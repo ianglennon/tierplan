@@ -99,6 +99,9 @@ export function useCreateCredential() {
   return useMutation<Credential, CredentialRequestError, CredentialRequest>({
     mutationFn: postCredential,
     retry: false,
+    // The mutation's variables hold the secret that was typed. With no time to live
+    // the cache lets go of them as soon as the sheet that made the request is gone.
+    gcTime: 0,
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: REGISTRIES_KEY });
     },

@@ -2,11 +2,12 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { environmentsQuery } from "@/api/environments";
 import { credentialsQuery } from "@/api/registries";
 import { NoPermission } from "@/components/full-page-state";
 import { MAX_QUERY } from "@/features/containers/list-search";
+import { CredentialSheet } from "@/features/registries/credential-sheet";
 import { CredentialTable } from "@/features/registries/credential-table";
 import { useAnyEnvironmentPermission, useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -57,21 +58,39 @@ export function RegistriesPage({ search, onSearchChange }: RegistriesPageProps) 
     [environments.data],
   );
 
+  // ?credential=new is the add form, which only an instance administrator has. For
+  // anyone else the parameter is dropped, so a shared link shows the list.
+  const addDenied = allowed && !canAdd && search.credential === "new";
+  useEffect(() => {
+    if (addDenied) onSearchChange({ credential: undefined });
+  }, [addDenied, onSearchChange]);
+
   if (!allowed) return <NoPermission />;
 
+  const closeSheet = () => onSearchChange({ credential: undefined });
+
   return (
-    <CredentialTable
-      credentials={credentials.data}
-      isPending={credentials.isPending}
-      isError={credentials.isError}
-      isFetching={credentials.isFetching}
-      refetch={credentials.refetch}
-      filters={{ q: search.q, scope: search.scope }}
-      onFiltersChange={onSearchChange}
-      scopes={scopes}
-      canAdd={canAdd}
-      onAdd={() => onSearchChange({ credential: "new" })}
-      onOpen={(id) => onSearchChange({ credential: id })}
-    />
+    <>
+      <CredentialTable
+        credentials={credentials.data}
+        isPending={credentials.isPending}
+        isError={credentials.isError}
+        isFetching={credentials.isFetching}
+        refetch={credentials.refetch}
+        filters={{ q: search.q, scope: search.scope }}
+        onFiltersChange={onSearchChange}
+        scopes={scopes}
+        canAdd={canAdd}
+        onAdd={() => onSearchChange({ credential: "new" })}
+        onOpen={(id) => onSearchChange({ credential: id })}
+      />
+      {search.credential === "new" ? (
+        canAdd ? (
+          <CredentialSheet mode="add" onClose={closeSheet} />
+        ) : null
+      ) : search.credential ? (
+        <CredentialSheet mode="view" credentialId={search.credential} onClose={closeSheet} />
+      ) : null}
+    </>
   );
 }

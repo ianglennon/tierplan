@@ -149,7 +149,7 @@ describe("CredentialSheet add mode", () => {
       "GitLab",
       "Generic v2",
     ]);
-    expect(screen.getByText("All environments (instance)")).toBeTruthy();
+    expect(screen.getByLabelText("Scope").textContent).toContain("All environments (instance)");
   });
 
   it("fills a read-only host and says which token to use for Docker Hub", async () => {

@@ -159,7 +159,7 @@ function DotText({ dot, children }: { dot: Dot; children: ReactNode }) {
   );
 }
 
-function ExpiresCell({ expiresAt }: { expiresAt: string | null }) {
+export function ExpiresCell({ expiresAt }: { expiresAt: string | null }) {
   const t = useT();
   const now = useNow();
   if (expiresAt === null) return <span>{t("dashboard.time.missing")}</span>;
@@ -172,7 +172,7 @@ function ExpiresCell({ expiresAt }: { expiresAt: string | null }) {
   return <RelativeTime value={expiresAt} />;
 }
 
-function LastTestCell({ test }: { test: Credential["lastTest"] }) {
+export function LastTestCell({ test }: { test: Credential["lastTest"] }) {
   const t = useT();
   if (test === null) {
     return <span className="text-xs text-muted-foreground">{t("registries.table.notTested")}</span>;

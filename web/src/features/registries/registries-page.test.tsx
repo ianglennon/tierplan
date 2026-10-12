@@ -312,6 +312,48 @@ describe("RegistriesPage permissions", () => {
 
 // The sidebar reads the matched route's params, so it is drawn by a real (empty) route
 // tree and not by the bare TestRouter.
+describe("RegistriesPage sheet deep links", () => {
+  it("opens the add sheet for ?credential=new for an instance administrator", async () => {
+    me = makeMe({ instanceAdmin: true });
+    credentials = [credential("alpha")];
+    search = { credential: "new" };
+    mount();
+    expect(await screen.findByText("Add a registry credential")).toBeTruthy();
+    expect(changes).toEqual([]);
+  });
+
+  it("drops ?credential=new for anyone else and shows the list", async () => {
+    credentials = [credential("alpha")];
+    search = { credential: "new" };
+    mount();
+    await screen.findByText("alpha");
+    await waitFor(() => expect(changes).toContainEqual({ credential: undefined }));
+    expect(screen.queryByText("Add a registry credential")).toBeNull();
+  });
+
+  it("opens ?credential={id} in view mode, and closing clears the parameter", async () => {
+    credentials = [credential("alpha")];
+    search = { credential: "alpha" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (req: Request) => {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/me") return Response.json(me);
+        if (url.pathname === "/api/registries/alpha") return Response.json(credential("alpha"));
+        if (url.pathname === "/api/registries") return Response.json({ items: credentials });
+        if (url.pathname === "/api/environments") return Response.json({ items: [] });
+        return Response.json({}, { status: 404 });
+      }),
+    );
+    mount();
+    const sheet = await screen.findByRole("table", { name: "Credential details" });
+    expect(within(sheet).getByText("••••wxyz")).toBeTruthy();
+    expect(screen.getByText("You can see this credential but not change it.")).toBeTruthy();
+    fireEvent.click(screen.getAllByRole("button", { name: "Close" })[0] as HTMLElement);
+    expect(changes).toContainEqual({ credential: undefined });
+  });
+});
+
 function mountSidebar() {
   const root = createRootRoute({
     component: () => (
