@@ -62,6 +62,9 @@ type TagPage struct {
 	Capped bool
 }
 
+// HiddenTag reports whether a tag is hidden by default: a signature, attestation or cache tag.
+func HiddenTag(name string) bool { return false }
+
 // nameKey identifies a cached name list. cred is the ID of the credential the list was
 // fetched with and the time it was last changed, or "anon": a list fetched with one sign-in is
 // never served to a call that cannot use that sign-in (T-05-60).

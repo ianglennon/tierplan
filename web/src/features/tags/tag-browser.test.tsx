@@ -286,6 +286,115 @@ describe("TagBrowser errors", () => {
   });
 });
 
+describe("TagBrowser filter, hide switch and paging", () => {
+  const hideSwitch = () =>
+    screen.getByRole("switch", { name: "Hide signature, attestation and cache tags" });
+  const filterBox = () => screen.getByRole("searchbox", { name: "Filter tags" });
+
+  it("has a filter and a Hide switch that is on, with how many it hides", async () => {
+    answer = () => Response.json(list({ hidden: 4 }));
+    mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" />);
+    await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
+    expect(filterBox().getAttribute("placeholder")).toBe("Filter by name");
+    expect(hideSwitch().getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByText("4 hidden")).toBeTruthy();
+  });
+
+  it("shows no hidden count when nothing is hidden or the switch is off", async () => {
+    mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" />);
+    await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
+    expect(screen.queryByText(/hidden$/)).toBeNull();
+    cleanup();
+    client.clear();
+
+    answer = () => Response.json(list({ hidden: 4 }));
+    mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" />);
+    await waitFor(() => expect(screen.getByText("4 hidden")).toBeTruthy());
+    fireEvent.click(hideSwitch());
+    await waitFor(() => expect(hideSwitch().getAttribute("aria-checked")).toBe("false"));
+    expect(screen.queryByText("4 hidden")).toBeNull();
+  });
+
+  it("asks again for the filter text and for the switch turned off", async () => {
+    mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" />);
+    await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
+    expect(sent.at(-1)?.query).toEqual({ ref: "ghcr.io/acme/app" });
+
+    fireEvent.change(filterBox(), { target: { value: "alpine" } });
+    await waitFor(() =>
+      expect(sent.at(-1)?.query).toEqual({ ref: "ghcr.io/acme/app", q: "alpine" }),
+    );
+
+    fireEvent.click(hideSwitch());
+    await waitFor(() =>
+      expect(sent.at(-1)?.query).toEqual({ ref: "ghcr.io/acme/app", q: "alpine", hide: "false" }),
+    );
+  });
+
+  it("loads 100 more, and says That's every tag. at the end", async () => {
+    answer = (req) =>
+      req.query.page === "1"
+        ? Response.json(list({ tags: [{ name: "v0.1.0" }], total: 4, more: false, page: 1 }))
+        : Response.json(list({ total: 4, more: true, page: 0 }));
+    mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" />);
+    await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
+    expect(screen.queryByText("That's every tag.")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Load 100 more" }));
+    await waitFor(() => expect(screen.getByText("v0.1.0")).toBeTruthy());
+    expect(sent.at(-1)?.query).toEqual({ ref: "ghcr.io/acme/app", page: "1" });
+    expect(screen.getByText("That's every tag.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Load 100 more" })).toBeNull();
+    expect(screen.getByText("Showing 4 tags")).toBeTruthy();
+    expect(rows().map((r) => r.textContent)).toEqual(["v1.10.0", "v1.9.2", "latest", "v0.1.0"]);
+  });
+
+  it("shows no match for the filter, with a button that clears it", async () => {
+    answer = (req) =>
+      req.query.q ? Response.json(list({ tags: [], total: 0 })) : Response.json(list());
+    mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" />);
+    await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
+    fireEvent.change(filterBox(), { target: { value: "zzz" } });
+    await waitFor(() => expect(screen.getByText("No tags match “zzz”.")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Clear filter" }));
+    await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
+    expect(sent.at(-1)?.query).toEqual({ ref: "ghcr.io/acme/app" });
+  });
+
+  it("says only signature and attestation tags are left, with a button that shows them", async () => {
+    answer = (req) =>
+      req.query.hide === "false"
+        ? Response.json(list({ tags: [{ name: "app.sig" }], total: 1, hidden: 1 }))
+        : Response.json(list({ tags: [], total: 0, hidden: 3 }));
+    mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" />);
+    await waitFor(() =>
+      expect(screen.getByText("Only signature and attestation tags are left.")).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Show them" }));
+    await waitFor(() => expect(screen.getByText("app.sig")).toBeTruthy());
+    expect(hideSwitch().getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("keeps the filter and the switch in the address when the page owns them", async () => {
+    const onSearchChange = vi.fn();
+    mount(
+      <BrowsePage
+        search={{ ref: "ghcr.io/acme/app", q: "alp", hide: 0 }}
+        onSearchChange={onSearchChange}
+      />,
+    );
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]?.query).toEqual({ ref: "ghcr.io/acme/app", q: "alp", hide: "false" });
+    await waitFor(() => expect(hideSwitch().getAttribute("aria-checked")).toBe("false"));
+    expect((filterBox() as HTMLInputElement).value).toBe("alp");
+
+    fireEvent.click(hideSwitch());
+    expect(onSearchChange).toHaveBeenLastCalledWith({ hide: undefined });
+    fireEvent.change(filterBox(), { target: { value: "alpine" } });
+    await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith({ q: "alpine" }));
+  });
+});
+
 describe("BrowsePage", () => {
   it("shows the breadcrumb, the repository as the title and the tag browser", async () => {
     mount(<BrowsePage search={{ ref: "ghcr.io/acme/app" }} />);

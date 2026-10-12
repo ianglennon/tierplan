@@ -5,6 +5,7 @@ package api_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -266,5 +267,61 @@ func TestBrowseTagsMapsAMissingRepositoryAndAnUnparsableReference(t *testing.T) 
 	rec = f.credCall(t, admin, http.MethodGet, "/api/registries/tags", "")
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Errorf("no ref: %d %s, want 422", rec.Code, rec.Body)
+	}
+}
+
+func TestBrowseTagsSortsFiltersHidesAndPages(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	reg := newFakeRegistry(t)
+	reg.tags = []string{"latest", "app.sig"}
+	for i := range 120 {
+		reg.tags = append(reg.tags, fmt.Sprintf("1.%d.0", i))
+	}
+	f.trusting(t, reg)
+	admin := f.asAdmin(t)
+	f.storeCredential(t, admin, reg.credentialBody("fake-inst"))
+	get := func(query string) tagsResp {
+		t.Helper()
+		rec := f.browse(t, admin, reg, "acme/app", query)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("browse %q: %d %s", query, rec.Code, rec.Body)
+		}
+		return decodeRec[tagsResp](t, rec)
+	}
+
+	first := get("")
+	if len(first.Tags) != 100 || first.Total != 121 || first.Hidden != 1 || !first.More || first.Page != 0 || first.Tags[0].Name != "1.119.0" {
+		t.Errorf("first page = %d tags, total %d, hidden %d, more %v, page %d, first %q; want 100, 121, 1, true, 0, 1.119.0",
+			len(first.Tags), first.Total, first.Hidden, first.More, first.Page, first.Tags[0].Name)
+	}
+	second := get("page=1")
+	if len(second.Tags) != 21 || second.More || second.Page != 1 || second.Tags[20].Name != "latest" {
+		t.Errorf("second page = %d tags, more %v, page %d, last %q; want 21, false, 1, latest", len(second.Tags), second.More, second.Page, second.Tags[len(second.Tags)-1].Name)
+	}
+	if shown := get("hide=false"); shown.Total != 122 || shown.Hidden != 1 {
+		t.Errorf("hide=false: total %d, hidden %d; want 122 and 1", shown.Total, shown.Hidden)
+	}
+	if hit := get("q=LATE"); hit.Total != 1 || hit.Tags[0].Name != "latest" {
+		t.Errorf("q=LATE = %d tags, total %d, want latest alone", len(hit.Tags), hit.Total)
+	}
+	if onlyHidden := get("q=.sig"); onlyHidden.Total != 0 || onlyHidden.Hidden != 1 || len(onlyHidden.Tags) != 0 {
+		t.Errorf("q=.sig = %d tags, total %d, hidden %d, want nothing shown and one hidden", len(onlyHidden.Tags), onlyHidden.Total, onlyHidden.Hidden)
+	}
+}
+
+func TestBrowseTagsRefusesAParameterOutOfRange(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	reg := newFakeRegistry(t)
+	f.trusting(t, reg)
+	admin := f.asAdmin(t)
+	for name, query := range map[string]string{
+		"negative page": "page=-1",
+		"huge page":     "page=100000",
+		"long filter":   "q=" + strings.Repeat("a", 129),
+		"hide not bool": "hide=maybe",
+	} {
+		if rec := f.browse(t, admin, reg, "acme/app", query); rec.Code != http.StatusUnprocessableEntity {
+			t.Errorf("%s: %d %s, want 422", name, rec.Code, rec.Body)
+		}
 	}
 }

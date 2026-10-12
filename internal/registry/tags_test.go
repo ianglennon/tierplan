@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -205,5 +207,142 @@ func TestListFollowsLinkPagesOfTheRegistry(t *testing.T) {
 	}
 	if page.Total != 250 {
 		t.Errorf("total = %d, want all 250 tags read through the Link pages", page.Total)
+	}
+}
+
+func TestHiddenTag(t *testing.T) {
+	sha := "sha256-" + strings.Repeat("ab12", 16)
+	for name, want := range map[string]bool{
+		sha:                                 true, // cosign's fallback tag for a signature or a referrer
+		sha + ".sig":                        true,
+		sha + ".att":                        true,
+		sha + ".sbom":                       true,
+		sha + ".sbom.json":                  true,
+		sha + ".prov":                       true,
+		"app.sig":                           true,
+		"1.2.3.att":                         true,
+		"v1.sbom":                           true,
+		"buildcache":                        true,
+		"cache":                             true,
+		"app-buildcache":                    true,
+		"registry.cache":                    true,
+		"latest":                            false,
+		"1.2.3":                             false,
+		"1.2.3-alpine":                      false,
+		"sha256-abc":                        false, // not 64 hex characters: a tag someone chose
+		sha + "0":                           false, // 65 characters
+		"sha256-" + strings.Repeat("g", 64): false, // not hex
+		"cached":                            false,
+		"mycache":                           false, // only -buildcache and .cache end a cache tag
+		"signed":                            false,
+		"attestation":                       false,
+		"":                                  false,
+	} {
+		if got := HiddenTag(name); got != want {
+			t.Errorf("HiddenTag(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+// bigRepo is 245 release tags, latest, and the four tags hidden by default.
+func bigRepo() []string {
+	sha := "sha256-" + strings.Repeat("0f", 32)
+	tags := []string{"latest", sha + ".sig", sha + ".att", "buildcache", "app-buildcache"}
+	for i := range 245 {
+		tags = append(tags, fmt.Sprintf("1.%d.0", i))
+	}
+	rand.Shuffle(len(tags), func(i, j int) { tags[i], tags[j] = tags[j], tags[i] })
+	return tags
+}
+
+func TestListSortsNewestVersionFirstAndPagesByAHundred(t *testing.T) {
+	f := newFakeRegistry(t, http.StatusUnauthorized)
+	f.pageSize = 40
+	f.tags = bigRepo()
+	s := tagServiceFor(f)
+	ctx, c, ref := context.Background(), f.cred("c1", f.pass), f.ref(t, "acme/app")
+
+	var all []string
+	for page, wantLen := range []int{100, 100, 46} {
+		got, err := s.List(ctx, c, ref, "", true, page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Tags) != wantLen || got.Total != 246 || got.Hidden != 4 || got.More != (page < 2) {
+			t.Fatalf("page %d: %d tags, total %d, hidden %d, more %v; want %d, 246, 4, %v", page, len(got.Tags), got.Total, got.Hidden, got.More, wantLen, page < 2)
+		}
+		all = append(all, tagNames(got)...)
+	}
+	if all[0] != "1.244.0" || all[1] != "1.243.0" || all[244] != "1.0.0" || all[245] != "latest" {
+		t.Errorf("order = %v ... %v, want 1.244.0 first down to 1.0.0 and then latest", all[:2], all[243:])
+	}
+	if beyond, err := s.List(ctx, c, ref, "", true, 3); err != nil || len(beyond.Tags) != 0 || beyond.More || beyond.Total != 246 {
+		t.Errorf("a page past the end = %+v, %v; want none, no more", beyond, err)
+	}
+	if negative, err := s.List(ctx, c, ref, "", true, -5); err != nil || len(negative.Tags) != 100 || negative.Tags[0].Name != "1.244.0" {
+		t.Errorf("a negative page = %d tags, %v; want the first page", len(negative.Tags), err)
+	}
+}
+
+func TestListHidesSignatureAttestationAndCacheTagsUnlessAskedToShowThem(t *testing.T) {
+	f := newFakeRegistry(t, http.StatusUnauthorized)
+	f.tags = bigRepo()
+	s := tagServiceFor(f)
+	ctx, c, ref := context.Background(), f.cred("c1", f.pass), f.ref(t, "acme/app")
+
+	hidden, err := s.List(ctx, c, ref, "", true, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range tagNames(hidden) {
+		if HiddenTag(n) {
+			t.Errorf("%q is shown with the hide switch on", n)
+		}
+	}
+	shown, err := s.List(ctx, c, ref, "", false, 0)
+	if err != nil || shown.Total != 250 || shown.Hidden != 4 {
+		t.Fatalf("with hide off: total %d hidden %d, %v; want 250 shown and 4 counted as hidden-type", shown.Total, shown.Hidden, err)
+	}
+	// The count of hidden-type tags follows the filter text, so "only hidden tags left" can be told.
+	onlyCache, err := s.List(ctx, c, ref, "buildcache", true, 0)
+	if err != nil || onlyCache.Total != 0 || onlyCache.Hidden != 2 || len(onlyCache.Tags) != 0 {
+		t.Errorf("filter buildcache: %+v, %v; want nothing shown and 2 hidden", onlyCache, err)
+	}
+}
+
+func TestListFiltersByTextIgnoringCase(t *testing.T) {
+	f := newFakeRegistry(t, http.StatusUnauthorized)
+	f.tags = []string{"1.0.0", "1.0.0-Alpine", "1.0.0-slim", "2.0.0", "latest", "Edge"}
+	s := tagServiceFor(f)
+	got, err := s.List(context.Background(), f.cred("c1", f.pass), f.ref(t, "acme/app"), " ALPINE ", true, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := tagNames(got); !slices.Equal(names, []string{"1.0.0-Alpine"}) || got.Total != 1 {
+		t.Errorf("filter ALPINE = %v (total %d), want the one name", names, got.Total)
+	}
+	got, _ = s.List(context.Background(), f.cred("c1", f.pass), f.ref(t, "acme/app"), "eDGE", true, 0)
+	if names := tagNames(got); !slices.Equal(names, []string{"Edge"}) {
+		t.Errorf("filter eDGE = %v", names)
+	}
+	got, _ = s.List(context.Background(), f.cred("c1", f.pass), f.ref(t, "acme/app"), "1.0.0", true, 0)
+	if names := tagNames(got); !slices.Equal(names, []string{"1.0.0", "1.0.0-slim", "1.0.0-Alpine"}) {
+		t.Errorf("filter 1.0.0 = %v, want the plain release first and then its variants by name, descending", names)
+	}
+}
+
+func TestListDoesNotReorderTheCachedListBetweenCalls(t *testing.T) {
+	f := newFakeRegistry(t, http.StatusUnauthorized)
+	f.tags = bigRepo()
+	s := tagServiceFor(f)
+	ctx, c, ref := context.Background(), f.cred("c1", f.pass), f.ref(t, "acme/app")
+	first, _ := s.List(ctx, c, ref, "", true, 0)
+	_, _ = s.List(ctx, c, ref, "1.1", false, 1)
+	second, err := s.List(ctx, c, ref, "", true, 0)
+	if err != nil || !slices.Equal(tagNames(first), tagNames(second)) {
+		t.Errorf("a later call changed the first page: %v", err)
+	}
+	if n := f.tagRequests(); n > 12 {
+		t.Errorf("tag list requests = %d, want one fetch (a handful of Link pages), not one per call", n)
 	}
 }
