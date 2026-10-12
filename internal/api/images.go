@@ -50,28 +50,49 @@ type ImageDetailInput struct {
 	Node    string `query:"node" maxLength:"128" doc:"Read only this node: its nodeId, as the nodes of the detail answer name it. Left out, every reporting node that has the image is read (inspect and history read the first of them)"`
 }
 
+// ImageListInput is the images list: the node filter, the search, the Dangling filter and the
+// view.
+type ImageListInput struct {
+	NodeFilterInput
+	Q        string `query:"q" maxLength:"128" doc:"Search: a case-insensitive substring of a tag (so of its repository too), or the start of the image ID, with or without sha256:. Applied before the 500-row cap"`
+	Dangling bool   `query:"dangling" doc:"True keeps only untagged images. Applied before the 500-row cap"`
+	View     string `query:"view" enum:"merged,node" default:"merged" doc:"merged: one row per image ID, with the nodes that hold it. node: one row per copy on a node. On a host with one node they are the same"`
+}
+
+// ImageHolderBody is one node that holds an image, or one node of the environment.
+type ImageHolderBody struct {
+	NodeID     string `json:"nodeId" doc:"The ID of the node"`
+	Name       string `json:"name" doc:"The display name of the node"`
+	Containers int    `json:"containers" doc:"Containers on this node, running or not, created from the image; 0 in nodeRefs"`
+}
+
 // ImageItem is one row of the images list. It carries no labels, variables or mounts.
 type ImageItem struct {
-	Node             string   `json:"node" doc:"The node that holds the image"`
-	NodeID           string   `json:"nodeId" doc:"The ID of that node"`
-	ID               string   `json:"id" doc:"The full image ID"`
-	ShortID          string   `json:"shortId" doc:"The first 12 characters of the ID, without the sha256: prefix"`
-	RepoTags         []string `json:"repoTags" doc:"repository:tag for each tag, or [\"<none>\"] for an untagged image"`
-	Dangling         bool     `json:"dangling" doc:"True when the image has no tag"`
-	Size             int64    `json:"size" doc:"Size in bytes"`
-	Created          string   `json:"created,omitempty" format:"date-time"`
-	UsedByContainers int      `json:"usedByContainers" doc:"Containers on this node, running or not, created from this image ID. Counted from the containers Bayplan reads, never from the engine's own per-image count, which a list does not compute"`
-	UsedByServices   int      `json:"usedByServices" doc:"Swarm services whose spec names this image, by pinned digest else by repository and tag, even with no running task, as of the last cluster read. A service can run a task on any node, so it counts for the image on every node. Always 0 off a swarm"`
-	ReadOnly         bool     `json:"readOnly" doc:"True when the host of this node is read-only, so no change to its images will be accepted"`
+	Node             string            `json:"node" doc:"The node that holds the image; empty for a merged row that more than one node holds"`
+	NodeID           string            `json:"nodeId" doc:"The ID of that node; empty when node is"`
+	ID               string            `json:"id" doc:"The full image ID"`
+	ShortID          string            `json:"shortId" doc:"The first 12 characters of the ID, without the sha256: prefix"`
+	RepoTags         []string          `json:"repoTags" doc:"repository:tag for each tag, on any node of a merged row, or [\"<none>\"] for an untagged image"`
+	Dangling         bool              `json:"dangling" doc:"True when the image has no tag"`
+	Size             int64             `json:"size" doc:"Size in bytes"`
+	Created          string            `json:"created,omitempty" format:"date-time"`
+	UsedByContainers int               `json:"usedByContainers" doc:"Containers, running or not, created from this image ID on the nodes the row stands for. Counted from the containers Bayplan reads, never from the engine's own per-image count, which a list does not compute"`
+	UsedByServices   int               `json:"usedByServices" doc:"Swarm services whose spec names this image, by pinned digest else by repository and tag, even with no running task, as of the last cluster read. A service can run a task on any node, so it counts once for the image. Always 0 off a swarm"`
+	ReadOnly         bool              `json:"readOnly" doc:"True when the host of every node the row stands for is read-only, so no change to it will be accepted"`
+	Nodes            []ImageHolderBody `json:"nodes" doc:"The nodes that hold the image, by name, each with its container count: one in the per-node view, every holder in the merged one"`
 }
 
 // ImageListBody is a capped list of images.
 type ImageListBody struct {
-	Items        []ImageItem `json:"items" doc:"At most 500 rows"`
-	Total        int         `json:"total" doc:"How many there are, whatever the cap"`
-	Truncated    bool        `json:"truncated" doc:"True when total is more than the rows returned"`
-	Nodes        []string    `json:"nodes" doc:"The nodes that answered, for the node filter"`
-	NotReporting []string    `json:"notReporting" doc:"Nodes that should have answered and did not, so these rows are not the whole cluster"`
+	Items           []ImageItem       `json:"items" doc:"At most 500 rows"`
+	Total           int               `json:"total" doc:"How many match the search and the filters, whatever the cap"`
+	Truncated       bool              `json:"truncated" doc:"True when total is more than the rows returned"`
+	Nodes           []string          `json:"nodes" doc:"The nodes that answered, for the node filter"`
+	NodeRefs        []ImageHolderBody `json:"nodeRefs" doc:"The nodes that answered, by name, with their IDs, so a row can say which nodes lack the image"`
+	NodeCount       int               `json:"nodeCount" doc:"How many nodes the environment has: those that answered and those that did not"`
+	NotReporting    []string          `json:"notReporting" doc:"Nodes that should have answered and did not, so these rows are not the whole cluster"`
+	DanglingCount   int               `json:"danglingCount" doc:"How many rows of this view are untagged, after the node filter and before the search and the Dangling filter, so the chip never shrinks with what was typed"`
+	UnfilteredTotal int               `json:"unfilteredTotal" doc:"How many rows this view has before the search and the Dangling filter (after the node filter), so a page can say 3 of 600"`
 }
 
 // ImageListOutput wraps ImageListBody for huma.
@@ -164,34 +185,20 @@ func RegisterImages(r *httpx.Router, d ImagesDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "listImages", Method: http.MethodGet, Path: "/api/env/{envId}/images",
 		Summary: "List the images of an environment",
-		Description: "Newest first, ties by image ID. An untagged image is listed as <none> and marked dangling. On a swarm every node's images, each with its node. Optionally only one node's (node). At most 500 rows, after the filter, with the total. " +
+		Description: "Newest first, ties by image ID. An untagged image is listed as <none> and marked dangling. " +
+			"view=merged (the default) lists one row per image ID with the nodes that hold it, so two nodes with the same ID are one row while the same tag under different IDs stays two rows and a drifted node shows; view=node lists one row per copy on a node. " +
+			"Optionally only one node's (node), a search (q: a tag or repository, or the start of an ID) and only untagged images (dangling=1). The node, the search and the Dangling filter run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal and danglingCount the numbers before the search and the Dangling filter. " +
 			"Each row says what uses it: usedByContainers (containers on its node, stopped ones included, created from its ID) and usedByServices (swarm services whose spec names it, by pinned digest, else by repository and tag, even with no task). " +
 			"503 environment_offline (with the state, a reason code and since) when the environment cannot be read, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied when the agent refuses a read by its own policy. " +
 			"Needs images.read (Viewer) on the environment. Reads are not audited.",
 		Tags: []string{"environments"}, Responses: maps.Clone(problems),
 	}, rbac.Requirement{Perm: rbac.PermImagesRead, Scope: rbac.ScopeEnvironment},
-		func(ctx context.Context, in *NodeFilterInput) (*ImageListOutput, error) {
+		func(ctx context.Context, in *ImageListInput) (*ImageListOutput, error) {
 			agg, _, err := d.Aggregator.Snapshot(ctx, in.EnvID)
 			if err != nil {
 				return nil, snapshotProblem(d.Log, in.EnvID, err)
 			}
-			readOnly := map[string]bool{}
-			for _, n := range agg.Nodes {
-				readOnly[n.ID] = n.ReadOnly
-			}
-			use := imageUsageOf(ctx, d.Clusters, in.EnvID, agg)
-			rows := filterNode(agg.Images, in.Node, func(i envs.ImageRow) string { return i.Node })
-			items, total, truncated := capRows(rows, func(i envs.ImageRow) ImageItem {
-				return ImageItem{
-					Node: i.Node, NodeID: i.NodeID, ID: i.ID, ShortID: shortImageID(i.ID), RepoTags: i.RepoTags,
-					Dangling: isDangling(i.RepoTags), Size: i.Size, Created: rfc3339(i.Created),
-					UsedByContainers: len(use.containersOf(i.NodeID, i.ID)), UsedByServices: len(use.servicesOf(i.ImageRow)),
-					ReadOnly: readOnly[i.NodeID],
-				}
-			})
-			return &ImageListOutput{CacheControl: "no-store", Body: ImageListBody{
-				Items: items, Total: total, Truncated: truncated, Nodes: reportingNodes(agg), NotReporting: agg.NotReporting,
-			}}, nil
+			return &ImageListOutput{CacheControl: "no-store", Body: listImages(ctx, d, in, agg)}, nil
 		})
 
 	httpx.Register(r, huma.Operation{
@@ -290,9 +297,124 @@ func RegisterImages(r *httpx.Router, d ImagesDeps) {
 		})
 }
 
-// isDangling says whether an image's tags are only the placeholder of an untagged image.
-func isDangling(tags []string) bool {
-	return !slices.ContainsFunc(tags, func(t string) bool { return t != "" && t != "<none>" && t != "<none>:<none>" })
+// imageGroup is one row of the list: the copies of an image on the nodes it stands for.
+type imageGroup struct {
+	// rows are the node copies, by node name then ID. Never empty.
+	rows []envs.ImageRow
+	// tags are the tags of the copies, each once, without the placeholder of an untagged
+	// image; empty for a dangling image.
+	tags []string
+}
+
+// groupImages makes the rows of a view. Merged, the copies with one merge key are one row;
+// per node, each copy is its own. The rows come out newest first, ties by image ID, then by
+// node, so equal creation times keep a stable order.
+func groupImages(rows []envs.ImageRow, view string) []imageGroup {
+	var groups []imageGroup
+	index := map[string]int{}
+	for _, r := range rows {
+		if view != "node" {
+			if i, ok := index[mergeKey(r.ImageRow)]; ok {
+				groups[i].rows = append(groups[i].rows, r)
+				continue
+			}
+			index[mergeKey(r.ImageRow)] = len(groups)
+		}
+		groups = append(groups, imageGroup{rows: []envs.ImageRow{r}})
+	}
+	for i := range groups {
+		g := &groups[i]
+		slices.SortFunc(g.rows, func(a, b envs.ImageRow) int {
+			return cmp.Or(strings.Compare(a.Node, b.Node), strings.Compare(a.NodeID, b.NodeID))
+		})
+		for _, r := range g.rows {
+			for _, t := range r.RepoTags {
+				if !isNoneTag(t) && !slices.Contains(g.tags, t) {
+					g.tags = append(g.tags, t)
+				}
+			}
+		}
+	}
+	slices.SortStableFunc(groups, func(a, b imageGroup) int {
+		x, y := a.rows[0], b.rows[0]
+		return cmp.Or(y.Created.Compare(x.Created), strings.Compare(mergeKey(x.ImageRow), mergeKey(y.ImageRow)), strings.Compare(x.Node, y.Node), strings.Compare(x.NodeID, y.NodeID))
+	})
+	return groups
+}
+
+// isNoneTag says whether a tag is the placeholder the engine gives an untagged image.
+func isNoneTag(t string) bool { return t == "" || t == "<none>" || t == "<none>:<none>" }
+
+// matchesImage says whether a row satisfies the search: q, lower case, is in one of its tags
+// (so in its repository), or starts its image ID. An empty q matches every row.
+func (g imageGroup) matches(q string) bool {
+	if q == "" {
+		return true
+	}
+	for _, t := range g.tags {
+		if strings.Contains(strings.ToLower(t), q) {
+			return true
+		}
+	}
+	if id := strings.TrimPrefix(q, "sha256:"); id != "" {
+		return strings.HasPrefix(strings.TrimPrefix(strings.ToLower(g.rows[0].ID), "sha256:"), id)
+	}
+	return false
+}
+
+// listImages builds the images list from one snapshot: the node filter, the view, the search
+// and the Dangling filter run here, before the 500-row cap, and the usage comes from the
+// containers and service specs of the same read.
+func listImages(ctx context.Context, d ImagesDeps, in *ImageListInput, agg envs.Aggregate) ImageListBody {
+	readOnly := map[string]bool{}
+	body := ImageListBody{
+		Items: []ImageItem{}, Nodes: reportingNodes(agg), NodeRefs: []ImageHolderBody{}, NotReporting: agg.NotReporting,
+		NodeCount: len(agg.Nodes) + len(agg.NotReporting),
+	}
+	for _, n := range agg.Nodes {
+		readOnly[n.ID] = n.ReadOnly
+		body.NodeRefs = append(body.NodeRefs, ImageHolderBody{NodeID: n.ID, Name: n.Name})
+	}
+	slices.SortFunc(body.NodeRefs, func(a, b ImageHolderBody) int {
+		return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.NodeID, b.NodeID))
+	})
+	use := imageUsageOf(ctx, d.Clusters, in.EnvID, agg)
+	groups := groupImages(filterNode(agg.Images, in.Node, func(i envs.ImageRow) string { return i.Node }), in.View)
+	body.UnfilteredTotal = len(groups)
+	for _, g := range groups {
+		if len(g.tags) == 0 {
+			body.DanglingCount++
+		}
+	}
+	q := strings.ToLower(strings.TrimSpace(in.Q))
+	shown := groups[:0:0]
+	for _, g := range groups {
+		if g.matches(q) && (!in.Dangling || len(g.tags) == 0) {
+			shown = append(shown, g)
+		}
+	}
+	body.Items, body.Total, body.Truncated = capRows(shown, func(g imageGroup) ImageItem {
+		first := g.rows[0]
+		it := ImageItem{
+			ID: first.ID, ShortID: shortImageID(first.ID), RepoTags: g.tags, Dangling: len(g.tags) == 0,
+			Size: first.Size, Created: rfc3339(first.Created), UsedByServices: len(use.servicesOf(first.ImageRow)),
+			ReadOnly: true, Nodes: make([]ImageHolderBody, 0, len(g.rows)),
+		}
+		if it.Dangling {
+			it.RepoTags = []string{"<none>"}
+		}
+		for _, r := range g.rows {
+			n := len(use.containersOf(r.NodeID, r.ID))
+			it.UsedByContainers += n
+			it.ReadOnly = it.ReadOnly && readOnly[r.NodeID]
+			it.Nodes = append(it.Nodes, ImageHolderBody{NodeID: r.NodeID, Name: r.Node, Containers: n})
+		}
+		if len(g.rows) == 1 {
+			it.Node, it.NodeID = first.Node, first.NodeID
+		}
+		return it
+	})
+	return body
 }
 
 // imageUsedBy lists what uses the image, from the snapshot the list is built from, so the

@@ -316,6 +316,7 @@ describe("createEventsConnection", () => {
       ["env", "e1", "containers"],
       ["env", "e1", "volumes"],
       ["env", "e1", "networks"],
+      ["env", "e1", "images"],
     ]);
 
     // A burst inside the second collapses into one trailing refetch.
@@ -348,6 +349,7 @@ describe("createEventsConnection", () => {
       ["env", "e1", "containers"],
       ["env", "e1", "volumes"],
       ["env", "e1", "networks"],
+      ["env", "e1", "images"],
     ]);
     expect(c.last().events).toEqual(before.events);
     expect(c.last().events).toHaveLength(0);

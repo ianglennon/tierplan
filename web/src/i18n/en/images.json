@@ -141,8 +141,57 @@
     "notInUse": "Not in use",
     "list": {
       "columns": {
+        "image": "Image",
+        "nodes": "Nodes",
         "usedBy": "Used by"
-      }
+      },
+      "search": {
+        "label": "Search images",
+        "placeholder": "Search by name, tag or ID",
+        "clear": "Clear search"
+      },
+      "filter": {
+        "label": "Filter images",
+        "dangling": "Dangling",
+        "danglingCount": "Dangling {{count, number}}"
+      },
+      "view": {
+        "label": "Group by node",
+        "merged": "Merged",
+        "node": "Per node"
+      },
+      "clearFilters": "Clear filters",
+      "dangling": {
+        "badge": "Dangling"
+      },
+      "more": "+{{count, number}}",
+      "moreNames": "Other names: {{names}}",
+      "copies_one": "{{count, number}} image copy",
+      "copies_other": "{{count, number}} image copies",
+      "caption": {
+        "merged": "{{what}} {{nodes}}",
+        "perNode": "{{what}} {{nodes}}",
+        "filtered": "{{count, number}} of {{total, number}} images"
+      },
+      "nodes": {
+        "all_one": "on all {{count}} node",
+        "all_other": "on all {{count}} nodes",
+        "some": "on {{present}}/{{total}} nodes",
+        "title": "Nodes with this image",
+        "containers_one": "{{count, number}} container",
+        "containers_other": "{{count, number}} containers",
+        "missing": "Missing"
+      },
+      "empty": {
+        "search": "No images match “{{query}}”.",
+        "clearSearch": "Clear search",
+        "dangling": {
+          "title": "No dangling images",
+          "body": "Untagged images with nothing using them show up here."
+        },
+        "node": "No images on {{node}}."
+      },
+      "untagged": "Untagged"
     }
   }
 }

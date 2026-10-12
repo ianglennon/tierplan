@@ -1,147 +1,36 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { useQuery } from "@tanstack/react-query";
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { TriangleAlert } from "lucide-react";
+import { createFileRoute } from "@tanstack/react-router";
 
-import { useAllReadOnly } from "@/api/pulls";
-import { type ImageRow, imagesQuery } from "@/api/resources";
-import { NoPermission } from "@/components/full-page-state";
-import { RelativeTime } from "@/components/relative-time";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { NodesBanner } from "@/features/environments/nodes-banner";
-import { usedWhat } from "@/features/images/used-by";
-import { PullImageButton } from "@/features/pulls/pull-dialog";
-import { type Column, ResourceTable, TruncatedText } from "@/features/resources/resource-table";
-import {
-  nodeRowKey,
-  nodeSearchSchema,
-  useEnvIsSwarm,
-  useNodeColumn,
-} from "@/features/resources/swarm-lists";
-import { useEnvName } from "@/features/resources/use-env-name";
-import { useDocumentTitle, usePermission } from "@/hooks/use-me";
+import { ImageList, type ImageSearchPatch, imageSearchSchema } from "@/features/images/image-list";
+import { useDocumentTitle } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
-import { formatBytes } from "@/lib/format";
-
-// The engine reports an untagged image as "<none>" or "<none>:<none>".
-const isNone = (tag: string) => tag === "<none>" || tag === "<none>:<none>";
-
-// ReadOnlyAlert is the warning above the table when the owner of every node's host turned
-// writes off: images can be looked at, not pulled or removed (D-30).
-function ReadOnlyAlert({ envId }: { envId: string }) {
-  const t = useT();
-  if (!useAllReadOnly(envId)) return null;
-  return (
-    <Alert variant="warning">
-      <TriangleAlert aria-hidden="true" />
-      <AlertDescription className="text-foreground">{t("pulls.readOnly.alert")}</AlertDescription>
-    </Alert>
-  );
-}
 
 function Images() {
   const { envId } = Route.useParams();
   const t = useT();
-  const key = "dashboard.lists.images";
-  useDocumentTitle(t(`${key}.title`));
-  const allowed = usePermission("images.read", envId);
-  const { node } = Route.useSearch();
+  useDocumentTitle(t("dashboard.lists.images.title"));
+  const search = Route.useSearch();
   const navigate = Route.useNavigate();
-  const swarm = useEnvIsSwarm(envId);
-  const nodeColumn = useNodeColumn<ImageRow>();
-  const query = useQuery({ ...imagesQuery(envId, swarm ? node : undefined), enabled: allowed });
-  const envName = useEnvName(envId);
-  const missing = t("dashboard.time.missing");
 
-  const columns: Column<ImageRow>[] = [
-    {
-      id: "repository",
-      header: t(`${key}.columns.repository`),
-      cell: (i) => {
-        const tags = (i.repoTags ?? []).filter((tag) => !isNone(tag));
-        // The name opens the image's page. The merged view has one row per image, so the
-        // link names the image and leaves the node to the page (D-18).
-        return (
-          <Link
-            to="/env/$envId/images/$imageId"
-            params={{ envId, imageId: i.id }}
-            className="block min-w-0 rounded-sm text-accent-ink hover:underline"
-          >
-            {tags.length > 0 ? (
-              <TruncatedText>{tags.join(", ")}</TruncatedText>
-            ) : (
-              <span className="text-muted-foreground">{t("dashboard.lists.untagged")}</span>
-            )}
-          </Link>
-        );
+  // A change to the filters or the search replaces the history entry, so the back button
+  // leaves the page and does not walk through every key.
+  function change(patch: ImageSearchPatch) {
+    void navigate({
+      search: (prev) => {
+        const next: Record<string, unknown> = { ...prev, ...patch };
+        for (const key of Object.keys(next)) if (next[key] === undefined) delete next[key];
+        return next;
       },
-    },
-    {
-      id: "id",
-      header: t(`${key}.columns.id`),
-      cell: (i) => {
-        const short = i.shortId || i.id.replace(/^sha256:/, "").slice(0, 12);
-        return short ? <span className="font-mono text-xs">{short}</span> : missing;
-      },
-    },
-    {
-      id: "usedBy",
-      header: t("images.list.columns.usedBy"),
-      cell: (i) =>
-        i.usedByContainers + i.usedByServices > 0 ? (
-          usedWhat(t, i.usedByContainers, i.usedByServices, swarm)
-        ) : (
-          <span className="text-muted-foreground">{t("images.notInUse")}</span>
-        ),
-    },
-    {
-      id: "size",
-      header: t(`${key}.columns.size`),
-      className: "text-right",
-      cell: (i) => <span className="tabular-nums">{formatBytes(i.size) || missing}</span>,
-    },
-    {
-      id: "created",
-      header: t(`${key}.columns.created`),
-      cell: (i) => <RelativeTime value={i.created} />,
-    },
-  ];
+      replace: true,
+    });
+  }
 
-  if (!allowed) return <NoPermission />;
-  return (
-    <ResourceTable
-      resource="images"
-      columns={columns}
-      query={query}
-      envName={envName}
-      nodeColumn={swarm ? nodeColumn : undefined}
-      nodeFilter={
-        swarm
-          ? {
-              value: node,
-              onChange: (n) => void navigate({ search: { node: n }, replace: true }),
-            }
-          : undefined
-      }
-      banner={
-        <>
-          {swarm ? <NodesBanner notReporting={query.data?.notReporting} /> : null}
-          <ReadOnlyAlert envId={envId} />
-        </>
-      }
-      getRowKey={(i) => nodeRowKey(i.node, i.id)}
-      captionExtra={
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          <PullImageButton envId={envId} hostName={envName} swarm={swarm} />
-        </div>
-      }
-    />
-  );
+  return <ImageList envId={envId} search={search} onSearchChange={change} />;
 }
 
 export const Route = createFileRoute("/_app/env/$envId/images")({
-  validateSearch: nodeSearchSchema,
+  validateSearch: imageSearchSchema,
   component: Images,
 });

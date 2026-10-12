@@ -183,7 +183,7 @@ func TestImageUsageAServiceCountsFromItsSpecEvenWithNoTasksByDigestElseByTag(t *
 	s := usageSwarm(t)
 	var byNode map[string]usageItem
 	waitFor(t, "the cluster read to reach the list", func() bool {
-		rec := s.get(t, s.env.ID, "images")
+		rec := s.get(t, s.env.ID, "images?view=node")
 		if rec.code != http.StatusOK {
 			return false
 		}

@@ -681,7 +681,7 @@ export interface paths {
         };
         /**
          * List the images of an environment
-         * @description Newest first, ties by image ID. An untagged image is listed as <none> and marked dangling. On a swarm every node's images, each with its node. Optionally only one node's (node). At most 500 rows, after the filter, with the total. Each row says what uses it: usedByContainers (containers on its node, stopped ones included, created from its ID) and usedByServices (swarm services whose spec names it, by pinned digest, else by repository and tag, even with no task). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied when the agent refuses a read by its own policy. Needs images.read (Viewer) on the environment. Reads are not audited.
+         * @description Newest first, ties by image ID. An untagged image is listed as <none> and marked dangling. view=merged (the default) lists one row per image ID with the nodes that hold it, so two nodes with the same ID are one row while the same tag under different IDs stays two rows and a drifted node shows; view=node lists one row per copy on a node. Optionally only one node's (node), a search (q: a tag or repository, or the start of an ID) and only untagged images (dangling=1). The node, the search and the Dangling filter run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal and danglingCount the numbers before the search and the Dangling filter. Each row says what uses it: usedByContainers (containers on its node, stopped ones included, created from its ID) and usedByServices (swarm services whose spec names it, by pinned digest, else by repository and tag, even with no task). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied when the agent refuses a read by its own policy. Needs images.read (Viewer) on the environment. Reads are not audited.
          */
         get: operations["listImages"];
         put?: never;
@@ -3924,6 +3924,17 @@ export interface components {
             /** @description The layers in the order the engine answers: the newest first */
             layers: components["schemas"]["ImageLayerBody"][] | null;
         };
+        ImageHolderBody: {
+            /**
+             * Format: int64
+             * @description Containers on this node, running or not, created from the image; 0 in nodeRefs
+             */
+            containers: number;
+            /** @description The display name of the node */
+            name: string;
+            /** @description The ID of the node */
+            nodeId: string;
+        };
         ImageInspectBody: {
             /** @description The engine's inspect document, with the values of the image configuration's environment (Config.Env, and ContainerConfig.Env of an older engine) replaced by <hidden> unless the caller holds secrets.reveal */
             inspect: {
@@ -3939,13 +3950,15 @@ export interface components {
             dangling: boolean;
             /** @description The full image ID */
             id: string;
-            /** @description The node that holds the image */
+            /** @description The node that holds the image; empty for a merged row that more than one node holds */
             node: string;
-            /** @description The ID of that node */
+            /** @description The ID of that node; empty when node is */
             nodeId: string;
-            /** @description True when the host of this node is read-only, so no change to its images will be accepted */
+            /** @description The nodes that hold the image, by name, each with its container count: one in the per-node view, every holder in the merged one */
+            nodes: components["schemas"]["ImageHolderBody"][] | null;
+            /** @description True when the host of every node the row stands for is read-only, so no change to it will be accepted */
             readOnly: boolean;
-            /** @description repository:tag for each tag, or ["<none>"] for an untagged image */
+            /** @description repository:tag for each tag, on any node of a merged row, or ["<none>"] for an untagged image */
             repoTags: string[] | null;
             /** @description The first 12 characters of the ID, without the sha256: prefix */
             shortId: string;
@@ -3956,12 +3969,12 @@ export interface components {
             size: number;
             /**
              * Format: int64
-             * @description Containers on this node, running or not, created from this image ID. Counted from the containers Bayplan reads, never from the engine's own per-image count, which a list does not compute
+             * @description Containers, running or not, created from this image ID on the nodes the row stands for. Counted from the containers Bayplan reads, never from the engine's own per-image count, which a list does not compute
              */
             usedByContainers: number;
             /**
              * Format: int64
-             * @description Swarm services whose spec names this image, by pinned digest else by repository and tag, even with no running task, as of the last cluster read. A service can run a task on any node, so it counts for the image on every node. Always 0 off a swarm
+             * @description Swarm services whose spec names this image, by pinned digest else by repository and tag, even with no running task, as of the last cluster read. A service can run a task on any node, so it counts once for the image. Always 0 off a swarm
              */
             usedByServices: number;
         };
@@ -3981,19 +3994,36 @@ export interface components {
             size: number;
         };
         ImageListBody: {
+            /**
+             * Format: int64
+             * @description How many rows of this view are untagged, after the node filter and before the search and the Dangling filter, so the chip never shrinks with what was typed
+             */
+            danglingCount: number;
             /** @description At most 500 rows */
             items: components["schemas"]["ImageItem"][] | null;
+            /**
+             * Format: int64
+             * @description How many nodes the environment has: those that answered and those that did not
+             */
+            nodeCount: number;
+            /** @description The nodes that answered, by name, with their IDs, so a row can say which nodes lack the image */
+            nodeRefs: components["schemas"]["ImageHolderBody"][] | null;
             /** @description The nodes that answered, for the node filter */
             nodes: string[] | null;
             /** @description Nodes that should have answered and did not, so these rows are not the whole cluster */
             notReporting: string[] | null;
             /**
              * Format: int64
-             * @description How many there are, whatever the cap
+             * @description How many match the search and the filters, whatever the cap
              */
             total: number;
             /** @description True when total is more than the rows returned */
             truncated: boolean;
+            /**
+             * Format: int64
+             * @description How many rows this view has before the search and the Dangling filter (after the node filter), so a page can say 3 of 600
+             */
+            unfilteredTotal: number;
         };
         ImageNameBody: {
             /**
@@ -6998,6 +7028,12 @@ export interface operations {
             query?: {
                 /** @description Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list */
                 node?: string;
+                /** @description Search: a case-insensitive substring of a tag (so of its repository too), or the start of the image ID, with or without sha256:. Applied before the 500-row cap */
+                q?: string;
+                /** @description True keeps only untagged images. Applied before the 500-row cap */
+                dangling?: boolean;
+                /** @description merged: one row per image ID, with the nodes that hold it. node: one row per copy on a node. On a host with one node they are the same */
+                view?: "merged" | "node";
             };
             header?: never;
             path: {

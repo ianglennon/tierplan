@@ -981,7 +981,9 @@ func TestSwarmListsCarryEachRowsNodeAndTheNodeNamesAvailableForTheFilter(t *test
 	if nets.Nodes == nil || !slices.Equal(*nets.Nodes, []string{"Cluster", "mgr-1", "mgr-2", "wrk-1"}) {
 		t.Errorf("networks nodes = %v, want the reporting nodes and Cluster for the filter", nets.Nodes)
 	}
-	for _, what := range []string{"images", "volumes"} {
+	// The images list merges the two managers' copy of one image by default (plan 05-15); the
+	// Per node view is the one row per copy.
+	for _, what := range []string{"images?view=node", "volumes"} {
 		l := decode[nodeListBody[nodeNamed]](t, s.get(t, s.env.ID, what))
 		if l.Total != 2 || len(l.Items) != 2 || l.Items[0].Node == "" {
 			t.Errorf("%s = %+v, want one row per manager with its node", what, l)
