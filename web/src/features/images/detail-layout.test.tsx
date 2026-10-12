@@ -322,6 +322,58 @@ describe("image page actions", () => {
     expect(sent.filter((s) => s.path.endsWith("/images/remove"))).toHaveLength(1);
   });
 
+  it("shows the in-use callout with what uses the image and makes Remove… unavailable while every node's copy is used", async () => {
+    usedByAnswer = () =>
+      Response.json({
+        items: [
+          {
+            kind: "container",
+            id: "c1",
+            name: "old-cache",
+            nodeId: "n1",
+            node: "node-1",
+            state: "exited",
+            matchedBy: "image_id",
+          },
+          {
+            kind: "service",
+            id: "s1",
+            name: "proxy",
+            nodeId: "",
+            node: "",
+            state: "no_tasks",
+            matchedBy: "tag",
+          },
+        ],
+        usedByContainers: 1,
+        usedByServices: 1,
+        notReporting: [],
+      });
+    renderAt();
+    const alert = await screen.findByText("nginx:1.27 is in use");
+    const callout = alert.closest("[role=alert]") as HTMLElement;
+    expect(callout.textContent).toContain(
+      "Stopped containers and swarm services that mention it count, even with no running tasks. Remove them first.",
+    );
+    expect(within(callout).getByText("old-cache on node-1")).toBeTruthy();
+    expect(within(callout).getByText("Service proxy")).toBeTruthy();
+    const remove = screen.getByRole("button", { name: "Remove nginx:1.27" });
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(remove);
+    expect(
+      (await screen.findAllByText("In use by 1 container, 1 service. Open it to see what uses it."))
+        .length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("shows no in-use callout and an available Remove… when nothing uses the image", async () => {
+    renderAt();
+    const remove = await screen.findByRole("button", { name: "Remove nginx:1.27" });
+    expect(screen.queryByText("nginx:1.27 is in use")).toBeNull();
+    expect(remove.getAttribute("aria-disabled")).not.toBe("true");
+  });
+
   it("has Copy image ID under More", async () => {
     const write = vi.fn(async () => undefined);
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: write } });

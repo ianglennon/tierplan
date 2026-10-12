@@ -88,6 +88,8 @@ interface RemoveImageDialogProps {
   name: string;
   // The nodes the image is removed from.
   nodes: readonly ImageNodeRef[];
+  // On a swarm the nodes are chosen from a list.
+  swarm?: boolean;
   open: boolean;
   onClose: () => void;
   // Called when the remove went through, so the page can move on.

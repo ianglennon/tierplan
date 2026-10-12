@@ -246,3 +246,284 @@ func TestRemoveImageTheSchemaRefusesAnEmptyListAndAnIDOfTheWrongShape(t *testing
 		t.Fatalf("writes = %v", w)
 	}
 }
+
+// In-use blocking, the fresh re-check and untag (plan 05-16 task 2, D-28, D-29, T-05-54).
+
+var (
+	rmSvc  = hexID("e")
+	rmFree = hexID("f")
+)
+
+// removeSwarm is two managers and a worker that all hold redis:8 (rmUsed), nginx:1.27 (rmSvc,
+// which a service spec with no task names), a free image and a two-name image. A stopped
+// container uses redis:8 on mgr-1 only.
+func removeSwarm(t *testing.T) *swarmFix {
+	t.Helper()
+	s, _ := removeSwarmCfgs(t)
+	return s
+}
+
+// removeSwarmCfgs is removeSwarm and the configuration each node's fake was started with, by
+// hostname, so a test can change what one answers.
+func removeSwarmCfgs(t *testing.T) (*swarmFix, map[string]dockertest.FakeConfig) {
+	t.Helper()
+	cfgs := map[string]dockertest.FakeConfig{}
+	s := newSwarmFixWith(t, func(host string, cfg *dockertest.FakeConfig) {
+		cfg.Images = []dockertest.FakeImage{
+			{ID: rmUsed, RepoTags: []string{"redis:8"}, Created: 50},
+			{ID: rmSvc, RepoTags: []string{"nginx:1.27"}, Created: 40},
+			{ID: rmFree, RepoTags: []string{"busybox:1"}, Created: 30},
+			{ID: rmMulti, RepoTags: []string{"app:1", "app:2"}, Created: 20},
+		}
+		if host == "mgr-1" {
+			cfg.Containers = append(cfg.Containers,
+				dockertest.FakeContainer{ID: "c-old", Names: []string{"/old-cache"}, Image: "redis:8", ImageID: rmUsed, State: "exited"})
+		}
+		if strings.HasPrefix(host, "mgr-") {
+			cfg.ServiceRows = append(cfg.ServiceRows,
+				dockertest.FakeService{ID: "svc-proxy", Name: "proxy", Mode: "replicated", Running: 0, Desired: 0, Image: "nginx:1.27"})
+		}
+		cfgs[host] = *cfg
+	})
+	return s, cfgs
+}
+
+func (s *swarmFix) postImages(t *testing.T, route, body string) (*envRec, imagesRemoved) {
+	t.Helper()
+	rec := s.req(t, http.MethodPost, "/api/env/"+s.env.ID+"/images/"+route, body)
+	var got imagesRemoved
+	if rec.code == http.StatusOK {
+		if err := json.Unmarshal(rec.body, &got); err != nil {
+			t.Fatalf("body = %s (%v)", rec.body, err)
+		}
+	}
+	return rec, got
+}
+
+func (s *swarmFix) imageDeletesOn() map[string][]string {
+	out := map[string][]string{}
+	for name, a := range map[string]*agentConn{"m1": s.m1, "m2": s.m2, "w": s.w} {
+		out[name] = imageWrites(a.fake)
+	}
+	return out
+}
+
+func (s *swarmFix) imageAudits(t *testing.T) []auditRowFull {
+	t.Helper()
+	return queryAudits(t, s.st.Read, audit.ActionImageRemoved, audit.ActionImageUntagged)
+}
+
+func TestRemoveImageAContainerBlocksOnlyItsOwnNodeAndTheOthersAreRemoved(t *testing.T) {
+	s := removeSwarm(t)
+	rec, got := s.postImages(t, "remove", removeImagesJSON([2]string{s.m1.id, rmUsed}, [2]string{s.m2.id, rmUsed}, [2]string{s.w.id, rmUsed}))
+	if rec.code != http.StatusOK || len(got.Results) != 3 {
+		t.Fatalf("%d %s", rec.code, rec.body)
+	}
+	if r := got.Results[0]; r.Result != "failed" || r.Code != "image_in_use" || !strings.Contains(r.Detail, "old-cache") {
+		t.Errorf("mgr-1 = %+v, want image_in_use naming old-cache", r)
+	}
+	if got.Results[1].Result != "done" || got.Results[2].Result != "done" {
+		t.Errorf("the other nodes = %+v %+v, want done", got.Results[1], got.Results[2])
+	}
+	d := s.imageDeletesOn()
+	if len(d["m1"]) != 0 || len(d["m2"]) == 0 || len(d["w"]) == 0 {
+		t.Fatalf("deletes = %v, want none on mgr-1 and some on the others", d)
+	}
+	rows := s.imageAudits(t)
+	if len(rows) != 3 || got.BulkID == "" {
+		t.Fatalf("audit rows = %+v bulk %q, want three with a bulk", rows, got.BulkID)
+	}
+	for i, r := range rows {
+		if r.Details["bulk"] != got.BulkID {
+			t.Errorf("row %d bulk = %q, want %q", i, r.Details["bulk"], got.BulkID)
+		}
+	}
+	if rows[0].Result != string(audit.ResultFailure) || rows[0].Details["code"] != "image_in_use" || rows[1].Result != string(audit.ResultSuccess) {
+		t.Errorf("rows = %+v, want a failure then successes in request order", rows)
+	}
+}
+
+func TestRemoveImageAServiceSpecWithNoTaskBlocksEveryNodeAndNothingIsSent(t *testing.T) {
+	s := removeSwarm(t)
+	rec, got := s.postImages(t, "remove", removeImagesJSON([2]string{s.m1.id, rmSvc}, [2]string{s.m2.id, rmSvc}, [2]string{s.w.id, rmSvc}))
+	if rec.code != http.StatusOK || len(got.Results) != 3 {
+		t.Fatalf("%d %s", rec.code, rec.body)
+	}
+	for _, r := range got.Results {
+		if r.Result != "failed" || r.Code != "image_in_use" || !strings.Contains(r.Detail, "proxy") {
+			t.Errorf("result = %+v, want image_in_use naming the proxy service", r)
+		}
+	}
+	if d := s.imageDeletesOn(); len(d["m1"])+len(d["m2"])+len(d["w"]) != 0 {
+		t.Fatalf("a delete reached an engine: %v", d)
+	}
+}
+
+func TestRemoveImageAContainerThatStartsBetweenTheCheckAndTheCallMakesTheEngineRefuseAsImageInUse(t *testing.T) {
+	cfg := removeEngine()
+	cfg.BusyImages = []string{rmApp}
+	f, e := dashEnv(t, cfg)
+	post := f.imageDeleter(t, e, "ops", "operator")
+	rec := post("remove", removeImagesJSON([2]string{e.ID, rmApp}))
+	var got imagesRemoved
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Results) != 1 {
+		t.Fatalf("%d body = %s (%v)", rec.Code, rec.Body, err)
+	}
+	if r := got.Results[0]; r.Result != "failed" || r.Code != "image_in_use" {
+		t.Fatalf("result = %+v, want failed image_in_use", r)
+	}
+	if w := imageWrites(f.fake); len(w) != 1 || strings.Contains(w[0], "force") {
+		t.Fatalf("writes = %v, want the one delete the engine refused, never forced", w)
+	}
+	if rows := f.imageAudits(t); len(rows) != 1 || rows[0].Details["code"] != "image_in_use" {
+		t.Fatalf("audit rows = %+v", rows)
+	}
+}
+
+func TestRemoveImageWhenTheServicesCannotBeReadNothingIsRemovedAndTheTargetIsNodeUnreachable(t *testing.T) {
+	s, cfgs := removeSwarmCfgs(t)
+	for host, a := range map[string]*agentConn{"mgr-1": s.m1, "mgr-2": s.m2} {
+		cfg := cfgs[host]
+		cfg.QuorumLost = true
+		a.fake.Reconfigure(cfg)
+	}
+	rec, got := s.postImages(t, "remove", removeImagesJSON([2]string{s.w.id, rmFree}))
+	if rec.code != http.StatusOK || len(got.Results) != 1 {
+		t.Fatalf("%d %s", rec.code, rec.body)
+	}
+	if r := got.Results[0]; r.Result != "failed" || r.Code != "node_unreachable" {
+		t.Fatalf("result = %+v, want failed node_unreachable", r)
+	}
+	if d := s.imageDeletesOn(); len(d["m1"])+len(d["m2"])+len(d["w"]) != 0 {
+		t.Fatalf("a delete reached an engine: %v", d)
+	}
+}
+
+func untagJSON(imageID, ref string, nodeIDs ...string) string {
+	b, _ := json.Marshal(map[string]any{"imageId": imageID, "ref": ref, "nodeIds": nodeIDs})
+	return string(b)
+}
+
+func TestUntagOneOfSeveralNamesIsAllowedWhileTheImageIsInUse(t *testing.T) {
+	cfg := removeEngine()
+	cfg.Containers = append(cfg.Containers,
+		dockertest.FakeContainer{ID: "c-web", Names: []string{"/web"}, Image: "nginx:latest", ImageID: rmMulti, State: "running"})
+	f, e := dashEnv(t, cfg)
+	post := f.imageDeleter(t, e, "ops", "operator")
+	rec := post("untag", untagJSON(rmMulti, "nginx:latest", e.ID))
+	var got imagesRemoved
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Results) != 1 {
+		t.Fatalf("%d body = %s (%v)", rec.Code, rec.Body, err)
+	}
+	if r := got.Results[0]; r.Result != "done" || r.Removed || r.Ref != "nginx:latest" {
+		t.Fatalf("result = %+v, want done, not removed", r)
+	}
+	if w := imageWrites(f.fake); len(w) != 1 || !strings.HasPrefix(w[0], "DELETE /images/nginx:latest") {
+		t.Fatalf("writes = %v, want one untag of the name", w)
+	}
+	rows := f.imageAudits(t)
+	if len(rows) != 1 || rows[0].Action != audit.ActionImageUntagged || rows[0].Details["ref"] != "nginx:latest" || rows[0].Details["node"] != e.ID || rows[0].Details["code"] != "untagged" {
+		t.Fatalf("audit rows = %+v, want one image.untagged", rows)
+	}
+}
+
+func TestUntagTheLastNameOfAnImageInUseIsLastNameInUseAndNothingIsSent(t *testing.T) {
+	f, e := dashEnv(t, removeEngine())
+	post := f.imageDeleter(t, e, "ops", "operator")
+	rec := post("untag", untagJSON(rmUsed, "redis:8", e.ID))
+	var got imagesRemoved
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Results) != 1 {
+		t.Fatalf("%d body = %s (%v)", rec.Code, rec.Body, err)
+	}
+	if r := got.Results[0]; r.Result != "failed" || r.Code != "last_name_in_use" {
+		t.Fatalf("result = %+v, want failed last_name_in_use", r)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("writes = %v, want none", w)
+	}
+	if rows := f.imageAudits(t); len(rows) != 1 || rows[0].Result != string(audit.ResultFailure) || rows[0].Details["code"] != "last_name_in_use" {
+		t.Fatalf("audit rows = %+v, want one failure", rows)
+	}
+}
+
+func TestUntagTheOnlyNameOfAnUnusedImageRemovesItAndIsAuditedAsARemove(t *testing.T) {
+	f, e := dashEnv(t, removeEngine())
+	post := f.imageDeleter(t, e, "ops", "operator")
+	rec := post("untag", untagJSON(rmApp, "ghcr.io/acme/app:1", e.ID))
+	var got imagesRemoved
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Results) != 1 {
+		t.Fatalf("%d body = %s (%v)", rec.Code, rec.Body, err)
+	}
+	if r := got.Results[0]; r.Result != "done" || !r.Removed {
+		t.Fatalf("result = %+v, want done and removed", r)
+	}
+	rows := f.imageAudits(t)
+	if len(rows) != 1 || rows[0].Action != audit.ActionImageRemoved || rows[0].Details["ref"] != "ghcr.io/acme/app:1" {
+		t.Fatalf("audit rows = %+v, want one image.removed", rows)
+	}
+	if list := decode[imageList](t, f.get(t, e, "images")); slices.ContainsFunc(list.Items, func(i listedImage) bool { return i.ID == rmApp }) {
+		t.Fatalf("the image is still listed: %+v", list.Items)
+	}
+}
+
+func TestUntagANameTheNodeDoesNotHaveIsNotFoundAndIsNotAudited(t *testing.T) {
+	f, e := dashEnv(t, removeEngine())
+	post := f.imageDeleter(t, e, "ops", "operator")
+	rec := post("untag", untagJSON(rmMulti, "nginx:9", e.ID))
+	var got imagesRemoved
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Results) != 1 {
+		t.Fatalf("%d body = %s (%v)", rec.Code, rec.Body, err)
+	}
+	if r := got.Results[0]; r.Result != "failed" || r.Code != "not_found" {
+		t.Fatalf("result = %+v, want failed not_found", r)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("writes = %v", w)
+	}
+	if rows := f.imageAudits(t); len(rows) != 0 {
+		t.Fatalf("audit rows = %+v, want none", rows)
+	}
+}
+
+func TestUntagWithNoNodesGoesToEveryNodeThatHasTheNameWithOneBulkID(t *testing.T) {
+	s := removeSwarm(t)
+	rec, got := s.postImages(t, "untag", untagJSON(rmMulti, "app:2"))
+	if rec.code != http.StatusOK || len(got.Results) != 3 {
+		t.Fatalf("%d %s", rec.code, rec.body)
+	}
+	for _, r := range got.Results {
+		if r.Result != "done" || r.Removed {
+			t.Errorf("result = %+v, want done and kept", r)
+		}
+	}
+	d := s.imageDeletesOn()
+	if len(d["m1"]) != 1 || len(d["m2"]) != 1 || len(d["w"]) != 1 {
+		t.Fatalf("deletes = %v, want one untag per node", d)
+	}
+	rows := s.imageAudits(t)
+	if len(rows) != 3 || got.BulkID == "" {
+		t.Fatalf("audit rows = %+v bulk %q", rows, got.BulkID)
+	}
+	for _, r := range rows {
+		if r.Action != audit.ActionImageUntagged || r.Details["bulk"] != got.BulkID {
+			t.Errorf("row = %+v, want image.untagged with the shared bulk", r)
+		}
+	}
+}
+
+func TestUntagAViewerIs403AndAnImageNoNodeHasWithNoNodesNamedIs404(t *testing.T) {
+	f, e := dashEnv(t, removeEngine())
+	viewer := f.imageDeleter(t, e, "looker", "viewer")
+	if rec := viewer("untag", untagJSON(rmMulti, "app:1", e.ID)); rec.Code != http.StatusForbidden {
+		t.Fatalf("viewer: %d, want 403: %s", rec.Code, rec.Body)
+	}
+	ops := f.imageDeleter(t, e, "ops", "operator")
+	if rec := ops("untag", untagJSON(rmMissing, "app:1")); rec.Code != http.StatusNotFound {
+		t.Fatalf("no holder: %d, want 404: %s", rec.Code, rec.Body)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("writes = %v", w)
+	}
+}
+
+var rmMissing = hexID("9")

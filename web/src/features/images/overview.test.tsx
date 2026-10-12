@@ -43,15 +43,26 @@ function detail(extra: Partial<ImageDetail> = {}): ImageDetail {
 
 let client: QueryClient;
 let answer: () => Response;
+let me: ReturnType<typeof makeMe>;
 
 beforeEach(() => {
   answer = () => Response.json(detail());
+  me = makeMe({ envs: { [ENV]: "admin" } });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   vi.stubGlobal(
     "fetch",
     vi.fn(async (req: Request) => {
       const path = decodeURIComponent(new URL(req.url).pathname);
-      if (path === "/api/me") return Response.json(makeMe({ envs: { [ENV]: "admin" } }));
+      if (path === "/api/me") return Response.json(me);
+      if (path === `/api/env/${ENV}/images/${ID}/used-by`) {
+        return Response.json({
+          items: [],
+          usedByContainers: 0,
+          usedByServices: 0,
+          notReporting: [],
+        });
+      }
+      if (path === "/api/environments") return Response.json({ items: [] });
       if (path === `/api/env/${ENV}/images/${ID}`) return answer();
       return Response.json({}, { status: 404 });
     }),
@@ -126,5 +137,57 @@ describe("image Overview", () => {
     answer = () => new Response(new ReadableStream());
     mount();
     expect(document.querySelector('[aria-busy="true"]')).toBeTruthy();
+  });
+});
+
+describe("image Overview Untag…", () => {
+  const several = () =>
+    detail({
+      names: [
+        { name: "nginx:1.27", kind: "tag" },
+        { name: "nginx:latest", kind: "tag" },
+        { name: DIGEST, kind: "digest" },
+      ],
+      nodes: [
+        {
+          nodeId: "n1",
+          name: "node-1",
+          present: true,
+          names: ["nginx:1.27", "nginx:latest", DIGEST],
+        },
+      ],
+    });
+
+  it("offers Untag… on each tag of an image with several names, and not on a digest", async () => {
+    answer = () => Response.json(several());
+    mount();
+    expect(await screen.findByRole("button", { name: "Untag nginx:1.27" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Untag nginx:latest" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: `Untag ${DIGEST}` })).toBeNull();
+  });
+
+  it("offers no Untag… when the image has only one name", async () => {
+    mount();
+    await screen.findByRole("region", { name: "Names" });
+    expect(screen.queryByRole("button", { name: /^Untag / })).toBeNull();
+  });
+
+  it("opens the untag dialog for that name", async () => {
+    answer = () => Response.json(several());
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Untag nginx:latest" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Untag nginx:latest?")).toBeTruthy();
+  });
+
+  it("makes Untag… unavailable, with the reason, for a viewer", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    answer = () => Response.json(several());
+    mount();
+    const button = await screen.findByRole("button", { name: "Untag nginx:1.27" });
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(button);
+    expect((await screen.findAllByText("Needs Operator")).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 });

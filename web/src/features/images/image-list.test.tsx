@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -463,6 +463,88 @@ describe("ImageList states", () => {
     me = makeMe({ envs: {} });
     mount();
     await waitFor(() => expect(screen.queryByText("nginx:1.27")).toBeNull());
+  });
+});
+
+async function openRowMenu(name: string) {
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: `Actions for ${name}` })).toBeTruthy(),
+  );
+  await act(async () => {});
+  await act(async () => {
+    fireEvent.keyDown(screen.getByRole("button", { name: `Actions for ${name}` }), {
+      key: "Enter",
+    });
+  });
+  return screen.findByRole("menu");
+}
+
+describe("ImageList row actions", () => {
+  beforeEach(() => {
+    body = list([
+      image("a", { repoTags: ["nginx:1.27", "nginx:latest"] }),
+      image("u", {
+        repoTags: ["redis:8"],
+        usedByContainers: 1,
+        nodes: [holder("node-1-id", 1)],
+      }),
+      image("c", { repoTags: ["busybox:1"] }),
+    ]);
+  });
+
+  it("offers Open, Pull again…, Remove… and Untag… for an image with several names", async () => {
+    mount();
+    const menu = await openRowMenu("nginx:1.27");
+    for (const name of ["Open", "Pull again…", "Remove…", "Untag…"]) {
+      expect(within(menu).getByRole("menuitem", { name })).toBeTruthy();
+    }
+  });
+
+  it("has no Untag… for an image with one name", async () => {
+    mount();
+    const menu = await openRowMenu("busybox:1");
+    expect(within(menu).queryByRole("menuitem", { name: "Untag…" })).toBeNull();
+    expect(within(menu).getByRole("menuitem", { name: "Remove…" })).toBeTruthy();
+  });
+
+  it("opens Remove {ref}? from Remove… on an unused image", async () => {
+    mount();
+    const menu = await openRowMenu("busybox:1");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Remove…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Remove busybox:1?")).toBeTruthy();
+  });
+
+  it("opens the untag dialog from Untag…", async () => {
+    mount();
+    const menu = await openRowMenu("nginx:1.27");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Untag…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Untag nginx:1.27?")).toBeTruthy();
+  });
+
+  it("disables Remove… with the reason while a container uses the image everywhere it is", async () => {
+    mount();
+    const menu = await openRowMenu("redis:8");
+    const item = within(menu).getByRole("menuitem", { name: "Remove…" });
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(item);
+    expect(
+      (await screen.findAllByText("In use by 1 container. Open it to see what uses it.")).length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("disables Remove… and Untag… with Needs Operator for a viewer", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    mount();
+    const menu = await openRowMenu("nginx:1.27");
+    expect(
+      within(menu).getByRole("menuitem", { name: "Remove…" }).getAttribute("aria-disabled"),
+    ).toBe("true");
+    expect(
+      within(menu).getByRole("menuitem", { name: "Untag…" }).getAttribute("aria-disabled"),
+    ).toBe("true");
   });
 });
 
