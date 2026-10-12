@@ -18,7 +18,7 @@ func TestCompareTagsPutsTheNewestVersionFirstAndNamesWithoutAVersionAfterThem(t 
 		"stable", "latest", "edge", "alpine",
 	}
 	got := slices.Clone(want)
-	rand.Shuffle(len(got), func(i, j int) { got[i], got[j] = got[j], got[i] })
+	rand.Shuffle(len(got), func(i, j int) { got[i], got[j] = got[j], got[i] }) //nolint:gosec // G404: a test shuffle, not a secret
 	slices.SortFunc(got, CompareTags)
 	if !slices.Equal(got, want) {
 		t.Errorf("sorted = %v\nwant     %v", got, want)

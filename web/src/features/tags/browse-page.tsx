@@ -13,7 +13,8 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { TagBrowser } from "@/features/tags/tag-browser";
+import { MAX_QUERY } from "@/features/containers/list-search";
+import { TagBrowser, type TagFilterPatch } from "@/features/tags/tag-browser";
 import { useAnyEnvironmentPermission, useDocumentTitle } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { z } from "@/lib/zod-config";
@@ -28,10 +29,16 @@ const MAX_REF = 512;
 // stale or hand-edited link shows the empty page and not an error.
 export const browseSearchSchema = z.object({
   ref: z.string().max(MAX_REF).catch(""),
+  q: z.string().min(1).max(MAX_QUERY).optional().catch(undefined),
+  // hide=0 shows the signature, attestation and cache tags; they are hidden otherwise.
+  hide: z.literal(0).optional().catch(undefined),
   envId: z.string().min(1).max(MAX_ID).optional().catch(undefined),
 });
 
 export type BrowseSearch = z.output<typeof browseSearchSchema>;
+
+// A change to the search: a key set to undefined leaves the address.
+export type BrowseSearchPatch = { [K in keyof BrowseSearch]?: BrowseSearch[K] | undefined };
 
 function Breadcrumb() {
   const t = useT();
@@ -54,7 +61,13 @@ function Breadcrumb() {
 // BrowsePage is /registries/browse: the breadcrumb, the repository as the title, and the
 // tag browser with the credential line (D-11). It is for anyone who reads images on some
 // environment; the server limits the credentials to the ones they may use (D-24a).
-export function BrowsePage({ search }: { search: BrowseSearch }) {
+export function BrowsePage({
+  search,
+  onSearchChange,
+}: {
+  search: BrowseSearch;
+  onSearchChange?: (patch: BrowseSearchPatch) => void;
+}) {
   const t = useT();
   const allowed = useAnyEnvironmentPermission("images.read");
   useDocumentTitle(search.ref || t("tags.page.breadcrumb.browse"));
@@ -73,7 +86,19 @@ export function BrowsePage({ search }: { search: BrowseSearch }) {
               <TooltipContent>{search.ref}</TooltipContent>
             </Tooltip>
           </h1>
-          <TagBrowser repo={search.ref} variant="full" envId={search.envId} />
+          <TagBrowser
+            repo={search.ref}
+            variant="full"
+            envId={search.envId}
+            q={search.q}
+            hide={search.hide !== 0}
+            onFilterChange={(patch: TagFilterPatch) => {
+              const next: BrowseSearchPatch = {};
+              if ("q" in patch) next.q = patch.q;
+              if ("hide" in patch) next.hide = patch.hide ? undefined : 0;
+              onSearchChange?.(next);
+            }}
+          />
         </>
       ) : (
         <Empty>

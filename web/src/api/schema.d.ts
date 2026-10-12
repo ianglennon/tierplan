@@ -1791,7 +1791,7 @@ export interface paths {
         };
         /**
          * List the tags of a repository
-         * @description Lists a repository's tag names through the server, with the stored credential pulls would use for it among the ones the caller may see: the instance credentials and, with envId, that environment's own. The answer names the credential, never holds it, and is cached for a minute per credential, so a caller never gets a list fetched with a credential they cannot use. Needs images.read on at least one environment, and on envId when it is given (403). An unparsable reference is 422 ref_invalid. When the registry cannot list the tags the answer is 404 repository_not_found, or 502 with the problem type needs_login (the registry wants a login and no stored credential matches), login_refused (it refused the matching credential), registry_unreachable or registry_tls; errors names the registry as registry.host and registry.repo and the credential used, if any, as credential.id, credential.name, credential.scopeKind and credential.scopeName. Not audited.
+         * @description Lists a repository's tag names through the server, with the stored credential pulls would use for it among the ones the caller may see: the instance credentials and, with envId, that environment's own. The tags come newest version first and then by name, descending, 100 to a page (page, from 0), filtered by the text q and without signature, attestation and cache tags unless hide is false. The answer names the credential, never holds it, and is cached for a minute per credential, so a caller never gets a list fetched with a credential they cannot use. Needs images.read on at least one environment, and on envId when it is given (403). An unparsable reference is 422 ref_invalid. When the registry cannot list the tags the answer is 404 repository_not_found, or 502 with the problem type needs_login (the registry wants a login and no stored credential matches), login_refused (it refused the matching credential), registry_unreachable or registry_tls; errors names the registry as registry.host and registry.repo and the credential used, if any, as credential.id, credential.name, credential.scopeKind and credential.scopeName. Not audited.
          */
         get: operations["browseTags"];
         put?: never;
@@ -9440,6 +9440,12 @@ export interface operations {
                 ref: string;
                 /** @description An environment whose own credentials are considered as well as the instance's. The caller needs images.read on it (403 otherwise). Left out, only the instance credentials are */
                 envId?: string;
+                /** @description Only tags whose name contains this text, ignoring case */
+                q?: string;
+                /** @description Leave out signature, attestation and cache tags (sha256-<digest> with .sig, .att, .sbom, .sbom.json or .prov, anything ending .sig, .att or .sbom, buildcache, cache, and names ending -buildcache or .cache). On by default */
+                hide?: boolean;
+                /** @description Which page, from 0; 100 tags to a page, newest version first and then by name, descending */
+                page?: number;
             };
             header?: never;
             path?: never;

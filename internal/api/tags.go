@@ -58,6 +58,9 @@ type TagListBody struct {
 type BrowseTagsInput struct {
 	Ref   string `query:"ref" required:"true" maxLength:"512" doc:"The repository to browse, like ghcr.io/acme/app or nginx. A tag or digest on it is ignored. 422 ref_invalid"`
 	EnvID string `query:"envId" maxLength:"64" doc:"An environment whose own credentials are considered as well as the instance's. The caller needs images.read on it (403 otherwise). Left out, only the instance credentials are"`
+	Q     string `query:"q" maxLength:"128" doc:"Only tags whose name contains this text, ignoring case"`
+	Hide  bool   `query:"hide" default:"true" doc:"Leave out signature, attestation and cache tags (sha256-<digest> with .sig, .att, .sbom, .sbom.json or .prov, anything ending .sig, .att or .sbom, buildcache, cache, and names ending -buildcache or .cache). On by default"`
+	Page  int    `query:"page" minimum:"0" maximum:"100" default:"0" doc:"Which page, from 0; 100 tags to a page, newest version first and then by name, descending"`
 	// UserAgent is read only to record a refusal in the audit log; it is not part of the contract.
 	UserAgent string `header:"User-Agent" hidden:"true"`
 }
@@ -80,7 +83,7 @@ func RegisterTags(r *httpx.Router, d TagsDeps) {
 		Path:        "/api/registries/tags",
 		Summary:     "List the tags of a repository",
 		Description: "Lists a repository's tag names through the server, with the stored credential pulls would use for it among the ones the caller may see: the instance credentials and, with envId, " +
-			"that environment's own. The answer names the credential, never holds it, and is cached for a minute per credential, so a caller never gets a list fetched with a credential they cannot use. " +
+			"that environment's own. The tags come newest version first and then by name, descending, 100 to a page (page, from 0), filtered by the text q and without signature, attestation and cache tags unless hide is false. The answer names the credential, never holds it, and is cached for a minute per credential, so a caller never gets a list fetched with a credential they cannot use. " +
 			"Needs images.read on at least one environment, and on envId when it is given (403). An unparsable reference is 422 ref_invalid. When the registry cannot list the tags the answer is 404 " +
 			"repository_not_found, or 502 with the problem type needs_login (the registry wants a login and no stored credential matches), login_refused (it refused the matching credential), " +
 			"registry_unreachable or registry_tls; errors names the registry as registry.host and registry.repo and the credential used, if any, as credential.id, credential.name, credential.scopeKind and credential.scopeName. Not audited.",
@@ -113,14 +116,14 @@ func RegisterTags(r *httpx.Router, d TagsDeps) {
 			d.Log.Error("tag browsing: choose a credential", "error", err)
 			return nil, huma.Error500InternalServerError("internal error")
 		}
-		page, err := d.Tags.List(ctx, cred, ref, "", true, 0)
+		page, err := d.Tags.List(ctx, cred, ref, in.Q, in.Hide, in.Page)
 		if err != nil {
 			return nil, d.tagProblem(ctx, ref, cred, err)
 		}
 		d.noteSignIn(ctx, cred, "")
 		body := TagListBody{
 			Repo: page.Repo, Host: page.Host, Tags: make([]TagNameBody, len(page.Tags)),
-			Hidden: page.Hidden, Total: page.Total, More: page.More, Capped: page.Capped,
+			Hidden: page.Hidden, Total: page.Total, More: page.More, Page: max(in.Page, 0), Capped: page.Capped,
 		}
 		for i, t := range page.Tags {
 			body.Tags[i] = TagNameBody{Name: t.Name}

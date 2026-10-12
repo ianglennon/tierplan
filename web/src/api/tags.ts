@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { infiniteQueryOptions } from "@tanstack/react-query";
+import { infiniteQueryOptions, keepPreviousData } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
 import { type ProblemField, readProblem } from "@/api/problem";
@@ -70,7 +70,14 @@ export interface TagsParams {
   repo: string;
   // An environment whose own credentials count as well as the instance's.
   envId?: string;
+  // Only tags whose name contains this text.
+  q?: string;
+  // Leave out signature, attestation and cache tags. On unless false.
+  hide?: boolean;
 }
+
+// Tags per page, as the server pages them.
+export const TAGS_PAGE_SIZE = 100;
 
 export const TAGS_KEY = ["tags"] as const;
 
@@ -79,12 +86,23 @@ export const TAGS_KEY = ["tags"] as const;
 // the table with its own Retry, so nothing retries by itself.
 export function tagsInfiniteQuery(p: TagsParams) {
   return infiniteQueryOptions({
-    queryKey: [...TAGS_KEY, p.repo, p.envId ?? null],
+    queryKey: [...TAGS_KEY, p.repo, p.envId ?? null, p.q ?? null, p.hide !== false],
     initialPageParam: 0,
-    queryFn: async (): Promise<TagList> => {
+    // The list stays on screen while a new filter is read, so typing does not blank it.
+    placeholderData: keepPreviousData,
+    queryFn: async ({ pageParam }): Promise<TagList> => {
       try {
+        // A value the server would assume anyway is left out of the address it is asked.
         const res = await api.GET("/api/registries/tags", {
-          params: { query: { ref: p.repo, envId: p.envId } },
+          params: {
+            query: {
+              ref: p.repo,
+              envId: p.envId,
+              q: p.q || undefined,
+              hide: p.hide === false ? false : undefined,
+              page: pageParam > 0 ? pageParam : undefined,
+            },
+          },
         });
         if (!res.data) {
           const problem = readProblem(res.error, res.response);

@@ -4,7 +4,7 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { TriangleAlert } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useId, useState } from "react";
 import { Trans } from "react-i18next";
 
 import { isTagErrorType, type TagErrorType, TagsRequestError, tagsInfiniteQuery } from "@/api/tags";
@@ -17,7 +17,10 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
 import {
   Table,
   TableBody,
@@ -26,6 +29,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { SearchBox } from "@/features/containers/container-list";
 import { TagRow } from "@/features/tags/tag-row";
 import { useAnyEnvironmentPermission, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -44,6 +48,18 @@ export interface TagBrowserProps {
   // Picker: what choosing a tag does, and the tag chosen.
   onSelect?: (tag: string) => void;
   selected?: string;
+  // The filter text and the Hide switch. A page that keeps them in its address passes both
+  // and hears of a change in onFilterChange; without onFilterChange the browser keeps them.
+  q?: string;
+  hide?: boolean;
+  onFilterChange?: (patch: TagFilterPatch) => void;
+}
+
+// A change to the filter: a member that is present is the new value, and an undefined q
+// clears the text.
+export interface TagFilterPatch {
+  q?: string | undefined;
+  hide?: boolean;
 }
 
 function scopeLabel(t: (key: string) => string, kind: string, name: string): string {
@@ -53,35 +69,51 @@ function scopeLabel(t: (key: string) => string, kind: string, name: string): str
 // TagBrowser lists a repository's tags through the server, with the credential it picks for
 // the repository (D-19, D-24a). The credential is named above the list and never leaves the
 // server. A failure replaces the table with its own message and way forward.
-export function TagBrowser({ repo, variant, envId, onSelect, selected }: TagBrowserProps) {
+export function TagBrowser({
+  repo,
+  variant,
+  envId,
+  onSelect,
+  selected,
+  q: qProp,
+  hide: hideProp,
+  onFilterChange,
+}: TagBrowserProps) {
   const t = useT();
-  const query = useInfiniteQuery(tagsInfiniteQuery({ repo, envId }));
+  const [local, setLocal] = useState<{ q?: string; hide: boolean }>({ hide: true });
+  const controlled = onFilterChange !== undefined;
+  const q = controlled ? qProp : local.q;
+  const hide = controlled ? hideProp !== false : local.hide;
+  function change(patch: TagFilterPatch) {
+    if (onFilterChange) onFilterChange(patch);
+    else setLocal((prev) => ({ ...prev, ...patch }));
+  }
+
+  const query = useInfiniteQuery(tagsInfiniteQuery({ repo, envId, q, hide }));
   const picker = variant === "picker";
 
   const pages = query.data?.pages ?? [];
   const first = pages[0];
   const tags = pages.flatMap((p) => p.tags ?? []);
 
+  const hidden = first?.hidden ?? 0;
   let body: ReactNode;
   if (query.isPending) {
     body = <SkeletonRows />;
-  } else if (query.isError) {
+  } else if (query.isError && !query.data) {
     body = <TagError error={query.error} repo={repo} onRetry={() => void query.refetch()} />;
   } else if (tags.length === 0) {
     body = (
-      <Empty>
-        <EmptyHeader>
-          <EmptyTitle>{t("tags.empty.none.title")}</EmptyTitle>
-          <EmptyDescription>
-            {t("tags.empty.none.body", { repo: first?.repo ?? repo, host: first?.host ?? "" })}
-          </EmptyDescription>
-        </EmptyHeader>
-        <EmptyContent>
-          <Button variant="outline" onClick={() => void query.refetch()}>
-            {t("tags.empty.none.retry")}
-          </Button>
-        </EmptyContent>
-      </Empty>
+      <EmptyList
+        hide={hide}
+        hidden={hidden}
+        q={q}
+        repo={first?.repo ?? repo}
+        host={first?.host ?? ""}
+        onShowHidden={() => change({ hide: false })}
+        onClearFilter={() => change({ q: undefined })}
+        onRetry={() => void query.refetch()}
+      />
     );
   } else {
     body = (
@@ -115,16 +147,125 @@ export function TagBrowser({ repo, variant, envId, onSelect, selected }: TagBrow
         credential={first?.credential ?? null}
         shown={first !== undefined}
       />
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+        <SearchBox
+          value={q}
+          onCommit={(next) => change({ q: next })}
+          label={t("tags.filter.label")}
+          placeholder={t("tags.filter.placeholder")}
+          clearLabel={t("tags.filter.clear")}
+        />
+        <HideSwitch
+          checked={hide}
+          hidden={first ? hidden : 0}
+          onChange={(next) => change({ hide: next })}
+        />
+      </div>
       <div className="rounded-lg border" aria-busy={query.isPending}>
         {body}
       </div>
       {first !== undefined && tags.length > 0 ? (
-        <p className="text-sm text-muted-foreground">
-          {t("tags.caption", { count: tags.length })}
-          {first.capped ? ` ${t("tags.capped", { count: 10000 })}` : ""}
-        </p>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <p className="text-sm text-muted-foreground">
+            {t("tags.caption", { count: tags.length })}
+            {first.capped ? ` ${t("tags.capped", { count: 10000 })}` : ""}
+          </p>
+          {query.hasNextPage ? (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={query.isFetchingNextPage}
+              onClick={() => void query.fetchNextPage()}
+            >
+              {query.isFetchingNextPage ? <Spinner aria-hidden="true" /> : null}
+              {query.isFetchingNextPage ? t("tags.paging.loading") : t("tags.paging.more")}
+            </Button>
+          ) : (
+            <p className="text-sm text-muted-foreground">{t("tags.paging.end")}</p>
+          )}
+          {query.isFetchNextPageError ? (
+            <p role="alert" className="text-sm text-destructive">
+              {t("tags.paging.error")}
+            </p>
+          ) : null}
+        </div>
       ) : null}
     </div>
+  );
+}
+
+interface HideSwitchProps {
+  checked: boolean;
+  hidden: number;
+  onChange: (next: boolean) => void;
+}
+
+// HideSwitch is the "Hide signature, attestation and cache tags" switch, on by default, with
+// how many tags it is hiding beside it.
+function HideSwitch({ checked, hidden, onChange }: HideSwitchProps) {
+  const t = useT();
+  const id = useId();
+  return (
+    <div className="flex items-center gap-2 max-md:min-h-11">
+      <Switch id={id} checked={checked} onCheckedChange={onChange} />
+      <Label htmlFor={id}>{t("tags.hide.label")}</Label>
+      {checked && hidden > 0 ? (
+        <span className="text-xs text-muted-foreground">{t("tags.hide.count", { n: hidden })}</span>
+      ) : null}
+    </div>
+  );
+}
+
+interface EmptyListProps {
+  hide: boolean;
+  hidden: number;
+  q: string | undefined;
+  repo: string;
+  host: string;
+  onShowHidden: () => void;
+  onClearFilter: () => void;
+  onRetry: () => void;
+}
+
+// EmptyList says why there is nothing to list and offers the way out: only tags the switch
+// hides are left, the filter matches nothing, or the repository has no tags.
+function EmptyList({
+  hide,
+  hidden,
+  q,
+  repo,
+  host,
+  onShowHidden,
+  onClearFilter,
+  onRetry,
+}: EmptyListProps) {
+  const t = useT();
+  let title: string;
+  let description: string | undefined;
+  let action: { label: string; run: () => void };
+  if (hide && hidden > 0) {
+    title = t("tags.empty.onlyHidden.title");
+    action = { label: t("tags.empty.onlyHidden.show"), run: onShowHidden };
+  } else if (q) {
+    title = t("tags.empty.noMatch.title", { query: q });
+    action = { label: t("tags.empty.noMatch.clear"), run: onClearFilter };
+  } else {
+    title = t("tags.empty.none.title");
+    description = t("tags.empty.none.body", { repo, host });
+    action = { label: t("tags.empty.none.retry"), run: onRetry };
+  }
+  return (
+    <Empty>
+      <EmptyHeader>
+        <EmptyTitle className="break-all">{title}</EmptyTitle>
+        {description ? <EmptyDescription>{description}</EmptyDescription> : null}
+      </EmptyHeader>
+      <EmptyContent>
+        <Button variant="outline" onClick={action.run}>
+          {action.label}
+        </Button>
+      </EmptyContent>
+    </Empty>
   );
 }
 

@@ -356,9 +356,14 @@ describe("TagBrowser filter, hide switch and paging", () => {
     await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
     fireEvent.change(filterBox(), { target: { value: "zzz" } });
     await waitFor(() => expect(screen.getByText("No tags match “zzz”.")).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "Clear filter" }));
+    // The filter box has a clear button of the same name; this is the one in the empty state.
+    const empty = screen
+      .getByText("No tags match “zzz”.")
+      .closest("[data-slot='empty']") as HTMLElement;
+    fireEvent.click(within(empty).getByRole("button", { name: "Clear filter" }));
+    // The unfiltered list was read a moment ago, so it comes back without asking again.
     await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
-    expect(sent.at(-1)?.query).toEqual({ ref: "ghcr.io/acme/app" });
+    expect(sent.map((s) => s.query.q)).toEqual([undefined, "zzz"]);
   });
 
   it("says only signature and attestation tags are left, with a button that shows them", async () => {

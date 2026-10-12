@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -20,6 +22,8 @@ const (
 	nameTTL = 60 * time.Second
 	// nameCacheEntries is how many name lists the cache keeps.
 	nameCacheEntries = 64
+	// TagPageSize is how many tags one page of the list holds.
+	TagPageSize = 100
 )
 
 // The codes a tag listing fails with, besides the step codes of a credential test. The SPA
@@ -62,8 +66,39 @@ type TagPage struct {
 	Capped bool
 }
 
-// HiddenTag reports whether a tag is hidden by default: a signature, attestation or cache tag.
-func HiddenTag(name string) bool { return false }
+// signatureSuffixes end the name of a signature, attestation or software bill of materials tag.
+var signatureSuffixes = []string{".sig", ".att", ".sbom"}
+
+// digestTagSuffixes may follow a sha256-<64 hex> tag, which is how cosign and BuildKit attach
+// a signature, attestation or provenance to an image by its digest.
+var digestTagSuffixes = []string{"", ".sig", ".att", ".sbom", ".sbom.json", ".prov"}
+
+// HiddenTag reports whether a tag is a signature, attestation or build cache tag, which the
+// tag list hides by default (D-21): sha256-<64 hex> with an optional .sig, .att, .sbom,
+// .sbom.json or .prov, any tag ending .sig, .att or .sbom, and the tags buildcache and cache
+// or ending -buildcache or .cache.
+func HiddenTag(name string) bool {
+	if rest, ok := strings.CutPrefix(name, "sha256-"); ok && len(rest) >= 64 && isHex(rest[:64]) {
+		if slices.Contains(digestTagSuffixes, rest[64:]) {
+			return true
+		}
+	}
+	for _, suffix := range signatureSuffixes {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+	return name == "buildcache" || name == "cache" || strings.HasSuffix(name, "-buildcache") || strings.HasSuffix(name, ".cache")
+}
+
+func isHex(s string) bool {
+	for _, c := range []byte(s) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return false
+		}
+	}
+	return true
+}
 
 // nameKey identifies a cached name list. cred is the ID of the credential the list was
 // fetched with and the time it was last changed, or "anon": a list fetched with one sign-in is
@@ -72,9 +107,14 @@ type nameKey struct {
 	cred, host, repo string
 }
 
-// nameList is the cached result of one fetch.
+// nameList is the cached result of one fetch, in list order. It is shared between calls and
+// never changed after it is made.
 type nameList struct {
-	names  []string
+	names []string
+	// lower and hidden are what each name is searched with and whether HiddenTag hides it,
+	// worked out once for the cache's minute.
+	lower  []string
+	hidden []bool
 	capped bool
 }
 
@@ -98,19 +138,36 @@ func NewTagService(clients *ClientCache, egress EgressPolicy, version string, lo
 	return &TagService{clients: clients, log: log, names: newLRU[nameKey, nameList](nameCacheEntries, nil)}
 }
 
-// List lists the tags of ref's repository with cred (nil is anonymous). The caller must have
-// been authorised, and cred must be one the caller may use, before this is called: the cache
-// is keyed by credential, not by caller.
+// List lists one page of the tags of ref's repository with cred (nil is anonymous). Tags are
+// in CompareTags order. q keeps the names that contain it, ignoring case; hide drops the tags
+// HiddenTag reports (D-21). page counts from 0, TagPageSize tags to a page; a page before the
+// first is the first, and one past the last is empty. The caller must have been authorised,
+// and cred must be one the caller may use, before this is called: the cache is keyed by
+// credential, not by caller.
 func (s *TagService) List(ctx context.Context, cred *ResolvedCredential, ref Ref, q string, hide bool, page int) (TagPage, error) {
-	_, _, _ = q, hide, page // 05-18 task 2 filters and pages
 	list, err := s.nameList(ctx, cred, ref)
 	if err != nil {
 		return TagPage{}, err
 	}
-	out := TagPage{Repo: ref.Path, Host: ref.Domain, Total: len(list.names), Capped: list.capped}
-	for _, n := range list.names {
-		out.Tags = append(out.Tags, TagName{Name: n})
+	q = strings.ToLower(strings.TrimSpace(q))
+	out := TagPage{Repo: ref.Path, Host: ref.Domain, Capped: list.capped}
+	skip := max(page, 0) * TagPageSize
+	for i, name := range list.names {
+		if q != "" && !strings.Contains(list.lower[i], q) {
+			continue
+		}
+		if list.hidden[i] {
+			out.Hidden++
+			if hide {
+				continue
+			}
+		}
+		if out.Total >= skip && len(out.Tags) < TagPageSize {
+			out.Tags = append(out.Tags, TagName{Name: name})
+		}
+		out.Total++
 	}
+	out.More = out.Total > skip+len(out.Tags)
 	return out, nil
 }
 
@@ -134,7 +191,7 @@ func (s *TagService) nameList(ctx context.Context, cred *ResolvedCredential, ref
 	if err != nil {
 		return nameList{}, &TagError{Code: tagCode(err, cred != nil), Err: err}
 	}
-	l := capNames(names)
+	l := sortNames(capNames(names))
 	s.names.Put(key, l, nameTTL)
 	return l, nil
 }
@@ -152,6 +209,18 @@ func capNames(names []string) nameList {
 			l.names, l.capped = l.names[:i], true
 			break
 		}
+	}
+	return l
+}
+
+// sortNames puts a name list in list order and works out what List searches it with.
+func sortNames(l nameList) nameList {
+	l.names = slices.Clone(l.names)
+	slices.SortFunc(l.names, CompareTags)
+	l.lower = make([]string, len(l.names))
+	l.hidden = make([]bool, len(l.names))
+	for i, n := range l.names {
+		l.lower[i], l.hidden[i] = strings.ToLower(n), HiddenTag(n)
 	}
 	return l
 }

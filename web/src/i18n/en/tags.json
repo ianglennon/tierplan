@@ -21,6 +21,21 @@
     "columns": {
       "tag": "Tag"
     },
+    "filter": {
+      "label": "Filter tags",
+      "placeholder": "Filter by name",
+      "clear": "Clear filter"
+    },
+    "hide": {
+      "label": "Hide signature, attestation and cache tags",
+      "count": "{{n}} hidden"
+    },
+    "paging": {
+      "more": "Load 100 more",
+      "loading": "Loading…",
+      "end": "That's every tag.",
+      "error": "Couldn't load more tags. Try again."
+    },
     "table": {
       "label": "Tags of {{repo}}"
     },
@@ -29,6 +44,14 @@
     "capped": "The repository has more tags than Bayplan reads, so only the first {{count}} are listed.",
     "selected": "Selected",
     "empty": {
+      "noMatch": {
+        "title": "No tags match “{{query}}”.",
+        "clear": "Clear filter"
+      },
+      "onlyHidden": {
+        "title": "Only signature and attestation tags are left.",
+        "show": "Show them"
+      },
       "none": {
         "title": "No tags",
         "body": "{{repo}} has no tags on {{host}}.",

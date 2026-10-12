@@ -251,7 +251,7 @@ func bigRepo() []string {
 	for i := range 245 {
 		tags = append(tags, fmt.Sprintf("1.%d.0", i))
 	}
-	rand.Shuffle(len(tags), func(i, j int) { tags[i], tags[j] = tags[j], tags[i] })
+	rand.Shuffle(len(tags), func(i, j int) { tags[i], tags[j] = tags[j], tags[i] }) //nolint:gosec // G404: a test shuffle, not a secret
 	return tags
 }
 
