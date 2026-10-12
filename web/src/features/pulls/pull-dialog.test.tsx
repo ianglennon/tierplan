@@ -11,7 +11,7 @@ import type { PullItem, PullJob } from "@/api/pulls";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
-import { PullDialog } from "@/features/pulls/pull-dialog";
+import { PullDialog, PullImageButton } from "@/features/pulls/pull-dialog";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
@@ -29,6 +29,7 @@ interface Sent {
 let sent: Sent[];
 let answer: (req: Sent) => Response | Promise<Response>;
 let client: QueryClient;
+let me: ReturnType<typeof makeMe>;
 
 const started = (nodes = 1) =>
   Response.json(
@@ -76,6 +77,7 @@ const job = (items: PullItem[], state: PullJob["state"] = "running"): PullJob =>
 
 beforeEach(() => {
   sent = [];
+  me = makeMe({ envs: { [ENV]: "operator" } });
   answer = () => started();
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
@@ -90,7 +92,7 @@ beforeEach(() => {
         body: req.method === "POST" ? await req.clone().json() : undefined,
       };
       sent.push(entry);
-      if (entry.path === "/api/me") return Response.json(makeMe({ envs: { [ENV]: "operator" } }));
+      if (entry.path === "/api/me") return Response.json(me);
       if (entry.path === `/api/env/${ENV}/images/pull` && req.method === "POST")
         return answer(entry);
       return Response.json({}, { status: 404 });
@@ -184,7 +186,7 @@ describe("PullDialog (the form)", () => {
     expect(button.hasAttribute("disabled") || button.getAttribute("aria-disabled") === "true").toBe(
       true,
     );
-    expect(within(dialog).getByRole("status", { name: "Loading" })).toBeTruthy();
+    expect(dialog.querySelector('[data-slot="spinner"]')).toBeTruthy();
     expect(posts()).toHaveLength(1);
     expect(posts()[0]?.body).toEqual({ ref: "nginx:1.27" });
     release(started());
@@ -398,5 +400,46 @@ describe("PullDialog (the progress)", () => {
       source().sendFrame("done", job([item({ state: "done", digest: DIGEST })], "done"), "3"),
     );
     expect(await screen.findByText(`Pulled ${REF}.`)).toBeTruthy();
+  });
+});
+
+describe("PullImageButton", () => {
+  function mountButton(role: "viewer" | "operator") {
+    me = makeMe({ envs: { [ENV]: role } });
+    render(
+      <QueryClientProvider client={client}>
+        <TestRouter>
+          <TooltipProvider>
+            <PullImageButton envId={ENV} hostName="Home lab" swarm={false} />
+            <Toaster />
+          </TooltipProvider>
+        </TestRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  const pullButton = () => screen.getByRole("button", { name: "Pull image" });
+
+  it("is the accent button for an Operator and opens the dialog", async () => {
+    mountButton("operator");
+    expect(
+      (await screen.findByRole("button", { name: "Pull image" })).getAttribute("data-variant"),
+    ).toBe("default");
+    // The permission arrives with /api/me; a click before it does nothing.
+    await waitFor(() => {
+      fireEvent.click(pullButton());
+      expect(screen.getByRole("dialog", { name: "Pull an image" })).toBeTruthy();
+    });
+    expect(pullButton().getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("is unavailable with Needs Operator for a Viewer, and opens nothing", async () => {
+    mountButton("viewer");
+    await waitFor(() => expect(pullButton().getAttribute("aria-disabled")).toBe("true"));
+    expect(pullButton().getAttribute("aria-describedby")).toBeTruthy();
+    expect(document.body.textContent).toContain("Needs Operator");
+    fireEvent.click(pullButton());
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(await screen.findAllByText("Needs Operator")).toBeTruthy();
   });
 });

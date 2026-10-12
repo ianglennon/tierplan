@@ -1,0 +1,332 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useQueryClient } from "@tanstack/react-query";
+import { Download } from "lucide-react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useForm } from "react-hook-form";
+
+import { type PullRequestError, type PullStarted, useStartPull } from "@/api/pulls";
+import { listKey } from "@/api/resources";
+import { AgentUpdateNotice } from "@/components/agent-update-notice";
+import { NeedsTooltip } from "@/components/needs-tooltip";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
+import { failureMessage } from "@/features/pulls/pull-node-row";
+import { PullProgress } from "@/features/pulls/pull-progress";
+import { usePullJob } from "@/features/pulls/pull-stream";
+import { useNeeds } from "@/hooks/use-needs";
+import { useT } from "@/i18n/use-t";
+import { toastErrorWithAction, toastSuccess } from "@/lib/toast";
+import { cn } from "@/lib/utils";
+import { z } from "@/lib/zod-config";
+
+// The server's own limit on a reference.
+const MAX_REF = 512;
+
+// Messages are i18n keys, never literals (D-65).
+const schema = z.object({
+  ref: z.string().trim().min(1, "pulls.errors.refInvalid").max(MAX_REF, "pulls.errors.refInvalid"),
+});
+type Values = z.infer<typeof schema>;
+
+// 44px targets under 768px (D-64), the dense 32px size from there up.
+const TOUCH_HEIGHT = "h-11 md:h-8";
+
+interface PullDialogProps {
+  envId: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  // The reference the field starts with, for a pull again.
+  initialRef?: string;
+  // The environment's name, for "Pulls on {host}."
+  hostName: string;
+  // Whether the environment is a swarm: a pull then goes to every node.
+  swarm: boolean;
+}
+
+// What a refusal of the whole request comes to: the sentence for the alert, and whether it
+// is the agent's policy, which has a notice of its own.
+interface Refusal {
+  message: string;
+  agentPolicy: boolean;
+}
+
+// PullDialog is the form that starts a pull and, once it has started, the panel that
+// follows it (UI-SPEC "Pull dialog and progress"): one dialog, two phases. Closing it
+// never stops the job: the stream is followed by this component, not by the panel, so the
+// finishing toast still comes. The pull runs on the server.
+export function PullDialog({
+  envId,
+  open,
+  onOpenChange,
+  initialRef,
+  hostName,
+  swarm,
+}: PullDialogProps) {
+  const t = useT();
+  const queryClient = useQueryClient();
+  const [view, setView] = useState<"form" | "progress">("form");
+  const [tracked, setTracked] = useState<PullStarted | null>(null);
+  const [typed, setTyped] = useState(initialRef ?? "");
+  const stream = usePullJob(tracked?.jobId ?? null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const toasted = useRef<string | null>(null);
+  // Set by the Details action of the finishing toast, so reopening shows the panel.
+  const keepProgress = useRef(false);
+  const wasOpen = useRef(open);
+
+  // Opening the dialog shows the form, unless the toast's Details asked for the panel.
+  useEffect(() => {
+    if (open && !wasOpen.current) {
+      if (keepProgress.current) keepProgress.current = false;
+      else setView("form");
+    }
+    wasOpen.current = open;
+  }, [open]);
+
+  // The panel replacing the form takes focus on its heading.
+  useEffect(() => {
+    if (view === "progress" && open) headingRef.current?.focus();
+  }, [view, open]);
+
+  // Details on the finishing toast: reopen on the panel, not the form.
+  const reopen = useCallback(() => {
+    keepProgress.current = true;
+    setView("progress");
+    onOpenChange(true);
+  }, [onOpenChange]);
+
+  // The end of the job: the images list reads again, and the person is told once, whether
+  // or not the dialog is open.
+  const job = stream.job;
+  const finished = stream.finished;
+  useEffect(() => {
+    if (!finished || !job || !tracked || toasted.current === tracked.jobId) return;
+    toasted.current = tracked.jobId;
+    void queryClient.invalidateQueries({ queryKey: listKey(envId, "images") });
+    const items = job.items ?? [];
+    const done = items.filter((i) => i.state === "done").length;
+    const failed = items.length - done;
+    const ref = tracked.ref;
+    if (failed === 0) {
+      toastSuccess(
+        items.length === 1
+          ? t("pulls.toast.pulled", { ref })
+          : t("pulls.toast.pulledOn", { ref, count: items.length }),
+      );
+    } else if (done === 0) {
+      const first = items.find((i) => i.state !== "done");
+      const reason = first ? failureMessage(t, first.code, first.name, ref) : "";
+      toastErrorWithAction(
+        t("pulls.toast.failed", { ref, reason }),
+        t("pulls.toast.details"),
+        reopen,
+      );
+    } else {
+      toastErrorWithAction(
+        t("pulls.toast.partial", { done, failed }),
+        t("pulls.toast.details"),
+        reopen,
+      );
+    }
+  }, [finished, job, tracked, envId, queryClient, t, reopen]);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-160">
+        {view === "form" || !tracked ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>{t("pulls.dialog.title")}</DialogTitle>
+              <DialogDescription>{t("pulls.dialog.body")}</DialogDescription>
+            </DialogHeader>
+            <PullForm
+              envId={envId}
+              hostName={hostName}
+              swarm={swarm}
+              initialRef={typed}
+              onCancel={() => onOpenChange(false)}
+              onStarted={(started, ref) => {
+                setTyped(ref);
+                setTracked(started);
+                setView("progress");
+              }}
+            />
+          </>
+        ) : (
+          <>
+            <DialogHeader className="sr-only">
+              <DialogTitle>{t("pulls.dialog.title")}</DialogTitle>
+              <DialogDescription>{t("pulls.dialog.body")}</DialogDescription>
+            </DialogHeader>
+            <PullProgress
+              envId={envId}
+              imageRef={tracked.ref}
+              nodes={tracked.nodes ?? []}
+              job={stream.job}
+              status={stream.status}
+              gone={stream.gone}
+              accessLost={stream.accessLost}
+              headingRef={headingRef}
+              onClose={() => onOpenChange(false)}
+              onTryAgain={() => setView("form")}
+            />
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+interface FormProps {
+  envId: string;
+  hostName: string;
+  swarm: boolean;
+  initialRef: string;
+  onCancel: () => void;
+  onStarted: (started: PullStarted, typedRef: string) => void;
+}
+
+function PullForm({ envId, hostName, swarm, initialRef, onCancel, onStarted }: FormProps) {
+  const t = useT();
+  const ids = useId();
+  const start = useStartPull(envId);
+  const [refusal, setRefusal] = useState<Refusal | null>(null);
+  const form = useForm<Values>({
+    resolver: zodResolver(schema),
+    defaultValues: { ref: initialRef },
+    mode: "onSubmit",
+  });
+  const errorKey = form.formState.errors.ref?.message;
+  const error = typeof errorKey === "string" ? t(errorKey) : undefined;
+  const pending = start.isPending;
+
+  function refusalOf(err: PullRequestError): Refusal | null {
+    switch (err.type) {
+      case "ref_invalid":
+        form.setError("ref", { type: "server", message: "pulls.errors.refInvalid" });
+        form.setFocus("ref");
+        return null;
+      case "too_many_pulls":
+        return { message: t("pulls.errors.tooMany"), agentPolicy: false };
+      case "agent_policy_denied":
+        return { message: "", agentPolicy: true };
+      case "host_read_only":
+        return { message: t("pulls.errors.hostReadOnly"), agentPolicy: false };
+      case "node_unavailable":
+        return { message: t("pulls.errors.nodeUnreachable"), agentPolicy: false };
+    }
+    if (err.status === 403) return { message: t("pulls.errors.permission"), agentPolicy: false };
+    return { message: t("pulls.errors.generic"), agentPolicy: false };
+  }
+
+  function submit(values: Values) {
+    if (start.isPending) return;
+    setRefusal(null);
+    start.mutate(
+      { ref: values.ref },
+      {
+        onSuccess: (started) => onStarted(started, values.ref),
+        onError: (err) => setRefusal(refusalOf(err)),
+      },
+    );
+  }
+
+  return (
+    <form noValidate onSubmit={form.handleSubmit(submit)} className="flex flex-col gap-4">
+      {refusal?.agentPolicy ? <AgentUpdateNotice envId={envId} /> : null}
+      {refusal && !refusal.agentPolicy ? (
+        <Alert variant="destructive" role="alert">
+          <AlertDescription>{refusal.message}</AlertDescription>
+        </Alert>
+      ) : null}
+      <fieldset disabled={pending} className="contents">
+        <FieldGroup className="gap-4">
+          <Field data-invalid={error ? true : undefined}>
+            <FieldLabel htmlFor={`${ids}-ref`}>{t("pulls.form.image.label")}</FieldLabel>
+            <Input
+              id={`${ids}-ref`}
+              autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              placeholder={t("pulls.form.image.placeholder")}
+              aria-invalid={Boolean(error)}
+              aria-describedby={`${ids}-ref-helper${error ? ` ${ids}-ref-error` : ""}`}
+              className={cn("font-mono", TOUCH_HEIGHT)}
+              {...form.register("ref", {
+                onChange: () => {
+                  if (form.formState.errors.ref?.type === "server") form.clearErrors("ref");
+                },
+              })}
+            />
+            <FieldDescription id={`${ids}-ref-helper`}>
+              {t("pulls.form.image.helper")}
+            </FieldDescription>
+            {error ? <FieldError id={`${ids}-ref-error`}>{error}</FieldError> : null}
+          </Field>
+          <p className="text-sm text-muted-foreground">
+            {swarm
+              ? t("pulls.form.targetSwarm", { host: hostName })
+              : t("pulls.form.targetStandalone", { host: hostName })}
+          </p>
+        </FieldGroup>
+      </fieldset>
+      <DialogFooter>
+        <Button type="button" variant="outline" className="max-md:h-11" onClick={onCancel}>
+          {t("pulls.form.cancel")}
+        </Button>
+        <Button type="submit" className="max-md:h-11" disabled={pending}>
+          {pending ? <Spinner aria-hidden="true" /> : null}
+          {pending ? t("pulls.form.pending") : t("pulls.form.submit")}
+        </Button>
+      </DialogFooter>
+    </form>
+  );
+}
+
+interface PullImageButtonProps {
+  envId: string;
+  hostName: string;
+  swarm: boolean;
+}
+
+// PullImageButton is the accent "Pull image" button of the Images page and the dialog it
+// opens. Without images.pull it is shown but unavailable, with the role it takes (D-19).
+export function PullImageButton({ envId, hostName, swarm }: PullImageButtonProps) {
+  const t = useT();
+  const pull = useNeeds("images.pull", envId);
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <NeedsTooltip reason={pull.reason}>
+        <Button className="max-md:h-11" onClick={pull.allowed ? () => setOpen(true) : undefined}>
+          <Download aria-hidden="true" />
+          {t("pulls.button")}
+        </Button>
+      </NeedsTooltip>
+      {pull.allowed ? (
+        <PullDialog
+          envId={envId}
+          open={open}
+          onOpenChange={setOpen}
+          hostName={hostName}
+          swarm={swarm}
+        />
+      ) : null}
+    </>
+  );
+}

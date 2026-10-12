@@ -409,6 +409,13 @@ func TestPullStreamResumesFromLastEventIDAndPingsAndEndsWhenSignedOut(t *testing
 	if len(ids) == 0 || ids[0] <= 1 || !slices.IsSorted(ids) {
 		t.Errorf("resumed ids = %v, want only events newer than 1, in order", ids)
 	}
+
+	// The SPA cannot set the header when it reopens a stream, so the query says it too.
+	c = openSSE(t, f.authFixture, path+"?lastEventId=1", f.cookie, "")
+	nextFrame(t, c) // the snapshot
+	if fr := nextFrame(t, c); fr.id == "" || fr.id == "1" {
+		t.Errorf("first frame after ?lastEventId=1 = %+v, want an event newer than 1", fr)
+	}
 }
 
 func TestPullStreamHeartbeatReauthorises(t *testing.T) {

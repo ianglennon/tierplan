@@ -521,7 +521,8 @@ func pullJobBody(j jobs.Job) PullJobBody {
 
 // servePullStream follows one pull: the job as it stands as a snapshot frame, then an item
 // frame for each change and a done frame at the end, each with the hub's event ID. A
-// browser that reconnects sends the last ID it saw in Last-Event-ID and is sent a new
+// browser that reconnects sends the last ID it saw in Last-Event-ID (or lastEventId in the
+// query) and is sent a new
 // snapshot and what it missed after that ID. An idle stream gets a comment line every
 // Heartbeat, and each one re-checks that the caller is still allowed in.
 //
@@ -551,8 +552,15 @@ func servePullStream(w http.ResponseWriter, req *http.Request, d PullsDeps, lim 
 	}
 	defer release()
 
+	// A browser's EventSource sends Last-Event-ID itself when it reconnects on its own. The
+	// SPA reopens the stream by hand, which cannot set a header, so it says the same in
+	// the query.
 	var after uint64
-	if last := req.Header.Get("Last-Event-ID"); last != "" {
+	last := req.Header.Get("Last-Event-ID")
+	if last == "" {
+		last = req.URL.Query().Get("lastEventId")
+	}
+	if last != "" {
 		if n, err := strconv.ParseUint(last, 10, 64); err == nil {
 			after = n
 		}

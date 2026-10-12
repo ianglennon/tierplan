@@ -1,0 +1,94 @@
+{
+  "pulls": {
+    "button": "Pull image",
+    "dialog": {
+      "title": "Pull an image",
+      "body": "Docker downloads the image on the node."
+    },
+    "form": {
+      "image": {
+        "label": "Image",
+        "placeholder": "nginx:1.27 or ghcr.io/acme/app:latest",
+        "helper": "No tag means latest."
+      },
+      "targetStandalone": "Pulls on {{host}}.",
+      "targetSwarm": "Pulls on every node of {{host}}.",
+      "cancel": "Cancel",
+      "submit": "Pull image",
+      "pending": "Starting…"
+    },
+    "errors": {
+      "refInvalid": "Enter an image like nginx:1.27 or ghcr.io/acme/app:latest.",
+      "tooMany": "You already have 5 pulls running. Wait for one to finish.",
+      "permission": "You no longer have permission to do that. Your access may have changed.",
+      "hostReadOnly": "This host is read-only (set on the host).",
+      "nodeUnreachable": "The node isn't connected to Bayplan right now. Try again when it's back.",
+      "generic": "Couldn't start the pull. Try again."
+    },
+    "progress": {
+      "title": "Pulling {{ref}}",
+      "titleDone": "Pulled {{ref}}",
+      "titleFailed": "Couldn't pull {{ref}}",
+      "credential": "Credential: anonymous",
+      "helper": "You can close this. The pull keeps running.",
+      "close": "Close",
+      "tryAgain": "Try again",
+      "nodes": "Pull progress by node",
+      "lost": "This pull is no longer here. Pulls are kept for 10 minutes after they end. The audit log has its result.",
+      "accessLost": "You can no longer follow this pull.",
+      "reconnecting": "Reconnecting…"
+    },
+    "node": {
+      "status": {
+        "waiting": "Waiting",
+        "running": "Pulling",
+        "done": "Done",
+        "failed": "Failed",
+        "cancelled": "Cancelled"
+      },
+      "progressLabel": "Pull progress on {{node}}",
+      "bytes": "{{done}} of {{total}}",
+      "layers_one": "{{done}} of {{count}} layer",
+      "layers_other": "{{done}} of {{count}} layers",
+      "digest": "Digest {{digest}}",
+      "copyDigest": "Copy digest",
+      "copiedDigest": "Copied the digest",
+      "upToDate": "Already up to date",
+      "expand": "Show layers on {{node}}",
+      "collapse": "Hide layers on {{node}}",
+      "layerTable": "Layers on {{node}}",
+      "noLayers": "No layers reported yet.",
+      "columns": {
+        "layer": "Layer",
+        "status": "Status",
+        "progress": "Progress"
+      },
+      "announce": {
+        "done": "Pulled on {{node}}",
+        "failed": "Failed on {{node}}"
+      }
+    },
+    "failure": {
+      "denied": "Pull denied by {{host}}. Check that the image exists and that you can pull it.",
+      "notFound": "{{ref}} wasn't found on {{host}}. Check the name and the tag.",
+      "invalidReference": "Docker on {{node}} doesn't accept {{ref}} as an image reference.",
+      "rateLimited": "{{host}}'s pull limit was reached. Try again later.",
+      "unreachable": "{{node}} couldn't reach {{host}}. Check its network, DNS and firewall.",
+      "tls": "{{node}} doesn't trust the certificate from {{host}}. Its Docker daemon needs the registry's CA (certs.d) or an insecure-registries entry. See the docs.",
+      "http": "{{host}} doesn't offer HTTPS, which Docker on {{node}} requires. Its Docker daemon needs an insecure-registries entry. See the docs.",
+      "nodeUnreachable": "{{node}} isn't reachable right now. Try again when it's back.",
+      "hostReadOnly": "This host is read-only (set on the host).",
+      "cancelled": "Cancelled before it finished on {{node}}.",
+      "interrupted": "Bayplan restarted before the pull finished on {{node}}. Try again.",
+      "generic": "The pull failed on {{node}}. Check the node and try again."
+    },
+    "toast": {
+      "pulled": "Pulled {{ref}}.",
+      "pulledOn_one": "Pulled {{ref}} on {{count}} node.",
+      "pulledOn_other": "Pulled {{ref}} on {{count}} nodes.",
+      "partial": "Pulled on {{done}}, {{failed}} failed",
+      "failed": "Couldn't pull {{ref}}. {{reason}}",
+      "details": "Details"
+    }
+  }
+}

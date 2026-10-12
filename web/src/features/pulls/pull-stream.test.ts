@@ -75,7 +75,7 @@ describe("the reducer", () => {
       type: "item",
       item: item({ nodeId: "n2", name: "node-2", state: "running", current: 5, total: 10 }),
     });
-    expect(next.job?.items.map((i) => [i.nodeId, i.state])).toEqual([
+    expect(next.job?.items?.map((i) => [i.nodeId, i.state])).toEqual([
       ["n1", "waiting"],
       ["n2", "running"],
     ]);
@@ -85,7 +85,7 @@ describe("the reducer", () => {
     expect(reducePullStream(initialPullStream, { type: "item", item: item() }).job).toBeUndefined();
     const start = reducePullStream(initialPullStream, { type: "snapshot", job: job() });
     const next = reducePullStream(start, { type: "item", item: item({ nodeId: "n3", name: "z" }) });
-    expect(next.job?.items.map((i) => i.nodeId)).toEqual(["n1", "n2", "n3"]);
+    expect(next.job?.items?.map((i) => i.nodeId)).toEqual(["n1", "n2", "n3"]);
   });
 
   it("marks the job finished by a done frame and closes", () => {

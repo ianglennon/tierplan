@@ -8,6 +8,7 @@ import { type ImageRow, imagesQuery } from "@/api/resources";
 import { NoPermission } from "@/components/full-page-state";
 import { RelativeTime } from "@/components/relative-time";
 import { NodesBanner } from "@/features/environments/nodes-banner";
+import { PullImageButton } from "@/features/pulls/pull-dialog";
 import { type Column, ResourceTable, TruncatedText } from "@/features/resources/resource-table";
 import {
   nodeRowKey,
@@ -89,6 +90,11 @@ function Images() {
       }
       banner={swarm ? <NodesBanner notReporting={query.data?.notReporting} /> : undefined}
       getRowKey={(i) => nodeRowKey(i.node, i.id)}
+      captionExtra={
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <PullImageButton envId={envId} hostName={envName} swarm={swarm} />
+        </div>
+      }
     />
   );
 }
