@@ -161,6 +161,7 @@ type RouterDeps struct {
 	Images        api.ImagesDeps
 	Pulls         api.PullsDeps
 	Registries    api.RegistriesDeps
+	Tags          api.TagsDeps
 	Events        api.EventsDeps
 	Logs          api.LogsDeps
 	Shells        api.ShellsDeps
@@ -204,6 +205,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterImages(r, d.Images)
 	api.RegisterPulls(r, d.Pulls)
 	api.RegisterRegistries(r, d.Registries)
+	api.RegisterTags(r, d.Tags)
 	api.RegisterEvents(r, d.Events)
 	api.RegisterLogs(r, d.Logs)
 	api.RegisterShells(r, d.Shells)
@@ -738,6 +740,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Images:        api.ImagesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
 		Pulls:         api.PullsDeps{Aggregator: aggregator, Jobs: jobHub, Audit: aud, Checker: checker, Resolver: resolver, Log: log},
 		Registries:    api.RegistriesDeps{Store: registryStore, Envs: envSvc, Aggregator: aggregator, Audit: aud, Checker: checker, Egress: registryEgress, Clients: registryClients, Version: buildinfo.Get().Version, Log: log},
+		Tags:          api.TagsDeps{Resolver: resolver, Tags: registry.NewTagService(registryClients, registryEgress, buildinfo.Get().Version, log), Checker: checker, Aggregator: aggregator, Audit: aud, Log: log},
 		Containers:    api.ContainersDeps{Aggregator: aggregator, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
 		Events:        api.EventsDeps{Aggregator: aggregator, Log: log},
 		Logs:          api.LogsDeps{Aggregator: aggregator, Audit: aud, Checker: checker, Log: log},

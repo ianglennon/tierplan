@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -30,6 +31,10 @@ type fakeRegistry struct {
 	refuseStatus int
 	// tagsStatus is the answer to the tag list of a signed-in client: 200, 401, 403 or 404.
 	tagsStatus int
+	// tags are the repository's tag names; nil answers the one tag "1.0". pageSize, when set,
+	// splits the list into pages joined by Link headers, as registries do.
+	tags     []string
+	pageSize int
 
 	// scheme is https for the usual fake and http for the plain one.
 	scheme string
@@ -116,10 +121,45 @@ func (f *fakeRegistry) serve(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(f.tagsStatus)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"name": repo, "tags": []string{"1.0"}})
+		f.serveTags(w, r, repo)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// tagRequests is how many tag lists the registry has been asked for.
+func (f *fakeRegistry) tagRequests() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, p := range f.paths {
+		if strings.HasSuffix(p, "/tags/list") {
+			n++
+		}
+	}
+	return n
+}
+
+// serveTags answers a tag list: all of f.tags, or one page of them with a Link to the next.
+func (f *fakeRegistry) serveTags(w http.ResponseWriter, r *http.Request, repo string) {
+	names := f.tags
+	if names == nil {
+		names = []string{"1.0"}
+	}
+	start := 0
+	if last := r.URL.Query().Get("last"); last != "" {
+		for i, n := range names {
+			if n == last {
+				start = i + 1
+			}
+		}
+	}
+	end := len(names)
+	if f.pageSize > 0 && start+f.pageSize < end {
+		end = start + f.pageSize
+		w.Header().Set("Link", `</v2/`+repo+`/tags/list?last=`+names[end-1]+`&n=`+strconv.Itoa(f.pageSize)+`>; rel="next"`)
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"name": repo, "tags": names[start:end]})
 }
 
 func TestCheckPassesAllThreeStepsWhenTheSignInAndTheRepositoryAreGood(t *testing.T) {

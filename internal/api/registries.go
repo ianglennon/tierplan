@@ -504,9 +504,19 @@ func (v credentialViewer) canManage(c registry.Credential) bool {
 // enforces with. A credential that is not visible is answered exactly like one that does not
 // exist, and one that is visible but not manageable is read-only to them.
 func credentialVisibility(ctx context.Context, d RegistriesDeps, p *rbac.Principal) (func(registry.Credential) (visible, canManage bool), error) {
-	global, perEnv, err := d.Checker.EffectivePermissions(ctx, p)
+	v, err := viewerOf(ctx, d.Checker, p)
 	if err != nil {
 		return nil, err
+	}
+	return func(c registry.Credential) (bool, bool) { return v.sees(c), v.canManage(c) }, nil
+}
+
+// viewerOf reads what one caller may do, from the same effective permissions the policy
+// enforces with.
+func viewerOf(ctx context.Context, checker *rbac.Checker, p *rbac.Principal) (credentialViewer, error) {
+	global, perEnv, err := checker.EffectivePermissions(ctx, p)
+	if err != nil {
+		return credentialViewer{}, err
 	}
 	v := credentialViewer{global: global, perEnv: perEnv}
 	for _, perms := range perEnv {
@@ -515,7 +525,7 @@ func credentialVisibility(ctx context.Context, d RegistriesDeps, p *rbac.Princip
 			break
 		}
 	}
-	return func(c registry.Credential) (bool, bool) { return v.sees(c), v.canManage(c) }, nil
+	return v, nil
 }
 
 // RegisterRegistries registers the registry credential routes that are not in an environment's

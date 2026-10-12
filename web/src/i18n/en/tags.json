@@ -1,0 +1,71 @@
+{
+  "tags": {
+    "page": {
+      "breadcrumb": {
+        "label": "Breadcrumb",
+        "registries": "Registries",
+        "browse": "Browse"
+      },
+      "noRepository": {
+        "title": "No repository to browse",
+        "body": "Enter a repository on the Registries page, like ghcr.io/acme/app or nginx.",
+        "back": "Back to Registries"
+      }
+    },
+    "credential": {
+      "using": "Using credential “<cred>{{name}}</cred>” ({{scope}})",
+      "usingPlain": "Using credential “{{name}}” ({{scope}})",
+      "anonymous": "Anonymous",
+      "scopeInstance": "Instance"
+    },
+    "columns": {
+      "tag": "Tag"
+    },
+    "table": {
+      "label": "Tags of {{repo}}"
+    },
+    "caption_one": "Showing {{count}} tag",
+    "caption_other": "Showing {{count}} tags",
+    "capped": "The repository has more tags than Bayplan reads, so only the first {{count}} are listed.",
+    "selected": "Selected",
+    "empty": {
+      "none": {
+        "title": "No tags",
+        "body": "{{repo}} has no tags on {{host}}.",
+        "retry": "Retry"
+      }
+    },
+    "errors": {
+      "login_refused": {
+        "message": "Bayplan couldn't sign in to {{host}} with credential “{{name}}” ({{scope}}). Test it.",
+        "action": "Test credential"
+      },
+      "needs_login": {
+        "message": "{{host}} needs a login to list tags, and no stored credential matches {{repo}}. Add one.",
+        "action": "Add credential"
+      },
+      "repository_not_found": {
+        "message": "No repository named {{repo}} on {{host}}."
+      },
+      "registry_unreachable": {
+        "message": "Couldn't reach {{host}}. Check the address and try again.",
+        "action": "Retry"
+      },
+      "registry_tls": {
+        "message": "The certificate from {{host}} isn't trusted. Add the registry's CA to its credential under Advanced, then try again.",
+        "action": "Retry"
+      },
+      "rate_limited": {
+        "message": "{{host}} is limiting requests. Wait a moment and try again.",
+        "action": "Retry"
+      },
+      "ref_invalid": {
+        "message": "Enter an image like nginx:1.27 or ghcr.io/acme/app:latest."
+      },
+      "generic": {
+        "message": "Couldn't load the tags. Check the connection and try again.",
+        "action": "Retry"
+      }
+    }
+  }
+}

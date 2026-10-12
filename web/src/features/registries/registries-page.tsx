@@ -2,11 +2,13 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { environmentsQuery } from "@/api/environments";
 import { type Credential, credentialsQuery } from "@/api/registries";
 import { NoPermission } from "@/components/full-page-state";
 import { MAX_QUERY } from "@/features/containers/list-search";
+import { BrowseBox } from "@/features/registries/browse-box";
 import { CredentialSheet } from "@/features/registries/credential-sheet";
 import { CredentialTable } from "@/features/registries/credential-table";
 import { CredentialTester } from "@/features/registries/credential-tester";
@@ -52,6 +54,7 @@ interface RegistriesPageProps {
 // (registries.manage), and everyone else sees the same table read-only.
 export function RegistriesPage({ search, onSearchChange }: RegistriesPageProps) {
   const t = useT();
+  const navigate = useNavigate();
   useDocumentTitle(t("registries.title"));
   const allowed = useAnyEnvironmentPermission("images.read");
   // Adding is for an instance administrator (instance credentials) and for an Admin of an
@@ -110,6 +113,9 @@ export function RegistriesPage({ search, onSearchChange }: RegistriesPageProps) 
       />
       <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
         <CredentialTester />
+        <BrowseBox
+          onBrowse={(ref) => void navigate({ to: "/registries/browse", search: { ref } })}
+        />
       </div>
       <DeleteCredentialDialog
         credential={deleting}

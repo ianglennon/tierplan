@@ -20,6 +20,7 @@ import { Route as AppEnvironmentsRouteImport } from './routes/_app/environments'
 import { Route as AppRegistriesRouteImport } from './routes/_app/registries'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
 import { Route as AppEnvEnvIdRouteImport } from './routes/_app/env/$envId'
+import { Route as AppRegistriesBrowseRouteImport } from './routes/_app/registries_.browse'
 import { Route as AppSettingsIndexRouteImport } from './routes/_app/settings/index'
 import { Route as AppSettingsAboutRouteImport } from './routes/_app/settings/about'
 import { Route as AppSettingsAccessRouteImport } from './routes/_app/settings/access'
@@ -113,6 +114,11 @@ const AppSettingsRoute = AppSettingsRouteImport.update({
 const AppEnvEnvIdRoute = AppEnvEnvIdRouteImport.update({
   id: '/env/$envId',
   path: '/env/$envId',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppRegistriesBrowseRoute = AppRegistriesBrowseRouteImport.update({
+  id: '/registries_/browse',
+  path: '/registries/browse',
   getParentRoute: () => AppRoute,
 } as any)
 const AppSettingsIndexRoute = AppSettingsIndexRouteImport.update({
@@ -352,6 +358,7 @@ export interface FileRoutesByFullPath {
   '/registries': typeof AppRegistriesRoute
   '/settings': typeof AppSettingsRouteWithChildren
   '/env/$envId': typeof AppEnvEnvIdRouteWithChildren
+  '/registries/browse': typeof AppRegistriesBrowseRoute
   '/settings/about': typeof AppSettingsAboutRoute
   '/settings/access': typeof AppSettingsAccessRouteWithChildren
   '/settings/backup': typeof AppSettingsBackupRoute
@@ -402,6 +409,7 @@ export interface FileRoutesByTo {
   '/environments': typeof AppEnvironmentsRoute
   '/registries': typeof AppRegistriesRoute
   '/': typeof AppIndexRoute
+  '/registries/browse': typeof AppRegistriesBrowseRoute
   '/settings/about': typeof AppSettingsAboutRoute
   '/settings/backup': typeof AppSettingsBackupRoute
   '/settings/environments': typeof AppSettingsEnvironmentsRoute
@@ -450,6 +458,7 @@ export interface FileRoutesById {
   '/_app/settings': typeof AppSettingsRouteWithChildren
   '/_app/': typeof AppIndexRoute
   '/_app/env/$envId': typeof AppEnvEnvIdRouteWithChildren
+  '/_app/registries_/browse': typeof AppRegistriesBrowseRoute
   '/_app/settings/about': typeof AppSettingsAboutRoute
   '/_app/settings/access': typeof AppSettingsAccessRouteWithChildren
   '/_app/settings/backup': typeof AppSettingsBackupRoute
@@ -504,6 +513,7 @@ export interface FileRouteTypes {
     | '/registries'
     | '/settings'
     | '/env/$envId'
+    | '/registries/browse'
     | '/settings/about'
     | '/settings/access'
     | '/settings/backup'
@@ -554,6 +564,7 @@ export interface FileRouteTypes {
     | '/environments'
     | '/registries'
     | '/'
+    | '/registries/browse'
     | '/settings/about'
     | '/settings/backup'
     | '/settings/environments'
@@ -601,6 +612,7 @@ export interface FileRouteTypes {
     | '/_app/settings'
     | '/_app/'
     | '/_app/env/$envId'
+    | '/_app/registries_/browse'
     | '/_app/settings/about'
     | '/_app/settings/access'
     | '/_app/settings/backup'
@@ -730,6 +742,13 @@ declare module '@tanstack/react-router' {
       path: '/env/$envId'
       fullPath: '/env/$envId'
       preLoaderRoute: typeof AppEnvEnvIdRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/registries_/browse': {
+      id: '/_app/registries_/browse'
+      path: '/registries/browse'
+      fullPath: '/registries/browse'
+      preLoaderRoute: typeof AppRegistriesBrowseRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/settings/': {
@@ -1203,6 +1222,7 @@ interface AppRouteChildren {
   AppSettingsRoute: typeof AppSettingsRouteWithChildren
   AppIndexRoute: typeof AppIndexRoute
   AppEnvEnvIdRoute: typeof AppEnvEnvIdRouteWithChildren
+  AppRegistriesBrowseRoute: typeof AppRegistriesBrowseRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -1212,6 +1232,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppSettingsRoute: AppSettingsRouteWithChildren,
   AppIndexRoute: AppIndexRoute,
   AppEnvEnvIdRoute: AppEnvEnvIdRouteWithChildren,
+  AppRegistriesBrowseRoute: AppRegistriesBrowseRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

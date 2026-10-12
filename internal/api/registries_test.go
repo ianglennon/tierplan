@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/config"
@@ -1165,6 +1166,10 @@ type fakeRegistry struct {
 	refuse int
 	// tagsStatus is the answer to the tag list of a signed-in client.
 	tagsStatus int
+	// tags are the repository's tag names; nil answers the one tag "1". tagLists counts the
+	// tag lists the registry served to a signed-in client.
+	tags       []string
+	tagLists   atomic.Int32
 	user, pass string
 }
 
@@ -1200,7 +1205,12 @@ func newFakeRegistry(t *testing.T) *fakeRegistry {
 			case f.tagsStatus != http.StatusOK:
 				w.WriteHeader(f.tagsStatus)
 			default:
-				_ = json.NewEncoder(w).Encode(map[string]any{"name": repo, "tags": []string{"1"}})
+				f.tagLists.Add(1)
+				names := f.tags
+				if names == nil {
+					names = []string{"1"}
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"name": repo, "tags": names})
 			}
 		default:
 			http.NotFound(w, r)

@@ -1782,6 +1782,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/registries/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the tags of a repository
+         * @description Lists a repository's tag names through the server, with the stored credential pulls would use for it among the ones the caller may see: the instance credentials and, with envId, that environment's own. The answer names the credential, never holds it, and is cached for a minute per credential, so a caller never gets a list fetched with a credential they cannot use. Needs images.read on at least one environment, and on envId when it is given (403). An unparsable reference is 422 ref_invalid. When the registry cannot list the tags the answer is 404 repository_not_found, or 502 with the problem type needs_login (the registry wants a login and no stored credential matches), login_refused (it refused the matching credential), registry_unreachable or registry_tls; errors names the registry as registry.host and registry.repo and the credential used, if any, as credential.id, credential.name, credential.scopeKind and credential.scopeName. Not audited.
+         */
+        get: operations["browseTags"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/registries/test": {
         parameters: {
             query?: never;
@@ -5337,6 +5357,39 @@ export interface components {
              * @enum {string}
              */
             type?: "swarm-manager" | "swarm-worker" | "standalone";
+        };
+        TagListBody: {
+            /** @description True when the repository has more tags than the server reads (10,000); the list is then the first 10,000 by registry order */
+            capped: boolean;
+            /** @description The stored credential the registry was asked with, or null when it was asked anonymously. Never the secret */
+            credential: components["schemas"]["ResolvedCredentialBody"] | null;
+            /**
+             * Format: int64
+             * @description How many signature, attestation and cache tags match the filter text, whether or not they are hidden
+             */
+            hidden: number;
+            /** @description The registry host: ghcr.io, or docker.io for Docker Hub */
+            host: string;
+            /** @description Whether another page follows this one */
+            more: boolean;
+            /**
+             * Format: int64
+             * @description This page's number, from 0
+             */
+            page: number;
+            /** @description The repository below the registry host: acme/app, or library/nginx on Docker Hub */
+            repo: string;
+            /** @description The tags of this page */
+            tags: components["schemas"]["TagNameBody"][] | null;
+            /**
+             * Format: int64
+             * @description How many tags the list has once the hide switch and the filter text are applied
+             */
+            total: number;
+        };
+        TagNameBody: {
+            /** @description The tag, as the registry names it */
+            name: string;
         };
         TeamBody: {
             /**
@@ -9367,6 +9420,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    browseTags: {
+        parameters: {
+            query: {
+                /** @description The repository to browse, like ghcr.io/acme/app or nginx. A tag or digest on it is ignored. 422 ref_invalid */
+                ref: string;
+                /** @description An environment whose own credentials are considered as well as the instance's. The caller needs images.read on it (403 otherwise). Left out, only the instance credentials are */
+                envId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagListBody"];
                 };
             };
             /** @description Error */

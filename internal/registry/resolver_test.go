@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -121,5 +122,83 @@ func TestAFailureIsRecordedWithItsCodeAndASuccessClearsIt(t *testing.T) {
 	}
 	if err := s.RecordFailure(ctx, "gone", "pull_denied"); err != nil {
 		t.Errorf("a failure for a deleted credential: %v", err)
+	}
+}
+
+// Which credential a tag listing is made with (plan 05-18, IMG-03, D-24a, T-05-60).
+
+func TestForBrowseUsesTheInstanceLayerAloneWhenNoEnvironmentIsChosen(t *testing.T) {
+	s, st, _ := newStore(t)
+	addEnvironment(t, st, "env-a", "Alpha")
+	inst := create(t, s, func(in *registry.CreateInput) { in.Name = "inst"; in.Prefix = "acme" })
+	create(t, s, func(in *registry.CreateInput) { in.Name = "in-a"; in.Prefix = "acme/team"; in.EnvID = "env-a" })
+	ref, _ := registry.ParseRef("ghcr.io/acme/team/app")
+
+	got, err := registry.NewResolver(s).ForBrowse(context.Background(), "", func(registry.Candidate) bool { return true }, ref)
+	if err != nil || got == nil {
+		t.Fatalf("ForBrowse = %+v, %v", got, err)
+	}
+	if got.ID != inst.ID || got.Layer != registry.LayerInstance {
+		t.Errorf("credential = %+v, want the instance one: another layer's is not a candidate without its environment", got.Candidate)
+	}
+	if got.HostOptions.Host != "ghcr.io" || got.Username != "bot" || got.Password != longSecret {
+		t.Errorf("sign-in = %+v, want the opened secret for the registry", got.HostOptions)
+	}
+}
+
+func TestForBrowseAddsTheChosenEnvironmentsLayerAndTheMoreSpecificPrefixWins(t *testing.T) {
+	s, st, _ := newStore(t)
+	addEnvironment(t, st, "env-a", "Alpha")
+	addEnvironment(t, st, "env-b", "Beta")
+	create(t, s, func(in *registry.CreateInput) { in.Name = "inst"; in.Prefix = "acme" })
+	inA := create(t, s, func(in *registry.CreateInput) { in.Name = "in-a"; in.Prefix = "acme/team"; in.EnvID = "env-a" })
+	create(t, s, func(in *registry.CreateInput) { in.Name = "in-b"; in.Prefix = "acme/team/app"; in.EnvID = "env-b" })
+	ref, _ := registry.ParseRef("ghcr.io/acme/team/app")
+
+	got, err := registry.NewResolver(s).ForBrowse(context.Background(), "env-a", func(registry.Candidate) bool { return true }, ref)
+	if err != nil || got == nil || got.ID != inA.ID {
+		t.Fatalf("ForBrowse = %+v, %v, want environment A's credential, never environment B's", got, err)
+	}
+}
+
+func TestForBrowseNeverPicksACredentialTheCallerCannotSee(t *testing.T) {
+	s, st, _ := newStore(t)
+	addEnvironment(t, st, "env-a", "Alpha")
+	inst := create(t, s, func(in *registry.CreateInput) { in.Name = "inst"; in.Prefix = "acme" })
+	create(t, s, func(in *registry.CreateInput) { in.Name = "in-a"; in.Prefix = "acme/team"; in.EnvID = "env-a" })
+	ref, _ := registry.ParseRef("ghcr.io/acme/team/app")
+	onlyInstance := func(c registry.Candidate) bool { return c.Layer == registry.LayerInstance }
+
+	got, err := registry.NewResolver(s).ForBrowse(context.Background(), "env-a", onlyInstance, ref)
+	if err != nil || got == nil || got.ID != inst.ID {
+		t.Fatalf("ForBrowse = %+v, %v, want the instance credential: the environment's is hidden from this caller", got, err)
+	}
+	none, err := registry.NewResolver(s).ForBrowse(context.Background(), "env-a", func(registry.Candidate) bool { return false }, ref)
+	if err != nil || none != nil {
+		t.Errorf("ForBrowse = %+v, %v, want anonymous (nil) when nothing is visible", none, err)
+	}
+}
+
+func TestForBrowseIsAnonymousWhenNothingMatches(t *testing.T) {
+	s, _, _ := newStore(t)
+	create(t, s, nil) // ghcr.io/acme
+	ref, _ := registry.ParseRef("ghcr.io/other/app")
+	got, err := registry.NewResolver(s).ForBrowse(context.Background(), "", nil, ref)
+	if got != nil || err != nil {
+		t.Errorf("ForBrowse = %+v, %v, want nil, nil", got, err)
+	}
+}
+
+func TestAResolvedCredentialNeverPrintsItsSecret(t *testing.T) {
+	c := registry.ResolvedCredential{
+		Candidate:   registry.Candidate{ID: "c1", Name: "n"},
+		HostOptions: registry.HostOptions{Host: "ghcr.io", Username: "bot", Password: longSecret},
+	}
+	for name, got := range map[string]string{
+		"%v": fmt.Sprintf("%v", c), "%+v": fmt.Sprintf("%+v", &c), "%#v": fmt.Sprintf("%#v", c),
+	} {
+		if strings.Contains(got, longSecret) || !strings.Contains(got, "c1") {
+			t.Errorf("%s = %q, want the ID and never the secret", name, got)
+		}
 	}
 }

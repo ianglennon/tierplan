@@ -7176,6 +7176,88 @@
         ],
         "type": "object"
       },
+      "TagListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "capped": {
+            "description": "True when the repository has more tags than the server reads (10,000); the list is then the first 10,000 by registry order",
+            "type": "boolean"
+          },
+          "credential": {
+            "description": "The stored credential the registry was asked with, or null when it was asked anonymously. Never the secret",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ResolvedCredentialBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hidden": {
+            "description": "How many signature, attestation and cache tags match the filter text, whether or not they are hidden",
+            "format": "int64",
+            "type": "integer"
+          },
+          "host": {
+            "description": "The registry host: ghcr.io, or docker.io for Docker Hub",
+            "type": "string"
+          },
+          "more": {
+            "description": "Whether another page follows this one",
+            "type": "boolean"
+          },
+          "page": {
+            "description": "This page's number, from 0",
+            "format": "int64",
+            "type": "integer"
+          },
+          "repo": {
+            "description": "The repository below the registry host: acme/app, or library/nginx on Docker Hub",
+            "type": "string"
+          },
+          "tags": {
+            "description": "The tags of this page",
+            "items": {
+              "$ref": "#/components/schemas/TagNameBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "total": {
+            "description": "How many tags the list has once the hide switch and the filter text are applied",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "repo",
+          "host",
+          "credential",
+          "tags",
+          "hidden",
+          "total",
+          "more",
+          "page",
+          "capped"
+        ],
+        "type": "object"
+      },
+      "TagNameBody": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "The tag, as the registry names it",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
       "TeamBody": {
         "additionalProperties": false,
         "properties": {
@@ -14211,6 +14293,70 @@
           }
         },
         "summary": "Add an instance registry credential",
+        "tags": [
+          "registries"
+        ]
+      }
+    },
+    "/api/registries/tags": {
+      "get": {
+        "description": "Lists a repository's tag names through the server, with the stored credential pulls would use for it among the ones the caller may see: the instance credentials and, with envId, that environment's own. The answer names the credential, never holds it, and is cached for a minute per credential, so a caller never gets a list fetched with a credential they cannot use. Needs images.read on at least one environment, and on envId when it is given (403). An unparsable reference is 422 ref_invalid. When the registry cannot list the tags the answer is 404 repository_not_found, or 502 with the problem type needs_login (the registry wants a login and no stored credential matches), login_refused (it refused the matching credential), registry_unreachable or registry_tls; errors names the registry as registry.host and registry.repo and the credential used, if any, as credential.id, credential.name, credential.scopeKind and credential.scopeName. Not audited.",
+        "operationId": "browseTags",
+        "parameters": [
+          {
+            "description": "The repository to browse, like ghcr.io/acme/app or nginx. A tag or digest on it is ignored. 422 ref_invalid",
+            "explode": false,
+            "in": "query",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "The repository to browse, like ghcr.io/acme/app or nginx. A tag or digest on it is ignored. 422 ref_invalid",
+              "maxLength": 512,
+              "type": "string"
+            }
+          },
+          {
+            "description": "An environment whose own credentials are considered as well as the instance's. The caller needs images.read on it (403 otherwise). Left out, only the instance credentials are",
+            "explode": false,
+            "in": "query",
+            "name": "envId",
+            "schema": {
+              "description": "An environment whose own credentials are considered as well as the instance's. The caller needs images.read on it (403 otherwise). Left out, only the instance credentials are",
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the tags of a repository",
         "tags": [
           "registries"
         ]

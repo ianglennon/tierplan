@@ -208,6 +208,15 @@ describe("RegistriesPage table", () => {
     expect(screen.getByRole("searchbox", { name: "Search credentials" })).toBeTruthy();
   });
 
+  it("puts the Browse a repository card beside the Which credential? card", async () => {
+    mount();
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Browse a repository" })).toBeTruthy(),
+    );
+    expect(screen.getByRole("heading", { name: "Which credential?" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Browse tags" })).toBeTruthy();
+  });
+
   it("shows the error with Retry when the list cannot be read", async () => {
     listStatus = 500;
     mount();

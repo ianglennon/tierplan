@@ -339,6 +339,14 @@
         "rate_limited": "The registry is limiting requests.",
         "check_failed": "The test couldn't finish."
       }
+    },
+    "browse": {
+      "title": "Browse a repository",
+      "body": "See a repository's tags, digests and where they run.",
+      "repository": "Repository",
+      "placeholder": "ghcr.io/acme/app or nginx",
+      "submit": "Browse tags",
+      "error": "Enter an image like nginx:1.27 or ghcr.io/acme/app:latest."
     }
   }
 }
