@@ -407,3 +407,53 @@ func TestDeleteRollsBackWhenTheHookFails(t *testing.T) {
 		t.Errorf("the credential is gone though its audit row failed: %v", err)
 	}
 }
+
+func addEnvironment(t *testing.T, st *store.Store, id, name string) {
+	t.Helper()
+	if _, err := st.Write.Exec(`INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at)
+		VALUES (?, 'agent', ?, '', 1, 1, 1)`, id, name); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCandidatesAreTheInstanceLayerAndOneEnvironmentsWithNoSecretAndNoOtherEnvironment(t *testing.T) {
+	s, st, _ := newStore(t)
+	addEnvironment(t, st, "env-a", "Alpha")
+	addEnvironment(t, st, "env-b", "Beta")
+	create(t, s, func(in *registry.CreateInput) { in.Name = "inst"; in.Prefix = "acme" })
+	create(t, s, func(in *registry.CreateInput) { in.Name = "in-a"; in.Prefix = "acme/team"; in.EnvID = "env-a" })
+	create(t, s, func(in *registry.CreateInput) { in.Name = "in-b"; in.Prefix = "acme/team/app"; in.EnvID = "env-b" })
+
+	got, err := s.Candidates(context.Background(), "env-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, len(got))
+	for i, c := range got {
+		names[i] = c.Name
+	}
+	slices.Sort(names)
+	if !slices.Equal(names, []string{"in-a", "inst"}) {
+		t.Fatalf("candidates = %v, want the instance one and Alpha's only", names)
+	}
+	for _, c := range got {
+		switch c.Name {
+		case "inst":
+			if c.Layer != registry.LayerInstance || c.EnvID != "" || c.EnvName != "" || c.Host != "ghcr.io" || c.Prefix != "acme" {
+				t.Errorf("instance candidate = %+v", c)
+			}
+		case "in-a":
+			if c.Layer != registry.LayerEnvironment || c.EnvID != "env-a" || c.EnvName != "Alpha" || c.Prefix != "acme/team" {
+				t.Errorf("environment candidate = %+v", c)
+			}
+		}
+		if c.ID == "" {
+			t.Errorf("candidate %q has no ID", c.Name)
+		}
+	}
+
+	none, err := s.Candidates(context.Background(), "env-without-credentials")
+	if err != nil || len(none) != 1 || none[0].Name != "inst" {
+		t.Errorf("an environment with none of its own: %+v, %v, want only the instance one", none, err)
+	}
+}

@@ -4,6 +4,7 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/config"
+	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/internal/registry"
 	"github.com/ianglennon/bayplan/internal/vault"
 )
 
@@ -686,5 +689,159 @@ func TestACreateThatClashesNamesTheOtherCredential(t *testing.T) {
 	if rec.Code != http.StatusConflict || p.Type != "hub_fallback_taken" || len(p.Errors) != 1 ||
 		p.Errors[0].Location != "conflict.credential" || p.Errors[0].Message != "hub-all" {
 		t.Errorf("%d %s, want 409 hub_fallback_taken naming hub-all", rec.Code, rec.Body)
+	}
+}
+
+// Which credential a pull would use (plan 05-08, IMG-02, D-09, D-10, D-24a). The tester asks the
+// same resolver pulls use, on the instance layer and the chosen environment's layer only.
+
+type resolveScope struct {
+	Kind    string  `json:"kind"`
+	EnvID   *string `json:"envId"`
+	EnvName *string `json:"envName"`
+}
+
+type resolveResp struct {
+	Input      string `json:"input"`
+	Normalized string `json:"normalized"`
+	Credential *struct {
+		ID    string       `json:"id"`
+		Name  string       `json:"name"`
+		Scope resolveScope `json:"scope"`
+	} `json:"credential"`
+	MatchedOn  string `json:"matchedOn"`
+	Considered []struct {
+		CredentialID string       `json:"credentialId"`
+		Name         string       `json:"name"`
+		Scope        resolveScope `json:"scope"`
+		Matches      bool         `json:"matches"`
+		Result       string       `json:"result"`
+	} `json:"considered"`
+}
+
+// addEnvCredential stores a credential of one environment directly: the environment family of
+// credential routes is a later plan's.
+func addEnvCredential(t *testing.T, f *envFix, envID string, in registry.CreateInput) {
+	t.Helper()
+	in.EnvID = envID
+	if in.Type == "" {
+		in.Type = "ghcr"
+	}
+	in.Username, in.Secret = "bot", credToken
+	if _, err := registry.NewStore(f.st, f.v, f.clk.now).Create(context.Background(), in, "id-admin", nil); err != nil {
+		t.Fatalf("store the environment credential: %v", err)
+	}
+}
+
+func TestAViewerLearnsWhichCredentialAPullWouldUseAndWhy(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
+	e, other := f.twoEnvironments(t)
+	admin := credentialUser{f.cookie, f.csrf}
+	if rec := f.credCall(t, admin, http.MethodPost, "/api/registries", ghcrAcme); rec.Code != http.StatusCreated {
+		t.Fatalf("create the instance credential: %d %s", rec.Code, rec.Body)
+	}
+	addEnvCredential(t, f, e.ID, registry.CreateInput{Name: "ghcr-team", Prefix: "acme/team"})
+	// Another environment's credential must never be considered for this one.
+	addEnvCredential(t, f, other.ID, registry.CreateInput{Name: "ghcr-other", Prefix: "acme/team/app"})
+
+	viewer := f.asRoleOn(t, "viewer", e.ID, "viewer")
+	rec := f.credCall(t, viewer, http.MethodPost, "/api/env/"+e.ID+"/registries/resolve", `{"ref":"ghcr.io/acme/team/app:1"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("resolve: %d %s", rec.Code, rec.Body)
+	}
+	var got resolveResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Input != "ghcr.io/acme/team/app:1" || got.Normalized != "ghcr.io/acme/team/app:1" || got.MatchedOn != "prefix" {
+		t.Errorf("answer = %+v", got)
+	}
+	if got.Credential == nil || got.Credential.Name != "ghcr-team" || got.Credential.Scope.Kind != "environment" ||
+		got.Credential.Scope.EnvID == nil || *got.Credential.Scope.EnvID != e.ID {
+		t.Fatalf("credential = %+v, want the environment's ghcr-team", got.Credential)
+	}
+	if len(got.Considered) != 2 || got.Considered[0].Name != "ghcr-team" || got.Considered[0].Result != "used" ||
+		got.Considered[1].Name != "ghcr-acme" || got.Considered[1].Result != "shorter_prefix" || !got.Considered[1].Matches {
+		t.Errorf("considered = %+v, want ghcr-team used then ghcr-acme with a shorter prefix", got.Considered)
+	}
+	if strings.Contains(rec.Body.String(), "ghcr-other") || strings.Contains(rec.Body.String(), credToken) || strings.Contains(rec.Body.String(), "SECRETtoken") {
+		t.Errorf("the answer leaks another environment's credential or a secret: %s", rec.Body)
+	}
+}
+
+func TestAnImageNoStoredCredentialMatchesIsAnonymousWithTheReferenceNormalised(t *testing.T) {
+	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
+	viewer := f.asRoleOn(t, "viewer", e.ID, "viewer")
+	rec := f.credCall(t, viewer, http.MethodPost, "/api/env/"+e.ID+"/registries/resolve", `{"ref":"nginx"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("resolve: %d %s", rec.Code, rec.Body)
+	}
+	var got resolveResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Input != "nginx" || got.Normalized != "docker.io/library/nginx:latest" || got.Credential != nil || got.MatchedOn != "" || got.Considered == nil || len(got.Considered) != 0 {
+		t.Errorf("answer = %+v, want anonymous and nothing considered", got)
+	}
+}
+
+func TestAHubFallbackAnswersAnOfficialImageAndAGhcrCredentialNeverAnswersAnotherHost(t *testing.T) {
+	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
+	admin := credentialUser{f.cookie, f.csrf}
+	for _, body := range []string{
+		`{"name":"hub-all","type":"dockerhub","username":"bot","secret":"` + credToken + `","hubFallback":true}`,
+		ghcrAcme,
+	} {
+		if rec := f.credCall(t, admin, http.MethodPost, "/api/registries", body); rec.Code != http.StatusCreated {
+			t.Fatalf("create: %d %s", rec.Code, rec.Body)
+		}
+	}
+	resolve := func(ref string) resolveResp {
+		t.Helper()
+		rec := f.credCall(t, admin, http.MethodPost, "/api/env/"+e.ID+"/registries/resolve", `{"ref":"`+ref+`"}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("resolve %s: %d %s", ref, rec.Code, rec.Body)
+		}
+		var got resolveResp
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if got := resolve("nginx"); got.Credential == nil || got.Credential.Name != "hub-all" || got.MatchedOn != "hub_fallback" {
+		t.Errorf("nginx = %+v, want the Hub fallback", got)
+	}
+	if got := resolve("ghcr.io.evil.example/acme/app"); got.Credential != nil {
+		t.Errorf("a look-alike host used %+v, want anonymous", got.Credential)
+	}
+	if got := resolve("ghcr.io/acmecorp/app"); got.Credential != nil {
+		t.Errorf("ghcr.io/acmecorp used %+v, want anonymous", got.Credential)
+	}
+}
+
+func TestResolvingRefusesAnUnreadableReferenceAndACallerWithoutImagesRead(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
+	e, other := f.twoEnvironments(t)
+	path := "/api/env/" + e.ID + "/registries/resolve"
+	admin := credentialUser{f.cookie, f.csrf}
+
+	for _, ref := range []string{"Bad Ref!", "GHCR.io/Acme/app", "   "} {
+		body, _ := json.Marshal(map[string]string{"ref": ref})
+		rec := f.credCall(t, admin, http.MethodPost, path, string(body))
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Errorf("ref %q: %d %s, want 422", ref, rec.Code, rec.Body)
+		} else if ref != "   " && problemType(t, rec) != "ref_invalid" {
+			t.Errorf("ref %q: type %q, want ref_invalid", ref, problemType(t, rec))
+		}
+	}
+
+	elsewhere := f.asRoleOn(t, "elsewhere", other.ID, "viewer")
+	if rec := f.credCall(t, elsewhere, http.MethodPost, path, `{"ref":"nginx"}`); rec.Code != http.StatusForbidden {
+		t.Errorf("a Viewer of another environment: %d %s, want 403", rec.Code, rec.Body)
+	}
+	f.addUser(t, "nobody", false)
+	cookie, csrf := f.signIn(t, "nobody", false)
+	if rec := f.credCall(t, credentialUser{cookie, csrf}, http.MethodPost, path, `{"ref":"nginx"}`); rec.Code != http.StatusForbidden {
+		t.Errorf("a user with no role: %d %s, want 403", rec.Code, rec.Body)
 	}
 }
