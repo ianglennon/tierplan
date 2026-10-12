@@ -166,6 +166,58 @@ func (q *Queries) InsertRegistryCredential(ctx context.Context, arg InsertRegist
 	return err
 }
 
+const listRegistryCandidates = `-- name: ListRegistryCandidates :many
+SELECT c.id, c.env_id, c.name, c.host, c.prefix, c.hub_fallback, COALESCE(e.name, '') AS env_name
+FROM registry_credentials c
+LEFT JOIN environments e ON e.id = c.env_id
+WHERE c.env_id IS NULL OR c.env_id = ?1
+ORDER BY (c.env_id IS NOT NULL), c.host, c.prefix, c.name, c.id
+`
+
+type ListRegistryCandidatesRow struct {
+	ID          string
+	EnvID       sql.NullString
+	Name        string
+	Host        string
+	Prefix      string
+	HubFallback int64
+	EnvName     string
+}
+
+// What the resolver needs to choose a credential for an environment: the instance credentials
+// and that environment's own, with the environment's name. Never the sealed secret, and never
+// another environment's credential.
+func (q *Queries) ListRegistryCandidates(ctx context.Context, envID sql.NullString) ([]ListRegistryCandidatesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listRegistryCandidates, envID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRegistryCandidatesRow
+	for rows.Next() {
+		var i ListRegistryCandidatesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.EnvID,
+			&i.Name,
+			&i.Host,
+			&i.Prefix,
+			&i.HubFallback,
+			&i.EnvName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRegistryCredentials = `-- name: ListRegistryCredentials :many
 SELECT id, env_id, name, type, host, prefix, username, secret_last4, hub_fallback, ca_pem, insecure,
        expires_at, last_test_at, last_test_ok, last_test_detail, last_failure_at, last_failure_code,

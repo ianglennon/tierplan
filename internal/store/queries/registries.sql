@@ -48,3 +48,13 @@ WHERE env_id IS sqlc.narg(env_id) AND id <> sqlc.arg(id)
     OR (sqlc.arg(kind) = 'prefix' AND host = sqlc.arg(host) AND prefix = sqlc.arg(prefix))
     OR (sqlc.arg(kind) = 'hub' AND hub_fallback = 1))
 LIMIT 1;
+
+-- name: ListRegistryCandidates :many
+-- What the resolver needs to choose a credential for an environment: the instance credentials
+-- and that environment's own, with the environment's name. Never the sealed secret, and never
+-- another environment's credential.
+SELECT c.id, c.env_id, c.name, c.host, c.prefix, c.hub_fallback, COALESCE(e.name, '') AS env_name
+FROM registry_credentials c
+LEFT JOIN environments e ON e.id = c.env_id
+WHERE c.env_id IS NULL OR c.env_id = sqlc.arg(env_id)
+ORDER BY (c.env_id IS NOT NULL), c.host, c.prefix, c.name, c.id;

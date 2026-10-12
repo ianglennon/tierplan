@@ -819,7 +819,7 @@ func TestAHubFallbackAnswersAnOfficialImageAndAGhcrCredentialNeverAnswersAnother
 	}
 }
 
-func TestResolvingRefusesAnUnreadableReferenceAndACallerWithoutImagesRead(t *testing.T) {
+func TestResolvingRefusesAnUnreadableReferenceAndACallerWhoCannotReadTheEnvironment(t *testing.T) {
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	e, other := f.twoEnvironments(t)
 	path := "/api/env/" + e.ID + "/registries/resolve"
@@ -835,13 +835,15 @@ func TestResolvingRefusesAnUnreadableReferenceAndACallerWithoutImagesRead(t *tes
 		}
 	}
 
+	// An environment the caller cannot read is not there for them: the platform answers 404
+	// environment_not_found, exactly as for one that does not exist, and nothing is resolved.
 	elsewhere := f.asRoleOn(t, "elsewhere", other.ID, "viewer")
-	if rec := f.credCall(t, elsewhere, http.MethodPost, path, `{"ref":"nginx"}`); rec.Code != http.StatusForbidden {
-		t.Errorf("a Viewer of another environment: %d %s, want 403", rec.Code, rec.Body)
+	if rec := f.credCall(t, elsewhere, http.MethodPost, path, `{"ref":"nginx"}`); rec.Code != http.StatusNotFound || problemType(t, rec) != "environment_not_found" {
+		t.Errorf("a Viewer of another environment: %d %s, want 404 environment_not_found", rec.Code, rec.Body)
 	}
 	f.addUser(t, "nobody", false)
 	cookie, csrf := f.signIn(t, "nobody", false)
-	if rec := f.credCall(t, credentialUser{cookie, csrf}, http.MethodPost, path, `{"ref":"nginx"}`); rec.Code != http.StatusForbidden {
-		t.Errorf("a user with no role: %d %s, want 403", rec.Code, rec.Body)
+	if rec := f.credCall(t, credentialUser{cookie, csrf}, http.MethodPost, path, `{"ref":"nginx"}`); rec.Code != http.StatusNotFound {
+		t.Errorf("a user with no role: %d %s, want 404", rec.Code, rec.Body)
 	}
 }

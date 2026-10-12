@@ -130,6 +130,12 @@ function mount() {
 
 const imageField = () => screen.getByLabelText("Image") as HTMLInputElement;
 const check = () => screen.getByRole("button", { name: "Check credential" });
+// The text of a row of the matched list: "Registry", "Matched on" or "Scope". The candidates
+// table has a Scope column of its own, so the rows are looked up inside the list only.
+const rowValue = (label: string) => {
+  const list = screen.getByRole("status").querySelector("dl") as HTMLElement;
+  return within(list).getByText(label).nextElementSibling?.textContent;
+};
 const resolves = () => sent.filter((s) => s.path.endsWith("/registries/resolve"));
 
 async function ready() {
@@ -161,16 +167,18 @@ describe("CredentialTester", () => {
     const status = screen.getByRole("status");
     await waitFor(() => expect(status.textContent).toContain("Pulls of"));
     expect(resolves()).toEqual([
-      { method: "POST", path: "/api/env/e1/registries/resolve", body: { ref: "ghcr.io/acme/team/app:1" } },
+      {
+        method: "POST",
+        path: "/api/env/e1/registries/resolve",
+        body: { ref: "ghcr.io/acme/team/app:1" },
+      },
     ]);
     expect(status.textContent).toContain("Pulls of ghcr.io/acme/team/app:1 use “ghcr-team” (Lab).");
     // The three rows.
     const rows = within(status);
-    expect(rows.getByText("Registry").nextElementSibling?.textContent).toBe("ghcr.io");
-    expect(rows.getByText("Matched on").nextElementSibling?.textContent).toBe(
-      "the prefix acme/team",
-    );
-    expect(rows.getByText("Scope").nextElementSibling?.textContent).toBe("Lab");
+    expect(rowValue("Registry")).toBe("ghcr.io");
+    expect(rowValue("Matched on")).toBe("the prefix acme/team");
+    expect(rowValue("Scope")).toBe("Lab");
     // The input was already normalised, so there is no "Read as" line.
     expect(status.textContent).not.toContain("Read as");
 
@@ -179,17 +187,20 @@ describe("CredentialTester", () => {
     const body = within(table)
       .getAllByRole("row")
       .slice(1)
-      .map((r) => within(r).getAllByRole("cell").map((c) => c.textContent));
+      .map((r) =>
+        within(r)
+          .getAllByRole("cell")
+          .map((c) => c.textContent),
+      );
     expect(body).toEqual([
       ["ghcr-team", "Lab", "Yes", "Used"],
       ["ghcr-acme", "Instance", "Yes", "Shorter prefix"],
     ]);
-    expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
-      "Credential",
-      "Scope",
-      "Matches",
-      "Result",
-    ]);
+    expect(
+      within(table)
+        .getAllByRole("columnheader")
+        .map((h) => h.textContent),
+    ).toEqual(["Credential", "Scope", "Matches", "Result"]);
   });
 
   it("says a pull is anonymous, shows how the reference was read, and links to Add credential", async () => {
@@ -239,9 +250,7 @@ describe("CredentialTester", () => {
     fireEvent.click(check());
     const status = screen.getByRole("status");
     await waitFor(() => expect(status.textContent).toContain("use “hub-all” (Instance)"));
-    expect(within(status).getByText("Matched on").nextElementSibling?.textContent).toBe(
-      "your Docker Hub fallback",
-    );
+    expect(rowValue("Matched on")).toBe("your Docker Hub fallback");
 
     answer = () =>
       Response.json({
@@ -252,11 +261,7 @@ describe("CredentialTester", () => {
       });
     fireEvent.change(imageField(), { target: { value: "ghcr.io/x/y" } });
     fireEvent.click(check());
-    await waitFor(() =>
-      expect(within(status).getByText("Matched on").nextElementSibling?.textContent).toBe(
-        "the registry address ghcr.io",
-      ),
-    );
+    await waitFor(() => expect(rowValue("Matched on")).toBe("the registry address ghcr.io"));
   });
 
   it("shows a spinner and Checking… while it asks, and clears the previous result", async () => {
@@ -296,10 +301,7 @@ describe("CredentialTester", () => {
 
   it("shows the reference error when the server does not understand the image", async () => {
     answer = () =>
-      Response.json(
-        { type: "ref_invalid", title: "x", status: 422, detail: "d" },
-        { status: 422 },
-      );
+      Response.json({ type: "ref_invalid", title: "x", status: 422, detail: "d" }, { status: 422 });
     await ready();
     fireEvent.change(imageField(), { target: { value: "Bad Ref!" } });
     fireEvent.click(check());

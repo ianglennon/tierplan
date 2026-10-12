@@ -11,6 +11,9 @@ export type Credential = components["schemas"]["CredentialBody"];
 export type CredentialRequest = components["schemas"]["CredentialRequest"];
 export type CredentialPatch = components["schemas"]["CredentialPatchRequest"];
 export type RegistryType = Credential["type"];
+export type ResolveResult = components["schemas"]["ResolveBody"];
+export type ResolvedCredential = components["schemas"]["ResolvedCredentialBody"];
+export type ConsideredCredential = components["schemas"]["ConsideredCredentialBody"];
 
 // How often the Last test and Last use cells are read again while the page is open.
 // There is no stream for credentials (UI-SPEC "Live updates").
@@ -180,5 +183,47 @@ export function useDeleteCredential() {
       queryClient.removeQueries({ queryKey: [...REGISTRIES_KEY, "detail", id] });
       void queryClient.invalidateQueries({ queryKey: REGISTRIES_KEY });
     },
+  });
+}
+
+// ResolveRequestError is a check the server refused or that got no answer. status is 0
+// when the server could not be reached; type is the problem type it named (ref_invalid).
+export class ResolveRequestError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  constructor(status: number, type?: string) {
+    super(`POST registries/resolve failed (${status})`);
+    this.name = "ResolveRequestError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+// postResolve asks which credential a pull of the image would use on one environment. It
+// is the same function pulls choose with (D-10), so the answer cannot drift from a pull.
+// Nothing in the answer is a secret.
+export async function postResolve(envId: string, ref: string): Promise<ResolveResult> {
+  try {
+    const res = await api.POST("/api/env/{envId}/registries/resolve", {
+      params: { path: { envId } },
+      body: { ref },
+    });
+    if (!res.data) {
+      const problem = readProblem(res.error, res.response);
+      throw new ResolveRequestError(problem.status, problem.type);
+    }
+    return res.data;
+  } catch (e) {
+    throw e instanceof ResolveRequestError ? e : new ResolveRequestError(0);
+  }
+}
+
+// useResolveCredential is the mutation behind the "Which credential?" tester and the pull
+// form's credential preview. A read, so it writes nothing and invalidates nothing; being a
+// mutation, a call replaces the one before it, so only the latest answer is ever shown.
+export function useResolveCredential(envId: string) {
+  return useMutation<ResolveResult, ResolveRequestError, string>({
+    mutationFn: (ref) => postResolve(envId, ref),
+    retry: false,
   });
 }

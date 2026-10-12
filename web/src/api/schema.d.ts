@@ -860,6 +860,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/registries/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Which registry credential a pull of an image would use
+         * @description Answers with the same function pulls choose a credential with: the exact registry host, the longest whole-segment namespace prefix across the instance credentials and this environment's, the environment's credential winning a tie, and a Docker Hub fallback last. The answer names the credential and why, and lists the other credentials for the registry with what became of each. Only the instance layer and this environment's layer are consulted, and no secret is ever returned. An unparsable reference is 422 ref_invalid. Needs images.read on the environment. Not audited: it reads nothing but the choice.
+         */
+        post: operations["resolveCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/shells": {
         parameters: {
             query?: never;
@@ -2584,6 +2604,21 @@ export interface components {
             /** @description 3 to 32 characters from a-z, 0-9, dot, dash and underscore; stored lower-case */
             username: string;
         };
+        ConsideredCredentialBody: {
+            /** @description The credential's ID */
+            credentialId: string;
+            /** @description Whether it covers the image at all */
+            matches: boolean;
+            /** @description Its name */
+            name: string;
+            /**
+             * @description used: the pulls use it. shorter_prefix: it covers the image with a shorter prefix than the one used. overridden_by_environment: an instance credential the environment's of the same specificity beat. hub_fallback_overridden: a Docker Hub fallback a more specific credential beat. no_match: it is for the same registry but not this namespace
+             * @enum {string}
+             */
+            result: "used" | "shorter_prefix" | "overridden_by_environment" | "hub_fallback_overridden" | "no_match";
+            /** @description Where it applies */
+            scope: components["schemas"]["CredentialScopeBody"];
+        };
         ContainerActionRequest: {
             /**
              * @description What to do. A stop or restart uses the container's own stop timeout and signal, and a kill sends SIGKILL, unless this is a single-target request that sets timeout or signal
@@ -4282,6 +4317,34 @@ export interface components {
              * @enum {string}
              */
             role?: "viewer" | "operator" | "admin";
+        };
+        ResolveBody: {
+            /** @description Every credential for the image's registry that the instance and this environment hold: the one used first, then those that cover the image from most to least specific, then those that do not */
+            considered: components["schemas"]["ConsideredCredentialBody"][] | null;
+            /** @description The credential a pull would use, or null for an anonymous pull */
+            credential: components["schemas"]["ResolvedCredentialBody"] | null;
+            /** @description The reference as it was sent, trimmed */
+            input: string;
+            /** @description prefix, host or hub_fallback; empty for an anonymous pull */
+            matchedOn: string;
+            /** @description The reference as the engine will pull it: docker.io and library/ filled in, and latest when there is no tag or digest */
+            normalized: string;
+        };
+        ResolveRequest: {
+            /** @description The image to check, like nginx:1.27 or ghcr.io/acme/app:latest. No tag means latest; a bare name is a Docker Hub library image. 422 ref_invalid when it is not an image reference */
+            ref: string;
+        };
+        ResolvedCredentialBody: {
+            /** @description The registry host it covers */
+            host: string;
+            /** @description The credential's ID */
+            id: string;
+            /** @description Its name */
+            name: string;
+            /** @description The namespace it covers; empty for the whole registry */
+            prefix: string;
+            /** @description Where it applies */
+            scope: components["schemas"]["CredentialScopeBody"];
         };
         RestoreApplyBody: {
             /** @description Always true: Bayplan is swapping the database and restarting, and everyone is signed out */
@@ -6885,6 +6948,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EnvironmentBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    resolveCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolveBody"];
                 };
             };
             /** @description Error */

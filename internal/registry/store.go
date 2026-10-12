@@ -341,6 +341,26 @@ func (s *Store) List(ctx context.Context) ([]Credential, error) {
 	return out, nil
 }
 
+// Candidates returns what the resolver chooses from for one environment: the instance
+// credentials and that environment's own, by host and prefix. They carry no secret, and no
+// other environment's credential is ever among them.
+func (s *Store) Candidates(ctx context.Context, envID string) ([]Candidate, error) {
+	rows, err := s.st.RQ.ListRegistryCandidates(ctx, sql.NullString{String: envID, Valid: true})
+	if err != nil {
+		return nil, fmt.Errorf("registry: candidates: %w", err)
+	}
+	out := make([]Candidate, len(rows))
+	for i, r := range rows {
+		out[i] = Candidate{
+			ID: r.ID, Name: r.Name, Layer: LayerInstance, Host: r.Host, Prefix: r.Prefix, HubFallback: r.HubFallback != 0,
+		}
+		if r.EnvID.Valid {
+			out[i].Layer, out[i].EnvID, out[i].EnvName = LayerEnvironment, r.EnvID.String, r.EnvName
+		}
+	}
+	return out, nil
+}
+
 // clash maps a unique-index failure to the typed conflict the caller words, naming the other
 // credential that holds what was asked for. The message names the columns of the index that
 // refused the row. self is the credential being written, which is never its own conflict.

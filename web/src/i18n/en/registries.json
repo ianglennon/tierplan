@@ -197,6 +197,57 @@
         "keep": "Keep editing",
         "discard": "Discard changes"
       }
+    },
+    "tester": {
+      "title": "Which credential?",
+      "body": "Check which credential a pull would use for an image, and why.",
+      "environment": "Environment",
+      "image": "Image",
+      "imagePlaceholder": "ghcr.io/acme/app:latest",
+      "submit": "Check credential",
+      "pending": "Checking…",
+      "matched": "Pulls of <ref>{{ref}}</ref> use “{{name}}” ({{scope}}).",
+      "anonymous": "Pulls of <ref>{{ref}}</ref> are anonymous.",
+      "noMatch": "No stored credential matches {{path}}.",
+      "addCredential": "Add credential",
+      "readAs": "Read as {{ref}}",
+      "rows": {
+        "registry": "Registry",
+        "matchedOn": "Matched on",
+        "scope": "Scope"
+      },
+      "on": {
+        "prefix": "the prefix {{prefix}}",
+        "host": "the registry address {{host}}",
+        "hub_fallback": "your Docker Hub fallback"
+      },
+      "scope": {
+        "instance": "Instance"
+      },
+      "considered": {
+        "caption": "Other credentials considered",
+        "columns": {
+          "credential": "Credential",
+          "scope": "Scope",
+          "matches": "Matches",
+          "result": "Result"
+        },
+        "yes": "Yes",
+        "no": "No",
+        "results": {
+          "used": "Used",
+          "shorter_prefix": "Shorter prefix",
+          "overridden_by_environment": "Instance credential, overridden by the environment's",
+          "hub_fallback_overridden": "Hub fallback, a more specific credential matched",
+          "no_match": "Not this namespace"
+        }
+      },
+      "errors": {
+        "environment": "Choose an environment.",
+        "ref": "Enter an image like nginx:1.27 or ghcr.io/acme/app:latest.",
+        "generic": "Couldn't check the credential. Try again.",
+        "permission": "You no longer have permission to do that. Your access may have changed."
+      }
     }
   }
 }

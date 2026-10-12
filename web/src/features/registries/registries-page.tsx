@@ -9,6 +9,7 @@ import { NoPermission } from "@/components/full-page-state";
 import { MAX_QUERY } from "@/features/containers/list-search";
 import { CredentialSheet } from "@/features/registries/credential-sheet";
 import { CredentialTable } from "@/features/registries/credential-table";
+import { CredentialTester } from "@/features/registries/credential-tester";
 import { DeleteCredentialDialog } from "@/features/registries/delete-credential-dialog";
 import { useAnyEnvironmentPermission, useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -92,6 +93,9 @@ export function RegistriesPage({ search, onSearchChange }: RegistriesPageProps) 
         onOpen={(id) => onSearchChange({ credential: id })}
         onDelete={setDeleting}
       />
+      <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <CredentialTester />
+      </div>
       <DeleteCredentialDialog
         credential={deleting}
         open={deleting !== null}

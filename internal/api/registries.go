@@ -157,6 +157,51 @@ type CredentialPathInput struct {
 	CredentialID string `path:"credentialId" maxLength:"64" doc:"The credential's ID"`
 }
 
+// ResolveRequest is the body of POST /api/env/{envId}/registries/resolve.
+type ResolveRequest struct {
+	Ref string `json:"ref" minLength:"1" maxLength:"512" doc:"The image to check, like nginx:1.27 or ghcr.io/acme/app:latest. No tag means latest; a bare name is a Docker Hub library image. 422 ref_invalid when it is not an image reference"`
+}
+
+// ResolveInput is the path and body of the resolve route.
+type ResolveInput struct {
+	EnvironmentPathInput
+	Body ResolveRequest
+}
+
+// ResolvedCredentialBody is the credential a pull would use: what it is and what it covers,
+// never its secret.
+type ResolvedCredentialBody struct {
+	ID     string              `json:"id" doc:"The credential's ID"`
+	Name   string              `json:"name" doc:"Its name"`
+	Scope  CredentialScopeBody `json:"scope" doc:"Where it applies"`
+	Host   string              `json:"host" doc:"The registry host it covers"`
+	Prefix string              `json:"prefix" doc:"The namespace it covers; empty for the whole registry"`
+}
+
+// ConsideredCredentialBody is one credential for the image's registry and what became of it.
+type ConsideredCredentialBody struct {
+	CredentialID string              `json:"credentialId" doc:"The credential's ID"`
+	Name         string              `json:"name" doc:"Its name"`
+	Scope        CredentialScopeBody `json:"scope" doc:"Where it applies"`
+	Matches      bool                `json:"matches" doc:"Whether it covers the image at all"`
+	Result       string              `json:"result" enum:"used,shorter_prefix,overridden_by_environment,hub_fallback_overridden,no_match" doc:"used: the pulls use it. shorter_prefix: it covers the image with a shorter prefix than the one used. overridden_by_environment: an instance credential the environment's of the same specificity beat. hub_fallback_overridden: a Docker Hub fallback a more specific credential beat. no_match: it is for the same registry but not this namespace"`
+}
+
+// ResolveBody is the answer of the resolve route.
+type ResolveBody struct {
+	Input      string                           `json:"input" doc:"The reference as it was sent, trimmed"`
+	Normalized string                           `json:"normalized" doc:"The reference as the engine will pull it: docker.io and library/ filled in, and latest when there is no tag or digest"`
+	Credential Nullable[ResolvedCredentialBody] `json:"credential" doc:"The credential a pull would use, or null for an anonymous pull"`
+	MatchedOn  string                           `json:"matchedOn" doc:"prefix, host or hub_fallback; empty for an anonymous pull"`
+	Considered []ConsideredCredentialBody       `json:"considered" doc:"Every credential for the image's registry that the instance and this environment hold: the one used first, then those that cover the image from most to least specific, then those that do not"`
+}
+
+// ResolveOutput wraps ResolveBody for huma.
+type ResolveOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         ResolveBody
+}
+
 // credentialViewer is what one caller may see and manage.
 type credentialViewer struct {
 	global    []rbac.Perm
@@ -384,6 +429,31 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 	})
 
 	httpx.Register(r, huma.Operation{
+		OperationID: "resolveCredential",
+		Method:      http.MethodPost,
+		Path:        "/api/env/{envId}/registries/resolve",
+		Summary:     "Which registry credential a pull of an image would use",
+		Description: "Answers with the same function pulls choose a credential with: the exact registry host, the longest whole-segment namespace prefix across the instance credentials and this " +
+			"environment's, the environment's credential winning a tie, and a Docker Hub fallback last. The answer names the credential and why, and lists the other credentials for the registry " +
+			"with what became of each. Only the instance layer and this environment's layer are consulted, and no secret is ever returned. An unparsable reference is 422 ref_invalid. Needs images.read " +
+			"on the environment. Not audited: it reads nothing but the choice.",
+		Tags: []string{"registries"},
+	}, rbac.Requirement{Perm: rbac.PermImagesRead, Scope: rbac.ScopeEnvironment}, func(ctx context.Context, in *ResolveInput) (*ResolveOutput, error) {
+		if d.Store == nil {
+			return nil, unavailable()
+		}
+		ref, err := registry.ParseRef(in.Body.Ref)
+		if err != nil {
+			return nil, httpx.Problem(http.StatusUnprocessableEntity, problemRefInvalid, "Enter an image like nginx:1.27 or ghcr.io/acme/app:latest.")
+		}
+		cands, err := d.Store.Candidates(ctx, in.EnvID)
+		if err != nil {
+			return nil, fail("list candidates", err)
+		}
+		return &ResolveOutput{CacheControl: "no-store", Body: resolveBody(strings.TrimSpace(in.Body.Ref), ref, registry.Select(cands, ref))}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
 		OperationID: "getCredential",
 		Method:      http.MethodGet,
 		Path:        "/api/registries/{credentialId}",
@@ -411,6 +481,32 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		}
 		return &CredentialOutput{CacheControl: "no-store", Body: body(ctx, v, c)}, nil
 	})
+}
+
+// resolveBody maps the resolver's answer to the body of the resolve route.
+func resolveBody(input string, ref registry.Ref, m registry.Match) ResolveBody {
+	b := ResolveBody{Input: input, Normalized: ref.String(), MatchedOn: m.On, Considered: make([]ConsideredCredentialBody, 0, len(m.Considered))}
+	if m.Cred != nil {
+		b.Credential = Some(ResolvedCredentialBody{
+			ID: m.Cred.ID, Name: m.Cred.Name, Scope: candidateScope(*m.Cred), Host: m.Cred.Host, Prefix: m.Cred.Prefix,
+		})
+	}
+	for _, c := range m.Considered {
+		b.Considered = append(b.Considered, ConsideredCredentialBody{
+			CredentialID: c.Candidate.ID, Name: c.Candidate.Name, Scope: candidateScope(c.Candidate), Matches: c.Matches, Result: c.Result,
+		})
+	}
+	return b
+}
+
+// candidateScope says where a candidate applies.
+func candidateScope(c registry.Candidate) CredentialScopeBody {
+	s := CredentialScopeBody{Kind: c.Layer}
+	if c.EnvID != "" {
+		id, name := c.EnvID, c.EnvName
+		s.EnvID, s.EnvName = &id, &name
+	}
+	return s
 }
 
 // mergeCredentialPatch lays the members of a patch over the stored credential. The secret is

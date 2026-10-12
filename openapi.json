@@ -820,6 +820,46 @@
         ],
         "type": "object"
       },
+      "ConsideredCredentialBody": {
+        "additionalProperties": false,
+        "properties": {
+          "credentialId": {
+            "description": "The credential's ID",
+            "type": "string"
+          },
+          "matches": {
+            "description": "Whether it covers the image at all",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "Its name",
+            "type": "string"
+          },
+          "result": {
+            "description": "used: the pulls use it. shorter_prefix: it covers the image with a shorter prefix than the one used. overridden_by_environment: an instance credential the environment's of the same specificity beat. hub_fallback_overridden: a Docker Hub fallback a more specific credential beat. no_match: it is for the same registry but not this namespace",
+            "enum": [
+              "used",
+              "shorter_prefix",
+              "overridden_by_environment",
+              "hub_fallback_overridden",
+              "no_match"
+            ],
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/CredentialScopeBody",
+            "description": "Where it applies"
+          }
+        },
+        "required": [
+          "credentialId",
+          "name",
+          "scope",
+          "matches",
+          "result"
+        ],
+        "type": "object"
+      },
       "ContainerActionRequest": {
         "additionalProperties": false,
         "properties": {
@@ -5260,6 +5300,100 @@
         },
         "required": [
           "kind"
+        ],
+        "type": "object"
+      },
+      "ResolveBody": {
+        "additionalProperties": false,
+        "properties": {
+          "considered": {
+            "description": "Every credential for the image's registry that the instance and this environment hold: the one used first, then those that cover the image from most to least specific, then those that do not",
+            "items": {
+              "$ref": "#/components/schemas/ConsideredCredentialBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "credential": {
+            "description": "The credential a pull would use, or null for an anonymous pull",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ResolvedCredentialBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "input": {
+            "description": "The reference as it was sent, trimmed",
+            "type": "string"
+          },
+          "matchedOn": {
+            "description": "prefix, host or hub_fallback; empty for an anonymous pull",
+            "type": "string"
+          },
+          "normalized": {
+            "description": "The reference as the engine will pull it: docker.io and library/ filled in, and latest when there is no tag or digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "input",
+          "normalized",
+          "credential",
+          "matchedOn",
+          "considered"
+        ],
+        "type": "object"
+      },
+      "ResolveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "ref": {
+            "description": "The image to check, like nginx:1.27 or ghcr.io/acme/app:latest. No tag means latest; a bare name is a Docker Hub library image. 422 ref_invalid when it is not an image reference",
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "type": "object"
+      },
+      "ResolvedCredentialBody": {
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "description": "The registry host it covers",
+            "type": "string"
+          },
+          "id": {
+            "description": "The credential's ID",
+            "type": "string"
+          },
+          "name": {
+            "description": "Its name",
+            "type": "string"
+          },
+          "prefix": {
+            "description": "The namespace it covers; empty for the whole registry",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/CredentialScopeBody",
+            "description": "Where it applies"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "scope",
+          "host",
+          "prefix"
         ],
         "type": "object"
       },
@@ -10277,6 +10411,67 @@
         "summary": "Retry the connection to an environment now",
         "tags": [
           "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/registries/resolve": {
+      "post": {
+        "description": "Answers with the same function pulls choose a credential with: the exact registry host, the longest whole-segment namespace prefix across the instance credentials and this environment's, the environment's credential winning a tie, and a Docker Hub fallback last. The answer names the credential and why, and lists the other credentials for the registry with what became of each. Only the instance layer and this environment's layer are consulted, and no secret is ever returned. An unparsable reference is 422 ref_invalid. Needs images.read on the environment. Not audited: it reads nothing but the choice.",
+        "operationId": "resolveCredential",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Which registry credential a pull of an image would use",
+        "tags": [
+          "registries"
         ]
       }
     },
