@@ -5,13 +5,17 @@
 package agents_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/moby/moby/client"
+
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/internal/registry"
 )
 
 // TestSwarmImagePullFanOut pulls an image on every node of a real swarm of three
@@ -136,5 +140,97 @@ func TestSwarmImagePullFanOut(t *testing.T) {
 	}
 	if id := strings.TrimSpace(sh(t, worker, "docker image inspect -f '{{.Id}}' "+second+" 2>/dev/null || echo none")); id != "none" {
 		t.Errorf("the unreachable worker has %s (%s): nothing should have reached it", second, id)
+	}
+}
+
+// TestSwarmPrivatePullEveryNode pulls an image from a registry that requires a sign-in on
+// every node of a real swarm of three managers and a worker, with one stored credential and
+// no docker login anywhere (plan 05-09, IMG-02, D-25, D-27): the job ends Done on all four
+// nodes and none holds a Docker client configuration. Then the header the resolver makes
+// creates a service pinned to the worker, after the worker's copy of the image is removed, and
+// its task reaches running there, which only works if the engine carried the credential from
+// the create to a node that never signed in. The raw service inspect holds neither the
+// password nor the encoded header.
+func TestSwarmPrivatePullEveryNode(t *testing.T) {
+	const user, password = "bot", "registry-pass-0123456789"
+	f := startSwarmFix(t, 3, 1)
+	addr := dockertest.StartSwarmRegistry(t, f.sw, dockertest.RegistryOptions{Htpasswd: dockertest.HtpasswdFor(user, password)})
+	ref := addr + "/private/busybox:1"
+	mgr := f.sw.Managers[0]
+	pushed := dockertest.PushImage(t, mgr, "busybox:1.36.1", ref, &dockertest.Login{User: user, Password: password})
+	// Signed in for the push only. Nobody has the image locally: every node must fetch it.
+	dockertest.Logout(t, mgr)
+	for _, n := range f.sw.Nodes() {
+		sh(t, n, "docker image rm -f busybox:1.36.1 "+ref+" >/dev/null 2>&1 || true")
+	}
+	f.install(t)
+	f.waitSwarmOnline(t, 4)
+
+	ctx := context.Background()
+	creds := registry.NewStore(f.srv.Core().Store(), f.srv.Core().Vault(), nil)
+	cred, err := creds.Create(ctx, registry.CreateInput{
+		Name: "private-bot", Type: registry.TypeGeneric, Host: addr, Prefix: "private", Username: user, Secret: password,
+	}, "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	job := pullAndWait(t, f.srv, f.env.ID, ref, nil)
+	if job.State != "done" || len(job.Items) != 4 {
+		t.Fatalf("job = %+v, want done with an item for each of the four nodes", job)
+	}
+	for _, it := range job.Items {
+		if it.State != "done" || it.Digest != pushed {
+			t.Errorf("item %+v, want done with the digest %s", it, pushed)
+		}
+	}
+	for _, r := range f.srv.AuditRows("image.pulled") {
+		if r.Result != "success" || r.Details["credential"] != "private-bot" {
+			t.Errorf("audit row %+v, want a success naming the credential", r)
+		}
+	}
+	for _, n := range f.sw.Nodes() {
+		if id := strings.TrimSpace(sh(t, n, "docker image inspect -f '{{.Id}}' "+ref)); !strings.HasPrefix(id, "sha256:") {
+			t.Errorf("%s does not have %s after the pull: %q", n.Hostname, ref, id)
+		}
+		if dockertest.HasClientConfig(t, n) {
+			t.Errorf("%s has a Docker client configuration after the pull: Bayplan must not log in", n.Hostname)
+		}
+	}
+
+	// A service created with the resolver's header runs on a worker that never logged in. The
+	// worker's copy goes first, so the task has to pull with what the engine carries.
+	parsed, err := registry.ParseRef(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, used, err := f.srv.Core().Resolver().AuthFor(ctx, f.env.ID, parsed)
+	if err != nil || used == nil || used.ID != cred.ID || header == "" {
+		t.Fatalf("AuthFor = %q, %+v, %v, want the stored credential", header, used, err)
+	}
+	worker := f.sw.Workers[0]
+	sh(t, worker, "docker image rm -f "+ref)
+	id := dockertest.CreateServiceWithAuth(t, mgr, "bp-private", ref, header)
+	dockertest.Wait(t, 3*time.Minute, "the task to run on the worker", func() (bool, string) {
+		out, err := mgr.Sh(ctx, "docker service ps --filter desired-state=running --format '{{.Node}} {{.CurrentState}}' "+id)
+		if err != nil {
+			return false, err.Error()
+		}
+		return strings.HasPrefix(strings.TrimSpace(out), worker.Hostname+" Running"), strings.TrimSpace(out)
+	})
+	if got := strings.TrimSpace(sh(t, worker, "docker image inspect -f '{{.Id}}' "+ref)); !strings.HasPrefix(got, "sha256:") {
+		t.Errorf("the worker does not have %s after the service started: %q", ref, got)
+	}
+	insp, err := mgr.Client(t).ServiceInspect(ctx, id, client.ServiceInspectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw := string(insp.Raw); strings.Contains(raw, password) || strings.Contains(raw, header) {
+		t.Errorf("service inspect holds the password or the encoded header")
+	}
+	for _, n := range f.sw.Nodes() {
+		if dockertest.HasClientConfig(t, n) {
+			t.Errorf("%s has a Docker client configuration after the service: nothing may log in", n.Hostname)
+		}
 	}
 }

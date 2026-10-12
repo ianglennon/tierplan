@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -235,4 +237,32 @@ func HasClientConfig(t testing.TB, node *Node) bool {
 		t.Fatalf("look for the client configuration on %s: %v\n%s", node.Hostname, err, out)
 	}
 	return strings.TrimSpace(out) == "present"
+}
+
+// CreateServiceWithAuth creates a one-replica service of image that runs only on a worker,
+// through the manager's own client, with encodedAuth as the registry header of the create (the
+// way a stack deploy will send the resolver's header), and returns its ID. The task sleeps, so
+// it stays running. A worker that has never signed in to the registry can only start it if the
+// engine carried the header from the create to that worker.
+func CreateServiceWithAuth(t testing.TB, manager *Node, name, image, encodedAuth string) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	one := uint64(1)
+	res, err := manager.Client(t).ServiceCreate(ctx, client.ServiceCreateOptions{
+		Spec: swarm.ServiceSpec{
+			Annotations: swarm.Annotations{Name: name},
+			TaskTemplate: swarm.TaskSpec{
+				ContainerSpec: &swarm.ContainerSpec{Image: image, Command: []string{"sleep", "3600"}},
+				Placement:     &swarm.Placement{Constraints: []string{"node.role==worker"}},
+			},
+			Mode: swarm.ServiceMode{Replicated: &swarm.ReplicatedService{Replicas: &one}},
+		},
+		EncodedRegistryAuth: encodedAuth,
+	})
+	if err != nil {
+		// The error is the engine's and never holds the header.
+		t.Fatalf("create the service %s on %s: %v", name, manager.Hostname, err)
+	}
+	return res.ID
 }
