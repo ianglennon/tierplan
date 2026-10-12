@@ -126,15 +126,25 @@ export function useCreateCredential() {
   });
 }
 
-// patchCredential changes one instance credential. Members left out keep what is stored;
-// a secret left out (or empty) keeps the stored secret, which no route ever returns. It
-// never retries, and the submitted body is never copied into the error.
-export async function patchCredential(id: string, body: CredentialPatch): Promise<Credential> {
+// patchCredential changes one credential, through the route of its layer: the environment's
+// when envId is given, the instance's otherwise. Members left out keep what is stored; a secret
+// left out (or empty) keeps the stored secret, which no route ever returns. It never retries,
+// and the submitted body is never copied into the error.
+export async function patchCredential(
+  id: string,
+  body: CredentialPatch,
+  envId?: string,
+): Promise<Credential> {
   try {
-    const res = await api.PATCH("/api/registries/{credentialId}", {
-      params: { path: { credentialId: id } },
-      body,
-    });
+    const res = envId
+      ? await api.PATCH("/api/env/{envId}/registries/{credentialId}", {
+          params: { path: { envId, credentialId: id } },
+          body,
+        })
+      : await api.PATCH("/api/registries/{credentialId}", {
+          params: { path: { credentialId: id } },
+          body,
+        });
     if (!res.data) {
       const problem = readProblem(res.error, res.response);
       throw new CredentialRequestError(problem.status, problem.type, problem.fields, "PATCH");
@@ -147,14 +157,22 @@ export async function patchCredential(id: string, body: CredentialPatch): Promis
   }
 }
 
+// What the update mutation is given: the credential, the change, and the environment the
+// credential belongs to (absent for an instance credential), which picks the route family.
+export interface UpdateCredentialVariables {
+  id: string;
+  body: CredentialPatch;
+  envId?: string;
+}
+
 // useUpdateCredential is the mutation behind the edit sheet's Save changes. Like the
 // create it keeps nothing the user typed: no retry, no cache time for the variables that
 // hold a replacement secret, and the list and the credential are read again whatever the
 // answer.
 export function useUpdateCredential() {
   const queryClient = useQueryClient();
-  return useMutation<Credential, CredentialRequestError, { id: string; body: CredentialPatch }>({
-    mutationFn: ({ id, body }) => patchCredential(id, body),
+  return useMutation<Credential, CredentialRequestError, UpdateCredentialVariables>({
+    mutationFn: ({ id, body, envId }) => patchCredential(id, body, envId),
     retry: false,
     gcTime: 0,
     onSettled: () => {
@@ -163,13 +181,18 @@ export function useUpdateCredential() {
   });
 }
 
-// deleteCredential removes one instance credential. It never retries: a repeat after a
-// lost answer would find it gone, and that is told apart by the 404.
-export async function deleteCredential(id: string): Promise<void> {
+// deleteCredential removes one credential, through the route of its layer: the environment's
+// when envId is given, the instance's otherwise. It never retries: a repeat after a lost answer
+// would find it gone, and that is told apart by the 404.
+export async function deleteCredential(id: string, envId?: string): Promise<void> {
   try {
-    const res = await api.DELETE("/api/registries/{credentialId}", {
-      params: { path: { credentialId: id } },
-    });
+    const res = envId
+      ? await api.DELETE("/api/env/{envId}/registries/{credentialId}", {
+          params: { path: { envId, credentialId: id } },
+        })
+      : await api.DELETE("/api/registries/{credentialId}", {
+          params: { path: { credentialId: id } },
+        });
     if (!res.response.ok) {
       const problem = readProblem(res.error, res.response);
       throw new CredentialRequestError(problem.status, problem.type, problem.fields, "DELETE");
@@ -181,15 +204,21 @@ export async function deleteCredential(id: string): Promise<void> {
   }
 }
 
+// What the delete mutation is given: the credential and, for an environment's, the environment.
+export interface DeleteCredentialVariables {
+  id: string;
+  envId?: string;
+}
+
 // useDeleteCredential is the mutation behind the delete dialog. It reads the list again
 // whatever the answer, and drops the deleted credential's own query so a stale copy is
 // never shown.
 export function useDeleteCredential() {
   const queryClient = useQueryClient();
-  return useMutation<void, CredentialRequestError, string>({
-    mutationFn: deleteCredential,
+  return useMutation<void, CredentialRequestError, DeleteCredentialVariables>({
+    mutationFn: ({ id, envId }) => deleteCredential(id, envId),
     retry: false,
-    onSettled: (_data, _error, id) => {
+    onSettled: (_data, _error, { id }) => {
       queryClient.removeQueries({ queryKey: [...REGISTRIES_KEY, "detail", id] });
       void queryClient.invalidateQueries({ queryKey: REGISTRIES_KEY });
     },

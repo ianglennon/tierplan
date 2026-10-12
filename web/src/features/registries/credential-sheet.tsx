@@ -20,6 +20,7 @@ import {
   useUpdateCredential,
 } from "@/api/registries";
 import { KeyValueTable } from "@/components/key-value-table";
+import { NeedsTooltip } from "@/components/needs-tooltip";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -60,7 +61,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { CredentialBadge } from "@/features/registries/credential-badge";
-import { ExpiresCell, LastTestCell, maskOf } from "@/features/registries/credential-table";
+import {
+  ExpiresCell,
+  LastTestCell,
+  maskOf,
+  useManageReason,
+} from "@/features/registries/credential-table";
 import { hostAfterTypeChange, PRESETS, presetFor } from "@/features/registries/presets";
 import { hasPermission, useMe } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -457,7 +463,7 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
         ...(values.secret.trim() ? { secret: values.secret } : {}),
       };
       update.mutate(
-        { id: credential.id, body: patch },
+        { id: credential.id, body: patch, envId: credential.scope.envId ?? undefined },
         {
           onSuccess: (saved) => {
             toastSuccess(t("registries.sheet.saved", { name: saved.name }));
@@ -839,6 +845,8 @@ function ViewSheet({ credentialId, onClose }: { credentialId: string; onClose: (
     ? t("registries.sheet.add.description")
     : t("registries.sheet.view.description");
   const title = credential?.name ?? t("registries.title");
+  const reasonOf = useManageReason();
+  const reason = credential ? reasonOf(credential) : undefined;
 
   return (
     <SheetFrame
@@ -848,9 +856,19 @@ function ViewSheet({ credentialId, onClose }: { credentialId: string; onClose: (
         if (!open) onClose();
       }}
       footer={
-        <Button type="button" variant="outline" className={TOUCH_HEIGHT} onClick={onClose}>
-          {t("registries.sheet.close")}
-        </Button>
+        <>
+          {/* What they can see but not use says why: Needs Admin on {environment}, or an instance administrator. */}
+          {reason ? (
+            <NeedsTooltip reason={reason}>
+              <Button type="button" variant="outline" className={TOUCH_HEIGHT}>
+                {t("registries.table.edit")}
+              </Button>
+            </NeedsTooltip>
+          ) : null}
+          <Button type="button" variant="outline" className={TOUCH_HEIGHT} onClick={onClose}>
+            {t("registries.sheet.close")}
+          </Button>
+        </>
       }
     >
       {credential ? (

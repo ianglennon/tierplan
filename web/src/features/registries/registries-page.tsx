@@ -11,7 +11,13 @@ import { CredentialSheet } from "@/features/registries/credential-sheet";
 import { CredentialTable } from "@/features/registries/credential-table";
 import { CredentialTester } from "@/features/registries/credential-tester";
 import { DeleteCredentialDialog } from "@/features/registries/delete-credential-dialog";
-import { useAnyEnvironmentPermission, useDocumentTitle, usePermission } from "@/hooks/use-me";
+import {
+  hasPermission,
+  useAnyEnvironmentPermission,
+  useDocumentTitle,
+  useMe,
+  usePermission,
+} from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { z } from "@/lib/zod-config";
 
@@ -58,12 +64,17 @@ export function RegistriesPage({ search, onSearchChange }: RegistriesPageProps) 
   const [deleting, setDeleting] = useState<Credential | null>(null);
   const environments = useQuery({ ...environmentsQuery, enabled: allowed });
 
+  const me = useMe();
+  // The Scope filter lists the environments the user can read, the ones whose credentials
+  // the table can hold (D-09). The server already limits the list; this keeps the filter from
+  // offering a scope that could only be empty.
   const scopes = useMemo(
     () =>
       (environments.data?.items ?? [])
+        .filter((e) => hasPermission(me.data, "images.read", e.id))
         .map((e) => ({ id: e.id, name: e.name }))
         .sort((a, b) => a.name.localeCompare(b.name)),
-    [environments.data],
+    [environments.data, me.data],
   );
 
   // ?credential=new is the add form, which only an instance administrator or an environment

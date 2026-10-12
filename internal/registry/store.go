@@ -194,6 +194,22 @@ type UpdateHook func(ctx context.Context, tx *sql.Tx, c Credential, changed []st
 // changed fields. ErrNotFound for an unknown ID, *ValidationError for a refused change and a
 // *ConflictError for a clash within the layer. The input is never logged.
 func (s *Store) Update(ctx context.Context, id string, in UpdateInput, hook UpdateHook) (Credential, []string, error) {
+	return s.update(ctx, nil, id, in, hook)
+}
+
+// UpdateInEnv is Update for a credential of one environment: the same rules, and the same
+// ErrNotFound for a credential that is not of that environment (another environment's, or the
+// instance layer's) as for one that does not exist. Nothing is read back, changed or hooked then.
+func (s *Store) UpdateInEnv(ctx context.Context, envID, id string, in UpdateInput, hook UpdateHook) (Credential, []string, error) {
+	if envID == "" {
+		return Credential{}, nil, ErrNotFound
+	}
+	return s.update(ctx, &envID, id, in, hook)
+}
+
+// update is Update and UpdateInEnv: env is nil for any layer, or the one environment whose
+// credential this is allowed to change.
+func (s *Store) update(ctx context.Context, env *string, id string, in UpdateInput, hook UpdateHook) (Credential, []string, error) {
 	now := s.now().UTC()
 	tx, err := s.st.Write.BeginTx(ctx, nil)
 	if err != nil {
@@ -210,6 +226,9 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput, hook Upda
 		return Credential{}, nil, fmt.Errorf("registry: read: %w", err)
 	}
 	cur := credentialOf(row)
+	if env != nil && cur.EnvID != *env {
+		return Credential{}, nil, ErrNotFound
+	}
 	prevExpires := ""
 	if cur.ExpiresAt != nil {
 		prevExpires = cur.ExpiresAt.UTC().Format(time.DateOnly)
@@ -249,8 +268,24 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput, hook Upda
 		end, _ := ExpiryEnd(in.Expires) // ValidateUpdate accepted it
 		params.ExpiresAt = sql.NullInt64{Int64: end.UnixNano(), Valid: true}
 	}
-	if _, err := q.UpdateRegistryCredential(ctx, params); err != nil {
-		return Credential{}, nil, clash(ctx, q, err, id, cur.EnvID, in.Name, in.Host, in.Prefix)
+	var uerr error
+	if env != nil {
+		// The statement is constrained to the environment too, so the check above is not the
+		// only thing keeping another layer's credential out of reach.
+		var n int64
+		n, uerr = q.UpdateRegistryCredentialInEnv(ctx, sqlc.UpdateRegistryCredentialInEnvParams{
+			Name: params.Name, Type: params.Type, Host: params.Host, Prefix: params.Prefix, Username: params.Username,
+			HubFallback: params.HubFallback, ExpiresAt: params.ExpiresAt, UpdatedAt: params.UpdatedAt,
+			ID: id, EnvID: nullString(*env),
+		})
+		if uerr == nil && n == 0 {
+			return Credential{}, nil, ErrNotFound
+		}
+	} else {
+		_, uerr = q.UpdateRegistryCredential(ctx, params)
+	}
+	if uerr != nil {
+		return Credential{}, nil, clash(ctx, q, uerr, id, cur.EnvID, in.Name, in.Host, in.Prefix)
 	}
 	if slices.Contains(changed, "secret") {
 		sealed, err := s.v.Seal(vault.ContextRegistryCred+id, []byte(in.Secret))
@@ -285,6 +320,21 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput, hook Upda
 // the credential would have matched fall back to the next matching one, or to anonymous:
 // nothing else refers to a credential.
 func (s *Store) Delete(ctx context.Context, id string, hook TxHook) (Credential, error) {
+	return s.delete(ctx, nil, id, hook)
+}
+
+// DeleteInEnv is Delete for a credential of one environment: a credential that is not of that
+// environment is ErrNotFound, exactly like one that does not exist, and is left alone.
+func (s *Store) DeleteInEnv(ctx context.Context, envID, id string, hook TxHook) (Credential, error) {
+	if envID == "" {
+		return Credential{}, ErrNotFound
+	}
+	return s.delete(ctx, &envID, id, hook)
+}
+
+// delete is Delete and DeleteInEnv: env is nil for any layer, or the one environment whose
+// credential this is allowed to remove.
+func (s *Store) delete(ctx context.Context, env *string, id string, hook TxHook) (Credential, error) {
 	tx, err := s.st.Write.BeginTx(ctx, nil)
 	if err != nil {
 		return Credential{}, fmt.Errorf("registry: begin: %w", err)
@@ -299,12 +349,21 @@ func (s *Store) Delete(ctx context.Context, id string, hook TxHook) (Credential,
 	if err != nil {
 		return Credential{}, fmt.Errorf("registry: read: %w", err)
 	}
-	if _, err := q.DeleteRegistryCredential(ctx, id); errors.Is(err, sql.ErrNoRows) {
-		return Credential{}, ErrNotFound
-	} else if err != nil {
-		return Credential{}, fmt.Errorf("registry: delete: %w", err)
-	}
 	c := credentialOf(row)
+	if env != nil && c.EnvID != *env {
+		return Credential{}, ErrNotFound
+	}
+	var derr error
+	if env != nil {
+		_, derr = q.DeleteRegistryCredentialInEnv(ctx, sqlc.DeleteRegistryCredentialInEnvParams{ID: id, EnvID: nullString(*env)})
+	} else {
+		_, derr = q.DeleteRegistryCredential(ctx, id)
+	}
+	if errors.Is(derr, sql.ErrNoRows) {
+		return Credential{}, ErrNotFound
+	} else if derr != nil {
+		return Credential{}, fmt.Errorf("registry: delete: %w", derr)
+	}
 	if hook != nil {
 		if err := hook(ctx, tx, c); err != nil {
 			return Credential{}, err

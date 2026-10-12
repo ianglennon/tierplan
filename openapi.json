@@ -10536,6 +10536,124 @@
         ]
       }
     },
+    "/api/env/{envId}/registries/{credentialId}": {
+      "delete": {
+        "description": "Removes the credential and its sealed secret. Pulls of this environment it would have matched fall back to the next matching credential, the instance's included, or to anonymous. Needs registries.manage on the environment (its Admin, or an instance admin). A credential of another environment, one of the instance layer, and one that is already gone answer 404 credential_not_found, so a repeated delete is safe and writes nothing. Audited as registry.credential_deleted with the environment, without the secret.",
+        "operationId": "deleteEnvCredential",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The credential's ID",
+            "in": "path",
+            "name": "credentialId",
+            "required": true,
+            "schema": {
+              "description": "The credential's ID",
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Delete an environment's registry credential",
+        "tags": [
+          "registries"
+        ]
+      },
+      "patch": {
+        "description": "Changes the members that are sent and keeps the rest, as for an instance credential: the secret is write-only (left out or empty keeps the stored one), and there is no scope. Needs registries.manage on the environment (its Admin, or an instance admin). A credential of another environment, and one of the instance layer, answer 404 credential_not_found here, exactly like one that does not exist, and nothing changes. 422 validation_failed names every field at fault; 409 credential_name_taken, host_prefix_taken or hub_fallback_taken when another credential of this environment clashes, naming it in its errors list (location conflict.credential). Audited as registry.credential_updated with the environment and a changed detail listing the names of the fields that changed, the secret only as the word secret.",
+        "operationId": "updateEnvCredential",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The credential's ID",
+            "in": "path",
+            "name": "credentialId",
+            "required": true,
+            "schema": {
+              "description": "The credential's ID",
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialPatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change an environment's registry credential",
+        "tags": [
+          "registries"
+        ]
+      }
+    },
     "/api/env/{envId}/shells": {
       "get": {
         "description": "The shells the caller has open on the environment, oldest first, and only those: other people's are never listed here, whatever the caller's role. With containerId, only the ones in that container. Needs containers.exec on the environment.",

@@ -35,6 +35,23 @@ func (q *Queries) DeleteRegistryCredential(ctx context.Context, id string) (stri
 	return id_2, err
 }
 
+const deleteRegistryCredentialInEnv = `-- name: DeleteRegistryCredentialInEnv :one
+DELETE FROM registry_credentials WHERE id = ?1 AND env_id = ?2 RETURNING id
+`
+
+type DeleteRegistryCredentialInEnvParams struct {
+	ID    string
+	EnvID sql.NullString
+}
+
+// DeleteRegistryCredential constrained to one environment's layer, for the same reason.
+func (q *Queries) DeleteRegistryCredentialInEnv(ctx context.Context, arg DeleteRegistryCredentialInEnvParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, deleteRegistryCredentialInEnv, arg.ID, arg.EnvID)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
 const findRegistryCredentialClash = `-- name: FindRegistryCredentialClash :one
 SELECT name FROM registry_credentials
 WHERE env_id IS ?1 AND id <> ?2
@@ -369,6 +386,46 @@ func (q *Queries) UpdateRegistryCredential(ctx context.Context, arg UpdateRegist
 		arg.ExpiresAt,
 		arg.UpdatedAt,
 		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateRegistryCredentialInEnv = `-- name: UpdateRegistryCredentialInEnv :execrows
+UPDATE registry_credentials
+SET name = ?, type = ?, host = ?, prefix = ?, username = ?, hub_fallback = ?, expires_at = ?, updated_at = ?
+WHERE id = ?9 AND env_id = ?10
+`
+
+type UpdateRegistryCredentialInEnvParams struct {
+	Name        string
+	Type        string
+	Host        string
+	Prefix      string
+	Username    string
+	HubFallback int64
+	ExpiresAt   sql.NullInt64
+	UpdatedAt   int64
+	ID          string
+	EnvID       sql.NullString
+}
+
+// UpdateRegistryCredential constrained to one environment's layer: a credential of another
+// environment, or of the instance, matches no row, so a route of one environment cannot change it.
+func (q *Queries) UpdateRegistryCredentialInEnv(ctx context.Context, arg UpdateRegistryCredentialInEnvParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateRegistryCredentialInEnv,
+		arg.Name,
+		arg.Type,
+		arg.Host,
+		arg.Prefix,
+		arg.Username,
+		arg.HubFallback,
+		arg.ExpiresAt,
+		arg.UpdatedAt,
+		arg.ID,
+		arg.EnvID,
 	)
 	if err != nil {
 		return 0, err

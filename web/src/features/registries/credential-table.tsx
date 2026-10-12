@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { Ellipsis, Plus } from "lucide-react";
-import { type ReactNode, useMemo, useState } from "react";
+import { type ReactNode, useId, useMemo, useState } from "react";
 
 import type { Credential } from "@/api/registries";
 import { NeedsTooltip } from "@/components/needs-tooltip";
@@ -40,6 +40,8 @@ import {
   type TableSort,
   TruncatedText,
 } from "@/features/resources/resource-table";
+import { useMe } from "@/hooks/use-me";
+import { needsOf } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
@@ -207,6 +209,22 @@ function LastUseCell({ failure }: { failure: Credential["lastFailure"] }) {
   );
 }
 
+// useManageReason says why the signed-in user cannot change a credential, in the words of the
+// disabled-with-reason pattern: "Needs Admin on {environment name}" for an environment's
+// credential (the role comes from the registry /api/me lists, never from here) and "Needs an
+// instance administrator" for the instance's. It is undefined for a credential they can change.
+export function useManageReason(): (c: Credential) => string | undefined {
+  const t = useT();
+  const me = useMe();
+  return (c) => {
+    if (c.canManage) return undefined;
+    if (c.scope.kind === "instance" || !c.scope.envId) return t("registries.needsInstance");
+    const need =
+      needsOf(me.data, "registries.manage", c.scope.envId, t).reason ?? t("needs.role.admin");
+    return t("registries.needsOnEnvironment", { need, name: c.scope.envName ?? c.scope.envId });
+  };
+}
+
 interface CredentialTableProps {
   // The credentials the caller may see, or undefined while they load.
   credentials: readonly Credential[] | undefined;
@@ -249,6 +267,8 @@ export function CredentialTable({
   onDelete,
 }: CredentialTableProps) {
   const t = useT();
+  const reasonOf = useManageReason();
+  const reasonIds = useId();
   const [sorted, setSorted] = useState<{ key: SortKey; dir: "asc" | "desc" } | null>(null);
 
   const rows = useMemo(() => {
@@ -354,41 +374,53 @@ export function CredentialTable({
       id: "actions",
       header: <span className="sr-only">{t("registries.table.columns.actions")}</span>,
       className: "w-11 min-w-11 px-0 text-center",
-      cell: (c) => (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="max-md:size-11"
-              aria-label={t("registries.table.actionsFor", { name: c.name })}
-            >
-              <Ellipsis aria-hidden="true" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {c.canManage ? (
-              <>
+      cell: (c) => {
+        // A row the user may only see says why they cannot change it. The menu still offers
+        // View details, so the reason is the button's description rather than a disabled item.
+        const reason = reasonOf(c);
+        const reasonId = `${reasonIds}-${c.id}`;
+        return (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="max-md:size-11"
+                aria-label={t("registries.table.actionsFor", { name: c.name })}
+                aria-describedby={reason ? reasonId : undefined}
+              >
+                <Ellipsis aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {c.canManage ? (
+                <>
+                  <DropdownMenuItem className="max-md:min-h-11" onSelect={() => onOpen(c.id)}>
+                    {t("registries.table.edit")}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    className="max-md:min-h-11"
+                    variant="destructive"
+                    onSelect={() => onDelete(c)}
+                  >
+                    {t("registries.table.delete")}
+                  </DropdownMenuItem>
+                </>
+              ) : (
                 <DropdownMenuItem className="max-md:min-h-11" onSelect={() => onOpen(c.id)}>
-                  {t("registries.table.edit")}
+                  {t("registries.table.viewDetails")}
                 </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  className="max-md:min-h-11"
-                  variant="destructive"
-                  onSelect={() => onDelete(c)}
-                >
-                  {t("registries.table.delete")}
-                </DropdownMenuItem>
-              </>
-            ) : (
-              <DropdownMenuItem className="max-md:min-h-11" onSelect={() => onOpen(c.id)}>
-                {t("registries.table.viewDetails")}
-              </DropdownMenuItem>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      ),
+              )}
+            </DropdownMenuContent>
+            {reason ? (
+              <span id={reasonId} className="sr-only">
+                {reason}
+              </span>
+            ) : null}
+          </DropdownMenu>
+        );
+      },
     },
   ];
 

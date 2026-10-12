@@ -22,10 +22,12 @@ import { toastInfo, toastSuccess } from "@/lib/toast";
 // 44px targets under 768px (D-64), the dense 32px size from there up.
 const TOUCH_HEIGHT = "h-11 md:h-8";
 
-// The credential a delete is about. Only its name is shown.
+// The credential a delete is about. Only its name is shown; its scope picks the route family,
+// the environment's for a credential of one and the instance's otherwise.
 export interface CredentialTarget {
   id: string;
   name: string;
+  scope?: { envId: string | null };
 }
 
 interface DeleteCredentialDialogProps {
@@ -67,7 +69,10 @@ export function DeleteCredentialDialog({
     inFlight.current = true;
     setError(null);
     try {
-      await mutation.mutateAsync(credential.id);
+      await mutation.mutateAsync({
+        id: credential.id,
+        envId: credential.scope?.envId ?? undefined,
+      });
       toastSuccess(t("registries.delete.done", { name }));
       finish();
     } catch (e) {

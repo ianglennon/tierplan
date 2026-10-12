@@ -900,6 +900,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/registries/{credentialId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete an environment's registry credential
+         * @description Removes the credential and its sealed secret. Pulls of this environment it would have matched fall back to the next matching credential, the instance's included, or to anonymous. Needs registries.manage on the environment (its Admin, or an instance admin). A credential of another environment, one of the instance layer, and one that is already gone answer 404 credential_not_found, so a repeated delete is safe and writes nothing. Audited as registry.credential_deleted with the environment, without the secret.
+         */
+        delete: operations["deleteEnvCredential"];
+        options?: never;
+        head?: never;
+        /**
+         * Change an environment's registry credential
+         * @description Changes the members that are sent and keeps the rest, as for an instance credential: the secret is write-only (left out or empty keeps the stored one), and there is no scope. Needs registries.manage on the environment (its Admin, or an instance admin). A credential of another environment, and one of the instance layer, answer 404 credential_not_found here, exactly like one that does not exist, and nothing changes. 422 validation_failed names every field at fault; 409 credential_name_taken, host_prefix_taken or hub_fallback_taken when another credential of this environment clashes, naming it in its errors list (location conflict.credential). Audited as registry.credential_updated with the environment and a changed detail listing the names of the fields that changed, the secret only as the word secret.
+         */
+        patch: operations["updateEnvCredential"];
+        trace?: never;
+    };
     "/api/env/{envId}/shells": {
         parameters: {
             query?: never;
@@ -7042,6 +7066,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResolveBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteEnvCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The credential's ID */
+                credentialId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateEnvCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The credential's ID */
+                credentialId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialBody"];
                 };
             };
             /** @description Error */

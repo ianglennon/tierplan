@@ -4,6 +4,7 @@
     "caption": "Credentials Bayplan uses to pull images and browse tags. Pulls pick the most specific match automatically.",
     "add": "Add credential",
     "needsInstance": "Needs an instance administrator",
+    "needsOnEnvironment": "{{need}} on {{name}}",
     "table": {
       "title": "Registries",
       "count_one": "{{count, number}} credential",

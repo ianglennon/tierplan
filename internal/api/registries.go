@@ -103,6 +103,23 @@ type DeleteCredentialInput struct {
 	CredentialID string `path:"credentialId" maxLength:"64" doc:"The credential's ID"`
 }
 
+// UpdateEnvCredentialInput is the request of the environment update route.
+type UpdateEnvCredentialInput struct {
+	EnvironmentPathInput
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent    string `header:"User-Agent" hidden:"true"`
+	CredentialID string `path:"credentialId" maxLength:"64" doc:"The credential's ID"`
+	Body         CredentialPatchRequest
+}
+
+// DeleteEnvCredentialInput is the request of the environment delete route.
+type DeleteEnvCredentialInput struct {
+	EnvironmentPathInput
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent    string `header:"User-Agent" hidden:"true"`
+	CredentialID string `path:"credentialId" maxLength:"64" doc:"The credential's ID"`
+}
+
 // CredentialScopeBody says where a credential applies.
 type CredentialScopeBody struct {
 	Kind    string  `json:"kind" enum:"instance,environment" doc:"instance: every environment. environment: one environment only"`
@@ -226,7 +243,7 @@ func (v credentialViewer) admin() bool { return slices.Contains(v.global, rbac.P
 
 // sees is D-09: an instance admin sees everything; anyone who can read images on an
 // environment sees the instance credentials, and an environment's own credentials when they
-// can read that environment.
+// can read that environment. A caller who reads no environment sees none.
 func (v credentialViewer) sees(c registry.Credential) bool {
 	if v.admin() {
 		return true
@@ -237,11 +254,33 @@ func (v credentialViewer) sees(c registry.Credential) bool {
 	return v.holds(c.EnvID, rbac.PermImagesRead)
 }
 
+// canManage is D-30: an instance admin manages every credential, an environment's Admin
+// (registries.manage on it) manages that environment's credentials, and nobody else manages
+// anything: the instance layer is for instance admins alone.
 func (v credentialViewer) canManage(c registry.Credential) bool {
 	if c.EnvID == "" {
 		return v.admin()
 	}
 	return v.admin() || v.holds(c.EnvID, rbac.PermRegistriesManage)
+}
+
+// credentialVisibility answers, for one caller, whether each credential is visible to them and
+// whether they may manage it (D-09, D-30), from the same effective permissions the policy
+// enforces with. A credential that is not visible is answered exactly like one that does not
+// exist, and one that is visible but not manageable is read-only to them.
+func credentialVisibility(ctx context.Context, d RegistriesDeps, p *rbac.Principal) (func(registry.Credential) (visible, canManage bool), error) {
+	global, perEnv, err := d.Checker.EffectivePermissions(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	v := credentialViewer{global: global, perEnv: perEnv}
+	for _, perms := range perEnv {
+		if slices.Contains(perms, rbac.PermImagesRead) {
+			v.anyImages = true
+			break
+		}
+	}
+	return func(c registry.Credential) (bool, bool) { return v.sees(c), v.canManage(c) }, nil
 }
 
 // RegisterRegistries registers the registry credential routes that are not in an environment's
@@ -290,22 +329,64 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 			})
 		})
 	}
-	viewerOf := func(ctx context.Context, p *rbac.Principal) (credentialViewer, error) {
-		global, perEnv, err := d.Checker.EffectivePermissions(ctx, p)
-		if err != nil {
-			return credentialViewer{}, err
-		}
-		v := credentialViewer{global: global, perEnv: perEnv}
-		for _, perms := range perEnv {
-			if slices.Contains(perms, rbac.PermImagesRead) {
-				v.anyImages = true
-				break
-			}
-		}
-		return v, nil
+	// body is a credential as the browser sees it, with the caller's rights over it.
+	body := func(ctx context.Context, vis func(registry.Credential) (bool, bool), c registry.Credential) CredentialBody {
+		_, manage := vis(c)
+		return credentialBody(c, manage, d.envName(ctx, c.EnvID))
 	}
-	body := func(ctx context.Context, v credentialViewer, c registry.Credential) CredentialBody {
-		return credentialBody(c, v.canManage(c), d.envName(ctx, c.EnvID))
+	// lookup reads a credential of the instance layer (envID empty) or of one environment. A
+	// credential of any other layer is ErrNotFound, exactly like one that does not exist.
+	lookup := func(ctx context.Context, envID, id string) (registry.Credential, error) {
+		if envID != "" {
+			return d.Store.GetInEnv(ctx, envID, id)
+		}
+		c, err := d.Store.Get(ctx, id)
+		if err == nil && c.EnvID != "" {
+			return registry.Credential{}, registry.ErrNotFound
+		}
+		return c, err
+	}
+	// update changes a credential of one layer and audits it, carrying the environment.
+	update := func(ctx context.Context, p *rbac.Principal, envID, id, userAgent string, patch CredentialPatchRequest) (registry.Credential, error) {
+		cur, err := lookup(ctx, envID, id)
+		if err != nil {
+			return registry.Credential{}, err
+		}
+		hook := func(ctx context.Context, tx *sql.Tx, c registry.Credential, changed []string) error {
+			details := credentialAuditDetails(c)
+			details["changed"] = strings.Join(changed, ",")
+			return d.Audit.RecordTx(ctx, tx, audit.Entry{
+				Actor: p.AuditActor(), Action: audit.ActionRegistryCredentialUpdated, TargetType: credentialTargetType, TargetID: c.ID,
+				EnvID: envID, Result: audit.ResultSuccess, IP: httpx.ClientIP(ctx), UserAgent: userAgent, Details: details,
+			})
+		}
+		merged := mergeCredentialPatch(cur, patch)
+		var c registry.Credential
+		if envID != "" {
+			c, _, err = d.Store.UpdateInEnv(ctx, envID, id, merged, hook)
+		} else {
+			c, _, err = d.Store.Update(ctx, id, merged, hook)
+		}
+		return c, err
+	}
+	// remove deletes a credential of one layer and audits it, carrying the environment.
+	remove := func(ctx context.Context, p *rbac.Principal, envID, id, userAgent string) error {
+		if _, err := lookup(ctx, envID, id); err != nil {
+			return err
+		}
+		hook := func(ctx context.Context, tx *sql.Tx, c registry.Credential) error {
+			return d.Audit.RecordTx(ctx, tx, audit.Entry{
+				Actor: p.AuditActor(), Action: audit.ActionRegistryCredentialDeleted, TargetType: credentialTargetType, TargetID: c.ID,
+				EnvID: envID, Result: audit.ResultSuccess, IP: httpx.ClientIP(ctx), UserAgent: userAgent, Details: credentialAuditDetails(c),
+			})
+		}
+		var err error
+		if envID != "" {
+			_, err = d.Store.DeleteInEnv(ctx, envID, id, hook)
+		} else {
+			_, err = d.Store.Delete(ctx, id, hook)
+		}
+		return err
 	}
 
 	httpx.Register(r, huma.Operation{
@@ -381,27 +462,39 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		if d.Store == nil {
 			return nil, unavailable()
 		}
-		cur, err := d.Store.Get(ctx, in.CredentialID)
-		if err != nil {
-			return nil, fail("get credential", err)
-		}
 		// This family manages the instance layer only. An environment's credential is not
 		// reachable through it, whatever the caller holds.
-		if cur.EnvID != "" {
-			return nil, fail("get credential", registry.ErrNotFound)
-		}
-		c, _, err := d.Store.Update(ctx, in.CredentialID, mergeCredentialPatch(cur, in.Body), func(ctx context.Context, tx *sql.Tx, c registry.Credential, changed []string) error {
-			details := credentialAuditDetails(c)
-			details["changed"] = strings.Join(changed, ",")
-			return d.Audit.RecordTx(ctx, tx, audit.Entry{
-				Actor: p.AuditActor(), Action: audit.ActionRegistryCredentialUpdated, TargetType: credentialTargetType, TargetID: c.ID,
-				Result: audit.ResultSuccess, IP: httpx.ClientIP(ctx), UserAgent: in.UserAgent, Details: details,
-			})
-		})
+		c, err := update(ctx, p, "", in.CredentialID, in.UserAgent, in.Body)
 		if err != nil {
 			return nil, fail("update credential", err)
 		}
 		return &CredentialOutput{CacheControl: "no-store", Body: credentialBody(c, true, nil)}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "updateEnvCredential",
+		Method:      http.MethodPatch,
+		Path:        "/api/env/{envId}/registries/{credentialId}",
+		Summary:     "Change an environment's registry credential",
+		Description: "Changes the members that are sent and keeps the rest, as for an instance credential: the secret is write-only (left out or empty keeps the stored one), and there is no scope. " +
+			"Needs registries.manage on the environment (its Admin, or an instance admin). A credential of another environment, and one of the instance layer, answer 404 credential_not_found here, " +
+			"exactly like one that does not exist, and nothing changes. 422 validation_failed names every field at fault; 409 credential_name_taken, host_prefix_taken or hub_fallback_taken when " +
+			"another credential of this environment clashes, naming it in its errors list (location conflict.credential). Audited as registry.credential_updated with the environment and a changed detail " +
+			"listing the names of the fields that changed, the secret only as the word secret.",
+		Tags: []string{"registries"},
+	}, rbac.Require(rbac.PermRegistriesManage), func(ctx context.Context, in *UpdateEnvCredentialInput) (*CredentialOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Store == nil {
+			return nil, unavailable()
+		}
+		c, err := update(ctx, p, in.EnvID, in.CredentialID, in.UserAgent, in.Body)
+		if err != nil {
+			return nil, failIn(true, "update environment credential", err)
+		}
+		return &CredentialOutput{CacheControl: "no-store", Body: credentialBody(c, true, d.envName(ctx, c.EnvID))}, nil
 	})
 
 	httpx.Register(r, huma.Operation{
@@ -422,20 +515,32 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		if d.Store == nil {
 			return nil, unavailable()
 		}
-		cur, err := d.Store.Get(ctx, in.CredentialID)
-		if err != nil {
-			return nil, fail("get credential", err)
-		}
-		if cur.EnvID != "" {
-			return nil, fail("get credential", registry.ErrNotFound)
-		}
-		if _, err := d.Store.Delete(ctx, in.CredentialID, func(ctx context.Context, tx *sql.Tx, c registry.Credential) error {
-			return d.Audit.RecordTx(ctx, tx, audit.Entry{
-				Actor: p.AuditActor(), Action: audit.ActionRegistryCredentialDeleted, TargetType: credentialTargetType, TargetID: c.ID,
-				Result: audit.ResultSuccess, IP: httpx.ClientIP(ctx), UserAgent: in.UserAgent, Details: credentialAuditDetails(c),
-			})
-		}); err != nil {
+		if err := remove(ctx, p, "", in.CredentialID, in.UserAgent); err != nil {
 			return nil, fail("delete credential", err)
+		}
+		return nil, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID:   "deleteEnvCredential",
+		Method:        http.MethodDelete,
+		Path:          "/api/env/{envId}/registries/{credentialId}",
+		Summary:       "Delete an environment's registry credential",
+		DefaultStatus: http.StatusNoContent,
+		Description: "Removes the credential and its sealed secret. Pulls of this environment it would have matched fall back to the next matching credential, the instance's included, or to anonymous. " +
+			"Needs registries.manage on the environment (its Admin, or an instance admin). A credential of another environment, one of the instance layer, and one that is already gone answer " +
+			"404 credential_not_found, so a repeated delete is safe and writes nothing. Audited as registry.credential_deleted with the environment, without the secret.",
+		Tags: []string{"registries"},
+	}, rbac.Require(rbac.PermRegistriesManage), func(ctx context.Context, in *DeleteEnvCredentialInput) (*struct{}, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Store == nil {
+			return nil, unavailable()
+		}
+		if err := remove(ctx, p, in.EnvID, in.CredentialID, in.UserAgent); err != nil {
+			return nil, failIn(true, "delete environment credential", err)
 		}
 		return nil, nil
 	})
@@ -456,7 +561,7 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		if d.Store == nil {
 			return nil, unavailable()
 		}
-		v, err := viewerOf(ctx, p)
+		vis, err := credentialVisibility(ctx, d, p)
 		if err != nil {
 			return nil, fail("effective permissions", err)
 		}
@@ -466,8 +571,8 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		}
 		items := make([]CredentialBody, 0, len(all))
 		for _, c := range all {
-			if v.sees(c) {
-				items = append(items, body(ctx, v, c))
+			if visible, _ := vis(c); visible {
+				items = append(items, body(ctx, vis, c))
 			}
 		}
 		return &CredentialListOutput{CacheControl: "no-store", Body: CredentialListBody{Items: items}}, nil
@@ -513,7 +618,7 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		if d.Store == nil {
 			return nil, unavailable()
 		}
-		v, err := viewerOf(ctx, p)
+		vis, err := credentialVisibility(ctx, d, p)
 		if err != nil {
 			return nil, fail("effective permissions", err)
 		}
@@ -521,10 +626,10 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		if err != nil {
 			return nil, fail("get credential", err)
 		}
-		if !v.sees(c) {
+		if visible, _ := vis(c); !visible {
 			return nil, fail("get credential", registry.ErrNotFound)
 		}
-		return &CredentialOutput{CacheControl: "no-store", Body: body(ctx, v, c)}, nil
+		return &CredentialOutput{CacheControl: "no-store", Body: body(ctx, vis, c)}, nil
 	})
 }
 

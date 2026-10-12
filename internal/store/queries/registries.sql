@@ -29,6 +29,13 @@ UPDATE registry_credentials
 SET name = ?, type = ?, host = ?, prefix = ?, username = ?, hub_fallback = ?, expires_at = ?, updated_at = ?
 WHERE id = ?;
 
+-- name: UpdateRegistryCredentialInEnv :execrows
+-- UpdateRegistryCredential constrained to one environment's layer: a credential of another
+-- environment, or of the instance, matches no row, so a route of one environment cannot change it.
+UPDATE registry_credentials
+SET name = ?, type = ?, host = ?, prefix = ?, username = ?, hub_fallback = ?, expires_at = ?, updated_at = ?
+WHERE id = sqlc.arg(id) AND env_id = sqlc.arg(env_id);
+
 -- name: UpdateRegistryCredentialSecret :execrows
 -- Re-seals the secret. Only called when a new one was given; otherwise the stored envelope is
 -- never touched.
@@ -38,6 +45,10 @@ WHERE id = ?;
 
 -- name: DeleteRegistryCredential :one
 DELETE FROM registry_credentials WHERE id = ? RETURNING id;
+
+-- name: DeleteRegistryCredentialInEnv :one
+-- DeleteRegistryCredential constrained to one environment's layer, for the same reason.
+DELETE FROM registry_credentials WHERE id = sqlc.arg(id) AND env_id = sqlc.arg(env_id) RETURNING id;
 
 -- name: FindRegistryCredentialClash :one
 -- The name of the other credential of the same layer that a refused write clashed with, so
