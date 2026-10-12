@@ -221,8 +221,9 @@ func registryHeaderOK(values []string) bool {
 		return false
 	}
 	for i := range end {
-		c := v[i]
-		if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+		switch c := v[i]; {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-', c == '_':
+		default:
 			return false
 		}
 	}

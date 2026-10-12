@@ -41,6 +41,9 @@ The agent is the security boundary between Bayplan and the host's Docker socket.
 - The inspect of one container, one network and one volume, and the state of one exec.
 - A container's logs (`stdout`, `stderr`, `since`, `until`, `timestamps`, `follow`, `tail`, `details` only).
 - Disk usage for volumes (`system/df` with `type=volume`).
+- Images, by repository, `repository:tag`, `repository@digest` or image ID:
+  - `GET /images/{name}/json` (inspect) and `GET /images/{name}/history`, with no query keys.
+  - `GET /distribution/{name}/json`, with no query keys. It asks the registry whether this host may pull the image, using the credential in `X-Registry-Auth` if one is sent.
 
 **Changes** (a read-only host refuses every one of these):
 
@@ -50,8 +53,11 @@ The agent is the security boundary between Bayplan and the host's Docker socket.
 | A shell in a container | create an exec, start it, resize its terminal. Start is the only call that may be upgraded to a raw two-way stream |
 | Networks | create, connect a container, disconnect a container, delete |
 | Volumes | create, delete |
+| Images | pull (`POST /images/create`, only the `fromImage`, `tag` and `platform` keys, no body) and remove (`DELETE /images/{name}`, only the `noprune` key) |
 
 For every call that carries a body (exec create and start, network create, connect and disconnect, volume create) the agent reads the JSON into Docker's own request type, refuses any field it does not know, builds a fresh request from the fields it allows, and forwards that fresh request. Whatever else the sender put in the body does not arrive.
+
+**A registry credential crosses on two calls only.** `X-Registry-Auth` carries the credential Bayplan holds for a registry. The agent accepts it on an image pull and on the distribution check and deletes it from every other request before the request reaches Docker; `X-Registry-Config` is deleted from every request. On those two calls the header must be absent or a single value of at most 16 KiB made only of base64url characters, otherwise the request is refused as `agent_policy_denied`. The agent never decodes, logs or keeps the value: a refusal is reported with the method, the path and the reason, without the query or any header.
 
 **Refused, whatever Bayplan asks:**
 
@@ -61,14 +67,15 @@ For every call that carries a body (exec create and start, network create, conne
 - A **forced** network disconnect.
 - A **cluster volume** (a volume with a cluster spec).
 - The legacy **`link`** key on a container remove, and **`force`** on a volume delete.
-- Creating or changing a container, image or service; the stats, export and file contents of a container; the swarm join tokens (`GET /swarm`).
+- Importing an image (`fromSrc`, `repo`, `message` and `changes` on a pull), **`force`** on an image remove, and tagging, pushing, saving, loading, building and pruning images.
+- Creating or changing a container or service; the stats, export and file contents of a container; the swarm join tokens (`GET /swarm`).
 - A body larger than 64 KiB, and a query larger than 4 KiB.
 
 **A volume can point at a host directory.** A `local` volume created with the options `type=none`, `o=bind` and a `device` is a bind of that host path. Docker allows it and so does the agent, because the agent cannot know who is asking: Bayplan lets only an environment **Admin** create volumes, and the options are written to the audit log. The agent forwards no container create, so Bayplan cannot mount such a volume into a new container. An Admin can still make a path on the host visible to a container someone else starts.
 
-**The read-only flag comes first.** On a host with `BAYPLAN_AGENT_READ_ONLY=true` the agent refuses every request that is not a `GET` or `HEAD` before it looks at the table, so no table entry can reach a change, and no shell can be opened, because creating an exec is a `POST`. See [Settings on the host](#settings-on-the-host-read-only-and-self-update).
+**The read-only flag comes first.** On a host with `BAYPLAN_AGENT_READ_ONLY=true` the agent refuses every request that is not a `GET` or `HEAD` before it looks at the table, so no table entry can reach a change, no shell can be opened (creating an exec is a `POST`), and no image can be pulled or removed. Image inspect, history and the distribution check are reads and still answer. See [Settings on the host](#settings-on-the-host-read-only-and-self-update).
 
-**An older agent refuses the newer calls.** The table ships with the agent. An agent from before this list grew refuses container actions, logs, shells, networks and volumes with `agent_policy_denied` until it updates; Bayplan then says the agent needs an update, and updates it itself unless the host set `BAYPLAN_AGENT_SELF_UPDATE=false` (see [Updates](#updates)).
+**An older agent refuses the newer calls.** The table ships with the agent. An agent from before this list grew refuses container actions, logs, shells, networks, volumes and image pulls, removes, inspects and distribution checks with `agent_policy_denied` until it updates; Bayplan then says the agent needs an update, and updates it itself unless the host set `BAYPLAN_AGENT_SELF_UPDATE=false` (see [Updates](#updates)).
 
 ## Before you install
 
