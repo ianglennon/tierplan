@@ -921,7 +921,7 @@ func TestCancelPullKeepsTheNodesThatFinishedDoneAndTheJobIsPartial(t *testing.T)
 		t.Fatalf("the held node was asked %d times", creates(held))
 	}
 
-	cancelled := f.authFixture.cancelPull(t, started.JobID, f.cookie, f.csrf)
+	cancelled := f.cancelPull(t, started.JobID, f.cookie, f.csrf)
 	if cancelled.Code != http.StatusOK {
 		t.Fatalf("cancel: %d %s", cancelled.Code, cancelled.Body)
 	}
