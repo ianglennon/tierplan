@@ -31,7 +31,10 @@ beforeEach(() => {
     vi.fn(async (req: Request) => {
       const url = new URL(req.url);
       if (url.pathname === "/api/me") return Response.json(makeMe({ instanceAdmin: true }));
-      if (url.pathname === "/api/registries/c1" && req.method === "DELETE") {
+      if (
+        (url.pathname === "/api/registries/c1" || url.pathname === "/api/env/e1/registries/c1") &&
+        req.method === "DELETE"
+      ) {
         deletes.push(url.pathname);
         return answer();
       }
@@ -48,12 +51,12 @@ afterEach(() => {
   client.clear();
 });
 
-function mount(name = "ghcr-acme") {
+function mount(name = "ghcr-acme", envId: string | null = null) {
   render(
     <QueryClientProvider client={client}>
       <TestRouter>
         <DeleteCredentialDialog
-          credential={{ id: "c1", name }}
+          credential={{ id: "c1", name, scope: { envId } }}
           open
           onClose={() => {
             closed += 1;
@@ -71,6 +74,14 @@ function mount(name = "ghcr-acme") {
 const confirm = () => fireEvent.click(screen.getByRole("button", { name: "Delete credential" }));
 
 describe("DeleteCredentialDialog", () => {
+  it("deletes through the route of the credential's own layer", async () => {
+    mount("ghcr-acme", "e1");
+    await screen.findByText("Delete “ghcr-acme”?");
+    confirm();
+    await waitFor(() => expect(deletes).toEqual(["/api/env/e1/registries/c1"]));
+    await waitFor(() => expect(done).toBe(1));
+  });
+
   it("asks Delete “{name}”? and says what happens to pulls, with focus on Cancel", async () => {
     mount();
     expect(await screen.findByText("Delete “ghcr-acme”?")).toBeTruthy();

@@ -502,3 +502,111 @@ func TestGetInEnvIsOnlyTheCredentialsOwnEnvironment(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateInEnvChangesOnlyACredentialOfThatEnvironment(t *testing.T) {
+	s, st, _ := newStore(t)
+	addEnvironment(t, st, "env-a", "Alpha")
+	addEnvironment(t, st, "env-b", "Beta")
+	instance := create(t, s, nil)
+	inA := create(t, s, func(in *registry.CreateInput) { in.EnvID = "env-a" })
+	ctx := context.Background()
+	hooks := 0
+	hook := func(context.Context, *sql.Tx, registry.Credential, []string) error { hooks++; return nil }
+
+	in := updateOf(inA)
+	in.Username = "bot2"
+	got, changed, err := s.UpdateInEnv(ctx, "env-a", inA.ID, in, hook)
+	if err != nil || got.Username != "bot2" || got.EnvID != "env-a" || !slices.Equal(changed, []string{"username"}) || hooks != 1 {
+		t.Fatalf("UpdateInEnv = %+v, %v, %v (hooks %d)", got, changed, err, hooks)
+	}
+
+	// Another environment's route, and the instance layer, never reach the credential.
+	for name, c := range map[string]struct{ env, id string }{
+		"another environment":      {"env-b", inA.ID},
+		"an instance credential":   {"env-a", instance.ID},
+		"an unknown ID":            {"env-a", "no-such"},
+		"no environment at all":    {"", inA.ID},
+		"the instance's own route": {"", instance.ID},
+	} {
+		in := updateOf(inA)
+		in.Username = "intruder"
+		if _, _, err := s.UpdateInEnv(ctx, c.env, c.id, in, hook); !errors.Is(err, registry.ErrNotFound) {
+			t.Errorf("%s: %v, want ErrNotFound", name, err)
+		}
+	}
+	if hooks != 1 {
+		t.Errorf("hooks = %d; a refused update runs no hook", hooks)
+	}
+	for _, c := range []registry.Credential{instance, inA} {
+		now, err := s.Get(ctx, c.ID)
+		if err != nil || (c.ID == instance.ID && now.Username != instance.Username) || (c.ID == inA.ID && now.Username != "bot2") {
+			t.Errorf("credential %s = %+v, %v; a refused update changes nothing", c.ID, now, err)
+		}
+	}
+}
+
+func TestDeleteInEnvRemovesOnlyACredentialOfThatEnvironment(t *testing.T) {
+	s, st, _ := newStore(t)
+	addEnvironment(t, st, "env-a", "Alpha")
+	addEnvironment(t, st, "env-b", "Beta")
+	instance := create(t, s, nil)
+	inA := create(t, s, func(in *registry.CreateInput) { in.EnvID = "env-a" })
+	ctx := context.Background()
+	hooks := 0
+	hook := func(context.Context, *sql.Tx, registry.Credential) error { hooks++; return nil }
+
+	for name, c := range map[string]struct{ env, id string }{
+		"another environment":    {"env-b", inA.ID},
+		"an instance credential": {"env-a", instance.ID},
+		"no environment at all":  {"", inA.ID},
+		"an unknown ID":          {"env-a", "no-such"},
+	} {
+		if _, err := s.DeleteInEnv(ctx, c.env, c.id, hook); !errors.Is(err, registry.ErrNotFound) {
+			t.Errorf("%s: %v, want ErrNotFound", name, err)
+		}
+	}
+	if hooks != 0 {
+		t.Errorf("hooks = %d; a refused delete runs no hook", hooks)
+	}
+	var n int
+	if err := st.Read.QueryRow(`SELECT count(*) FROM registry_credentials`).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("rows = %d, %v; a refused delete removes nothing", n, err)
+	}
+
+	got, err := s.DeleteInEnv(ctx, "env-a", inA.ID, hook)
+	if err != nil || got.ID != inA.ID || got.EnvID != "env-a" || hooks != 1 {
+		t.Fatalf("DeleteInEnv = %+v, %v (hooks %d)", got, err, hooks)
+	}
+	if _, err := s.DeleteInEnv(ctx, "env-a", inA.ID, hook); !errors.Is(err, registry.ErrNotFound) {
+		t.Errorf("second DeleteInEnv: %v, want ErrNotFound", err)
+	}
+	if _, err := s.Get(ctx, instance.ID); err != nil {
+		t.Errorf("the instance credential is gone: %v", err)
+	}
+}
+
+func TestDeletingAnEnvironmentDeletesItsCredentialsInTheSameStatement(t *testing.T) {
+	s, st, _ := newStore(t)
+	addEnvironment(t, st, "env-a", "Alpha")
+	addEnvironment(t, st, "env-b", "Beta")
+	instance := create(t, s, nil)
+	inA := create(t, s, func(in *registry.CreateInput) { in.EnvID = "env-a" })
+	inB := create(t, s, func(in *registry.CreateInput) { in.EnvID = "env-b" })
+
+	if _, err := st.Write.Exec(`DELETE FROM environments WHERE id = 'env-a'`); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := s.Get(ctx, inA.ID); !errors.Is(err, registry.ErrNotFound) {
+		t.Errorf("the removed environment's credential: %v, want ErrNotFound", err)
+	}
+	for _, c := range []registry.Credential{instance, inB} {
+		if _, err := s.Get(ctx, c.ID); err != nil {
+			t.Errorf("credential %s of a layer that stays is gone: %v", c.Name, err)
+		}
+	}
+	cands, err := s.Candidates(ctx, "env-a")
+	if err != nil || len(cands) != 1 || cands[0].ID != instance.ID {
+		t.Errorf("candidates for the removed environment = %+v, %v; only the instance's remain", cands, err)
+	}
+}

@@ -29,6 +29,7 @@ let stored: Record<string, unknown> | null;
 let closed: number;
 let environments: { id: string; name: string }[];
 let envPosted: { path: string; body: Record<string, unknown> }[];
+let envPatched: { path: string; body: Record<string, unknown> }[];
 
 const credential = (extra: Record<string, unknown> = {}) => ({
   id: "c1",
@@ -64,6 +65,7 @@ beforeEach(() => {
     { id: "e2", name: "Prod" },
   ];
   envPosted = [];
+  envPatched = [];
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   vi.stubGlobal(
@@ -75,6 +77,13 @@ beforeEach(() => {
       if (/^\/api\/env\/[^/]+\/registries$/.test(url.pathname) && req.method === "POST") {
         envPosted.push({ path: url.pathname, body: (await req.json()) as Record<string, unknown> });
         return Response.json(postBody, { status: postStatus });
+      }
+      if (url.pathname === "/api/env/e1/registries/c1" && req.method === "PATCH") {
+        envPatched.push({
+          path: url.pathname,
+          body: (await req.json()) as Record<string, unknown>,
+        });
+        return Response.json(patchBody, { status: patchStatus });
       }
       if (url.pathname === "/api/registries" && req.method === "POST") {
         posted.push((await req.json()) as Record<string, unknown>);
@@ -749,5 +758,44 @@ describe("CredentialSheet scope", () => {
     expect(alert.textContent).toBe(
       "Lab already has a credential for ghcr.io/acme. Edit that one instead.",
     );
+  });
+});
+
+describe("CredentialSheet of an environment credential", () => {
+  const envCredential = (extra: Record<string, unknown> = {}) =>
+    credential({ scope: { kind: "environment", envId: "e1", envName: "Lab" }, ...extra });
+
+  it("saves a change through the environment's route", async () => {
+    me = makeMe({ envs: { e1: "admin" } });
+    stored = envCredential();
+    patchBody = envCredential({ username: "deploy2" });
+    mount("edit", "c1");
+    await screen.findByText("Edit ghcr-acme");
+    expect(screen.getByRole("combobox", { name: "Scope" }).textContent).toContain("Lab");
+    type("Username", "deploy2");
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(closed).toBe(1));
+    expect(patched).toEqual([]);
+    expect(envPatched.map((p) => p.path)).toEqual(["/api/env/e1/registries/c1"]);
+    expect(envPatched[0]?.body).toMatchObject({ username: "deploy2" });
+  });
+
+  it("gives a credential the user may only see a disabled Edit with the reason Needs Admin on {environment}", async () => {
+    me = makeMe({ envs: { e1: "operator" } });
+    stored = envCredential({ canManage: false });
+    mount("view", "c1");
+    await screen.findByText("You can see this credential but not change it.");
+    const edit = await screen.findByRole("button", { name: "Edit" });
+    expect(edit.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getAllByText("Needs Admin on Lab").length).toBeGreaterThan(0);
+  });
+
+  it("says Needs an instance administrator for an instance credential the user may only see", async () => {
+    me = makeMe({ envs: { e1: "admin" } });
+    stored = credential({ canManage: false });
+    mount("view", "c1");
+    const edit = await screen.findByRole("button", { name: "Edit" });
+    expect(edit.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getAllByText("Needs an instance administrator").length).toBeGreaterThan(0);
   });
 });

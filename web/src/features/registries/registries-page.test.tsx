@@ -306,6 +306,51 @@ describe("RegistriesPage permissions", () => {
     expect(changes).toEqual([{ credential: "new" }]);
   });
 
+  it("lists only the environments the user can see in the Scope filter", async () => {
+    me = makeMe({ envs: { e1: "viewer" } });
+    credentials = [credential("alpha")];
+    mount();
+    await screen.findByText("alpha");
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Scope" }), { key: "Enter" });
+    const options = (await screen.findAllByRole("option")).map((o) => o.textContent);
+    expect(options).toEqual(["All scopes", "Instance", "Lab"]);
+  });
+
+  it("gives each row the reason the user cannot manage it, and an environment Admin their own Edit and Delete…", async () => {
+    me = makeMe({ envs: { e1: "admin", e2: "viewer" } });
+    credentials = [
+      credential("inst"),
+      credential("lab", {
+        scope: { kind: "environment", envId: "e1", envName: "Lab" },
+        canManage: true,
+      }),
+      credential("prod", { scope: { kind: "environment", envId: "e2", envName: "Prod" } }),
+    ];
+    mount();
+    await screen.findByText("lab");
+    const open = (name: string) => {
+      const actions = screen.getByRole("button", { name: `Actions for ${name}` });
+      fireEvent.pointerDown(actions, { button: 0, ctrlKey: false, pointerType: "mouse" });
+      fireEvent.click(actions);
+    };
+    // The reasons sit on the rows that cannot be managed, worded for their layer.
+    expect(
+      screen.getByRole("button", { name: "Actions for inst" }).getAttribute("aria-describedby"),
+    ).toBeTruthy();
+    expect(screen.getByText("Needs an instance administrator")).toBeTruthy();
+    expect(screen.getByText("Needs Admin on Prod")).toBeTruthy();
+    expect(screen.queryByText("Needs Admin on Lab")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Actions for lab" }).getAttribute("aria-describedby"),
+    ).toBeNull();
+
+    open("lab");
+    expect((await screen.findAllByRole("menuitem")).map((i) => i.textContent)).toEqual([
+      "Edit",
+      "Delete…",
+    ]);
+  });
+
   it("offers a manager Edit and a destructive Delete… after a separator", async () => {
     me = makeMe({ instanceAdmin: true });
     credentials = [credential("alpha", { canManage: true })];

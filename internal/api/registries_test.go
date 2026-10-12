@@ -1004,3 +1004,147 @@ func (f *agentFix) startPullOn(t *testing.T, envID string) pullStarted {
 	}
 	return decode[pullStarted](t, rec)
 }
+
+// A credential of one environment is managed through that environment's routes only.
+func TestEnvCredentialEditAndDeleteStayInTheirEnvironmentAndLayer(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
+	a, b := f.twoEnvironments(t)
+	instance, inA, inB := f.layeredCredentials(t, a, b)
+	adminA := f.asRoleOn(t, "admina", a.ID, "admin")
+	path := func(env, id string) string { return "/api/env/" + env + "/registries/" + id }
+	username := func(id string) string {
+		var u string
+		if err := f.st.Read.QueryRow(`SELECT username FROM registry_credentials WHERE id = ?`, id).Scan(&u); err != nil {
+			return "(" + err.Error() + ")"
+		}
+		return u
+	}
+
+	// A's own credential.
+	rec := f.credCall(t, adminA, http.MethodPatch, path(a.ID, inA.ID), `{"username":"bot2"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch: %d %s", rec.Code, rec.Body)
+	}
+	if c := decodeCred(t, rec); c.Username != "bot2" || c.Scope.Kind != "environment" || c.Scope.EnvID == nil || *c.Scope.EnvID != a.ID || !c.CanManage || c.Last4 != "WXYZ" {
+		t.Errorf("patched = %+v", c)
+	}
+	if strings.Contains(rec.Body.String(), "SECRETtoken") {
+		t.Errorf("the response carries the secret: %s", rec.Body)
+	}
+
+	// Another environment's credential and the instance's are 404 credential_not_found on A's routes,
+	// exactly as an unknown ID is, and nothing changes.
+	for name, id := range map[string]string{"B's credential": inB.ID, "the instance's": instance.ID, "an unknown one": "no-such"} {
+		for method, body := range map[string]string{http.MethodPatch: `{"username":"intruder"}`, http.MethodDelete: ""} {
+			rec := f.credCall(t, adminA, method, path(a.ID, id), body)
+			if rec.Code != http.StatusNotFound || problemType(t, rec) != "credential_not_found" {
+				t.Errorf("%s %s: %d %s, want 404 credential_not_found", method, name, rec.Code, rec.Body)
+			}
+		}
+	}
+	if username(inB.ID) != "bot" || username(instance.ID) != "bot" {
+		t.Errorf("a refused request changed another layer: B %q, instance %q", username(inB.ID), username(instance.ID))
+	}
+	// An instance admin reaches B's credential through B's routes, and A's through A's, not crosswise.
+	admin := credentialUser{f.cookie, f.csrf}
+	if rec := f.credCall(t, admin, http.MethodPatch, path(b.ID, inA.ID), `{"username":"x"}`); rec.Code != http.StatusNotFound {
+		t.Errorf("A's credential through B's route: %d %s, want 404", rec.Code, rec.Body)
+	}
+	if rec := f.credCall(t, admin, http.MethodPatch, path(b.ID, inB.ID), `{"username":"botb"}`); rec.Code != http.StatusOK || username(inB.ID) != "botb" {
+		t.Errorf("B's credential through B's route: %d %s", rec.Code, rec.Body)
+	}
+
+	// Delete A's, then again.
+	if rec := f.credCall(t, adminA, http.MethodDelete, path(a.ID, inA.ID), ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body)
+	}
+	if rec := f.credCall(t, adminA, http.MethodDelete, path(a.ID, inA.ID), ""); rec.Code != http.StatusNotFound || problemType(t, rec) != "credential_not_found" {
+		t.Errorf("second delete: %d %s, want 404 credential_not_found", rec.Code, rec.Body)
+	}
+
+	// The audit rows carry the environment and never the secret.
+	rows, err := f.st.Read.Query(`SELECT action, COALESCE(env_id, ''), details FROM audit_log WHERE action IN ('registry.credential_updated', 'registry.credential_deleted') AND target_id = ? ORDER BY seq`, inA.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var got []string
+	for rows.Next() {
+		var action, env, details string
+		if err := rows.Scan(&action, &env, &details); err != nil {
+			t.Fatal(err)
+		}
+		if env != a.ID || strings.Contains(details, "SECRETtoken") || strings.Contains(details, "WXYZ") {
+			t.Errorf("audit row %s env %q details %s", action, env, details)
+		}
+		got = append(got, action)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, ",") != "registry.credential_updated,registry.credential_deleted" {
+		t.Errorf("audit actions = %v, want an update and a delete", got)
+	}
+}
+
+func TestEnvCredentialItemRoutesAreForTheAdminOfTheEnvironmentOnly(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
+	a, b := f.twoEnvironments(t)
+	_, inA, _ := f.layeredCredentials(t, a, b)
+	f.addUser(t, "nobody", false)
+	nobodyCookie, nobodyCSRF := f.signIn(t, "nobody", false)
+	path := "/api/env/" + a.ID + "/registries/" + inA.ID
+
+	for name, tc := range map[string]struct {
+		u    credentialUser
+		want int
+	}{
+		"operator of A":     {f.asRoleOn(t, "operatora", a.ID, "operator"), http.StatusForbidden},
+		"viewer of A":       {f.asRoleOn(t, "viewera", a.ID, "viewer"), http.StatusForbidden},
+		"admin of B only":   {f.asRoleOn(t, "adminb", b.ID, "admin"), http.StatusNotFound},
+		"user with no role": {credentialUser{nobodyCookie, nobodyCSRF}, http.StatusNotFound},
+	} {
+		for method, body := range map[string]string{http.MethodPatch: `{"username":"intruder"}`, http.MethodDelete: ""} {
+			rec := f.credCall(t, tc.u, method, path, body)
+			if rec.Code != tc.want {
+				t.Errorf("%s %s: %d %s, want %d", name, method, rec.Code, rec.Body, tc.want)
+			}
+		}
+	}
+	var username string
+	if err := f.st.Read.QueryRow(`SELECT username FROM registry_credentials WHERE id = ?`, inA.ID).Scan(&username); err != nil || username != "bot" {
+		t.Errorf("username = %q, %v; refused requests change and delete nothing", username, err)
+	}
+}
+
+func TestEditingAnEnvCredentialOntoAnotherOfTheEnvironmentIsAConflictNamingItButNotOntoTheInstances(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
+	a, _ := f.twoEnvironments(t)
+	admin := credentialUser{f.cookie, f.csrf}
+	mk := func(path, name, prefix string) credentialResp {
+		rec := f.credCall(t, admin, http.MethodPost, path,
+			`{"name":"`+name+`","type":"ghcr","prefix":"`+prefix+`","username":"bot","secret":"`+credToken+`"}`)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create %s: %d %s", name, rec.Code, rec.Body)
+		}
+		return decodeCred(t, rec)
+	}
+	mk("/api/registries", "inst", "acme")
+	first := mk("/api/env/"+a.ID+"/registries", "first", "team")
+	second := mk("/api/env/"+a.ID+"/registries", "second", "other")
+	item := func(id string) string { return "/api/env/" + a.ID + "/registries/" + id }
+
+	rec := f.credCall(t, admin, http.MethodPatch, item(second.ID), `{"prefix":"team"}`)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "host_prefix_taken" || !strings.Contains(rec.Body.String(), "first") {
+		t.Errorf("onto first: %d %s, want 409 host_prefix_taken naming first", rec.Code, rec.Body)
+	}
+	rec = f.credCall(t, admin, http.MethodPatch, item(second.ID), `{"name":"first"}`)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "credential_name_taken" {
+		t.Errorf("name: %d %s, want 409 credential_name_taken", rec.Code, rec.Body)
+	}
+	// The instance's host and prefix are free to an environment (D-02), and so is its name.
+	if rec := f.credCall(t, admin, http.MethodPatch, item(second.ID), `{"prefix":"acme","name":"inst"}`); rec.Code != http.StatusOK {
+		t.Errorf("onto the instance's: %d %s, want 200", rec.Code, rec.Body)
+	}
+	_ = first
+}
