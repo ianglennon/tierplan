@@ -70,11 +70,12 @@ type Client struct {
 	// probe makes the one raw request regclient does not report: whether the registry asks
 	// for a login at all.
 	probe *http.Client
-	// fallback is the same client over plain HTTP, built only when Insecure is on. plain is
-	// set once the registry has answered plain HTTP to a TLS request, so later calls go straight
-	// to it.
-	fallback *Client
-	plain    atomic.Bool
+	// fallback is the same client over plain HTTP, built only when Insecure is on. plainUntil is
+	// the time (Unix nanoseconds) until which calls go straight to it, set when the registry has
+	// answered plain HTTP to a TLS request. It expires, so one downgrade answer never turns a
+	// registry that serves TLS into a plaintext one for the life of the client (WR-A03).
+	fallback   *Client
+	plainUntil atomic.Int64
 	// viaRegclient makes Probe ask regclient, whose host mode is the only place the
 	// verification-free connection is made.
 	viaRegclient bool
@@ -166,18 +167,27 @@ func (c *Client) Probe(ctx context.Context) (ProbeResult, error) {
 	return withFallback(ctx, c, (*Client).probeOnce)
 }
 
+// plainTTL is how long calls go straight to the plain HTTP fallback after the registry answered
+// plain HTTP to a TLS request. Docker's insecure-registries decides per request; this keeps the
+// saving of a failed TLS attempt per call for a registry that really is plain HTTP, without making
+// one answer permanent.
+const plainTTL = time.Minute
+
+// plainNow is the clock of plainUntil, replaced by a test.
+var plainNow = time.Now
+
 // withFallback runs call on c and, for a client with the plain HTTP fallback, runs it on the
-// fallback when the registry answers plain HTTP to a TLS request. Once it has, later calls go
-// straight to the fallback. The fallback is built on the same egress policy, so a blocked
-// address is refused there too.
+// fallback when the registry answers plain HTTP to a TLS request. For plainTTL after that, later
+// calls go straight to the fallback; then TLS is tried first again. The fallback is built on the
+// same egress policy, so a blocked address is refused there too.
 func withFallback[T any](ctx context.Context, c *Client, call func(*Client, context.Context) (T, error)) (T, error) {
 	first := c
-	if c.fallback != nil && c.plain.Load() {
+	if c.fallback != nil && plainNow().UnixNano() < c.plainUntil.Load() {
 		first = c.fallback
 	}
 	v, err := call(first, ctx)
 	if err != nil && first == c && c.fallback != nil && isPlainHTTPAnswer(err) {
-		c.plain.Store(true)
+		c.plainUntil.Store(plainNow().Add(plainTTL).UnixNano())
 		return call(c.fallback, ctx)
 	}
 	return v, err

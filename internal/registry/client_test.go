@@ -202,6 +202,48 @@ func TestClientInsecureFallbackStillRefusesBlockedAddresses(t *testing.T) {
 	}
 }
 
+// One answer in plain HTTP is not permanent: calls go straight to the plain client for a minute,
+// then TLS is tried first again (WR-A03).
+func TestClientPlainHTTPFallbackExpiresSoTLSIsTriedAgain(t *testing.T) {
+	c := NewClient(HostOptions{Host: "registry.example.org", Insecure: true}, NewEgressPolicy(nil), "test", quietLog())
+	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+	plainNow = func() time.Time { return now }
+	t.Cleanup(func() { plainNow = time.Now })
+
+	var asked []*Client
+	call := func(cl *Client, _ context.Context) (int, error) {
+		asked = append(asked, cl)
+		if cl == c {
+			return 0, errors.New("http: server gave HTTP response to HTTPS client")
+		}
+		return 1, nil
+	}
+	which := func() string {
+		asked = nil
+		if _, err := withFallback(context.Background(), c, call); err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case len(asked) == 2 && asked[0] == c && asked[1] == c.fallback:
+			return "tls then plain"
+		case len(asked) == 1 && asked[0] == c.fallback:
+			return "plain only"
+		}
+		return "unexpected"
+	}
+	if got := which(); got != "tls then plain" {
+		t.Fatalf("first call = %s", got)
+	}
+	now = now.Add(plainTTL - time.Second)
+	if got := which(); got != "plain only" {
+		t.Errorf("within the minute = %s, want plain only", got)
+	}
+	now = now.Add(2 * time.Second)
+	if got := which(); got != "tls then plain" {
+		t.Errorf("after the minute = %s, want TLS tried first again", got)
+	}
+}
+
 // Without the switch there is no plain HTTP client at all.
 func TestClientWithoutTheSwitchHasNoPlainHTTPFallback(t *testing.T) {
 	if c := NewClient(HostOptions{Host: "registry.example.org"}, NewEgressPolicy(nil), "test", quietLog()); c.fallback != nil {
