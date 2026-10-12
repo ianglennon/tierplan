@@ -12,9 +12,11 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"golang.org/x/time/rate"
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/envs"
@@ -31,6 +33,13 @@ const (
 	problemCredentialNotFound    = "credential_not_found" //nolint:gosec // G101: a problem or target type, not a credential
 
 	credentialTargetType = "registry_credential" //nolint:gosec // G101: a problem or target type, not a credential
+
+	// testsPerMinute is how many credential tests one user may run in a minute, across both
+	// route families: a test is a sign-in attempt against a registry of the caller's choosing,
+	// and must not become a way to guess a password (T-05-39).
+	testsPerMinute = 10
+	// testBudget is the time one test may take in all, whatever it reaches.
+	testBudget = 30 * time.Second
 )
 
 // RegistriesDeps are the dependencies of the registry credential routes.
@@ -43,6 +52,14 @@ type RegistriesDeps struct {
 	Audit *audit.Writer
 	// Checker decides who may see and manage which credentials.
 	Checker *rbac.Checker
+	// Egress is the policy every registry connection of the server dials through. Its zero
+	// value refuses link-local, unspecified and multicast addresses.
+	Egress registry.EgressPolicy
+	// Clients keeps the registry clients. Nil makes a cache from Egress and Version, so the
+	// test routes work in a deployment that does not share one.
+	Clients *registry.ClientCache
+	// Version is the build version, sent as the user agent bayplan/<version>.
+	Version string
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
@@ -227,6 +244,108 @@ type ResolveOutput struct {
 	Body         ResolveBody
 }
 
+// CredentialTestRequest is the body of the credential test routes. The values are the sheet's
+// as they stand, saved or not.
+type CredentialTestRequest struct {
+	Type           string `json:"type,omitempty" maxLength:"32" doc:"dockerhub, ghcr, gitlab or generic, as when adding; 422 type_invalid"`
+	Host           string `json:"host,omitempty" maxLength:"512" doc:"The registry host, as when adding; 422 host_required or host_invalid"`
+	Prefix         string `json:"prefix,omitempty" maxLength:"512" doc:"The namespace the credential covers. Recorded with the test; it does not change what is tried"`
+	Username       string `json:"username,omitempty" maxLength:"512" doc:"The registry user name; 422 username_required"`
+	Secret         string `json:"secret,omitempty" maxLength:"4096" doc:"The password or token to try. It is used for this one test, never stored by it, and never returned or recorded. 422 secret_required when there is none to try"`
+	TestRepository string `json:"testRepository,omitempty" maxLength:"512" doc:"A repository to try to read with the sign-in, like acme/app. Without one, the last step is not checked. 422 test_repository_invalid"`
+}
+
+// TestCredentialInput is the request of the instance test route.
+type TestCredentialInput struct {
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      CredentialTestRequest
+}
+
+// TestEnvCredentialInput is the request of the environment test route.
+type TestEnvCredentialInput struct {
+	EnvironmentPathInput
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      CredentialTestRequest
+}
+
+// TestStepBody is the outcome of one step of a credential test.
+type TestStepBody struct {
+	State string `json:"state" enum:"passed,failed,not_checked" doc:"passed, failed, or not_checked when the step did not apply or an earlier step failed"`
+	Code  string `json:"code" doc:"Why, as a stable code: registry_unreachable, registry_tls, registry_http, sign_in_refused, no_login_asked, no_pull_access, repository_not_found, rate_limited or check_failed. Empty when there is nothing to say. No text from the registry is ever returned"`
+}
+
+// CredentialTestResultBody is the three steps of a credential test.
+type CredentialTestResultBody struct {
+	Reachable TestStepBody `json:"reachable" doc:"Whether the registry answered"`
+	SignedIn  TestStepBody `json:"signedIn" doc:"Whether it accepted the sign-in. not_checked with no_login_asked when the registry asks for no login"`
+	CanPull   TestStepBody `json:"canPull" doc:"Whether the sign-in can read the test repository. not_checked without one"`
+	TestedAt  time.Time    `json:"testedAt" format:"date-time" doc:"When the test ran"`
+}
+
+// CredentialTestOutput wraps CredentialTestResultBody for huma.
+type CredentialTestOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         CredentialTestResultBody
+}
+
+// testLimiter is the per-user limit on credential tests, shared by both route families.
+type testLimiter struct {
+	mu sync.Mutex
+	by map[string]*rate.Limiter
+}
+
+func (l *testLimiter) allow(user string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.by == nil {
+		l.by = map[string]*rate.Limiter{}
+	}
+	lim, ok := l.by[user]
+	if !ok {
+		lim = rate.NewLimiter(rate.Every(time.Minute/testsPerMinute), testsPerMinute)
+		l.by[user] = lim
+	}
+	return lim.Allow()
+}
+
+// testFields are the fields of a submission a test looks at.
+var testFields = []string{"type", "host", "prefix", "username", "secret"}
+
+// validateTest checks the values of a test as adding a credential would, for the fields a
+// test uses, and returns them cleaned together with the repository to read. keepSecret says
+// the stored secret will be used, so none has to be typed.
+func validateTest(req CredentialTestRequest, keepSecret bool, now time.Time) (registry.CreateInput, string, *registry.ValidationError) {
+	in := registry.CreateInput{
+		Name: "test", Type: req.Type, Host: req.Host, Prefix: req.Prefix, Username: req.Username, Secret: req.Secret,
+		HubFallback: req.Type == registry.TypeDockerHub,
+	}
+	if keepSecret && strings.TrimSpace(in.Secret) == "" {
+		in.Secret = "placeholder"
+	}
+	clean, fields := registry.Validate(in, now)
+	if keepSecret && strings.TrimSpace(req.Secret) == "" {
+		clean.Secret = ""
+	}
+	var bad []registry.FieldError
+	for _, f := range fields {
+		if slices.Contains(testFields, f.Field) {
+			bad = append(bad, f)
+		}
+	}
+	repo, ok := registry.TestRepositoryPath(clean.Host, req.TestRepository)
+	if !ok {
+		bad = append(bad, registry.FieldError{Field: "testRepository", Code: "test_repository_invalid"})
+	}
+	if len(bad) > 0 {
+		return clean, "", &registry.ValidationError{Fields: bad}
+	}
+	return clean, repo, nil
+}
+
+func stepBody(s registry.StepResult) TestStepBody { return TestStepBody{State: s.State, Code: s.Code} }
+
 // credentialViewer is what one caller may see and manage.
 type credentialViewer struct {
 	global    []rbac.Perm
@@ -315,6 +434,54 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 	fail := func(what string, err error) error { return failIn(false, what, err) }
 	unavailable := func() error {
 		return httpx.Problem(http.StatusServiceUnavailable, problemRegistriesUnavailable, "Registry credentials are not available on this server.")
+	}
+	limiter := &testLimiter{}
+	clients := d.Clients
+	if clients == nil {
+		clients = registry.NewClientCache(d.Egress, d.Version, d.Log)
+	}
+	// runTest tries the sign-in of a submission against its registry, from this server, and
+	// audits it. The secret is only ever passed to the registry client.
+	runTest := func(ctx context.Context, p *rbac.Principal, envID, userAgent string, req CredentialTestRequest) (*CredentialTestOutput, error) {
+		in, repo, ve := validateTest(req, false, time.Now())
+		if ve != nil {
+			return nil, credentialFieldProblems(ve)
+		}
+		if !limiter.allow(p.ID) {
+			return nil, httpx.Problem(http.StatusTooManyRequests, problemRateLimited, "Too many tests. Wait a minute and try again.")
+		}
+		opts := registry.HostOptions{Host: in.Host, Username: in.Username, Password: in.Secret}
+		tctx, cancel := context.WithTimeout(ctx, testBudget)
+		defer cancel()
+		res := registry.Check(tctx, clients.New(opts), clients.Anonymous(in.Host), registry.CheckInput{
+			HostOptions: opts, Type: in.Type, Prefix: in.Prefix, TestRepository: repo,
+		})
+		layer := registry.LayerInstance
+		if envID != "" {
+			layer = registry.LayerEnvironment
+		}
+		details := map[string]string{
+			"layer": layer, "host": in.Host, "prefix": in.Prefix, "type": in.Type, "via": "server",
+			"reachable": res.Reachable.State, "signed_in": res.SignedIn.State, "can_pull": res.CanPull.State,
+		}
+		if repo != "" {
+			details["repository"] = repo
+		}
+		result, reason := audit.ResultSuccess, ""
+		if res.Failed() {
+			result, reason = audit.ResultFailure, res.FailureCode()
+			details["code"] = reason
+		}
+		if err := d.Audit.Record(ctx, audit.Entry{
+			Actor: p.AuditActor(), Action: audit.ActionRegistryCredentialTested, TargetType: credentialTargetType,
+			EnvID: envID, Result: result, Reason: reason, IP: httpx.ClientIP(ctx), UserAgent: userAgent, Details: details,
+		}); err != nil {
+			d.Log.Error("could not audit a credential test", "host", in.Host, "error", err)
+			return nil, huma.Error500InternalServerError("internal error")
+		}
+		return &CredentialTestOutput{CacheControl: "no-store", Body: CredentialTestResultBody{
+			Reachable: stepBody(res.Reachable), SignedIn: stepBody(res.SignedIn), CanPull: stepBody(res.CanPull), TestedAt: time.Now().UTC(),
+		}}, nil
 	}
 	// create stores a credential of the instance layer (envID empty) or of one environment, and
 	// writes its audit row in the same transaction, carrying the environment.
@@ -441,6 +608,26 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 			return nil, failIn(true, "create environment credential", err)
 		}
 		return &CredentialOutput{CacheControl: "no-store", Body: credentialBody(c, true, d.envName(ctx, c.EnvID))}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "testInstanceCredential",
+		Method:      http.MethodPost,
+		Path:        "/api/registries/test",
+		Summary:     "Test a registry sign-in from the server",
+		Description: "Runs the registry's own flow from the Bayplan server in three steps and reports each one: whether the registry answers, whether it accepts the sign-in, " +
+			"and, when a test repository is given, whether the sign-in can read it. Works on values that are not saved. A 401 to the unauthenticated ping counts as reachable; a refused sign-in is " +
+			"reported as refused whether the registry says 401 or 403; a registry that asks for no login reports signed in as not_checked. Each step is a state and a code, never text from the registry. " +
+			"The server refuses link-local, unspecified and multicast addresses (cloud metadata included) after DNS, allows private and loopback ranges, and refuses redirects to plain HTTP or local URLs. " +
+			"Needs registries.instance. At most 10 tests a minute per user across both families: 429 rate_limited. 422 validation_failed names the fields at fault with the codes of adding a credential, " +
+			"and test_repository_invalid. Audited as registry.credential_tested with each step's result, never the secret.",
+		Tags: []string{"registries"},
+	}, rbac.Require(rbac.PermRegistriesInstance), func(ctx context.Context, in *TestCredentialInput) (*CredentialTestOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		return runTest(ctx, p, "", in.UserAgent, in.Body)
 	})
 
 	httpx.Register(r, huma.Operation{

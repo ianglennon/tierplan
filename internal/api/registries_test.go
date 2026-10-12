@@ -5,6 +5,7 @@ package api_test
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -1147,4 +1148,228 @@ func TestEditingAnEnvCredentialOntoAnotherOfTheEnvironmentIsAConflictNamingItBut
 		t.Errorf("onto the instance's: %d %s, want 200", rec.Code, rec.Body)
 	}
 	_ = first
+}
+
+// Testing a credential (plan 05-11, IMG-01, D-12, D-31). The registry is a real TLS server
+// in the test that answers the way the live ones were probed to.
+
+type fakeRegistry struct {
+	srv *httptest.Server
+	// refuse is the token endpoint's answer to bad credentials.
+	refuse int
+	// tagsStatus is the answer to the tag list of a signed-in client.
+	tagsStatus int
+	user, pass string
+}
+
+func newFakeRegistry(t *testing.T) *fakeRegistry {
+	t.Helper()
+	f := &fakeRegistry{refuse: http.StatusUnauthorized, tagsStatus: http.StatusOK, user: "bot", pass: "registry-secret-value-9876"}
+	f.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		challenge := func(scope string) {
+			c := `Bearer realm="` + f.srv.URL + `/token",service="fake"`
+			if scope != "" {
+				c += `,scope="` + scope + `"`
+			}
+			w.Header().Set("WWW-Authenticate", c)
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+		switch {
+		case r.URL.Path == "/v2/":
+			if r.Header.Get("Authorization") == "Bearer good" {
+				return
+			}
+			challenge("")
+		case r.URL.Path == "/token":
+			if u, p, ok := r.BasicAuth(); !ok || u != f.user || p != f.pass {
+				w.WriteHeader(f.refuse)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"token": "good", "expires_in": 300})
+		case strings.HasSuffix(r.URL.Path, "/tags/list"):
+			repo := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v2/"), "/tags/list")
+			switch {
+			case r.Header.Get("Authorization") != "Bearer good", f.tagsStatus == http.StatusUnauthorized:
+				challenge("repository:" + repo + ":pull")
+			case f.tagsStatus != http.StatusOK:
+				w.WriteHeader(f.tagsStatus)
+			default:
+				_ = json.NewEncoder(w).Encode(map[string]any{"name": repo, "tags": []string{"1"}})
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(f.srv.Close)
+	return f
+}
+
+func (f *fakeRegistry) host() string { return strings.TrimPrefix(f.srv.URL, "https://") }
+
+// trusting makes the fixture's tests dial through a policy that trusts the registry's
+// certificate, and rebuilds the router.
+func (f *authFixture) trusting(t *testing.T, regs ...*fakeRegistry) {
+	t.Helper()
+	pool := x509.NewCertPool()
+	for _, r := range regs {
+		pool.AddCert(r.srv.Certificate())
+	}
+	f.registryEgress = registry.NewEgressPolicy(nil).WithRootCAs(pool)
+	f.h = f.build(t)
+}
+
+type testStep struct {
+	State string `json:"state"`
+	Code  string `json:"code"`
+}
+
+type testResult struct {
+	Reachable testStep `json:"reachable"`
+	SignedIn  testStep `json:"signedIn"`
+	CanPull   testStep `json:"canPull"`
+	TestedAt  string   `json:"testedAt"`
+}
+
+func (f *fakeRegistry) body(secret, repo string) string {
+	b, _ := json.Marshal(map[string]string{"type": "generic", "host": f.host(), "username": f.user, "secret": secret, "testRepository": repo})
+	return string(b)
+}
+
+func decodeTest(t *testing.T, rec *httptest.ResponseRecorder) testResult {
+	t.Helper()
+	var r testResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &r); err != nil {
+		t.Fatalf("decode %s: %v", rec.Body, err)
+	}
+	return r
+}
+
+func TestAnInstanceAdminTestsUnsavedValuesAndSeesEachStepPass(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	reg := newFakeRegistry(t)
+	f.trusting(t, reg)
+	admin := f.asAdmin(t)
+
+	rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test", reg.body(reg.pass, "acme/app"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("test: %d %s", rec.Code, rec.Body)
+	}
+	got := decodeTest(t, rec)
+	if got.Reachable.State != "passed" || got.SignedIn.State != "passed" || got.CanPull.State != "passed" || got.TestedAt == "" {
+		t.Fatalf("result = %+v, want every step passed", got)
+	}
+	if strings.Contains(rec.Body.String(), reg.pass) {
+		t.Errorf("the answer carries the secret: %s", rec.Body)
+	}
+	var n int
+	if err := f.st.Read.QueryRow(`SELECT count(*) FROM registry_credentials`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("credentials = %d, %v; a test of unsaved values stores nothing", n, err)
+	}
+	actions, details := f.registryAudit(t)
+	if !slices.Equal(actions, []string{"registry.credential_tested"}) {
+		t.Fatalf("actions = %v, want one registry.credential_tested", actions)
+	}
+	for k, want := range map[string]string{"layer": "instance", "host": reg.host(), "type": "generic", "via": "server", "reachable": "passed", "signed_in": "passed", "can_pull": "passed", "repository": "acme/app"} {
+		if details[0][k] != want {
+			t.Errorf("details[%s] = %q, want %q", k, details[0][k], want)
+		}
+	}
+	for k, v := range details[0] {
+		if strings.Contains(v, reg.pass) || strings.Contains(k, "secret") {
+			t.Errorf("audit detail %s = %q carries the secret", k, v)
+		}
+	}
+}
+
+func TestATestWithBadCredentialsNamesTheFailedStepWhetherTheRegistrySays401Or403(t *testing.T) {
+	for name, status := range map[string]int{"401": http.StatusUnauthorized, "403": http.StatusForbidden} {
+		t.Run(name, func(t *testing.T) {
+			f := newAuthFixture(t, config.Config{})
+			reg := newFakeRegistry(t)
+			reg.refuse = status
+			f.trusting(t, reg)
+			rec := f.credCall(t, f.asAdmin(t), http.MethodPost, "/api/registries/test", reg.body("wrong-password-123456", "acme/app"))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("test: %d %s", rec.Code, rec.Body)
+			}
+			got := decodeTest(t, rec)
+			if got.Reachable.State != "passed" || got.SignedIn != (testStep{"failed", "sign_in_refused"}) || got.CanPull.State != "not_checked" {
+				t.Fatalf("result = %+v", got)
+			}
+			_, details := f.registryAudit(t)
+			if details[0]["code"] != "sign_in_refused" || details[0]["signed_in"] != "failed" {
+				t.Errorf("details = %v", details[0])
+			}
+			var result, reason string
+			if err := f.st.Read.QueryRow(`SELECT result, COALESCE(reason, '') FROM audit_log WHERE action = 'registry.credential_tested'`).Scan(&result, &reason); err != nil || result != "failure" || reason != "sign_in_refused" {
+				t.Errorf("audit result = %q, reason %q, %v, want failure sign_in_refused", result, reason, err)
+			}
+		})
+	}
+}
+
+func TestATestOfTheMetadataAddressNeverConnectsAndSaysUnreachable(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	rec := f.credCall(t, f.asAdmin(t), http.MethodPost, "/api/registries/test", `{"type":"generic","host":"169.254.169.254","username":"bot","secret":"does-not-matter-1234"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("test: %d %s", rec.Code, rec.Body)
+	}
+	got := decodeTest(t, rec)
+	if got.Reachable != (testStep{"failed", "registry_unreachable"}) || got.SignedIn.State != "not_checked" {
+		t.Fatalf("result = %+v, want unreachable and the rest not checked", got)
+	}
+}
+
+func TestATestNeedsTheCredentialsPermissionOfItsLayer(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	f.addEnvironmentRow(t, "e1")
+	envAdmin := f.asRoleOn(t, "envadmin", "e1", "admin")
+	rec := f.credCall(t, envAdmin, http.MethodPost, "/api/registries/test", `{"type":"generic","host":"169.254.169.254","username":"bot","secret":"does-not-matter-1234"}`)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("an env Admin on the instance family: %d %s, want 403", rec.Code, rec.Body)
+	}
+	if actions, _ := f.registryAudit(t); len(actions) != 0 {
+		t.Errorf("actions = %v; a refused test records no test", actions)
+	}
+}
+
+func TestATestRefusesWhatAddingWouldRefuseAndWhatCannotBeTried(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	admin := f.asAdmin(t)
+	for _, tc := range []struct{ name, body, location, code string }{
+		{"no secret", `{"type":"generic","host":"r.example.org","username":"bot"}`, "body.secret", "secret_required"},
+		{"no username", `{"type":"generic","host":"r.example.org","secret":"abc"}`, "body.username", "username_required"},
+		{"a bad host", `{"type":"generic","host":"http://r.example.org","username":"bot","secret":"abc"}`, "body.host", "host_invalid"},
+		{"no type", `{"host":"r.example.org","username":"bot","secret":"abc"}`, "body.type", "type_invalid"},
+		{"a bad test repository", `{"type":"generic","host":"r.example.org","username":"bot","secret":"abc","testRepository":"A b?"}`, "body.testRepository", "test_repository_invalid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test", tc.body)
+			p := decodeProblem(t, rec)
+			if rec.Code != http.StatusUnprocessableEntity || p.Type != "validation_failed" || len(p.Errors) != 1 || p.Errors[0].Location != tc.location || p.Errors[0].Message != tc.code {
+				t.Errorf("%d %s, want 422 validation_failed %s %s", rec.Code, rec.Body, tc.location, tc.code)
+			}
+		})
+	}
+	if actions, _ := f.registryAudit(t); len(actions) != 0 {
+		t.Errorf("actions = %v; a refused test records nothing", actions)
+	}
+}
+
+func TestTheEleventhTestInAMinuteIsRateLimited(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	admin := f.asAdmin(t)
+	body := `{"type":"generic","host":"169.254.169.254","username":"bot","secret":"does-not-matter-1234"}`
+	for i := 1; i <= 10; i++ {
+		if rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test", body); rec.Code != http.StatusOK {
+			t.Fatalf("test %d: %d %s", i, rec.Code, rec.Body)
+		}
+	}
+	rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test", body)
+	if rec.Code != http.StatusTooManyRequests || problemType(t, rec) != "rate_limited" {
+		t.Fatalf("test 11: %d %s, want 429 rate_limited", rec.Code, rec.Body)
+	}
+	if actions, _ := f.registryAudit(t); len(actions) != 10 {
+		t.Errorf("audit rows = %d, want 10: the refused one writes none", len(actions))
+	}
 }

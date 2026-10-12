@@ -189,7 +189,8 @@
       "registry": {
         "credential_created": "Registry credential added",
         "credential_updated": "Registry credential changed",
-        "credential_deleted": "Registry credential deleted"
+        "credential_deleted": "Registry credential deleted",
+        "credential_tested": "Registry credential tested"
       },
       "logs": {
         "viewed": "Container logs viewed",

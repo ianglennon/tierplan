@@ -1622,6 +1622,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/registries/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test a registry sign-in from the server
+         * @description Runs the registry's own flow from the Bayplan server in three steps and reports each one: whether the registry answers, whether it accepts the sign-in, and, when a test repository is given, whether the sign-in can read it. Works on values that are not saved. A 401 to the unauthenticated ping counts as reachable; a refused sign-in is reported as refused whether the registry says 401 or 403; a registry that asks for no login reports signed in as not_checked. Each step is a state and a code, never text from the registry. The server refuses link-local, unspecified and multicast addresses (cloud metadata included) after DNS, allows private and loopback ranges, and refuses redirects to plain HTTP or local URLs. Needs registries.instance. At most 10 tests a minute per user across both families: 429 rate_limited. 422 validation_failed names the fields at fault with the codes of adding a credential, and test_repository_invalid. Audited as registry.credential_tested with each step's result, never the secret.
+         */
+        post: operations["testInstanceCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/registries/{credentialId}": {
         parameters: {
             query?: never;
@@ -3082,6 +3102,33 @@ export interface components {
             detail: string;
             /** @description Whether the registry accepted it */
             ok: boolean;
+        };
+        CredentialTestRequest: {
+            /** @description The registry host, as when adding; 422 host_required or host_invalid */
+            host?: string;
+            /** @description The namespace the credential covers. Recorded with the test; it does not change what is tried */
+            prefix?: string;
+            /** @description The password or token to try. It is used for this one test, never stored by it, and never returned or recorded. 422 secret_required when there is none to try */
+            secret?: string;
+            /** @description A repository to try to read with the sign-in, like acme/app. Without one, the last step is not checked. 422 test_repository_invalid */
+            testRepository?: string;
+            /** @description dockerhub, ghcr, gitlab or generic, as when adding; 422 type_invalid */
+            type?: string;
+            /** @description The registry user name; 422 username_required */
+            username?: string;
+        };
+        CredentialTestResultBody: {
+            /** @description Whether the sign-in can read the test repository. not_checked without one */
+            canPull: components["schemas"]["TestStepBody"];
+            /** @description Whether the registry answered */
+            reachable: components["schemas"]["TestStepBody"];
+            /** @description Whether it accepted the sign-in. not_checked with no_login_asked when the registry asks for no login */
+            signedIn: components["schemas"]["TestStepBody"];
+            /**
+             * Format: date-time
+             * @description When the test ran
+             */
+            testedAt: string;
         };
         DeleteUserInputBody: {
             /** @description Automations the user owns and who takes each over. Whatever is not listed is paused as owner deleted */
@@ -4855,6 +4902,15 @@ export interface components {
             id: string;
             /** @description The team's name */
             name: string;
+        };
+        TestStepBody: {
+            /** @description Why, as a stable code: registry_unreachable, registry_tls, registry_http, sign_in_refused, no_login_asked, no_pull_access, repository_not_found, rate_limited or check_failed. Empty when there is nothing to say. No text from the registry is ever returned */
+            code: string;
+            /**
+             * @description passed, failed, or not_checked when the step did not apply or an earlier step failed
+             * @enum {string}
+             */
+            state: "passed" | "failed" | "not_checked";
         };
         TokenStatusBody: {
             /**
@@ -8490,6 +8546,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    testInstanceCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialTestRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialTestResultBody"];
                 };
             };
             /** @description Error */

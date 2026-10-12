@@ -30,6 +30,10 @@ let closed: number;
 let environments: { id: string; name: string }[];
 let envPosted: { path: string; body: Record<string, unknown> }[];
 let envPatched: { path: string; body: Record<string, unknown> }[];
+let testSent: Record<string, unknown>[];
+let testStatus: number;
+let testBody: unknown;
+let testGate: Promise<void> | null;
 
 const credential = (extra: Record<string, unknown> = {}) => ({
   id: "c1",
@@ -50,6 +54,20 @@ const credential = (extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
+const step = (state: string, code = "") => ({ state, code });
+const passedTest = {
+  reachable: step("passed"),
+  signedIn: step("passed"),
+  canPull: step("passed"),
+  testedAt: "2026-10-12T10:00:00Z",
+};
+const refusedTest = {
+  reachable: step("passed"),
+  signedIn: step("failed", "sign_in_refused"),
+  canPull: step("not_checked"),
+  testedAt: "2026-10-12T10:00:00Z",
+};
+
 beforeEach(() => {
   me = makeMe({ instanceAdmin: true });
   posted = [];
@@ -66,6 +84,10 @@ beforeEach(() => {
   ];
   envPosted = [];
   envPatched = [];
+  testSent = [];
+  testStatus = 200;
+  testBody = passedTest;
+  testGate = null;
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   vi.stubGlobal(
@@ -88,6 +110,11 @@ beforeEach(() => {
       if (url.pathname === "/api/registries" && req.method === "POST") {
         posted.push((await req.json()) as Record<string, unknown>);
         return Response.json(postBody, { status: postStatus });
+      }
+      if (url.pathname === "/api/registries/test" && req.method === "POST") {
+        testSent.push((await req.json()) as Record<string, unknown>);
+        if (testGate) await testGate;
+        return Response.json(testBody, { status: testStatus });
       }
       if (url.pathname === "/api/registries") return Response.json({ items: [] });
       if (url.pathname === "/api/registries/c1" && req.method === "PATCH") {
@@ -232,7 +259,8 @@ describe("CredentialSheet add mode", () => {
     expect(await screen.findByText("Enter a name.")).toBeTruthy();
     expect(screen.getByText("Enter the registry address.")).toBeTruthy();
     expect(screen.getByText("Enter a username.")).toBeTruthy();
-    expect(screen.getByText("Enter a secret.")).toBeTruthy();
+    // Once as the field's error and once as the reason Test is unavailable.
+    expect(screen.getAllByText("Enter a secret.")).toHaveLength(2);
     expect(posted).toEqual([]);
   });
 
@@ -797,5 +825,175 @@ describe("CredentialSheet of an environment credential", () => {
     const edit = await screen.findByRole("button", { name: "Edit" });
     expect(edit.getAttribute("aria-disabled")).toBe("true");
     expect(screen.getAllByText("Needs an instance administrator").length).toBeGreaterThan(0);
+  });
+});
+
+// The Test block (plan 05-11, IMG-01, D-12).
+describe("CredentialSheet test block", () => {
+  const testButton = () => screen.getByRole("button", { name: "Test credential" });
+
+  it("has the Test repository field and the button, disabled with Enter a secret. while there is nothing to test", async () => {
+    mount();
+    await screen.findByText("Add a registry credential");
+    expect(screen.getByRole("heading", { name: "Test" })).toBeTruthy();
+    expect(field("Test repository (optional)")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "A repository this credential should be able to pull. Checks pull access, which catches a token missing a scope.",
+      ),
+    ).toBeTruthy();
+    expect((testButton() as HTMLButtonElement).disabled).toBe(true);
+    expect(testButton().getAttribute("aria-describedby")).toBeTruthy();
+    expect(screen.getByText("Enter a secret.")).toBeTruthy();
+    type("Secret", SECRET);
+    expect((testButton() as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText("Enter a secret.")).toBeNull();
+  });
+
+  it("tests the unsaved values, shows the three steps as a status and sends the repository", async () => {
+    mount();
+    await screen.findByText("Add a registry credential");
+    type("Username", "deploy");
+    type("Secret", SECRET);
+    type("Test repository (optional)", "acme/app");
+    fireEvent.click(testButton());
+    const region = await screen.findByRole("status");
+    expect(region.textContent).toContain("Registry reachable");
+    expect(region.textContent).toContain("Can pull acme/app");
+    expect(testSent).toEqual([
+      { type: "dockerhub", username: "deploy", secret: SECRET, testRepository: "acme/app" },
+    ]);
+    expect(posted).toEqual([]);
+  });
+
+  it("shows Testing… with the spinner while the test runs", async () => {
+    let release: () => void = () => {};
+    testGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mount();
+    await screen.findByText("Add a registry credential");
+    type("Username", "deploy");
+    type("Secret", SECRET);
+    fireEvent.click(testButton());
+    const busy = await screen.findByRole("button", { name: "Testing…" });
+    expect((busy as HTMLButtonElement).disabled).toBe(true);
+    release();
+    await screen.findByRole("status");
+  });
+
+  it("shows a failed step with the mapped copy, warns, and still lets the credential be saved", async () => {
+    testBody = refusedTest;
+    mount();
+    await screen.findByText("Add a registry credential");
+    type("Name", "ghcr-acme");
+    type("Username", "deploy");
+    type("Secret", SECRET);
+    fireEvent.click(testButton());
+    expect(
+      (await screen.findAllByText("docker.io refused this username and secret.")).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getByText("The last test failed. You can still save this credential."),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Save credential" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it("greys the result out when a field changes and drops the warning", async () => {
+    testBody = refusedTest;
+    mount();
+    await screen.findByText("Add a registry credential");
+    type("Username", "deploy");
+    type("Secret", SECRET);
+    fireEvent.click(testButton());
+    await screen.findByText("The last test failed. You can still save this credential.");
+    type("Secret", `${SECRET}x`);
+    expect(await screen.findByText("Result is for the earlier values")).toBeTruthy();
+    expect(
+      screen.queryByText("The last test failed. You can still save this credential."),
+    ).toBeNull();
+  });
+
+  it("does not show a result that arrives after a field changed", async () => {
+    let release: () => void = () => {};
+    testGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mount();
+    await screen.findByText("Add a registry credential");
+    type("Username", "deploy");
+    type("Secret", SECRET);
+    fireEvent.click(testButton());
+    await screen.findByRole("button", { name: "Testing…" });
+    type("Username", "someone-else");
+    release();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Testing…" })).toBeNull());
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("names the field the server refused and shows no result", async () => {
+    testStatus = 422;
+    testBody = {
+      type: "validation_failed",
+      title: "Unprocessable Entity",
+      status: 422,
+      errors: [{ location: "body.host", message: "host_invalid" }],
+    };
+    mount("add");
+    await screen.findByText("Add a registry credential");
+    choose("Generic v2");
+    type("Registry", "registry.example.org");
+    type("Username", "deploy");
+    type("Secret", SECRET);
+    fireEvent.click(testButton());
+    expect(
+      await screen.findByText("Use a host like ghcr.io or registry.example.com:5000."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("says when the user is testing too fast", async () => {
+    testStatus = 429;
+    testBody = { type: "rate_limited", title: "Too Many Requests", status: 429 };
+    mount();
+    await screen.findByText("Add a registry credential");
+    type("Username", "deploy");
+    type("Secret", SECRET);
+    fireEvent.click(testButton());
+    expect(await screen.findByText("Too many tests. Wait a minute and try again.")).toBeTruthy();
+  });
+
+  it("refuses a test repository that is not a path before asking the server", async () => {
+    mount();
+    await screen.findByText("Add a registry credential");
+    type("Username", "deploy");
+    type("Secret", SECRET);
+    type("Test repository (optional)", "Not A Repo");
+    fireEvent.click(testButton());
+    expect(await screen.findByText("Enter a repository like acme/app.")).toBeTruthy();
+    expect(testSent).toEqual([]);
+  });
+
+  it("leaves the secret out of the caches after a test", async () => {
+    mount();
+    await screen.findByText("Add a registry credential");
+    type("Username", "deploy");
+    type("Secret", SECRET);
+    fireEvent.click(testButton());
+    await screen.findByRole("status");
+    // The variables of the mutation hold the secret; they go when the sheet that made the
+    // request is gone.
+    cleanup();
+    await waitFor(() => expect(client.getMutationCache().getAll()).toHaveLength(0));
+    expect(
+      JSON.stringify(
+        client
+          .getQueryCache()
+          .getAll()
+          .map((q) => q.state.data),
+      ),
+    ).not.toContain(SECRET);
   });
 });

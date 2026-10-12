@@ -4,7 +4,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, EyeOff } from "lucide-react";
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 
 import { environmentsQuery } from "@/api/environments";
@@ -13,10 +13,12 @@ import {
   type CredentialPatch,
   type CredentialRequest,
   CredentialRequestError,
+  type CredentialTestResult,
   credentialQuery,
   credentialsQuery,
   type RegistryType,
   useCreateCredential,
+  useTestCredential,
   useUpdateCredential,
 } from "@/api/registries";
 import { KeyValueTable } from "@/components/key-value-table";
@@ -68,6 +70,7 @@ import {
   useManageReason,
 } from "@/features/registries/credential-table";
 import { hostAfterTypeChange, PRESETS, presetFor } from "@/features/registries/presets";
+import { TestResult } from "@/features/registries/test-result";
 import { hasPermission, useMe } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { toastSuccess } from "@/lib/toast";
@@ -341,6 +344,13 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
   const [showSecret, setShowSecret] = useState(false);
   const [discarding, setDiscarding] = useState(false);
   const { choices, ready } = useScopeChoices();
+  const tester = useTestCredential();
+  const [testRepository, setTestRepository] = useState("");
+  const [testRepositoryInvalid, setTestRepositoryInvalid] = useState(false);
+  const [testError, setTestError] = useState<string | null>(null);
+  // The last test shown: what it said and the values it was run on. A change to any of them
+  // greys it out (UI-SPEC "Credential sheet").
+  const [tested, setTested] = useState<{ result: CredentialTestResult; key: string } | null>(null);
   const form = useForm<Values>({
     resolver: zodResolver(schema),
     defaultValues: defaults,
@@ -352,6 +362,26 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
   const scope = form.watch("scope");
   const preset = presetFor(type);
   const pending = create.isPending || update.isPending;
+  const watched = form.watch(["host", "username", "secret"]);
+  const effectiveHost = preset.hostEditable ? watched[0].trim() : preset.host;
+  // The values a test depends on. A result is only as good as these were when it ran.
+  const testKey = JSON.stringify([
+    type,
+    effectiveHost,
+    watched[1].trim(),
+    watched[2],
+    testRepository.trim(),
+  ]);
+  const latestTestKey = useRef(testKey);
+  latestTestKey.current = testKey;
+  const stale = tested !== null && tested.key !== testKey;
+  const nothingToTest = watched[2].trim() === "";
+  const testFailed =
+    tested !== null &&
+    !stale &&
+    [tested.result.reachable, tested.result.signedIn, tested.result.canPull].some(
+      (step) => step.state === "failed",
+    );
 
   // A new credential starts in the first place its author may add one: the instance for an
   // instance administrator, otherwise their environment (preselected when they have one).
@@ -493,6 +523,59 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
           close();
         },
         onError: (err) => setRefusal(refusalOf(err)),
+      },
+    );
+  }
+
+  // runTest tries the sign-in as it stands in the form, saved or not. The server makes the
+  // calls, so it also tells a registry that is down from a secret that is wrong.
+  async function runTest() {
+    if (tester.isPending) return;
+    setTestError(null);
+    const repo = testRepository.trim();
+    const repoOk = repo === "" || PREFIX.test(repo.replace(/^[^/]*[.:][^/]*\//, "").toLowerCase());
+    setTestRepositoryInvalid(!repoOk);
+    const valid = await form.trigger(["host", "username", "secret"]);
+    if (!valid || !repoOk) return;
+    const values = form.getValues();
+    const key = testKey;
+    tester.mutate(
+      {
+        type: values.type,
+        username: values.username.trim(),
+        secret: values.secret,
+        ...(preset.hostEditable ? { host: values.host.trim() } : {}),
+        ...(values.prefix.trim() ? { prefix: values.prefix.trim() } : {}),
+        ...(repo ? { testRepository: repo } : {}),
+      },
+      {
+        onSuccess: (result) => {
+          // A field changed while the test ran: its result is for values that are gone.
+          if (latestTestKey.current === key) setTested({ result, key });
+        },
+        onError: (err) => {
+          if (err.status === 422) {
+            for (const f of err.fields) {
+              const name = f.location.replace(/^body\./, "") as keyof Values;
+              if ((FIELDS as readonly string[]).includes(name)) {
+                form.setError(name, {
+                  type: "server",
+                  message: `registries.sheet.errors.${f.message}`,
+                });
+              } else if (f.location === "body.testRepository") {
+                setTestRepositoryInvalid(true);
+              }
+            }
+            return;
+          }
+          setTestError(
+            err.status === 429
+              ? t("registries.test.errors.rateLimited")
+              : err.status === 403
+                ? t("registries.test.errors.permission")
+                : t("registries.test.errors.generic"),
+          );
+        },
       },
     );
   }
@@ -799,7 +882,88 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
                   <FieldError id={`${ids}-expires-error`}>{errorOf("expires")}</FieldError>
                 ) : null}
               </Field>
+
+              <section
+                aria-labelledby={`${ids}-test-title`}
+                className="flex flex-col gap-3 border-t pt-4"
+              >
+                <h3 id={`${ids}-test-title`} className="font-heading text-sm font-medium">
+                  {t("registries.test.title")}
+                </h3>
+                <Field data-invalid={testRepositoryInvalid ? true : undefined}>
+                  <FieldLabel htmlFor={`${ids}-test-repo`}>
+                    {t("registries.test.repository.label")}
+                  </FieldLabel>
+                  <Input
+                    id={`${ids}-test-repo`}
+                    autoComplete="off"
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    placeholder={t("registries.test.repository.placeholder")}
+                    className={cn("font-mono", TOUCH_HEIGHT)}
+                    value={testRepository}
+                    aria-invalid={testRepositoryInvalid || undefined}
+                    aria-describedby={`${ids}-test-repo-helper${testRepositoryInvalid ? ` ${ids}-test-repo-error` : ""}`}
+                    onChange={(e) => {
+                      setTestRepository(e.target.value);
+                      setTestRepositoryInvalid(false);
+                    }}
+                  />
+                  <FieldDescription id={`${ids}-test-repo-helper`}>
+                    {t("registries.test.repository.helper")}
+                  </FieldDescription>
+                  {testRepositoryInvalid ? (
+                    <FieldError id={`${ids}-test-repo-error`}>
+                      {t("registries.test.repository.invalid")}
+                    </FieldError>
+                  ) : null}
+                </Field>
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className={TOUCH_HEIGHT}
+                    disabled={nothingToTest || tester.isPending}
+                    aria-describedby={nothingToTest ? `${ids}-test-need` : undefined}
+                    onClick={() => void runTest()}
+                  >
+                    {tester.isPending ? (
+                      <>
+                        <Spinner aria-hidden="true" />
+                        {t("registries.test.pending")}
+                      </>
+                    ) : (
+                      t("registries.test.button")
+                    )}
+                  </Button>
+                  {nothingToTest ? (
+                    <span id={`${ids}-test-need`} className="text-xs text-muted-foreground">
+                      {t("registries.test.needSecret")}
+                    </span>
+                  ) : null}
+                </div>
+                {testError ? (
+                  <Alert variant="destructive" role="alert">
+                    <AlertDescription>{testError}</AlertDescription>
+                  </Alert>
+                ) : null}
+                {tested ? (
+                  <TestResult
+                    result={tested.result}
+                    host={effectiveHost}
+                    repository={testRepository.trim()}
+                    type={type}
+                    stale={stale}
+                  />
+                ) : null}
+              </section>
             </FieldGroup>
+            {testFailed ? (
+              <Alert variant="warning" className="mt-4">
+                <AlertDescription>{t("registries.test.warning")}</AlertDescription>
+              </Alert>
+            ) : null}
           </fieldset>
         </form>
       </SheetFrame>

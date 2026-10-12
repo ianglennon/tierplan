@@ -103,6 +103,9 @@ type authFixture struct {
 	pwLimiter *auth.IPLimiter
 	// localHost feeds GET /api/local-host (plan 15).
 	localHost api.LocalHostDeps
+	// registryEgress is the policy the credential tests dial through (plan 05-11); a test
+	// that talks to a registry of its own sets one that trusts that registry's certificate.
+	registryEgress registry.EgressPolicy
 	// envSvc, when set, is the environment registry behind the environment
 	// routes and the {envId} resolver (plan 16). Without it, no environment
 	// exists and the environment routes are never called.
@@ -322,7 +325,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			MaxStreamsPerUser: f.envStreamMaxStreams, MaxLifetime: f.envStreamMaxLifetime, Log: log,
 		})
 	}
-	api.RegisterRegistries(r, api.RegistriesDeps{Store: registry.NewStore(f.st, f.v, f.clk.now), Envs: f.envSvc, Audit: f.aud, Checker: checker, Log: log})
+	api.RegisterRegistries(r, api.RegistriesDeps{Store: registry.NewStore(f.st, f.v, f.clk.now), Envs: f.envSvc, Audit: f.aud, Checker: checker, Egress: f.registryEgress, Version: "test", Log: log})
 	api.RegisterUnknownAgents(r, api.UnknownAgentsDeps{Unknown: f.unknown, Store: f.st, Now: f.clk.now, Log: log})
 	api.RegisterRecent(r, api.RecentDeps{Store: f.st, Envs: f.envSvc, Checker: checker, Refusals: f.aud, Now: f.clk.now, Log: log})
 	api.RegisterAudit(r, api.AuditDeps{Store: f.st, RetentionDays: f.auditRetention, Now: f.clk.now, Checker: checker, Refusals: f.aud, Log: log})

@@ -666,6 +666,9 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	jobHub := jobs.New(jobs.Options{})
 	registryStore := registry.NewStore(st, vlt, nil)
 	resolver := registry.NewResolver(registryStore)
+	// Every call the server makes to a registry dials through one egress policy (T-05-38).
+	registryEgress := registry.NewEgressPolicy(nil)
+	registryClients := registry.NewClientCache(registryEgress, buildinfo.Get().Version, log)
 	router := NewRouter(RouterDeps{
 		Options: httpx.Options{
 			Fallback:       spa,
@@ -731,7 +734,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, SelfContainerID: selfID, Log: log},
 		Volumes:       api.VolumesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, Log: log},
 		Pulls:         api.PullsDeps{Aggregator: aggregator, Jobs: jobHub, Audit: aud, Checker: checker, Resolver: resolver, Log: log},
-		Registries:    api.RegistriesDeps{Store: registryStore, Envs: envSvc, Audit: aud, Checker: checker, Log: log},
+		Registries:    api.RegistriesDeps{Store: registryStore, Envs: envSvc, Audit: aud, Checker: checker, Egress: registryEgress, Clients: registryClients, Version: buildinfo.Get().Version, Log: log},
 		Containers:    api.ContainersDeps{Aggregator: aggregator, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
 		Events:        api.EventsDeps{Aggregator: aggregator, Log: log},
 		Logs:          api.LogsDeps{Aggregator: aggregator, Audit: aud, Checker: checker, Log: log},

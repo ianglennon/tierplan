@@ -143,6 +143,10 @@ var phase5DetailKeys = map[string][]string{
 	// the word secret (plan 05-07).
 	audit.ActionRegistryCredentialUpdated: {"name", "layer", "host", "prefix", "type", "username", "hub_fallback", "expires", "changed"},
 	audit.ActionRegistryCredentialDeleted: {"name", "layer", "host", "prefix", "type", "username", "hub_fallback", "expires"},
+	// A test records where it ran from (via: the server, or a node), the registry and
+	// type, each step's result, the code of the first failure, the repository tried and, from
+	// an environment, the node. Never the secret (plan 05-11, D-12, D-31).
+	audit.ActionRegistryCredentialTested: {"name", "layer", "host", "prefix", "type", "reachable", "signed_in", "can_pull", "code", "via", "repository", "node"},
 }
 
 func TestEveryPhase5ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -170,6 +174,7 @@ func TestEveryPhase5ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		"registry.credential_created": audit.ActionRegistryCredentialCreated,
 		"registry.credential_updated": audit.ActionRegistryCredentialUpdated,
 		"registry.credential_deleted": audit.ActionRegistryCredentialDeleted,
+		"registry.credential_tested":  audit.ActionRegistryCredentialTested,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)

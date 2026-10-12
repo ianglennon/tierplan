@@ -14,6 +14,9 @@ export type RegistryType = Credential["type"];
 export type ResolveResult = components["schemas"]["ResolveBody"];
 export type ResolvedCredential = components["schemas"]["ResolvedCredentialBody"];
 export type ConsideredCredential = components["schemas"]["ConsideredCredentialBody"];
+export type CredentialTestRequest = components["schemas"]["CredentialTestRequest"];
+export type CredentialTestResult = components["schemas"]["CredentialTestResultBody"];
+export type TestStep = components["schemas"]["TestStepBody"];
 
 // How often the Last test and Last use cells are read again while the page is open.
 // There is no stream for credentials (UI-SPEC "Live updates").
@@ -264,5 +267,37 @@ export function useResolveCredential(envId: string) {
   return useMutation<ResolveResult, ResolveRequestError, string>({
     mutationFn: (ref) => postResolve(envId, ref),
     retry: false,
+  });
+}
+
+// postTestCredential runs the three-step test from the server on the values of the sheet,
+// saved or not. It never retries: each test is a sign-in attempt, and the server limits how
+// many a user may make. The request body (which holds the secret) is never copied into the
+// error.
+export async function postTestCredential(
+  body: CredentialTestRequest,
+): Promise<CredentialTestResult> {
+  try {
+    const res = await api.POST("/api/registries/test", { body });
+    if (!res.data) {
+      const problem = readProblem(res.error, res.response);
+      throw new CredentialRequestError(problem.status, problem.type, problem.fields, "POST");
+    }
+    return res.data;
+  } catch (e) {
+    throw e instanceof CredentialRequestError
+      ? e
+      : new CredentialRequestError(0, undefined, [], "POST");
+  }
+}
+
+// useTestCredential is the mutation behind the sheet's Test credential. It writes nothing
+// to the list, so it invalidates nothing; the variables hold the secret that was typed, so the
+// cache lets go of them at once.
+export function useTestCredential() {
+  return useMutation<CredentialTestResult, CredentialRequestError, CredentialTestRequest>({
+    mutationFn: (body) => postTestCredential(body),
+    retry: false,
+    gcTime: 0,
   });
 }

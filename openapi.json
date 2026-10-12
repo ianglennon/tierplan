@@ -1993,6 +1993,71 @@
         ],
         "type": "object"
       },
+      "CredentialTestRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "description": "The registry host, as when adding; 422 host_required or host_invalid",
+            "maxLength": 512,
+            "type": "string"
+          },
+          "prefix": {
+            "description": "The namespace the credential covers. Recorded with the test; it does not change what is tried",
+            "maxLength": 512,
+            "type": "string"
+          },
+          "secret": {
+            "description": "The password or token to try. It is used for this one test, never stored by it, and never returned or recorded. 422 secret_required when there is none to try",
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "testRepository": {
+            "description": "A repository to try to read with the sign-in, like acme/app. Without one, the last step is not checked. 422 test_repository_invalid",
+            "maxLength": 512,
+            "type": "string"
+          },
+          "type": {
+            "description": "dockerhub, ghcr, gitlab or generic, as when adding; 422 type_invalid",
+            "maxLength": 32,
+            "type": "string"
+          },
+          "username": {
+            "description": "The registry user name; 422 username_required",
+            "maxLength": 512,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "CredentialTestResultBody": {
+        "additionalProperties": false,
+        "properties": {
+          "canPull": {
+            "$ref": "#/components/schemas/TestStepBody",
+            "description": "Whether the sign-in can read the test repository. not_checked without one"
+          },
+          "reachable": {
+            "$ref": "#/components/schemas/TestStepBody",
+            "description": "Whether the registry answered"
+          },
+          "signedIn": {
+            "$ref": "#/components/schemas/TestStepBody",
+            "description": "Whether it accepted the sign-in. not_checked with no_login_asked when the registry asks for no login"
+          },
+          "testedAt": {
+            "description": "When the test ran",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reachable",
+          "signedIn",
+          "canPull",
+          "testedAt"
+        ],
+        "type": "object"
+      },
       "DeleteUserInputBody": {
         "additionalProperties": false,
         "properties": {
@@ -6401,6 +6466,29 @@
         "required": [
           "id",
           "name"
+        ],
+        "type": "object"
+      },
+      "TestStepBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "Why, as a stable code: registry_unreachable, registry_tls, registry_http, sign_in_refused, no_login_asked, no_pull_access, repository_not_found, rate_limited or check_failed. Empty when there is nothing to say. No text from the registry is ever returned",
+            "type": "string"
+          },
+          "state": {
+            "description": "passed, failed, or not_checked when the step did not apply or an earlier step failed",
+            "enum": [
+              "passed",
+              "failed",
+              "not_checked"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "code"
         ],
         "type": "object"
       },
@@ -12680,6 +12768,55 @@
           }
         },
         "summary": "Add an instance registry credential",
+        "tags": [
+          "registries"
+        ]
+      }
+    },
+    "/api/registries/test": {
+      "post": {
+        "description": "Runs the registry's own flow from the Bayplan server in three steps and reports each one: whether the registry answers, whether it accepts the sign-in, and, when a test repository is given, whether the sign-in can read it. Works on values that are not saved. A 401 to the unauthenticated ping counts as reachable; a refused sign-in is reported as refused whether the registry says 401 or 403; a registry that asks for no login reports signed in as not_checked. Each step is a state and a code, never text from the registry. The server refuses link-local, unspecified and multicast addresses (cloud metadata included) after DNS, allows private and loopback ranges, and refuses redirects to plain HTTP or local URLs. Needs registries.instance. At most 10 tests a minute per user across both families: 429 rate_limited. 422 validation_failed names the fields at fault with the codes of adding a credential, and test_repository_invalid. Audited as registry.credential_tested with each step's result, never the secret.",
+        "operationId": "testInstanceCredential",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialTestResultBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Test a registry sign-in from the server",
         "tags": [
           "registries"
         ]

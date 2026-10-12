@@ -249,6 +249,50 @@
         "generic": "Couldn't check the credential. Try again.",
         "permission": "You no longer have permission to do that. Your access may have changed."
       }
+    },
+    "test": {
+      "title": "Test",
+      "repository": {
+        "label": "Test repository (optional)",
+        "placeholder": "acme/app",
+        "helper": "A repository this credential should be able to pull. Checks pull access, which catches a token missing a scope.",
+        "invalid": "Enter a repository like acme/app."
+      },
+      "button": "Test credential",
+      "pending": "Testing…",
+      "needSecret": "Enter a secret.",
+      "steps": {
+        "reachable": "Registry reachable",
+        "signedIn": "Signed in",
+        "canPull": "Can pull {{repo}}",
+        "canPullNone": "Can pull a test repository"
+      },
+      "states": {
+        "passed": "Passed",
+        "failed": "Failed",
+        "not_checked": "Not checked"
+      },
+      "passed": "Test passed",
+      "failed": "Test failed: {{reason}}",
+      "stale": "Result is for the earlier values",
+      "warning": "The last test failed. You can still save this credential.",
+      "ghcrHint": "GitHub may refuse a token until it names a repository. Add a test repository and test again.",
+      "reasons": {
+        "registry_unreachable": "Couldn't reach {{host}}. Check the address, DNS and firewall.",
+        "registry_tls": "The certificate from {{host}} isn't trusted. Add the registry's CA under Advanced.",
+        "registry_http": "{{host}} answered, but not like a Docker registry.",
+        "sign_in_refused": "{{host}} refused this username and secret.",
+        "no_login_asked": "{{host}} asks for no login, so there was nothing to sign in to.",
+        "no_pull_access": "Signed in, but this credential can't pull {{repo}}. Check its scopes.",
+        "repository_not_found": "{{host}} has no repository {{repo}}.",
+        "rate_limited": "{{host}} is limiting requests. Try again in a moment.",
+        "check_failed": "The test couldn't finish. Try again."
+      },
+      "errors": {
+        "rateLimited": "Too many tests. Wait a minute and try again.",
+        "permission": "You no longer have permission to do that. Your access may have changed.",
+        "generic": "Couldn't run the test. Try again."
+      }
     }
   }
 }

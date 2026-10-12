@@ -103,6 +103,7 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "registry.credential_created",
   "registry.credential_updated",
   "registry.credential_deleted",
+  "registry.credential_tested",
   "logs.viewed",
   "logs.downloaded",
   "shell.opened",
