@@ -6,6 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
+import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   ImageList,
@@ -38,6 +39,8 @@ let changes: ImageSearchPatch[];
 let body: Record<string, unknown>;
 let listAnswer: () => Response | Promise<Response>;
 let readOnlyNodes: boolean;
+let posts: { bulkId?: string; targets: { nodeId: string; imageId: string }[] }[];
+let removeAnswer: (call: number) => Response;
 
 const holder = (nodeId: string, containers = 0): Holder => ({
   nodeId,
@@ -81,6 +84,8 @@ beforeEach(() => {
   me = makeMe({ envs: { [ENV]: "admin" } });
   swarmEnv = false;
   readOnlyNodes = false;
+  posts = [];
+  removeAnswer = () => Response.json({ results: [] });
   urls = [];
   search = {};
   changes = [];
@@ -98,6 +103,15 @@ beforeEach(() => {
       const url = new URL(req.url);
       urls.push(url.pathname + url.search);
       if (url.pathname === "/api/me") return Response.json(me);
+      if (url.pathname === `/api/env/${ENV}/images/remove`) {
+        const sentBody = await req.clone().json();
+        posts.push(sentBody);
+        const answer = removeAnswer(posts.length);
+        if (answer.status !== 200) return answer;
+        return Response.json({
+          results: sentBody.targets.map((t: object) => ({ ...t, result: "done" })),
+        });
+      }
       if (url.pathname === `/api/env/${ENV}/images`) return listAnswer();
       if (url.pathname === `/api/env/${ENV}/images/pull-targets`) {
         return Response.json({
@@ -127,6 +141,7 @@ function mount() {
       <TestRouter>
         <TooltipProvider>
           <ImageList envId={ENV} search={search} onSearchChange={(patch) => changes.push(patch)} />
+          <Toaster />
         </TooltipProvider>
       </TestRouter>
     </QueryClientProvider>,
@@ -172,7 +187,7 @@ describe("ImageList columns", () => {
     mount();
     await screen.findByText("nginx:1.27");
     const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
-    expect(heads).toEqual(["Image", "Image ID", "Used by", "Size", "Created", "Actions"]);
+    expect(heads).toEqual(["", "Image", "Image ID", "Used by", "Size", "Created", "Actions"]);
   });
 
   it("shows the first tag with +n and the rest in a tooltip, and Untagged with a Dangling badge", async () => {
@@ -221,7 +236,7 @@ describe("ImageList columns", () => {
     mount();
     const long = await screen.findByText(/very-long/);
     expect(long.className).toContain("truncate");
-    const head = screen.getAllByRole("columnheader")[0] as HTMLElement;
+    const head = screen.getAllByRole("columnheader")[1] as HTMLElement;
     expect(head.className).toContain("min-w-[240px]");
   });
 });
@@ -237,7 +252,16 @@ describe("ImageList on a swarm", () => {
     expect(await screen.findByRole("button", { name: "on 2/3 nodes" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "on all 3 nodes" })).toBeTruthy();
     const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
-    expect(heads).toEqual(["Image", "Image ID", "Nodes", "Used by", "Size", "Created", "Actions"]);
+    expect(heads).toEqual([
+      "",
+      "Image",
+      "Image ID",
+      "Nodes",
+      "Used by",
+      "Size",
+      "Created",
+      "Actions",
+    ]);
   });
 
   it("opens a popover with every node, its container count, and Missing where it has none", async () => {
@@ -290,7 +314,16 @@ describe("ImageList on a swarm", () => {
     mount();
     await screen.findAllByText("nginx:1.27");
     const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
-    expect(heads).toEqual(["Image", "Image ID", "Node", "Used by", "Size", "Created", "Actions"]);
+    expect(heads).toEqual([
+      "",
+      "Image",
+      "Image ID",
+      "Node",
+      "Used by",
+      "Size",
+      "Created",
+      "Actions",
+    ]);
     expect(screen.getAllByRole("row")).toHaveLength(3);
     expect(screen.getByText("node-2")).toBeTruthy();
   });
@@ -557,5 +590,166 @@ describe("imageSearchSchema", () => {
     expect(imageSearchSchema.parse({ view: "merged" }).view).toBeUndefined();
     expect(imageSearchSchema.parse({ view: "sideways" }).view).toBeUndefined();
     expect(imageSearchSchema.parse({ q: "" }).q).toBeUndefined();
+  });
+});
+
+// Deleting dangling images in bulk (plan 05-17, RES-09, D-17).
+describe("ImageList bulk delete of dangling images", () => {
+  const dangling = (c: string, extra: Record<string, unknown> = {}) =>
+    image(c, { repoTags: ["<none>"], dangling: true, ...extra });
+  const bulkBody = () =>
+    list([
+      image("a", { repoTags: ["nginx:1.27"] }),
+      dangling("b"),
+      dangling("c"),
+      dangling("d", { usedByContainers: 1, nodes: [holder("node-1-id", 1)] }),
+      dangling("e"),
+    ]);
+  const boxOf = async (id: string) => {
+    const r = (await screen.findByText(`${id.repeat(12)}`)).closest("tr") as HTMLElement;
+    return within(r).getByRole("checkbox");
+  };
+
+  it("adds a checkbox column whose header is named Select all dangling images", async () => {
+    body = bulkBody();
+    mount();
+    await boxOf("b");
+    expect(screen.getByRole("checkbox", { name: "Select all dangling images" })).toBeTruthy();
+    expect(screen.getAllByRole("checkbox")).toHaveLength(6);
+  });
+
+  it("lets only dangling, unused rows be ticked and says why on the others", async () => {
+    body = bulkBody();
+    mount();
+    const named = await boxOf("a");
+    fireEvent.click(named);
+    expect(named.getAttribute("aria-checked")).toBe("false");
+    const used = await boxOf("d");
+    fireEvent.click(used);
+    expect(used.getAttribute("aria-checked")).toBe("false");
+    fireEvent.focus(named);
+    expect(
+      (
+        await screen.findAllByText(
+          "Only dangling images can be deleted in bulk. Open an image to remove it.",
+        )
+      ).length,
+    ).toBeGreaterThan(0);
+    fireEvent.focus(used);
+    expect((await screen.findAllByText("In use, so it can't be removed.")).length).toBeGreaterThan(
+      0,
+    );
+    expect(screen.queryByText(/selected/)).toBeNull();
+  });
+
+  it("shows the bulk bar with the count, Remove… and Clear selection once a row is ticked", async () => {
+    body = bulkBody();
+    mount();
+    fireEvent.click(await boxOf("b"));
+    const bar = await screen.findByRole("toolbar", { name: "Bulk actions" });
+    expect(within(bar).getByText("1 selected")).toBeTruthy();
+    expect(within(bar).getByRole("button", { name: "Remove…" })).toBeTruthy();
+    fireEvent.click(within(bar).getByRole("button", { name: "Clear selection" }));
+    await waitFor(() => expect(screen.queryByRole("toolbar", { name: "Bulk actions" })).toBeNull());
+  });
+
+  it("makes the header checkbox tri-state over the selectable rows", async () => {
+    body = bulkBody();
+    mount();
+    const all = await screen.findByRole("checkbox", { name: "Select all dangling images" });
+    fireEvent.click(await boxOf("b"));
+    await waitFor(() => expect(all.getAttribute("aria-checked")).toBe("mixed"));
+    fireEvent.click(all);
+    await waitFor(() => expect(all.getAttribute("aria-checked")).toBe("true"));
+    expect(screen.getByText("3 selected")).toBeTruthy();
+    fireEvent.click(all);
+    await waitFor(() => expect(all.getAttribute("aria-checked")).toBe("false"));
+  });
+
+  it("selects a range with Shift+click and clears with Escape", async () => {
+    body = bulkBody();
+    mount();
+    fireEvent.click(await boxOf("b"));
+    fireEvent.click(await boxOf("e"), { shiftKey: true });
+    expect(await screen.findByText("3 selected")).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole("table"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByText("3 selected")).toBeNull());
+  });
+
+  it("deletes the selection in one confirm and sends each image on its node", async () => {
+    body = bulkBody();
+    mount();
+    fireEvent.click(await boxOf("b"));
+    fireEvent.click(await boxOf("c"));
+    fireEvent.click(screen.getByRole("button", { name: "Remove…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Delete 2 images?")).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete 2 images" }));
+    expect(await screen.findByText("Deleted 2 images.")).toBeTruthy();
+    expect(posts).toHaveLength(1);
+    expect(posts[0]?.targets).toEqual([
+      { nodeId: "node-1-id", imageId: ID("b") },
+      { nodeId: "node-1-id", imageId: ID("c") },
+    ]);
+    await waitFor(() => expect(screen.queryByRole("toolbar", { name: "Bulk actions" })).toBeNull());
+  });
+
+  it("marks the targeted rows Removing… with their checkbox and menu disabled until the list changes", async () => {
+    body = bulkBody();
+    mount();
+    fireEvent.click(await boxOf("b"));
+    fireEvent.click(screen.getByRole("button", { name: "Remove…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete 1 image" }));
+    const r = (await screen.findByText("b".repeat(12))).closest("tr") as HTMLElement;
+    await waitFor(() => expect(within(r).getByText("Removing…")).toBeTruthy());
+    expect(within(r).getByRole("checkbox").hasAttribute("disabled")).toBe(true);
+    expect(
+      within(r)
+        .getByRole("button", { name: /Actions for/ })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("holds new rows behind a pill while rows are selected", async () => {
+    body = bulkBody();
+    mount();
+    fireEvent.click(await boxOf("b"));
+    body = list([...(bulkBody().items as unknown[]), dangling("f")]);
+    await act(async () => {
+      await client.invalidateQueries();
+    });
+    expect(await screen.findByText("1 change waiting")).toBeTruthy();
+    expect(screen.queryByText("f".repeat(12))).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show changes" }));
+    expect(await screen.findByText("f".repeat(12))).toBeTruthy();
+  });
+
+  it("offers Select all {n} once every visible row is selected and more dangling images exist", async () => {
+    const shown = [dangling("b"), dangling("c")];
+    body = list(shown, { danglingCount: 4, total: 2, unfilteredTotal: 2, truncated: true });
+    listAnswer = () => Response.json(body);
+    mount();
+    await boxOf("b");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all dangling images" }));
+    const bar = await screen.findByRole("toolbar", { name: "Bulk actions" });
+    listAnswer = () =>
+      Response.json(list([...shown, dangling("f"), dangling("g")], { danglingCount: 4 }));
+    fireEvent.click(within(bar).getByRole("button", { name: "Select all 4" }));
+    expect(await screen.findByText("4 selected")).toBeTruthy();
+    expect(urls.some((u) => u.includes("dangling=true"))).toBe(true);
+    expect(screen.queryByRole("button", { name: "Select all 4" })).toBeNull();
+  });
+
+  it("disables Remove… with the reason for a viewer", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    body = bulkBody();
+    mount();
+    fireEvent.click(await boxOf("b"));
+    const bar = await screen.findByRole("toolbar", { name: "Bulk actions" });
+    const remove = within(bar).getByRole("button", { name: "Remove…" });
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(remove);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 });

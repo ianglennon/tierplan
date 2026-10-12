@@ -252,6 +252,37 @@
     },
     "menu": {
       "pull": "Pull again…"
+    },
+    "bulk": {
+      "remove": "Remove…",
+      "selectAll": "Select all dangling images",
+      "notDangling": "Only dangling images can be deleted in bulk. Open an image to remove it.",
+      "inUse": "In use, so it can't be removed.",
+      "title_one": "Delete {{count}} image?",
+      "title_other": "Delete {{count}} images?",
+      "body": "Dangling images have no name. Ones you built here can't be pulled again.",
+      "label": "Images to delete",
+      "column": "Image",
+      "cancel": "Cancel",
+      "confirm_one": "Delete {{count}} image",
+      "confirm_other": "Delete {{count}} images",
+      "pending": "Deleting…",
+      "done_one": "Deleted {{count}} image.",
+      "done_other": "Deleted {{count}} images.",
+      "partial": "Removed {{done}}, {{failed}} failed",
+      "partialSkipped": "Removed {{done}}, {{failed}} failed, {{skipped}} skipped",
+      "skippedOnly": "Deleted {{done}}, {{skipped}} skipped",
+      "skippedNote": "In use, skipped",
+      "skipped": "{{name}} is in use or has a name, so it was skipped. Open the image to see why.",
+      "gone": "{{name}} is already gone.",
+      "changes_one": "{{count}} change waiting",
+      "changes_other": "{{count}} changes waiting",
+      "showChanges": "Show changes",
+      "selectEvery": "Couldn't read the dangling images. Try again.",
+      "results": {
+        "title": "Delete results",
+        "image": "Image"
+      }
     }
   }
 }
