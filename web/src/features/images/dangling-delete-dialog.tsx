@@ -92,7 +92,9 @@ interface DanglingDeleteDialogProps {
 // on one plain confirmation (no typed phrase: an image can be pulled again, and the body says
 // the ones built here cannot). The TargetList names every image and node. A copy something
 // uses is muted with "In use, skipped" and not sent; the server refuses a named or used one
-// whatever is sent (T-05-58). Focus starts on Cancel, the dialog cannot be dismissed while the
+// whatever is sent (T-05-58). The send goes out in chunks of BULK_CHUNK (25) sharing one bulk ID
+// (useRemoveImages does the chunking), and the report Details opens is the list's
+// BulkResultDialog. Focus starts on Cancel, the dialog cannot be dismissed while the
 // request is out, and a refusal of the whole request stays inside it. Otherwise it closes and
 // one toast sums up: "Deleted {n} images.", or what was removed, failed and skipped with
 // Details that open the results.
