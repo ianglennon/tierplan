@@ -74,6 +74,7 @@ import {
   useManageReason,
 } from "@/features/registries/credential-table";
 import { hostAfterTypeChange, PRESETS, presetFor } from "@/features/registries/presets";
+import { secretDestinationChanged } from "@/features/registries/secret-destination";
 import { TestFromEnv } from "@/features/registries/test-from-env";
 import { TestResult } from "@/features/registries/test-result";
 import { hasPermission, useMe } from "@/hooks/use-me";
@@ -113,8 +114,10 @@ function today(): string {
 
 // Messages are i18n keys, never literals (D-65). When a credential is edited the secret is
 // optional (empty keeps the stored one) and an expiry day it already has is not checked
-// against today, so a credential that has expired can still be corrected.
-function makeSchema(editing: boolean, keepExpires: string) {
+// against today, so a credential that has expired can still be corrected. The one exception
+// to an optional secret: when the form points the stored secret somewhere else (see
+// secretDestinationChanged) a freshly typed one is required (CR-C01).
+function makeSchema(editing: boolean, keepExpires: string, stored?: Credential) {
   return z
     .object({
       scope: z.string(),
@@ -146,6 +149,19 @@ function makeSchema(editing: boolean, keepExpires: string) {
       if (v.username.trim() === "") issue("username", "username_required");
       if (!editing && v.secret.trim() === "") issue("secret", "secret_required");
       if (editing && v.secret !== "" && v.secret.trim() === "") issue("secret", "secret_required");
+      if (
+        stored &&
+        v.secret.trim() === "" &&
+        secretDestinationChanged(stored, {
+          type: v.type,
+          host: presetFor(v.type).hostEditable ? v.host : presetFor(v.type).host,
+          username: v.username,
+          caPem: v.caPem,
+          insecure: v.insecure,
+        })
+      ) {
+        issue("secret", "secret_required");
+      }
       if (
         v.expires !== "" &&
         v.expires !== keepExpires &&
@@ -363,7 +379,10 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
   const queryClient = useQueryClient();
   const editing = credential !== undefined;
   const defaults = useMemo(() => (credential ? valuesOf(credential) : DEFAULTS), [credential]);
-  const schema = useMemo(() => makeSchema(editing, defaults.expires), [editing, defaults.expires]);
+  const schema = useMemo(
+    () => makeSchema(editing, defaults.expires, credential),
+    [editing, defaults.expires, credential],
+  );
   const create = useCreateCredential();
   const update = useUpdateCredential();
   const [refusal, setRefusal] = useState<Refusal | null>(null);
@@ -405,8 +424,21 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
   const latestTestKey = useRef(testKey);
   latestTestKey.current = testKey;
   const stale = tested !== null && tested.key !== testKey;
-  // A saved credential can be tested on its stored secret; only a new one needs one typed.
-  const nothingToTest = !editing && watched[2].trim() === "";
+  // A saved credential can be tested on its stored secret, unless the form now points that
+  // secret somewhere else: then, as for a new credential, one has to be typed (CR-C01).
+  const destinationChanged =
+    credential !== undefined &&
+    secretDestinationChanged(credential, {
+      type,
+      host: effectiveHost,
+      username: watched[1],
+      caPem: watched[3],
+      insecure: watched[4],
+    });
+  const secretEmpty = watched[2].trim() === "";
+  // Edit mode only: a typed secret is required because the destination moved.
+  const secretRequired = destinationChanged && secretEmpty;
+  const nothingToTest = (!editing || destinationChanged) && secretEmpty;
   const storedFailed = tested === null && credential?.lastTest != null && !credential.lastTest.ok;
   const testFailed =
     storedFailed ||
@@ -452,6 +484,26 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
     else close();
   }
 
+  // placeFieldErrors shows each field a 422 names, with the server's stable code worded here
+  // (a secret_required on body.secret lands on the secret field). It answers whether any field
+  // took one; the caller then shows nothing else.
+  function placeFieldErrors(err: CredentialRequestError): boolean {
+    if (err.status !== 422) return false;
+    let placed = 0;
+    for (const f of err.fields) {
+      const field = f.location.replace(/^body\./, "") as keyof Values;
+      if ((FIELDS as readonly string[]).includes(field)) {
+        form.setError(field, { type: "server", message: `registries.sheet.errors.${f.message}` });
+        if (field === "caPem") setAdvanced(true);
+        placed += 1;
+      } else if (f.location === "body.testRepository") {
+        setTestRepositoryInvalid(true);
+        placed += 1;
+      }
+    }
+    return placed > 0;
+  }
+
   function refusalOf(err: CredentialRequestError): Refusal | null {
     const values = form.getValues();
     const layer = credential ? scopeValue(credential) : values.scope;
@@ -492,20 +544,7 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
         };
       }
     }
-    if (err.status === 422) {
-      // Every field at fault, named by the server with a stable code; the SPA words it.
-      let placed = 0;
-      for (const f of err.fields) {
-        const field = f.location.replace(/^body\./, "") as keyof Values;
-        const key = `registries.sheet.errors.${f.message}`;
-        if ((FIELDS as readonly string[]).includes(field)) {
-          form.setError(field, { type: "server", message: key });
-          if (field === "caPem") setAdvanced(true);
-          placed += 1;
-        }
-      }
-      if (placed > 0) return null;
-    }
+    if (placeFieldErrors(err)) return null;
     if (err.status === 403) return { message: t("registries.sheet.errors.permission") };
     return { message: t("registries.sheet.errors.generic") };
   }
@@ -610,21 +649,7 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
           if (latestTestKey.current === key) setTested({ result, key });
         },
         onError: (err) => {
-          if (err.status === 422) {
-            for (const f of err.fields) {
-              const name = f.location.replace(/^body\./, "") as keyof Values;
-              if ((FIELDS as readonly string[]).includes(name)) {
-                form.setError(name, {
-                  type: "server",
-                  message: `registries.sheet.errors.${f.message}`,
-                });
-                if (name === "caPem") setAdvanced(true);
-              } else if (f.location === "body.testRepository") {
-                setTestRepositoryInvalid(true);
-              }
-            }
-            return;
-          }
+          if (placeFieldErrors(err)) return;
           setTestError(
             err.status === 429
               ? t("registries.test.errors.rateLimited")
@@ -669,7 +694,13 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
             >
               {t("registries.sheet.cancel")}
             </Button>
-            <Button type="submit" form={`${ids}-form`} className={TOUCH_HEIGHT} disabled={pending}>
+            <Button
+              type="submit"
+              form={`${ids}-form`}
+              className={TOUCH_HEIGHT}
+              disabled={pending || secretRequired}
+              aria-describedby={secretRequired ? `${ids}-secret-why` : undefined}
+            >
               {pending ? (
                 <>
                   <Spinner aria-hidden="true" />
@@ -875,7 +906,7 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
                           : t("registries.sheet.secret.keepStored")
                         : undefined
                     }
-                    {...errorProps("secret")}
+                    {...errorProps("secret", secretRequired ? `${ids}-secret-why` : undefined)}
                     {...form.register("secret")}
                   />
                   <InputGroupAddon align="inline-end">
@@ -894,6 +925,11 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
                     </InputGroupButton>
                   </InputGroupAddon>
                 </InputGroup>
+                {secretRequired ? (
+                  <FieldDescription id={`${ids}-secret-why`}>
+                    {t("registries.sheet.secret.retype")}
+                  </FieldDescription>
+                ) : null}
                 {errors.secret ? (
                   <FieldError id={`${ids}-secret-error`}>{errorOf("secret")}</FieldError>
                 ) : null}
@@ -1003,6 +1039,7 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
                     prepare={testRequest}
                     repository={testRepository}
                     needsSecret={nothingToTest}
+                    onFieldErrors={placeFieldErrors}
                     credentialEnvId={
                       credential ? (credential.scope.envId ?? undefined) : envOfScope(scope)
                     }

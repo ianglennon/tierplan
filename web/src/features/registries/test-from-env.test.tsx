@@ -6,7 +6,11 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
-import type { CredentialTestFromEnvRequest, CredentialTestFromEnvResult } from "@/api/registries";
+import type {
+  CredentialRequestError,
+  CredentialTestFromEnvRequest,
+  CredentialTestFromEnvResult,
+} from "@/api/registries";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TestFromEnv } from "@/features/registries/test-from-env";
 import "@/i18n";
@@ -107,6 +111,7 @@ function mount(
   over: Partial<{
     repository: string;
     needsSecret: boolean;
+    onFieldErrors: (err: CredentialRequestError) => boolean;
     credentialEnvId: string;
     prepare: () => Promise<CredentialTestFromEnvRequest | null>;
   }> = {},
@@ -120,6 +125,7 @@ function mount(
             prepare={prepare}
             repository={over.repository ?? "private/app"}
             needsSecret={over.needsSecret ?? false}
+            onFieldErrors={over.onFieldErrors}
             credentialEnvId={over.credentialEnvId}
           />
         </TooltipProvider>
@@ -195,6 +201,31 @@ describe("TestFromEnv", () => {
     expect(
       screen.getByText(/^Runs on alpha through its agent, so it also catches firewall, DNS/),
     ).toBeTruthy();
+  });
+
+  it("hands a 422 that names a field to the sheet and shows nothing of its own", async () => {
+    answer = () =>
+      Response.json(
+        {
+          title: "Unprocessable",
+          status: 422,
+          type: "validation_failed",
+          errors: [{ location: "body.secret", message: "secret_required", value: "" }],
+        },
+        { status: 422 },
+      );
+    const onFieldErrors = vi.fn((_err: CredentialRequestError) => true);
+    mount({ onFieldErrors });
+    await open();
+    await waitFor(() => expect(runButton().textContent).toBe("Run test from Lab"));
+    fireEvent.click(runButton());
+    await waitFor(() => expect(onFieldErrors).toHaveBeenCalledOnce());
+    const err = onFieldErrors.mock.calls[0]?.[0] as CredentialRequestError;
+    expect(err.status).toBe(422);
+    expect(err.fields.map((f) => [f.location, f.message])).toEqual([
+      ["body.secret", "secret_required"],
+    ]);
+    expect(screen.queryByText("Couldn't run the test. Try again.")).toBeNull();
   });
 
   it("sends nothing while the sheet's values are not valid", async () => {

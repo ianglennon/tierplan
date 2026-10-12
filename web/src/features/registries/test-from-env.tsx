@@ -37,6 +37,9 @@ interface TestFromEnvProps {
   repository: string;
   // True while there is no secret to try: a new credential with none typed.
   needsSecret: boolean;
+  // Called with a refusal that names form fields (422), so the sheet can show them where they
+  // belong; answers true when it did, and the popover then shows nothing of its own.
+  onFieldErrors?: (err: CredentialRequestError) => boolean;
   // The environment the credential belongs to, absent for an instance credential. Such a
   // credential is tested from its own environment only, through the environment's routes.
   credentialEnvId?: string;
@@ -75,6 +78,7 @@ export function TestFromEnv({
   prepare,
   repository,
   needsSecret,
+  onFieldErrors,
   credentialEnvId,
 }: TestFromEnvProps) {
   const t = useT();
@@ -128,7 +132,11 @@ export function TestFromEnv({
       { body: { ...body, repository: repository.trim() }, runEnvId: envId, credentialEnvId },
       {
         onSuccess: (result) => setOutcome({ kind: "result", result, envId }),
-        onError: (err: CredentialRequestError) =>
+        onError: (err: CredentialRequestError) => {
+          if (onFieldErrors?.(err)) {
+            setOpen(false);
+            return;
+          }
           setOutcome({
             kind: "error",
             message:
@@ -143,7 +151,8 @@ export function TestFromEnv({
                         node: environment?.name ?? "",
                       }).text
                     : t("registries.test.errors.generic"),
-          }),
+          });
+        },
       },
     );
   }

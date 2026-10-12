@@ -534,15 +534,15 @@ describe("CredentialSheet edit mode", () => {
   it("saves a changed username without sending the secret, toasts and closes", async () => {
     mount("edit", "c1");
     await screen.findByText("Edit ghcr-acme");
-    type("Username", "deploy2");
+    type("Name", "ghcr-renamed");
     saveChanges();
     await waitFor(() => expect(closed).toBe(1));
     expect(patched).toEqual([
       {
-        name: "ghcr-acme",
+        name: "ghcr-renamed",
         type: "ghcr",
         prefix: "acme",
-        username: "deploy2",
+        username: "deploy",
         hubFallback: false,
         expires: "",
         caPem: "",
@@ -604,6 +604,127 @@ describe("CredentialSheet edit mode", () => {
     await screen.findByText("Edit ghcr-acme");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(closed).toBe(1));
+  });
+});
+
+describe("CredentialSheet edit mode, a changed destination (CR-C01)", () => {
+  const saveButton = () =>
+    screen.getByRole("button", { name: "Save changes" }) as HTMLButtonElement;
+  const testButton = () =>
+    screen.getByRole("button", { name: "Test credential" }) as HTMLButtonElement;
+  const WHY = /Type the secret again/;
+  const PEM = "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ0\n-----END CERTIFICATE-----";
+  const switchEl = () =>
+    screen.getByRole("switch", { name: "Allow plain HTTP or skip TLS verification" });
+
+  const open = async (extra: Record<string, unknown> = {}) => {
+    stored = credential({
+      type: "generic",
+      host: "registry.lan:5000",
+      caPem: PEM,
+      hasCa: true,
+      insecure: true,
+      ...extra,
+    });
+    mount("edit", "c1");
+    await screen.findByText("Edit ghcr-acme");
+  };
+
+  it("asks for nothing when no field that sets the destination changed", async () => {
+    await open();
+    expect(screen.queryByText(WHY)).toBeNull();
+    expect(saveButton().disabled).toBe(false);
+    expect(testButton().disabled).toBe(false);
+  });
+
+  it.each([
+    ["the host", () => type("Registry", "other.lan:5000")],
+    ["the username", () => type("Username", "someone-else")],
+    [
+      "the CA",
+      () =>
+        fireEvent.change(screen.getByLabelText("Custom CA certificate (PEM)"), {
+          target: { value: "" },
+        }),
+    ],
+    ["the insecure switch", () => fireEvent.click(switchEl())],
+  ])(
+    "says why, blocks Save and Test, and unblocks both once a secret is typed after %s changed",
+    async (_name, change) => {
+      await open();
+      change();
+      expect(await screen.findByText(WHY)).toBeTruthy();
+      expect(field("New secret (optional)").getAttribute("aria-describedby")).toContain(
+        "secret-why",
+      );
+      expect(saveButton().disabled).toBe(true);
+      expect(testButton().disabled).toBe(true);
+      expect(screen.getByText("Enter a secret.")).toBeTruthy();
+      type("New secret (optional)", SECRET);
+      expect(screen.queryByText(WHY)).toBeNull();
+      expect(saveButton().disabled).toBe(false);
+      expect(testButton().disabled).toBe(false);
+    },
+  );
+
+  it("needs the secret again when the type changes", async () => {
+    await open();
+    choose("GHCR");
+    expect(await screen.findByText(WHY)).toBeTruthy();
+    expect(saveButton().disabled).toBe(true);
+  });
+
+  it("does not ask when the changed field is put back", async () => {
+    await open();
+    type("Registry", "other.lan:5000");
+    await screen.findByText(WHY);
+    type("Registry", "registry.lan:5000");
+    expect(screen.queryByText(WHY)).toBeNull();
+    expect(saveButton().disabled).toBe(false);
+  });
+
+  it("sends the typed secret with the changed host", async () => {
+    await open();
+    type("Registry", "other.lan:5000");
+    type("New secret (optional)", SECRET);
+    saveButton().click();
+    await waitFor(() => expect(patched).toHaveLength(1));
+    expect(patched[0]).toMatchObject({ host: "other.lan:5000", secret: SECRET });
+  });
+
+  it("shows the server's secret_required on the secret field", async () => {
+    patchStatus = 422;
+    patchBody = {
+      title: "Unprocessable",
+      status: 422,
+      type: "validation_failed",
+      errors: [{ location: "body.secret", message: "secret_required", value: "" }],
+    };
+    await open();
+    type("Name", "renamed");
+    saveButton().click();
+    await waitFor(() => expect(patched).toHaveLength(1));
+    await waitFor(() =>
+      expect(field("New secret (optional)").getAttribute("aria-invalid")).toBe("true"),
+    );
+    expect(screen.getByText("Enter a secret.")).toBeTruthy();
+    expect(closed).toBe(0);
+  });
+
+  it("shows the server's secret_required from a test on the secret field", async () => {
+    testStatus = 422;
+    testBody = {
+      title: "Unprocessable",
+      status: 422,
+      type: "validation_failed",
+      errors: [{ location: "body.secret", message: "secret_required", value: "" }],
+    };
+    await open();
+    fireEvent.click(testButton());
+    await waitFor(() => expect(testSent).toHaveLength(1));
+    await waitFor(() =>
+      expect(field("New secret (optional)").getAttribute("aria-invalid")).toBe("true"),
+    );
   });
 });
 
@@ -685,7 +806,7 @@ describe("CredentialSheet conflicts", () => {
     patchBody = { title: "Forbidden", status: 403 };
     mount("edit", "c1");
     await screen.findByText("Edit ghcr-acme");
-    type("Username", "x");
+    type("Name", "x");
     saveChanges();
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("You no longer have permission to do that.");
@@ -809,11 +930,12 @@ describe("CredentialSheet of an environment credential", () => {
     await screen.findByText("Edit ghcr-acme");
     expect(screen.getByRole("combobox", { name: "Scope" }).textContent).toContain("Lab");
     type("Username", "deploy2");
+    type("New secret (optional)", SECRET);
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(closed).toBe(1));
     expect(patched).toEqual([]);
     expect(envPatched.map((p) => p.path)).toEqual(["/api/env/e1/registries/c1"]);
-    expect(envPatched[0]?.body).toMatchObject({ username: "deploy2" });
+    expect(envPatched[0]?.body).toMatchObject({ username: "deploy2", secret: SECRET });
   });
 
   it("gives a credential the user may only see a disabled Edit with the reason Needs Admin on {environment}", async () => {
@@ -1228,9 +1350,11 @@ describe("CredentialSheet Advanced (self-hosted registries)", () => {
     fireEvent.change(screen.getByLabelText("Custom CA certificate (PEM)"), {
       target: { value: "" },
     });
+    // Clearing the CA and switching verification back on move the secret's destination.
+    type("New secret (optional)", SECRET);
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(patched).toHaveLength(1));
-    expect(patched[0]).toMatchObject({ caPem: "", insecure: false });
+    expect(patched[0]).toMatchObject({ caPem: "", insecure: false, secret: SECRET });
   });
 
   it("tests with the CA and the switch as they stand in the form", async () => {
