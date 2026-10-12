@@ -166,6 +166,9 @@ type FakeConfig struct {
 	// PullStreamError makes a pull stream its progress and then an errorDetail with this
 	// message, as a classic image store does; empty means the pull succeeds.
 	PullStreamError string
+	// PullHold holds every pull, after it is recorded and before it answers, until the
+	// channel is closed or the caller gives up, so a test can look at a pull in progress.
+	PullHold <-chan struct{}
 }
 
 // FakePullStatus is an HTTP status and message a pull is answered with.

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -113,9 +114,21 @@ func (f *envFix) pullAudits(t *testing.T) []auditRowFull {
 	return out
 }
 
+// holdPulls returns a gate for FakeConfig.PullHold and a function that opens it. The gate
+// is opened when the test ends too, so no pull is left held.
+func holdPulls(t *testing.T) (gate <-chan struct{}, open func()) {
+	t.Helper()
+	ch := make(chan struct{})
+	var once sync.Once
+	open = func() { once.Do(func() { close(ch) }) }
+	t.Cleanup(open)
+	return ch, open
+}
+
 func TestPullJobOnTheLocalHostStreamsToDone(t *testing.T) {
-	// The write delay holds the pull back long enough for the stream to open first.
-	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", WriteDelay: 300 * time.Millisecond})
+	// The pull is held until the stream is open, so the item frames are always seen.
+	gate, release := holdPulls(t)
+	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", PullHold: gate})
 	rec := f.startPull(t, e, `{"ref":"busybox:1.36.1"}`)
 	if rec.code != http.StatusAccepted {
 		t.Fatalf("status = %d: %s", rec.code, rec.body)
@@ -135,6 +148,7 @@ func TestPullJobOnTheLocalHostStreamsToDone(t *testing.T) {
 	if first.event != "snapshot" || first.id != "" || json.Unmarshal([]byte(first.data), &snap) != nil || snap.ID != started.JobID || len(snap.Items) != 1 {
 		t.Fatalf("first frame = %+v, want the snapshot without an id", first)
 	}
+	release()
 
 	var last uint64
 	var items []pullItem
@@ -212,7 +226,8 @@ func TestPullOfAnImageTheNodeHasIsUpToDateAndStillAudited(t *testing.T) {
 }
 
 func TestPullRefusals(t *testing.T) {
-	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", WriteDelay: 1500 * time.Millisecond})
+	gate, _ := holdPulls(t)
+	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", PullHold: gate})
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
 	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
@@ -259,7 +274,7 @@ func TestPullRefusals(t *testing.T) {
 }
 
 func TestPullJobIsOnlyVisibleToItsOwner(t *testing.T) {
-	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", WriteDelay: 300 * time.Millisecond})
+	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
 	for _, name := range []string{"op1", "op2"} {
 		f.addUser(t, name, false)
 		f.addEnvRole(t, name, e.ID, "operator")
@@ -298,7 +313,7 @@ func TestPullJobIsOnlyVisibleToItsOwner(t *testing.T) {
 }
 
 func TestPullStateHoldsNoRegistryHeader(t *testing.T) {
-	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", WriteDelay: 200 * time.Millisecond})
+	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
 	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
 	secret := "c2VjcmV0LXJlZ2lzdHJ5LXRva2Vu" //nolint:gosec // a made-up value the test looks for, not a credential
 	rec := f.call(t, authReq{
@@ -419,7 +434,8 @@ func TestPullStreamResumesFromLastEventIDAndPingsAndEndsWhenSignedOut(t *testing
 }
 
 func TestPullStreamHeartbeatReauthorises(t *testing.T) {
-	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", WriteDelay: 2 * time.Second})
+	gate, _ := holdPulls(t)
+	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", PullHold: gate})
 	f.pullsHeartbeat = 20 * time.Millisecond
 	f.h = f.build(t)
 	f.cookie, f.csrf = f.signIn(t, "admin", false)
@@ -441,7 +457,8 @@ func TestPullStreamHeartbeatReauthorises(t *testing.T) {
 }
 
 func TestPullStreamsPerUserAreCapped(t *testing.T) {
-	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", WriteDelay: 1500 * time.Millisecond})
+	gate, _ := holdPulls(t)
+	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", PullHold: gate})
 	f.pullsMaxStreams = 2
 	f.h = f.build(t)
 	f.cookie, f.csrf = f.signIn(t, "admin", false)

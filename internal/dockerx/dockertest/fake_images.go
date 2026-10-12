@@ -38,6 +38,13 @@ func (f *Fake) serveImageCreate(w http.ResponseWriter, r *http.Request, p string
 		writeJSON(w, http.StatusForbidden, map[string]string{"message": "agent_policy_denied: " + r.Method + " " + r.URL.Path})
 		return true
 	}
+	if cfg.PullHold != nil {
+		select {
+		case <-cfg.PullHold:
+		case <-r.Context().Done():
+			return true
+		}
+	}
 	if cfg.PullStatus.Code != 0 {
 		writeJSON(w, cfg.PullStatus.Code, map[string]string{"message": cfg.PullStatus.Message})
 		return true
