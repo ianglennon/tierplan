@@ -83,3 +83,52 @@ updated through Bayplan.
 
 Credentials travel only with the request that needs them, over the connection to the
 node's agent, and are not written to logs, audit rows, job state or API responses.
+
+## Self-hosted registries
+
+A registry you run yourself, such as `registry:2`, Harbor or a GitLab registry on your own
+network, often has a certificate from your own certificate authority, or serves plain HTTP.
+Add it as a **Generic v2** credential (or **GitLab** with your own host), then open
+**Advanced** in the credential sheet.
+
+- **Custom CA certificate (PEM)**: paste the certificate authority that signed the
+  registry's certificate. Bayplan trusts it for this credential's calls only, in addition
+  to the system's own authorities. It is at most 64 KiB and must hold a certificate.
+- **Allow plain HTTP or skip TLS verification**: Bayplan first tries HTTPS without checking
+  the certificate and, only when the server answers plain HTTP, uses plain HTTP. This is the
+  way Docker's `insecure-registries` behaves. It is off by default, and the sheet warns
+  while it is on: anyone on the network path could read the credential. Use a CA instead
+  whenever you can.
+
+These two settings affect **only Bayplan's own calls**: the credential test and tag
+browsing. They do not change how a node pulls.
+
+### Each node needs its own setup
+
+A node pulls with its own Docker daemon, which does not know about Bayplan's settings. To
+pull from a registry with its own CA or without HTTPS, set up each node that will pull:
+
+- **A CA**: put the CA certificate at `/etc/docker/certs.d/<host:port>/ca.crt` on the node
+  (for example `/etc/docker/certs.d/registry.lan:5000/ca.crt`). No restart is needed.
+- **Plain HTTP or an untrusted certificate**: add the registry to `insecure-registries` in
+  the node's `/etc/docker/daemon.json` and restart Docker.
+
+Bayplan never edits daemon settings, never writes to `/etc/docker` and never runs
+`docker login`. When a node refuses a pull for a certificate or HTTPS reason, the pull
+panel says so and points here.
+
+### Registry mirrors are ignored
+
+Bayplan's own calls always go to the registry named in the credential. They ignore the
+registry mirrors set on your nodes (`registry-mirrors` in `daemon.json`) and any mirror
+setting of a Docker client. Node pulls still follow each node's own mirrors. To browse or
+test a mirror from Bayplan, add the mirror as its own **Generic v2** credential.
+
+### Limiting where the server connects
+
+The Bayplan server always refuses link-local (cloud metadata), unspecified and multicast
+addresses for registry calls, including on the plain HTTP fallback. It allows private and
+loopback addresses, because self-hosted registries live there. To refuse more, set
+`BAYPLAN_REGISTRY_BLOCK_CIDRS` to a comma-separated list of IPs or CIDRs, such as
+`10.9.0.0/16,fd00::/8`. An entry that is not an IP address or CIDR stops Bayplan at startup
+and names the entry.

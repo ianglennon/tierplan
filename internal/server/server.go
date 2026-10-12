@@ -667,7 +667,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	registryStore := registry.NewStore(st, vlt, nil)
 	resolver := registry.NewResolver(registryStore)
 	// Every call the server makes to a registry dials through one egress policy (T-05-38).
-	registryEgress := registry.NewEgressPolicy(nil)
+	registryEgress := registry.NewEgressPolicy(cfg.RegistryBlockCIDRs)
 	registryClients := registry.NewClientCache(registryEgress, buildinfo.Get().Version, log)
 	router := NewRouter(RouterDeps{
 		Options: httpx.Options{

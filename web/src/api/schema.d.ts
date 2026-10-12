@@ -1633,7 +1633,7 @@ export interface paths {
         put?: never;
         /**
          * Add an instance registry credential
-         * @description Stores a sign-in for a registry host and an optional namespace, used for pulls and tag browsing on every environment. The secret is sealed with the vault, included in backups and re-wrapped by key rotation, and never returned by any route afterwards: the answer carries only its last 4 characters, and only for a secret of 12 or more characters. Needs registries.instance, which only instance admins hold. 422 validation_failed names every field at fault with a stable code (name_required, name_invalid, type_invalid, host_required, host_invalid, prefix_invalid, username_required, secret_required, hub_prefix_required, hub_fallback_not_hub, expiry_invalid, expiry_past); 409 credential_name_taken, host_prefix_taken or hub_fallback_taken when another instance credential clashes; the 409 names that credential in its errors list (location conflict.credential). Audited as registry.credential_created without the secret.
+         * @description Stores a sign-in for a registry host and an optional namespace, used for pulls and tag browsing on every environment. The secret is sealed with the vault, included in backups and re-wrapped by key rotation, and never returned by any route afterwards: the answer carries only its last 4 characters, and only for a secret of 12 or more characters. Needs registries.instance, which only instance admins hold. 422 validation_failed names every field at fault with a stable code (name_required, name_invalid, type_invalid, host_required, host_invalid, prefix_invalid, username_required, secret_required, hub_prefix_required, hub_fallback_not_hub, expiry_invalid, expiry_past, ca_invalid); 409 credential_name_taken, host_prefix_taken or hub_fallback_taken when another instance credential clashes; the 409 names that credential in its errors list (location conflict.credential). Audited as registry.credential_created without the secret.
          */
         post: operations["createInstanceCredential"];
         delete?: never;
@@ -1653,7 +1653,7 @@ export interface paths {
         put?: never;
         /**
          * Test a registry sign-in from the server
-         * @description Runs the registry's own flow from the Bayplan server in three steps and reports each one: whether the registry answers, whether it accepts the sign-in, and, when a test repository is given, whether the sign-in can read it. Works on values that are not saved. A 401 to the unauthenticated ping counts as reachable; a refused sign-in is reported as refused whether the registry says 401 or 403; a registry that asks for no login reports signed in as not_checked. Each step is a state and a code, never text from the registry. The server refuses link-local, unspecified and multicast addresses (cloud metadata included) after DNS, allows private and loopback ranges, and refuses redirects to plain HTTP or local URLs. Needs registries.instance. At most 10 tests a minute per user across both families: 429 rate_limited. 422 validation_failed names the fields at fault with the codes of adding a credential, and test_repository_invalid. Audited as registry.credential_tested with each step's result, never the secret.
+         * @description Runs the registry's own flow from the Bayplan server in three steps and reports each one: whether the registry answers, whether it accepts the sign-in, and, when a test repository is given, whether the sign-in can read it. Works on values that are not saved. A 401 to the unauthenticated ping counts as reachable; a refused sign-in is reported as refused whether the registry says 401 or 403; a registry that asks for no login reports signed in as not_checked. Each step is a state and a code, never text from the registry. The server refuses link-local, unspecified and multicast addresses (cloud metadata included) after DNS, allows private and loopback ranges, and refuses redirects to plain HTTP or local URLs. Needs registries.instance. At most 10 tests a minute per user across both families: 429 rate_limited. 422 validation_failed names the fields at fault with the codes of adding a credential, ca_invalid and test_repository_invalid. caPem and insecure apply the credential's own CA and switch to this test only; the operator's BAYPLAN_REGISTRY_BLOCK_CIDRS ranges stay refused even with the switch on. Audited as registry.credential_tested with each step's result, never the secret.
          */
         post: operations["testInstanceCredential"];
         delete?: never;
@@ -3009,6 +3009,8 @@ export interface components {
             username: string;
         };
         CredentialBody: {
+            /** @description The custom certificate authority in PEM, public material, for people who may manage the credential; empty for everyone else and when there is none */
+            caPem: string;
             /** @description Whether the caller may change or delete it */
             canManage: boolean;
             /**
@@ -3021,12 +3023,16 @@ export interface components {
              * @description The end of the last day it is valid; null when it does not expire
              */
             expiresAt: string | null;
+            /** @description Whether the credential carries a custom certificate authority, whoever is asking */
+            hasCa: boolean;
             /** @description The registry host, lower case, with a port if it has one */
             host: string;
             /** @description Whether it is used for every Docker Hub pull no more specific credential matches */
             hubFallback: boolean;
             /** @description The credential's ID */
             id: string;
+            /** @description Whether Bayplan's own tests and tag browsing skip certificate verification and may use plain HTTP for this registry. Nodes are not affected */
+            insecure: boolean;
             /** @description The last 4 characters of the secret, or empty when the secret is shorter than 12 characters. The page shows •••• before it */
             last4: string;
             /** @description The last sign-in failure with it; null when there was none */
@@ -3066,12 +3072,16 @@ export interface components {
             items: components["schemas"]["CredentialBody"][] | null;
         };
         CredentialPatchRequest: {
+            /** @description A new custom certificate authority in PEM, or an empty string for none. 422 ca_invalid for more than 64 KiB or text that holds no certificate */
+            caPem?: string;
             /** @description A day, YYYY-MM-DD, or an empty string for none. 422 expiry_invalid, and expiry_past for a day that has gone (the credential's own unchanged day is never refused) */
             expires?: string;
             /** @description A new registry host. Ignored for dockerhub and ghcr; 422 host_required or host_invalid */
             host?: string;
             /** @description Whether it is used for every Docker Hub pull no more specific credential matches. Docker Hub only (422 hub_fallback_not_hub), one per layer (409 hub_fallback_taken) */
             hubFallback?: boolean;
+            /** @description Whether Bayplan's own tests and tag browsing skip certificate verification and may use plain HTTP for this registry */
+            insecure?: boolean;
             /** @description A new name, unique among the instance credentials. Same rules as when adding; 422 name_required or name_invalid */
             name?: string;
             /** @description A new namespace; an empty string covers the whole registry. 422 prefix_invalid, and hub_prefix_required for docker.io with neither a prefix nor hubFallback */
@@ -3084,12 +3094,16 @@ export interface components {
             username?: string;
         };
         CredentialRequest: {
+            /** @description An optional certificate authority, in PEM, that Bayplan's own tests and tag browsing trust for this registry. At most 64 KiB and it must hold a certificate: 422 ca_invalid. Public material, returned to people who may manage the credential. It never changes the server's trust store and does nothing on a node */
+            caPem?: string;
             /** @description An optional day, YYYY-MM-DD. It lasts to the end of that day, UTC. 422 expiry_invalid, and expiry_past for a day that has gone */
             expires?: string;
             /** @description The registry host, with a port if it has one, like registry.example.org:5000. Ignored for dockerhub and ghcr, registry.gitlab.com when left out for gitlab, required for generic: 422 host_required or host_invalid. No scheme and no path */
             host?: string;
             /** @description Use this credential for every Docker Hub pull no more specific credential matches. Docker Hub only (422 hub_fallback_not_hub), one per layer (409 hub_fallback_taken) */
             hubFallback?: boolean;
+            /** @description Let Bayplan's own tests and tag browsing reach this registry without verifying its certificate, and over plain HTTP when it answers plain HTTP. Off by default. It does nothing on a node: each node's Docker daemon needs its own insecure-registries or certs.d setup */
+            insecure?: boolean;
             /** @description What the credential is called, unique among the instance credentials. 1 to 64 characters: letters, digits, spaces and . _ ( ) -; 422 name_required or name_invalid */
             name?: string;
             /** @description The namespace the credential covers, like acme or acme/team: lower-case path segments with no slash at either end. Empty covers the whole registry. 422 prefix_invalid, and hub_prefix_required for docker.io with neither a prefix nor hubFallback */
@@ -3124,10 +3138,14 @@ export interface components {
             ok: boolean;
         };
         CredentialTestRequest: {
+            /** @description The custom certificate authority to trust for this test, in PEM. Left out, a stored credential's own is used; an empty string means none. 422 ca_invalid */
+            caPem?: string;
             /** @description A stored credential of this layer to test. A field left blank is taken from it, and with no secret sent the stored secret is tried. When nothing is changed from what is stored, the result is remembered on the credential. 404 credential_not_found for one of another layer or environment */
             credentialId?: string;
             /** @description The registry host, as when adding; 422 host_required or host_invalid */
             host?: string;
+            /** @description Whether to skip certificate verification and allow plain HTTP for this test. Left out, a stored credential's own switch is used */
+            insecure?: boolean;
             /** @description The namespace the credential covers. Recorded with the test; it does not change what is tried */
             prefix?: string;
             /** @description The password or token to try. It is used for this one test, never stored by it, and never returned or recorded. 422 secret_required when there is none to try */

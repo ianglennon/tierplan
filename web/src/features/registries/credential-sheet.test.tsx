@@ -46,6 +46,9 @@ const credential = (extra: Record<string, unknown> = {}) => ({
   username: "deploy",
   last4: "WXYZ",
   hubFallback: false,
+  caPem: "",
+  hasCa: false,
+  insecure: false,
   expiresAt: null,
   lastTest: null,
   lastFailure: null,
@@ -542,6 +545,8 @@ describe("CredentialSheet edit mode", () => {
         username: "deploy2",
         hubFallback: false,
         expires: "",
+        caPem: "",
+        insecure: false,
       },
     ]);
     expect(patched[0]).not.toHaveProperty("secret");
@@ -864,7 +869,14 @@ describe("CredentialSheet test block", () => {
     expect(region.textContent).toContain("Registry reachable");
     expect(region.textContent).toContain("Can pull acme/app");
     expect(testSent).toEqual([
-      { type: "dockerhub", username: "deploy", secret: SECRET, testRepository: "acme/app" },
+      {
+        type: "dockerhub",
+        username: "deploy",
+        secret: SECRET,
+        testRepository: "acme/app",
+        caPem: "",
+        insecure: false,
+      },
     ]);
     expect(posted).toEqual([]);
   });
@@ -1012,7 +1024,14 @@ describe("CredentialSheet test block of a saved credential", () => {
     fireEvent.click(testButton());
     await screen.findByRole("status");
     expect(testSent).toEqual([
-      { credentialId: "c1", type: "ghcr", username: "deploy", prefix: "acme" },
+      {
+        credentialId: "c1",
+        type: "ghcr",
+        username: "deploy",
+        prefix: "acme",
+        caPem: "",
+        insecure: false,
+      },
     ]);
     expect(testPaths).toEqual(["/api/registries/test"]);
   });
@@ -1072,5 +1091,180 @@ describe("CredentialSheet test block of a saved credential", () => {
     mount("view", "c1");
     await screen.findByRole("table", { name: "Credential details" });
     expect(screen.queryByRole("button", { name: "Test credential" })).toBeNull();
+  });
+});
+
+// Self-hosted registries (plan 05-12, D-14): Advanced holds the registry's own CA and the
+// switch for plain HTTP or no verification.
+describe("CredentialSheet Advanced (self-hosted registries)", () => {
+  const PEM = "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ0\n-----END CERTIFICATE-----";
+  const advancedTrigger = () => screen.getByRole("button", { name: "Advanced" });
+  const switchEl = () =>
+    screen.getByRole("switch", { name: "Allow plain HTTP or skip TLS verification" });
+  const testButton = () => screen.getByRole("button", { name: "Test credential" });
+
+  async function fillGeneric() {
+    await screen.findByText("Add a registry credential");
+    choose("Generic v2");
+    type("Name", "lab");
+    type("Registry", "registry.lan:5000");
+    type("Username", "deploy");
+    type("Secret", SECRET);
+  }
+
+  it("is collapsed, and opens to a mono PEM textarea with its own scroll and the switch off", async () => {
+    mount();
+    await screen.findByText("Add a registry credential");
+    expect(screen.queryByLabelText("Custom CA certificate (PEM)")).toBeNull();
+    fireEvent.click(advancedTrigger());
+    const ca = await screen.findByLabelText("Custom CA certificate (PEM)");
+    expect(ca.tagName).toBe("TEXTAREA");
+    expect(ca.getAttribute("placeholder")).toBe("-----BEGIN CERTIFICATE-----");
+    expect(ca.className).toContain("font-mono");
+    expect(ca.className).toContain("overflow-auto");
+    expect(
+      screen.getByText(
+        "For a registry with its own certificate authority. Used for Bayplan's tests and tag browsing.",
+      ),
+    ).toBeTruthy();
+    expect(switchEl().getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("always says nodes need their own setting, with the docs link, and warns only while the switch is on", async () => {
+    mount();
+    await screen.findByText("Add a registry credential");
+    fireEvent.click(advancedTrigger());
+    const note = await screen.findByText(/These settings only affect Bayplan's own tests/);
+    expect(note.textContent).toContain("insecure-registries or certs.d");
+    expect(note.textContent).toContain("Bayplan never changes daemon settings");
+    const link = screen.getByRole("link", { name: "Self-hosted registry docs" });
+    expect(link.getAttribute("href")).toBe(
+      "https://github.com/ianglennon/bayplan/blob/main/docs/registries.md#self-hosted-registries",
+    );
+    const warning = "Bayplan will use this credential over a connection that isn't verified.";
+    expect(screen.queryByText(new RegExp(warning))).toBeNull();
+    fireEvent.click(switchEl());
+    expect(switchEl().getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByText(new RegExp(warning)).textContent).toContain(
+      "Only use this on a network you trust.",
+    );
+    fireEvent.click(switchEl());
+    expect(screen.queryByText(new RegExp(warning))).toBeNull();
+  });
+
+  it("sends the CA and the switch when adding, and neither when they are left alone", async () => {
+    mount();
+    await fillGeneric();
+    fireEvent.click(advancedTrigger());
+    fireEvent.change(await screen.findByLabelText("Custom CA certificate (PEM)"), {
+      target: { value: `\n${PEM}\n` },
+    });
+    fireEvent.click(switchEl());
+    save();
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]).toMatchObject({ host: "registry.lan:5000", caPem: PEM, insecure: true });
+  });
+
+  it("leaves caPem and insecure out of a plain add", async () => {
+    mount();
+    await fillGeneric();
+    save();
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]).not.toHaveProperty("caPem");
+    expect(posted[0]).not.toHaveProperty("insecure");
+  });
+
+  it("refuses text that is not a PEM certificate, names the field and keeps Advanced open", async () => {
+    mount();
+    await fillGeneric();
+    fireEvent.click(advancedTrigger());
+    fireEvent.change(await screen.findByLabelText("Custom CA certificate (PEM)"), {
+      target: { value: "hello" },
+    });
+    save();
+    expect(await screen.findByText("That isn't a valid PEM certificate.")).toBeTruthy();
+    expect(posted).toEqual([]);
+    expect(screen.getByLabelText("Custom CA certificate (PEM)").getAttribute("aria-invalid")).toBe(
+      "true",
+    );
+  });
+
+  it("opens Advanced by itself when the server refuses the CA, even if it was collapsed", async () => {
+    postStatus = 422;
+    postBody = {
+      title: "Unprocessable Entity",
+      status: 422,
+      type: "validation_failed",
+      errors: [{ message: "ca_invalid", location: "body.caPem" }],
+    };
+    mount();
+    await fillGeneric();
+    fireEvent.click(advancedTrigger());
+    fireEvent.change(await screen.findByLabelText("Custom CA certificate (PEM)"), {
+      target: { value: PEM },
+    });
+    fireEvent.click(advancedTrigger());
+    expect(screen.queryByLabelText("Custom CA certificate (PEM)")).toBeNull();
+    save();
+    expect(await screen.findByText("That isn't a valid PEM certificate.")).toBeTruthy();
+    expect(screen.getByLabelText("Custom CA certificate (PEM)")).toBeTruthy();
+  });
+
+  it("opens with the stored CA and switch on a credential that uses them, and sends a change", async () => {
+    stored = credential({
+      type: "generic",
+      host: "registry.lan:5000",
+      caPem: PEM,
+      hasCa: true,
+      insecure: true,
+    });
+    mount("edit", "c1");
+    await screen.findByText("Edit ghcr-acme");
+    expect(
+      (screen.getByLabelText("Custom CA certificate (PEM)") as HTMLTextAreaElement).value,
+    ).toBe(PEM);
+    expect(switchEl().getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(switchEl());
+    fireEvent.change(screen.getByLabelText("Custom CA certificate (PEM)"), {
+      target: { value: "" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(patched).toHaveLength(1));
+    expect(patched[0]).toMatchObject({ caPem: "", insecure: false });
+  });
+
+  it("tests with the CA and the switch as they stand in the form", async () => {
+    mount();
+    await fillGeneric();
+    fireEvent.click(advancedTrigger());
+    fireEvent.change(await screen.findByLabelText("Custom CA certificate (PEM)"), {
+      target: { value: PEM },
+    });
+    fireEvent.click(switchEl());
+    fireEvent.click(testButton());
+    await screen.findByRole("status");
+    expect(testSent[0]).toMatchObject({ caPem: PEM, insecure: true, host: "registry.lan:5000" });
+  });
+
+  it("greys a shown result when the CA or the switch changes after it", async () => {
+    mount();
+    await fillGeneric();
+    fireEvent.click(advancedTrigger());
+    await screen.findByLabelText("Custom CA certificate (PEM)");
+    fireEvent.click(testButton());
+    const region = await screen.findByRole("status");
+    expect(region.className).not.toContain("opacity-60");
+    fireEvent.click(switchEl());
+    await waitFor(() => expect(screen.getByRole("status").className).toContain("opacity-60"));
+  });
+});
+
+describe("CredentialSheet details with a custom CA", () => {
+  it("says a credential uses a custom CA or skips verification, and never shows the CA", async () => {
+    stored = credential({ canManage: false, hasCa: true, insecure: true, caPem: "" });
+    mount("view", "c1");
+    expect(await screen.findByText("Custom CA")).toBeTruthy();
+    expect(screen.getByText("TLS verification")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("BEGIN CERTIFICATE");
   });
 });

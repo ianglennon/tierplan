@@ -389,7 +389,7 @@ func (q *Queries) SetRegistryCredentialTest(ctx context.Context, arg SetRegistry
 
 const updateRegistryCredential = `-- name: UpdateRegistryCredential :execrows
 UPDATE registry_credentials
-SET name = ?, type = ?, host = ?, prefix = ?, username = ?, hub_fallback = ?, expires_at = ?, updated_at = ?
+SET name = ?, type = ?, host = ?, prefix = ?, username = ?, hub_fallback = ?, ca_pem = ?, insecure = ?, expires_at = ?, updated_at = ?
 WHERE id = ?
 `
 
@@ -400,6 +400,8 @@ type UpdateRegistryCredentialParams struct {
 	Prefix      string
 	Username    string
 	HubFallback int64
+	CaPem       string
+	Insecure    int64
 	ExpiresAt   sql.NullInt64
 	UpdatedAt   int64
 	ID          string
@@ -414,6 +416,8 @@ func (q *Queries) UpdateRegistryCredential(ctx context.Context, arg UpdateRegist
 		arg.Prefix,
 		arg.Username,
 		arg.HubFallback,
+		arg.CaPem,
+		arg.Insecure,
 		arg.ExpiresAt,
 		arg.UpdatedAt,
 		arg.ID,
@@ -426,8 +430,8 @@ func (q *Queries) UpdateRegistryCredential(ctx context.Context, arg UpdateRegist
 
 const updateRegistryCredentialInEnv = `-- name: UpdateRegistryCredentialInEnv :execrows
 UPDATE registry_credentials
-SET name = ?, type = ?, host = ?, prefix = ?, username = ?, hub_fallback = ?, expires_at = ?, updated_at = ?
-WHERE id = ?9 AND env_id = ?10
+SET name = ?, type = ?, host = ?, prefix = ?, username = ?, hub_fallback = ?, ca_pem = ?, insecure = ?, expires_at = ?, updated_at = ?
+WHERE id = ?11 AND env_id = ?12
 `
 
 type UpdateRegistryCredentialInEnvParams struct {
@@ -437,6 +441,8 @@ type UpdateRegistryCredentialInEnvParams struct {
 	Prefix      string
 	Username    string
 	HubFallback int64
+	CaPem       string
+	Insecure    int64
 	ExpiresAt   sql.NullInt64
 	UpdatedAt   int64
 	ID          string
@@ -453,6 +459,8 @@ func (q *Queries) UpdateRegistryCredentialInEnv(ctx context.Context, arg UpdateR
 		arg.Prefix,
 		arg.Username,
 		arg.HubFallback,
+		arg.CaPem,
+		arg.Insecure,
 		arg.ExpiresAt,
 		arg.UpdatedAt,
 		arg.ID,

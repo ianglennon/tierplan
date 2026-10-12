@@ -62,6 +62,22 @@ func (p EgressPolicy) WithRootCAs(pool *x509.CertPool) EgressPolicy {
 	return p
 }
 
+// poolWith returns the certificate authorities a connection trusts when the credential brings
+// its own: the policy's roots, or the system's, plus caPEM. The pool is new each time, so the
+// credential's CA is never added to anything shared (T-05-73).
+func (p EgressPolicy) poolWith(caPEM string) *x509.CertPool {
+	var pool *x509.CertPool
+	if p.roots != nil {
+		pool = p.roots.Clone()
+	} else if sys, err := x509.SystemCertPool(); err == nil {
+		pool = sys
+	} else {
+		pool = x509.NewCertPool()
+	}
+	pool.AppendCertsFromPEM([]byte(caPEM))
+	return pool
+}
+
 // Blocked reports whether the policy refuses a connection to a.
 func (p EgressPolicy) Blocked(a netip.Addr) bool {
 	a = a.Unmap().WithZone("")

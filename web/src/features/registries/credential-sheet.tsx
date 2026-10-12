@@ -3,7 +3,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, EyeOff } from "lucide-react";
+import { ChevronRight, Eye, EyeOff } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 
@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
@@ -61,6 +62,8 @@ import {
 } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { CredentialBadge } from "@/features/registries/credential-badge";
 import {
@@ -76,6 +79,15 @@ import { useT } from "@/i18n/use-t";
 import { toastSuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { z } from "@/lib/zod-config";
+
+// Build-time source URL (Vite define). The docs ship with the source, so a link to one is built
+// from the same URL the footer uses.
+declare const __BAYPLAN_SOURCE_URL__: string;
+const SELF_HOSTED_DOCS_PATH = "/blob/main/docs/registries.md#self-hosted-registries";
+
+// The server's limit on a custom CA, and the line every certificate in a PEM bundle starts with.
+const MAX_CA_BYTES = 64 * 1024;
+const CA_MARKER = "-----BEGIN CERTIFICATE-----";
 
 // The server's limit on a name; its allowed characters are checked there, which names
 // the field when one does not fit.
@@ -112,6 +124,8 @@ function makeSchema(editing: boolean, keepExpires: string) {
       secret: z.string(),
       hubFallback: z.boolean(),
       expires: z.string(),
+      caPem: z.string(),
+      insecure: z.boolean(),
     })
     .superRefine((v, ctx) => {
       const issue = (path: keyof typeof v, code: string) =>
@@ -137,6 +151,11 @@ function makeSchema(editing: boolean, keepExpires: string) {
       ) {
         issue("expires", "expiry_invalid");
       }
+      // The server parses the certificates; this catches the obvious before a round trip.
+      const ca = v.caPem.trim();
+      if (ca !== "" && (!ca.includes(CA_MARKER) || new Blob([ca]).size > MAX_CA_BYTES)) {
+        issue("caPem", "ca_invalid");
+      }
     });
 }
 type Values = z.infer<ReturnType<typeof makeSchema>>;
@@ -150,6 +169,7 @@ const FIELDS = [
   "secret",
   "hubFallback",
   "expires",
+  "caPem",
 ] as const satisfies readonly (keyof Values)[];
 
 // The empty form. Docker Hub is first in the toggle, so it is what the sheet opens on.
@@ -163,6 +183,8 @@ const DEFAULTS: Values = {
   secret: "",
   hubFallback: false,
   expires: "",
+  caPem: "",
+  insecure: false,
 };
 
 // 44px targets under 768px (D-64), the dense 32px size from there up.
@@ -181,6 +203,8 @@ function valuesOf(c: Credential): Values {
     secret: "",
     hubFallback: c.hubFallback,
     expires: c.expiresAt ? c.expiresAt.slice(0, 10) : "",
+    caPem: c.caPem,
+    insecure: c.insecure,
   };
 }
 
@@ -343,6 +367,8 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [showSecret, setShowSecret] = useState(false);
   const [discarding, setDiscarding] = useState(false);
+  // Advanced starts open for a credential that already uses it, so the switch is never hidden.
+  const [advanced, setAdvanced] = useState(Boolean(credential?.hasCa || credential?.insecure));
   const { choices, ready } = useScopeChoices();
   const tester = useTestCredential();
   const [testRepository, setTestRepository] = useState("");
@@ -362,7 +388,7 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
   const scope = form.watch("scope");
   const preset = presetFor(type);
   const pending = create.isPending || update.isPending;
-  const watched = form.watch(["host", "username", "secret"]);
+  const watched = form.watch(["host", "username", "secret", "caPem", "insecure"]);
   const effectiveHost = preset.hostEditable ? watched[0].trim() : preset.host;
   // The values a test depends on. A result is only as good as these were when it ran.
   const testKey = JSON.stringify([
@@ -371,6 +397,8 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
     watched[1].trim(),
     watched[2],
     testRepository.trim(),
+    watched[3].trim(),
+    watched[4],
   ]);
   const latestTestKey = useRef(testKey);
   latestTestKey.current = testKey;
@@ -470,6 +498,7 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
         const key = `registries.sheet.errors.${f.message}`;
         if ((FIELDS as readonly string[]).includes(field)) {
           form.setError(field, { type: "server", message: key });
+          if (field === "caPem") setAdvanced(true);
           placed += 1;
         }
       }
@@ -492,6 +521,8 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
         prefix: values.prefix.trim(),
         hubFallback: values.type === "dockerhub" && values.hubFallback,
         expires: values.expires,
+        caPem: values.caPem.trim(),
+        insecure: values.insecure,
         ...(preset.hostEditable ? { host: values.host.trim() } : {}),
         ...(values.secret.trim() ? { secret: values.secret } : {}),
       };
@@ -516,6 +547,8 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
       ...(values.prefix.trim() ? { prefix: values.prefix.trim() } : {}),
       ...(values.type === "dockerhub" && values.hubFallback ? { hubFallback: true } : {}),
       ...(values.expires ? { expires: values.expires } : {}),
+      ...(values.caPem.trim() ? { caPem: values.caPem.trim() } : {}),
+      ...(values.insecure ? { insecure: true } : {}),
     };
     // The scope chosen in the sheet picks the route family: the instance's or the environment's.
     create.mutate(
@@ -538,7 +571,8 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
     const repo = testRepository.trim();
     const repoOk = repo === "" || PREFIX.test(repo.replace(/^[^/]*[.:][^/]*\//, "").toLowerCase());
     setTestRepositoryInvalid(!repoOk);
-    const valid = await form.trigger(["host", "username", "secret"]);
+    const valid = await form.trigger(["host", "username", "secret", "caPem"]);
+    if (form.getFieldState("caPem").invalid) setAdvanced(true);
     if (!valid || !repoOk) return;
     const values = form.getValues();
     const key = testKey;
@@ -553,6 +587,9 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
           ...(preset.hostEditable ? { host: values.host.trim() } : {}),
           ...(values.prefix.trim() ? { prefix: values.prefix.trim() } : {}),
           ...(repo ? { testRepository: repo } : {}),
+          // The test uses the CA and the switch as they stand in the form, saved or not.
+          caPem: values.caPem.trim(),
+          insecure: values.insecure,
         },
       },
       {
@@ -569,6 +606,7 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
                   type: "server",
                   message: `registries.sheet.errors.${f.message}`,
                 });
+                if (name === "caPem") setAdvanced(true);
               } else if (f.location === "body.testRepository") {
                 setTestRepositoryInvalid(true);
               }
@@ -971,6 +1009,92 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
                   />
                 ) : null}
               </section>
+
+              <Collapsible
+                open={advanced}
+                onOpenChange={setAdvanced}
+                className="flex flex-col gap-4"
+              >
+                <CollapsibleTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="group/advanced w-fit max-md:h-11"
+                  >
+                    <ChevronRight
+                      aria-hidden="true"
+                      className="transition-transform group-aria-expanded/advanced:rotate-90"
+                    />
+                    {t("registries.sheet.advanced.trigger")}
+                  </Button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="flex flex-col gap-4">
+                  <Field data-invalid={errors.caPem ? true : undefined}>
+                    <FieldLabel htmlFor={`${ids}-ca`}>
+                      {t("registries.sheet.advanced.ca.label")}
+                    </FieldLabel>
+                    <Textarea
+                      id={`${ids}-ca`}
+                      rows={5}
+                      wrap="off"
+                      autoComplete="off"
+                      autoCapitalize="off"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      placeholder={t("registries.sheet.advanced.ca.placeholder")}
+                      // Fixed height with its own scroll: a pasted bundle never grows the sheet.
+                      className="field-sizing-fixed h-32 max-h-48 resize-y overflow-auto font-mono text-xs"
+                      {...errorProps("caPem", `${ids}-ca-helper`)}
+                      {...form.register("caPem")}
+                    />
+                    <FieldDescription id={`${ids}-ca-helper`}>
+                      {t("registries.sheet.advanced.ca.helper")}
+                    </FieldDescription>
+                    {errors.caPem ? (
+                      <FieldError id={`${ids}-caPem-error`}>{errorOf("caPem")}</FieldError>
+                    ) : null}
+                  </Field>
+
+                  <Field orientation="horizontal">
+                    <Controller
+                      control={form.control}
+                      name="insecure"
+                      render={({ field }) => (
+                        <Switch
+                          id={`${ids}-insecure`}
+                          checked={field.value}
+                          onCheckedChange={(checked) => field.onChange(checked)}
+                        />
+                      )}
+                    />
+                    <FieldLabel htmlFor={`${ids}-insecure`}>
+                      {t("registries.sheet.advanced.insecure.label")}
+                    </FieldLabel>
+                  </Field>
+                  {watched[4] ? (
+                    <Alert variant="warning">
+                      <AlertDescription>
+                        {t("registries.sheet.advanced.insecure.warning")}
+                      </AlertDescription>
+                    </Alert>
+                  ) : null}
+
+                  <Alert>
+                    <AlertDescription className="flex flex-col gap-1">
+                      <span>{t("registries.sheet.advanced.nodeNote")}</span>
+                      <a
+                        href={`${__BAYPLAN_SOURCE_URL__}${SELF_HOSTED_DOCS_PATH}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-fit rounded-sm text-accent-ink underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                      >
+                        {t("registries.sheet.advanced.docsLink")}
+                      </a>
+                    </AlertDescription>
+                  </Alert>
+                </CollapsibleContent>
+              </Collapsible>
             </FieldGroup>
             {testFailed ? (
               <Alert variant="warning" className="mt-4">
@@ -1129,6 +1253,22 @@ function CredentialDetails({ credential: c }: { credential: Credential }) {
               {
                 key: t("registries.sheet.view.hubFallback"),
                 value: t("registries.sheet.view.hubFallbackYes"),
+              },
+            ]
+          : []),
+        ...(c.hasCa
+          ? [
+              {
+                key: t("registries.sheet.view.customCa"),
+                value: t("registries.sheet.view.customCaYes"),
+              },
+            ]
+          : []),
+        ...(c.insecure
+          ? [
+              {
+                key: t("registries.sheet.view.insecure"),
+                value: t("registries.sheet.view.insecureYes"),
               },
             ]
           : []),

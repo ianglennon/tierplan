@@ -4,6 +4,7 @@
 package registry
 
 import (
+	"crypto/x509"
 	"regexp"
 	"slices"
 	"strconv"
@@ -38,6 +39,8 @@ const (
 	maxUsernameLen = 256
 	maxPrefixLen   = 255
 	maxHostLen     = 253
+	// maxCAPEMLen caps a custom CA bundle: a handful of certificates, never a way to store files.
+	maxCAPEMLen = 64 << 10
 	// shortSecretLen is the length below which a secret keeps no last characters.
 	shortSecretLen = 12
 	lastChars      = 4
@@ -76,6 +79,12 @@ type CreateInput struct {
 	HubFallback bool
 	// Expires is an optional day, YYYY-MM-DD (D-07).
 	Expires string
+	// CAPEM is an optional certificate authority, in PEM, that Bayplan's own calls to this
+	// registry trust. It is public material and never joins the server's own trust store.
+	CAPEM string
+	// Insecure lets Bayplan's own calls to this registry skip TLS verification and fall back
+	// to plain HTTP when the server answers plain HTTP (D-14). It affects nothing on a node.
+	Insecure bool
 }
 
 // FieldError is one problem with a field of a submission. Code is stable: the SPA words it.
@@ -180,7 +189,18 @@ func Validate(in CreateInput, now time.Time) (CreateInput, []FieldError) {
 			bad("expires", "expiry_past")
 		}
 	}
+
+	in.CAPEM = strings.TrimSpace(in.CAPEM)
+	if in.CAPEM != "" && !validCAPEM(in.CAPEM) {
+		bad("caPem", "ca_invalid")
+	}
 	return in, errs
+}
+
+// validCAPEM reports whether s is at most 64 KiB and adds at least one certificate to a pool
+// (T-05-73). Text around the certificates is ignored, as a pool does.
+func validCAPEM(s string) bool {
+	return len(s) <= maxCAPEMLen && x509.NewCertPool().AppendCertsFromPEM([]byte(s))
 }
 
 // validHost reports whether s is a host[:port] with a usable port.
@@ -210,6 +230,10 @@ type UpdateInput struct {
 	HubFallback bool
 	// Expires is an optional day, YYYY-MM-DD; empty clears it.
 	Expires string
+	// CAPEM is the custom certificate authority; empty clears it.
+	CAPEM string
+	// Insecure is the plain HTTP or skip-verification switch.
+	Insecure bool
 }
 
 // ValidateUpdate checks a change as Validate checks an addition, with two differences: an
@@ -220,7 +244,7 @@ func ValidateUpdate(in UpdateInput, prevExpires string, now time.Time) (UpdateIn
 	keepSecret := in.Secret == ""
 	forCreate := CreateInput{
 		Name: in.Name, Type: in.Type, Host: in.Host, Prefix: in.Prefix, Username: in.Username,
-		Secret: in.Secret, HubFallback: in.HubFallback, Expires: in.Expires,
+		Secret: in.Secret, HubFallback: in.HubFallback, Expires: in.Expires, CAPEM: in.CAPEM, Insecure: in.Insecure,
 	}
 	if keepSecret {
 		forCreate.Secret = "placeholder" // so Validate does not ask for a secret that is not changing
@@ -234,6 +258,6 @@ func ValidateUpdate(in UpdateInput, prevExpires string, now time.Time) (UpdateIn
 	}
 	return UpdateInput{
 		Name: clean.Name, Type: clean.Type, Host: clean.Host, Prefix: clean.Prefix, Username: clean.Username,
-		Secret: clean.Secret, HubFallback: clean.HubFallback, Expires: clean.Expires,
+		Secret: clean.Secret, HubFallback: clean.HubFallback, Expires: clean.Expires, CAPEM: clean.CAPEM, Insecure: clean.Insecure,
 	}, errs
 }

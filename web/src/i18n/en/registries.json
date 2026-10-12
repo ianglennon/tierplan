@@ -167,6 +167,10 @@
         "secret": "Secret",
         "hubFallback": "All Docker Hub pulls",
         "hubFallbackYes": "Used when no more specific credential matches",
+        "customCa": "Custom CA",
+        "customCaYes": "Used for Bayplan's tests and tag browsing",
+        "insecure": "TLS verification",
+        "insecureYes": "Skipped for Bayplan's tests and tag browsing; plain HTTP allowed",
         "expires": "Expires",
         "lastTest": "Last test",
         "missing": "—"
@@ -190,13 +194,28 @@
         "hubFallbackTakenUnnamed": "Another credential already uses all Docker Hub pulls for {{scope}}. Untick it there first.",
         "scopeInstance": "all environments",
         "permission": "You no longer have permission to do that. Your access may have changed.",
-        "generic": "Couldn't save the credential. Try again."
+        "generic": "Couldn't save the credential. Try again.",
+        "ca_invalid": "That isn't a valid PEM certificate."
       },
       "discard": {
         "title": "Discard changes?",
         "body": "The credential hasn't been saved.",
         "keep": "Keep editing",
         "discard": "Discard changes"
+      },
+      "advanced": {
+        "trigger": "Advanced",
+        "ca": {
+          "label": "Custom CA certificate (PEM)",
+          "placeholder": "-----BEGIN CERTIFICATE-----",
+          "helper": "For a registry with its own certificate authority. Used for Bayplan's tests and tag browsing."
+        },
+        "insecure": {
+          "label": "Allow plain HTTP or skip TLS verification",
+          "warning": "Bayplan will use this credential over a connection that isn't verified. Anyone on the network path could read it. Only use this on a network you trust."
+        },
+        "nodeNote": "These settings only affect Bayplan's own tests and tag browsing. Each node's Docker daemon still needs its own insecure-registries or certs.d setup to pull from this registry. Bayplan never changes daemon settings.",
+        "docsLink": "Self-hosted registry docs"
       }
     },
     "tester": {

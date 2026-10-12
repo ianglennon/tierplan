@@ -26,14 +26,14 @@ ORDER BY (env_id IS NOT NULL), env_id, host, prefix, name, id;
 -- name: UpdateRegistryCredential :execrows
 -- Everything but the secret and the layer. A credential never moves between layers.
 UPDATE registry_credentials
-SET name = ?, type = ?, host = ?, prefix = ?, username = ?, hub_fallback = ?, expires_at = ?, updated_at = ?
+SET name = ?, type = ?, host = ?, prefix = ?, username = ?, hub_fallback = ?, ca_pem = ?, insecure = ?, expires_at = ?, updated_at = ?
 WHERE id = ?;
 
 -- name: UpdateRegistryCredentialInEnv :execrows
 -- UpdateRegistryCredential constrained to one environment's layer: a credential of another
 -- environment, or of the instance, matches no row, so a route of one environment cannot change it.
 UPDATE registry_credentials
-SET name = ?, type = ?, host = ?, prefix = ?, username = ?, hub_fallback = ?, expires_at = ?, updated_at = ?
+SET name = ?, type = ?, host = ?, prefix = ?, username = ?, hub_fallback = ?, ca_pem = ?, insecure = ?, expires_at = ?, updated_at = ?
 WHERE id = sqlc.arg(id) AND env_id = sqlc.arg(env_id);
 
 -- name: UpdateRegistryCredentialSecret :execrows

@@ -6,18 +6,20 @@ package registry
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/regclient/regclient"
 	"github.com/regclient/regclient/config"
 	"github.com/regclient/regclient/scheme"
 	"github.com/regclient/regclient/scheme/reg"
+	"github.com/regclient/regclient/types/errs"
 	"github.com/regclient/regclient/types/ref"
 )
 
@@ -47,10 +49,13 @@ type HostOptions struct {
 	Username string
 	Password string //nolint:gosec // G117: a plaintext sign-in held in memory for one call, never marshalled
 
-	// tlsMode and caPEM are set by tests and, by the self-hosted registry options, from the
-	// credential's own settings. The zero value is verified TLS against the system roots.
-	tlsMode config.TLSConf
-	caPEM   string
+	// CAPEM is a certificate authority, in PEM, that this client trusts for this registry in
+	// addition to the system roots. It never changes the server's own trust store (D-14).
+	CAPEM string
+	// Insecure makes the client reach the registry without verifying its certificate and, only
+	// when the server answers plain HTTP to a TLS request, over plain HTTP. Both stay behind
+	// the egress policy. It applies to Bayplan's own calls and to nothing on a node (D-14).
+	Insecure bool
 }
 
 // Client talks to one registry host as one sign-in. It is safe for concurrent use. It reads
@@ -65,6 +70,14 @@ type Client struct {
 	// probe makes the one raw request regclient does not report: whether the registry asks
 	// for a login at all.
 	probe *http.Client
+	// fallback is the same client over plain HTTP, built only when Insecure is on. plain is
+	// set once the registry has answered plain HTTP to a TLS request, so later calls go straight
+	// to it.
+	fallback *Client
+	plain    atomic.Bool
+	// viaRegclient makes Probe ask regclient, whose host mode is the only place the
+	// verification-free connection is made.
+	viaRegclient bool
 }
 
 // NewClient returns a client for one registry host. Its connections dial through egress, its
@@ -74,13 +87,23 @@ func NewClient(o HostOptions, egress EgressPolicy, version string, log *slog.Log
 	if log == nil {
 		log = slog.Default()
 	}
+	if !o.Insecure {
+		return newClient(o, egress, version, log, config.TLSEnabled)
+	}
+	// The switch is one decision with two steps, as Docker's insecure-registries is: HTTPS
+	// without verification first, plain HTTP when the server answers plain HTTP. The second
+	// client is built the same way on the same egress policy, so nothing it does skips it.
+	c := newClient(o, egress, version, log, config.TLSInsecure)
+	c.fallback = newClient(o, egress, version, log, config.TLSDisabled)
+	return c
+}
+
+// newClient builds the client for one TLS mode of regclient.
+func newClient(o HostOptions, egress EgressPolicy, version string, log *slog.Logger, mode config.TLSConf) *Client {
 	h := config.HostNewName(o.Host)
 	h.User, h.Pass = o.Username, o.Password
-	h.TLS = o.tlsMode
-	if h.TLS == config.TLSUndefined {
-		h.TLS = config.TLSEnabled
-	}
-	h.RegCert = o.caPEM
+	h.TLS = mode
+	h.RegCert = o.CAPEM
 	h.ReqConcurrent = reqConcurrent
 	ua := "bayplan/" + version
 	rc := regclient.New(
@@ -103,12 +126,13 @@ func NewClient(o HostOptions, egress EgressPolicy, version string, log *slog.Log
 		c.scheme = "http"
 	}
 	t := egress.Transport()
-	if o.caPEM != "" {
-		pool := x509.NewCertPool()
-		if pool.AppendCertsFromPEM([]byte(o.caPEM)) {
-			t.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}
-		}
+	if o.CAPEM != "" && mode == config.TLSEnabled {
+		t.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: egress.poolWith(o.CAPEM)}
 	}
+	// Verification is turned off by regclient's own host mode and by nothing here, so the
+	// repository's one reviewed place for that setting stays the agent's. That also means the
+	// raw probe cannot be made with it: an insecure client asks regclient for the probe.
+	c.viaRegclient = mode == config.TLSInsecure
 	c.probe = &http.Client{
 		Transport: &userAgentTransport{base: t, ua: ua},
 		Timeout:   callTimeout,
@@ -128,6 +152,10 @@ type ProbeResult struct {
 	// AsksLogin is true for a 401 or 403: the registry wants a sign-in. A 200 means it does
 	// not.
 	AsksLogin bool
+	// LoginUnknown is true when the answer came through regclient's own sign-in, which may
+	// have taken an anonymous token without saying so: a 200 then does not mean the registry
+	// wants no login. Only a client that skips certificate verification probes that way.
+	LoginUnknown bool
 }
 
 // Probe sends GET /v2/ with no credentials, once, and reports the status. A 401 is
@@ -135,6 +163,30 @@ type ProbeResult struct {
 // is an answer from a registry; any other status is returned as ErrNotARegistry. Redirects are
 // not followed.
 func (c *Client) Probe(ctx context.Context) (ProbeResult, error) {
+	return withFallback(ctx, c, (*Client).probeOnce)
+}
+
+// withFallback runs call on c and, for a client with the plain HTTP fallback, runs it on the
+// fallback when the registry answers plain HTTP to a TLS request. Once it has, later calls go
+// straight to the fallback. The fallback is built on the same egress policy, so a blocked
+// address is refused there too.
+func withFallback[T any](ctx context.Context, c *Client, call func(*Client, context.Context) (T, error)) (T, error) {
+	first := c
+	if c.fallback != nil && c.plain.Load() {
+		first = c.fallback
+	}
+	v, err := call(first, ctx)
+	if err != nil && first == c && c.fallback != nil && isPlainHTTPAnswer(err) {
+		c.plain.Store(true)
+		return call(c.fallback, ctx)
+	}
+	return v, err
+}
+
+func (c *Client) probeOnce(ctx context.Context) (ProbeResult, error) {
+	if c.viaRegclient {
+		return c.probeViaRegclient(ctx)
+	}
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.scheme+"://"+c.dial+"/v2/", http.NoBody)
@@ -156,9 +208,34 @@ func (c *Client) Probe(ctx context.Context) (ProbeResult, error) {
 	return ProbeResult{Status: resp.StatusCode}, fmt.Errorf("registry: probe %s: status %d: %w", c.host, resp.StatusCode, ErrNotARegistry)
 }
 
+// probeViaRegclient is Probe for a client that does not verify the registry's certificate:
+// regclient makes the request. An answer that needs a login is a 401 or 403; one that does
+// not is a 200, though regclient may have signed in anonymously to get it (LoginUnknown).
+func (c *Client) probeViaRegclient(ctx context.Context) (ProbeResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	_, err := c.rc.Ping(ctx, ref.Ref{Scheme: "reg", Registry: c.host})
+	switch {
+	case err == nil:
+		return ProbeResult{Status: http.StatusOK, LoginUnknown: true}, nil
+	case errors.Is(err, errs.ErrHTTPUnauthorized):
+		return ProbeResult{Status: http.StatusUnauthorized, AsksLogin: true}, nil
+	case errors.Is(err, errs.ErrNotFound), errors.Is(err, errs.ErrHTTPStatus):
+		return ProbeResult{}, fmt.Errorf("registry: probe %s: %w: %w", c.host, ErrNotARegistry, err)
+	}
+	return ProbeResult{}, fmt.Errorf("registry: probe %s: %w", c.host, err)
+}
+
 // Ping signs in the way the registry's own flow does, with this client's credentials, and
 // asks it for /v2/. It succeeds when the registry accepts the sign-in.
 func (c *Client) Ping(ctx context.Context) error {
+	_, err := withFallback(ctx, c, func(c *Client, ctx context.Context) (struct{}, error) {
+		return struct{}{}, c.pingOnce(ctx)
+	})
+	return err
+}
+
+func (c *Client) pingOnce(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 	if _, err := c.rc.Ping(ctx, ref.Ref{Scheme: "reg", Registry: c.host}); err != nil {
@@ -170,6 +247,12 @@ func (c *Client) Ping(ctx context.Context) error {
 // TagList lists at most limit tag names of a repository (a path below the host, like
 // acme/app). limit zero asks for the registry's own page.
 func (c *Client) TagList(ctx context.Context, repo string, limit int) ([]string, error) {
+	return withFallback(ctx, c, func(c *Client, ctx context.Context) ([]string, error) {
+		return c.tagListOnce(ctx, repo, limit)
+	})
+}
+
+func (c *Client) tagListOnce(ctx context.Context, repo string, limit int) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 	var opts []scheme.TagOpts

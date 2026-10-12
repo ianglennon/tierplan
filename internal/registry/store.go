@@ -148,6 +148,7 @@ func (s *Store) Create(ctx context.Context, in CreateInput, actorID string, hook
 	params := sqlc.InsertRegistryCredentialParams{
 		ID: id, EnvID: nullString(in.EnvID), Name: in.Name, Type: in.Type, Host: in.Host, Prefix: in.Prefix,
 		Username: in.Username, SecretSealed: sealed, SecretLast4: Last4(in.Secret), HubFallback: boolInt(in.HubFallback),
+		CaPem: in.CAPEM, Insecure: boolInt(in.Insecure),
 		CreatedAt: now.UnixNano(), UpdatedAt: now.UnixNano(), CreatedBy: actorID,
 	}
 	if in.Expires != "" {
@@ -189,7 +190,7 @@ type UpdateHook func(ctx context.Context, tx *sql.Tx, c Credential, changed []st
 // same transaction. An empty Secret keeps the stored one: its envelope is not read or touched.
 // A new one is sealed again under the credential's own ID and its last characters replaced.
 // It returns the credential as it now is and the names of the fields that changed, sorted
-// (expires, host, hub_fallback, name, prefix, secret, type, username); the secret is only ever
+// (ca_pem, expires, host, hub_fallback, insecure, name, prefix, secret, type, username); the secret is only ever
 // the word secret. A form that changes nothing writes nothing, runs no hook and returns no
 // changed fields. ErrNotFound for an unknown ID, *ValidationError for a refused change and a
 // *ConflictError for a clash within the layer. The input is never logged.
@@ -243,9 +244,11 @@ func (s *Store) update(ctx context.Context, env *string, id string, in UpdateInp
 		name string
 		diff bool
 	}{
+		{"ca_pem", in.CAPEM != cur.CAPEM},
 		{"expires", in.Expires != prevExpires},
 		{"host", in.Host != cur.Host},
 		{"hub_fallback", in.HubFallback != cur.HubFallback},
+		{"insecure", in.Insecure != cur.Insecure},
 		{"name", in.Name != cur.Name},
 		{"prefix", in.Prefix != cur.Prefix},
 		{"secret", in.Secret != ""},
@@ -262,7 +265,7 @@ func (s *Store) update(ctx context.Context, env *string, id string, in UpdateInp
 
 	params := sqlc.UpdateRegistryCredentialParams{
 		ID: id, Name: in.Name, Type: in.Type, Host: in.Host, Prefix: in.Prefix, Username: in.Username,
-		HubFallback: boolInt(in.HubFallback), UpdatedAt: now.UnixNano(),
+		HubFallback: boolInt(in.HubFallback), CaPem: in.CAPEM, Insecure: boolInt(in.Insecure), UpdatedAt: now.UnixNano(),
 	}
 	if in.Expires != "" {
 		end, _ := ExpiryEnd(in.Expires) // ValidateUpdate accepted it
@@ -275,7 +278,7 @@ func (s *Store) update(ctx context.Context, env *string, id string, in UpdateInp
 		var n int64
 		n, uerr = q.UpdateRegistryCredentialInEnv(ctx, sqlc.UpdateRegistryCredentialInEnvParams{
 			Name: params.Name, Type: params.Type, Host: params.Host, Prefix: params.Prefix, Username: params.Username,
-			HubFallback: params.HubFallback, ExpiresAt: params.ExpiresAt, UpdatedAt: params.UpdatedAt,
+			HubFallback: params.HubFallback, CaPem: params.CaPem, Insecure: params.Insecure, ExpiresAt: params.ExpiresAt, UpdatedAt: params.UpdatedAt,
 			ID: id, EnvID: nullString(*env),
 		})
 		if uerr == nil && n == 0 {

@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -31,7 +32,7 @@ const ghcrAcme = `{"name":"ghcr-acme","type":"ghcr","prefix":"acme","username":"
 // credentialKeys is the exact key set of CredentialBody: a new key is a new thing the browser can
 // learn, and it must be added here on purpose.
 var credentialKeys = []string{
-	"canManage", "createdAt", "expiresAt", "hubFallback", "host", "id", "last4", "lastFailure", "lastTest",
+	"caPem", "canManage", "createdAt", "expiresAt", "hasCa", "hubFallback", "host", "id", "insecure", "last4", "lastFailure", "lastTest",
 	"name", "prefix", "scope", "type", "updatedAt", "username",
 }
 
@@ -51,6 +52,9 @@ type credentialResp struct {
 	HubFallback bool    `json:"hubFallback"`
 	ExpiresAt   *string `json:"expiresAt"`
 	CanManage   bool    `json:"canManage"`
+	CAPEM       string  `json:"caPem"`
+	HasCA       bool    `json:"hasCa"`
+	Insecure    bool    `json:"insecure"`
 }
 
 type credentialUser struct {
@@ -357,7 +361,7 @@ func TestACreateIsAuditedWithoutTheSecretOrItsLastCharacters(t *testing.T) {
 		if err := json.Unmarshal([]byte(details), &d); err != nil {
 			t.Fatal(err)
 		}
-		want := map[string]string{"name": "ghcr-acme", "layer": "instance", "host": "ghcr.io", "prefix": "acme", "type": "ghcr", "username": "bot", "hub_fallback": "false", "expires": "2199-12-31"}
+		want := map[string]string{"name": "ghcr-acme", "layer": "instance", "host": "ghcr.io", "prefix": "acme", "type": "ghcr", "username": "bot", "hub_fallback": "false", "expires": "2199-12-31", "insecure": "false", "custom_ca": "false"}
 		if len(d) != len(want) {
 			t.Errorf("details = %v, want exactly %v", d, want)
 		}
@@ -1568,5 +1572,178 @@ func TestBothFamiliesShareOneLimitOfTenTestsAMinutePerUser(t *testing.T) {
 	other := f.asRoleOn(t, "envadmin", a.ID, "admin")
 	if rec := f.credCall(t, other, http.MethodPost, "/api/env/"+a.ID+"/registries/test", body); rec.Code != http.StatusOK {
 		t.Errorf("another user: %d %s, want 200", rec.Code, rec.Body)
+	}
+}
+
+// Self-hosted registries (plan 05-12, D-14): a credential's own CA and the insecure switch.
+
+// caOf is the registry's certificate in PEM, the CA a person would paste for a self-signed one.
+func (f *fakeRegistry) caOf() string {
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: f.srv.Certificate().Raw}))
+}
+
+// withOptions is the credential body with the self-hosted options added.
+func (f *fakeRegistry) withOptions(name, secret string, extra map[string]any) string {
+	m := map[string]any{"name": name, "type": "generic", "host": f.host(), "username": f.user, "secret": secret}
+	for k, v := range extra {
+		m[k] = v
+	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+func TestACredentialKeepsItsCAAndSwitchAndOnlyManagersReadTheCA(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	reg := newFakeRegistry(t)
+	admin := f.asAdmin(t)
+	f.addEnvironmentRow(t, "env-a")
+	viewer := f.asRoleOn(t, "viewer", "env-a", "viewer")
+
+	c := f.storeCredential(t, admin, reg.withOptions("lab", reg.pass, map[string]any{"caPem": "\n" + reg.caOf() + "\n", "insecure": true}))
+	if c.CAPEM != strings.TrimSpace(reg.caOf()) || !c.HasCA || !c.Insecure {
+		t.Fatalf("created = %+v, want the trimmed CA, hasCa and insecure for a manager", c)
+	}
+	rec := f.credCall(t, viewer, http.MethodGet, "/api/registries/"+c.ID, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("viewer get: %d %s", rec.Code, rec.Body)
+	}
+	seen := decodeCred(t, rec)
+	if seen.CAPEM != "" || !seen.HasCA || !seen.Insecure || seen.CanManage {
+		t.Errorf("viewer sees %+v, want no CA text but hasCa and insecure", seen)
+	}
+
+	_, details := f.registryAudit(t)
+	if details[0]["insecure"] != "true" || details[0]["custom_ca"] != "true" {
+		t.Errorf("audit details = %v, want insecure and custom_ca recorded", details[0])
+	}
+	for k, v := range details[0] {
+		if strings.Contains(v, "BEGIN CERTIFICATE") {
+			t.Errorf("audit detail %s carries the certificate", k)
+		}
+	}
+
+	// An edit changes them, clears the CA with an empty string, and keeps both when left out.
+	rec = f.credCall(t, admin, http.MethodPatch, "/api/registries/"+c.ID, `{"caPem":"","insecure":false}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch: %d %s", rec.Code, rec.Body)
+	}
+	if got := decodeCred(t, rec); got.HasCA || got.CAPEM != "" || got.Insecure {
+		t.Errorf("after clearing = %+v, want no CA and no switch", got)
+	}
+	actions, details := f.registryAudit(t)
+	last := details[len(details)-1]
+	if actions[len(actions)-1] != "registry.credential_updated" || last["changed"] != "ca_pem,insecure" {
+		t.Errorf("update audit = %v %v, want changed ca_pem,insecure", actions[len(actions)-1], last)
+	}
+	rec = f.credCall(t, admin, http.MethodPatch, "/api/registries/"+c.ID, `{"insecure":true,"caPem":`+jsonString(reg.caOf())+`}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch: %d %s", rec.Code, rec.Body)
+	}
+	rec = f.credCall(t, admin, http.MethodPatch, "/api/registries/"+c.ID, `{"name":"lab2"}`)
+	if got := decodeCred(t, rec); !got.HasCA || !got.Insecure || got.Name != "lab2" {
+		t.Errorf("a patch that leaves them out changed them: %+v", got)
+	}
+}
+
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+func TestACAThatIsTooLargeOrHoldsNoCertificateIsRefusedWithCaInvalid(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	reg := newFakeRegistry(t)
+	admin := f.asAdmin(t)
+	big := reg.caOf() + strings.Repeat("#", 64<<10)
+	for name, ca := range map[string]string{"not a certificate": "hello", "too large": big} {
+		rec := f.credCall(t, admin, http.MethodPost, "/api/registries", reg.withOptions("lab", reg.pass, map[string]any{"caPem": ca}))
+		if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "body.caPem") || !strings.Contains(rec.Body.String(), "ca_invalid") {
+			t.Errorf("create with %s: %d %s, want 422 ca_invalid at body.caPem", name, rec.Code, rec.Body)
+		}
+	}
+	var n int
+	if err := f.st.Read.QueryRow(`SELECT count(*) FROM registry_credentials`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("credentials = %d, %v; a refused CA stores nothing", n, err)
+	}
+	c := f.storeCredential(t, admin, reg.credential("lab", reg.pass))
+	rec := f.credCall(t, admin, http.MethodPatch, "/api/registries/"+c.ID, `{"caPem":"hello"}`)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "ca_invalid") {
+		t.Errorf("patch with a bad CA: %d %s, want 422 ca_invalid", rec.Code, rec.Body)
+	}
+	rec = f.credCall(t, admin, http.MethodPost, "/api/registries/test", reg.withOptionsTest(map[string]any{"caPem": "hello"}))
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "ca_invalid") {
+		t.Errorf("test with a bad CA: %d %s, want 422 ca_invalid", rec.Code, rec.Body)
+	}
+}
+
+func (f *fakeRegistry) withOptionsTest(extra map[string]any) string {
+	m := map[string]any{"type": "generic", "host": f.host(), "username": f.user, "secret": f.pass, "testRepository": "acme/app"}
+	for k, v := range extra {
+		m[k] = v
+	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+// The server's own default trust does not include the fixture's certificate; the credential's
+// CA, or the switch, is what lets the test through.
+func TestATestTrustsTheCredentialsCAOrTheSwitchAndNothingElse(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	reg := newFakeRegistry(t)
+	admin := f.asAdmin(t)
+
+	call := func(extra map[string]any) testResult {
+		rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test", reg.withOptionsTest(extra))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("test: %d %s", rec.Code, rec.Body)
+		}
+		return decodeTest(t, rec)
+	}
+	if got := call(nil); got.Reachable != (testStep{"failed", "registry_tls"}) {
+		t.Errorf("without a CA = %+v, want failed registry_tls", got)
+	}
+	if got := call(map[string]any{"caPem": reg.caOf()}); got.Reachable.State != "passed" || got.SignedIn.State != "passed" || got.CanPull.State != "passed" {
+		t.Errorf("with the CA = %+v, want every step passed", got)
+	}
+	if got := call(map[string]any{"insecure": true}); got.Reachable.State != "passed" || got.SignedIn.State != "passed" || got.CanPull.State != "passed" {
+		t.Errorf("with the switch = %+v, want every step passed", got)
+	}
+	// The CA of one test does not leak into the next.
+	if got := call(nil); got.Reachable != (testStep{"failed", "registry_tls"}) {
+		t.Errorf("after a test with the CA, without it = %+v, want failed registry_tls", got)
+	}
+	_, details := f.registryAudit(t)
+	if details[1]["custom_ca"] != "true" || details[2]["insecure"] != "true" || details[0]["insecure"] != "false" {
+		t.Errorf("audit details = %v, want custom_ca and insecure recorded per test", details)
+	}
+}
+
+func TestATestOfAStoredCredentialLendsItsCAAndSwitchUnlessTheTestSendsOthers(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	reg := newFakeRegistry(t)
+	admin := f.asAdmin(t)
+	c := f.storeCredential(t, admin, reg.withOptions("lab", reg.pass, map[string]any{"caPem": reg.caOf()}))
+
+	rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test", `{"credentialId":"`+c.ID+`","testRepository":"acme/app"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("test: %d %s", rec.Code, rec.Body)
+	}
+	if got := decodeTest(t, rec); got.Reachable.State != "passed" || got.CanPull.State != "passed" {
+		t.Fatalf("with the stored CA = %+v, want passed", got)
+	}
+	if last := f.storedTest(t, admin, c.ID); last == nil || !last.OK {
+		t.Fatalf("lastTest = %+v, want the pass remembered", last)
+	}
+
+	// A test that sends another CA is of values that are not saved: answered, not remembered.
+	rec = f.credCall(t, admin, http.MethodPost, "/api/registries/test", `{"credentialId":"`+c.ID+`","caPem":""}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("test: %d %s", rec.Code, rec.Body)
+	}
+	if got := decodeTest(t, rec); got.Reachable != (testStep{"failed", "registry_tls"}) {
+		t.Fatalf("with the CA cleared = %+v, want failed registry_tls", got)
+	}
+	if last := f.storedTest(t, admin, c.ID); last == nil || !last.OK {
+		t.Errorf("lastTest = %+v, want the earlier pass kept: the changed test was not saved values", last)
 	}
 }

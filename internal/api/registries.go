@@ -75,6 +75,8 @@ type CredentialRequest struct {
 	Secret      string `json:"secret,omitempty" maxLength:"4096" doc:"The password or token. It is sealed with the vault and never returned by any route; only its last 4 characters can be shown, and only when it has 12 or more. 422 secret_required"`
 	HubFallback bool   `json:"hubFallback,omitempty" doc:"Use this credential for every Docker Hub pull no more specific credential matches. Docker Hub only (422 hub_fallback_not_hub), one per layer (409 hub_fallback_taken)"`
 	Expires     string `json:"expires,omitempty" maxLength:"32" doc:"An optional day, YYYY-MM-DD. It lasts to the end of that day, UTC. 422 expiry_invalid, and expiry_past for a day that has gone"`
+	CAPEM       string `json:"caPem,omitempty" maxLength:"262144" doc:"An optional certificate authority, in PEM, that Bayplan's own tests and tag browsing trust for this registry. At most 64 KiB and it must hold a certificate: 422 ca_invalid. Public material, returned to people who may manage the credential. It never changes the server's trust store and does nothing on a node"`
+	Insecure    bool   `json:"insecure,omitempty" doc:"Let Bayplan's own tests and tag browsing reach this registry without verifying its certificate, and over plain HTTP when it answers plain HTTP. Off by default. It does nothing on a node: each node's Docker daemon needs its own insecure-registries or certs.d setup"`
 }
 
 // CreateCredentialInput is the body of the create route.
@@ -104,6 +106,8 @@ type CredentialPatchRequest struct {
 	Secret      *string `json:"secret,omitempty" maxLength:"4096" doc:"A replacement password or token. Left out or empty keeps the stored secret, which is never read back. A new one is sealed with the vault and replaces it. It is never returned by any route"`
 	HubFallback *bool   `json:"hubFallback,omitempty" doc:"Whether it is used for every Docker Hub pull no more specific credential matches. Docker Hub only (422 hub_fallback_not_hub), one per layer (409 hub_fallback_taken)"`
 	Expires     *string `json:"expires,omitempty" maxLength:"32" doc:"A day, YYYY-MM-DD, or an empty string for none. 422 expiry_invalid, and expiry_past for a day that has gone (the credential's own unchanged day is never refused)"`
+	CAPEM       *string `json:"caPem,omitempty" maxLength:"262144" doc:"A new custom certificate authority in PEM, or an empty string for none. 422 ca_invalid for more than 64 KiB or text that holds no certificate"`
+	Insecure    *bool   `json:"insecure,omitempty" doc:"Whether Bayplan's own tests and tag browsing skip certificate verification and may use plain HTTP for this registry"`
 }
 
 // UpdateCredentialInput is the request of the update route.
@@ -170,6 +174,9 @@ type CredentialBody struct {
 	Username    string                          `json:"username" doc:"The registry user name"`
 	Last4       string                          `json:"last4" doc:"The last 4 characters of the secret, or empty when the secret is shorter than 12 characters. The page shows •••• before it"`
 	HubFallback bool                            `json:"hubFallback" doc:"Whether it is used for every Docker Hub pull no more specific credential matches"`
+	CAPEM       string                          `json:"caPem" doc:"The custom certificate authority in PEM, public material, for people who may manage the credential; empty for everyone else and when there is none"`
+	HasCA       bool                            `json:"hasCa" doc:"Whether the credential carries a custom certificate authority, whoever is asking"`
+	Insecure    bool                            `json:"insecure" doc:"Whether Bayplan's own tests and tag browsing skip certificate verification and may use plain HTTP for this registry. Nodes are not affected"`
 	ExpiresAt   *string                         `json:"expiresAt" nullable:"true" format:"date-time" doc:"The end of the last day it is valid; null when it does not expire"`
 	LastTest    Nullable[CredentialTestBody]    `json:"lastTest" doc:"The last test of the credential; null when it was never tested"`
 	LastFailure Nullable[CredentialFailureBody] `json:"lastFailure" doc:"The last sign-in failure with it; null when there was none"`
@@ -248,13 +255,15 @@ type ResolveOutput struct {
 // CredentialTestRequest is the body of the credential test routes. The values are the sheet's
 // as they stand, saved or not.
 type CredentialTestRequest struct {
-	CredentialID   string `json:"credentialId,omitempty" maxLength:"64" doc:"A stored credential of this layer to test. A field left blank is taken from it, and with no secret sent the stored secret is tried. When nothing is changed from what is stored, the result is remembered on the credential. 404 credential_not_found for one of another layer or environment"`
-	Type           string `json:"type,omitempty" maxLength:"32" doc:"dockerhub, ghcr, gitlab or generic, as when adding; 422 type_invalid"`
-	Host           string `json:"host,omitempty" maxLength:"512" doc:"The registry host, as when adding; 422 host_required or host_invalid"`
-	Prefix         string `json:"prefix,omitempty" maxLength:"512" doc:"The namespace the credential covers. Recorded with the test; it does not change what is tried"`
-	Username       string `json:"username,omitempty" maxLength:"512" doc:"The registry user name; 422 username_required"`
-	Secret         string `json:"secret,omitempty" maxLength:"4096" doc:"The password or token to try. It is used for this one test, never stored by it, and never returned or recorded. 422 secret_required when there is none to try"`
-	TestRepository string `json:"testRepository,omitempty" maxLength:"512" doc:"A repository to try to read with the sign-in, like acme/app. Without one, the last step is not checked. 422 test_repository_invalid"`
+	CredentialID   string  `json:"credentialId,omitempty" maxLength:"64" doc:"A stored credential of this layer to test. A field left blank is taken from it, and with no secret sent the stored secret is tried. When nothing is changed from what is stored, the result is remembered on the credential. 404 credential_not_found for one of another layer or environment"`
+	Type           string  `json:"type,omitempty" maxLength:"32" doc:"dockerhub, ghcr, gitlab or generic, as when adding; 422 type_invalid"`
+	Host           string  `json:"host,omitempty" maxLength:"512" doc:"The registry host, as when adding; 422 host_required or host_invalid"`
+	Prefix         string  `json:"prefix,omitempty" maxLength:"512" doc:"The namespace the credential covers. Recorded with the test; it does not change what is tried"`
+	Username       string  `json:"username,omitempty" maxLength:"512" doc:"The registry user name; 422 username_required"`
+	Secret         string  `json:"secret,omitempty" maxLength:"4096" doc:"The password or token to try. It is used for this one test, never stored by it, and never returned or recorded. 422 secret_required when there is none to try"`
+	TestRepository string  `json:"testRepository,omitempty" maxLength:"512" doc:"A repository to try to read with the sign-in, like acme/app. Without one, the last step is not checked. 422 test_repository_invalid"`
+	CAPEM          *string `json:"caPem,omitempty" maxLength:"262144" doc:"The custom certificate authority to trust for this test, in PEM. Left out, a stored credential's own is used; an empty string means none. 422 ca_invalid"`
+	Insecure       *bool   `json:"insecure,omitempty" doc:"Whether to skip certificate verification and allow plain HTTP for this test. Left out, a stored credential's own switch is used"`
 }
 
 // TestCredentialInput is the request of the instance test route.
@@ -313,7 +322,7 @@ func (l *testLimiter) allow(user string) bool {
 }
 
 // testFields are the fields of a submission a test looks at.
-var testFields = []string{"type", "host", "prefix", "username", "secret"}
+var testFields = []string{"type", "host", "prefix", "username", "secret", "caPem"}
 
 // validateTest checks the values of a test as adding a credential would, for the fields a
 // test uses, and returns them cleaned together with the repository to read. keepSecret says
@@ -321,7 +330,7 @@ var testFields = []string{"type", "host", "prefix", "username", "secret"}
 func validateTest(req CredentialTestRequest, keepSecret bool, now time.Time) (registry.CreateInput, string, *registry.ValidationError) {
 	in := registry.CreateInput{
 		Name: "test", Type: req.Type, Host: req.Host, Prefix: req.Prefix, Username: req.Username, Secret: req.Secret,
-		HubFallback: req.Type == registry.TypeDockerHub,
+		HubFallback: req.Type == registry.TypeDockerHub, CAPEM: deref(req.CAPEM), Insecure: deref(req.Insecure),
 	}
 	if keepSecret && strings.TrimSpace(in.Secret) == "" {
 		in.Secret = "placeholder"
@@ -344,6 +353,15 @@ func validateTest(req CredentialTestRequest, keepSecret bool, now time.Time) (re
 		return clean, "", &registry.ValidationError{Fields: bad}
 	}
 	return clean, repo, nil
+}
+
+// deref is the value a pointer holds, or the zero value when it is nil.
+func deref[T any](p *T) T {
+	var zero T
+	if p == nil {
+		return zero
+	}
+	return *p
 }
 
 func stepBody(s registry.StepResult) TestStepBody { return TestStepBody{State: s.State, Code: s.Code} }
@@ -442,7 +460,7 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 	create := func(ctx context.Context, p *rbac.Principal, envID, userAgent string, req CredentialRequest) (registry.Credential, error) {
 		return d.Store.Create(ctx, registry.CreateInput{
 			EnvID: envID, Name: req.Name, Type: req.Type, Host: req.Host, Prefix: req.Prefix, Username: req.Username,
-			Secret: req.Secret, HubFallback: req.HubFallback, Expires: req.Expires,
+			Secret: req.Secret, HubFallback: req.HubFallback, Expires: req.Expires, CAPEM: req.CAPEM, Insecure: req.Insecure,
 		}, p.ID, func(ctx context.Context, tx *sql.Tx, c registry.Credential) error {
 			return d.Audit.RecordTx(ctx, tx, audit.Entry{
 				Actor: p.AuditActor(), Action: audit.ActionRegistryCredentialCreated, TargetType: credentialTargetType, TargetID: c.ID,
@@ -488,6 +506,14 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 			req.Type = cmp.Or(req.Type, c.Type)
 			req.Host = cmp.Or(req.Host, c.Host)
 			req.Username = cmp.Or(req.Username, c.Username)
+			// The CA and the switch are lent by the stored credential only when the test did not
+			// send them, so a person can try a different CA before saving it.
+			if req.CAPEM == nil {
+				req.CAPEM = &c.CAPEM
+			}
+			if req.Insecure == nil {
+				req.Insecure = &c.Insecure
+			}
 		}
 		in, repo, ve := validateTest(req, stored != nil, time.Now())
 		if ve != nil {
@@ -505,11 +531,13 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 			return nil, httpx.Problem(http.StatusTooManyRequests, problemRateLimited, "Too many tests. Wait a minute and try again.")
 		}
 		// The test is of the saved values when nothing it uses was changed from them.
-		saved := stored != nil && req.Secret == "" && in.Type == stored.Type && in.Host == stored.Host && in.Username == stored.Username
-		opts := registry.HostOptions{Host: in.Host, Username: in.Username, Password: secret}
+		saved := stored != nil && req.Secret == "" && in.Type == stored.Type && in.Host == stored.Host && in.Username == stored.Username &&
+			in.CAPEM == stored.CAPEM && in.Insecure == stored.Insecure
+		opts := registry.HostOptions{Host: in.Host, Username: in.Username, Password: secret, CAPEM: in.CAPEM, Insecure: in.Insecure}
 		tctx, cancel := context.WithTimeout(ctx, testBudget)
 		defer cancel()
-		res := registry.Check(tctx, clients.New(opts), clients.Anonymous(in.Host), registry.CheckInput{
+		anon := registry.HostOptions{Host: in.Host, CAPEM: in.CAPEM, Insecure: in.Insecure}
+		res := registry.Check(tctx, clients.New(opts), clients.New(anon), registry.CheckInput{
 			HostOptions: opts, Type: in.Type, Prefix: in.Prefix, TestRepository: repo,
 		})
 		layer := registry.LayerInstance
@@ -519,6 +547,7 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		details := map[string]string{
 			"layer": layer, "host": in.Host, "prefix": in.Prefix, "type": in.Type, "via": "server",
 			"reachable": res.Reachable.State, "signed_in": res.SignedIn.State, "can_pull": res.CanPull.State,
+			"insecure": strconv.FormatBool(in.Insecure), "custom_ca": strconv.FormatBool(in.CAPEM != ""),
 		}
 		entry := audit.Entry{
 			Actor: p.AuditActor(), Action: audit.ActionRegistryCredentialTested, TargetType: credentialTargetType,
@@ -600,7 +629,7 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		Description: "Stores a sign-in for a registry host and an optional namespace, used for pulls and tag browsing on every environment. The secret is sealed with the vault, " +
 			"included in backups and re-wrapped by key rotation, and never returned by any route afterwards: the answer carries only its last 4 characters, and only for a secret of 12 or more characters. " +
 			"Needs registries.instance, which only instance admins hold. 422 validation_failed names every field at fault with a stable code (name_required, name_invalid, type_invalid, host_required, host_invalid, " +
-			"prefix_invalid, username_required, secret_required, hub_prefix_required, hub_fallback_not_hub, expiry_invalid, expiry_past); 409 credential_name_taken, host_prefix_taken or hub_fallback_taken " +
+			"prefix_invalid, username_required, secret_required, hub_prefix_required, hub_fallback_not_hub, expiry_invalid, expiry_past, ca_invalid); 409 credential_name_taken, host_prefix_taken or hub_fallback_taken " +
 			"when another instance credential clashes; the 409 names that credential in its errors list (location conflict.credential). Audited as registry.credential_created without the secret.",
 		Tags: []string{"registries"},
 	}, rbac.Require(rbac.PermRegistriesInstance), func(ctx context.Context, in *CreateCredentialInput) (*CredentialOutput, error) {
@@ -655,7 +684,8 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 			"reported as refused whether the registry says 401 or 403; a registry that asks for no login reports signed in as not_checked. Each step is a state and a code, never text from the registry. " +
 			"The server refuses link-local, unspecified and multicast addresses (cloud metadata included) after DNS, allows private and loopback ranges, and refuses redirects to plain HTTP or local URLs. " +
 			"Needs registries.instance. At most 10 tests a minute per user across both families: 429 rate_limited. 422 validation_failed names the fields at fault with the codes of adding a credential, " +
-			"and test_repository_invalid. Audited as registry.credential_tested with each step's result, never the secret.",
+			"ca_invalid and test_repository_invalid. caPem and insecure apply the credential's own CA and switch to this test only; the operator's BAYPLAN_REGISTRY_BLOCK_CIDRS ranges stay refused even with the switch on. " +
+			"Audited as registry.credential_tested with each step's result, never the secret.",
 		Tags: []string{"registries"},
 	}, rbac.Require(rbac.PermRegistriesInstance), func(ctx context.Context, in *TestCredentialInput) (*CredentialTestOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
@@ -910,13 +940,14 @@ func candidateScope(c registry.Candidate) CredentialScopeBody {
 func mergeCredentialPatch(cur registry.Credential, patch CredentialPatchRequest) registry.UpdateInput {
 	in := registry.UpdateInput{
 		Name: cur.Name, Type: cur.Type, Host: cur.Host, Prefix: cur.Prefix, Username: cur.Username, HubFallback: cur.HubFallback,
+		CAPEM: cur.CAPEM, Insecure: cur.Insecure,
 	}
 	if cur.ExpiresAt != nil {
 		in.Expires = cur.ExpiresAt.UTC().Format(time.DateOnly)
 	}
 	for dst, src := range map[*string]*string{
 		&in.Name: patch.Name, &in.Type: patch.Type, &in.Host: patch.Host, &in.Prefix: patch.Prefix,
-		&in.Username: patch.Username, &in.Secret: patch.Secret, &in.Expires: patch.Expires,
+		&in.Username: patch.Username, &in.Secret: patch.Secret, &in.Expires: patch.Expires, &in.CAPEM: patch.CAPEM,
 	} {
 		if src != nil {
 			*dst = *src
@@ -924,6 +955,9 @@ func mergeCredentialPatch(cur registry.Credential, patch CredentialPatchRequest)
 	}
 	if patch.HubFallback != nil {
 		in.HubFallback = *patch.HubFallback
+	}
+	if patch.Insecure != nil {
+		in.Insecure = *patch.Insecure
 	}
 	return in
 }
@@ -955,8 +989,11 @@ func (d RegistriesDeps) envName(ctx context.Context, envID string) *string {
 func credentialBody(c registry.Credential, canManage bool, envName *string) CredentialBody {
 	b := CredentialBody{
 		ID: c.ID, Scope: CredentialScopeBody{Kind: c.Layer(), EnvName: envName}, Name: c.Name, Type: c.Type, Host: c.Host,
-		Prefix: c.Prefix, Username: c.Username, Last4: c.Last4, HubFallback: c.HubFallback, CanManage: canManage,
-		CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
+		Prefix: c.Prefix, Username: c.Username, Last4: c.Last4, HubFallback: c.HubFallback, HasCA: c.CAPEM != "", Insecure: c.Insecure,
+		CanManage: canManage, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
+	}
+	if canManage {
+		b.CAPEM = c.CAPEM
 	}
 	if c.EnvID != "" {
 		id := c.EnvID
@@ -985,6 +1022,7 @@ func credentialAuditDetails(c registry.Credential) map[string]string {
 	return map[string]string{
 		"name": c.Name, "layer": c.Layer(), "host": c.Host, "prefix": c.Prefix, "type": c.Type,
 		"username": c.Username, "hub_fallback": strconv.FormatBool(c.HubFallback), "expires": expires,
+		"insecure": strconv.FormatBool(c.Insecure), "custom_ca": strconv.FormatBool(c.CAPEM != ""),
 	}
 }
 

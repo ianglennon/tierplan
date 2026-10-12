@@ -51,6 +51,9 @@ type Config struct {
 	EncryptionKey string // secret
 	// TrustedProxies are the peers whose forwarded headers are believed (D-39).
 	TrustedProxies []netip.Prefix
+	// RegistryBlockCIDRs are address ranges the server refuses to connect to when it talks to
+	// a registry, on top of the built-in link-local, unspecified and multicast ranges.
+	RegistryBlockCIDRs []netip.Prefix
 
 	LoginMaxFailures        int
 	LoginLockout            time.Duration
@@ -160,6 +163,8 @@ var settings = []setting{
 		apply: func(c *Config, raw string) error { c.EncryptionKey = raw; return nil }},
 	{env: "BAYPLAN_TRUSTED_PROXIES", flag: "trusted-proxies", desc: "comma-separated IPs or CIDRs of proxies whose forwarded headers are trusted",
 		apply: func(c *Config, raw string) (err error) { c.TrustedProxies, err = parsePrefixes(raw); return err }},
+	{env: "BAYPLAN_REGISTRY_BLOCK_CIDRS", flag: "registry-block-cidrs", desc: "comma-separated IPs or CIDRs the server refuses to connect to when it tests or browses a registry, on top of link-local, unspecified and multicast ranges; private and loopback ranges are allowed by default because self-hosted registries live there",
+		apply: func(c *Config, raw string) (err error) { c.RegistryBlockCIDRs, err = parsePrefixes(raw); return err }},
 	{env: "BAYPLAN_LOGIN_MAX_FAILURES", flag: "login-max-failures", def: "5", desc: "failed sign-ins before an account locks",
 		apply: func(c *Config, raw string) (err error) { c.LoginMaxFailures, err = parseInt(raw, 1); return err }},
 	{env: "BAYPLAN_LOGIN_LOCKOUT", flag: "login-lockout", def: "30m", desc: "how long an account stays locked",

@@ -102,7 +102,9 @@ func Check(ctx context.Context, c, anon *Client, in CheckInput) CheckResult {
 	res.Reachable = StepResult{State: StepPassed}
 
 	signedIn := true
-	if probe.AsksLogin {
+	// A probe that went through regclient's sign-in cannot say the registry wants no login, so
+	// the sign-in is tried.
+	if probe.AsksLogin || probe.LoginUnknown {
 		if err := c.Ping(ctx); err != nil {
 			res.SignedIn = StepResult{State: StepFailed, Code: classify(err)}
 			signedIn = false
