@@ -93,9 +93,12 @@ func alertOf(now time.Time, c Credential) (Alert, bool) {
 		a.Kind, a.At = AlertExpired, *c.ExpiresAt
 		return a, true
 	}
-	if f := c.LastFailure; f != nil && !(c.LastTest != nil && c.LastTest.OK && c.LastTest.At.After(f.At)) {
-		a.Kind, a.At = AlertAuthFailed, f.At
-		return a, true
+	if f := c.LastFailure; f != nil {
+		worked := c.LastTest != nil && c.LastTest.OK && c.LastTest.At.After(f.At)
+		if !worked {
+			a.Kind, a.At = AlertAuthFailed, f.At
+			return a, true
+		}
 	}
 	if c.ExpiresAt != nil {
 		if left := c.ExpiresAt.Sub(now); left <= ExpiryWarning {
