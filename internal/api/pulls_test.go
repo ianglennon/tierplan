@@ -16,6 +16,9 @@ import (
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/internal/tunnel"
+	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/bayplan/proto/wire"
 )
 
 // Pull jobs (plan 05-01, RES-09, D-25, D-26, D-30, D-31). Docker is a fake daemon behind
@@ -470,5 +473,290 @@ func TestPullStreamsPerUserAreCapped(t *testing.T) {
 	third := f.call(t, authReq{method: http.MethodGet, path: path, cookie: f.cookie})
 	if third.Code != http.StatusTooManyRequests || problemType(t, third) != "too_many_streams" {
 		t.Fatalf("third stream: %d %s, want 429 too_many_streams", third.Code, third.Body)
+	}
+}
+
+// Where a pull runs: the nodes of a swarm are listed with their role, architecture and
+// reachability, a pull names all of them or the ones the user picks, and a read-only host
+// is named and never called (plan 05-03, RES-09, IMG-02, D-25, D-30, P4 D-13).
+
+type pullTargets struct {
+	Swarm bool `json:"swarm"`
+	Nodes []struct {
+		NodeID    string `json:"nodeId"`
+		Name      string `json:"name"`
+		Role      string `json:"role"`
+		Arch      string `json:"arch"`
+		ReadOnly  bool   `json:"readOnly"`
+		Reachable bool   `json:"reachable"`
+	} `json:"nodes"`
+}
+
+// pullOnSwarm posts a pull to the swarm fixture's environment once its managers' engines
+// have been probed.
+func (s *swarmFix) pullOnSwarm(t *testing.T, body string) *envRec {
+	t.Helper()
+	s.whenProbed(t, envs.AgentTarget(s.m1.id), envs.AgentTarget(s.m2.id), envs.AgentTarget(s.w.id))
+	return s.req(t, http.MethodPost, "/api/env/"+s.env.ID+"/images/pull", body)
+}
+
+func (s *swarmFix) pullsDone(t *testing.T, id string) pullJob {
+	t.Helper()
+	var job pullJob
+	waitFor(t, "the pull to end", func() bool {
+		rec := s.getPull(t, id)
+		if rec.code != http.StatusOK {
+			t.Fatalf("GET pull: %d %s", rec.code, rec.body)
+		}
+		job = decode[pullJob](t, rec)
+		return job.State != "running"
+	})
+	return job
+}
+
+func creates(a *agentConn) int {
+	n := 0
+	for _, w := range a.fake.Writes() {
+		if strings.HasPrefix(w, "POST /images/create") {
+			n++
+		}
+	}
+	return n
+}
+
+func TestPullTargetsListsEveryNodeWithRoleArchitectureAndReachability(t *testing.T) {
+	s := newSwarmFix(t)
+	s.whenProbed(t, envs.AgentTarget(s.m1.id), envs.AgentTarget(s.m2.id), envs.AgentTarget(s.w.id))
+	rec := s.req(t, http.MethodGet, "/api/env/"+s.env.ID+"/images/pull-targets", "")
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	got := decode[pullTargets](t, rec)
+	if !got.Swarm || len(got.Nodes) != 3 {
+		t.Fatalf("targets = %s, want a swarm of three nodes", rec.body)
+	}
+	for i, want := range []struct{ id, name, role string }{
+		{s.m1.id, "mgr-1", "manager"}, {s.m2.id, "mgr-2", "manager"}, {s.w.id, "wrk-1", "worker"},
+	} {
+		n := got.Nodes[i]
+		if n.NodeID != want.id || n.Name != want.name || n.Role != want.role || n.Arch != "amd64" || n.ReadOnly || !n.Reachable {
+			t.Errorf("node %d = %+v, want %s (%s) amd64, writable and reachable", i, n, want.name, want.role)
+		}
+	}
+
+	// A worker whose agent is gone is still listed, and unreachable.
+	s.srv.Hub.Kick(s.w.id, tunnel.DisconnectClosed)
+	waitFor(t, "the worker to be listed unreachable", func() bool {
+		got = decode[pullTargets](t, s.req(t, http.MethodGet, "/api/env/"+s.env.ID+"/images/pull-targets", ""))
+		return len(got.Nodes) == 3 && !got.Nodes[2].Reachable
+	})
+	if w := got.Nodes[2]; w.NodeID != s.w.id || w.Name != "wrk-1" || w.Role != "worker" || got.Nodes[0].Reachable != true {
+		t.Errorf("targets = %+v, want wrk-1 unreachable by its agent ID and the managers still reachable", got.Nodes)
+	}
+}
+
+func TestPullTargetsOfAStandaloneHostIsOneNodeAndNotASwarm(t *testing.T) {
+	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	rec := f.get(t, e, "images/pull-targets")
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	got := decode[pullTargets](t, rec)
+	if got.Swarm || len(got.Nodes) != 1 || got.Nodes[0].NodeID != e.ID || got.Nodes[0].Name == "" || got.Nodes[0].Arch != "amd64" || !got.Nodes[0].Reachable {
+		t.Fatalf("targets = %s, want one reachable amd64 node and swarm false", rec.body)
+	}
+}
+
+func TestPullTargetsAreForViewersAndNotForAnotherEnvironmentsUsers(t *testing.T) {
+	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
+	f.addUser(t, "viewer", false)
+	f.addEnvRole(t, "viewer", e.ID, "viewer")
+	f.addUser(t, "nobody", false)
+	cookie, _ := f.signIn(t, "viewer", false)
+	if rec := f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + e.ID + "/images/pull-targets", cookie: cookie}); rec.Code != http.StatusOK {
+		t.Errorf("a Viewer: %d %s, want 200", rec.Code, rec.Body)
+	}
+	cookie, _ = f.signIn(t, "nobody", false)
+	if rec := f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + e.ID + "/images/pull-targets", cookie: cookie}); rec.Code == http.StatusOK {
+		t.Errorf("a user with no role here: %d, want a refusal", rec.Code)
+	}
+}
+
+func TestPullWithoutNodeIDsRunsOnEveryNodeAndNodeIDsChooseThem(t *testing.T) {
+	s := newSwarmFix(t)
+	rec := s.pullOnSwarm(t, `{"ref":"busybox:1.36.1"}`)
+	if rec.code != http.StatusAccepted {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	started := decode[pullStarted](t, rec)
+	var names []string
+	for _, n := range started.Nodes {
+		names = append(names, n.Name)
+	}
+	if !slices.Equal(names, []string{"mgr-1", "mgr-2", "wrk-1"}) {
+		t.Fatalf("nodes = %v, want every node in name order", names)
+	}
+	job := s.pullsDone(t, started.JobID)
+	if job.State != "done" || len(job.Items) != 3 || job.Items[0].Name != "mgr-1" || job.Items[2].Name != "wrk-1" {
+		t.Fatalf("job = %+v, want three done items in node-name order", job)
+	}
+	if creates(s.m1) != 1 || creates(s.m2) != 1 || creates(s.w) != 1 {
+		t.Fatalf("pulls served = %d/%d/%d, want one each", creates(s.m1), creates(s.m2), creates(s.w))
+	}
+
+	// Only the worker is chosen.
+	rec = s.pullOnSwarm(t, `{"ref":"busybox:1.37","nodeIds":["`+s.w.id+`"]}`)
+	if rec.code != http.StatusAccepted {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	one := s.pullsDone(t, decode[pullStarted](t, rec).JobID)
+	if one.State != "done" || len(one.Items) != 1 || one.Items[0].NodeID != s.w.id {
+		t.Fatalf("job = %+v, want the one chosen node", one)
+	}
+	if creates(s.m1) != 1 || creates(s.m2) != 1 || creates(s.w) != 2 {
+		t.Fatalf("pulls served = %d/%d/%d, want only the worker to have pulled again", creates(s.m1), creates(s.m2), creates(s.w))
+	}
+}
+
+func TestPullNodeChoiceIsCheckedAgainstTheEnvironmentsOwnNodes(t *testing.T) {
+	s := newSwarmFix(t)
+	for name, tc := range map[string]struct{ body, ptyp string }{
+		"a node of nowhere":                {`{"ref":"busybox","nodeIds":["not-a-node"]}`, "nodes_unknown"},
+		"one good node and one unknown":    {`{"ref":"busybox","nodeIds":["` + s.w.id + `","other"]}`, "nodes_unknown"},
+		"a node named instead of its ID":   {`{"ref":"busybox","nodeIds":["wrk-1"]}`, "nodes_unknown"},
+		"an empty choice":                  {`{"ref":"busybox","nodeIds":[]}`, "nodes_required"},
+		"the same node twice is only once": {`{"ref":"busybox","nodeIds":["` + s.w.id + `","` + s.w.id + `"]}`, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := s.pullOnSwarm(t, tc.body)
+			if tc.ptyp == "" {
+				if rec.code != http.StatusAccepted || len(decode[pullStarted](t, rec).Nodes) != 1 {
+					t.Fatalf("status = %d: %s, want one item", rec.code, rec.body)
+				}
+				return
+			}
+			if rec.code != http.StatusUnprocessableEntity || rec.ptyp != tc.ptyp {
+				t.Fatalf("status = %d %q: %s, want 422 %s", rec.code, rec.ptyp, rec.body, tc.ptyp)
+			}
+		})
+	}
+	// Only the duplicate case started a pull: nothing else reached an engine.
+	waitFor(t, "the one pull to reach the worker", func() bool { return creates(s.w) == 1 })
+	if creates(s.m1) != 0 || creates(s.m2) != 0 {
+		t.Errorf("managers served %d/%d pulls, want none", creates(s.m1), creates(s.m2))
+	}
+
+	t.Run("more than 128 IDs", func(t *testing.T) {
+		ids := make([]string, 129)
+		for i := range ids {
+			ids[i] = "n" + strconv.Itoa(i)
+		}
+		b, _ := json.Marshal(map[string]any{"ref": "busybox", "nodeIds": ids})
+		if rec := s.pullOnSwarm(t, string(b)); rec.code != http.StatusUnprocessableEntity {
+			t.Fatalf("status = %d: %s, want 422", rec.code, rec.body)
+		}
+	})
+}
+
+// twoNodes is a swarm of two nodes whose engines the caller configures.
+func twoNodes(t *testing.T, a, b dockertest.FakeConfig, aFacts, bFacts *wire.Facts) (f *agentFix, env tunneltest.Environment, x, y *agentConn) {
+	t.Helper()
+	f = newAgentFix(t)
+	env = f.srv.NewEnvironment(t, "Pair")
+	x = f.connect(t, env, a, aFacts)
+	y = f.connect(t, env, b, bFacts)
+	f.whenState(t, env.ID, "online")
+	f.whenProbed(t, envs.AgentTarget(x.id), envs.AgentTarget(y.id))
+	return f, env, x, y
+}
+
+func pairFacts(name string, readOnly bool) *wire.Facts {
+	return &wire.Facts{
+		EngineID: "ENG:" + name, Hostname: name, EngineReachable: true, Policy: wire.PolicyFacts{ReadOnly: readOnly},
+		Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-" + name, ClusterID: "cluster-1", Control: true},
+	}
+}
+
+func TestPullOnAReadOnlyNodeIsHostReadOnlyAuditedAndNeverCallsItsEngine(t *testing.T) {
+	f, env, ro, rw := twoNodes(t,
+		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
+		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
+		pairFacts("alpha", true), pairFacts("bravo", false))
+	rec := f.req(t, http.MethodPost, "/api/env/"+env.ID+"/images/pull", `{"ref":"busybox:1.36.1"}`)
+	if rec.code != http.StatusAccepted {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	job := f.pullDone(t, decode[pullStarted](t, rec).JobID)
+	if job.State != "partial" || len(job.Items) != 2 {
+		t.Fatalf("job = %+v, want partial with two items", job)
+	}
+	if a := job.Items[0]; a.Name != "alpha" || a.State != "failed" || a.Code != "host_read_only" {
+		t.Errorf("alpha = %+v, want failed with host_read_only", a)
+	}
+	if b := job.Items[1]; b.Name != "bravo" || b.State != "done" {
+		t.Errorf("bravo = %+v, want done", b)
+	}
+	if w := ro.fake.Writes(); len(w) != 0 {
+		t.Errorf("the read-only host's engine received %v", w)
+	}
+	if creates(rw) != 1 {
+		t.Errorf("the writable host served %d pulls, want 1", creates(rw))
+	}
+	rows := f.pullAudits(t)
+	if len(rows) != 2 || rows[0].Reason != "host_read_only" || rows[0].Result != string(audit.ResultFailure) {
+		t.Fatalf("audit rows = %+v, want a host_read_only failure and a success", rows)
+	}
+}
+
+func TestOneNodeFailingLeavesTheOthersDoneAndEveryAuditRowCarriesTheSameBulkID(t *testing.T) {
+	f, env, _, _ := twoNodes(t,
+		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true, PullStatus: dockertest.FakePullStatus{Code: http.StatusInternalServerError, Message: "boom"}},
+		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
+		pairFacts("alpha", false), pairFacts("bravo", false))
+	rec := f.req(t, http.MethodPost, "/api/env/"+env.ID+"/images/pull", `{"ref":"busybox:1.36.1"}`)
+	if rec.code != http.StatusAccepted {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	started := decode[pullStarted](t, rec)
+	job := f.pullDone(t, started.JobID)
+	if job.State != "partial" || len(job.Items) != 2 || job.Items[0].State != "failed" || job.Items[0].Code == "" || job.Items[1].State != "done" {
+		t.Fatalf("job = %+v, want alpha failed with a code and bravo done, so partial", job)
+	}
+	rows := f.pullAudits(t)
+	if len(rows) != 2 {
+		t.Fatalf("audit rows = %+v, want one per node", rows)
+	}
+	for _, r := range rows {
+		if r.Details["bulk"] != started.JobID {
+			t.Errorf("audit row %+v does not carry the job ID %s as its bulk", r, started.JobID)
+		}
+	}
+	if rows[0].Result == rows[1].Result {
+		t.Errorf("audit results = %s and %s, want one failure and one success", rows[0].Result, rows[1].Result)
+	}
+}
+
+func TestPullOnAnUnreachableNodeFailsItAloneWithNodeUnreachable(t *testing.T) {
+	s := newSwarmFix(t)
+	s.whenProbed(t, envs.AgentTarget(s.m1.id), envs.AgentTarget(s.m2.id), envs.AgentTarget(s.w.id))
+	s.srv.Hub.Kick(s.w.id, tunnel.DisconnectClosed)
+	waitFor(t, "the worker to be listed unreachable", func() bool {
+		got := decode[pullTargets](t, s.req(t, http.MethodGet, "/api/env/"+s.env.ID+"/images/pull-targets", ""))
+		return len(got.Nodes) == 3 && !got.Nodes[2].Reachable
+	})
+	rec := s.req(t, http.MethodPost, "/api/env/"+s.env.ID+"/images/pull", `{"ref":"busybox:1.36.1"}`)
+	if rec.code != http.StatusAccepted {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	job := s.pullsDone(t, decode[pullStarted](t, rec).JobID)
+	if job.State != "partial" || len(job.Items) != 3 {
+		t.Fatalf("job = %+v, want partial with the unreachable node as an item too", job)
+	}
+	if w := job.Items[2]; w.Name != "wrk-1" || w.State != "failed" || w.Code != "node_unreachable" {
+		t.Errorf("worker = %+v, want failed with node_unreachable", w)
+	}
+	if job.Items[0].State != "done" || job.Items[1].State != "done" {
+		t.Errorf("managers = %+v %+v, want both done", job.Items[0], job.Items[1])
 	}
 }

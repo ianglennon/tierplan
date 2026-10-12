@@ -22,7 +22,10 @@ import (
 // agent reported that its host owner made it read-only; the local socket is never.
 type NodeRef struct {
 	ID, Name, Role string
-	ReadOnly       bool
+	// Arch is the node's CPU architecture by its OCI name (amd64, arm64), empty when
+	// the node has not said.
+	Arch     string
+	ReadOnly bool
 }
 
 // Limits of the swarm fan-out (D-46, T-02-72).
@@ -102,6 +105,10 @@ type Aggregate struct {
 	// NotReporting names the nodes expected to answer whose rows are left out:
 	// agent missing, read failed or timed out (D-46). It is never nil.
 	NotReporting []string
+	// Unreachable is NotReporting with what a write needs: the node's ID (its agent's
+	// ID, or the swarm node's when it never had an agent), name and role. A pull that
+	// names every node includes them, so each gets its own failed row (D-25).
+	Unreachable []NodeRef
 }
 
 // ErrNotOnline is the error of a read of an environment that cannot be read: the
