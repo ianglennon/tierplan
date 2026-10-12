@@ -25,6 +25,8 @@
       },
       "actionsFor": "Actions for {{name}}",
       "viewDetails": "View details",
+      "edit": "Edit",
+      "delete": "Delete…",
       "hubFallback": "All Hub pulls",
       "notTested": "Not tested",
       "testPassed": "Passed",
@@ -70,6 +72,17 @@
       "gitlab": "GitLab",
       "generic": "Generic",
       "genericLong": "Generic v2"
+    },
+    "delete": {
+      "title": "Delete “{{name}}”?",
+      "body": "Pulls this credential would have matched fall back to the next matching credential, or to anonymous. Nothing else refers to it.",
+      "cancel": "Cancel",
+      "confirm": "Delete credential",
+      "pending": "Deleting…",
+      "done": "Deleted credential {{name}}.",
+      "gone": "{{name}} is already gone.",
+      "permission": "You no longer have permission to do that. Your access may have changed.",
+      "generic": "Couldn't delete the credential. Try again."
     },
     "sheet": {
       "add": {

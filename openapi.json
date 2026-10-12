@@ -12312,6 +12312,42 @@
       }
     },
     "/api/registries/{credentialId}": {
+      "delete": {
+        "description": "Removes the credential and its sealed secret. Pulls it would have matched fall back to the next matching credential, or to anonymous; nothing else refers to it. Needs registries.instance. A credential that is already gone, and one of an environment, answer 404 credential_not_found, so a repeated delete is safe and writes nothing. Audited as registry.credential_deleted without the secret.",
+        "operationId": "deleteInstanceCredential",
+        "parameters": [
+          {
+            "description": "The credential's ID",
+            "in": "path",
+            "name": "credentialId",
+            "required": true,
+            "schema": {
+              "description": "The credential's ID",
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Delete an instance registry credential",
+        "tags": [
+          "registries"
+        ]
+      },
       "get": {
         "description": "The credential as the list shows it. One the caller may not see answers exactly like one that does not exist: 404 credential_not_found.",
         "operationId": "getCredential",

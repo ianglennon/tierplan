@@ -1572,7 +1572,11 @@ export interface paths {
         get: operations["getCredential"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete an instance registry credential
+         * @description Removes the credential and its sealed secret. Pulls it would have matched fall back to the next matching credential, or to anonymous; nothing else refers to it. Needs registries.instance. A credential that is already gone, and one of an environment, answer 404 credential_not_found, so a repeated delete is safe and writes nothing. Audited as registry.credential_deleted without the secret.
+         */
+        delete: operations["deleteInstanceCredential"];
         options?: never;
         head?: never;
         /**
@@ -8268,6 +8272,36 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["CredentialBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteInstanceCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The credential's ID */
+                credentialId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

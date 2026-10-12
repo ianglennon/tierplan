@@ -2,13 +2,14 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { environmentsQuery } from "@/api/environments";
-import { credentialsQuery } from "@/api/registries";
+import { type Credential, credentialsQuery } from "@/api/registries";
 import { NoPermission } from "@/components/full-page-state";
 import { MAX_QUERY } from "@/features/containers/list-search";
 import { CredentialSheet } from "@/features/registries/credential-sheet";
 import { CredentialTable } from "@/features/registries/credential-table";
+import { DeleteCredentialDialog } from "@/features/registries/delete-credential-dialog";
 import { useAnyEnvironmentPermission, useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { z } from "@/lib/zod-config";
@@ -48,6 +49,8 @@ export function RegistriesPage({ search, onSearchChange }: RegistriesPageProps) 
   const allowed = useAnyEnvironmentPermission("images.read");
   const canAdd = usePermission("registries.instance");
   const credentials = useQuery({ ...credentialsQuery, enabled: allowed });
+  // The credential whose delete confirmation is open.
+  const [deleting, setDeleting] = useState<Credential | null>(null);
   const environments = useQuery({ ...environmentsQuery, enabled: allowed });
 
   const scopes = useMemo(
@@ -68,6 +71,10 @@ export function RegistriesPage({ search, onSearchChange }: RegistriesPageProps) 
   if (!allowed) return <NoPermission />;
 
   const closeSheet = () => onSearchChange({ credential: undefined });
+  // A credential the list shows as one the caller may only see opens as its details; any
+  // other, including one the list does not hold yet, opens as the form, which falls back to
+  // the details by itself when the server says the caller may not change it.
+  const listed = credentials.data?.find((c) => c.id === search.credential);
 
   return (
     <>
@@ -83,13 +90,27 @@ export function RegistriesPage({ search, onSearchChange }: RegistriesPageProps) 
         canAdd={canAdd}
         onAdd={() => onSearchChange({ credential: "new" })}
         onOpen={(id) => onSearchChange({ credential: id })}
+        onDelete={setDeleting}
+      />
+      <DeleteCredentialDialog
+        credential={deleting}
+        open={deleting !== null}
+        onClose={() => setDeleting(null)}
+        onDone={() => {
+          // Deleting the credential whose sheet is open leaves nothing to show.
+          if (deleting && deleting.id === search.credential) closeSheet();
+        }}
       />
       {search.credential === "new" ? (
         canAdd ? (
           <CredentialSheet mode="add" onClose={closeSheet} />
         ) : null
       ) : search.credential ? (
-        <CredentialSheet mode="view" credentialId={search.credential} onClose={closeSheet} />
+        <CredentialSheet
+          mode={listed && !listed.canManage ? "view" : "edit"}
+          credentialId={search.credential}
+          onClose={closeSheet}
+        />
       ) : null}
     </>
   );

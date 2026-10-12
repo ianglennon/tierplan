@@ -13,6 +13,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -224,11 +225,14 @@ interface CredentialTableProps {
   onAdd: () => void;
   // Opens the credential's sheet.
   onOpen: (id: string) => void;
+  // Asks to delete a credential the caller may change.
+  onDelete: (credential: Credential) => void;
 }
 
 // CredentialTable is the Registries page's table (IMG-01, D-09): every stored
 // credential the caller may see, the secret only as its last characters. A
-// credential the caller may not change offers "View details" alone. Names, hosts,
+// credential the caller may not change offers "View details" alone; one they may change
+// offers Edit, a separator, then Delete…. Names, hosts,
 // prefixes and usernames are typed by people and drawn as text only.
 export function CredentialTable({
   credentials,
@@ -242,6 +246,7 @@ export function CredentialTable({
   canAdd,
   onAdd,
   onOpen,
+  onDelete,
 }: CredentialTableProps) {
   const t = useT();
   const [sorted, setSorted] = useState<{ key: SortKey; dir: "asc" | "desc" } | null>(null);
@@ -362,9 +367,25 @@ export function CredentialTable({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={() => onOpen(c.id)}>
-              {t("registries.table.viewDetails")}
-            </DropdownMenuItem>
+            {c.canManage ? (
+              <>
+                <DropdownMenuItem className="max-md:min-h-11" onSelect={() => onOpen(c.id)}>
+                  {t("registries.table.edit")}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="max-md:min-h-11"
+                  variant="destructive"
+                  onSelect={() => onDelete(c)}
+                >
+                  {t("registries.table.delete")}
+                </DropdownMenuItem>
+              </>
+            ) : (
+              <DropdownMenuItem className="max-md:min-h-11" onSelect={() => onOpen(c.id)}>
+                {t("registries.table.viewDetails")}
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       ),

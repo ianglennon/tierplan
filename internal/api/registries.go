@@ -88,6 +88,13 @@ type UpdateCredentialInput struct {
 	Body         CredentialPatchRequest
 }
 
+// DeleteCredentialInput is the request of the delete route.
+type DeleteCredentialInput struct {
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent    string `header:"User-Agent" hidden:"true"`
+	CredentialID string `path:"credentialId" maxLength:"64" doc:"The credential's ID"`
+}
+
 // CredentialScopeBody says where a credential applies.
 type CredentialScopeBody struct {
 	Kind    string  `json:"kind" enum:"instance,environment" doc:"instance: every environment. environment: one environment only"`
@@ -305,6 +312,42 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 			return nil, fail("update credential", err)
 		}
 		return &CredentialOutput{CacheControl: "no-store", Body: credentialBody(c, true, nil)}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID:   "deleteInstanceCredential",
+		Method:        http.MethodDelete,
+		Path:          "/api/registries/{credentialId}",
+		Summary:       "Delete an instance registry credential",
+		DefaultStatus: http.StatusNoContent,
+		Description: "Removes the credential and its sealed secret. Pulls it would have matched fall back to the next matching credential, or to anonymous; nothing else refers to it. " +
+			"Needs registries.instance. A credential that is already gone, and one of an environment, answer 404 credential_not_found, so a repeated delete is safe and writes nothing. " +
+			"Audited as registry.credential_deleted without the secret.",
+		Tags: []string{"registries"},
+	}, rbac.Require(rbac.PermRegistriesInstance), func(ctx context.Context, in *DeleteCredentialInput) (*struct{}, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Store == nil {
+			return nil, unavailable()
+		}
+		cur, err := d.Store.Get(ctx, in.CredentialID)
+		if err != nil {
+			return nil, fail("get credential", err)
+		}
+		if cur.EnvID != "" {
+			return nil, fail("get credential", registry.ErrNotFound)
+		}
+		if _, err := d.Store.Delete(ctx, in.CredentialID, func(ctx context.Context, tx *sql.Tx, c registry.Credential) error {
+			return d.Audit.RecordTx(ctx, tx, audit.Entry{
+				Actor: p.AuditActor(), Action: audit.ActionRegistryCredentialDeleted, TargetType: credentialTargetType, TargetID: c.ID,
+				Result: audit.ResultSuccess, IP: httpx.ClientIP(ctx), UserAgent: in.UserAgent, Details: credentialAuditDetails(c),
+			})
+		}); err != nil {
+			return nil, fail("delete credential", err)
+		}
+		return nil, nil
 	})
 
 	httpx.Register(r, huma.Operation{

@@ -149,3 +149,36 @@ export function useUpdateCredential() {
     },
   });
 }
+
+// deleteCredential removes one instance credential. It never retries: a repeat after a
+// lost answer would find it gone, and that is told apart by the 404.
+export async function deleteCredential(id: string): Promise<void> {
+  try {
+    const res = await api.DELETE("/api/registries/{credentialId}", {
+      params: { path: { credentialId: id } },
+    });
+    if (!res.response.ok) {
+      const problem = readProblem(res.error, res.response);
+      throw new CredentialRequestError(problem.status, problem.type, problem.fields, "DELETE");
+    }
+  } catch (e) {
+    throw e instanceof CredentialRequestError
+      ? e
+      : new CredentialRequestError(0, undefined, [], "DELETE");
+  }
+}
+
+// useDeleteCredential is the mutation behind the delete dialog. It reads the list again
+// whatever the answer, and drops the deleted credential's own query so a stale copy is
+// never shown.
+export function useDeleteCredential() {
+  const queryClient = useQueryClient();
+  return useMutation<void, CredentialRequestError, string>({
+    mutationFn: deleteCredential,
+    retry: false,
+    onSettled: (_data, _error, id) => {
+      queryClient.removeQueries({ queryKey: [...REGISTRIES_KEY, "detail", id] });
+      void queryClient.invalidateQueries({ queryKey: REGISTRIES_KEY });
+    },
+  });
+}

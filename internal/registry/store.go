@@ -279,6 +279,43 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput, hook Upda
 	return c, changed, nil
 }
 
+// Delete removes a credential, running hook (which may be nil) in the same transaction with
+// the credential as it was, so the audit row and the removal commit or roll back together.
+// ErrNotFound when there is no such credential, which makes a repeated delete safe. Pulls
+// the credential would have matched fall back to the next matching one, or to anonymous:
+// nothing else refers to a credential.
+func (s *Store) Delete(ctx context.Context, id string, hook TxHook) (Credential, error) {
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return Credential{}, fmt.Errorf("registry: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := s.st.Q.WithTx(tx)
+
+	row, err := q.GetRegistryCredential(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Credential{}, ErrNotFound
+	}
+	if err != nil {
+		return Credential{}, fmt.Errorf("registry: read: %w", err)
+	}
+	if _, err := q.DeleteRegistryCredential(ctx, id); errors.Is(err, sql.ErrNoRows) {
+		return Credential{}, ErrNotFound
+	} else if err != nil {
+		return Credential{}, fmt.Errorf("registry: delete: %w", err)
+	}
+	c := credentialOf(row)
+	if hook != nil {
+		if err := hook(ctx, tx, c); err != nil {
+			return Credential{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Credential{}, fmt.Errorf("registry: commit: %w", err)
+	}
+	return c, nil
+}
+
 // Get returns one credential, or ErrNotFound.
 func (s *Store) Get(ctx context.Context, id string) (Credential, error) {
 	row, err := s.st.RQ.GetRegistryCredential(ctx, id)
