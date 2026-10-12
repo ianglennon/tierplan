@@ -1153,6 +1153,24 @@ func TestARefusedPullRecordsTheCredentialsFailureOnceAndALaterSuccessClearsItWit
 	}
 }
 
+// "denied" is what a registry says of a repository that does not exist or that the account may not
+// read, so it is not the credential failing and must not alert the people who manage it (WR-B03).
+func TestADeniedPullDoesNotFlagTheCredentialItWasMadeWith(t *testing.T) {
+	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", PullStatus: dockertest.FakePullStatus{Code: http.StatusForbidden, Message: "denied: requested access to the resource is denied"}})
+	cred := f.addPullCredential(t, "local-bot", "")
+	rec := f.startPull(t, e, `{"ref":"`+privateRef+`"}`)
+	if rec.code != http.StatusAccepted {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	job := f.pullDone(t, decode[pullStarted](t, rec).JobID)
+	if job.Items[0].Code != "pull_denied" {
+		t.Fatalf("job = %+v, want pull_denied", job)
+	}
+	if code, set := lastFailure(t, f.authFixture, cred.ID); set || code != "" {
+		t.Errorf("failure = %q set=%v, want none for a denied pull", code, set)
+	}
+}
+
 func TestAPullThatWorksAfterAFailureClearsIt(t *testing.T) {
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
 	cred := f.addPullCredential(t, "local-bot", "")

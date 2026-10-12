@@ -749,7 +749,10 @@ func (pr *pullRun) finish(r *jobs.Reporter, n envs.NodeRef, res dockerx.PullResu
 
 // noteCredential keeps the credential's bookkeeping (D-07): a node the registry refused to sign
 // in records the failure with its code once per job, and a node that pulled clears it unless a
-// node of this job failed to sign in. A failed write is logged and changes nothing else.
+// node of this job failed to sign in. A pull the registry answered "denied" does not count: that
+// is what it says of a repository that does not exist or that the account may not read, so anyone
+// who can pull could otherwise flag a working credential and alert the people who manage it
+// (WR-B03). A failed write is logged and changes nothing else.
 func (pr *pullRun) noteCredential(code string) {
 	if pr.used == nil {
 		return
@@ -760,7 +763,7 @@ func (pr *pullRun) noteCredential(code string) {
 	defer pr.mu.Unlock()
 	var err error
 	switch code {
-	case dockerx.PullCodeUnauthorized, dockerx.PullCodeDenied:
+	case dockerx.PullCodeUnauthorized:
 		if pr.failed {
 			return
 		}

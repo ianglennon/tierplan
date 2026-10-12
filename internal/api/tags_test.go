@@ -254,6 +254,27 @@ func TestBrowseTagsNamesTheCredentialTheRegistryRefusedAndRecordsTheFailure(t *t
 	}
 }
 
+// A credential with no namespace covers any repository a caller names, so a refusal on one of them
+// is not the credential failing (WR-B03).
+func TestBrowseTagsDoesNotFlagACredentialWithNoNamespaceWhenTheRegistryRefusesIt(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	reg := newFakeRegistry(t)
+	f.trusting(t, reg)
+	admin := f.asAdmin(t)
+	body, _ := json.Marshal(map[string]string{"name": "wide", "type": "generic", "host": reg.host(), "username": reg.user, "secret": reg.pass})
+	cred := f.storeCredential(t, admin, string(body))
+	reg.pass = "changed-at-the-registry-after-saving"
+
+	rec := f.browse(t, admin, reg, "someone/else", "")
+	if rec.Code != http.StatusBadGateway || problemType(t, rec) != "login_refused" {
+		t.Fatalf("browse: %d %s, want 502 login_refused", rec.Code, rec.Body)
+	}
+	var code string
+	if err := f.st.Read.QueryRow(`SELECT last_failure_code FROM registry_credentials WHERE id = ?`, cred.ID).Scan(&code); err != nil || code != "" {
+		t.Errorf("last failure code = %q, %v, want none for a credential with no namespace", code, err)
+	}
+}
+
 func TestBrowseTagsMapsAMissingRepositoryAndAnUnparsableReference(t *testing.T) {
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)

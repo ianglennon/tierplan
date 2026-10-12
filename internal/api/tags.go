@@ -545,6 +545,12 @@ func (d TagsDeps) noteSignIn(ctx context.Context, cred *registry.ResolvedCredent
 	if cred == nil {
 		return
 	}
+	// A credential with no namespace (the Docker Hub fallback, or a whole host) covers whatever
+	// repository the caller names, so a refusal on one of them says nothing about the credential:
+	// only a credential's own namespace can be taken as the credential failing (WR-B03).
+	if failure != "" && cred.Prefix == "" {
+		return
+	}
 	var err error
 	if failure == "" {
 		err = d.Resolver.ClearFailure(ctx, cred.ID)
