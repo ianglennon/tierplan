@@ -185,12 +185,12 @@ func TestUpdateWithNoSecretKeepsTheSealedSecretByteForByte(t *testing.T) {
 	before := sealedOf(t, st, c.ID)
 
 	in := updateOf(c)
-	in.Username = "bot2"
+	in.Name = "renamed"
 	got, changed, err := s.Update(context.Background(), c.ID, in, nil)
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if got.Username != "bot2" || got.Last4 != "wxyz" || !slices.Equal(changed, []string{"username"}) {
+	if got.Name != "renamed" || got.Last4 != "wxyz" || !slices.Equal(changed, []string{"name"}) {
 		t.Errorf("credential = %+v, changed = %v", got, changed)
 	}
 	if after := sealedOf(t, st, c.ID); after != before {
@@ -254,10 +254,51 @@ func TestUpdateChangesUpdatedAtWhenSomethingChanges(t *testing.T) {
 	}
 	clock = now.Add(2 * time.Hour)
 	in := updateOf(c)
-	in.Username = "bot2"
+	in.Name = "renamed"
 	got, _, err := s.Update(context.Background(), c.ID, in, nil)
 	if err != nil || !got.UpdatedAt.Equal(clock) || !got.CreatedAt.Equal(now) {
 		t.Errorf("created/updated = %v/%v, %v; want %v/%v", got.CreatedAt, got.UpdatedAt, err, now, clock)
+	}
+}
+
+// A stored secret is write-only: it may only go where it was stored for, so a change of the
+// host, type, username, CA or insecure switch without a secret typed now is refused and writes
+// nothing (CR-A01, CR-B01).
+func TestUpdateWithNoSecretRefusesAChangeOfWhereTheSecretGoes(t *testing.T) {
+	caPEM := testCA(t)
+	for name, change := range map[string]func(in *registry.UpdateInput){
+		"host":     func(in *registry.UpdateInput) { in.Type, in.Host = registry.TypeGeneric, "evil.example" },
+		"type":     func(in *registry.UpdateInput) { in.Type, in.Host = registry.TypeGitLab, "" },
+		"username": func(in *registry.UpdateInput) { in.Username = "someone-else" },
+		"ca":       func(in *registry.UpdateInput) { in.CAPEM = caPEM },
+		"insecure": func(in *registry.UpdateInput) { in.Insecure = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, st, _ := newStore(t)
+			c := create(t, s, nil)
+			before := sealedOf(t, st, c.ID)
+			hooks := 0
+			in := updateOf(c)
+			change(&in)
+			_, _, err := s.Update(context.Background(), c.ID, in, func(context.Context, *sql.Tx, registry.Credential, []string) error { hooks++; return nil })
+			var ve *registry.ValidationError
+			if !errors.As(err, &ve) || len(ve.Fields) != 1 || ve.Fields[0] != (registry.FieldError{Field: "secret", Code: "secret_required"}) {
+				t.Fatalf("Update = %v, want secret_required", err)
+			}
+			now, gerr := s.Get(context.Background(), c.ID)
+			if gerr != nil || now.Host != c.Host || now.Type != c.Type || now.Username != c.Username || now.Insecure != c.Insecure || now.CAPEM != c.CAPEM {
+				t.Errorf("credential = %+v, %v; a refused change writes nothing", now, gerr)
+			}
+			if hooks != 0 || sealedOf(t, st, c.ID) != before {
+				t.Errorf("hooks = %d, envelope changed = %v", hooks, sealedOf(t, st, c.ID) != before)
+			}
+
+			// With a secret typed now the same change is accepted.
+			in.Secret = "a-freshly-typed-secret-0001"
+			if _, changed, err := s.Update(context.Background(), c.ID, in, nil); err != nil || !slices.Contains(changed, "secret") {
+				t.Errorf("Update with a new secret = %v, %v", changed, err)
+			}
+		})
 	}
 }
 
@@ -351,7 +392,7 @@ func TestUpdateKeepsTheSameExpiryOfAnExpiredCredentialValid(t *testing.T) {
 	clock = time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC) // the day has passed
 	up := updateOf(c)
 	up.Expires = "2026-10-20"
-	up.Username = "bot2"
+	up.Name = "renamed"
 	if _, _, err := s.Update(context.Background(), c.ID, up, nil); err != nil {
 		t.Errorf("Update of an expired credential that keeps its day: %v", err)
 	}
@@ -367,12 +408,12 @@ func TestUpdateRollsBackWhenTheHookFails(t *testing.T) {
 	c := create(t, s, nil)
 	boom := errors.New("audit write failed")
 	in := updateOf(c)
-	in.Username = "bot2"
+	in.Name = "renamed"
 	if _, _, err := s.Update(context.Background(), c.ID, in, func(context.Context, *sql.Tx, registry.Credential, []string) error { return boom }); !errors.Is(err, boom) {
 		t.Fatalf("Update: %v, want the hook's error", err)
 	}
 	got, err := s.Get(context.Background(), c.ID)
-	if err != nil || got.Username != "bot" {
+	if err != nil || got.Name != c.Name {
 		t.Errorf("after the rollback = %+v, %v; a change must not exist without its audit row", got, err)
 	}
 }
@@ -514,9 +555,9 @@ func TestUpdateInEnvChangesOnlyACredentialOfThatEnvironment(t *testing.T) {
 	hook := func(context.Context, *sql.Tx, registry.Credential, []string) error { hooks++; return nil }
 
 	in := updateOf(inA)
-	in.Username = "bot2"
+	in.Name = "renamed"
 	got, changed, err := s.UpdateInEnv(ctx, "env-a", inA.ID, in, hook)
-	if err != nil || got.Username != "bot2" || got.EnvID != "env-a" || !slices.Equal(changed, []string{"username"}) || hooks != 1 {
+	if err != nil || got.Name != "renamed" || got.EnvID != "env-a" || !slices.Equal(changed, []string{"name"}) || hooks != 1 {
 		t.Fatalf("UpdateInEnv = %+v, %v, %v (hooks %d)", got, changed, err, hooks)
 	}
 
@@ -529,7 +570,7 @@ func TestUpdateInEnvChangesOnlyACredentialOfThatEnvironment(t *testing.T) {
 		"the instance's own route": {"", instance.ID},
 	} {
 		in := updateOf(inA)
-		in.Username = "intruder"
+		in.Name = "intruder"
 		if _, _, err := s.UpdateInEnv(ctx, c.env, c.id, in, hook); !errors.Is(err, registry.ErrNotFound) {
 			t.Errorf("%s: %v, want ErrNotFound", name, err)
 		}
@@ -539,7 +580,7 @@ func TestUpdateInEnvChangesOnlyACredentialOfThatEnvironment(t *testing.T) {
 	}
 	for _, c := range []registry.Credential{instance, inA} {
 		now, err := s.Get(ctx, c.ID)
-		if err != nil || (c.ID == instance.ID && now.Username != instance.Username) || (c.ID == inA.ID && now.Username != "bot2") {
+		if err != nil || (c.ID == instance.ID && now.Name != instance.Name) || (c.ID == inA.ID && now.Name != "renamed") {
 			t.Errorf("credential %s = %+v, %v; a refused update changes nothing", c.ID, now, err)
 		}
 	}

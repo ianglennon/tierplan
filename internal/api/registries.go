@@ -663,7 +663,14 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		}
 		secret := in.Secret
 		if secret == "" {
-			// validateTest only lets this through for a stored credential.
+			// validateTest only lets this through for a stored credential. The stored secret is
+			// lent only to the destination it was stored for: a different host, type, username, CA
+			// or insecure switch needs a secret typed now, or a manager could have the server send
+			// the stored one to a registry they run (CR-A01, CR-B01).
+			if registry.SecretDestinationChanged(*stored, in.Host, in.Type, in.Username, in.CAPEM, in.Insecure) {
+				return nil, credentialFieldProblems(&registry.ValidationError{
+					Fields: []registry.FieldError{{Field: "secret", Code: "secret_required"}}})
+			}
 			var err error
 			if secret, err = d.Store.Secret(ctx, stored.ID); err != nil {
 				return nil, failIn(envID != "", "open the stored secret to test", err)
@@ -825,6 +832,10 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		hook := func(ctx context.Context, tx *sql.Tx, c registry.Credential, changed []string) error {
 			details := credentialAuditDetails(c)
 			details["changed"] = strings.Join(changed, ",")
+			if slices.Contains(changed, "host") {
+				// Where the credential pointed before, so a redirect of it is on record (CR-B01).
+				details["host_from"], details["host_to"] = cur.Host, c.Host
+			}
 			return d.Audit.RecordTx(ctx, tx, audit.Entry{
 				Actor: p.AuditActor(), Action: audit.ActionRegistryCredentialUpdated, TargetType: credentialTargetType, TargetID: c.ID,
 				EnvID: envID, Result: audit.ResultSuccess, IP: httpx.ClientIP(ctx), UserAgent: userAgent, Details: details,
@@ -924,6 +935,7 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 			"The server refuses link-local, unspecified and multicast addresses (cloud metadata included) after DNS, allows private and loopback ranges, and refuses redirects to plain HTTP or local URLs. " +
 			"Needs registries.instance. At most 10 tests a minute per user across both families: 429 rate_limited. 422 validation_failed names the fields at fault with the codes of adding a credential, " +
 			"ca_invalid and test_repository_invalid. caPem and insecure apply the credential's own CA and switch to this test only; the operator's BAYPLAN_REGISTRY_BLOCK_CIDRS ranges stay refused even with the switch on. " +
+			"A stored credential's secret is lent only to the host, type, username, CA and insecure switch it was stored with: a test that changes any of them needs a secret typed now (422 secret_required). " +
 			"Audited as registry.credential_tested with each step's result, never the secret.",
 		Tags: []string{"registries"},
 	}, rbac.Require(rbac.PermRegistriesInstance), func(ctx context.Context, in *TestCredentialInput) (*CredentialTestOutput, error) {
@@ -944,7 +956,8 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		Summary:     "Test an environment registry sign-in from the server",
 		Description: "As testing an instance sign-in, for the credentials of one environment: the same three steps from the Bayplan server, on unsaved values or on a stored credential of this environment " +
 			"(credentialId; 404 credential_not_found for the instance's or another environment's). Needs registries.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403. " +
-			"The 10 tests a minute per user are shared with the instance family: 429 rate_limited. Audited as registry.credential_tested with the environment, never the secret.",
+			"The 10 tests a minute per user are shared with the instance family: 429 rate_limited. The stored secret is lent only to the host, type, username, CA and insecure switch it was stored with (422 secret_required otherwise). " +
+			"Audited as registry.credential_tested with the environment, never the secret.",
 		Tags: []string{"registries"},
 	}, rbac.Require(rbac.PermRegistriesManage), func(ctx context.Context, in *TestEnvCredentialInput) (*CredentialTestOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
@@ -969,7 +982,7 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 			"image_not_found, registry_unreachable, registry_tls, registry_http, rate_limited, pull_failed, agent_policy_denied when the node's agent is older than this server, node_unavailable when the node " +
 			"did not answer), never any text from the registry. Needs registries.instance. 422 repository_required without a repository; 422 validation_failed names the other fields at fault (tag_invalid, " +
 			"test_repository_invalid and those of adding a credential); 404 environment_not_found; 503 node_unavailable when no node of the environment is connected; 502 agent_policy_denied when the " +
-			"environment cannot be read. The 10 tests a minute per user are shared with the server tests: 429 rate_limited. Audited as registry.credential_tested with the environment, the node and via env, never the secret.",
+			"environment cannot be read. The 10 tests a minute per user are shared with the server tests: 429 rate_limited. The stored secret is lent only to the host, type, username, CA and insecure switch it was stored with (422 secret_required otherwise). Audited as registry.credential_tested with the environment, the node and via env, never the secret.",
 		Tags: []string{"registries"},
 	}, rbac.Require(rbac.PermRegistriesInstance), func(ctx context.Context, in *TestInstanceCredentialFromEnvInput) (*CredentialTestFromEnvOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
@@ -1016,10 +1029,11 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		Path:        "/api/registries/{credentialId}",
 		Summary:     "Change an instance registry credential",
 		Description: "Changes the members that are sent and keeps the rest. The secret is write-only: leave it out or send it empty to keep the stored one, which is neither read nor returned; " +
-			"send a new one and it is sealed again and replaces it, and the answer carries only its last 4 characters (12 or more characters). There is no scope: a credential never moves between layers. " +
+			"send a new one and it is sealed again and replaces it, and the answer carries only its last 4 characters (12 or more characters). Leaving it out keeps the stored one only while the host, type, username, " +
+			"CA and insecure switch stay as stored: changing any of them needs a secret typed now (422 validation_failed, secret_required on body.secret), so the stored secret never goes to a destination it was not stored for. There is no scope: a credential never moves between layers. " +
 			"Needs registries.instance. A credential of an environment answers 404 credential_not_found here, exactly like one that does not exist. 422 validation_failed names every field at fault " +
 			"with the same codes as adding; 409 credential_name_taken, host_prefix_taken or hub_fallback_taken when another instance credential clashes, naming it in its errors list (location conflict.credential). " +
-			"Audited as registry.credential_updated with a changed detail listing the names of the fields that changed, the secret only as the word secret.",
+			"Audited as registry.credential_updated with a changed detail listing the names of the fields that changed, the secret only as the word secret, and host_from and host_to when the host changed.",
 		Tags: []string{"registries"},
 	}, rbac.Require(rbac.PermRegistriesInstance), func(ctx context.Context, in *UpdateCredentialInput) (*CredentialOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
@@ -1043,11 +1057,11 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		Method:      http.MethodPatch,
 		Path:        "/api/env/{envId}/registries/{credentialId}",
 		Summary:     "Change an environment's registry credential",
-		Description: "Changes the members that are sent and keeps the rest, as for an instance credential: the secret is write-only (left out or empty keeps the stored one), and there is no scope. " +
+		Description: "Changes the members that are sent and keeps the rest, as for an instance credential: the secret is write-only (left out or empty keeps the stored one only while the host, type, username, CA and insecure switch stay as stored; changing any of them is 422 secret_required), and there is no scope. " +
 			"Needs registries.manage on the environment (its Admin, or an instance admin). A credential of another environment, and one of the instance layer, answer 404 credential_not_found here, " +
 			"exactly like one that does not exist, and nothing changes. 422 validation_failed names every field at fault; 409 credential_name_taken, host_prefix_taken or hub_fallback_taken when " +
 			"another credential of this environment clashes, naming it in its errors list (location conflict.credential). Audited as registry.credential_updated with the environment and a changed detail " +
-			"listing the names of the fields that changed, the secret only as the word secret.",
+			"listing the names of the fields that changed, the secret only as the word secret, and host_from and host_to when the host changed.",
 		Tags: []string{"registries"},
 	}, rbac.Require(rbac.PermRegistriesManage), func(ctx context.Context, in *UpdateEnvCredentialInput) (*CredentialOutput, error) {
 		p := httpx.PrincipalFrom(ctx)

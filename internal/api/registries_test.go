@@ -422,7 +422,7 @@ func (f *authFixture) registryAudit(t *testing.T) (actions []string, details []m
 	return actions, details
 }
 
-func TestAnAdminEditsAUsernameAndTheSecretStaysWhereItWas(t *testing.T) {
+func TestAnAdminEditsANamespaceAndTheSecretStaysWhereItWas(t *testing.T) {
 	f := newAuthFixture(t, config.Config{})
 	admin := f.asAdmin(t)
 	c := f.storeCredential(t, admin, ghcrAcme)
@@ -431,12 +431,12 @@ func TestAnAdminEditsAUsernameAndTheSecretStaysWhereItWas(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rec := f.credCall(t, admin, http.MethodPatch, "/api/registries/"+c.ID, `{"username":"bot2"}`)
+	rec := f.credCall(t, admin, http.MethodPatch, "/api/registries/"+c.ID, `{"prefix":"team"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("patch: %d %s", rec.Code, rec.Body)
 	}
 	got := decodeCred(t, rec)
-	if got.Username != "bot2" || got.Name != "ghcr-acme" || got.Prefix != "acme" || got.Last4 != "WXYZ" || got.Scope.Kind != "instance" {
+	if got.Username != "bot" || got.Name != "ghcr-acme" || got.Prefix != "team" || got.Last4 != "WXYZ" || got.Scope.Kind != "instance" {
 		t.Errorf("credential = %+v", got)
 	}
 	if strings.Contains(rec.Body.String(), "SECRETtoken") {
@@ -492,7 +492,7 @@ func TestAnUpdateWritesAuditRowsNamingTheChangedFieldsNeverTheirValues(t *testin
 	f := newAuthFixture(t, config.Config{})
 	admin := f.asAdmin(t)
 	c := f.storeCredential(t, admin, ghcrAcme)
-	if rec := f.credCall(t, admin, http.MethodPatch, "/api/registries/"+c.ID, `{"username":"bot2"}`); rec.Code != http.StatusOK {
+	if rec := f.credCall(t, admin, http.MethodPatch, "/api/registries/"+c.ID, `{"prefix":"team"}`); rec.Code != http.StatusOK {
 		t.Fatalf("patch: %d %s", rec.Code, rec.Body)
 	}
 	if rec := f.credCall(t, admin, http.MethodPatch, "/api/registries/"+c.ID, `{"username":"bot3","secret":"`+newCredToken+`"}`); rec.Code != http.StatusOK {
@@ -503,8 +503,8 @@ func TestAnUpdateWritesAuditRowsNamingTheChangedFieldsNeverTheirValues(t *testin
 	if !slices.Equal(actions, []string{"registry.credential_created", "registry.credential_updated", "registry.credential_updated"}) {
 		t.Fatalf("actions = %v", actions)
 	}
-	if details[1]["changed"] != "username" || details[2]["changed"] != "secret,username" {
-		t.Errorf("changed = %q and %q, want username and secret,username", details[1]["changed"], details[2]["changed"])
+	if details[1]["changed"] != "prefix" || details[2]["changed"] != "secret,username" {
+		t.Errorf("changed = %q and %q, want prefix and secret,username", details[1]["changed"], details[2]["changed"])
 	}
 	if details[2]["username"] != "bot3" || details[2]["name"] != "ghcr-acme" || details[2]["layer"] != "instance" {
 		t.Errorf("details = %v", details[2])
@@ -1029,11 +1029,11 @@ func TestEnvCredentialEditAndDeleteStayInTheirEnvironmentAndLayer(t *testing.T) 
 	}
 
 	// A's own credential.
-	rec := f.credCall(t, adminA, http.MethodPatch, path(a.ID, inA.ID), `{"username":"bot2"}`)
+	rec := f.credCall(t, adminA, http.MethodPatch, path(a.ID, inA.ID), `{"username":"bot2","secret":"`+newCredToken+`"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("patch: %d %s", rec.Code, rec.Body)
 	}
-	if c := decodeCred(t, rec); c.Username != "bot2" || c.Scope.Kind != "environment" || c.Scope.EnvID == nil || *c.Scope.EnvID != a.ID || !c.CanManage || c.Last4 != "WXYZ" {
+	if c := decodeCred(t, rec); c.Username != "bot2" || c.Scope.Kind != "environment" || c.Scope.EnvID == nil || *c.Scope.EnvID != a.ID || !c.CanManage || c.Last4 != "QRST" {
 		t.Errorf("patched = %+v", c)
 	}
 	if strings.Contains(rec.Body.String(), "SECRETtoken") {
@@ -1058,7 +1058,7 @@ func TestEnvCredentialEditAndDeleteStayInTheirEnvironmentAndLayer(t *testing.T) 
 	if rec := f.credCall(t, admin, http.MethodPatch, path(b.ID, inA.ID), `{"username":"x"}`); rec.Code != http.StatusNotFound {
 		t.Errorf("A's credential through B's route: %d %s, want 404", rec.Code, rec.Body)
 	}
-	if rec := f.credCall(t, admin, http.MethodPatch, path(b.ID, inB.ID), `{"username":"botb"}`); rec.Code != http.StatusOK || username(inB.ID) != "botb" {
+	if rec := f.credCall(t, admin, http.MethodPatch, path(b.ID, inB.ID), `{"username":"botb","secret":"`+newCredToken+`"}`); rec.Code != http.StatusOK || username(inB.ID) != "botb" {
 		t.Errorf("B's credential through B's route: %d %s", rec.Code, rec.Body)
 	}
 
@@ -1173,12 +1173,15 @@ type fakeRegistry struct {
 	user, pass string
 	// extra, when set, answers any request the fake does not (manifests and blobs).
 	extra http.HandlerFunc
+	// hits counts every request the registry has been sent.
+	hits atomic.Int32
 }
 
 func newFakeRegistry(t *testing.T) *fakeRegistry {
 	t.Helper()
 	f := &fakeRegistry{refuse: http.StatusUnauthorized, tagsStatus: http.StatusOK, user: "bot", pass: "registry-secret-value-9876"}
 	f.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.hits.Add(1)
 		challenge := func(scope string) {
 			c := `Bearer realm="` + f.srv.URL + `/token",service="fake"`
 			if scope != "" {
@@ -1471,7 +1474,7 @@ func TestAFailedTestOfTheStoredValuesIsRememberedWithItsCode(t *testing.T) {
 		t.Fatalf("lastTest = %+v, want a failure with the code", last)
 	}
 	// A credential can be saved after a failed test: the failed result blocks nothing.
-	if rec := f.credCall(t, admin, http.MethodPatch, "/api/registries/"+c.ID, `{"username":"someone-else"}`); rec.Code != http.StatusOK {
+	if rec := f.credCall(t, admin, http.MethodPatch, "/api/registries/"+c.ID, `{"name":"renamed-lab"}`); rec.Code != http.StatusOK {
 		t.Errorf("save after a failed test: %d %s", rec.Code, rec.Body)
 	}
 }
@@ -1639,7 +1642,7 @@ func TestACredentialKeepsItsCAAndSwitchAndOnlyManagersReadTheCA(t *testing.T) {
 	}
 
 	// An edit changes them, clears the CA with an empty string, and keeps both when left out.
-	rec = f.credCall(t, admin, http.MethodPatch, "/api/registries/"+c.ID, `{"caPem":"","insecure":false}`)
+	rec = f.credCall(t, admin, http.MethodPatch, "/api/registries/"+c.ID, `{"caPem":"","insecure":false,"secret":`+jsonString(reg.pass)+`}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("patch: %d %s", rec.Code, rec.Body)
 	}
@@ -1648,10 +1651,10 @@ func TestACredentialKeepsItsCAAndSwitchAndOnlyManagersReadTheCA(t *testing.T) {
 	}
 	actions, details := f.registryAudit(t)
 	last := details[len(details)-1]
-	if actions[len(actions)-1] != "registry.credential_updated" || last["changed"] != "ca_pem,insecure" {
-		t.Errorf("update audit = %v %v, want changed ca_pem,insecure", actions[len(actions)-1], last)
+	if actions[len(actions)-1] != "registry.credential_updated" || last["changed"] != "ca_pem,insecure,secret" {
+		t.Errorf("update audit = %v %v, want changed ca_pem,insecure,secret", actions[len(actions)-1], last)
 	}
-	rec = f.credCall(t, admin, http.MethodPatch, "/api/registries/"+c.ID, `{"insecure":true,"caPem":`+jsonString(reg.caOf())+`}`)
+	rec = f.credCall(t, admin, http.MethodPatch, "/api/registries/"+c.ID, `{"insecure":true,"caPem":`+jsonString(reg.caOf())+`,"secret":`+jsonString(reg.pass)+`}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("patch: %d %s", rec.Code, rec.Body)
 	}
@@ -1752,7 +1755,7 @@ func TestATestOfAStoredCredentialLendsItsCAAndSwitchUnlessTheTestSendsOthers(t *
 	}
 
 	// A test that sends another CA is of values that are not saved: answered, not remembered.
-	rec = f.credCall(t, admin, http.MethodPost, "/api/registries/test", `{"credentialId":"`+c.ID+`","caPem":""}`)
+	rec = f.credCall(t, admin, http.MethodPost, "/api/registries/test", `{"credentialId":"`+c.ID+`","caPem":"","secret":`+jsonString(reg.pass)+`}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("test: %d %s", rec.Code, rec.Body)
 	}

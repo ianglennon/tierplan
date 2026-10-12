@@ -188,6 +188,9 @@ type UpdateHook func(ctx context.Context, tx *sql.Tx, c Credential, changed []st
 
 // Update validates in, applies it to the credential and runs hook (which may be nil) in the
 // same transaction. An empty Secret keeps the stored one: its envelope is not read or touched.
+// That is only allowed while the host, type, username, CA and insecure switch stay as stored; a
+// change of any of them without a new Secret is a *ValidationError (secret: secret_required), so
+// the stored secret is never aimed at a destination it was not stored for.
 // A new one is sealed again under the credential's own ID and its last characters replaced.
 // It returns the credential as it now is and the names of the fields that changed, sorted
 // (ca_pem, expires, host, hub_fallback, insecure, name, prefix, secret, type, username); the secret is only ever
@@ -237,6 +240,12 @@ func (s *Store) update(ctx context.Context, env *string, id string, in UpdateInp
 	in, errs := ValidateUpdate(in, prevExpires, now)
 	if len(errs) > 0 {
 		return Credential{}, nil, &ValidationError{Fields: errs}
+	}
+	// The stored secret is write-only and may only go where it was stored for. A change of host,
+	// type, username, CA or insecure switch must come with a secret typed now, or a manager could
+	// point the stored one at a registry they run (CR-A01, CR-B01).
+	if in.Secret == "" && SecretDestinationChanged(cur, in.Host, in.Type, in.Username, in.CAPEM, in.Insecure) {
+		return Credential{}, nil, &ValidationError{Fields: []FieldError{{"secret", "secret_required"}}}
 	}
 
 	var changed []string

@@ -144,8 +144,8 @@ var phase5DetailKeys = map[string][]string{
 	// Hub fallback and the expiry day (plan 05-05, D-31).
 	audit.ActionRegistryCredentialCreated: {"name", "layer", "host", "prefix", "type", "username", "hub_fallback", "expires"},
 	// An update adds the names of the fields that changed, comma-joined, the secret only as
-	// the word secret (plan 05-07).
-	audit.ActionRegistryCredentialUpdated: {"name", "layer", "host", "prefix", "type", "username", "hub_fallback", "expires", "changed"},
+	// the word secret (plan 05-07). A change of host also records where it pointed before and now.
+	audit.ActionRegistryCredentialUpdated: {"name", "layer", "host", "prefix", "type", "username", "hub_fallback", "expires", "changed", "host_from", "host_to"},
 	audit.ActionRegistryCredentialDeleted: {"name", "layer", "host", "prefix", "type", "username", "hub_fallback", "expires"},
 	// A test records where it ran from (via: the server, or a node), the registry and
 	// type, each step's result, the code of the first failure, the repository tried and, from

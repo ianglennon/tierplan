@@ -225,7 +225,8 @@ type UpdateInput struct {
 	// Username is the registry sign-in.
 	Username string
 	// Secret is a replacement. Empty keeps the stored secret, which is neither read nor
-	// sent anywhere. It is never logged.
+	// sent anywhere, and is refused by the store when the host, type, username, CA or insecure
+	// switch changes. It is never logged.
 	Secret      string
 	HubFallback bool
 	// Expires is an optional day, YYYY-MM-DD; empty clears it.
@@ -234,6 +235,16 @@ type UpdateInput struct {
 	CAPEM string
 	// Insecure is the plain HTTP or skip-verification switch.
 	Insecure bool
+}
+
+// SecretDestinationChanged reports whether in points the stored secret at somewhere it was not
+// stored for: a different host, type, username, certificate authority or insecure switch.
+// The secret is write-only, so it may only ever go where its owner last typed it; once the
+// destination moves, a freshly typed secret is required (CR-A01, CR-B01). in is expected clean
+// (as Validate and ValidateUpdate return it) and cur is the stored credential.
+func SecretDestinationChanged(cur Credential, host, typ, username, caPEM string, insecure bool) bool {
+	return host != cur.Host || typ != cur.Type || username != cur.Username ||
+		strings.TrimSpace(caPEM) != cur.CAPEM || insecure != cur.Insecure
 }
 
 // ValidateUpdate checks a change as Validate checks an addition, with two differences: an
