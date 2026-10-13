@@ -2,9 +2,8 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { z } from "zod";
-
 import { ImageTags } from "@/features/images/image-tags";
+import { z } from "@/lib/zod-config";
 
 // The repository the tab browses when the image has several. A value that is not a
 // repository name's length is dropped (T-05-68).

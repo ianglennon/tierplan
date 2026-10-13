@@ -32,6 +32,33 @@
   },
   "overrides": [
     {
+      "includes": ["src/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "zod": "Import z from @/lib/zod-config: it turns the JIT compiler off, which a Content-Security-Policy without unsafe-eval needs."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/lib/zod-config.ts", "src/**/*.test.ts", "src/**/*.test.tsx"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": "off"
+          }
+        }
+      }
+    },
+    {
       "includes": ["src/components/ui/**"],
       "linter": {
         "enabled": false
