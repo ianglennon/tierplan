@@ -154,8 +154,10 @@ test("a container started behind Bayplan's back appears live, is stopped and sta
   const startedBefore = ["e2e-a", "e2e-b"].map((n) =>
     dind(`docker inspect -f '{{.State.StartedAt}}' ${n}`),
   );
-  await expect(rowOf(page, "e2e-a")).toBeVisible();
-  await expect(rowOf(page, "e2e-b")).toBeVisible();
+  // A row can show up while its container is still created, before the start event
+  // has been read, and a bulk leaves out a row its action does not apply to.
+  await expect(rowOf(page, "e2e-a")).toContainText("Running");
+  await expect(rowOf(page, "e2e-b")).toContainText("Running");
   await page.getByRole("checkbox", { name: "Select e2e-a" }).check();
   await page.getByRole("checkbox", { name: "Select e2e-b" }).check();
   const bar = page.getByRole("toolbar", { name: "Bulk actions" });
