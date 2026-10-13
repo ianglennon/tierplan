@@ -120,7 +120,11 @@ export function TagBrowser({
   const { visible, observe } = useVisibleRows();
   // The picker's one tab stop: the row that last had focus, else the chosen one, else the first.
   const [active, setActive] = useState<string | null>(null);
-  const { ordered: tags, detailOf } = useTagDetails({
+  const {
+    ordered: tags,
+    detailOf,
+    rateLimited,
+  } = useTagDetails({
     repo,
     envId,
     credentialEnvId,
@@ -265,6 +269,11 @@ export function TagBrowser({
       <div className="rounded-lg border" aria-busy={query.isPending}>
         {body}
       </div>
+      {rateLimited ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          {t("tags.errors.too_fast.details")}
+        </p>
+      ) : null}
       {first !== undefined && tags.length > 0 ? (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <p className="text-sm text-muted-foreground">
@@ -439,11 +448,16 @@ function TagError({ error, repo, onRetry }: TagErrorProps) {
   const canAddInstance = usePermission("registries.instance");
   const canAddEnvironment = useAnyEnvironmentPermission("registries.manage");
   const err = error instanceof TagsRequestError ? error : new TagsRequestError(0);
-  const kind: TagErrorType | "ref_invalid" | "generic" = isTagErrorType(err.type)
-    ? err.type
-    : err.type === "ref_invalid"
-      ? "ref_invalid"
-      : "generic";
+  // Bayplan's own limit on tag requests (429) is not the registry's (a 502 rate_limited): it is
+  // about how often this person asks, not about the host named in the other sentence.
+  const kind: TagErrorType | "too_fast" | "ref_invalid" | "generic" =
+    err.status === 429 && err.type === "rate_limited"
+      ? "too_fast"
+      : isTagErrorType(err.type)
+        ? err.type
+        : err.type === "ref_invalid"
+          ? "ref_invalid"
+          : "generic";
   const cred = err.credential;
   const values = {
     host: err.host,
@@ -477,7 +491,8 @@ function TagError({ error, repo, onRetry }: TagErrorProps) {
   } else if (
     kind === "registry_unreachable" ||
     kind === "registry_tls" ||
-    kind === "rate_limited"
+    kind === "rate_limited" ||
+    kind === "too_fast"
   ) {
     action = (
       <Button variant="outline" size="sm" onClick={onRetry}>

@@ -13,6 +13,14 @@ export type TagDetail = components["schemas"]["TagDetailBody"];
 export type Platform = components["schemas"]["PlatformBody"];
 export type RunningHereData = components["schemas"]["RunningHereBody"];
 
+// A tag as the reference grammar writes one, which is what the server's details route accepts
+// (422 tag_invalid for anything else, and it refuses the whole request for one such name). A
+// registry can list a name that is not, so the SPA never asks about one.
+const TAG_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
+export function isValidTagName(name: string): boolean {
+  return TAG_NAME.test(name);
+}
+
 // How many tags one details request asks about, as the server allows.
 export const TAG_DETAILS_BATCH = 25;
 

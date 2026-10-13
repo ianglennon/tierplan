@@ -310,6 +310,16 @@ describe("PullDialog (the form)", () => {
     expect(FakeEventSource.instances).toHaveLength(0);
   });
 
+  it("shows tag_invalid as an error on the Image field and keeps the form", async () => {
+    answer = () => problem(422, "tag_invalid");
+    mount();
+    const dialog = await submit("nginx:1.27");
+    expect(
+      await within(dialog).findByText(/A tag is 1 to 128 letters, digits, underscores/),
+    ).toBeTruthy();
+    expect(within(dialog).getByLabelText("Image")).toBeTruthy();
+  });
+
   it("shows an inline alert when the user already has five pulls running", async () => {
     answer = () => problem(429, "too_many_pulls");
     mount();

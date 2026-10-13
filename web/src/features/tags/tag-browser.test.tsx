@@ -357,6 +357,17 @@ describe("TagBrowser errors", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("words Bayplan's own 429 as too many requests, not as the registry limiting them", async () => {
+    answer = () => problem(429, "rate_limited", []);
+    mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" />);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Too many tag requests. Wait a minute and try again.");
+    expect(alert.textContent).not.toContain("is limiting requests");
+    answer = () => Response.json(list());
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
+  });
+
   it("never shows what the registry said", async () => {
     answer = () =>
       Response.json(
@@ -1272,5 +1283,32 @@ describe("TagBrowser picker", () => {
       expect(row.hasAttribute("aria-selected")).toBe(false);
       expect(row.hasAttribute("tabindex")).toBe(false);
     }
+  });
+});
+
+describe("TagBrowser details that cannot be read (WR-B01, WR-B05)", () => {
+  it("never asks about a name the server would refuse, and reads it as a tag with no manifest", async () => {
+    answer = () =>
+      Response.json(
+        list({
+          tags: [{ name: "v1.10.0" }, { name: "../etc" }, { name: "a?b" }, { name: "latest" }],
+        }),
+      );
+    mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" />);
+    await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
+    scrollTo(["v1.10.0", "../etc", "a?b", "latest"]);
+    await waitFor(() => expect(detailsSent).toHaveLength(1));
+    expect(detailsSent[0]?.tags).toEqual(["v1.10.0", "latest"]);
+    await waitFor(() => expect(screen.queryAllByText("Loading…")).toHaveLength(0));
+  });
+
+  it("says so when the server turned the request for details away as too frequent", async () => {
+    detailsAnswer = () => problem(429, "rate_limited", []);
+    mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" />);
+    await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
+    scrollTo(["v1.10.0", "v1.9.2", "latest"]);
+    expect(
+      await screen.findByText(/Too many requests, so some details haven't loaded/),
+    ).toBeTruthy();
   });
 });

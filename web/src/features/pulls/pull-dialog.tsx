@@ -372,6 +372,10 @@ function PullForm({
 
   function refusalOf(err: PullRequestError): Refusal | null {
     switch (err.type) {
+      case "tag_invalid":
+        form.setError("ref", { type: "server", message: "pulls.errors.tagInvalid" });
+        form.setFocus("ref");
+        return null;
       case "ref_invalid":
         form.setError("ref", { type: "server", message: "pulls.errors.refInvalid" });
         form.setFocus("ref");

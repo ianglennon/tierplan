@@ -3,7 +3,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { fetchTagDetails, TAG_DETAILS_BATCH, type TagDetail, type TagName } from "@/api/tags";
+import {
+  fetchTagDetails,
+  isValidTagName,
+  TAG_DETAILS_BATCH,
+  type TagDetail,
+  type TagName,
+  TagsRequestError,
+} from "@/api/tags";
 
 // What has been learned about the tags of one repository as seen by one environment.
 interface Store {
@@ -68,6 +75,10 @@ export interface TagDetails {
   ordered: TagName[];
   // What the server said about a tag, or undefined while it has not been asked or answered.
   detailOf: (name: string) => TagDetail | undefined;
+  // True when the server turned the last request for details away as too frequent (429
+  // rate_limited). The rows it was about stay pending and are asked again when they come back
+  // into view; the browser says so meanwhile.
+  rateLimited: boolean;
 }
 
 interface Params {
@@ -88,6 +99,7 @@ export function useTagDetails({ repo, envId, credentialEnvId, tags, visible }: P
   const key = `${repo}\u0000${envId ?? ""}\u0000${credentialEnvId ?? ""}`;
   const [store, setStore] = useState<Store>(() => fresh(key));
   const [busy, setBusy] = useState(false);
+  const [limited, setLimited] = useState(false);
   const current = store.key === key ? store : fresh(key);
   const keyRef = useRef(key);
   keyRef.current = key;
@@ -105,6 +117,32 @@ export function useTagDetails({ repo, envId, credentialEnvId, tags, visible }: P
       });
       return;
     }
+    // A name the server would refuse (and refuse the whole batch for) is never asked about: the
+    // row reads as a tag the registry has no manifest for.
+    const unaskable = tags.filter(
+      (t) =>
+        (visible === null || visible.has(t.name)) &&
+        !details.has(t.name) &&
+        !isValidTagName(t.name),
+    );
+    if (unaskable.length > 0) {
+      setStore((prev) => {
+        const base = prev.key === key ? prev : fresh(key);
+        const next = new Map(base.details);
+        for (const t of unaskable) {
+          next.set(t.name, {
+            tag: t.name,
+            digest: "",
+            platforms: [],
+            code: "tag_not_found",
+            runningIn: [],
+            missing: [],
+          });
+        }
+        return { ...base, details: next };
+      });
+      return;
+    }
     const pending = tags
       .filter(
         (t) =>
@@ -119,6 +157,7 @@ export function useTagDetails({ repo, envId, credentialEnvId, tags, visible }: P
     fetchTagDetails({ repo, envId, credentialEnvId }, pending)
       .then((items) => {
         if (keyRef.current !== key) return;
+        setLimited(false);
         const byTag = new Map(items.map((d) => [d.tag, d] as const));
         update((base) => {
           const next = new Map(base.details);
@@ -142,8 +181,9 @@ export function useTagDetails({ repo, envId, credentialEnvId, tags, visible }: P
           return { key, details: next, batches, failed: missing };
         });
       })
-      .catch(() => {
+      .catch((e: unknown) => {
         if (keyRef.current !== key) return;
+        if (e instanceof TagsRequestError && e.status === 429) setLimited(true);
         update((base) => ({ ...base, failed: new Set([...base.failed, ...pending]) }));
       })
       .finally(() => setBusy(false));
@@ -151,5 +191,5 @@ export function useTagDetails({ repo, envId, credentialEnvId, tags, visible }: P
 
   const ordered = useMemo(() => applyBatches(tags, current.batches), [tags, current.batches]);
   const detailOf = useCallback((name: string) => details.get(name), [details]);
-  return { ordered, detailOf };
+  return { ordered, detailOf, rateLimited: limited && store.key === key };
 }

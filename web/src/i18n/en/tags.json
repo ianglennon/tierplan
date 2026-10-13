@@ -88,6 +88,11 @@
         "message": "{{host}} is limiting requests. Wait a moment and try again.",
         "action": "Retry"
       },
+      "too_fast": {
+        "message": "Too many tag requests. Wait a minute and try again.",
+        "action": "Retry",
+        "details": "Too many requests, so some details haven't loaded. Wait a minute, then scroll those rows out of view and back."
+      },
       "ref_invalid": {
         "message": "Enter an image like nginx:1.27 or ghcr.io/acme/app:latest."
       },

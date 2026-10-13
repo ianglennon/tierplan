@@ -28,6 +28,7 @@
     },
     "errors": {
       "refInvalid": "Enter an image like nginx:1.27 or ghcr.io/acme/app:latest.",
+      "tagInvalid": "A tag is 1 to 128 letters, digits, underscores, dots or dashes, and doesn't start with a dot or dash.",
       "tooMany": "You already have 5 pulls running. Wait for one to finish.",
       "permission": "You no longer have permission to do that. Your access may have changed.",
       "hostReadOnly": "This host is read-only (set on the host).",
