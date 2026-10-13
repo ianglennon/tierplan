@@ -322,6 +322,12 @@
         "button": "Test from an environment…",
         "needRepository": "Enter a test repository",
         "environment": "Environment",
+        "tag": {
+          "label": "Tag (optional)",
+          "placeholder": "latest",
+          "helper": "Left empty, Bayplan reads latest, or the newest tag the registry lists when it has no latest.",
+          "invalid": "A tag is 1 to 128 letters, digits, underscores, dots or dashes, and doesn't start with a dot or dash."
+        },
         "noEnvironment": "There is no environment to run the test from.",
         "caption": "Runs on {{where}} through its agent, so it also catches firewall, DNS and CA problems that Bayplan's own server can't see.",
         "whereBefore": "a node of {{environment}}",

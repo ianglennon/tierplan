@@ -12,10 +12,12 @@ import {
   type CredentialTestFromEnvResult,
   useTestCredentialFromEnv,
 } from "@/api/registries";
+import { isValidTagName } from "@/api/tags";
 import { AgentUpdateNotice } from "@/components/agent-update-notice";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Field, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
@@ -114,6 +116,10 @@ export function TestFromEnv({
   const tester = useTestCredentialFromEnv();
   const [open, setOpen] = useState(false);
   const [chosen, setChosen] = useState<string | undefined>();
+  // The tag to read, as typed; empty leaves the choice to the server. tagInvalid is set by
+  // the check before sending or by the server's 422 tag_invalid, and cleared on typing.
+  const [tag, setTag] = useState("");
+  const [tagInvalid, setTagInvalid] = useState(false);
   const [outcome, setOutcome] = useState<
     | { kind: "result"; result: CredentialTestFromEnvResult; envId: string }
     | { kind: "error"; message: string }
@@ -151,13 +157,31 @@ export function TestFromEnv({
   async function run() {
     if (tester.isPending || !envId) return;
     clear();
+    const wanted = tag.trim();
+    if (wanted !== "" && !isValidTagName(wanted)) {
+      setTagInvalid(true);
+      return;
+    }
     const body = await prepare();
     if (!body) return;
     tester.mutate(
-      { body: { ...body, repository: repository.trim() }, runEnvId: envId, credentialEnvId },
+      {
+        body: {
+          ...body,
+          repository: repository.trim(),
+          ...(wanted !== "" ? { tag: wanted } : {}),
+        },
+        runEnvId: envId,
+        credentialEnvId,
+      },
       {
         onSuccess: (result) => setOutcome({ kind: "result", result, envId }),
         onError: (err: CredentialRequestError) => {
+          // A refused tag belongs to this popover's own field, not to the sheet's.
+          if (err.status === 422 && err.fields.some((f) => f.location === "body.tag")) {
+            setTagInvalid(true);
+            return;
+          }
           if (onFieldErrors?.(err)) {
             setOpen(false);
             return;
@@ -242,6 +266,35 @@ export function TestFromEnv({
                   ))}
                 </SelectContent>
               </Select>
+            </Field>
+            <Field data-invalid={tagInvalid || undefined}>
+              <FieldLabel htmlFor={`${ids}-tag`}>
+                {t("registries.test.fromEnv.tag.label")}
+              </FieldLabel>
+              <Input
+                id={`${ids}-tag`}
+                value={tag}
+                onChange={(e) => {
+                  setTag(e.target.value);
+                  setTagInvalid(false);
+                  clear();
+                }}
+                placeholder={t("registries.test.fromEnv.tag.placeholder")}
+                autoComplete="off"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                disabled={tester.isPending}
+                aria-invalid={tagInvalid || undefined}
+                aria-describedby={`${ids}-tag-help`}
+                className="h-11 font-mono md:h-8"
+              />
+              <FieldDescription id={`${ids}-tag-help`}>
+                {t("registries.test.fromEnv.tag.helper")}
+              </FieldDescription>
+              {tagInvalid ? (
+                <FieldError>{t("registries.test.fromEnv.tag.invalid")}</FieldError>
+              ) : null}
             </Field>
             <p className="text-xs text-muted-foreground">
               {t("registries.test.fromEnv.caption", { where })}
