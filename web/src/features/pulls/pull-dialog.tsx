@@ -635,6 +635,7 @@ function TagPicker({ typed, envId, onChoose }: TagPickerProps) {
   if (!repo) return null;
   return (
     <TagBrowser
+      key={repo}
       repo={repo}
       variant="picker"
       envId={envId || undefined}

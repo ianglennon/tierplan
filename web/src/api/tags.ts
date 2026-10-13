@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { infiniteQueryOptions, keepPreviousData } from "@tanstack/react-query";
+import { type InfiniteData, infiniteQueryOptions, keepPreviousData } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
 import { type ProblemField, readProblem } from "@/api/problem";
@@ -105,8 +105,17 @@ export function tagsInfiniteQuery(p: TagsParams) {
       p.hide !== false,
     ],
     initialPageParam: 0,
-    // The list stays on screen while a new filter is read, so typing does not blank it.
-    placeholderData: keepPreviousData,
+    // The list stays on screen while a new filter is read, so typing does not blank it. That is
+    // only right within one repository and environment: another repository's names must never
+    // stand in for this one's, or the rows would be asked about under the wrong repository
+    // (WR-C03). The key's slots are the ones above: 1 repo, 2 env, 3 credential environment.
+    placeholderData: (prev, prevQuery): InfiniteData<TagList, number> | undefined =>
+      prevQuery &&
+      prevQuery.queryKey[1] === p.repo &&
+      prevQuery.queryKey[2] === (p.envId ?? null) &&
+      prevQuery.queryKey[3] === (p.credentialEnvId ?? null)
+        ? keepPreviousData(prev)
+        : undefined,
     queryFn: async ({ pageParam }): Promise<TagList> => {
       try {
         // A value the server would assume anyway is left out of the address it is asked.

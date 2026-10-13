@@ -33,6 +33,8 @@ let cancelAnswer: () => Response | Promise<Response>;
 let resolveAnswer: (req: Sent) => Response | Promise<Response>;
 // The tag picker's reads: the tag list of an environment's route, and the details of its rows.
 let tagsAnswer: (req: Sent) => Response | Promise<Response>;
+// The reference each tag list was asked for.
+let tagRefs: string[];
 let client: QueryClient;
 let me: ReturnType<typeof makeMe>;
 
@@ -100,6 +102,7 @@ const job = (items: PullItem[], state: PullJob["state"] = "running"): PullJob =>
 
 beforeEach(() => {
   sent = [];
+  tagRefs = [];
   me = makeMe({ envs: { [ENV]: "operator" } });
   answer = () => started();
   targetsAnswer = () => Response.json({}, { status: 404 });
@@ -154,7 +157,10 @@ beforeEach(() => {
           ],
           total: 3,
         });
-      if (entry.path === "/api/env/e1/images/tags") return tagsAnswer(entry);
+      if (entry.path === "/api/env/e1/images/tags") {
+        tagRefs.push(new URL(req.url).searchParams.get("ref") ?? "");
+        return tagsAnswer(entry);
+      }
       if (entry.path === "/api/env/e1/images/tags/details")
         return Response.json({
           items: ((entry.body?.tags as string[]) ?? []).map((tag) => ({
@@ -909,6 +915,59 @@ describe("PullDialog (Browse tags)", () => {
     fireEvent.keyDown(rows[1] as HTMLElement, { key: "Enter" });
     expect(input.value).toBe("nginx:1.26");
     expect(rows[1]?.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("does not ask the registry about the previous repository's tags under the new one (WR-C03)", async () => {
+    let release: (r: Response) => void = () => {};
+    tagsAnswer = () =>
+      tagRefs.at(-1) === "redis"
+        ? new Promise<Response>((r) => (release = r))
+        : Response.json({
+            repo: "library/nginx",
+            host: "docker.io",
+            credential: null,
+            tags: [{ name: "old-a" }, { name: "old-b" }],
+            hidden: 0,
+            total: 2,
+            more: false,
+            page: 0,
+            capped: false,
+            limit: 10000,
+          });
+    mount();
+    const { dialog, input } = await field();
+    fireEvent.change(input, { target: { value: "nginx" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Browse tags" }));
+    await within(dialog).findByText("old-a");
+    await waitFor(() => expect(within(dialog).queryAllByText("Loading…")).toHaveLength(0));
+    const detailsFor = (repo: string) =>
+      posts().filter((p) => p.path.endsWith("/tags/details") && p.body?.ref === repo);
+    expect(detailsFor("nginx").length).toBeGreaterThan(0);
+
+    fireEvent.change(input, { target: { value: "redis" } });
+    // The picker follows the field once the typing stops; the new list is then in flight.
+    await waitFor(() => expect(tagRefs).toContain("redis"), { timeout: 3000 });
+    expect(within(dialog).queryByText("old-a")).toBeNull();
+    expect(detailsFor("redis")).toEqual([]);
+
+    release(
+      Response.json({
+        repo: "library/redis",
+        host: "docker.io",
+        credential: null,
+        tags: [{ name: "7.4" }],
+        hidden: 0,
+        total: 1,
+        more: false,
+        page: 0,
+        capped: false,
+        limit: 10000,
+      }),
+    );
+    await within(dialog).findByText("7.4");
+    expect(
+      detailsFor("redis").flatMap((p) => (p.body?.tags as string[] | undefined) ?? []),
+    ).toEqual(["7.4"]);
   });
 
   it("starts the pull with the tag that was chosen", async () => {
