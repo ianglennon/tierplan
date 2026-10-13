@@ -440,9 +440,15 @@ export function ResourceTable<T>({
       {!failed && !empty ? (
         // The wrapper scrolls sideways on a phone (D-64) and, past the page
         // height, down, so the sticky header has something to stick to.
+        // It is also positioned (relative). Cells hold visually hidden reasons
+        // (NeedsTooltip, the credential table's Actions cell), and sr-only is
+        // position: absolute: without a positioned wrapper their containing block is
+        // the page, so they escape the scroll clip and widen the document. On a phone
+        // that grows the layout viewport, and every fixed sheet with it (G-05-7a,
+        // G-05-7b).
         // biome-ignore lint/a11y/noStaticElementInteractions: it only hears Escape from the controls inside the table; the wrapper itself is not interactive
         <div
-          className="max-h-[calc(100dvh-14rem)] overflow-x-auto overflow-y-auto rounded-xl ring-1 ring-foreground/10"
+          className="relative max-h-[calc(100dvh-14rem)] overflow-x-auto overflow-y-auto rounded-xl ring-1 ring-foreground/10"
           onKeyDown={(e) => {
             // Escape from a menu or dialog is theirs: it arrives here already
             // handled, or from a portal outside this table.

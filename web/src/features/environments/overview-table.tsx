@@ -591,7 +591,7 @@ export function EnvOverviewTable({
         // The wrapper scrolls sideways on a narrow screen and down past the
         // page height, so the sticky header has something to stick to.
         <div
-          className="max-h-[calc(100dvh-12rem)] overflow-x-auto overflow-y-auto rounded-xl ring-1 ring-foreground/10"
+          className="relative max-h-[calc(100dvh-12rem)] overflow-x-auto overflow-y-auto rounded-xl ring-1 ring-foreground/10"
           {...region}
         >
           <table

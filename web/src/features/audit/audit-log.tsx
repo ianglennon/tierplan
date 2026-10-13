@@ -377,7 +377,7 @@ export function AuditLog() {
       {!failed && !empty ? (
         // Scrolls sideways on a phone (D-64) and down past the page height, so
         // the sticky header has something to stick to.
-        <div className="max-h-[calc(100dvh-18rem)] overflow-x-auto overflow-y-auto rounded-xl ring-1 ring-foreground/10">
+        <div className="relative max-h-[calc(100dvh-18rem)] overflow-x-auto overflow-y-auto rounded-xl ring-1 ring-foreground/10">
           <table
             data-slot="table"
             aria-busy={loading || undefined}
