@@ -49,3 +49,7 @@ export const AGENT_PIN = ((): string => {
 export const AUTH_STATE = resolve(HERE, "../../.devdata/e2e-admin.json");
 
 export const ADMIN = { username: "admin", password: "correct horse battery staple" } as const;
+
+// The password the access spec gives the Viewer it invites (viewer1, or viewer1-r1
+// on a retry). The responsive spec signs in as that user on a phone.
+export const VIEWER_PASSWORD = "a long passphrase for the viewer";

@@ -84,6 +84,13 @@ describe("ResourceTable", () => {
     expect(screen.getByRole("table").parentElement?.className).toContain("overflow-x-auto");
   });
 
+  it("makes its scroll wrapper a containing block, so a visually hidden reason in a cell cannot widen the page (G-05-7a)", () => {
+    show(query({ data: { items: [{ id: "a", name: "alpha" }], total: 1, truncated: false } }));
+    const wrapper = screen.getByRole("table").parentElement;
+    expect(wrapper?.className).toContain("relative");
+    expect(wrapper?.className).toContain("overflow-x-auto");
+  });
+
   it("counts with the plural: '1 container', '0 containers', '2 containers'", () => {
     show(query({ data: { items: [{ id: "a", name: "alpha" }], total: 1, truncated: false } }));
     expect(screen.getByText("1 container")).toBeTruthy();

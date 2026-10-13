@@ -13,7 +13,7 @@
 // It runs after the agent spec, which leaves a second, revoked environment: that
 // is the one the new user must not be able to see.
 
-import { AUTH_STATE, at, ORIGIN } from "./env";
+import { AUTH_STATE, at, ORIGIN, VIEWER_PASSWORD } from "./env";
 import {
   apiAs,
   createUserViaUI,
@@ -25,8 +25,6 @@ import {
 } from "./helpers";
 
 test.use({ storageState: AUTH_STATE });
-
-const VIEWER_PASSWORD = "a long passphrase for the viewer";
 
 test("an invited user gets Viewer through a team, sees only that environment, and a hidden action is refused and audited", async ({
   page,
