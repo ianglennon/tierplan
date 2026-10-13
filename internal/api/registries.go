@@ -45,6 +45,9 @@ const (
 	testsPerMinute = 10
 	// testBudget is the time one test may take in all, whatever it reaches.
 	testBudget = 30 * time.Second
+	// tagPickBudget is the time the server's listing of a repository's tags may take when a
+	// check from an environment was sent without a tag (G-05-4c).
+	tagPickBudget = 10 * time.Second
 )
 
 // RegistriesDeps are the dependencies of the registry credential routes.
@@ -338,7 +341,7 @@ type CredentialTestOutput struct {
 type CredentialTestFromEnvRequest struct {
 	CredentialTestRequest
 	Repository string `json:"repository,omitempty" maxLength:"512" doc:"The repository to read through the environment's node, like acme/app. Required: the engine needs a concrete image, so 422 repository_required without one (testRepository is taken in its place). 422 test_repository_invalid"`
-	Tag        string `json:"tag,omitempty" maxLength:"128" doc:"The tag to read; latest when left out. 422 tag_invalid"`
+	Tag        string `json:"tag,omitempty" maxLength:"128" doc:"The tag to read. Left out: latest when the registry lists it, else the newest listed tag, else latest. 422 tag_invalid"`
 }
 
 // InstanceCredentialTestFromEnvRequest is the body of POST /api/registries/test-from-env.
@@ -371,6 +374,8 @@ type CredentialTestFromEnvBody struct {
 	Digest     string    `json:"digest" doc:"The digest of the manifest the node read; empty when it failed"`
 	Platforms  []string  `json:"platforms" doc:"The platforms of the image, like linux/amd64; empty when it failed"`
 	Repository string    `json:"repository" doc:"The repository that was tried, with its registry host, like ghcr.io/acme/app"`
+	Tag        string    `json:"tag" doc:"The tag that was read: the one asked for, else latest when the registry lists it, else the newest tag it lists, else latest"`
+	Ref        string    `json:"ref" doc:"The image reference that was read, host/repository:tag, like ghcr.io/acme/app:1.4"`
 	TestedAt   time.Time `json:"testedAt" format:"date-time" doc:"When the check ran"`
 }
 
@@ -756,7 +761,8 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		if err != nil {
 			return nil, err
 		}
-		tag := cmp.Or(strings.TrimSpace(req.Tag), "latest")
+		askedTag := strings.TrimSpace(req.Tag)
+		tag := cmp.Or(askedTag, "latest")
 		if !tagPattern.MatchString(tag) {
 			return nil, credentialFieldProblems(&registry.ValidationError{Fields: []registry.FieldError{{Field: "tag", Code: "tag_invalid"}}})
 		}
@@ -780,7 +786,24 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		defer cancel()
 		var res dockerx.DistributionResult
 		code := ""
-		if d.Egress.RefusesHost(nctx, pt.in.Host) {
+		refused := d.Egress.RefusesHost(nctx, pt.in.Host)
+		if !refused && askedTag == "" {
+			// No tag was asked for: read one the registry has. A repository pinned to version tags
+			// has no latest, and the engine cannot read a manifest without a concrete tag. The list
+			// is made by this server through the egress-guarded client, only for a host the policy
+			// allows, and any failure to list keeps latest (G-05-4c, T-05-78).
+			opts := registry.HostOptions{Host: pt.in.Host, Username: pt.in.Username, Password: pt.secret, CAPEM: pt.in.CAPEM, Insecure: pt.in.Insecure}
+			pctx, pcancel := context.WithTimeout(ctx, tagPickBudget)
+			picked, _ := registry.PickTestTag(pctx, clients.New(opts), pt.repo)
+			pcancel()
+			// A name the registry supplied must parse back to the same host, repository and tag
+			// (T-05-79); otherwise latest stays.
+			if pref, perr := registry.ParseRef(pt.in.Host + "/" + pt.repo + ":" + picked); perr == nil &&
+				pref.Domain == pt.in.Host && pref.Path == ref.Path && pref.Tag == picked && pref.Digest == "" {
+				tag, ref = picked, pref
+			}
+		}
+		if refused {
 			// The node's engine makes this call, outside the server's egress policy, so a host the
 			// policy refuses (cloud metadata, the operator's BAYPLAN_REGISTRY_BLOCK_CIDRS) is not
 			// sent to it: it reads as unreachable, as it does from the server (WR-B02).
@@ -824,7 +847,7 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		}
 		return &CredentialTestFromEnvOutput{CacheControl: "no-store", Body: CredentialTestFromEnvBody{
 			NodeID: node.ID, Node: node.Name, State: state, Code: code, Digest: res.Digest, Platforms: nonNil(res.Platforms),
-			Repository: ref.Repo(), TestedAt: time.Now().UTC(),
+			Repository: ref.Repo(), Tag: tag, Ref: ref.String(), TestedAt: time.Now().UTC(),
 		}}, nil
 	}
 	// update changes a credential of one layer and audits it, carrying the environment.

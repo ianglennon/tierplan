@@ -2128,6 +2128,10 @@
               "null"
             ]
           },
+          "ref": {
+            "description": "The image reference that was read, host/repository:tag, like ghcr.io/acme/app:1.4",
+            "type": "string"
+          },
           "repository": {
             "description": "The repository that was tried, with its registry host, like ghcr.io/acme/app",
             "type": "string"
@@ -2138,6 +2142,10 @@
               "passed",
               "failed"
             ],
+            "type": "string"
+          },
+          "tag": {
+            "description": "The tag that was read: the one asked for, else latest when the registry lists it, else the newest tag it lists, else latest",
             "type": "string"
           },
           "testedAt": {
@@ -2154,6 +2162,8 @@
           "digest",
           "platforms",
           "repository",
+          "tag",
+          "ref",
           "testedAt"
         ],
         "type": "object"
@@ -2196,7 +2206,7 @@
             "type": "string"
           },
           "tag": {
-            "description": "The tag to read; latest when left out. 422 tag_invalid",
+            "description": "The tag to read. Left out: latest when the registry lists it, else the newest listed tag, else latest. 422 tag_invalid",
             "maxLength": 128,
             "type": "string"
           },
@@ -4688,7 +4698,7 @@
             "type": "string"
           },
           "tag": {
-            "description": "The tag to read; latest when left out. 422 tag_invalid",
+            "description": "The tag to read. Left out: latest when the registry lists it, else the newest listed tag, else latest. 422 tag_invalid",
             "maxLength": 128,
             "type": "string"
           },

@@ -167,6 +167,42 @@ func (f *fakeRegistry) serveTags(w http.ResponseWriter, r *http.Request, repo st
 	_ = json.NewEncoder(w).Encode(map[string]any{"name": repo, "tags": names[start:end]})
 }
 
+func TestPickTestTag(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		tags       []string
+		status     int
+		want       string
+		wantListed bool
+	}{
+		{"latest is listed among others", []string{"2.0", "latest"}, http.StatusOK, "latest", true},
+		{"only a version tag", []string{"1.36.1"}, http.StatusOK, "1.36.1", true},
+		{"hidden tags are skipped and the newest version wins", []string{"1.2", "1.10", "sha256-" + strings.Repeat("a", 64) + ".sig", "x.sig"}, http.StatusOK, "1.10", true},
+		{"nothing usable but hidden tags", []string{"x.sig", "buildcache"}, http.StatusOK, "latest", false},
+		{"no tags", []string{}, http.StatusOK, "latest", false},
+		{"a refused listing", []string{"1.0"}, http.StatusForbidden, "latest", false},
+		{"a missing repository", []string{"1.0"}, http.StatusNotFound, "latest", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeRegistry(t, http.StatusUnauthorized)
+			f.tags, f.tagsStatus = tc.tags, tc.status
+			got, listed := PickTestTag(context.Background(), f.client(f.user, f.pass), "acme/app")
+			if got != tc.want || listed != tc.wantListed {
+				t.Errorf("PickTestTag = %q, %v; want %q, %v", got, listed, tc.want, tc.wantListed)
+			}
+		})
+	}
+}
+
+func TestPickTestTagFallsBackToLatestWhenTheRegistryCannotBeReached(t *testing.T) {
+	f := newFakeRegistry(t, http.StatusUnauthorized)
+	c := f.client(f.user, f.pass)
+	f.srv.Close()
+	if got, listed := PickTestTag(context.Background(), c, "acme/app"); got != "latest" || listed {
+		t.Errorf("PickTestTag = %q, %v; want latest, false", got, listed)
+	}
+}
+
 func TestCheckPassesAllThreeStepsWhenTheSignInAndTheRepositoryAreGood(t *testing.T) {
 	f := newFakeRegistry(t, http.StatusUnauthorized)
 	got := Check(context.Background(), f.client(f.user, f.pass), f.client("", ""), CheckInput{TestRepository: "acme/app"})

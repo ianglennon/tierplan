@@ -3439,6 +3439,8 @@ export interface components {
             nodeId: string;
             /** @description The platforms of the image, like linux/amd64; empty when it failed */
             platforms: string[] | null;
+            /** @description The image reference that was read, host/repository:tag, like ghcr.io/acme/app:1.4 */
+            ref: string;
             /** @description The repository that was tried, with its registry host, like ghcr.io/acme/app */
             repository: string;
             /**
@@ -3446,6 +3448,8 @@ export interface components {
              * @enum {string}
              */
             state: "passed" | "failed";
+            /** @description The tag that was read: the one asked for, else latest when the registry lists it, else the newest tag it lists, else latest */
+            tag: string;
             /**
              * Format: date-time
              * @description When the check ran
@@ -3467,7 +3471,7 @@ export interface components {
             repository?: string;
             /** @description The password or token to try. It is used for this one test, never stored by it, and never returned or recorded. 422 secret_required when there is none to try */
             secret?: string;
-            /** @description The tag to read; latest when left out. 422 tag_invalid */
+            /** @description The tag to read. Left out: latest when the registry lists it, else the newest listed tag, else latest. 422 tag_invalid */
             tag?: string;
             /** @description A repository to try to read with the sign-in, like acme/app. Without one, the last step is not checked. 422 test_repository_invalid */
             testRepository?: string;
@@ -4438,7 +4442,7 @@ export interface components {
             repository?: string;
             /** @description The password or token to try. It is used for this one test, never stored by it, and never returned or recorded. 422 secret_required when there is none to try */
             secret?: string;
-            /** @description The tag to read; latest when left out. 422 tag_invalid */
+            /** @description The tag to read. Left out: latest when the registry lists it, else the newest listed tag, else latest. 422 tag_invalid */
             tag?: string;
             /** @description A repository to try to read with the sign-in, like acme/app. Without one, the last step is not checked. 422 test_repository_invalid */
             testRepository?: string;

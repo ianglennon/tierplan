@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"net"
+	"slices"
 	"strings"
 
 	"github.com/regclient/regclient/types/errs"
@@ -130,6 +131,40 @@ func Check(ctx context.Context, c, anon *Client, in CheckInput) CheckResult {
 	}
 	res.CanPull = StepResult{State: StepPassed}
 	return res
+}
+
+// testTagListMax is how many tag names PickTestTag asks for.
+const testTagListMax = 1000
+
+// testTagDefault is the tag a check reads when the registry lists no better one.
+const testTagDefault = "latest"
+
+// PickTestTag is the tag a check from an environment reads when none was asked for: latest when
+// the registry lists it, otherwise the newest tag it lists (CompareTags order, the order of the
+// tag browser; signature and attestation tags are skipped). listed says whether the name came
+// from the registry; it is false, with latest, when the tags cannot be listed or none is usable.
+// A repository pinned to version tags has no latest, and a node's engine cannot read a manifest
+// without a concrete tag, so a blind latest would report a missing tag as a failed credential
+// (G-05-4c, D-13). c should be a client built through the egress policy.
+func PickTestTag(ctx context.Context, c *Client, repo string) (tag string, listed bool) {
+	names, err := c.TagList(ctx, repo, testTagListMax)
+	if err != nil {
+		return testTagDefault, false
+	}
+	if slices.Contains(names, testTagDefault) {
+		return testTagDefault, true
+	}
+	usable := make([]string, 0, len(names))
+	for _, n := range names {
+		if ValidTag(n) && !HiddenTag(n) {
+			usable = append(usable, n)
+		}
+	}
+	if len(usable) == 0 {
+		return testTagDefault, false
+	}
+	slices.SortStableFunc(usable, CompareTags)
+	return usable[0], true
 }
 
 // TestRepositoryPath is the repository to read on host: the path below the host, with the

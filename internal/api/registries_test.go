@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -1777,6 +1778,8 @@ type fromEnvResult struct {
 	Digest     string   `json:"digest"`
 	Platforms  []string `json:"platforms"`
 	Repository string   `json:"repository"`
+	Tag        string   `json:"tag"`
+	Ref        string   `json:"ref"`
 }
 
 func fromEnvBody(envID, repo, tag string) string {
@@ -1814,8 +1817,9 @@ func TestATestFromAnEnvironmentRunsOnOneManagerNamesItAndSendsTheCredentialOnlyT
 	res := decodeFromEnv(t, rec)
 	if res.State != "passed" || res.Code != "" || res.Node != "alpha" || res.NodeID != alpha.id ||
 		!strings.HasPrefix(res.Digest, "sha256:") || res.Repository != "localhost:5000/private/app" ||
+		res.Tag != "latest" || res.Ref != "localhost:5000/private/app:latest" ||
 		!slices.Equal(res.Platforms, []string{"linux/amd64", "linux/arm64/v8"}) {
-		t.Errorf("result = %+v, want passed on alpha with the digest and the real platforms", res)
+		t.Errorf("result = %+v, want passed on alpha with the digest, the tag and the real platforms", res)
 	}
 	// One node was asked, once, for the tag that defaults to latest, with the credential.
 	if got := bravo.fake.DistributionAuth(); len(got) != 0 {
@@ -1850,6 +1854,111 @@ func TestATestFromAnEnvironmentRunsOnOneManagerNamesItAndSendsTheCredentialOnlyT
 	}
 	if strings.Contains(raw, pullCredSecret) {
 		t.Errorf("the audit row carries the secret: %s", raw)
+	}
+}
+
+// fromEnvBodyFor is a from-env request for a stored registry fake: its host, user and password.
+func fromEnvBodyFor(reg *fakeRegistry, envID, repo, tag string) string {
+	m := map[string]string{"type": "generic", "host": reg.host(), "username": reg.user, "secret": reg.pass, "repository": repo, "envId": envID}
+	if tag != "" {
+		m["tag"] = tag
+	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+func TestATestFromAnEnvironmentReadsATagTheRepositoryHasWhenNoneIsAsked(t *testing.T) {
+	f, env, alpha, _ := twoNodes(t,
+		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
+		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
+		pairFacts("alpha", false), pairFacts("bravo", false))
+	admin := credentialUser{f.cookie, f.csrf}
+	reg := newFakeRegistry(t)
+	reg.tags = []string{"1.36.1"}
+	f.trusting(t, reg)
+
+	rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test-from-env", fromEnvBodyFor(reg, env.ID, "team/busybox", ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("test-from-env: %d %s", rec.Code, rec.Body)
+	}
+	want := reg.host() + "/team/busybox:1.36.1"
+	res := decodeFromEnv(t, rec)
+	if res.State != "passed" || res.Tag != "1.36.1" || res.Ref != want || res.Repository != reg.host()+"/team/busybox" {
+		t.Errorf("result = %+v, want passed on %s", res, want)
+	}
+	if refs := alpha.fake.DistributionRefs(); !slices.Equal(refs, []string{want}) {
+		t.Errorf("the node was asked for %q, want %q", refs, want)
+	}
+	if n := reg.tagLists.Load(); n != 1 {
+		t.Errorf("tag lists = %d, want one", n)
+	}
+	var tag string
+	if err := f.st.Read.QueryRow(`SELECT details->>'tag' FROM audit_log WHERE action = 'registry.credential_tested'`).Scan(&tag); err != nil || tag != "1.36.1" {
+		t.Errorf("audited tag = %q, %v, want the tag that was read", tag, err)
+	}
+	if strings.Contains(rec.Body.String(), pullCredSecret) || strings.Contains(rec.Body.String(), reg.pass) {
+		t.Errorf("the response carries the secret: %s", rec.Body)
+	}
+
+	// latest wins when the repository lists it.
+	reg.tags = []string{"2.0", "latest"}
+	rec = f.credCall(t, admin, http.MethodPost, "/api/registries/test-from-env", fromEnvBodyFor(reg, env.ID, "team/busybox", ""))
+	if res := decodeFromEnv(t, rec); res.Tag != "latest" || res.Ref != reg.host()+"/team/busybox:latest" {
+		t.Errorf("result = %+v, want latest when it is listed", res)
+	}
+}
+
+func TestATestFromAnEnvironmentWithATagListsNothingAndAHostThePolicyRefusesIsNeverListed(t *testing.T) {
+	f, env, alpha, _ := twoNodes(t,
+		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
+		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
+		pairFacts("alpha", false), pairFacts("bravo", false))
+	admin := credentialUser{f.cookie, f.csrf}
+	reg := newFakeRegistry(t)
+	reg.tags = []string{"1.36.1"}
+	f.trusting(t, reg)
+
+	rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test-from-env", fromEnvBodyFor(reg, env.ID, "team/busybox", "2.0"))
+	if res := decodeFromEnv(t, rec); rec.Code != http.StatusOK || res.Tag != "2.0" || res.Ref != reg.host()+"/team/busybox:2.0" {
+		t.Errorf("explicit tag: %d %+v, want 2.0", rec.Code, res)
+	}
+	if refs := alpha.fake.DistributionRefs(); !slices.Equal(refs, []string{reg.host() + "/team/busybox:2.0"}) {
+		t.Errorf("the node was asked for %q, want :2.0", refs)
+	}
+	if n := reg.hits.Load(); n != 0 {
+		t.Errorf("the registry was sent %d requests for a check with a tag, want none from the server", n)
+	}
+
+	// A host the egress policy refuses reads as unreachable and the server makes no request.
+	pool := x509.NewCertPool()
+	pool.AddCert(reg.srv.Certificate())
+	f.registryEgress = registry.NewEgressPolicy([]netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}).WithRootCAs(pool)
+	f.h = f.build(t)
+	rec = f.credCall(t, admin, http.MethodPost, "/api/registries/test-from-env", fromEnvBodyFor(reg, env.ID, "team/busybox", ""))
+	res := decodeFromEnv(t, rec)
+	if rec.Code != http.StatusOK || res.State != "failed" || res.Code != "registry_unreachable" || res.Tag != "latest" {
+		t.Errorf("refused host: %d %+v, want failed registry_unreachable with latest", rec.Code, res)
+	}
+	if n := reg.hits.Load(); n != 0 {
+		t.Errorf("the registry was sent %d requests for a refused host, want none", n)
+	}
+}
+
+func TestATestFromAnEnvironmentKeepsLatestWhenTheServerCannotListTheTags(t *testing.T) {
+	f, env, alpha, _ := twoNodes(t,
+		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
+		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
+		pairFacts("alpha", false), pairFacts("bravo", false))
+	admin := credentialUser{f.cookie, f.csrf}
+	reg := newFakeRegistry(t)
+	reg.tagsStatus = http.StatusForbidden
+	f.trusting(t, reg)
+	rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test-from-env", fromEnvBodyFor(reg, env.ID, "team/busybox", ""))
+	if res := decodeFromEnv(t, rec); rec.Code != http.StatusOK || res.Tag != "latest" || res.Ref != reg.host()+"/team/busybox:latest" {
+		t.Errorf("result = %d %+v, want latest", rec.Code, res)
+	}
+	if refs := alpha.fake.DistributionRefs(); !slices.Equal(refs, []string{reg.host() + "/team/busybox:latest"}) {
+		t.Errorf("the node was asked for %q, want :latest", refs)
 	}
 }
 

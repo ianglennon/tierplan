@@ -42,6 +42,8 @@ const passed: CredentialTestFromEnvResult = {
   digest: "sha256:abc",
   platforms: ["linux/amd64"],
   repository: REPO,
+  tag: "latest",
+  ref: `${REPO}:latest`,
   testedAt: "2026-10-12T10:00:00Z",
 };
 const failed = (code: string): CredentialTestFromEnvResult => ({
