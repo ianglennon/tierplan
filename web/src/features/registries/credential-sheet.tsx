@@ -479,8 +479,12 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
 
   // Closing with something typed asks first. Escape, the overlay, the X and Cancel all
   // come through here.
+  // While a save is out nothing closes the sheet: unmounting the form would drop the outcome
+  // (TanStack Query skips the per-call callbacks of an unmounted caller), so the person would
+  // never see the toast or the server's refusal (WR-C01).
   function requestClose() {
-    if (dirty && !pending) setDiscarding(true);
+    if (pending) return;
+    if (dirty) setDiscarding(true);
     else close();
   }
 

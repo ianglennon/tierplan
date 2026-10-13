@@ -331,6 +331,26 @@ describe("PullDialog (the form)", () => {
     expect(await within(dialog).findByText(/older than this Bayplan|agent/i)).toBeTruthy();
   });
 
+  it("ignores Escape and Cancel while the request is out, and still tracks the pull when it answers (WR-C01)", async () => {
+    let release: (r: Response) => void = () => {};
+    answer = () => new Promise<Response>((r) => (release = r));
+    const { onOpenChange } = mount();
+    const dialog = await submit("nginx:1.27");
+    await within(dialog).findByRole("button", { name: "Starting…" });
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    const cancel = within(dialog).getByRole("button", { name: "Cancel" });
+    expect((cancel as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(cancel);
+    expect(onOpenChange).not.toHaveBeenCalled();
+    release(started());
+    await within(dialog).findByRole("heading", { name: `Pulling ${REF}` });
+    await streamOpen();
+    expect(source().url).toContain("/api/pulls/j1/stream");
+    // Once the request is over the dialog closes as usual.
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+  });
+
   it("closes through Cancel without sending anything", async () => {
     const { onOpenChange } = mount();
     const dialog = await screen.findByRole("dialog");

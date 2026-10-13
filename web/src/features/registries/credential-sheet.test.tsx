@@ -35,6 +35,7 @@ let testPaths: string[];
 let testStatus: number;
 let testBody: unknown;
 let testGate: Promise<void> | null;
+let patchGate: Promise<void> | null;
 
 const credential = (extra: Record<string, unknown> = {}) => ({
   id: "c1",
@@ -93,6 +94,7 @@ beforeEach(() => {
   testStatus = 200;
   testBody = passedTest;
   testGate = null;
+  patchGate = null;
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   vi.stubGlobal(
@@ -125,6 +127,7 @@ beforeEach(() => {
       if (url.pathname === "/api/registries") return Response.json({ items: [] });
       if (url.pathname === "/api/registries/c1" && req.method === "PATCH") {
         patched.push((await req.json()) as Record<string, unknown>);
+        if (patchGate) await patchGate;
         return Response.json(patchBody, { status: patchStatus });
       }
       if (url.pathname === "/api/registries/c1") {
@@ -597,6 +600,25 @@ describe("CredentialSheet edit mode", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Discard changes" }));
     await waitFor(() => expect(closed).toBe(1));
     expect(patched).toHaveLength(0);
+  });
+
+  it("ignores Escape and Cancel while a save is out, then shows its outcome (WR-C01)", async () => {
+    let release: () => void = () => {};
+    patchGate = new Promise<void>((r) => {
+      release = r;
+    });
+    mount("edit", "c1");
+    await screen.findByText("Edit ghcr-acme");
+    type("Name", "renamed");
+    saveChanges();
+    await waitFor(() => expect(patched).toHaveLength(1));
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(screen.queryByText("Discard changes?")).toBeNull();
+    expect(closed).toBe(0);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    release();
+    await waitFor(() => expect(closed).toBe(1));
+    expect(await screen.findByText("Saved ghcr-acme.")).toBeTruthy();
   });
 
   it("closes at once when nothing changed", async () => {

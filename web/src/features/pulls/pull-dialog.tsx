@@ -219,8 +219,17 @@ export function PullDialog({
     }
   }, [finished, job, tracked, envId, hostName, queryClient, t, reopen]);
 
+  // While the request that starts a pull is out, the dialog stays: closing would unmount the
+  // form, and TanStack Query does not run the per-call callbacks of an unmounted caller, so the
+  // pull (already running on the server) would never be tracked and its toast never come.
+  const [startPending, setStartPending] = useState(false);
+  const requestOpenChange = (next: boolean) => {
+    if (!next && startPending) return;
+    onOpenChange(next);
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={requestOpenChange}>
       <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-160">
         {view === "form" || !tracked ? (
           <>
@@ -235,7 +244,8 @@ export function PullDialog({
               hostName={hostName}
               swarm={swarm}
               initialRef={typed}
-              onCancel={() => onOpenChange(false)}
+              onCancel={() => requestOpenChange(false)}
+              onPendingChange={setStartPending}
               onStarted={(started, ref) => {
                 setTyped(ref);
                 setTracked(started);
@@ -281,6 +291,9 @@ interface FormProps {
   swarm: boolean;
   initialRef: string;
   onCancel: () => void;
+  // Told whether the request that starts the pull is out, so the dialog can refuse to close
+  // meanwhile. False again when the form goes.
+  onPendingChange: (pending: boolean) => void;
   onStarted: (started: PullStarted, typedRef: string) => void;
 }
 
@@ -292,6 +305,7 @@ function PullForm({
   swarm,
   initialRef,
   onCancel,
+  onPendingChange,
   onStarted,
 }: FormProps) {
   const t = useT();
@@ -323,6 +337,10 @@ function PullForm({
   const errorKey = form.formState.errors.ref?.message;
   const error = typeof errorKey === "string" ? t(errorKey) : undefined;
   const pending = start.isPending;
+  useEffect(() => {
+    onPendingChange(pending);
+    return () => onPendingChange(false);
+  }, [pending, onPendingChange]);
 
   // The credential preview: what the typed reference becomes and which stored credential the
   // pull will use, asked of the same resolver the pull will use 400 ms after the typing stops.
@@ -577,7 +595,13 @@ function PullForm({
         </FieldGroup>
       </fieldset>
       <DialogFooter>
-        <Button type="button" variant="outline" className="max-md:h-11" onClick={onCancel}>
+        <Button
+          type="button"
+          variant="outline"
+          className="max-md:h-11"
+          disabled={pending}
+          onClick={onCancel}
+        >
           {t("pulls.form.cancel")}
         </Button>
         <Button type="submit" form={formId} className="max-md:h-11" disabled={pending}>
