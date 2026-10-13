@@ -29,8 +29,14 @@ const (
 	PullCodeRegistryUnreachable = "registry_unreachable"
 	PullCodeRegistryTLS         = "registry_tls"
 	PullCodeRegistryHTTP        = "registry_http"
-	PullCodeCancelled           = "cancelled"
-	PullCodeFailed              = "pull_failed"
+	// PullCodeRegistryHTTPFallback is the engine's answer "Client sent an HTTP request to an
+	// HTTPS server". The engine retried over plain HTTP, because the registry is in
+	// insecure-registries or its name resolves to a loopback address, and the registry spoke TLS.
+	// The plain-HTTP answer hides the HTTPS one, so a missing tag, a refused sign-in and a missing
+	// repository all read the same; the real cause is not known.
+	PullCodeRegistryHTTPFallback = "registry_http_fallback"
+	PullCodeCancelled            = "cancelled"
+	PullCodeFailed               = "pull_failed"
 )
 
 // PullOptions are what a pull is sent with.
@@ -218,6 +224,8 @@ func PullFailure(err error) string {
 		return PullCodeRegistryTLS
 	case has("server gave http response to https client"):
 		return PullCodeRegistryHTTP
+	case has("client sent an http request to an https server"):
+		return PullCodeRegistryHTTPFallback
 	}
 	return PullCodeFailed
 }

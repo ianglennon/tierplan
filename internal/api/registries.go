@@ -370,7 +370,7 @@ type CredentialTestFromEnvBody struct {
 	NodeID     string    `json:"nodeId" doc:"The node that made the check, by the ID the node lists use"`
 	Node       string    `json:"node" doc:"The node's name, for the sentence that names it"`
 	State      string    `json:"state" enum:"passed,failed" doc:"passed: the node read the manifest with the credential. failed: it could not; code says why"`
-	Code       string    `json:"code" doc:"Why it failed, as a stable code: pull_denied, pull_unauthorized, image_not_found, invalid_reference, rate_limited, registry_unreachable, registry_tls, registry_http, cancelled, pull_failed, agent_policy_denied (the node's agent is too old for this check) or node_unavailable (the node did not answer). Empty when it passed. No text from the registry or the engine is ever returned"`
+	Code       string    `json:"code" doc:"Why it failed, as a stable code: pull_denied, pull_unauthorized, image_not_found, invalid_reference, rate_limited, registry_unreachable, registry_tls, registry_http, registry_http_fallback (the engine retried over plain HTTP and the registry spoke TLS, which hides the real answer), cancelled, pull_failed, agent_policy_denied (the node's agent is too old for this check) or node_unavailable (the node did not answer). Empty when it passed. No text from the registry or the engine is ever returned"`
 	Digest     string    `json:"digest" doc:"The digest of the manifest the node read; empty when it failed"`
 	Platforms  []string  `json:"platforms" doc:"The platforms of the image, like linux/amd64; empty when it failed"`
 	Repository string    `json:"repository" doc:"The repository that was tried, with its registry host, like ghcr.io/acme/app"`
@@ -814,7 +814,7 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 			return e
 		}); err != nil {
 			code = checkErrorCode(err)
-			if code == dockerx.PullCodeFailed || code == problemNodeUnavailable {
+			if code == dockerx.PullCodeFailed || code == dockerx.PullCodeRegistryHTTPFallback || code == problemNodeUnavailable {
 				// The text stays in the server log; the answer carries the code only.
 				d.Log.Warn("a credential check from an environment failed", "environment", runEnvID, "node", node.ID, "repository", ref.Repo(), "code", code, "error", err)
 			}

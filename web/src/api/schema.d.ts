@@ -3429,7 +3429,7 @@ export interface components {
             ok: boolean;
         };
         CredentialTestFromEnvBody: {
-            /** @description Why it failed, as a stable code: pull_denied, pull_unauthorized, image_not_found, invalid_reference, rate_limited, registry_unreachable, registry_tls, registry_http, cancelled, pull_failed, agent_policy_denied (the node's agent is too old for this check) or node_unavailable (the node did not answer). Empty when it passed. No text from the registry or the engine is ever returned */
+            /** @description Why it failed, as a stable code: pull_denied, pull_unauthorized, image_not_found, invalid_reference, rate_limited, registry_unreachable, registry_tls, registry_http, registry_http_fallback (the engine retried over plain HTTP and the registry spoke TLS, which hides the real answer), cancelled, pull_failed, agent_policy_denied (the node's agent is too old for this check) or node_unavailable (the node did not answer). Empty when it passed. No text from the registry or the engine is ever returned */
             code: string;
             /** @description The digest of the manifest the node read; empty when it failed */
             digest: string;

@@ -77,19 +77,20 @@ const (
 // system said reaches a browser through a job (T-05-02, T-05-06). The SPA words a code
 // itself and uses these only as a fallback.
 var pullMessages = map[string]string{
-	dockerx.PullCodeDenied:              "The registry refused the pull.",
-	dockerx.PullCodeUnauthorized:        "The registry asked for a sign-in the pull did not have.",
-	dockerx.PullCodeNotFound:            "The registry has no such image.",
-	dockerx.PullCodeInvalidReference:    "The engine did not accept this image reference.",
-	dockerx.PullCodeRateLimited:         "The registry is limiting pulls. Try again later.",
-	dockerx.PullCodeRegistryUnreachable: "The registry could not be reached from this node.",
-	dockerx.PullCodeRegistryTLS:         "The registry's certificate was not accepted by this node.",
-	dockerx.PullCodeRegistryHTTP:        "The registry does not speak HTTPS and this node requires it.",
-	dockerx.PullCodeCancelled:           "The pull was cancelled.",
-	dockerx.PullCodeFailed:              "The pull failed.",
-	codeNodeUnreachable:                 "The node is not connected to Bayplan.",
-	codeHostReadOnly:                    "This host is read-only, so Bayplan cannot pull on it.",
-	codeAgentPolicyDeny:                 "The node's agent refused the request.",
+	dockerx.PullCodeDenied:               "The registry refused the pull.",
+	dockerx.PullCodeUnauthorized:         "The registry asked for a sign-in the pull did not have.",
+	dockerx.PullCodeNotFound:             "The registry has no such image.",
+	dockerx.PullCodeInvalidReference:     "The engine did not accept this image reference.",
+	dockerx.PullCodeRateLimited:          "The registry is limiting pulls. Try again later.",
+	dockerx.PullCodeRegistryUnreachable:  "The registry could not be reached from this node.",
+	dockerx.PullCodeRegistryTLS:          "The registry's certificate was not accepted by this node.",
+	dockerx.PullCodeRegistryHTTP:         "The registry does not speak HTTPS and this node requires it.",
+	dockerx.PullCodeRegistryHTTPFallback: "The registry's real answer was hidden by a retry over plain HTTP. Check the name, the tag and the sign-in.",
+	dockerx.PullCodeCancelled:            "The pull was cancelled.",
+	dockerx.PullCodeFailed:               "The pull failed.",
+	codeNodeUnreachable:                  "The node is not connected to Bayplan.",
+	codeHostReadOnly:                     "This host is read-only, so Bayplan cannot pull on it.",
+	codeAgentPolicyDeny:                  "The node's agent refused the request.",
 }
 
 // PullsDeps are the dependencies of the pull routes.
