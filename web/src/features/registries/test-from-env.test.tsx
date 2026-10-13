@@ -359,6 +359,79 @@ describe("TestFromEnv", () => {
     );
   });
 
+  describe("Tag field", () => {
+    const INVALID =
+      "A tag is 1 to 128 letters, digits, underscores, dots or dashes, and doesn't start with a dot or dash.";
+    const tagInput = () => screen.getByLabelText("Tag (optional)") as HTMLInputElement;
+
+    it("sends the typed tag, and no tag while the field is empty", async () => {
+      mount();
+      await open();
+      await waitFor(() => expect(runButton().textContent).toBe("Run test from Lab"));
+      expect(tagInput().placeholder).toBe("latest");
+      fireEvent.click(runButton());
+      await waitFor(() => expect(posts()).toHaveLength(1));
+      expect(posts()[0]?.body).toEqual({ ...base, repository: "private/app", envId: "e1" });
+
+      fireEvent.change(tagInput(), { target: { value: "1.36.1" } });
+      await waitFor(() => expect(runButton().hasAttribute("disabled")).toBe(false));
+      fireEvent.click(runButton());
+      await waitFor(() => expect(posts()).toHaveLength(2));
+      expect(posts()[1]?.body).toEqual({
+        ...base,
+        repository: "private/app",
+        tag: "1.36.1",
+        envId: "e1",
+      });
+    });
+
+    it("shows an invalid tag on the field and sends nothing", async () => {
+      mount();
+      await open();
+      await waitFor(() => expect(runButton().textContent).toBe("Run test from Lab"));
+      fireEvent.change(tagInput(), { target: { value: "bad tag!" } });
+      fireEvent.click(runButton());
+      await waitFor(() => expect(screen.getByText(INVALID)).toBeTruthy());
+      expect(tagInput().getAttribute("aria-invalid")).toBe("true");
+      expect(posts()).toHaveLength(0);
+      // Typing again takes the error away.
+      fireEvent.change(tagInput(), { target: { value: "ok" } });
+      await waitFor(() => expect(screen.queryByText(INVALID)).toBeNull());
+    });
+
+    it("puts a 422 tag_invalid on the same field and does not hand it to the sheet", async () => {
+      answer = () =>
+        Response.json(
+          {
+            title: "Unprocessable",
+            status: 422,
+            type: "validation_failed",
+            errors: [{ location: "body.tag", message: "tag_invalid", value: "x" }],
+          },
+          { status: 422 },
+        );
+      const onFieldErrors = vi.fn((_err: CredentialRequestError) => true);
+      mount({ onFieldErrors });
+      await open();
+      await waitFor(() => expect(runButton().textContent).toBe("Run test from Lab"));
+      fireEvent.change(tagInput(), { target: { value: "x" } });
+      fireEvent.click(runButton());
+      await waitFor(() => expect(screen.getByText(INVALID)).toBeTruthy());
+      expect(onFieldErrors).not.toHaveBeenCalled();
+      expect(screen.queryByText("Couldn't run the test. Try again.")).toBeNull();
+    });
+
+    it("clears the last result when the tag changes", async () => {
+      mount();
+      await open();
+      await waitFor(() => expect(runButton().textContent).toBe("Run test from Lab"));
+      fireEvent.click(runButton());
+      await waitFor(() => expect(screen.getByText(/can pull/)).toBeTruthy());
+      fireEvent.change(tagInput(), { target: { value: "2" } });
+      await waitFor(() => expect(screen.queryByText(/can pull/)).toBeNull());
+    });
+  });
+
   it("shows the agent-update notice for an agent too old for the check", async () => {
     answer = () => Response.json(failed("agent_policy_denied"));
     mount();
