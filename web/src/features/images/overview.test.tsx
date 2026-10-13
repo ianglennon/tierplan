@@ -120,6 +120,19 @@ describe("image Overview", () => {
     expect(within(card).getByText("arm64/v8")).toBeTruthy();
   });
 
+  it("says some label values are hidden when the server masked them", async () => {
+    answer = () => Response.json(detail({ masked: true, labels: { token: "<hidden>" } }));
+    mount();
+    const labels = await screen.findByRole("region", { name: "Labels" });
+    expect(within(labels).getByText(/Some label values are hidden/)).toBeTruthy();
+  });
+
+  it("says nothing about hidden labels when none were", async () => {
+    mount();
+    const labels = await screen.findByRole("region", { name: "Labels" });
+    expect(within(labels).queryByText(/Some label values are hidden/)).toBeNull();
+  });
+
   it("shows the labels by name as text, and No labels. when there are none", async () => {
     mount();
     const labels = await screen.findByRole("region", { name: "Labels" });

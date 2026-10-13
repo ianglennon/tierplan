@@ -91,11 +91,16 @@ function LayerCommand({ text }: { text: string }) {
   );
 }
 
-function LayersTable({ layers }: { layers: ImageLayer[] }) {
+function LayersTable({ layers, masked }: { layers: ImageLayer[]; masked: boolean }) {
   const t = useT();
   const total = layers.reduce((sum, l) => sum + l.size, 0);
   return (
     <div className="flex flex-col gap-3">
+      {masked ? (
+        <Alert>
+          <AlertDescription>{t(`${key}.masked`)}</AlertDescription>
+        </Alert>
+      ) : null}
       {/* The scrolling region is focusable, so a keyboard user can scroll it. */}
       <section
         // biome-ignore lint/a11y/noNoninteractiveTabindex: scrollable region
@@ -153,7 +158,7 @@ export function ImageLayers({ envId, imageId, node }: ImageLayersProps) {
     const layers = query.data.layers ?? [];
     if (layers.length === 0)
       return <p className="text-sm text-muted-foreground">{t(`${key}.empty`)}</p>;
-    return <LayersTable layers={layers} />;
+    return <LayersTable layers={layers} masked={query.data.masked === true} />;
   }
   if (query.isError) {
     if (isAgentTooOld(query.error)) return <AgentUpdateNotice envId={envId} />;

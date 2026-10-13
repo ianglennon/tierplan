@@ -78,7 +78,8 @@
         "labels": {
           "title": "Labels",
           "label": "Labels",
-          "empty": "No labels."
+          "empty": "No labels.",
+          "masked": "Some label values are hidden. Needs the reveal secrets permission to show them."
         }
       },
       "usedBy": {
@@ -111,7 +112,7 @@
         "loading": "Loading the inspect output",
         "loadFailed": "Couldn't load the inspect output of {{name}}.",
         "retry": "Retry",
-        "masked": "Environment variable values are hidden. Needs the reveal secrets permission to show them."
+        "masked": "Environment variable values, commands and secret-looking label values are hidden. Needs the reveal secrets permission to show them."
       },
       "layers": {
         "loading": "Loading the layers",
@@ -120,6 +121,7 @@
         "label": "Layers",
         "region": "Layers of the image",
         "empty": "No layers.",
+        "masked": "Command values are hidden: each layer shows only its kind of instruction. Needs the reveal secrets permission to show them.",
         "caption_one": "{{count, number}} layer, {{size}} in total",
         "caption_other": "{{count, number}} layers, {{size}} in total",
         "columns": {

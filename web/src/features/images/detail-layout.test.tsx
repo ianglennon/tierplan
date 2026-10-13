@@ -446,7 +446,7 @@ describe("image Inspect tab", () => {
     expect(doc.textContent).toContain("API_KEY=<hidden>");
     expect(
       screen.getByText(
-        "Environment variable values are hidden. Needs the reveal secrets permission to show them.",
+        "Environment variable values, commands and secret-looking label values are hidden. Needs the reveal secrets permission to show them.",
       ),
     ).toBeTruthy();
     expect(
@@ -460,7 +460,7 @@ describe("image Inspect tab", () => {
     inspectAnswer = () => Response.json({ masked: false, inspect: { Id: ID } });
     renderAt(`${PAGE}/inspect`);
     await screen.findByRole("region", { name: /nginx:1.27/i });
-    expect(screen.queryByText(/Environment variable values are hidden/)).toBeNull();
+    expect(screen.queryByText(/secret-looking label values are hidden/)).toBeNull();
   });
 
   it("says it could not load the inspect output, with Retry", async () => {

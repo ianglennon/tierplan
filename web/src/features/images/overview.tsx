@@ -11,6 +11,7 @@ import { CopyableCode, copyText } from "@/components/copyable-code";
 import { KeyValueTable } from "@/components/key-value-table";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -236,6 +237,11 @@ function LabelsCard({ detail }: { detail: ImageDetail }) {
   const rows = Object.entries(detail.labels ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return (
     <SettingsCard title={t(`${key}.labels.title`)}>
+      {detail.masked ? (
+        <Alert className="mb-3">
+          <AlertDescription>{t(`${key}.labels.masked`)}</AlertDescription>
+        </Alert>
+      ) : null}
       <KeyValueTable
         label={t(`${key}.labels.label`)}
         empty={t(`${key}.labels.empty`)}

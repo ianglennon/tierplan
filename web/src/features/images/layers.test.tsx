@@ -115,6 +115,19 @@ describe("image Layers", () => {
     expect(await screen.findByText("2 layers, 3 KiB in total")).toBeTruthy();
   });
 
+  it("says the commands are hidden when the server masked them", async () => {
+    answer = () => Response.json({ masked: true, layers: [layer({ createdBy: "ENV <hidden>" })] });
+    mount();
+    expect(await screen.findByText(/Command values are hidden/)).toBeTruthy();
+    expect(screen.getByText("ENV <hidden>")).toBeTruthy();
+  });
+
+  it("says nothing about hidden commands when none were", async () => {
+    mount();
+    await screen.findByRole("table", { name: "Layers" });
+    expect(screen.queryByText(/Command values are hidden/)).toBeNull();
+  });
+
   it("reads one layer in the singular", async () => {
     mount();
     expect(await screen.findByText("1 layer, 2 KiB in total")).toBeTruthy();
