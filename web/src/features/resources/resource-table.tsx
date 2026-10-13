@@ -339,7 +339,7 @@ export function ResourceTable<T>({
           id: "select",
           header: select.header,
           cell: select.cell,
-          className: "w-11 min-w-11 px-0 text-center",
+          className: "w-12 min-w-12 ps-3 pe-0 text-start",
         },
         ...withNode,
       ]
