@@ -28,7 +28,9 @@ import (
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
+	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/registry"
 	"github.com/ianglennon/bayplan/internal/shells"
 	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/store/sqlc"
@@ -101,6 +103,9 @@ type authFixture struct {
 	pwLimiter *auth.IPLimiter
 	// localHost feeds GET /api/local-host (plan 15).
 	localHost api.LocalHostDeps
+	// registryEgress is the policy the credential tests dial through (plan 05-11); a test
+	// that talks to a registry of its own sets one that trusts that registry's certificate.
+	registryEgress registry.EgressPolicy
 	// envSvc, when set, is the environment registry behind the environment
 	// routes and the {envId} resolver (plan 16). Without it, no environment
 	// exists and the environment routes are never called.
@@ -117,6 +122,14 @@ type authFixture struct {
 	eventsMaxStreams int
 	// eventsMaxLifetime caps how long one stream may live; zero is the default.
 	eventsMaxLifetime time.Duration
+	// jobHub holds the pulls (plan 05-01); it is made when a test builds the routes.
+	// pullsHeartbeat, pullsMaxStreams and pullsMaxLifetime tune the pull stream, and
+	// pullsNodeTimeout the longest one node may pull; zero is the default.
+	jobHub           *jobs.Hub
+	pullsHeartbeat   time.Duration
+	pullsMaxStreams  int
+	pullsMaxLifetime time.Duration
+	pullsNodeTimeout time.Duration
 	// logsHeartbeat, logsMaxStreams and logsMaxLifetime tune the container log stream
 	// (plan 04-19); zero is the default. logsWrap, when set, wraps the aggregator the
 	// stream reads through, so a test can make the node refuse as a busy agent does.
@@ -278,6 +291,16 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		api.RegisterContainers(r, api.ContainersDeps{Aggregator: f.agg, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
 		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
 		api.RegisterVolumes(r, api.VolumesDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, SizesTimeout: f.volumeSizesTimeout, Log: log})
+		api.RegisterImages(r, api.ImagesDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
+		if f.jobHub == nil {
+			f.jobHub = jobs.New(jobs.Options{})
+			t.Cleanup(f.jobHub.Close)
+		}
+		api.RegisterPulls(r, api.PullsDeps{
+			Aggregator: f.agg, Jobs: f.jobHub, Audit: f.aud, Checker: checker, Heartbeat: f.pullsHeartbeat,
+			Resolver:          registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
+			MaxStreamsPerUser: f.pullsMaxStreams, MaxLifetime: f.pullsMaxLifetime, NodeTimeout: f.pullsNodeTimeout, Log: log,
+		})
 		var logsSrc api.LogsSource = f.agg
 		if f.logsWrap != nil {
 			logsSrc = f.logsWrap(logsSrc)
@@ -303,6 +326,12 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			MaxStreamsPerUser: f.envStreamMaxStreams, MaxLifetime: f.envStreamMaxLifetime, Log: log,
 		})
 	}
+	api.RegisterRegistries(r, api.RegistriesDeps{Store: registry.NewStore(f.st, f.v, f.clk.now), Now: f.clk.now, Envs: f.envSvc, Aggregator: f.agg, Audit: f.aud, Checker: checker, Egress: f.registryEgress, Version: "test", Log: log})
+	regStore := registry.NewStore(f.st, f.v, f.clk.now)
+	api.RegisterTags(r, api.TagsDeps{
+		Resolver: registry.NewResolver(regStore), Tags: registry.NewTagService(nil, f.registryEgress, "test", log),
+		Checker: checker, Aggregator: f.agg, Envs: f.envSvc, Audit: f.aud, Log: log,
+	})
 	api.RegisterUnknownAgents(r, api.UnknownAgentsDeps{Unknown: f.unknown, Store: f.st, Now: f.clk.now, Log: log})
 	api.RegisterRecent(r, api.RecentDeps{Store: f.st, Envs: f.envSvc, Checker: checker, Refusals: f.aud, Now: f.clk.now, Log: log})
 	api.RegisterAudit(r, api.AuditDeps{Store: f.st, RetentionDays: f.auditRetention, Now: f.clk.now, Checker: checker, Refusals: f.aud, Log: log})
@@ -344,6 +373,8 @@ type authReq struct {
 	method, path, body string
 	cookie, csrf       string // cookie is the raw session ID
 	ip                 string
+	// headers are added to the request as sent.
+	headers map[string]string
 }
 
 func (f *authFixture) do(t *testing.T, h http.Handler, r authReq) *httptest.ResponseRecorder {
@@ -368,6 +399,9 @@ func (f *authFixture) do(t *testing.T, h http.Handler, r authReq) *httptest.Resp
 	}
 	if r.csrf != "" {
 		req.Header.Set("X-CSRF-Token", r.csrf)
+	}
+	for k, v := range r.headers {
+		req.Header.Set(k, v)
 	}
 	if r.method != http.MethodGet {
 		if origin := f.inst.PublicOrigin(); origin != "" {

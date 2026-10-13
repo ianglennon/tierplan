@@ -1,0 +1,156 @@
+{
+  "pulls": {
+    "button": "Pull image",
+    "dialog": {
+      "title": "Pull an image",
+      "body": "Docker downloads the image on the node."
+    },
+    "form": {
+      "image": {
+        "label": "Image",
+        "placeholder": "nginx:1.27 or ghcr.io/acme/app:latest",
+        "helper": "No tag means latest."
+      },
+      "targetStandalone": "Pulls on {{host}}.",
+      "targetSwarm": "Pulls on every node of {{host}}.",
+      "cancel": "Cancel",
+      "submit": "Pull image",
+      "pending": "Starting…",
+      "resolved": "Pulls {{ref}}",
+      "credential": "Credential: “{{name}}” ({{scope}})",
+      "credentialAnonymous": "Credential: anonymous. No stored credential matches.",
+      "browse": "Browse tags",
+      "environment": {
+        "label": "Environment",
+        "placeholder": "Choose an environment",
+        "error": "Choose an environment."
+      }
+    },
+    "errors": {
+      "refInvalid": "Enter an image like nginx:1.27 or ghcr.io/acme/app:latest.",
+      "tagInvalid": "A tag is 1 to 128 letters, digits, underscores, dots or dashes, and doesn't start with a dot or dash.",
+      "tooMany": "You already have 5 pulls running. Wait for one to finish.",
+      "permission": "You no longer have permission to do that. Your access may have changed.",
+      "hostReadOnly": "This host is read-only (set on the host).",
+      "nodeUnreachable": "The node isn't connected to Bayplan right now. Try again when it's back.",
+      "generic": "Couldn't start the pull. Try again.",
+      "nodesUnknown": "One of the chosen nodes isn't part of this environment any more. Reload the page and choose again.",
+      "nodesRequired": "Choose at least one node."
+    },
+    "progress": {
+      "title": "Pulling {{ref}}",
+      "titleDone": "Pulled {{ref}}",
+      "titleFailed": "Couldn't pull {{ref}}",
+      "credential": "Credential: “{{name}}” ({{scope}})",
+      "credentialAnonymous": "Credential: anonymous",
+      "helper": "You can close this. The pull keeps running. Find it under Pulls.",
+      "close": "Close",
+      "tryAgain": "Try again",
+      "nodes": "Pull progress by node",
+      "lost": "This pull is no longer listed. Pulls are kept for 10 minutes after they end. The audit log has its result.",
+      "accessLost": "You can no longer follow this pull.",
+      "reconnecting": "Reconnecting…",
+      "cancel": "Cancel pull",
+      "cancelling": "Cancelling…"
+    },
+    "node": {
+      "status": {
+        "waiting": "Waiting",
+        "running": "Pulling",
+        "done": "Done",
+        "failed": "Failed",
+        "cancelled": "Cancelled"
+      },
+      "progressLabel": "Pull progress on {{node}}",
+      "bytes": "{{done}} of {{total}}",
+      "layers_one": "{{done}} of {{count}} layer",
+      "layers_other": "{{done}} of {{count}} layers",
+      "digest": "Digest {{digest}}",
+      "copyDigest": "Copy digest",
+      "copiedDigest": "Copied the digest",
+      "upToDate": "Already up to date",
+      "expand": "Show layers on {{node}}",
+      "collapse": "Hide layers on {{node}}",
+      "layerTable": "Layers on {{node}}",
+      "noLayers": "No layers reported yet.",
+      "columns": {
+        "layer": "Layer",
+        "status": "Status",
+        "progress": "Progress"
+      },
+      "announce": {
+        "done": "Pulled on {{node}}",
+        "failed": "Failed on {{node}}"
+      }
+    },
+    "failure": {
+      "deniedWithCredential": "Pull denied using credential “{{name}}” ({{scope}}). Check its scopes or test it.",
+      "noCredential": "No stored credential matches {{ref}}, so it was pulled anonymously. Add one.",
+      "testCredential": "Test credential",
+      "addCredential": "Add credential",
+      "notFound": "{{ref}} wasn't found on {{host}}. Check the name and the tag.",
+      "invalidReference": "Docker on {{node}} doesn't accept {{ref}} as an image reference.",
+      "rateLimited": "{{host}}'s pull limit was reached. Try again later.",
+      "rateLimitedHub": "Docker Hub's pull limit was reached. Add a Docker Hub credential and tick “Use for all Docker Hub pulls”, or try again later.",
+      "unreachable": "{{node}} couldn't reach {{host}}. Check its network, DNS and firewall.",
+      "tls": "{{node}} doesn't trust the certificate from {{host}}. Its Docker daemon needs the registry's CA (certs.d) or an insecure-registries entry. See the docs.",
+      "http": "{{host}} doesn't offer HTTPS, which Docker on {{node}} requires. Its Docker daemon needs an insecure-registries entry. See the docs.",
+      "httpFallback": "{{node}} retried {{host}} over plain HTTP, because the name resolves to a loopback address or is listed in insecure-registries, and that answer hid the real one. Check the name, the tag and the sign-in.",
+      "nodeUnreachable": "{{node}} isn't reachable right now. Try again when it's back.",
+      "hostReadOnly": "This host is read-only (set on the host).",
+      "cancelled": "Cancelled before it finished on {{node}}.",
+      "interrupted": "Bayplan restarted before the pull finished on {{node}}. Try again.",
+      "generic": "The pull failed on {{node}}. Check the node and try again."
+    },
+    "toast": {
+      "pulled": "Pulled {{ref}}.",
+      "pulledOn_one": "Pulled {{ref}} on {{count}} node.",
+      "pulledOn_other": "Pulled {{ref}} on {{count}} nodes.",
+      "partial": "Pulled on {{done}}, {{failed}} failed",
+      "failed": "Couldn't pull {{ref}}. {{reason}}",
+      "details": "Details"
+    },
+    "targets": {
+      "legend": "Where to pull",
+      "all": "All nodes ({{count}})",
+      "choose": "Choose nodes",
+      "chooserLabel": "Nodes to pull on",
+      "count": "{{selected}} of {{total}} selected",
+      "manager": "Manager",
+      "worker": "Worker",
+      "notReachable": "Not reachable",
+      "unreachableReason": "{{node}} isn't reachable right now.",
+      "readOnlyReason": "This host is read-only (set on the host)",
+      "none": "Choose at least one node.",
+      "loading": "Loading nodes…"
+    },
+    "readOnly": {
+      "reason": "This host is read-only (set on the host)",
+      "alert": "This host is read-only. Changes are turned off on the host itself, so you can look at images but not pull or remove them."
+    },
+    "indicator": {
+      "button": "Pulls",
+      "buttonCount": "Pulls, {{count}} in progress",
+      "title": "Pulls",
+      "by": "by {{name}}",
+      "state": {
+        "running_one": "Pulling on {{running}} of {{count}} node",
+        "running_other": "Pulling on {{running}} of {{count}} nodes",
+        "done": "Done",
+        "partialFailed": "Done, {{failed}} failed",
+        "partial": "Partly done",
+        "failed": "Failed",
+        "cancelled": "Cancelled"
+      },
+      "cancel": "Cancel",
+      "cancelLabel": "Cancel pull of {{ref}}"
+    },
+    "cancel": {
+      "done_one": "Cancelled the pull on {{count}} node.",
+      "done_other": "Cancelled the pull on {{count}} nodes.",
+      "finished": "This pull has already ended.",
+      "failed": "Couldn't cancel the pull. Try again.",
+      "permission": "You no longer have permission to do that. Your access may have changed."
+    }
+  }
+}

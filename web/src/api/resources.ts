@@ -28,12 +28,6 @@ export function listKey(envId: string, resource: Resource) {
   return ["env", envId, resource] as const;
 }
 
-// The key of a list read for one node. The unfiltered key is listKey itself and
-// a filtered one extends it, so invalidating listKey refreshes every filter.
-function nodeKey(envId: string, resource: Resource, node: string | undefined) {
-  return node ? ([...listKey(envId, resource), { node }] as const) : listKey(envId, resource);
-}
-
 // Changing the node filter keeps the rows on screen until the new ones arrive,
 // so the table does not jump to a skeleton. It never carries rows over from
 // another environment.
@@ -80,12 +74,29 @@ export function containersQuery(envId: string, filters: ContainerFilters = {}) {
   });
 }
 
-export function imagesQuery(envId: string, node?: string) {
+// What narrows the images list on the server, before its 500-row cap: the node, the search
+// text, whether only untagged images are wanted and whether the rows are merged over nodes
+// or one per node copy.
+export interface ImageFilters {
+  node?: string;
+  q?: string;
+  dangling?: boolean;
+  view?: "merged" | "node";
+}
+
+export function imagesQuery(envId: string, filters: ImageFilters = {}) {
+  const set: { node?: string; q?: string; dangling?: boolean; view?: "node" } = {};
+  if (filters.node) set.node = filters.node;
+  if (filters.q) set.q = filters.q;
+  if (filters.dangling) set.dangling = true;
+  // Merged is the server's default and keeps the bare key.
+  if (filters.view === "node") set.view = "node";
+  const filtered = Object.keys(set).length > 0;
   return queryOptions({
-    queryKey: nodeKey(envId, "images", node),
+    queryKey: filtered ? ([...listKey(envId, "images"), set] as const) : listKey(envId, "images"),
     queryFn: async () => {
       const { data } = await api.GET("/api/env/{envId}/images", {
-        params: { path: { envId }, query: node ? { node } : undefined },
+        params: { path: { envId }, query: filtered ? set : undefined },
       });
       if (!data) throw new Error("GET images failed");
       return data;

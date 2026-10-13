@@ -7,6 +7,7 @@ import { Bell, TriangleAlert } from "lucide-react";
 import { type ReactNode, useRef, useState } from "react";
 
 import { api } from "@/api/client";
+import { type CredentialAlert, credentialAlertsQuery } from "@/api/registries";
 import type { components } from "@/api/schema";
 import { ENV_WARNINGS_KEY, WARNINGS_KEY } from "@/api/warnings";
 import { isPlainHttpRemote } from "@/components/auth-layout";
@@ -62,6 +63,24 @@ const BADGE_CAP = 9;
 
 export type EnvWarning = components["schemas"]["EnvWarningBody"];
 
+// useRegistryAlerts reads the credentials that expire within 7 days, have expired or were
+// refused by their registry (D-07). The server lists a credential only to the people who
+// can manage it, so the query runs only for an instance administrator and for an Admin of
+// at least one environment; for everyone else it never runs and the list stays empty. A
+// refresh that fails keeps the last items. The key sits under the registries key, so an
+// edit, a test or a delete of a credential reads the alerts again.
+export function useRegistryAlerts(): {
+  items: CredentialAlert[];
+  allowed: boolean;
+  loading: boolean;
+} {
+  const instance = usePermission("registries.instance");
+  const environment = useAnyEnvironmentPermission("registries.manage");
+  const allowed = instance || environment;
+  const { data, isPending } = useQuery({ ...credentialAlertsQuery, enabled: allowed });
+  return { items: allowed ? (data ?? []) : [], allowed, loading: allowed && isPending };
+}
+
 // useWarnings reads the instance warnings the server knows about: the data
 // directory is not persisted, and the generated encryption key has not been
 // backed up. Only an admin may ask (settings.read), so for anyone else the
@@ -115,7 +134,18 @@ type Entry =
   | { kind: "backupFailed"; key: string; severity: "warning"; since?: string; w: Warning }
   | { kind: "unknownAgents"; key: string; severity: "warning"; since?: string; w: Warning }
   | { kind: "env"; key: string; severity: EnvWarning["severity"]; since?: string; w: EnvWarning }
+  | {
+      kind: "registry";
+      key: string;
+      severity: EnvWarning["severity"];
+      since?: string;
+      alertKind: CredentialAlert["kind"];
+      alerts: CredentialAlert[];
+    }
   | { kind: "manyOffline"; key: string; severity: "error"; since?: string; count: number };
+
+// The registry credential items, most severe first (D-07).
+const REGISTRY_KINDS = ["expired", "auth_failed", "expiring"] as const;
 
 const entryKey = (w: EnvWarning) => `${w.id}:${w.envId ?? ""}:${w.agentId ?? w.node ?? ""}`;
 
@@ -131,6 +161,7 @@ export function bellEntries(
     bursts?: Warning[];
     backupFailed?: Warning[];
     unknownAgents?: Warning[];
+    registry?: CredentialAlert[];
   },
 ): Entry[] {
   const offline = env.filter((w) => w.id === "env_offline");
@@ -174,6 +205,19 @@ export function bellEntries(
   }
   for (const w of instance.unknownAgents ?? []) {
     entries.push({ kind: "unknownAgents", key: "unknown_agents", severity: "warning", w });
+  }
+  // One item per kind. A credential has at most one alert (the most severe), so the
+  // items never repeat a credential, and several of a kind collapse into one.
+  for (const alertKind of REGISTRY_KINDS) {
+    const alerts = (instance.registry ?? []).filter((a) => a.kind === alertKind);
+    if (alerts.length === 0) continue;
+    entries.push({
+      kind: "registry",
+      key: `registry:${alertKind}`,
+      severity: alertKind === "expired" ? "error" : "warning",
+      alertKind,
+      alerts,
+    });
   }
   if (instance.keyBackup)
     entries.push({ kind: "keyBackup", key: "key_backup", severity: "warning" });
@@ -265,6 +309,74 @@ function UnknownAgentsEntry({ w, close }: { w: Warning; close: () => void }) {
         onClick={close}
       >
         {t("bell.unknownAgents.link")}
+      </Link>
+    </BellItem>
+  );
+}
+
+// The scope a credential applies to, as the bell words it.
+function scopeText(alert: CredentialAlert, t: ReturnType<typeof useT>): string {
+  if (alert.scope.kind === "instance") return t("bell.registry.scope.instance");
+  return alert.scope.envName || t("bell.registry.scope.unnamed");
+}
+
+// A credential that needs its managers' attention (D-07): about to stop working, expired,
+// or refused by its registry. One credential reads with its name and links to its sheet;
+// several of a kind read as a count and link to the Registries page filtered to them. The
+// names and hosts were typed by people, so they are React strings; the title truncates with
+// its whole text on hover and the description wraps, so a long one never widens the popover.
+function RegistryEntry({
+  alertKind,
+  alerts,
+  close,
+}: {
+  alertKind: CredentialAlert["kind"];
+  alerts: CredentialAlert[];
+  close: () => void;
+}) {
+  const t = useT();
+  const now = useNow();
+  const [first] = alerts;
+  if (!first) return null;
+  const base = `bell.registry.${alertKind}`;
+  const className = `${linkClass} text-sm ${touchLink}`;
+
+  if (alerts.length > 1) {
+    return (
+      <BellItem
+        id={`registry_${alertKind}`}
+        title={t(`${base}.titleMany`, { count: alerts.length })}
+      >
+        <ItemDescription className="line-clamp-none wrap-anywhere">
+          {t(`${base}.descriptionMany`)}
+        </ItemDescription>
+        <Link to="/registries" search={{ alert: alertKind }} className={className} onClick={close}>
+          {t("bell.registry.link")}
+        </Link>
+      </BellItem>
+    );
+  }
+
+  const params = {
+    name: first.name,
+    host: first.host,
+    scope: scopeText(first, t),
+    time: formatRelative(first.at, new Date(now), t),
+    // Only the expiry reads a number of days, so only it has plural forms.
+    ...(alertKind === "expiring" ? { count: first.days ?? 1 } : {}),
+  };
+  return (
+    <BellItem id={`registry_${alertKind}`} title={t(`${base}.title`, params)}>
+      <ItemDescription className="line-clamp-none wrap-anywhere">
+        {t(`${base}.description`, params)}
+      </ItemDescription>
+      <Link
+        to="/registries"
+        search={{ credential: first.credentialId }}
+        className={className}
+        onClick={close}
+      >
+        {t(alertKind === "auth_failed" ? "bell.registry.test" : "bell.registry.link")}
       </Link>
     </BellItem>
   );
@@ -452,6 +564,7 @@ export function HealthBell() {
   const { data: me } = useMe();
   const { items, loading: instanceLoading } = useWarnings();
   const { items: envItems, loading: envLoading } = useEnvWarnings();
+  const { items: registryItems, loading: registryLoading } = useRegistryAlerts();
   const [acknowledging, setAcknowledging] = useState(false);
   const [open, setOpen] = useState(false);
   const [install, setInstall] = useState<{ open: boolean; envId?: string }>({ open: false });
@@ -471,8 +584,9 @@ export function HealthBell() {
     bursts,
     backupFailed,
     unknownAgents,
+    registry: registryItems,
   });
-  const loading = instanceLoading || envLoading;
+  const loading = instanceLoading || envLoading || registryLoading;
   const count = loading ? 0 : entries.length;
 
   async function acknowledge() {
@@ -655,6 +769,15 @@ export function HealthBell() {
                             {t("bell.refusalBurst.link")}
                           </Link>
                         </BellItem>
+                      );
+                    case "registry":
+                      return (
+                        <RegistryEntry
+                          key={entry.key}
+                          alertKind={entry.alertKind}
+                          alerts={entry.alerts}
+                          close={actions.close}
+                        />
                       );
                     case "backupFailed":
                       return (

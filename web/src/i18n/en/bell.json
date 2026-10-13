@@ -75,6 +75,36 @@
       "descriptionNoTime": "{{reason}}.",
       "link": "Open backups"
     },
+    "registry": {
+      "scope": {
+        "instance": "Instance",
+        "unnamed": "Environment"
+      },
+      "link": "Open registries",
+      "test": "Test credential",
+      "expiring": {
+        "title_one": "“{{name}}” expires in {{count}} day",
+        "title_other": "“{{name}}” expires in {{count}} days",
+        "description": "{{scope}} credential for {{host}}. Pulls that use it fail after that.",
+        "titleMany_one": "{{count}} registry credential expires within 7 days",
+        "titleMany_other": "{{count}} registry credentials expire within 7 days",
+        "descriptionMany": "Pulls that use them fail after that."
+      },
+      "expired": {
+        "title": "“{{name}}” has expired",
+        "description": "{{scope}} credential for {{host}}. Pulls that use it are being refused.",
+        "titleMany_one": "{{count}} registry credential has expired",
+        "titleMany_other": "{{count}} registry credentials have expired",
+        "descriptionMany": "Pulls that use them are being refused."
+      },
+      "auth_failed": {
+        "title": "“{{name}}” was refused by {{host}}",
+        "description": "Its last use failed {{time}}. Check its token or test it.",
+        "titleMany_one": "{{count}} registry credential was refused",
+        "titleMany_other": "{{count}} registry credentials were refused",
+        "descriptionMany": "Their last use failed. Check their tokens or test them."
+      }
+    },
     "unknownAgents": {
       "title_one": "{{count}} agent isn't known to this Bayplan",
       "title_other": "{{count}} agents aren't known to this Bayplan",

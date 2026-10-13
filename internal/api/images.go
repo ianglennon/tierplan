@@ -1,0 +1,659 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+package api
+
+import (
+	"cmp"
+	"context"
+	"errors"
+	"log/slog"
+	"maps"
+	"net/http"
+	"slices"
+	"strings"
+
+	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/ianglennon/bayplan/internal/audit"
+	"github.com/ianglennon/bayplan/internal/dockerx"
+	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/internal/httpx"
+	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/redact"
+)
+
+// problemImageNotFound is the problem type of an image page whose image no reporting node has.
+const problemImageNotFound = "image_not_found"
+
+// ImagesDeps are the dependencies of the image detail routes. Image reads are not audited
+// (D-31), so Audit is for the routes later plans add.
+type ImagesDeps struct {
+	// Aggregator reaches an engine: every read goes through OnNode, which never drops the
+	// cached snapshot.
+	Aggregator *envs.Aggregator
+	// Clusters reads the services of a swarm live, for the routes that ask what uses an image.
+	Clusters *envs.Clusters
+	Audit    *audit.Writer
+	// Checker decides whether a caller may see the values in an image's configuration.
+	Checker *rbac.Checker
+	// SelfContainerID marks Bayplan's own container, for the routes that act on images.
+	SelfContainerID string
+	// Log receives server-side failures. Nil means slog.Default().
+	Log *slog.Logger
+}
+
+// ImageDetailInput is the path and query of the image detail, inspect and history routes.
+type ImageDetailInput struct {
+	EnvironmentPathInput
+	ImageID string `path:"imageId" pattern:"^sha256:[a-f0-9]{64}$" maxLength:"71" doc:"The image ID: sha256: and 64 hexadecimal characters"`
+	Node    string `query:"node" maxLength:"128" doc:"Read only this node: its nodeId, as the nodes of the detail answer name it. Left out, every reporting node that has the image is read (inspect and history read the first of them)"`
+}
+
+// ImageListInput is the images list: the node filter, the search, the Dangling filter and the
+// view.
+type ImageListInput struct {
+	NodeFilterInput
+	Q        string `query:"q" maxLength:"128" doc:"Search: a case-insensitive substring of a tag (so of its repository too), or the start of the image ID, with or without sha256:. Applied before the 500-row cap"`
+	Dangling bool   `query:"dangling" doc:"True keeps only untagged images. Applied before the 500-row cap"`
+	View     string `query:"view" enum:"merged,node" default:"merged" doc:"merged: one row per image ID, with the nodes that hold it. node: one row per copy on a node. On a host with one node they are the same"`
+}
+
+// ImageHolderBody is one node that holds an image, or one node of the environment.
+type ImageHolderBody struct {
+	NodeID     string `json:"nodeId" doc:"The ID of the node"`
+	Name       string `json:"name" doc:"The display name of the node"`
+	Containers int    `json:"containers" doc:"Containers on this node, running or not, created from the image; 0 in nodeRefs"`
+}
+
+// ImageItem is one row of the images list. It carries no labels, variables or mounts.
+type ImageItem struct {
+	Node             string            `json:"node" doc:"The node that holds the image; empty for a merged row that more than one node holds"`
+	NodeID           string            `json:"nodeId" doc:"The ID of that node; empty when node is"`
+	ID               string            `json:"id" doc:"The full image ID"`
+	ShortID          string            `json:"shortId" doc:"The first 12 characters of the ID, without the sha256: prefix"`
+	RepoTags         []string          `json:"repoTags" doc:"repository:tag for each tag, on any node of a merged row, or [\"<none>\"] for an untagged image"`
+	Dangling         bool              `json:"dangling" doc:"True when the image has no tag"`
+	Size             int64             `json:"size" doc:"Size in bytes"`
+	Created          string            `json:"created,omitempty" format:"date-time"`
+	UsedByContainers int               `json:"usedByContainers" doc:"Containers, running or not, created from this image ID on the nodes the row stands for. Counted from the containers Bayplan reads, never from the engine's own per-image count, which a list does not compute"`
+	UsedByServices   int               `json:"usedByServices" doc:"Swarm services whose spec names this image, by pinned digest else by repository and tag, even with no running task, as of the last cluster read. A service can run a task on any node, so it counts once for the image. Always 0 off a swarm"`
+	ReadOnly         bool              `json:"readOnly" doc:"True when the host of every node the row stands for is read-only, so no change to it will be accepted"`
+	Nodes            []ImageHolderBody `json:"nodes" doc:"The nodes that hold the image, by name, each with its container count: one in the per-node view, every holder in the merged one"`
+}
+
+// ImageListBody is a capped list of images.
+type ImageListBody struct {
+	Items           []ImageItem       `json:"items" doc:"At most 500 rows"`
+	Total           int               `json:"total" doc:"How many match the search and the filters, whatever the cap"`
+	Truncated       bool              `json:"truncated" doc:"True when total is more than the rows returned"`
+	Nodes           []string          `json:"nodes" doc:"The nodes that answered, for the node filter"`
+	NodeRefs        []ImageHolderBody `json:"nodeRefs" doc:"The nodes that answered, by name, with their IDs, so a row can say which nodes lack the image"`
+	NodeCount       int               `json:"nodeCount" doc:"How many nodes the environment has: those that answered and those that did not"`
+	NotReporting    []string          `json:"notReporting" doc:"Nodes that should have answered and did not, so these rows are not the whole cluster"`
+	DanglingCount   int               `json:"danglingCount" doc:"How many rows of this view are untagged, after the node filter and before the search and the Dangling filter, so the chip never shrinks with what was typed"`
+	UnfilteredTotal int               `json:"unfilteredTotal" doc:"How many rows this view has before the search and the Dangling filter (after the node filter), so a page can say 3 of 600"`
+}
+
+// ImageListOutput wraps ImageListBody for huma.
+type ImageListOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         ImageListBody
+}
+
+// ImageUsedByOutput wraps ImageUsedByBody for huma.
+type ImageUsedByOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         ImageUsedByBody
+}
+
+// ImageNameBody is one name of an image.
+type ImageNameBody struct {
+	Name string `json:"name" doc:"repository:tag for a tag, repository@sha256:... for a digest"`
+	Kind string `json:"kind" enum:"tag,digest" doc:"tag for a repository:tag name, digest for a repo@sha256 name"`
+}
+
+// ImageNodeBody says whether one node holds the image and under which names.
+type ImageNodeBody struct {
+	NodeID  string   `json:"nodeId" doc:"The ID of the node"`
+	Name    string   `json:"name" doc:"The display name of the node"`
+	Present bool     `json:"present" doc:"True when the node has the image"`
+	Names   []string `json:"names" doc:"The tags and digests the image has on this node; empty when it is not there or has none"`
+}
+
+// ImageDetailBody is one image as its detail page shows it.
+type ImageDetailBody struct {
+	ID           string            `json:"id" doc:"The full image ID"`
+	ShortID      string            `json:"shortId" doc:"The first 12 characters of the ID, without the sha256: prefix"`
+	Names        []ImageNameBody   `json:"names" doc:"Every tag, then every digest, the image has on the nodes read, each once, by name"`
+	Dangling     bool              `json:"dangling" doc:"True when the image has no tag on any node read"`
+	Size         int64             `json:"size" doc:"Size in bytes"`
+	Created      string            `json:"created,omitempty" format:"date-time"`
+	OS           string            `json:"os" doc:"The operating system the image is built for"`
+	Architecture string            `json:"architecture" doc:"The CPU architecture the image is built for"`
+	Variant      string            `json:"variant" doc:"The architecture variant, for example v8; empty when there is none"`
+	Labels       map[string]string `json:"labels" doc:"Every label of the image. For a caller without secrets.reveal on the environment the value of a label whose name says it is a secret (token, password, key, ...) is replaced by <hidden>, and so is the user-info of a URL in a value; the org.opencontainers.image.* annotations are shown as they are"`
+	Masked       bool              `json:"masked,omitempty" doc:"True when a label value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment"`
+	Nodes        []ImageNodeBody   `json:"nodes" doc:"One entry per node read, by display name: whether it has the image and its names there"`
+	NotReporting []string          `json:"notReporting" doc:"Nodes that should have answered and did not, so names and nodes may be incomplete"`
+}
+
+// ImageDetailOutput wraps ImageDetailBody for huma.
+type ImageDetailOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         ImageDetailBody
+}
+
+// ImageInspectBody is the raw inspect document of one image.
+type ImageInspectBody struct {
+	Masked  bool           `json:"masked" doc:"True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment"`
+	Inspect map[string]any `json:"inspect" doc:"The engine's inspect document, with the values of the image configuration's environment (Config.Env, and ContainerConfig.Env of an older engine), its command (Cmd, Entrypoint, OnBuild), its health check command and the values of secret-named labels replaced by <hidden> unless the caller holds secrets.reveal"`
+}
+
+// ImageInspectOutput wraps ImageInspectBody for huma.
+type ImageInspectOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         ImageInspectBody
+}
+
+// ImageLayerBody is one layer of an image's history.
+type ImageLayerBody struct {
+	ID        string `json:"id" doc:"The layer's ID as the engine gives it: sha256: and 64 hexadecimal characters, <missing> for a layer of a pulled image, or empty"`
+	CreatedBy string `json:"createdBy" doc:"The command that made the layer. A build can have a secret in one, so for a caller without secrets.reveal on the environment only the kind of instruction is kept and its text replaced by <hidden> (ENV <hidden>, RUN <hidden>)"`
+	Size      int64  `json:"size" doc:"The layer's size in bytes; 0 for a layer that only changes metadata"`
+	Created   string `json:"created,omitempty" format:"date-time"`
+	Comment   string `json:"comment" doc:"The layer's comment, usually empty"`
+}
+
+// ImageHistoryBody is the layers of one image.
+type ImageHistoryBody struct {
+	Layers []ImageLayerBody `json:"layers" doc:"The layers in the order the engine answers: the newest first"`
+	Masked bool             `json:"masked,omitempty" doc:"True when a command was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment"`
+}
+
+// ImageHistoryOutput wraps ImageHistoryBody for huma.
+type ImageHistoryOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         ImageHistoryBody
+}
+
+// RegisterImages registers the image detail routes. They are reads: nothing here is audited
+// (D-31).
+func RegisterImages(r *httpx.Router, d ImagesDeps) {
+	if d.Log == nil {
+		d.Log = slog.Default()
+	}
+	problems := problemResponses(r)
+	registerImageRemove(r, d)
+	httpx.Register(r, huma.Operation{
+		OperationID: "listImages", Method: http.MethodGet, Path: "/api/env/{envId}/images",
+		Summary: "List the images of an environment",
+		Description: "Newest first, ties by image ID. An untagged image is listed as <none> and marked dangling. " +
+			"view=merged (the default) lists one row per image ID with the nodes that hold it, so two nodes with the same ID are one row while the same tag under different IDs stays two rows and a drifted node shows; view=node lists one row per copy on a node. " +
+			"Optionally only one node's (node), a search (q: a tag or repository, or the start of an ID) and only untagged images (dangling=1). The node, the search and the Dangling filter run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal and danglingCount the numbers before the search and the Dangling filter. " +
+			"Each row says what uses it: usedByContainers (containers on its node, stopped ones included, created from its ID) and usedByServices (swarm services whose spec names it, by pinned digest, else by repository and tag, even with no task). " +
+			"503 environment_offline (with the state, a reason code and since) when the environment cannot be read, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied when the agent refuses a read by its own policy. " +
+			"Needs images.read (Viewer) on the environment. Reads are not audited.",
+		Tags: []string{"environments"}, Responses: maps.Clone(problems),
+	}, rbac.Requirement{Perm: rbac.PermImagesRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *ImageListInput) (*ImageListOutput, error) {
+			agg, _, err := d.Aggregator.Snapshot(ctx, in.EnvID)
+			if err != nil {
+				return nil, snapshotProblem(d.Log, in.EnvID, err)
+			}
+			return &ImageListOutput{CacheControl: "no-store", Body: listImages(ctx, d, in, agg)}, nil
+		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "imageUsedBy", Method: http.MethodGet, Path: "/api/env/{envId}/images/{imageId}/used-by",
+		Summary: "What uses one image",
+		Description: "The containers, running or stopped, on the nodes that hold the image, matched by image ID on their own node, then the swarm services whose spec names it: " +
+			"matched by pinned digest against the image's repo digests, else by normalised repository and tag, and counted even with no tasks (state no_tasks). " +
+			"Each item says how it was matched (image_id, tag or digest). The image is named as the detail route names it, with the same rules and problems (422 for an ID of the wrong shape, 404 image_not_found when no reporting node holds it, 503 node_unavailable when node is not a node of the environment). " +
+			"Needs images.read (Viewer) on the environment. Reads are not audited.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermImagesRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *ImageDetailInput) (*ImageUsedByOutput, error) {
+			env := httpx.EnvFrom(ctx)
+			if env == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			body, err := imageUsedBy(ctx, d, env.ID, in)
+			if err != nil {
+				return nil, err
+			}
+			return &ImageUsedByOutput{CacheControl: "no-store", Body: body}, nil
+		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "getImage", Method: http.MethodGet, Path: "/api/env/{envId}/images/{imageId}",
+		Summary: "One image: its names, details, labels and the nodes that have it",
+		Description: "Everything the image detail page shows, read live from the engines. The image is named by its ID (sha256: and 64 hexadecimal characters; anything else is 422). " +
+			"Every reporting node whose image list has the ID is asked, and the names (tags, then digests) are merged; node limits the read to one node by its nodeId. " +
+			"nodes says, for every node read, whether it has the image and under which names. " +
+			"404 image_not_found when no reporting node has the image (it may have been removed, or its tag moved); 503 node_unavailable when node is not a connected node of the environment. " +
+			"Needs images.read (Viewer) on the environment. Reads are not audited.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermImagesRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *ImageDetailInput) (*ImageDetailOutput, error) {
+			p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+			if p == nil || env == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			body, err := getImage(ctx, d, env.ID, in, redact.CanReveal(ctx, d.Checker, p, env.ID))
+			if err != nil {
+				return nil, err
+			}
+			return &ImageDetailOutput{CacheControl: "no-store", Body: body}, nil
+		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "inspectImage", Method: http.MethodGet, Path: "/api/env/{envId}/images/{imageId}/inspect",
+		Summary: "One image's raw inspect document",
+		Description: "The engine's inspect document of the image as it is, for the Inspect tab, read from the first node that has the image or from the node named. " +
+			"The image is named as the detail route names it, with the same rules and problems (422 for an ID of the wrong shape, 404 image_not_found, 503 node_unavailable). " +
+			"The image's configuration can hold a secret a build baked in: for a caller without secrets.reveal on the environment the value of each environment variable, the command (Cmd, Entrypoint, OnBuild) and the health check command are replaced by the placeholder <hidden> on the server, as for a container, and so is the value of a label whose name says it is a secret (the org.opencontainers.image.* annotations stay); masked says something was. " +
+			"Needs images.read (Viewer) on the environment. Reads are not audited.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermImagesRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *ImageDetailInput) (*ImageInspectOutput, error) {
+			p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+			if p == nil || env == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			_, reads, _, err := readImage(ctx, d, env.ID, in.ImageID, in.Node, false)
+			if err != nil {
+				return nil, err
+			}
+			shown, masked, err := redact.MaskImageInspect(reads[0].raw, redact.CanReveal(ctx, d.Checker, p, env.ID))
+			if err != nil {
+				d.Log.Error("masking an image inspect failed", "environment", env.ID, "error", err)
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			doc, err := decodeInspect(shown)
+			if err != nil {
+				d.Log.Error("reading an image inspect failed", "environment", env.ID, "error", err)
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			return &ImageInspectOutput{CacheControl: "no-store", Body: ImageInspectBody{Masked: masked, Inspect: doc}}, nil
+		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "imageHistory", Method: http.MethodGet, Path: "/api/env/{envId}/images/{imageId}/history",
+		Summary: "The layers of one image",
+		Description: "The image's history from the engine, newest layer first, for the Layers tab, read from the first node that has the image or from the node named. " +
+			"The image is named as the detail route names it, with the same rules and problems (422, 404 image_not_found, 503 node_unavailable). " +
+			"502 agent_policy_denied when the node's agent is older than this server and does not know the history route. " +
+			"For a caller without secrets.reveal on the environment each command is reduced to its kind of instruction (ENV <hidden>), because a build writes ENV and ARG values and RUN arguments into it; masked says something was. Needs images.read (Viewer) on the environment. Reads are not audited.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermImagesRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *ImageDetailInput) (*ImageHistoryOutput, error) {
+			p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+			if p == nil || env == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			body, err := imageLayers(ctx, d, env.ID, in, redact.CanReveal(ctx, d.Checker, p, env.ID))
+			if err != nil {
+				return nil, err
+			}
+			return &ImageHistoryOutput{CacheControl: "no-store", Body: body}, nil
+		})
+}
+
+// imageGroup is one row of the list: the copies of an image on the nodes it stands for.
+type imageGroup struct {
+	// rows are the node copies, by node name then ID. Never empty.
+	rows []envs.ImageRow
+	// tags are the tags of the copies, each once, without the placeholder of an untagged
+	// image; empty for a dangling image.
+	tags []string
+}
+
+// groupImages makes the rows of a view. Merged, the copies with one merge key are one row;
+// per node, each copy is its own. The rows come out newest first, ties by image ID, then by
+// node, so equal creation times keep a stable order.
+func groupImages(rows []envs.ImageRow, view string) []imageGroup {
+	var groups []imageGroup
+	index := map[string]int{}
+	for _, r := range rows {
+		if view != "node" {
+			if i, ok := index[mergeKey(r.ImageRow)]; ok {
+				groups[i].rows = append(groups[i].rows, r)
+				continue
+			}
+			index[mergeKey(r.ImageRow)] = len(groups)
+		}
+		groups = append(groups, imageGroup{rows: []envs.ImageRow{r}})
+	}
+	for i := range groups {
+		g := &groups[i]
+		slices.SortFunc(g.rows, func(a, b envs.ImageRow) int {
+			return cmp.Or(strings.Compare(a.Node, b.Node), strings.Compare(a.NodeID, b.NodeID))
+		})
+		for _, r := range g.rows {
+			for _, t := range r.RepoTags {
+				if !isNoneTag(t) && !slices.Contains(g.tags, t) {
+					g.tags = append(g.tags, t)
+				}
+			}
+		}
+	}
+	slices.SortStableFunc(groups, func(a, b imageGroup) int {
+		x, y := a.rows[0], b.rows[0]
+		return cmp.Or(y.Created.Compare(x.Created), strings.Compare(mergeKey(x.ImageRow), mergeKey(y.ImageRow)), strings.Compare(x.Node, y.Node), strings.Compare(x.NodeID, y.NodeID))
+	})
+	return groups
+}
+
+// isNoneTag says whether a tag is the placeholder the engine gives an untagged image.
+func isNoneTag(t string) bool { return t == "" || t == "<none>" || t == "<none>:<none>" }
+
+// matchesImage says whether a row satisfies the search: q, lower case, is in one of its tags
+// (so in its repository), or starts its image ID. An empty q matches every row.
+func (g imageGroup) matches(q string) bool {
+	if q == "" {
+		return true
+	}
+	for _, t := range g.tags {
+		if strings.Contains(strings.ToLower(t), q) {
+			return true
+		}
+	}
+	if id := strings.TrimPrefix(q, "sha256:"); id != "" {
+		return strings.HasPrefix(strings.TrimPrefix(strings.ToLower(g.rows[0].ID), "sha256:"), id)
+	}
+	return false
+}
+
+// listImages builds the images list from one snapshot: the node filter, the view, the search
+// and the Dangling filter run here, before the 500-row cap, and the usage comes from the
+// containers and service specs of the same read.
+func listImages(ctx context.Context, d ImagesDeps, in *ImageListInput, agg envs.Aggregate) ImageListBody {
+	readOnly := map[string]bool{}
+	body := ImageListBody{
+		Items: []ImageItem{}, Nodes: reportingNodes(agg), NodeRefs: []ImageHolderBody{}, NotReporting: agg.NotReporting,
+		NodeCount: len(agg.Nodes) + len(agg.NotReporting),
+	}
+	for _, n := range agg.Nodes {
+		readOnly[n.ID] = n.ReadOnly
+		body.NodeRefs = append(body.NodeRefs, ImageHolderBody{NodeID: n.ID, Name: n.Name})
+	}
+	slices.SortFunc(body.NodeRefs, func(a, b ImageHolderBody) int {
+		return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.NodeID, b.NodeID))
+	})
+	use := imageUsageOf(ctx, d.Clusters, in.EnvID, agg)
+	groups := groupImages(filterNode(agg.Images, in.Node, func(i envs.ImageRow) string { return i.Node }), in.View)
+	body.UnfilteredTotal = len(groups)
+	for _, g := range groups {
+		if len(g.tags) == 0 {
+			body.DanglingCount++
+		}
+	}
+	q := strings.ToLower(strings.TrimSpace(in.Q))
+	shown := groups[:0:0]
+	for _, g := range groups {
+		if g.matches(q) && (!in.Dangling || len(g.tags) == 0) {
+			shown = append(shown, g)
+		}
+	}
+	body.Items, body.Total, body.Truncated = capRows(shown, func(g imageGroup) ImageItem {
+		first := g.rows[0]
+		it := ImageItem{
+			ID: first.ID, ShortID: shortImageID(first.ID), RepoTags: g.tags, Dangling: len(g.tags) == 0,
+			Size: first.Size, Created: rfc3339(first.Created), UsedByServices: len(use.servicesOf(first.ImageRow)),
+			ReadOnly: true, Nodes: make([]ImageHolderBody, 0, len(g.rows)),
+		}
+		if it.Dangling {
+			it.RepoTags = []string{"<none>"}
+		}
+		for _, r := range g.rows {
+			n := len(use.containersOf(r.NodeID, r.ID))
+			it.UsedByContainers += n
+			it.ReadOnly = it.ReadOnly && readOnly[r.NodeID]
+			it.Nodes = append(it.Nodes, ImageHolderBody{NodeID: r.NodeID, Name: r.Node, Containers: n})
+		}
+		if len(g.rows) == 1 {
+			it.Node, it.NodeID = first.Node, first.NodeID
+		}
+		return it
+	})
+	return body
+}
+
+// imageUsedBy lists what uses the image, from the snapshot the list is built from, so the
+// tab and the list's counts agree.
+func imageUsedBy(ctx context.Context, d ImagesDeps, envID string, in *ImageDetailInput) (ImageUsedByBody, error) {
+	agg, _, err := d.Aggregator.Snapshot(ctx, envID)
+	if err != nil {
+		return ImageUsedByBody{}, snapshotProblem(d.Log, envID, err)
+	}
+	var rows []envs.ImageRow
+	known := in.Node == ""
+	for _, n := range agg.Nodes {
+		known = known || n.ID == in.Node
+	}
+	if !known {
+		return ImageUsedByBody{}, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Bayplan.")
+	}
+	for _, row := range agg.Images {
+		if row.ID == in.ImageID && (in.Node == "" || row.NodeID == in.Node) {
+			rows = append(rows, row)
+		}
+	}
+	if len(rows) == 0 {
+		return ImageUsedByBody{}, httpx.Problem(http.StatusNotFound, problemImageNotFound, "No node has this image. It may have been removed, or its tag may have moved to another image.")
+	}
+	body := imageUsageOf(ctx, d.Clusters, envID, agg).usedBy(rows)
+	body.NotReporting = agg.NotReporting
+	return body, nil
+}
+
+// imageLayers reads the history of the image from the first node that has it, or the node named.
+// A caller who may not reveal secrets sees each command reduced to its kind of instruction
+// (CR-B02, WR-A04): a build writes ENV and ARG values and RUN arguments into it verbatim.
+func imageLayers(ctx context.Context, d ImagesDeps, envID string, in *ImageDetailInput, reveal bool) (ImageHistoryBody, error) {
+	_, holders, err := imageHolders(ctx, d, envID, in.ImageID, in.Node)
+	if err != nil {
+		return ImageHistoryBody{}, err
+	}
+	var rows []dockerx.HistoryRow
+	if _, _, err := askImageNodes(ctx, d, envID, holders, false, func(ctx context.Context, c *dockerx.Client, _ envs.NodeRef) error {
+		var e error
+		rows, e = c.ImageHistory(ctx, in.ImageID)
+		return e
+	}); err != nil {
+		return ImageHistoryBody{}, err
+	}
+	body := ImageHistoryBody{Layers: make([]ImageLayerBody, 0, len(rows))}
+	for _, r := range rows {
+		createdBy, masked := redact.MaskHistoryCommand(r.CreatedBy, reveal)
+		body.Masked = body.Masked || masked
+		body.Layers = append(body.Layers, ImageLayerBody{ID: r.ID, CreatedBy: createdBy, Size: r.Size, Created: rfc3339(r.Created), Comment: r.Comment})
+	}
+	return body, nil
+}
+
+// imageRead is what one node answered for an image.
+type imageRead struct {
+	node   envs.NodeRef
+	detail dockerx.ImageDetail
+	raw    []byte
+}
+
+// imageHolders finds the nodes to ask about an image. With node set that node alone is asked,
+// whether or not the list had the image: the list may be a few seconds old, and a node that is
+// not the environment's says so itself. Otherwise every reporting node whose image list has
+// the ID, by display name. The errors are already problems.
+func imageHolders(ctx context.Context, d ImagesDeps, envID, imageID, node string) (envs.Aggregate, []envs.NodeRef, error) {
+	agg, _, err := d.Aggregator.Snapshot(ctx, envID)
+	if err != nil {
+		return agg, nil, snapshotProblem(d.Log, envID, err)
+	}
+	if node != "" {
+		ref := envs.NodeRef{ID: node}
+		for _, n := range agg.Nodes {
+			if n.ID == node {
+				ref = n
+			}
+		}
+		return agg, []envs.NodeRef{ref}, nil
+	}
+	var holders []envs.NodeRef
+	seen := map[string]bool{}
+	for _, row := range agg.Images {
+		if row.ID != imageID || seen[row.NodeID] {
+			continue
+		}
+		seen[row.NodeID] = true
+		for _, n := range agg.Nodes {
+			if n.ID == row.NodeID {
+				holders = append(holders, n)
+			}
+		}
+	}
+	slices.SortFunc(holders, func(a, b envs.NodeRef) int {
+		return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.ID, b.ID))
+	})
+	return agg, holders, nil
+}
+
+// askImageNodes runs ask on the nodes in order, once each, and stops after the first node that
+// answers unless every is set. A node that no longer has the image is skipped; one that fails
+// is named in failed. When no node answered, err is the problem to send: 503 node_unavailable
+// when the node is not connected, the environment's own for any other failure, else 404
+// image_not_found.
+func askImageNodes(ctx context.Context, d ImagesDeps, envID string, nodes []envs.NodeRef, every bool, ask func(ctx context.Context, c *dockerx.Client, n envs.NodeRef) error) (answered []envs.NodeRef, failed []string, err error) {
+	var firstErr error
+	for _, n := range nodes {
+		readCtx, cancel := context.WithTimeout(ctx, inspectTimeout)
+		e := d.Aggregator.OnNode(readCtx, envID, n.ID, func(c *dockerx.Client) error { return ask(readCtx, c, n) })
+		cancel()
+		switch {
+		case e == nil:
+			answered = append(answered, n)
+		case dockerx.IsNotFound(e):
+			// Removed since the list was read: this node does not have it.
+		default:
+			if firstErr == nil {
+				firstErr = e
+			}
+			failed = append(failed, n.Name)
+		}
+		if len(answered) > 0 && !every {
+			break
+		}
+	}
+	if len(answered) > 0 {
+		return answered, failed, nil
+	}
+	switch {
+	case firstErr == nil:
+		return nil, nil, httpx.Problem(http.StatusNotFound, problemImageNotFound, "No node has this image. It may have been removed, or its tag may have moved to another image.")
+	case errors.Is(firstErr, envs.ErrNodeUnavailable), errors.Is(firstErr, envs.ErrNotFound):
+		return nil, failed, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Bayplan.")
+	}
+	return nil, failed, snapshotProblem(d.Log, envID, firstErr)
+}
+
+// readImage reads the image live from every node that has it (or the one named). The reads come
+// back in the order of the nodes' display names. The errors are already problems: 404
+// image_not_found when no node has it, 503 node_unavailable, or the environment's own.
+func readImage(ctx context.Context, d ImagesDeps, envID, imageID, node string, every bool) (agg envs.Aggregate, reads []imageRead, failed []string, err error) {
+	agg, holders, err := imageHolders(ctx, d, envID, imageID, node)
+	if err != nil {
+		return agg, nil, nil, err
+	}
+	byNode := map[string]imageRead{}
+	answered, failed, err := askImageNodes(ctx, d, envID, holders, every, func(ctx context.Context, c *dockerx.Client, n envs.NodeRef) error {
+		rd := imageRead{node: n}
+		var e error
+		rd.detail, rd.raw, e = c.ImageDetail(ctx, imageID)
+		if e == nil {
+			byNode[n.ID] = rd
+		}
+		return e
+	})
+	if err != nil {
+		return agg, nil, failed, err
+	}
+	for _, n := range answered {
+		reads = append(reads, byNode[n.ID])
+	}
+	return agg, reads, failed, nil
+}
+
+// getImage builds the detail page's answer from the nodes that have the image.
+func getImage(ctx context.Context, d ImagesDeps, envID string, in *ImageDetailInput, reveal bool) (ImageDetailBody, error) {
+	agg, reads, failed, err := readImage(ctx, d, envID, in.ImageID, in.Node, true)
+	if err != nil {
+		return ImageDetailBody{}, err
+	}
+	first := reads[0].detail
+	labels, labelsMasked := redact.MaskLabels(first.Labels, reveal)
+	body := ImageDetailBody{
+		ID: first.ID, ShortID: shortImageID(first.ID),
+		Names: []ImageNameBody{}, Size: first.Size, Created: rfc3339(first.Created),
+		OS: first.OS, Architecture: first.Architecture, Variant: first.Variant,
+		Labels: labels, Masked: labelsMasked, Nodes: []ImageNodeBody{}, NotReporting: mergeNames(agg.NotReporting, failed),
+	}
+	var tags, digests []string
+	have := map[string]imageRead{}
+	for _, rd := range reads {
+		have[rd.node.ID] = rd
+		tags = append(tags, rd.detail.RepoTags...)
+		digests = append(digests, rd.detail.RepoDigests...)
+	}
+	for _, name := range sortedUnique(tags) {
+		body.Names = append(body.Names, ImageNameBody{Name: name, Kind: "tag"})
+	}
+	for _, name := range sortedUnique(digests) {
+		body.Names = append(body.Names, ImageNameBody{Name: name, Kind: "digest"})
+	}
+	body.Dangling = len(tags) == 0
+	if in.Node != "" {
+		// One node was asked for, and it is the only one the page can say anything about.
+		for _, rd := range reads {
+			body.Nodes = append(body.Nodes, imageNode(rd.node, &rd))
+		}
+		return body, nil
+	}
+	for _, n := range agg.Nodes {
+		if rd, ok := have[n.ID]; ok {
+			body.Nodes = append(body.Nodes, imageNode(n, &rd))
+		} else {
+			body.Nodes = append(body.Nodes, imageNode(n, nil))
+		}
+	}
+	slices.SortFunc(body.Nodes, func(a, b ImageNodeBody) int {
+		return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.NodeID, b.NodeID))
+	})
+	return body, nil
+}
+
+// imageNode is the entry of a node in the detail: its names for the image when it has it.
+func imageNode(n envs.NodeRef, rd *imageRead) ImageNodeBody {
+	out := ImageNodeBody{NodeID: n.ID, Name: n.Name, Names: []string{}}
+	if rd == nil {
+		return out
+	}
+	out.Present = true
+	out.Names = append(out.Names, sortedUnique(rd.detail.RepoTags)...)
+	out.Names = append(out.Names, sortedUnique(rd.detail.RepoDigests)...)
+	return out
+}
+
+// sortedUnique is s sorted, without repeats.
+func sortedUnique(s []string) []string {
+	out := slices.Clone(s)
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// mergeNames is the names in a and b, each once, sorted; never nil.
+func mergeNames(a, b []string) []string {
+	out := sortedUnique(append(slices.Clone(a), b...))
+	if out == nil {
+		return []string{}
+	}
+	return out
+}

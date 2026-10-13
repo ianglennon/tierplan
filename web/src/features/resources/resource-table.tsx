@@ -27,7 +27,7 @@ import { type GroupCollapse, GroupHeaderRow } from "@/features/resources/group-h
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
-export type ResourceKind = "containers" | "images" | "volumes" | "networks";
+export type ResourceKind = "containers" | "images" | "volumes" | "networks" | "registries";
 
 // One column of a list. The cell renders from the row; the header is the
 // translated label.
@@ -142,6 +142,14 @@ interface ResourceTableProps<T> {
   // selected.
   select?: TableSelect<T>;
   bulkBar?: ReactNode;
+  // The i18n key whose title and error words the table uses, when it is not one of
+  // the dashboard lists (the Registries page keeps its words in its own namespace).
+  i18nKey?: string;
+  // Replaces the sentence under the error heading.
+  errorBody?: string;
+  // The primary action of the page, at the right end of the header. Drawn while the
+  // list loads, so the header does not move when it arrives.
+  actions?: ReactNode;
 }
 
 export interface NodeFilter {
@@ -310,10 +318,13 @@ export function ResourceTable<T>({
   rowStates,
   select,
   bulkBar,
+  i18nKey,
+  errorBody,
+  actions,
 }: ResourceTableProps<T>) {
   const t = useT();
   const groupsId = useId();
-  const key = `dashboard.lists.${resource}`;
+  const key = i18nKey ?? `dashboard.lists.${resource}`;
   const data = query.data;
   const rows = groups ? groups.items.flatMap((g) => g.rows) : (data?.items ?? []);
   const failed = query.isError && !data;
@@ -328,7 +339,7 @@ export function ResourceTable<T>({
           id: "select",
           header: select.header,
           cell: select.cell,
-          className: "w-11 min-w-11 px-0 text-center",
+          className: "w-12 min-w-12 ps-3 pe-0 text-start",
         },
         ...withNode,
       ]
@@ -384,6 +395,7 @@ export function ResourceTable<T>({
           <span className="text-sm text-muted-foreground tabular-nums">{caption}</span>
         ) : null}
         {data ? captionExtra : null}
+        {actions}
       </header>
 
       {bulkBar}
@@ -396,7 +408,7 @@ export function ResourceTable<T>({
         <Alert variant="destructive">
           <AlertTitle>{t(`${key}.error`)}</AlertTitle>
           <AlertDescription className="flex flex-wrap items-center gap-3">
-            <span>{t("dashboard.lists.errorBody")}</span>
+            <span>{errorBody ?? t("dashboard.lists.errorBody")}</span>
             <Button
               variant="outline"
               size="sm"
@@ -428,9 +440,15 @@ export function ResourceTable<T>({
       {!failed && !empty ? (
         // The wrapper scrolls sideways on a phone (D-64) and, past the page
         // height, down, so the sticky header has something to stick to.
+        // It is also positioned (relative). Cells hold visually hidden reasons
+        // (NeedsTooltip, the credential table's Actions cell), and sr-only is
+        // position: absolute: without a positioned wrapper their containing block is
+        // the page, so they escape the scroll clip and widen the document. On a phone
+        // that grows the layout viewport, and every fixed sheet with it (G-05-7a,
+        // G-05-7b).
         // biome-ignore lint/a11y/noStaticElementInteractions: it only hears Escape from the controls inside the table; the wrapper itself is not interactive
         <div
-          className="max-h-[calc(100dvh-14rem)] overflow-x-auto overflow-y-auto rounded-xl ring-1 ring-foreground/10"
+          className="relative max-h-[calc(100dvh-14rem)] overflow-x-auto overflow-y-auto rounded-xl ring-1 ring-foreground/10"
           onKeyDown={(e) => {
             // Escape from a menu or dialog is theirs: it arrives here already
             // handled, or from a portal outside this table.

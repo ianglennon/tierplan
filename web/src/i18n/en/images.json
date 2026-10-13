@@ -1,0 +1,291 @@
+{
+  "images": {
+    "detail": {
+      "breadcrumb": {
+        "label": "Breadcrumb",
+        "images": "Images"
+      },
+      "tabs": {
+        "label": "Image sections",
+        "overview": "Overview",
+        "usedBy": "Used by",
+        "layers": "Layers",
+        "tags": "Tags",
+        "inspect": "Inspect"
+      },
+      "header": {
+        "dangling": "Dangling",
+        "onNodes": "on {{present}}/{{total}} nodes",
+        "usedBy": "Used by {{what}}",
+        "notInUse": "Not in use"
+      },
+      "actions": {
+        "pull": "Pull…",
+        "pullLabel": "Pull {{name}} again",
+        "more": "More actions",
+        "moreText": "More",
+        "copyId": "Copy image ID",
+        "copied": "Copied the image ID",
+        "copyFailed": "Couldn't copy the image ID. Select it in Details and copy it by hand."
+      },
+      "error": {
+        "loadFailed": "Couldn't load {{name}}. Docker may be unreachable. Try again.",
+        "retry": "Retry"
+      },
+      "gone": {
+        "heading": "This image is gone",
+        "body": "It was removed, or the tag moved to another image. Go back to the list to find it.",
+        "back": "Back to images"
+      },
+      "overview": {
+        "loading": "Loading the image",
+        "names": {
+          "title": "Names",
+          "label": "Names of the image",
+          "empty": "No names. This image is dangling.",
+          "columns": {
+            "name": "Name",
+            "type": "Type"
+          },
+          "type": {
+            "tag": "Tag",
+            "digest": "Digest"
+          },
+          "copy": "Copy",
+          "copyLabel": "Copy {{name}}",
+          "copied": "Copied {{name}}",
+          "copyFailed": "Couldn't copy the name. Select it and copy it by hand."
+        },
+        "details": {
+          "title": "Details",
+          "id": "ID",
+          "idLabel": "the image ID",
+          "size": "Size",
+          "created": "Created",
+          "os": "Operating system",
+          "architecture": "Architecture"
+        },
+        "nodes": {
+          "title": "On nodes",
+          "columns": {
+            "node": "Node",
+            "containers": "Containers",
+            "names": "Names on this node"
+          },
+          "absent": "Not on this node",
+          "noNames": "No names"
+        },
+        "labels": {
+          "title": "Labels",
+          "label": "Labels",
+          "empty": "No labels.",
+          "masked": "Some label values are hidden. Needs the reveal secrets permission to show them."
+        }
+      },
+      "usedBy": {
+        "loading": "Loading what uses the image",
+        "loadFailed": "Couldn't load what uses this image. Docker may be unreachable. Try again.",
+        "retry": "Retry",
+        "label": "Containers and services that use the image",
+        "region": "What uses the image",
+        "empty": "Nothing uses this image.",
+        "openContainer": "Open container {{name}}",
+        "noTasks": "Service spec, no tasks",
+        "columns": {
+          "name": "Name",
+          "type": "Type",
+          "node": "Node",
+          "state": "State",
+          "matchedBy": "Matched by"
+        },
+        "type": {
+          "container": "Container",
+          "service": "Service"
+        },
+        "matched": {
+          "image_id": "Image ID",
+          "tag": "Tag",
+          "digest": "Digest"
+        }
+      },
+      "inspect": {
+        "loading": "Loading the inspect output",
+        "loadFailed": "Couldn't load the inspect output of {{name}}.",
+        "retry": "Retry",
+        "masked": "Environment variable values, commands and secret-looking label values are hidden. Needs the reveal secrets permission to show them."
+      },
+      "layers": {
+        "loading": "Loading the layers",
+        "loadFailed": "Couldn't load the layers of this image. Docker may be unreachable. Try again.",
+        "retry": "Retry",
+        "label": "Layers",
+        "region": "Layers of the image",
+        "empty": "No layers.",
+        "masked": "Command values are hidden: each layer shows only its kind of instruction. Needs the reveal secrets permission to show them.",
+        "caption_one": "{{count, number}} layer, {{size}} in total",
+        "caption_other": "{{count, number}} layers, {{size}} in total",
+        "columns": {
+          "layer": "Layer",
+          "createdBy": "Created by",
+          "size": "Size",
+          "created": "Created"
+        },
+        "showMore": "Show more",
+        "showLess": "Show less"
+      }
+    },
+    "used": {
+      "containers_one": "{{count, number}} container",
+      "containers_other": "{{count, number}} containers",
+      "services_one": "{{count, number}} service",
+      "services_other": "{{count, number}} services",
+      "both": "{{containers}}, {{services}}"
+    },
+    "notInUse": "Not in use",
+    "list": {
+      "columns": {
+        "image": "Image",
+        "nodes": "Nodes",
+        "usedBy": "Used by"
+      },
+      "search": {
+        "label": "Search images",
+        "placeholder": "Search by name, tag or ID",
+        "clear": "Clear search"
+      },
+      "filter": {
+        "label": "Filter images",
+        "dangling": "Dangling",
+        "danglingCount": "Dangling {{count, number}}"
+      },
+      "view": {
+        "label": "Group by node",
+        "merged": "Merged",
+        "node": "Per node"
+      },
+      "clearFilters": "Clear filters",
+      "dangling": {
+        "badge": "Dangling"
+      },
+      "more": "+{{count, number}}",
+      "moreNames": "Other names: {{names}}",
+      "copies_one": "{{count, number}} image copy",
+      "copies_other": "{{count, number}} image copies",
+      "caption": {
+        "merged": "{{what}} {{nodes}}",
+        "perNode": "{{what}} {{nodes}}",
+        "filtered": "{{count, number}} of {{total, number}} images"
+      },
+      "nodes": {
+        "all_one": "on all {{count}} node",
+        "all_other": "on all {{count}} nodes",
+        "some": "on {{present}}/{{total}} nodes",
+        "title": "Nodes with this image",
+        "containers_one": "{{count, number}} container",
+        "containers_other": "{{count, number}} containers",
+        "missing": "Missing"
+      },
+      "empty": {
+        "search": "No images match “{{query}}”.",
+        "clearSearch": "Clear search",
+        "dangling": {
+          "title": "No dangling images",
+          "body": "Untagged images with nothing using them show up here."
+        },
+        "node": "No images on {{node}}."
+      },
+      "untagged": "Untagged"
+    },
+    "remove": {
+      "action": "Remove…",
+      "label": "Remove {{name}}",
+      "title": "Remove {{name}}?",
+      "body": "The image is deleted from the node. A registry image can be pulled again. An image you built here can't.",
+      "cancel": "Cancel",
+      "confirm": "Remove image",
+      "pending": "Removing…",
+      "done": "Removed {{name}}.",
+      "gone": "{{name}} is already gone. The list has been refreshed.",
+      "inUse": "{{name}} is in use. Remove what uses it, then try again.",
+      "errors": {
+        "nodeNamedUnreachable": "{{node}} isn't reachable right now. Try again when it's back.",
+        "hostReadOnly": "This host is read-only. Changes are turned off on the host itself, so Bayplan can only read from it.",
+        "permission": "You no longer have permission to do that. Your access may have changed.",
+        "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening."
+      },
+      "titleSwarm": "Remove {{name}} from nodes?",
+      "confirmNodes": "Remove from {{selected}} of {{total}} nodes",
+      "nodesLabel": "Nodes to remove the image from",
+      "usedBy": "Used by {{what}}",
+      "usedByService": "Used by service {{name}}",
+      "more_one": "{{name}} and {{count}} more",
+      "more_other": "{{name}} and {{count}} more",
+      "inUseConfirm": "In use by {{what}}",
+      "inUseReason": "In use by {{what}}. Open it to see what uses it.",
+      "doneNodes_one": "Removed {{name}} from {{count}} node.",
+      "doneNodes_other": "Removed {{name}} from {{count}} nodes.",
+      "partial": "Removed {{done}}, {{failed}} failed",
+      "lastNameInUse": "That is the last name of an image that is in use. Remove what uses it first.",
+      "results": {
+        "title": "Remove results",
+        "image": "Image"
+      }
+    },
+    "untag": {
+      "action": "Untag…",
+      "label": "Untag {{name}}",
+      "title": "Untag {{name}}?",
+      "body": "This removes the name only. The image stays on the node under its other names.",
+      "bodyOnly": "This is the image's only name, so the image is removed.",
+      "cancel": "Cancel",
+      "confirm": "Untag {{name}}",
+      "confirmRemove": "Remove image",
+      "pending": "Untagging…",
+      "done": "Untagged {{name}}.",
+      "removed": "Removed {{name}}.",
+      "gone": "{{name}} is already gone. The list has been refreshed.",
+      "lastNameInUse": "This is the last name of an image that is in use. Remove what uses it first.",
+      "partial": "Untagged {{done}}, {{failed}} failed",
+      "chooseName": "Name to take off",
+      "nodesLabel": "Nodes to untag the image on",
+      "results": {
+        "title": "Untag results",
+        "image": "Name"
+      }
+    },
+    "menu": {
+      "pull": "Pull again…"
+    },
+    "bulk": {
+      "remove": "Remove…",
+      "selectAll": "Select all dangling images",
+      "notDangling": "Only dangling images can be deleted in bulk. Open an image to remove it.",
+      "inUse": "In use, so it can't be removed.",
+      "title_one": "Delete {{count}} image?",
+      "title_other": "Delete {{count}} images?",
+      "body": "Dangling images have no name. Ones you built here can't be pulled again.",
+      "label": "Images to delete",
+      "column": "Image",
+      "cancel": "Cancel",
+      "confirm_one": "Delete {{count}} image",
+      "confirm_other": "Delete {{count}} images",
+      "pending": "Deleting…",
+      "done_one": "Deleted {{count}} image.",
+      "done_other": "Deleted {{count}} images.",
+      "partial": "Removed {{done}}, {{failed}} failed",
+      "partialSkipped": "Removed {{done}}, {{failed}} failed, {{skipped}} skipped",
+      "skippedOnly": "Deleted {{done}}, {{skipped}} skipped",
+      "skippedNote": "In use, skipped",
+      "skipped": "{{name}} is in use or has a name, so it was skipped. Open the image to see why.",
+      "gone": "{{name}} is already gone.",
+      "changes_one": "{{count}} change waiting",
+      "changes_other": "{{count}} changes waiting",
+      "showChanges": "Show changes",
+      "selectEvery": "Couldn't read the dangling images. Try again.",
+      "results": {
+        "title": "Delete results",
+        "image": "Image"
+      }
+    }
+  }
+}

@@ -14,6 +14,8 @@ const chromium = { ...devices["Desktop Chrome"], baseURL };
 // The containers project follows the dashboard because it starts from the one
 // environment and the engine the dashboard spec left, and it clears what that spec
 // made under names it also uses.
+// The registries project needs only the admin: it stores one throwaway
+// credential and deletes it, so it sits anywhere after the setup.
 // The agent project adds a second environment and revokes it, so the specs before
 // it assume the one environment they started with. The access project follows it
 // because it needs that second, revoked environment as the one a new user must not
@@ -28,6 +30,7 @@ const order = [
   "settings",
   "agent",
   "access",
+  "registries",
   "responsive",
   "backup",
 ] as const;

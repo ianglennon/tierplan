@@ -681,9 +681,209 @@ export interface paths {
         };
         /**
          * List the images of an environment
-         * @description Newest first. An untagged image is listed as <none>. On a swarm every node's images, each with its node. Optionally only one node's (node). At most 500 rows, after the filter, with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description Newest first, ties by image ID. An untagged image is listed as <none> and marked dangling. view=merged (the default) lists one row per image ID with the nodes that hold it, so two nodes with the same ID are one row while the same tag under different IDs stays two rows and a drifted node shows; view=node lists one row per copy on a node. Optionally only one node's (node), a search (q: a tag or repository, or the start of an ID) and only untagged images (dangling=1). The node, the search and the Dangling filter run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal and danglingCount the numbers before the search and the Dangling filter. Each row says what uses it: usedByContainers (containers on its node, stopped ones included, created from its ID) and usedByServices (swarm services whose spec names it, by pinned digest, else by repository and tag, even with no task). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied when the agent refuses a read by its own policy. Needs images.read (Viewer) on the environment. Reads are not audited.
          */
         get: operations["listImages"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/images/pull": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pull an image on the nodes of an environment
+         * @description Starts a pull of the image on every node of the environment, or on the nodes named in nodeIds, and answers 202 with the job ID at once; the pull goes on if the browser closes. A node that is not connected to Bayplan gets an item of its own that fails with node_unreachable, and a node whose host is read-only fails with host_read_only without a call to its engine: neither stops the others. The reference is normalised first: nginx:1.27 becomes docker.io/library/nginx:1.27 and no tag means latest. An unparsable reference is 422 ref_invalid and starts nothing. At most 5 pulls of one user run at once (429 too_many_pulls). Each node pulls once, is never retried, and writes one image.pulled audit row. Needs images.pull (Operator) on the environment.
+         */
+        post: operations["startPull"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/images/pull-targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The nodes a pull can run on
+         * @description Every node of the environment by name, with its role, its architecture by the registry's names (amd64, arm64), whether its host is read-only and whether it is connected to Bayplan now. A node whose agent is not connected is listed with reachable false. swarm is true when the environment is a swarm. Needs images.read.
+         */
+        get: operations["listPullTargets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/images/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove images
+         * @description Removes up to 25 image copies, each named by its node ID and image ID, and answers one result per target in request order. An image with several names has each name untagged first and is then deleted by ID, so the engine's must-be-forced refusal never stops a removal; force is never sent. An image that any container on its node, running or stopped, references is never removed there, and an image that any swarm service spec references, even with no task, is never removed on any node, because Swarm would pull it again: the result is failed with code image_in_use and the detail names up to 5 users. The containers are read again from the node just before each removal and the service specs from a manager, and a container that starts between the check and the call makes the engine refuse and is answered image_in_use too. On a swarm whose services cannot be read nothing is removed and the target is node_unreachable. An image the node does not have is failed with code not_found and writes no audit row. One that fails never stops the others. A request that names more than one image, or sends a bulkId, is a bulk delete of dangling images: a target whose image has a name is skipped with code not_dangling, nothing is sent for it and it writes no audit row, whatever the browser sent. One image, on one or several nodes, is removed whatever its names. Needs images.delete (Operator) on the environment. With more than one target (or a bulkId sent) every audit row of the request carries the same bulk detail, a UUIDv7 the server makes when the client sends none, and the response returns it. Every attempt on an image the node has is audited as image.removed, failures included.
+         */
+        post: operations["removeImages"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/images/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the tags of a repository, as an environment's reader
+         * @description The same listing as /api/registries/tags with this environment chosen: the credential is the most specific match among the instance's credentials and this environment's own, never another environment's. Needs images.read (Viewer) on the environment. Shares the per-user limit of /api/registries/tags (429 rate_limited). Not audited.
+         */
+        get: operations["envBrowseTags"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/images/tags/details": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read the digest, date and platforms of tags, and what runs them here
+         * @description The details of up to 25 tags as /api/registries/tags/details gives them, for this environment: runningHere lists its running containers and swarm services whose image is the tag's index digest or the digest of any of its platforms, matched by digest even after the tag moved, and missing lists the architectures its nodes run that the tag has no platform for. Both come from the environment's last snapshot and are left out when it cannot be read. Needs images.read (Viewer) on the environment. Not audited.
+         */
+        post: operations["envBrowseTagDetails"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/images/untag": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Take one name off an image
+         * @description Untags one name (repository:tag) of an image on each node named in nodeIds, or on every node whose copy has that name, and answers one result per node. Untagging one of several names is always allowed, even while the image is in use: the image stays under its other names. The last name of an image that is in use is never untagged: the result is failed with code last_name_in_use. The last name of an image that is not in use is untagged and the image removed with it (removed is true, and the audit row is image.removed). A name the node does not have is failed with code not_found and writes no audit row. 404 image_not_found when nodeIds is left out and no node has the image under that name. Needs images.delete (Operator) on the environment. Every other attempt writes one image.untagged (or image.removed) row per node with a shared bulk ID.
+         */
+        post: operations["untagImage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/images/{imageId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One image: its names, details, labels and the nodes that have it
+         * @description Everything the image detail page shows, read live from the engines. The image is named by its ID (sha256: and 64 hexadecimal characters; anything else is 422). Every reporting node whose image list has the ID is asked, and the names (tags, then digests) are merged; node limits the read to one node by its nodeId. nodes says, for every node read, whether it has the image and under which names. 404 image_not_found when no reporting node has the image (it may have been removed, or its tag moved); 503 node_unavailable when node is not a connected node of the environment. Needs images.read (Viewer) on the environment. Reads are not audited.
+         */
+        get: operations["getImage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/images/{imageId}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The layers of one image
+         * @description The image's history from the engine, newest layer first, for the Layers tab, read from the first node that has the image or from the node named. The image is named as the detail route names it, with the same rules and problems (422, 404 image_not_found, 503 node_unavailable). 502 agent_policy_denied when the node's agent is older than this server and does not know the history route. For a caller without secrets.reveal on the environment each command is reduced to its kind of instruction (ENV <hidden>), because a build writes ENV and ARG values and RUN arguments into it; masked says something was. Needs images.read (Viewer) on the environment. Reads are not audited.
+         */
+        get: operations["imageHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/images/{imageId}/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One image's raw inspect document
+         * @description The engine's inspect document of the image as it is, for the Inspect tab, read from the first node that has the image or from the node named. The image is named as the detail route names it, with the same rules and problems (422 for an ID of the wrong shape, 404 image_not_found, 503 node_unavailable). The image's configuration can hold a secret a build baked in: for a caller without secrets.reveal on the environment the value of each environment variable, the command (Cmd, Entrypoint, OnBuild) and the health check command are replaced by the placeholder <hidden> on the server, as for a container, and so is the value of a label whose name says it is a secret (the org.opencontainers.image.* annotations stay); masked says something was. Needs images.read (Viewer) on the environment. Reads are not audited.
+         */
+        get: operations["inspectImage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/images/{imageId}/used-by": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What uses one image
+         * @description The containers, running or stopped, on the nodes that hold the image, matched by image ID on their own node, then the swarm services whose spec names it: matched by pinned digest against the image's repo digests, else by normalised repository and tag, and counted even with no tasks (state no_tasks). Each item says how it was matched (image_id, tag or digest). The image is named as the detail route names it, with the same rules and problems (422 for an ID of the wrong shape, 404 image_not_found when no reporting node holds it, 503 node_unavailable when node is not a node of the environment). Needs images.read (Viewer) on the environment. Reads are not audited.
+         */
+        get: operations["imageUsedBy"];
         put?: never;
         post?: never;
         delete?: never;
@@ -818,6 +1018,110 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/registries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add a registry credential to an environment
+         * @description Stores a sign-in that applies to this environment's pulls and tag browsing only, and wins over an instance credential for the same registry host and namespace (D-02). Everything else is as adding an instance credential: the secret is sealed with the vault and never returned, only its last 4 characters (12 or more characters). Needs registries.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403 and an environment the caller cannot see 404 environment_not_found. 422 validation_failed names every field at fault with a stable code, as for the instance family; 409 credential_name_taken, host_prefix_taken or hub_fallback_taken when another credential of this environment clashes (an instance credential never does). Audited as registry.credential_created with the environment, without the secret.
+         */
+        post: operations["createEnvCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/registries/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Which registry credential a pull of an image would use
+         * @description Answers with the same function pulls choose a credential with: the exact registry host, the longest whole-segment namespace prefix across the instance credentials and this environment's, the environment's credential winning a tie, and a Docker Hub fallback last. The answer names the credential and why, and lists the other credentials for the registry with what became of each. Only the instance layer and this environment's layer are consulted, and no secret is ever returned. An unparsable reference is 422 ref_invalid. Needs images.read on the environment. Not audited: it reads nothing but the choice.
+         */
+        post: operations["resolveCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/registries/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test an environment registry sign-in from the server
+         * @description As testing an instance sign-in, for the credentials of one environment: the same three steps from the Bayplan server, on unsaved values or on a stored credential of this environment (credentialId; 404 credential_not_found for the instance's or another environment's). Needs registries.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403. The 10 tests a minute per user are shared with the instance family: 429 rate_limited. The stored secret is lent only to the host, type, username, CA and insecure switch it was stored with (422 secret_required otherwise). Audited as registry.credential_tested with the environment, never the secret.
+         */
+        post: operations["testEnvCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/registries/test-from-env": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test an environment registry sign-in from its own node
+         * @description As testing an instance sign-in from an environment, for the credentials of one environment and run on that environment's own node: a connected manager on a swarm, else its one node. A stored credential (credentialId) must be this environment's own: 404 credential_not_found for the instance's or another environment's. Needs registries.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403. The 10 tests a minute per user are shared with the other test routes: 429 rate_limited. Audited as registry.credential_tested with the environment, the node and via env, never the secret. A host that the server's egress policy refuses is not sent to the node: failed with registry_unreachable.
+         */
+        post: operations["testEnvCredentialFromEnv"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/registries/{credentialId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete an environment's registry credential
+         * @description Removes the credential and its sealed secret. Pulls of this environment it would have matched fall back to the next matching credential, the instance's included, or to anonymous. Needs registries.manage on the environment (its Admin, or an instance admin). A credential of another environment, one of the instance layer, and one that is already gone answer 404 credential_not_found, so a repeated delete is safe and writes nothing. Audited as registry.credential_deleted with the environment, without the secret.
+         */
+        delete: operations["deleteEnvCredential"];
+        options?: never;
+        head?: never;
+        /**
+         * Change an environment's registry credential
+         * @description Changes the members that are sent and keeps the rest, as for an instance credential: the secret is write-only (left out or empty keeps the stored one only while the host, type, username, CA and insecure switch stay as stored; changing any of them is 422 secret_required), and there is no scope. Needs registries.manage on the environment (its Admin, or an instance admin). A credential of another environment, and one of the instance layer, answer 404 credential_not_found here, exactly like one that does not exist, and nothing changes. 422 validation_failed names every field at fault; 409 credential_name_taken, host_prefix_taken or hub_fallback_taken when another credential of this environment clashes, naming it in its errors list (location conflict.credential). Audited as registry.credential_updated with the environment and a changed detail listing the names of the fields that changed, the secret only as the word secret, and host_from and host_to when the host changed.
+         */
+        patch: operations["updateEnvCredential"];
         trace?: never;
     };
     "/api/env/{envId}/shells": {
@@ -1432,6 +1736,218 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/pulls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The pulls you can follow
+         * @description The pulls running or ended in the last 10 minutes, newest first: your own, and for an instance admin or an Env Admin (environments.configure) also those other people started on the environments they administer, with the starter's username. Nobody else sees another person's pull.
+         */
+        get: operations["listPulls"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/pulls/{jobId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One pull job and its progress on every node
+         * @description The pull as it stands now, for a browser that returns to a pull it started. A pull is kept for 10 minutes after it ends. Only the user who started it, or an instance admin, can read it; anyone else gets 404 pull_not_found.
+         */
+        get: operations["getPull"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/pulls/{jobId}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel a pull that is running
+         * @description Stops the nodes that have not finished: their downloads are cancelled, their items end cancelled and write an image.pulled audit row with the code cancelled. A cancel by someone other than the user who started the pull also writes an image.pull_cancelled row, with the canceller as the actor and the starter named. Nodes that had finished keep the image and stay done. The job ends cancelled when no node finished and partial otherwise, and the answer is the job as it stands, normally already ended. Only the user who started the pull, or a holder of images.pull on the pull's environment, may cancel it: anyone else who may not see the pull gets 404 pull_not_found, and one who sees it but cannot cancel gets 403 (audited as permission.denied). A pull that has already ended answers 409 pull_finished and nothing changes, so cancelling twice is safe. A cancel is a change and is never retried.
+         */
+        post: operations["cancelPull"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/registries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the registry credentials the signed-in user may see
+         * @description An instance admin sees every credential. Anyone who holds images.read on at least one environment sees the instance credentials, and an environment's own credentials when they can read that environment; canManage says whether they may change a credential. A caller with no images.read anywhere gets an empty list. No secret is ever included.
+         */
+        get: operations["listCredentials"];
+        put?: never;
+        /**
+         * Add an instance registry credential
+         * @description Stores a sign-in for a registry host and an optional namespace, used for pulls and tag browsing on every environment. The secret is sealed with the vault, included in backups and re-wrapped by key rotation, and never returned by any route afterwards: the answer carries only its last 4 characters, and only for a secret of 12 or more characters. Needs registries.instance, which only instance admins hold. 422 validation_failed names every field at fault with a stable code (name_required, name_invalid, type_invalid, host_required, host_invalid, prefix_invalid, username_required, secret_required, hub_prefix_required, hub_fallback_not_hub, expiry_invalid, expiry_past, ca_invalid); 409 credential_name_taken, host_prefix_taken or hub_fallback_taken when another instance credential clashes; the 409 names that credential in its errors list (location conflict.credential). Audited as registry.credential_created without the secret.
+         */
+        post: operations["createInstanceCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/registries/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the registry credentials that need attention
+         * @description Derived from live state, never stored, so an item is there exactly while its cause is: a credential that expires within 7 days (expiring), whose expiry day has passed (expired) or that its registry refused on the last use and that has not worked since (auth_failed). An expiry day counts as the end of that day in UTC, and the 7-day warning and expired use that same instant. Only credentials the caller may manage are listed: an instance admin gets instance and environment credentials, an Env Admin the credentials of the environments they administer, and everyone else an empty list. A credential with several problems has one item, the most severe. Nothing is renewed automatically.
+         */
+        get: operations["listCredentialAlerts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/registries/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the tags of a repository
+         * @description Lists a repository's tag names through the server, with the stored credential pulls would use for it among the ones the caller may see: the instance credentials and, with envId, that environment's own. The tags come newest version first and then by name, descending, 100 to a page (page, from 0), filtered by the text q and without signature, attestation and cache tags unless hide is false. The answer names the credential, never holds it, and is cached for a minute per credential, so a caller never gets a list fetched with a credential they cannot use. Needs images.read on at least one environment, and on envId when it is given (403). An unparsable reference is 422 ref_invalid. At most 60 tag requests a minute per user (a burst of 30), lists and details together: 429 rate_limited. When the registry cannot list the tags the answer is 404 repository_not_found or repository_unavailable (the registry refused the repository although the credential's sign-in works, so it does not exist or the account cannot read it), or 502 with the problem type needs_login (the registry wants a login and no stored credential matches), login_refused (it refused the matching credential), registry_unreachable or registry_tls; errors names the registry as registry.host and registry.repo and the credential used, if any, as credential.id, credential.name, credential.scopeKind and credential.scopeName. Not audited.
+         */
+        get: operations["browseTags"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/registries/tags/details": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read the digest, date and platforms of tags
+         * @description Reads the digest, the created date and the platforms of up to 25 tags of a repository, for the rows the person can see. The server asks the registry with the same credential and the same authorisation as the tag list: images.read on at least one environment, and on envId when it is given (403, audited), an unparsable reference is 422 ref_invalid, the limit of the tag list applies (429 rate_limited), 26 tags are 422 and so is a tag that is not 1 to 128 letters, digits, underscores, dots or dashes (tag_invalid). Docker Hub is read through its tags API, which costs no pulls; any other registry through a manifest HEAD and, per digest, the manifest and the config of one platform (linux/amd64, else the environment's node architecture, else the first). Results are cached per credential, repository and digest. A tag that could not be read carries a code, never a failure of the request. Not audited.
+         */
+        post: operations["browseTagDetails"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/registries/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test a registry sign-in from the server
+         * @description Runs the registry's own flow from the Bayplan server in three steps and reports each one: whether the registry answers, whether it accepts the sign-in, and, when a test repository is given, whether the sign-in can read it. Works on values that are not saved. A 401 to the unauthenticated ping counts as reachable; a refused sign-in is reported as refused whether the registry says 401 or 403; a registry that asks for no login reports signed in as not_checked. Each step is a state and a code, never text from the registry. The server refuses link-local, unspecified and multicast addresses (cloud metadata included) after DNS, allows private and loopback ranges, and refuses redirects to plain HTTP or local URLs. Needs registries.instance. At most 10 tests a minute per user across both families: 429 rate_limited. 422 validation_failed names the fields at fault with the codes of adding a credential, ca_invalid and test_repository_invalid. caPem and insecure apply the credential's own CA and switch to this test only; the operator's BAYPLAN_REGISTRY_BLOCK_CIDRS ranges stay refused even with the switch on. A stored credential's secret is lent only to the host, type, username, CA and insecure switch it was stored with: a test that changes any of them needs a secret typed now (422 secret_required). Audited as registry.credential_tested with each step's result, never the secret.
+         */
+        post: operations["testInstanceCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/registries/test-from-env": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test a registry sign-in from an environment's node
+         * @description Asks one node of the environment envId to read the manifest of repository:tag (latest when left out) from the credential's registry with the credential, through its agent and its own engine. A firewall, an internal DNS name or a certificate authority that only the node has shows up here and cannot show up in the server's own test. The engine reads the manifest with a HEAD, which Docker Hub does not count as a pull. On a swarm the check runs on one connected manager, else on the one node; the answer names the node. Works on values that are not saved, or on a stored instance credential (credentialId). The answer is 200 whether the node could pull or not: state is passed or failed, and a failed one carries a code (pull_denied, pull_unauthorized, image_not_found, registry_unreachable, registry_tls, registry_http, rate_limited, pull_failed, agent_policy_denied when the node's agent is older than this server, node_unavailable when the node did not answer), never any text from the registry. Needs registries.instance. 422 repository_required without a repository; 422 validation_failed names the other fields at fault (tag_invalid, test_repository_invalid and those of adding a credential); 404 environment_not_found; 503 node_unavailable when no node of the environment is connected; 502 agent_policy_denied when the environment cannot be read. The 10 tests a minute per user are shared with the server tests: 429 rate_limited. The stored secret is lent only to the host, type, username, CA and insecure switch it was stored with (422 secret_required otherwise). A host that is, or resolves on the server to, an address the server's egress policy refuses (cloud metadata, link-local, BAYPLAN_REGISTRY_BLOCK_CIDRS) is not sent to the node: the answer is failed with registry_unreachable. Audited as registry.credential_tested with the environment, the node and via env, never the secret.
+         */
+        post: operations["testInstanceCredentialFromEnv"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/registries/{credentialId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one registry credential
+         * @description The credential as the list shows it. One the caller may not see answers exactly like one that does not exist: 404 credential_not_found.
+         */
+        get: operations["getCredential"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete an instance registry credential
+         * @description Removes the credential and its sealed secret. Pulls it would have matched fall back to the next matching credential, or to anonymous; nothing else refers to it. Needs registries.instance. A credential that is already gone, and one of an environment, answer 404 credential_not_found, so a repeated delete is safe and writes nothing. Audited as registry.credential_deleted without the secret.
+         */
+        delete: operations["deleteInstanceCredential"];
+        options?: never;
+        head?: never;
+        /**
+         * Change an instance registry credential
+         * @description Changes the members that are sent and keeps the rest. The secret is write-only: leave it out or send it empty to keep the stored one, which is neither read nor returned; send a new one and it is sealed again and replaces it, and the answer carries only its last 4 characters (12 or more characters). Leaving it out keeps the stored one only while the host, type, username, CA and insecure switch stay as stored: changing any of them needs a secret typed now (422 validation_failed, secret_required on body.secret), so the stored secret never goes to a destination it was not stored for. There is no scope: a credential never moves between layers. Needs registries.instance. A credential of an environment answers 404 credential_not_found here, exactly like one that does not exist. 422 validation_failed names every field at fault with the same codes as adding; 409 credential_name_taken, host_prefix_taken or hub_fallback_taken when another instance credential clashes, naming it in its errors list (location conflict.credential). Audited as registry.credential_updated with a changed detail listing the names of the fields that changed, the secret only as the word secret, and host_from and host_to when the host changed.
+         */
+        patch: operations["updateInstanceCredential"];
         trace?: never;
     };
     "/api/settings": {
@@ -2432,6 +2948,21 @@ export interface components {
             /** @description 3 to 32 characters from a-z, 0-9, dot, dash and underscore; stored lower-case */
             username: string;
         };
+        ConsideredCredentialBody: {
+            /** @description The credential's ID */
+            credentialId: string;
+            /** @description Whether it covers the image at all */
+            matches: boolean;
+            /** @description Its name */
+            name: string;
+            /**
+             * @description used: the pulls use it. shorter_prefix: it covers the image with a shorter prefix than the one used. overridden_by_environment: an instance credential the environment's of the same specificity beat. hub_fallback_overridden: a Docker Hub fallback a more specific credential beat. no_match: it is for the same registry but not this namespace
+             * @enum {string}
+             */
+            result: "used" | "shorter_prefix" | "overridden_by_environment" | "hub_fallback_overridden" | "no_match";
+            /** @description Where it applies */
+            scope: components["schemas"]["CredentialScopeBody"];
+        };
         ContainerActionRequest: {
             /**
              * @description What to do. A stop or restart uses the container's own stop timeout and signal, and a kill sends SIGKILL, unless this is a single-target request that sets timeout or signal
@@ -2737,6 +3268,251 @@ export interface components {
             /** @description 3 to 32 characters from a-z, 0-9, dot, dash and underscore; stored lower-case */
             username: string;
         };
+        CredentialAlertBody: {
+            /**
+             * Format: date-time
+             * @description For expiring and expired: the end of the last day it is valid. For auth_failed: when the registry refused it
+             */
+            at: string;
+            /** @description The credential's ID */
+            credentialId: string;
+            /**
+             * Format: int64
+             * @description For expiring: the whole days left, rounded up, at least 1
+             */
+            days?: number;
+            /** @description The registry host */
+            host: string;
+            /**
+             * @description expiring: it stops working within 7 days. expired: its expiry day has passed. auth_failed: its registry refused it on the last use and it has not worked since
+             * @enum {string}
+             */
+            kind: "expiring" | "expired" | "auth_failed";
+            /** @description Its name */
+            name: string;
+            /** @description The namespace it covers; empty for the whole registry */
+            prefix: string;
+            /** @description Where it applies */
+            scope: components["schemas"]["CredentialScopeBody"];
+        };
+        CredentialAlertsBody: {
+            /** @description Only the credentials that need attention, one item each, the most severe first; empty when there are none */
+            items: components["schemas"]["CredentialAlertBody"][] | null;
+        };
+        CredentialBody: {
+            /** @description The custom certificate authority in PEM, public material, for people who may manage the credential; empty for everyone else and when there is none */
+            caPem: string;
+            /** @description Whether the caller may change or delete it */
+            canManage: boolean;
+            /**
+             * Format: date-time
+             * @description When it was added
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description The end of the last day it is valid; null when it does not expire
+             */
+            expiresAt: string | null;
+            /** @description Whether the credential carries a custom certificate authority, whoever is asking */
+            hasCa: boolean;
+            /** @description The registry host, lower case, with a port if it has one */
+            host: string;
+            /** @description Whether it is used for every Docker Hub pull no more specific credential matches */
+            hubFallback: boolean;
+            /** @description The credential's ID */
+            id: string;
+            /** @description Whether Bayplan's own tests and tag browsing skip certificate verification and may use plain HTTP for this registry. Nodes are not affected */
+            insecure: boolean;
+            /** @description The last 4 characters of the secret, or empty when the secret is shorter than 12 characters. The page shows •••• before it */
+            last4: string;
+            /** @description The last sign-in failure with it; null when there was none */
+            lastFailure: components["schemas"]["CredentialFailureBody"] | null;
+            /** @description The last test of the credential; null when it was never tested */
+            lastTest: components["schemas"]["CredentialTestBody"] | null;
+            /** @description Its name, unique within its scope */
+            name: string;
+            /** @description The namespace it covers; empty for the whole registry */
+            prefix: string;
+            /** @description Where it applies */
+            scope: components["schemas"]["CredentialScopeBody"];
+            /**
+             * @description The registry preset
+             * @enum {string}
+             */
+            type: "dockerhub" | "ghcr" | "gitlab" | "generic";
+            /**
+             * Format: date-time
+             * @description When it was last changed
+             */
+            updatedAt: string;
+            /** @description The registry user name */
+            username: string;
+        };
+        CredentialFailureBody: {
+            /**
+             * Format: date-time
+             * @description When it failed
+             */
+            at: string;
+            /** @description A stable code, like unauthorized or denied */
+            code: string;
+        };
+        CredentialListBody: {
+            /** @description Instance credentials first, then each environment's, by host and prefix */
+            items: components["schemas"]["CredentialBody"][] | null;
+        };
+        CredentialPatchRequest: {
+            /** @description A new custom certificate authority in PEM, or an empty string for none. 422 ca_invalid for more than 64 KiB or text that holds no certificate */
+            caPem?: string;
+            /** @description A day, YYYY-MM-DD, or an empty string for none. 422 expiry_invalid, and expiry_past for a day that has gone (the credential's own unchanged day is never refused) */
+            expires?: string;
+            /** @description A new registry host. Ignored for dockerhub and ghcr; 422 host_required or host_invalid */
+            host?: string;
+            /** @description Whether it is used for every Docker Hub pull no more specific credential matches. Docker Hub only (422 hub_fallback_not_hub), one per layer (409 hub_fallback_taken) */
+            hubFallback?: boolean;
+            /** @description Whether Bayplan's own tests and tag browsing skip certificate verification and may use plain HTTP for this registry */
+            insecure?: boolean;
+            /** @description A new name, unique among the instance credentials. Same rules as when adding; 422 name_required or name_invalid */
+            name?: string;
+            /** @description A new namespace; an empty string covers the whole registry. 422 prefix_invalid, and hub_prefix_required for docker.io with neither a prefix nor hubFallback */
+            prefix?: string;
+            /** @description A replacement password or token. Left out or empty keeps the stored secret, which is never read back. A new one is sealed with the vault and replaces it. It is never returned by any route */
+            secret?: string;
+            /** @description dockerhub, ghcr, gitlab or generic; 422 type_invalid for anything else */
+            type?: string;
+            /** @description A new registry user name; 422 username_required */
+            username?: string;
+        };
+        CredentialRequest: {
+            /** @description An optional certificate authority, in PEM, that Bayplan's own tests and tag browsing trust for this registry. At most 64 KiB and it must hold a certificate: 422 ca_invalid. Public material, returned to people who may manage the credential. It never changes the server's trust store and does nothing on a node */
+            caPem?: string;
+            /** @description An optional day, YYYY-MM-DD. It lasts to the end of that day, UTC. 422 expiry_invalid, and expiry_past for a day that has gone */
+            expires?: string;
+            /** @description The registry host, with a port if it has one, like registry.example.org:5000. Ignored for dockerhub and ghcr, registry.gitlab.com when left out for gitlab, required for generic: 422 host_required or host_invalid. No scheme and no path */
+            host?: string;
+            /** @description Use this credential for every Docker Hub pull no more specific credential matches. Docker Hub only (422 hub_fallback_not_hub), one per layer (409 hub_fallback_taken) */
+            hubFallback?: boolean;
+            /** @description Let Bayplan's own tests and tag browsing reach this registry without verifying its certificate, and over plain HTTP when it answers plain HTTP. Off by default. It does nothing on a node: each node's Docker daemon needs its own insecure-registries or certs.d setup */
+            insecure?: boolean;
+            /** @description What the credential is called, unique among the instance credentials. 1 to 64 characters: letters, digits, spaces and . _ ( ) -; 422 name_required or name_invalid */
+            name?: string;
+            /** @description The namespace the credential covers, like acme or acme/team: lower-case path segments with no slash at either end. Empty covers the whole registry. 422 prefix_invalid, and hub_prefix_required for docker.io with neither a prefix nor hubFallback */
+            prefix?: string;
+            /** @description The password or token. It is sealed with the vault and never returned by any route; only its last 4 characters can be shown, and only when it has 12 or more. 422 secret_required */
+            secret?: string;
+            /** @description dockerhub, ghcr, gitlab or generic. The first three fill in the host; 422 type_invalid for anything else */
+            type?: string;
+            /** @description The registry user name; 422 username_required */
+            username?: string;
+        };
+        CredentialScopeBody: {
+            /** @description The environment of an environment credential; null for an instance credential */
+            envId: string | null;
+            /** @description The name of that environment; null for an instance credential */
+            envName: string | null;
+            /**
+             * @description instance: every environment. environment: one environment only
+             * @enum {string}
+             */
+            kind: "instance" | "environment";
+        };
+        CredentialTestBody: {
+            /**
+             * Format: date-time
+             * @description When it was tested
+             */
+            at: string;
+            /** @description A short sentence about the outcome. Never the secret */
+            detail: string;
+            /** @description Whether the registry accepted it */
+            ok: boolean;
+        };
+        CredentialTestFromEnvBody: {
+            /** @description Why it failed, as a stable code: pull_denied, pull_unauthorized, image_not_found, invalid_reference, rate_limited, registry_unreachable, registry_tls, registry_http, registry_http_fallback (the engine retried over plain HTTP and the registry spoke TLS, which hides the real answer), cancelled, pull_failed, agent_policy_denied (the node's agent is too old for this check) or node_unavailable (the node did not answer). Empty when it passed. No text from the registry or the engine is ever returned */
+            code: string;
+            /** @description The digest of the manifest the node read; empty when it failed */
+            digest: string;
+            /** @description The node's name, for the sentence that names it */
+            node: string;
+            /** @description The node that made the check, by the ID the node lists use */
+            nodeId: string;
+            /** @description The platforms of the image, like linux/amd64; empty when it failed */
+            platforms: string[] | null;
+            /** @description The image reference that was read, host/repository:tag, like ghcr.io/acme/app:1.4 */
+            ref: string;
+            /** @description The repository that was tried, with its registry host, like ghcr.io/acme/app */
+            repository: string;
+            /**
+             * @description passed: the node read the manifest with the credential. failed: it could not; code says why
+             * @enum {string}
+             */
+            state: "passed" | "failed";
+            /** @description The tag that was read: the one asked for, else latest when the registry lists it, else the newest tag it lists, else latest */
+            tag: string;
+            /**
+             * Format: date-time
+             * @description When the check ran
+             */
+            testedAt: string;
+        };
+        CredentialTestFromEnvRequest: {
+            /** @description The custom certificate authority to trust for this test, in PEM. Left out, a stored credential's own is used; an empty string means none. 422 ca_invalid */
+            caPem?: string;
+            /** @description A stored credential of this layer to test. A field left blank is taken from it, and with no secret sent the stored secret is tried. When nothing is changed from what is stored, the result is remembered on the credential. 404 credential_not_found for one of another layer or environment */
+            credentialId?: string;
+            /** @description The registry host, as when adding; 422 host_required or host_invalid */
+            host?: string;
+            /** @description Whether to skip certificate verification and allow plain HTTP for this test. Left out, a stored credential's own switch is used */
+            insecure?: boolean;
+            /** @description The namespace the credential covers. Recorded with the test; it does not change what is tried */
+            prefix?: string;
+            /** @description The repository to read through the environment's node, like acme/app. Required: the engine needs a concrete image, so 422 repository_required without one (testRepository is taken in its place). 422 test_repository_invalid */
+            repository?: string;
+            /** @description The password or token to try. It is used for this one test, never stored by it, and never returned or recorded. 422 secret_required when there is none to try */
+            secret?: string;
+            /** @description The tag to read. Left out: latest when the registry lists it, else the newest listed tag, else latest. 422 tag_invalid */
+            tag?: string;
+            /** @description A repository to try to read with the sign-in, like acme/app. Without one, the last step is not checked. 422 test_repository_invalid */
+            testRepository?: string;
+            /** @description dockerhub, ghcr, gitlab or generic, as when adding; 422 type_invalid */
+            type?: string;
+            /** @description The registry user name; 422 username_required */
+            username?: string;
+        };
+        CredentialTestRequest: {
+            /** @description The custom certificate authority to trust for this test, in PEM. Left out, a stored credential's own is used; an empty string means none. 422 ca_invalid */
+            caPem?: string;
+            /** @description A stored credential of this layer to test. A field left blank is taken from it, and with no secret sent the stored secret is tried. When nothing is changed from what is stored, the result is remembered on the credential. 404 credential_not_found for one of another layer or environment */
+            credentialId?: string;
+            /** @description The registry host, as when adding; 422 host_required or host_invalid */
+            host?: string;
+            /** @description Whether to skip certificate verification and allow plain HTTP for this test. Left out, a stored credential's own switch is used */
+            insecure?: boolean;
+            /** @description The namespace the credential covers. Recorded with the test; it does not change what is tried */
+            prefix?: string;
+            /** @description The password or token to try. It is used for this one test, never stored by it, and never returned or recorded. 422 secret_required when there is none to try */
+            secret?: string;
+            /** @description A repository to try to read with the sign-in, like acme/app. Without one, the last step is not checked. 422 test_repository_invalid */
+            testRepository?: string;
+            /** @description dockerhub, ghcr, gitlab or generic, as when adding; 422 type_invalid */
+            type?: string;
+            /** @description The registry user name; 422 username_required */
+            username?: string;
+        };
+        CredentialTestResultBody: {
+            /** @description Whether the sign-in can read the test repository. not_checked without one */
+            canPull: components["schemas"]["TestStepBody"];
+            /** @description Whether the registry answered */
+            reachable: components["schemas"]["TestStepBody"];
+            /** @description Whether it accepted the sign-in. not_checked with no_login_asked when the registry asks for no login */
+            signedIn: components["schemas"]["TestStepBody"];
+            /**
+             * Format: date-time
+             * @description When the test ran
+             */
+            testedAt: string;
+        };
         DeleteUserInputBody: {
             /** @description Automations the user owns and who takes each over. Whatever is not listed is paused as owner deleted */
             reassign?: components["schemas"]["ReassignBody"][] | null;
@@ -2862,6 +3638,12 @@ export interface components {
              * @enum {string}
              */
             subjectType: "user" | "team";
+        };
+        EnvTagDetailsRequest: {
+            /** @description The repository, like ghcr.io/acme/app or nginx. A tag or digest on it is ignored. 422 ref_invalid */
+            ref: string;
+            /** @description The tags to read, at most 25, as the list named them */
+            tags: string[] | null;
         };
         EnvVar: {
             /** @description True when the value was withheld because the caller may not reveal secrets on this environment */
@@ -3288,14 +4070,80 @@ export interface components {
              */
             role: "viewer" | "operator" | "admin";
         };
+        ImageDetailBody: {
+            /** @description The CPU architecture the image is built for */
+            architecture: string;
+            /** Format: date-time */
+            created?: string;
+            /** @description True when the image has no tag on any node read */
+            dangling: boolean;
+            /** @description The full image ID */
+            id: string;
+            /** @description Every label of the image. For a caller without secrets.reveal on the environment the value of a label whose name says it is a secret (token, password, key, ...) is replaced by <hidden>, and so is the user-info of a URL in a value; the org.opencontainers.image.* annotations are shown as they are */
+            labels: {
+                [key: string]: string;
+            };
+            /** @description True when a label value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment */
+            masked?: boolean;
+            /** @description Every tag, then every digest, the image has on the nodes read, each once, by name */
+            names: components["schemas"]["ImageNameBody"][] | null;
+            /** @description One entry per node read, by display name: whether it has the image and its names there */
+            nodes: components["schemas"]["ImageNodeBody"][] | null;
+            /** @description Nodes that should have answered and did not, so names and nodes may be incomplete */
+            notReporting: string[] | null;
+            /** @description The operating system the image is built for */
+            os: string;
+            /** @description The first 12 characters of the ID, without the sha256: prefix */
+            shortId: string;
+            /**
+             * Format: int64
+             * @description Size in bytes
+             */
+            size: number;
+            /** @description The architecture variant, for example v8; empty when there is none */
+            variant: string;
+        };
+        ImageHistoryBody: {
+            /** @description The layers in the order the engine answers: the newest first */
+            layers: components["schemas"]["ImageLayerBody"][] | null;
+            /** @description True when a command was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment */
+            masked?: boolean;
+        };
+        ImageHolderBody: {
+            /**
+             * Format: int64
+             * @description Containers on this node, running or not, created from the image; 0 in nodeRefs
+             */
+            containers: number;
+            /** @description The display name of the node */
+            name: string;
+            /** @description The ID of the node */
+            nodeId: string;
+        };
+        ImageInspectBody: {
+            /** @description The engine's inspect document, with the values of the image configuration's environment (Config.Env, and ContainerConfig.Env of an older engine), its command (Cmd, Entrypoint, OnBuild), its health check command and the values of secret-named labels replaced by <hidden> unless the caller holds secrets.reveal */
+            inspect: {
+                [key: string]: unknown;
+            };
+            /** @description True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment */
+            masked: boolean;
+        };
         ImageItem: {
             /** Format: date-time */
             created?: string;
+            /** @description True when the image has no tag */
+            dangling: boolean;
             /** @description The full image ID */
             id: string;
-            /** @description The node that holds the image */
+            /** @description The node that holds the image; empty for a merged row that more than one node holds */
             node: string;
-            /** @description repository:tag for each tag, or ["<none>"] for an untagged image */
+            /** @description The ID of that node; empty when node is */
+            nodeId: string;
+            /** @description The nodes that hold the image, by name, each with its container count: one in the per-node view, every holder in the merged one */
+            nodes: components["schemas"]["ImageHolderBody"][] | null;
+            /** @description True when the host of every node the row stands for is read-only, so no change to it will be accepted */
+            readOnly: boolean;
+            /** @description repository:tag for each tag, on any node of a merged row, or ["<none>"] for an untagged image */
             repoTags: string[] | null;
             /** @description The first 12 characters of the ID, without the sha256: prefix */
             shortId: string;
@@ -3304,21 +4152,200 @@ export interface components {
              * @description Size in bytes
              */
             size: number;
+            /**
+             * Format: int64
+             * @description Containers, running or not, created from this image ID on the nodes the row stands for. Counted from the containers Bayplan reads, never from the engine's own per-image count, which a list does not compute
+             */
+            usedByContainers: number;
+            /**
+             * Format: int64
+             * @description Swarm services whose spec names this image, by pinned digest else by repository and tag, even with no running task, as of the last cluster read. A service can run a task on any node, so it counts once for the image. Always 0 off a swarm
+             */
+            usedByServices: number;
+        };
+        ImageLayerBody: {
+            /** @description The layer's comment, usually empty */
+            comment: string;
+            /** Format: date-time */
+            created?: string;
+            /** @description The command that made the layer. A build can have a secret in one, so for a caller without secrets.reveal on the environment only the kind of instruction is kept and its text replaced by <hidden> (ENV <hidden>, RUN <hidden>) */
+            createdBy: string;
+            /** @description The layer's ID as the engine gives it: sha256: and 64 hexadecimal characters, <missing> for a layer of a pulled image, or empty */
+            id: string;
+            /**
+             * Format: int64
+             * @description The layer's size in bytes; 0 for a layer that only changes metadata
+             */
+            size: number;
         };
         ImageListBody: {
+            /**
+             * Format: int64
+             * @description How many rows of this view are untagged, after the node filter and before the search and the Dangling filter, so the chip never shrinks with what was typed
+             */
+            danglingCount: number;
             /** @description At most 500 rows */
             items: components["schemas"]["ImageItem"][] | null;
-            /** @description The nodes that answered, for the node filter; Cluster is listed too when swarm-wide networks are shown */
+            /**
+             * Format: int64
+             * @description How many nodes the environment has: those that answered and those that did not
+             */
+            nodeCount: number;
+            /** @description The nodes that answered, by name, with their IDs, so a row can say which nodes lack the image */
+            nodeRefs: components["schemas"]["ImageHolderBody"][] | null;
+            /** @description The nodes that answered, for the node filter */
             nodes: string[] | null;
             /** @description Nodes that should have answered and did not, so these rows are not the whole cluster */
             notReporting: string[] | null;
             /**
              * Format: int64
-             * @description How many there are, whatever the cap
+             * @description How many match the search and the filters, whatever the cap
              */
             total: number;
             /** @description True when total is more than the rows returned */
             truncated: boolean;
+            /**
+             * Format: int64
+             * @description How many rows this view has before the search and the Dangling filter (after the node filter), so a page can say 3 of 600
+             */
+            unfilteredTotal: number;
+        };
+        ImageNameBody: {
+            /**
+             * @description tag for a repository:tag name, digest for a repo@sha256 name
+             * @enum {string}
+             */
+            kind: "tag" | "digest";
+            /** @description repository:tag for a tag, repository@sha256:... for a digest */
+            name: string;
+        };
+        ImageNodeBody: {
+            /** @description The display name of the node */
+            name: string;
+            /** @description The tags and digests the image has on this node; empty when it is not there or has none */
+            names: string[] | null;
+            /** @description The ID of the node */
+            nodeId: string;
+            /** @description True when the node has the image */
+            present: boolean;
+        };
+        ImageRemoveRequest: {
+            /**
+             * Format: uuid
+             * @description Groups the audit rows of one bulk request. Send a UUID to name the bulk yourself; with more than one target and none sent, the server makes one (a UUIDv7) and answers it
+             */
+            bulkId?: string;
+            /** @description The image copies to remove, at most 25. Each is answered separately; one that fails never stops the others */
+            targets: components["schemas"]["ImageRemoveTarget"][] | null;
+        };
+        ImageRemoveResponse: {
+            /** @description The bulk ID recorded in the audit rows of this request: the one sent, or the one the server made for a request with more than one target. Absent for a single target with none sent */
+            bulkId?: string;
+            /** @description One entry per requested target, in request order */
+            results: components["schemas"]["ImageRemoveResult"][] | null;
+        };
+        ImageRemoveResult: {
+            /**
+             * @description Why a target failed or was skipped. not_dangling (with result skipped): the image has a name and the request was a bulk delete of dangling images; nothing was sent. image_in_use: a container on the node, running or not, or a swarm service spec references the image; nothing was removed and detail names up to 5 users. not_found: the node has no such image, so it is already gone. node_unreachable: the node is not a connected node of this environment, its engine did not answer, or on a swarm no manager could be asked for the services; nothing was removed. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the node's agent. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message
+             * @enum {string}
+             */
+            code?: "image_in_use" | "not_dangling" | "not_found" | "node_unreachable" | "host_read_only" | "agent_policy_denied" | "action_failed";
+            /** @description A plain sentence, or for action_failed the engine's message, at most 300 characters */
+            detail?: string;
+            /** @description The image ID the request named */
+            imageId: string;
+            /** @description The node ID the request named */
+            nodeId: string;
+            /**
+             * @description done: the image and all its names are gone from the node. failed: it was refused or could not be sent; code says why. skipped: not acted on because the image has a name and the request was a bulk delete of dangling images; code is not_dangling
+             * @enum {string}
+             */
+            result: "done" | "failed" | "skipped";
+        };
+        ImageRemoveTarget: {
+            /** @description The full image ID: sha256: and 64 hexadecimal characters */
+            imageId: string;
+            /** @description The node the copy is on: the nodeId of its row in the images list. Never the display name */
+            nodeId: string;
+        };
+        ImageUntagRequest: {
+            /**
+             * Format: uuid
+             * @description Groups the audit rows of one request. Send a UUID to name the bulk yourself; with more than one node and none sent, the server makes one (a UUIDv7) and answers it
+             */
+            bulkId?: string;
+            /** @description The full image ID: sha256: and 64 hexadecimal characters */
+            imageId: string;
+            /** @description The nodes to untag it on, by nodeId. Left out, every node whose copy of the image has that name */
+            nodeIds?: string[] | null;
+            /** @description The name to take off the image, as the image's tags show it: repository:tag */
+            ref: string;
+        };
+        ImageUntagResponse: {
+            /** @description The bulk ID recorded in the audit rows of this request: the one sent, or the one the server made for a request with more than one node. Absent for one node with none sent */
+            bulkId?: string;
+            /** @description One entry per node, in the order of nodeIds, else by node name */
+            results: components["schemas"]["ImageUntagResult"][] | null;
+        };
+        ImageUntagResult: {
+            /**
+             * @description Why a node failed. last_name_in_use: it is the image's last name on the node and the image is in use, so untagging it would remove an image that is in use. image_in_use: the engine refused because a container uses the image. not_found: the node has no such image or no such name on it. The others are those of a remove
+             * @enum {string}
+             */
+            code?: "last_name_in_use" | "image_in_use" | "not_found" | "node_unreachable" | "host_read_only" | "agent_policy_denied" | "action_failed";
+            /** @description A plain sentence, or for action_failed the engine's message, at most 300 characters */
+            detail?: string;
+            /** @description The image ID the request named */
+            imageId: string;
+            /** @description The node ID the name was taken off, or was to be */
+            nodeId: string;
+            /** @description The name the request named */
+            ref: string;
+            /** @description True when it was the image's only name on the node and the image was not in use, so the image was removed with it; the audit row is then image.removed */
+            removed: boolean;
+            /**
+             * @description done: the name is gone from the node. failed: it was refused or could not be sent; code says why
+             * @enum {string}
+             */
+            result: "done" | "failed";
+        };
+        ImageUsedByBody: {
+            /** @description Containers, running or stopped, on the nodes that hold the image, then swarm services whose spec names it, even with no task */
+            items: components["schemas"]["ImageUsedByItem"][] | null;
+            /** @description Nodes that should have answered and did not, so the containers may be incomplete */
+            notReporting: string[] | null;
+            /**
+             * Format: int64
+             * @description How many of the items are containers
+             */
+            usedByContainers: number;
+            /**
+             * Format: int64
+             * @description How many of the items are services
+             */
+            usedByServices: number;
+        };
+        ImageUsedByItem: {
+            /** @description The container's or the service's ID */
+            id: string;
+            /**
+             * @description container for a container on a node, service for a swarm service
+             * @enum {string}
+             */
+            kind: "container" | "service";
+            /**
+             * @description image_id for a container, which is matched by the image ID on its own node; digest for a service pinned to a digest the image has; tag for a service matched by its repository and tag
+             * @enum {string}
+             */
+            matchedBy: "image_id" | "tag" | "digest";
+            /** @description The container name or the service name */
+            name: string;
+            /** @description The display name of that node; empty for a service */
+            node: string;
+            /** @description The ID of the node a container runs on; empty for a service, which can run on any node */
+            nodeId: string;
+            /** @description A container's state; for a service running, starting or no_tasks (its spec names the image but no task runs it); empty when the cluster read did not have it */
+            state: string;
         };
         ImpactBody: {
             /** @description Who loses which environment access, sorted by username then environment. Empty when no one does */
@@ -3397,6 +4424,32 @@ export interface components {
              * @description Days a 'keep me signed in' session lasts
              */
             rememberDays: number;
+        };
+        InstanceCredentialTestFromEnvRequest: {
+            /** @description The custom certificate authority to trust for this test, in PEM. Left out, a stored credential's own is used; an empty string means none. 422 ca_invalid */
+            caPem?: string;
+            /** @description A stored credential of this layer to test. A field left blank is taken from it, and with no secret sent the stored secret is tried. When nothing is changed from what is stored, the result is remembered on the credential. 404 credential_not_found for one of another layer or environment */
+            credentialId?: string;
+            /** @description The environment whose node makes the check. 404 environment_not_found when there is none */
+            envId: string;
+            /** @description The registry host, as when adding; 422 host_required or host_invalid */
+            host?: string;
+            /** @description Whether to skip certificate verification and allow plain HTTP for this test. Left out, a stored credential's own switch is used */
+            insecure?: boolean;
+            /** @description The namespace the credential covers. Recorded with the test; it does not change what is tried */
+            prefix?: string;
+            /** @description The repository to read through the environment's node, like acme/app. Required: the engine needs a concrete image, so 422 repository_required without one (testRepository is taken in its place). 422 test_repository_invalid */
+            repository?: string;
+            /** @description The password or token to try. It is used for this one test, never stored by it, and never returned or recorded. 422 secret_required when there is none to try */
+            secret?: string;
+            /** @description The tag to read. Left out: latest when the registry lists it, else the newest listed tag, else latest. 422 tag_invalid */
+            tag?: string;
+            /** @description A repository to try to read with the sign-in, like acme/app. Without one, the last step is not checked. 422 test_repository_invalid */
+            testRepository?: string;
+            /** @description dockerhub, ghcr, gitlab or generic, as when adding; 422 type_invalid */
+            type?: string;
+            /** @description The registry user name; 422 username_required */
+            username?: string;
         };
         LinkBody: {
             /**
@@ -3738,6 +4791,21 @@ export interface components {
             /** @description Installation-wide permissions */
             global: string[] | null;
         };
+        PlatformBody: {
+            /** @description The CPU architecture by its OCI name, like amd64, arm64 or arm */
+            arch: string;
+            /** @description The digest of this platform's manifest */
+            digest: string;
+            /** @description The operating system, like linux or windows */
+            os: string;
+            /**
+             * Format: int64
+             * @description The compressed size of the image in bytes, or 0 when the registry does not say
+             */
+            size: number;
+            /** @description The architecture variant, like v7; empty when there is none */
+            variant: string;
+        };
         PreviewTeamImpactInputBody: {
             /**
              * @description The change to preview
@@ -3786,6 +4854,179 @@ export interface components {
             updatedAt: string;
             /** @description The lower-cased username. It can never be changed */
             username: string;
+        };
+        PullCredentialBody: {
+            /** @description The credential's ID */
+            id: string;
+            /**
+             * @description Where the credential is stored
+             * @enum {string}
+             */
+            layer: "instance" | "environment";
+            /** @description The credential's name */
+            name: string;
+        };
+        PullItemBody: {
+            /** @description A stable word for how a failed pull failed, empty otherwise */
+            code: string;
+            /**
+             * Format: int64
+             * @description Layers seen so far
+             */
+            count: number;
+            /**
+             * Format: int64
+             * @description Bytes downloaded so far across the layers counted
+             */
+            current: number;
+            /** @description The digest the reference resolved to, once the pull is done */
+            digest: string;
+            /**
+             * Format: int64
+             * @description Layers finished
+             */
+            done: number;
+            /** @description The layers seen, in the order the engine named them */
+            layers: components["schemas"]["PullLayerBody"][] | null;
+            /** @description A sentence for the code. The SPA words the code itself */
+            message: string;
+            /** @description The node's name */
+            name: string;
+            /** @description The node's ID */
+            nodeId: string;
+            /**
+             * @description Where the pull on this node is
+             * @enum {string}
+             */
+            state: "waiting" | "running" | "done" | "failed" | "cancelled";
+            /**
+             * Format: int64
+             * @description Bytes to download across the layers counted, 0 until known
+             */
+            total: number;
+            /** @description What current and total count: bytes, or empty */
+            unit: string;
+            /** @description True when the node already had this image */
+            upToDate: boolean;
+        };
+        PullJobBody: {
+            /** @description When the job started, RFC 3339 UTC */
+            createdAt: string;
+            /** @description The credential the pull uses, or null for an anonymous pull */
+            credential: components["schemas"]["PullCredentialBody"] | null;
+            /** @description The environment the pull runs on */
+            envId: string;
+            /** @description When the job ended, RFC 3339 UTC, empty while it runs */
+            finishedAt: string;
+            /** @description The job ID */
+            id: string;
+            /** @description One entry per node, in the order the nodes were named */
+            items: components["schemas"]["PullItemBody"][] | null;
+            /** @description The normalised reference */
+            ref: string;
+            /**
+             * @description running until every node has ended, then done when every node is, partial when some are, failed when none is and one failed, and cancelled otherwise
+             * @enum {string}
+             */
+            state: "running" | "done" | "partial" | "failed" | "cancelled";
+        };
+        PullLayerBody: {
+            /**
+             * Format: int64
+             * @description Bytes downloaded so far, 0 when the engine has not counted
+             */
+            current: number;
+            /** @description The layer's short ID */
+            id: string;
+            /** @description What the engine last said about the layer: Pulling fs layer, Downloading, Download complete, Extracting, Pull complete or Already exists */
+            status: string;
+            /**
+             * Format: int64
+             * @description Bytes to download, 0 when not known
+             */
+            total: number;
+        };
+        PullListBody: {
+            /** @description The caller's pulls, and for an instance admin or an Env Admin the pulls of other people on the environments they administer, newest first */
+            pulls: components["schemas"]["PullSummaryBody"][] | null;
+        };
+        PullNodeBody: {
+            /** @description The node's name */
+            name: string;
+            /** @description The node's ID: the nodeId of its rows in the lists */
+            nodeId: string;
+        };
+        PullStartBody: {
+            /** @description The credential the pull uses, or null for an anonymous pull */
+            credential: components["schemas"]["PullCredentialBody"] | null;
+            /** @description The ID of the pull job. GET /api/pulls/{jobId} reads it and GET /api/pulls/{jobId}/stream follows it */
+            jobId: string;
+            /** @description The nodes the pull runs on, one item each */
+            nodes: components["schemas"]["PullNodeBody"][] | null;
+            /** @description The normalised reference being pulled: nginx:1.27 is docker.io/library/nginx:1.27 */
+            ref: string;
+        };
+        PullStartRequest: {
+            /** @description The nodes to pull on, by the nodeId that pull-targets lists. Leave it out to pull on every node. An empty list is 422 nodes_required and an ID that is not a node of this environment is 422 nodes_unknown */
+            nodeIds?: string[] | null;
+            /** @description The image to pull, like nginx:1.27 or ghcr.io/acme/app:latest. No tag means latest; a bare name is a Docker Hub library image */
+            ref: string;
+        };
+        PullSummaryBody: {
+            /** @description When the job started, RFC 3339 UTC */
+            createdAt: string;
+            /**
+             * Format: int64
+             * @description Nodes the pull finished on
+             */
+            done: number;
+            /** @description The environment the pull runs on */
+            envId: string;
+            /** @description The environment's name when the pull started */
+            envName: string;
+            /**
+             * Format: int64
+             * @description Nodes the pull failed on
+             */
+            failed: number;
+            /** @description When the job ended, RFC 3339 UTC. Left out while it runs */
+            finishedAt?: string;
+            /** @description The job ID */
+            id: string;
+            /** @description The username of the person who started the pull. Only on pulls of other people, which only an instance admin or an Env Admin of the environment sees */
+            ownerName?: string;
+            /** @description The normalised reference */
+            ref: string;
+            /**
+             * @description Where the pull as a whole is
+             * @enum {string}
+             */
+            state: "running" | "done" | "partial" | "failed" | "cancelled";
+            /**
+             * Format: int64
+             * @description Nodes the pull was started on
+             */
+            total: number;
+        };
+        PullTargetBody: {
+            /** @description The node's CPU architecture by the registry's name: amd64, arm64, arm/v7. Empty when the node has not said */
+            arch: string;
+            /** @description The node's name */
+            name: string;
+            /** @description The node's ID: what nodeIds in a pull names, and the nodeId of its rows in the lists */
+            nodeId: string;
+            /** @description False when the node's agent is not connected to Bayplan now */
+            reachable: boolean;
+            /** @description True when the host's owner made it read-only: a pull there fails with host_read_only */
+            readOnly: boolean;
+            /** @description manager or worker on a swarm, standalone on a single host */
+            role: string;
+        };
+        PullTargetsBody: {
+            /** @description Every node, by name */
+            nodes: components["schemas"]["PullTargetBody"][] | null;
+            /** @description True when the environment is a swarm and a pull may name nodes */
+            swarm: boolean;
         };
         PutBackupScheduleInputBody: {
             /** @description Turn scheduled backups on or off */
@@ -3842,6 +5083,34 @@ export interface components {
              * @enum {string}
              */
             role?: "viewer" | "operator" | "admin";
+        };
+        ResolveBody: {
+            /** @description Every credential for the image's registry that the instance and this environment hold: the one used first, then those that cover the image from most to least specific, then those that do not */
+            considered: components["schemas"]["ConsideredCredentialBody"][] | null;
+            /** @description The credential a pull would use, or null for an anonymous pull */
+            credential: components["schemas"]["ResolvedCredentialBody"] | null;
+            /** @description The reference as it was sent, trimmed */
+            input: string;
+            /** @description prefix, host or hub_fallback; empty for an anonymous pull */
+            matchedOn: string;
+            /** @description The reference as the engine will pull it: docker.io and library/ filled in, and latest when there is no tag or digest */
+            normalized: string;
+        };
+        ResolveRequest: {
+            /** @description The image to check, like nginx:1.27 or ghcr.io/acme/app:latest. No tag means latest; a bare name is a Docker Hub library image. 422 ref_invalid when it is not an image reference */
+            ref: string;
+        };
+        ResolvedCredentialBody: {
+            /** @description The registry host it covers */
+            host: string;
+            /** @description The credential's ID */
+            id: string;
+            /** @description Its name */
+            name: string;
+            /** @description The namespace it covers; empty for the whole registry */
+            prefix: string;
+            /** @description Where it applies */
+            scope: components["schemas"]["CredentialScopeBody"];
         };
         RestoreApplyBody: {
             /** @description Always true: Bayplan is swapping the database and restarting, and everyone is signed out */
@@ -3923,6 +5192,36 @@ export interface components {
             hasAgents: boolean;
             /** @description The new token and every command and file built from it. Shown only in this answer: the server keeps the token's hash and cannot show it again. install.generation is one more than the token it replaced, and the swarm secret is named for it */
             install: components["schemas"]["InstallBody"];
+        };
+        RunningContainerBody: {
+            /** @description The container's ID */
+            id: string;
+            /** @description The container name */
+            name: string;
+            /** @description The display name of that node */
+            node: string;
+            /** @description The ID of the node it runs on */
+            nodeId: string;
+        };
+        RunningHereBody: {
+            /** @description The running containers, a swarm task's included, by name */
+            containers: components["schemas"]["RunningContainerBody"][] | null;
+            /** @description The swarm services with a running task of the tag, by name */
+            services: components["schemas"]["RunningServiceBody"][] | null;
+        };
+        RunningInBody: {
+            /** @description The environment's ID */
+            envId: string;
+            /** @description The environment's name */
+            envName: string;
+        };
+        RunningServiceBody: {
+            /** @description The service's ID */
+            id: string;
+            /** @description The service name */
+            name: string;
+            /** @description The display names of the nodes that run its tasks of this image, in name order */
+            nodes: string[] | null;
         };
         ScheduleRunBody: {
             /**
@@ -4229,6 +5528,89 @@ export interface components {
              */
             type?: "swarm-manager" | "swarm-worker" | "standalone";
         };
+        TagDetailBody: {
+            /**
+             * @description Empty when everything was read; date_unavailable when the date could not be; tag_not_found when the registry no longer has the tag; repository_unavailable when the registry refused the repository although the sign-in works; otherwise why the registry could not be read
+             * @enum {string}
+             */
+            code: "" | "date_unavailable" | "tag_not_found" | "repository_unavailable" | "needs_login" | "login_refused" | "registry_unreachable" | "registry_tls" | "rate_limited";
+            /**
+             * Format: date-time
+             * @description When the image was built, from its config (Docker Hub: when the tag was pushed). Left out when it could not be read
+             */
+            created?: string;
+            /** @description The digest the tag points at; the index digest for a multi-platform tag. Empty when the registry could not be asked */
+            digest: string;
+            /** @description Only filled in an environment's answer: the CPU architectures its nodes run, by OCI name (arm64, arm/v7), that this tag has no platform for. Empty when every node's architecture is covered, when the tag's platforms could not be read, and on the Registries page */
+            missing: string[] | null;
+            /** @description The runnable platforms of the tag, without attestation and unknown/unknown entries; one for a single-platform image, none when the registry could not be read */
+            platforms: components["schemas"]["PlatformBody"][] | null;
+            /** @description Only in an environment's answer, and only for a tag that runs there: the running containers and swarm services of that environment whose image is this tag's index digest or the digest of any of its platforms, matched by digest and not by tag text, so a tag that moved still shows where its old image runs */
+            runningHere?: components["schemas"]["RunningHereBody"];
+            /** @description The environments the caller can read whose running containers run this tag's digest, matched by digest and not by tag text, from each environment's last snapshot; environments that are offline are skipped. Only filled on the Registries page: left empty when envId is given */
+            runningIn: components["schemas"]["RunningInBody"][] | null;
+            /** @description The tag asked about */
+            tag: string;
+        };
+        TagDetailsBody: {
+            /** @description One entry per tag asked about, in the same order */
+            items: components["schemas"]["TagDetailBody"][] | null;
+        };
+        TagDetailsRequest: {
+            /** @description An environment whose own credentials are considered as well as the instance's, and whose nodes' architecture the created date prefers. The caller needs images.read on it (403 otherwise) */
+            envId?: string;
+            /** @description The repository, like ghcr.io/acme/app or nginx. A tag or digest on it is ignored. 422 ref_invalid */
+            ref: string;
+            /** @description The tags to read, at most 25, as the list named them */
+            tags: string[] | null;
+        };
+        TagListBody: {
+            /** @description True when the repository has more tags than the server reads; the list is then the first limit tags, by registry order or, on Docker Hub, the newest */
+            capped: boolean;
+            /** @description The stored credential the registry was asked with, or null when it was asked anonymously. Never the secret */
+            credential: components["schemas"]["ResolvedCredentialBody"] | null;
+            /**
+             * Format: int64
+             * @description How many signature, attestation and cache tags match the filter text, whether or not they are hidden
+             */
+            hidden: number;
+            /** @description The registry host: ghcr.io, or docker.io for Docker Hub */
+            host: string;
+            /**
+             * Format: int64
+             * @description How many tags the server reads of one repository: 10,000, or 2,000 on Docker Hub
+             */
+            limit: number;
+            /** @description Whether another page follows this one */
+            more: boolean;
+            /**
+             * Format: int64
+             * @description This page's number, from 0
+             */
+            page: number;
+            /** @description The repository below the registry host: acme/app, or library/nginx on Docker Hub */
+            repo: string;
+            /** @description The tags of this page */
+            tags: components["schemas"]["TagNameBody"][] | null;
+            /**
+             * Format: int64
+             * @description How many tags the list has once the hide switch and the filter text are applied
+             */
+            total: number;
+        };
+        TagNameBody: {
+            /**
+             * Format: date-time
+             * @description When the tag was last pushed, with the same limit as the digest
+             */
+            created?: string;
+            /** @description The digest the tag points at, for a repository whose registry lists it with the names (Docker Hub). Left out otherwise: ask for the details of the tags on screen */
+            digest?: string;
+            /** @description The tag, as the registry names it */
+            name: string;
+            /** @description The platforms of the tag, with the same limit as the digest */
+            platforms?: components["schemas"]["PlatformBody"][] | null;
+        };
         TeamBody: {
             /**
              * Format: date-time
@@ -4308,6 +5690,15 @@ export interface components {
             id: string;
             /** @description The team's name */
             name: string;
+        };
+        TestStepBody: {
+            /** @description Why, as a stable code: registry_unreachable, registry_tls, registry_http, sign_in_refused, no_login_asked, no_pull_access, repository_not_found, rate_limited or check_failed. Empty when there is nothing to say. No text from the registry is ever returned */
+            code: string;
+            /**
+             * @description passed, failed, or not_checked when the step did not apply or an earlier step failed
+             * @enum {string}
+             */
+            state: "passed" | "failed" | "not_checked";
         };
         TokenStatusBody: {
             /**
@@ -6030,6 +7421,12 @@ export interface operations {
             query?: {
                 /** @description Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list */
                 node?: string;
+                /** @description Search: a case-insensitive substring of a tag (so of its repository too), or the start of the image ID, with or without sha256:. Applied before the 500-row cap */
+                q?: string;
+                /** @description True keeps only untagged images. Applied before the 500-row cap */
+                dangling?: boolean;
+                /** @description merged: one row per image ID, with the nodes that hold it. node: one row per copy on a node. On a host with one node they are the same */
+                view?: "merged" | "node";
             };
             header?: never;
             path: {
@@ -6075,6 +7472,381 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+        };
+    };
+    startPull: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PullStartRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PullStartBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listPullTargets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PullTargetsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    removeImages: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImageRemoveRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageRemoveResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    envBrowseTags: {
+        parameters: {
+            query: {
+                /** @description The repository to browse, like ghcr.io/acme/app or nginx. A tag or digest on it is ignored. 422 ref_invalid */
+                ref: string;
+                /** @description Only tags whose name contains this text, ignoring case */
+                q?: string;
+                /** @description Leave out signature, attestation and cache tags. On by default */
+                hide?: boolean;
+                /** @description Which page, from 0; 100 tags to a page, newest version first and then by name, descending */
+                page?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    envBrowseTagDetails: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnvTagDetailsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagDetailsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    untagImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImageUntagRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageUntagResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getImage: {
+        parameters: {
+            query?: {
+                /** @description Read only this node: its nodeId, as the nodes of the detail answer name it. Left out, every reporting node that has the image is read (inspect and history read the first of them) */
+                node?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The image ID: sha256: and 64 hexadecimal characters */
+                imageId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    imageHistory: {
+        parameters: {
+            query?: {
+                /** @description Read only this node: its nodeId, as the nodes of the detail answer name it. Left out, every reporting node that has the image is read (inspect and history read the first of them) */
+                node?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The image ID: sha256: and 64 hexadecimal characters */
+                imageId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageHistoryBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    inspectImage: {
+        parameters: {
+            query?: {
+                /** @description Read only this node: its nodeId, as the nodes of the detail answer name it. Left out, every reporting node that has the image is read (inspect and history read the first of them) */
+                node?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The image ID: sha256: and 64 hexadecimal characters */
+                imageId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageInspectBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    imageUsedBy: {
+        parameters: {
+            query?: {
+                /** @description Read only this node: its nodeId, as the nodes of the detail answer name it. Left out, every reporting node that has the image is read (inspect and history read the first of them) */
+                node?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The image ID: sha256: and 64 hexadecimal characters */
+                imageId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageUsedByBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
                 };
             };
         };
@@ -6375,6 +8147,225 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EnvironmentBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createEnvCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    resolveCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolveBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    testEnvCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialTestRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialTestResultBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    testEnvCredentialFromEnv: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialTestFromEnvRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialTestFromEnvBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteEnvCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The credential's ID */
+                credentialId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateEnvCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The credential's ID */
+                credentialId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialBody"];
                 };
             };
             /** @description Error */
@@ -7568,6 +9559,439 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OwnedBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listPulls: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PullListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getPull: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The pull job ID */
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PullJobBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    cancelPull: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The pull job ID */
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PullJobBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listCredentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createInstanceCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listCredentialAlerts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialAlertsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    browseTags: {
+        parameters: {
+            query: {
+                /** @description The repository to browse, like ghcr.io/acme/app or nginx. A tag or digest on it is ignored. 422 ref_invalid */
+                ref: string;
+                /** @description An environment whose own credentials are considered as well as the instance's. The caller needs images.read on it (403 otherwise). Left out, only the instance credentials are */
+                envId?: string;
+                /** @description Only tags whose name contains this text, ignoring case */
+                q?: string;
+                /** @description Leave out signature, attestation and cache tags (sha256-<digest> with .sig, .att, .sbom, .sbom.json or .prov, anything ending .sig, .att or .sbom, buildcache, cache, and names ending -buildcache or .cache). On by default */
+                hide?: boolean;
+                /** @description Which page, from 0; 100 tags to a page, newest version first and then by name, descending */
+                page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    browseTagDetails: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TagDetailsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagDetailsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    testInstanceCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialTestRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialTestResultBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    testInstanceCredentialFromEnv: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InstanceCredentialTestFromEnvRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialTestFromEnvBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The credential's ID */
+                credentialId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteInstanceCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The credential's ID */
+                credentialId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateInstanceCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The credential's ID */
+                credentialId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialBody"];
                 };
             };
             /** @description Error */

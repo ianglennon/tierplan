@@ -213,7 +213,7 @@ func TestEverythingElseIsRefusedWithATypedAnswerAndNeverReachesTheEngine(t *test
 		{"a delete with the legacy link key", request("DELETE", "/containers/abc?link=1"), "agent_policy_denied: DELETE /containers/abc"},
 		{"attach to a container", request("POST", "/containers/abc/attach"), "agent_policy_denied: POST /containers/abc/attach"},
 		{"the file archive of a container", get("/containers/abc/archive"), "agent_policy_denied: GET /containers/abc/archive"},
-		{"a delete of an image", request("DELETE", "/images/abc"), "agent_policy_denied: DELETE /images/abc"},
+		{"a forced delete of an image", request("DELETE", "/images/abc?force=1"), "agent_policy_denied: DELETE /images/abc"},
 		{"a longer path under an allowed one", get("/containers/json/extra"), "agent_policy_denied: GET /containers/json/extra"},
 		{"a trailing slash", get("/info/"), "agent_policy_denied: GET /info/"},
 		{"an upper-case path", get("/INFO"), "agent_policy_denied: GET /INFO"},
@@ -529,7 +529,7 @@ func TestAllowedOpensOnlyTheInspectOfOneContainer(t *testing.T) {
 		{"an ID of 129 characters", "GET", "/containers/a" + strings.Repeat("b", 128) + "/json", false},
 		{"a second segment after json", "GET", "/containers/abc/json/extra", false},
 		{"the list itself still allowed", "GET", "/containers/json", true},
-		{"the images inspect is not opened", "GET", "/images/abc/json", false},
+		{"an image tag is not opened", "POST", "/images/abc/tag", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ok, _, _ := Allowed(tc.method, tc.path, "", false, false, Policy{})
@@ -541,5 +541,248 @@ func TestAllowedOpensOnlyTheInspectOfOneContainer(t *testing.T) {
 	// A read-only host still refuses the POST, whatever the allowlist grew to.
 	if ok, reason, _ := Allowed("POST", "/containers/abc/json", "", false, false, Policy{ReadOnly: true}); ok || reason != "read_only_flag" {
 		t.Errorf("a POST of an inspect on a read-only host = %v %q, want refused read_only_flag", ok, reason)
+	}
+}
+
+// A registry credential is carried by the two routes that use one and by nothing
+// else (T-05-09). The value below is only shaped like base64url JSON.
+const testRegistryAuth = "eyJ1c2VybmFtZSI6InUiLCJwYXNzd29yZCI6InAifQ=="
+
+// headersSeen is the headers of the requests the engine received, in order.
+func (f *fakeSocket) headersSeen() []http.Header {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]http.Header(nil), f.headers...)
+}
+
+func TestRegistryAuthReachesTheEngineOnlyOnImagePull(t *testing.T) {
+	sock := newFakeSocket(t)
+	h := Handler(sock.path, Policy{}, nil)
+	pull := "/v1.56/images/create?fromImage=docker.io%2Flibrary%2Fbusybox&tag=1.36.1"
+	for _, tc := range []struct {
+		name, method, target string
+		wantAuth             bool
+	}{
+		{"an image pull", "POST", pull, true},
+		{"a container list", "GET", "/containers/json", false},
+		{"an image list", "GET", "/images/json", false},
+		{"a volume remove", "DELETE", "/volumes/v1", false},
+		{"a container stop", "POST", "/containers/abc/stop", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := len(sock.requests())
+			resp := do(t, h, request(tc.method, tc.target,
+				"X-Registry-Auth: "+testRegistryAuth+"\r\n", "X-Registry-Config: e30=\r\n"))
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status %d, want 200", resp.StatusCode)
+			}
+			seen := sock.headersSeen()
+			if len(seen) != before+1 {
+				t.Fatalf("the engine saw %d requests, want %d", len(seen), before+1)
+			}
+			hdr := seen[before]
+			got := hdr.Values("X-Registry-Auth")
+			if tc.wantAuth {
+				if len(got) != 1 || got[0] != testRegistryAuth {
+					t.Errorf("the engine received X-Registry-Auth %q, want the one value untouched", got)
+				}
+			} else if len(got) != 0 {
+				t.Errorf("the engine received X-Registry-Auth %q on %s %s", got, tc.method, tc.target)
+			}
+			if v := hdr.Values("X-Registry-Config"); len(v) != 0 {
+				t.Errorf("the engine received X-Registry-Config %q on %s %s", v, tc.method, tc.target)
+			}
+		})
+	}
+}
+
+func TestImagePullTakesOnlyTheKeysOfAPull(t *testing.T) {
+	sock := newFakeSocket(t)
+	var mu sync.Mutex
+	var denied []string
+	h := Handler(sock.path, Policy{}, func(method, path, reason string) {
+		mu.Lock()
+		denied = append(denied, method+" "+path+" "+reason)
+		mu.Unlock()
+	})
+	okTargets := []string{
+		"/images/create?fromImage=docker.io%2Flibrary%2Fbusybox&tag=1.36.1",
+		"/v1.56/images/create?fromImage=ghcr.io%2Facme%2Fapp&tag=sha256%3A" + strings.Repeat("a", 64),
+		"/images/create?fromImage=registry.example.org%3A5000%2Fteam%2Fapp&tag=v1&platform=linux%2Farm64%2Fv8",
+	}
+	for _, target := range okTargets {
+		resp := do(t, h, request("POST", target))
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("POST %s: status %d, want 200", target, resp.StatusCode)
+		}
+	}
+	for _, tc := range []struct {
+		name, raw string
+	}{
+		{"an import from a URL", request("POST", "/images/create?fromSrc=http%3A%2F%2Fx%2Fimg.tar&repo=x")},
+		{"a repo key", request("POST", "/images/create?fromImage=a&tag=b&repo=x")},
+		{"a message key", request("POST", "/images/create?fromImage=a&tag=b&message=x")},
+		{"a changes key", request("POST", "/images/create?fromImage=a&tag=b&changes=CMD+x")},
+		{"an import from stdin", request("POST", "/images/create?fromSrc=-", "Content-Length: 4\r\n") + "data"},
+		{"a body on a pull", request("POST", "/images/create?fromImage=a&tag=b", "Content-Length: 2\r\n") + "{}"},
+		{"a tag that is not a tag", request("POST", "/images/create?fromImage=a&tag=b%2Fc")},
+		{"a platform that is not os/arch", request("POST", "/images/create?fromImage=a&tag=b&platform=x")},
+		{"an image that starts with a dash", request("POST", "/images/create?fromImage=-a&tag=b")},
+		{"a GET of create", get("/images/create?fromImage=a&tag=b")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := len(sock.requests())
+			resp := do(t, h, tc.raw)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("status %d, want 403", resp.StatusCode)
+			}
+			if got := len(sock.requests()); got != before {
+				t.Fatalf("a refused pull reached the engine")
+			}
+		})
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, d := range denied {
+		if strings.Contains(d, "?") || strings.Contains(d, "fromSrc") || strings.Contains(d, "fromImage") {
+			t.Errorf("a refusal reported the query: %q", d)
+		}
+	}
+}
+
+func TestImagePullAndRemoveAreRefusedOnAReadOnlyHostBeforeTheTable(t *testing.T) {
+	sock := newFakeSocket(t)
+	h := Handler(sock.path, Policy{ReadOnly: true}, nil)
+	for _, tc := range []struct{ method, target string }{
+		{"POST", "/images/create?fromImage=a&tag=b"},
+		{"POST", "/images/create?fromSrc=http%3A%2F%2Fx"},
+		{"DELETE", "/images/x"},
+	} {
+		ok, reason, _ := Allowed(tc.method, strings.SplitN(tc.target, "?", 2)[0], "", false, false, Policy{ReadOnly: true})
+		if ok || reason != "read_only_flag" {
+			t.Errorf("%s %s on a read-only host = %v %q, want refused read_only_flag", tc.method, tc.target, ok, reason)
+		}
+		resp := do(t, h, request(tc.method, tc.target))
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%s %s: status %d, want 403", tc.method, tc.target, resp.StatusCode)
+		}
+	}
+	if got := sock.requests(); len(got) != 0 {
+		t.Fatalf("a write reached the engine of a read-only host: %v", got)
+	}
+}
+
+func TestRegistryHeaderShapeIsChecked(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		values []string
+		want   bool
+	}{
+		{"absent", nil, true},
+		{"empty", []string{""}, true},
+		{"base64url without padding", []string{"eyJhIjoiYiJ9"}, true},
+		{"base64url with padding", []string{testRegistryAuth}, true},
+		{"url-safe alphabet", []string{"a-b_c"}, true},
+		{"two values", []string{"YQ==", "Yg=="}, false},
+		{"two identical values", []string{"YQ==", "YQ=="}, false},
+		{"exactly 16 KiB", []string{strings.Repeat("A", maxRegistryAuth)}, true},
+		{"16 KiB and one byte", []string{strings.Repeat("A", maxRegistryAuth+1)}, false},
+		{"a dot", []string{"a.b"}, false},
+		{"a slash", []string{"a/b"}, false},
+		{"a plus", []string{"a+b"}, false},
+		{"a space", []string{"a b"}, false},
+		{"a newline", []string{"ab\n"}, false},
+		{"padding in the middle", []string{"a=b"}, false},
+		{"three padding characters", []string{"abc==="}, false},
+		{"padding only", []string{"=="}, false},
+		{"a non-ASCII byte", []string{"é"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := registryHeaderOK(tc.values); got != tc.want {
+				t.Errorf("registryHeaderOK(%q) = %v, want %v", tc.values, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAMalformedRegistryHeaderOnAPullIsRefusedAndNeverReachesTheEngine(t *testing.T) {
+	sock := newFakeSocket(t)
+	var mu sync.Mutex
+	var reasons []string
+	h := Handler(sock.path, Policy{}, func(_, path, reason string) {
+		mu.Lock()
+		reasons = append(reasons, path+" "+reason)
+		mu.Unlock()
+	})
+	target := "/images/create?fromImage=a&tag=b"
+	for _, tc := range []struct {
+		name string
+		hdrs []string
+	}{
+		{"two values", []string{"X-Registry-Auth: YQ==\r\n", "X-Registry-Auth: Yg==\r\n"}},
+		{"over 16 KiB", []string{"X-Registry-Auth: " + strings.Repeat("A", maxRegistryAuth+1) + "\r\n"}},
+		{"a dot", []string{"X-Registry-Auth: a.b\r\n"}},
+		{"a slash", []string{"X-Registry-Auth: a/b\r\n"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := do(t, h, request("POST", target, tc.hdrs...))
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("status %d, want 403", resp.StatusCode)
+			}
+		})
+	}
+	if got := sock.requests(); len(got) != 0 {
+		t.Fatalf("a refused pull reached the engine: %v", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, r := range reasons {
+		if r != "/images/create allowlist" {
+			t.Errorf("onDenied got %q, want the path without its query and the allowlist reason", r)
+		}
+	}
+	if len(reasons) != 4 {
+		t.Errorf("onDenied ran %d times, want 4", len(reasons))
+	}
+}
+
+func TestDistributionKeepsTheRegistryHeaderWhileInspectAndHistoryDropIt(t *testing.T) {
+	sock := newFakeSocket(t)
+	h := Handler(sock.path, Policy{}, nil)
+	for _, tc := range []struct {
+		method, target string
+		wantAuth       bool
+	}{
+		{"GET", "/distribution/ghcr.io/acme/app:1/json", true},
+		{"GET", "/images/ghcr.io/acme/app:1/json", false},
+		{"GET", "/images/ghcr.io/acme/app:1/history", false},
+		{"DELETE", "/images/ghcr.io/acme/app:1", false},
+	} {
+		before := len(sock.requests())
+		resp := do(t, h, request(tc.method, tc.target,
+			"X-Registry-Auth: "+testRegistryAuth+"\r\n", "X-Registry-Config: e30=\r\n"))
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s %s: status %d, want 200", tc.method, tc.target, resp.StatusCode)
+		}
+		seen := sock.headersSeen()
+		if len(seen) != before+1 {
+			t.Fatalf("%s %s: the engine saw %d requests, want %d", tc.method, tc.target, len(seen), before+1)
+		}
+		got := seen[before].Values("X-Registry-Auth")
+		if tc.wantAuth && (len(got) != 1 || got[0] != testRegistryAuth) {
+			t.Errorf("%s %s: the engine received X-Registry-Auth %q, want the one value", tc.method, tc.target, got)
+		}
+		if !tc.wantAuth && len(got) != 0 {
+			t.Errorf("%s %s: the engine received X-Registry-Auth %q", tc.method, tc.target, got)
+		}
+		if v := seen[before].Values("X-Registry-Config"); len(v) != 0 {
+			t.Errorf("%s %s: the engine received X-Registry-Config %q", tc.method, tc.target, v)
+		}
 	}
 }

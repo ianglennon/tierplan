@@ -180,7 +180,13 @@ function Sidebar({
           data-sidebar="sidebar"
           data-slot="sidebar"
           data-mobile="true"
-          className="w-(--sidebar-width) bg-sidebar p-0 text-sidebar-foreground [&>button]:hidden"
+          // The Sheet sizes itself with data-[side=left]:w-3/4, a selector that beats a
+          // plain width: the width is set through the same selectors so that the 18rem
+          // applies on any layout viewport, and is capped so a strip of the page stays
+          // tappable on the narrowest phones (G-05-7a). The Sheet's built-in close
+          // stays hidden: AppSidebar draws its own 44px control, because the built-in
+          // one is small and would sit on the environment switcher.
+          className="bg-sidebar p-0 text-sidebar-foreground max-w-[calc(100vw-3rem)] data-[side=left]:w-(--sidebar-width) data-[side=right]:w-(--sidebar-width) [&>button]:hidden"
           style={
             {
               "--sidebar-width": SIDEBAR_WIDTH_MOBILE,

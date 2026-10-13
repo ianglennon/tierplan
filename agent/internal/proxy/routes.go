@@ -46,6 +46,11 @@ type route struct {
 	anyQuery bool
 	body     BodyKind
 	upgrade  bool
+	// registryAuth is true for the routes that may carry an X-Registry-Auth
+	// header, which holds a registry credential. Only image pull and the
+	// distribution check use one; the header is deleted from every other request
+	// before it is forwarded (Handler).
+	registryAuth bool
 }
 
 const (
@@ -55,6 +60,12 @@ const (
 	idShape = `[A-Za-z0-9][A-Za-z0-9_.-]{0,127}`
 	// volumeShape is a volume name, which Docker allows to be longer.
 	volumeShape = `[A-Za-z0-9][A-Za-z0-9_.-]{0,254}`
+	// imageNameShape is an image given by repository (with a registry host and
+	// port), repository:tag, repository@digest or image ID, so it may hold slashes,
+	// colons and @. It starts with a letter or digit and is at most 255
+	// characters. A path that holds "..", "//" or a trailing slash never gets this
+	// far: Allowed refuses a path that path.Clean would change.
+	imageNameShape = `[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}`
 )
 
 var (
@@ -75,6 +86,13 @@ var (
 	volumeType = regexp.MustCompile(`^volume$`)
 	// signalValue is a signal name or number.
 	signalValue = regexp.MustCompile(`^[A-Za-z0-9+]{1,16}$`)
+	// fromImageValue is the repository an image pull names, which the client
+	// sends without its tag.
+	fromImageValue = regexp.MustCompile(`^` + imageNameShape + `$`)
+	// pullTag is a tag or a digest, which the engine takes in the same key.
+	pullTag = regexp.MustCompile(`^([A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|sha256:[a-f0-9]{64}|sha512:[a-f0-9]{128})$`)
+	// platformValue is os/arch or os/arch/variant.
+	platformValue = regexp.MustCompile(`^[a-z0-9]{1,16}(/[A-Za-z0-9_.-]{1,32}){1,2}$`)
 )
 
 // pathOf anchors tail and allows the optional /vX.Y prefix, which is the API
@@ -168,6 +186,35 @@ var routes = []route{
 	{name: "volume inspect", method: http.MethodGet, path: pathOf(`volumes/` + volumeShape)},
 	{name: "volume create", method: http.MethodPost, path: pathOf(`volumes/create`), body: BodyVolumeCreate},
 	{name: "volume remove", method: http.MethodDelete, path: pathOf(`volumes/` + volumeShape)},
+
+	// Images. Pull is the one write that takes a registry credential. Tag, push,
+	// save, load, import, build and prune are absent on purpose: nothing Bayplan
+	// does needs them, and each one changes or exports what the host holds.
+	{
+		// fromSrc, repo, message and changes are absent on purpose: they import an
+		// image from a URL or from the request body instead of pulling it from a
+		// registry.
+		name: "image pull", method: http.MethodPost, path: pathOf(`images/create`),
+		query:        map[string]*regexp.Regexp{"fromImage": fromImageValue, "tag": pullTag, "platform": platformValue},
+		registryAuth: true,
+	},
+	// The list ("images list", above) is matched first, so GET /images/json is
+	// never read as the inspect of an image whose name has no slash.
+	{name: "image inspect", method: http.MethodGet, path: pathOf(`images/` + imageNameShape + `/json`)},
+	{name: "image history", method: http.MethodGet, path: pathOf(`images/` + imageNameShape + `/history`)},
+	{
+		// force is absent on purpose: without it the engine itself refuses to
+		// remove an image a container uses. platforms is absent because Bayplan
+		// removes whole images.
+		name: "image remove", method: http.MethodDelete, path: pathOf(`images/` + imageNameShape),
+		query: map[string]*regexp.Regexp{"noprune": boolValue},
+	},
+	// The distribution check asks the registry whether this host may pull an
+	// image, with the credential the pull would use.
+	{
+		name: "distribution", method: http.MethodGet, path: pathOf(`distribution/` + imageNameShape + `/json`),
+		registryAuth: true,
+	},
 
 	// Disk usage, for the size of volumes only.
 	{

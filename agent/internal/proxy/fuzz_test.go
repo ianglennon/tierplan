@@ -27,6 +27,9 @@ const (
 	oVer = `^/(v[0-9]+\.[0-9]+/)?`
 	oID  = `[A-Za-z0-9][A-Za-z0-9_.-]{0,127}`
 	oVol = `[A-Za-z0-9][A-Za-z0-9_.-]{0,254}`
+	// oImg is an image reference or ID: repository, tag, digest, written again here
+	// and not read from routes.go.
+	oImg = `[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}`
 )
 
 // oracleEntry is one thing the agent may forward.
@@ -87,6 +90,18 @@ var oracle = []oracleEntry{
 	{method: "POST", path: rx(oVer + `volumes/create$`), body: true},
 	oEntry("DELETE", `volumes/`+oVol, nil),
 
+	// Images: a pull with its three keys and no body, the inspect, history and remove
+	// of an image by any name, and the distribution check.
+	oEntry("POST", `images/create`, map[string]*regexp.Regexp{
+		"fromImage": rx(`^` + oImg + `$`),
+		"tag":       rx(`^([A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|sha256:[a-f0-9]{64}|sha512:[a-f0-9]{128})$`),
+		"platform":  rx(`^[a-z0-9]{1,16}(/[A-Za-z0-9_.-]{1,32}){1,2}$`),
+	}),
+	oEntry("GET", `images/`+oImg+`/json`, nil),
+	oEntry("GET", `images/`+oImg+`/history`, nil),
+	oEntry("DELETE", `images/`+oImg, map[string]*regexp.Regexp{"noprune": oBool}),
+	oEntry("GET", `distribution/`+oImg+`/json`, nil),
+
 	oEntry("GET", `system/df`, map[string]*regexp.Regexp{"type": rx(`^volume$`), "verbose": oBool}),
 }
 
@@ -143,6 +158,27 @@ func FuzzAllowed(f *testing.F) {
 		{"DELETE", "/volumes/v1", "", false, false, false},
 		{"DELETE", "/volumes/v1", "force=1", false, false, false},
 		{"GET", "/system/df", "type=volume&verbose=1", false, false, false},
+		{"POST", "/images/create", "fromSrc=http://x", false, false, false},
+		{"POST", "/images/create", "fromImage=a&tag=b&platform=linux/arm64", false, false, false},
+		{"POST", "/images/create", "fromImage=ghcr.io/acme/app&tag=sha256:0000000000000000000000000000000000000000000000000000000000000000", false, false, false},
+		{"POST", "/images/create", "fromImage=a&tag=b&repo=x", true, false, false},
+		{"POST", "/images/create", "fromImage=a&tag=b", false, false, true},
+		{"DELETE", "/images/x", "force=1", false, false, false},
+		{"DELETE", "/images/x", "noprune=1", false, false, false},
+		{"DELETE", "/images/x", "noprune=1", false, false, true},
+		{"DELETE", "/images/ghcr.io/acme/app:1", "", false, false, false},
+		{"GET", "/images/a/json/history", "", false, false, false},
+		{"GET", "/images/a/history/json", "", false, false, false},
+		{"GET", "/images/json", "", false, false, false},
+		{"HEAD", "/images/json", "all=1", false, false, true},
+		{"GET", "/images/a/json", "manifests=1", false, false, false},
+		{"GET", "/distribution/a:1/json", "", false, false, false},
+		{"GET", "/images/sha256:0000000000000000000000000000000000000000000000000000000000000000/json", "", false, false, false},
+		{"GET", "/images/../x/json", "", false, false, false},
+		{"GET", "/images//x/json", "", false, false, false},
+		{"POST", "/images/x/tag", "repo=y", false, false, false},
+		{"POST", "/images/load", "", true, false, false},
+		{"GET", "/images/get", "names=x", false, false, false},
 		{"POST", "/containers/create", "", true, false, false},
 		{"POST", "/containers/abc/attach", "", false, true, false},
 		{"GET", "/containers/abc/archive", "", false, false, false},

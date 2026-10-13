@@ -35,11 +35,15 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `environments.read` | environment | yes | yes | yes | yes | no | View an environment |
 | `environments.revoke` | environment | no | no | yes | yes | no | Revoke, block and unblock this environment's agents |
 | `environments.token` | global | no | no | no | yes | yes | Show or rotate an environment's join token |
+| `images.delete` | environment | no | yes | yes | yes | no | Remove and untag images |
+| `images.pull` | environment | no | yes | yes | yes | no | Pull images |
 | `images.read` | environment | yes | yes | yes | yes | no | View images |
 | `janitor.policy` | environment | no | extra | yes | yes | yes | Change cleanup policy |
 | `networks.connect` | environment | no | yes | yes | yes | no | Connect and disconnect containers and networks |
 | `networks.manage` | environment | no | no | yes | yes | no | Create and delete networks |
 | `networks.read` | environment | yes | yes | yes | yes | no | View networks |
+| `registries.instance` | global | no | no | no | yes | yes | Manage registry credentials that apply to every environment |
+| `registries.manage` | environment | no | no | yes | yes | no | Manage this environment's registry credentials |
 | `secrets.reveal` | environment | no | extra | yes | yes | yes | Reveal secret values |
 | `settings.read` | global | no | no | no | yes | no | View settings |
 | `settings.write` | global | no | no | no | yes | no | Change settings |

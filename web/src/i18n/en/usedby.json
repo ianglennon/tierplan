@@ -1,0 +1,10 @@
+{
+  "usedBy": {
+    "container": "{{name}} on {{node}}",
+    "service": "Service {{name}}",
+    "image": {
+      "title": "{{name}} is in use",
+      "body": "Stopped containers and swarm services that mention it count, even with no running tasks. Remove them first."
+    }
+  }
+}

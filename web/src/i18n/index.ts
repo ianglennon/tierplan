@@ -21,6 +21,7 @@ import envsettings from "./en/envsettings.json";
 import events from "./en/events.json";
 import fullpage from "./en/fullpage.json";
 import grants from "./en/grants.json";
+import images from "./en/images.json";
 import install from "./en/install.json";
 import invite from "./en/invite.json";
 import logs from "./en/logs.json";
@@ -29,7 +30,9 @@ import networks from "./en/networks.json";
 import noaccess from "./en/noaccess.json";
 import overview from "./en/overview.json";
 import owned from "./en/owned.json";
+import pulls from "./en/pulls.json";
 import reason from "./en/reason.json";
+import registries from "./en/registries.json";
 import restore from "./en/restore.json";
 import schedule from "./en/schedule.json";
 import sessions from "./en/sessions.json";
@@ -37,8 +40,10 @@ import settings from "./en/settings.json";
 import setup from "./en/setup.json";
 import shell from "./en/shell.json";
 import switcher from "./en/switcher.json";
+import tags from "./en/tags.json";
 import teams from "./en/teams.json";
 import terminal from "./en/terminal.json";
+import usedby from "./en/usedby.json";
 import userpage from "./en/userpage.json";
 import users from "./en/users.json";
 import volumes from "./en/volumes.json";
@@ -46,7 +51,7 @@ import volumes from "./en/volumes.json";
 // English only for now (D-65). Resources are bundled statically, so there is
 // no language detector and no backend plugin: nothing is fetched at runtime.
 // Each later plan adds its own namespace file (setup, auth, shell, env,
-// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule, actions, activeshells, containers, containerdetail, networks, volumes, logs, terminal, events) and registers it
+// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule, actions, activeshells, containers, containerdetail, networks, volumes, logs, terminal, events, pulls, registries, images, usedBy, tags) and registers it
 // here, so parallel work never edits the same JSON. The "containers" namespace
 // holds the containers list copy, and the "terminal" namespace the browser shell's
 // (never "shell", which is the app chrome's). Keys are shaped
@@ -70,6 +75,7 @@ export const resources = {
     events,
     fullpage,
     grants,
+    images,
     install,
     invite,
     logs,
@@ -78,7 +84,9 @@ export const resources = {
     noaccess,
     overview,
     owned,
+    pulls,
     reason,
+    registries,
     restore,
     schedule,
     sessions,
@@ -86,8 +94,10 @@ export const resources = {
     setup,
     shell,
     switcher,
+    tags,
     teams,
     terminal,
+    usedBy: usedby,
     userpage,
     users,
     volumes,

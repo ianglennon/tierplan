@@ -128,6 +128,70 @@ var phase4DetailKeys = map[string][]string{
 	audit.ActionShellEnded: {"container", "node", "sid", "owner"},
 }
 
+// phase5DetailKeys maps every Phase 5 action to the detail keys the plans that record
+// it must use, for the same reason as phase3DetailKeys. A pull records one row per node:
+// the normalised reference, the digest it resolved to, the node, which credential was used
+// (anonymous until a credential is chosen), the code of a refusal, the layer a failure
+// stopped on and the job ID as bulk (plan 05-01, D-31).
+var phase5DetailKeys = map[string][]string{
+	audit.ActionImagePulled: {"ref", "digest", "node", "credential", "layer", "code", "bulk"},
+	// A cancel of a pull by someone other than the person who started it is its own row, with the
+	// canceller as the actor, the job ID as bulk and the starter named (WR-B04).
+	audit.ActionImagePullCancelled: {"ref", "bulk", "started_by"},
+	// A remove or an untag records one row per node: the image's name as it was shown, the node,
+	// the code of a refusal and the bulk ID (plan 05-16, D-31).
+	audit.ActionImageRemoved:  {"ref", "node", "code", "bulk"},
+	audit.ActionImageUntagged: {"ref", "node", "code", "bulk"},
+	// A credential row names what was stored and never the secret or any part of it: the
+	// name, the layer, the host and prefix, the type, the username, whether it is the Docker
+	// Hub fallback and the expiry day (plan 05-05, D-31).
+	audit.ActionRegistryCredentialCreated: {"name", "layer", "host", "prefix", "type", "username", "hub_fallback", "expires"},
+	// An update adds the names of the fields that changed, comma-joined, the secret only as
+	// the word secret (plan 05-07). A change of host also records where it pointed before and now.
+	audit.ActionRegistryCredentialUpdated: {"name", "layer", "host", "prefix", "type", "username", "hub_fallback", "expires", "changed", "host_from", "host_to"},
+	audit.ActionRegistryCredentialDeleted: {"name", "layer", "host", "prefix", "type", "username", "hub_fallback", "expires"},
+	// A test records where it ran from (via: the server, or a node), the registry and
+	// type, each step's result, the code of the first failure, the repository tried and, from
+	// an environment, the node. Never the secret (plan 05-11, D-12, D-31).
+	audit.ActionRegistryCredentialTested: {"name", "layer", "host", "prefix", "type", "reachable", "signed_in", "can_pull", "code", "via", "repository", "node"},
+}
+
+func TestEveryPhase5ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
+	f := newFixture(t)
+	for action, keys := range phase5DetailKeys {
+		details := make(map[string]string, len(keys))
+		for _, k := range keys {
+			details[k] = "x"
+		}
+		e := ent(action)
+		e.Details = details
+		if err := f.w.Record(context.Background(), e); err != nil {
+			if errors.Is(err, audit.ErrSecretField) {
+				t.Errorf("%s: a documented detail key trips the secret-word filter: %v", action, err)
+			} else {
+				t.Errorf("%s: Record: %v", action, err)
+			}
+		}
+	}
+	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase5DetailKeys) {
+		t.Fatalf("verify = %+v", got)
+	}
+	for key, constant := range map[string]string{
+		"image.pulled":                audit.ActionImagePulled,
+		"image.pull_cancelled":        audit.ActionImagePullCancelled,
+		"image.removed":               audit.ActionImageRemoved,
+		"image.untagged":              audit.ActionImageUntagged,
+		"registry.credential_created": audit.ActionRegistryCredentialCreated,
+		"registry.credential_updated": audit.ActionRegistryCredentialUpdated,
+		"registry.credential_deleted": audit.ActionRegistryCredentialDeleted,
+		"registry.credential_tested":  audit.ActionRegistryCredentialTested,
+	} {
+		if key != constant {
+			t.Errorf("constant = %q, want %q", constant, key)
+		}
+	}
+}
+
 func TestEveryPhase4ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 	f := newFixture(t)
 	for action, keys := range phase4DetailKeys {

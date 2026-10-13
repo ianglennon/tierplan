@@ -103,6 +103,10 @@ const IMAGES = {
       repoTags: ["nginx:1.27", "nginx:latest"],
       size: 734003200,
       created: ago(60_000),
+      usedByContainers: 2,
+      usedByServices: 0,
+      dangling: false,
+      nodes: [],
     },
     {
       id: "sha256:fedcba9876543210",
@@ -110,6 +114,10 @@ const IMAGES = {
       repoTags: ["<none>"],
       size: 1536,
       created: ago(30_000),
+      usedByContainers: 0,
+      usedByServices: 0,
+      dangling: true,
+      nodes: [],
     },
   ],
   total: 2,
@@ -413,25 +421,69 @@ describe("containers list", () => {
 });
 
 describe("images list", () => {
-  it("shows Repository:tag, a short mono ID, Size and Created, with a muted <none> for an untagged image", async () => {
+  it("shows Image, a short mono ID, Used by, Size and Created, with a muted Untagged and a Dangling badge for an untagged image", async () => {
     renderAt("/env/e1/images");
-    await screen.findByText("nginx:1.27, nginx:latest");
+    await screen.findByText("nginx:1.27");
     const headers = (await screen.findAllByRole("columnheader")).map((h) => h.textContent);
-    expect(headers).toEqual(["Repository:tag", "Image ID", "Size", "Created"]);
+    expect(headers).toEqual(["", "Image", "Image ID", "Used by", "Size", "Created", "Actions"]);
     const rows = screen.getAllByRole("row").slice(1);
     expect(cellsOf(rows[0] as HTMLElement)).toEqual([
-      "nginx:1.27, nginx:latest",
+      "Only dangling images can be deleted in bulk. Open an image to remove it.",
+      "nginx:1.27+1",
       "0123456789ab",
+      "2 containers",
       "700 MiB",
       "1 min ago",
+      "",
     ]);
     const untagged = cellsOf(rows[1] as HTMLElement);
-    expect(untagged[0]).toBe("<none>");
-    expect(untagged[1]).toBe("fedcba987654");
-    expect(untagged[2]).toBe("1.5 KiB");
-    const none = screen.getByText("<none>");
+    expect(untagged[1]).toBe("UntaggedDangling");
+    expect(untagged[2]).toBe("fedcba987654");
+    expect(untagged[3]).toBe("Not in use");
+    expect(untagged[4]).toBe("1.5 KiB");
+    const none = screen.getByText("Untagged");
     expect(none.className).toContain("text-muted-foreground");
     expect(screen.getByText("0123456789ab").className).toContain("font-mono");
+  });
+});
+
+describe("images list on a read-only host", () => {
+  const node = (id: string, readOnly: boolean) => ({
+    nodeId: id,
+    name: id,
+    role: "standalone",
+    arch: "amd64",
+    readOnly,
+    reachable: true,
+  });
+
+  it("warns above the table and disables Pull image with the reason when every node is read-only", async () => {
+    me = makeMe({
+      instanceAdmin: true,
+      permissions: {
+        global: [],
+        environments: { e1: ["environments.read", ...READS, "images.pull"] },
+      },
+    });
+    answers["/api/env/e1/images/pull-targets"] = () =>
+      Response.json({ swarm: false, nodes: [node("n1", true)] });
+    renderAt("/env/e1/images");
+    const alert = await screen.findByText(
+      "This host is read-only. Changes are turned off on the host itself, so you can look at images but not pull or remove them.",
+    );
+    expect(alert.closest('[data-slot="alert"]')).toBeTruthy();
+    const pull = await screen.findByRole("button", { name: "Pull image" });
+    await waitFor(() => expect(pull.getAttribute("aria-disabled")).toBe("true"));
+    expect(document.body.textContent).toContain("This host is read-only (set on the host)");
+  });
+
+  it("shows no warning when a node can still be written to", async () => {
+    answers["/api/env/e1/images/pull-targets"] = () =>
+      Response.json({ swarm: true, nodes: [node("n1", true), node("n2", false)] });
+    renderAt("/env/e1/images");
+    await screen.findByText("nginx:1.27");
+    await waitFor(() => expect(sentUrls.some((u) => u.includes("pull-targets"))).toBe(true));
+    expect(screen.queryByText(/This host is read-only\./)).toBeNull();
   });
 });
 
@@ -763,7 +815,7 @@ describe("swarm lists", () => {
     ]);
   });
 
-  it("gives images and volumes a Node column after their first column", async () => {
+  it("gives images a Nodes column, or a Node column per node, and volumes a Node column after their first", async () => {
     answers["/api/env/e1/images"] = () =>
       Response.json({
         items: [
@@ -771,14 +823,23 @@ describe("swarm lists", () => {
             id: "sha256:0123456789abcdef0123",
             shortId: "0123456789ab",
             node: "n1",
+            nodeId: "n1",
             repoTags: ["nginx:1.27"],
             size: 1024,
             created: ago(60_000),
+            usedByContainers: 0,
+            usedByServices: 0,
+            dangling: false,
+            nodes: [{ nodeId: "n1", name: "n1", containers: 0 }],
           },
         ],
         total: 1,
         truncated: false,
         nodes: ["n1"],
+        nodeRefs: [{ nodeId: "n1", name: "n1", containers: 0 }],
+        nodeCount: 1,
+        danglingCount: 0,
+        unfilteredTotal: 1,
         notReporting: [],
       });
     answers["/api/env/e1/volumes"] = () =>
@@ -792,11 +853,27 @@ describe("swarm lists", () => {
     renderAt("/env/e1/images");
     await screen.findByText("nginx:1.27");
     expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
-      "Repository:tag",
-      "Node",
+      "",
+      "Image",
       "Image ID",
+      "Nodes",
+      "Used by",
       "Size",
       "Created",
+      "Actions",
+    ]);
+    cleanup();
+    renderAt("/env/e1/images?view=node");
+    await screen.findByText("nginx:1.27");
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
+      "",
+      "Image",
+      "Image ID",
+      "Node",
+      "Used by",
+      "Size",
+      "Created",
+      "Actions",
     ]);
     cleanup();
     renderAt("/env/e1/volumes");
@@ -818,9 +895,14 @@ describe("swarm lists", () => {
       id: "sha256:a9e1c0de",
       shortId: "a9e1c0de",
       node,
+      nodeId: node,
       repoTags: ["ghcr.io/ianglennon/bayplan-agent:0.1.0"],
       size: 1024,
       created: ago(60_000),
+      usedByContainers: 0,
+      usedByServices: 0,
+      dangling: false,
+      nodes: [{ nodeId: node, name: node, containers: 0 }],
     });
     const imagesOn = (nodes: string[]) => () =>
       Response.json({
@@ -833,16 +915,16 @@ describe("swarm lists", () => {
     answers["/api/env/e1/images"] = imagesOn(["n1", "n2"]);
     const spy = sameKeyWarnings();
     try {
-      renderAt("/env/e1/images");
+      renderAt("/env/e1/images?view=node");
       await screen.findAllByText("ghcr.io/ianglennon/bayplan-agent:0.1.0");
       let rows = screen.getAllByRole("row").slice(1);
-      expect(rows.map((r) => cellsOf(r as HTMLElement)[1])).toEqual(["n1", "n2"]);
+      expect(rows.map((r) => cellsOf(r as HTMLElement)[3])).toEqual(["n1", "n2"]);
 
       answers["/api/env/e1/images"] = imagesOn(["n2", "n3"]);
       await queryClient.invalidateQueries({ queryKey: listKey("e1", "images") });
       await waitFor(() => {
         rows = screen.getAllByRole("row").slice(1);
-        expect(rows.map((r) => cellsOf(r as HTMLElement)[1])).toEqual(["n2", "n3"]);
+        expect(rows.map((r) => cellsOf(r as HTMLElement)[3])).toEqual(["n2", "n3"]);
       });
       expect(sameKeyWarningsOf(spy)).toEqual([]);
     } finally {
@@ -922,7 +1004,7 @@ describe("swarm lists", () => {
     const spy = sameKeyWarnings();
     try {
       renderAt("/env/e1/images");
-      await screen.findByText("nginx:1.27, nginx:latest");
+      await screen.findByText("nginx:1.27");
       expect(screen.getAllByRole("row").slice(1)).toHaveLength(2);
       cleanup();
       renderAt("/env/e1/volumes?group=none");

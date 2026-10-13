@@ -34,6 +34,10 @@ var SealedColumns = []SealedColumn{
 		Table: "backup_schedule", Column: "passphrase_sealed", KeyColumns: []string{"id"},
 		Context: func([]string) string { return ContextBackupSchedule },
 	},
+	{
+		Table: "registry_credentials", Column: "secret_sealed", KeyColumns: []string{"id"},
+		Context: func(keys []string) string { return ContextRegistryCred + keys[0] },
+	},
 }
 
 // RewrapAll moves every sealed value in tx from the vault from to the vault to:

@@ -145,6 +145,14 @@ const (
 	ActionNetworkDisconnected        = "network.disconnected"
 	ActionVolumeCreated              = "volume.created"
 	ActionVolumeRemoved              = "volume.removed"
+	ActionImagePulled                = "image.pulled"
+	ActionImageRemoved               = "image.removed"
+	ActionImageUntagged              = "image.untagged"
+	ActionImagePullCancelled         = "image.pull_cancelled"
+	ActionRegistryCredentialCreated  = "registry.credential_created" //nolint:gosec // G101: an action name, not a credential
+	ActionRegistryCredentialUpdated  = "registry.credential_updated" //nolint:gosec // G101: an action name, not a credential
+	ActionRegistryCredentialDeleted  = "registry.credential_deleted" //nolint:gosec // G101: an action name, not a credential
+	ActionRegistryCredentialTested   = "registry.credential_tested"  //nolint:gosec // G101: an action name, not a credential
 	ActionLogsViewed                 = "logs.viewed"
 	ActionLogsDownloaded             = "logs.downloaded"
 	ActionShellOpened                = "shell.opened"

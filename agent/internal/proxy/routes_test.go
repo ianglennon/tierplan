@@ -175,3 +175,129 @@ func TestRouteMatchTreatsHeadAsGetAndNothingElseAsAnything(t *testing.T) {
 		t.Error("GET matched a POST route")
 	}
 }
+
+func TestRouteImagePullQueryCases(t *testing.T) {
+	digest := "sha256%3A" + strings.Repeat("0", 64)
+	for _, tc := range []struct {
+		name, query string
+		want        bool
+	}{
+		{"a repository and a tag", "fromImage=docker.io%2Flibrary%2Fbusybox&tag=1.36.1", true},
+		{"a registry with a port", "fromImage=reg.example.org%3A5000%2Fa%2Fb&tag=v1", true},
+		{"a digest in the tag key", "fromImage=ghcr.io%2Facme%2Fapp&tag=" + digest, true},
+		{"a platform with a variant", "fromImage=a&tag=b&platform=linux%2Farm%2Fv7", true},
+		{"no query at all", "", true},
+		{"fromSrc", "fromSrc=http%3A%2F%2Fx", false},
+		{"repo", "fromImage=a&tag=b&repo=x", false},
+		{"message", "fromImage=a&tag=b&message=x", false},
+		{"changes", "fromImage=a&tag=b&changes=x", false},
+		{"a tag with a slash", "fromImage=a&tag=x%2Fy", false},
+		{"a sha1 digest", "fromImage=a&tag=sha1%3A" + strings.Repeat("0", 40), false},
+		{"a short sha256 digest", "fromImage=a&tag=sha256%3A" + strings.Repeat("0", 63), false},
+		{"a platform without an architecture", "fromImage=a&tag=b&platform=linux", false},
+		{"an upper-case operating system", "fromImage=a&tag=b&platform=Linux%2Famd64", false},
+		{"an image of 256 characters", "fromImage=" + strings.Repeat("a", 256) + "&tag=b", false},
+		{"an image of 255 characters", "fromImage=" + strings.Repeat("a", 255) + "&tag=b", true},
+		{"an image with a space", "fromImage=a%20b&tag=b", false},
+		{"a second fromImage that is not allowed", "fromImage=a&fromImage=-b&tag=b", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, _, _ := Allowed("POST", "/images/create", tc.query, false, false, Policy{})
+			if ok != tc.want {
+				t.Fatalf("Allowed(POST /images/create?%s) = %v, want %v", tc.query, ok, tc.want)
+			}
+		})
+	}
+	rt, ok := Match("POST", "/v1.56/images/create")
+	if !ok || rt.name != "image pull" || !rt.registryAuth || rt.body != BodyNone || rt.upgrade {
+		t.Errorf("POST images/create matched %+v, %v", rt, ok)
+	}
+	if rt, ok := Match("GET", "/containers/json"); !ok || rt.registryAuth {
+		t.Errorf("a route other than a pull or a distribution check may carry a registry credential: %+v", rt)
+	}
+}
+
+func TestRouteImageInspectHistoryRemoveAndDistribution(t *testing.T) {
+	digest := strings.Repeat("0", 64)
+	long255 := "a" + strings.Repeat("b", 254)
+	long256 := "a" + strings.Repeat("b", 255)
+	for _, tc := range []struct {
+		name, method, path, query string
+		wantRoute                 string // "" means refused
+	}{
+		{"the list is only the list", "GET", "/images/json", "all=1&filters=x", "images list"},
+		{"an image called a", "GET", "/images/a/json", "", "image inspect"},
+		{"an image called a/json has a history", "GET", "/images/a/json/history", "", "image history"},
+		{"a registry repository with a tag", "GET", "/images/ghcr.io/acme/app:1/json", "", "image inspect"},
+		{"the version prefix", "GET", "/v1.56/images/busybox:1.36.1/json", "", "image inspect"},
+		{"an image ID", "GET", "/images/sha256:" + digest + "/json", "", "image inspect"},
+		{"a digest reference history", "GET", "/images/repo@sha256:" + digest + "/history", "", "image history"},
+		{"a HEAD of an inspect", "HEAD", "/images/a/json", "", "image inspect"},
+		{"a remove with no query", "DELETE", "/images/ghcr.io/acme/app:1", "", "image remove"},
+		{"a remove with noprune", "DELETE", "/images/ghcr.io/acme/app:1", "noprune=1", "image remove"},
+		{"a remove by ID", "DELETE", "/images/sha256:" + digest, "noprune=true", "image remove"},
+		{"a distribution check", "GET", "/distribution/ghcr.io/acme/app:1/json", "", "distribution"},
+		{"a distribution check with the version prefix", "GET", "/v1.56/distribution/busybox/json", "", "distribution"},
+		{"a name of 255 characters", "GET", "/images/" + long255 + "/json", "", "image inspect"},
+
+		{"a remove with force", "DELETE", "/images/x", "force=1", ""},
+		{"a remove with force=0", "DELETE", "/images/x", "force=0", ""},
+		{"a remove with platforms", "DELETE", "/images/x", "platforms=x", ""},
+		{"a remove with a bad noprune", "DELETE", "/images/x", "noprune=yes", ""},
+		{"an inspect with manifests", "GET", "/images/a/json", "manifests=1", ""},
+		{"an inspect with a platform", "GET", "/images/a/json", "platform=linux", ""},
+		{"a history with a query", "GET", "/images/a/history", "platform=x", ""},
+		{"a distribution check with a query", "GET", "/distribution/a/json", "x=1", ""},
+		{"a dot-dot name", "GET", "/images/../x/json", "", ""},
+		{"a dot-dot inside the name", "GET", "/images/a/../b/json", "", ""},
+		{"an empty segment", "GET", "/images//x/json", "", ""},
+		{"a name of 256 characters", "GET", "/images/" + long256 + "/json", "", ""},
+		{"a name starting with a dash", "GET", "/images/-x/json", "", ""},
+		{"a name starting with a dot", "GET", "/images/.x/json", "", ""},
+		{"a name with a space", "GET", "/images/a b/json", "", ""},
+		{"an encoded slash in the name", "GET", "/images/a%2Fb/json", "", ""},
+		{"a trailing slash on a remove", "DELETE", "/images/x/", "", ""},
+		{"a tag", "POST", "/images/x/tag", "repo=y", ""},
+		{"a push", "POST", "/images/x/push", "", ""},
+		{"a save of one image", "GET", "/images/x/get", "", ""},
+		{"a save of several images", "GET", "/images/get", "names=x", ""},
+		{"a load", "POST", "/images/load", "", ""},
+		{"a prune", "POST", "/images/prune", "", ""},
+		{"a search", "GET", "/images/search", "term=x", ""},
+		{"a build", "POST", "/build", "", ""},
+		{"a delete of the list", "DELETE", "/images/json/", "", ""},
+		{"a post of an inspect", "POST", "/images/x/json", "", ""},
+		{"a delete of x/history removes the image of that name", "DELETE", "/images/x/history", "", "image remove"},
+		{"a delete of a distribution check", "DELETE", "/distribution/x/json", "", ""},
+		{"a post of a distribution check", "POST", "/distribution/x/json", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, _, _ := Allowed(tc.method, tc.path, tc.query, false, false, Policy{})
+			if ok != (tc.wantRoute != "") {
+				t.Fatalf("Allowed(%s %s?%s) = %v, want %v", tc.method, tc.path, tc.query, ok, tc.wantRoute != "")
+			}
+			if !ok {
+				return
+			}
+			rt, found := Match(tc.method, tc.path)
+			if !found || rt.name != tc.wantRoute {
+				t.Fatalf("Match(%s %s) = %q, want %q", tc.method, tc.path, rt.name, tc.wantRoute)
+			}
+			wantAuth := tc.wantRoute == "distribution"
+			if rt.registryAuth != wantAuth {
+				t.Errorf("route %q has registryAuth %v, want %v", rt.name, rt.registryAuth, wantAuth)
+			}
+		})
+	}
+}
+
+func TestRouteImageRemoveIsRefusedOnAReadOnlyHostAndInspectsStillAnswer(t *testing.T) {
+	if ok, reason, _ := Allowed("DELETE", "/images/x", "", false, false, Policy{ReadOnly: true}); ok || reason != "read_only_flag" {
+		t.Errorf("an image remove on a read-only host = %v %q, want refused read_only_flag", ok, reason)
+	}
+	for _, p := range []string{"/images/a/json", "/images/a/history", "/distribution/a/json"} {
+		if ok, reason, _ := Allowed("GET", p, "", false, false, Policy{ReadOnly: true}); !ok {
+			t.Errorf("GET %s on a read-only host was refused (%s)", p, reason)
+		}
+	}
+}

@@ -38,6 +38,8 @@ const (
 	PermEnvironmentsAudit     Perm = "environments.audit"
 	PermContainersRead        Perm = "containers.read"
 	PermImagesRead            Perm = "images.read"
+	PermImagesPull            Perm = "images.pull"
+	PermImagesDelete          Perm = "images.delete"
 	PermVolumesRead           Perm = "volumes.read"
 	PermNetworksRead          Perm = "networks.read"
 	PermContainersControl     Perm = "containers.control"
@@ -56,6 +58,8 @@ const (
 	PermVolumesDelete         Perm = "volumes.delete"
 	PermJanitorPolicy         Perm = "janitor.policy"
 	PermShellsManage          Perm = "shells.manage"
+	PermRegistriesInstance    Perm = "registries.instance"
+	PermRegistriesManage      Perm = "registries.manage"
 )
 
 // Registry is a list of permissions. The Checker consults one, so a test can
@@ -84,6 +88,8 @@ var defaultRegistry = Registry{
 	{Name: PermNetworksRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View networks"},
 	{Name: PermContainersControl, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Start, stop, restart, kill, pause and unpause containers"},
 	{Name: PermContainersRemove, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Remove containers"},
+	{Name: PermImagesPull, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Pull images"},
+	{Name: PermImagesDelete, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Remove and untag images"},
 	{Name: PermNetworksManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Create and delete networks"},
 	{Name: PermNetworksConnect, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Connect and disconnect containers and networks"},
 	{Name: PermVolumesCreate, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Create volumes"},
@@ -98,6 +104,8 @@ var defaultRegistry = Registry{
 	{Name: PermVolumesDelete, Scope: ScopeEnvironment, MinRole: RoleOperator, Extra: true, Dangerous: true, Description: "Delete volumes"},
 	{Name: PermJanitorPolicy, Scope: ScopeEnvironment, MinRole: RoleOperator, Extra: true, Dangerous: true, Description: "Change cleanup policy"},
 	{Name: PermShellsManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "See and end other people's shells"},
+	{Name: PermRegistriesInstance, Scope: ScopeGlobal, Dangerous: true, Description: "Manage registry credentials that apply to every environment"},
+	{Name: PermRegistriesManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Manage this environment's registry credentials"},
 }
 
 // DefaultRegistry returns a copy of the registry production runs with.

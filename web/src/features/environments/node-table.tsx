@@ -592,7 +592,7 @@ export function NodeTable({ envId, onRotateToken }: NodeTableProps) {
         ref={scroller}
         data-scroll
         tabIndex={-1}
-        className="max-h-[28rem] overflow-auto rounded-md border outline-none"
+        className="relative max-h-[28rem] overflow-auto rounded-md border outline-none"
       >
         <table
           aria-label={t("envsettings.nodes.tableLabel")}

@@ -45,6 +45,9 @@ const (
 	readHeaderTimeout = 10 * time.Second
 	// idleTimeout closes a keep-alive stream that has gone quiet.
 	idleTimeout = 120 * time.Second
+	// maxRegistryAuth caps the X-Registry-Auth header, which holds a base64url
+	// JSON registry credential.
+	maxRegistryAuth = 16 << 10
 )
 
 // Policy is what the host owner set on this agent (D-28).
@@ -163,6 +166,16 @@ func Handler(socketPath string, policy Policy, onDenied func(method, path, reaso
 			deny(reason)
 			return
 		}
+		// A registry credential crosses only on the routes that use one, and then
+		// only as a single well-formed value. The value is never decoded, logged or
+		// kept: the only thing done with it is a length and character check.
+		r.Header.Del("X-Registry-Config")
+		if rt, found := Match(r.Method, rawPath); !found || !rt.registryAuth {
+			r.Header.Del("X-Registry-Auth")
+		} else if !registryHeaderOK(r.Header.Values("X-Registry-Auth")) {
+			deny(wire.DeniedAllowlist)
+			return
+		}
 		if kind != BodyNone {
 			// What is forwarded is the rebuilt body, never the bytes the server sent.
 			rebuilt, err := validateBody(kind, http.MaxBytesReader(w, r.Body, maxBody))
@@ -181,6 +194,40 @@ func Handler(socketPath string, policy Policy, onDenied func(method, path, reaso
 		}
 		rp.ServeHTTP(w, r)
 	})
+}
+
+// registryHeaderOK reports whether the values of an X-Registry-Auth header may be
+// forwarded: none at all, or exactly one that is empty or at most maxRegistryAuth
+// bytes of base64url. A second value is refused because the engine would read only
+// one of them, and a character outside base64url because the value is only ever
+// the encoding of a JSON credential.
+func registryHeaderOK(values []string) bool {
+	switch len(values) {
+	case 0:
+		return true
+	case 1:
+	default:
+		return false
+	}
+	v := values[0]
+	if len(v) > maxRegistryAuth {
+		return false
+	}
+	end := len(v)
+	for end > 0 && v[end-1] == '=' {
+		end--
+	}
+	if len(v)-end > 2 || (v != "" && end == 0) {
+		return false
+	}
+	for i := range end {
+		switch c := v[i]; {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-', c == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func connectionUpgrade(h http.Header) bool {

@@ -22,7 +22,10 @@ import (
 // agent reported that its host owner made it read-only; the local socket is never.
 type NodeRef struct {
 	ID, Name, Role string
-	ReadOnly       bool
+	// Arch is the node's CPU architecture by its OCI name (amd64, arm64), empty when
+	// the node has not said.
+	Arch     string
+	ReadOnly bool
 }
 
 // Limits of the swarm fan-out (D-46, T-02-72).
@@ -102,6 +105,10 @@ type Aggregate struct {
 	// NotReporting names the nodes expected to answer whose rows are left out:
 	// agent missing, read failed or timed out (D-46). It is never nil.
 	NotReporting []string
+	// Unreachable is NotReporting with what a write needs: the node's ID (its agent's
+	// ID, or the swarm node's when it never had an agent), name and role. A pull that
+	// names every node includes them, so each gets its own failed row (D-25).
+	Unreachable []NodeRef
 }
 
 // ErrNotOnline is the error of a read of an environment that cannot be read: the
@@ -241,14 +248,14 @@ func (a *Aggregator) FreshSnapshot(ctx context.Context, envID string) (Aggregate
 func nodeOf(in RollupInput, key string, st Status) NodeRef {
 	for _, a := range in.Agents {
 		if a.TargetKey() == key {
-			return NodeRef{ID: a.ID, Name: nodeName(a), Role: a.Role, ReadOnly: a.ReadOnly}
+			return NodeRef{ID: a.ID, Name: nodeName(a), Role: a.Role, Arch: dockerx.OCIArch(st.Probe.Arch), ReadOnly: a.ReadOnly}
 		}
 	}
 	name := cleanText(st.Probe.Hostname, maxNodeLen)
 	if name == "" {
 		name = "local"
 	}
-	return NodeRef{ID: in.EnvID, Name: name, Role: st.Probe.Type}
+	return NodeRef{ID: in.EnvID, Name: name, Role: st.Probe.Type, Arch: dockerx.OCIArch(st.Probe.Arch)}
 }
 
 // swarmNets says what to do with the swarm-scoped networks a node lists.
@@ -382,7 +389,7 @@ func (a *Aggregator) swarm(ctx context.Context, in RollupInput, h Health) (Aggre
 			agg.Counts.Nodes, agg.Counts.Services = r.snap.Counts.Nodes, r.snap.Counts.Services
 		}
 		before := len(agg.Networks)
-		ref := NodeRef{ID: r.agent.ID, Name: node, Role: r.agent.Role, ReadOnly: r.agent.ReadOnly}
+		ref := NodeRef{ID: r.agent.ID, Name: node, Role: r.agent.Role, Arch: dockerx.OCIArch(r.st.Probe.Arch), ReadOnly: r.agent.ReadOnly}
 		agg.addRows(r.snap, ref, nets)
 		agg.Nodes = append(agg.Nodes, ref)
 		agg.ByNode[node] = nodeCounts(r.snap, agg.Networks[before:])
@@ -399,12 +406,15 @@ func (a *Aggregator) swarm(ctx context.Context, in RollupInput, h Health) (Aggre
 	agg.total()
 	agg.sortRows()
 	slices.SortFunc(agg.Nodes, func(x, y NodeRef) int { return cmp.Or(cmp.Compare(x.Name, y.Name), cmp.Compare(x.ID, y.ID)) })
+	agg.Unreachable = []NodeRef{}
 	for _, e := range a.expectedNodes(in) {
 		if !reported[e.key] {
 			agg.NotReporting = append(agg.NotReporting, e.name)
+			agg.Unreachable = append(agg.Unreachable, NodeRef{ID: e.id, Name: e.name, Role: e.role, ReadOnly: e.readOnly})
 		}
 	}
 	sort.Strings(agg.NotReporting)
+	slices.SortFunc(agg.Unreachable, func(x, y NodeRef) int { return cmp.Or(cmp.Compare(x.Name, y.Name), cmp.Compare(x.ID, y.ID)) })
 	return agg, h, nil
 }
 
@@ -438,7 +448,12 @@ func agentKey(a AgentView) string {
 	return a.TargetKey()
 }
 
-type expectedNode struct{ key, name string }
+// expectedNode is a node that should answer a read. id is what a write names it by: its
+// agent's ID, or for a swarm node that never had an agent the swarm node ID.
+type expectedNode struct {
+	key, name, id, role string
+	readOnly            bool
+}
 
 // expectedNodes are the nodes that should answer a read: every agent not revoked,
 // and every node the manager's last node list says should run one (active, and
@@ -447,15 +462,15 @@ type expectedNode struct{ key, name string }
 func (a *Aggregator) expectedNodes(in RollupInput) []expectedNode {
 	var out []expectedNode
 	seen := map[string]bool{}
-	add := func(key, name string) {
-		if !seen[key] {
-			seen[key] = true
-			out = append(out, expectedNode{key, name})
+	add := func(e expectedNode) {
+		if !seen[e.key] {
+			seen[e.key] = true
+			out = append(out, e)
 		}
 	}
 	for _, ag := range in.Agents {
 		if !ag.Revoked {
-			add(agentKey(ag), nodeName(ag))
+			add(expectedNode{key: agentKey(ag), name: nodeName(ag), id: ag.ID, role: ag.Role, readOnly: ag.ReadOnly})
 		}
 	}
 	if a.svc.clusters != nil {
@@ -466,7 +481,7 @@ func (a *Aggregator) expectedNodes(in RollupInput) []expectedNode {
 					if name == "" {
 						name = cleanText(n.ID, maxNodeLen)
 					}
-					add(n.ID, name)
+					add(expectedNode{key: n.ID, name: name, id: n.ID, role: n.Role})
 				}
 			}
 		}

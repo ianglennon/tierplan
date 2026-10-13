@@ -49,11 +49,12 @@ const (
 	LabelCSRF      = "bayplan/csrf/v1"
 
 	// Sealing contexts that more than one package must agree on. The CA key
-	// context is followed by the environment ID. Like the labels they are part
-	// of the on-disk format: a ciphertext only opens under the context it was
-	// sealed with.
+	// context is followed by the environment ID, the registry credential one by
+	// the credential ID. Like the labels they are part of the on-disk format: a
+	// ciphertext only opens under the context it was sealed with.
 	ContextAgentCA        = "agent-ca/v1/"
 	ContextBackupSchedule = "backup-schedule/v1"
+	ContextRegistryCred   = "registry-cred/v1/" //nolint:gosec // G101: a sealing context label, not a credential
 
 	keyLen         = 32
 	keyIDDomain    = "bayplan/key-id/v1"

@@ -340,20 +340,21 @@ var containerKeys = []string{
 func TestListsNeverCarryLabelsMountsOrVariables(t *testing.T) {
 	cfg := richEngine()
 	cfg.Containers[1].Labels = map[string]string{
-		"app.note": "label-9f3", "com.docker.compose.project": "shop",
+		"app.note": "label-zq7", "com.docker.compose.project": "shop",
 		"com.docker.stack.namespace": "blog", "com.docker.swarm.service.name": "blog_web",
 	}
-	cfg.Containers[1].Mounts = []string{"/srv/mount-9f3"}
-	cfg.Containers[1].Networks = map[string]dockertest.FakeEndpoint{"net-9f3": {NetworkID: "n9f3", IPv4: "10.9.3.2"}}
-	cfg.Images[0].Labels = map[string]string{"app.build": "image-9f3"}
-	cfg.Volumes[0].Labels = map[string]string{"app.owner": "volume-9f3"}
+	cfg.Containers[1].Mounts = []string{"/srv/mount-zq7"}
+	cfg.Containers[1].Networks = map[string]dockertest.FakeEndpoint{"net-zq7": {NetworkID: "nzq7", IPv4: "10.9.3.2"}}
+	cfg.Images[0].Labels = map[string]string{"app.build": "image-zq7"}
+	cfg.Volumes[0].Labels = map[string]string{"app.owner": "volume-zq7"}
 	f, e := dashEnv(t, cfg)
 	for _, what := range dataPaths {
 		rec := f.get(t, e, what)
 		if rec.code != http.StatusOK {
 			t.Fatalf("%s: %d %s", what, rec.code, rec.body)
 		}
-		for _, leaked := range []string{"9f3", "app.note", "app.build", "app.owner"} {
+		// "zq7" is not hex, so it cannot match an ID or digest by chance.
+		for _, leaked := range []string{"zq7", "app.note", "app.build", "app.owner"} {
 			if strings.Contains(string(rec.body), leaked) {
 				t.Errorf("%s leaked %q, a label, mount, network or variable (T-01-77): %s", what, leaked, rec.body)
 			}
@@ -553,6 +554,8 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 func TestEachListDocumentsItsOwn200Schema(t *testing.T) {
 	r := httpx.New(httpx.Options{})
 	api.RegisterDashboard(r, api.DashboardDeps{})
+	// The images list lives with the image routes (plan 05-15) and keeps its path.
+	api.RegisterImages(r, api.ImagesDeps{})
 	doc := r.API().OpenAPI()
 	for path, want := range map[string]string{
 		"summary":    "EnvironmentSummaryBody",
@@ -843,8 +846,15 @@ type swarmFix struct {
 	m1, m2, w *agentConn
 }
 
-func newSwarmFix(t *testing.T) *swarmFix {
+func newSwarmFix(t *testing.T) *swarmFix { return newSwarmFixWith(t, nil) }
+
+// newSwarmFixWith builds the same swarm and lets tune change each node's engine, by the
+// node's hostname, before it connects.
+func newSwarmFixWith(t *testing.T, tune func(host string, cfg *dockertest.FakeConfig)) *swarmFix {
 	t.Helper()
+	if tune == nil {
+		tune = func(string, *dockertest.FakeConfig) {}
+	}
 	f := newAgentFix(t)
 	// The cluster reader of a real server: the networks routes read the services a
 	// network is mentioned by from it. The router is built again to hear of it.
@@ -854,7 +864,7 @@ func newSwarmFix(t *testing.T) *swarmFix {
 	env := f.srv.NewEnvironment(t, "Swarm")
 	mgr := func(i int) (dockertest.FakeConfig, *wire.Facts) {
 		name := fmt.Sprintf("mgr-%d", i)
-		return dockertest.FakeConfig{
+		cfg := dockertest.FakeConfig{
 			Hostname: name, SwarmState: "active", SwarmControl: true, Nodes: 3, Services: 2,
 			Containers: []dockertest.FakeContainer{{ID: fmt.Sprintf("m%d", i), Names: []string{"/web"}, State: "running"}},
 			// Two services mention the overlay; one of them is scaled to zero.
@@ -870,7 +880,9 @@ func newSwarmFix(t *testing.T) *swarmFix {
 				{ID: "ovl", Name: "ovl", Driver: "overlay", Scope: "swarm"},
 				{ID: fmt.Sprintf("br%d", i), Name: "bridge", Driver: "bridge", Scope: "local"},
 			},
-		}, &wire.Facts{
+		}
+		tune(name, &cfg)
+		return cfg, &wire.Facts{
 			EngineID: "ENG:" + name, Hostname: name, EngineReachable: true,
 			Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-" + name, ClusterID: "cluster-1", Control: true},
 		}
@@ -884,10 +896,12 @@ func newSwarmFix(t *testing.T) *swarmFix {
 	for i := range 501 {
 		many = append(many, dockertest.FakeContainer{ID: fmt.Sprintf("w%03d", i), Names: []string{fmt.Sprintf("/job-%03d", i)}, State: "running"})
 	}
-	s.w = f.connect(t, env, dockertest.FakeConfig{
+	wcfg := dockertest.FakeConfig{
 		Hostname: "wrk-1", SwarmState: "active", Containers: many,
 		Networks: []dockertest.FakeNetwork{{ID: "ovl", Name: "ovl", Driver: "overlay", Scope: "swarm"}, {ID: "brw", Name: "bridge", Driver: "bridge", Scope: "local"}},
-	}, &wire.Facts{EngineID: "ENG:wrk-1", Hostname: "wrk-1", EngineReachable: true, Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-wrk-1"}})
+	}
+	tune("wrk-1", &wcfg)
+	s.w = f.connect(t, env, wcfg, &wire.Facts{EngineID: "ENG:wrk-1", Hostname: "wrk-1", EngineReachable: true, Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-wrk-1"}})
 	f.whenState(t, env.ID, "online")
 	return s
 }
@@ -968,7 +982,9 @@ func TestSwarmListsCarryEachRowsNodeAndTheNodeNamesAvailableForTheFilter(t *test
 	if nets.Nodes == nil || !slices.Equal(*nets.Nodes, []string{"Cluster", "mgr-1", "mgr-2", "wrk-1"}) {
 		t.Errorf("networks nodes = %v, want the reporting nodes and Cluster for the filter", nets.Nodes)
 	}
-	for _, what := range []string{"images", "volumes"} {
+	// The images list merges the two managers' copy of one image by default (plan 05-15); the
+	// Per node view is the one row per copy.
+	for _, what := range []string{"images?view=node", "volumes"} {
 		l := decode[nodeListBody[nodeNamed]](t, s.get(t, s.env.ID, what))
 		if l.Total != 2 || len(l.Items) != 2 || l.Items[0].Node == "" {
 			t.Errorf("%s = %+v, want one row per manager with its node", what, l)

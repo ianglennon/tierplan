@@ -102,7 +102,7 @@ export function SetupWizard() {
   const submitting = useRef(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const shownStep = useRef<Step>(step);
-  const pendingFocus = useRef<SetupField | null>(null);
+  const pendingFocus = useRef<{ field: SetupField; step: Step } | null>(null);
 
   const tokenForm = useForm<TokenValues>({
     resolver: zodResolver(tokenFormSchema),
@@ -133,11 +133,15 @@ export function SetupWizard() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs on step and pending changes only
   useEffect(() => {
     if (pending) return;
-    const field = pendingFocus.current;
-    if (field) {
+    const target = pendingFocus.current;
+    if (target) {
+      // React can commit the end of the request before the jump back to the
+      // field's step. Focusing then would reach a field that is not on screen
+      // yet, so the focus waits until its step is the one shown.
+      if (target.step !== step) return;
       pendingFocus.current = null;
       shownStep.current = step;
-      focusField(field);
+      focusField(target.field);
     } else if (shownStep.current !== step) {
       shownStep.current = step;
       headingRef.current?.focus();
@@ -189,7 +193,7 @@ export function SetupWizard() {
     }
     // Focus waits for the pending state to clear (see the effect above), which
     // also covers a jump to an earlier step.
-    pendingFocus.current = first.field;
+    pendingFocus.current = { field: first.field, step: first.step };
     if (first.step !== step) setStep(first.step);
   }
 

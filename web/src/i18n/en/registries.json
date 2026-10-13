@@ -1,0 +1,367 @@
+{
+  "registries": {
+    "title": "Registries",
+    "caption": "Credentials Bayplan uses to pull images and browse tags. Pulls pick the most specific match automatically.",
+    "add": "Add credential",
+    "needsInstance": "Needs an instance administrator",
+    "needsOnEnvironment": "{{need}} on {{name}}",
+    "table": {
+      "title": "Registries",
+      "count_one": "{{count, number}} credential",
+      "count_other": "{{count, number}} credentials",
+      "countOf": "{{count, number}} of {{total, number}} credentials",
+      "error": "Couldn't load credentials.",
+      "errorBody": "The server may be busy. Try again.",
+      "columns": {
+        "name": "Name",
+        "scope": "Scope",
+        "type": "Type",
+        "registry": "Registry",
+        "username": "Username",
+        "secret": "Secret",
+        "expires": "Expires",
+        "lastTest": "Last test",
+        "lastUse": "Last use",
+        "actions": "Actions"
+      },
+      "actionsFor": "Actions for {{name}}",
+      "viewDetails": "View details",
+      "edit": "Edit",
+      "delete": "Delete…",
+      "hubFallback": "All Hub pulls",
+      "notTested": "Not tested",
+      "testPassed": "Passed",
+      "testFailed": "Failed",
+      "signInFailed": "Sign-in failed",
+      "expiresIn_one": "Expires in {{count}} day",
+      "expiresIn_other": "Expires in {{count}} days",
+      "expired": "Expired"
+    },
+    "toolbar": {
+      "search": {
+        "label": "Search credentials",
+        "placeholder": "Search by name, registry or username",
+        "clear": "Clear search"
+      },
+      "scope": {
+        "label": "Scope",
+        "all": "All scopes",
+        "instance": "Instance"
+      },
+      "alert": {
+        "expiring": "Expiring within 7 days",
+        "expired": "Expired",
+        "auth_failed": "Sign-in refused"
+      },
+      "clear": "Clear filters"
+    },
+    "empty": {
+      "manage": {
+        "title": "No registry credentials",
+        "body": "Add one so private images pull on every node without a docker login. Public images work without one."
+      },
+      "view": {
+        "title": "No registry credentials apply here",
+        "body": "Public images pull without one. Ask an administrator to add a credential if you need a private registry."
+      },
+      "filtered": {
+        "title": "No credentials match these filters.",
+        "action": "Clear filters"
+      }
+    },
+    "badge": {
+      "instance": "Instance"
+    },
+    "type": {
+      "dockerhub": "Docker Hub",
+      "ghcr": "GHCR",
+      "gitlab": "GitLab",
+      "generic": "Generic",
+      "genericLong": "Generic v2"
+    },
+    "delete": {
+      "title": "Delete “{{name}}”?",
+      "body": "Pulls this credential would have matched fall back to the next matching credential, or to anonymous. Nothing else refers to it.",
+      "cancel": "Cancel",
+      "confirm": "Delete credential",
+      "pending": "Deleting…",
+      "done": "Deleted credential {{name}}.",
+      "gone": "{{name}} is already gone.",
+      "permission": "You no longer have permission to do that. Your access may have changed.",
+      "generic": "Couldn't delete the credential. Try again."
+    },
+    "sheet": {
+      "add": {
+        "title": "Add a registry credential",
+        "description": "Stored encrypted. The secret can't be shown again after you save."
+      },
+      "edit": {
+        "title": "Edit {{name}}"
+      },
+      "close": "Close",
+      "cancel": "Cancel",
+      "submit": "Save credential",
+      "save": "Save changes",
+      "pending": "Saving…",
+      "success": "Added credential {{name}}.",
+      "saved": "Saved {{name}}.",
+      "loadError": {
+        "title": "Couldn't load this credential.",
+        "body": "Check the connection and try again.",
+        "notFound": "This credential doesn't exist, or you can't see it.",
+        "retry": "Retry"
+      },
+      "type": {
+        "label": "Registry type"
+      },
+      "helper": {
+        "dockerhub": "Use a Docker Hub access token, not your password. Create one under Account settings → Personal access tokens.",
+        "ghcr": "Use a personal access token (classic) with the read:packages scope.",
+        "gitlab": "Use a deploy token with read_registry, or a personal access token with read_registry.",
+        "generic": "Use a static token or password. Amazon ECR tokens expire after 12 hours, so they need replacing often."
+      },
+      "name": {
+        "label": "Name",
+        "placeholder": "ghcr-acme",
+        "helper": "Shown in the table, in pull progress and in error messages."
+      },
+      "scope": {
+        "label": "Scope",
+        "instance": "All environments (instance)",
+        "helper": "Instance credentials apply to every environment. Pick an environment to limit it to one.",
+        "fixed": "A credential's scope can't change. Create a new one instead."
+      },
+      "host": {
+        "label": "Registry",
+        "helper": "To browse a registry mirror, add it here as a generic registry. Bayplan never uses the mirrors set on your nodes.",
+        "readOnly": "This host is read-only (set on the host)"
+      },
+      "prefix": {
+        "label": "Namespace (optional)",
+        "placeholder": "acme or acme/team",
+        "helper": "Only images under this path use this credential. Leave empty to cover the whole registry."
+      },
+      "username": {
+        "label": "Username"
+      },
+      "secret": {
+        "label": "Secret",
+        "editLabel": "New secret (optional)",
+        "keepLast4": "Leave empty to keep the one ending {{last4}}",
+        "keepStored": "Leave empty to keep the stored secret",
+        "retype": "You changed where this credential signs in (address, type, username or certificate settings). Type the secret again: a saved secret is only sent to the place it was saved for.",
+        "show": "Show secret",
+        "hide": "Hide secret"
+      },
+      "hubFallback": {
+        "label": "Use for all Docker Hub pulls",
+        "helper": "Raises the anonymous pull limit for every Docker Hub image that has no more specific credential. One per scope."
+      },
+      "expires": {
+        "label": "Expires (optional)",
+        "helper": "Bayplan warns 7 days before. It doesn't renew anything."
+      },
+      "view": {
+        "description": "You can see this credential but not change it.",
+        "label": "Credential details",
+        "empty": "Nothing to show.",
+        "name": "Name",
+        "scope": "Scope",
+        "type": "Type",
+        "registry": "Registry",
+        "username": "Username",
+        "secret": "Secret",
+        "hubFallback": "All Docker Hub pulls",
+        "hubFallbackYes": "Used when no more specific credential matches",
+        "customCa": "Custom CA",
+        "customCaYes": "Used for Bayplan's tests and tag browsing",
+        "insecure": "TLS verification",
+        "insecureYes": "Skipped for Bayplan's tests and tag browsing; plain HTTP allowed",
+        "expires": "Expires",
+        "lastTest": "Last test",
+        "missing": "—"
+      },
+      "errors": {
+        "name_required": "Enter a name.",
+        "name_invalid": "Use 1 to 64 letters, digits, spaces and . _ ( ) -.",
+        "host_required": "Enter the registry address.",
+        "host_invalid": "Use a host like ghcr.io or registry.example.com:5000.",
+        "prefix_invalid": "Use a path like acme or acme/team.",
+        "username_required": "Enter a username.",
+        "secret_required": "Enter a secret.",
+        "hub_prefix_required": "Docker Hub needs a namespace like acme, or tick “Use for all Docker Hub pulls”.",
+        "hub_fallback_not_hub": "Only a Docker Hub credential can be used for all Docker Hub pulls.",
+        "expiry_invalid": "Pick a date in the future.",
+        "expiry_past": "Pick a date in the future.",
+        "type_invalid": "Choose a registry type.",
+        "nameTaken": "A credential named {{name}} already exists in {{scope}}.",
+        "hostPrefixTaken": "{{scope}} already has a credential for {{target}}. Edit that one instead.",
+        "hubFallbackTaken": "“{{name}}” already uses all Docker Hub pulls for {{scope}}. Untick it there first.",
+        "hubFallbackTakenUnnamed": "Another credential already uses all Docker Hub pulls for {{scope}}. Untick it there first.",
+        "scopeInstance": "all environments",
+        "permission": "You no longer have permission to do that. Your access may have changed.",
+        "generic": "Couldn't save the credential. Try again.",
+        "ca_invalid": "That isn't a valid PEM certificate."
+      },
+      "discard": {
+        "title": "Discard changes?",
+        "body": "The credential hasn't been saved.",
+        "keep": "Keep editing",
+        "discard": "Discard changes"
+      },
+      "advanced": {
+        "trigger": "Advanced",
+        "ca": {
+          "label": "Custom CA certificate (PEM)",
+          "placeholder": "-----BEGIN CERTIFICATE-----",
+          "helper": "For a registry with its own certificate authority. Used for Bayplan's tests and tag browsing."
+        },
+        "insecure": {
+          "label": "Allow plain HTTP or skip TLS verification",
+          "warning": "Bayplan will use this credential over a connection that isn't verified. Anyone on the network path could read it. Only use this on a network you trust."
+        },
+        "nodeNote": "These settings only affect Bayplan's own tests and tag browsing. Each node's Docker daemon still needs its own insecure-registries or certs.d setup to pull from this registry. Bayplan never changes daemon settings.",
+        "docsLink": "Self-hosted registry docs"
+      }
+    },
+    "tester": {
+      "title": "Which credential?",
+      "body": "Check which credential a pull would use for an image, and why.",
+      "environment": "Environment",
+      "image": "Image",
+      "imagePlaceholder": "ghcr.io/acme/app:latest",
+      "submit": "Check credential",
+      "pending": "Checking…",
+      "matched": "Pulls of <ref>{{ref}}</ref> use “{{name}}” ({{scope}}).",
+      "anonymous": "Pulls of <ref>{{ref}}</ref> are anonymous.",
+      "noMatch": "No stored credential matches {{path}}.",
+      "addCredential": "Add credential",
+      "readAs": "Read as {{ref}}",
+      "rows": {
+        "registry": "Registry",
+        "matchedOn": "Matched on",
+        "scope": "Scope"
+      },
+      "on": {
+        "prefix": "the prefix {{prefix}}",
+        "host": "the registry address {{host}}",
+        "hub_fallback": "your Docker Hub fallback"
+      },
+      "scope": {
+        "instance": "Instance"
+      },
+      "considered": {
+        "caption": "Other credentials considered",
+        "columns": {
+          "credential": "Credential",
+          "scope": "Scope",
+          "matches": "Matches",
+          "result": "Result"
+        },
+        "yes": "Yes",
+        "no": "No",
+        "results": {
+          "used": "Used",
+          "shorter_prefix": "Shorter prefix",
+          "overridden_by_environment": "Instance credential, overridden by the environment's",
+          "hub_fallback_overridden": "Hub fallback, a more specific credential matched",
+          "no_match": "Not this namespace"
+        }
+      },
+      "errors": {
+        "environment": "Choose an environment.",
+        "ref": "Enter an image like nginx:1.27 or ghcr.io/acme/app:latest.",
+        "generic": "Couldn't check the credential. Try again.",
+        "permission": "You no longer have permission to do that. Your access may have changed."
+      }
+    },
+    "test": {
+      "title": "Test",
+      "repository": {
+        "label": "Test repository (optional)",
+        "placeholder": "acme/app",
+        "helper": "A repository this credential should be able to pull. Checks pull access, which catches a token missing a scope.",
+        "invalid": "Enter a repository like acme/app."
+      },
+      "button": "Test credential",
+      "pending": "Testing…",
+      "needSecret": "Enter a secret.",
+      "steps": {
+        "reachable": "Registry reachable",
+        "signedIn": "Signed in",
+        "canPull": "Can pull {{repo}}",
+        "canPullNone": "Can pull a test repository"
+      },
+      "states": {
+        "passed": "Passed",
+        "failed": "Failed",
+        "not_checked": "Not checked"
+      },
+      "passed": "Test passed",
+      "failed": "Test failed: {{reason}}",
+      "stale": "Result is for the earlier values",
+      "warning": "The last test failed. You can still save this credential.",
+      "ghcrHint": "GitHub may refuse a token until it names a repository. Add a test repository and test again.",
+      "reasons": {
+        "registry_unreachable": "Couldn't reach {{host}}. Check the address, DNS and firewall.",
+        "registry_tls": "The certificate from {{host}} isn't trusted. Add the registry's CA under Advanced.",
+        "registry_http": "{{host}} answered, but not like a Docker registry.",
+        "sign_in_refused": "{{host}} refused this username and secret.",
+        "no_login_asked": "{{host}} asks for no login, so there was nothing to sign in to.",
+        "no_pull_access": "Signed in, but this credential can't pull {{repo}}. Check its scopes.",
+        "repository_not_found": "{{host}} has no repository {{repo}}.",
+        "rate_limited": "{{host}} is limiting requests. Try again in a moment.",
+        "check_failed": "The test couldn't finish. Try again."
+      },
+      "errors": {
+        "rateLimited": "Too many tests. Wait a minute and try again.",
+        "permission": "You no longer have permission to do that. Your access may have changed.",
+        "generic": "Couldn't run the test. Try again."
+      },
+      "fromEnv": {
+        "button": "Test from an environment…",
+        "needRepository": "Enter a test repository",
+        "environment": "Environment",
+        "tag": {
+          "label": "Tag (optional)",
+          "placeholder": "latest",
+          "helper": "Left empty, Bayplan reads latest, or the newest tag the registry lists when it has no latest.",
+          "invalid": "A tag is 1 to 128 letters, digits, underscores, dots or dashes, and doesn't start with a dot or dash."
+        },
+        "noEnvironment": "There is no environment to run the test from.",
+        "caption": "Runs on {{where}} through its agent, so it also catches firewall, DNS and CA problems that Bayplan's own server can't see.",
+        "whereBefore": "a node of {{environment}}",
+        "run": "Run test from {{environment}}",
+        "pending": "Testing…",
+        "passed": "{{node}} can pull {{ref}} with this credential.",
+        "failed": "{{node}} couldn't read {{ref}} with this credential: {{reason}}",
+        "reasons": {
+          "pull_denied": "{{host}} refused this credential for that repository. Check its scopes.",
+          "pull_unauthorized": "{{host}} refused this username and secret.",
+          "image_not_found": "{{host}} has no such repository, or no tag {{tag}} in it. Check both.",
+          "pull_failed": "Docker on {{node}} gave an answer Bayplan doesn't recognise. The server log has it.",
+          "registry_http_fallback": "Docker on {{node}} retried {{host}} over plain HTTP, because the name resolves to a loopback address or is listed in insecure-registries, and that answer hid the real one. Check that the tag {{tag}} exists and that the sign-in works."
+        }
+      },
+      "lastTest": "Last test",
+      "short": {
+        "registry_unreachable": "Couldn't reach the registry. Check the address, DNS and firewall.",
+        "registry_tls": "The registry's certificate isn't trusted.",
+        "registry_http": "The host answered, but not like a Docker registry.",
+        "sign_in_refused": "The registry refused this username and secret.",
+        "no_pull_access": "Signed in, but this credential can't pull the test repository. Check its scopes.",
+        "repository_not_found": "The test repository wasn't found.",
+        "rate_limited": "The registry is limiting requests.",
+        "check_failed": "The test couldn't finish."
+      }
+    },
+    "browse": {
+      "title": "Browse a repository",
+      "body": "See a repository's tags, digests and where they run.",
+      "repository": "Repository",
+      "placeholder": "ghcr.io/acme/app or nginx",
+      "submit": "Browse tags",
+      "error": "Enter an image like nginx:1.27 or ghcr.io/acme/app:latest."
+    }
+  }
+}

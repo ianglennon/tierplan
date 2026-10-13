@@ -115,6 +115,10 @@ type FakeConfig struct {
 	// BusyVolumes are volumes the daemon refuses to remove as in use although no container
 	// in its list mounts them, as when a container starts between a check and the call.
 	BusyVolumes []string
+	// BusyImages are image IDs the daemon refuses to remove as in use although no container
+	// in its list was created from them, as when a container starts between a check and the
+	// call.
+	BusyImages []string
 	// Nodes and Services are how many swarm nodes and services /nodes and
 	// /services list. A fake that is not a swarm manager answers both with the
 	// 503 a real worker gives, so a client that asks anyway fails loudly.
@@ -134,6 +138,9 @@ type FakeConfig struct {
 	// message an agent gives for a request its policy refuses: agent_policy_denied:
 	// followed by the method and path.
 	PolicyDeny bool
+	// HistoryDeny makes only the image history route answer 403 agent_policy_denied, as
+	// an agent older than the route does, while the lists and the image inspect answer.
+	HistoryDeny bool
 	// Events is the history the daemon has buffered when it starts, oldest
 	// first, as /events replays it to a client that passes since.
 	Events []FakeEvent
@@ -159,6 +166,22 @@ type FakeConfig struct {
 	// container has: starting an exec of one prints the runtime's "no such file or
 	// directory" message and ends with exit code 127 (fake_exec.go).
 	MissingExecutables []string
+	// PullStatus makes POST /images/create answer that status and message before any stream,
+	// as the engine on the containerd image store does for a registry's refusal (images.go).
+	// A zero Code answers normally.
+	PullStatus FakePullStatus
+	// PullStreamError makes a pull stream its progress and then an errorDetail with this
+	// message, as a classic image store does; empty means the pull succeeds.
+	PullStreamError string
+	// PullHold holds every pull, after it is recorded and before it answers, until the
+	// channel is closed or the caller gives up, so a test can look at a pull in progress.
+	PullHold <-chan struct{}
+}
+
+// FakePullStatus is an HTTP status and message a pull is answered with.
+type FakePullStatus struct {
+	Code    int
+	Message string
 }
 
 // FakeNode is one entry of /nodes. Leader marks the one manager whose
@@ -194,6 +217,8 @@ type FakeService struct {
 	// name as the spec wrote it, and Mounts the mounts of its container spec.
 	Networks []string
 	Mounts   []FakeServiceMount
+	// Image is the image the spec names; empty leaves the container spec without one.
+	Image string
 }
 
 // FakeServiceMount is one mount of a service's container spec. Type is "volume",
@@ -245,9 +270,11 @@ type eventSub struct {
 // FakeContainer is one entry of /containers/json. Labels and Mounts exist so a
 // test can prove they never reach a Bayplan response.
 type FakeContainer struct {
-	ID      string
-	Names   []string
-	Image   string
+	ID    string
+	Names []string
+	Image string
+	// ImageID is the ID of the image the container was created from.
+	ImageID string
 	State   string
 	Status  string
 	Created int64
@@ -294,6 +321,28 @@ type FakeImage struct {
 	Size     int64
 	Created  int64
 	Labels   map[string]string
+	// RepoDigests are the repo@sha256 names of the image, shown by its inspect.
+	RepoDigests []string
+	// OS and Architecture default to linux and amd64 in the inspect; Variant is omitted
+	// when empty.
+	OS, Architecture, Variant string
+	// Env is the image config's environment, "NAME=value" each. The inspect carries it in
+	// Config.Env and in ContainerConfig.Env, as an older engine does.
+	Env []string
+	// Cmd and Entrypoint are the image config's command, carried in Config when set.
+	Cmd, Entrypoint []string
+	// History is the layers /images/{name}/history answers, newest first. Empty gives one
+	// layer.
+	History []FakeLayer
+}
+
+// FakeLayer is one entry of an image's history.
+type FakeLayer struct {
+	ID        string
+	CreatedBy string
+	Comment   string
+	Size      int64
+	Created   int64
 }
 
 // FakeVolume is one entry of /volumes. CreatedAt is RFC 3339, or empty.
@@ -393,6 +442,16 @@ type Fake struct {
 	volGone map[string]bool
 	// dfCalls counts the GET /system/df requests the fake answered or refused.
 	dfCalls int
+	// pulled are the images pulled through the fake, listed after the configured ones, and
+	// pullAuth the X-Registry-Auth header of every pull, in order (fake_images.go).
+	pulled   []FakeImage
+	pullAuth []string
+	// imgGone are the IDs of the images removed through the fake, and imgUntagged the names
+	// (normalised) taken off an image, by its ID.
+	imgGone     map[string]bool
+	imgUntagged map[string]map[string]bool
+	// distAuth and distRefs are the header and reference of each distribution check.
+	distAuth, distRefs []string
 
 	// evMu guards the events history, the open streams and the queries seen.
 	evMu      sync.Mutex
@@ -515,7 +574,7 @@ func (f *Fake) Reconfigure(cfg FakeConfig) {
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone)
+	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
@@ -720,7 +779,7 @@ func (c FakeConfig) containerList(all bool) []container.Summary {
 			continue
 		}
 		s := container.Summary{
-			ID: fc.ID, Names: fc.Names, Image: fc.Image, Created: fc.Created,
+			ID: fc.ID, Names: fc.Names, Image: fc.Image, ImageID: fc.ImageID, Created: fc.Created,
 			State: container.ContainerState(fc.State), Status: fc.Status, Labels: fc.Labels,
 		}
 		for _, p := range fc.Ports {
@@ -768,7 +827,7 @@ func (c FakeConfig) containerList(all bool) []container.Summary {
 func (c FakeConfig) imageList() []image.Summary {
 	out := make([]image.Summary, 0, len(c.Images))
 	for _, fi := range c.Images {
-		out = append(out, image.Summary{ID: fi.ID, RepoTags: fi.RepoTags, Size: fi.Size, Created: fi.Created, Labels: fi.Labels})
+		out = append(out, image.Summary{ID: fi.ID, RepoTags: fi.RepoTags, RepoDigests: fi.RepoDigests, Size: fi.Size, Created: fi.Created, Labels: fi.Labels})
 	}
 	return out
 }
@@ -1120,8 +1179,8 @@ func (c FakeConfig) serviceList(withStatus bool) []swarm.Service {
 		for _, target := range fs.Networks {
 			s.Spec.TaskTemplate.Networks = append(s.Spec.TaskTemplate.Networks, swarm.NetworkAttachmentConfig{Target: target})
 		}
-		if len(fs.Mounts) > 0 {
-			s.Spec.TaskTemplate.ContainerSpec = &swarm.ContainerSpec{}
+		if len(fs.Mounts) > 0 || fs.Image != "" {
+			s.Spec.TaskTemplate.ContainerSpec = &swarm.ContainerSpec{Image: fs.Image}
 			for _, m := range fs.Mounts {
 				s.Spec.TaskTemplate.ContainerSpec.Mounts = append(s.Spec.TaskTemplate.ContainerSpec.Mounts, mount.Mount{Type: mount.Type(m.Type), Source: m.Source, Target: m.Target, ReadOnly: m.ReadOnly})
 			}

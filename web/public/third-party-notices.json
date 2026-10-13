@@ -1240,6 +1240,11 @@
     "licence": "Apache-2.0"
   },
   {
+    "name": "github.com/docker/libtrust",
+    "version": "v0.0.0-20160708172513-aabc10ec26b7",
+    "licence": "Apache-2.0"
+  },
+  {
     "name": "github.com/dustin/go-humanize",
     "version": "v1.0.1",
     "licence": "MIT"
@@ -1273,6 +1278,11 @@
     "name": "github.com/hashicorp/yamux",
     "version": "v0.1.2",
     "licence": "MPL-2.0"
+  },
+  {
+    "name": "github.com/klauspost/compress",
+    "version": "v1.19.2",
+    "licence": "Apache-2.0 AND BSD-3-Clause AND MIT"
   },
   {
     "name": "github.com/mfridman/interpolate",
@@ -1320,6 +1330,11 @@
     "licence": "BSD-0-Clause"
   },
   {
+    "name": "github.com/regclient/regclient",
+    "version": "v0.11.6",
+    "licence": "Apache-2.0"
+  },
+  {
     "name": "github.com/remyoudompheng/bigfft",
     "version": "v0.0.0-20230129092748-24d4a6f8daec",
     "licence": "BSD-3-Clause"
@@ -1330,6 +1345,11 @@
     "licence": "Apache-2.0"
   },
   {
+    "name": "github.com/sirupsen/logrus",
+    "version": "v1.10.2",
+    "licence": "MIT"
+  },
+  {
     "name": "github.com/spf13/cobra",
     "version": "v1.10.2",
     "licence": "Apache-2.0"
@@ -1337,6 +1357,11 @@
   {
     "name": "github.com/spf13/pflag",
     "version": "v1.0.10",
+    "licence": "BSD-3-Clause"
+  },
+  {
+    "name": "github.com/ulikunitz/xz",
+    "version": "v0.5.16",
     "licence": "BSD-3-Clause"
   },
   {

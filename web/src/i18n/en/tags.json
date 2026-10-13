@@ -1,0 +1,157 @@
+{
+  "tags": {
+    "page": {
+      "breadcrumb": {
+        "label": "Breadcrumb",
+        "registries": "Registries",
+        "browse": "Browse"
+      },
+      "noRepository": {
+        "title": "No repository to browse",
+        "body": "Enter a repository on the Registries page, like ghcr.io/acme/app or nginx.",
+        "back": "Back to Registries"
+      }
+    },
+    "credential": {
+      "using": "Using credential “<cred>{{name}}</cred>” ({{scope}})",
+      "usingPlain": "Using credential “{{name}}” ({{scope}})",
+      "anonymous": "Anonymous",
+      "scopeInstance": "Instance"
+    },
+    "columns": {
+      "tag": "Tag",
+      "digest": "Digest",
+      "created": "Created",
+      "platforms": "Platforms",
+      "runningIn": "Running in",
+      "runningHere": "Running here",
+      "actions": "Actions"
+    },
+    "filter": {
+      "label": "Filter tags",
+      "placeholder": "Filter by name",
+      "clear": "Clear filter"
+    },
+    "hide": {
+      "label": "Hide signature, attestation and cache tags",
+      "count": "{{n}} hidden"
+    },
+    "paging": {
+      "more": "Load 100 more",
+      "loading": "Loading…",
+      "end": "That's every tag.",
+      "error": "Couldn't load more tags. Try again."
+    },
+    "table": {
+      "label": "Tags of {{repo}}"
+    },
+    "caption_one": "Showing {{count}} tag",
+    "caption_other": "Showing {{count}} tags",
+    "capped": "The repository has more tags than Bayplan reads, so only the first {{count}} are listed.",
+    "selected": "Selected",
+    "empty": {
+      "noMatch": {
+        "title": "No tags match “{{query}}”.",
+        "clear": "Clear filter"
+      },
+      "onlyHidden": {
+        "title": "Only signature and attestation tags are left.",
+        "show": "Show them"
+      },
+      "none": {
+        "title": "No tags",
+        "body": "{{repo}} has no tags on {{host}}.",
+        "retry": "Retry"
+      }
+    },
+    "errors": {
+      "login_refused": {
+        "message": "Bayplan couldn't sign in to {{host}} with credential “{{name}}” ({{scope}}). Test it.",
+        "action": "Test credential"
+      },
+      "needs_login": {
+        "message": "{{host}} needs a login to list tags, and no stored credential matches {{repo}}. Add one.",
+        "action": "Add credential"
+      },
+      "repository_not_found": {
+        "message": "No repository named {{repo}} on {{host}}."
+      },
+      "repository_unavailable": {
+        "message": "{{host}} has no repository {{repo}} that credential “{{name}}” ({{scope}}) can read. It may not exist, or the account may not have access."
+      },
+      "registry_unreachable": {
+        "message": "Couldn't reach {{host}}. Check the address and try again.",
+        "action": "Retry"
+      },
+      "registry_tls": {
+        "message": "The certificate from {{host}} isn't trusted. Add the registry's CA to its credential under Advanced, then try again.",
+        "action": "Retry"
+      },
+      "rate_limited": {
+        "message": "{{host}} is limiting requests. Wait a moment and try again.",
+        "action": "Retry"
+      },
+      "too_fast": {
+        "message": "Too many tag requests. Wait a minute and try again.",
+        "action": "Retry",
+        "details": "Too many requests, so some details haven't loaded. Wait a minute, then scroll those rows out of view and back."
+      },
+      "ref_invalid": {
+        "message": "Enter an image like nginx:1.27 or ghcr.io/acme/app:latest."
+      },
+      "generic": {
+        "message": "Couldn't load the tags. Check the connection and try again.",
+        "action": "Retry"
+      }
+    },
+    "loading": "Loading…",
+    "none": "—",
+    "dateUnavailable": "Couldn't read this tag's date.",
+    "expand": "Show platforms for {{tag}}",
+    "platforms": {
+      "more": "+{{n}}",
+      "tableLabel": "Platforms of {{tag}}",
+      "caption": "Index digest {{digest}}",
+      "columns": {
+        "platform": "Platform",
+        "digest": "Digest",
+        "size": "Size"
+      },
+      "unknown": "—"
+    },
+    "running": {
+      "more_one": "Show {{count}} more environment",
+      "more_other": "Show {{count}} more environments"
+    },
+    "runningHere": {
+      "label": "Running here",
+      "title": "Running here",
+      "summary": "{{containers}}, {{services}}",
+      "containers_one": "{{count}} container",
+      "containers_other": "{{count}} containers",
+      "services_one": "{{count}} service",
+      "services_other": "{{count}} services",
+      "openContainer": "Open container {{name}}"
+    },
+    "image": {
+      "repository": "Repository",
+      "empty": {
+        "title": "No repository to browse",
+        "body": "This image has no name or registry digest, so Bayplan can't tell where it came from."
+      }
+    },
+    "missing": {
+      "label": "No {{arch}}",
+      "tooltip": "Nodes in {{env}} run {{arch}}, and this tag doesn't include it."
+    },
+    "actions": {
+      "label": "Actions for {{tag}}",
+      "pullHere": "Pull to this environment",
+      "pullElsewhere": "Pull to an environment…",
+      "copyRef": "Copy repo:tag",
+      "copyDigest": "Copy repo@sha256:…",
+      "copied": "Copied {{value}}.",
+      "copyFailed": "Copy failed. Select the text and copy it manually."
+    }
+  }
+}

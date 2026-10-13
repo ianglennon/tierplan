@@ -27,6 +27,8 @@ func TestRequirementOfEveryRegisteredPermission(t *testing.T) {
 		rbac.PermNetworksRead:          {Kind: rbac.NeedRole, Role: rbac.RoleViewer},
 		rbac.PermContainersControl:     {Kind: rbac.NeedRole, Role: rbac.RoleOperator},
 		rbac.PermContainersRemove:      {Kind: rbac.NeedRole, Role: rbac.RoleOperator},
+		rbac.PermImagesPull:            {Kind: rbac.NeedRole, Role: rbac.RoleOperator},
+		rbac.PermImagesDelete:          {Kind: rbac.NeedRole, Role: rbac.RoleOperator},
 		rbac.PermNetworksManage:        {Kind: rbac.NeedRole, Role: rbac.RoleAdmin},
 		rbac.PermNetworksConnect:       {Kind: rbac.NeedRole, Role: rbac.RoleOperator},
 		rbac.PermVolumesCreate:         {Kind: rbac.NeedRole, Role: rbac.RoleAdmin},
@@ -41,6 +43,8 @@ func TestRequirementOfEveryRegisteredPermission(t *testing.T) {
 		rbac.PermVolumesDelete:         {Kind: rbac.NeedExtra, Role: rbac.RoleOperator},
 		rbac.PermJanitorPolicy:         {Kind: rbac.NeedExtra, Role: rbac.RoleOperator},
 		rbac.PermShellsManage:          {Kind: rbac.NeedRole, Role: rbac.RoleAdmin},
+		rbac.PermRegistriesInstance:    {Kind: rbac.NeedInstance},
+		rbac.PermRegistriesManage:      {Kind: rbac.NeedRole, Role: rbac.RoleAdmin},
 	}
 	all := rbac.All()
 	if len(all) != len(want) {

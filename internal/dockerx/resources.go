@@ -27,11 +27,15 @@ const untagged = "<none>"
 // volumes. They can hold secrets, so the API exposes an allowlist and never
 // these fields (T-01-77, T-04-29).
 type ContainerRow struct {
-	ID      string
-	Name    string
-	State   string
-	Status  string
-	Image   string
+	ID     string
+	Name   string
+	State  string
+	Status string
+	Image  string
+	// ImageID is the ID of the image the container was created from, as the engine
+	// reports it. It is what the "used by" rules of images match on, since a tag may
+	// have moved since the container was created.
+	ImageID string
 	Created time.Time
 	// Ports reads like "0.0.0.0:8080->80/tcp", or "80/tcp" when not published.
 	Ports []string
@@ -65,12 +69,18 @@ type ContainerNet struct {
 	MAC       string
 }
 
-// ImageRow is one image. RepoTags is ["<none>"] for an untagged image.
+// ImageRow is one image. RepoTags is ["<none>"] for an untagged image. It carries no
+// count of the containers that use the image: the engine does not compute one in a list
+// by default (it answers -1), so usage is counted from the containers and service specs
+// Bayplan reads itself.
 type ImageRow struct {
 	ID       string
 	RepoTags []string
-	Size     int64
-	Created  time.Time
+	// RepoDigests are the repo@sha256 names of the image, never nil. A service pinned to
+	// a digest is matched to the image by them.
+	RepoDigests []string
+	Size        int64
+	Created     time.Time
 }
 
 // VolumeRow is one volume. Created is the zero time when the engine did not say.
@@ -257,6 +267,7 @@ func containerRows(items []container.Summary) []ContainerRow {
 			State:    string(it.State),
 			Status:   it.Status,
 			Image:    it.Image,
+			ImageID:  it.ImageID,
 			Created:  time.Unix(it.Created, 0).UTC(),
 			Ports:    portStrings(it.Ports),
 			Labels:   maps.Clone(it.Labels),
@@ -392,7 +403,11 @@ func imageRows(res client.ImageListResult) []ImageRow {
 		if len(tags) == 0 {
 			tags = []string{untagged}
 		}
-		rows = append(rows, ImageRow{ID: it.ID, RepoTags: tags, Size: it.Size, Created: time.Unix(it.Created, 0).UTC()})
+		digests := slices.DeleteFunc(slices.Clone(it.RepoDigests), func(d string) bool { return d == "" || d == untagged+"@"+untagged })
+		if digests == nil {
+			digests = []string{}
+		}
+		rows = append(rows, ImageRow{ID: it.ID, RepoTags: tags, RepoDigests: digests, Size: it.Size, Created: time.Unix(it.Created, 0).UTC()})
 	}
 	slices.SortFunc(rows, func(a, b ImageRow) int {
 		return cmp.Or(cmp.Compare(b.Created.Unix(), a.Created.Unix()), cmp.Compare(a.ID, b.ID))

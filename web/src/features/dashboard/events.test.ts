@@ -3,6 +3,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { imageDetailKey, imageUsedByQuery } from "@/api/images";
 import type { components } from "@/api/schema";
 import {
   createEventsConnection,
@@ -140,13 +141,26 @@ describe("invalidationKeys", () => {
   const summary = ["env", "e1", "summary"];
   const list = (resource: string) => ["env", "e1", resource];
 
-  it("maps a container event to the summary, containers, volumes and networks", () => {
+  it("maps a container event to the summary, containers, volumes, networks and images", () => {
     expect(invalidationKeys("container", "e1")).toEqual([
       summary,
       list("containers"),
       list("volumes"),
       list("networks"),
+      list("images"),
     ]);
+  });
+
+  it("refreshes an open image page with the images list, since its keys extend the list's", () => {
+    const detail = imageDetailKey("e1", `sha256:${"a".repeat(64)}`, undefined);
+    const usedBy = imageUsedByQuery("e1", `sha256:${"a".repeat(64)}`).queryKey;
+    for (const type of ["container", "image"] as const) {
+      const keys = invalidationKeys(type, "e1");
+      const images = keys.find((k) => k[2] === "images") ?? [];
+      expect(images.length).toBeGreaterThan(0);
+      expect(detail.slice(0, images.length)).toEqual(images);
+      expect(usedBy.slice(0, images.length)).toEqual(images);
+    }
   });
 
   it("maps a network event to the summary, networks and containers", () => {
@@ -302,6 +316,7 @@ describe("createEventsConnection", () => {
       ["env", "e1", "containers"],
       ["env", "e1", "volumes"],
       ["env", "e1", "networks"],
+      ["env", "e1", "images"],
     ]);
 
     // A burst inside the second collapses into one trailing refetch.
@@ -334,6 +349,7 @@ describe("createEventsConnection", () => {
       ["env", "e1", "containers"],
       ["env", "e1", "volumes"],
       ["env", "e1", "networks"],
+      ["env", "e1", "images"],
     ]);
     expect(c.last().events).toEqual(before.events);
     expect(c.last().events).toHaveLength(0);

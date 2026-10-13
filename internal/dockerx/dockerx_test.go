@@ -445,13 +445,26 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // options, so the caller can ask for nothing else.
 // VolumeRemove (Phase 4, RES-07) removes one volume by name, once; it takes no options, so force
 // is never sent, and the API refuses a volume that is in use before it is called.
+// ImagePull (Phase 5, D-25) pulls an image by a full reference and reports its progress; it takes
+// the reference, an optional encoded credential and platform, and nothing that picks a path or a
+// registry address, and it is never retried. It is the only method whose name carries Pull.
+// DistributionInspect (Phase 5, D-13) is a read: it asks the engine to read one manifest from its registry with
+// an optional encoded credential, to say whether the node can pull; it takes a reference and nothing
+// that picks a path or a registry address, and it is never retried.
+// ImageDetail (Phase 5, RES-09) is a read: one image inspect by ID, typed, with the raw document; it asks
+// for no manifests and no platform.
+// ImageHistory (Phase 5, RES-09) is a read: the layers of one image by ID, with no platform option.
+// ImageRemove (Phase 5, RES-09) removes one image by ID and untags the names it is given first, once; it has
+// no force option, so an image a container uses is refused by the engine. ImageUntag (Phase 5, RES-09)
+// removes one name of an image and never sends force. ImageUsers (Phase 5, RES-09) is a read: the names of
+// the containers created from one image.
 // ContainerLogs (Phase 4, OBS-01) is a read: one inspect, then the engine's log of the container
 // with stdout, stderr and timestamps always on; it takes only the time range, the tail and follow.
-var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "Events", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "Probe", "RestartPolicies", "ServiceRefs", "Snapshot", "StartExec", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers"}
+var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "DistributionInspect", "Events", "ImageDetail", "ImageHistory", "ImagePull", "ImageRemove", "ImageUntag", "ImageUsers", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "Probe", "RestartPolicies", "ServiceRefs", "Snapshot", "StartExec", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers"}
 
 // typedMethodsWithForbiddenWords are allowed methods whose names contain a word the
 // pattern below refuses, each reviewed one by one.
-var typedMethodsWithForbiddenWords = []string{"StartExec", "ContainerRemove", "NetworkCreate", "NetworkRemove", "VolumeCreate", "VolumeRemove"}
+var typedMethodsWithForbiddenWords = []string{"StartExec", "ContainerRemove", "NetworkCreate", "NetworkRemove", "VolumeCreate", "VolumeRemove", "ImageRemove"}
 
 var forbiddenName = regexp.MustCompile(`Plugin|Swarm(Init|Join|Leave|Unlock)|Create|Remove|Start|Stop|Kill|Exec|Update|Prune|Raw|Do$|Passthrough`)
 
@@ -1471,5 +1484,45 @@ func TestClusterDoesNotReportAnotherServicesTasksAsTheAgents(t *testing.T) {
 	}
 	if len(got.AgentTasks) != 1 || got.AgentTasks[0].NodeID != "n1" {
 		t.Errorf("agent tasks = %+v, want only n1's", got.AgentTasks)
+	}
+}
+
+// Image usage inputs (plan 05-15, RES-09, D-28): a container row names its image by ID, an
+// image row carries its repo digests, and a service ref the image its spec names.
+
+func TestSnapshotRowsCarryTheImageIDOfAContainerAndTheRepoDigestsOfAnImage(t *testing.T) {
+	cfg := dockertest.FakeConfig{
+		Containers: []dockertest.FakeContainer{{ID: "c1", Names: []string{"/web"}, Image: "nginx:1.27", ImageID: "sha256:aaaa", State: "exited"}},
+		Images: []dockertest.FakeImage{
+			{ID: "sha256:aaaa", RepoTags: []string{"nginx:1.27"}, RepoDigests: []string{"nginx@sha256:cc", "<none>@<none>"}, Created: 5},
+			{ID: "sha256:bbbb", Created: 4},
+		},
+	}
+	snap, _ := snapshot(t, cfg, false)
+	if got := snap.Containers[0].ImageID; got != "sha256:aaaa" {
+		t.Errorf("container ImageID = %q, want sha256:aaaa (a stopped container too)", got)
+	}
+	if got := snap.Images[0].RepoDigests; !slices.Equal(got, []string{"nginx@sha256:cc"}) {
+		t.Errorf("repo digests = %q, want the one real digest", got)
+	}
+	if got := snap.Images[1].RepoDigests; got == nil || len(got) != 0 {
+		t.Errorf("an image with no digest has %#v, want an empty list and not nil", got)
+	}
+}
+
+func TestServiceRefsNameTheImageOfTheSpec(t *testing.T) {
+	cfg := dockertest.FakeConfig{
+		SwarmState: "active", SwarmControl: true,
+		ServiceRows: []dockertest.FakeService{
+			{ID: "s1", Name: "web", Image: "nginx:1.27@sha256:cc", Mounts: []dockertest.FakeServiceMount{{Type: "volume", Source: "data", Target: "/d"}}},
+			{ID: "s2", Name: "bare"},
+		},
+	}
+	got, err := newClient(t, dockertest.NewFake(t, cfg)).ServiceRefs(context.Background())
+	if err != nil {
+		t.Fatalf("ServiceRefs: %v", err)
+	}
+	if len(got) != 2 || got[1].Image != "nginx:1.27@sha256:cc" || got[0].Image != "" {
+		t.Fatalf("ServiceRefs = %+v, want the image of web and none for bare", got)
 	}
 }

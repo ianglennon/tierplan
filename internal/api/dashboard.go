@@ -162,16 +162,6 @@ type ContainerItem struct {
 	Service  string   `json:"service" doc:"The swarm service name (com.docker.swarm.service.name); empty when the container has none"`
 }
 
-// ImageItem is one row of the images list.
-type ImageItem struct {
-	Node     string   `json:"node" doc:"The node that holds the image"`
-	ID       string   `json:"id" doc:"The full image ID"`
-	ShortID  string   `json:"shortId" doc:"The first 12 characters of the ID, without the sha256: prefix"`
-	RepoTags []string `json:"repoTags" doc:"repository:tag for each tag, or [\"<none>\"] for an untagged image"`
-	Size     int64    `json:"size" doc:"Size in bytes"`
-	Created  string   `json:"created,omitempty" format:"date-time"`
-}
-
 // VolumeItem is one row of the volumes list.
 type VolumeItem struct {
 	Node    string `json:"node" doc:"The node that holds the volume"`
@@ -223,15 +213,6 @@ type ContainerListBody struct {
 	StatusCounts StatusCountsBody `json:"statusCounts" doc:"How many containers each status chip counts, after the node filter and before the search and the status filter, so the numbers never shrink with what was typed"`
 }
 
-// ImageListBody is a capped list of images.
-type ImageListBody struct {
-	Items        []ImageItem `json:"items" doc:"At most 500 rows"`
-	Total        int         `json:"total" doc:"How many there are, whatever the cap"`
-	Truncated    bool        `json:"truncated" doc:"True when total is more than the rows returned"`
-	Nodes        []string    `json:"nodes" doc:"The nodes that answered, for the node filter; Cluster is listed too when swarm-wide networks are shown"`
-	NotReporting []string    `json:"notReporting" doc:"Nodes that should have answered and did not, so these rows are not the whole cluster"`
-}
-
 // VolumeListBody is a capped list of volumes.
 type VolumeListBody struct {
 	Items        []VolumeItem `json:"items" doc:"At most 500 rows"`
@@ -254,12 +235,6 @@ type NetworkListBody struct {
 type ContainerListOutput struct {
 	CacheControl string `header:"Cache-Control"`
 	Body         ContainerListBody
-}
-
-// ImageListOutput wraps ImageListBody for huma.
-type ImageListOutput struct {
-	CacheControl string `header:"Cache-Control"`
-	Body         ImageListBody
 }
 
 // VolumeListOutput wraps VolumeListBody for huma.
@@ -495,24 +470,6 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 			return &ContainerListOutput{CacheControl: "no-store", Body: ContainerListBody{
 				Items: items, Total: total, Truncated: truncated, Nodes: reportingNodes(agg), NotReporting: agg.NotReporting,
 				UnfilteredTotal: len(onNode), StatusCounts: statusCounts(onNode),
-			}}, nil
-		})
-
-	httpx.Register(r, op("listImages", "/api/env/{envId}/images",
-		"List the images of an environment",
-		"Newest first. An untagged image is listed as <none>. On a swarm every node's images, each with its node. Optionally only one node's (node). At most 500 rows, after the filter, with the total."),
-		need(rbac.PermImagesRead),
-		func(ctx context.Context, in *NodeFilterInput) (*ImageListOutput, error) {
-			agg, _, err := read(ctx, in.EnvID)
-			if err != nil {
-				return nil, err
-			}
-			rows := filterNode(agg.Images, in.Node, func(i envs.ImageRow) string { return i.Node })
-			items, total, truncated := capRows(rows, func(i envs.ImageRow) ImageItem {
-				return ImageItem{Node: i.Node, ID: i.ID, ShortID: shortImageID(i.ID), RepoTags: i.RepoTags, Size: i.Size, Created: rfc3339(i.Created)}
-			})
-			return &ImageListOutput{CacheControl: "no-store", Body: ImageListBody{
-				Items: items, Total: total, Truncated: truncated, Nodes: reportingNodes(agg), NotReporting: agg.NotReporting,
 			}}, nil
 		})
 

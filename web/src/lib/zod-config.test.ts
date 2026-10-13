@@ -16,4 +16,21 @@ describe("zod configuration", () => {
     expect(schema.safeParse({ name: "x" }).success).toBe(true);
     expect(schema.safeParse({ name: "" }).success).toBe(false);
   });
+
+  // A schema built from "zod" itself can run before the entry has set jitless (WR-C02). Biome's
+  // noRestrictedImports says the same at lint time; this keeps it true where the linter is not run.
+  it("is the only module a source file imports z from", () => {
+    const sources = import.meta.glob(["/src/**/*.{ts,tsx}", "!/src/**/*.test.{ts,tsx}"], {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    }) as Record<string, string>;
+    expect(Object.keys(sources).length).toBeGreaterThan(100);
+    const offenders = Object.entries(sources)
+      .filter(
+        ([path, code]) => /from\s+["']zod["']/.test(code) && path !== "/src/lib/zod-config.ts",
+      )
+      .map(([path]) => path);
+    expect(offenders).toEqual([]);
+  });
 });

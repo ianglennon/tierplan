@@ -945,3 +945,64 @@ func TestAggregateNodeRefOfTheLocalSocketIsNeverReadOnly(t *testing.T) {
 		t.Fatalf("nodes = %+v, %v; want the local socket writable", agg.Nodes, err)
 	}
 }
+
+// The node chooser of a pull needs each node's architecture and, for a node that is not
+// answering, an ID to name it by (plan 05-03, IMG-02, D-25).
+
+func TestAggregateNodeRefCarriesTheArchitectureTheWayARegistryNamesIt(t *testing.T) {
+	f := newFanRig(t, nil, nil)
+	agg := f.read(t)
+	if len(agg.Nodes) != 4 {
+		t.Fatalf("nodes = %+v, want four", agg.Nodes)
+	}
+	for _, n := range agg.Nodes {
+		if n.Arch != "amd64" {
+			t.Errorf("node %s has arch %q, want amd64", n.Name, n.Arch)
+		}
+	}
+
+	local := dockertest.NewFake(t, dockertest.FakeConfig{Hostname: "this-host"})
+	r := newTunRig(t, local)
+	r.pastGrace()
+	e, err := r.svc.AddLocal(context.Background(), admin, "", false, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.whenOnline(t, e.ID)
+	one, _, err := r.agg.Snapshot(context.Background(), e.ID)
+	if err != nil || len(one.Nodes) != 1 || one.Nodes[0].Arch != "amd64" {
+		t.Fatalf("nodes = %+v, %v; want the local socket's node as amd64", one.Nodes, err)
+	}
+}
+
+func TestAggregateUnreachableNodesCarryTheIDsAWriteRoutesBy(t *testing.T) {
+	// wrk-2 is in the swarm and never had an agent; wrk-1's agent drops.
+	f := newFanRig(t, []dockertest.FakeNode{{ID: "node-wrk-2", Hostname: "wrk-2", Role: "worker", EngineVersion: "29.1.0", OS: "linux"}}, nil)
+	f.kick(t, f.w)
+	if err := f.c.Refresh(context.Background(), f.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	agg := f.read(t)
+	if len(agg.Unreachable) != 2 {
+		t.Fatalf("unreachable = %+v, want the two nodes notReporting names", agg.Unreachable)
+	}
+	dropped, never := agg.Unreachable[0], agg.Unreachable[1]
+	if dropped.Name != "wrk-1" || dropped.ID != f.w.id || dropped.Role != "worker" {
+		t.Errorf("the dropped node = %+v, want wrk-1 by its agent's ID %q", dropped, f.w.id)
+	}
+	if never.Name != "wrk-2" || never.ID != "node-wrk-2" || never.Role != "worker" {
+		t.Errorf("the node that never had an agent = %+v, want wrk-2 by its swarm node ID", never)
+	}
+	for _, n := range agg.Nodes {
+		if n.ID == dropped.ID || n.ID == never.ID {
+			t.Errorf("node %+v is both reporting and unreachable", n)
+		}
+	}
+}
+
+func TestAggregateOfAnEnvironmentWhoseNodesAllAnswerHasNoUnreachableNode(t *testing.T) {
+	f := newFanRig(t, nil, nil)
+	if agg := f.read(t); len(agg.Unreachable) != 0 {
+		t.Errorf("unreachable = %+v, want none", agg.Unreachable)
+	}
+}
