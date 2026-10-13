@@ -42,6 +42,10 @@ type fakeRegistry struct {
 	// extra, when set, answers any request the fake does not (manifests and blobs).
 	extra http.HandlerFunc
 
+	// signedInV2, when set, answers a /v2/ request that already carries the issued token, which
+	// is the sign-in check a client makes after a call was refused (tag browsing, G-05-17a).
+	signedInV2 http.HandlerFunc
+
 	user, pass string
 	mu         sync.Mutex
 	paths      []string
@@ -97,6 +101,10 @@ func (f *fakeRegistry) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	case r.URL.Path == "/v2/":
 		if r.Header.Get("Authorization") == "Bearer good" {
+			if f.signedInV2 != nil {
+				f.signedInV2(w, r)
+				return
+			}
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -130,6 +138,19 @@ func (f *fakeRegistry) serve(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// requests is how many requests the registry has been sent for a path.
+func (f *fakeRegistry) requests(path string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, p := range f.paths {
+		if p == path {
+			n++
+		}
+	}
+	return n
 }
 
 // tagRequests is how many tag lists the registry has been asked for.

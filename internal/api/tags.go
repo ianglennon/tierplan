@@ -175,7 +175,7 @@ type TagDetailBody struct {
 	RunningIn   []RunningInBody  `json:"runningIn" doc:"The environments the caller can read whose running containers run this tag's digest, matched by digest and not by tag text, from each environment's last snapshot; environments that are offline are skipped. Only filled on the Registries page: left empty when envId is given"`
 	RunningHere *RunningHereBody `json:"runningHere,omitempty" doc:"Only in an environment's answer, and only for a tag that runs there: the running containers and swarm services of that environment whose image is this tag's index digest or the digest of any of its platforms, matched by digest and not by tag text, so a tag that moved still shows where its old image runs"`
 	Missing     []string         `json:"missing" doc:"Only filled in an environment's answer: the CPU architectures its nodes run, by OCI name (arm64, arm/v7), that this tag has no platform for. Empty when every node's architecture is covered, when the tag's platforms could not be read, and on the Registries page"`
-	Code        string           `json:"code" enum:",date_unavailable,tag_not_found,needs_login,login_refused,registry_unreachable,registry_tls,rate_limited" doc:"Empty when everything was read; date_unavailable when the date could not be; tag_not_found when the registry no longer has the tag; otherwise why the registry could not be read"`
+	Code        string           `json:"code" enum:",date_unavailable,tag_not_found,repository_unavailable,needs_login,login_refused,registry_unreachable,registry_tls,rate_limited" doc:"Empty when everything was read; date_unavailable when the date could not be; tag_not_found when the registry no longer has the tag; repository_unavailable when the registry refused the repository although the sign-in works; otherwise why the registry could not be read"`
 }
 
 // RunningContainerBody is a container of the environment that runs a tag.
@@ -234,7 +234,7 @@ func RegisterTags(r *httpx.Router, d TagsDeps) {
 		Description: "Lists a repository's tag names through the server, with the stored credential pulls would use for it among the ones the caller may see: the instance credentials and, with envId, " +
 			"that environment's own. The tags come newest version first and then by name, descending, 100 to a page (page, from 0), filtered by the text q and without signature, attestation and cache tags unless hide is false. The answer names the credential, never holds it, and is cached for a minute per credential, so a caller never gets a list fetched with a credential they cannot use. " +
 			"Needs images.read on at least one environment, and on envId when it is given (403). An unparsable reference is 422 ref_invalid. At most 60 tag requests a minute per user (a burst of 30), lists and details together: 429 rate_limited. When the registry cannot list the tags the answer is 404 " +
-			"repository_not_found, or 502 with the problem type needs_login (the registry wants a login and no stored credential matches), login_refused (it refused the matching credential), " +
+			"repository_not_found or repository_unavailable (the registry refused the repository although the credential's sign-in works, so it does not exist or the account cannot read it), or 502 with the problem type needs_login (the registry wants a login and no stored credential matches), login_refused (it refused the matching credential), " +
 			"registry_unreachable or registry_tls; errors names the registry as registry.host and registry.repo and the credential used, if any, as credential.id, credential.name, credential.scopeKind and credential.scopeName. Not audited.",
 		Tags: []string{"registries"},
 	}, rbac.SelfService, func(ctx context.Context, in *BrowseTagsInput) (*TagListOutput, error) {
@@ -568,7 +568,9 @@ func (d TagsDeps) tagProblem(ctx context.Context, ref registry.Ref, cred *regist
 		d.noteSignIn(ctx, cred, dockerx.PullCodeUnauthorized)
 	}
 	status := http.StatusBadGateway
-	if code == registry.CodeRepositoryNotFound {
+	// repository_unavailable is the registry refusing the repository while the credential's
+	// sign-in works: nothing is recorded against the credential, which is not at fault (D-07).
+	if code == registry.CodeRepositoryNotFound || code == registry.CodeRepositoryUnavailable {
 		status = http.StatusNotFound
 	}
 	m := &huma.ErrorModel{

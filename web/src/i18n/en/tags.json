@@ -76,6 +76,9 @@
       "repository_not_found": {
         "message": "No repository named {{repo}} on {{host}}."
       },
+      "repository_unavailable": {
+        "message": "{{host}} has no repository {{repo}} that credential “{{name}}” ({{scope}}) can read. It may not exist, or the account may not have access."
+      },
       "registry_unreachable": {
         "message": "Couldn't reach {{host}}. Check the address and try again.",
         "action": "Retry"

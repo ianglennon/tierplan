@@ -30,6 +30,7 @@ export const TAG_ERROR_TYPES = [
   "needs_login",
   "login_refused",
   "repository_not_found",
+  "repository_unavailable",
   "registry_unreachable",
   "registry_tls",
   "rate_limited",

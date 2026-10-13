@@ -35,10 +35,16 @@ const (
 	CodeNeedsLogin = "needs_login"
 	// CodeLoginRefused is a registry that refused the sign-in of the credential that matched.
 	CodeLoginRefused = "login_refused"
+	// CodeRepositoryUnavailable is a registry that refused the repository although the sign-in
+	// of the credential that matched works: the repository does not exist, or another account
+	// owns it. Registries such as Docker Hub hide which, answering 401 insufficient_scope after
+	// they issue a token, so the two cannot be told apart and neither is claimed (G-05-17a).
+	CodeRepositoryUnavailable = "repository_unavailable"
 )
 
 // TagError is a tag listing that failed. Code is one of CodeNeedsLogin, CodeLoginRefused,
-// CodeRepositoryNotFound, CodeRegistryUnreachable, CodeRegistryTLS and CodeRateLimited. Its
+// CodeRepositoryNotFound, CodeRepositoryUnavailable, CodeRegistryUnreachable, CodeRegistryTLS
+// and CodeRateLimited. Its
 // text is the code alone, because what the registry said may hold anything; Unwrap reaches
 // the cause for errors.Is.
 type TagError struct {
@@ -240,7 +246,12 @@ func (s *TagService) nameList(ctx context.Context, cred *ResolvedCredential, ref
 	// One more than the cap, to know whether the repository has more.
 	names, err := c.TagList(ctx, ref.Path, nameListMax+1)
 	if err != nil {
-		return nameList{}, &TagError{Code: tagCode(err, cred != nil), Err: err}
+		// A 401 after a stored credential was used is the registry refusing the repository or
+		// the credential. Check's reasoning tells them apart: if the sign-in itself works, the
+		// refusal is the repository's (Docker Hub answers a missing repository with 401
+		// insufficient_scope after issuing a token, G-05-17a).
+		code := refusalCode(err, cred != nil, func() error { return c.Ping(ctx) })
+		return nameList{}, &TagError{Code: code, Err: err}
 	}
 	l := sortNames(capNames(names))
 	s.names.Put(key, l, nameTTL)
@@ -308,6 +319,33 @@ func tagCode(err error, signedIn bool) string {
 		// Not a registry, a redirect, a timeout, a refused address and anything unforeseen
 		// all read the same to a person: the registry could not be reached.
 		return CodeRegistryUnreachable
+	}
+}
+
+// refusalCode words a failed registry call. When the registry refused (a 401 or 403 that
+// classify reads as a refused sign-in) and a stored credential was used, the refusal may be the
+// credential's or the repository's, and the error cannot say which: regclient returns the same
+// value for both. signIn runs the credential's sign-in on the same client, the way Check does
+// ("the sign-in worked a moment ago, so a refusal here is the repository's"):
+//
+//   - it passes: the refusal is the repository's, CodeRepositoryUnavailable;
+//   - it is refused: the credential's, CodeLoginRefused;
+//   - it fails another way (unreachable, certificate, rate limit): that failure's code.
+//
+// Every other case is tagCode's, and signIn is not called, so an anonymous browse stays
+// CodeNeedsLogin.
+func refusalCode(err error, signedIn bool, signIn func() error) string {
+	if !signedIn || classify(err) != CodeSignInRefused {
+		return tagCode(err, signedIn)
+	}
+	serr := signIn()
+	switch {
+	case serr == nil:
+		return CodeRepositoryUnavailable
+	case classify(serr) == CodeSignInRefused:
+		return CodeLoginRefused
+	default:
+		return tagCode(serr, true)
 	}
 }
 

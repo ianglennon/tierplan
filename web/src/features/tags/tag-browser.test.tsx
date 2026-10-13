@@ -343,6 +343,25 @@ describe("TagBrowser errors", () => {
     expect(within(alert).queryByRole("button")).toBeNull();
   });
 
+  it("repository_unavailable says the repository can't be read, with no Test credential link and no Retry", async () => {
+    answer = () =>
+      problem(404, "repository_unavailable", [
+        ...where,
+        { location: "credential.id", message: "c1" },
+        { location: "credential.name", message: "ghcr-acme" },
+        { location: "credential.scopeKind", message: "instance" },
+        { location: "credential.scopeName", message: "" },
+      ]);
+    mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" />);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(
+      "ghcr.io has no repository acme/app that credential “ghcr-acme” (Instance) can read. It may not exist, or the account may not have access.",
+    );
+    expect(alert.textContent).not.toContain("sign in");
+    expect(within(alert).queryByRole("link")).toBeNull();
+    expect(within(alert).queryByRole("button")).toBeNull();
+  });
+
   it.each([
     ["registry_unreachable", "Couldn't reach ghcr.io. Check the address and try again."],
     ["rate_limited", "ghcr.io is limiting requests. Wait a moment and try again."],

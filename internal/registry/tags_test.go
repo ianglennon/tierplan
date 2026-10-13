@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/regclient/regclient/types/errs"
 )
 
 // Listing the tags of a repository (plan 05-18, IMG-03, D-19, D-24a). The registry is a real
@@ -131,7 +133,7 @@ func TestListNamesTheReasonARegistryRefused(t *testing.T) {
 		"anonymous 401":           {func(*fakeRegistry) {}, func(*fakeRegistry) *ResolvedCredential { return nil }, CodeNeedsLogin},
 		"wrong secret, 401":       {func(*fakeRegistry) {}, func(f *fakeRegistry) *ResolvedCredential { return f.cred("c1", "wrong") }, CodeLoginRefused},
 		"wrong secret, 403":       {func(f *fakeRegistry) { f.refuseStatus = http.StatusForbidden }, func(f *fakeRegistry) *ResolvedCredential { return f.cred("c1", "wrong") }, CodeLoginRefused},
-		"no access to the repo":   {func(f *fakeRegistry) { f.tagsStatus = http.StatusUnauthorized }, func(f *fakeRegistry) *ResolvedCredential { return f.cred("c1", f.pass) }, CodeLoginRefused},
+		"no access to the repo":   {func(f *fakeRegistry) { f.tagsStatus = http.StatusUnauthorized }, func(f *fakeRegistry) *ResolvedCredential { return f.cred("c1", f.pass) }, CodeRepositoryUnavailable},
 		"repository unknown":      {func(f *fakeRegistry) { f.tagsStatus = http.StatusNotFound }, func(f *fakeRegistry) *ResolvedCredential { return f.cred("c1", f.pass) }, CodeRepositoryNotFound},
 		"rate limited":            {func(f *fakeRegistry) { f.tagsStatus = http.StatusTooManyRequests }, func(f *fakeRegistry) *ResolvedCredential { return f.cred("c1", f.pass) }, CodeRateLimited},
 		"not trusted certificate": {func(*fakeRegistry) {}, func(f *fakeRegistry) *ResolvedCredential { return f.cred("c1", f.pass) }, CodeRegistryTLS},
@@ -152,6 +154,51 @@ func TestListNamesTheReasonARegistryRefused(t *testing.T) {
 			}
 			if got := err.Error(); got != "registry: list tags: "+tc.want {
 				t.Errorf("Error() = %q; the text must be the code alone", got)
+			}
+		})
+	}
+}
+
+// A refused listing is worded by the sign-in check that follows it: a check that fails some
+// way other than a refusal gives that failure's code and never login_refused (G-05-17a).
+func TestListWordsAFailedSignInCheckByItsOwnReason(t *testing.T) {
+	f := newFakeRegistry(t, http.StatusUnauthorized)
+	f.tagsStatus = http.StatusUnauthorized
+	f.signedInV2 = func(w http.ResponseWriter, r *http.Request) {
+		// The connection drops: the registry cannot be reached for the check.
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			_ = conn.Close()
+		}
+	}
+	s := tagServiceFor(f)
+	_, err := s.List(context.Background(), f.cred("c1", f.pass), f.ref(t, "acme/app"), "", true, 0)
+	if got := TagErrorCode(err); got != CodeRegistryUnreachable {
+		t.Errorf("err = %v (%q), want registry_unreachable", err, got)
+	}
+}
+
+func TestRefusalCodeChecksTheSignInOnlyForARefusalWithACredential(t *testing.T) {
+	refused := fmt.Errorf("wrapped: %w", errs.ErrHTTPUnauthorized)
+	pass := func() error { return nil }
+	fail := func() error { t.Error("the sign-in check ran when it was not needed"); return nil }
+	for name, tc := range map[string]struct {
+		err      error
+		signedIn bool
+		signIn   func() error
+		want     string
+	}{
+		"refused, sign-in works":      {refused, true, pass, CodeRepositoryUnavailable},
+		"refused, sign-in refused":    {refused, true, func() error { return refused }, CodeLoginRefused},
+		"refused, sign-in rate limit": {refused, true, func() error { return errs.ErrHTTPRateLimit }, CodeRateLimited},
+		"refused, sign-in down":       {refused, true, func() error { return context.DeadlineExceeded }, CodeRegistryUnreachable},
+		"anonymous refusal":           {refused, false, fail, CodeNeedsLogin},
+		"not found":                   {errs.ErrNotFound, true, fail, CodeRepositoryNotFound},
+		"rate limited":                {errs.ErrHTTPRateLimit, true, fail, CodeRateLimited},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := refusalCode(tc.err, tc.signedIn, tc.signIn); got != tc.want {
+				t.Errorf("refusalCode = %q, want %q", got, tc.want)
 			}
 		})
 	}

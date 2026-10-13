@@ -1851,7 +1851,7 @@ export interface paths {
         };
         /**
          * List the tags of a repository
-         * @description Lists a repository's tag names through the server, with the stored credential pulls would use for it among the ones the caller may see: the instance credentials and, with envId, that environment's own. The tags come newest version first and then by name, descending, 100 to a page (page, from 0), filtered by the text q and without signature, attestation and cache tags unless hide is false. The answer names the credential, never holds it, and is cached for a minute per credential, so a caller never gets a list fetched with a credential they cannot use. Needs images.read on at least one environment, and on envId when it is given (403). An unparsable reference is 422 ref_invalid. At most 60 tag requests a minute per user (a burst of 30), lists and details together: 429 rate_limited. When the registry cannot list the tags the answer is 404 repository_not_found, or 502 with the problem type needs_login (the registry wants a login and no stored credential matches), login_refused (it refused the matching credential), registry_unreachable or registry_tls; errors names the registry as registry.host and registry.repo and the credential used, if any, as credential.id, credential.name, credential.scopeKind and credential.scopeName. Not audited.
+         * @description Lists a repository's tag names through the server, with the stored credential pulls would use for it among the ones the caller may see: the instance credentials and, with envId, that environment's own. The tags come newest version first and then by name, descending, 100 to a page (page, from 0), filtered by the text q and without signature, attestation and cache tags unless hide is false. The answer names the credential, never holds it, and is cached for a minute per credential, so a caller never gets a list fetched with a credential they cannot use. Needs images.read on at least one environment, and on envId when it is given (403). An unparsable reference is 422 ref_invalid. At most 60 tag requests a minute per user (a burst of 30), lists and details together: 429 rate_limited. When the registry cannot list the tags the answer is 404 repository_not_found or repository_unavailable (the registry refused the repository although the credential's sign-in works, so it does not exist or the account cannot read it), or 502 with the problem type needs_login (the registry wants a login and no stored credential matches), login_refused (it refused the matching credential), registry_unreachable or registry_tls; errors names the registry as registry.host and registry.repo and the credential used, if any, as credential.id, credential.name, credential.scopeKind and credential.scopeName. Not audited.
          */
         get: operations["browseTags"];
         put?: never;
@@ -5530,10 +5530,10 @@ export interface components {
         };
         TagDetailBody: {
             /**
-             * @description Empty when everything was read; date_unavailable when the date could not be; tag_not_found when the registry no longer has the tag; otherwise why the registry could not be read
+             * @description Empty when everything was read; date_unavailable when the date could not be; tag_not_found when the registry no longer has the tag; repository_unavailable when the registry refused the repository although the sign-in works; otherwise why the registry could not be read
              * @enum {string}
              */
-            code: "" | "date_unavailable" | "tag_not_found" | "needs_login" | "login_refused" | "registry_unreachable" | "registry_tls" | "rate_limited";
+            code: "" | "date_unavailable" | "tag_not_found" | "repository_unavailable" | "needs_login" | "login_refused" | "registry_unreachable" | "registry_tls" | "rate_limited";
             /**
              * Format: date-time
              * @description When the image was built, from its config (Docker Hub: when the tag was pushed). Left out when it could not be read

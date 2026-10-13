@@ -275,6 +275,31 @@ func TestBrowseTagsDoesNotFlagACredentialWithNoNamespaceWhenTheRegistryRefusesIt
 	}
 }
 
+// Docker Hub answers a missing or private repository with 401 insufficient_scope after it issued a
+// token. The credential's sign-in works, so the refusal is the repository's: the answer says so,
+// and a credential with a namespace is not flagged (G-05-17a, D-07).
+func TestBrowseTagsSaysARepositoryIsUnavailableAndDoesNotFlagACredentialWhoseSignInWorks(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	reg := newFakeRegistry(t)
+	reg.tagsStatus = http.StatusUnauthorized
+	f.trusting(t, reg)
+	admin := f.asAdmin(t)
+	cred := f.storeCredential(t, admin, reg.credentialBody("fake-inst"))
+
+	rec := f.browse(t, admin, reg, "acme/app", "")
+	if rec.Code != http.StatusNotFound || problemType(t, rec) != "repository_unavailable" {
+		t.Fatalf("browse: %d %s, want 404 repository_unavailable", rec.Code, rec.Body)
+	}
+	errs := problemErrors(t, rec)
+	if errs["registry.host"] != reg.host() || errs["registry.repo"] != "acme/app" || errs["credential.id"] != cred.ID || errs["credential.name"] != "fake-inst" {
+		t.Errorf("errors = %v, want the registry, repository and credential named", errs)
+	}
+	var code string
+	if err := f.st.Read.QueryRow(`SELECT last_failure_code FROM registry_credentials WHERE id = ?`, cred.ID).Scan(&code); err != nil || code != "" {
+		t.Errorf("last failure code = %q, %v, want none: the credential's sign-in works", code, err)
+	}
+}
+
 func TestBrowseTagsMapsAMissingRepositoryAndAnUnparsableReference(t *testing.T) {
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)
