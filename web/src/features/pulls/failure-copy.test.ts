@@ -81,6 +81,15 @@ describe("failureCopy", () => {
       expect(failureCopy(t, code, base).action).toBeUndefined();
   });
 
+  it("words the masked plain-HTTP retry with the node and the registry, never as a node fault", () => {
+    const c = failureCopy(t, "registry_http_fallback", base);
+    expect(c.text).toBe(
+      "node-1 retried ghcr.io over plain HTTP, because the name resolves to a loopback address or is listed in insecure-registries, and that answer hid the real one. Check the name, the tag and the sign-in.",
+    );
+    expect(c.text).not.toContain("Check the node");
+    expect(c.action).toBeUndefined();
+  });
+
   it("gives an unknown code the generic sentence and never shows the code", () => {
     const c = failureCopy(t, "weird_new_code", base);
     expect(c.text).toBe("The pull failed on node-1. Check the node and try again.");

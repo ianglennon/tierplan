@@ -15,6 +15,7 @@ const FAILURE_KEYS: Record<string, string> = {
   registry_unreachable: "unreachable",
   registry_tls: "tls",
   registry_http: "http",
+  registry_http_fallback: "httpFallback",
   node_unreachable: "nodeUnreachable",
   host_read_only: "hostReadOnly",
   cancelled: "cancelled",

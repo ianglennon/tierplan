@@ -95,6 +95,7 @@
       "unreachable": "{{node}} couldn't reach {{host}}. Check its network, DNS and firewall.",
       "tls": "{{node}} doesn't trust the certificate from {{host}}. Its Docker daemon needs the registry's CA (certs.d) or an insecure-registries entry. See the docs.",
       "http": "{{host}} doesn't offer HTTPS, which Docker on {{node}} requires. Its Docker daemon needs an insecure-registries entry. See the docs.",
+      "httpFallback": "{{node}} retried {{host}} over plain HTTP, because the name resolves to a loopback address or is listed in insecure-registries, and that answer hid the real one. Check the name, the tag and the sign-in.",
       "nodeUnreachable": "{{node}} isn't reachable right now. Try again when it's back.",
       "hostReadOnly": "This host is read-only (set on the host).",
       "cancelled": "Cancelled before it finished on {{node}}.",

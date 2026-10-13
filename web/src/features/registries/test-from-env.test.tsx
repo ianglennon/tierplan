@@ -46,8 +46,12 @@ const passed: CredentialTestFromEnvResult = {
   ref: `${REPO}:latest`,
   testedAt: "2026-10-12T10:00:00Z",
 };
-const failed = (code: string): CredentialTestFromEnvResult => ({
+const failed = (
+  code: string,
+  over: Partial<CredentialTestFromEnvResult> = {},
+): CredentialTestFromEnvResult => ({
   ...passed,
+  ...over,
   state: "failed",
   code,
   digest: "",
@@ -188,7 +192,7 @@ describe("TestFromEnv", () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText("alpha can pull localhost:5000/private/app with this credential."),
+        screen.getByText("alpha can pull localhost:5000/private/app:latest with this credential."),
       ).toBeTruthy(),
     );
     expect(prepare).toHaveBeenCalledOnce();
@@ -262,47 +266,97 @@ describe("TestFromEnv", () => {
     expect(screen.getByRole("combobox").hasAttribute("disabled")).toBe(true);
   });
 
-  it("words a failure with the node, the repository and the mapped reason, never a code", async () => {
+  it("words a failure with the node, the ref it read and the mapped reason, never a code", async () => {
+    const lead = "alpha couldn't read localhost:5000/private/app:latest with this credential: ";
     const cases: [string, string][] = [
       [
         "pull_denied",
-        "alpha couldn't pull localhost:5000/private/app with this credential: localhost:5000 refused this credential for that repository. Check its scopes.",
+        "localhost:5000 refused this credential for that repository. Check its scopes.",
       ],
-      [
-        "pull_unauthorized",
-        "alpha couldn't pull localhost:5000/private/app with this credential: localhost:5000 refused this username and secret.",
-      ],
+      ["pull_unauthorized", "localhost:5000 refused this username and secret."],
       [
         "registry_unreachable",
-        "alpha couldn't pull localhost:5000/private/app with this credential: alpha couldn't reach localhost:5000. Check its network, DNS and firewall.",
+        "alpha couldn't reach localhost:5000. Check its network, DNS and firewall.",
       ],
       [
         "registry_tls",
-        "alpha couldn't pull localhost:5000/private/app with this credential: alpha doesn't trust the certificate from localhost:5000. Its Docker daemon needs the registry's CA (certs.d) or an insecure-registries entry. See the docs.",
+        "alpha doesn't trust the certificate from localhost:5000. Its Docker daemon needs the registry's CA (certs.d) or an insecure-registries entry. See the docs.",
       ],
+      [
+        "registry_http",
+        "localhost:5000 doesn't offer HTTPS, which Docker on alpha requires. Its Docker daemon needs an insecure-registries entry. See the docs.",
+      ],
+      ["rate_limited", "localhost:5000's pull limit was reached. Try again later."],
+      [
+        "invalid_reference",
+        "Docker on alpha doesn't accept localhost:5000/private/app:latest as an image reference.",
+      ],
+      ["cancelled", "Cancelled before it finished on alpha."],
       [
         "image_not_found",
-        "alpha couldn't pull localhost:5000/private/app with this credential: localhost:5000/private/app wasn't found on localhost:5000. Check the name and the tag.",
+        "localhost:5000 has no such repository, or no tag latest in it. Check both.",
       ],
       [
-        "node_unavailable",
-        "alpha couldn't pull localhost:5000/private/app with this credential: alpha isn't reachable right now. Try again when it's back.",
+        "pull_failed",
+        "Docker on alpha gave an answer Bayplan doesn't recognise. The server log has it.",
       ],
+      [
+        "registry_http_fallback",
+        "Docker on alpha retried localhost:5000 over plain HTTP, because the name resolves to a loopback address or is listed in insecure-registries, and that answer hid the real one. Check that the tag latest exists and that the sign-in works.",
+      ],
+      ["node_unavailable", "alpha isn't reachable right now. Try again when it's back."],
       [
         "something_new",
-        "alpha couldn't pull localhost:5000/private/app with this credential: The pull failed on alpha. Check the node and try again.",
+        "Docker on alpha gave an answer Bayplan doesn't recognise. The server log has it.",
       ],
     ];
-    for (const [code, text] of cases) {
+    for (const [code, reason] of cases) {
       cleanup();
       answer = () => Response.json(failed(code));
       mount();
       await open();
       await waitFor(() => expect(runButton().textContent).toBe("Run test from Lab"));
       fireEvent.click(runButton());
-      await waitFor(() => expect(screen.getByText(text)).toBeTruthy());
+      await waitFor(() => expect(screen.getByText(lead + reason)).toBeTruthy());
       expect(document.body.textContent).not.toContain(code);
+      expect(document.body.textContent).not.toContain("Check the node");
     }
+  });
+
+  it("names the tag it read for a registry that has no latest", async () => {
+    const ref = "dev.homelab.org.uk:5443/team/busybox:latest";
+    answer = () =>
+      Response.json(
+        failed("image_not_found", {
+          repository: "dev.homelab.org.uk:5443/team/busybox",
+          tag: "latest",
+          ref,
+        }),
+      );
+    mount();
+    await open();
+    await waitFor(() => expect(runButton().textContent).toBe("Run test from Lab"));
+    fireEvent.click(runButton());
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          `alpha couldn't read ${ref} with this credential: dev.homelab.org.uk:5443 has no such repository, or no tag latest in it. Check both.`,
+        ),
+      ).toBeTruthy(),
+    );
+  });
+
+  it("says which tag a passed check read", async () => {
+    answer = () => Response.json({ ...passed, tag: "1.36.1", ref: `${REPO}:1.36.1` });
+    mount();
+    await open();
+    await waitFor(() => expect(runButton().textContent).toBe("Run test from Lab"));
+    fireEvent.click(runButton());
+    await waitFor(() =>
+      expect(
+        screen.getByText("alpha can pull localhost:5000/private/app:1.36.1 with this credential."),
+      ).toBeTruthy(),
+    );
   });
 
   it("shows the agent-update notice for an agent too old for the check", async () => {

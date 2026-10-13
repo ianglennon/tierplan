@@ -50,23 +50,48 @@ interface TestFromEnvProps {
 const AGENT_TOO_OLD = "agent_policy_denied";
 // A node that did not answer is worded as the pull form words it.
 const NODE_GONE = "node_unavailable";
+// The codes this check words itself, because the pull form's sentence for them is about a
+// pull and a node, and a manifest check pulls nothing (G-05-4c).
+const OWN_REASONS = new Set([
+  "pull_denied",
+  "pull_unauthorized",
+  "image_not_found",
+  "pull_failed",
+  "registry_http_fallback",
+]);
+// The codes the pull form words well for a manifest check too, with the ref from the answer.
+const SHARED_REASONS = new Set([
+  "registry_unreachable",
+  "registry_tls",
+  "registry_http",
+  "rate_limited",
+  "invalid_reference",
+  "cancelled",
+]);
 
 // reasonOf is the mapped text for a failed code, in the words of UI-SPEC "Shared refusals and
 // failures". Nothing the registry or the engine said is ever in it: the server sends a code.
-function reasonOf(
-  t: ReturnType<typeof useT>,
-  result: CredentialTestFromEnvResult,
-  host: string,
-): string {
-  if (result.code === "pull_denied" || result.code === "pull_unauthorized") {
-    return t(`registries.test.fromEnv.reasons.${result.code}`, { host });
+function reasonOf(t: ReturnType<typeof useT>, result: CredentialTestFromEnvResult): string {
+  const host = registryHost(result.ref);
+  if (result.code === NODE_GONE) {
+    return failureCopy(t, "node_unreachable", {
+      credential: null,
+      ref: result.ref,
+      node: result.node,
+    }).text;
   }
-  const code = result.code === NODE_GONE ? "node_unreachable" : result.code;
-  return failureCopy(t, code, {
-    credential: null,
-    ref: result.repository,
+  if (SHARED_REASONS.has(result.code)) {
+    return failureCopy(t, result.code, { credential: null, ref: result.ref, node: result.node })
+      .text;
+  }
+  // A code this list does not know is worded as the check's pull_failed: never "check the node".
+  const code = OWN_REASONS.has(result.code) ? result.code : "pull_failed";
+  return t(`registries.test.fromEnv.reasons.${code}`, {
+    host,
     node: result.node,
-  }).text;
+    tag: result.tag,
+    repo: result.repository,
+  });
 }
 
 // TestFromEnv is the sheet's "Test from an environment…": a popover with an Environment
@@ -249,19 +274,14 @@ export function TestFromEnv({
             <AgentUpdateNotice envId={outcome.envId} />
           ) : null}
           {result && result.state === "passed" ? (
-            <p>
-              {t("registries.test.fromEnv.passed", {
-                node: result.node,
-                repo: result.repository,
-              })}
-            </p>
+            <p>{t("registries.test.fromEnv.passed", { node: result.node, ref: result.ref })}</p>
           ) : null}
           {result && result.state === "failed" && result.code !== AGENT_TOO_OLD ? (
             <p>
               {t("registries.test.fromEnv.failed", {
                 node: result.node,
-                repo: result.repository,
-                reason: reasonOf(t, result, registryHost(result.repository)),
+                ref: result.ref,
+                reason: reasonOf(t, result),
               })}
             </p>
           ) : null}

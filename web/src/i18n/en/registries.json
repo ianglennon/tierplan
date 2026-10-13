@@ -327,11 +327,14 @@
         "whereBefore": "a node of {{environment}}",
         "run": "Run test from {{environment}}",
         "pending": "Testing…",
-        "passed": "{{node}} can pull {{repo}} with this credential.",
-        "failed": "{{node}} couldn't pull {{repo}} with this credential: {{reason}}",
+        "passed": "{{node}} can pull {{ref}} with this credential.",
+        "failed": "{{node}} couldn't read {{ref}} with this credential: {{reason}}",
         "reasons": {
           "pull_denied": "{{host}} refused this credential for that repository. Check its scopes.",
-          "pull_unauthorized": "{{host}} refused this username and secret."
+          "pull_unauthorized": "{{host}} refused this username and secret.",
+          "image_not_found": "{{host}} has no such repository, or no tag {{tag}} in it. Check both.",
+          "pull_failed": "Docker on {{node}} gave an answer Bayplan doesn't recognise. The server log has it.",
+          "registry_http_fallback": "Docker on {{node}} retried {{host}} over plain HTTP, because the name resolves to a loopback address or is listed in insecure-registries, and that answer hid the real one. Check that the tag {{tag}} exists and that the sign-in works."
         }
       },
       "lastTest": "Last test",
