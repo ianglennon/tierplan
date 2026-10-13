@@ -4,6 +4,7 @@
     "toggleSidebar": "Toggle sidebar",
     "sidebar": {
       "title": "Navigation",
+      "close": "Close menu",
       "description": "Main navigation for Bayplan."
     },
     "switcher": {

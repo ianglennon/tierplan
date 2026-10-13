@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { Link, useParams } from "@tanstack/react-router";
+import { Link, useParams, useRouterState } from "@tanstack/react-router";
 import {
   Activity,
   Container,
@@ -13,9 +13,11 @@ import {
   Network,
   ScrollText,
   Settings,
+  X,
 } from "lucide-react";
-
+import { useEffect } from "react";
 import { EnvSwitcher } from "@/components/env-switcher";
+import { Button } from "@/components/ui/button";
 import {
   Sidebar,
   SidebarContent,
@@ -54,7 +56,15 @@ const RESOURCE_ITEMS = [
   { key: "events", perm: "environments.read", to: "/env/$envId/events", icon: Activity },
 ] as const;
 
-function ResourceItem({ envId, item }: { envId: string; item: (typeof RESOURCE_ITEMS)[number] }) {
+function ResourceItem({
+  envId,
+  item,
+  onNavigate,
+}: {
+  envId: string;
+  item: (typeof RESOURCE_ITEMS)[number];
+  onNavigate: () => void;
+}) {
   const t = useT();
   const allowed = usePermission(item.perm, envId);
   if (!allowed) return null;
@@ -66,6 +76,7 @@ function ResourceItem({ envId, item }: { envId: string; item: (typeof RESOURCE_I
         <Link
           to={item.to}
           params={{ envId }}
+          onClick={onNavigate}
           activeProps={{ "aria-current": "page", "data-active": true }}
         >
           <Icon aria-hidden="true" />
@@ -78,8 +89,19 @@ function ResourceItem({ envId, item }: { envId: string; item: (typeof RESOURCE_I
 
 export function AppSidebar() {
   const t = useT();
-  const { state, isMobile } = useSidebar();
+  const { state, isMobile, setOpenMobile } = useSidebar();
   const footerHere = isMobile || state === "expanded";
+  // The drawer closes when a page is chosen (G-05-7a): a link closes it on click, which
+  // also covers tapping the page you are already on, and a change of path closes it
+  // too, which covers the environment switcher and redirects.
+  const closeMenu = () => {
+    if (isMobile) setOpenMobile(false);
+  };
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  // biome-ignore lint/correctness/useExhaustiveDependencies: it runs when the path changes, and only then
+  useEffect(() => {
+    setOpenMobile(false);
+  }, [pathname]);
   // The selected environment's sections show while a route has one.
   const { envId } = useParams({ strict: false });
   // Settings shows when any of its tabs does: an instance admin's pages and the
@@ -103,8 +125,22 @@ export function AppSidebar() {
       mobileTitle={t("shell.sidebar.title")}
       mobileDescription={t("shell.sidebar.description")}
     >
-      <SidebarHeader className="h-12 justify-center border-b border-sidebar-border p-2">
-        <EnvSwitcher />
+      <SidebarHeader className="h-12 justify-center border-b border-sidebar-border p-2 max-md:h-14 max-md:flex-row max-md:items-center">
+        <div className="min-w-0 flex-1">
+          <EnvSwitcher />
+        </div>
+        {isMobile ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-11 shrink-0"
+            aria-label={t("shell.sidebar.close")}
+            onClick={() => setOpenMobile(false)}
+          >
+            <X aria-hidden="true" />
+          </Button>
+        ) : null}
       </SidebarHeader>
       <SidebarContent>
         {canOverview || canRegistries ? (
@@ -120,6 +156,7 @@ export function AppSidebar() {
                     >
                       <Link
                         to="/environments"
+                        onClick={closeMenu}
                         activeOptions={{ exact: true }}
                         activeProps={{ "aria-current": "page", "data-active": true }}
                       >
@@ -138,6 +175,7 @@ export function AppSidebar() {
                     >
                       <Link
                         to="/registries"
+                        onClick={closeMenu}
                         activeProps={{ "aria-current": "page", "data-active": true }}
                       >
                         <KeyRound aria-hidden="true" />
@@ -163,6 +201,7 @@ export function AppSidebar() {
                     <Link
                       to="/env/$envId"
                       params={{ envId }}
+                      onClick={closeMenu}
                       activeOptions={{ exact: true }}
                       activeProps={{ "aria-current": "page", "data-active": true }}
                     >
@@ -181,7 +220,7 @@ export function AppSidebar() {
             <SidebarGroupContent>
               <SidebarMenu>
                 {RESOURCE_ITEMS.map((item) => (
-                  <ResourceItem key={item.key} envId={envId} item={item} />
+                  <ResourceItem key={item.key} envId={envId} item={item} onNavigate={closeMenu} />
                 ))}
               </SidebarMenu>
             </SidebarGroupContent>
@@ -194,7 +233,11 @@ export function AppSidebar() {
             {canAudit ? (
               <SidebarMenuItem>
                 <SidebarMenuButton asChild tooltip={t("shell.nav.audit")} className="max-md:h-11">
-                  <Link to="/audit" activeProps={{ "aria-current": "page", "data-active": true }}>
+                  <Link
+                    to="/audit"
+                    onClick={closeMenu}
+                    activeProps={{ "aria-current": "page", "data-active": true }}
+                  >
                     <ScrollText aria-hidden="true" />
                     <span>{t("shell.nav.audit")}</span>
                   </Link>
@@ -210,6 +253,7 @@ export function AppSidebar() {
                 >
                   <Link
                     to="/settings"
+                    onClick={closeMenu}
                     activeProps={{ "aria-current": "page", "data-active": true }}
                   >
                     <Settings aria-hidden="true" />
