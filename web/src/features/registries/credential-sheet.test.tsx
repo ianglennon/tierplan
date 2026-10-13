@@ -193,6 +193,21 @@ const type = (name: string | RegExp, value: string) =>
 const choose = (name: string) => fireEvent.click(screen.getByRole("radio", { name }));
 const save = () => fireEvent.click(screen.getByRole("button", { name: "Save credential" }));
 
+// The failed-test warning sits inside the Test region and inside the FieldGroup, and the fieldset's
+// only child is the FieldGroup: an alert next to that inline-size container collapses its layout in
+// Chromium (G-05-4a), which jsdom cannot see, so the structure is pinned here and the layout in e2e.
+function expectWarningInsideTestSection(): void {
+  const warning = screen.getByText("The last test failed. You can still save this credential.");
+  const region = screen.getByRole("region", { name: "Test" });
+  expect(
+    within(region).getByText("The last test failed. You can still save this credential."),
+  ).toBe(warning);
+  expect(warning.closest('[data-slot="field-group"]')).toBeTruthy();
+  const fieldset = warning.closest("fieldset") as HTMLFieldSetElement;
+  expect(fieldset.children).toHaveLength(1);
+  expect(fieldset.children[0]?.getAttribute("data-slot")).toBe("field-group");
+}
+
 describe("CredentialSheet add mode", () => {
   it("opens with the type toggle, the fields in order and the explanation of the secret", async () => {
     mount();
@@ -1052,9 +1067,7 @@ describe("CredentialSheet test block", () => {
     expect(
       (await screen.findAllByText("docker.io refused this username and secret.")).length,
     ).toBeGreaterThan(0);
-    expect(
-      screen.getByText("The last test failed. You can still save this credential."),
-    ).toBeTruthy();
+    expectWarningInsideTestSection();
     expect(
       (screen.getByRole("button", { name: "Save credential" }) as HTMLButtonElement).disabled,
     ).toBe(false);
@@ -1211,9 +1224,7 @@ describe("CredentialSheet test block of a saved credential", () => {
     await screen.findByText("Edit ghcr-acme");
     const block = screen.getByRole("heading", { name: "Test" }).closest("section") as HTMLElement;
     expect(within(block).getByText("Failed")).toBeTruthy();
-    expect(
-      screen.getByText("The last test failed. You can still save this credential."),
-    ).toBeTruthy();
+    expectWarningInsideTestSection();
     expect(
       (screen.getByRole("button", { name: "Save changes" }) as HTMLButtonElement).disabled,
     ).toBe(false);

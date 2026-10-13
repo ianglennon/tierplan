@@ -287,6 +287,27 @@ export async function apiAs(
   });
 }
 
+// createCredentialAs stores a registry credential through the API as whoever the
+// context is signed in as, and returns its id and name. The body is the
+// CredentialRequest of POST /api/registries; an instance admin's credential is an
+// instance one.
+export async function createCredentialAs(
+  context: BrowserContext,
+  body: Record<string, unknown>,
+): Promise<{ id: string; name: string }> {
+  const res = await apiAs(context, "POST", "/api/registries", body);
+  expect(res.status(), `POST /api/registries: ${await res.text()}`).toBe(201);
+  const credential = (await res.json()) as { id: string; name: string };
+  return { id: credential.id, name: credential.name };
+}
+
+// deleteCredentialAs removes a credential through the API. A credential that is
+// already gone (404) is fine, so a cleanup in a finally block can run twice.
+export async function deleteCredentialAs(context: BrowserContext, id: string): Promise<void> {
+  const res = await apiAs(context, "DELETE", `/api/registries/${id}`);
+  expect([204, 404], `DELETE /api/registries/${id}`).toContain(res.status());
+}
+
 interface EnvironmentRow {
   id: string;
   name: string;

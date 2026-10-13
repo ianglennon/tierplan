@@ -1069,6 +1069,17 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
                     stale={stale}
                   />
                 ) : null}
+                {/* The warning lives inside the Test section, inside the FieldGroup. FieldGroup is
+                    an inline-size container (@container/field-group). A box that appears next to
+                    it in the same commit that grows its content (the TestResult) makes Chromium
+                    drop the layout of the whole FieldGroup, so every field vanishes (G-05-4a).
+                    New alerts therefore belong inside the container. A passing test has always
+                    grown the FieldGroup without harm. */}
+                {testFailed ? (
+                  <Alert variant="warning">
+                    <AlertDescription>{t("registries.test.warning")}</AlertDescription>
+                  </Alert>
+                ) : null}
               </section>
 
               <Collapsible
@@ -1157,11 +1168,6 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
                 </CollapsibleContent>
               </Collapsible>
             </FieldGroup>
-            {testFailed ? (
-              <Alert variant="warning" className="mt-4">
-                <AlertDescription>{t("registries.test.warning")}</AlertDescription>
-              </Alert>
-            ) : null}
           </fieldset>
         </form>
       </SheetFrame>
