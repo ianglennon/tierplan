@@ -43,7 +43,7 @@ export function GroupHeaderRow({
   const Chevron = expanded ? ChevronDown : ChevronRight;
   return (
     <TableRow data-slot="group-header-row" className="h-9 bg-muted hover:bg-muted max-md:h-11">
-      <TableCell colSpan={colSpan} className="px-1 py-0">
+      <TableCell colSpan={colSpan} className={cn("py-0", checkbox ? "ps-3 pe-1" : "px-1")}>
         <div className="flex min-w-0 items-center gap-2">
           {checkbox}
           <Button
