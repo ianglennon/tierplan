@@ -82,10 +82,26 @@ const REFUSED = {
   signedIn: ["failed", "sign_in_refused"],
   canPull: ["not_checked", ""],
 } as const;
+const UNTRUSTED = {
+  reachable: ["failed", "registry_tls"],
+  signedIn: ["not_checked", ""],
+  canPull: ["not_checked", ""],
+} as const;
+
 const REFUSED_SENTENCE = `${HOST} refused this username and secret.`;
 const WARNING = "The last test failed. You can still save this credential.";
 
-test("a failed test leaves the credential form on screen", async ({
+// closeSheet leaves the sheet the way a person does: Cancel, and Discard changes
+// when it asks.
+async function closeSheet(page: Page, dialog: Locator): Promise<void> {
+  if ((await dialog.count()) === 0) return;
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  const discard = page.getByRole("button", { name: "Discard changes", exact: true });
+  if (await discard.isVisible().catch(() => false)) await discard.click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+}
+
+test("a failed test, a refused save and a failed add leave the credential form on screen", async ({
   page,
   context,
 }, info) => {
@@ -125,6 +141,108 @@ test("a failed test leaves the credential form on screen", async ({
     await expect(edit.getByText(WARNING)).toBeVisible();
     await expectFormLaidOut(edit, ["Save changes", "Cancel"]);
     await unstubRefused();
+
+    // C: the certificate is not trusted (G-05-4b).
+    await edit.getByRole("button", { name: "Advanced", exact: true }).click();
+    const unstubUntrusted = await answerTest(page, UNTRUSTED);
+    await secret.fill("wrong-secret-2");
+    await edit.getByRole("button", { name: "Test credential", exact: true }).click();
+    await expect(
+      edit.getByText(
+        `The certificate from ${HOST} isn't trusted. Add the registry's CA under Advanced.`,
+        { exact: true },
+      ),
+    ).toBeVisible();
+    await expect(edit.getByText(WARNING)).toBeVisible();
+    await expectFormLaidOut(edit, ["Save changes", "Cancel"]);
+    await unstubUntrusted();
+
+    // D: a save the server refuses, with the refusal alert next to the fields.
+    const unstubPatch = await stub(
+      page,
+      "PATCH",
+      `/registries/${credential.id}`,
+      409,
+      "application/problem+json",
+      {
+        type: "credential_name_taken",
+        title: "Conflict",
+        status: 409,
+        errors: [{ location: "conflict.credential", message: "other" }],
+      },
+    );
+    await edit.getByRole("textbox", { name: "Name", exact: true }).fill(`${name}-b`);
+    await edit.getByRole("button", { name: "Save changes", exact: true }).click();
+    await expect(
+      edit.getByRole("alert").filter({ hasText: `A credential named ${name}-b already exists in` }),
+    ).toBeVisible();
+    await expectFormLaidOut(edit, ["Save changes", "Cancel"]);
+    await unstubPatch();
+    await closeSheet(page, edit);
+
+    // E: a failed test in the add sheet.
+    await page.getByRole("button", { name: "Add credential", exact: true }).first().click();
+    const add = page.getByRole("dialog", { name: "Add a registry credential" });
+    await expect(add).toBeVisible();
+    await add.getByRole("radio", { name: "Generic v2", exact: true }).click();
+    await add.getByRole("textbox", { name: "Name", exact: true }).fill(`${name}-add`);
+    await add.getByRole("textbox", { name: "Registry", exact: true }).fill(HOST);
+    await add.getByRole("textbox", { name: "Username", exact: true }).fill("bot");
+    await add.getByLabel("Secret", { exact: true }).fill(SECRET);
+    const unstubAddRefused = await answerTest(page, REFUSED);
+    await add.getByRole("button", { name: "Test credential", exact: true }).click();
+    await expect(add.getByText(REFUSED_SENTENCE, { exact: true })).toBeVisible();
+    await expect(add.getByText(WARNING)).toBeVisible();
+    await expectFormLaidOut(add, ["Save credential", "Cancel"]);
+    await unstubAddRefused();
+
+    // F: a test request that fails, so the sheet shows its own error alert.
+    const unstubFailing = await stub(
+      page,
+      "POST",
+      "/registries/test",
+      500,
+      "application/problem+json",
+      { title: "Internal Server Error", status: 500 },
+    );
+    await add.getByLabel("Secret", { exact: true }).fill(`${SECRET}-2`);
+    await add.getByRole("button", { name: "Test credential", exact: true }).click();
+    await expect(
+      add.getByRole("alert").filter({ hasText: "Couldn't run the test. Try again." }),
+    ).toBeVisible();
+    await expectFormLaidOut(add, ["Save credential", "Cancel"]);
+    await unstubFailing();
+
+    // G: Test from an environment. Its popover is portaled out of the sheet, so the
+    // sheet is checked with the popover open and again once it is closed.
+    const unstubFromEnv = await stub(
+      page,
+      "POST",
+      "/registries/test-from-env",
+      200,
+      "application/json",
+      {
+        nodeId: "e2e-node-id",
+        node: "e2e-node",
+        state: "failed",
+        code: "pull_unauthorized",
+        digest: "",
+        platforms: [],
+        repository: `${HOST}/acme/app:latest`,
+        testedAt: new Date().toISOString(),
+      },
+    );
+    await add.getByRole("textbox", { name: "Test repository (optional)" }).fill("acme/app");
+    await add.getByRole("button", { name: "Test from an environment…" }).click();
+    await page.getByRole("button", { name: /^Run test from / }).click();
+    const outcome = page.getByRole("status").filter({ hasText: "e2e-node" });
+    await expect(outcome).toBeVisible();
+    await expectFormLaidOut(add, ["Save credential", "Cancel"]);
+    await page.keyboard.press("Escape");
+    await expect(outcome).toHaveCount(0);
+    await expectFormLaidOut(add, ["Save credential", "Cancel"]);
+    await unstubFromEnv();
+    await closeSheet(page, add);
   } finally {
     await page.unrouteAll({ behavior: "ignoreErrors" });
     await deleteCredentialAs(context, credential.id);
