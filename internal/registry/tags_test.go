@@ -182,6 +182,23 @@ func TestListWordsAFailedSignInCheckByItsOwnReason(t *testing.T) {
 	}
 }
 
+// A registry that serves /v2/ to anyone and enforces access per repository passes a sign-in
+// check whatever the password is, so the check proves nothing there: a wrong password stays
+// login_refused instead of reading as the repository's refusal (WR-G01).
+func TestListKeepsLoginRefusedOnARegistryWhoseV2IsOpen(t *testing.T) {
+	f := newFakeRegistry(t, http.StatusUnauthorized)
+	f.open = true // GET /v2/ answers 200 with no challenge; the tag list needs the token
+	s := tagServiceFor(f)
+	_, err := s.List(context.Background(), f.cred("c1", "wrong"), f.ref(t, "acme/app"), "", true, 0)
+	if got := TagErrorCode(err); got != CodeLoginRefused {
+		t.Fatalf("wrong secret on an open /v2/: %v (%q), want login_refused", err, got)
+	}
+	// The right secret still lists.
+	if _, err := s.List(context.Background(), f.cred("c2", f.pass), f.ref(t, "acme/app"), "", true, 0); err != nil {
+		t.Fatalf("right secret on an open /v2/: %v", err)
+	}
+}
+
 func TestRefusalCodeChecksTheSignInOnlyForARefusalWithACredential(t *testing.T) {
 	refused := fmt.Errorf("wrapped: %w", errs.ErrHTTPUnauthorized)
 	pass := func() error { return nil }

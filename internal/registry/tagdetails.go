@@ -125,7 +125,7 @@ func (s *TagService) registryDetails(ctx context.Context, cred *ResolvedCredenti
 	c := s.clientFor(cred, r.Domain)
 	id := credIdentity(cred)
 	// One sign-in check serves the whole request, and runs only after a refusal (T-05-85).
-	signIn := sync.OnceValue(func() error { return c.Ping(ctx) })
+	signIn := sync.OnceValue(s.signInCheck(ctx, r.Domain, c))
 	var g errgroup.Group
 	g.SetLimit(detailsParallel)
 	for i, tag := range tags {

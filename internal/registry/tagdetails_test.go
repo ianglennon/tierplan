@@ -392,6 +392,17 @@ func TestDetailsOfARefusedRepositoryWithAWrongCredentialAreLoginRefused(t *testi
 	}
 }
 
+func TestDetailsWithAWrongCredentialOnARegistryWhoseV2IsOpenAreLoginRefused(t *testing.T) {
+	f := newFakeRegistry(t, http.StatusUnauthorized)
+	f.open = true
+	fi := newFakeImages(f)
+	multiArch(fi, "acme/app", "1.0")
+	got := tagServiceFor(f).Details(context.Background(), f.cred("c1", "wrong"), f.ref(t, "acme/app"), []string{"1.0"}, "amd64")
+	if got[0].Code != CodeLoginRefused {
+		t.Errorf("detail = %+v, want login_refused", got[0])
+	}
+}
+
 func TestDetailsOfARefusedRepositoryWithNoCredentialNeedALogin(t *testing.T) {
 	f := newFakeRegistry(t, http.StatusUnauthorized)
 	fi := newFakeImages(f)

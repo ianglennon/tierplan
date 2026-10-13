@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/regclient/regclient/types/errs"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -250,7 +251,7 @@ func (s *TagService) nameList(ctx context.Context, cred *ResolvedCredential, ref
 		// the credential. Check's reasoning tells them apart: if the sign-in itself works, the
 		// refusal is the repository's (Docker Hub answers a missing repository with 401
 		// insufficient_scope after issuing a token, G-05-17a).
-		code := refusalCode(err, cred != nil, func() error { return c.Ping(ctx) })
+		code := refusalCode(err, cred != nil, s.signInCheck(ctx, ref.Domain, c))
 		return nameList{}, &TagError{Code: code, Err: err}
 	}
 	l := sortNames(capNames(names))
@@ -319,6 +320,22 @@ func tagCode(err error, signedIn bool) string {
 		// Not a registry, a redirect, a timeout, a refused address and anything unforeseen
 		// all read the same to a person: the registry could not be reached.
 		return CodeRegistryUnreachable
+	}
+}
+
+// signInCheck is the sign-in check refusalCode runs for a call made on c. The check is only
+// evidence about the credential when the registry asked for a login at all: Check does the same
+// ("only when the anonymous probe says the registry asks"). A registry that serves /v2/ to anyone
+// and enforces access per repository (Nexus with anonymous access, for one) passes a Ping with
+// any password, so a passing Ping there would turn a wrong password into repository_unavailable
+// and hide it. For such a registry the check reports the refusal, keeping login_refused; a probe
+// that fails is no evidence either way, so the Ping decides.
+func (s *TagService) signInCheck(ctx context.Context, host string, c *Client) func() error {
+	return func() error {
+		if probe, err := s.clients.Anonymous(host).Probe(ctx); err == nil && !probe.AsksLogin && !probe.LoginUnknown {
+			return errs.ErrHTTPUnauthorized
+		}
+		return c.Ping(ctx)
 	}
 }
 
