@@ -8,7 +8,7 @@
 // automated guard that complements, and does not replace, a person looking at
 // the pages on a phone-sized browser (docs/release-checklist.md).
 
-import type { Locator, Page } from "@playwright/test";
+import type { BrowserContext, Locator, Page } from "@playwright/test";
 
 import { AUTH_STATE, at, ORIGIN, VIEWER_PASSWORD } from "./env";
 import {
@@ -179,33 +179,34 @@ test("a Viewer on a phone sees Registries, Volumes and Networks at the width of 
     username: "bot",
     secret: "e2e-throwaway-secret-1",
   });
-  dind(`docker volume create ${volume}`);
-
-  // The Viewer the access spec made: a retried spec makes viewer1-r1 as well, and
-  // only the last one is the user of the attempt that passed.
-  const res = await page.request.get(at("/api/users"));
-  expect(res.ok()).toBe(true);
-  const users = (await res.json()) as { username: string }[];
-  const viewerName = users
-    .map((u) => u.username)
-    .filter((u) => u.startsWith("viewer1"))
-    .sort()
-    .at(-1);
-  expect(viewerName, "the user the access spec created").toBeDefined();
-  if (!viewerName) return;
-
-  const context = await browser.newContext({
-    baseURL: ORIGIN,
-    ignoreHTTPSErrors: true,
-    storageState: { cookies: [], origins: [] },
-    locale: "en-GB",
-    timezoneId: "UTC",
-    viewport: { width: WIDTH, height: HEIGHT },
-    isMobile: true,
-    hasTouch: true,
-    deviceScaleFactor: 2,
-  });
+  let context: BrowserContext | undefined;
   try {
+    dind(`docker volume create ${volume}`);
+
+    // The Viewer the access spec made: a retried spec makes viewer1-r1 as well, and
+    // only the last one is the user of the attempt that passed.
+    const res = await page.request.get(at("/api/users"));
+    expect(res.ok()).toBe(true);
+    const users = (await res.json()) as { username: string }[];
+    const viewerName = users
+      .map((u) => u.username)
+      .filter((u) => u.startsWith("viewer1"))
+      .sort()
+      .at(-1);
+    expect(viewerName, "the user the access spec created").toBeDefined();
+    if (!viewerName) throw new Error("the access spec made no Viewer");
+
+    context = await browser.newContext({
+      baseURL: ORIGIN,
+      ignoreHTTPSErrors: true,
+      storageState: { cookies: [], origins: [] },
+      locale: "en-GB",
+      timezoneId: "UTC",
+      viewport: { width: WIDTH, height: HEIGHT },
+      isMobile: true,
+      hasTouch: true,
+      deviceScaleFactor: 2,
+    });
     const phone = await context.newPage();
     await trackPage(phone);
     await phone.goto(at("/login"));
@@ -276,7 +277,7 @@ test("a Viewer on a phone sees Registries, Volumes and Networks at the width of 
       await expectPhoneWidth(phone, `${list} list`);
     }
   } finally {
-    await context.close();
+    await context?.close();
     await deleteCredentialAs(page.context(), credential.id);
     try {
       dind(`docker volume rm ${volume}`);
