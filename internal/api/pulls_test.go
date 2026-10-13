@@ -364,6 +364,7 @@ func TestAFailedPullIsMappedToACodeAuditedAndNeverRetried(t *testing.T) {
 		{"denied", dockertest.FakeConfig{PullStatus: dockertest.FakePullStatus{Code: 403, Message: "denied: secret-registry-body-A"}}, "pull_denied"},
 		{"not found", dockertest.FakeConfig{PullStatus: dockertest.FakePullStatus{Code: 404, Message: "manifest unknown secret-registry-body-B"}}, "image_not_found"},
 		{"in the stream", dockertest.FakeConfig{PullStreamError: "layer exploded secret-registry-body-C"}, "pull_failed"},
+		{"plain-HTTP retry", dockertest.FakeConfig{PullStatus: dockertest.FakePullStatus{Code: 500, Message: "unknown: Client sent an HTTP request to an HTTPS server. secret-registry-body-D"}}, "registry_http_fallback"},
 		{"policy", dockertest.FakeConfig{PullStatus: dockertest.FakePullStatus{Code: 403, Message: "agent_policy_denied: POST /v1.52/images/create"}}, "agent_policy_denied"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

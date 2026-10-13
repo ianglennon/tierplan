@@ -1993,6 +1993,7 @@ func TestATestFromAnEnvironmentNamesTheNodeAndTheCodeWhenItCannotPull(t *testing
 		{"missing", dockertest.FakePullStatus{Code: 404, Message: "manifest unknown"}, "image_not_found"},
 		{"unreachable", dockertest.FakePullStatus{Code: 500, Message: "lookup localhost: no such host"}, "registry_unreachable"},
 		{"certificate", dockertest.FakePullStatus{Code: 500, Message: "x509: certificate signed by unknown authority"}, "registry_tls"},
+		{"plain-HTTP retry hid the answer", dockertest.FakePullStatus{Code: 500, Message: "unknown: Client sent an HTTP request to an HTTPS server."}, "registry_http_fallback"},
 		{"an agent too old for the route", dockertest.FakePullStatus{Code: 403, Message: "agent_policy_denied: GET /distribution/localhost:5000/private/app:latest/json"}, "agent_policy_denied"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2009,7 +2010,8 @@ func TestATestFromAnEnvironmentNamesTheNodeAndTheCodeWhenItCannotPull(t *testing
 			if res.State != "failed" || res.Code != tc.want || res.Node != "alpha" || res.NodeID != node.id || res.Digest != "" {
 				t.Errorf("result = %+v, want failed %s on alpha", res, tc.want)
 			}
-			if strings.Contains(rec.Body.String(), "manifests/latest") || strings.Contains(rec.Body.String(), "x509") {
+			if strings.Contains(rec.Body.String(), "manifests/latest") || strings.Contains(rec.Body.String(), "x509") ||
+				strings.Contains(rec.Body.String(), "HTTPS server") {
 				t.Errorf("the answer carries text from the engine: %s", rec.Body)
 			}
 			var reason, result string

@@ -102,6 +102,7 @@ func TestImagePullFailuresAreClassified(t *testing.T) {
 		{"500 no such host", dockertest.FakeConfig{PullStatus: dockertest.FakePullStatus{Code: 500, Message: "Get \"https://reg.example/v2/\": dial tcp: lookup reg.example: no such host"}}, dockerx.PullCodeRegistryUnreachable, ""},
 		{"500 tls", dockertest.FakeConfig{PullStatus: dockertest.FakePullStatus{Code: 500, Message: "x509: certificate signed by unknown authority"}}, dockerx.PullCodeRegistryTLS, ""},
 		{"500 http", dockertest.FakeConfig{PullStatus: dockertest.FakePullStatus{Code: 500, Message: "http: server gave HTTP response to HTTPS client"}}, dockerx.PullCodeRegistryHTTP, ""},
+		{"500 plain-HTTP retry", dockertest.FakeConfig{PullStatus: dockertest.FakePullStatus{Code: 500, Message: "unknown: Client sent an HTTP request to an HTTPS server."}}, dockerx.PullCodeRegistryHTTPFallback, ""},
 		{"500 other", dockertest.FakeConfig{PullStatus: dockertest.FakePullStatus{Code: 500, Message: "boom"}}, dockerx.PullCodeFailed, ""},
 		{"in-stream error", dockertest.FakeConfig{PullStreamError: "layer exploded"}, dockerx.PullCodeFailed, "layer exploded"},
 	} {
