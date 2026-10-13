@@ -22,6 +22,12 @@ const (
 	// registryHost is how every node reaches its registry: dind trusts a
 	// 127.0.0.0/8 registry over plain HTTP by default.
 	registryHost = "localhost:5000"
+	// swarmRegistryHost is how every swarm node reaches the ingress-published
+	// registry. It is the IPv4 loopback, not "localhost": Engine 24's routing mesh
+	// answers 127.0.0.1:5000 but leaves [::1]:5000 hanging, and its daemon dials
+	// "localhost" as ::1, so a push or login there times out. 127.0.0.0/8 is still
+	// trusted over plain HTTP by default.
+	swarmRegistryHost = "127.0.0.1:5000"
 
 	registryName = "bp-registry"
 	registryDir  = "/tmp/bp-registry"
@@ -130,8 +136,8 @@ func StartRegistry(t testing.TB, node *Node, o RegistryOptions) string {
 }
 
 // StartSwarmRegistry runs a one-replica registry:2 service with port 5000
-// published through the ingress mesh, so every node reaches it at localhost:5000,
-// and waits until every node does.
+// published through the ingress mesh, so every node reaches it at 127.0.0.1:5000
+// (swarmRegistryHost), and waits until every node does.
 func StartSwarmRegistry(t testing.TB, s *Swarm, o RegistryOptions) string {
 	t.Helper()
 	LoadImage(t, RegistryImage, s.Nodes()...)
@@ -168,7 +174,7 @@ func StartSwarmRegistry(t testing.TB, s *Swarm, o RegistryOptions) string {
 			return registryUp(ctx, n, o)
 		})
 	}
-	return registryHost
+	return swarmRegistryHost
 }
 
 // PushImage copies src (from this machine's engine, pulled there first when it is
@@ -221,7 +227,7 @@ func Logout(t testing.TB, node *Node) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	if out, err := node.Sh(ctx, "docker logout "+registryHost+" >/dev/null 2>&1; rm -f \"$HOME/.docker/config.json\""); err != nil {
+	if out, err := node.Sh(ctx, "docker logout "+registryHost+" >/dev/null 2>&1; docker logout "+swarmRegistryHost+" >/dev/null 2>&1; rm -f \"$HOME/.docker/config.json\""); err != nil {
 		t.Fatalf("sign out on %s: %v\n%s", node.Hostname, err, out)
 	}
 }
