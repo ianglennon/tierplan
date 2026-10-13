@@ -118,6 +118,8 @@ export function TagBrowser({
     [query.data],
   );
   const { visible, observe } = useVisibleRows();
+  // The picker's one tab stop: the row that last had focus, else the chosen one, else the first.
+  const [active, setActive] = useState<string | null>(null);
   const { ordered: tags, detailOf } = useTagDetails({
     repo,
     envId,
@@ -134,6 +136,9 @@ export function TagBrowser({
       return next;
     });
   }
+
+  const names = tags.map((tag) => tag.name);
+  const tabStop = [active, selected].find((n) => n != null && names.includes(n)) ?? names[0];
 
   const hidden = first?.hidden ?? 0;
   let body: ReactNode;
@@ -157,7 +162,11 @@ export function TagBrowser({
   } else {
     body = (
       <div className={cn("overflow-x-auto", picker && "max-h-80 overflow-y-auto")}>
-        <Table aria-label={t("tags.table.label", { repo: first?.repo ?? repo })}>
+        <Table
+          // The picker is a grid of selectable rows; the full list is a plain table.
+          role={picker ? "grid" : undefined}
+          aria-label={t("tags.table.label", { repo: first?.repo ?? repo })}
+        >
           <TableHeader>
             <TableRow>
               {picker ? null : <TableHead className="w-10" />}
@@ -196,6 +205,8 @@ export function TagBrowser({
                     variant={variant}
                     selected={picker && selected === tag.name}
                     onSelect={onSelect}
+                    tabStop={picker && tag.name === tabStop}
+                    onActive={picker ? setActive : undefined}
                     showRunning={showRunning}
                     envId={envId}
                     envName={envName}

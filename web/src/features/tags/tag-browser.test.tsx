@@ -1241,6 +1241,36 @@ describe("TagBrowser picker", () => {
 
   it("is at most 320px tall with its own scroll", async () => {
     await pick();
-    expect(screen.getByRole("table").closest(".max-h-80")).toBeTruthy();
+    expect(screen.getByRole("grid").closest(".max-h-80")).toBeTruthy();
+  });
+
+  it("is a grid of rows with one tab stop, which follows focus (WR-C04)", async () => {
+    await pick();
+    expect(screen.queryByRole("table")).toBeNull();
+    const rows = pickerRows();
+    expect(rows.map((r) => r.getAttribute("tabindex"))).toEqual(["0", "-1", "-1"]);
+    rows[1]?.focus();
+    await waitFor(() =>
+      expect(pickerRows().map((r) => r.getAttribute("tabindex"))).toEqual(["-1", "0", "-1"]),
+    );
+    fireEvent.keyDown(rows[1] as HTMLElement, { key: "End" });
+    await waitFor(() =>
+      expect(pickerRows().map((r) => r.getAttribute("tabindex"))).toEqual(["-1", "-1", "0"]),
+    );
+  });
+
+  it("starts the tab stop on the chosen row", async () => {
+    await pick({ selected: "v1.9.2" });
+    expect(pickerRows().map((r) => r.getAttribute("tabindex"))).toEqual(["-1", "0", "-1"]);
+  });
+
+  it("keeps the full list a plain table whose rows are not focusable or selectable", async () => {
+    mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" />);
+    await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
+    expect(screen.queryByRole("grid")).toBeNull();
+    for (const row of screen.getAllByRole("row")) {
+      expect(row.hasAttribute("aria-selected")).toBe(false);
+      expect(row.hasAttribute("tabindex")).toBe(false);
+    }
   });
 });

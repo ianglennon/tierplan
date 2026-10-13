@@ -34,6 +34,10 @@ interface TagRowProps {
   // Picker only: whether this is the tag chosen, and what choosing one does.
   selected?: boolean;
   onSelect?: (tag: string) => void;
+  // Picker only: whether this row is the table's one tab stop (roving tabindex), and the report
+  // that it took focus, which moves the tab stop to it.
+  tabStop?: boolean;
+  onActive?: (tag: string) => void;
   // Full only: draw the Running in cell, which the Registries page has and an environment
   // does not.
   showRunning?: boolean;
@@ -81,6 +85,8 @@ export function TagRow({
   variant,
   selected,
   onSelect,
+  tabStop,
+  onActive,
   showRunning,
   envId,
   envName,
@@ -95,8 +101,10 @@ export function TagRow({
   const picker = variant === "picker";
   const k = known(tag, detail);
 
-  // The picker is a listbox: Enter or Space chooses the row, the arrow keys move between rows
-  // and Home and End jump to the first and last. Typing in the filter never moves focus here.
+  // The picker is a grid (role="grid" on its table, rows keep their own role): Enter or Space
+  // chooses the row, the arrow keys move between rows and Home and End jump to the first and
+  // last. Only one row is in the tab order at a time (roving tabindex), so Tab leaves the list
+  // instead of walking up to 100 rows. Typing in the filter never moves focus here.
   function onKeyDown(e: KeyboardEvent<HTMLTableRowElement>) {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
@@ -164,7 +172,8 @@ export function TagRow({
       ref={rowRef}
       data-tag={tag.name}
       aria-selected={picker ? Boolean(selected) : undefined}
-      tabIndex={picker ? 0 : undefined}
+      tabIndex={picker ? (tabStop ? 0 : -1) : undefined}
+      onFocus={picker ? () => onActive?.(tag.name) : undefined}
       onClick={picker ? () => onSelect?.(tag.name) : undefined}
       onKeyDown={picker ? onKeyDown : undefined}
       className={cn("h-9", picker && "cursor-pointer")}

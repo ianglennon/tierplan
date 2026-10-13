@@ -875,7 +875,7 @@ describe("PullDialog (Browse tags)", () => {
         .getAllByRole("columnheader")
         .map((h) => h.textContent),
     ).toEqual(["Tag", "Created", "Platforms"]);
-    expect(within(dialog).getByRole("table").closest(".max-h-80")).toBeTruthy();
+    expect(within(dialog).getByRole("grid").closest(".max-h-80")).toBeTruthy();
   });
 
   it("writes the chosen tag into the field and updates the credential preview", async () => {
