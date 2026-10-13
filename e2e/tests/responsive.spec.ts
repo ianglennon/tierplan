@@ -214,9 +214,44 @@ test("a Viewer on a phone sees Registries, Volumes and Networks at the width of 
     await phone.getByRole("button", { name: "Sign in" }).click();
     await expect(phone.getByRole("button", { name: "User menu" })).toBeVisible();
 
-    await phone.goto(at("/registries"));
+    // The main menu: 18rem wide with the page visible beside it, a Close menu
+    // button, closing when a page is chosen, and closing on a tap beside it
+    // (G-05-7a, D-09).
+    const toggle = phone.getByRole("button", { name: "Toggle sidebar" });
+    const menu = phone.getByRole("dialog", { name: "Navigation" });
+    const openMenu = async (what: string): Promise<void> => {
+      await toggle.click();
+      await expect(menu, what).toBeVisible();
+      // The drawer slides in; a box measured meanwhile is off to one side.
+      await menu.evaluate(async (el) => {
+        await Promise.all(el.getAnimations().map((a) => a.finished));
+      });
+    };
+    const expectNarrowMenu = async (what: string): Promise<void> => {
+      const box = await menu.boundingBox();
+      expect(box, `${what}: the menu has a box`).not.toBeNull();
+      expect(box?.width ?? 0, `${what}: the menu is 18rem wide at most`).toBeLessThanOrEqual(288.5);
+      expect((box?.x ?? 0) + (box?.width ?? 0), `${what}: the page shows beside it`).toBeLessThan(
+        WIDTH,
+      );
+    };
+
+    await openMenu("the menu opens");
+    await expectNarrowMenu("before Registries");
+    await menu.getByRole("button", { name: "Close menu" }).click();
+    await expect(menu).toBeHidden();
+
+    await openMenu("the menu opens again");
+    await menu.getByRole("link", { name: "Registries", exact: true }).click();
+    await expect(phone).toHaveURL(/\/bayplan\/registries/);
+    await expect(menu).toBeHidden();
     await expect(phone.getByRole("button", { name: `Actions for ${name}` })).toBeVisible();
     await expectPhoneWidth(phone, "Registries");
+
+    await openMenu("the menu opens on Registries");
+    await expectNarrowMenu("on Registries");
+    await phone.touchscreen.tap(360, 400);
+    await expect(menu).toBeHidden();
 
     await phone.getByRole("button", { name: `Actions for ${name}` }).click();
     await phone.getByRole("menuitem", { name: "View details" }).click();
