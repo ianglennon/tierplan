@@ -228,7 +228,9 @@ test("a failed test, a refused save and a failed add leave the credential form o
         code: "pull_unauthorized",
         digest: "",
         platforms: [],
-        repository: `${HOST}/acme/app:latest`,
+        repository: `${HOST}/acme/app`,
+        tag: "latest",
+        ref: `${HOST}/acme/app:latest`,
         testedAt: new Date().toISOString(),
       },
     );
