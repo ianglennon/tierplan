@@ -140,19 +140,6 @@ func (f *fakeRegistry) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// requests is how many requests the registry has been sent for a path.
-func (f *fakeRegistry) requests(path string) int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	n := 0
-	for _, p := range f.paths {
-		if p == path {
-			n++
-		}
-	}
-	return n
-}
-
 // tagRequests is how many tag lists the registry has been asked for.
 func (f *fakeRegistry) tagRequests() int {
 	f.mu.Lock()

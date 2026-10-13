@@ -485,6 +485,35 @@ func TestBrowseTagDetailsGiveTheDigestDateAndPlatformsOfTheTagsAsked(t *testing.
 	}
 }
 
+// Tag details follow the listing's rule: manifests the registry refuses although the sign-in works
+// read repository_unavailable, and nothing is recorded against a credential with a namespace
+// (G-05-17a, D-07).
+func TestBrowseTagDetailsOfARepositoryTheRegistryRefusesAreUnavailableAndDoNotFlagTheCredential(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	reg := newFakeRegistry(t)
+	reg.extra = func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="`+reg.srv.URL+`/token",service="fake",scope="repository:acme/app:pull"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	}
+	f.trusting(t, reg)
+	admin := f.asAdmin(t)
+	cred := f.storeCredential(t, admin, reg.credentialBody("fake-inst"))
+
+	rec := f.details(t, admin, reg, "acme/app", "", "1.0", "2.0")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("details: %d %s", rec.Code, rec.Body)
+	}
+	for _, it := range decodeRec[tagDetailsResp](t, rec).Items {
+		if it.Code != "repository_unavailable" {
+			t.Errorf("%s = %+v, want repository_unavailable", it.Tag, it)
+		}
+	}
+	var code string
+	if err := f.st.Read.QueryRow(`SELECT last_failure_code FROM registry_credentials WHERE id = ?`, cred.ID).Scan(&code); err != nil || code != "" {
+		t.Errorf("last failure code = %q, %v, want none: the credential's sign-in works", code, err)
+	}
+}
+
 func TestBrowseTagDetailsRefusesZeroTagsMoreThan25AndAnUnparsableReference(t *testing.T) {
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -41,6 +42,9 @@ type fakeImages struct {
 	requests  []string                // "METHOD kind ref"
 	failBlobs bool
 	delay     time.Duration
+	// refuse answers every manifest and blob request that carries the issued token with a 401
+	// challenge, the way Docker Hub answers a repository it hides.
+	refuse bool
 
 	inflight, maxInflight int
 }
@@ -125,6 +129,10 @@ func (fi *fakeImages) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Header.Get("Authorization") != "Bearer good" {
+		fi.f.challenge(w, "repository:"+repo+":pull")
+		return
+	}
+	if fi.refuse {
 		fi.f.challenge(w, "repository:"+repo+":pull")
 		return
 	}
@@ -345,6 +353,52 @@ func TestDetailsNameATagTheRegistryDoesNotHave(t *testing.T) {
 	got := tagServiceFor(f).Details(context.Background(), f.cred("c1", f.pass), f.ref(t, "acme/app"), []string{"1.0", "gone"}, "amd64")
 	if got[0].Code != "" || got[1].Code != CodeTagNotFound || got[1].Tag != "gone" || got[1].Digest != "" {
 		t.Errorf("details = %+v, want 1.0 fine and gone tag_not_found", got)
+	}
+}
+
+// A refusal after a working sign-in is the repository's, decided with one sign-in check for the
+// whole request; a credential the token endpoint refuses is still login_refused (G-05-17a).
+func TestDetailsOfARefusedRepositoryAreUnavailableWithOneSignInCheck(t *testing.T) {
+	f := newFakeRegistry(t, http.StatusUnauthorized)
+	fi := newFakeImages(f)
+	fi.refuse = true
+	var checks atomic.Int32
+	f.signedInV2 = func(w http.ResponseWriter, _ *http.Request) {
+		checks.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}
+	tags := []string{"1.0", "2.0", "3.0"}
+	got := tagServiceFor(f).Details(context.Background(), f.cred("c1", f.pass), f.ref(t, "acme/app"), tags, "amd64")
+	for _, d := range got {
+		if d.Code != CodeRepositoryUnavailable || d.Digest != "" {
+			t.Errorf("detail = %+v, want repository_unavailable", d)
+		}
+	}
+	if n := checks.Load(); n != 1 {
+		t.Errorf("sign-in checks = %d, want exactly one for the request", n)
+	}
+}
+
+func TestDetailsOfARefusedRepositoryWithAWrongCredentialAreLoginRefused(t *testing.T) {
+	f := newFakeRegistry(t, http.StatusUnauthorized)
+	fi := newFakeImages(f)
+	fi.refuse = true
+	multiArch(fi, "acme/app", "1.0")
+	got := tagServiceFor(f).Details(context.Background(), f.cred("c1", "wrong"), f.ref(t, "acme/app"), []string{"1.0", "2.0", "gone"}, "amd64")
+	for _, d := range got {
+		if d.Code != CodeLoginRefused {
+			t.Errorf("detail = %+v, want login_refused", d)
+		}
+	}
+}
+
+func TestDetailsOfARefusedRepositoryWithNoCredentialNeedALogin(t *testing.T) {
+	f := newFakeRegistry(t, http.StatusUnauthorized)
+	fi := newFakeImages(f)
+	fi.refuse = true
+	got := tagServiceFor(f).Details(context.Background(), nil, f.ref(t, "acme/app"), []string{"1.0"}, "amd64")
+	if got[0].Code != CodeNeedsLogin {
+		t.Errorf("detail = %+v, want needs_login", got[0])
 	}
 }
 

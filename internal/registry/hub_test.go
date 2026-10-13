@@ -54,6 +54,8 @@ type fakeHub struct {
 	// limited429 is how many of the first API calls are answered 429, or every call when
 	// negative.
 	limited429 int
+	// denyStatus answers every API call other than the token request, when it is not zero.
+	denyStatus int
 	retryAfter string
 	calls      int
 }
@@ -100,7 +102,12 @@ func (h *fakeHub) serve(w http.ResponseWriter, r *http.Request) {
 	limited := h.limited429 < 0 || h.calls <= h.limited429
 	retry := h.retryAfter
 	private := h.private
+	deny := h.denyStatus
 	h.mu.Unlock()
+	if deny != 0 {
+		w.WriteHeader(deny)
+		return
+	}
 	if limited {
 		if retry != "" {
 			w.Header().Set("Retry-After", retry)
@@ -405,5 +412,52 @@ func TestHubKeepsWhatACredentialSawAwayFromAnonymousCalls(t *testing.T) {
 	got := s.Details(context.Background(), nil, hubRef(t), []string{"t0"}, "amd64")[0]
 	if got.Digest != "" || got.Created != nil || got.Code == "" {
 		t.Errorf("anonymous details = %+v, want nothing from the credential's cache", got)
+	}
+}
+
+// A denial from the API after the token was issued is the repository's, as Docker Hub hides
+// whether a repository exists; a refused token is the credential's (G-05-17a).
+func TestHubDetailsReadARepositoryDeniedAfterTheTokenWasIssuedAsUnavailable(t *testing.T) {
+	cred := &ResolvedCredential{
+		Candidate:   Candidate{ID: "c1", Layer: LayerInstance},
+		HostOptions: HostOptions{Host: "docker.io", Username: "ana", Password: "pat"},
+		UpdatedAt:   tagsT0,
+	}
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			h := newFakeHub(t)
+			h.denyStatus = status
+			s := hubService(t, h)
+			for _, d := range s.Details(context.Background(), cred, hubRef(t), []string{"t0", "t1"}, "amd64") {
+				if d.Code != CodeRepositoryUnavailable {
+					t.Errorf("detail = %+v, want repository_unavailable", d)
+				}
+			}
+			if n := len(h.bodies); n != 1 {
+				t.Errorf("token requests = %d, want one", n)
+			}
+		})
+	}
+}
+
+func TestHubDetailsReadARefusedTokenAsLoginRefusedAndAnAnonymousDenialAsNeedsLogin(t *testing.T) {
+	cred := &ResolvedCredential{
+		Candidate:   Candidate{ID: "c1", Layer: LayerInstance},
+		HostOptions: HostOptions{Host: "docker.io", Username: "ana", Password: "bad"},
+		UpdatedAt:   tagsT0,
+	}
+	h := newFakeHub(t)
+	h.tokenStatus = http.StatusUnauthorized
+	s := hubService(t, h)
+	for _, d := range s.Details(context.Background(), cred, hubRef(t), []string{"t0", "t1"}, "amd64") {
+		if d.Code != CodeLoginRefused {
+			t.Errorf("refused token: %+v, want login_refused", d)
+		}
+	}
+	h = newFakeHub(t)
+	h.denyStatus = http.StatusUnauthorized
+	s = hubService(t, h)
+	if d := s.Details(context.Background(), nil, hubRef(t), []string{"t0"}, "amd64")[0]; d.Code != CodeNeedsLogin {
+		t.Errorf("anonymous denial: %+v, want needs_login", d)
 	}
 }

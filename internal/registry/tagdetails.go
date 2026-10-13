@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -123,11 +124,13 @@ func (s *TagService) registryDetails(ctx context.Context, cred *ResolvedCredenti
 	out := make([]TagDetail, len(tags))
 	c := s.clientFor(cred, r.Domain)
 	id := credIdentity(cred)
+	// One sign-in check serves the whole request, and runs only after a refusal (T-05-85).
+	signIn := sync.OnceValue(func() error { return c.Ping(ctx) })
 	var g errgroup.Group
 	g.SetLimit(detailsParallel)
 	for i, tag := range tags {
 		g.Go(func() error {
-			out[i] = s.oneDetail(ctx, c, id, cred != nil, r, tag, preferArch)
+			out[i] = s.oneDetail(ctx, c, id, cred != nil, signIn, r, tag, preferArch)
 			return nil
 		})
 	}
@@ -136,14 +139,14 @@ func (s *TagService) registryDetails(ctx context.Context, cred *ResolvedCredenti
 }
 
 // oneDetail reads one tag, from the caches where they hold it.
-func (s *TagService) oneDetail(ctx context.Context, c *Client, id string, signedIn bool, r Ref, tag, preferArch string) TagDetail {
+func (s *TagService) oneDetail(ctx context.Context, c *Client, id string, signedIn bool, signIn func() error, r Ref, tag, preferArch string) TagDetail {
 	d := TagDetail{Tag: tag}
 	hk := headKey{cred: id, host: r.Domain, repo: r.Path, tag: tag}
 	digest, ok := s.heads.Get(hk)
 	if !ok {
 		var err error
 		if digest, err = c.ManifestDigest(ctx, r.Path, tag); err != nil {
-			d.Code = detailCode(err, signedIn)
+			d.Code = detailCode(err, signedIn, signIn)
 			return d
 		}
 		s.heads.Put(hk, digest, headTTL)
@@ -157,7 +160,7 @@ func (s *TagService) oneDetail(ctx context.Context, c *Client, id string, signed
 			return c.Inspect(ctx, r.Path, digest, preferArch)
 		})
 		if err != nil {
-			d.Code = detailCode(err, signedIn)
+			d.Code = detailCode(err, signedIn, signIn)
 			return d
 		}
 		in := v.(Inspected) //nolint:errcheck,forcetypeassert // Inspect is the only thing the group runs
@@ -173,12 +176,12 @@ func (s *TagService) oneDetail(ctx context.Context, c *Client, id string, signed
 }
 
 // detailCode words a failed read of one tag: a tag the registry does not have is its own
-// code, everything else reads as it does for a listing.
-func detailCode(err error, signedIn bool) string {
+// code, everything else reads as it does for a listing, a refusal being told apart by signIn.
+func detailCode(err error, signedIn bool, signIn func() error) string {
 	if classify(err) == CodeRepositoryNotFound {
 		return CodeTagNotFound
 	}
-	return tagCode(err, signedIn)
+	return refusalCode(err, signedIn, signIn)
 }
 
 // clientFor returns the client a call with cred makes its requests with.

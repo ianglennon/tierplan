@@ -166,8 +166,12 @@ func TestListWordsAFailedSignInCheckByItsOwnReason(t *testing.T) {
 	f.tagsStatus = http.StatusUnauthorized
 	f.signedInV2 = func(w http.ResponseWriter, r *http.Request) {
 		// The connection drops: the registry cannot be reached for the check.
-		conn, _, err := w.(http.Hijacker).Hijack()
-		if err == nil {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Error("the fake cannot drop the connection")
+			return
+		}
+		if conn, _, err := hj.Hijack(); err == nil {
 			_ = conn.Close()
 		}
 	}

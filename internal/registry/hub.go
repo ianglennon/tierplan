@@ -315,6 +315,17 @@ func hubCode(err error, signedIn bool) string {
 	return tagCode(err, signedIn)
 }
 
+// hubCodeAfterSignIn is hubCode for a call made with a token the credential was just issued. A
+// denial then is the repository's, not the credential's, because the token endpoint accepted the
+// credential: Docker Hub hides whether a repository exists behind the same denial (G-05-17a). An
+// anonymous call has no sign-in to vouch for it and keeps needs_login.
+func hubCodeAfterSignIn(err error, signedIn bool) string {
+	if signedIn && errors.Is(err, errHubDenied) {
+		return CodeRepositoryUnavailable
+	}
+	return hubCode(err, signedIn)
+}
+
 // hubNames reads the newest tags of a Docker Hub repository for the name cache. A failure is
 // returned as it is; the caller decides whether the registry path should answer instead.
 func (s *TagService) hubNames(ctx context.Context, cred *ResolvedCredential, r Ref) (nameList, error) {
@@ -341,7 +352,8 @@ func (s *TagService) hubNames(ctx context.Context, cred *ResolvedCredential, r R
 
 // hubDetails answers the details of tags of a Docker Hub repository from what the listing
 // read and, for a tag it did not, from the API's tag endpoint. It sends no request to the
-// registry, so it costs no pulls (T-05-61).
+// registry, so it costs no pulls (T-05-61). A refused token is login_refused; an API denial
+// after the token was issued is repository_unavailable.
 func (s *TagService) hubDetails(ctx context.Context, cred *ResolvedCredential, r Ref, tags []string) []TagDetail {
 	out := make([]TagDetail, len(tags))
 	id := credIdentity(cred)
@@ -362,11 +374,14 @@ func (s *TagService) hubDetails(ctx context.Context, cred *ResolvedCredential, r
 			t, ok := s.hubTags.Get(hubKey{cred: id, repo: r.Path, tag: name})
 			if !ok {
 				tok, err := login()
-				if err == nil {
-					t, err = s.hub.one(ctx, tok, r.Path, name)
-				}
 				if err != nil {
+					// The token itself failed: a refusal here is the credential's.
 					d.Code = hubCode(err, cred != nil)
+					out[i] = d
+					return nil
+				}
+				if t, err = s.hub.one(ctx, tok, r.Path, name); err != nil {
+					d.Code = hubCodeAfterSignIn(err, cred != nil)
 					out[i] = d
 					return nil
 				}
