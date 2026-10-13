@@ -96,8 +96,13 @@ const WARNING = "The last test failed. You can still save this credential.";
 async function closeSheet(page: Page, dialog: Locator): Promise<void> {
   if ((await dialog.count()) === 0) return;
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  // The confirmation mounts a moment after Cancel, so wait until either the question is
+  // up or the sheet is gone, instead of sampling once.
   const discard = page.getByRole("button", { name: "Discard changes", exact: true });
-  if (await discard.isVisible().catch(() => false)) await discard.click();
+  await expect
+    .poll(async () => (await discard.isVisible()) || (await page.getByRole("dialog").count()) === 0)
+    .toBe(true);
+  if (await discard.isVisible()) await discard.click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
 }
 
