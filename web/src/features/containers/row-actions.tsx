@@ -20,6 +20,7 @@ import { Spinner } from "@/components/ui/spinner";
 import {
   ActionDialog,
   type DialogVerb,
+  isLostAnswer,
   reasonOf,
   requestReasonOf,
 } from "@/features/containers/action-dialog";
@@ -28,7 +29,7 @@ import { eligibleFor, ownKind } from "@/features/containers/eligibility";
 import { pendingFingerprint, pendingKey, usePendingApi } from "@/features/containers/pending";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
-import { toastError, toastSuccess } from "@/lib/toast";
+import { toastError, toastInfo, toastSuccess } from "@/lib/toast";
 
 // The actions that need no confirmation, with the words of their toast.
 export type ImmediateAction = "start" | "restart" | "pause" | "unpause";
@@ -69,6 +70,10 @@ export function useImmediateAction(envId: string, row: ContainerRow) {
       toastError(t("actions.toast.failed", { verb, name: row.name, reason }));
     } catch (err) {
       pend.release([key]);
+      if (isLostAnswer(err)) {
+        toastInfo(t("actions.toast.lost", { verb, name: row.name }));
+        return;
+      }
       toastError(
         t("actions.toast.failed", { verb, name: row.name, reason: requestReasonOf(t, err) }),
       );

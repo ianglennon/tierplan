@@ -31,6 +31,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import {
   ActionDialog,
   type DialogVerb,
+  isLostAnswer,
   reportOf,
   requestReasonOf,
   toastBulk,
@@ -79,7 +80,7 @@ import { nodeRowKey, useEnvIsSwarm, useNodeColumn } from "@/features/resources/s
 import { useEnvName } from "@/features/resources/use-env-name";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
-import { toastError } from "@/lib/toast";
+import { toastError, toastInfo } from "@/lib/toast";
 
 // How long the box waits after the last key before the search goes into the URL
 // and to the server (UI-SPEC "Screens": 250 ms).
@@ -533,6 +534,12 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
       toastBulk(t, reportOf(t, verb, selectedRows, targets, results), setReport);
       selection.clear();
     } catch (err) {
+      if (isLostAnswer(err)) {
+        toastInfo(
+          t("actions.toast.lostMany", { verb: t(`actions.verb.${verb}`), count: targets.length }),
+        );
+        return;
+      }
       toastError(requestReasonOf(t, err));
     }
   }

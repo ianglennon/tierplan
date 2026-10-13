@@ -42,7 +42,7 @@ import {
 import { TargetList } from "@/features/resources/target-list";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
-import { toastError, toastErrorWithAction, toastSuccess } from "@/lib/toast";
+import { toastError, toastErrorWithAction, toastInfo, toastSuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 // 44px targets under 768px (D-64), the dense 32px size from there up.
@@ -104,7 +104,19 @@ interface Failure {
   agentPolicy: boolean;
 }
 
+// isLostAnswer says whether a request got no answer at all: it was sent and the
+// connection dropped before the server replied, as a page does when Chromium
+// abandons every request on a change of the host's network. The server sees a
+// sent action through, so it may well have happened: it is not a server fault,
+// and the list (refreshed after every request) shows the outcome.
+export function isLostAnswer(err: unknown): boolean {
+  return err instanceof ActionRequestError && err.status === 0;
+}
+
 function failureOf(t: Translate, err: unknown): Failure {
+  if (isLostAnswer(err)) {
+    return { message: t("actions.refusal.lost"), agentPolicy: false };
+  }
   if (err instanceof ActionRequestError) {
     if (err.type === "agent_policy_denied") {
       return { message: t("actions.refusal.agent_policy_denied"), agentPolicy: true };
@@ -410,6 +422,20 @@ export function ActionDialog({
       onClosed?.();
       onDone?.();
     } catch (err) {
+      if (isLostAnswer(err)) {
+        // Nothing in the dialog can say more than the list will: it closes, and a
+        // notice says the outcome is not known.
+        const verbWord = t(`actions.verb.${verb}`);
+        toastInfo(
+          bulk
+            ? t("actions.toast.lostMany", { verb: verbWord, count })
+            : t("actions.toast.lost", { verb: verbWord, name }),
+        );
+        reset();
+        onClose();
+        onClosed?.();
+        return;
+      }
       fail(failureOf(t, err));
     } finally {
       inFlight.current = false;

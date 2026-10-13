@@ -296,6 +296,25 @@ describe("Stop", () => {
     );
     expect(posts()).toHaveLength(1);
   });
+
+  // Found by the end-to-end suite: Chromium abandons every request in flight when
+  // the host's network changes, and the dialog said the server had failed although
+  // the server went on to stop the container.
+  it("closes and says the outcome is unknown when the connection drops before the answer, without retrying", async () => {
+    answer = () => {
+      throw new TypeError("Failed to fetch");
+    };
+    const dialog = await openStop();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Stop container" }));
+    expect(
+      await screen.findByText(
+        "The connection dropped before Bayplan answered the request to stop web. The list shows whether it happened.",
+      ),
+    ).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(screen.queryByText(/Something went wrong on the server/)).toBeNull();
+    expect(posts()).toHaveLength(1);
+  });
 });
 
 describe("Start", () => {
@@ -321,6 +340,21 @@ describe("Start", () => {
         "Couldn't start web. node-1 isn't reachable right now. Try again when it's back.",
       ),
     ).toBeTruthy();
+  });
+
+  it("says the outcome is unknown, not that it failed, when the connection drops", async () => {
+    answer = () => {
+      throw new TypeError("Failed to fetch");
+    };
+    mount(row({ state: "exited" }));
+    await openMenu();
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Start" }));
+    expect(
+      await screen.findByText(
+        "The connection dropped before Bayplan answered the request to start web. The list shows whether it happened.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Couldn't start web/)).toBeNull();
   });
 });
 
