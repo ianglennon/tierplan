@@ -68,6 +68,10 @@ func (f *Fake) serveWrite(w http.ResponseWriter, r *http.Request, p string, cfg 
 	if cfg.DropWrites && dropConnection(w) {
 		return true
 	}
+	if cfg.WriteError != "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": cfg.WriteError})
+		return true
+	}
 	if cfg.PolicyDeny {
 		// The refusal an agent gives for a write its policy does not allow, in the
 		// words the server maps to agent_policy_denied.

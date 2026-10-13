@@ -637,6 +637,14 @@ func (op containerOp) disruptive() bool {
 	return false
 }
 
+// name is the action's name in the log: the verb, or remove.
+func (op containerOp) name() string {
+	if op.remove {
+		return "remove"
+	}
+	return string(op.verb)
+}
+
 // writeDeadline is how long the write of op may take on a container with the given
 // own stop timeout.
 func (op containerOp) writeDeadline(own *int) time.Duration {
@@ -801,6 +809,14 @@ func actOnOne(ctx context.Context, d ContainersDeps, isSelf func(string) bool, e
 		res.Result, res.Code, res.Detail = actionFailed, code, detail
 		return res
 	}
+	// failCall is a failure of an engine call. Its error is logged whole: the result's
+	// detail is clipped, and the audit row keeps only the code.
+	failCall := func(err error) ContainerActionResult {
+		code, detail := actionError(err)
+		d.Log.Warn("container action failed", "environment", envID, "node", t.NodeID,
+			"container", res.Name, "action", op.name(), "code", code, "error", err)
+		return fail(code, detail)
+	}
 
 	// The own-container rule reads the container fresh from its engine: a list can
 	// be seconds old, and detection of the server's own container can miss, so
@@ -814,8 +830,7 @@ func actOnOne(ctx context.Context, d ContainersDeps, isSelf func(string) bool, e
 	})
 	cancel()
 	if err != nil {
-		code, detail := actionError(err)
-		return fail(code, detail)
+		return failCall(err)
 	}
 	if own.Name != "" {
 		res.Name = own.Name
@@ -851,7 +866,14 @@ func actOnOne(ctx context.Context, d ContainersDeps, isSelf func(string) bool, e
 
 	// A write is sent once. If its answer is lost the outcome is unknown, and the
 	// caller refreshes the list to see it (P2 D-42).
-	writeCtx, cancelWrite := context.WithTimeout(ctx, op.writeDeadline(own.StopTimeout))
+	//
+	// Once sent it is seen through: the write does not end with the request. The engine
+	// finishes a stop, restart or remove whether or not its caller is still there, so a
+	// write cut short when the browser's request ended (a closed page, a dropped
+	// connection, or Chromium abandoning every request when the host's network changes)
+	// would answer and audit "context canceled" as a failure for an action that happened.
+	// It keeps its own deadline.
+	writeCtx, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), op.writeDeadline(own.StopTimeout))
 	defer cancelWrite()
 	err = d.Aggregator.WriteOnNode(writeCtx, envID, t.NodeID, func(c *dockerx.Client) error {
 		if op.remove {
@@ -870,8 +892,7 @@ func actOnOne(ctx context.Context, d ContainersDeps, isSelf func(string) bool, e
 			res.Detail = "The connection ended while the action ran, which is what it does to Bayplan's own container. Refresh to see the outcome."
 			return res
 		}
-		code, detail := actionError(err)
-		return fail(code, detail)
+		return failCall(err)
 	}
 	res.Result = actionDone
 	return res
