@@ -382,6 +382,46 @@ func TestRouteServiceInspectAndUpdateQueryCases(t *testing.T) {
 	}
 }
 
+func TestRouteNodeInspectTakesNoQueryAndNeverShadowsTheList(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, path, query string
+		body                      bool
+		wantRoute                 string // "" means refused
+	}{
+		{"an inspect", "GET", "/nodes/abc123", "", false, "node inspect"},
+		{"an inspect with the version prefix", "GET", "/v1.56/nodes/abc123", "", false, "node inspect"},
+		{"a HEAD of an inspect", "HEAD", "/nodes/abc123", "", false, "node inspect"},
+		{"the list still takes any query", "GET", "/nodes", "filters=x&whatever=1", false, "nodes"},
+		{"an inspect with a key", "GET", "/nodes/abc123", "x=1", false, ""},
+		{"an inspect with an empty key", "GET", "/nodes/abc123", "x=", false, ""},
+		{"an inspect with a body", "GET", "/nodes/abc123", "", true, ""},
+		{"a trailing slash on an inspect", "GET", "/nodes/abc123/", "", false, ""},
+		{"a dot-dot node", "GET", "/nodes/../x", "", false, ""},
+		{"a node starting with a dot", "GET", "/nodes/.x", "", false, ""},
+		{"a 129 character node", "GET", "/nodes/" + strings.Repeat("a", 129), "", false, ""},
+		{"a 128 character node", "GET", "/nodes/" + strings.Repeat("a", 128), "", false, "node inspect"},
+		{"a node's sub-path", "GET", "/nodes/abc123/tasks", "", false, ""},
+		{"a node update", "POST", "/nodes/abc123/update", "version=1", true, ""},
+		{"a node delete", "DELETE", "/nodes/abc123", "", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, _, _ := Allowed(tc.method, tc.path, tc.query, tc.body, false, Policy{})
+			if ok != (tc.wantRoute != "") {
+				t.Fatalf("Allowed(%s %s?%s) = %v, want %v", tc.method, tc.path, tc.query, ok, tc.wantRoute != "")
+			}
+			if !ok {
+				return
+			}
+			if rt, found := Match(tc.method, tc.path); !found || rt.name != tc.wantRoute {
+				t.Fatalf("Match(%s %s) = %q, want %q", tc.method, tc.path, rt.name, tc.wantRoute)
+			}
+		})
+	}
+	if ok, reason, _ := Allowed("GET", "/nodes/abc123", "", false, false, Policy{ReadOnly: true}); !ok {
+		t.Errorf("a node inspect on a read-only host was refused (%s)", reason)
+	}
+}
+
 func TestRouteServiceWritesAreRefusedOnAReadOnlyHostAndInspectStillAnswers(t *testing.T) {
 	for _, tc := range []struct {
 		method, path, query string

@@ -110,6 +110,8 @@ var oracle = []oracleEntry{
 	// One service: the inspect, the create and update that take a whole spec as
 	// their body, and the remove, which takes no key at all.
 	oEntry("GET", `services/`+oID, map[string]*regexp.Regexp{"insertDefaults": oBool}),
+	// One node: the inspect, which takes no key at all.
+	oEntry("GET", `nodes/`+oID, nil),
 	{method: "POST", path: rx(oVer + `services/create$`), body: true},
 	oEntry("DELETE", `services/`+oID, nil),
 	{
@@ -175,6 +177,13 @@ func FuzzAllowed(f *testing.F) {
 		{"DELETE", "/volumes/v1", "", false, false, false},
 		{"DELETE", "/volumes/v1", "force=1", false, false, false},
 		{"GET", "/system/df", "type=volume&verbose=1", false, false, false},
+		{"GET", "/nodes/abc123", "", false, false, false},
+		{"GET", "/nodes/abc123", "x=1", false, false, false},
+		{"GET", "/nodes/abc123", "", true, false, false},
+		{"HEAD", "/v1.56/nodes/abc123", "", false, false, true},
+		{"GET", "/nodes/abc123/tasks", "", false, false, false},
+		{"POST", "/nodes/abc123/update", "version=1", true, false, false},
+		{"DELETE", "/nodes/abc123", "", false, false, false},
 		{"GET", "/services/web", "insertDefaults=1", false, false, false},
 		{"GET", "/services/web", "insertDefaults=maybe", false, false, false},
 		{"GET", "/services/web", "", true, false, false},

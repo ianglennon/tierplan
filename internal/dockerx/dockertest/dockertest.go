@@ -217,6 +217,10 @@ type FakeNode struct {
 	NanoCPUs, MemoryBytes int64
 	Labels, EngineLabels  map[string]string
 	ManagerAddr           string
+	// Version is the node's object version (zero is 1), CreatedAt and UpdatedAt its
+	// times (zero is the Unix epoch).
+	Version              uint64
+	CreatedAt, UpdatedAt time.Time
 }
 
 // FakeService is one entry of /services. Mode is "replicated" (the default),
