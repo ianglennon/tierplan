@@ -294,6 +294,10 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
 			Audit: f.aud, Checker: checker, Log: log,
 		})
+		api.RegisterNodes(r, api.NodesDeps{
+			Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, Live: f.liveAgents,
+			SelfContainerID: f.envSvc.SelfContainerID(), Log: log,
+		})
 		api.RegisterVolumes(r, api.VolumesDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, SizesTimeout: f.volumeSizesTimeout, Log: log})
 		api.RegisterImages(r, api.ImagesDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
 		if f.jobHub == nil {
