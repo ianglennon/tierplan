@@ -116,7 +116,7 @@ type ServiceScaleResult struct {
 	ServiceID string `json:"serviceId" doc:"The service ID or name the request named"`
 	Name      string `json:"name" doc:"The service name when the manager could be asked; otherwise what the request named"`
 	Result    string `json:"result" enum:"done,failed,skipped" doc:"done: the service has the replica count asked for (changed says whether an update was sent). failed: it could not be scaled; code says why. skipped: it has no replica count to set (not_scalable)"`
-	Code      string `json:"code,omitempty" enum:"not_scalable,service_changed,service_not_found,host_read_only,agent_policy_denied,no_manager_connected,no_quorum,registry_unresolved,scale_failed" doc:"Why a target failed or was skipped. not_scalable (with skipped): a global or job service has no replica count. service_changed: somebody else changed the service after it was read, so nothing was changed and nothing is retried; ask again. service_not_found: the swarm has no such service. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the manager's agent, so nothing was sent. agent_policy_denied: the manager's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. no_manager_connected: no manager of the swarm is connected, or the one reached is not a manager. no_quorum: the swarm has lost its quorum. registry_unresolved: the registry credential chosen for the image could not be read, so nothing was sent. scale_failed: the manager refused it; detail has its message"`
+	Code      string `json:"code,omitempty" enum:"not_scalable,service_changed,service_not_found,host_read_only,agent_policy_denied,agent_host_policy,no_manager_connected,no_quorum,registry_unresolved,scale_failed" doc:"Why a target failed or was skipped. not_scalable (with skipped): a global or job service has no replica count. service_changed: somebody else changed the service after it was read, so nothing was changed and nothing is retried; ask again. service_not_found: the swarm has no such service. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the manager's agent, so nothing was sent. agent_policy_denied: the manager's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. agent_host_policy: the service's spec gives tasks host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, a lowered sandbox, the host network) and the manager's agent refuses that unless its owner set BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true; every update carries the whole spec, so a service that already has host access cannot be scaled either. no_manager_connected: no manager of the swarm is connected, or the one reached is not a manager. no_quorum: the swarm has lost its quorum. registry_unresolved: the registry credential chosen for the image could not be read, so nothing was sent. scale_failed: the manager refused it; detail has its message"`
 	Detail    string `json:"detail,omitempty" doc:"The manager's message for scale_failed, at most 300 characters; for the other codes a plain sentence"`
 	Previous  *int64 `json:"previous,omitempty" doc:"The replica count the service had; absent when it was not read"`
 	Replicas  int64  `json:"replicas" doc:"The replica count that was asked for"`
@@ -382,25 +382,59 @@ func registryAuthFor(ctx context.Context, d ServicesDeps, envID, image string) (
 	return header, nil
 }
 
-// scaleError maps the error of one scale to a result code and a sentence.
-func scaleError(err error) (code, detail string) {
+// swarmWriteCode is the one place that maps the error of a swarm write to the code every
+// swarm write answers with, so the services, nodes, secrets and configs routes word a
+// refusal the same way. It returns "" for an error that is none of these: the caller then
+// has a code of its own, or a generic failure.
+//
+//   - host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the manager's agent.
+//   - agent_host_policy: the agent refused a spec that gives tasks host access, because its
+//     owner did not set BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES (D-36).
+//   - agent_policy_denied: the agent refused the call by its own policy.
+//   - no_manager_connected: no manager is connected, or the one reached is not a manager.
+//   - service_changed, service_not_found: the service moved or went away under the write.
+func swarmWriteCode(err error) string {
 	switch denied := (*envs.AgentPolicyDeniedError)(nil); {
-	case errors.Is(err, dockerx.ErrNotScalable):
-		return codeNotScalable, "A global or job service has no replica count to set."
-	case errors.Is(err, dockerx.ErrServiceChanged):
-		return codeServiceChanged, "This service was changed by someone else after it was read. Nothing was changed; try again."
-	case errors.Is(err, dockerx.ErrServiceNotFound):
-		return codeServiceNotFound, "The service no longer exists."
-	case errors.Is(err, errRegistryUnresolved):
-		return codeRegistryUnresolved, "The registry credential for this service's image could not be read, so nothing was sent."
 	case errors.Is(err, envs.ErrHostReadOnly):
-		return codeHostReadOnly, "This host is read-only: its owner set BAYPLAN_AGENT_READ_ONLY on the agent, so Bayplan cannot change anything on it."
+		return codeHostReadOnly
 	case errors.As(envs.ClassifyDockerError(err), &denied):
-		return codeAgentPolicyDeny, "The manager's agent refused the request."
+		if denied.HostPolicy {
+			return codeAgentHostPolicy
+		}
+		return codeAgentPolicyDeny
 	case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNoManager), errors.Is(err, envs.ErrOffline),
 		errors.Is(err, envs.ErrNotFound), errors.Is(err, tunnel.ErrAgentGone), envs.ReasonFor(err) == envs.ReasonNotAManager:
-		return codeNoManagerConnected, "No manager of the swarm is connected."
-	case envs.ReasonFor(err) == envs.ReasonNoQuorum:
+		return codeNoManagerConnected
+	case errors.Is(err, dockerx.ErrServiceChanged):
+		return codeServiceChanged
+	case errors.Is(err, dockerx.ErrServiceNotFound):
+		return codeServiceNotFound
+	}
+	return ""
+}
+
+// swarmWriteDetail is the sentence of a code swarmWriteCode returned.
+var swarmWriteDetail = map[string]string{
+	codeHostReadOnly:       "This host is read-only: its owner set BAYPLAN_AGENT_READ_ONLY on the agent, so Bayplan cannot change anything on it.",
+	codeAgentHostPolicy:    "This swarm's manager agents don't let Bayplan change services with host access. Set BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true on them to allow it.",
+	codeAgentPolicyDeny:    "The manager's agent refused the request.",
+	codeNoManagerConnected: "No manager of the swarm is connected.",
+	codeServiceChanged:     "This service was changed by someone else after it was read. Nothing was changed; try again.",
+	codeServiceNotFound:    "The service no longer exists.",
+}
+
+// scaleError maps the error of one scale to a result code and a sentence.
+func scaleError(err error) (code, detail string) {
+	switch {
+	case errors.Is(err, dockerx.ErrNotScalable):
+		return codeNotScalable, "A global or job service has no replica count to set."
+	case errors.Is(err, errRegistryUnresolved):
+		return codeRegistryUnresolved, "The registry credential for this service's image could not be read, so nothing was sent."
+	}
+	if code := swarmWriteCode(err); code != "" {
+		return code, swarmWriteDetail[code]
+	}
+	if envs.ReasonFor(err) == envs.ReasonNoQuorum {
 		return codeNoQuorum, "The swarm has lost its quorum."
 	}
 	return codeScaleFailed, clipDetail(err.Error())

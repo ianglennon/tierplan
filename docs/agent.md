@@ -38,7 +38,7 @@ The agent is the security boundary between Bayplan and the host's Docker socket.
 - `_ping`, `version`, `info`, `events`.
 - The lists the dashboard shows: containers, images, volumes and networks.
 - The swarm lists: nodes, services and tasks.
-- The inspect of one container, one network and one volume, and the state of one exec.
+- The inspect of one container, one network, one volume and one service (`GET /services/{id}`, only the `insertDefaults` key), and the state of one exec.
 - A container's logs (`stdout`, `stderr`, `since`, `until`, `timestamps`, `follow`, `tail`, `details` only).
 - Disk usage for volumes (`system/df` with `type=volume`).
 - Images, by repository, `repository:tag`, `repository@digest` or image ID:
@@ -54,10 +54,11 @@ The agent is the security boundary between Bayplan and the host's Docker socket.
 | Networks | create, connect a container, disconnect a container, delete |
 | Volumes | create, delete |
 | Images | pull (`POST /images/create`, only the `fromImage`, `tag` and `platform` keys, no body) and remove (`DELETE /images/{name}`, only the `noprune` key) |
+| Services | create (`POST /services/create`, no query key), update (`POST /services/{id}/update`, only the `version`, `registryAuthFrom` and `rollback` keys) and remove (`DELETE /services/{id}`, no query key). Create and update take a service spec as their body and may carry `X-Registry-Auth`. A spec that gives tasks host access is refused unless the host set `BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true` (see [Service specs and host access](#service-specs-and-host-access)) |
 
-For every call that carries a body (exec create and start, network create, connect and disconnect, volume create) the agent reads the JSON into Docker's own request type, refuses any field it does not know, builds a fresh request from the fields it allows, and forwards that fresh request. Whatever else the sender put in the body does not arrive.
+For every call that carries a body (exec create and start, network create, connect and disconnect, volume create, service create and update) the agent reads the JSON into Docker's own request type, refuses any field it does not know, builds a fresh request from the fields it allows, and forwards that fresh request. Whatever else the sender put in the body does not arrive.
 
-**A registry credential crosses on two calls only.** `X-Registry-Auth` carries the credential Bayplan holds for a registry. The agent accepts it on an image pull and on the distribution check and deletes it from every other request before the request reaches Docker; `X-Registry-Config` is deleted from every request. On those two calls the header must be absent or a single value of at most 16 KiB made only of base64url characters, otherwise the request is refused as `agent_policy_denied`. The agent never decodes, logs or keeps the value: a refusal is reported with the method, the path and the reason, without the query or any header.
+**A registry credential crosses on four calls only.** `X-Registry-Auth` carries the credential Bayplan holds for a registry. The agent accepts it on an image pull, on the distribution check and on a service create and update, and deletes it from every other request before the request reaches Docker; `X-Registry-Config` is deleted from every request. On those calls the header must be absent or a single value of at most 16 KiB made only of base64url characters, otherwise the request is refused as `agent_policy_denied`. The agent never decodes, logs or keeps the value: a refusal is reported with the method, the path and the reason, without the query or any header.
 
 **Refused, whatever Bayplan asks:**
 
@@ -68,14 +69,28 @@ For every call that carries a body (exec create and start, network create, conne
 - A **cluster volume** (a volume with a cluster spec).
 - The legacy **`link`** key on a container remove, and **`force`** on a volume delete.
 - Importing an image (`fromSrc`, `repo`, `message` and `changes` on a pull), **`force`** on an image remove, and tagging, pushing, saving, loading, building and pruning images.
-- Creating or changing a container or service; the stats, export and file contents of a container; the swarm join tokens (`GET /swarm`).
-- A body larger than 64 KiB, and a query larger than 4 KiB.
+- Creating or changing a container; creating or changing a **service whose spec gives tasks host access**, unless the host opted in (below); the stats, export and file contents of a container; the swarm join tokens (`GET /swarm`).
+- A body larger than 64 KiB (256 KiB for a service spec), and a query larger than 4 KiB.
+
+## Service specs and host access
+
+A service spec is a whole container specification, so a service write could start a privileged container on every node. Unless the host owner set `BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true`, a manager's agent refuses a service create or update whose spec holds any of these, answers `403` with `agent_policy_denied: host_policy:`, and Bayplan shows the refusal as `agent_host_policy`:
+
+- A bind mount of the Docker socket or another container runtime socket, of `/`, or of any host path that is not under `/srv`, `/mnt` or `/media` (a path strictly below `/var/log` is allowed, `/var/log` itself is not), or a Windows named pipe. This is the same rule Bayplan applies to the bind mounts of a stack.
+- A volume with the `local` driver whose options mount such a path or a host block device (`type=none` with `o=bind`, or a filesystem type with a `device`).
+- Any added capability (`CapabilityAdd`).
+- SELinux disabled or the `spc_t` type, seccomp unconfined or custom, and AppArmor disabled.
+- A network attachment to the host network, given by name or by ID. For an ID the agent asks its own engine for the network and refuses one of the `host` driver or named `host`; a network the engine does not answer for is not refused by the agent, because the engine refuses an unknown network itself.
+
+The check runs after the read-only flag and after the body has been decoded strictly, so a read-only host refuses these writes first. It only matters on managers: a worker's agent forwards no service write.
+
+**Without the opt-in, Bayplan cannot change a service that already has host access.** Every service update carries the whole spec, so scale, force update and roll back are refused for such a service as well. Bayplan's own agent service mounts the Docker socket; Bayplan does not scale it, and it is updated by the agent's own self-update (see [Updates](#updates)), not through this check.
 
 **A volume can point at a host directory.** A `local` volume created with the options `type=none`, `o=bind` and a `device` is a bind of that host path. Docker allows it and so does the agent, because the agent cannot know who is asking: Bayplan lets only an environment **Admin** create volumes, and the options are written to the audit log. The agent forwards no container create, so Bayplan cannot mount such a volume into a new container. An Admin can still make a path on the host visible to a container someone else starts.
 
 **The read-only flag comes first.** On a host with `BAYPLAN_AGENT_READ_ONLY=true` the agent refuses every request that is not a `GET` or `HEAD` before it looks at the table, so no table entry can reach a change, no shell can be opened (creating an exec is a `POST`), and no image can be pulled or removed. Image inspect, history and the distribution check are reads and still answer. The distribution check is a read for the agent but not for the network: it has the host's Docker engine connect to a registry host that Bayplan names, using the credential Bayplan sends, and the engine treats loopback and its `insecure-registries` hosts as plain HTTP. A read-only host therefore still lets the Bayplan server make that host's network position issue requests to registries, so "read-only" does not mean "makes no outbound connections". If that matters, firewall the host's egress. See [Settings on the host](#settings-on-the-host-read-only-and-self-update).
 
-**An older agent refuses the newer calls.** The table ships with the agent. An agent from before this list grew refuses container actions, logs, shells, networks, volumes and image pulls, removes, inspects and distribution checks with `agent_policy_denied` until it updates; Bayplan then says the agent needs an update, and updates it itself unless the host set `BAYPLAN_AGENT_SELF_UPDATE=false` (see [Updates](#updates)).
+**An older agent refuses the newer calls.** The table ships with the agent. An agent from before this list grew refuses container actions, logs, shells, networks, volumes, image pulls, removes, inspects and distribution checks, and service inspects, creates, updates and removes with `agent_policy_denied` until it updates; Bayplan then says the agent needs an update, and updates it itself unless the host set `BAYPLAN_AGENT_SELF_UPDATE=false` (see [Updates](#updates)).
 
 ## Before you install
 
@@ -204,13 +219,14 @@ To put the token back on a swarm, take a new token from **Show install command**
    && docker service update --secret-add source=bayplan-agent-token-g<N>,target=bayplan-agent-token,mode=0400 --env-add BAYPLAN_AGENT_JOIN_TOKEN_FILE=/run/secrets/bayplan-agent-token bayplan-agent
 ```
 
-## Settings on the host: read-only and self-update
+## Settings on the host: read-only, self-update and privileged services
 
-These two are set by whoever owns the host, in the agent's environment (`-e` on a standalone host, `--env` on a swarm service). Bayplan cannot change them.
+These are set by whoever owns the host, in the agent's environment (`-e` on a standalone host, `--env` on a swarm service). Bayplan cannot change them.
 
 | Variable | Default | What it does |
 |----------|---------|--------------|
 | `BAYPLAN_AGENT_READ_ONLY` | `false` | The agent refuses every Docker request that is not a `GET` or `HEAD`, whatever the allowlist says. The node list shows **Read-only (set on host)**. On a read-only host Bayplan can still list and read, but it cannot start, stop or remove anything, create networks or volumes, or open a shell. It can still ask the host's engine to check that a registry image is reachable (the distribution check), which is an outbound connection. |
+| `BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES` | `false` | On a swarm manager, let the agent forward service specs that give tasks host access: a bind of the Docker socket or of a host path outside `/srv`, `/mnt` and `/media`, an added capability, a lowered sandbox, the host network (see [Service specs and host access](#service-specs-and-host-access)). Set it only on a swarm where you accept that a compromised Bayplan could then run a privileged service on every node, which is root on every node. It takes `true` or `false` (the other spellings Go's boolean parser reads, such as `1`, also work); any other value, a typo like `yes` included, stops the agent at start and names the variable, so the restriction is never dropped by mistake. It only matters on managers. |
 | `BAYPLAN_AGENT_SELF_UPDATE` | `true` | Whether the agent may update or uninstall itself when Bayplan asks. With `false` the node list gives you the update command to run by hand and removing the environment leaves the agent in place (see [Updates](#updates) and [Uninstall and manual cleanup](#uninstall-and-manual-cleanup)). |
 
 Smaller settings, rarely needed: `BAYPLAN_AGENT_SOCKET` (default `/var/run/docker.sock`), `BAYPLAN_AGENT_STATE_DIR` (default `/var/lib/bayplan-agent`), `BAYPLAN_AGENT_DOCKER_GID` (the group of the socket, when it cannot be detected), `BAYPLAN_AGENT_BACKOFF_MIN` and `BAYPLAN_AGENT_BACKOFF_MAX` (reconnect delay, 1 s to 60 s by default), and `BAYPLAN_AGENT_ALLOW_INSECURE` (development only, see [Development only](#development-only-plain-ws)).
@@ -307,6 +323,7 @@ Bayplan shows the same reason on the environment, in the overview's tooltip, in 
 | `engine_unreachable` | The agent cannot reach Docker. | Check that `/var/run/docker.sock` is mounted into the agent and that the Docker daemon is running. |
 | `unsupported_engine` | Docker on the node is older than Engine 24. | Upgrade Docker on that node. Its data is left out until then. |
 | `agent_policy_denied` | The agent refused a request because it is not on its allowlist, or the host is set read-only. | The refusal is recorded in the audit log. If you did not expect it, check the Bayplan server and the agent's settings. |
+| `agent_host_policy` | The manager's agent refused a service spec that gives tasks host access, because its owner did not set `BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true`. | Remove the host access from the service, or set the variable on the manager agents if you accept what it allows. |
 
 An agent that is refused when it first connects also gets one of these. They appear in the waiting panel while you install, with the address the attempt came from, and in the audit log as `agent.enrol_refused`:
 

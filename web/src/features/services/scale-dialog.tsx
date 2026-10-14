@@ -157,6 +157,8 @@ function ScaleForm({ envId, target, onClose, onScaled }: FormProps) {
         };
       case "host_read_only":
         return { message: t("actions.refusal.host_read_only"), agentPolicy: false };
+      case "agent_host_policy":
+        return { message: t("services.problems.agent_host_policy"), agentPolicy: false };
       default:
         // The manager's own message says what it refused; without one, the server could not
         // say more than that something went wrong.

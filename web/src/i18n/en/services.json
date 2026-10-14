@@ -70,6 +70,9 @@
         "permission": "You no longer have permission to do that. Your access may have changed.",
         "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening."
       }
+    },
+    "problems": {
+      "agent_host_policy": "This swarm's manager agents don't let Bayplan change services with host access. Set BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true on them to allow it."
     }
   }
 }

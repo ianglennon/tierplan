@@ -313,7 +313,7 @@ func (s *Service) input(ctx context.Context, row sqlc.Environment, now time.Time
 		if l, ok := live[a.ID]; ok {
 			v.Connected, v.ConnectedAt, v.LastSeen, v.Ended, v.LastCode = l.Connected, l.ConnectedAt, l.LastSeen, l.Ended, l.LastCode
 			v.EngineReachable, v.ClockOffset = l.EngineReachable, l.ClockOffset
-			v.ReadOnly = l.ReadOnly
+			v.ReadOnly, v.PrivilegedServices = l.ReadOnly, l.PrivilegedServices
 			if l.Version != "" {
 				v.Version = l.Version
 			}
@@ -919,8 +919,11 @@ func (e *AgentPolicyDeniedError) Error() string {
 	return "envs: the agent refused " + e.Endpoint + " by policy"
 }
 
-// Is makes errors.Is(err, ErrAgentPolicyDenied) true.
-func (e *AgentPolicyDeniedError) Is(target error) bool { return target == ErrAgentPolicyDenied }
+// Is makes errors.Is(err, ErrAgentPolicyDenied) true, and errors.Is(err,
+// ErrAgentHostPolicy) true for a host-policy refusal only.
+func (e *AgentPolicyDeniedError) Is(target error) bool {
+	return target == ErrAgentPolicyDenied || (e.HostPolicy && target == ErrAgentHostPolicy)
+}
 
 // Unwrap returns the error the refusal was read from.
 func (e *AgentPolicyDeniedError) Unwrap() error { return e.cause }
@@ -929,6 +932,11 @@ func (e *AgentPolicyDeniedError) Unwrap() error { return e.cause }
 // Docker client puts the daemon's message in its error, so the marker is how a
 // refusal is told from an engine error.
 const policyDeniedMarker = "agent_policy_denied:"
+
+// hostPolicyMarker follows policyDeniedMarker in the refusal of a service spec that
+// gives tasks host access. A request reads "METHOD /path", so a method can never be
+// mistaken for it.
+const hostPolicyMarker = "host_policy:"
 
 // maxEndpoint caps the endpoint kept from a refusal message.
 const maxEndpoint = 256
@@ -945,6 +953,10 @@ func ClassifyDockerError(err error) error {
 		return err
 	}
 	endpoint, _, _ := strings.Cut(rest, "\n")
+	hostPolicy := false
+	if after, ok := strings.CutPrefix(strings.TrimSpace(endpoint), hostPolicyMarker); ok {
+		hostPolicy, endpoint = true, after
+	}
 	endpoint = strings.Map(func(r rune) rune {
 		if r < 0x20 || r == 0x7f {
 			return -1
@@ -954,5 +966,5 @@ func ClassifyDockerError(err error) error {
 	if len(endpoint) > maxEndpoint {
 		endpoint = strings.ToValidUTF8(endpoint[:maxEndpoint], "")
 	}
-	return &AgentPolicyDeniedError{Endpoint: endpoint, cause: err}
+	return &AgentPolicyDeniedError{Endpoint: endpoint, HostPolicy: hostPolicy, cause: err}
 }
