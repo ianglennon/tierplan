@@ -275,3 +275,137 @@ export function serviceTasksQuery(envId: string, id: string) {
     refetchInterval: () => (document.visibilityState === "visible" ? TASKS_REFETCH_MS : false),
   });
 }
+
+export type ServiceSpec = components["schemas"]["ServiceSpecBody"];
+export type ServiceForceUpdateResult = components["schemas"]["ServiceForceUpdateBody"];
+export type ServiceRollbackResult = components["schemas"]["ServiceRollbackBody"];
+
+// The spec of one service and the one before its last update, under the key of its detail, so
+// the events feed and every action refresh an open dialog or editor with the page. The server has
+// already replaced every value the caller may not see with <hidden>. The spec carries a version,
+// so it is read again each time a dialog opens (gcTime 0 keeps a stale one from being shown).
+export function serviceSpecQuery(envId: string, id: string) {
+  return queryOptions({
+    queryKey: [...serviceKey(envId, id), "spec"] as const,
+    queryFn: async () => {
+      const res = await api.GET("/api/env/{envId}/services/{serviceId}/spec", {
+        params: { path: { envId, serviceId: id } },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new ServiceLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    retry: (count, error) => !isServiceGone(error) && count < serviceRetry.attempts,
+    gcTime: 0,
+    staleTime: 0,
+  });
+}
+
+// ServiceActionError is a force update or a rollback the server refused or that got no answer.
+// The status is 0 when the server could not be reached; the type is the problem type the server
+// named; the fields are what the problem listed (the image and its registry host for
+// image_unresolved, the kind and name of what is gone for rollback_object_missing); the detail
+// is the manager's own words where the problem carries them.
+export class ServiceActionError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  readonly fields: ReadonlyMap<string, string>;
+  readonly detail?: string;
+  constructor(
+    status: number,
+    type?: string,
+    fields: ReadonlyMap<string, string> = new Map(),
+    detail?: string,
+  ) {
+    super(`POST service action failed (${status})`);
+    this.name = "ServiceActionError";
+    this.status = status;
+    this.type = type;
+    this.fields = fields;
+    this.detail = detail;
+  }
+}
+
+// isLostAction says whether a service action got no answer at all. The server sees a write
+// through, so it may well have happened: the page, read again after every action, shows it.
+export function isLostAction(err: unknown): boolean {
+  return err instanceof ServiceActionError && err.status === 0;
+}
+
+function actionError(body: unknown, response?: { status: number }): ServiceActionError {
+  const problem = readProblem(body, response);
+  const detail =
+    typeof body === "object" && body !== null && "detail" in body && typeof body.detail === "string"
+      ? body.detail
+      : undefined;
+  return new ServiceActionError(
+    problem.status,
+    problem.type,
+    new Map(problem.fields.map((f) => [f.location, f.message])),
+    detail,
+  );
+}
+
+function refreshService(queryClient: ReturnType<typeof useQueryClient>, envId: string) {
+  void queryClient.invalidateQueries({ queryKey: servicesKey(envId) });
+}
+
+export interface ForceUpdateRequest {
+  serviceId: string;
+  // True when this repeats a stalled or failed update (Retry update).
+  retry?: boolean;
+}
+
+// useForceUpdateService is the mutation behind the force update and retry dialogs. It does not
+// retry, and reads the service again whatever the answer: a write whose answer was lost may have
+// happened (P2 D-42).
+export function useForceUpdateService(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<ServiceForceUpdateResult, ServiceActionError, ForceUpdateRequest>({
+    mutationFn: async ({ serviceId, retry }) => {
+      try {
+        const res = await api.POST("/api/env/{envId}/services/{serviceId}/force-update", {
+          params: { path: { envId, serviceId } },
+          body: retry ? { retry: true } : {},
+        });
+        if (!res.data) throw actionError(res.error, res.response);
+        return res.data;
+      } catch (e) {
+        // A network failure has no status.
+        throw e instanceof ServiceActionError ? e : new ServiceActionError(0);
+      }
+    },
+    retry: false,
+    onSettled: () => refreshService(queryClient, envId),
+  });
+}
+
+export interface RollbackRequest {
+  serviceId: string;
+  // The version the diff was shown at: the rollback goes back only to the spec that was shown.
+  version: number;
+}
+
+// useRollbackService is the mutation behind the rollback dialog, with the same rules as the force
+// update's.
+export function useRollbackService(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<ServiceRollbackResult, ServiceActionError, RollbackRequest>({
+    mutationFn: async ({ serviceId, version }) => {
+      try {
+        const res = await api.POST("/api/env/{envId}/services/{serviceId}/rollback", {
+          params: { path: { envId, serviceId } },
+          body: { version },
+        });
+        if (!res.data) throw actionError(res.error, res.response);
+        return res.data;
+      } catch (e) {
+        throw e instanceof ServiceActionError ? e : new ServiceActionError(0);
+      }
+    },
+    retry: false,
+    onSettled: () => refreshService(queryClient, envId),
+  });
+}

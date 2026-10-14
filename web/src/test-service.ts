@@ -118,6 +118,11 @@ export interface ServiceApiState {
   scale: () => Response | Promise<Response>;
   // The service's tasks. A test that does not read them leaves it out, and the route answers 404.
   tasks?: () => Response | Promise<Response>;
+  // The service's spec and the force update and rollback writes. A test that does not use them
+  // leaves them out, and the routes answer 404.
+  spec?: () => Response | Promise<Response>;
+  forceUpdate?: () => Response | Promise<Response>;
+  rollback?: () => Response | Promise<Response>;
 }
 
 // serviceFetch answers the page's requests: the app shell's, the service and its inspect, and
@@ -190,6 +195,12 @@ export function serviceFetch(state: ServiceApiState) {
         return state.inspect();
       case `${base}/services/${SERVICE_ID}/tasks`:
         return state.tasks ? state.tasks() : new Response(null, { status: 404 });
+      case `${base}/services/${SERVICE_ID}/spec`:
+        return state.spec ? state.spec() : new Response(null, { status: 404 });
+      case `${base}/services/${SERVICE_ID}/force-update`:
+        return state.forceUpdate ? state.forceUpdate() : new Response(null, { status: 404 });
+      case `${base}/services/${SERVICE_ID}/rollback`:
+        return state.rollback ? state.rollback() : new Response(null, { status: 404 });
       case `${base}/services/scale`:
         return state.scale();
       case `${base}/services`:

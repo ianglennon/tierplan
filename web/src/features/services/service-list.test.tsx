@@ -274,6 +274,70 @@ describe("ServiceList", () => {
   });
 });
 
+describe("the row menu's Force update… and Roll back…", () => {
+  it("lists Force update… and Roll back… for every mode, after Scale… where there is one", async () => {
+    mount();
+    await openMenu("web");
+    const names = (await screen.findAllByRole("menuitem")).map((m) =>
+      m.textContent?.replace(/\s+/g, " ").trim(),
+    );
+    expect(names.slice(0, 4)).toEqual([
+      "Open",
+      "Scale…",
+      "Force update…",
+      "Roll back… There's no earlier version to roll back to.",
+    ]);
+    cleanup();
+    mount();
+    await openMenu("bayplan-agent");
+    expect(await screen.findByRole("menuitem", { name: "Force update…" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: /^Roll back…/ })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Scale…" })).toBeNull();
+  });
+
+  it("opens the force update dialog from the row menu", async () => {
+    mount();
+    await openMenu("web");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Force update…" }));
+    expect(await screen.findByRole("dialog", { name: "Force update web?" })).toBeTruthy();
+    expect(posts()).toEqual([]);
+  });
+
+  it("opens the rollback dialog from the row menu when the service has an earlier version", async () => {
+    items = [svc({ hasPreviousSpec: true }), ...items.slice(1)];
+    mount();
+    await openMenu("web");
+    const back = await screen.findByRole("menuitem", { name: /^Roll back…/ });
+    expect(back.getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(back);
+    expect(await screen.findByRole("dialog", { name: "Roll back web?" })).toBeTruthy();
+  });
+
+  it("shows Roll back… disabled with the reason, and opens nothing, without an earlier version", async () => {
+    mount();
+    await openMenu("web");
+    const back = await screen.findByRole("menuitem", { name: /^Roll back…/ });
+    expect(back.getAttribute("aria-disabled")).toBe("true");
+    expect(within(back).getByText("There's no earlier version to roll back to.")).toBeTruthy();
+    fireEvent.click(back);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("shows both disabled with Needs Operator to a viewer, and opens nothing", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    items = [svc({ hasPreviousSpec: true }), ...items.slice(1)];
+    mount();
+    await openMenu("web");
+    for (const name of [/^Force update…/, /^Roll back…/]) {
+      const item = await screen.findByRole("menuitem", { name });
+      expect(item.getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(item);
+    }
+    expect(screen.getAllByText("Needs Operator").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
 describe("ScaleDialog", () => {
   it("opens from the row menu with the title, the current count and the Replicas field", async () => {
     const dialog = await openScale();

@@ -88,6 +88,16 @@ function headerOf(): HTMLElement {
   return header;
 }
 
+// openMore opens the More menu once the signed-in user is known.
+async function openMore() {
+  const more = await screen.findByRole("button", { name: "More actions" });
+  await waitFor(() => expect(state.sent.some((s) => s.path === "/api/me")).toBe(true));
+  await act(async () => {});
+  await act(async () => {
+    fireEvent.keyDown(more, { key: "Enter" });
+  });
+}
+
 function answerWith(body: ServiceDetailBody) {
   state.detail = () => Response.json(body);
 }
@@ -215,6 +225,87 @@ describe("the header actions", () => {
       cleanup();
       queryClient.clear();
     }
+  });
+
+  it("offers Force update… to an Operator as an outline button, opening its dialog", async () => {
+    renderAt();
+    const force = await screen.findByRole("button", { name: "Force update…" });
+    expect(force.getAttribute("aria-disabled")).toBeNull();
+    expect(force.getAttribute("data-variant")).toBe("outline");
+    fireEvent.click(force);
+    expect(await screen.findByRole("dialog", { name: "Force update api?" })).toBeTruthy();
+  });
+
+  it("shows Force update… to a Viewer unavailable, with the reason, and opens nothing", async () => {
+    state.me = makeMe({ envs: { [SERVICE_ENV]: "viewer" } });
+    renderAt();
+    const force = await screen.findByRole("button", { name: "Force update…" });
+    expect(force.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getAllByText("Needs Operator").length).toBeGreaterThan(0);
+    fireEvent.click(force);
+    expect(screen.queryByRole("dialog", { name: "Force update api?" })).toBeNull();
+  });
+
+  it("keeps Force update… and Roll back… on a global service, a job and a stack-owned service", async () => {
+    for (const extra of [
+      { mode: "global" as const },
+      { mode: "replicated-job" as const },
+      { stack: "shop" },
+    ]) {
+      answerWith(serviceDetail(extra));
+      renderAt();
+      const force = await screen.findByRole("button", { name: "Force update…" });
+      expect(force.getAttribute("aria-disabled")).toBeNull();
+      await openMore();
+      const back = await screen.findByRole("menuitem", { name: /^Roll back…/ });
+      expect(back.getAttribute("aria-disabled")).toBeNull();
+      cleanup();
+      queryClient.clear();
+    }
+  });
+
+  it("offers Roll back… in More, opening the rollback dialog with the diff", async () => {
+    state.spec = () =>
+      Response.json({
+        version: 9,
+        name: "api",
+        mode: "replicated",
+        stack: "",
+        agent: false,
+        masked: false,
+        spec: { Name: "api", TaskTemplate: { ContainerSpec: { Image: "api:2" } } },
+        previousSpec: { Name: "api", TaskTemplate: { ContainerSpec: { Image: "api:1" } } },
+      });
+    renderAt();
+    await screen.findByRole("heading", { name: "api" });
+    await openMore();
+    fireEvent.click(await screen.findByRole("menuitem", { name: /^Roll back…/ }));
+    expect(await screen.findByRole("dialog", { name: "Roll back api?" })).toBeTruthy();
+    expect(await screen.findByRole("table", { name: "Changes to api" })).toBeTruthy();
+  });
+
+  it("shows Roll back… unavailable with the reason when the service has no earlier version", async () => {
+    answerWith(serviceDetail({ hasPreviousSpec: false }));
+    renderAt();
+    await screen.findByRole("heading", { name: "api" });
+    await openMore();
+    const back = await screen.findByRole("menuitem", { name: /^Roll back…/ });
+    expect(back.getAttribute("aria-disabled")).toBe("true");
+    expect(
+      screen.getAllByText("There's no earlier version to roll back to.").length,
+    ).toBeGreaterThan(0);
+    fireEvent.click(back);
+    expect(screen.queryByRole("dialog", { name: "Roll back api?" })).toBeNull();
+  });
+
+  it("shows Roll back… to a Viewer unavailable with Needs Operator", async () => {
+    state.me = makeMe({ envs: { [SERVICE_ENV]: "viewer" } });
+    renderAt();
+    await screen.findByRole("heading", { name: "api" });
+    await openMore();
+    const back = await screen.findByRole("menuitem", { name: /^Roll back…/ });
+    expect(back.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getAllByText("Needs Operator").length).toBeGreaterThan(0);
   });
 
   it("copies the service ID from More", async () => {
