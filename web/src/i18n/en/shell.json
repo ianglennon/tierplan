@@ -23,6 +23,7 @@
       "events": "Events",
       "swarm": "Swarm",
       "services": "Services",
+      "nodes": "Nodes",
       "placement": "Placement",
       "audit": "Audit",
       "settings": "Settings"

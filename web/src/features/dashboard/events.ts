@@ -94,7 +94,9 @@ export function mergeEvents(existing: EventDTO[], incoming: EventDTO[], cap: num
 // the containers list (its networks). Detail queries share their list's key
 // prefix, so an open image page, with its Used by tab, refreshes with its list. A
 // service event refreshes the services list and every filtered read of it, whose keys
-// extend the list's. The other swarm objects, and a row of Bayplan's own, have no list
+// extend the list's. A node event refreshes the nodes list, the node pages (their keys extend the
+// list's) and the services list, whose key the placement view extends, since a node going down
+// or being drained moves tasks. The other swarm objects, and a row of Bayplan's own, have no list
 // yet and refresh the summary only.
 export function invalidationKeys(type: EventType, envId: string): QueryKey[] {
   const summary: QueryKey = ["env", envId, "summary"];
@@ -115,6 +117,8 @@ export function invalidationKeys(type: EventType, envId: string): QueryKey[] {
       return [summary, [...listKey(envId, "images")]];
     case "service":
       return [summary, [...listKey(envId, "services")]];
+    case "node":
+      return [summary, [...listKey(envId, "nodes")], [...listKey(envId, "services")]];
     default:
       return [summary];
   }

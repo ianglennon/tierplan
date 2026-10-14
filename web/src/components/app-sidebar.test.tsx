@@ -148,12 +148,30 @@ describe("the Swarm group", () => {
     expect(groups).toEqual(["Resources", "Swarm"]);
   });
 
-  it("lists Placement after Services, for a user who can read services", async () => {
+  it("lists Nodes after Services, for a user who can read nodes", async () => {
+    mount(1280, "/env/e1");
+    const link = await screen.findByRole("link", { name: "Nodes" });
+    expect(link.getAttribute("href")).toBe("/env/e1/nodes");
+    const swarm = screen.getAllByRole("link").map((l) => l.textContent);
+    expect(swarm.indexOf("Nodes")).toBe(swarm.indexOf("Services") + 1);
+  });
+
+  it("lists Placement after Nodes, for a user who can read services", async () => {
     mount(1280, "/env/e1");
     const link = await screen.findByRole("link", { name: "Placement" });
     expect(link.getAttribute("href")).toBe("/env/e1/placement");
     const swarm = screen.getAllByRole("link").map((l) => l.textContent);
-    expect(swarm.indexOf("Placement")).toBe(swarm.indexOf("Services") + 1);
+    expect(swarm.indexOf("Placement")).toBe(swarm.indexOf("Nodes") + 1);
+  });
+
+  it("leaves Nodes out for a user who can read services but not nodes", async () => {
+    me = makeMe({
+      envs: { e1: "viewer" },
+      permissions: splitPermissions(["containers.read", "environments.read", "services.read"]),
+    });
+    mount(1280, "/env/e1");
+    expect(await screen.findByRole("link", { name: "Services" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Nodes" })).toBeNull();
   });
 
   it("is not there on a standalone environment", async () => {

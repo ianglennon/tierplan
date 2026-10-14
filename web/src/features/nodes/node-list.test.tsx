@@ -291,6 +291,7 @@ describe("NodeList", () => {
     expect(within(rowOf("wkr-2")).getByText("Paused")).toBeTruthy();
     expect(within(rowOf("wkr-1")).getByText("Draining (2 tasks left)")).toBeTruthy();
     cleanup();
+    client.clear();
     items = [node({ availability: "drain", tasksRunning: 0, tasksNotRunning: 0 })];
     mount();
     await screen.findByRole("link", { name: "mgr-1" });
@@ -312,6 +313,7 @@ describe("NodeList", () => {
     fireEvent.focus(count);
     expect((await screen.findAllByText("3 running, 1 not running")).length).toBeGreaterThan(0);
     cleanup();
+    client.clear();
     tasksKnown = false;
     mount();
     await screen.findByRole("link", { name: "mgr-1" });
@@ -354,10 +356,12 @@ describe("NodeList", () => {
     mount();
     expect(await screen.findByText("4 nodes, 2 managers")).toBeTruthy();
     cleanup();
+    client.clear();
     items = [node()];
     mount();
     expect(await screen.findByText("1 node, 1 manager")).toBeTruthy();
     cleanup();
+    client.clear();
     items = [node({ role: "worker", leader: false })];
     mount();
     expect(await screen.findByText("1 node, 0 managers")).toBeTruthy();
@@ -426,6 +430,7 @@ describe("the nodes list: search and chips", () => {
     await screen.findByRole("link", { name: "mgr-1" });
     expect(screen.queryByRole("button", { name: "Clear filters" })).toBeNull();
     cleanup();
+    client.clear();
     mount({ q: "mgr", status: "down" });
     await screen.findByRole("link", { name: "mgr-1" });
     fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));

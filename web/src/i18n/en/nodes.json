@@ -1,0 +1,84 @@
+{
+  "nodes": {
+    "list": {
+      "title": "Nodes",
+      "count_one": "{{count, number}} node",
+      "count_other": "{{count, number}} nodes",
+      "empty": "No nodes",
+      "error": "Couldn't load nodes.",
+      "errorRetry": "Retry loading nodes",
+      "caption": {
+        "nodes_one": "{{count, number}} node",
+        "nodes_other": "{{count, number}} nodes",
+        "managers_one": "{{count, number}} manager",
+        "managers_other": "{{count, number}} managers",
+        "summary": "{{nodes}}, {{managers}}",
+        "filtered_one": "{{n, number}} of {{count, number}} node",
+        "filtered_other": "{{n, number}} of {{count, number}} nodes"
+      },
+      "search": {
+        "label": "Search nodes",
+        "placeholder": "Search by name, address or label",
+        "clear": "Clear search"
+      },
+      "status": {
+        "label": "Filter nodes",
+        "managers": "Managers",
+        "workers": "Workers",
+        "drained": "Drained",
+        "down": "Down",
+        "chip": "{{label}} {{count, number}}"
+      },
+      "clearFilters": "Clear filters",
+      "emptyFilters": {
+        "title": "No nodes match these filters.",
+        "action": "Clear filters"
+      },
+      "noManager": {
+        "title": "No manager is connected",
+        "body": "Node changes are off until a manager node's agent reconnects. You can still look at what Bayplan last saw."
+      },
+      "columns": {
+        "name": "Name",
+        "status": "Status",
+        "availability": "Availability",
+        "role": "Role",
+        "address": "Address",
+        "engine": "Engine",
+        "platform": "Platform",
+        "cpu": "CPU",
+        "memory": "Memory",
+        "tasks": "Tasks",
+        "agent": "Agent"
+      },
+      "tasksTooltip": "{{running, number}} running, {{notRunning, number}} not running"
+    },
+    "state": {
+      "ready": "Ready",
+      "down": "Down",
+      "disconnected": "Disconnected",
+      "unknown": "Unknown"
+    },
+    "availability": {
+      "active": "Active",
+      "pause": "Paused",
+      "drain": "Draining",
+      "drainTasks_one": "Draining ({{count, number}} task left)",
+      "drainTasks_other": "Draining ({{count, number}} tasks left)",
+      "drained": "Drained"
+    },
+    "role": {
+      "manager": "Manager",
+      "worker": "Worker",
+      "unreachable": "Unreachable"
+    },
+    "badge": {
+      "leader": "Leader",
+      "runsBayplan": "Runs Bayplan"
+    },
+    "agent": {
+      "reporting": "Reporting",
+      "notReporting": "Not reporting"
+    }
+  }
+}
