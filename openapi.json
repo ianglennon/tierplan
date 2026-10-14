@@ -7563,6 +7563,42 @@
         ],
         "type": "object"
       },
+      "ServiceTasksBody": {
+        "additionalProperties": false,
+        "properties": {
+          "global": {
+            "description": "True for a global service, whose rows are nodes rather than slots",
+            "type": "boolean"
+          },
+          "retention": {
+            "description": "How many tasks per slot Docker keeps (TaskHistoryRetentionLimit); 5 when the cluster sets none",
+            "format": "int64",
+            "type": "integer"
+          },
+          "slots": {
+            "description": "A replicated service by slot number, a global one by node name (nodes the swarm no longer lists last)",
+            "items": {
+              "$ref": "#/components/schemas/TaskSlot"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "total": {
+            "description": "Every task listed, current and earlier",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "slots",
+          "retention",
+          "total",
+          "global"
+        ],
+        "type": "object"
+      },
       "ServiceUpdatePolicyBody": {
         "additionalProperties": false,
         "properties": {
@@ -8467,6 +8503,137 @@
         },
         "required": [
           "name"
+        ],
+        "type": "object"
+      },
+      "TaskItem": {
+        "additionalProperties": false,
+        "properties": {
+          "containerId": {
+            "description": "The task's container ID on its node; empty until it has one",
+            "type": "string"
+          },
+          "createdAt": {
+            "description": "When the task was created",
+            "format": "date-time",
+            "type": "string"
+          },
+          "desiredState": {
+            "description": "The state the swarm wants the task in",
+            "type": "string"
+          },
+          "dockerState": {
+            "description": "The state Docker last recorded for the task (new, pending, assigned, accepted, preparing, ready, starting, running, complete, failed, shutdown, rejected, remove, orphaned)",
+            "type": "string"
+          },
+          "error": {
+            "description": "Docker's error text about the task, cleaned of control characters; empty when there is none. Docker's free text, to be shown as plain text",
+            "type": "string"
+          },
+          "exitCode": {
+            "description": "The exit code of the task's container once the task has ended; null while it runs and when it never had a container",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "The task ID",
+            "type": "string"
+          },
+          "message": {
+            "description": "Docker's status message, cleaned the same way",
+            "type": "string"
+          },
+          "node": {
+            "description": "The node's host name; empty when the task has no node or its node is no longer in the swarm",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The swarm node the task was placed on; empty while it is not placed. The swarm keeps the ID of a node that has since been removed",
+            "type": "string"
+          },
+          "nodeKnown": {
+            "description": "False when the task names a node the swarm no longer lists (a removed node); true otherwise, also for a task with no node",
+            "type": "boolean"
+          },
+          "slot": {
+            "description": "The replica number of a replicated service's task; 0 for a global service's",
+            "format": "int64",
+            "type": "integer"
+          },
+          "state": {
+            "description": "The state to show: Docker's own word, except unknown for a task that has not ended on a node that is down, disconnected or removed, which cannot say it is still running",
+            "type": "string"
+          },
+          "stateSince": {
+            "description": "When the task reached dockerState",
+            "format": "date-time",
+            "type": "string"
+          },
+          "targetNodeId": {
+            "description": "The node ID the container routes of this environment take (?node= of the container page) for the task's node; empty when no connected agent or local socket reaches that node now",
+            "type": "string"
+          },
+          "updatedAt": {
+            "description": "When the task last changed",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "slot",
+          "nodeId",
+          "node",
+          "nodeKnown",
+          "targetNodeId",
+          "state",
+          "dockerState",
+          "desiredState",
+          "error",
+          "message",
+          "exitCode",
+          "containerId",
+          "createdAt",
+          "updatedAt",
+          "stateSince"
+        ],
+        "type": "object"
+      },
+      "TaskSlot": {
+        "additionalProperties": false,
+        "properties": {
+          "current": {
+            "$ref": "#/components/schemas/TaskItem",
+            "description": "The task that should be running there: the newest one whose desired state is running, else the newest"
+          },
+          "history": {
+            "description": "The earlier tasks, newest first, as many as Docker keeps; empty when there are none",
+            "items": {
+              "$ref": "#/components/schemas/TaskItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "node": {
+            "description": "The host name of the node the current task is on; empty when it has none or its node is gone",
+            "type": "string"
+          },
+          "slot": {
+            "description": "The slot number; 0 for a global service's row",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "slot",
+          "node",
+          "current",
+          "history"
         ],
         "type": "object"
       },
@@ -13893,6 +14060,69 @@
           }
         },
         "summary": "One swarm service's raw inspect document",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/services/{serviceId}/tasks": {
+      "get": {
+        "description": "The tasks of one service read live from a manager: for a replicated service one entry per slot, for a global service one per node, each with the task that is current there and the earlier tasks Docker still keeps (up to the cluster's TaskHistoryRetentionLimit, given as retention). A task that has not ended on a node that is down, disconnected or no longer in the swarm reads unknown, never running; dockerState keeps Docker's own word. A task whose node the swarm no longer lists has nodeKnown false. targetNodeId is the node ID the container routes take, empty when nothing reaches the node now. Docker's error and message text is cleaned of control characters and invalid UTF-8 on the server and is to be shown as plain text. 404 service_not_found when the swarm has no such service; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs services.read (Viewer) on the environment.",
+        "operationId": "listServiceTasks",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The service ID or name: the id of a row of the services list",
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "description": "The service ID or name: the id of a row of the services list",
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceTasksBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The tasks of a swarm service, grouped by slot",
         "tags": [
           "environments"
         ]

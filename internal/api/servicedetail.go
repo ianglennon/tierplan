@@ -6,7 +6,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -17,7 +16,6 @@ import (
 	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/redact"
@@ -228,17 +226,10 @@ func readService(ctx context.Context, d ServicesDeps, envID, serviceID string, w
 		}
 		return e
 	})
-	switch {
-	case err == nil:
-		return detail, raw, nets, nil
-	case errors.Is(err, dockerx.ErrServiceNotFound):
-		return detail, nil, nil, httpx.Problem(http.StatusNotFound, problemServiceNotFound, "This service does not exist. It may have been removed.")
-	case swarmWriteCode(err) == codeNoManagerConnected:
-		return detail, nil, nil, httpx.Problem(http.StatusServiceUnavailable, problemNoManager, "No manager of the swarm is connected.")
-	case envs.ReasonFor(err) == envs.ReasonNoQuorum:
-		return detail, nil, nil, httpx.Problem(http.StatusServiceUnavailable, problemNoQuorum, "The swarm has lost its quorum.")
+	if err != nil {
+		return detail, nil, nil, serviceReadProblem(d, envID, err)
 	}
-	return detail, nil, nil, snapshotProblem(d.Log, envID, err)
+	return detail, raw, nets, nil
 }
 
 // getService answers the detail of one service. The spec leaves through MaskServiceSpec with
