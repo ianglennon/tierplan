@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"testing"
 
@@ -393,5 +394,77 @@ func TestWriteOnManagerOnASwarmGoesToTheManagerTheClusterReaderChoosesOnceEvenWh
 	})
 	if !errors.Is(err, errBoom) || !slices.Equal(hosts, []string{"mgr-2"}) {
 		t.Fatalf("err = %v, hosts = %v; want one attempt on the leader mgr-2 and no failover for a write", err, hosts)
+	}
+}
+
+// A swarm node is a swarm ID to the cluster and an agent ID (or the environment's own, or
+// socket:<envId>) to the routes that reach it. SwarmNodeTargets is the map between them
+// (plan 06-07, RES-04), so a task can link to its container and later plans can route a
+// node-local read to the node a task ran on.
+
+func nodeIDs(m map[string]NodeRef) map[string]string {
+	out := map[string]string{}
+	for swarmID, ref := range m {
+		out[swarmID] = ref.ID
+	}
+	return out
+}
+
+func TestSwarmNodeTargetsMapsAConnectedAgentsSwarmNodeToTheAgentID(t *testing.T) {
+	f := newFoldRig(t, nil)
+	got, err := f.agg.SwarmNodeTargets(context.Background(), f.env.ID)
+	if err != nil {
+		t.Fatalf("SwarmNodeTargets: %v", err)
+	}
+	if want := map[string]string{"node-m1": f.m.id}; !maps.Equal(nodeIDs(got), want) {
+		t.Fatalf("targets = %v, want %v", nodeIDs(got), want)
+	}
+	if ref := got["node-m1"]; ref.Name != "mgr-1" {
+		t.Errorf("the node is named %q, want the agent's host name mgr-1", ref.Name)
+	}
+}
+
+func TestSwarmNodeTargetsMapsTheFoldedHostToItsSocketTarget(t *testing.T) {
+	f := newFoldRig(t, nil)
+	f.fold(t)
+	got, err := f.agg.SwarmNodeTargets(context.Background(), f.env.ID)
+	if err != nil {
+		t.Fatalf("SwarmNodeTargets: %v", err)
+	}
+	want := map[string]string{"node-m1": f.m.id, "node-local": SocketTarget(f.env.ID)}
+	if !maps.Equal(nodeIDs(got), want) {
+		t.Fatalf("targets = %v, want %v", nodeIDs(got), want)
+	}
+	// The ID is one that the node routes accept.
+	if err := f.agg.OnNode(context.Background(), f.env.ID, got["node-local"].ID, func(*dockerx.Client) error { return nil }); err != nil {
+		t.Errorf("OnNode with the folded host's target: %v", err)
+	}
+}
+
+func TestSwarmNodeTargetsMapsTheLocalSocketsOwnSwarmNodeToTheEnvironmentID(t *testing.T) {
+	f := newFoldRig(t, nil)
+	got, err := f.agg.SwarmNodeTargets(context.Background(), f.localEnv.ID)
+	if err != nil {
+		t.Fatalf("SwarmNodeTargets: %v", err)
+	}
+	if want := map[string]string{"node-local": f.localEnv.ID}; !maps.Equal(nodeIDs(got), want) {
+		t.Fatalf("targets = %v, want %v", nodeIDs(got), want)
+	}
+}
+
+func TestSwarmNodeTargetsLeavesOutAnAgentThatIsGone(t *testing.T) {
+	f := newFoldRig(t, nil)
+	ctx := context.Background()
+	_ = f.m.conn.WS.CloseNow()
+	eventually(t, "the manager's agent to be seen disconnected", func() bool {
+		got, err := f.agg.SwarmNodeTargets(ctx, f.env.ID)
+		return err == nil && len(got) == 0
+	})
+}
+
+func TestSwarmNodeTargetsOfAnUnknownEnvironmentIsNotFound(t *testing.T) {
+	f := newFoldRig(t, nil)
+	if _, err := f.agg.SwarmNodeTargets(context.Background(), "no-such-environment"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }

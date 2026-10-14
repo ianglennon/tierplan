@@ -465,9 +465,12 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // swarm networks, to name a service's attachments. ServiceScale (Phase 6, RES-02) changes one service's
 // replica count, once, with the version it just read; it takes an ID, a count and an optional credential, cannot express
 // any other change to the spec, and is never retried.
+// Tasks (Phase 6, RES-04) is a read: swarm tasks by service, node, task ID or desired state, typed; a
+// filter that names none is refused before any call. TaskHistoryLimit (Phase 6, RES-04) is a read: the
+// cluster's task history retention limit, from the engine's info.
 // ContainerLogs (Phase 4, OBS-01) is a read: one inspect, then the engine's log of the container
 // with stdout, stderr and timestamps always on; it takes only the time range, the tail and follow.
-var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "DistributionInspect", "Events", "ImageDetail", "ImageHistory", "ImagePull", "ImageRemove", "ImageUntag", "ImageUsers", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "Probe", "RestartPolicies", "ServiceInspect", "ServiceRefs", "ServiceScale", "Snapshot", "StartExec", "SwarmNetworkNames", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers"}
+var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "DistributionInspect", "Events", "ImageDetail", "ImageHistory", "ImagePull", "ImageRemove", "ImageUntag", "ImageUsers", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "Probe", "RestartPolicies", "ServiceInspect", "ServiceRefs", "ServiceScale", "Snapshot", "StartExec", "SwarmNetworkNames", "TaskHistoryLimit", "Tasks", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers"}
 
 // typedMethodsWithForbiddenWords are allowed methods whose names contain a word the
 // pattern below refuses, each reviewed one by one.

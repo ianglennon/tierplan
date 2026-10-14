@@ -158,6 +158,12 @@ type FakeConfig struct {
 	// AgentTasks are the tasks /tasks lists. A task is listed when the request's
 	// service filter names its service, by ID or by name, as a real daemon matches.
 	AgentTasks []FakeAgentTask
+	// Tasks are whole swarm tasks /tasks lists, with the filters of a real daemon (service,
+	// node, desired-state and id), beside AgentTasks (fake_tasks.go).
+	Tasks []swarm.Task
+	// HistoryLimit is Swarm.Cluster.Spec.Orchestration.TaskHistoryRetentionLimit /info
+	// reports; zero leaves the field unset, as a cluster that never set it does.
+	HistoryLimit int
 	// QuorumLost makes /nodes, /services, /tasks and /swarm answer the 500 a
 	// manager gives when the swarm has no leader. Node-local calls keep working,
 	// and so does /_ping, as on a real manager (RESEARCH Pitfall 11).
@@ -786,8 +792,12 @@ func (c FakeConfig) swarmInfo() swarm.Info {
 		LocalNodeState:   swarm.LocalNodeState(c.SwarmState),
 		ControlAvailable: c.SwarmControl,
 	}
-	if c.SwarmClusterID != "" {
+	if c.SwarmClusterID != "" || c.HistoryLimit != 0 {
 		info.Cluster = &swarm.ClusterInfo{ID: c.SwarmClusterID}
+	}
+	if c.HistoryLimit != 0 {
+		limit := int64(c.HistoryLimit)
+		info.Cluster.Spec.Orchestration.TaskHistoryRetentionLimit = &limit
 	}
 	return info
 }
@@ -1255,32 +1265,4 @@ func (fs FakeService) decorate(s *swarm.Service) {
 	}
 	s.PreviousSpec = fs.PreviousSpec
 	s.CreatedAt = fs.CreatedAt
-}
-
-// taskList is the /tasks answer. A task is listed only when the filter names its
-// service, by ID or by name, as a real daemon lists only what matches.
-func (c FakeConfig) taskList(rawFilters string) []swarm.Task {
-	out := []swarm.Task{}
-	var f map[string]map[string]bool
-	if json.Unmarshal([]byte(rawFilters), &f) != nil {
-		return out
-	}
-	alias := map[string]string{} // service ID <-> name
-	for _, fs := range c.ServiceRows {
-		alias[fs.ID], alias[fs.Name] = fs.Name, fs.ID
-	}
-	for _, ft := range c.AgentTasks {
-		svc := ft.Service
-		if svc == "" {
-			svc = "bayplan-agent"
-		}
-		if !f["service"][svc] && !f["service"][alias[svc]] {
-			continue
-		}
-		t := swarm.Task{ID: ft.ID, NodeID: ft.NodeID, ServiceID: svc}
-		t.CreatedAt = ft.Created
-		t.Status = swarm.TaskStatus{State: swarm.TaskState(ft.State), Err: ft.Error}
-		out = append(out, t)
-	}
-	return out
 }

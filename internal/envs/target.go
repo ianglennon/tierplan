@@ -147,3 +147,10 @@ func nodeTarget(in RollupInput, nodeID string) (key string, readOnly, ok bool) {
 	}
 	return "", false, false
 }
+
+// SwarmNodeTargets maps each swarm node of the environment that Bayplan can reach to the
+// node ID that container routes take (the ID of OnNode and WriteOnNode). The key is the
+// swarm node ID, as a task or a node row carries it.
+func (a *Aggregator) SwarmNodeTargets(ctx context.Context, envID string) (map[string]NodeRef, error) {
+	return nil, nil
+}
