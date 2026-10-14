@@ -42,7 +42,8 @@
       "menu": {
         "scale": "Scale…",
         "forceUpdate": "Force update…",
-        "rollback": "Roll back…"
+        "rollback": "Roll back…",
+        "remove": "Remove…"
       },
       "caption": {
         "filtered_one": "{{n, number}} of {{count, number}} service",
@@ -183,6 +184,20 @@
       "loadFailed": "Couldn't load the earlier version.",
       "now": "Now",
       "after": "After rollback"
+    },
+    "remove": {
+      "title": "Remove {{name}}?",
+      "body_one": "Swarm stops its {{count}} task and deletes the service. Its images, volumes, networks, secrets and configs stay.",
+      "body_other": "Swarm stops its {{count}} tasks and deletes the service. Its images, volumes, networks, secrets and configs stay.",
+      "agentWarning": "This is Bayplan's agent service. Removing it cuts Bayplan off from every node it runs on.",
+      "cancel": "Cancel",
+      "confirm": "Remove service",
+      "confirmAgent": "Remove agent service",
+      "pending": "Removing…",
+      "done": "Removed {{name}}.",
+      "gone": "{{name}} is already gone.",
+      "stackOwned": "Managed by stack {{stack}}. Change it through the stack.",
+      "confirmRequired": "Type {{name}} to remove Bayplan's agent service."
     },
     "refusal": {
       "image_unresolved": "Couldn't look up {{ref}} on {{host}} to pin it to a digest. Check the name, the tag and the credential, then try again.",

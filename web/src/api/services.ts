@@ -413,6 +413,34 @@ export function useRollbackService(envId: string) {
   });
 }
 
+export interface RemoveRequest {
+  serviceId: string;
+  // The service's name, typed. Sent only to remove Bayplan's own agent service.
+  confirm?: string;
+}
+
+// useRemoveService is the mutation behind the remove dialog. It does not retry, and reads the
+// services again whatever the answer, so a service that was already gone leaves the list too: a
+// write whose answer was lost may have happened (P2 D-42).
+export function useRemoveService(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, ServiceActionError, RemoveRequest>({
+    mutationKey: serviceActionKey(envId),
+    mutationFn: async ({ serviceId, confirm }) => {
+      try {
+        const res = await api.DELETE("/api/env/{envId}/services/{serviceId}", {
+          params: { path: { envId, serviceId }, query: confirm ? { confirm } : undefined },
+        });
+        if (!res.response.ok) throw actionError(res.error, res.response);
+      } catch (e) {
+        throw e instanceof ServiceActionError ? e : new ServiceActionError(0);
+      }
+    },
+    retry: false,
+    onSettled: () => refreshService(queryClient, envId),
+  });
+}
+
 export type ServiceRollout = components["schemas"]["RolloutBody"];
 export type RolloutState = ServiceRollout["state"];
 

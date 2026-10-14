@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useIsMutating } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import { ChevronDown } from "lucide-react";
 import { useRef, useState } from "react";
 
@@ -13,9 +14,14 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ForceUpdateDialog } from "@/features/services/force-update-dialog";
+import {
+  RemoveServiceDialog,
+  RemoveServiceMenuItem,
+} from "@/features/services/remove-service-dialog";
 import { RollbackDialog } from "@/features/services/rollback-dialog";
 import { RollbackMenuItem } from "@/features/services/rollback-menu-item";
 import { ScaleDialog } from "@/features/services/scale-dialog";
@@ -54,19 +60,23 @@ interface ServiceHeaderActionsProps {
 }
 
 // ServiceHeaderActions are the buttons in a service page's header: Scale… (not for a global
-// service or a job), Force update… and More, which holds Roll back…. A caller below Operator sees
-// them unavailable with the reason; the server decides either way. All three stay available on a
-// service that belongs to a stack, with the stack's warning in their dialogs (D-05). A later plan
-// adds Edit… here.
+// service or a job), Force update… and More, which holds Roll back…, Copy service ID and, last,
+// Remove…. A caller below Operator sees the first three unavailable with the reason, and Remove…
+// needs Admin; the server decides either way. Scale, force update and roll back stay available on
+// a service that belongs to a stack, with the stack's warning in their dialogs, but Remove… does
+// not: a stack's service is changed through the stack (D-05). A later plan adds Edit… here.
 export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProps) {
   const t = useT();
   const needs = useNeeds("services.control", envId);
+  const manage = useNeeds("services.manage", envId);
+  const navigate = useNavigate();
   // A scale, force update or rollback waiting for the manager's answer: the actions wait too, so
   // a second one cannot start on a service that is changing.
   const pending = useIsMutating({ mutationKey: serviceActionKey(envId) }) > 0;
   const [scaling, setScaling] = useState(false);
   const [forcing, setForcing] = useState(false);
   const [rollingBack, setRollingBack] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const host = useRef<HTMLDivElement>(null);
 
   async function copyId() {
@@ -125,6 +135,12 @@ export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProp
           <DropdownMenuItem className="max-md:min-h-11" onSelect={() => void copyId()}>
             {t("servicedetail.actions.copyId")}
           </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <RemoveServiceMenuItem
+            stack={detail.stack}
+            needs={manage}
+            onSelect={() => setRemoving(true)}
+          />
         </DropdownMenuContent>
       </DropdownMenu>
       {needs.allowed ? (
@@ -142,6 +158,14 @@ export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProp
             onOpenChange={setRollingBack}
           />
         </>
+      ) : null}
+      {manage.allowed && !detail.stack ? (
+        <RemoveServiceDialog
+          envId={envId}
+          target={removing ? itemOf(detail) : null}
+          onClose={() => setRemoving(false)}
+          onRemoved={() => void navigate({ to: "/env/$envId/services", params: { envId } })}
+        />
       ) : null}
       {needs.allowed && canScale(detail) ? (
         <ScaleDialog

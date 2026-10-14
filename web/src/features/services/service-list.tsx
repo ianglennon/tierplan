@@ -62,6 +62,10 @@ import {
   serviceStatusParam,
 } from "@/features/services/list-search";
 import { NotASwarm } from "@/features/services/not-a-swarm";
+import {
+  RemoveServiceDialog,
+  RemoveServiceMenuItem,
+} from "@/features/services/remove-service-dialog";
 import { RollbackDialog } from "@/features/services/rollback-dialog";
 import { RollbackMenuItem } from "@/features/services/rollback-menu-item";
 import { ScaleDialog, type ScaledService } from "@/features/services/scale-dialog";
@@ -99,6 +103,7 @@ interface RowActionsProps {
   onScale: (service: ServiceItem) => void;
   onForceUpdate: (service: ServiceItem) => void;
   onRollback: (service: ServiceItem) => void;
+  onRemove: (service: ServiceItem) => void;
   // True while the row waits on a scale: its menu is off until the list shows the count.
   disabled?: boolean;
   // Called as the row's menu opens and closes: a list with a menu open does not move.
@@ -107,19 +112,22 @@ interface RowActionsProps {
 
 // RowActions is the row menu of the services list. Open goes to the service's page; Scale… is
 // for replicated services only; Force update… and Roll back… are for every service, Roll back…
-// unavailable with the reason when the service has no earlier version. A caller below Operator
-// sees them disabled with the reason (D-19). The server decides either way.
+// unavailable with the reason when the service has no earlier version. Remove…, last and in
+// destructive text, needs Admin and is unavailable for a service a stack owns. A caller below the
+// permission sees them disabled with the reason (D-19). The server decides either way.
 function RowActions({
   envId,
   service,
   onScale,
   onForceUpdate,
   onRollback,
+  onRemove,
   disabled,
   onOpenChange,
 }: RowActionsProps) {
   const t = useT();
   const needs = useNeeds("services.control", envId);
+  const manage = useNeeds("services.manage", envId);
   const canScale = service.mode === "replicated";
   // Set when an item was chosen, so the menu does not hand focus back to its button before
   // the dialog has opened.
@@ -185,6 +193,15 @@ function RowActions({
           onSelect={() => {
             chose.current = true;
             onRollback(service);
+          }}
+        />
+        <DropdownMenuSeparator />
+        <RemoveServiceMenuItem
+          stack={service.stack}
+          needs={manage}
+          onSelect={() => {
+            chose.current = true;
+            onRemove(service);
           }}
         />
       </DropdownMenuContent>
@@ -253,6 +270,7 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
   // The service a Force update… or a Roll back… from a row menu is open for.
   const [forcing, setForcing] = useState<ServiceItem | null>(null);
   const [rollingBack, setRollingBack] = useState<ServiceItem | null>(null);
+  const [removing, setRemoving] = useState<ServiceItem | null>(null);
   // The results a person asked to see from a bulk scale's Details.
   const [report, setReport] = useState<BulkReport | null>(null);
   const canScale = useNeeds("services.control", envId);
@@ -605,6 +623,7 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
           }}
           onForceUpdate={setForcing}
           onRollback={setRollingBack}
+          onRemove={setRemoving}
         />
       ),
     },
@@ -786,6 +805,9 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
             if (!isOpen) setRollingBack(null);
           }}
         />
+      ) : null}
+      {removing ? (
+        <RemoveServiceDialog envId={envId} target={removing} onClose={() => setRemoving(null)} />
       ) : null}
       <BulkResultDialog
         envId={envId}
