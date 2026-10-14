@@ -38,6 +38,10 @@ interface State {
   detail: () => Response | Promise<Response>;
   tasks: () => Response | Promise<Response>;
   inspect: () => Response | Promise<Response>;
+  impact: () => Response | Promise<Response>;
+  // What was posted to the node's availability and role routes, with the route.
+  posted: { path: string; body: unknown }[];
+  post: () => Response | Promise<Response>;
 }
 
 let state: State;
@@ -61,6 +65,18 @@ beforeEach(() => {
     detail: () => node(nodeDetail()),
     tasks: () => Response.json(tasksAnswer()),
     inspect: () => Response.json({ document: { ID: NODE_ID, Spec: { Role: "manager" } } }),
+    impact: () =>
+      Response.json({
+        action: "drain",
+        hostname: "mgr-1",
+        version: 12,
+        tasks: [],
+        managers: { total: 3, reachable: 3, after: 3 },
+        warnings: [],
+        needsConfirm: false,
+      }),
+    posted: [],
+    post: () => new Response(null, { status: 204 }),
   };
   queryClient.setDefaultOptions({ queries: { retry: false, refetchOnWindowFocus: false } });
   nodeRetry.attempts = 0;
@@ -72,6 +88,10 @@ beforeEach(() => {
     vi.fn(async (req: Request): Promise<Response> => {
       const url = new URL(req.url);
       state.sent.push(url.pathname);
+      if (req.method === "POST") {
+        state.posted.push({ path: url.pathname, body: await req.json() });
+        return state.post();
+      }
       switch (url.pathname) {
         case "/api/instance":
           return Response.json({ instanceName: "Lab", needsSetup: false, rememberDays: 30 });
@@ -128,6 +148,8 @@ beforeEach(() => {
           return state.tasks();
         case `${BASE}/nodes/${NODE_ID}/inspect`:
           return state.inspect();
+        case `${BASE}/nodes/${NODE_ID}/impact`:
+          return state.impact();
       }
       return Response.json({}, { status: 404 });
     }),
@@ -511,5 +533,123 @@ describe("the Inspect tab", () => {
     renderAt(`${PAGE}/inspect`);
     expect(await screen.findByText("Couldn't load the inspect document of mgr-1.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry loading the inspect document" })).toBeTruthy();
+  });
+});
+
+describe("the node's actions", () => {
+  beforeEach(() => {
+    state.me = makeMe({ envs: { [NODE_ENV]: "admin" } });
+  });
+
+  const names = (el: HTMLElement) =>
+    within(el)
+      .getAllByRole("button")
+      .map((b) => b.textContent);
+
+  async function openMore() {
+    const more = await screen.findByRole("button", { name: "More" });
+    await act(async () => {
+      fireEvent.keyDown(more, { key: "Enter" });
+    });
+    return screen.findByRole("menu");
+  }
+
+  it("offers an active manager Drain… and Pause…, and Demote… and Copy node ID under More", async () => {
+    renderAt();
+    await screen.findByRole("heading", { name: "mgr-1" });
+    expect(names(headerOf())).toEqual(["Drain…", "Pause…", "More"]);
+    const menu = await openMore();
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((i) => i.textContent),
+    ).toEqual(["Demote…", "Copy node ID"]);
+  });
+
+  it("offers a paused worker Drain… and Activate node, and Promote… under More", async () => {
+    state.detail = () =>
+      node(
+        nodeDetail({
+          role: "worker",
+          leader: false,
+          runsBayplan: false,
+          reachability: "",
+          availability: "pause",
+        }),
+      );
+    renderAt();
+    await screen.findByRole("heading", { name: "mgr-1" });
+    expect(names(headerOf())).toEqual(["Drain…", "Activate node", "More"]);
+    const menu = await openMore();
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((i) => i.textContent),
+    ).toEqual(["Promote…", "Copy node ID"]);
+  });
+
+  it("offers a drained node Activate node only", async () => {
+    state.detail = () => node(nodeDetail({ availability: "drain" }));
+    renderAt();
+    await screen.findByRole("heading", { name: "mgr-1" });
+    expect(names(headerOf())).toEqual(["Activate node", "More"]);
+  });
+
+  it("opens the drain dialog, sends the drain and shows Draining… until the page shows it", async () => {
+    renderAt();
+    await screen.findByRole("heading", { name: "mgr-1" });
+    fireEvent.click(within(headerOf()).getByRole("button", { name: "Drain…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Drain mgr-1?" });
+    await waitFor(() =>
+      expect(within(dialog).queryByText("Checking what this will do…")).toBeNull(),
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Drain node" }));
+    await waitFor(() => expect(state.posted).toHaveLength(1));
+    expect(state.posted[0]).toEqual({
+      path: `${BASE}/nodes/${NODE_ID}/availability`,
+      body: { availability: "drain", version: 12 },
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(within(headerOf()).getByText("Draining…")).toBeTruthy();
+  });
+
+  it("activates a node with no dialog", async () => {
+    state.detail = () => node(nodeDetail({ availability: "drain" }));
+    renderAt();
+    await screen.findByRole("heading", { name: "mgr-1" });
+    fireEvent.click(within(headerOf()).getByRole("button", { name: "Activate node" }));
+    expect(await screen.findByText("Activated mgr-1.")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(state.posted[0]).toEqual({
+      path: `${BASE}/nodes/${NODE_ID}/availability`,
+      body: { availability: "active", version: 12 },
+    });
+  });
+
+  it("copies the node's ID", async () => {
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    renderAt();
+    await screen.findByRole("heading", { name: "mgr-1" });
+    const menu = await openMore();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Copy node ID" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(NODE_ID));
+  });
+
+  it("shows a Viewer the changes unavailable with Needs Admin", async () => {
+    state.me = makeMe({ envs: { [NODE_ENV]: "viewer" } });
+    renderAt();
+    await screen.findByRole("heading", { name: "mgr-1" });
+    const drain = within(headerOf()).getByRole("button", { name: "Drain…" });
+    expect(drain.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(drain);
+    expect(await screen.findAllByText("Needs Admin")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(state.posted).toEqual([]);
+    // Copying the ID is a read, open to a Viewer.
+    const menu = await openMore();
+    expect(
+      within(menu).getByRole("menuitem", { name: "Copy node ID" }).getAttribute("aria-disabled"),
+    ).toBeNull();
   });
 });

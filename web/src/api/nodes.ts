@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
 import { readProblem } from "@/api/problem";
@@ -154,5 +154,135 @@ export function nodeTasksQuery(envId: string, id: string) {
       ),
     retry: retryUnlessGone,
     refetchInterval: visibleEvery(NODES_REFETCH_MS),
+  });
+}
+
+export type NodeImpact = components["schemas"]["NodeImpactBody"];
+export type NodeImpactTask = components["schemas"]["NodeImpactTask"];
+
+// The changes a node dialog is for, as the impact route knows them. Activate has no dialog.
+export type NodeImpactAction = "drain" | "pause" | "promote" | "demote";
+
+// What a change to a node will do, judged by the server from a live read. It extends the node's
+// key, so a node event refreshes an open dialog's answer, and it is never kept: a dialog opened
+// again reads again, since the warnings are about the swarm as it is now.
+export function nodeImpactQuery(envId: string, id: string, action: NodeImpactAction) {
+  return queryOptions({
+    queryKey: [...nodeKey(envId, id), "impact", action] as const,
+    queryFn: async () => {
+      const res = await api.GET("/api/env/{envId}/nodes/{nodeId}/impact", {
+        params: { path: { envId, nodeId: id }, query: { action } },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new NodeLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    retry: false,
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
+  });
+}
+
+// NodeActionError is a node change the server refused or that got no answer. The status and the
+// problem type say which refusal it was (confirmation_required, node_changed, last_manager,
+// no_manager_connected, ...); the detail is Docker's own words where the problem carries them.
+// A status of 0 is a request that got no answer at all.
+export class NodeActionError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  readonly detail?: string;
+  constructor(status: number, type?: string, detail?: string) {
+    super(`POST node action failed (${status})`);
+    this.name = "NodeActionError";
+    this.status = status;
+    this.type = type;
+    this.detail = detail;
+  }
+}
+
+// isLostNodeAction says whether a node change got no answer. The server sees a write through, so
+// it may well have happened: the list, read again after every change, shows it.
+export function isLostNodeAction(err: unknown): boolean {
+  return err instanceof NodeActionError && err.status === 0;
+}
+
+function nodeActionError(body: unknown, response: { status: number }): NodeActionError {
+  const problem = readProblem(body, response);
+  const detail =
+    typeof body === "object" && body !== null && "detail" in body && typeof body.detail === "string"
+      ? body.detail
+      : undefined;
+  return new NodeActionError(problem.status, problem.type, detail);
+}
+
+// A change to a node moves its tasks, so the nodes (and every page under them) and the services
+// list, which the placement view reads, are read again whatever the answer: a write whose answer
+// was lost may have happened (P2 D-42).
+function refreshNodes(queryClient: ReturnType<typeof useQueryClient>, envId: string) {
+  void queryClient.invalidateQueries({ queryKey: nodesKey(envId) });
+  void queryClient.invalidateQueries({ queryKey: listKey(envId, "services") });
+}
+
+export type NodeAvailability = "active" | "pause" | "drain";
+export type NodeRole = "manager" | "worker";
+
+export interface NodeAvailabilityChange {
+  nodeId: string;
+  availability: NodeAvailability;
+  // The node's version as it was last read: the impact's, or the node page's.
+  version: number;
+  // The node's name, typed, when the impact said it is needed.
+  confirm?: string;
+}
+
+export interface NodeRoleChange {
+  nodeId: string;
+  role: NodeRole;
+  version: number;
+  confirm?: string;
+}
+
+// useSetNodeAvailability is the mutation behind Drain, Pause and Activate. It does not retry.
+export function useSetNodeAvailability(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, NodeActionError, NodeAvailabilityChange>({
+    mutationKey: ["env", envId, "node-action"],
+    mutationFn: async ({ nodeId, availability, version, confirm }) => {
+      try {
+        const res = await api.POST("/api/env/{envId}/nodes/{nodeId}/availability", {
+          params: { path: { envId, nodeId } },
+          body: { availability, version, ...(confirm ? { confirm } : {}) },
+        });
+        if (!res.response.ok) throw nodeActionError(res.error, res.response);
+      } catch (e) {
+        throw e instanceof NodeActionError ? e : new NodeActionError(0);
+      }
+    },
+    retry: false,
+    onSettled: () => refreshNodes(queryClient, envId),
+  });
+}
+
+// useSetNodeRole is the mutation behind Promote and Demote. It does not retry.
+export function useSetNodeRole(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, NodeActionError, NodeRoleChange>({
+    mutationKey: ["env", envId, "node-action"],
+    mutationFn: async ({ nodeId, role, version, confirm }) => {
+      try {
+        const res = await api.POST("/api/env/{envId}/nodes/{nodeId}/role", {
+          params: { path: { envId, nodeId } },
+          body: { role, version, ...(confirm ? { confirm } : {}) },
+        });
+        if (!res.response.ok) throw nodeActionError(res.error, res.response);
+      } catch (e) {
+        throw e instanceof NodeActionError ? e : new NodeActionError(0);
+      }
+    },
+    retry: false,
+    onSettled: () => refreshNodes(queryClient, envId),
   });
 }
