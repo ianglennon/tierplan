@@ -18,6 +18,7 @@ export function TestRouter({ children }: { children: ReactNode }) {
   const [router] = useState(() => {
     const root = createRootRoute();
     const tree = root.addChildren([
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/containers" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/containers/$containerId" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/networks/$networkId" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/events" }),

@@ -294,3 +294,95 @@ describe("ScaleDialog", () => {
     expect(posts()).toHaveLength(1);
   });
 });
+
+describe("the State column", () => {
+  it("comes after Name and shows each row's state word by the priority rule", async () => {
+    items = [
+      svc(),
+      svc({ id: "id-deg", name: "degraded-svc", running: 1, desired: 3 }),
+      svc({ id: "id-down", name: "down-svc", running: 0, desired: 2 }),
+      svc({ id: "id-zero", name: "zero-svc", running: 0, desired: 0 }),
+      svc({ id: "id-upd", name: "updating-svc", updateState: "updating" }),
+      svc({ id: "id-paused", name: "paused-svc", updateState: "paused" }),
+      svc({ id: "id-rb", name: "rolledback-svc", updateState: "rollback_completed" }),
+      svc({ id: "id-job", name: "job-svc", mode: "replicated-job", running: 0, desired: 0 }),
+    ];
+    mount();
+    await screen.findByText("web");
+    const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
+    expect(headers.slice(0, 3)).toEqual(["Name", "State", "Mode"]);
+    const stateOf = (name: RegExp) => within(screen.getByRole("row", { name })).getByText;
+    expect(stateOf(/^web/)("Running")).toBeTruthy();
+    expect(stateOf(/^degraded-svc/)("Degraded")).toBeTruthy();
+    expect(stateOf(/^down-svc/)("Not running")).toBeTruthy();
+    expect(stateOf(/^zero-svc/)("Scaled to 0")).toBeTruthy();
+    expect(stateOf(/^updating-svc/)("Updating")).toBeTruthy();
+    expect(stateOf(/^paused-svc/)("Update paused")).toBeTruthy();
+    expect(stateOf(/^rolledback-svc/)("Rolled back")).toBeTruthy();
+    expect(stateOf(/^job-svc/)("Completed")).toBeTruthy();
+  });
+
+  it("explains a service's replicas in a tooltip", async () => {
+    items = [svc({ running: 1, desired: 3 })];
+    mount();
+    const word = await screen.findByText("Degraded");
+    await act(async () => {
+      fireEvent.focus(word);
+    });
+    expect((await screen.findAllByText("1 of 3 replicas running")).length).toBeGreaterThan(0);
+  });
+
+  it("shows a pulsing Scaling… in the State cell, with the target in Replicas, until the list shows the new count", async () => {
+    const dialog = await openScale();
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Replicas" }), {
+      target: { value: "5" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Scale service" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const row = screen.getByRole("row", { name: /^web/ });
+    const cells = within(row).getAllByRole("cell");
+    // Name, State, Mode, Replicas
+    expect(within(cells[1] as HTMLElement).getByText("Scaling…")).toBeTruthy();
+    expect(within(cells[1] as HTMLElement).queryByText("Running")).toBeNull();
+    expect(cells[3]?.textContent).toBe("2/5");
+    expect(within(cells[3] as HTMLElement).queryByText("Scaling…")).toBeNull();
+  });
+});
+
+describe("a standalone environment", () => {
+  it("shows This isn't a swarm with a way back to containers instead of the table", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (req: Request) => {
+        const path = new URL(req.url).pathname;
+        if (path === "/api/me") return Response.json(me);
+        if (path === `/api/env/${ENV}/services`) {
+          return Response.json(
+            {
+              type: "not_a_swarm",
+              title: "Conflict",
+              status: 409,
+              detail: "This environment is a standalone Docker host, not a swarm.",
+            },
+            { status: 409 },
+          );
+        }
+        if (path === "/api/environments") {
+          return Response.json({ items: [{ id: ENV, name: "Homelab", envType: "standalone" }] });
+        }
+        return Response.json({}, { status: 404 });
+      }),
+    );
+    mount();
+    expect(await screen.findByRole("heading", { name: "This isn't a swarm" })).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "Homelab is a standalone host, so it has no services, nodes, secrets or configs.",
+      ),
+    ).toBeTruthy();
+    const back = screen.getByRole("link", { name: "Back to containers" });
+    expect(back.getAttribute("href")).toBe(`/env/${ENV}/containers`);
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(screen.queryByText("Couldn't load services.")).toBeNull();
+  });
+});
