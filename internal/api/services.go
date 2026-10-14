@@ -226,6 +226,7 @@ func RegisterServices(r *httpx.Router, d ServicesDeps) {
 
 	registerServiceDetail(r, d)
 	registerServiceTasks(r, d)
+	registerServiceRollout(r, d)
 	registerServiceActions(r, d)
 }
 

@@ -64,6 +64,9 @@ type ServiceDetail struct {
 	Agent bool
 	// Replicas is the replica count of a replicated service, zero otherwise.
 	Replicas uint64
+	// TemplateHash identifies the spec's TaskTemplate, Runtime aside: the SpecHash of a task
+	// that runs the service's current version.
+	TemplateHash string
 }
 
 // ServiceInspect reads one service by ID or name, and returns the typed detail and the
@@ -89,6 +92,7 @@ func serviceDetail(s swarm.Service) (ServiceDetail, error) {
 	d := ServiceDetail{
 		ID: s.ID, Name: s.Spec.Name, Mode: serviceMode(s.Spec.Mode), Stack: s.Spec.Labels[stackLabel],
 		Version: s.Version.Index, CreatedAt: s.CreatedAt.UTC(), UpdatedAt: s.UpdatedAt.UTC(), Agent: isAgentService(s),
+		TemplateHash: specHash(s.Spec.TaskTemplate),
 	}
 	if cs := s.Spec.TaskTemplate.ContainerSpec; cs != nil {
 		d.Image = cs.Image

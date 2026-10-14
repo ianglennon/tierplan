@@ -1244,6 +1244,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/services/{serviceId}/rollout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How far a service's rolling update has got
+         * @description The state of the service's last update or rollback as the swarm reports it, and how many of the tasks it wants running are running on the service's current task template (a task's spec equals the template but for its runtime): updated of total. A service with no UpdateStatus, which is also a service that was only scaled, answers state none. latestTaskError is the error of the newest failed or rejected task. Docker's message and task error text are cleaned of control characters and invalid UTF-8 on the server and are to be shown as plain text. One inspect and one task list read live from a manager; nothing is written. 404 service_not_found when the swarm has no such service; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs services.read (Viewer) on the environment.
+         */
+        get: operations["getServiceRollout"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/services/{serviceId}/spec": {
         parameters: {
             query?: never;
@@ -5342,6 +5362,37 @@ export interface components {
             /** @description Why the node is revoked, for the audit log and the node table. Optional */
             reason?: string;
         };
+        RolloutBody: {
+            /**
+             * Format: date-time
+             * @description When it completed; absent while it has not
+             */
+            completedAt?: string;
+            /** @description Docker's error text of the newest failed or rejected task, cleaned of control characters; empty when there is none. Docker's free text, to be shown as plain text */
+            latestTaskError: string;
+            /** @description Docker's own message about the update, cleaned of control characters; empty when it gave none. Docker's free text, to be shown as plain text */
+            message: string;
+            /**
+             * Format: date-time
+             * @description When the update or rollback started; absent when Docker says none
+             */
+            startedAt?: string;
+            /**
+             * @description The swarm's UpdateStatus state: updating, paused or completed for an update; rollback_started, rollback_paused or rollback_completed for a rollback. none when the service has no UpdateStatus, which is also what a scale leaves
+             * @enum {string}
+             */
+            state: "none" | "updating" | "paused" | "completed" | "rollback_started" | "rollback_paused" | "rollback_completed";
+            /**
+             * Format: int64
+             * @description Tasks the swarm wants running (desired state running)
+             */
+            total: number;
+            /**
+             * Format: int64
+             * @description Tasks that should run and are running on the service's current task template: the new version after an update, the earlier one after a rollback
+             */
+            updated: number;
+        };
         RotateTokenBody: {
             /**
              * @description What the environment's active agents run on. Absent while it has none
@@ -9232,6 +9283,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ServiceRollbackBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getServiceRollout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The service ID or name: the id of a row of the services list */
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RolloutBody"];
                 };
             };
             /** @description Error */

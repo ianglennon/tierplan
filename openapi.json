@@ -6638,6 +6638,60 @@
         },
         "type": "object"
       },
+      "RolloutBody": {
+        "additionalProperties": false,
+        "properties": {
+          "completedAt": {
+            "description": "When it completed; absent while it has not",
+            "format": "date-time",
+            "type": "string"
+          },
+          "latestTaskError": {
+            "description": "Docker's error text of the newest failed or rejected task, cleaned of control characters; empty when there is none. Docker's free text, to be shown as plain text",
+            "type": "string"
+          },
+          "message": {
+            "description": "Docker's own message about the update, cleaned of control characters; empty when it gave none. Docker's free text, to be shown as plain text",
+            "type": "string"
+          },
+          "startedAt": {
+            "description": "When the update or rollback started; absent when Docker says none",
+            "format": "date-time",
+            "type": "string"
+          },
+          "state": {
+            "description": "The swarm's UpdateStatus state: updating, paused or completed for an update; rollback_started, rollback_paused or rollback_completed for a rollback. none when the service has no UpdateStatus, which is also what a scale leaves",
+            "enum": [
+              "none",
+              "updating",
+              "paused",
+              "completed",
+              "rollback_started",
+              "rollback_paused",
+              "rollback_completed"
+            ],
+            "type": "string"
+          },
+          "total": {
+            "description": "Tasks the swarm wants running (desired state running)",
+            "format": "int64",
+            "type": "integer"
+          },
+          "updated": {
+            "description": "Tasks that should run and are running on the service's current task template: the new version after an update, the earlier one after a rollback",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "state",
+          "message",
+          "updated",
+          "total",
+          "latestTaskError"
+        ],
+        "type": "object"
+      },
       "RotateTokenBody": {
         "additionalProperties": false,
         "properties": {
@@ -14343,6 +14397,69 @@
           }
         },
         "summary": "Roll a service back to its previous spec",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/services/{serviceId}/rollout": {
+      "get": {
+        "description": "The state of the service's last update or rollback as the swarm reports it, and how many of the tasks it wants running are running on the service's current task template (a task's spec equals the template but for its runtime): updated of total. A service with no UpdateStatus, which is also a service that was only scaled, answers state none. latestTaskError is the error of the newest failed or rejected task. Docker's message and task error text are cleaned of control characters and invalid UTF-8 on the server and are to be shown as plain text. One inspect and one task list read live from a manager; nothing is written. 404 service_not_found when the swarm has no such service; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs services.read (Viewer) on the environment.",
+        "operationId": "getServiceRollout",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The service ID or name: the id of a row of the services list",
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "description": "The service ID or name: the id of a row of the services list",
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RolloutBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "How far a service's rolling update has got",
         "tags": [
           "environments"
         ]

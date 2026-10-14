@@ -6,12 +6,16 @@ package dockerx
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
 )
 
@@ -40,6 +44,9 @@ type TaskRow struct {
 	ExitCode *int
 	// CreatedAt and UpdatedAt are the task's own times, StateSince when State was reached.
 	CreatedAt, UpdatedAt, StateSince time.Time
+	// SpecHash identifies the task's spec, Runtime aside. A task is on the service's
+	// current version when it equals ServiceDetail.TemplateHash (RESEARCH E10).
+	SpecHash string
 }
 
 // TaskFilter narrows a task read. At least one field must be set.
@@ -80,6 +87,7 @@ func (c *Client) Tasks(ctx context.Context, f TaskFilter) ([]TaskRow, error) {
 			State: string(t.Status.State), DesiredState: string(t.DesiredState),
 			Err: t.Status.Err, Message: t.Status.Message,
 			CreatedAt: t.CreatedAt.UTC(), UpdatedAt: t.UpdatedAt.UTC(), StateSince: t.Status.Timestamp.UTC(),
+			SpecHash: specHash(t.Spec),
 		}
 		if cs := t.Status.ContainerStatus; cs != nil {
 			row.ContainerID = cs.ContainerID
@@ -109,4 +117,19 @@ func (c *Client) TaskHistoryLimit(ctx context.Context) (int, error) {
 		}
 	}
 	return DefaultTaskHistoryLimit, nil
+}
+
+// specHash is the SHA-256, in hex, of a task spec encoded as JSON with Runtime cleared: a
+// task's spec equals its service's TaskTemplate except for Runtime (RESEARCH E10), so equal
+// hashes mean the task runs the service's current template. The encoding sorts map keys,
+// so two equal specs hash alike whatever order their maps were built in.
+func specHash(spec swarm.TaskSpec) string {
+	spec.Runtime = ""
+	raw, err := json.Marshal(spec)
+	if err != nil {
+		// A TaskSpec holds only types the encoder accepts; an empty hash matches nothing.
+		return ""
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }
