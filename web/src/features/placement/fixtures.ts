@@ -6,7 +6,7 @@ import type { PlacementData, PlacementNode, PlacementTask } from "@/features/pla
 // Test data for the placement tests: a node and a task with every field the API sends.
 
 export const node = (extra: Partial<PlacementNode> = {}): PlacementNode => ({
-  id: "node-1",
+  id: "n1",
   hostname: "mgr-1",
   role: "manager",
   leader: false,
@@ -29,7 +29,7 @@ export const task = (extra: Partial<PlacementTask> = {}): PlacementTask => ({
   service: "web",
   stack: "shop",
   slot: 1,
-  nodeId: "node-1",
+  nodeId: "n1",
   nodeKnown: true,
   state: "running",
   dockerState: "running",

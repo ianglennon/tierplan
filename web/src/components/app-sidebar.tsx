@@ -66,9 +66,10 @@ const RESOURCE_ITEMS = [
 
 // The Swarm group (Phase 6, UI-SPEC "Sidebar"): the swarm-only pages of the selected
 // environment, below Resources. Shown on a swarm environment alone, each item to a user who may
-// read it. Later plans add Nodes, Placement, Secrets and Configs to this array.
+// read it. Later plans add Nodes, Secrets and Configs to this array.
 const SWARM_ITEMS = [
   { key: "services", perm: "services.read", to: "/env/$envId/services", icon: Boxes },
+  { key: "placement", perm: "services.read", to: "/env/$envId/placement", icon: LayoutGrid },
 ] as const;
 
 type NavItem = (typeof RESOURCE_ITEMS)[number] | (typeof SWARM_ITEMS)[number];

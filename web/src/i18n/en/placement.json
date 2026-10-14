@@ -1,0 +1,71 @@
+{
+  "placement": {
+    "title": "Placement",
+    "caption": "Where tasks run across {{environment}}.",
+    "layout": {
+      "label": "Layout",
+      "nodes": "By node"
+    },
+    "filters": {
+      "stack": "Stack",
+      "allStacks": "All stacks",
+      "noStack": "Not in a stack",
+      "search": {
+        "label": "Search services",
+        "placeholder": "Filter by service name",
+        "clear": "Clear search"
+      },
+      "clear": "Clear filters"
+    },
+    "column": {
+      "manager": "Manager",
+      "worker": "Worker",
+      "leader": "Leader",
+      "tasks_one": "{{count, number}} task",
+      "tasks_other": "{{count, number}} tasks",
+      "cpus_one": "{{count, number}} CPU",
+      "cpus_other": "{{count, number}} CPUs",
+      "capacity": "{{cpus}} · {{memory}}",
+      "noCapacity": "Capacity not reported",
+      "none": "No tasks",
+      "noStack": "Not in a stack",
+      "notPlaced": "Not placed",
+      "notPlacedTooltip": "These tasks have no node yet. Their error says why.",
+      "removed": "Removed node",
+      "removedTooltip": "These tasks ran on nodes that are no longer in the swarm."
+    },
+    "node": {
+      "state": {
+        "ready": "Ready",
+        "down": "Down",
+        "disconnected": "Disconnected",
+        "unknown": "Unknown"
+      },
+      "availability": {
+        "active": "Active",
+        "pause": "Paused",
+        "drain_one": "Draining ({{count, number}} task left)",
+        "drain_other": "Draining ({{count, number}} tasks left)",
+        "drained": "Drained"
+      }
+    },
+    "card": {
+      "open": "Open service {{service}}, slot {{slot}}, {{state}}",
+      "openGlobal": "Open service {{service}}, {{state}}",
+      "slot": "{{slot}}"
+    },
+    "empty": {
+      "title": "No tasks to place",
+      "body": "Tasks appear here once a service is running on {{environment}}."
+    },
+    "filteredEmpty": {
+      "title": "No tasks match these filters.",
+      "action": "Clear filters"
+    },
+    "error": {
+      "title": "Couldn't load placement.",
+      "body": "Bayplan couldn't ask a manager where the tasks run.",
+      "retry": "Retry loading placement"
+    }
+  }
+}
