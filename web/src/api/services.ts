@@ -168,6 +168,7 @@ async function postScaleChunk(
 export function useScaleServices(envId: string) {
   const queryClient = useQueryClient();
   return useMutation<ServiceScaleResult[], ScaleRequestError, ScaleRequest>({
+    mutationKey: serviceActionKey(envId),
     mutationFn: (request) => postScale(envId, request),
     retry: false,
     onSettled: () => {
@@ -364,6 +365,7 @@ export interface ForceUpdateRequest {
 export function useForceUpdateService(envId: string) {
   const queryClient = useQueryClient();
   return useMutation<ServiceForceUpdateResult, ServiceActionError, ForceUpdateRequest>({
+    mutationKey: serviceActionKey(envId),
     mutationFn: async ({ serviceId, retry }) => {
       try {
         const res = await api.POST("/api/env/{envId}/services/{serviceId}/force-update", {
@@ -393,6 +395,7 @@ export interface RollbackRequest {
 export function useRollbackService(envId: string) {
   const queryClient = useQueryClient();
   return useMutation<ServiceRollbackResult, ServiceActionError, RollbackRequest>({
+    mutationKey: serviceActionKey(envId),
     mutationFn: async ({ serviceId, version }) => {
       try {
         const res = await api.POST("/api/env/{envId}/services/{serviceId}/rollback", {
@@ -408,4 +411,46 @@ export function useRollbackService(envId: string) {
     retry: false,
     onSettled: () => refreshService(queryClient, envId),
   });
+}
+
+export type ServiceRollout = components["schemas"]["RolloutBody"];
+export type RolloutState = ServiceRollout["state"];
+
+// How often a rollout is read while an update or a rollback runs (UI-SPEC "Rollout progress").
+export const ROLLOUT_REFETCH_MS = 2000;
+
+// Whether a rollout is still running: the swarm is replacing tasks.
+export function isRolloutRunning(state: RolloutState | undefined): boolean {
+  return state === "updating" || state === "rollback_started";
+}
+
+// How far one service's rolling update has got and the error of its newest failed task, under the
+// key of its detail, so the events feed and every action that refresh the service refresh the
+// rollout too. It is read every 2 s while an update or rollback runs and the page is visible, at
+// the list's pace otherwise, and not at all while the page is hidden.
+export function serviceRolloutQuery(envId: string, id: string) {
+  return queryOptions({
+    queryKey: [...serviceKey(envId, id), "rollout"] as const,
+    queryFn: async () => {
+      const res = await api.GET("/api/env/{envId}/services/{serviceId}/rollout", {
+        params: { path: { envId, serviceId: id } },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new ServiceLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    retry: (count, error) => !isServiceGone(error) && count < serviceRetry.attempts,
+    refetchInterval: (query) => {
+      if (document.visibilityState !== "visible") return false;
+      return isRolloutRunning(query.state.data?.state) ? ROLLOUT_REFETCH_MS : LIST_REFETCH_MS;
+    },
+  });
+}
+
+// The key every service action (scale, force update, rollback) carries, so the page can tell one
+// is pending.
+export function serviceActionKey(envId: string) {
+  return ["service-action", envId] as const;
 }

@@ -3,7 +3,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet } from "@tanstack/react-router";
-import { Boxes, TriangleAlert } from "lucide-react";
+import { Boxes } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { isServiceGone, type ServiceDetail, serviceQuery } from "@/api/services";
@@ -24,11 +24,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SelfContainerBadge } from "@/features/containers/self-container-badge";
-import { ServiceHeaderActions } from "@/features/service-detail/header-actions";
+import { ServiceAlerts } from "@/features/service-detail/alerts";
+import { itemOf, ServiceHeaderActions } from "@/features/service-detail/header-actions";
 import { SERVICE_TABS } from "@/features/service-detail/tabs";
-import { ManagedByStackNotice } from "@/features/services/managed-by-stack-notice";
+import { ForceUpdateDialog } from "@/features/services/force-update-dialog";
+import { RollbackDialog } from "@/features/services/rollback-dialog";
+import { RolloutProgress } from "@/features/services/rollout-progress";
 import { ServiceStateCell } from "@/features/services/service-state-cell";
 import { useDocumentTitle } from "@/hooks/use-me";
+import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { toastError } from "@/lib/toast";
 
@@ -190,11 +194,48 @@ function Header({ envId, data }: { envId: string; data: ServiceDetail }) {
   );
 }
 
+// Alerts is the region under the header: the update's progress or the alert for one that paused
+// or was rolled back, then the other alerts. Roll back and Retry update, which the update-state
+// alert offers, open their dialogs from here, so the dialogs are the same ones the header opens.
+function Alerts({ envId, data }: { envId: string; data: ServiceDetail }) {
+  const needs = useNeeds("services.control", envId);
+  const [dialog, setDialog] = useState<"rollback" | "retry" | null>(null);
+  return (
+    <>
+      <RolloutProgress
+        envId={envId}
+        serviceId={data.id}
+        name={data.name}
+        onRollback={() => setDialog("rollback")}
+        onRetry={() => setDialog("retry")}
+      />
+      <ServiceAlerts envId={envId} detail={data} />
+      {needs.allowed ? (
+        <>
+          <ForceUpdateDialog
+            envId={envId}
+            target={itemOf(data)}
+            retry
+            open={dialog === "retry"}
+            onOpenChange={(open) => setDialog(open ? "retry" : null)}
+          />
+          <RollbackDialog
+            envId={envId}
+            target={itemOf(data)}
+            open={dialog === "rollback"}
+            onOpenChange={(open) => setDialog(open ? "rollback" : null)}
+          />
+        </>
+      ) : null}
+    </>
+  );
+}
+
 // ServiceDetailLayout is the frame of a service's page: the breadcrumb, the header with the
 // name, the state, the badges, the image line and the actions, the alerts, the tab bar (Link
 // triggers, the active tab follows the URL) and the tab under it. The tabs render at once,
-// before the service has loaded (UI-SPEC "Loading"). Rollout, restart-loop and
-// replicas-short alerts are added by later plans, in the alerts region.
+// before the service has loaded (UI-SPEC "Loading"). The restart-loop alert is added by a later
+// plan, in the alerts region.
 export function ServiceDetailLayout({ envId, serviceId }: ServiceDetailLayoutProps) {
   const t = useT();
   const query = useQuery(serviceQuery(envId, serviceId));
@@ -235,15 +276,7 @@ export function ServiceDetailLayout({ envId, serviceId }: ServiceDetailLayoutPro
         <Breadcrumb envId={envId} name={data?.name} />
         {data ? <Header envId={envId} data={data} /> : <Skeleton className="h-8 w-64" />}
       </header>
-      {data?.agent ? (
-        <Alert variant="warning">
-          <TriangleAlert aria-hidden="true" />
-          <AlertDescription className="text-foreground">
-            {t("servicedetail.agentService")}
-          </AlertDescription>
-        </Alert>
-      ) : null}
-      {data?.stack ? <ManagedByStackNotice stack={data.stack} /> : null}
+      {data ? <Alerts envId={envId} data={data} /> : null}
       <Tabs value="" className="gap-4">
         <TabsList
           variant="line"

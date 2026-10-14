@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { serviceRetry } from "@/api/services";
@@ -21,15 +21,18 @@ import {
 // D-12, UI-SPEC "Service detail").
 
 let answer: ServiceRolloutBody;
+let reads: number;
 
 beforeEach(() => {
   answer = rollout();
+  reads = 0;
   serviceRetry.attempts = 0;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (req: Request) => {
       const path = new URL(req.url).pathname;
       if (path === `/api/env/${SERVICE_ENV}/services/${SERVICE_ID}/rollout`) {
+        reads++;
         return Response.json(answer);
       }
       return Response.json({}, { status: 404 });
@@ -51,8 +54,10 @@ async function mount(detail: ServiceDetailBody, restartLoop?: React.ReactNode) {
     </QueryClientProvider>,
   );
   // The rollout is read once before the alerts decide.
-  await act(async () => {});
-  await act(async () => {});
+  await waitFor(() => expect(reads).toBe(1));
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
 }
 
 const short = (extra: Partial<ServiceDetailBody> = {}) =>

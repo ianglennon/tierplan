@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
+import { useIsMutating } from "@tanstack/react-query";
 import { ChevronDown } from "lucide-react";
 import { useRef, useState } from "react";
 
-import type { ServiceDetail, ServiceItem } from "@/api/services";
+import { type ServiceDetail, type ServiceItem, serviceActionKey } from "@/api/services";
 import { copyText } from "@/components/copyable-code";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { Button } from "@/components/ui/button";
@@ -60,6 +61,9 @@ interface ServiceHeaderActionsProps {
 export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProps) {
   const t = useT();
   const needs = useNeeds("services.control", envId);
+  // A scale, force update or rollback waiting for the manager's answer: the actions wait too, so
+  // a second one cannot start on a service that is changing.
+  const pending = useIsMutating({ mutationKey: serviceActionKey(envId) }) > 0;
   const [scaling, setScaling] = useState(false);
   const [forcing, setForcing] = useState(false);
   const [rollingBack, setRollingBack] = useState(false);
@@ -81,6 +85,7 @@ export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProp
             type="button"
             variant="outline"
             className="max-md:h-11"
+            disabled={pending}
             onClick={needs.allowed ? () => setScaling(true) : undefined}
           >
             {t("servicedetail.actions.scale")}
@@ -92,6 +97,7 @@ export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProp
           type="button"
           variant="outline"
           className="max-md:h-11"
+          disabled={pending}
           onClick={needs.allowed ? () => setForcing(true) : undefined}
         >
           {t("servicedetail.actions.forceUpdate")}
@@ -103,6 +109,7 @@ export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProp
             type="button"
             variant="outline"
             className="max-md:h-11"
+            disabled={pending}
             aria-label={t("servicedetail.actions.more")}
           >
             {t("servicedetail.actions.moreText")}

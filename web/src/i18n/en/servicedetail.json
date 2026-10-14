@@ -24,6 +24,50 @@
       "body": "Change its settings through the stack so the next deploy doesn't overwrite them. You can still scale, force update and roll back here, but a stack deploy sets those again."
     },
     "agentService": "This is Bayplan's agent service. Removing or changing it can cut Bayplan off from every node it runs on.",
+    "rollout": {
+      "progressLabel": "Update progress",
+      "updating": {
+        "title": "Updating {{name}}",
+        "count_one": "{{updated}} of {{count}} task is on the new version.",
+        "count_other": "{{updated}} of {{count}} tasks are on the new version."
+      },
+      "rollingBack": {
+        "title": "Rolling back {{name}}",
+        "count_one": "{{updated}} of {{count}} task is back on the earlier version.",
+        "count_other": "{{updated}} of {{count}} tasks are back on the earlier version."
+      },
+      "complete": "Update complete",
+      "paused": {
+        "title": "Update paused",
+        "body": "Docker paused the update: {{message}}",
+        "bodyBare": "Docker paused the update."
+      },
+      "rollbackPaused": {
+        "title": "Rollback paused",
+        "body": "Docker paused the rollback: {{message}}",
+        "bodyBare": "Docker paused the rollback."
+      },
+      "rolledBack": {
+        "title": "Update rolled back",
+        "body": "Docker returned the service to its earlier settings: {{message}}",
+        "bodyBare": "Docker returned the service to its earlier settings."
+      },
+      "rollBack": "Roll back",
+      "retry": "Retry update",
+      "announce": {
+        "complete": "Update complete",
+        "paused": "Update paused",
+        "rollbackPaused": "Rollback paused",
+        "rolledBack": "Update rolled back"
+      }
+    },
+    "alerts": {
+      "replicasShort": {
+        "title": "{{count}} of {{desired}} tasks aren't running",
+        "error": "Latest task error: {{error}}",
+        "starting": "Swarm is still starting them."
+      }
+    },
     "actions": {
       "scale": "Scale…",
       "forceUpdate": "Force update…",

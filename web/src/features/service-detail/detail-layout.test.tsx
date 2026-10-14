@@ -17,6 +17,7 @@ import { makeMe } from "@/test-me";
 import {
   bareServiceDetail,
   DIGEST,
+  rollout,
   SERVICE_ENV,
   SERVICE_ID,
   type ServiceApiState,
@@ -194,6 +195,74 @@ describe("the alerts", () => {
       ),
     ).toBeTruthy();
     expect(screen.getAllByText("Bayplan agent").length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("the rollout region", () => {
+  it("shows the update's progress under the header while it runs", async () => {
+    state.rollout = () => Response.json(rollout({ state: "updating", updated: 1, total: 3 }));
+    renderAt();
+    expect(await screen.findByText("Updating api")).toBeTruthy();
+    expect(screen.getByText("1 of 3 tasks are on the new version.")).toBeTruthy();
+    const bar = screen.getByRole("progressbar", { name: "Update progress" });
+    expect(bar.getAttribute("aria-valuenow")).toBe("33");
+    // Under the header, above the tabs.
+    const header = headerOf();
+    const tabs = screen.getByRole("tablist");
+    expect(header.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(bar.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("opens the retry dialog from a paused update", async () => {
+    state.rollout = () => Response.json(rollout({ state: "paused", message: "task t1 failed" }));
+    renderAt();
+    expect(await screen.findByText("Update paused")).toBeTruthy();
+    const retry = screen.getByRole("button", { name: "Retry update" });
+    await waitFor(() => expect(retry.getAttribute("aria-disabled")).toBeNull());
+    fireEvent.click(retry);
+    expect(await screen.findByRole("dialog", { name: "Retry the update on api?" })).toBeTruthy();
+  });
+
+  it("opens the rollback dialog from a paused update", async () => {
+    state.rollout = () => Response.json(rollout({ state: "paused", message: "task t1 failed" }));
+    renderAt();
+    await screen.findByText("Update paused");
+    const rollBack = screen.getByRole("button", { name: "Roll back" });
+    await waitFor(() => expect(rollBack.getAttribute("aria-disabled")).toBeNull());
+    fireEvent.click(rollBack);
+    expect(await screen.findByRole("dialog", { name: "Roll back api?" })).toBeTruthy();
+  });
+
+  it("shows the replicas-short alert with the latest task error when no update explains it", async () => {
+    state.rollout = () => Response.json(rollout({ latestTaskError: "no suitable node" }));
+    renderAt();
+    expect(await screen.findByText("1 of 3 tasks aren't running")).toBeTruthy();
+    expect(screen.getByText("Latest task error: no suitable node")).toBeTruthy();
+  });
+
+  it("does not show the replicas-short alert during an update", async () => {
+    state.rollout = () => Response.json(rollout({ state: "updating", updated: 0, total: 3 }));
+    renderAt();
+    await screen.findByText("Updating api");
+    expect(screen.queryByText(/tasks aren't running/)).toBeNull();
+  });
+
+  it("makes the header actions unavailable while a force update waits for its answer", async () => {
+    state.forceUpdate = () => new Promise<Response>(() => {});
+    renderAt();
+    fireEvent.click(await screen.findByRole("button", { name: "Force update…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Force update api?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Force update" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Scale…", hidden: true }).hasAttribute("disabled"),
+      ).toBe(true),
+    );
+    for (const name of ["Force update…", "More actions"]) {
+      expect(screen.getByRole("button", { name, hidden: true }).hasAttribute("disabled")).toBe(
+        true,
+      );
+    }
   });
 });
 

@@ -76,11 +76,19 @@ function mount() {
   );
 }
 
+// shown is how many times text is drawn on the page, not counting the screen reader's live
+// region, which repeats a change in the same words.
+function shown(text: string): number {
+  return screen
+    .queryAllByText(text)
+    .filter((el) => !el.closest('[data-testid="rollout-announcement"]')).length;
+}
+
 // next makes the server answer with body from now on and reads the rollout again.
 async function next(body: ServiceRolloutBody) {
   answer = body;
   await act(async () => {
-    await client.invalidateQueries({ queryKey: ["services"] });
+    await client.invalidateQueries({ queryKey: ["env", SERVICE_ENV] });
   });
 }
 
@@ -117,9 +125,9 @@ describe("RolloutProgress while the swarm replaces tasks", () => {
     mount();
     await screen.findByText("Updating api");
     await next(rollout({ state: "completed", updated: 4, total: 4 }));
-    expect(await screen.findByText("Update complete")).toBeTruthy();
+    await waitFor(() => expect(shown("Update complete")).toBe(1));
     expect(screen.queryByRole("progressbar")).toBeNull();
-    await waitFor(() => expect(screen.queryByText("Update complete")).toBeNull());
+    await waitFor(() => expect(shown("Update complete")).toBe(0));
     expect(screen.queryByText("Updating api")).toBeNull();
   });
 
@@ -142,7 +150,7 @@ describe("RolloutProgress while the swarm replaces tasks", () => {
     mount();
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(0));
     await act(async () => {});
-    expect(screen.queryByText("Update complete")).toBeNull();
+    expect(shown("Update complete")).toBe(0);
     expect(screen.queryByRole("progressbar")).toBeNull();
     expect(screen.getByTestId("rollout-announcement").textContent).toBe("");
   });
