@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import type { PlacementData, PlacementNode, PlacementTask } from "@/features/placement/project";
+import type {
+  PlacementData,
+  PlacementNode,
+  PlacementService,
+  PlacementTask,
+} from "@/features/placement/project";
 
 // Test data for the placement tests: a node and a task with every field the API sends.
 
@@ -35,6 +40,17 @@ export const task = (extra: Partial<PlacementTask> = {}): PlacementTask => ({
   dockerState: "running",
   desiredState: "running",
   error: "",
+  ...extra,
+});
+
+export const service = (extra: Partial<PlacementService> = {}): PlacementService => ({
+  id: "svc-web",
+  name: "web",
+  stack: "shop",
+  mode: "replicated",
+  constraints: [],
+  preferences: [],
+  maxReplicas: 0,
   ...extra,
 });
 

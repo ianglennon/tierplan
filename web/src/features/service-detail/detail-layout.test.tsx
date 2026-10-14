@@ -139,6 +139,18 @@ describe("the page frame", () => {
     );
   });
 
+  it("has a Placement tab after Tasks and before Inspect", async () => {
+    renderAt();
+    const placement = await screen.findByRole("tab", { name: "Placement" });
+    expect(placement.getAttribute("href")).toBe(`/env/e1/services/${SERVICE_ID}/placement`);
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "Overview",
+      "Tasks",
+      "Placement",
+      "Inspect",
+    ]);
+  });
+
   it("shows the tabs and skeletons at once, before the service has loaded", async () => {
     state.detail = () => new Promise<Response>(() => {});
     renderAt();

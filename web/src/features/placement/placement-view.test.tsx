@@ -15,7 +15,7 @@ import {
 import { queryClient } from "@/api/query-client";
 import { servicesKey } from "@/api/services";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { node, placement, task } from "@/features/placement/fixtures";
+import { node, placement, service, task } from "@/features/placement/fixtures";
 import type { PlacementSearch, PlacementSearchPatch } from "@/features/placement/placement-search";
 import { PlacementView } from "@/features/placement/placement-view";
 import "@/i18n";
@@ -75,9 +75,9 @@ const DATA = placement(
   ],
   {
     services: [
-      { id: "svc-web", name: "web", stack: "shop", mode: "replicated", constraints: [] },
-      { id: "svc-db", name: "db", stack: "shop", mode: "replicated", constraints: [] },
-      { id: "svc-solo", name: "solo", stack: "", mode: "replicated", constraints: [] },
+      service({ id: "svc-web", name: "web", stack: "shop" }),
+      service({ id: "svc-db", name: "db", stack: "shop" }),
+      service({ id: "svc-solo", name: "solo", stack: "" }),
     ],
   },
 );
@@ -85,12 +85,18 @@ const DATA = placement(
 function renderView(
   search: PlacementSearch = {},
   onSearchChange: (p: PlacementSearchPatch) => void = () => {},
+  serviceId?: string,
 ) {
   return render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <TestRouter>
-          <PlacementView envId={ENV} search={search} onSearchChange={onSearchChange} />
+          <PlacementView
+            envId={ENV}
+            search={search}
+            onSearchChange={onSearchChange}
+            serviceId={serviceId}
+          />
         </TestRouter>
       </TooltipProvider>
     </QueryClientProvider>,
@@ -189,6 +195,134 @@ describe("PlacementView", () => {
     renderView({ q: "web" });
     await screen.findByRole("region", { name: "mgr-1" });
     expect(screen.getByRole("button", { name: "Clear filters" })).toBeTruthy();
+  });
+});
+
+describe("the Grid layout", () => {
+  it("offers By node and Grid, and a change of layout keeps the filters", async () => {
+    const change = vi.fn();
+    renderView({ view: "grid", stack: "shop" }, change);
+    await screen.findByRole("table");
+    expect(screen.getByRole("radio", { name: "Grid" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("radio", { name: "By node" }).getAttribute("aria-checked")).toBe(
+      "false",
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "By node" }));
+    expect(change).toHaveBeenCalledWith({ view: undefined });
+    expect(change).not.toHaveBeenCalledWith(expect.objectContaining({ stack: undefined }));
+    cleanup();
+    const next = vi.fn();
+    renderView({}, next);
+    await screen.findByRole("region", { name: "mgr-1" });
+    fireEvent.click(screen.getByRole("radio", { name: "Grid" }));
+    expect(next).toHaveBeenCalledWith({ view: "grid" });
+  });
+
+  it("draws the node x service table and applies the stack and search filters to its rows", async () => {
+    renderView({ view: "grid", stack: "shop", q: "web" });
+    const table = await screen.findByRole("table");
+    expect(within(table).getByRole("rowheader", { name: "web" })).toBeTruthy();
+    expect(within(table).queryByRole("rowheader", { name: "db" })).toBeNull();
+    expect(
+      within(table)
+        .getAllByRole("columnheader")
+        .map((h) => h.textContent),
+    ).toEqual(["Service", "mgr-11 task", "wrk-10 tasks", "Total"]);
+  });
+
+  it("says nothing matches, and offers Clear filters, when the filters leave no row", async () => {
+    renderView({ view: "grid", q: "zzz" });
+    expect(await screen.findByText("No tasks match these filters.")).toBeTruthy();
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  it("holds the grid still while a cell popover is open, and catches up when it closes", async () => {
+    renderView({ view: "grid" });
+    fireEvent.click(await screen.findByRole("button", { name: "web on mgr-1: 1 task" }));
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+
+    act(() => {
+      queryClient.setQueryData(placementKey(ENV), {
+        ...DATA,
+        tasks: [
+          ...(DATA.tasks ?? []),
+          task({ id: "a2", nodeId: "n1", service: "web", serviceId: "svc-web", slot: 2 }),
+        ],
+      });
+    });
+    expect(screen.getByRole("button", { name: "web on mgr-1: 1 task" })).toBeTruthy();
+
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(await screen.findByRole("button", { name: "web on mgr-1: 2 tasks" })).toBeTruthy();
+  });
+});
+
+describe("a service's Placement tab", () => {
+  const WORKERS = [
+    node({ id: "n1", hostname: "mgr-1" }),
+    node({ id: "n2", hostname: "mgr-2" }),
+    node({ id: "n3", hostname: "mgr-3" }),
+    node({ id: "n4", hostname: "wrk-1", role: "worker" }),
+  ];
+  const ONE = placement(WORKERS, [task({ id: "a", nodeId: "n4", slot: 1 })], {
+    services: [
+      service({
+        constraints: ["node.role==worker"],
+        preferences: ["node.labels.zone"],
+        maxReplicas: 2,
+      }),
+    ],
+  });
+
+  it("is headed Where {name} runs, with the rules card above columns for every node", async () => {
+    answer = () => Response.json(ONE);
+    renderView({}, () => {}, "svc-web");
+    expect(await screen.findByRole("heading", { name: "Where web runs" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
+    const rules = screen.getByRole("region", { name: "Placement rules" });
+    expect(within(rules).getByText("Matches 1 of 4 nodes")).toBeTruthy();
+    expect(within(rules).getByText("Spread over node.labels.zone")).toBeTruthy();
+    expect(within(rules).getByText("Max replicas per node: 2")).toBeTruthy();
+    expect(screen.getAllByRole("region", { name: /^(mgr|wrk)-/ })).toHaveLength(4);
+    // The empty columns say whose tasks they lack.
+    expect(screen.getAllByText("No tasks of web")).toHaveLength(3);
+    expect(
+      rules.compareDocumentPosition(screen.getByRole("region", { name: "wrk-1" })) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("asks the swarm for that one service, and has no stack or search filter of its own", async () => {
+    const seen: string[] = [];
+    answer = () => Response.json(ONE);
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const inner = fetchMock.getMockImplementation() as (req: Request) => Promise<Response>;
+    fetchMock.mockImplementation(async (req: Request) => {
+      if (new URL(req.url).pathname === `/api/env/${ENV}/placement`)
+        seen.push(new URL(req.url).search);
+      return inner(req);
+    });
+    renderView({}, () => {}, "svc-web");
+    await screen.findByRole("region", { name: "wrk-1" });
+    expect(seen[0]).toBe("?serviceId=svc-web");
+    expect(screen.queryByRole("combobox", { name: "Stack" })).toBeNull();
+    expect(screen.queryByRole("searchbox")).toBeNull();
+    expect(screen.getByRole("radio", { name: "Grid" })).toBeTruthy();
+  });
+
+  it("still shows every node when the service has no task, never No tasks to place", async () => {
+    answer = () => Response.json(placement(WORKERS, [], { services: [service()] }));
+    renderView({}, () => {}, "svc-web");
+    expect(await screen.findByRole("region", { name: "wrk-1" })).toBeTruthy();
+    expect(screen.queryByText("No tasks to place")).toBeNull();
+    expect(screen.getAllByText("No tasks of web")).toHaveLength(4);
+  });
+
+  it("draws the grid with the service's own row", async () => {
+    answer = () => Response.json(ONE);
+    renderView({ view: "grid" }, () => {}, "svc-web");
+    const table = await screen.findByRole("table");
+    expect(within(table).getByRole("button", { name: "web on wrk-1: 1 task" })).toBeTruthy();
   });
 });
 

@@ -56,6 +56,8 @@ interface PlacementViewProps {
   envId: string;
   search: PlacementSearch;
   onSearchChange: (patch: PlacementSearchPatch) => void;
+  // Narrow the view to this service (its Placement tab).
+  serviceId?: string;
 }
 
 // PlacementView is the Placement page (RES-12, D-18, D-19): where the tasks of a swarm run, one
