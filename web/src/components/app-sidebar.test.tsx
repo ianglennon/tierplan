@@ -18,6 +18,7 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import "@/i18n";
 import { makeMe } from "@/test-me";
+import { splitPermissions } from "@/test-permissions";
 
 // The switcher and the version footer have their own tests and their own endpoints.
 vi.mock("@/components/env-switcher", () => ({ EnvSwitcher: () => null }));
@@ -25,13 +26,22 @@ vi.mock("@/components/version-footer", () => ({ VersionFooter: () => null }));
 
 const DESKTOP_WIDTH = window.innerWidth;
 
+// What the stubbed server says: who is signed in and what kind of environment e1 is.
+let me: ReturnType<typeof makeMe>;
+let envType: "swarm" | "standalone";
+
 beforeEach(() => {
   setCsrfToken(null);
+  me = makeMe({ envs: { e1: "viewer" } });
+  envType = "swarm";
   vi.stubGlobal(
     "fetch",
     vi.fn(async (req: Request) => {
       const url = new URL(req.url);
-      if (url.pathname === "/api/me") return Response.json(makeMe({ envs: { e1: "viewer" } }));
+      if (url.pathname === "/api/me") return Response.json(me);
+      if (url.pathname === "/api/environments") {
+        return Response.json({ items: [{ id: "e1", name: "Env one", envType }] });
+      }
       return Response.json({ items: [] });
     }),
   );
@@ -44,7 +54,7 @@ afterEach(() => {
 });
 
 // A phone is what useIsMobile reads: a window narrower than 768px.
-function mount(width: number) {
+function mount(width: number, path = "/") {
   window.innerWidth = width;
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const root = createRootRoute({
@@ -62,8 +72,11 @@ function mount(width: number) {
       createRoute({ getParentRoute: () => root, path: "/" }),
       createRoute({ getParentRoute: () => root, path: "/environments" }),
       createRoute({ getParentRoute: () => root, path: "/registries" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/containers" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/services" }),
     ]),
-    history: createMemoryHistory({ initialEntries: ["/"] }),
+    history: createMemoryHistory({ initialEntries: [path] }),
   });
   render(
     <QueryClientProvider client={client}>
@@ -120,5 +133,35 @@ describe("the desktop sidebar", () => {
     expect(await screen.findByRole("link", { name: "Registries" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Close menu" })).toBeNull();
     expect(screen.queryByRole("dialog", { name: "Navigation" })).toBeNull();
+  });
+});
+
+describe("the Swarm group", () => {
+  it("lists Services below Resources on a swarm environment, for a user who can read services", async () => {
+    mount(1280, "/env/e1");
+    const link = await screen.findByRole("link", { name: "Services" });
+    expect(link.getAttribute("href")).toBe("/env/e1/services");
+    const groups = screen.getAllByText(/^(Resources|Swarm)$/).map((g) => g.textContent);
+    expect(groups).toEqual(["Resources", "Swarm"]);
+  });
+
+  it("is not there on a standalone environment", async () => {
+    envType = "standalone";
+    mount(1280, "/env/e1");
+    expect(await screen.findByRole("link", { name: "Containers" })).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText("Swarm")).toBeNull());
+    expect(screen.queryByRole("link", { name: "Services" })).toBeNull();
+  });
+
+  it("is not there for a user without services.read, though a swarm environment is open", async () => {
+    me = makeMe({
+      envs: { e1: "viewer" },
+      permissions: splitPermissions(["containers.read", "environments.read"]),
+    });
+    mount(1280, "/env/e1");
+    expect(await screen.findByRole("link", { name: "Containers" })).toBeTruthy();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByRole("link", { name: "Services" })).toBeNull();
+    expect(screen.queryByText("Swarm")).toBeNull();
   });
 });
