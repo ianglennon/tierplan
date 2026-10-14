@@ -142,9 +142,14 @@ var routes = []route{
 	read("container inspect", `containers/`+idShape+`/json`),
 
 	// One node: the inspect, which takes no key. It sits after the list so GET /nodes is
-	// never read as an inspect. The actions that change a node are added by the plans that
-	// need them.
+	// never read as an inspect. The update changes one node's availability, role or labels:
+	// it takes the version just read and a node spec body that carries a name, labels, a
+	// role and an availability and nothing else. Removing a node is absent on purpose.
 	{name: "node inspect", method: http.MethodGet, path: pathOf(`nodes/` + idShape)},
+	{
+		name: "node update", method: http.MethodPost, path: pathOf(`nodes/` + idShape + `/update`),
+		query: map[string]*regexp.Regexp{"version": versionValue}, body: BodyNodeSpec,
+	},
 
 	// One service: the inspect (matched after the list, so GET /services is never
 	// read as an inspect), the create and the update, which take the service's whole

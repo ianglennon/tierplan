@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
@@ -77,6 +78,9 @@ var ErrNodeChanged = errors.New("dockerx: the node changed since it was read")
 // ErrLastManager is the daemon's refusal to demote the last manager of the swarm.
 var ErrLastManager = errors.New("dockerx: attempting to demote the last manager of the swarm")
 
+// lastManagerText is the daemon's words for that refusal (RESEARCH E14: HTTP 400).
+const lastManagerText = "attempting to demote the last manager"
+
 // NodeChange is one change to a node: the version the caller read, and the fields to change.
 // An empty Availability or Role leaves that field alone. Labels replace the node's labels when
 // they are not nil, or when SetLabels is true (a nil or empty map then clears them); with
@@ -89,7 +93,45 @@ type NodeChange struct {
 	SetLabels    bool
 }
 
-// NodeUpdate changes one node.
+// NodeUpdate changes one node once. It reads the node, refuses a version that is not the one in
+// ch (ErrNodeChanged) before anything is sent, then sends the node's whole spec with only the
+// fields of ch changed and the version it just read. The swarm judges that version again, so a
+// change in between is ErrNodeChanged too. A node the manager does not know is ErrNodeNotFound,
+// and the daemon's refusal to demote the last manager is ErrLastManager. The write is never
+// retried: whoever asked for it asks again (P2 D-42).
 func (c *Client) NodeUpdate(ctx context.Context, id string, ch NodeChange) error {
-	return errors.New("dockerx: NodeUpdate is not implemented")
+	cli := c.cur()
+	res, err := cli.NodeInspect(ctx, id, client.NodeInspectOptions{})
+	if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return fmt.Errorf("inspect node on %s: %w", c.t.Describe(), ErrNodeNotFound)
+		}
+		return fmt.Errorf("inspect node on %s: %w", c.t.Describe(), err)
+	}
+	n := res.Node
+	if n.Version.Index != ch.Version {
+		return fmt.Errorf("update node on %s: %w", c.t.Describe(), ErrNodeChanged)
+	}
+	spec := n.Spec
+	if ch.Availability != "" {
+		spec.Availability = swarm.NodeAvailability(ch.Availability)
+	}
+	if ch.Role != "" {
+		spec.Role = swarm.NodeRole(ch.Role)
+	}
+	if ch.SetLabels || ch.Labels != nil {
+		spec.Labels = nonNilLabels(ch.Labels)
+	}
+	if _, err := cli.NodeUpdate(ctx, n.ID, client.NodeUpdateOptions{Version: n.Version, Spec: spec}); err != nil {
+		switch {
+		case strings.Contains(err.Error(), outOfSequence):
+			return fmt.Errorf("update node on %s: %w", c.t.Describe(), ErrNodeChanged)
+		case strings.Contains(err.Error(), lastManagerText):
+			return fmt.Errorf("update node on %s: %w", c.t.Describe(), ErrLastManager)
+		case cerrdefs.IsNotFound(err):
+			return fmt.Errorf("update node on %s: %w", c.t.Describe(), ErrNodeNotFound)
+		}
+		return fmt.Errorf("update node on %s: %w", c.t.Describe(), err)
+	}
+	return nil
 }

@@ -106,6 +106,8 @@ func validateBody(kind BodyKind, r io.Reader, env bodyEnv) ([]byte, error) {
 		clean, err = validateVolumeCreate(raw)
 	case BodyServiceSpec:
 		clean, err = validateServiceSpec(raw, env)
+	case BodyNodeSpec:
+		clean, err = validateNodeSpec(raw)
 	default:
 		return nil, refuse("a route with no body kind has no validator")
 	}
@@ -416,4 +418,37 @@ func validateServiceSpec(raw []byte, env bodyEnv) (swarm.ServiceSpec, error) {
 		return in, err
 	}
 	return in, nil
+}
+
+// validateNodeSpec decodes the body of a node update into the engine's own swarm.NodeSpec
+// with unknown fields refused, and builds the value to forward from the four fields a node
+// update may set: its name, its labels, its role (manager or worker) and its availability
+// (active, pause or drain). The labels are bounded like every other free map. The role and
+// availability are required, as the server always sends the spec it read with one field changed.
+func validateNodeSpec(raw []byte) (swarm.NodeSpec, error) {
+	var in swarm.NodeSpec
+	if err := decodeStrict(raw, &in); err != nil {
+		return in, err
+	}
+	clean := swarm.NodeSpec{
+		Annotations:  swarm.Annotations{Name: in.Name, Labels: in.Labels},
+		Role:         in.Role,
+		Availability: in.Availability,
+	}
+	if err := sameAsAllowlisted(in, clean); err != nil {
+		return in, err
+	}
+	switch {
+	case clean.Role != swarm.NodeRoleManager && clean.Role != swarm.NodeRoleWorker:
+		return in, refuse("the node role is not manager or worker")
+	case clean.Availability != swarm.NodeAvailabilityActive && clean.Availability != swarm.NodeAvailabilityPause &&
+		clean.Availability != swarm.NodeAvailabilityDrain:
+		return in, refuse("the node availability is not active, pause or drain")
+	case len(clean.Name) > maxAliasChars:
+		return in, refuse("the node name is over %d characters", maxAliasChars)
+	}
+	if err := checkMap("Labels", clean.Labels); err != nil {
+		return in, err
+	}
+	return clean, nil
 }
