@@ -18,17 +18,41 @@ export function servicesKey(envId: string) {
   return ["env", envId, "services"] as const;
 }
 
+// ServicesLoadError is a services list the server refused or could not answer. The status and
+// the problem type tell a standalone host (409 not_a_swarm) from every other failure.
+export class ServicesLoadError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  constructor(status: number, type?: string) {
+    super(`GET services failed (${status})`);
+    this.name = "ServicesLoadError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+// isNotASwarm says whether the error is the server answering that the environment is a
+// standalone host, which has no services.
+export function isNotASwarm(error: unknown): boolean {
+  return error instanceof ServicesLoadError && error.status === 409 && error.type === "not_a_swarm";
+}
+
 // The services of a swarm environment. The rows stay on screen while a refetch is out.
 export function servicesQuery(envId: string) {
   return queryOptions({
     queryKey: servicesKey(envId),
     queryFn: async () => {
-      const { data } = await api.GET("/api/env/{envId}/services", {
+      const res = await api.GET("/api/env/{envId}/services", {
         params: { path: { envId } },
       });
-      if (!data) throw new Error("GET services failed");
-      return data;
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new ServicesLoadError(problem.status, problem.type);
+      }
+      return res.data;
     },
+    // A standalone host will not turn into a swarm on a second try.
+    retry: (count, error) => !isNotASwarm(error) && count < 3,
     refetchInterval: LIST_REFETCH_MS,
   });
 }

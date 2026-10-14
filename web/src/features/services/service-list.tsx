@@ -5,11 +5,10 @@ import { useQuery } from "@tanstack/react-query";
 import { Ellipsis, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { type ServiceItem, servicesQuery } from "@/api/services";
+import { isNotASwarm, type ServiceItem, servicesQuery } from "@/api/services";
 import { NoPermission } from "@/components/full-page-state";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
-import { StatusDot } from "@/components/status-dot";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,7 +21,9 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { type Column, ResourceTable } from "@/features/resources/resource-table";
 import { useEnvName } from "@/features/resources/use-env-name";
+import { NotASwarm } from "@/features/services/not-a-swarm";
 import { ScaleDialog, type ScaledService } from "@/features/services/scale-dialog";
+import { ServiceStateCell } from "@/features/services/service-state-cell";
 import { usePermission } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -190,6 +191,13 @@ export function ServiceList({ envId }: ServiceListProps) {
       ),
     },
     {
+      id: "state",
+      header: t("services.list.columns.state"),
+      cell: (s) => (
+        <ServiceStateCell service={s} pending={pending.has(s.id) ? "scale" : undefined} />
+      ),
+    },
+    {
       id: "mode",
       header: t("services.list.columns.mode"),
       cell: (s) => t(`services.list.mode.${s.mode}`),
@@ -199,16 +207,10 @@ export function ServiceList({ envId }: ServiceListProps) {
       header: t("services.list.columns.replicas"),
       className: "text-end tabular-nums",
       cell: (s) => {
-        if (pending.has(s.id)) {
-          return (
-            <span data-pending="scale" className="inline-flex justify-end">
-              <StatusDot state="reconnecting" label={t("services.list.scaling")} />
-            </span>
-          );
-        }
         // A job runs to completion and has no count to show.
         if (s.mode === "replicated-job" || s.mode === "global-job") return <span>{missing}</span>;
-        return <span>{`${s.running}/${s.desired}`}</span>;
+        // A scale waiting to show shows the count it was asked for ("2/5").
+        return <span>{`${s.running}/${pending.get(s.id) ?? s.desired}`}</span>;
       },
     },
     {
@@ -249,6 +251,7 @@ export function ServiceList({ envId }: ServiceListProps) {
   ) : undefined;
 
   if (!allowed) return <NoPermission />;
+  if (isNotASwarm(query.error)) return <NotASwarm envId={envId} envName={envName} />;
   return (
     <>
       <ResourceTable

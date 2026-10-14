@@ -8,6 +8,7 @@
       "error": "Couldn't load services.",
       "columns": {
         "name": "Name",
+        "state": "State",
         "mode": "Mode",
         "replicas": "Replicas",
         "image": "Image",
@@ -20,6 +21,19 @@
         "global-job": "Global job"
       },
       "scaling": "Scaling…",
+      "state": {
+        "running": "Running",
+        "degraded": "Degraded",
+        "notRunning": "Not running",
+        "scaledToZero": "Scaled to 0",
+        "updating": "Updating",
+        "rollingBack": "Rolling back",
+        "updatePaused": "Update paused",
+        "rollbackPaused": "Rollback paused",
+        "rolledBack": "Rolled back",
+        "completed": "Completed"
+      },
+      "stateTooltip": "{{running, number}} of {{desired, number}} replicas running",
       "noManager": {
         "title": "No manager is connected",
         "body": "Swarm changes are off until a manager node's agent reconnects. You can still look at what Bayplan last saw."
@@ -27,6 +41,11 @@
       "menu": {
         "scale": "Scale…"
       }
+    },
+    "notASwarm": {
+      "heading": "This isn't a swarm",
+      "body": "{{environment}} is a standalone host, so it has no services, nodes, secrets or configs.",
+      "back": "Back to containers"
     },
     "scale": {
       "title": "Scale {{name}}",
