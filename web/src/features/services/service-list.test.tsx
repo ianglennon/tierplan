@@ -813,3 +813,279 @@ describe("the services list: live updates", () => {
     await waitFor(() => expect(screen.queryByText("1 change waiting")).toBeNull());
   });
 });
+
+describe("the services list: selection and bulk scale", () => {
+  const STACKED = () => [
+    svc({ id: "id-web", name: "shop_web", stack: "shop", desired: 2 }),
+    svc({ id: "id-db", name: "shop_db", stack: "shop", desired: 1, running: 1 }),
+    svc({ id: "id-blog", name: "blog_app", stack: "Blog", desired: 3, running: 3 }),
+    svc({ id: "id-agent", name: "bayplan-agent", mode: "global", running: 3, desired: 3 }),
+    svc({ id: "id-backup", name: "backup", mode: "replicated-job", running: 0, desired: 0 }),
+  ];
+
+  const box = (name: string) => screen.getByRole("checkbox", { name: `Select ${name}` });
+  const isOn = (el: HTMLElement) =>
+    el.getAttribute("aria-checked") ?? el.getAttribute("data-state");
+  const bar = () => screen.getByRole("toolbar", { name: "Bulk actions" });
+
+  async function mountReady() {
+    items = STACKED();
+    mount();
+    await screen.findByText("shop_web");
+    await waitFor(() => expect(sent.some((s) => s.path === "/api/me")).toBe(true));
+    await act(async () => {});
+  }
+
+  it("gives every row a named checkbox, the header one to select all services and each group one of its own", async () => {
+    await mountReady();
+    for (const name of ["shop_web", "shop_db", "blog_app", "bayplan-agent", "backup"]) {
+      expect(box(name)).toBeTruthy();
+    }
+    expect(screen.getByRole("checkbox", { name: "Select all services" })).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: "Select shop" })).toBeTruthy();
+    expect(screen.queryByRole("toolbar", { name: "Bulk actions" })).toBeNull();
+  });
+
+  it("shows the bulk bar with '{n} selected', Scale… and Clear selection, and clears on request", async () => {
+    await mountReady();
+    fireEvent.click(box("shop_web"));
+    fireEvent.click(box("blog_app"));
+    expect(within(bar()).getByText("2 selected")).toBeTruthy();
+    expect(within(bar()).getByRole("button", { name: "Scale…" })).toBeTruthy();
+    fireEvent.click(within(bar()).getByRole("button", { name: "Clear selection" }));
+    expect(screen.queryByRole("toolbar", { name: "Bulk actions" })).toBeNull();
+    expect(isOn(box("shop_web"))).toBe("false");
+  });
+
+  it("selects a whole group from its checkbox and every row from the header", async () => {
+    await mountReady();
+    const group = screen.getByRole("checkbox", { name: "Select shop" });
+    fireEvent.click(group);
+    expect(isOn(box("shop_web"))).toBe("true");
+    expect(isOn(box("shop_db"))).toBe("true");
+    expect(isOn(box("blog_app"))).toBe("false");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all services" }));
+    expect(within(bar()).getByText("5 selected")).toBeTruthy();
+  });
+
+  it("offers 'Select all {n}' only when every visible row is selected and folded groups hold more", async () => {
+    await mountReady();
+    fireEvent.click(screen.getByRole("button", { name: "Collapse shop" }));
+    expect(screen.queryByText("shop_web")).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all services" }));
+    expect(within(bar()).getByText("3 selected")).toBeTruthy();
+    fireEvent.click(within(bar()).getByRole("button", { name: "Select all 5" }));
+    expect(within(bar()).getByText("5 selected")).toBeTruthy();
+    expect(within(bar()).queryByRole("button", { name: /^Select all/ })).toBeNull();
+  });
+
+  it("does not offer 'Select all {n}' when nothing is folded away", async () => {
+    await mountReady();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all services" }));
+    expect(within(bar()).queryByRole("button", { name: /^Select all/ })).toBeNull();
+  });
+
+  it("disables Scale… with 'None of the selected services can be scaled.' when nothing selected is replicated", async () => {
+    await mountReady();
+    fireEvent.click(box("bayplan-agent"));
+    fireEvent.click(box("backup"));
+    const scale = within(bar()).getByRole("button", { name: "Scale…" });
+    expect(scale.getAttribute("aria-disabled")).toBe("true");
+    expect(
+      screen.getAllByText("None of the selected services can be scaled.").length,
+    ).toBeGreaterThan(0);
+    fireEvent.click(scale);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(posts()).toEqual([]);
+  });
+
+  it("disables Scale… with Needs Operator for a viewer", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    await mountReady();
+    fireEvent.click(box("shop_web"));
+    expect(
+      within(bar()).getByRole("button", { name: "Scale…" }).getAttribute("aria-disabled"),
+    ).toBe("true");
+    expect(screen.getAllByText("Needs Operator").length).toBeGreaterThan(0);
+  });
+
+  it("opens the bulk dialog with every selected row, and the mixed ones skipped with their notes", async () => {
+    await mountReady();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all services" }));
+    fireEvent.click(within(bar()).getByRole("button", { name: "Scale…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Scale 5 services" });
+    expect(within(dialog).getByRole("button", { name: "Scale 3 services" })).toBeTruthy();
+    expect(within(dialog).getByText("Global services can't be scaled.")).toBeTruthy();
+    expect(within(dialog).getByText("Jobs can't be scaled here.")).toBeTruthy();
+    expect(within(dialog).getAllByText("Part of stack shop")).toHaveLength(2);
+    expect(posts()).toEqual([]);
+  });
+
+  it("scales the eligible rows in one request, marks them Scaling… with a disabled checkbox and menu, and releases them when the list shows the counts", async () => {
+    answerScale = () =>
+      Response.json({
+        results: [
+          {
+            serviceId: "id-web",
+            name: "shop_web",
+            result: "done",
+            previous: 2,
+            replicas: 4,
+            changed: true,
+          },
+          {
+            serviceId: "id-db",
+            name: "shop_db",
+            result: "done",
+            previous: 1,
+            replicas: 4,
+            changed: true,
+          },
+          {
+            serviceId: "id-blog",
+            name: "blog_app",
+            result: "done",
+            previous: 3,
+            replicas: 4,
+            changed: true,
+          },
+        ],
+      });
+    await mountReady();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all services" }));
+    fireEvent.click(within(bar()).getByRole("button", { name: "Scale…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Scale 5 services" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Set all to" }), {
+      target: { value: "4" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Scale 3 services" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    const body = posts()[0]?.body as { bulkId: string; targets: unknown[] };
+    expect(body.targets).toEqual([
+      { serviceId: "id-blog", replicas: 4 },
+      { serviceId: "id-db", replicas: 4 },
+      { serviceId: "id-web", replicas: 4 },
+    ]);
+    expect(body.bulkId).toBeTruthy();
+    expect(await screen.findByText(/Scaled 3 services\./)).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // The selection is spent and the three rows wait for their counts.
+    expect(screen.queryByRole("toolbar", { name: "Bulk actions" })).toBeNull();
+    for (const name of ["shop_web", "shop_db", "blog_app"]) {
+      const row = screen.getByRole("row", { name: new RegExp(`^${name}`) });
+      expect(within(row).getByText("Scaling…")).toBeTruthy();
+      expect(row.querySelector("[data-pending]")).toBeTruthy();
+      expect(
+        within(row)
+          .getByRole("checkbox", { name: `Select ${name}` })
+          .hasAttribute("disabled"),
+      ).toBe(true);
+      expect(
+        (within(row).getByRole("button", { name: `Actions for ${name}` }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(true);
+    }
+    expect(within(screen.getByRole("row", { name: /^backup/ })).queryByText("Scaling…")).toBeNull();
+    // The list shows the counts: the rows are released.
+    items = items.map((i) =>
+      ["id-web", "id-db", "id-blog"].includes(i.id) ? { ...i, desired: 4, running: 4 } : i,
+    );
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["env", ENV, "services"] });
+    });
+    await waitFor(() => expect(screen.queryByText("Scaling…")).toBeNull());
+  });
+
+  it("releases a Scaling… row after 30 seconds if the list never shows the count", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await mountReady();
+      fireEvent.click(box("shop_web"));
+      fireEvent.click(box("blog_app"));
+      fireEvent.click(within(bar()).getByRole("button", { name: "Scale…" }));
+      const dialog = await screen.findByRole("dialog", { name: "Scale 2 services" });
+      answerScale = () =>
+        Response.json({
+          results: [
+            {
+              serviceId: "id-web",
+              name: "shop_web",
+              result: "done",
+              previous: 2,
+              replicas: 9,
+              changed: true,
+            },
+            {
+              serviceId: "id-blog",
+              name: "blog_app",
+              result: "done",
+              previous: 3,
+              replicas: 9,
+              changed: true,
+            },
+          ],
+        });
+      fireEvent.change(within(dialog).getByRole("textbox", { name: "Set all to" }), {
+        target: { value: "9" },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Scale 2 services" }));
+      await waitFor(() => expect(screen.getAllByText("Scaling…").length).toBe(2));
+      await act(async () => {
+        vi.advanceTimersByTime(30_001);
+      });
+      await waitFor(() => expect(screen.queryByText("Scaling…")).toBeNull());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("opens BulkResultDialog from a partial failure's Details with Service, Result and Reason", async () => {
+    answerScale = () =>
+      Response.json({
+        results: [
+          {
+            serviceId: "id-web",
+            name: "shop_web",
+            result: "done",
+            previous: 2,
+            replicas: 4,
+            changed: true,
+          },
+          {
+            serviceId: "id-blog",
+            name: "blog_app",
+            result: "failed",
+            code: "service_changed",
+            replicas: 4,
+            changed: false,
+          },
+        ],
+      });
+    await mountReady();
+    fireEvent.click(box("shop_web"));
+    fireEvent.click(box("blog_app"));
+    fireEvent.click(box("backup"));
+    fireEvent.click(within(bar()).getByRole("button", { name: "Scale…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Scale 3 services" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Set all to" }), {
+      target: { value: "4" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Scale 2 services" }));
+    expect(await screen.findByText(/Scaled 1, 1 failed/)).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    const results = await screen.findByRole("dialog", { name: "Scale results" });
+    expect(
+      within(results)
+        .getAllByRole("columnheader")
+        .map((h) => h.textContent),
+    ).toEqual(["Service", "Result", "Reason"]);
+    const rows = within(results).getAllByRole("row").slice(1);
+    expect(
+      rows.map((r) => Array.from(r.querySelectorAll("td")).map((c) => c.textContent?.slice(0, 20))),
+    ).toEqual([
+      ["backup", "Skipped", "Jobs can't be scaled here."],
+      ["blog_app", "Failed", expect.stringContaining("changed by someone")],
+      ["shop_web", "Done", "—"],
+    ]);
+  });
+});
