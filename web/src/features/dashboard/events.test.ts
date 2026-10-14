@@ -4,6 +4,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { imageDetailKey, imageUsedByQuery } from "@/api/images";
+import { nodeKey, nodesQuery } from "@/api/nodes";
+import { placementKey } from "@/api/placement";
 import type { components } from "@/api/schema";
 import { servicesQuery } from "@/api/services";
 import {
@@ -177,10 +179,23 @@ describe("invalidationKeys", () => {
     expect(invalidationKeys("image", "e1")).toEqual([summary, list("images")]);
   });
 
-  it("makes only the summary stale for swarm objects and for a row of Bayplan's own", () => {
-    for (const type of ["node", "secret", "config", "bayplan"] as const) {
+  it("makes only the summary stale for the swarm objects without a list yet and for a row of Bayplan's own", () => {
+    for (const type of ["secret", "config", "bayplan"] as const) {
       expect(invalidationKeys(type, "e1")).toEqual([summary]);
     }
+  });
+
+  it("maps a node event to the summary, the nodes list and the services list (which holds the placement view)", () => {
+    expect(invalidationKeys("node", "e1")).toEqual([summary, list("nodes"), list("services")]);
+  });
+
+  it("refreshes an open node page and its filtered reads, since their keys extend the nodes list's", () => {
+    const keys = invalidationKeys("node", "e1");
+    const nodes = keys.find((k) => k[2] === "nodes") ?? [];
+    const filtered = nodesQuery("e1", { q: "mgr", status: "managers" }).queryKey;
+    expect(filtered.slice(0, nodes.length)).toEqual(nodes);
+    expect(nodeKey("e1", "n1").slice(0, nodes.length)).toEqual(nodes);
+    expect(placementKey("e1").slice(0, 3)).toEqual(keys.find((k) => k[2] === "services"));
   });
 
   it("maps a service event to the summary and the services list", () => {

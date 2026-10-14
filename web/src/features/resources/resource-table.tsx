@@ -33,7 +33,8 @@ export type ResourceKind =
   | "volumes"
   | "networks"
   | "registries"
-  | "services";
+  | "services"
+  | "nodes";
 
 // One column of a list. The cell renders from the row; the header is the
 // translated label.
