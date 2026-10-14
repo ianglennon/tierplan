@@ -42,6 +42,7 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `networks.connect` | environment | no | yes | yes | yes | no | Connect and disconnect containers and networks |
 | `networks.manage` | environment | no | no | yes | yes | no | Create and delete networks |
 | `networks.read` | environment | yes | yes | yes | yes | no | View networks |
+| `nodes.manage` | environment | no | no | yes | yes | no | Drain, pause, activate, promote, demote, label and remove nodes |
 | `nodes.read` | environment | yes | yes | yes | yes | no | View swarm nodes |
 | `registries.instance` | global | no | no | no | yes | yes | Manage registry credentials that apply to every environment |
 | `registries.manage` | environment | no | no | yes | yes | no | Manage this environment's registry credentials |

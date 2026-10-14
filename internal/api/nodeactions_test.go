@@ -37,6 +37,7 @@ type niTaskBody struct {
 type niBody struct {
 	Action   string       `json:"action"`
 	Hostname string       `json:"hostname"`
+	Version  uint64       `json:"version"`
 	Tasks    []niTaskBody `json:"tasks"`
 	Managers struct {
 		Total     int `json:"total"`
@@ -145,6 +146,9 @@ func TestNodeImpactOfADrainClassifiesTheNodesTasks(t *testing.T) {
 	b := niOf(t, f.nodeImpact(t, e, "node-4", "drain"))
 	if b.Action != "drain" || b.Hostname != "wrk-1" || b.NeedsConfirm || len(b.Warnings) != 0 {
 		t.Fatalf("body = %+v, want a plain drain of wrk-1", b)
+	}
+	if b.Version != 3 {
+		t.Errorf("version = %d, want the node's own, 3: the version a change sent on the strength of this must carry", b.Version)
 	}
 	got := map[string]string{}
 	for _, tk := range b.Tasks {

@@ -116,6 +116,8 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "service.force_updated",
   "service.rolled_back",
   "service.removed",
+  "node.availability_changed",
+  "node.role_changed",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped
@@ -139,6 +141,7 @@ const ENV_SCOPED_PREFIXES = [
   "logs.",
   "shell.",
   "service.",
+  "node.",
 ];
 export const ENV_SCOPED_ACTIONS: readonly string[] = KNOWN_ACTIONS.filter(
   (key) => key === "permission.denied" || ENV_SCOPED_PREFIXES.some((p) => key.startsWith(p)),

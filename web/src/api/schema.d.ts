@@ -1040,6 +1040,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/nodes/{nodeId}/availability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Drain, pause or activate a node
+         * @description Sets the availability of one node to active, pause or drain, once. The server reads the node fresh and sends its whole spec with only the availability changed and the version sent, so nothing else about the node changes. Before it writes, the server judges the change as getNodeActionImpact does; when that says needsConfirm (a drain of the node that runs Bayplan or of the only connected manager agent) the body's confirm must be the node's host name, else 422 confirmation_required and nothing is sent. A node whose version is not the one sent is 409 node_changed, and nothing is retried. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Docker's own refusals come back mapped: 409 last_manager for the demotion of the last manager, 502 node_update_failed with Docker's words for any other. Bayplan itself never blocks a change that was confirmed by typing the node's name. Needs nodes.manage (Admin) on the environment. Every attempt on a node that exists is audited as node.availability_changed with the name, from, to, whether the name was typed, the warnings and the code.
+         */
+        post: operations["setNodeAvailability"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/nodes/{nodeId}/impact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What a change to a swarm node will do
+         * @description Judges a drain, pause, promote or demote of one node from a live read of the swarm, and is the same judgement the change itself enforces. For a drain or a pause it lists the node's tasks that are meant to run with what happens to each: moves (another active, ready node meets the service's placement constraints), stops (a global service's task is not moved), cannot_place, or stays (a pause). managers gives the manager counts now and after the change. warnings are quorum_at_risk, even_count, runs_bayplan, only_manager_agent and facts_unreadable, and needsConfirm says the node's name must be typed for the change to be accepted. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.manage (Admin) on the environment.
+         */
+        get: operations["getNodeActionImpact"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/nodes/{nodeId}/inspect": {
         parameters: {
             query?: never;
@@ -1054,6 +1094,26 @@ export interface paths {
         get: operations["getNodeInspect"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/nodes/{nodeId}/role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Promote a worker or demote a manager
+         * @description Sets the role of one node to manager or worker, once. The server reads the node fresh and sends its whole spec with only the role changed and the version sent. Before it writes, the server judges the change as getNodeActionImpact does; when that says needsConfirm (a demote that puts quorum at risk, of the node that runs Bayplan, of the only connected manager agent, or with the managers' state unreadable) the body's confirm must be the node's host name, else 422 confirmation_required and nothing is sent. A node whose version is not the one sent is 409 node_changed, and nothing is retried. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Docker's own refusals come back mapped: 409 last_manager for the demotion of the last manager, 502 node_update_failed with Docker's words for any other. Bayplan itself never blocks a change that was confirmed by typing the node's name. Needs nodes.manage (Admin) on the environment. Every attempt on a node that exists is audited as node.role_changed with the name, from, to, whether the name was typed, the warnings and the code.
+         */
+        post: operations["setNodeRole"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5031,6 +5091,20 @@ export interface components {
             /** @description The agent's version; empty when no agent is connected there and for the local socket's node */
             version: string;
         };
+        NodeAvailabilityRequest: {
+            /**
+             * @description What the node's spec should let the swarm do with it: active, pause (no new tasks) or drain (move its tasks away)
+             * @enum {string}
+             */
+            availability: "active" | "pause" | "drain";
+            /** @description The node's host name, typed. Needed when the change's impact says needsConfirm; ignored otherwise */
+            confirm?: string;
+            /**
+             * Format: int64
+             * @description The node's version as the page last read it (the version of getNode); a node changed since is refused 409 node_changed
+             */
+            version: number;
+        };
         NodeCountsBody: {
             /**
              * Format: int64
@@ -5120,6 +5194,63 @@ export interface components {
              */
             version: number;
         };
+        NodeImpactBody: {
+            /**
+             * @description The change judged
+             * @enum {string}
+             */
+            action: "drain" | "pause" | "promote" | "demote" | "activate";
+            /** @description The node's host name, which is what is typed to confirm */
+            hostname: string;
+            /** @description The manager counts */
+            managers: components["schemas"]["NodeImpactManagers"];
+            /** @description True when the node's name must be typed to make the change: a drain or demote of Bayplan's node or of the only manager agent, a demote that puts quorum at risk, and a demote whose quorum facts could not be read. The server refuses the change without it */
+            needsConfirm: boolean;
+            /** @description For drain and pause, the node's tasks whose desired state is running, by service then slot; empty otherwise */
+            tasks: components["schemas"]["NodeImpactTask"][] | null;
+            /**
+             * Format: int64
+             * @description The node's object version as read for this judgement: the version a change made on the strength of it must send back
+             */
+            version: number;
+            /** @description What to warn of: quorum_at_risk (a demote could leave no majority), even_count (a demote leaves an even number of managers), runs_bayplan (the node hosts Bayplan), only_manager_agent (it has the only manager agent connected to Bayplan), facts_unreadable (a manager's state is not known, so the first cannot be judged). Never null */
+            warnings: string[] | null;
+        };
+        NodeImpactManagers: {
+            /**
+             * Format: int64
+             * @description Managers there would be after the change
+             */
+            after: number;
+            /**
+             * Format: int64
+             * @description Managers whose reachability is reachable now
+             */
+            reachable: number;
+            /**
+             * Format: int64
+             * @description Nodes whose role is manager now
+             */
+            total: number;
+        };
+        NodeImpactTask: {
+            /** @description The task ID */
+            id: string;
+            /**
+             * @description What happens to it: moves (another active, ready node meets the service's constraints), stops (a global service's task is not moved), cannot_place (no other node can take it) or stays (a pause leaves it running)
+             * @enum {string}
+             */
+            outcome: "moves" | "stops" | "cannot_place" | "stays";
+            /** @description The service's name; its ID when the swarm no longer lists the service */
+            service: string;
+            /** @description The service the task belongs to */
+            serviceId: string;
+            /**
+             * Format: int64
+             * @description The replica number of a replicated service's task; 0 for a global service's
+             */
+            slot: number;
+        };
         NodeInspectBody: {
             /** @description The manager's inspect document of the node: its spec, description, status and manager status, with the TLS trust root and certificate subject of its description */
             document: {
@@ -5206,6 +5337,20 @@ export interface components {
              * @description How many nodes the swarm has before the search and the status filter
              */
             unfilteredTotal: number;
+        };
+        NodeRoleRequest: {
+            /** @description The node's host name, typed. Needed when the change's impact says needsConfirm; ignored otherwise */
+            confirm?: string;
+            /**
+             * @description manager promotes a worker, worker demotes a manager
+             * @enum {string}
+             */
+            role: "manager" | "worker";
+            /**
+             * Format: int64
+             * @description The node's version as the page last read it (the version of getNode); a node changed since is refused 409 node_changed
+             */
+            version: number;
         };
         NodeStatusCountsBody: {
             /**
@@ -9347,6 +9492,80 @@ export interface operations {
             };
         };
     };
+    setNodeAvailability: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm node ID: the id of a row of the nodes list */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NodeAvailabilityRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getNodeActionImpact: {
+        parameters: {
+            query: {
+                /** @description The change to judge: drain, pause, promote or demote */
+                action: "drain" | "pause" | "promote" | "demote";
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm node ID: the id of a row of the nodes list */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeImpactBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     getNodeInspect: {
         parameters: {
             query?: never;
@@ -9370,6 +9589,42 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["NodeInspectBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setNodeRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm node ID: the id of a row of the nodes list */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NodeRoleRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

@@ -195,7 +195,8 @@ type NodeTasksOutput struct {
 	Body         NodeTasksBody
 }
 
-// RegisterNodes mounts the swarm node read routes. Nothing here writes to a node.
+// RegisterNodes mounts the swarm node routes: the reads, and the impact, availability and role
+// routes that change a node (nodeactions.go).
 func RegisterNodes(r *httpx.Router, d NodesDeps) {
 	if d.Log == nil {
 		d.Log = slog.Default()
@@ -277,6 +278,8 @@ func RegisterNodes(r *httpx.Router, d NodesDeps) {
 		}
 		return &NodeTasksOutput{CacheControl: "no-store", Body: body}, nil
 	})
+
+	registerNodeActions(r, d)
 }
 
 // parseNodeStatuses reads the comma list of status=. An empty list means no filter and an

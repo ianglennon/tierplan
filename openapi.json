@@ -5508,6 +5508,36 @@
         ],
         "type": "object"
       },
+      "NodeAvailabilityRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "availability": {
+            "description": "What the node's spec should let the swarm do with it: active, pause (no new tasks) or drain (move its tasks away)",
+            "enum": [
+              "active",
+              "pause",
+              "drain"
+            ],
+            "type": "string"
+          },
+          "confirm": {
+            "description": "The node's host name, typed. Needed when the change's impact says needsConfirm; ignored otherwise",
+            "maxLength": 128,
+            "type": "string"
+          },
+          "version": {
+            "description": "The node's version as the page last read it (the version of getNode); a node changed since is refused 409 node_changed",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "availability",
+          "version"
+        ],
+        "type": "object"
+      },
       "NodeCountsBody": {
         "additionalProperties": false,
         "properties": {
@@ -5679,6 +5709,136 @@
           "updatedAt",
           "agent",
           "targetNodeId"
+        ],
+        "type": "object"
+      },
+      "NodeImpactBody": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "description": "The change judged",
+            "enum": [
+              "drain",
+              "pause",
+              "promote",
+              "demote",
+              "activate"
+            ],
+            "type": "string"
+          },
+          "hostname": {
+            "description": "The node's host name, which is what is typed to confirm",
+            "type": "string"
+          },
+          "managers": {
+            "$ref": "#/components/schemas/NodeImpactManagers",
+            "description": "The manager counts"
+          },
+          "needsConfirm": {
+            "description": "True when the node's name must be typed to make the change: a drain or demote of Bayplan's node or of the only manager agent, a demote that puts quorum at risk, and a demote whose quorum facts could not be read. The server refuses the change without it",
+            "type": "boolean"
+          },
+          "tasks": {
+            "description": "For drain and pause, the node's tasks whose desired state is running, by service then slot; empty otherwise",
+            "items": {
+              "$ref": "#/components/schemas/NodeImpactTask"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "The node's object version as read for this judgement: the version a change made on the strength of it must send back",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "warnings": {
+            "description": "What to warn of: quorum_at_risk (a demote could leave no majority), even_count (a demote leaves an even number of managers), runs_bayplan (the node hosts Bayplan), only_manager_agent (it has the only manager agent connected to Bayplan), facts_unreadable (a manager's state is not known, so the first cannot be judged). Never null",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "action",
+          "hostname",
+          "version",
+          "tasks",
+          "managers",
+          "warnings",
+          "needsConfirm"
+        ],
+        "type": "object"
+      },
+      "NodeImpactManagers": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "Managers there would be after the change",
+            "format": "int64",
+            "type": "integer"
+          },
+          "reachable": {
+            "description": "Managers whose reachability is reachable now",
+            "format": "int64",
+            "type": "integer"
+          },
+          "total": {
+            "description": "Nodes whose role is manager now",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "reachable",
+          "after"
+        ],
+        "type": "object"
+      },
+      "NodeImpactTask": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The task ID",
+            "type": "string"
+          },
+          "outcome": {
+            "description": "What happens to it: moves (another active, ready node meets the service's constraints), stops (a global service's task is not moved), cannot_place (no other node can take it) or stays (a pause leaves it running)",
+            "enum": [
+              "moves",
+              "stops",
+              "cannot_place",
+              "stays"
+            ],
+            "type": "string"
+          },
+          "service": {
+            "description": "The service's name; its ID when the swarm no longer lists the service",
+            "type": "string"
+          },
+          "serviceId": {
+            "description": "The service the task belongs to",
+            "type": "string"
+          },
+          "slot": {
+            "description": "The replica number of a replicated service's task; 0 for a global service's",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "serviceId",
+          "service",
+          "slot",
+          "outcome"
         ],
         "type": "object"
       },
@@ -5856,6 +6016,35 @@
           "tasksKnown",
           "noManager",
           "fetchedAt"
+        ],
+        "type": "object"
+      },
+      "NodeRoleRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "description": "The node's host name, typed. Needed when the change's impact says needsConfirm; ignored otherwise",
+            "maxLength": 128,
+            "type": "string"
+          },
+          "role": {
+            "description": "manager promotes a worker, worker demotes a manager",
+            "enum": [
+              "manager",
+              "worker"
+            ],
+            "type": "string"
+          },
+          "version": {
+            "description": "The node's version as the page last read it (the version of getNode); a node changed since is refused 409 node_changed",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "role",
+          "version"
         ],
         "type": "object"
       },
@@ -14475,6 +14664,145 @@
         ]
       }
     },
+    "/api/env/{envId}/nodes/{nodeId}/availability": {
+      "post": {
+        "description": "Sets the availability of one node to active, pause or drain, once. The server reads the node fresh and sends its whole spec with only the availability changed and the version sent, so nothing else about the node changes. Before it writes, the server judges the change as getNodeActionImpact does; when that says needsConfirm (a drain of the node that runs Bayplan or of the only connected manager agent) the body's confirm must be the node's host name, else 422 confirmation_required and nothing is sent. A node whose version is not the one sent is 409 node_changed, and nothing is retried. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Docker's own refusals come back mapped: 409 last_manager for the demotion of the last manager, 502 node_update_failed with Docker's words for any other. Bayplan itself never blocks a change that was confirmed by typing the node's name. Needs nodes.manage (Admin) on the environment. Every attempt on a node that exists is audited as node.availability_changed with the name, from, to, whether the name was typed, the warnings and the code.",
+        "operationId": "setNodeAvailability",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The swarm node ID: the id of a row of the nodes list",
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "description": "The swarm node ID: the id of a row of the nodes list",
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NodeAvailabilityRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Drain, pause or activate a node",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/nodes/{nodeId}/impact": {
+      "get": {
+        "description": "Judges a drain, pause, promote or demote of one node from a live read of the swarm, and is the same judgement the change itself enforces. For a drain or a pause it lists the node's tasks that are meant to run with what happens to each: moves (another active, ready node meets the service's placement constraints), stops (a global service's task is not moved), cannot_place, or stays (a pause). managers gives the manager counts now and after the change. warnings are quorum_at_risk, even_count, runs_bayplan, only_manager_agent and facts_unreadable, and needsConfirm says the node's name must be typed for the change to be accepted. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.manage (Admin) on the environment.",
+        "operationId": "getNodeActionImpact",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The swarm node ID: the id of a row of the nodes list",
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "description": "The swarm node ID: the id of a row of the nodes list",
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The change to judge: drain, pause, promote or demote",
+            "explode": false,
+            "in": "query",
+            "name": "action",
+            "required": true,
+            "schema": {
+              "description": "The change to judge: drain, pause, promote or demote",
+              "enum": [
+                "drain",
+                "pause",
+                "promote",
+                "demote"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeImpactBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "What a change to a swarm node will do",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
     "/api/env/{envId}/nodes/{nodeId}/inspect": {
       "get": {
         "description": "The manager's inspect document of the node, for the Inspect tab. It holds the TLS trust root of the swarm and the node's certificate subject, which are public, and no join token. 404 node_not_found when the swarm has no such node. 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.read (Viewer) on the environment.",
@@ -14533,6 +14861,65 @@
           }
         },
         "summary": "The raw inspect document of a swarm node",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/nodes/{nodeId}/role": {
+      "post": {
+        "description": "Sets the role of one node to manager or worker, once. The server reads the node fresh and sends its whole spec with only the role changed and the version sent. Before it writes, the server judges the change as getNodeActionImpact does; when that says needsConfirm (a demote that puts quorum at risk, of the node that runs Bayplan, of the only connected manager agent, or with the managers' state unreadable) the body's confirm must be the node's host name, else 422 confirmation_required and nothing is sent. A node whose version is not the one sent is 409 node_changed, and nothing is retried. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Docker's own refusals come back mapped: 409 last_manager for the demotion of the last manager, 502 node_update_failed with Docker's words for any other. Bayplan itself never blocks a change that was confirmed by typing the node's name. Needs nodes.manage (Admin) on the environment. Every attempt on a node that exists is audited as node.role_changed with the name, from, to, whether the name was typed, the warnings and the code.",
+        "operationId": "setNodeRole",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The swarm node ID: the id of a row of the nodes list",
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "description": "The swarm node ID: the id of a row of the nodes list",
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NodeRoleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Promote a worker or demote a manager",
         "tags": [
           "environments"
         ]

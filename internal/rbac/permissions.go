@@ -115,6 +115,7 @@ var defaultRegistry = Registry{
 	{Name: PermServicesControl, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Scale, force update, roll back and change the settings of services, and mute their restart-loop alerts"},
 	{Name: PermServicesManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Create and remove services"},
 	{Name: PermNodesRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View swarm nodes"},
+	{Name: PermNodesManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Drain, pause, activate, promote, demote, label and remove nodes"},
 }
 
 // DefaultRegistry returns a copy of the registry production runs with.
