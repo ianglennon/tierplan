@@ -423,7 +423,7 @@ func TestLoadReadsTheHostPolicyFlags(t *testing.T) {
 // misspelled: the agent refuses to start and names the variable.
 func TestLoadRefusesAPolicyFlagItCannotRead(t *testing.T) {
 	for _, name := range []string{"BAYPLAN_AGENT_READ_ONLY", "BAYPLAN_AGENT_SELF_UPDATE", "BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES"} {
-		for _, value := range []string{"sure", "yes", "1", "TRUE-ish"} {
+		for _, value := range []string{"sure", "yes", "on", "TRUE-ish"} {
 			_, err := Load(env(map[string]string{
 				"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_JOIN_TOKEN": "tok", name: value,
 			}), files(nil))

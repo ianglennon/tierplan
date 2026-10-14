@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -123,6 +124,14 @@ func queryAllowed(rt route, rawQuery string) bool {
 // onDenied, which may be nil, with the method, the path (capped, without the query)
 // and the reason; onDenied runs on the request's goroutine and must not block.
 func Handler(socketPath string, policy Policy, onDenied func(method, path, reason string)) http.Handler {
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", socketPath)
+		},
+		DisableCompression: true,
+	}
+	lookup := networkLookupOver(transport)
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			// Rewrite, unlike Director, drops any X-Forwarded-* the server
@@ -135,13 +144,7 @@ func Handler(socketPath string, policy Policy, onDenied func(method, path, reaso
 			// engine does not, and nothing but the request itself should cross.
 			pr.Out.Header.Del("Te")
 		},
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				var d net.Dialer
-				return d.DialContext(ctx, "unix", socketPath)
-			},
-			DisableCompression: true,
-		},
+		Transport: transport,
 		// Flush every write: /events is a stream and must not be buffered.
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
@@ -162,7 +165,13 @@ func Handler(socketPath string, policy Policy, onDenied func(method, path, reaso
 			if onDenied != nil {
 				onDenied(r.Method, shownPath(r), reason)
 			}
-			writeJSON(w, http.StatusForbidden, DeniedPrefix+": "+r.Method+" "+shownPath(r), true)
+			// A host-policy refusal says so, so the server can name the setting that
+			// lifts it; every other refusal is the bare prefix.
+			prefix := DeniedPrefix + ": "
+			if reason == wire.DeniedHostPolicy {
+				prefix += wire.DeniedHostPolicy + ": "
+			}
+			writeJSON(w, http.StatusForbidden, prefix+r.Method+" "+shownPath(r), true)
 		}
 		ok, reason, kind := Allowed(r.Method, rawPath, query, hasBody, hasUpgrade, policy)
 		if !ok {
@@ -181,9 +190,13 @@ func Handler(socketPath string, policy Policy, onDenied func(method, path, reaso
 		}
 		if kind != BodyNone {
 			// What is forwarded is the rebuilt body, never the bytes the server sent.
-			rebuilt, err := validateBody(kind, http.MaxBytesReader(w, r.Body, bodyCap(kind)), bodyEnv{policy: policy, ctx: r.Context()})
+			rebuilt, err := validateBody(kind, http.MaxBytesReader(w, r.Body, bodyCap(kind)), bodyEnv{policy: policy, lookup: lookup, ctx: r.Context()})
 			if err != nil {
-				deny(wire.DeniedAllowlist)
+				if errors.Is(err, errHostPolicy) {
+					deny(wire.DeniedHostPolicy)
+				} else {
+					deny(wire.DeniedAllowlist)
+				}
 				return
 			}
 			r.Body = io.NopCloser(bytes.NewReader(rebuilt))
@@ -198,6 +211,45 @@ func Handler(socketPath string, policy Policy, onDenied func(method, path, reaso
 		rp.ServeHTTP(w, r)
 	})
 }
+
+// lookupTimeout bounds the one network lookup a service-spec check makes.
+const lookupTimeout = 5 * time.Second
+
+// networkLookupOver asks the engine behind transport about a network: one GET
+// /networks/{target}. A target that is not shaped like a network name or ID, or
+// that the engine does not answer for, is an error, which the check reads as "not
+// the host network"; the engine refuses an unknown network itself.
+func networkLookupOver(transport http.RoundTripper) networkLookup {
+	client := &http.Client{Transport: transport}
+	return func(ctx context.Context, target string) (string, string, error) {
+		if !idRe.MatchString(target) {
+			return "", "", errors.New("not a network name or ID")
+		}
+		ctx, cancel := context.WithTimeout(ctx, lookupTimeout)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker/networks/"+target, nil)
+		if err != nil {
+			return "", "", err
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return "", "", err
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusOK {
+			return "", "", fmt.Errorf("network lookup answered %d", resp.StatusCode)
+		}
+		var n struct{ Name, Driver string }
+		if err := json.NewDecoder(io.LimitReader(resp.Body, maxLookupAnswer)).Decode(&n); err != nil {
+			return "", "", err
+		}
+		return n.Name, n.Driver, nil
+	}
+}
+
+// maxLookupAnswer caps what is read of a network inspect. Only the name and the
+// driver are used, but a network with many containers has a long answer.
+const maxLookupAnswer = 8 << 20
 
 // registryHeaderOK reports whether the values of an X-Registry-Auth header may be
 // forwarded: none at all, or exactly one that is empty or at most maxRegistryAuth

@@ -392,8 +392,9 @@ func validateVolumeCreate(raw []byte) (volume.CreateRequest, error) {
 // is a user's service, and every field of it is the user's to set. What is refused is
 // what is not a container service: a plugin or a network attachment task, and a
 // runtime other than container. The value returned is encoded again, so what is
-// forwarded is what the decoder understood. The host-escalation refusal (privileged
-// settings, host mounts, host networking) is added to this validator by plan 06-03.
+// forwarded is what the decoder understood. A spec that gives tasks host access
+// (host mounts, added capabilities, a lowered sandbox, host networking) is refused
+// with errHostPolicy unless the host allows it (checkHostPolicy).
 func validateServiceSpec(raw []byte, env bodyEnv) (swarm.ServiceSpec, error) {
 	var in swarm.ServiceSpec
 	if err := decodeStrict(raw, &in); err != nil {
@@ -407,6 +408,12 @@ func validateServiceSpec(raw []byte, env bodyEnv) (swarm.ServiceSpec, error) {
 		return in, refuse("a plugin spec is not forwarded")
 	case tt.NetworkAttachmentSpec != nil:
 		return in, refuse("a network attachment spec is not forwarded")
+	}
+	// Host access (D-36): a spec that mounts the host, adds capabilities, lowers
+	// the sandbox or joins the host network is refused unless the host owner allowed
+	// it with BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES.
+	if err := checkHostPolicy(in, env); err != nil {
+		return in, err
 	}
 	return in, nil
 }

@@ -42,6 +42,12 @@ const (
 	// envSelfUpdate says whether the agent may update or uninstall itself when the
 	// server asks (D-28). The default is true; a later plan implements what it gates.
 	envSelfUpdate = "BAYPLAN_AGENT_SELF_UPDATE"
+	// envAllowPrivilegedServices lets a manager's agent forward service specs that
+	// give tasks host access: a bind of the Docker socket or of a host path outside
+	// the data roots, an added capability, a lowered sandbox, the host network
+	// (D-36). The default is false. It matters on managers only; a worker's agent
+	// forwards no service write.
+	envAllowPrivilegedServices = "BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES"
 	// envAllowInsecure lets the agent dial plain ws:// to a host that is not
 	// loopback. For development only: the join token, the proof and every Docker
 	// answer then cross the network unencrypted to a server the agent cannot check
@@ -104,7 +110,7 @@ type Config struct {
 //	BAYPLAN_AGENT_BACKOFF_MIN      first reconnect delay, default 1s
 //	BAYPLAN_AGENT_BACKOFF_MAX      longest reconnect delay, default 60s; at least the minimum
 //
-// The host policy flags (envReadOnly and envSelfUpdate) and envAllowInsecure are
+// The host policy flags (envReadOnly, envSelfUpdate and envAllowPrivilegedServices) and envAllowInsecure are
 // true or false; a value that is neither stops the agent, so that a restriction is
 // never dropped because it was misspelled.
 func Load(env func(string) string, readFile func(string) ([]byte, error)) (Config, error) {
@@ -143,6 +149,9 @@ func Load(env func(string) string, readFile func(string) ([]byte, error)) (Confi
 		return Config{}, err
 	}
 	if cfg.SelfUpdate, err = parseFlag(env, envSelfUpdate, true); err != nil {
+		return Config{}, err
+	}
+	if cfg.AllowPrivilegedServices, err = parseFlag(env, envAllowPrivilegedServices, false); err != nil {
 		return Config{}, err
 	}
 

@@ -29,7 +29,7 @@ const (
 	BodyNetworkDisconnect
 	// BodyVolumeCreate is POST /volumes/create.
 	BodyVolumeCreate
-	// BodyServiceSpec is POST /services/{id}/update.
+	// BodyServiceSpec is POST /services/create and POST /services/{id}/update.
 	BodyServiceSpec
 )
 
@@ -140,13 +140,20 @@ var routes = []route{
 	read("container inspect", `containers/`+idShape+`/json`),
 
 	// One service: the inspect (matched after the list, so GET /services is never
-	// read as an inspect) and the update, which takes the service's whole spec as
-	// its body and the registry credential its image needs. The create, remove and
-	// logs of a service are added by the plans that need them.
+	// read as an inspect), the create and the update, which take the service's whole
+	// spec as their body and the registry credential its image needs, and the
+	// remove, which takes no key. A spec that gives tasks host access is refused by
+	// the body validator unless the host allows it (D-36). The logs of a service are
+	// added by the plan that needs them.
 	{
 		name: "service inspect", method: http.MethodGet, path: pathOf(`services/` + idShape),
 		query: map[string]*regexp.Regexp{"insertDefaults": boolValue},
 	},
+	{
+		name: "service create", method: http.MethodPost, path: pathOf(`services/create`),
+		body: BodyServiceSpec, registryAuth: true,
+	},
+	{name: "service remove", method: http.MethodDelete, path: pathOf(`services/` + idShape)},
 	{
 		name: "service update", method: http.MethodPost, path: pathOf(`services/` + idShape + `/update`),
 		query:        map[string]*regexp.Regexp{"version": versionValue, "registryAuthFrom": authFromValue, "rollback": rollbackValue},
