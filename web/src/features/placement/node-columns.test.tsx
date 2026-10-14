@@ -89,6 +89,23 @@ describe("NodeColumns", () => {
     expect(within(wrk).getByText("1 task")).toBeTruthy();
   });
 
+  it("links the name in a node's header to the node's page, and leaves the columns that are not nodes plain", () => {
+    renderColumns(
+      placement(
+        [MGR, WRK],
+        [task({ id: "p", nodeId: "" }), task({ id: "r", nodeId: "gone-id", nodeKnown: false })],
+      ),
+    );
+    expect(within(column("mgr-1")).getByRole("link", { name: "mgr-1" }).getAttribute("href")).toBe(
+      "/env/e1/nodes/n1",
+    );
+    expect(within(column("wrk-1")).getByRole("link", { name: "wrk-1" }).getAttribute("href")).toBe(
+      "/env/e1/nodes/n2",
+    );
+    expect(within(column("Not placed")).queryByRole("link", { name: "Not placed" })).toBeNull();
+    expect(within(column("Removed node")).queryByRole("link", { name: "Removed node" })).toBeNull();
+  });
+
   it("keeps a node that is down as a muted column whose tasks read Unknown", () => {
     renderColumns(
       placement(
