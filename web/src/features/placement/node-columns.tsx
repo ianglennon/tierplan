@@ -50,7 +50,7 @@ export function NodeColumns({ envId, columns, emptyLabel }: NodeColumnsProps) {
 }
 
 // Three columns of skeleton, drawn while the first answer is on its way.
-export function NodeColumnsSkeleton() {
+export function ColumnsSkeleton() {
   return (
     <div data-slot="node-columns-skeleton" className="flex gap-4 overflow-x-hidden pb-2">
       {[0, 1, 2].map((i) => (

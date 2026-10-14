@@ -29,7 +29,7 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { SearchBox } from "@/features/containers/container-list";
-import { NodeColumns, NodeColumnsSkeleton } from "@/features/placement/node-columns";
+import { ColumnsSkeleton, NodeColumns } from "@/features/placement/node-columns";
 import type { PlacementSearch, PlacementSearchPatch } from "@/features/placement/placement-search";
 import { isFiltered, NO_STACK, project, stackNames } from "@/features/placement/project";
 import { useEnvName } from "@/features/resources/use-env-name";
@@ -173,7 +173,7 @@ export function PlacementView({ envId, search, onSearchChange }: PlacementViewPr
       </Alert>
     );
   } else if (!data) {
-    body = <NodeColumnsSkeleton />;
+    body = <ColumnsSkeleton />;
   } else if (none) {
     body = (
       <Empty className="min-h-[30svh] border">
