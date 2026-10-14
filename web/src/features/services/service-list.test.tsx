@@ -236,6 +236,31 @@ describe("ServiceList", () => {
     expect(screen.queryByRole("menuitem", { name: "Scale…" })).toBeNull();
   });
 
+  it("links the name to the service's page", async () => {
+    mount();
+    const link = await screen.findByRole("link", { name: "web" });
+    expect(link.getAttribute("href")).toBe("/env/e1/services/id-web");
+    expect(screen.getByRole("link", { name: "bayplan-agent" }).getAttribute("href")).toBe(
+      "/env/e1/services/id-agent",
+    );
+  });
+
+  it("opens the service's page from Open in the row menu, for every service", async () => {
+    mount();
+    for (const [name, id] of [
+      ["web", "id-web"],
+      ["bayplan-agent", "id-agent"],
+      ["backup", "id-backup"],
+    ] as const) {
+      await openMenu(name);
+      const open = await screen.findByRole("menuitem", { name: "Open" });
+      expect(open.getAttribute("aria-disabled")).toBeNull();
+      expect(open.getAttribute("data-disabled")).toBeNull();
+      expect(open.getAttribute("href")).toBe(`/env/e1/services/${id}`);
+      fireEvent.keyDown(open, { key: "Escape" });
+    }
+  });
+
   it("shows Scale… disabled with Needs Operator to a viewer, and opens nothing", async () => {
     me = makeMe({ envs: { [ENV]: "viewer" } });
     mount();
