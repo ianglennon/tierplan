@@ -65,6 +65,7 @@ import { Route as AppEnvEnvIdNetworksNetworkIdAttachmentsRouteImport } from './r
 import { Route as AppEnvEnvIdNetworksNetworkIdInspectRouteImport } from './routes/_app/env/$envId/networks_.$networkId.inspect'
 import { Route as AppEnvEnvIdServicesServiceIdIndexRouteImport } from './routes/_app/env/$envId/services_.$serviceId.index'
 import { Route as AppEnvEnvIdServicesServiceIdInspectRouteImport } from './routes/_app/env/$envId/services_.$serviceId.inspect'
+import { Route as AppEnvEnvIdServicesServiceIdPlacementRouteImport } from './routes/_app/env/$envId/services_.$serviceId.placement'
 import { Route as AppEnvEnvIdServicesServiceIdTasksRouteImport } from './routes/_app/env/$envId/services_.$serviceId.tasks'
 import { Route as AppEnvEnvIdVolumesVolumeNameIndexRouteImport } from './routes/_app/env/$envId/volumes_.$volumeName.index'
 import { Route as AppEnvEnvIdVolumesVolumeNameInspectRouteImport } from './routes/_app/env/$envId/volumes_.$volumeName.inspect'
@@ -375,6 +376,12 @@ const AppEnvEnvIdServicesServiceIdInspectRoute =
     path: '/inspect',
     getParentRoute: () => AppEnvEnvIdServicesServiceIdRoute,
   } as any)
+const AppEnvEnvIdServicesServiceIdPlacementRoute =
+  AppEnvEnvIdServicesServiceIdPlacementRouteImport.update({
+    id: '/placement',
+    path: '/placement',
+    getParentRoute: () => AppEnvEnvIdServicesServiceIdRoute,
+  } as any)
 const AppEnvEnvIdServicesServiceIdTasksRoute =
   AppEnvEnvIdServicesServiceIdTasksRouteImport.update({
     id: '/tasks',
@@ -446,6 +453,7 @@ export interface FileRoutesByFullPath {
   '/env/$envId/networks/$networkId/attachments': typeof AppEnvEnvIdNetworksNetworkIdAttachmentsRoute
   '/env/$envId/networks/$networkId/inspect': typeof AppEnvEnvIdNetworksNetworkIdInspectRoute
   '/env/$envId/services/$serviceId/inspect': typeof AppEnvEnvIdServicesServiceIdInspectRoute
+  '/env/$envId/services/$serviceId/placement': typeof AppEnvEnvIdServicesServiceIdPlacementRoute
   '/env/$envId/services/$serviceId/tasks': typeof AppEnvEnvIdServicesServiceIdTasksRoute
   '/env/$envId/volumes/$volumeName/inspect': typeof AppEnvEnvIdVolumesVolumeNameInspectRoute
   '/env/$envId/containers/$containerId/': typeof AppEnvEnvIdContainersContainerIdIndexRoute
@@ -497,6 +505,7 @@ export interface FileRoutesByTo {
   '/env/$envId/networks/$networkId/attachments': typeof AppEnvEnvIdNetworksNetworkIdAttachmentsRoute
   '/env/$envId/networks/$networkId/inspect': typeof AppEnvEnvIdNetworksNetworkIdInspectRoute
   '/env/$envId/services/$serviceId/inspect': typeof AppEnvEnvIdServicesServiceIdInspectRoute
+  '/env/$envId/services/$serviceId/placement': typeof AppEnvEnvIdServicesServiceIdPlacementRoute
   '/env/$envId/services/$serviceId/tasks': typeof AppEnvEnvIdServicesServiceIdTasksRoute
   '/env/$envId/volumes/$volumeName/inspect': typeof AppEnvEnvIdVolumesVolumeNameInspectRoute
   '/env/$envId/containers/$containerId': typeof AppEnvEnvIdContainersContainerIdIndexRoute
@@ -559,6 +568,7 @@ export interface FileRoutesById {
   '/_app/env/$envId/networks_/$networkId/attachments': typeof AppEnvEnvIdNetworksNetworkIdAttachmentsRoute
   '/_app/env/$envId/networks_/$networkId/inspect': typeof AppEnvEnvIdNetworksNetworkIdInspectRoute
   '/_app/env/$envId/services_/$serviceId/inspect': typeof AppEnvEnvIdServicesServiceIdInspectRoute
+  '/_app/env/$envId/services_/$serviceId/placement': typeof AppEnvEnvIdServicesServiceIdPlacementRoute
   '/_app/env/$envId/services_/$serviceId/tasks': typeof AppEnvEnvIdServicesServiceIdTasksRoute
   '/_app/env/$envId/volumes_/$volumeName/inspect': typeof AppEnvEnvIdVolumesVolumeNameInspectRoute
   '/_app/env/$envId/containers_/$containerId/': typeof AppEnvEnvIdContainersContainerIdIndexRoute
@@ -621,6 +631,7 @@ export interface FileRouteTypes {
     | '/env/$envId/networks/$networkId/attachments'
     | '/env/$envId/networks/$networkId/inspect'
     | '/env/$envId/services/$serviceId/inspect'
+    | '/env/$envId/services/$serviceId/placement'
     | '/env/$envId/services/$serviceId/tasks'
     | '/env/$envId/volumes/$volumeName/inspect'
     | '/env/$envId/containers/$containerId/'
@@ -672,6 +683,7 @@ export interface FileRouteTypes {
     | '/env/$envId/networks/$networkId/attachments'
     | '/env/$envId/networks/$networkId/inspect'
     | '/env/$envId/services/$serviceId/inspect'
+    | '/env/$envId/services/$serviceId/placement'
     | '/env/$envId/services/$serviceId/tasks'
     | '/env/$envId/volumes/$volumeName/inspect'
     | '/env/$envId/containers/$containerId'
@@ -733,6 +745,7 @@ export interface FileRouteTypes {
     | '/_app/env/$envId/networks_/$networkId/attachments'
     | '/_app/env/$envId/networks_/$networkId/inspect'
     | '/_app/env/$envId/services_/$serviceId/inspect'
+    | '/_app/env/$envId/services_/$serviceId/placement'
     | '/_app/env/$envId/services_/$serviceId/tasks'
     | '/_app/env/$envId/volumes_/$volumeName/inspect'
     | '/_app/env/$envId/containers_/$containerId/'
@@ -1146,6 +1159,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppEnvEnvIdServicesServiceIdInspectRouteImport
       parentRoute: typeof AppEnvEnvIdServicesServiceIdRoute
     }
+    '/_app/env/$envId/services_/$serviceId/placement': {
+      id: '/_app/env/$envId/services_/$serviceId/placement'
+      path: '/placement'
+      fullPath: '/env/$envId/services/$serviceId/placement'
+      preLoaderRoute: typeof AppEnvEnvIdServicesServiceIdPlacementRouteImport
+      parentRoute: typeof AppEnvEnvIdServicesServiceIdRoute
+    }
     '/_app/env/$envId/services_/$serviceId/tasks': {
       id: '/_app/env/$envId/services_/$serviceId/tasks'
       path: '/tasks'
@@ -1304,6 +1324,7 @@ const AppEnvEnvIdNetworksNetworkIdRouteWithChildren =
 
 interface AppEnvEnvIdServicesServiceIdRouteChildren {
   AppEnvEnvIdServicesServiceIdInspectRoute: typeof AppEnvEnvIdServicesServiceIdInspectRoute
+  AppEnvEnvIdServicesServiceIdPlacementRoute: typeof AppEnvEnvIdServicesServiceIdPlacementRoute
   AppEnvEnvIdServicesServiceIdTasksRoute: typeof AppEnvEnvIdServicesServiceIdTasksRoute
   AppEnvEnvIdServicesServiceIdIndexRoute: typeof AppEnvEnvIdServicesServiceIdIndexRoute
 }
@@ -1312,6 +1333,8 @@ const AppEnvEnvIdServicesServiceIdRouteChildren: AppEnvEnvIdServicesServiceIdRou
   {
     AppEnvEnvIdServicesServiceIdInspectRoute:
       AppEnvEnvIdServicesServiceIdInspectRoute,
+    AppEnvEnvIdServicesServiceIdPlacementRoute:
+      AppEnvEnvIdServicesServiceIdPlacementRoute,
     AppEnvEnvIdServicesServiceIdTasksRoute:
       AppEnvEnvIdServicesServiceIdTasksRoute,
     AppEnvEnvIdServicesServiceIdIndexRoute:

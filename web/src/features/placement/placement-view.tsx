@@ -3,7 +3,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { LayoutGrid } from "lucide-react";
-import { useId } from "react";
+import { useId, useState } from "react";
 
 import { placementQuery } from "@/api/placement";
 import { isNotASwarm } from "@/api/services";
@@ -26,12 +26,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { SearchBox } from "@/features/containers/container-list";
 import { ColumnsSkeleton, NodeColumns } from "@/features/placement/node-columns";
+import { NodeServiceGrid } from "@/features/placement/node-service-grid";
+import { PlacementRulesCard } from "@/features/placement/placement-rules-card";
 import type { PlacementSearch, PlacementSearchPatch } from "@/features/placement/placement-search";
-import { isFiltered, NO_STACK, project, stackNames } from "@/features/placement/project";
+import {
+  filterTasks,
+  isFiltered,
+  NO_STACK,
+  type PlacementData,
+  project,
+  stackNames,
+} from "@/features/placement/project";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { NotASwarm } from "@/features/services/not-a-swarm";
 import { usePermission } from "@/hooks/use-me";
@@ -60,19 +70,27 @@ interface PlacementViewProps {
   serviceId?: string;
 }
 
-// PlacementView is the Placement page (RES-12, D-18, D-19): where the tasks of a swarm run, one
-// column per node. The toolbar is drawn while the answer loads. The stack and service filters
-// are in the URL and narrow the tasks, never the nodes.
-export function PlacementView({ envId, search, onSearchChange }: PlacementViewProps) {
+// PlacementView is where the tasks of a swarm run (RES-12, D-18, D-19), in one of two layouts:
+// a column per node, or the node x service grid. It is the Placement page and, with a serviceId,
+// the Placement tab of that service: the same view for the one service, under a header and the
+// rules card, with the node columns kept when they are empty. The toolbar is drawn while the
+// answer loads. The stack and service filters are in the URL and narrow the tasks, never the
+// nodes. While a grid cell's popover is open the answer on screen is held, so nothing moves
+// under the pointer (UI-SPEC "Live updates").
+export function PlacementView({ envId, search, onSearchChange, serviceId }: PlacementViewProps) {
   const t = useT();
   const stackId = useId();
   const layoutId = useId();
   const allowed = usePermission("services.read", envId);
-  const query = useQuery({ ...placementQuery(envId), enabled: allowed });
+  const query = useQuery({ ...placementQuery(envId, serviceId), enabled: allowed });
   const envName = useEnvName(envId);
-  const data = query.data;
-  const filters = { stack: search.stack, q: search.q };
+  const [held, setHeld] = useState<PlacementData | null>(null);
+  const live = query.data;
+  const data = held ?? live;
+  // The answer for one service is already narrowed, so the page's filters do not apply to it.
+  const filters = serviceId ? {} : { stack: search.stack, q: search.q };
   const filtered = isFiltered(filters);
+  const grid = search.view === "grid";
 
   if (!allowed) return <NoPermission />;
   if (isNotASwarm(query.error)) return <NotASwarm envId={envId} envName={envName} />;
@@ -88,44 +106,51 @@ export function PlacementView({ envId, search, onSearchChange }: PlacementViewPr
   const columns = data ? project(data, filters) : [];
   const failed = query.isError && !data;
   const none = data !== undefined && (data.tasks ?? []).length === 0;
-  const matched = columns.reduce((n, c) => n + c.count, 0);
+  const matched = data ? filterTasks(data, filters).length : 0;
+  const service = data?.services?.[0];
+  const serviceName = service?.name ?? serviceId ?? "";
+  // A popover holds the answer it was opened on; closing it lets the page catch up.
+  const hold = (open: boolean) => setHeld(open ? (live ?? null) : null);
 
   const toolbar = (
     <div className="flex flex-wrap items-center gap-2 max-md:[&>*]:min-w-0">
-      <SearchBox
-        value={search.q}
-        onCommit={(q) => onSearchChange({ q })}
-        label={t("placement.filters.search.label")}
-        placeholder={t("placement.filters.search.placeholder")}
-        clearLabel={t("placement.filters.search.clear")}
-      />
-      <div className="flex items-center gap-2">
-        <Label htmlFor={stackId} className="text-sm text-muted-foreground">
-          {t("placement.filters.stack")}
-        </Label>
-        <Select
-          value={toSelect(search.stack)}
-          onValueChange={(v) => onSearchChange({ stack: fromSelect(v) })}
-        >
-          <SelectTrigger id={stackId} size="sm" className="max-w-64 min-w-40 max-md:h-11">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent position="popper" align="start" className="max-h-72">
-            <SelectItem value={ALL_STACKS}>{t("placement.filters.allStacks")}</SelectItem>
-            {choices.map((s) => (
-              <SelectItem key={s} value={`${STACK_PREFIX}${s}`}>
-                {s}
-              </SelectItem>
-            ))}
-            <SelectItem value={NO_STACK}>{t("placement.filters.noStack")}</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
+      {serviceId ? null : (
+        <>
+          <SearchBox
+            value={search.q}
+            onCommit={(q) => onSearchChange({ q })}
+            label={t("placement.filters.search.label")}
+            placeholder={t("placement.filters.search.placeholder")}
+            clearLabel={t("placement.filters.search.clear")}
+          />
+          <div className="flex items-center gap-2">
+            <Label htmlFor={stackId} className="text-sm text-muted-foreground">
+              {t("placement.filters.stack")}
+            </Label>
+            <Select
+              value={toSelect(search.stack)}
+              onValueChange={(v) => onSearchChange({ stack: fromSelect(v) })}
+            >
+              <SelectTrigger id={stackId} size="sm" className="max-w-64 min-w-40 max-md:h-11">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent position="popper" align="start" className="max-h-72">
+                <SelectItem value={ALL_STACKS}>{t("placement.filters.allStacks")}</SelectItem>
+                {choices.map((s) => (
+                  <SelectItem key={s} value={`${STACK_PREFIX}${s}`}>
+                    {s}
+                  </SelectItem>
+                ))}
+                <SelectItem value={NO_STACK}>{t("placement.filters.noStack")}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </>
+      )}
       <div className="flex items-center gap-2">
         <Label id={layoutId} className="text-sm text-muted-foreground">
           {t("placement.layout.label")}
         </Label>
-        {/* Only By node for now: the grid joins this group when it exists. */}
         <ToggleGroup
           type="single"
           role="group"
@@ -133,10 +158,11 @@ export function PlacementView({ envId, search, onSearchChange }: PlacementViewPr
           size="sm"
           spacing={2}
           aria-labelledby={layoutId}
-          value="nodes"
-          // Pressing the one that is on would turn it off: there is always a layout.
+          value={grid ? "grid" : "nodes"}
+          // Pressing the one that is on would turn it off: there is always a layout. The
+          // filters are not touched, so they carry over to the other layout.
           onValueChange={(v) => {
-            if (v) onSearchChange({ view: undefined });
+            if (v) onSearchChange({ view: v === "grid" ? "grid" : undefined });
           }}
         >
           <ToggleGroupItem
@@ -145,9 +171,15 @@ export function PlacementView({ envId, search, onSearchChange }: PlacementViewPr
           >
             {t("placement.layout.nodes")}
           </ToggleGroupItem>
+          <ToggleGroupItem
+            value="grid"
+            className="aria-checked:border-ring aria-checked:text-ring max-md:h-11"
+          >
+            {t("placement.layout.grid")}
+          </ToggleGroupItem>
         </ToggleGroup>
       </div>
-      {filtered ? (
+      {filtered && !serviceId ? (
         <Button variant="ghost" className="max-md:h-11" onClick={clearFilters}>
           {t("placement.filters.clear")}
         </Button>
@@ -176,7 +208,7 @@ export function PlacementView({ envId, search, onSearchChange }: PlacementViewPr
     );
   } else if (!data) {
     body = <ColumnsSkeleton />;
-  } else if (none) {
+  } else if (none && !serviceId) {
     body = (
       <Empty className="min-h-[30svh] border">
         <EmptyHeader>
@@ -190,7 +222,7 @@ export function PlacementView({ envId, search, onSearchChange }: PlacementViewPr
         </EmptyHeader>
       </Empty>
     );
-  } else if (matched === 0) {
+  } else if (matched === 0 && !serviceId) {
     body = (
       <Empty className="min-h-[30svh] border">
         <EmptyHeader>
@@ -205,18 +237,49 @@ export function PlacementView({ envId, search, onSearchChange }: PlacementViewPr
         </EmptyContent>
       </Empty>
     );
+  } else if (grid) {
+    body = (
+      <NodeServiceGrid
+        envId={envId}
+        data={data}
+        filters={filters}
+        keepServices={serviceId !== undefined}
+        onPopoverOpenChange={hold}
+      />
+    );
   } else {
-    body = <NodeColumns envId={envId} columns={columns} />;
+    body = (
+      <NodeColumns
+        envId={envId}
+        columns={columns}
+        emptyLabel={serviceId ? t("placement.column.noneOf", { name: serviceName }) : undefined}
+      />
+    );
   }
 
   return (
     <div className="flex w-full flex-col gap-4">
-      <header className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h1 className="text-2xl font-semibold">{t("placement.title")}</h1>
-        <span className="text-sm text-muted-foreground">
-          {t("placement.caption", { environment: envName })}
-        </span>
-      </header>
+      {serviceId ? (
+        <>
+          {data || failed ? (
+            <h3 className="text-lg font-semibold break-all">
+              {t("placement.serviceTab.title", { name: serviceName })}
+            </h3>
+          ) : (
+            <Skeleton className="h-7 w-48" />
+          )}
+          {service && data ? (
+            <PlacementRulesCard service={service} nodes={data.nodes ?? []} />
+          ) : null}
+        </>
+      ) : (
+        <header className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h1 className="text-2xl font-semibold">{t("placement.title")}</h1>
+          <span className="text-sm text-muted-foreground">
+            {t("placement.caption", { environment: envName })}
+          </span>
+        </header>
+      )}
       {toolbar}
       {body}
     </div>

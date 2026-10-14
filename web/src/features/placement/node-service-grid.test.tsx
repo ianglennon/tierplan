@@ -53,7 +53,7 @@ describe("NodeServiceGrid", () => {
     renderGrid(DATA);
     expect(screen.getByRole("table")).toBeTruthy();
     const names = screen.getAllByRole("columnheader").map((h) => h.textContent);
-    expect(names).toEqual(["Service", "mgr-12 tasks", "wrk-13 tasks", "wrk-21 task", "Total"]);
+    expect(names).toEqual(["Service", "mgr-12 tasks", "wrk-12 tasks", "wrk-21 task", "Total"]);
     for (const header of screen.getAllByRole("columnheader")) {
       expect(header.getAttribute("scope")).toBe("col");
     }
@@ -130,7 +130,7 @@ describe("NodeServiceGrid", () => {
     expect(headers).toEqual([
       "Service",
       "mgr-12 tasks",
-      "wrk-13 tasks",
+      "wrk-12 tasks",
       "wrk-21 task",
       "Not placed1 task",
       "Total",

@@ -4,7 +4,8 @@
     "caption": "Where tasks run across {{environment}}.",
     "layout": {
       "label": "Layout",
-      "nodes": "By node"
+      "nodes": "By node",
+      "grid": "Grid"
     },
     "filters": {
       "stack": "Stack",
@@ -32,7 +33,8 @@
       "notPlaced": "Not placed",
       "notPlacedTooltip": "These tasks have no node yet. Their error says why.",
       "removed": "Removed node",
-      "removedTooltip": "These tasks ran on nodes that are no longer in the swarm."
+      "removedTooltip": "These tasks ran on nodes that are no longer in the swarm.",
+      "noneOf": "No tasks of {{name}}"
     },
     "node": {
       "state": {
@@ -66,6 +68,36 @@
       "title": "Couldn't load placement.",
       "body": "Bayplan couldn't ask a manager where the tasks run.",
       "retry": "Retry loading placement"
+    },
+    "grid": {
+      "label": "Tasks of each service on each node",
+      "corner": "Service",
+      "total": "Total",
+      "notPlaced": "Not placed",
+      "removed": "Removed node",
+      "cellNode": "{{service}} on {{node}}",
+      "cellNotPlaced": "{{service}} (not placed)",
+      "cellRemoved": "{{service}} on removed nodes",
+      "cell_one": "{{title}}: {{count, number}} task",
+      "cell_other": "{{title}}: {{count, number}} tasks",
+      "task": "{{slot}} — {{state}}",
+      "taskGlobal": "Global — {{state}}",
+      "notRunning_one": "{{count, number}} task isn't running",
+      "notRunning_other": "{{count, number}} tasks aren't running",
+      "note": "Shading shows how a service's tasks are spread across nodes. A dot marks a task that isn't running."
+    },
+    "serviceTab": {
+      "title": "Where {{name}} runs"
+    },
+    "rules": {
+      "title": "Placement rules",
+      "matches_one": "Matches {{matched, number}} of {{count, number}} node",
+      "matches_other": "Matches {{matched, number}} of {{count, number}} nodes",
+      "matchesNone": "Matches no nodes",
+      "unreadable": "Bayplan can't read this constraint.",
+      "spread": "Spread over {{label}}",
+      "maxReplicas": "Max replicas per node: {{count, number}}",
+      "empty": "No placement rules. Tasks can run on any node."
     }
   }
 }

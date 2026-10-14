@@ -8,6 +8,7 @@
       "label": "Service sections",
       "overview": "Overview",
       "tasks": "Tasks",
+      "placement": "Placement",
       "inspect": "Inspect"
     },
     "loading": "Loading the service",

@@ -446,10 +446,10 @@ describe("the Tasks tab", () => {
     serviceRetry.attempts = 1;
   });
 
-  it("is a tab between Overview and Inspect and shows the service's slots", async () => {
+  it("is the tab after Overview and shows the service's slots", async () => {
     renderPage();
     const tabs = await screen.findAllByRole("tab");
-    expect(tabs.map((t) => t.textContent)).toEqual(["Overview", "Tasks", "Inspect"]);
+    expect(tabs.map((t) => t.textContent)).toEqual(["Overview", "Tasks", "Placement", "Inspect"]);
     expect(screen.getByRole("tab", { name: "Tasks" }).getAttribute("href")).toBe(PAGE);
     expect(await screen.findByText("api.1")).toBeTruthy();
     expect(screen.getByText("api.2")).toBeTruthy();

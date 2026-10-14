@@ -77,20 +77,28 @@ function column(
   return { key, kind, node, groups: groupByStack(tasks), count: tasks.length };
 }
 
+// passes says whether a service of this stack and name is shown under the filters.
+export function passes(filters: PlacementFilters, stack: string, service: string): boolean {
+  if (filters.stack === NO_STACK) {
+    if (stack !== "") return false;
+  } else if (filters.stack && stack !== filters.stack) {
+    return false;
+  }
+  const q = filters.q?.trim().toLowerCase();
+  return !q || service.toLowerCase().includes(q);
+}
+
+// filterTasks are the tasks the filters leave. Both layouts show these and nothing else.
+export function filterTasks(data: PlacementData, filters: PlacementFilters): PlacementTask[] {
+  return (data.tasks ?? []).filter((t) => passes(filters, t.stack, t.service));
+}
+
 // project turns the answer into the columns of the By node layout: Not placed first when it
 // holds tasks, one column per node in node-name order whether or not it holds any (so an idle
 // node and a down node are seen), and Removed node last when it holds tasks. The filters
 // narrow the tasks and never the nodes.
 export function project(data: PlacementData, filters: PlacementFilters): PlacementColumn[] {
-  const q = filters.q?.trim().toLowerCase();
-  const kept = (data.tasks ?? []).filter((t) => {
-    if (filters.stack === NO_STACK) {
-      if (t.stack !== "") return false;
-    } else if (filters.stack && t.stack !== filters.stack) {
-      return false;
-    }
-    return !q || t.service.toLowerCase().includes(q);
-  });
+  const kept = filterTasks(data, filters);
 
   const allNodes = data.nodes ?? [];
   const known = new Set(allNodes.map((n) => n.id));

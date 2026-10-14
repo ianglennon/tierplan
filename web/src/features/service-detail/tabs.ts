@@ -2,8 +2,9 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 // The tabs of the service detail page. The order the UI-SPEC gives is Overview, Tasks,
-// Placement, Logs, Stats, Inspect; Overview and Inspect are here, and each later plan inserts
-// its own entry at its place in that order, with its route file under services_.$serviceId.*.
+// Placement, Logs, Stats, Inspect; Overview, Tasks, Placement and Inspect are here, and each
+// later plan inserts its own entry at its place in that order, with its route file under
+// services_.$serviceId.*.
 export interface ServiceTab {
   id: string;
   // The route the tab links to: the page's own address for the Overview, a child of it for
@@ -11,6 +12,7 @@ export interface ServiceTab {
   to:
     | "/env/$envId/services/$serviceId"
     | "/env/$envId/services/$serviceId/tasks"
+    | "/env/$envId/services/$serviceId/placement"
     | "/env/$envId/services/$serviceId/inspect";
   // The i18n key of the tab's label.
   labelKey: string;
@@ -33,6 +35,12 @@ export const SERVICE_TABS = [
     id: "tasks",
     to: "/env/$envId/services/$serviceId/tasks",
     labelKey: "servicedetail.tabs.tasks",
+    exact: false,
+  },
+  {
+    id: "placement",
+    to: "/env/$envId/services/$serviceId/placement",
+    labelKey: "servicedetail.tabs.placement",
     exact: false,
   },
   {
