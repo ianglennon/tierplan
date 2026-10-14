@@ -54,6 +54,8 @@
       "cancel": "Cancel",
       "submit": "Scale service",
       "pending": "Scaling…",
+      "zeroWarning": "Scaling to 0 stops every task. The service stays, and you can scale it up again.",
+      "stackWarning": "{{name}} belongs to stack {{stack}}. The next stack deploy sets its replica count again.",
       "done": "Scaled {{name}} to {{replicas, number}}.",
       "unchanged": "{{name}} already runs {{replicas, number}}. Nothing changed.",
       "errors": {

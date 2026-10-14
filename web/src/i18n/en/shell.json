@@ -21,6 +21,8 @@
       "volumes": "Volumes",
       "networks": "Networks",
       "events": "Events",
+      "swarm": "Swarm",
+      "services": "Services",
       "audit": "Audit",
       "settings": "Settings"
     },

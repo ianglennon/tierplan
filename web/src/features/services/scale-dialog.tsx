@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { zodResolver } from "@hookform/resolvers/zod";
+import { TriangleAlert } from "lucide-react";
 import { useId, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 
@@ -125,6 +126,10 @@ function ScaleForm({ envId, target, onClose, onScaled }: FormProps) {
     mode: "onSubmit",
   });
   const rangeKey = form.formState.errors.replicas?.message;
+  // Scaling to 0 and scaling a stack service are warned about, not refused (D-10): the
+  // confirm stays open to both.
+  const asked = form.watch("replicas");
+  const scalingToZero = /^0+$/.test((asked ?? "").trim());
 
   // refusalOf words a service that was not scaled, from its code. A code is never shown.
   function refusalOf(result: ServiceScaleResult): Refusal {
@@ -213,6 +218,22 @@ function ScaleForm({ envId, target, onClose, onScaled }: FormProps) {
       {refusal && !refusal.agentPolicy ? (
         <Alert variant="destructive" role="alert">
           <AlertDescription>{refusal.message}</AlertDescription>
+        </Alert>
+      ) : null}
+      {scalingToZero ? (
+        <Alert variant="warning" role="status">
+          <TriangleAlert aria-hidden="true" />
+          <AlertDescription className="text-foreground">
+            {t("services.scale.zeroWarning")}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+      {target.stack ? (
+        <Alert variant="warning" role="status">
+          <TriangleAlert aria-hidden="true" />
+          <AlertDescription className="text-foreground">
+            {t("services.scale.stackWarning", { name: target.name, stack: target.stack })}
+          </AlertDescription>
         </Alert>
       ) : null}
       <fieldset disabled={pending} className="contents">

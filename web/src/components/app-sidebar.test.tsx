@@ -42,6 +42,8 @@ beforeEach(() => {
       if (url.pathname === "/api/environments") {
         return Response.json({ items: [{ id: "e1", name: "Env one", envType }] });
       }
+      // The summary is not what these tests are about: the environment list names the type.
+      if (url.pathname.endsWith("/summary")) return Response.json({}, { status: 404 });
       return Response.json({ items: [] });
     }),
   );
@@ -149,7 +151,9 @@ describe("the Swarm group", () => {
     envType = "standalone";
     mount(1280, "/env/e1");
     expect(await screen.findByRole("link", { name: "Containers" })).toBeTruthy();
-    await waitFor(() => expect(screen.queryByText("Swarm")).toBeNull());
+    // Give the environment list time to answer: the group must stay away once it has.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText("Swarm")).toBeNull();
     expect(screen.queryByRole("link", { name: "Services" })).toBeNull();
   });
 
