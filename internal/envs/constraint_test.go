@@ -49,12 +49,7 @@ func loadVectors(t *testing.T) []vector {
 	return vs
 }
 
-func factsOf(n vectorNode) NodeFacts {
-	return NodeFacts{
-		ID: n.ID, Hostname: n.Hostname, IP: n.IP, Role: n.Role, OS: n.OS, Arch: n.Arch,
-		Labels: n.Labels, EngineLabels: n.EngineLabels,
-	}
-}
+func factsOf(n vectorNode) NodeFacts { return NodeFacts(n) }
 
 func TestConstraintVectorsHoldEnoughCases(t *testing.T) {
 	if n := len(loadVectors(t)); n < 30 {
