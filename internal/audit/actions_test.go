@@ -173,6 +173,9 @@ var phase6DetailKeys = map[string][]string{
 	// code (plan 06-15, RES-05).
 	audit.ActionNodeAvailabilityChanged: {"name", "from", "to", "confirmed", "warnings", "code"},
 	audit.ActionNodeRoleChanged:         {"name", "from", "to", "confirmed", "warnings", "code"},
+	// A label change records the node's name, how many labels were added, changed and removed, how
+	// many services have a placement constraint the change affects and the code (plan 06-16, RES-05).
+	audit.ActionNodeLabelsChanged: {"name", "added", "changed", "removed", "affected", "code"},
 }
 
 func TestEveryPhase6ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -203,6 +206,7 @@ func TestEveryPhase6ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 
 		"node.availability_changed": audit.ActionNodeAvailabilityChanged,
 		"node.role_changed":         audit.ActionNodeRoleChanged,
+		"node.labels_changed":       audit.ActionNodeLabelsChanged,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)

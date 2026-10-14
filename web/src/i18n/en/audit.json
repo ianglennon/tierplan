@@ -212,7 +212,8 @@
       },
       "node": {
         "availability_changed": "Node availability changed",
-        "role_changed": "Node role changed"
+        "role_changed": "Node role changed",
+        "labels_changed": "Node labels changed"
       }
     },
     "coalesced": {

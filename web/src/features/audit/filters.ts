@@ -118,6 +118,7 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "service.removed",
   "node.availability_changed",
   "node.role_changed",
+  "node.labels_changed",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped
