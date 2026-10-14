@@ -77,6 +77,7 @@ function mount(width: number, path = "/") {
       createRoute({ getParentRoute: () => root, path: "/env/$envId" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/containers" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/services" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/placement" }),
     ]),
     history: createMemoryHistory({ initialEntries: [path] }),
   });
@@ -147,6 +148,14 @@ describe("the Swarm group", () => {
     expect(groups).toEqual(["Resources", "Swarm"]);
   });
 
+  it("lists Placement after Services, for a user who can read services", async () => {
+    mount(1280, "/env/e1");
+    const link = await screen.findByRole("link", { name: "Placement" });
+    expect(link.getAttribute("href")).toBe("/env/e1/placement");
+    const swarm = screen.getAllByRole("link").map((l) => l.textContent);
+    expect(swarm.indexOf("Placement")).toBe(swarm.indexOf("Services") + 1);
+  });
+
   it("is not there on a standalone environment", async () => {
     envType = "standalone";
     mount(1280, "/env/e1");
@@ -155,6 +164,7 @@ describe("the Swarm group", () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(screen.queryByText("Swarm")).toBeNull();
     expect(screen.queryByRole("link", { name: "Services" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Placement" })).toBeNull();
   });
 
   it("is not there for a user without services.read, though a swarm environment is open", async () => {
