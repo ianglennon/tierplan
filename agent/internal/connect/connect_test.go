@@ -1127,6 +1127,17 @@ func TestTheHandshakeReportsTheHostPolicyInTheFacts(t *testing.T) {
 	}
 }
 
+func TestTheHandshakeReportsThePrivilegedServicesOptIn(t *testing.T) {
+	for name, allow := range map[string]bool{"opted in": true, "not opted in": false} {
+		srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{} })
+		startAgent(t, Config{URL: srv.url(), JoinToken: "bpjt_tok", AllowPrivilegedServices: allow}, fastEnv())
+		a, _ := srv.authN(t, 1)
+		if a.Facts.Policy.PrivilegedServices != allow {
+			t.Errorf("%s: facts.policy = %+v", name, a.Facts.Policy)
+		}
+	}
+}
+
 func TestARefusedDockerRequestIsReportedOnTheControlStream(t *testing.T) {
 	sock := fakeEngine(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("OK")) })
 	for name, tc := range map[string]struct {

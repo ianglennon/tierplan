@@ -137,8 +137,32 @@ func TestADeniedMessageHasTheShapeTheServerReads(t *testing.T) {
 	if out := roundTrip(t, in); out != in {
 		t.Fatalf("round trip = %+v, want %+v", out, in)
 	}
-	if DeniedAllowlist != "allowlist" || DeniedReadOnly != "read_only_flag" {
-		t.Fatalf("reasons = %q, %q", DeniedAllowlist, DeniedReadOnly)
+	if DeniedAllowlist != "allowlist" || DeniedReadOnly != "read_only_flag" || DeniedHostPolicy != "host_policy" {
+		t.Fatalf("reasons = %q, %q, %q", DeniedAllowlist, DeniedReadOnly, DeniedHostPolicy)
+	}
+}
+
+// The new fact is optional on the wire: an agent that does not know it sends
+// nothing, and the server reads that as false, so every existing golden stays
+// byte-identical.
+func TestPolicyFactsPrivilegedServicesIsOptional(t *testing.T) {
+	b, err := json.Marshal(PolicyFacts{ReadOnly: true, SelfUpdate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"readOnly":true,"selfUpdate":true}`; string(b) != want {
+		t.Fatalf("policy = %s, want %s", b, want)
+	}
+	b, err = json.Marshal(PolicyFacts{PrivilegedServices: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"readOnly":false,"selfUpdate":false,"privilegedServices":true}`; string(b) != want {
+		t.Fatalf("policy = %s, want %s", b, want)
+	}
+	var old PolicyFacts
+	if err := json.Unmarshal([]byte(`{"readOnly":true,"selfUpdate":false}`), &old); err != nil || old.PrivilegedServices {
+		t.Fatalf("a policy without the field read as %+v (%v)", old, err)
 	}
 }
 

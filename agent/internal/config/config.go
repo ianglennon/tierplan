@@ -76,6 +76,9 @@ type Config struct {
 	// ReadOnly refuses every Docker call that is not a read, and SelfUpdate says
 	// whether the agent may update itself (D-28).
 	ReadOnly, SelfUpdate bool
+	// AllowPrivilegedServices is BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES: on a
+	// manager it lets the agent forward service specs that give tasks host access.
+	AllowPrivilegedServices bool
 	// AllowInsecure allows a plain ws:// address for a host that is not loopback
 	// (development only).
 	AllowInsecure bool

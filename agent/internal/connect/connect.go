@@ -81,6 +81,8 @@ type Config struct {
 	// SelfUpdate says whether the host lets the agent update itself. Both are
 	// reported in the handshake so the UI can show them (D-28).
 	ReadOnly, SelfUpdate bool
+	// AllowPrivilegedServices is BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES.
+	AllowPrivilegedServices bool
 	// AllowInsecure is BAYPLAN_AGENT_ALLOW_INSECURE: it lets the agent dial a plain
 	// ws:// address for a host that is not loopback. For development only; without
 	// it such an address is never dialed, whether it came from URL, from the stored

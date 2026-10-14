@@ -101,6 +101,10 @@ const (
 	// DeniedReadOnly means the host set BAYPLAN_AGENT_READ_ONLY and the request
 	// would change something.
 	DeniedReadOnly = "read_only_flag"
+	// DeniedHostPolicy means the host did not set
+	// BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES and the service spec gives tasks
+	// host access.
+	DeniedHostPolicy = "host_policy"
 )
 
 // Modes of an auth message.
@@ -178,6 +182,10 @@ type SwarmFacts struct {
 type PolicyFacts struct {
 	ReadOnly   bool `json:"readOnly"`
 	SelfUpdate bool `json:"selfUpdate"`
+	// PrivilegedServices is true when the host set
+	// BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES, so a manager's agent forwards
+	// service specs that give tasks host access. Absent reads as false.
+	PrivilegedServices bool `json:"privilegedServices,omitempty"`
 }
 
 // Welcome is the server's answer to a successful handshake. Cert is the DER

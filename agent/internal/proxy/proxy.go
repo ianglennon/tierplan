@@ -55,6 +55,9 @@ type Policy struct {
 	// ReadOnly refuses every request that is not GET or HEAD, whatever the
 	// allowlist says.
 	ReadOnly bool
+	// AllowPrivilegedServices lets a service spec that gives tasks host access
+	// through (BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES).
+	AllowPrivilegedServices bool
 }
 
 // Allowed decides whether a request may be forwarded to the engine, and says why
@@ -178,7 +181,7 @@ func Handler(socketPath string, policy Policy, onDenied func(method, path, reaso
 		}
 		if kind != BodyNone {
 			// What is forwarded is the rebuilt body, never the bytes the server sent.
-			rebuilt, err := validateBody(kind, http.MaxBytesReader(w, r.Body, bodyCap(kind)))
+			rebuilt, err := validateBody(kind, http.MaxBytesReader(w, r.Body, bodyCap(kind)), bodyEnv{policy: policy, ctx: r.Context()})
 			if err != nil {
 				deny(wire.DeniedAllowlist)
 				return

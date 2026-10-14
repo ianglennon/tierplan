@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"net/netip"
 	"net/url"
@@ -13,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/api/types/volume"
@@ -105,8 +107,11 @@ var oracle = []oracleEntry{
 
 	oEntry("GET", `system/df`, map[string]*regexp.Regexp{"type": rx(`^volume$`), "verbose": oBool}),
 
-	// One service: the inspect, and the update that takes a whole spec as its body.
+	// One service: the inspect, the create and update that take a whole spec as
+	// their body, and the remove, which takes no key at all.
 	oEntry("GET", `services/`+oID, map[string]*regexp.Regexp{"insertDefaults": oBool}),
+	{method: "POST", path: rx(oVer + `services/create$`), body: true},
+	oEntry("DELETE", `services/`+oID, nil),
 	{
 		method: "POST", path: rx(oVer + `services/` + oID + `/update$`), body: true,
 		keys: map[string]*regexp.Regexp{
@@ -471,6 +476,12 @@ func FuzzBody(f *testing.F) {
 		})},
 		{uint8(BodyServiceSpec), enc(swarm.ServiceSpec{TaskTemplate: swarm.TaskSpec{Runtime: swarm.RuntimePlugin, PluginSpec: &swarm.RuntimeSpec{Name: "p"}}})},
 		{uint8(BodyServiceSpec), enc(swarm.ServiceSpec{TaskTemplate: swarm.TaskSpec{NetworkAttachmentSpec: &swarm.NetworkAttachmentSpec{ContainerID: "c"}}})},
+		{uint8(BodyServiceSpec), enc(swarm.ServiceSpec{TaskTemplate: swarm.TaskSpec{ContainerSpec: &swarm.ContainerSpec{
+			Image: "x", Mounts: []mount.Mount{{Type: mount.TypeBind, Source: "/var/run/docker.sock", Target: "/s"}},
+		}}})},
+		{uint8(BodyServiceSpec), enc(swarm.ServiceSpec{TaskTemplate: swarm.TaskSpec{ContainerSpec: &swarm.ContainerSpec{
+			Image: "x", CapabilityAdd: []string{"SYS_ADMIN"}, Privileges: &swarm.Privileges{Seccomp: &swarm.SeccompOpts{Mode: swarm.SeccompModeUnconfined}},
+		}}})},
 		{uint8(BodyNone), `{}`},
 	}
 	for _, s := range seeds {
@@ -478,7 +489,7 @@ func FuzzBody(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, kind uint8, body string) {
 		k := BodyKind(kind % 8) // BodyNone and the seven kinds
-		out, err := validateBody(k, strings.NewReader(body))
+		out, err := validateBody(k, strings.NewReader(body), bodyEnv{})
 		if err != nil {
 			return
 		}
@@ -508,6 +519,11 @@ func FuzzBody(f *testing.F) {
 			}
 			if rt := spec.TaskTemplate.Runtime; rt != "" && rt != swarm.RuntimeContainer {
 				t.Fatalf("a service spec with the runtime %q was forwarded: %s", rt, out)
+			}
+			// With the zero environment (no opt-in, no lookup) nothing that gives
+			// tasks host access may be forwarded.
+			if found := escalations(context.Background(), spec, nil); len(found) > 0 {
+				t.Fatalf("a service spec with host access %v was forwarded: %s", found, out)
 			}
 		}
 	})

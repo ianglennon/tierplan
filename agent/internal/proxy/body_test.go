@@ -41,7 +41,7 @@ func postJSON(method, target, body string, headers ...string) string {
 // roundTrip validates a body and decodes what would be forwarded into out.
 func roundTrip(t *testing.T, kind BodyKind, in string, out any) error {
 	t.Helper()
-	got, err := validateBody(kind, strings.NewReader(in))
+	got, err := validateBody(kind, strings.NewReader(in), bodyEnv{})
 	if err != nil {
 		return err
 	}
@@ -96,7 +96,7 @@ func TestBodyExecCreateRefusals(t *testing.T) {
 		{"empty", ``},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := validateBody(BodyExecCreate, strings.NewReader(tc.body)); err == nil {
+			if _, err := validateBody(BodyExecCreate, strings.NewReader(tc.body), bodyEnv{}); err == nil {
 				t.Fatal("the body was accepted")
 			}
 		})
@@ -106,7 +106,7 @@ func TestBodyExecCreateRefusals(t *testing.T) {
 func TestBodyDuplicateKeysCannotSmuggleAField(t *testing.T) {
 	// Go keeps the last of two equal keys. Whatever it keeps, the body that is
 	// forwarded is the rebuilt one, with Privileged absent.
-	got, err := validateBody(BodyExecCreate, strings.NewReader(`{"Tty":true,"Cmd":["sh"],"Privileged":true,"Privileged":false}`))
+	got, err := validateBody(BodyExecCreate, strings.NewReader(`{"Tty":true,"Cmd":["sh"],"Privileged":true,"Privileged":false}`), bodyEnv{})
 	if err != nil {
 		t.Fatalf("refused: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestBodyExecStart(t *testing.T) {
 		"an unknown key":  `{"Tty":true,"Foo":1}`,
 		"data after json": `{"Tty":true} x`,
 	} {
-		if _, err := validateBody(BodyExecStart, strings.NewReader(body)); err == nil {
+		if _, err := validateBody(BodyExecStart, strings.NewReader(body), bodyEnv{}); err == nil {
 			t.Errorf("%s: the body was accepted", name)
 		}
 	}
@@ -180,7 +180,7 @@ func TestBodyNetworkCreate(t *testing.T) {
 		{"an unknown key", `{"Name":"n","Driver":"bridge","Foo":true}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := validateBody(BodyNetworkCreate, strings.NewReader(tc.body)); err == nil {
+			if _, err := validateBody(BodyNetworkCreate, strings.NewReader(tc.body), bodyEnv{}); err == nil {
 				t.Fatal("the body was accepted")
 			}
 		})
@@ -223,7 +223,7 @@ func TestBodyNetworkConnectAndDisconnect(t *testing.T) {
 		{"an unknown key", `{"Container":"a","Foo":1}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := validateBody(BodyNetworkConnect, strings.NewReader(tc.body)); err == nil {
+			if _, err := validateBody(BodyNetworkConnect, strings.NewReader(tc.body), bodyEnv{}); err == nil {
 				t.Fatal("the body was accepted")
 			}
 		})
@@ -237,7 +237,7 @@ func TestBodyNetworkConnectAndDisconnect(t *testing.T) {
 		"no container":        enc(t, network.DisconnectRequest{}),
 		"an unknown key":      `{"Container":"a","Foo":1}`,
 	} {
-		if _, err := validateBody(BodyNetworkDisconnect, strings.NewReader(body)); err == nil {
+		if _, err := validateBody(BodyNetworkDisconnect, strings.NewReader(body), bodyEnv{}); err == nil {
 			t.Errorf("%s: the body was accepted", name)
 		}
 	}
@@ -270,7 +270,7 @@ func TestBodyVolumeCreate(t *testing.T) {
 		}()}),
 		"an unknown key": `{"Name":"v","Foo":1}`,
 	} {
-		if _, err := validateBody(BodyVolumeCreate, strings.NewReader(body)); err == nil {
+		if _, err := validateBody(BodyVolumeCreate, strings.NewReader(body), bodyEnv{}); err == nil {
 			t.Errorf("%s: the body was accepted", name)
 		}
 	}

@@ -347,8 +347,16 @@ func TestRouteServiceInspectAndUpdateQueryCases(t *testing.T) {
 		{"an update with a second bad version", "POST", "/services/web/update", "version=1&version=x", true, ""},
 		{"a dot-dot service", "GET", "/services/../x", "", false, ""},
 		{"a service starting with a dot", "GET", "/services/.x", "", false, ""},
-		{"a delete of a service", "DELETE", "/services/web", "", false, ""},
-		{"a service create", "POST", "/services/create", "", true, ""},
+		{"a delete of a service", "DELETE", "/services/web", "", false, "service remove"},
+		{"a delete of a service with the version prefix", "DELETE", "/v1.56/services/abc123", "", false, "service remove"},
+		{"a delete of a service with a key", "DELETE", "/services/web", "force=1", false, ""},
+		{"a delete of a service with a body", "DELETE", "/services/web", "", true, ""},
+		{"a delete of a service with a trailing slash", "DELETE", "/services/web/", "", false, ""},
+		{"a service create", "POST", "/services/create", "", true, "service create"},
+		{"a service create with the version prefix", "POST", "/v1.56/services/create", "", true, "service create"},
+		{"a service create with no body", "POST", "/services/create", "", false, ""},
+		{"a service create with a key", "POST", "/services/create", "version=1", true, ""},
+		{"a GET of create is an inspect of a service named create", "GET", "/services/create", "", false, "service inspect"},
 		{"service logs", "GET", "/services/web/logs", "", false, ""},
 		{"a GET of update", "GET", "/services/web/update", "", false, ""},
 	} {
@@ -364,19 +372,28 @@ func TestRouteServiceInspectAndUpdateQueryCases(t *testing.T) {
 			if !found || rt.name != tc.wantRoute {
 				t.Fatalf("Match(%s %s) = %q, want %q", tc.method, tc.path, rt.name, tc.wantRoute)
 			}
-			if wantKind := map[string]BodyKind{"service update": BodyServiceSpec}[tc.wantRoute]; kind != wantKind {
+			if wantKind := map[string]BodyKind{"service update": BodyServiceSpec, "service create": BodyServiceSpec}[tc.wantRoute]; kind != wantKind {
 				t.Errorf("body kind = %d, want %d", kind, wantKind)
 			}
-			if wantAuth := tc.wantRoute == "service update"; rt.registryAuth != wantAuth {
+			if wantAuth := tc.wantRoute == "service update" || tc.wantRoute == "service create"; rt.registryAuth != wantAuth {
 				t.Errorf("route %q has registryAuth %v, want %v", rt.name, rt.registryAuth, wantAuth)
 			}
 		})
 	}
 }
 
-func TestRouteServiceUpdateIsRefusedOnAReadOnlyHostAndInspectStillAnswers(t *testing.T) {
-	if ok, reason, _ := Allowed("POST", "/services/web/update", "version=1", true, false, Policy{ReadOnly: true}); ok || reason != "read_only_flag" {
-		t.Errorf("a service update on a read-only host = %v %q, want refused read_only_flag", ok, reason)
+func TestRouteServiceWritesAreRefusedOnAReadOnlyHostAndInspectStillAnswers(t *testing.T) {
+	for _, tc := range []struct {
+		method, path, query string
+		body                bool
+	}{
+		{"POST", "/services/web/update", "version=1", true},
+		{"POST", "/services/create", "", true},
+		{"DELETE", "/services/web", "", false},
+	} {
+		if ok, reason, _ := Allowed(tc.method, tc.path, tc.query, tc.body, false, Policy{ReadOnly: true}); ok || reason != "read_only_flag" {
+			t.Errorf("%s %s on a read-only host = %v %q, want refused read_only_flag", tc.method, tc.path, ok, reason)
+		}
 	}
 	if ok, reason, _ := Allowed("GET", "/services/web", "", false, false, Policy{ReadOnly: true}); !ok {
 		t.Errorf("a service inspect on a read-only host was refused (%s)", reason)
@@ -418,7 +435,7 @@ func TestBodyServiceSpecRefusals(t *testing.T) {
 		"a runtime that is a lie": `{"Name":"web","TaskTemplate":{"Runtime":"host"}}`,
 		"an empty body":           ``,
 	} {
-		if _, err := validateBody(BodyServiceSpec, strings.NewReader(body)); err == nil {
+		if _, err := validateBody(BodyServiceSpec, strings.NewReader(body), bodyEnv{}); err == nil {
 			t.Errorf("%s: the body was accepted", name)
 		}
 	}
@@ -437,14 +454,14 @@ func TestBodyServiceSpecCapIs256KiBAndOtherKindsKeep64KiB(t *testing.T) {
 	// Over 64 KiB (four labels' worth is over the per-value limit of other kinds, but a
 	// service spec has no such limit) and under 256 KiB.
 	under := spec(100 << 10)
-	if _, err := validateBody(BodyServiceSpec, strings.NewReader(under)); err != nil {
+	if _, err := validateBody(BodyServiceSpec, strings.NewReader(under), bodyEnv{}); err != nil {
 		t.Errorf("a 100 KiB service spec was refused: %v", err)
 	}
 	over := spec(260 << 10)
-	if _, err := validateBody(BodyServiceSpec, strings.NewReader(over)); err == nil {
+	if _, err := validateBody(BodyServiceSpec, strings.NewReader(over), bodyEnv{}); err == nil {
 		t.Error("a service spec over 256 KiB was accepted")
 	}
-	if _, err := validateBody(BodyVolumeCreate, strings.NewReader(`{"Name":"`+strings.Repeat("a", 70<<10)+`"}`)); err == nil {
+	if _, err := validateBody(BodyVolumeCreate, strings.NewReader(`{"Name":"`+strings.Repeat("a", 70<<10)+`"}`), bodyEnv{}); err == nil {
 		t.Error("a volume body over 64 KiB was accepted")
 	}
 }

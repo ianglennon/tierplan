@@ -12,10 +12,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/swarm"
 )
 
 // fakeSocket is a Docker daemon stand-in on a unix socket. It records every
@@ -32,6 +36,9 @@ type fakeSocket struct {
 	bodies [][]byte
 	// release lets the /events and /logs handlers finish.
 	release chan struct{}
+	// answers maps a request path to the JSON the daemon answers with, for the
+	// network lookups a service-spec check makes. Set before the first request.
+	answers map[string]string
 }
 
 func newFakeSocket(t *testing.T) *fakeSocket {
@@ -78,6 +85,11 @@ func (f *fakeSocket) serve(w http.ResponseWriter, r *http.Request) {
 		_, _ = rw.WriteString("HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
 		_ = rw.Flush()
 		_, _ = io.Copy(conn, rw)
+		return
+	}
+	if answer, ok := f.answers[r.URL.Path]; ok {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(answer))
 		return
 	}
 	w.Header().Set("Api-Version", "1.52")
@@ -784,5 +796,148 @@ func TestDistributionKeepsTheRegistryHeaderWhileInspectAndHistoryDropIt(t *testi
 		if v := seen[before].Values("X-Registry-Config"); len(v) != 0 {
 			t.Errorf("%s %s: the engine received X-Registry-Config %q", tc.method, tc.target, v)
 		}
+	}
+}
+
+// A service spec that gives tasks host access is refused on a host that did not
+// opt in, whichever write route it arrives on, and never reaches the engine.
+func TestHostPolicyRefusalIsA403WithTheTypedMessageAndTheHostPolicyReason(t *testing.T) {
+	for _, tc := range []struct{ name, method, target, wantMsg string }{
+		{"an update", "POST", "/services/web/update?version=3", "agent_policy_denied: host_policy: POST /services/web/update"},
+		{"a create", "POST", "/services/create", "agent_policy_denied: host_policy: POST /services/create"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sock := newFakeSocket(t)
+			var reasons []string
+			h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+			spec := sampleSpec()
+			spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{{Type: mount.TypeBind, Source: "/var/run/docker.sock", Target: "/sock"}}
+			resp := do(t, h, postJSON(tc.method, tc.target, enc(t, spec)))
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("status %d, want 403", resp.StatusCode)
+			}
+			var msg struct{ Message string }
+			if err := json.NewDecoder(resp.Body).Decode(&msg); err != nil || msg.Message != tc.wantMsg {
+				t.Fatalf("message = %q (%v), want %q", msg.Message, err, tc.wantMsg)
+			}
+			if !slices.Equal(reasons, []string{"host_policy"}) {
+				t.Errorf("onDenied reasons = %v, want [host_policy]", reasons)
+			}
+			if got := sock.requests(); len(got) != 0 {
+				t.Fatalf("a refused spec reached the engine: %v", got)
+			}
+		})
+	}
+}
+
+func TestHostPolicyOptInForwardsTheSameSpec(t *testing.T) {
+	sock := newFakeSocket(t)
+	h := Handler(sock.path, Policy{AllowPrivilegedServices: true}, nil)
+	spec := sampleSpec()
+	spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{{Type: mount.TypeBind, Source: "/", Target: "/host"}}
+	spec.TaskTemplate.ContainerSpec.CapabilityAdd = []string{"SYS_ADMIN"}
+	resp := do(t, h, postJSON("POST", "/services/web/update?version=3", enc(t, spec)))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", resp.StatusCode)
+	}
+	if got := sock.requests(); !slices.Equal(got, []string{"POST /services/web/update?version=3"}) {
+		t.Fatalf("the engine saw %v", got)
+	}
+}
+
+func TestHostPolicyAHostNetworkNamedByIDIsFoundOnTheAgentsOwnEngine(t *testing.T) {
+	const id = "7a1c0f3e9b2d4c5f8e6a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e"
+	sock := newFakeSocket(t)
+	sock.answers = map[string]string{"/networks/" + id: `{"Name":"host","Driver":"host","Scope":"local"}`}
+	var reasons []string
+	h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+	spec := sampleSpec()
+	spec.TaskTemplate.Networks = []swarm.NetworkAttachmentConfig{{Target: id}}
+	resp := do(t, h, postJSON("POST", "/services/create", enc(t, spec)))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden || !slices.Equal(reasons, []string{"host_policy"}) {
+		t.Fatalf("status %d reasons %v, want 403 host_policy", resp.StatusCode, reasons)
+	}
+	if got := sock.requests(); !slices.Equal(got, []string{"GET /networks/" + id}) {
+		t.Fatalf("the engine saw %v, want the one network lookup", got)
+	}
+}
+
+// A lookup that cannot answer is not an escalation: the engine refuses an unknown
+// network itself when it gets the spec.
+func TestHostPolicyALookupThatFailsDoesNotRefuseTheSpec(t *testing.T) {
+	sock := newFakeSocket(t) // answers "OK", which is not a network
+	h := Handler(sock.path, Policy{}, nil)
+	spec := sampleSpec()
+	spec.TaskTemplate.Networks = []swarm.NetworkAttachmentConfig{{Target: "app_net"}}
+	resp := do(t, h, postJSON("POST", "/services/create", enc(t, spec)))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", resp.StatusCode)
+	}
+	if got := sock.requests(); !slices.Equal(got, []string{"GET /networks/app_net", "POST /services/create"}) {
+		t.Fatalf("the engine saw %v", got)
+	}
+}
+
+func TestServiceCreateKeepsTheRegistryCredentialAndRemoveIsForwarded(t *testing.T) {
+	sock := newFakeSocket(t)
+	h := Handler(sock.path, Policy{}, nil)
+	resp := do(t, h, postJSON("POST", "/v1.52/services/create", enc(t, sampleSpec()), "X-Registry-Auth: eyJ1c2VybmFtZSI6InUifQ==\r\n"))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create: status %d, want 200", resp.StatusCode)
+	}
+	resp = do(t, h, request("DELETE", "/services/web"))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("remove: status %d, want 200", resp.StatusCode)
+	}
+	if got := sock.requests(); !slices.Equal(got, []string{"POST /v1.52/services/create", "DELETE /services/web"}) {
+		t.Fatalf("the engine saw %v", got)
+	}
+	sock.mu.Lock()
+	defer sock.mu.Unlock()
+	if got := sock.headers[0].Get("X-Registry-Auth"); got != "eyJ1c2VybmFtZSI6InUifQ==" {
+		t.Errorf("X-Registry-Auth = %q, want it kept on a create", got)
+	}
+}
+
+func TestServiceRemoveWithAnyQueryKeyIsRefused(t *testing.T) {
+	sock := newFakeSocket(t)
+	h := Handler(sock.path, Policy{}, nil)
+	resp := do(t, h, request("DELETE", "/services/web?force=1"))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status %d, want 403", resp.StatusCode)
+	}
+	if got := sock.requests(); len(got) != 0 {
+		t.Fatalf("the engine saw %v", got)
+	}
+}
+
+func TestAReadOnlyHostRefusesServiceCreateAndRemoveBeforeAnyValidator(t *testing.T) {
+	sock := newFakeSocket(t)
+	var reasons []string
+	h := Handler(sock.path, Policy{ReadOnly: true, AllowPrivilegedServices: true}, func(_, _, reason string) { reasons = append(reasons, reason) })
+	for _, raw := range []string{
+		postJSON("POST", "/services/create", enc(t, sampleSpec())),
+		postJSON("POST", "/services/create", `{not json`),
+		request("DELETE", "/services/web"),
+		postJSON("POST", "/services/web/update?version=1", enc(t, sampleSpec())),
+	} {
+		resp := do(t, h, raw)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("status %d, want 403 for %.40q", resp.StatusCode, raw)
+		}
+	}
+	if !slices.Equal(reasons, []string{"read_only_flag", "read_only_flag", "read_only_flag", "read_only_flag"}) {
+		t.Errorf("reasons = %v", reasons)
+	}
+	if got := sock.requests(); len(got) != 0 {
+		t.Fatalf("the engine saw %v", got)
 	}
 }

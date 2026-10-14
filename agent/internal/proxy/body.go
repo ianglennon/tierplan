@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,15 @@ import (
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/api/types/volume"
 )
+
+// bodyEnv is what a validator needs besides the bytes: the host's policy and a way
+// to ask the agent's own engine about a network. The zero value is the strictest
+// reading: nothing allowed, no lookup.
+type bodyEnv struct {
+	policy Policy
+	lookup networkLookup
+	ctx    context.Context
+}
 
 // maxBody caps a request body of every kind but a service spec. Every such body is
 // a small JSON object, so a larger one is a refusal, not a truncation.
@@ -71,7 +81,7 @@ func refuse(format string, args ...any) error {
 // must equal that fresh value, so any other field that was set is a refusal. What
 // is forwarded is the fresh value encoded again, so a field the decoder accepted
 // but the allowlist does not name cannot cross.
-func validateBody(kind BodyKind, r io.Reader) ([]byte, error) {
+func validateBody(kind BodyKind, r io.Reader, env bodyEnv) ([]byte, error) {
 	limit := bodyCap(kind)
 	raw, err := io.ReadAll(io.LimitReader(r, limit+1))
 	if err != nil {
@@ -95,7 +105,7 @@ func validateBody(kind BodyKind, r io.Reader) ([]byte, error) {
 	case BodyVolumeCreate:
 		clean, err = validateVolumeCreate(raw)
 	case BodyServiceSpec:
-		clean, err = validateServiceSpec(raw)
+		clean, err = validateServiceSpec(raw, env)
 	default:
 		return nil, refuse("a route with no body kind has no validator")
 	}
@@ -384,7 +394,7 @@ func validateVolumeCreate(raw []byte) (volume.CreateRequest, error) {
 // runtime other than container. The value returned is encoded again, so what is
 // forwarded is what the decoder understood. The host-escalation refusal (privileged
 // settings, host mounts, host networking) is added to this validator by plan 06-03.
-func validateServiceSpec(raw []byte) (swarm.ServiceSpec, error) {
+func validateServiceSpec(raw []byte, env bodyEnv) (swarm.ServiceSpec, error) {
 	var in swarm.ServiceSpec
 	if err := decodeStrict(raw, &in); err != nil {
 		return in, err
