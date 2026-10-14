@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -198,10 +199,14 @@ func (c *Client) Cluster(ctx context.Context) (ClusterRead, error) {
 			ID: n.ID, Hostname: n.Description.Hostname, Role: string(n.Spec.Role),
 			Availability: string(n.Spec.Availability), State: string(n.Status.State),
 			EngineVersion: n.Description.Engine.EngineVersion, OS: n.Description.Platform.OS,
+			Address: n.Status.Addr, Arch: n.Description.Platform.Architecture,
+			NanoCPUs: n.Description.Resources.NanoCPUs, MemoryBytes: n.Description.Resources.MemoryBytes,
+			Labels: nonNilLabels(n.Spec.Labels), EngineLabels: nonNilLabels(n.Description.Engine.Labels),
 		}
 		if n.ManagerStatus != nil {
 			row.Leader = n.ManagerStatus.Leader
 			row.Reachability = string(n.ManagerStatus.Reachability)
+			row.ManagerAddr = n.ManagerStatus.Addr
 		}
 		out.Nodes = append(out.Nodes, row)
 	}
@@ -237,6 +242,10 @@ func (c *Client) Cluster(ctx context.Context) (ClusterRead, error) {
 		row.CreatedAt = s.CreatedAt.UTC()
 		row.Labels = s.Spec.Labels
 		row.Ports = servicePorts(s.Endpoint.Ports)
+		row.Constraints = []string{}
+		if pl := s.Spec.TaskTemplate.Placement; pl != nil {
+			row.Constraints = append(row.Constraints, pl.Constraints...)
+		}
 		out.Services = append(out.Services, row)
 	}
 	slices.SortFunc(out.Services, func(a, b ServiceRow) int {
@@ -257,6 +266,15 @@ func (c *Client) Cluster(ctx context.Context) (ClusterRead, error) {
 	}
 	out.AgentTasks = currentAgentTasks(ts.Items)
 	return out, nil
+}
+
+// nonNilLabels returns the labels as a map that is never nil, so a consumer can range
+// over it and encode it as an object.
+func nonNilLabels(in map[string]string) map[string]string {
+	if in == nil {
+		return map[string]string{}
+	}
+	return maps.Clone(in)
 }
 
 // serviceMode names a service's mode.
