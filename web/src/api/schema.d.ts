@@ -5048,10 +5048,17 @@ export interface components {
             constraints: string[] | null;
             /** @description The service ID */
             id: string;
+            /**
+             * Format: int64
+             * @description The most tasks of the service one node may run; 0 when the spec sets no limit
+             */
+            maxReplicas: number;
             /** @description replicated, global, replicated-job or global-job */
             mode: string;
             /** @description The service's name */
             name: string;
+            /** @description The label each Spread placement preference spreads tasks over (node.labels.zone), in the spec's order; an empty list when it has none */
+            preferences: string[] | null;
             /** @description The stack the service belongs to; empty for a service made on its own */
             stack: string;
         };

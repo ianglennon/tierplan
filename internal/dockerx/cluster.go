@@ -247,9 +247,15 @@ func (c *Client) Cluster(ctx context.Context) (ClusterRead, error) {
 		row.CreatedAt = s.CreatedAt.UTC()
 		row.Labels = s.Spec.Labels
 		row.Ports = servicePorts(s.Endpoint.Ports)
-		row.Constraints = []string{}
+		row.Constraints, row.Preferences = []string{}, []string{}
 		if pl := s.Spec.TaskTemplate.Placement; pl != nil {
 			row.Constraints = append(row.Constraints, pl.Constraints...)
+			row.MaxReplicas = pl.MaxReplicas
+			for _, pref := range pl.Preferences {
+				if pref.Spread != nil {
+					row.Preferences = append(row.Preferences, pref.Spread.SpreadDescriptor)
+				}
+			}
 		}
 		out.Services = append(out.Services, row)
 	}

@@ -1252,8 +1252,12 @@ func (c FakeConfig) serviceList(withStatus bool) []swarm.Service {
 		}
 		s.Spec.Name = fs.Name
 		s.Spec.Labels = fs.Labels
-		if len(fs.Constraints) > 0 {
-			s.Spec.TaskTemplate.Placement = &swarm.Placement{Constraints: slices.Clone(fs.Constraints)}
+		if len(fs.Constraints) > 0 || len(fs.Preferences) > 0 || fs.MaxReplicas > 0 {
+			pl := &swarm.Placement{Constraints: slices.Clone(fs.Constraints), MaxReplicas: fs.MaxReplicas}
+			for _, label := range fs.Preferences {
+				pl.Preferences = append(pl.Preferences, swarm.PlacementPreference{Spread: &swarm.SpreadOver{SpreadDescriptor: label}})
+			}
+			s.Spec.TaskTemplate.Placement = pl
 		}
 		for _, target := range fs.Networks {
 			s.Spec.TaskTemplate.Networks = append(s.Spec.TaskTemplate.Networks, swarm.NetworkAttachmentConfig{Target: target})

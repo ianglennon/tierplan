@@ -183,7 +183,7 @@ func placementOf(read dockerx.ClusterRead, rows []dockerx.TaskRow, targets map[s
 	for _, s := range read.Services {
 		byID[s.ID] = s
 		body.Services = append(body.Services, PlacementService{
-			ID: s.ID, Name: s.Name, Stack: s.Stack, Mode: s.Mode, Constraints: s.Constraints, Preferences: []string{},
+			ID: s.ID, Name: s.Name, Stack: s.Stack, Mode: s.Mode, Constraints: s.Constraints, Preferences: s.Preferences, MaxReplicas: s.MaxReplicas,
 		})
 	}
 	for _, r := range rows {

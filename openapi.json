@@ -5772,6 +5772,12 @@
             "description": "The service ID",
             "type": "string"
           },
+          "maxReplicas": {
+            "description": "The most tasks of the service one node may run; 0 when the spec sets no limit",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "mode": {
             "description": "replicated, global, replicated-job or global-job",
             "type": "string"
@@ -5779,6 +5785,16 @@
           "name": {
             "description": "The service's name",
             "type": "string"
+          },
+          "preferences": {
+            "description": "The label each Spread placement preference spreads tasks over (node.labels.zone), in the spec's order; an empty list when it has none",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "stack": {
             "description": "The stack the service belongs to; empty for a service made on its own",
@@ -5790,7 +5806,9 @@
           "name",
           "stack",
           "mode",
-          "constraints"
+          "constraints",
+          "preferences",
+          "maxReplicas"
         ],
         "type": "object"
       },
