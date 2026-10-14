@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -230,6 +231,14 @@ type FakeService struct {
 	// Spec, when set, is the service's spec as /services answers it, in place of the one
 	// the fields above make up (fake_services.go).
 	Spec *swarm.ServiceSpec
+	// Ports are the service's endpoint ports, the ones the swarm publishes.
+	Ports []swarm.PortConfig
+	// UpdateMessage is the UpdateStatus message, empty for none.
+	UpdateMessage string
+	// PreviousSpec, when set, is the spec the service had before its last update.
+	PreviousSpec *swarm.ServiceSpec
+	// CreatedAt is when the service was created; zero is the Unix epoch.
+	CreatedAt time.Time
 }
 
 // FakeServiceMount is one mount of a service's container spec. Type is "volume",
@@ -1193,12 +1202,10 @@ func (c FakeConfig) serviceList(withStatus bool) []swarm.Service {
 		if fs.Spec != nil {
 			s.Spec = *fs.Spec
 			s.UpdatedAt = fs.UpdatedAt
-			if fs.UpdateState != "" {
-				s.UpdateStatus = &swarm.UpdateStatus{State: swarm.UpdateState(fs.UpdateState)}
-			}
 			if withStatus {
 				s.ServiceStatus = &swarm.ServiceStatus{RunningTasks: fs.Running, DesiredTasks: fs.Desired}
 			}
+			fs.decorate(&s)
 			out = append(out, s)
 			continue
 		}
@@ -1228,15 +1235,26 @@ func (c FakeConfig) serviceList(withStatus bool) []swarm.Service {
 			}
 			s.Spec.Mode.Replicated = &swarm.ReplicatedService{Replicas: &replicas}
 		}
-		if fs.UpdateState != "" {
-			s.UpdateStatus = &swarm.UpdateStatus{State: swarm.UpdateState(fs.UpdateState)}
-		}
 		if withStatus {
 			s.ServiceStatus = &swarm.ServiceStatus{RunningTasks: fs.Running, DesiredTasks: fs.Desired}
 		}
+		fs.decorate(&s)
 		out = append(out, s)
 	}
 	return out
+}
+
+// decorate sets what every row has whatever made its spec: the update status and its
+// message, the endpoint's published ports, the previous spec and the creation time.
+func (fs FakeService) decorate(s *swarm.Service) {
+	if fs.UpdateState != "" || fs.UpdateMessage != "" {
+		s.UpdateStatus = &swarm.UpdateStatus{State: swarm.UpdateState(fs.UpdateState), Message: fs.UpdateMessage}
+	}
+	if len(fs.Ports) > 0 {
+		s.Endpoint.Ports = slices.Clone(fs.Ports)
+	}
+	s.PreviousSpec = fs.PreviousSpec
+	s.CreatedAt = fs.CreatedAt
 }
 
 // taskList is the /tasks answer. A task is listed only when the filter names its

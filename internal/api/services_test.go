@@ -5,12 +5,15 @@ package api_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
@@ -64,14 +67,27 @@ type serviceItem struct {
 	Stack       string `json:"stack"`
 	Agent       bool   `json:"agent"`
 	UpdatedAt   string `json:"updatedAt"`
+
+	Ports           []string `json:"ports"`
+	UpdateMessage   string   `json:"updateMessage"`
+	HasPreviousSpec bool     `json:"hasPreviousSpec"`
+	CreatedAt       string   `json:"createdAt"`
+}
+
+type serviceStatusCounts struct {
+	Degraded int `json:"degraded"`
+	Updating int `json:"updating"`
+	Problem  int `json:"problem"`
 }
 
 type serviceList struct {
-	Items     []serviceItem `json:"items"`
-	Total     int           `json:"total"`
-	Truncated bool          `json:"truncated"`
-	NoManager bool          `json:"noManager"`
-	FetchedAt string        `json:"fetchedAt"`
+	Items           []serviceItem       `json:"items"`
+	Total           int                 `json:"total"`
+	UnfilteredTotal int                 `json:"unfilteredTotal"`
+	Capped          bool                `json:"capped"`
+	StatusCounts    serviceStatusCounts `json:"statusCounts"`
+	NoManager       bool                `json:"noManager"`
+	FetchedAt       string              `json:"fetchedAt"`
 }
 
 type scaleResult struct {
@@ -130,7 +146,7 @@ func TestListServicesOfALocalSwarmManagerAnswersItsRows(t *testing.T) {
 		t.Fatalf("status = %d: %s", rec.code, rec.body)
 	}
 	got := decode[serviceList](t, rec)
-	if got.Total != 3 || got.Truncated || got.NoManager || got.FetchedAt == "" || len(got.Items) != 3 {
+	if got.Total != 3 || got.UnfilteredTotal != 3 || got.Capped || got.NoManager || got.FetchedAt == "" || len(got.Items) != 3 {
 		t.Fatalf("list = %+v", got)
 	}
 	names := []string{got.Items[0].Name, got.Items[1].Name, got.Items[2].Name}
@@ -444,5 +460,199 @@ func TestAScaleTheAgentRefusesByPlainPolicyIsStillAgentPolicyDenied(t *testing.T
 	r := decode[scaleAnswer](t, rec).Results[0]
 	if r.Result != "failed" || r.Code != "agent_policy_denied" {
 		t.Fatalf("result = %+v, want failed agent_policy_denied", r)
+	}
+}
+
+func namesOf(items []serviceItem) []string {
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		out = append(out, it.Name)
+	}
+	return out
+}
+
+func listServicesQuery(t *testing.T, f *envFix, e envBody, query string) (*envRec, serviceList) {
+	t.Helper()
+	rec := f.get(t, e, "services"+query)
+	var got serviceList
+	if rec.code == http.StatusOK {
+		got = decode[serviceList](t, rec)
+	}
+	return rec, got
+}
+
+// Search and status filters run on the server before the 500-row cap, and the chip counts
+// are counted before them (plan 06-04, RES-02, P4 D-02).
+func TestServicesListFiltersAndCounts(t *testing.T) {
+	stackLabel := func(stack string) map[string]string { return map[string]string{"com.docker.stack.namespace": stack} }
+	f, e := serviceEnv(t,
+		dockertest.FakeService{ID: "s1", Name: "web-1", Mode: "replicated", Running: 2, Desired: 2, Image: "nginx:1"},
+		dockertest.FakeService{ID: "s2", Name: "api", Mode: "replicated", Running: 1, Desired: 3, Image: "ghcr.io/acme/web:2", UpdateState: "updating"},
+		dockertest.FakeService{ID: "s3", Name: "worker", Mode: "replicated", Running: 2, Desired: 2, Labels: map[string]string{"owner.web": "x"}, UpdateState: "paused"},
+		dockertest.FakeService{ID: "s4", Name: "cache", Mode: "replicated", Running: 1, Desired: 1, Labels: map[string]string{"team": "Webops"}, UpdateState: "rollback_started"},
+		dockertest.FakeService{ID: "s5", Name: "db", Mode: "replicated", Running: 1, Desired: 1, Labels: stackLabel("web"), UpdateState: "rollback_paused"},
+		dockertest.FakeService{ID: "s6", Name: "mail", Mode: "replicated", Running: 0, Desired: 2, Image: "mail:1", UpdateState: "rollback_completed"},
+		dockertest.FakeService{ID: "s7", Name: "queue", Mode: "replicated", Running: 0, Desired: 0, Image: "queue:1"},
+		dockertest.FakeService{ID: "s8", Name: "proxy", Mode: "global", Running: 3, Desired: 3, Image: "traefik:3", UpdateState: "completed"},
+	)
+
+	t.Run("q matches the name, image, label key or value and stack, ignoring case", func(t *testing.T) {
+		for _, q := range []string{"web", "WEB", "  Web "} {
+			rec, got := listServicesQuery(t, f, e, "?q="+strings.ReplaceAll(q, " ", "%20"))
+			if rec.code != http.StatusOK {
+				t.Fatalf("q=%q: %d %s", q, rec.code, rec.body)
+			}
+			// api (image), cache (label value), db (stack), web-1 (name), worker (label key)
+			if want := []string{"api", "cache", "db", "web-1", "worker"}; !slices.Equal(namesOf(got.Items), want) {
+				t.Errorf("q=%q names = %v, want %v", q, namesOf(got.Items), want)
+			}
+			if got.Total != 5 || got.UnfilteredTotal != 8 {
+				t.Errorf("q=%q total/unfiltered = %d/%d, want 5/8", q, got.Total, got.UnfilteredTotal)
+			}
+		}
+	})
+
+	t.Run("status keeps degraded, updating or problem services and several values are a union", func(t *testing.T) {
+		cases := []struct {
+			status string
+			want   []string
+		}{
+			{"degraded", []string{"api"}},
+			{"updating", []string{"api", "cache"}},
+			{"problem", []string{"db", "mail", "worker"}},
+			{"degraded,problem", []string{"api", "db", "mail", "worker"}},
+			{"updating,degraded,problem", []string{"api", "cache", "db", "mail", "worker"}},
+			{"DEGRADED, degraded", []string{"api"}},
+		}
+		for _, c := range cases {
+			rec, got := listServicesQuery(t, f, e, "?status="+strings.ReplaceAll(c.status, " ", "%20"))
+			if rec.code != http.StatusOK {
+				t.Fatalf("status=%q: %d %s", c.status, rec.code, rec.body)
+			}
+			if !slices.Equal(namesOf(got.Items), c.want) || got.Total != len(c.want) {
+				t.Errorf("status=%q names = %v (total %d), want %v", c.status, namesOf(got.Items), got.Total, c.want)
+			}
+		}
+	})
+
+	t.Run("q and status together, and the counts ignore both", func(t *testing.T) {
+		rec, got := listServicesQuery(t, f, e, "?q=web&status=updating")
+		if rec.code != http.StatusOK {
+			t.Fatalf("%d %s", rec.code, rec.body)
+		}
+		if want := []string{"api", "cache"}; !slices.Equal(namesOf(got.Items), want) {
+			t.Errorf("names = %v, want %v", namesOf(got.Items), want)
+		}
+		if got.Total != 2 || got.UnfilteredTotal != 8 {
+			t.Errorf("total/unfiltered = %d/%d, want 2/8", got.Total, got.UnfilteredTotal)
+		}
+		if got.StatusCounts != (serviceStatusCounts{Degraded: 1, Updating: 2, Problem: 3}) {
+			t.Errorf("statusCounts = %+v, want degraded 1, updating 2, problem 3 from all 8 services", got.StatusCounts)
+		}
+		_, bare := listServicesQuery(t, f, e, "")
+		if bare.StatusCounts != got.StatusCounts || len(bare.Items) != 8 {
+			t.Errorf("unfiltered list = %d items, counts %+v, want 8 and the same counts", len(bare.Items), bare.StatusCounts)
+		}
+	})
+
+	t.Run("a filter that matches nothing is an empty list with the counts kept", func(t *testing.T) {
+		rec, got := listServicesQuery(t, f, e, "?q=nothing-like-this")
+		if rec.code != http.StatusOK || len(got.Items) != 0 || got.Total != 0 || got.UnfilteredTotal != 8 || got.Capped {
+			t.Fatalf("%d %+v", rec.code, got)
+		}
+		if got.Items == nil {
+			t.Error("items is null, want []")
+		}
+	})
+
+	t.Run("refusals", func(t *testing.T) {
+		rec, _ := listServicesQuery(t, f, e, "?status=degraded,sleepy")
+		if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "status_invalid" {
+			t.Errorf("unknown status = %d %s (%s), want 422 status_invalid", rec.code, rec.body, rec.ptyp)
+		}
+		rec, _ = listServicesQuery(t, f, e, "?q="+strings.Repeat("a", 129))
+		if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "query_too_long" {
+			t.Errorf("129-character q = %d %s (%s), want 422 query_too_long", rec.code, rec.body, rec.ptyp)
+		}
+		rec, got := listServicesQuery(t, f, e, "?q="+strings.Repeat("a", 128))
+		if rec.code != http.StatusOK || len(got.Items) != 0 {
+			t.Errorf("128-character q = %d %s, want 200 and no rows", rec.code, rec.body)
+		}
+	})
+
+	t.Run("labels never leave the server", func(t *testing.T) {
+		rec := f.get(t, e, "services")
+		for _, secret := range []string{"owner.web", "Webops", "team"} {
+			if strings.Contains(string(rec.body), secret) {
+				t.Errorf("the list body carries the label text %q: %s", secret, rec.body)
+			}
+		}
+	})
+}
+
+func TestServicesListRowsCarryPortsUpdateMessagePreviousSpecAndCreatedAt(t *testing.T) {
+	created := time.Date(2026, 9, 1, 8, 30, 0, 0, time.UTC)
+	f, e := serviceEnv(t,
+		dockertest.FakeService{
+			ID: "s1", Name: "web", Mode: "replicated", Running: 1, Desired: 2, UpdateState: "paused", UpdateMessage: "update paused", CreatedAt: created,
+			Ports: []swarm.PortConfig{
+				{Protocol: "tcp", TargetPort: 80, PublishedPort: 8080, PublishMode: "ingress"},
+				{Protocol: "udp", TargetPort: 9000, PublishedPort: 9000, PublishMode: "host"},
+			},
+			PreviousSpec: &swarm.ServiceSpec{Annotations: swarm.Annotations{Name: "web"}},
+		},
+		dockertest.FakeService{ID: "s2", Name: "plain", Mode: "global", Running: 1, Desired: 1},
+	)
+	rec, got := listServicesQuery(t, f, e, "")
+	if rec.code != http.StatusOK || len(got.Items) != 2 {
+		t.Fatalf("%d %s", rec.code, rec.body)
+	}
+	plain, web := got.Items[0], got.Items[1]
+	if want := []string{"8080->80/tcp", "9000->9000/udp (host)"}; !slices.Equal(web.Ports, want) {
+		t.Errorf("web ports = %v, want %v", web.Ports, want)
+	}
+	if web.UpdateMessage != "update paused" || !web.HasPreviousSpec || web.CreatedAt != "2026-09-01T08:30:00Z" {
+		t.Errorf("web = %+v", web)
+	}
+	if plain.Ports == nil || len(plain.Ports) != 0 || plain.HasPreviousSpec || plain.UpdateMessage != "" {
+		t.Errorf("plain = %+v, want an empty ports list and no previous spec", plain)
+	}
+	if !strings.Contains(string(rec.body), `"ports":[]`) {
+		t.Errorf("a service with no ports must answer [] and not null: %s", rec.body)
+	}
+}
+
+func TestServicesListCapsAt500(t *testing.T) {
+	rows := make([]dockertest.FakeService, 600)
+	for i := range rows {
+		rows[i] = dockertest.FakeService{ID: fmt.Sprintf("s%03d", i), Name: fmt.Sprintf("svc-%03d", i), Mode: "replicated", Running: 1, Desired: 1}
+	}
+	rows[599].Running = 0                       // none running is "not running", not degraded
+	rows[598].Running, rows[598].Desired = 1, 2 // the one degraded service, past the cap
+	f, e := serviceEnv(t, rows...)
+
+	rec, got := listServicesQuery(t, f, e, "")
+	if rec.code != http.StatusOK {
+		t.Fatalf("%d %s", rec.code, rec.body)
+	}
+	if got.Total != 600 || got.UnfilteredTotal != 600 || len(got.Items) != 500 || !got.Capped {
+		t.Fatalf("total/unfiltered/items/capped = %d/%d/%d/%v, want 600/600/500/true", got.Total, got.UnfilteredTotal, len(got.Items), got.Capped)
+	}
+	if got.Items[0].Name != "svc-000" || got.Items[499].Name != "svc-499" {
+		t.Errorf("the cap keeps the first 500 by name: %s .. %s", got.Items[0].Name, got.Items[499].Name)
+	}
+
+	// The filter runs before the cap: the one degraded service is past row 500 and is still found.
+	rec, got = listServicesQuery(t, f, e, "?status=degraded")
+	if rec.code != http.StatusOK || got.Total != 1 || got.Capped || namesOf(got.Items)[0] != "svc-598" {
+		t.Fatalf("status=degraded = %d total %d capped %v items %v", rec.code, got.Total, got.Capped, namesOf(got.Items))
+	}
+	if got.StatusCounts.Degraded != 1 || got.UnfilteredTotal != 600 {
+		t.Errorf("counts = %+v unfiltered %d", got.StatusCounts, got.UnfilteredTotal)
+	}
+
+	rec, got = listServicesQuery(t, f, e, "?q=svc-5")
+	if rec.code != http.StatusOK || got.Total != 100 || got.Capped || len(got.Items) != 100 {
+		t.Errorf("q=svc-5 = %d total %d items %d capped %v, want 100 rows", rec.code, got.Total, len(got.Items), got.Capped)
 	}
 }

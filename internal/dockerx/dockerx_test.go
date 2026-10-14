@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/moby/moby/api/types/swarm"
+
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/engine"
@@ -1274,6 +1276,55 @@ func TestClusterReadsNodesServicesAndTheAgentTasksFromAManager(t *testing.T) {
 	}
 	if len(got.AgentTasks) != 2 || tasks["n1"].State != "running" || tasks["n3"].State != "failed" || tasks["n3"].Error != "task: non-zero exit (1)" {
 		t.Errorf("agent tasks = %+v, want n1 running and n3's newest task, failed", got.AgentTasks)
+	}
+}
+
+func TestClusterServiceRowsCarryPortsUpdateMessagePreviousSpecAndCreatedAt(t *testing.T) {
+	created := time.Date(2026, 9, 1, 8, 30, 0, 0, time.UTC)
+	cfg := clusterManager()
+	cfg.ServiceRows = []dockertest.FakeService{
+		{
+			ID: "s-web", Name: "web", Mode: "replicated", Running: 2, Desired: 2, UpdateState: "paused",
+			UpdateMessage: "update paused due to failure or early termination of task t1", CreatedAt: created,
+			Labels: map[string]string{"com.docker.stack.namespace": "shop", "team": "web-ops"},
+			Ports: []swarm.PortConfig{
+				{Protocol: "udp", TargetPort: 53, PublishedPort: 5353, PublishMode: "host"},
+				{Protocol: "tcp", TargetPort: 80, PublishedPort: 8080, PublishMode: "ingress"},
+				{Protocol: "tcp", TargetPort: 443, PublishedPort: 8443, PublishMode: "ingress"},
+			},
+			PreviousSpec: &swarm.ServiceSpec{Annotations: swarm.Annotations{Name: "web"}},
+		},
+		{ID: "s-plain", Name: "plain", Mode: "global", Running: 1, Desired: 1},
+	}
+	got, err := newClient(t, dockertest.NewFake(t, cfg)).Cluster(context.Background())
+	if err != nil {
+		t.Fatalf("Cluster: %v", err)
+	}
+	svc := map[string]dockerx.ServiceRow{}
+	for _, s := range got.Services {
+		svc[s.Name] = s
+	}
+	web := svc["web"]
+	want := []dockerx.ServicePort{
+		{Published: 5353, Target: 53, Protocol: "udp", Mode: "host"},
+		{Published: 8080, Target: 80, Protocol: "tcp", Mode: "ingress"},
+		{Published: 8443, Target: 443, Protocol: "tcp", Mode: "ingress"},
+	}
+	if !reflect.DeepEqual(web.Ports, want) {
+		t.Errorf("web ports = %+v, want %+v", web.Ports, want)
+	}
+	if web.UpdateMessage != "update paused due to failure or early termination of task t1" || !web.HasPreviousSpec || !web.CreatedAt.Equal(created) || web.CreatedAt.Location() != time.UTC {
+		t.Errorf("web = %+v, want the update message, a previous spec and the creation time in UTC", web)
+	}
+	if web.Labels["team"] != "web-ops" || web.Labels["com.docker.stack.namespace"] != "shop" {
+		t.Errorf("web labels = %v, want the spec's labels kept for the server-side search", web.Labels)
+	}
+	plain := svc["plain"]
+	if plain.Ports == nil || len(plain.Ports) != 0 {
+		t.Errorf("plain ports = %#v, want an empty, non-nil list", plain.Ports)
+	}
+	if plain.UpdateMessage != "" || plain.HasPreviousSpec {
+		t.Errorf("plain = %+v, want no update message and no previous spec", plain)
 	}
 }
 
