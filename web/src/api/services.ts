@@ -248,3 +248,15 @@ export function serviceInspectQuery(envId: string, id: string) {
     refetchInterval: LIST_REFETCH_MS,
   });
 }
+
+export type ServiceTasks = components["schemas"]["ServiceTasksBody"];
+
+export function serviceTasksQuery(envId: string, id: string) {
+  return queryOptions({
+    queryKey: [...serviceKey(envId, id), "tasks"] as const,
+    queryFn: async (): Promise<ServiceTasks> => {
+      throw new Error("not implemented");
+    },
+    refetchInterval: LIST_REFETCH_MS,
+  });
+}

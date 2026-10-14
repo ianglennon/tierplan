@@ -116,6 +116,8 @@ export interface ServiceApiState {
   detail: () => Response | Promise<Response>;
   inspect: () => Response | Promise<Response>;
   scale: () => Response | Promise<Response>;
+  // The service's tasks. A test that does not read them leaves it out, and the route answers 404.
+  tasks?: () => Response | Promise<Response>;
 }
 
 // serviceFetch answers the page's requests: the app shell's, the service and its inspect, and
@@ -186,6 +188,8 @@ export function serviceFetch(state: ServiceApiState) {
         return state.detail();
       case `${base}/services/${SERVICE_ID}/inspect`:
         return state.inspect();
+      case `${base}/services/${SERVICE_ID}/tasks`:
+        return state.tasks ? state.tasks() : new Response(null, { status: 404 });
       case `${base}/services/scale`:
         return state.scale();
       case `${base}/services`:
