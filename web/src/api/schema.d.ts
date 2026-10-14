@@ -1000,6 +1000,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the nodes of a swarm
+         * @description Every node of a swarm with the facts the Nodes list shows: role, leader, state, availability, address, engine, platform, CPUs, memory, how many tasks run there and whether a Bayplan agent reports from it, read through a manager's agent or through the local socket of a swarm manager, sorted by host name then ID. runsBayplan marks the node whose engine hosts Bayplan's own container. Optionally a search (q) and a status filter (status: managers, workers, drained, down); counts are the chip numbers before them. When no manager is connected the answer is 200 with noManager true and the rows last read, or none. A task counts as running only on a node that is ready. 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.read (Viewer) on the environment.
+         */
+        get: operations["listNodes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/nodes/{nodeId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One swarm node
+         * @description The facts of one node read live from a manager: its object version, role, state, availability, manager status, platform, resources, labels and engine labels, when it was created and last changed, and the Bayplan agent on it (whether it reports, its version, when it was last seen). 404 node_not_found when the swarm has no such node. 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.read (Viewer) on the environment.
+         */
+        get: operations["getNode"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/nodes/{nodeId}/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The raw inspect document of a swarm node
+         * @description The manager's inspect document of the node, for the Inspect tab. It holds the TLS trust root of the swarm and the node's certificate subject, which are public, and no join token. 404 node_not_found when the swarm has no such node. 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.read (Viewer) on the environment.
+         */
+        get: operations["getNodeInspect"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/nodes/{nodeId}/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The tasks of a swarm node
+         * @description The tasks the swarm holds for one node: those whose desired state is running first, newest first, then the 50 newest others, each with its service's name. A task that has not ended on a node that is not ready reads unknown, never running; dockerState keeps Docker's own word. Docker's error and message text is cleaned of control characters and is to be shown as plain text. 404 node_not_found when the swarm has no such node. 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.read (Viewer) on the environment.
+         */
+        get: operations["listNodeTasks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/placement": {
         parameters: {
             query?: never;
@@ -4940,6 +5020,17 @@ export interface components {
             /** @description True when total is more than the rows returned */
             truncated: boolean;
         };
+        NodeAgentBody: {
+            /**
+             * Format: date-time
+             * @description The agent's last sign of life this server run; empty when none
+             */
+            lastSeen: string;
+            /** @description True when Bayplan reaches the node now: a connected agent runs on it, or it is the local socket's own node */
+            reporting: boolean;
+            /** @description The agent's version; empty when no agent is connected there and for the local socket's node */
+            version: string;
+        };
         NodeCountsBody: {
             /**
              * Format: int64
@@ -4957,6 +5048,250 @@ export interface components {
             node: string;
             /** Format: int64 */
             volumes: number;
+        };
+        NodeDetailBody: {
+            /** @description The address the swarm reaches the node at; empty when unknown */
+            address: string;
+            /** @description The Bayplan agent on the node */
+            agent: components["schemas"]["NodeAgentBody"];
+            /** @description The node's architecture as the engine reports it (x86_64, aarch64) */
+            arch: string;
+            /**
+             * @description What the node's spec lets the swarm do with it
+             * @enum {string}
+             */
+            availability: "active" | "pause" | "drain";
+            /**
+             * Format: double
+             * @description The CPUs the node reports; 0 when it reports none
+             */
+            cpus: number;
+            /**
+             * Format: date-time
+             * @description When the node joined the swarm
+             */
+            createdAt: string;
+            /** @description The labels of the node's engine (engine.labels.*), set in its daemon settings; an empty object when it has none */
+            engineLabels: {
+                [key: string]: string;
+            };
+            /** @description The Docker Engine version the node reports */
+            engineVersion: string;
+            /** @description The node's host name */
+            hostname: string;
+            /** @description The swarm node ID */
+            id: string;
+            /** @description The node's labels (node.labels.*), which can be changed; an empty object when it has none */
+            labels: {
+                [key: string]: string;
+            };
+            /** @description True for the manager that leads the swarm */
+            leader: boolean;
+            /** @description The address a manager listens on for the swarm; empty for a worker */
+            managerAddr: string;
+            /**
+             * Format: int64
+             * @description The memory the node reports, in bytes; 0 when it reports none
+             */
+            memoryBytes: number;
+            /** @description The node's operating system */
+            os: string;
+            /** @description A manager's reachability (reachable, unreachable or unknown); empty for a worker */
+            reachability: string;
+            /**
+             * @description The node's role
+             * @enum {string}
+             */
+            role: "manager" | "worker";
+            /** @description True for the node whose engine hosts Bayplan's own container (or, on the local socket, the node the socket is) */
+            runsBayplan: boolean;
+            /** @description The swarm's word for the node: ready, down, disconnected or unknown */
+            state: string;
+            /** @description The node ID the container routes of this environment take (?node= of the container page) for this node; empty when nothing reaches it now */
+            targetNodeId: string;
+            /**
+             * Format: date-time
+             * @description When the node last changed
+             */
+            updatedAt: string;
+            /**
+             * Format: int64
+             * @description The node's object version, which a change to the node must send back
+             */
+            version: number;
+        };
+        NodeInspectBody: {
+            /** @description The manager's inspect document of the node: its spec, description, status and manager status, with the TLS trust root and certificate subject of its description */
+            document: {
+                [key: string]: unknown;
+            };
+        };
+        NodeItem: {
+            /** @description The address the swarm reaches the node at; empty when unknown */
+            address: string;
+            /** @description True when Bayplan reaches the node now: a connected agent runs on it, or it is the local socket's own node */
+            agentReporting: boolean;
+            /** @description The node's architecture as the engine reports it (x86_64, aarch64) */
+            arch: string;
+            /**
+             * @description What the node's spec lets the swarm do with it
+             * @enum {string}
+             */
+            availability: "active" | "pause" | "drain";
+            /**
+             * Format: double
+             * @description The CPUs the node reports; 0 when it reports none
+             */
+            cpus: number;
+            /** @description The Docker Engine version the node reports */
+            engineVersion: string;
+            /** @description The node's host name */
+            hostname: string;
+            /** @description The swarm node ID */
+            id: string;
+            /** @description True for the manager that leads the swarm */
+            leader: boolean;
+            /**
+             * Format: int64
+             * @description The memory the node reports, in bytes; 0 when it reports none
+             */
+            memoryBytes: number;
+            /** @description The node's operating system (node.platform.os) */
+            os: string;
+            /** @description A manager's reachability (reachable, unreachable or unknown); empty for a worker */
+            reachability: string;
+            /**
+             * @description The node's role
+             * @enum {string}
+             */
+            role: "manager" | "worker";
+            /** @description True for the node whose engine hosts Bayplan's own container (or, on the local socket, the node the socket is) */
+            runsBayplan: boolean;
+            /** @description The swarm's word for the node: ready, down, disconnected or unknown */
+            state: string;
+            /** @description The node ID the container routes of this environment take (?node= of the container page) for this node; empty when nothing reaches it now */
+            targetNodeId: string;
+            /**
+             * Format: int64
+             * @description Tasks whose desired state is running that are not: still starting, failed to place, or on a node that is not ready and so cannot say. 0 when tasksKnown is false
+             */
+            tasksNotRunning: number;
+            /**
+             * Format: int64
+             * @description Tasks whose desired state is running that are running on the node. 0 when tasksKnown is false
+             */
+            tasksRunning: number;
+        };
+        NodeListBody: {
+            /** @description How many nodes each status chip counts, before the search and the status filter, so the numbers never shrink with what was typed */
+            counts: components["schemas"]["NodeStatusCountsBody"];
+            /**
+             * Format: date-time
+             * @description When the rows were read from a manager; empty when none were
+             */
+            fetchedAt: string;
+            /** @description The nodes that match the search and the status filter, sorted by host name then ID */
+            items: components["schemas"]["NodeItem"][] | null;
+            /** @description True when no manager of the swarm is connected: the rows are the last ones read, or none */
+            noManager: boolean;
+            /** @description False when the tasks could not be read (no manager is connected, or the read failed): tasksRunning and tasksNotRunning are then 0 and mean nothing */
+            tasksKnown: boolean;
+            /**
+             * Format: int64
+             * @description How many nodes match the search and the status filter
+             */
+            total: number;
+            /**
+             * Format: int64
+             * @description How many nodes the swarm has before the search and the status filter
+             */
+            unfilteredTotal: number;
+        };
+        NodeStatusCountsBody: {
+            /**
+             * Format: int64
+             * @description Nodes whose state is down or disconnected
+             */
+            down: number;
+            /**
+             * Format: int64
+             * @description Nodes whose availability is drain
+             */
+            drained: number;
+            /**
+             * Format: int64
+             * @description Nodes whose role is manager
+             */
+            managers: number;
+            /**
+             * Format: int64
+             * @description Nodes whose role is worker
+             */
+            workers: number;
+        };
+        NodeTaskItem: {
+            /** @description The task's container ID on its node; empty until it has one */
+            containerId: string;
+            /**
+             * Format: date-time
+             * @description When the task was created
+             */
+            createdAt: string;
+            /** @description The state the swarm wants the task in */
+            desiredState: string;
+            /** @description The state Docker last recorded for the task (new, pending, assigned, accepted, preparing, ready, starting, running, complete, failed, shutdown, rejected, remove, orphaned) */
+            dockerState: string;
+            /** @description Docker's error text about the task, cleaned of control characters; empty when there is none. Docker's free text, to be shown as plain text */
+            error: string;
+            /**
+             * Format: int64
+             * @description The exit code of the task's container once the task has ended; null while it runs and when it never had a container
+             */
+            exitCode: number | null;
+            /** @description The task ID */
+            id: string;
+            /** @description Docker's status message, cleaned the same way */
+            message: string;
+            /** @description The node's host name; empty when the task has no node or its node is no longer in the swarm */
+            node: string;
+            /** @description The swarm node the task was placed on; empty while it is not placed. The swarm keeps the ID of a node that has since been removed */
+            nodeId: string;
+            /** @description False when the task names a node the swarm no longer lists (a removed node); true otherwise, also for a task with no node */
+            nodeKnown: boolean;
+            /** @description The service's name; empty when the swarm no longer lists the service */
+            service: string;
+            /** @description The service the task belongs to */
+            serviceId: string;
+            /**
+             * Format: int64
+             * @description The replica number of a replicated service's task; 0 for a global service's
+             */
+            slot: number;
+            /** @description The state to show: Docker's own word, except unknown for a task that has not ended on a node that is down, disconnected or removed, which cannot say it is still running */
+            state: string;
+            /**
+             * Format: date-time
+             * @description When the task reached dockerState
+             */
+            stateSince: string;
+            /** @description The node ID the container routes of this environment take (?node= of the container page) for the task's node; empty when no connected agent or local socket reaches that node now */
+            targetNodeId: string;
+            /**
+             * Format: date-time
+             * @description When the task last changed
+             */
+            updatedAt: string;
+        };
+        NodeTasksBody: {
+            /** @description True when earlier tasks were left out of items */
+            capped: boolean;
+            /** @description The tasks whose desired state is running, newest first, then the 50 newest others, newest first */
+            items: components["schemas"]["NodeTaskItem"][] | null;
+            /**
+             * Format: int64
+             * @description Every task the swarm holds for the node, current and earlier
+             */
+            total: number;
         };
         OptionVar: {
             /** @description True when the value was withheld because the caller may not reveal secrets on this environment */
@@ -8926,6 +9261,149 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NetworkInspectBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listNodes: {
+        parameters: {
+            query?: {
+                /** @description Search: a case-insensitive substring of the host name, the address or any label key or value (of the node's spec or of its engine), at most 128 characters (else 422 query_too_long) */
+                q?: string;
+                /** @description Only nodes in one of these statuses, comma separated: managers, workers, drained (availability drain) or down (state down or disconnected). Any other value is refused 422 status_invalid */
+                status?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getNode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm node ID: the id of a row of the nodes list */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getNodeInspect: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm node ID: the id of a row of the nodes list */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeInspectBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listNodeTasks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm node ID: the id of a row of the nodes list */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeTasksBody"];
                 };
             };
             /** @description Error */

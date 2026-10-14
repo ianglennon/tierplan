@@ -289,12 +289,10 @@ func TestGetNodeAndInspect(t *testing.T) {
 	if rec.code != http.StatusOK {
 		t.Fatalf("GET inspect: %d %s", rec.code, rec.body)
 	}
-	var doc struct {
+	type inspected struct {
 		Document map[string]any `json:"document"`
 	}
-	doc = decode[struct {
-		Document map[string]any `json:"document"`
-	}](t, rec)
+	doc := decode[inspected](t, rec)
 	if doc.Document["ID"] != "node-1" || doc.Document["Spec"] == nil || doc.Document["Description"] == nil {
 		t.Errorf("inspect document = %v, want the manager's own", doc.Document)
 	}
@@ -433,7 +431,7 @@ func TestRunsBayplanNode(t *testing.T) {
 
 	// On the node of the container that is Bayplan's own, found through the agents.
 	s := newNodesSwarm(t)
-	s.whenProbed(t, s.m1.id, s.m2.id, s.w.id)
+	s.whenProbed(t, envs.AgentTarget(s.m1.id), envs.AgentTarget(s.m2.id), envs.AgentTarget(s.w.id))
 	var l ndList
 	waitFor(t, "the node list", func() bool {
 		rec := s.get(t, s.env.ID, "nodes")

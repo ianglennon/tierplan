@@ -38,7 +38,7 @@ The agent is the security boundary between Bayplan and the host's Docker socket.
 - `_ping`, `version`, `info`, `events`.
 - The lists the dashboard shows: containers, images, volumes and networks.
 - The swarm lists: nodes, services and tasks.
-- The inspect of one container, one network, one volume and one service (`GET /services/{id}`, only the `insertDefaults` key), and the state of one exec.
+- The inspect of one container, one network, one volume, one service (`GET /services/{id}`, only the `insertDefaults` key) and one swarm node (`GET /nodes/{id}`, no query key), and the state of one exec.
 - A container's logs (`stdout`, `stderr`, `since`, `until`, `timestamps`, `follow`, `tail`, `details` only).
 - Disk usage for volumes (`system/df` with `type=volume`).
 - Images, by repository, `repository:tag`, `repository@digest` or image ID:
