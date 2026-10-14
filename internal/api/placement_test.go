@@ -54,6 +54,8 @@ type plService struct {
 	Stack       string   `json:"stack"`
 	Mode        string   `json:"mode"`
 	Constraints []string `json:"constraints"`
+	Preferences []string `json:"preferences"`
+	MaxReplicas uint64   `json:"maxReplicas"`
 }
 
 type plBody struct {
@@ -204,6 +206,37 @@ func TestPlacementForOneService(t *testing.T) {
 	rec := f.get(t, e, "placement?serviceId=nope")
 	if rec.code != http.StatusNotFound || rec.ptyp != "service_not_found" {
 		t.Errorf("an unknown service = %d %s (%s), want 404 service_not_found", rec.code, rec.body, rec.ptyp)
+	}
+}
+
+func TestPlacementCarriesConstraintFacts(t *testing.T) {
+	web := webService()
+	web.Constraints = []string{"node.role==worker", "node.labels.zone!=a"}
+	web.Preferences = []string{"node.labels.zone", "engine.labels.rack"}
+	web.MaxReplicas = 2
+	api := dockertest.FakeService{ID: "svc-api", Name: "api", Mode: "replicated", Running: 1, Desired: 1}
+	f, e := tkEnv(t, 5, []dockertest.FakeService{web, api},
+		tkRunning("web-1", "svc-web", "node-3", 1, "c1", time.Minute),
+	)
+	b := plGet(t, f, e, "")
+	for _, n := range b.Nodes {
+		if n.OS == "" || n.Arch == "" || n.Labels == nil || n.EngineLabels == nil {
+			t.Errorf("node %s = %+v, want os, arch and both label maps (never null)", n.ID, n)
+		}
+	}
+	byName := map[string]plService{}
+	for _, s := range b.Services {
+		byName[s.Name] = s
+	}
+	got := byName[web.Name]
+	if !slices.Equal(got.Preferences, web.Preferences) || got.MaxReplicas != 2 || !slices.Equal(got.Constraints, web.Constraints) {
+		t.Errorf("web = %+v, want its constraints, spread labels and a max of 2 per node", got)
+	}
+	if bare := byName["api"]; bare.Preferences == nil || len(bare.Preferences) != 0 || bare.MaxReplicas != 0 {
+		t.Errorf("api = %+v, want no preferences (an empty list, not null) and no limit", bare)
+	}
+	if rec := f.get(t, e, "placement"); strings.Contains(string(rec.body), `"preferences":null`) {
+		t.Errorf("body = %s, want no null preferences", rec.body)
 	}
 }
 

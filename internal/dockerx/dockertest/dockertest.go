@@ -240,6 +240,10 @@ type FakeService struct {
 	Image string
 	// Constraints are the placement constraints of the service's spec.
 	Constraints []string
+	// Preferences are the spread descriptors of the spec's placement preferences.
+	Preferences []string
+	// MaxReplicas is the spec's placement limit of tasks per node.
+	MaxReplicas uint64
 	// Version is the version the service reports and a write must send back; zero is 1.
 	// Every update the fake accepts adds one.
 	Version uint64

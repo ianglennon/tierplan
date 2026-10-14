@@ -105,6 +105,11 @@ type ServiceRow struct {
 	// Constraints are the placement constraints of the service's spec, as written. Never
 	// nil.
 	Constraints []string
+	// Preferences are the spread descriptors of the service's placement preferences (the
+	// label each Spread preference spreads tasks over), in the spec's order. Never nil.
+	Preferences []string
+	// MaxReplicas is the most tasks of the service one node may run; 0 when unset.
+	MaxReplicas uint64
 }
 
 // ServicePort is one port a swarm service publishes.

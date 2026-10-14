@@ -64,6 +64,8 @@ type PlacementService struct {
 	Stack       string   `json:"stack" doc:"The stack the service belongs to; empty for a service made on its own"`
 	Mode        string   `json:"mode" doc:"replicated, global, replicated-job or global-job"`
 	Constraints []string `json:"constraints" doc:"The placement constraints of the service's spec, as written; an empty list when it has none"`
+	Preferences []string `json:"preferences" doc:"The label each Spread placement preference spreads tasks over (node.labels.zone), in the spec's order; an empty list when it has none"`
+	MaxReplicas uint64   `json:"maxReplicas" doc:"The most tasks of the service one node may run; 0 when the spec sets no limit"`
 }
 
 // PlacementBody is where the tasks of a swarm run.
@@ -181,7 +183,7 @@ func placementOf(read dockerx.ClusterRead, rows []dockerx.TaskRow, targets map[s
 	for _, s := range read.Services {
 		byID[s.ID] = s
 		body.Services = append(body.Services, PlacementService{
-			ID: s.ID, Name: s.Name, Stack: s.Stack, Mode: s.Mode, Constraints: s.Constraints,
+			ID: s.ID, Name: s.Name, Stack: s.Stack, Mode: s.Mode, Constraints: s.Constraints, Preferences: []string{},
 		})
 	}
 	for _, r := range rows {
