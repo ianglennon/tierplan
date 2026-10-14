@@ -1,0 +1,87 @@
+{
+  "tasks": {
+    "state": {
+      "running": "Running",
+      "new": "New",
+      "pending": "Pending",
+      "assigned": "Assigned",
+      "accepted": "Accepted",
+      "preparing": "Preparing",
+      "ready": "Ready",
+      "starting": "Starting",
+      "complete": "Complete",
+      "shutdown": "Shut down",
+      "remove": "Removing",
+      "failed": "Failed",
+      "rejected": "Rejected",
+      "orphaned": "Orphaned",
+      "unknown": "Unknown",
+      "unknownTooltip": "Docker last recorded “{{state}}”, but its node isn't ready, so that can't be confirmed."
+    },
+    "table": {
+      "label": "Tasks",
+      "columns": {
+        "expand": "Show earlier tasks",
+        "task": "Task",
+        "state": "State",
+        "desired": "Desired",
+        "node": "Node",
+        "updated": "Updated",
+        "error": "Error",
+        "exitCode": "Exit code",
+        "started": "Started",
+        "finished": "Finished",
+        "actions": "Actions"
+      },
+      "expand": "Show earlier tasks for {{slot}}",
+      "missing": "—",
+      "removedNode": "Removed node",
+      "removedNodeTooltip": "{{id}} is no longer in the swarm.",
+      "history": {
+        "label": "Earlier tasks for {{slot}}",
+        "header": "Earlier tasks in this slot. Docker keeps up to {{limit}}.",
+        "empty": "No earlier tasks in this slot."
+      }
+    },
+    "caption": {
+      "tasks_one": "{{count, number}} task",
+      "tasks_other": "{{count, number}} tasks",
+      "filtered_one": "{{shown, number}} of {{count, number}} task",
+      "filtered_other": "{{shown, number}} of {{count, number}} tasks",
+      "slots_one": "{{count, number}} slot",
+      "slots_other": "{{count, number}} slots",
+      "nodes_one": "{{count, number}} node",
+      "nodes_other": "{{count, number}} nodes",
+      "inSlots": "{{tasks}} in {{slots}}",
+      "onNodes": "{{tasks}} on {{nodes}}"
+    },
+    "failedOnly": "Show only failed",
+    "actions": {
+      "open": "Open container",
+      "noContainer": "No container yet",
+      "nodeNotReporting": "{{node}} isn't reporting right now.",
+      "nodeNotReportingUnnamed": "The task's node isn't reporting right now.",
+      "nodeGone": "That node is no longer in the swarm.",
+      "copyId": "Copy task ID",
+      "copied": "Copied the task ID.",
+      "copyFailed": "Couldn't copy. Select the ID and copy it by hand."
+    },
+    "empty": {
+      "none": {
+        "title": "No tasks",
+        "body": "This service is scaled to 0, so nothing is running. Scale it up to start tasks.",
+        "scale": "Scale…"
+      },
+      "failed": {
+        "title": "No failed tasks",
+        "body": "Nothing has failed in the history Docker keeps for this service."
+      }
+    },
+    "loading": "Loading tasks",
+    "error": {
+      "title": "Couldn't load tasks.",
+      "body": "Docker may be unreachable. Try again.",
+      "retry": "Retry loading tasks"
+    }
+  }
+}

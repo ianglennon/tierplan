@@ -8,7 +8,10 @@ export interface ServiceTab {
   id: string;
   // The route the tab links to: the page's own address for the Overview, a child of it for
   // every other tab.
-  to: "/env/$envId/services/$serviceId" | "/env/$envId/services/$serviceId/inspect";
+  to:
+    | "/env/$envId/services/$serviceId"
+    | "/env/$envId/services/$serviceId/tasks"
+    | "/env/$envId/services/$serviceId/inspect";
   // The i18n key of the tab's label.
   labelKey: string;
   // True when only the tab's own path is the tab, as for the Overview, whose path is the start
@@ -25,6 +28,12 @@ export const SERVICE_TABS = [
     to: "/env/$envId/services/$serviceId",
     labelKey: "servicedetail.tabs.overview",
     exact: true,
+  },
+  {
+    id: "tasks",
+    to: "/env/$envId/services/$serviceId/tasks",
+    labelKey: "servicedetail.tabs.tasks",
+    exact: false,
   },
   {
     id: "inspect",

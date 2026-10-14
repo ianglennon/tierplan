@@ -7,6 +7,7 @@
     "tabs": {
       "label": "Service sections",
       "overview": "Overview",
+      "tasks": "Tasks",
       "inspect": "Inspect"
     },
     "loading": "Loading the service",

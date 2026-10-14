@@ -3,7 +3,7 @@
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -111,6 +111,17 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+// The words the State cells show, in row order. The Desired cells use some of the same words.
+const stateWords = (root: ParentNode = document) =>
+  Array.from(root.querySelectorAll("[data-slot=task-state-word]")).map((e) => e.textContent);
+
+// rowOf finds the row of the task with this short ID.
+function rowOf(id: string): HTMLElement {
+  const row = screen.getByText(id).closest("tr");
+  if (!row) throw new Error(`no row for ${id}`);
+  return row;
+}
+
 describe("TaskTable", () => {
   it("lists one row per slot, in the columns of the spec, named after the service and the slot", () => {
     renderTable();
@@ -122,7 +133,7 @@ describe("TaskTable", () => {
     expect(within(table).getByText("web.2")).toBeTruthy();
     expect(within(table).getByText("mgr-1")).toBeTruthy();
     expect(within(table).getByText("wrk-ready")).toBeTruthy();
-    expect(within(table).getAllByText("Running")).toHaveLength(2);
+    expect(stateWords(table)).toEqual(["Running", "Running"]);
   });
 
   it("names the rows of a global service after the service and puts the node in the Node column", () => {
@@ -160,10 +171,9 @@ describe("TaskTable", () => {
     for (const name of ["Exit code", "Started", "Finished"]) {
       expect(within(history).getByRole("columnheader", { name })).toBeTruthy();
     }
-    expect(within(history).getByText("1")).toBeTruthy();
-    expect(within(history).getByText("137")).toBeTruthy();
-    expect(within(history).getByText("Failed")).toBeTruthy();
-    expect(within(history).getByText("Shut down")).toBeTruthy();
+    expect(stateWords(history)).toEqual(["Failed", "Shut down"]);
+    expect(within(rowOf("t1-failed")).getByText("1")).toBeTruthy();
+    expect(within(rowOf("t1-rolled")).getByText("137")).toBeTruthy();
     fireEvent.click(expander);
     expect(screen.queryByRole("table", { name: "Earlier tasks for web.1" })).toBeNull();
   });
@@ -210,8 +220,7 @@ describe("TaskTable", () => {
     renderTable({
       slots: [slotOf(1, task({ state: "unknown", dockerState: "running", node: "wrk-down" }))],
     });
-    expect(screen.getByText("Unknown")).toBeTruthy();
-    expect(screen.queryByText("Running")).toBeNull();
+    expect(stateWords()).toEqual(["Unknown"]);
   });
 
   it("shows a removed node as such and an unplaced task's node as a dash", () => {
@@ -250,8 +259,8 @@ describe("TaskTable", () => {
       expect(screen.queryByText("web.2")).toBeNull();
       fireEvent.click(screen.getByRole("button", { name: "Show earlier tasks for web.1" }));
       const history = screen.getByRole("table", { name: "Earlier tasks for web.1" });
-      expect(within(history).getByText("Failed")).toBeTruthy();
-      expect(within(history).queryByText("Shut down")).toBeNull();
+      expect(stateWords(history)).toEqual(["Failed"]);
+      expect(within(history).queryByText("t1-rolled")).toBeNull();
     });
 
     it("says nothing has failed when no slot has", () => {
@@ -299,16 +308,17 @@ describe("TaskTable", () => {
   });
 
   describe("row actions", () => {
-    function openMenu(row: string) {
-      fireEvent.pointerDown(screen.getByRole("button", { name: `Actions for ${row}` }), {
-        button: 0,
-        ctrlKey: false,
+    async function openMenu(row: string) {
+      await act(async () => {
+        fireEvent.keyDown(screen.getByRole("button", { name: `Actions for ${row}` }), {
+          key: "Enter",
+        });
       });
     }
 
     it("opens the task's container on its node", async () => {
       renderTable();
-      openMenu("web.1");
+      await openMenu("web.1");
       const link = await screen.findByRole("menuitem", { name: "Open container" });
       expect(link.getAttribute("href")).toBe(
         `/env/${SERVICE_ENV}/containers/cont-1?node=${SERVICE_ENV}`,
@@ -319,7 +329,7 @@ describe("TaskTable", () => {
       renderTable({
         slots: [slotOf(1, task({ containerId: "", state: "pending", dockerState: "pending" }))],
       });
-      openMenu("web.1");
+      await openMenu("web.1");
       const item = await screen.findByRole("menuitem", { name: /Open container/ });
       expect(item.getAttribute("aria-disabled")).toBe("true");
       expect(item.getAttribute("href")).toBeNull();
@@ -328,7 +338,7 @@ describe("TaskTable", () => {
 
     it("disables Open container with the node's name when nothing reaches the node", async () => {
       renderTable({ slots: [slotOf(2, task({ slot: 2, node: "wrk-ready", targetNodeId: "" }))] });
-      openMenu("web.2");
+      await openMenu("web.2");
       const item = await screen.findByRole("menuitem", { name: /Open container/ });
       expect(item.getAttribute("aria-disabled")).toBe("true");
       expect(within(item).getByText("wrk-ready isn't reporting right now.")).toBeTruthy();
@@ -340,7 +350,7 @@ describe("TaskTable", () => {
           slotOf(1, task({ node: "", nodeId: "node-gone", nodeKnown: false, targetNodeId: "" })),
         ],
       });
-      openMenu("web.1");
+      await openMenu("web.1");
       const item = await screen.findByRole("menuitem", { name: /Open container/ });
       expect(within(item).getByText("That node is no longer in the swarm.")).toBeTruthy();
     });
@@ -349,7 +359,7 @@ describe("TaskTable", () => {
       const writeText = vi.fn().mockResolvedValue(undefined);
       vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
       renderTable();
-      openMenu("web.1");
+      await openMenu("web.1");
       fireEvent.click(await screen.findByRole("menuitem", { name: "Copy task ID" }));
       await waitFor(() => expect(writeText).toHaveBeenCalledWith("t1-now"));
     });

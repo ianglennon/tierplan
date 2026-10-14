@@ -251,12 +251,27 @@ export function serviceInspectQuery(envId: string, id: string) {
 
 export type ServiceTasks = components["schemas"]["ServiceTasksBody"];
 
+// How often an open Tasks tab reads again while the page is visible. Docker sends no task
+// events, so the tab polls (UI-SPEC "Shared state and overflow rules").
+export const TASKS_REFETCH_MS = 5000;
+
+// The tasks of one service, under the key of its detail, so the events feed and every action
+// that refresh the service refresh an open Tasks tab too. It polls every 5 s while the page is
+// visible and not at all while it is hidden.
 export function serviceTasksQuery(envId: string, id: string) {
   return queryOptions({
     queryKey: [...serviceKey(envId, id), "tasks"] as const,
-    queryFn: async (): Promise<ServiceTasks> => {
-      throw new Error("not implemented");
+    queryFn: async () => {
+      const res = await api.GET("/api/env/{envId}/services/{serviceId}/tasks", {
+        params: { path: { envId, serviceId: id } },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new ServiceLoadError(problem.status, problem.type);
+      }
+      return res.data;
     },
-    refetchInterval: LIST_REFETCH_MS,
+    retry: (count, error) => !isServiceGone(error) && count < serviceRetry.attempts,
+    refetchInterval: () => (document.visibilityState === "visible" ? TASKS_REFETCH_MS : false),
   });
 }
