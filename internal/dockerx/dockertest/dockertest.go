@@ -1204,7 +1204,8 @@ func (c FakeConfig) nodeList() []swarm.Node {
 			arch = "x86_64"
 		}
 		n := swarm.Node{
-			ID: fn.ID,
+			ID:   fn.ID,
+			Meta: swarm.Meta{Version: swarm.Version{Index: max(fn.Version, 1)}, CreatedAt: fn.CreatedAt, UpdatedAt: fn.UpdatedAt},
 			Spec: swarm.NodeSpec{
 				Annotations: swarm.Annotations{Labels: fn.Labels},
 				Role:        swarm.NodeRole(role), Availability: swarm.NodeAvailability(avail),

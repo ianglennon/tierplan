@@ -6,26 +6,66 @@ package dockerx
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
+
+	cerrdefs "github.com/containerd/errdefs"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 )
 
 // ErrNodeNotFound means the manager knows no such node.
 var ErrNodeNotFound = errors.New("dockerx: no such node")
 
-// NodeDetail is one swarm node as an inspect shows it.
+// NodeDetail is one swarm node as an inspect shows it. The node's engine labels and
+// spec labels are never nil.
 type NodeDetail struct {
 	ID string
 	// Version is the object version a write must send back (swarm.Version.Index).
-	Version                                                                 uint64
-	Hostname, Role, Availability, State, Address, Reachability, ManagerAddr string
-	EngineVersion, OS, Arch                                                 string
-	Leader                                                                  bool
-	NanoCPUs, MemoryBytes                                                   int64
-	Labels, EngineLabels                                                    map[string]string
-	CreatedAt, UpdatedAt                                                    time.Time
+	Version uint64
+	// Hostname is what the engine reports, Role and Availability are the spec's, State is
+	// the manager's view of the node (ready, down, ...).
+	Hostname, Role, Availability, State string
+	// Address is the address the swarm reaches the node at.
+	Address string
+	// Reachability and ManagerAddr are those of a manager, empty for a worker.
+	Reachability, ManagerAddr string
+	EngineVersion, OS, Arch   string
+	// Leader is true for the one manager that leads the swarm.
+	Leader                bool
+	NanoCPUs, MemoryBytes int64
+	// Labels are the labels of the node's spec, EngineLabels those of its engine.
+	Labels, EngineLabels map[string]string
+	CreatedAt, UpdatedAt time.Time
 }
 
-// NodeInspect is not written yet.
+// NodeInspect reads one node by ID and returns the typed detail and the raw document. A
+// node the manager does not know is ErrNodeNotFound. A worker, and a manager that has
+// lost quorum, answer with errors whose text carries the daemon's own message.
 func (c *Client) NodeInspect(ctx context.Context, id string) (NodeDetail, []byte, error) {
-	return NodeDetail{}, nil, errors.New("not implemented")
+	res, err := c.cur().NodeInspect(ctx, id, client.NodeInspectOptions{})
+	if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return NodeDetail{}, nil, fmt.Errorf("inspect node on %s: %w", c.t.Describe(), ErrNodeNotFound)
+		}
+		return NodeDetail{}, nil, fmt.Errorf("inspect node on %s: %w", c.t.Describe(), err)
+	}
+	return nodeDetail(res.Node), res.Raw, nil
+}
+
+// nodeDetail turns an inspected node into its detail.
+func nodeDetail(n swarm.Node) NodeDetail {
+	d := NodeDetail{
+		ID: n.ID, Version: n.Version.Index, Hostname: n.Description.Hostname,
+		Role: string(n.Spec.Role), Availability: string(n.Spec.Availability), State: string(n.Status.State),
+		Address: n.Status.Addr, EngineVersion: n.Description.Engine.EngineVersion,
+		OS: n.Description.Platform.OS, Arch: n.Description.Platform.Architecture,
+		NanoCPUs: n.Description.Resources.NanoCPUs, MemoryBytes: n.Description.Resources.MemoryBytes,
+		Labels: nonNilLabels(n.Spec.Labels), EngineLabels: nonNilLabels(n.Description.Engine.Labels),
+		CreatedAt: n.CreatedAt.UTC(), UpdatedAt: n.UpdatedAt.UTC(),
+	}
+	if m := n.ManagerStatus; m != nil {
+		d.Leader, d.Reachability, d.ManagerAddr = m.Leader, string(m.Reachability), m.Addr
+	}
+	return d
 }

@@ -139,6 +139,11 @@ var routes = []route{
 	read("tasks", `tasks`),
 	read("container inspect", `containers/`+idShape+`/json`),
 
+	// One node: the inspect, which takes no key. It sits after the list so GET /nodes is
+	// never read as an inspect. The actions that change a node are added by the plans that
+	// need them.
+	{name: "node inspect", method: http.MethodGet, path: pathOf(`nodes/` + idShape)},
+
 	// One service: the inspect (matched after the list, so GET /services is never
 	// read as an inspect), the create and the update, which take the service's whole
 	// spec as their body and the registry credential its image needs, and the
