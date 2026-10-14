@@ -139,3 +139,55 @@ func TestTaskHistoryLimitIsFiveWhenTheClusterSetsNone(t *testing.T) {
 		})
 	}
 }
+
+// The hash of a task's spec against the hash of its service's template (plan 06-09, RES-02,
+// RESEARCH E10): a task is on the new version when the two are equal.
+
+func specTask(id, image, runtime string) swarm.Task {
+	t := fakeTask(id, "web-id", "node-a", 1, "running", "running", time.Minute)
+	t.Spec = swarm.TaskSpec{ContainerSpec: &swarm.ContainerSpec{Image: image, Env: []string{"A=1", "B=2"}}, Runtime: swarm.RuntimeType(runtime)}
+	return t
+}
+
+func TestTaskSpecHashIgnoresRuntimeAndMatchesTheTemplateOfTheSameSpec(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{
+		SwarmState: "active", SwarmControl: true, SwarmClusterID: "cluster-1",
+		NodeRows: []dockertest.FakeNode{{ID: "node-a", Hostname: "alpha", Role: "manager"}},
+		ServiceRows: []dockertest.FakeService{{
+			ID: "web-id", Name: "web", Mode: "replicated",
+			Spec: &swarm.ServiceSpec{
+				Annotations: swarm.Annotations{Name: "web"},
+				TaskTemplate: swarm.TaskSpec{
+					ContainerSpec: &swarm.ContainerSpec{Image: "img:2", Env: []string{"A=1", "B=2"}},
+				},
+			},
+		}},
+		Tasks: []swarm.Task{specTask("t-new", "img:2", "container"), specTask("t-new-bare", "img:2", ""), specTask("t-old", "img:1", "container")},
+	})
+	c := newClient(t, fake)
+
+	detail, _, err := c.ServiceInspect(context.Background(), "web-id")
+	if err != nil {
+		t.Fatalf("ServiceInspect: %v", err)
+	}
+	if detail.TemplateHash == "" {
+		t.Fatal("the service has no TemplateHash")
+	}
+	rows, err := c.Tasks(context.Background(), dockerx.TaskFilter{ServiceIDs: []string{"web-id"}})
+	if err != nil {
+		t.Fatalf("Tasks: %v", err)
+	}
+	hash := map[string]string{}
+	for _, r := range rows {
+		hash[r.ID] = r.SpecHash
+	}
+	if hash["t-new"] == "" || hash["t-new"] != hash["t-new-bare"] {
+		t.Errorf("Runtime changed the hash: %q vs %q", hash["t-new"], hash["t-new-bare"])
+	}
+	if hash["t-new"] != detail.TemplateHash {
+		t.Errorf("a task on the new spec hashes to %q, the template to %q", hash["t-new"], detail.TemplateHash)
+	}
+	if hash["t-old"] == detail.TemplateHash {
+		t.Errorf("a task on the old spec hashes like the template: %q", hash["t-old"])
+	}
+}
