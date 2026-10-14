@@ -1100,6 +1100,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/nodes/{nodeId}/labels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace a node's labels
+         * @description Replaces the labels of one node, once. The server reads the node fresh and sends its whole spec with only the labels changed and the version sent, so nothing else about the node changes. A node whose version is not the one sent is 409 node_changed and nothing is retried; Docker's own refusals are 502 node_update_failed with Docker's words. Whether a constraint would stop matching is the caller's to confirm: Bayplan does not block it. Every attempt on a node that exists is audited as node.labels_changed with the name, how many labels were added, changed and removed, how many services are affected and the code. 422 label_reserved for a name starting with com.docker., io.docker. or org.dockerproject. (without regard to case; Docker itself accepts them), 422 label_invalid for a name of 0 or over 256 bytes, a value over 4096 bytes or more than 64 labels; 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.manage (Admin) on the environment.
+         */
+        put: operations["setNodeLabels"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/nodes/{nodeId}/labels/impact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * What a change of a node's labels will do to placement
+         * @description Judges the labels a node would have, from a live read of the swarm, and writes nothing. Every placement constraint of a service that names a label the change adds, changes the value of or removes is listed with whether the node meets it before and after (names compare byte for byte, values without regard to case). noLongerMatches counts the services with a constraint the node would stop meeting, and tasksMayMove the tasks on the node that belong to them. version is the node's version, which the save must send. 422 label_reserved for a name starting with com.docker., io.docker. or org.dockerproject. (without regard to case; Docker itself accepts them), 422 label_invalid for a name of 0 or over 256 bytes, a value over 4096 bytes or more than 64 labels; 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.manage (Admin) on the environment.
+         */
+        post: operations["getNodeLabelImpact"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/nodes/{nodeId}/role": {
         parameters: {
             query?: never;
@@ -5312,6 +5352,69 @@ export interface components {
              * @description Tasks whose desired state is running that are running on the node. 0 when tasksKnown is false
              */
             tasksRunning: number;
+        };
+        NodeLabelImpactBody: {
+            /**
+             * Format: int64
+             * @description Labels the change adds
+             */
+            added: number;
+            /**
+             * Format: int64
+             * @description Labels whose value the change changes
+             */
+            changed: number;
+            /**
+             * Format: int64
+             * @description How many services have a constraint the node met and would no longer meet
+             */
+            noLongerMatches: number;
+            /**
+             * Format: int64
+             * @description Labels the change removes
+             */
+            removed: number;
+            /** @description Each placement constraint of a service that names a label the change adds, changes or removes, by service name then constraint. Never null */
+            rows: components["schemas"]["NodeLabelImpactRow"][] | null;
+            /**
+             * Format: int64
+             * @description How many tasks on the node belong to those services, which the swarm may move off it
+             */
+            tasksMayMove: number;
+            /**
+             * Format: int64
+             * @description The node's object version as read for this judgement: the version the save must send back
+             */
+            version: number;
+        };
+        NodeLabelImpactRequest: {
+            /** @description The node's labels as they would be saved; they replace the ones it has. At most 64, names of 1 to 256 bytes, values of at most 4096 bytes, and none starting with com.docker., io.docker. or org.dockerproject. (compared without regard to case) */
+            labels: {
+                [key: string]: string;
+            };
+        };
+        NodeLabelImpactRow: {
+            /** @description True when the node would meet the constraint with the labels asked for */
+            after: boolean;
+            /** @description True when the node meets the constraint with the labels it has now */
+            before: boolean;
+            /** @description The constraint as the service's spec writes it, such as node.labels.disk==ssd */
+            constraint: string;
+            /** @description The service's name */
+            service: string;
+            /** @description The service the constraint belongs to */
+            serviceId: string;
+        };
+        NodeLabelsRequest: {
+            /** @description The node's labels as they are to be saved; they replace the ones it has, and an empty object removes them all. The limits are those of the impact check */
+            labels: {
+                [key: string]: string;
+            };
+            /**
+             * Format: int64
+             * @description The node's version as the page last read it (the version of the impact); a node changed since is refused 409 node_changed
+             */
+            version: number;
         };
         NodeListBody: {
             /** @description How many nodes each status chip counts, before the search and the status filter, so the numbers never shrink with what was typed */
@@ -9588,6 +9691,81 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NodeInspectBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setNodeLabels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm node ID: the id of a row of the nodes list */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NodeLabelsRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getNodeLabelImpact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm node ID: the id of a row of the nodes list */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NodeLabelImpactRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeLabelImpactBody"];
                 };
             };
             /** @description Error */

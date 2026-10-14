@@ -280,6 +280,7 @@ func RegisterNodes(r *httpx.Router, d NodesDeps) {
 	})
 
 	registerNodeActions(r, d)
+	registerNodeLabels(r, d)
 }
 
 // parseNodeStatuses reads the comma list of status=. An empty list means no filter and an

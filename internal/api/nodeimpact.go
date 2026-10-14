@@ -24,6 +24,9 @@ const (
 	impactPause   = "pause"
 	impactPromote = "promote"
 	impactDemote  = "demote"
+	// impactLabels is the read a change of the node's labels needs: the tasks that run on the
+	// node, as a drain's, and nothing about managers or Bayplan.
+	impactLabels = "labels"
 )
 
 // What a drain does to one task of the node.
@@ -257,7 +260,7 @@ func gatherImpact(ctx context.Context, d NodesDeps, envID, nodeID, action string
 			return e
 		}
 		version = detail.Version
-		if action == impactDrain || action == impactPause {
+		if action == impactDrain || action == impactPause || action == impactLabels {
 			tasks, e = c.Tasks(readCtx, dockerx.TaskFilter{NodeIDs: []string{nodeID}, DesiredState: "running"})
 		}
 		return e
@@ -278,6 +281,9 @@ func gatherImpact(ctx context.Context, d NodesDeps, envID, nodeID, action string
 		if tk.NodeID == nodeID {
 			in.Tasks = append(in.Tasks, tk)
 		}
+	}
+	if action == impactLabels {
+		return in, nil
 	}
 	targets := swarmNodeTargets(ctx, d.services(), envID)
 	in.RunsBayplan = bayplanNode(ctx, d, envID, targets) == nodeID

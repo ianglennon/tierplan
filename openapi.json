@@ -5967,6 +5967,134 @@
         ],
         "type": "object"
       },
+      "NodeLabelImpactBody": {
+        "additionalProperties": false,
+        "properties": {
+          "added": {
+            "description": "Labels the change adds",
+            "format": "int64",
+            "type": "integer"
+          },
+          "changed": {
+            "description": "Labels whose value the change changes",
+            "format": "int64",
+            "type": "integer"
+          },
+          "noLongerMatches": {
+            "description": "How many services have a constraint the node met and would no longer meet",
+            "format": "int64",
+            "type": "integer"
+          },
+          "removed": {
+            "description": "Labels the change removes",
+            "format": "int64",
+            "type": "integer"
+          },
+          "rows": {
+            "description": "Each placement constraint of a service that names a label the change adds, changes or removes, by service name then constraint. Never null",
+            "items": {
+              "$ref": "#/components/schemas/NodeLabelImpactRow"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "tasksMayMove": {
+            "description": "How many tasks on the node belong to those services, which the swarm may move off it",
+            "format": "int64",
+            "type": "integer"
+          },
+          "version": {
+            "description": "The node's object version as read for this judgement: the version the save must send back",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "rows",
+          "noLongerMatches",
+          "tasksMayMove",
+          "added",
+          "changed",
+          "removed"
+        ],
+        "type": "object"
+      },
+      "NodeLabelImpactRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "The node's labels as they would be saved; they replace the ones it has. At most 64, names of 1 to 256 bytes, values of at most 4096 bytes, and none starting with com.docker., io.docker. or org.dockerproject. (compared without regard to case)",
+            "type": "object"
+          }
+        },
+        "required": [
+          "labels"
+        ],
+        "type": "object"
+      },
+      "NodeLabelImpactRow": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "True when the node would meet the constraint with the labels asked for",
+            "type": "boolean"
+          },
+          "before": {
+            "description": "True when the node meets the constraint with the labels it has now",
+            "type": "boolean"
+          },
+          "constraint": {
+            "description": "The constraint as the service's spec writes it, such as node.labels.disk==ssd",
+            "type": "string"
+          },
+          "service": {
+            "description": "The service's name",
+            "type": "string"
+          },
+          "serviceId": {
+            "description": "The service the constraint belongs to",
+            "type": "string"
+          }
+        },
+        "required": [
+          "serviceId",
+          "service",
+          "constraint",
+          "before",
+          "after"
+        ],
+        "type": "object"
+      },
+      "NodeLabelsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "The node's labels as they are to be saved; they replace the ones it has, and an empty object removes them all. The limits are those of the impact check",
+            "type": "object"
+          },
+          "version": {
+            "description": "The node's version as the page last read it (the version of the impact); a node changed since is refused 409 node_changed",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "labels",
+          "version"
+        ],
+        "type": "object"
+      },
       "NodeListBody": {
         "additionalProperties": false,
         "properties": {
@@ -14861,6 +14989,138 @@
           }
         },
         "summary": "The raw inspect document of a swarm node",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/nodes/{nodeId}/labels": {
+      "put": {
+        "description": "Replaces the labels of one node, once. The server reads the node fresh and sends its whole spec with only the labels changed and the version sent, so nothing else about the node changes. A node whose version is not the one sent is 409 node_changed and nothing is retried; Docker's own refusals are 502 node_update_failed with Docker's words. Whether a constraint would stop matching is the caller's to confirm: Bayplan does not block it. Every attempt on a node that exists is audited as node.labels_changed with the name, how many labels were added, changed and removed, how many services are affected and the code. 422 label_reserved for a name starting with com.docker., io.docker. or org.dockerproject. (without regard to case; Docker itself accepts them), 422 label_invalid for a name of 0 or over 256 bytes, a value over 4096 bytes or more than 64 labels; 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.manage (Admin) on the environment.",
+        "operationId": "setNodeLabels",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The swarm node ID: the id of a row of the nodes list",
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "description": "The swarm node ID: the id of a row of the nodes list",
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NodeLabelsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Replace a node's labels",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/nodes/{nodeId}/labels/impact": {
+      "post": {
+        "description": "Judges the labels a node would have, from a live read of the swarm, and writes nothing. Every placement constraint of a service that names a label the change adds, changes the value of or removes is listed with whether the node meets it before and after (names compare byte for byte, values without regard to case). noLongerMatches counts the services with a constraint the node would stop meeting, and tasksMayMove the tasks on the node that belong to them. version is the node's version, which the save must send. 422 label_reserved for a name starting with com.docker., io.docker. or org.dockerproject. (without regard to case; Docker itself accepts them), 422 label_invalid for a name of 0 or over 256 bytes, a value over 4096 bytes or more than 64 labels; 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.manage (Admin) on the environment.",
+        "operationId": "getNodeLabelImpact",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The swarm node ID: the id of a row of the nodes list",
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "description": "The swarm node ID: the id of a row of the nodes list",
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NodeLabelImpactRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeLabelImpactBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "What a change of a node's labels will do to placement",
         "tags": [
           "environments"
         ]
