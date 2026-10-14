@@ -14,6 +14,7 @@ import (
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
+	"github.com/distribution/reference"
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
 )
@@ -153,15 +154,34 @@ func (c *Client) ServiceScale(ctx context.Context, id string, replicas uint64, e
 		EncodedRegistryAuth: encodedAuth,
 		QueryRegistry:       false,
 	})
-	switch {
-	case err == nil:
-		return previous, true, nil
-	case strings.Contains(err.Error(), outOfSequence):
-		return previous, false, fmt.Errorf("scale service on %s: %w", c.t.Describe(), ErrServiceChanged)
-	case cerrdefs.IsNotFound(err):
-		return previous, false, fmt.Errorf("scale service on %s: %w", c.t.Describe(), ErrServiceNotFound)
+	if err != nil {
+		return previous, false, c.serviceWriteError("scale", err)
 	}
-	return previous, false, fmt.Errorf("scale service on %s: %w", c.t.Describe(), err)
+	return previous, true, nil
+}
+
+// serviceWriteError turns the engine's refusal of a service update into this package's
+// errors: out of sequence is ErrServiceChanged, a service that went away ErrServiceNotFound.
+func (c *Client) serviceWriteError(op string, err error) error {
+	switch {
+	case strings.Contains(err.Error(), outOfSequence):
+		return fmt.Errorf("%s service on %s: %w", op, c.t.Describe(), ErrServiceChanged)
+	case cerrdefs.IsNotFound(err):
+		return fmt.Errorf("%s service on %s: %w", op, c.t.Describe(), ErrServiceNotFound)
+	}
+	return fmt.Errorf("%s service on %s: %w", op, c.t.Describe(), err)
+}
+
+// inspectForWrite reads one service for a write that must be judged against its version.
+func (c *Client) inspectForWrite(ctx context.Context, cli *client.Client, id string) (swarm.Service, error) {
+	res, err := cli.ServiceInspect(ctx, id, client.ServiceInspectOptions{})
+	if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return swarm.Service{}, fmt.Errorf("inspect service on %s: %w", c.t.Describe(), ErrServiceNotFound)
+		}
+		return swarm.Service{}, fmt.Errorf("inspect service on %s: %w", c.t.Describe(), err)
+	}
+	return res.Service, nil
 }
 
 // NetworkName is a swarm network's ID and name, enough to say which network a service's spec
@@ -222,7 +242,55 @@ type ResolvedImage struct {
 // ErrDigestOnly. A registry that cannot answer is an error PullFailure classifies; this never
 // falls back to the tag unpinned.
 func (c *Client) ResolveImage(ctx context.Context, image, encodedAuth string) (ResolvedImage, error) {
-	return ResolvedImage{}, nil
+	named, err := reference.ParseNormalizedNamed(image)
+	if err != nil {
+		return ResolvedImage{}, &pullError{ref: image, where: c.t.Describe(), err: cerrdefs.ErrInvalidArgument.WithMessage(err.Error())}
+	}
+	tag := "latest"
+	t, tagged := named.(reference.Tagged)
+	if tagged {
+		tag = t.Tag()
+	}
+	if _, digested := named.(reference.Digested); digested && !tagged {
+		return ResolvedImage{}, fmt.Errorf("resolve %s on %s: %w", image, c.t.Describe(), ErrDigestOnly)
+	}
+	byTag, err := reference.WithTag(reference.TrimNamed(named), tag)
+	if err != nil {
+		return ResolvedImage{}, &pullError{ref: image, where: c.t.Describe(), err: cerrdefs.ErrInvalidArgument.WithMessage(err.Error())}
+	}
+	res, err := c.DistributionInspect(ctx, byTag.String(), encodedAuth)
+	if err != nil {
+		return ResolvedImage{}, err
+	}
+	pinned, err := reference.ParseNormalizedNamed(byTag.String() + "@" + res.Digest)
+	if err != nil {
+		return ResolvedImage{}, &pullError{ref: byTag.String(), where: c.t.Describe(), err: fmt.Errorf("the registry answered the digest %q: %w", res.Digest, err)}
+	}
+	return ResolvedImage{
+		Ref: reference.FamiliarString(pinned), Tag: tag, Digest: res.Digest, Platforms: swarmPlatforms(res.Platforms),
+	}, nil
+}
+
+// swarmPlatforms turns os/arch[/variant] platforms into the os/arch ones a swarm schedules by,
+// as the docker client does for a service it creates: the architecture of arm is blanked
+// (a node reports armv7l, never arm), the variant is dropped and duplicates are dropped
+// (moby/moby#2294).
+func swarmPlatforms(platforms []string) []string {
+	var out []string
+	for _, p := range platforms {
+		parts := strings.Split(p, "/")
+		if len(parts) < 2 {
+			continue
+		}
+		arch := parts[1]
+		if strings.EqualFold(arch, "arm") {
+			arch = ""
+		}
+		if s := parts[0] + "/" + arch; !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // ForceUpdateOptions are the choices of ServiceForceUpdate.
@@ -245,6 +313,41 @@ type ForceUpdateOptions struct {
 // the spec it read, changed in those two fields only, once, with that version and
 // QueryRegistry off. It takes no spec from the caller and is never retried.
 func (c *Client) ServiceForceUpdate(ctx context.Context, id string, o ForceUpdateOptions) error {
+	cli := c.cur()
+	svc, err := c.inspectForWrite(ctx, cli, id)
+	if err != nil {
+		return err
+	}
+	if svc.Version.Index != o.Version {
+		return fmt.Errorf("force update service on %s: %w", c.t.Describe(), ErrServiceChanged)
+	}
+	spec := svc.Spec
+	spec.TaskTemplate.ForceUpdate++
+	if o.Image != "" {
+		if spec.TaskTemplate.ContainerSpec == nil {
+			return fmt.Errorf("force update service on %s: the service has no container spec to pin an image on", c.t.Describe())
+		}
+		cs := *spec.TaskTemplate.ContainerSpec
+		cs.Image = o.Image
+		spec.TaskTemplate.ContainerSpec = &cs
+	}
+	if len(o.Platforms) > 0 {
+		var pl swarm.Placement
+		if spec.TaskTemplate.Placement != nil {
+			pl = *spec.TaskTemplate.Placement
+		}
+		pl.Platforms = nil
+		for _, p := range o.Platforms {
+			osName, arch, _ := strings.Cut(p, "/")
+			pl.Platforms = append(pl.Platforms, swarm.Platform{OS: osName, Architecture: arch})
+		}
+		spec.TaskTemplate.Placement = &pl
+	}
+	if _, err := cli.ServiceUpdate(ctx, svc.ID, client.ServiceUpdateOptions{
+		Version: svc.Version, Spec: spec, EncodedRegistryAuth: o.EncodedAuth, QueryRegistry: false,
+	}); err != nil {
+		return c.serviceWriteError("force update", err)
+	}
 	return nil
 }
 
@@ -254,5 +357,31 @@ func (c *Client) ServiceForceUpdate(ctx context.Context, id string, o ForceUpdat
 // manager swaps the two). encodedAuth is the credential for the previous spec's image; when
 // it is empty the update asks the manager to take the credential from the previous spec.
 func (c *Client) ServiceRollback(ctx context.Context, id string, version uint64, encodedAuth string) error {
+	cli := c.cur()
+	svc, err := c.inspectForWrite(ctx, cli, id)
+	if err != nil {
+		return err
+	}
+	if svc.Version.Index != version {
+		return fmt.Errorf("roll back service on %s: %w", c.t.Describe(), ErrServiceChanged)
+	}
+	if svc.PreviousSpec == nil {
+		return fmt.Errorf("roll back service on %s: %w", c.t.Describe(), ErrNoPreviousSpec)
+	}
+	o := client.ServiceUpdateOptions{
+		Version: svc.Version, Spec: svc.Spec, EncodedRegistryAuth: encodedAuth, Rollback: "previous", QueryRegistry: false,
+	}
+	if encodedAuth == "" {
+		o.RegistryAuthFrom = swarm.RegistryAuthFromPreviousSpec
+	}
+	if _, err := cli.ServiceUpdate(ctx, svc.ID, o); err != nil {
+		if cerrdefs.IsInvalidArgument(err) {
+			if strings.Contains(err.Error(), "previous spec") {
+				return fmt.Errorf("roll back service on %s: %w", c.t.Describe(), ErrNoPreviousSpec)
+			}
+			return fmt.Errorf("roll back service on %s: %w", c.t.Describe(), &RollbackRefusedError{Message: err.Error()})
+		}
+		return c.serviceWriteError("roll back", err)
+	}
 	return nil
 }
