@@ -9,9 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
+import { serviceRetry } from "@/api/services";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 import {
   bareServiceDetail,
   DIGEST,
@@ -22,7 +24,6 @@ import {
   serviceDetail,
   serviceFetch,
 } from "@/test-service";
-import { makeMe } from "@/test-me";
 
 // The service page: header, alerts, tabs, and the states of loading, failing and being gone
 // (plan 06-06, RES-02, D-05, UI-SPEC "Service detail").
@@ -50,6 +51,7 @@ beforeEach(() => {
       }),
   };
   queryClient.setDefaultOptions({ queries: { retry: false, refetchOnWindowFocus: false } });
+  serviceRetry.attempts = 0;
   setCsrfToken(null);
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
@@ -62,6 +64,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   queryClient.clear();
   queryClient.setDefaultOptions(defaults);
+  serviceRetry.attempts = 1;
   document.title = "";
 });
 
@@ -76,6 +79,13 @@ function renderAt(path = PAGE) {
     </QueryClientProvider>,
   );
   return router;
+}
+
+// headerOf is the page's header, so a word the cards repeat is not counted twice.
+function headerOf(): HTMLElement {
+  const header = screen.getByRole("heading", { level: 2 }).closest("header");
+  if (!header) throw new Error("no header");
+  return header;
 }
 
 function answerWith(body: ServiceDetailBody) {
@@ -95,10 +105,10 @@ describe("the page frame", () => {
     expect(screen.getAllByText("Degraded").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("Replicated").length).toBeGreaterThanOrEqual(1);
     // The tag in mono and the short digest as a chip; the full digest is not on the line.
-    expect(screen.getByText("1.4")).toBeTruthy();
+    expect(within(headerOf()).getByText("1.4")).toBeTruthy();
     const chip = screen.getByRole("button", { name: "Copy digest" });
     expect(chip.textContent).toBe(DIGEST.slice(0, 19));
-    expect(screen.getByText(/Updated/)).toBeTruthy();
+    expect(within(headerOf()).getByText(/Updated/)).toBeTruthy();
     expect(document.title).toBe("api · Lab");
   });
 
@@ -141,7 +151,7 @@ describe("the page frame", () => {
     renderAt();
     await screen.findByRole("heading", { name: "api" });
     expect(screen.queryByRole("button", { name: "Copy digest" })).toBeNull();
-    expect(screen.getByText("1")).toBeTruthy();
+    expect(within(headerOf()).getByText("1")).toBeTruthy();
   });
 });
 

@@ -12,6 +12,8 @@ export type ServiceItem = components["schemas"]["ServiceItem"];
 export type ServiceScaleTarget = components["schemas"]["ServiceScaleTarget"];
 export type ServiceScaleResult = components["schemas"]["ServiceScaleResult"];
 export type ServiceScaleCode = NonNullable<ServiceScaleResult["code"]>;
+export type ServiceDetail = components["schemas"]["ServiceDetailBody"];
+export type ServiceInspect = components["schemas"]["ServiceInspectBody"];
 
 // The query key of an environment's services list, and of every read that extends it.
 export function servicesKey(envId: string) {
@@ -171,5 +173,78 @@ export function useScaleServices(envId: string) {
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: servicesKey(envId) });
     },
+  });
+}
+
+// ServiceLoadError is a service read the server refused or could not answer. The status and the
+// problem type tell a service that no longer exists (404 service_not_found) from every other
+// failure.
+export class ServiceLoadError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  constructor(status: number, type?: string) {
+    super(`GET service failed (${status})`);
+    this.name = "ServiceLoadError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+// isServiceGone says whether the error is the swarm answering that the service does not exist:
+// it was removed.
+export function isServiceGone(error: unknown): boolean {
+  return (
+    error instanceof ServiceLoadError && error.status === 404 && error.type === "service_not_found"
+  );
+}
+
+// How many times a failed service read is tried again. A service that does not exist is never
+// tried again. Exported so tests can set it to none.
+export const serviceRetry = { attempts: 1 };
+
+// The key of one service's detail. It extends the services list key, so the events feed and
+// every action, which refresh that key, refresh an open service page too.
+export function serviceKey(envId: string, id: string) {
+  return [...servicesKey(envId), "detail", id] as const;
+}
+
+// The settings of one service. The server has already withheld every value the caller may not
+// see.
+export function serviceQuery(envId: string, id: string) {
+  return queryOptions({
+    queryKey: serviceKey(envId, id),
+    queryFn: async () => {
+      const res = await api.GET("/api/env/{envId}/services/{serviceId}", {
+        params: { path: { envId, serviceId: id } },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new ServiceLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    retry: (count, error) => !isServiceGone(error) && count < serviceRetry.attempts,
+    refetchInterval: LIST_REFETCH_MS,
+  });
+}
+
+// The raw inspect document of one service, under the key of its detail, so the events feed and
+// every action refresh an open Inspect tab with the page. The server has already replaced every
+// value the caller may not see.
+export function serviceInspectQuery(envId: string, id: string) {
+  return queryOptions({
+    queryKey: [...serviceKey(envId, id), "inspect"] as const,
+    queryFn: async () => {
+      const res = await api.GET("/api/env/{envId}/services/{serviceId}/inspect", {
+        params: { path: { envId, serviceId: id } },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new ServiceLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    retry: (count, error) => !isServiceGone(error) && count < serviceRetry.attempts,
+    refetchInterval: LIST_REFETCH_MS,
   });
 }

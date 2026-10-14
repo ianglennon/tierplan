@@ -41,6 +41,7 @@ import { Route as AppSettingsEnvironmentsEnvIdRouteImport } from './routes/_app/
 import { Route as AppEnvEnvIdContainersContainerIdRouteImport } from './routes/_app/env/$envId/containers_.$containerId'
 import { Route as AppEnvEnvIdImagesImageIdRouteImport } from './routes/_app/env/$envId/images_.$imageId'
 import { Route as AppEnvEnvIdNetworksNetworkIdRouteImport } from './routes/_app/env/$envId/networks_.$networkId'
+import { Route as AppEnvEnvIdServicesServiceIdRouteImport } from './routes/_app/env/$envId/services_.$serviceId'
 import { Route as AppEnvEnvIdVolumesVolumeNameRouteImport } from './routes/_app/env/$envId/volumes_.$volumeName'
 import { Route as AppSettingsAccessTeamsTeamIdRouteImport } from './routes/_app/settings/access/teams_.$teamId'
 import { Route as AppSettingsAccessUsersUserIdRouteImport } from './routes/_app/settings/access/users_.$userId'
@@ -61,6 +62,8 @@ import { Route as AppEnvEnvIdImagesImageIdUsedByRouteImport } from './routes/_ap
 import { Route as AppEnvEnvIdNetworksNetworkIdIndexRouteImport } from './routes/_app/env/$envId/networks_.$networkId.index'
 import { Route as AppEnvEnvIdNetworksNetworkIdAttachmentsRouteImport } from './routes/_app/env/$envId/networks_.$networkId.attachments'
 import { Route as AppEnvEnvIdNetworksNetworkIdInspectRouteImport } from './routes/_app/env/$envId/networks_.$networkId.inspect'
+import { Route as AppEnvEnvIdServicesServiceIdIndexRouteImport } from './routes/_app/env/$envId/services_.$serviceId.index'
+import { Route as AppEnvEnvIdServicesServiceIdInspectRouteImport } from './routes/_app/env/$envId/services_.$serviceId.inspect'
 import { Route as AppEnvEnvIdVolumesVolumeNameIndexRouteImport } from './routes/_app/env/$envId/volumes_.$volumeName.index'
 import { Route as AppEnvEnvIdVolumesVolumeNameInspectRouteImport } from './routes/_app/env/$envId/volumes_.$volumeName.inspect'
 
@@ -227,6 +230,12 @@ const AppEnvEnvIdNetworksNetworkIdRoute =
     path: '/networks/$networkId',
     getParentRoute: () => AppEnvEnvIdRoute,
   } as any)
+const AppEnvEnvIdServicesServiceIdRoute =
+  AppEnvEnvIdServicesServiceIdRouteImport.update({
+    id: '/services_/$serviceId',
+    path: '/services/$serviceId',
+    getParentRoute: () => AppEnvEnvIdRoute,
+  } as any)
 const AppEnvEnvIdVolumesVolumeNameRoute =
   AppEnvEnvIdVolumesVolumeNameRouteImport.update({
     id: '/volumes_/$volumeName',
@@ -347,6 +356,18 @@ const AppEnvEnvIdNetworksNetworkIdInspectRoute =
     path: '/inspect',
     getParentRoute: () => AppEnvEnvIdNetworksNetworkIdRoute,
   } as any)
+const AppEnvEnvIdServicesServiceIdIndexRoute =
+  AppEnvEnvIdServicesServiceIdIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AppEnvEnvIdServicesServiceIdRoute,
+  } as any)
+const AppEnvEnvIdServicesServiceIdInspectRoute =
+  AppEnvEnvIdServicesServiceIdInspectRouteImport.update({
+    id: '/inspect',
+    path: '/inspect',
+    getParentRoute: () => AppEnvEnvIdServicesServiceIdRoute,
+  } as any)
 const AppEnvEnvIdVolumesVolumeNameIndexRoute =
   AppEnvEnvIdVolumesVolumeNameIndexRouteImport.update({
     id: '/',
@@ -392,6 +413,7 @@ export interface FileRoutesByFullPath {
   '/env/$envId/containers/$containerId': typeof AppEnvEnvIdContainersContainerIdRouteWithChildren
   '/env/$envId/images/$imageId': typeof AppEnvEnvIdImagesImageIdRouteWithChildren
   '/env/$envId/networks/$networkId': typeof AppEnvEnvIdNetworksNetworkIdRouteWithChildren
+  '/env/$envId/services/$serviceId': typeof AppEnvEnvIdServicesServiceIdRouteWithChildren
   '/env/$envId/volumes/$volumeName': typeof AppEnvEnvIdVolumesVolumeNameRouteWithChildren
   '/settings/access/teams/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
   '/settings/access/users/$userId': typeof AppSettingsAccessUsersUserIdRoute
@@ -409,10 +431,12 @@ export interface FileRoutesByFullPath {
   '/env/$envId/images/$imageId/used-by': typeof AppEnvEnvIdImagesImageIdUsedByRoute
   '/env/$envId/networks/$networkId/attachments': typeof AppEnvEnvIdNetworksNetworkIdAttachmentsRoute
   '/env/$envId/networks/$networkId/inspect': typeof AppEnvEnvIdNetworksNetworkIdInspectRoute
+  '/env/$envId/services/$serviceId/inspect': typeof AppEnvEnvIdServicesServiceIdInspectRoute
   '/env/$envId/volumes/$volumeName/inspect': typeof AppEnvEnvIdVolumesVolumeNameInspectRoute
   '/env/$envId/containers/$containerId/': typeof AppEnvEnvIdContainersContainerIdIndexRoute
   '/env/$envId/images/$imageId/': typeof AppEnvEnvIdImagesImageIdIndexRoute
   '/env/$envId/networks/$networkId/': typeof AppEnvEnvIdNetworksNetworkIdIndexRoute
+  '/env/$envId/services/$serviceId/': typeof AppEnvEnvIdServicesServiceIdIndexRoute
   '/env/$envId/volumes/$volumeName/': typeof AppEnvEnvIdVolumesVolumeNameIndexRoute
 }
 export interface FileRoutesByTo {
@@ -456,10 +480,12 @@ export interface FileRoutesByTo {
   '/env/$envId/images/$imageId/used-by': typeof AppEnvEnvIdImagesImageIdUsedByRoute
   '/env/$envId/networks/$networkId/attachments': typeof AppEnvEnvIdNetworksNetworkIdAttachmentsRoute
   '/env/$envId/networks/$networkId/inspect': typeof AppEnvEnvIdNetworksNetworkIdInspectRoute
+  '/env/$envId/services/$serviceId/inspect': typeof AppEnvEnvIdServicesServiceIdInspectRoute
   '/env/$envId/volumes/$volumeName/inspect': typeof AppEnvEnvIdVolumesVolumeNameInspectRoute
   '/env/$envId/containers/$containerId': typeof AppEnvEnvIdContainersContainerIdIndexRoute
   '/env/$envId/images/$imageId': typeof AppEnvEnvIdImagesImageIdIndexRoute
   '/env/$envId/networks/$networkId': typeof AppEnvEnvIdNetworksNetworkIdIndexRoute
+  '/env/$envId/services/$serviceId': typeof AppEnvEnvIdServicesServiceIdIndexRoute
   '/env/$envId/volumes/$volumeName': typeof AppEnvEnvIdVolumesVolumeNameIndexRoute
 }
 export interface FileRoutesById {
@@ -496,6 +522,7 @@ export interface FileRoutesById {
   '/_app/env/$envId/containers_/$containerId': typeof AppEnvEnvIdContainersContainerIdRouteWithChildren
   '/_app/env/$envId/images_/$imageId': typeof AppEnvEnvIdImagesImageIdRouteWithChildren
   '/_app/env/$envId/networks_/$networkId': typeof AppEnvEnvIdNetworksNetworkIdRouteWithChildren
+  '/_app/env/$envId/services_/$serviceId': typeof AppEnvEnvIdServicesServiceIdRouteWithChildren
   '/_app/env/$envId/volumes_/$volumeName': typeof AppEnvEnvIdVolumesVolumeNameRouteWithChildren
   '/_app/settings/access/teams_/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
   '/_app/settings/access/users_/$userId': typeof AppSettingsAccessUsersUserIdRoute
@@ -513,10 +540,12 @@ export interface FileRoutesById {
   '/_app/env/$envId/images_/$imageId/used-by': typeof AppEnvEnvIdImagesImageIdUsedByRoute
   '/_app/env/$envId/networks_/$networkId/attachments': typeof AppEnvEnvIdNetworksNetworkIdAttachmentsRoute
   '/_app/env/$envId/networks_/$networkId/inspect': typeof AppEnvEnvIdNetworksNetworkIdInspectRoute
+  '/_app/env/$envId/services_/$serviceId/inspect': typeof AppEnvEnvIdServicesServiceIdInspectRoute
   '/_app/env/$envId/volumes_/$volumeName/inspect': typeof AppEnvEnvIdVolumesVolumeNameInspectRoute
   '/_app/env/$envId/containers_/$containerId/': typeof AppEnvEnvIdContainersContainerIdIndexRoute
   '/_app/env/$envId/images_/$imageId/': typeof AppEnvEnvIdImagesImageIdIndexRoute
   '/_app/env/$envId/networks_/$networkId/': typeof AppEnvEnvIdNetworksNetworkIdIndexRoute
+  '/_app/env/$envId/services_/$serviceId/': typeof AppEnvEnvIdServicesServiceIdIndexRoute
   '/_app/env/$envId/volumes_/$volumeName/': typeof AppEnvEnvIdVolumesVolumeNameIndexRoute
 }
 export interface FileRouteTypes {
@@ -553,6 +582,7 @@ export interface FileRouteTypes {
     | '/env/$envId/containers/$containerId'
     | '/env/$envId/images/$imageId'
     | '/env/$envId/networks/$networkId'
+    | '/env/$envId/services/$serviceId'
     | '/env/$envId/volumes/$volumeName'
     | '/settings/access/teams/$teamId'
     | '/settings/access/users/$userId'
@@ -570,10 +600,12 @@ export interface FileRouteTypes {
     | '/env/$envId/images/$imageId/used-by'
     | '/env/$envId/networks/$networkId/attachments'
     | '/env/$envId/networks/$networkId/inspect'
+    | '/env/$envId/services/$serviceId/inspect'
     | '/env/$envId/volumes/$volumeName/inspect'
     | '/env/$envId/containers/$containerId/'
     | '/env/$envId/images/$imageId/'
     | '/env/$envId/networks/$networkId/'
+    | '/env/$envId/services/$serviceId/'
     | '/env/$envId/volumes/$volumeName/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -617,10 +649,12 @@ export interface FileRouteTypes {
     | '/env/$envId/images/$imageId/used-by'
     | '/env/$envId/networks/$networkId/attachments'
     | '/env/$envId/networks/$networkId/inspect'
+    | '/env/$envId/services/$serviceId/inspect'
     | '/env/$envId/volumes/$volumeName/inspect'
     | '/env/$envId/containers/$containerId'
     | '/env/$envId/images/$imageId'
     | '/env/$envId/networks/$networkId'
+    | '/env/$envId/services/$serviceId'
     | '/env/$envId/volumes/$volumeName'
   id:
     | '__root__'
@@ -656,6 +690,7 @@ export interface FileRouteTypes {
     | '/_app/env/$envId/containers_/$containerId'
     | '/_app/env/$envId/images_/$imageId'
     | '/_app/env/$envId/networks_/$networkId'
+    | '/_app/env/$envId/services_/$serviceId'
     | '/_app/env/$envId/volumes_/$volumeName'
     | '/_app/settings/access/teams_/$teamId'
     | '/_app/settings/access/users_/$userId'
@@ -673,10 +708,12 @@ export interface FileRouteTypes {
     | '/_app/env/$envId/images_/$imageId/used-by'
     | '/_app/env/$envId/networks_/$networkId/attachments'
     | '/_app/env/$envId/networks_/$networkId/inspect'
+    | '/_app/env/$envId/services_/$serviceId/inspect'
     | '/_app/env/$envId/volumes_/$volumeName/inspect'
     | '/_app/env/$envId/containers_/$containerId/'
     | '/_app/env/$envId/images_/$imageId/'
     | '/_app/env/$envId/networks_/$networkId/'
+    | '/_app/env/$envId/services_/$serviceId/'
     | '/_app/env/$envId/volumes_/$volumeName/'
   fileRoutesById: FileRoutesById
 }
@@ -916,6 +953,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppEnvEnvIdNetworksNetworkIdRouteImport
       parentRoute: typeof AppEnvEnvIdRoute
     }
+    '/_app/env/$envId/services_/$serviceId': {
+      id: '/_app/env/$envId/services_/$serviceId'
+      path: '/services/$serviceId'
+      fullPath: '/env/$envId/services/$serviceId'
+      preLoaderRoute: typeof AppEnvEnvIdServicesServiceIdRouteImport
+      parentRoute: typeof AppEnvEnvIdRoute
+    }
     '/_app/env/$envId/volumes_/$volumeName': {
       id: '/_app/env/$envId/volumes_/$volumeName'
       path: '/volumes/$volumeName'
@@ -1055,6 +1099,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/env/$envId/networks/$networkId/inspect'
       preLoaderRoute: typeof AppEnvEnvIdNetworksNetworkIdInspectRouteImport
       parentRoute: typeof AppEnvEnvIdNetworksNetworkIdRoute
+    }
+    '/_app/env/$envId/services_/$serviceId/': {
+      id: '/_app/env/$envId/services_/$serviceId/'
+      path: '/'
+      fullPath: '/env/$envId/services/$serviceId/'
+      preLoaderRoute: typeof AppEnvEnvIdServicesServiceIdIndexRouteImport
+      parentRoute: typeof AppEnvEnvIdServicesServiceIdRoute
+    }
+    '/_app/env/$envId/services_/$serviceId/inspect': {
+      id: '/_app/env/$envId/services_/$serviceId/inspect'
+      path: '/inspect'
+      fullPath: '/env/$envId/services/$serviceId/inspect'
+      preLoaderRoute: typeof AppEnvEnvIdServicesServiceIdInspectRouteImport
+      parentRoute: typeof AppEnvEnvIdServicesServiceIdRoute
     }
     '/_app/env/$envId/volumes_/$volumeName/': {
       id: '/_app/env/$envId/volumes_/$volumeName/'
@@ -1205,6 +1263,24 @@ const AppEnvEnvIdNetworksNetworkIdRouteWithChildren =
     AppEnvEnvIdNetworksNetworkIdRouteChildren,
   )
 
+interface AppEnvEnvIdServicesServiceIdRouteChildren {
+  AppEnvEnvIdServicesServiceIdInspectRoute: typeof AppEnvEnvIdServicesServiceIdInspectRoute
+  AppEnvEnvIdServicesServiceIdIndexRoute: typeof AppEnvEnvIdServicesServiceIdIndexRoute
+}
+
+const AppEnvEnvIdServicesServiceIdRouteChildren: AppEnvEnvIdServicesServiceIdRouteChildren =
+  {
+    AppEnvEnvIdServicesServiceIdInspectRoute:
+      AppEnvEnvIdServicesServiceIdInspectRoute,
+    AppEnvEnvIdServicesServiceIdIndexRoute:
+      AppEnvEnvIdServicesServiceIdIndexRoute,
+  }
+
+const AppEnvEnvIdServicesServiceIdRouteWithChildren =
+  AppEnvEnvIdServicesServiceIdRoute._addFileChildren(
+    AppEnvEnvIdServicesServiceIdRouteChildren,
+  )
+
 interface AppEnvEnvIdVolumesVolumeNameRouteChildren {
   AppEnvEnvIdVolumesVolumeNameInspectRoute: typeof AppEnvEnvIdVolumesVolumeNameInspectRoute
   AppEnvEnvIdVolumesVolumeNameIndexRoute: typeof AppEnvEnvIdVolumesVolumeNameIndexRoute
@@ -1234,6 +1310,7 @@ interface AppEnvEnvIdRouteChildren {
   AppEnvEnvIdContainersContainerIdRoute: typeof AppEnvEnvIdContainersContainerIdRouteWithChildren
   AppEnvEnvIdImagesImageIdRoute: typeof AppEnvEnvIdImagesImageIdRouteWithChildren
   AppEnvEnvIdNetworksNetworkIdRoute: typeof AppEnvEnvIdNetworksNetworkIdRouteWithChildren
+  AppEnvEnvIdServicesServiceIdRoute: typeof AppEnvEnvIdServicesServiceIdRouteWithChildren
   AppEnvEnvIdVolumesVolumeNameRoute: typeof AppEnvEnvIdVolumesVolumeNameRouteWithChildren
 }
 
@@ -1250,6 +1327,8 @@ const AppEnvEnvIdRouteChildren: AppEnvEnvIdRouteChildren = {
   AppEnvEnvIdImagesImageIdRoute: AppEnvEnvIdImagesImageIdRouteWithChildren,
   AppEnvEnvIdNetworksNetworkIdRoute:
     AppEnvEnvIdNetworksNetworkIdRouteWithChildren,
+  AppEnvEnvIdServicesServiceIdRoute:
+    AppEnvEnvIdServicesServiceIdRouteWithChildren,
   AppEnvEnvIdVolumesVolumeNameRoute:
     AppEnvEnvIdVolumesVolumeNameRouteWithChildren,
 }

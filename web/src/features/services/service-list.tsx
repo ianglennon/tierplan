@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { ChevronsDownUp, ChevronsUpDown, Ellipsis, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
@@ -99,8 +100,8 @@ interface RowActionsProps {
   onOpenChange: (open: boolean) => void;
 }
 
-// RowActions is the row menu of the services list. Open is there but off until the service's
-// page exists; Scale… is for replicated services only, and a caller below Operator sees it
+// RowActions is the row menu of the services list. Open goes to the service's page; Scale… is
+// for replicated services only, and a caller below Operator sees it
 // disabled with the reason (D-19). The server decides either way.
 function RowActions({ envId, service, onScale, disabled, onOpenChange }: RowActionsProps) {
   const t = useT();
@@ -131,8 +132,10 @@ function RowActions({ envId, service, onScale, disabled, onOpenChange }: RowActi
           event.preventDefault();
         }}
       >
-        <DropdownMenuItem disabled className="max-md:min-h-11">
-          {t("actions.menu.open")}
+        <DropdownMenuItem asChild className="max-md:min-h-11">
+          <Link to="/env/$envId/services/$serviceId" params={{ envId, serviceId: service.id }}>
+            {t("actions.menu.open")}
+          </Link>
         </DropdownMenuItem>
         {canScale ? (
           <>
@@ -493,7 +496,13 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
       sortKey: "name",
       cell: (s) => (
         <span className="flex items-center gap-2">
-          <TruncatedText className="min-w-0">{s.name}</TruncatedText>
+          <Link
+            to="/env/$envId/services/$serviceId"
+            params={{ envId, serviceId: s.id }}
+            className="min-w-0 rounded-sm text-accent-ink hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            <TruncatedText>{s.name}</TruncatedText>
+          </Link>
           {s.agent ? <SelfContainerBadge kind="agent-service" /> : null}
         </span>
       ),

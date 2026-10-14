@@ -9,9 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
+import { serviceRetry } from "@/api/services";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 import {
   bareServiceDetail,
   DIGEST,
@@ -22,7 +24,6 @@ import {
   serviceDetail,
   serviceFetch,
 } from "@/test-service";
-import { makeMe } from "@/test-me";
 
 // The Overview tab of a service (plan 06-06, RES-02, D-39, UI-SPEC "Service detail" and the E2
 // states).
@@ -41,6 +42,7 @@ beforeEach(() => {
     scale: () => Response.json({ results: [] }),
   };
   queryClient.setDefaultOptions({ queries: { retry: false, refetchOnWindowFocus: false } });
+  serviceRetry.attempts = 0;
   setCsrfToken(null);
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
@@ -53,6 +55,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   queryClient.clear();
   queryClient.setDefaultOptions(defaults);
+  serviceRetry.attempts = 1;
 });
 
 async function overview(body: ServiceDetailBody = serviceDetail()) {
@@ -151,7 +154,8 @@ describe("the Overview cards", () => {
     await overview();
     const c = within(card("Secrets and configs"));
     expect(c.getByText("Secret")).toBeTruthy();
-    expect(c.getByText("db_pw", { selector: "td" })).toBeTruthy();
+    expect(c.getByText("db_pw")).toBeTruthy();
+    expect(c.getByText("db_pw.txt")).toBeTruthy();
     expect(c.getByText("Config")).toBeTruthy();
     expect(c.getByText("app_conf")).toBeTruthy();
     expect(c.getByText("/etc/app.conf")).toBeTruthy();

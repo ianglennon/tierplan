@@ -36,7 +36,7 @@ export function serviceDetail(extra: Partial<ServiceDetailBody> = {}): ServiceDe
       { type: "volume", source: "api-data", target: "/data", readOnly: false },
       { type: "bind", source: "/srv/conf", target: "/etc/conf", readOnly: true },
     ],
-    secrets: [{ id: "sec1", name: "db_pw", file: "db_pw", uid: "0", gid: "0", mode: "0444" }],
+    secrets: [{ id: "sec1", name: "db_pw", file: "db_pw.txt", uid: "0", gid: "0", mode: "0444" }],
     configs: [
       {
         id: "cfg1",
