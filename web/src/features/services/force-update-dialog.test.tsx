@@ -199,8 +199,8 @@ describe("ForceUpdateDialog", () => {
     answer = () => problem(status, type);
     mount();
     fireEvent.click(confirm());
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toMatch(words);
+    // The environment's name arrives from its own request, so the words are waited for.
+    const alert = await screen.findByText(words);
     expect(alert.textContent).not.toContain(type);
     expect(screen.getByRole("dialog", { name: "Force update web?" })).toBeTruthy();
   });

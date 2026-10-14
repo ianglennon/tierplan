@@ -40,7 +40,9 @@
         "body": "Swarm changes are off until a manager node's agent reconnects. You can still look at what Bayplan last saw."
       },
       "menu": {
-        "scale": "Scale…"
+        "scale": "Scale…",
+        "forceUpdate": "Force update…",
+        "rollback": "Roll back…"
       },
       "caption": {
         "filtered_one": "{{n, number}} of {{count, number}} service",
@@ -152,6 +154,49 @@
     },
     "problems": {
       "agent_host_policy": "This swarm's manager agents don't let Bayplan change services with host access. Set BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true on them to allow it."
+    },
+    "forceUpdate": {
+      "title": "Force update {{name}}?",
+      "body": "Swarm replaces every task, a batch at a time, using the service's update settings. Bayplan looks up the image again, so a tag that has moved is picked up.",
+      "cancel": "Cancel",
+      "submit": "Force update",
+      "pending": "Updating…",
+      "done": "Started a forced update of {{name}}.",
+      "stackWarning": "{{name}} belongs to stack {{stack}}. The next stack deploy applies the compose file again.",
+      "retry": {
+        "title": "Retry the update on {{name}}?",
+        "body": "Swarm tries the update again with the service's current settings.",
+        "submit": "Retry update",
+        "done": "Retrying the update on {{name}}."
+      }
+    },
+    "rollback": {
+      "title": "Roll back {{name}}?",
+      "body": "The service goes back to the settings it had before its last update. Swarm rolls tasks back a batch at a time.",
+      "cancel": "Cancel",
+      "submit": "Roll back service",
+      "pending": "Rolling back…",
+      "done": "Rolling back {{name}}.",
+      "stackWarning": "The next stack deploy applies the compose file again.",
+      "noEarlier": "There's no earlier version to roll back to.",
+      "loading": "Loading the earlier version…",
+      "loadFailed": "Couldn't load the earlier version.",
+      "now": "Now",
+      "after": "After rollback"
+    },
+    "refusal": {
+      "image_unresolved": "Couldn't look up {{ref}} on {{host}} to pin it to a digest. Check the name, the tag and the credential, then try again.",
+      "service_changed": "This service was changed by someone else after you looked. Nothing was changed. Close this and open it again to see what it runs now.",
+      "service_not_found": "This service is gone. It was removed, or a stack deploy replaced it.",
+      "no_manager_connected": "No manager is connected for {{environment}}, so this swarm can't be changed right now. Reconnect a manager's agent and try again.",
+      "no_quorum": "The swarm has lost its quorum, so it can't be changed right now. Bring its managers back and try again.",
+      "registry_unresolved": "Bayplan couldn't read the registry credential for this service's image, so nothing was sent. Check the credential under Registries, then try again.",
+      "permission": "You no longer have permission to do that. Your access may have changed.",
+      "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening.",
+      "rollback_object_missing": "Can't roll back: {{object}} no longer exists. Create it again or edit the service instead.",
+      "rollback_object_unnamed": "something the earlier version uses",
+      "rejectedUpdate": "Docker rejected the update: {{message}}",
+      "rejectedRollback": "Docker rejected the rollback: {{message}}"
     }
   }
 }

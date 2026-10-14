@@ -14,6 +14,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ForceUpdateDialog } from "@/features/services/force-update-dialog";
+import { RollbackDialog } from "@/features/services/rollback-dialog";
+import { RollbackMenuItem } from "@/features/services/rollback-menu-item";
 import { ScaleDialog } from "@/features/services/scale-dialog";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -50,12 +53,16 @@ interface ServiceHeaderActionsProps {
 }
 
 // ServiceHeaderActions are the buttons in a service page's header: Scale… (not for a global
-// service or a job) and More. A caller below Operator sees Scale… unavailable with the reason;
-// the server decides either way. Later plans add Edit…, Force update… and Roll back… here.
+// service or a job), Force update… and More, which holds Roll back…. A caller below Operator sees
+// them unavailable with the reason; the server decides either way. All three stay available on a
+// service that belongs to a stack, with the stack's warning in their dialogs (D-05). A later plan
+// adds Edit… here.
 export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProps) {
   const t = useT();
   const needs = useNeeds("services.control", envId);
   const [scaling, setScaling] = useState(false);
+  const [forcing, setForcing] = useState(false);
+  const [rollingBack, setRollingBack] = useState(false);
   const host = useRef<HTMLDivElement>(null);
 
   async function copyId() {
@@ -80,6 +87,16 @@ export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProp
           </Button>
         </NeedsTooltip>
       ) : null}
+      <NeedsTooltip reason={needs.reason}>
+        <Button
+          type="button"
+          variant="outline"
+          className="max-md:h-11"
+          onClick={needs.allowed ? () => setForcing(true) : undefined}
+        >
+          {t("servicedetail.actions.forceUpdate")}
+        </Button>
+      </NeedsTooltip>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
@@ -93,11 +110,32 @@ export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProp
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
+          <RollbackMenuItem
+            hasPreviousSpec={detail.hasPreviousSpec}
+            needs={needs}
+            onSelect={() => setRollingBack(true)}
+          />
           <DropdownMenuItem className="max-md:min-h-11" onSelect={() => void copyId()}>
             {t("servicedetail.actions.copyId")}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      {needs.allowed ? (
+        <>
+          <ForceUpdateDialog
+            envId={envId}
+            target={itemOf(detail)}
+            open={forcing}
+            onOpenChange={setForcing}
+          />
+          <RollbackDialog
+            envId={envId}
+            target={itemOf(detail)}
+            open={rollingBack}
+            onOpenChange={setRollingBack}
+          />
+        </>
+      ) : null}
       {needs.allowed && canScale(detail) ? (
         <ScaleDialog
           envId={envId}

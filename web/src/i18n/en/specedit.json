@@ -1,0 +1,77 @@
+{
+  "specEditor": {
+    "diff": {
+      "caption": "Changes to {{name}}",
+      "columns": {
+        "change": "Change",
+        "setting": "Setting",
+        "current": "Current",
+        "next": "New"
+      },
+      "change": {
+        "added": "Added",
+        "changed": "Changed",
+        "removed": "Removed"
+      },
+      "hidden": "••••",
+      "replaced": "Hidden value replaced",
+      "absent": "—",
+      "absentLabel": "Not set",
+      "empty": "(empty)",
+      "none": {
+        "title": "No changes",
+        "body": "The spec is the same as the current one. There's nothing to apply."
+      }
+    },
+    "groups": {
+      "basics": "Basics",
+      "environment": "Environment",
+      "ports": "Ports",
+      "secrets": "Secrets",
+      "configs": "Configs",
+      "networks": "Networks",
+      "mounts": "Mounts",
+      "resources": "Resources",
+      "placement": "Placement",
+      "restartPolicy": "Restart policy",
+      "updatePolicy": "Update policy",
+      "other": "Other settings"
+    },
+    "kinds": {
+      "Env": "Environment variable {{key}}",
+      "Mounts": "Mount {{key}}",
+      "Ports": "Port {{key}}",
+      "Secrets": "Secret {{key}}",
+      "Configs": "Config {{key}}",
+      "Networks": "Network {{key}}"
+    },
+    "labels": {
+      "Name": "Name",
+      "Mode": "Mode",
+      "Mode/Replicated/Replicas": "Replicas",
+      "TaskTemplate/ContainerSpec/Image": "Image",
+      "TaskTemplate/ContainerSpec/Command": "Command",
+      "TaskTemplate/ContainerSpec/Args": "Arguments",
+      "TaskTemplate/ContainerSpec/Healthcheck/Test": "Health check command",
+      "TaskTemplate/ForceUpdate": "Forced updates",
+      "TaskTemplate/Resources/Limits/NanoCPUs": "CPU limit (billionths of a core)",
+      "TaskTemplate/Resources/Limits/MemoryBytes": "Memory limit (bytes)",
+      "TaskTemplate/Resources/Reservations/NanoCPUs": "CPU reservation (billionths of a core)",
+      "TaskTemplate/Resources/Reservations/MemoryBytes": "Memory reservation (bytes)",
+      "TaskTemplate/Placement/Constraints": "Placement constraint",
+      "TaskTemplate/Placement/MaxReplicas": "Most tasks on one node",
+      "TaskTemplate/RestartPolicy/Condition": "Restart when",
+      "TaskTemplate/RestartPolicy/Delay": "Delay between restarts",
+      "TaskTemplate/RestartPolicy/MaxAttempts": "Most restart attempts",
+      "TaskTemplate/RestartPolicy/Window": "Restart window",
+      "TaskTemplate/LogDriver/Name": "Log driver",
+      "UpdateConfig/Parallelism": "Tasks at a time",
+      "UpdateConfig/Delay": "Delay between batches",
+      "UpdateConfig/Order": "Order",
+      "UpdateConfig/FailureAction": "On failure",
+      "UpdateConfig/Monitor": "Monitor",
+      "UpdateConfig/MaxFailureRatio": "Max failure ratio",
+      "EndpointSpec/Mode": "Endpoint mode"
+    }
+  }
+}

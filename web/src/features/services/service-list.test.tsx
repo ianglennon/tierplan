@@ -285,7 +285,7 @@ describe("the row menu's Force update… and Roll back…", () => {
       "Open",
       "Scale…",
       "Force update…",
-      "Roll back… There's no earlier version to roll back to.",
+      "Roll back…There's no earlier version to roll back to.",
     ]);
     cleanup();
     mount();
