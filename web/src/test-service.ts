@@ -104,6 +104,20 @@ export function bareServiceDetail(extra: Partial<ServiceDetailBody> = {}): Servi
   });
 }
 
+export type ServiceRolloutBody = components["schemas"]["RolloutBody"];
+
+// A rollout answer: no update, unless a test says otherwise.
+export function rollout(extra: Partial<ServiceRolloutBody> = {}): ServiceRolloutBody {
+  return {
+    state: "none",
+    message: "",
+    updated: 0,
+    total: 0,
+    latestTaskError: "",
+    ...extra,
+  };
+}
+
 export interface Sent {
   method: string;
   path: string;
@@ -121,6 +135,9 @@ export interface ServiceApiState {
   // The service's spec and the force update and rollback writes. A test that does not use them
   // leaves them out, and the routes answer 404.
   spec?: () => Response | Promise<Response>;
+  // How far the service's rolling update has got. A test that does not read it leaves it out, and
+  // the route answers 404.
+  rollout?: () => Response | Promise<Response>;
   forceUpdate?: () => Response | Promise<Response>;
   rollback?: () => Response | Promise<Response>;
 }
@@ -195,6 +212,8 @@ export function serviceFetch(state: ServiceApiState) {
         return state.inspect();
       case `${base}/services/${SERVICE_ID}/tasks`:
         return state.tasks ? state.tasks() : new Response(null, { status: 404 });
+      case `${base}/services/${SERVICE_ID}/rollout`:
+        return state.rollout ? state.rollout() : new Response(null, { status: 404 });
       case `${base}/services/${SERVICE_ID}/spec`:
         return state.spec ? state.spec() : new Response(null, { status: 404 });
       case `${base}/services/${SERVICE_ID}/force-update`:
