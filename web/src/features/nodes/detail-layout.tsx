@@ -4,6 +4,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet } from "@tanstack/react-router";
 import { Crown, Lock, Server } from "lucide-react";
+import { useMemo } from "react";
 
 import { isNodeGone, type NodeDetail, nodeQuery } from "@/api/nodes";
 import { StatusDot } from "@/components/status-dot";
@@ -22,6 +23,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { nodeStateKey, nodeTone } from "@/features/nodes/node-facts";
+import { NodeHeaderActions, useNodeActions } from "@/features/nodes/row-actions";
 import { NODE_TABS } from "@/features/nodes/tabs";
 import { useDocumentTitle } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -135,12 +137,14 @@ function Header({ data }: { data: NodeDetail }) {
 // NodeDetailLayout is the frame of a node's page: the breadcrumb Nodes / name, the header with the
 // host name, the status and the badges, the tab bar (Link triggers, the active tab follows the URL)
 // and the tab under it. The tabs render at once, before the node has loaded. A node that leaves
-// the swarm while its page is open turns the page into the gone state. The node's actions come
-// with a later plan, in the header.
+// the swarm while its page is open turns the page into the gone state. The header carries the
+// node's availability and role changes.
 export function NodeDetailLayout({ envId, nodeId }: NodeDetailLayoutProps) {
   const t = useT();
   const query = useQuery(nodeQuery(envId, nodeId));
   const { data } = query;
+  const rows = useMemo(() => (data ? [data] : undefined), [data]);
+  const actions = useNodeActions(envId, rows);
   const gone = isNodeGone(query.error);
   useDocumentTitle(gone ? t("nodes.detail.gone.heading") : data?.hostname);
 
@@ -175,7 +179,10 @@ export function NodeDetailLayout({ envId, nodeId }: NodeDetailLayoutProps) {
     <div className="flex flex-col gap-6">
       <header className="flex flex-col gap-2">
         <Breadcrumb envId={envId} name={data?.hostname} />
-        {data ? <Header data={data} /> : <Skeleton className="h-8 w-64" />}
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          {data ? <Header data={data} /> : <Skeleton className="h-8 w-64" />}
+          {data ? <NodeHeaderActions envId={envId} node={data} actions={actions} /> : null}
+        </div>
       </header>
       <Tabs value="" className="gap-4">
         <TabsList
@@ -213,6 +220,7 @@ export function NodeDetailLayout({ envId, nodeId }: NodeDetailLayoutProps) {
           <Skeleton className="h-64 w-full" />
         </div>
       )}
+      {actions.dialog}
     </div>
   );
 }

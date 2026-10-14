@@ -29,6 +29,12 @@ import {
   sortNodes,
 } from "@/features/nodes/node-search";
 import {
+  type NodeAction,
+  type NodeActions,
+  NodeRowActions,
+  useNodeActions,
+} from "@/features/nodes/row-actions";
+import {
   type Column,
   type ListQuery,
   ResourceTable,
@@ -52,8 +58,20 @@ const rowKeyOf = (n: NodeItem) => n.id;
 
 type Translate = ReturnType<typeof useT>;
 
-function AvailabilityCell({ node, tasksKnown }: { node: NodeItem; tasksKnown: boolean }) {
+function AvailabilityCell({
+  node,
+  tasksKnown,
+  pending,
+}: {
+  node: NodeItem;
+  tasksKnown: boolean;
+  pending?: NodeAction;
+}) {
   const t = useT();
+  // A change the swarm has accepted reads in its pulsing word until the list shows it.
+  if (pending === "drain" || pending === "pause" || pending === "activate") {
+    return <StatusDot state="reconnecting" label={t(`nodes.pending.${pending}`)} />;
+  }
   if (node.availability === "pause") {
     return <StatusDot state="degraded" label={t("nodes.availability.pause")} />;
   }
@@ -70,8 +88,11 @@ function AvailabilityCell({ node, tasksKnown }: { node: NodeItem; tasksKnown: bo
   return <span>{t("nodes.availability.active")}</span>;
 }
 
-function RoleCell({ node }: { node: NodeItem }) {
+function RoleCell({ node, pending }: { node: NodeItem; pending?: NodeAction }) {
   const t = useT();
+  if (pending === "promote" || pending === "demote") {
+    return <StatusDot state="reconnecting" label={t(`nodes.pending.${pending}`)} />;
+  }
   return (
     <span className="flex items-center gap-2">
       <span>{node.role === "manager" ? t("nodes.role.manager") : t("nodes.role.worker")}</span>
@@ -111,6 +132,8 @@ function columnsOf(
   t: Translate,
   tasksKnown: boolean,
   missing: string,
+  actions: NodeActions,
+  noManager: boolean,
 ): Column<NodeItem>[] {
   return [
     {
@@ -155,14 +178,16 @@ function columnsOf(
       id: "availability",
       header: t("nodes.list.columns.availability"),
       className: "w-48 min-w-48",
-      cell: (n) => <AvailabilityCell node={n} tasksKnown={tasksKnown} />,
+      cell: (n) => (
+        <AvailabilityCell node={n} tasksKnown={tasksKnown} pending={actions.pending.get(n.id)} />
+      ),
     },
     {
       id: "role",
       header: t("nodes.list.columns.role"),
       className: "w-44 min-w-44",
       sortKey: "role",
-      cell: (n) => <RoleCell node={n} />,
+      cell: (n) => <RoleCell node={n} pending={actions.pending.get(n.id)} />,
     },
     {
       id: "address",
@@ -212,6 +237,14 @@ function columnsOf(
           <StatusDot state="unknown" label={t("nodes.agent.notReporting")} />
         ),
     },
+    {
+      id: "actions",
+      header: <span className="sr-only">{t("actions.column")}</span>,
+      className: "w-11 px-1 text-end",
+      cell: (n) => (
+        <NodeRowActions envId={envId} node={n} actions={actions} noManager={noManager} />
+      ),
+    },
   ];
 }
 
@@ -229,6 +262,7 @@ export function NodeList({ envId, search, onSearchChange }: NodeListProps) {
     enabled: allowed,
   });
   const data = query.data;
+  const actions = useNodeActions(envId, data?.items ?? undefined);
   const envName = useEnvName(envId);
   const missing = t("dashboard.time.missing");
   const tasksKnown = data?.tasksKnown ?? true;
@@ -344,19 +378,22 @@ export function NodeList({ envId, search, onSearchChange }: NodeListProps) {
   if (!allowed) return <NoPermission />;
   if (isNotASwarm(query.error)) return <NotASwarm envId={envId} envName={envName} />;
   return (
-    <ResourceTable
-      resource="nodes"
-      i18nKey="nodes.list"
-      columns={columnsOf(envId, t, tasksKnown, missing)}
-      query={listQuery}
-      envName={envName}
-      banner={banner}
-      toolbar={toolbar}
-      caption={caption}
-      empty={empty}
-      retryLabel={t("nodes.list.errorRetry")}
-      sort={{ key: sortKey, dir: sortDir, onSort }}
-      getRowKey={rowKeyOf}
-    />
+    <>
+      <ResourceTable
+        resource="nodes"
+        i18nKey="nodes.list"
+        columns={columnsOf(envId, t, tasksKnown, missing, actions, data?.noManager === true)}
+        query={listQuery}
+        envName={envName}
+        banner={banner}
+        toolbar={toolbar}
+        caption={caption}
+        empty={empty}
+        retryLabel={t("nodes.list.errorRetry")}
+        sort={{ key: sortKey, dir: sortDir, onSort }}
+        getRowKey={rowKeyOf}
+      />
+      {actions.dialog}
+    </>
   );
 }

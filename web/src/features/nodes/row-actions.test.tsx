@@ -362,8 +362,8 @@ describe("the node row menu", () => {
     expect(drain.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(drain);
     expect(
-      await screen.findByText("No manager is connected, so swarm changes are off."),
-    ).toBeTruthy();
+      (await screen.findAllByText("No manager is connected, so swarm changes are off.")).length,
+    ).toBeGreaterThan(0);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
