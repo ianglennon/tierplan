@@ -8,8 +8,11 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -28,6 +31,8 @@ const (
 	problemNotASwarm       = "not_a_swarm"
 	problemReplicasInvalid = "replicas_invalid"
 	problemDuplicateTarget = "duplicate_target"
+	problemStatusInvalid   = "status_invalid"
+	problemQueryTooLong    = "query_too_long"
 
 	// The codes of one target of a scale, beside the ones containers share.
 	codeNotScalable        = "not_scalable"
@@ -39,6 +44,14 @@ const (
 	codeRegistryUnresolved = "registry_unresolved"
 	codeScaleFailed        = "scale_failed"
 	codeUnchanged          = "unchanged"
+
+	// maxServiceQuery is the longest search the services list takes, in characters.
+	maxServiceQuery = 128
+
+	// The values of the services list's status filter (UI-SPEC "Services list" chips).
+	serviceStatusDegraded = "degraded"
+	serviceStatusUpdating = "updating"
+	serviceStatusProblem  = "problem"
 
 	// maxReplicas is the most replicas a scale may ask for.
 	maxReplicas = 1000
@@ -74,15 +87,37 @@ type ServiceItem struct {
 	Stack       string `json:"stack" doc:"The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own"`
 	Agent       bool   `json:"agent" doc:"True for a Bayplan agent service"`
 	UpdatedAt   string `json:"updatedAt" format:"date-time" doc:"When the service's spec last changed"`
+
+	Ports           []string `json:"ports" doc:"The ports the service publishes, as published->target/protocol (8080->80/tcp), with (host) after a port published in host mode; sorted by published port. Empty when it publishes none"`
+	UpdateMessage   string   `json:"updateMessage" doc:"The swarm's message about the last update; empty when it has none"`
+	HasPreviousSpec bool     `json:"hasPreviousSpec" doc:"True when the swarm still holds the spec before the last update, so a rollback has something to go back to"`
+	CreatedAt       string   `json:"createdAt" format:"date-time" doc:"When the service was created"`
+}
+
+// ServiceStatusCountsBody is how many services each status chip of the list counts. A
+// service that is both degraded and updating is in both.
+type ServiceStatusCountsBody struct {
+	Degraded int `json:"degraded" doc:"Services with some but not all of their tasks running"`
+	Updating int `json:"updating" doc:"Services whose update or rollback is in progress (updating, rollback_started)"`
+	Problem  int `json:"problem" doc:"Services whose update or rollback stopped or went wrong (paused, rollback_paused, rollback_completed)"`
 }
 
 // ServiceListBody is the answer of the services list.
 type ServiceListBody struct {
-	Items     []ServiceItem `json:"items" doc:"At most 500 rows, sorted by name then ID"`
-	Total     int           `json:"total" doc:"How many services there are, whatever the cap"`
-	Truncated bool          `json:"truncated" doc:"True when total is more than the rows returned"`
-	NoManager bool          `json:"noManager" doc:"True when no manager of the swarm is connected: the rows are the last ones read, or none"`
-	FetchedAt string        `json:"fetchedAt" format:"date-time" doc:"When the rows were read from a manager; empty when none were"`
+	Items           []ServiceItem           `json:"items" doc:"At most 500 rows that match the search and the status filter, sorted by name then ID"`
+	Total           int                     `json:"total" doc:"How many services match the search and the status filter, whatever the cap"`
+	UnfilteredTotal int                     `json:"unfilteredTotal" doc:"How many services there are before the search and the status filter, so a page can say 3 of 600"`
+	Capped          bool                    `json:"capped" doc:"True when total is more than the rows returned"`
+	StatusCounts    ServiceStatusCountsBody `json:"statusCounts" doc:"How many services each status chip counts, before the search and the status filter, so the numbers never shrink with what was typed"`
+	NoManager       bool                    `json:"noManager" doc:"True when no manager of the swarm is connected: the rows are the last ones read, or none"`
+	FetchedAt       string                  `json:"fetchedAt" format:"date-time" doc:"When the rows were read from a manager; empty when none were"`
+}
+
+// ServicesListInput is the path of the services list with its search and status filter.
+type ServicesListInput struct {
+	EnvironmentPathInput
+	Q      string `query:"q" doc:"Search: a case-insensitive substring of the service name, image, stack or any label key or value, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap"`
+	Status string `query:"status" maxLength:"64" doc:"Only services in one of these statuses, comma separated: degraded (some but not all tasks running), updating (updating, rollback_started) or problem (paused, rollback_paused, rollback_completed). Applied before the 500-row cap; any other value is refused 422 status_invalid"`
 }
 
 // ServiceListOutput wraps ServiceListBody for huma.
@@ -145,16 +180,18 @@ func RegisterServices(r *httpx.Router, d ServicesDeps) {
 		Summary: "List the swarm services of an environment",
 		Description: "The services of a swarm environment with their mode, running and desired task counts, image, stack and last update, " +
 			"read through a manager's agent or through the local socket of a swarm manager, at most 500 rows sorted by name then ID. " +
+			"Optionally a search (q) and a status filter (status: degraded, updating, problem). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. " +
+			"Each row has its published ports, the update message, whether a rollback has a spec to go back to and its creation time. " +
 			"409 not_a_swarm when the environment is a standalone host. When no manager is connected the answer is 200 with noManager true and the rows last read, or none. " +
 			"Needs services.read (Viewer) on the environment.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermServicesRead, Scope: rbac.ScopeEnvironment},
-		func(ctx context.Context, _ *EnvironmentPathInput) (*ServiceListOutput, error) {
+		func(ctx context.Context, in *ServicesListInput) (*ServiceListOutput, error) {
 			env := httpx.EnvFrom(ctx)
 			if env == nil {
 				return nil, huma.Error500InternalServerError("internal error")
 			}
-			body, err := listServices(ctx, d, env.ID)
+			body, err := listServices(ctx, d, env.ID, in)
 			if err != nil {
 				return nil, err
 			}
@@ -201,8 +238,126 @@ func requireSwarm(ctx context.Context, d ServicesDeps, envID string) error {
 	return nil
 }
 
+// serviceStatuses are the values status= takes.
+var serviceStatuses = []string{serviceStatusDegraded, serviceStatusUpdating, serviceStatusProblem}
+
+// parseServiceStatuses reads the comma list of status=. An empty list means no filter and
+// an unknown value is a 422.
+func parseServiceStatuses(raw string) ([]string, error) {
+	var out []string
+	for part := range strings.SplitSeq(raw, ",") {
+		part = strings.ToLower(strings.TrimSpace(part))
+		if part == "" {
+			continue
+		}
+		if !slices.Contains(serviceStatuses, part) {
+			return nil, httpx.Problem(http.StatusUnprocessableEntity, problemStatusInvalid,
+				"status "+strconv.Quote(part)+" is not one of "+strings.Join(serviceStatuses, ", ")+".")
+		}
+		if !slices.Contains(out, part) {
+			out = append(out, part)
+		}
+	}
+	return out, nil
+}
+
+// serviceHasStatus says whether a row counts under one status value. Degraded is some
+// tasks running and not all of them: a service with none running is not running, not
+// degraded, and a job (which wants 0) never is.
+func serviceHasStatus(row dockerx.ServiceRow, status string) bool {
+	switch status {
+	case serviceStatusDegraded:
+		return row.Running > 0 && row.Running < row.Desired
+	case serviceStatusUpdating:
+		return row.UpdateState == "updating" || row.UpdateState == "rollback_started"
+	case serviceStatusProblem:
+		return row.UpdateState == "paused" || row.UpdateState == "rollback_paused" || row.UpdateState == "rollback_completed"
+	}
+	return false
+}
+
+// serviceStatusCounts counts the rows by status. It is called on every row, before the
+// search and the status filter, so the numbers on the chips never shrink with what the
+// caller typed.
+func serviceStatusCounts(rows []dockerx.ServiceRow) ServiceStatusCountsBody {
+	var c ServiceStatusCountsBody
+	for _, r := range rows {
+		if serviceHasStatus(r, serviceStatusDegraded) {
+			c.Degraded++
+		}
+		if serviceHasStatus(r, serviceStatusUpdating) {
+			c.Updating++
+		}
+		if serviceHasStatus(r, serviceStatusProblem) {
+			c.Problem++
+		}
+	}
+	return c
+}
+
+// serviceMatchesQuery says whether q (already lower-cased) occurs in the name, the image,
+// the stack or any label key or value of the row. The match is a case-insensitive
+// substring. An empty q matches every row. The labels are read here and go no further
+// (T-06-13).
+func serviceMatchesQuery(row dockerx.ServiceRow, q string) bool {
+	if q == "" {
+		return true
+	}
+	has := func(s string) bool { return strings.Contains(strings.ToLower(s), q) }
+	if has(row.Name) || has(row.Image) || has(row.Stack) {
+		return true
+	}
+	for k, v := range row.Labels {
+		if has(k) || has(v) {
+			return true
+		}
+	}
+	return false
+}
+
+// filterServices keeps the rows that match q and any of statuses, in their order. It runs
+// before the row cap, so the cap applies to what the caller asked for.
+func filterServices(rows []dockerx.ServiceRow, q string, statuses []string) []dockerx.ServiceRow {
+	if q == "" && len(statuses) == 0 {
+		return rows
+	}
+	out := make([]dockerx.ServiceRow, 0, len(rows))
+	for _, r := range rows {
+		if !serviceMatchesQuery(r, q) {
+			continue
+		}
+		if len(statuses) > 0 && !slices.ContainsFunc(statuses, func(s string) bool { return serviceHasStatus(r, s) }) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// servicePortStrings writes a row's ports as the list shows them: 8080->80/tcp, with
+// (host) after a port published in host mode.
+func servicePortStrings(ports []dockerx.ServicePort) []string {
+	out := make([]string, 0, len(ports))
+	for _, p := range ports {
+		text := strconv.FormatUint(uint64(p.Published), 10) + "->" + strconv.FormatUint(uint64(p.Target), 10) + "/" + p.Protocol
+		if p.Mode == "host" {
+			text += " (host)"
+		}
+		out = append(out, text)
+	}
+	return out
+}
+
 // listServices answers the services of a swarm from the cluster reader.
-func listServices(ctx context.Context, d ServicesDeps, envID string) (ServiceListBody, error) {
+func listServices(ctx context.Context, d ServicesDeps, envID string, in *ServicesListInput) (ServiceListBody, error) {
+	if utf8.RuneCountInString(in.Q) > maxServiceQuery {
+		return ServiceListBody{}, httpx.Problem(http.StatusUnprocessableEntity, problemQueryTooLong,
+			"The search can be at most "+strconv.Itoa(maxServiceQuery)+" characters.")
+	}
+	statuses, err := parseServiceStatuses(in.Status)
+	if err != nil {
+		return ServiceListBody{}, err
+	}
 	if err := requireSwarm(ctx, d, envID); err != nil {
 		return ServiceListBody{}, err
 	}
@@ -218,13 +373,19 @@ func listServices(ctx context.Context, d ServicesDeps, envID string) (ServiceLis
 		}
 		// Otherwise the last read is served, with its age in fetchedAt.
 	}
-	rows := st.Read.Services
-	body := ServiceListBody{Items: make([]ServiceItem, 0, min(len(rows), maxListRows)), Total: len(rows), NoManager: noManager, FetchedAt: rfc3339(st.FetchedAt)}
-	body.Truncated = len(rows) > maxListRows
-	for _, row := range rows[:min(len(rows), maxListRows)] {
+	all := st.Read.Services
+	rows := filterServices(all, strings.ToLower(strings.TrimSpace(in.Q)), statuses)
+	shown := rows[:min(len(rows), maxListRows)]
+	body := ServiceListBody{
+		Items: make([]ServiceItem, 0, len(shown)), Total: len(rows), UnfilteredTotal: len(all), Capped: len(rows) > maxListRows,
+		StatusCounts: serviceStatusCounts(all), NoManager: noManager, FetchedAt: rfc3339(st.FetchedAt),
+	}
+	for _, row := range shown {
 		body.Items = append(body.Items, ServiceItem{
 			ID: row.ID, Name: row.Name, Mode: row.Mode, Running: row.Running, Desired: row.Desired,
 			UpdateState: row.UpdateState, Image: row.Image, Stack: row.Stack, Agent: row.Agent, UpdatedAt: rfc3339(row.UpdatedAt),
+			Ports: servicePortStrings(row.Ports), UpdateMessage: row.UpdateMessage, HasPreviousSpec: row.HasPreviousSpec,
+			CreatedAt: rfc3339(row.CreatedAt),
 		})
 	}
 	return body, nil

@@ -1133,7 +1133,7 @@ export interface paths {
         };
         /**
          * List the swarm services of an environment
-         * @description The services of a swarm environment with their mode, running and desired task counts, image, stack and last update, read through a manager's agent or through the local socket of a swarm manager, at most 500 rows sorted by name then ID. 409 not_a_swarm when the environment is a standalone host. When no manager is connected the answer is 200 with noManager true and the rows last read, or none. Needs services.read (Viewer) on the environment.
+         * @description The services of a swarm environment with their mode, running and desired task counts, image, stack and last update, read through a manager's agent or through the local socket of a swarm manager, at most 500 rows sorted by name then ID. Optionally a search (q) and a status filter (status: degraded, updating, problem). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Each row has its published ports, the update message, whether a rollback has a spec to go back to and its creation time. 409 not_a_swarm when the environment is a standalone host. When no manager is connected the answer is 200 with noManager true and the rows last read, or none. Needs services.read (Viewer) on the environment.
          */
         get: operations["listServices"];
         put?: never;
@@ -5285,10 +5285,17 @@ export interface components {
             /** @description True for a Bayplan agent service */
             agent: boolean;
             /**
+             * Format: date-time
+             * @description When the service was created
+             */
+            createdAt: string;
+            /**
              * Format: int64
              * @description Tasks the swarm wants running. For a global service this is the count of nodes it runs on; for a job, 0
              */
             desired: number;
+            /** @description True when the swarm still holds the spec before the last update, so a rollback has something to go back to */
+            hasPreviousSpec: boolean;
             /** @description The service ID */
             id: string;
             /** @description The image the service's spec names, as written; empty when it has none */
@@ -5300,6 +5307,8 @@ export interface components {
             mode: "replicated" | "global" | "replicated-job" | "global-job";
             /** @description The service name */
             name: string;
+            /** @description The ports the service publishes, as published->target/protocol (8080->80/tcp), with (host) after a port published in host mode; sorted by published port. Empty when it publishes none */
+            ports: string[] | null;
             /**
              * Format: int64
              * @description Tasks that are running now
@@ -5307,6 +5316,8 @@ export interface components {
             running: number;
             /** @description The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own */
             stack: string;
+            /** @description The swarm's message about the last update; empty when it has none */
+            updateMessage: string;
             /** @description The state of the service's last update or rollback (updating, paused, completed, rollback_started, rollback_paused, rollback_completed); empty when it has none */
             updateState: string;
             /**
@@ -5316,22 +5327,29 @@ export interface components {
             updatedAt: string;
         };
         ServiceListBody: {
+            /** @description True when total is more than the rows returned */
+            capped: boolean;
             /**
              * Format: date-time
              * @description When the rows were read from a manager; empty when none were
              */
             fetchedAt: string;
-            /** @description At most 500 rows, sorted by name then ID */
+            /** @description At most 500 rows that match the search and the status filter, sorted by name then ID */
             items: components["schemas"]["ServiceItem"][] | null;
             /** @description True when no manager of the swarm is connected: the rows are the last ones read, or none */
             noManager: boolean;
+            /** @description How many services each status chip counts, before the search and the status filter, so the numbers never shrink with what was typed */
+            statusCounts: components["schemas"]["ServiceStatusCountsBody"];
             /**
              * Format: int64
-             * @description How many services there are, whatever the cap
+             * @description How many services match the search and the status filter, whatever the cap
              */
             total: number;
-            /** @description True when total is more than the rows returned */
-            truncated: boolean;
+            /**
+             * Format: int64
+             * @description How many services there are before the search and the status filter, so a page can say 3 of 600
+             */
+            unfilteredTotal: number;
         };
         ServiceScaleRequest: {
             /**
@@ -5386,6 +5404,23 @@ export interface components {
             replicas: number;
             /** @description The service ID or name: the id of a row of the services list */
             serviceId: string;
+        };
+        ServiceStatusCountsBody: {
+            /**
+             * Format: int64
+             * @description Services with some but not all of their tasks running
+             */
+            degraded: number;
+            /**
+             * Format: int64
+             * @description Services whose update or rollback stopped or went wrong (paused, rollback_paused, rollback_completed)
+             */
+            problem: number;
+            /**
+             * Format: int64
+             * @description Services whose update or rollback is in progress (updating, rollback_started)
+             */
+            updating: number;
         };
         SessionBody: {
             /**
@@ -8527,7 +8562,12 @@ export interface operations {
     };
     listServices: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Search: a case-insensitive substring of the service name, image, stack or any label key or value, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap */
+                q?: string;
+                /** @description Only services in one of these statuses, comma separated: degraded (some but not all tasks running), updating (updating, rollback_started) or problem (paused, rollback_paused, rollback_completed). Applied before the 500-row cap; any other value is refused 422 status_invalid */
+                status?: string;
+            };
             header?: never;
             path: {
                 /** @description The environment ID */

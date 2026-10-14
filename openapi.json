@@ -6808,11 +6808,20 @@
             "description": "True for a Bayplan agent service",
             "type": "boolean"
           },
+          "createdAt": {
+            "description": "When the service was created",
+            "format": "date-time",
+            "type": "string"
+          },
           "desired": {
             "description": "Tasks the swarm wants running. For a global service this is the count of nodes it runs on; for a job, 0",
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "hasPreviousSpec": {
+            "description": "True when the swarm still holds the spec before the last update, so a rollback has something to go back to",
+            "type": "boolean"
           },
           "id": {
             "description": "The service ID",
@@ -6836,6 +6845,16 @@
             "description": "The service name",
             "type": "string"
           },
+          "ports": {
+            "description": "The ports the service publishes, as published-\u003etarget/protocol (8080-\u003e80/tcp), with (host) after a port published in host mode; sorted by published port. Empty when it publishes none",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "running": {
             "description": "Tasks that are running now",
             "format": "int64",
@@ -6844,6 +6863,10 @@
           },
           "stack": {
             "description": "The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own",
+            "type": "string"
+          },
+          "updateMessage": {
+            "description": "The swarm's message about the last update; empty when it has none",
             "type": "string"
           },
           "updateState": {
@@ -6866,20 +6889,28 @@
           "image",
           "stack",
           "agent",
-          "updatedAt"
+          "updatedAt",
+          "ports",
+          "updateMessage",
+          "hasPreviousSpec",
+          "createdAt"
         ],
         "type": "object"
       },
       "ServiceListBody": {
         "additionalProperties": false,
         "properties": {
+          "capped": {
+            "description": "True when total is more than the rows returned",
+            "type": "boolean"
+          },
           "fetchedAt": {
             "description": "When the rows were read from a manager; empty when none were",
             "format": "date-time",
             "type": "string"
           },
           "items": {
-            "description": "At most 500 rows, sorted by name then ID",
+            "description": "At most 500 rows that match the search and the status filter, sorted by name then ID",
             "items": {
               "$ref": "#/components/schemas/ServiceItem"
             },
@@ -6892,20 +6923,27 @@
             "description": "True when no manager of the swarm is connected: the rows are the last ones read, or none",
             "type": "boolean"
           },
+          "statusCounts": {
+            "$ref": "#/components/schemas/ServiceStatusCountsBody",
+            "description": "How many services each status chip counts, before the search and the status filter, so the numbers never shrink with what was typed"
+          },
           "total": {
-            "description": "How many services there are, whatever the cap",
+            "description": "How many services match the search and the status filter, whatever the cap",
             "format": "int64",
             "type": "integer"
           },
-          "truncated": {
-            "description": "True when total is more than the rows returned",
-            "type": "boolean"
+          "unfilteredTotal": {
+            "description": "How many services there are before the search and the status filter, so a page can say 3 of 600",
+            "format": "int64",
+            "type": "integer"
           }
         },
         "required": [
           "items",
           "total",
-          "truncated",
+          "unfilteredTotal",
+          "capped",
+          "statusCounts",
           "noManager",
           "fetchedAt"
         ],
@@ -7042,6 +7080,32 @@
         "required": [
           "serviceId",
           "replicas"
+        ],
+        "type": "object"
+      },
+      "ServiceStatusCountsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "degraded": {
+            "description": "Services with some but not all of their tasks running",
+            "format": "int64",
+            "type": "integer"
+          },
+          "problem": {
+            "description": "Services whose update or rollback stopped or went wrong (paused, rollback_paused, rollback_completed)",
+            "format": "int64",
+            "type": "integer"
+          },
+          "updating": {
+            "description": "Services whose update or rollback is in progress (updating, rollback_started)",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "degraded",
+          "updating",
+          "problem"
         ],
         "type": "object"
       },
@@ -13082,7 +13146,7 @@
     },
     "/api/env/{envId}/services": {
       "get": {
-        "description": "The services of a swarm environment with their mode, running and desired task counts, image, stack and last update, read through a manager's agent or through the local socket of a swarm manager, at most 500 rows sorted by name then ID. 409 not_a_swarm when the environment is a standalone host. When no manager is connected the answer is 200 with noManager true and the rows last read, or none. Needs services.read (Viewer) on the environment.",
+        "description": "The services of a swarm environment with their mode, running and desired task counts, image, stack and last update, read through a manager's agent or through the local socket of a swarm manager, at most 500 rows sorted by name then ID. Optionally a search (q) and a status filter (status: degraded, updating, problem). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Each row has its published ports, the update message, whether a rollback has a spec to go back to and its creation time. 409 not_a_swarm when the environment is a standalone host. When no manager is connected the answer is 200 with noManager true and the rows last read, or none. Needs services.read (Viewer) on the environment.",
         "operationId": "listServices",
         "parameters": [
           {
@@ -13092,6 +13156,27 @@
             "required": true,
             "schema": {
               "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Search: a case-insensitive substring of the service name, image, stack or any label key or value, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap",
+            "explode": false,
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "description": "Search: a case-insensitive substring of the service name, image, stack or any label key or value, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only services in one of these statuses, comma separated: degraded (some but not all tasks running), updating (updating, rollback_started) or problem (paused, rollback_paused, rollback_completed). Applied before the 500-row cap; any other value is refused 422 status_invalid",
+            "explode": false,
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "description": "Only services in one of these statuses, comma separated: degraded (some but not all tasks running), updating (updating, rollback_started) or problem (paused, rollback_paused, rollback_completed). Applied before the 500-row cap; any other value is refused 422 status_invalid",
+              "maxLength": 64,
               "type": "string"
             }
           }

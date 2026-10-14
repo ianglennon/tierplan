@@ -75,10 +75,51 @@ type ServiceRow struct {
 	Stack string
 	// Agent is true for a Bayplan agent service (see isAgentService).
 	Agent bool
+	// Ports are the ports the service publishes, sorted by published port, then target
+	// port, then protocol. Never nil.
+	Ports []ServicePort
+	// UpdateMessage is the message of the service's last update (UpdateStatus.Message),
+	// empty when it has none.
+	UpdateMessage string
+	// HasPreviousSpec is true when the swarm still holds the spec before the last update,
+	// which is what a rollback goes back to.
+	HasPreviousSpec bool
+	// CreatedAt is when the service was created, in UTC.
+	CreatedAt time.Time
+	// Labels are the labels of the service's spec. They stay on the server, where the
+	// list search reads them; no response carries them.
+	Labels map[string]string
+}
+
+// ServicePort is one port a swarm service publishes.
+type ServicePort struct {
+	// Published is the port on the swarm (or on the node, for host mode), Target the port
+	// in the container.
+	Published, Target uint32
+	// Protocol is tcp, udp or sctp.
+	Protocol string
+	// Mode is ingress (the routing mesh) or host (only the node that runs the task).
+	Mode string
 }
 
 // stackLabel is the label docker stack deploy puts on every service of a stack (E19).
 const stackLabel = "com.docker.stack.namespace"
+
+// servicePorts converts an endpoint's ports, sorted so a row reads the same on every
+// refresh. The result is never nil.
+func servicePorts(in []swarm.PortConfig) []ServicePort {
+	out := make([]ServicePort, 0, len(in))
+	for _, p := range in {
+		out = append(out, ServicePort{
+			Published: p.PublishedPort, Target: p.TargetPort,
+			Protocol: string(p.Protocol), Mode: string(p.PublishMode),
+		})
+	}
+	slices.SortStableFunc(out, func(a, b ServicePort) int {
+		return cmp.Or(cmp.Compare(a.Published, b.Published), cmp.Compare(a.Target, b.Target), cmp.Compare(a.Protocol, b.Protocol))
+	})
+	return out
+}
 
 // AgentTaskRow is the state of the agent service's current task on one node.
 type AgentTaskRow struct{ NodeID, State, Error string }
@@ -175,7 +216,12 @@ func (c *Client) Cluster(ctx context.Context) (ClusterRead, error) {
 		}
 		if s.UpdateStatus != nil {
 			row.UpdateState = string(s.UpdateStatus.State)
+			row.UpdateMessage = s.UpdateStatus.Message
 		}
+		row.HasPreviousSpec = s.PreviousSpec != nil
+		row.CreatedAt = s.CreatedAt.UTC()
+		row.Labels = s.Spec.Labels
+		row.Ports = servicePorts(s.Endpoint.Ports)
 		out.Services = append(out.Services, row)
 	}
 	slices.SortFunc(out.Services, func(a, b ServiceRow) int {
