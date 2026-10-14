@@ -1155,7 +1155,7 @@ export interface paths {
         put?: never;
         /**
          * Scale swarm services
-         * @description Sets the replica count of one or more replicated services, once each and never retried. Each target is read from the manager, and the update is sent with the version just read, so a service somebody else changed in between is service_changed and nothing is changed. Only the replica count of the spec changes. The registry credential for the service's image is sent with the update. A service that already has the count is answered done with changed false and nothing is sent. A global or job service is skipped with not_scalable. replicas outside 0 to 1000 is 422 replicas_invalid, and a service named twice is 422 duplicate_target, both before anything is sent. 409 not_a_swarm for a standalone host. Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.scaled, with the new and the previous count.
+         * @description Sets the replica count of one or more replicated services, once each and never retried. Each target is read from the manager, and the update is sent with the version just read, so a service somebody else changed in between is service_changed and nothing is changed. Only the replica count of the spec changes. The registry credential for the service's image is sent with the update. A service that already has the count is answered done with changed false and nothing is sent. A global or job service is skipped with not_scalable. replicas outside 0 to 1000 is 422 replicas_invalid, a service named twice is 422 duplicate_target, and more than 100 targets is 422 too_many_targets, all before anything is sent. 409 not_a_swarm for a standalone host. Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.scaled, with the new and the previous count.
          */
         post: operations["scaleServices"];
         delete?: never;
@@ -5357,7 +5357,7 @@ export interface components {
              * @description Groups the audit rows of one bulk request. Send a UUID to name the bulk yourself; with more than one target and none sent, the server makes one (a UUIDv7) and answers it
              */
             bulkId?: string;
-            /** @description The services to scale, at most 100, each named once (else 422 duplicate_target). Each is answered separately; one that fails never stops the others */
+            /** @description The services to scale, at most 100 (else 422 too_many_targets), each named once (else 422 duplicate_target). Each is answered separately; one that fails never stops the others */
             targets: components["schemas"]["ServiceScaleTarget"][] | null;
         };
         ServiceScaleResponse: {

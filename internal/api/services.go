@@ -31,6 +31,7 @@ const (
 	problemNotASwarm       = "not_a_swarm"
 	problemReplicasInvalid = "replicas_invalid"
 	problemDuplicateTarget = "duplicate_target"
+	problemTooManyTargets  = "too_many_targets"
 	problemStatusInvalid   = "status_invalid"
 	problemQueryTooLong    = "query_too_long"
 
@@ -55,6 +56,8 @@ const (
 
 	// maxReplicas is the most replicas a scale may ask for.
 	maxReplicas = 1000
+	// maxScaleTargets is the most services one scale request may name.
+	maxScaleTargets = 100
 	// scaleManager is the "node" a scale target is run against: a service belongs to the
 	// cluster, so every target goes to the one manager the environment writes through.
 	scaleManager = "manager"
@@ -135,7 +138,7 @@ type ServiceScaleTarget struct {
 // ServiceScaleRequest is the body of POST /api/env/{envId}/services/scale.
 type ServiceScaleRequest struct {
 	BulkID  string               `json:"bulkId,omitempty" format:"uuid" doc:"Groups the audit rows of one bulk request. Send a UUID to name the bulk yourself; with more than one target and none sent, the server makes one (a UUIDv7) and answers it"`
-	Targets []ServiceScaleTarget `json:"targets" minItems:"1" maxItems:"100" doc:"The services to scale, at most 100, each named once (else 422 duplicate_target). Each is answered separately; one that fails never stops the others"`
+	Targets []ServiceScaleTarget `json:"targets" minItems:"1" doc:"The services to scale, at most 100 (else 422 too_many_targets), each named once (else 422 duplicate_target). Each is answered separately; one that fails never stops the others"`
 }
 
 // ServiceScaleInput is the path and body of the scale route.
@@ -205,7 +208,7 @@ func RegisterServices(r *httpx.Router, d ServicesDeps) {
 			"Each target is read from the manager, and the update is sent with the version just read, so a service somebody else changed in between is service_changed and nothing is changed. " +
 			"Only the replica count of the spec changes. The registry credential for the service's image is sent with the update. " +
 			"A service that already has the count is answered done with changed false and nothing is sent. A global or job service is skipped with not_scalable. " +
-			"replicas outside 0 to 1000 is 422 replicas_invalid, and a service named twice is 422 duplicate_target, both before anything is sent. 409 not_a_swarm for a standalone host. " +
+			"replicas outside 0 to 1000 is 422 replicas_invalid, a service named twice is 422 duplicate_target, and more than 100 targets is 422 too_many_targets, all before anything is sent. 409 not_a_swarm for a standalone host. " +
 			"Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.scaled, with the new and the previous count.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermServicesControl, Scope: rbac.ScopeEnvironment},
@@ -404,6 +407,10 @@ type scaleOutcome struct {
 // each attempt.
 func scaleServices(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID string, in *ServiceScaleInput) (ServiceScaleResponse, error) {
 	body := in.Body
+	if len(body.Targets) > maxScaleTargets {
+		return ServiceScaleResponse{}, httpx.Problem(http.StatusUnprocessableEntity, problemTooManyTargets,
+			"Scale at most "+strconv.Itoa(maxScaleTargets)+" services in one request.")
+	}
 	seen := make(map[string]bool, len(body.Targets))
 	for _, t := range body.Targets {
 		if t.Replicas < 0 || t.Replicas > maxReplicas {
