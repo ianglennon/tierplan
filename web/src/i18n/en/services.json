@@ -90,6 +90,12 @@
       "showChanges": "Show changes",
       "self": {
         "agentService": "Bayplan agent"
+      },
+      "select": {
+        "all": "Select all services"
+      },
+      "bulk": {
+        "none": "None of the selected services can be scaled."
       }
     },
     "notASwarm": {
@@ -119,6 +125,29 @@
         "registry_unresolved": "Bayplan couldn't read the registry credential for this service's image, so nothing was sent. Check the credential under Registries, then try again.",
         "permission": "You no longer have permission to do that. Your access may have changed.",
         "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening."
+      },
+      "bulkTitle": "Scale {{count}} services",
+      "bulkBody": "Set how many tasks each service should run.",
+      "setAll": "Set all to",
+      "replicasFor": "Replicas for {{name}}",
+      "columns": {
+        "service": "Service",
+        "now": "Now",
+        "new": "New",
+        "note": "Note"
+      },
+      "skipped": "Skipped",
+      "partOfStack": "Part of stack {{stack}}",
+      "submitBulk_one": "Scale {{count}} service",
+      "submitBulk_other": "Scale {{count}} services",
+      "stackWarningMany_one": "{{count}} of these belongs to a stack. The next stack deploy sets its replica count again.",
+      "stackWarningMany_other": "{{count}} of these belong to stacks. The next stack deploy sets their replica counts again.",
+      "bulkDone_one": "Scaled {{count}} service.",
+      "bulkDone_other": "Scaled {{count}} services.",
+      "bulkPartial": "Scaled {{done}}, {{failed}} failed",
+      "results": {
+        "title": "Scale results",
+        "service": "Service"
       }
     },
     "problems": {

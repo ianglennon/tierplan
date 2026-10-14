@@ -342,8 +342,11 @@ describe("ScaleDialog: several services", () => {
     expect(body.bulkId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     expect(await screen.findByText(/Scaled 2 services\./)).toBeTruthy();
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
-    // Only the service whose count changed is waited on.
-    expect(onScaled).toHaveBeenCalledWith([{ id: "id-web", replicas: 5, changed: true }]);
+    // The list waits only on the service whose count changed.
+    expect(onScaled).toHaveBeenCalledWith([
+      { id: "id-web", replicas: 5, changed: true },
+      { id: "id-api", replicas: 2, changed: false },
+    ]);
   });
 
   it("sends a fresh bulk ID for each scale", async () => {

@@ -202,16 +202,16 @@ describe("ServiceList", () => {
     for (const header of ["Name", "Mode", "Replicas", "Image", "Updated"]) {
       expect(screen.getByRole("columnheader", { name: header })).toBeTruthy();
     }
-    const web = screen.getByRole("row", { name: /^web/ });
+    const web = screen.getByRole("row", { name: /^Select web/ });
     expect(within(web).getByText("Replicated")).toBeTruthy();
     expect(within(web).getByText("2/2")).toBeTruthy();
     // The tag is shown, the digest only in the tooltip.
     expect(web.textContent).toContain("registry.example.com/acme/web:1.4");
     expect(web.textContent).not.toContain("sha256");
-    const agent = screen.getByRole("row", { name: /^bayplan-agent/ });
+    const agent = screen.getByRole("row", { name: /^Select bayplan-agent/ });
     expect(within(agent).getByText("Global")).toBeTruthy();
     expect(within(agent).getByText("3/3")).toBeTruthy();
-    const job = screen.getByRole("row", { name: /^backup/ });
+    const job = screen.getByRole("row", { name: /^Select backup/ });
     expect(within(job).getByText("Replicated job")).toBeTruthy();
     expect(within(job).getByText("—", { selector: "span" })).toBeTruthy();
     expect(screen.getByText("3 services")).toBeTruthy();
@@ -268,7 +268,7 @@ describe("ScaleDialog", () => {
     expect(posts()[0]?.body).toEqual({ targets: [{ serviceId: "id-web", replicas: 5 }] });
     expect(await screen.findByText("Scaled web to 5.")).toBeTruthy();
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    const row = screen.getByRole("row", { name: /^web/ });
+    const row = screen.getByRole("row", { name: /^Select web/ });
     expect(within(row).getByText("Scaling…")).toBeTruthy();
     // The list is read again after the write and now shows the new count.
     items = [svc({ desired: 5, running: 5 }), ...items.slice(1)];
@@ -276,9 +276,13 @@ describe("ScaleDialog", () => {
       await client.invalidateQueries({ queryKey: ["env", ENV, "services"] });
     });
     await waitFor(() =>
-      expect(within(screen.getByRole("row", { name: /^web/ })).getByText("5/5")).toBeTruthy(),
+      expect(
+        within(screen.getByRole("row", { name: /^Select web/ })).getByText("5/5"),
+      ).toBeTruthy(),
     );
-    expect(within(screen.getByRole("row", { name: /^web/ })).queryByText("Scaling…")).toBeNull();
+    expect(
+      within(screen.getByRole("row", { name: /^Select web/ })).queryByText("Scaling…"),
+    ).toBeNull();
   });
 
   it("sends nothing for anything but a whole number from 0 to 1000", async () => {
@@ -310,7 +314,7 @@ describe("ScaleDialog", () => {
     // The dialog is still open and the row, hidden from assistive technology behind it, is
     // not waiting on anything.
     expect(screen.getByRole("dialog", { name: "Scale web" })).toBeTruthy();
-    const row = screen.getByRole("row", { name: /^web/, hidden: true });
+    const row = screen.getByRole("row", { name: /^Select web/, hidden: true });
     expect(within(row).queryByText("Scaling…")).toBeNull();
   });
 
@@ -346,16 +350,17 @@ describe("the State column", () => {
     mount();
     await screen.findByText("web");
     const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
-    expect(headers.slice(0, 3)).toEqual(["Name", "State", "Mode"]);
+    // The checkbox column has no title.
+    expect(headers.slice(1, 4)).toEqual(["Name", "State", "Mode"]);
     const stateOf = (name: RegExp) => within(screen.getByRole("row", { name })).getByText;
-    expect(stateOf(/^web/)("Running")).toBeTruthy();
-    expect(stateOf(/^degraded-svc/)("Degraded")).toBeTruthy();
-    expect(stateOf(/^down-svc/)("Not running")).toBeTruthy();
-    expect(stateOf(/^zero-svc/)("Scaled to 0")).toBeTruthy();
-    expect(stateOf(/^updating-svc/)("Updating")).toBeTruthy();
-    expect(stateOf(/^paused-svc/)("Update paused")).toBeTruthy();
-    expect(stateOf(/^rolledback-svc/)("Rolled back")).toBeTruthy();
-    expect(stateOf(/^job-svc/)("Completed")).toBeTruthy();
+    expect(stateOf(/^Select web/)("Running")).toBeTruthy();
+    expect(stateOf(/^Select degraded-svc/)("Degraded")).toBeTruthy();
+    expect(stateOf(/^Select down-svc/)("Not running")).toBeTruthy();
+    expect(stateOf(/^Select zero-svc/)("Scaled to 0")).toBeTruthy();
+    expect(stateOf(/^Select updating-svc/)("Updating")).toBeTruthy();
+    expect(stateOf(/^Select paused-svc/)("Update paused")).toBeTruthy();
+    expect(stateOf(/^Select rolledback-svc/)("Rolled back")).toBeTruthy();
+    expect(stateOf(/^Select job-svc/)("Completed")).toBeTruthy();
   });
 
   it("explains a service's replicas in a tooltip", async () => {
@@ -363,7 +368,7 @@ describe("the State column", () => {
     mount();
     // The Degraded chip has the same word until the counts arrive, so look in the row.
     await screen.findByText("web");
-    const word = within(screen.getByRole("row", { name: /^web/ })).getByText("Degraded");
+    const word = within(screen.getByRole("row", { name: /^Select web/ })).getByText("Degraded");
     await act(async () => {
       fireEvent.focus(word);
     });
@@ -377,13 +382,13 @@ describe("the State column", () => {
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "Scale service" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    const row = screen.getByRole("row", { name: /^web/ });
+    const row = screen.getByRole("row", { name: /^Select web/ });
     const cells = within(row).getAllByRole("cell");
-    // Name, State, Mode, Replicas
-    expect(within(cells[1] as HTMLElement).getByText("Scaling…")).toBeTruthy();
-    expect(within(cells[1] as HTMLElement).queryByText("Running")).toBeNull();
-    expect(cells[3]?.textContent).toBe("2/5");
-    expect(within(cells[3] as HTMLElement).queryByText("Scaling…")).toBeNull();
+    // Select, Name, State, Mode, Replicas
+    expect(within(cells[2] as HTMLElement).getByText("Scaling…")).toBeTruthy();
+    expect(within(cells[2] as HTMLElement).queryByText("Running")).toBeNull();
+    expect(cells[4]?.textContent).toBe("2/5");
+    expect(within(cells[4] as HTMLElement).queryByText("Scaling…")).toBeNull();
   });
 });
 
@@ -628,7 +633,7 @@ describe("the services list: columns", () => {
     mount();
     await screen.findByText("web");
     expect(screen.getByRole("columnheader", { name: "Ports" })).toBeTruthy();
-    const web = screen.getByRole("row", { name: /^web/ });
+    const web = screen.getByRole("row", { name: /^Select web/ });
     expect(web.textContent).toContain("8080→80/tcp, 8443→443/tcp");
     expect(web.textContent).not.toContain("9000");
     const more = within(web).getByText("+1");
@@ -636,10 +641,10 @@ describe("the services list: columns", () => {
       fireEvent.focus(more);
     });
     expect((await screen.findAllByText(/9000→9000\/udp \(host\)/)).length).toBeGreaterThan(0);
-    const one = screen.getByRole("row", { name: /^one/ });
+    const one = screen.getByRole("row", { name: /^Select one/ });
     expect(one.textContent).toContain("53→53/udp");
     expect(within(one).queryByText(/^\+\d/)).toBeNull();
-    const none = screen.getByRole("row", { name: /^none/ });
+    const none = screen.getByRole("row", { name: /^Select none/ });
     expect(within(none).getAllByText("—").length).toBeGreaterThan(0);
   });
 
@@ -647,10 +652,10 @@ describe("the services list: columns", () => {
     mount();
     await screen.findByText("web");
     expect(
-      within(screen.getByRole("row", { name: /^bayplan-agent/ })).getByText("Bayplan agent"),
+      within(screen.getByRole("row", { name: /^Select bayplan-agent/ })).getByText("Bayplan agent"),
     ).toBeTruthy();
     expect(
-      within(screen.getByRole("row", { name: /^web/ })).queryByText("Bayplan agent"),
+      within(screen.getByRole("row", { name: /^Select web/ })).queryByText("Bayplan agent"),
     ).toBeNull();
   });
 
@@ -661,10 +666,10 @@ describe("the services list: columns", () => {
     ];
     mount();
     await screen.findByText("gl");
-    expect(within(screen.getByRole("row", { name: /^gl/ })).getByText("2/3")).toBeTruthy();
-    const cells = within(screen.getByRole("row", { name: /^mystery/ })).getAllByRole("cell");
-    // Name, State, Mode
-    expect(cells[2]?.textContent).toBe("—");
+    expect(within(screen.getByRole("row", { name: /^Select gl/ })).getByText("2/3")).toBeTruthy();
+    const cells = within(screen.getByRole("row", { name: /^Select mystery/ })).getAllByRole("cell");
+    // Select, Name, State, Mode
+    expect(cells[3]?.textContent).toBe("—");
   });
 
   it("keeps the Name column at least 224px wide and cuts a long name with the whole of it in the text", async () => {
@@ -791,7 +796,7 @@ describe("the services list: live updates", () => {
       await client.invalidateQueries({ queryKey: ["env", ENV, "services"] });
     });
     const row = await waitFor(() => {
-      const r = screen.getByRole("row", { name: /^web/ });
+      const r = screen.getByRole("row", { name: /^Select web/ });
       expect(within(r).getByText("1/2")).toBeTruthy();
       return r;
     });
@@ -972,7 +977,7 @@ describe("the services list: selection and bulk scale", () => {
     // The selection is spent and the three rows wait for their counts.
     expect(screen.queryByRole("toolbar", { name: "Bulk actions" })).toBeNull();
     for (const name of ["shop_web", "shop_db", "blog_app"]) {
-      const row = screen.getByRole("row", { name: new RegExp(`^${name}`) });
+      const row = screen.getByRole("row", { name: new RegExp(`^Select ${name}`) });
       expect(within(row).getByText("Scaling…")).toBeTruthy();
       expect(row.querySelector("[data-pending]")).toBeTruthy();
       expect(
@@ -985,7 +990,9 @@ describe("the services list: selection and bulk scale", () => {
           .disabled,
       ).toBe(true);
     }
-    expect(within(screen.getByRole("row", { name: /^backup/ })).queryByText("Scaling…")).toBeNull();
+    expect(
+      within(screen.getByRole("row", { name: /^Select backup/ })).queryByText("Scaling…"),
+    ).toBeNull();
     // The list shows the counts: the rows are released.
     items = items.map((i) =>
       ["id-web", "id-db", "id-blog"].includes(i.id) ? { ...i, desired: 4, running: 4 } : i,
@@ -1080,12 +1087,12 @@ describe("the services list: selection and bulk scale", () => {
         .map((h) => h.textContent),
     ).toEqual(["Service", "Result", "Reason"]);
     const rows = within(results).getAllByRole("row").slice(1);
-    expect(
-      rows.map((r) => Array.from(r.querySelectorAll("td")).map((c) => c.textContent?.slice(0, 20))),
-    ).toEqual([
-      ["backup", "Skipped", "Jobs can't be scaled here."],
-      ["blog_app", "Failed", expect.stringContaining("changed by someone")],
-      ["shop_web", "Done", "—"],
-    ]);
+    expect(rows.map((r) => Array.from(r.querySelectorAll("td")).map((c) => c.textContent))).toEqual(
+      [
+        ["backup", "Skipped", "Jobs can't be scaled here."],
+        ["blog_app", "Failed", expect.stringContaining("changed by someone else")],
+        ["shop_web", "Done", "—"],
+      ],
+    );
   });
 });

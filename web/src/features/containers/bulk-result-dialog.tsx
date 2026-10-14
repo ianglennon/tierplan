@@ -31,7 +31,9 @@ export interface BulkReportRow {
 }
 
 export interface BulkReport {
-  verb: PendingVerb;
+  // What the bulk did. A bulk that is not about containers (a scale) names its dialog with
+  // title and so needs no verb of the containers' words.
+  verb: PendingVerb | "scale";
   // The words of a bulk that is not about containers: the dialog's title, and the
   // header of the first column ("Volume"). Without them the dialog reads "{Verb}
   // results" over a Container column.
@@ -43,20 +45,33 @@ export interface BulkReport {
   rows: BulkReportRow[];
 }
 
+// The words of the table's headers, when a bulk is not about containers. target is the first
+// column ("Service"); node is the second, or null for a bulk whose rows have no node, which
+// leaves the column out.
+export interface BulkResultLabels {
+  target?: string;
+  node?: string | null;
+}
+
 interface BulkResultDialogProps {
   envId: string;
   // Open while there is a report.
   report: BulkReport | null;
+  labels?: BulkResultLabels | undefined;
   onClose: () => void;
 }
 
 // BulkResultDialog is "Stop results": a table of Container, Node, Result and
 // Reason for a bulk that partly failed, opened from the toast's Details. Names
 // and reasons are text only; the table is keyboard navigable by being a table.
-export function BulkResultDialog({ envId, report, onClose }: BulkResultDialogProps) {
+export function BulkResultDialog({ envId, report, labels, onClose }: BulkResultDialogProps) {
   const t = useT();
   const canReadAudit = useCanReadAudit();
   const missing = t("dashboard.time.missing");
+  const showNode = labels?.node !== null;
+  const columns = (["container", "node", "result", "reason"] as const).filter(
+    (c) => c !== "node" || showNode,
+  );
   const title =
     report?.title ??
     t("actions.results.title", {
@@ -75,11 +90,13 @@ export function BulkResultDialog({ envId, report, onClose }: BulkResultDialogPro
           <table className="w-full text-sm">
             <thead className="sticky top-0 bg-muted text-xs text-muted-foreground">
               <tr>
-                {(["container", "node", "result", "reason"] as const).map((c) => (
+                {columns.map((c) => (
                   <th key={c} scope="col" className="px-2 py-1 text-start font-semibold">
-                    {c === "container" && report?.itemLabel
-                      ? report.itemLabel
-                      : t(`actions.results.${c}`)}
+                    {c === "container"
+                      ? (labels?.target ?? report?.itemLabel ?? t("actions.results.container"))
+                      : c === "node" && labels?.node
+                        ? labels.node
+                        : t(`actions.results.${c}`)}
                   </th>
                 ))}
               </tr>
@@ -96,7 +113,7 @@ export function BulkResultDialog({ envId, report, onClose }: BulkResultDialogPro
                   )}
                 >
                   <td className="px-2 py-1 font-mono text-xs break-all">{r.name}</td>
-                  <td className="px-2 py-1 break-words">{r.node}</td>
+                  {showNode ? <td className="px-2 py-1 break-words">{r.node}</td> : null}
                   <td
                     className={cn(
                       "px-2 py-1 whitespace-nowrap",

@@ -99,16 +99,56 @@ export function isLostScale(err: unknown): boolean {
   return err instanceof ScaleRequestError && err.status === 0;
 }
 
+// The most targets one scale request takes (the server refuses more with 422).
+export const SCALE_CHUNK = 100;
+
+// What a scale asks for: the services and their counts, and the bulk ID the audit rows of the
+// operation share (D-14) when it is more than one service.
+export interface ScaleRequest {
+  targets: ServiceScaleTarget[];
+  bulkId?: string;
+}
+
 // postScale sets the replica count of one or more services. It never retries: a write whose
-// answer was lost may have happened (P2 D-42), and the person asks again.
+// answer was lost may have happened (P2 D-42), and the person asks again. The server takes 100
+// targets at a time, so a longer list goes out in requests one after the other that share the
+// bulk ID; if the first is refused as a whole that is thrown, and the targets of a later one
+// that is refused are answered as failed while the earlier ones stand.
 export async function postScale(
   envId: string,
+  { targets, bulkId }: ScaleRequest,
+): Promise<ServiceScaleResult[]> {
+  const results: ServiceScaleResult[] = [];
+  for (let at = 0; at < targets.length; at += SCALE_CHUNK) {
+    const chunk = targets.slice(at, at + SCALE_CHUNK);
+    try {
+      results.push(...(await postScaleChunk(envId, chunk, bulkId)));
+    } catch (e) {
+      if (at === 0) throw e;
+      for (const t of chunk) {
+        results.push({
+          serviceId: t.serviceId,
+          name: t.serviceId,
+          result: "failed",
+          code: "scale_failed",
+          replicas: t.replicas,
+          changed: false,
+        });
+      }
+    }
+  }
+  return results;
+}
+
+async function postScaleChunk(
+  envId: string,
   targets: ServiceScaleTarget[],
+  bulkId: string | undefined,
 ): Promise<ServiceScaleResult[]> {
   try {
     const res = await api.POST("/api/env/{envId}/services/scale", {
       params: { path: { envId } },
-      body: { targets },
+      body: { targets, bulkId },
     });
     if (!res.data) {
       const problem = readProblem(res.error, res.response);
@@ -125,8 +165,8 @@ export async function postScale(
 // list again whatever the answer: a write whose answer was lost may have happened.
 export function useScaleServices(envId: string) {
   const queryClient = useQueryClient();
-  return useMutation<ServiceScaleResult[], ScaleRequestError, ServiceScaleTarget[]>({
-    mutationFn: (targets) => postScale(envId, targets),
+  return useMutation<ServiceScaleResult[], ScaleRequestError, ScaleRequest>({
+    mutationFn: (request) => postScale(envId, request),
     retry: false,
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: servicesKey(envId) });

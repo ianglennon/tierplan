@@ -30,8 +30,10 @@ import {
 import { Label } from "@/components/ui/label";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { type BulkReport, BulkResultDialog } from "@/features/containers/bulk-result-dialog";
 import { PortsCell, SearchBox } from "@/features/containers/container-list";
 import { SelfContainerBadge } from "@/features/containers/self-container-badge";
+import { type BulkAction, BulkBar } from "@/features/resources/bulk-bar";
 import { useFrozenRows } from "@/features/resources/frozen-rows";
 import { useGroupCollapse } from "@/features/resources/group-header-row";
 import {
@@ -39,10 +41,14 @@ import {
   type ListQuery,
   ResourceTable,
   type RowState,
+  SelectCheckbox,
   type TableGroup,
+  type TableSelect,
   TruncatedText,
 } from "@/features/resources/resource-table";
+import { useChosenKeys, useSelection } from "@/features/resources/selection";
 import { useEnvName } from "@/features/resources/use-env-name";
+import { scaleEligibility } from "@/features/services/eligibility";
 import { groupServices, sortServices } from "@/features/services/group";
 import {
   SERVICE_STATUS_VALUES,
@@ -87,6 +93,8 @@ interface RowActionsProps {
   envId: string;
   service: ServiceItem;
   onScale: (service: ServiceItem) => void;
+  // True while the row waits on a scale: its menu is off until the list shows the count.
+  disabled?: boolean;
   // Called as the row's menu opens and closes: a list with a menu open does not move.
   onOpenChange: (open: boolean) => void;
 }
@@ -94,7 +102,7 @@ interface RowActionsProps {
 // RowActions is the row menu of the services list. Open is there but off until the service's
 // page exists; Scale… is for replicated services only, and a caller below Operator sees it
 // disabled with the reason (D-19). The server decides either way.
-function RowActions({ envId, service, onScale, onOpenChange }: RowActionsProps) {
+function RowActions({ envId, service, onScale, disabled, onOpenChange }: RowActionsProps) {
   const t = useT();
   const needs = useNeeds("services.control", envId);
   const canScale = service.mode === "replicated";
@@ -109,6 +117,7 @@ function RowActions({ envId, service, onScale, onOpenChange }: RowActionsProps) 
           variant="ghost"
           size="icon"
           className="max-md:size-11"
+          disabled={disabled}
           aria-label={t("actions.menu.label", { name: service.name })}
         >
           <Ellipsis aria-hidden="true" />
@@ -145,6 +154,11 @@ function RowActions({ envId, service, onScale, onOpenChange }: RowActionsProps) 
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+// checkedOf is a checkbox's state from a selection's: tri-state for a group.
+function checkedOf(state: "checked" | "mixed" | "unchecked"): boolean | "indeterminate" {
+  return state === "checked" ? true : state === "mixed" ? "indeterminate" : false;
 }
 
 interface ServiceListProps {
@@ -198,8 +212,11 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
   const data = query.data;
   const envName = useEnvName(envId);
   const collapse = useGroupCollapse();
-  const [scaling, setScaling] = useState<ServiceItem | null>(null);
+  const [scaling, setScaling] = useState<readonly ServiceItem[]>([]);
   const [open, setOpen] = useState(false);
+  // The results a person asked to see from a bulk scale's Details.
+  const [report, setReport] = useState<BulkReport | null>(null);
+  const canScale = useNeeds("services.control", envId);
   // The count each row was last asked to have, by service ID, while it is awaited.
   const [pending, setPending] = useState<ReadonlyMap<string, number>>(new Map());
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
@@ -273,8 +290,11 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
       return next;
     });
   }, []);
+  // Rows chosen for a bulk scale also hold the list still: a row that moved between choosing
+  // it and pressing the button would be the wrong one.
+  const chosen = useChosenKeys<string>();
   const frozen = useFrozenRows(sorted, {
-    frozen: openRows.size > 0 || open,
+    frozen: openRows.size > 0 || open || chosen[0].size > 0,
     getKey: rowKeyOf,
     fingerprint: fingerprintOf,
     // Rows of the previous filters, kept on screen while the new ones load, are not an
@@ -299,7 +319,7 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
     return out;
   }, [frozen.rows]);
 
-  const groups = useMemo<TableGroup<ServiceItem>[]>(
+  const baseGroups = useMemo<TableGroup<ServiceItem>[]>(
     () =>
       groupServices(shownRows, by, null).map((g) => ({
         key: g.key,
@@ -317,6 +337,41 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
               },
       })),
     [shownRows, by, t],
+  );
+
+  // Which rows can be chosen: not gone and not waiting on a scale. A global service or a job
+  // can be chosen too: the dialog lists it as skipped. The order a Shift range follows is the
+  // order on screen, folded groups left out.
+  const byKey = useMemo(() => new Map(shownRows.map((r) => [rowKeyOf(r), r])), [shownRows]);
+  const orderedKeys = useMemo(
+    () =>
+      baseGroups
+        .filter((g) => !g.header || !collapse.collapsed.has(g.key))
+        .flatMap((g) => g.rows.map(rowKeyOf)),
+    [baseGroups, collapse.collapsed],
+  );
+  const isEligible = useCallback(
+    (key: string) => byKey.has(key) && !rowStates.get(key)?.removed && !pending.has(key),
+    [byKey, rowStates, pending],
+  );
+  const selection = useSelection({ orderedKeys, isEligible }, chosen);
+
+  const groups: TableGroup<ServiceItem>[] = baseGroups.map((g) =>
+    g.header
+      ? {
+          ...g,
+          header: {
+            ...g.header,
+            checkbox: (
+              <SelectCheckbox
+                checked={checkedOf(selection.groupState(g.rows.map(rowKeyOf)))}
+                label={t("actions.select.group", { name: g.header.name })}
+                onToggle={() => selection.selectGroup(g.rows.map(rowKeyOf))}
+              />
+            ),
+          },
+        }
+      : g,
   );
 
   const changesWaiting = frozen.heldCount + frozen.removedCount;
@@ -379,6 +434,56 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
       </EmptyHeader>
     </Empty>
   ) : undefined;
+
+  // The checkbox column. A row gone or waiting on a scale has none to tick.
+  const select: TableSelect<ServiceItem> = {
+    header: (
+      <SelectCheckbox
+        checked={checkedOf(selection.allState)}
+        label={t("services.list.select.all")}
+        disabled={selection.eligibleCount === 0}
+        onToggle={() => selection.selectAll()}
+      />
+    ),
+    cell: (s) => {
+      const key = rowKeyOf(s);
+      return (
+        <SelectCheckbox
+          checked={selection.isSelected(key)}
+          label={t("actions.select.row", { name: s.name })}
+          disabled={Boolean(rowStates.get(key)?.removed) || pending.has(key)}
+          onToggle={(shift) => selection.toggle(key, { shift })}
+        />
+      );
+    },
+    onEscape: selection.selected.size > 0 ? selection.clear : undefined,
+  };
+
+  // Scale… is the one bulk action of this phase (D-10). It cannot be used without Operator,
+  // or when no chosen row is a replicated service.
+  const selectedRows = shownRows.filter((r) => selection.isSelected(rowKeyOf(r)));
+  const scaleReason = !canScale.allowed
+    ? (canScale.reason ?? t("needs.role.operator"))
+    : selectedRows.some((r) => scaleEligibility(r).eligible)
+      ? undefined
+      : t("services.list.bulk.none");
+  const actions: BulkAction[] = [
+    {
+      id: "scale",
+      label: t("services.list.menu.scale"),
+      reason: scaleReason,
+      onClick: () => {
+        setScaling(selectedRows);
+        setOpen(true);
+      },
+    },
+  ];
+  // Offered when every visible row that can be chosen is, and folded groups hold more.
+  const everyKey = shownRows.map(rowKeyOf).filter(isEligible);
+  const offerAll =
+    selection.allState === "checked" && selection.selected.size < everyKey.length
+      ? { count: everyKey.length, onSelect: () => selection.selectEvery(everyKey) }
+      : undefined;
 
   const columns: Column<ServiceItem>[] = [
     {
@@ -447,9 +552,10 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
         <RowActions
           envId={envId}
           service={s}
+          disabled={pending.has(s.id)}
           onOpenChange={(isOpen) => setRowOpen(rowKeyOf(s), isOpen)}
           onScale={(service) => {
-            setScaling(service);
+            setScaling([service]);
             setOpen(true);
           }}
         />
@@ -591,13 +697,34 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
         sort={{ key: sortKey, dir: sortDir, onSort }}
         rowStates={rowStates}
         getRowKey={rowKeyOf}
+        select={select}
+        bulkBar={
+          selection.selected.size > 0 ? (
+            <BulkBar
+              count={selection.selected.size}
+              actions={actions}
+              onClear={selection.clear}
+              selectAll={offerAll}
+            />
+          ) : undefined
+        }
       />
       <ScaleDialog
         envId={envId}
-        targets={scaling ? [scaling] : []}
+        targets={scaling}
         open={open}
         onOpenChange={setOpen}
-        onScaled={markScaling}
+        onScaled={(done) => {
+          markScaling(done);
+          selection.clear();
+        }}
+        onDetails={setReport}
+      />
+      <BulkResultDialog
+        envId={envId}
+        report={report}
+        labels={{ target: t("services.scale.results.service"), node: null }}
+        onClose={() => setReport(null)}
       />
     </>
   );

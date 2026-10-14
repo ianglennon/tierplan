@@ -15,8 +15,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCsrfToken } from "@/api/client";
 import {
   type BulkReport,
-  type BulkResultLabels,
   BulkResultDialog,
+  type BulkResultLabels,
 } from "@/features/containers/bulk-result-dialog";
 import "@/i18n";
 import { makeMe } from "@/test-me";
@@ -67,7 +67,7 @@ async function mount(r: BulkReport, labels?: BulkResultLabels) {
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
-  await screen.findByRole("dialog", { name: "Stop results" });
+  await screen.findByRole("dialog");
 }
 
 describe("BulkResultDialog audit link", () => {
