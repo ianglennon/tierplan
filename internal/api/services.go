@@ -226,6 +226,7 @@ func RegisterServices(r *httpx.Router, d ServicesDeps) {
 
 	registerServiceDetail(r, d)
 	registerServiceTasks(r, d)
+	registerServiceActions(r, d)
 }
 
 // requireSwarm answers 409 not_a_swarm for an environment that is a standalone host.

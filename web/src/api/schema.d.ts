@@ -1184,6 +1184,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/services/{serviceId}/force-update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Force a service update
+         * @description Replaces every task of a service again with the settings it has now, once and never retried. Bayplan strips any digest from the spec's image, resolves the tag to its current digest through the manager with the stored registry credential, writes tag@sha256 into the spec, raises the spec's ForceUpdate counter and sends the update with the version just read, so a tag that moved is picked up. A lookup that fails is 422 image_unresolved (errors name image.ref, image.host and reason) and nothing is sent: a force update never falls back to the unpinned tag. An image that names a digest and no tag is not re-pinned: the answer says pinned false with reason digest_only. A version that is not the current one is 409 service_changed; 409 not_a_swarm for a standalone host. Works on a service that belongs to a stack. Repeating it replaces every task again: each call is its own rollout. Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.force_updated.
+         */
+        post: operations["forceUpdateService"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/services/{serviceId}/inspect": {
         parameters: {
             query?: never;
@@ -1196,6 +1216,46 @@ export interface paths {
          * @description The manager's inspect document of the service, for the Inspect tab. The environment variables' values, the command line (Command and Args), the command of the health check and the log driver's option values, in Spec and in PreviousSpec, can be credentials: for a caller without secrets.reveal on the environment each is replaced by the placeholder <hidden> on the server, and masked says something was. The same problems as the service detail route (404 service_not_found, 409 not_a_swarm, 503 no_manager_connected). Needs services.read (Viewer) on the environment.
          */
         get: operations["inspectService"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/services/{serviceId}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Roll a service back to its previous spec
+         * @description Sends the service's current spec with rollback=previous and the version, once and never retried; the manager swaps the current and the previous spec, so a second rollback goes back to the spec just replaced. The registry credential for the previous spec's image is sent with it. The answer is 202: the rollout continues in the swarm. A service that has no previous spec is 409 no_previous_spec. A manager that refuses because the previous spec names a secret, a config or a network that no longer exists is 409 rollback_object_missing, with its words in detail. A version that is not the current one is 409 service_changed; 409 not_a_swarm for a standalone host. Works on a service that belongs to a stack. Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.rolled_back.
+         */
+        post: operations["rollbackService"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/services/{serviceId}/spec": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One swarm service's spec and its previous spec
+         * @description The spec the manager holds for the service and the spec before its last update, with the version a write must send back. The values of the environment variables, the command line (Command and Args), the command of the health check and the log driver's option values, in both specs, can be credentials: for a caller without secrets.reveal on the environment each is replaced by the placeholder <hidden> on the server, and masked says something was. previousSpec is absent when the service was never updated. The same problems as the service detail route (404 service_not_found, 409 not_a_swarm, 503 no_manager_connected). Needs services.read (Viewer) on the environment.
+         */
+        get: operations["getServiceSpec"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5424,6 +5484,30 @@ export interface components {
             /** @description The file's owner */
             uid: string;
         };
+        ServiceForceUpdateBody: {
+            /** @description The digest the image is pinned to; empty when it names none */
+            digest: string;
+            /** @description The image the service now names: tag@sha256:digest when the tag was resolved, else what it named */
+            image: string;
+            /** @description True when Bayplan resolved the tag and wrote the digest into the spec */
+            pinned: boolean;
+            /** @description The image the service named before */
+            previousImage: string;
+            /**
+             * @description Why nothing was pinned. digest_only: the image names a digest and no tag, so it already is the exact image. no_image: the spec has no container image
+             * @enum {string}
+             */
+            reason?: "digest_only" | "no_image";
+        };
+        ServiceForceUpdateRequest: {
+            /** @description True when this repeats a stalled or failed update. It changes nothing but the audit row */
+            retry?: boolean;
+            /**
+             * Format: int64
+             * @description The version of the service the caller saw. When it is not the current one nothing is changed and the answer is 409 service_changed. Left out (0), the version read at the start of the update is used, so a repeated force update always goes through
+             */
+            version?: number;
+        };
         ServiceImageBody: {
             /** @description The digest the reference is pinned to (sha256:...); empty when it is not pinned */
             digest: string;
@@ -5592,6 +5676,17 @@ export interface components {
             /** @description How long to wait before a restart counts as having worked, as a Go duration; empty for the engine's default */
             window: string;
         };
+        ServiceRollbackBody: {
+            /** @description The image of the spec the service is going back to; empty when that spec names none */
+            image: string;
+        };
+        ServiceRollbackRequest: {
+            /**
+             * Format: int64
+             * @description The version of the service the caller saw (what GET .../spec answered). When it is not the current one nothing is changed and the answer is 409 service_changed, so a rollback only ever goes back to the spec that was shown
+             */
+            version: number;
+        };
         ServiceScaleRequest: {
             /**
              * Format: uuid
@@ -5645,6 +5740,34 @@ export interface components {
             replicas: number;
             /** @description The service ID or name: the id of a row of the services list */
             serviceId: string;
+        };
+        ServiceSpecBody: {
+            /** @description True for a Bayplan agent service */
+            agent: boolean;
+            /** @description True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment */
+            masked: boolean;
+            /**
+             * @description How the swarm runs it
+             * @enum {string}
+             */
+            mode: "replicated" | "global" | "replicated-job" | "global-job";
+            /** @description The service name */
+            name: string;
+            /** @description The spec before the last update, masked the same way; absent when the service was never updated, so there is nothing to roll back to */
+            previousSpec?: {
+                [key: string]: unknown;
+            };
+            /** @description The service's spec as the manager states it (Name, Labels, TaskTemplate, Mode, ...), with the values of the environment variables, the command line, the health check command and the log driver's options replaced by <hidden> unless the caller holds secrets.reveal */
+            spec: {
+                [key: string]: unknown;
+            };
+            /** @description The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own */
+            stack: string;
+            /**
+             * Format: int64
+             * @description The service's version: what an update or a rollback must send back to be accepted
+             */
+            version: number;
         };
         ServiceStatusCountsBody: {
             /**
@@ -9009,6 +9132,45 @@ export interface operations {
             };
         };
     };
+    forceUpdateService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The service ID or name: the id of a row of the services list */
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceForceUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceForceUpdateBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     inspectService: {
         parameters: {
             query?: never;
@@ -9031,6 +9193,80 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ServiceInspectBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    rollbackService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The service ID or name: the id of a row of the services list */
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceRollbackRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceRollbackBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getServiceSpec: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The service ID or name: the id of a row of the services list */
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceSpecBody"];
                 };
             };
             /** @description Error */

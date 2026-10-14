@@ -159,9 +159,13 @@ var phase5DetailKeys = map[string][]string{
 // phase6DetailKeys maps every Phase 6 action to the detail keys the plans that record it must
 // use, for the same reason as phase3DetailKeys. A scale records one row per service: its name, the new
 // replica count, the count it had, the code of a refusal, the bulk ID of a selection scaled at
-// once and the node the manager answered on (plan 06-01, RES-02).
+// once and the node the manager answered on (plan 06-01, RES-02). A force update records the image
+// the service was left with, its digest, whether it was pinned, whether it was a retry and the
+// code; a rollback records the version it was asked at and the code (plan 06-08, RES-02).
 var phase6DetailKeys = map[string][]string{
-	audit.ActionServiceScaled: {"name", "replicas", "previous", "code", "bulk", "node"},
+	audit.ActionServiceScaled:       {"name", "replicas", "previous", "code", "bulk", "node"},
+	audit.ActionServiceForceUpdated: {"name", "image", "digest", "retry", "pinned", "code"},
+	audit.ActionServiceRolledBack:   {"name", "version", "code"},
 }
 
 func TestEveryPhase6ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -185,7 +189,9 @@ func TestEveryPhase6ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		t.Fatalf("verify = %+v", got)
 	}
 	for key, constant := range map[string]string{
-		"service.scaled": audit.ActionServiceScaled,
+		"service.scaled":        audit.ActionServiceScaled,
+		"service.force_updated": audit.ActionServiceForceUpdated,
+		"service.rolled_back":   audit.ActionServiceRolledBack,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)

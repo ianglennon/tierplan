@@ -7021,6 +7021,58 @@
         ],
         "type": "object"
       },
+      "ServiceForceUpdateBody": {
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "description": "The digest the image is pinned to; empty when it names none",
+            "type": "string"
+          },
+          "image": {
+            "description": "The image the service now names: tag@sha256:digest when the tag was resolved, else what it named",
+            "type": "string"
+          },
+          "pinned": {
+            "description": "True when Bayplan resolved the tag and wrote the digest into the spec",
+            "type": "boolean"
+          },
+          "previousImage": {
+            "description": "The image the service named before",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why nothing was pinned. digest_only: the image names a digest and no tag, so it already is the exact image. no_image: the spec has no container image",
+            "enum": [
+              "digest_only",
+              "no_image"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "image",
+          "digest",
+          "pinned",
+          "previousImage"
+        ],
+        "type": "object"
+      },
+      "ServiceForceUpdateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "retry": {
+            "description": "True when this repeats a stalled or failed update. It changes nothing but the audit row",
+            "type": "boolean"
+          },
+          "version": {
+            "description": "The version of the service the caller saw. When it is not the current one nothing is changed and the answer is 409 service_changed. Left out (0), the version read at the start of the update is used, so a repeated force update always goes through",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "ServiceImageBody": {
         "additionalProperties": false,
         "properties": {
@@ -7404,6 +7456,34 @@
         ],
         "type": "object"
       },
+      "ServiceRollbackBody": {
+        "additionalProperties": false,
+        "properties": {
+          "image": {
+            "description": "The image of the spec the service is going back to; empty when that spec names none",
+            "type": "string"
+          }
+        },
+        "required": [
+          "image"
+        ],
+        "type": "object"
+      },
+      "ServiceRollbackRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "description": "The version of the service the caller saw (what GET .../spec answered). When it is not the current one nothing is changed and the answer is 409 service_changed, so a rollback only ever goes back to the spec that was shown",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "type": "object"
+      },
       "ServiceScaleRequest": {
         "additionalProperties": false,
         "properties": {
@@ -7534,6 +7614,63 @@
         "required": [
           "serviceId",
           "replicas"
+        ],
+        "type": "object"
+      },
+      "ServiceSpecBody": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "description": "True for a Bayplan agent service",
+            "type": "boolean"
+          },
+          "masked": {
+            "description": "True when a value was replaced by the placeholder \u003chidden\u003e because the caller may not reveal secrets on this environment",
+            "type": "boolean"
+          },
+          "mode": {
+            "description": "How the swarm runs it",
+            "enum": [
+              "replicated",
+              "global",
+              "replicated-job",
+              "global-job"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "The service name",
+            "type": "string"
+          },
+          "previousSpec": {
+            "additionalProperties": {},
+            "description": "The spec before the last update, masked the same way; absent when the service was never updated, so there is nothing to roll back to",
+            "type": "object"
+          },
+          "spec": {
+            "additionalProperties": {},
+            "description": "The service's spec as the manager states it (Name, Labels, TaskTemplate, Mode, ...), with the values of the environment variables, the command line, the health check command and the log driver's options replaced by \u003chidden\u003e unless the caller holds secrets.reveal",
+            "type": "object"
+          },
+          "stack": {
+            "description": "The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own",
+            "type": "string"
+          },
+          "version": {
+            "description": "The service's version: what an update or a rollback must send back to be accepted",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "name",
+          "mode",
+          "stack",
+          "agent",
+          "masked",
+          "spec"
         ],
         "type": "object"
       },
@@ -14002,6 +14139,79 @@
         ]
       }
     },
+    "/api/env/{envId}/services/{serviceId}/force-update": {
+      "post": {
+        "description": "Replaces every task of a service again with the settings it has now, once and never retried. Bayplan strips any digest from the spec's image, resolves the tag to its current digest through the manager with the stored registry credential, writes tag@sha256 into the spec, raises the spec's ForceUpdate counter and sends the update with the version just read, so a tag that moved is picked up. A lookup that fails is 422 image_unresolved (errors name image.ref, image.host and reason) and nothing is sent: a force update never falls back to the unpinned tag. An image that names a digest and no tag is not re-pinned: the answer says pinned false with reason digest_only. A version that is not the current one is 409 service_changed; 409 not_a_swarm for a standalone host. Works on a service that belongs to a stack. Repeating it replaces every task again: each call is its own rollout. Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.force_updated.",
+        "operationId": "forceUpdateService",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The service ID or name: the id of a row of the services list",
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "description": "The service ID or name: the id of a row of the services list",
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceForceUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceForceUpdateBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Force a service update",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
     "/api/env/{envId}/services/{serviceId}/inspect": {
       "get": {
         "description": "The manager's inspect document of the service, for the Inspect tab. The environment variables' values, the command line (Command and Args), the command of the health check and the log driver's option values, in Spec and in PreviousSpec, can be credentials: for a caller without secrets.reveal on the environment each is replaced by the placeholder \u003chidden\u003e on the server, and masked says something was. The same problems as the service detail route (404 service_not_found, 409 not_a_swarm, 503 no_manager_connected). Needs services.read (Viewer) on the environment.",
@@ -14060,6 +14270,142 @@
           }
         },
         "summary": "One swarm service's raw inspect document",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/services/{serviceId}/rollback": {
+      "post": {
+        "description": "Sends the service's current spec with rollback=previous and the version, once and never retried; the manager swaps the current and the previous spec, so a second rollback goes back to the spec just replaced. The registry credential for the previous spec's image is sent with it. The answer is 202: the rollout continues in the swarm. A service that has no previous spec is 409 no_previous_spec. A manager that refuses because the previous spec names a secret, a config or a network that no longer exists is 409 rollback_object_missing, with its words in detail. A version that is not the current one is 409 service_changed; 409 not_a_swarm for a standalone host. Works on a service that belongs to a stack. Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.rolled_back.",
+        "operationId": "rollbackService",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The service ID or name: the id of a row of the services list",
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "description": "The service ID or name: the id of a row of the services list",
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceRollbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceRollbackBody"
+                }
+              }
+            },
+            "description": "Accepted",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Roll a service back to its previous spec",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/services/{serviceId}/spec": {
+      "get": {
+        "description": "The spec the manager holds for the service and the spec before its last update, with the version a write must send back. The values of the environment variables, the command line (Command and Args), the command of the health check and the log driver's option values, in both specs, can be credentials: for a caller without secrets.reveal on the environment each is replaced by the placeholder \u003chidden\u003e on the server, and masked says something was. previousSpec is absent when the service was never updated. The same problems as the service detail route (404 service_not_found, 409 not_a_swarm, 503 no_manager_connected). Needs services.read (Viewer) on the environment.",
+        "operationId": "getServiceSpec",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The service ID or name: the id of a row of the services list",
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "description": "The service ID or name: the id of a row of the services list",
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceSpecBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "One swarm service's spec and its previous spec",
         "tags": [
           "environments"
         ]

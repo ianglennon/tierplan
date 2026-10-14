@@ -162,7 +162,7 @@ type ServiceInspectOutput struct {
 	Body         ServiceInspectBody
 }
 
-// registerServiceDetail mounts the service detail and inspect routes.
+// registerServiceDetail mounts the service detail, inspect and spec routes.
 func registerServiceDetail(r *httpx.Router, d ServicesDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "getService", Method: http.MethodGet, Path: "/api/env/{envId}/services/{serviceId}",
@@ -206,6 +206,33 @@ func registerServiceDetail(r *httpx.Router, d ServicesDeps) {
 			}
 			return &ServiceInspectOutput{CacheControl: "no-store", Body: body}, nil
 		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "getServiceSpec", Method: http.MethodGet, Path: "/api/env/{envId}/services/{serviceId}/spec",
+		Summary: "One swarm service's spec and its previous spec",
+		Description: "The spec the manager holds for the service and the spec before its last update, with the version a write must send back. " +
+			"The values of the environment variables, the command line (Command and Args), the command of the health check and the log driver's option values, in both specs, can be credentials: for a caller without secrets.reveal on the environment each is replaced by the placeholder <hidden> on the server, and masked says something was. " +
+			"previousSpec is absent when the service was never updated. " +
+			"The same problems as the service detail route (404 service_not_found, 409 not_a_swarm, 503 no_manager_connected). " +
+			"Needs services.read (Viewer) on the environment.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermServicesRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *ServiceDetailInput) (*ServiceSpecOutput, error) {
+			p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+			if p == nil || env == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			body, err := getServiceSpec(ctx, d, p, env.ID, in.ServiceID)
+			if err != nil {
+				return nil, err
+			}
+			return &ServiceSpecOutput{CacheControl: "no-store", Body: body}, nil
+		})
+}
+
+// getServiceSpec is not written yet.
+func getServiceSpec(_ context.Context, _ ServicesDeps, _ *rbac.Principal, _, _ string) (ServiceSpecBody, error) {
+	return ServiceSpecBody{}, httpx.Problem(http.StatusNotImplemented, "not_implemented", "not implemented")
 }
 
 // readService reads one service from a manager, and the swarm's networks too when

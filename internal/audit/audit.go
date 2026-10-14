@@ -159,6 +159,8 @@ const (
 	ActionShellClosed                = "shell.closed"
 	ActionShellEnded                 = "shell.ended"
 	ActionServiceScaled              = "service.scaled"
+	ActionServiceForceUpdated        = "service.force_updated"
+	ActionServiceRolledBack          = "service.rolled_back"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

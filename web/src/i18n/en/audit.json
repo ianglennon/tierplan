@@ -205,7 +205,9 @@
         "ended": "Container shell ended by an administrator"
       },
       "service": {
-        "scaled": "Service scaled"
+        "scaled": "Service scaled",
+        "force_updated": "Service force-updated",
+        "rolled_back": "Service rolled back"
       }
     },
     "coalesced": {
