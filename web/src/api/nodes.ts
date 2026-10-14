@@ -286,3 +286,59 @@ export function useSetNodeRole(envId: string) {
     onSettled: () => refreshNodes(queryClient, envId),
   });
 }
+
+export type NodeLabelImpact = components["schemas"]["NodeLabelImpactBody"];
+export type NodeLabelImpactRow = components["schemas"]["NodeLabelImpactRow"];
+
+// useNodeLabelImpact asks the server what a set of labels would do to the services' placement
+// constraints. It is a mutation because each answer is for the labels it was asked about and is
+// never cached; the editor asks again whenever the labels change, and only the latest call's
+// answer is the one the hook shows. It writes nothing.
+export function useNodeLabelImpact(envId: string, nodeId: string) {
+  return useMutation<NodeLabelImpact, NodeActionError, Record<string, string>>({
+    mutationKey: ["env", envId, "node-label-impact", nodeId],
+    mutationFn: async (labels) => {
+      try {
+        const res = await api.POST("/api/env/{envId}/nodes/{nodeId}/labels/impact", {
+          params: { path: { envId, nodeId } },
+          body: { labels },
+        });
+        if (!res.data) throw nodeActionError(res.error, res.response);
+        return res.data;
+      } catch (e) {
+        throw e instanceof NodeActionError ? e : new NodeActionError(0);
+      }
+    },
+    retry: false,
+  });
+}
+
+export interface NodeLabelsChange {
+  nodeId: string;
+  // The node's labels as they are to be saved: they replace the ones it has.
+  labels: Record<string, string>;
+  // The version of the impact the person saw, which the server checks against the node's now.
+  version: number;
+}
+
+// useSetNodeLabels is the mutation behind Save labels. It does not retry: a write whose answer
+// was lost may have happened, so the nodes are read again whatever the answer.
+export function useSetNodeLabels(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, NodeActionError, NodeLabelsChange>({
+    mutationKey: ["env", envId, "node-labels"],
+    mutationFn: async ({ nodeId, labels, version }) => {
+      try {
+        const res = await api.PUT("/api/env/{envId}/nodes/{nodeId}/labels", {
+          params: { path: { envId, nodeId } },
+          body: { labels, version },
+        });
+        if (!res.response.ok) throw nodeActionError(res.error, res.response);
+      } catch (e) {
+        throw e instanceof NodeActionError ? e : new NodeActionError(0);
+      }
+    },
+    retry: false,
+    onSettled: () => refreshNodes(queryClient, envId),
+  });
+}

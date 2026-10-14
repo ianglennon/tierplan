@@ -49,6 +49,8 @@ interface KeyValueEditorProps {
   value: readonly KeyValueRow[];
   onChange: (rows: KeyValueRow[]) => void;
   labels: KeyValueEditorLabels;
+  // A message for each row that has a problem, by the row's id.
+  errors?: ReadonlyMap<string, string>;
   className?: string;
 }
 

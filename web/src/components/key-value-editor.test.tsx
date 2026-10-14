@@ -62,6 +62,27 @@ describe("KeyValueEditor", () => {
   });
 });
 
+describe("KeyValueEditor row errors", () => {
+  it("shows the message of a row that has one under it, marks its name invalid and describes it", () => {
+    const bad = newRow("com.docker.x", "1");
+    const errors = new Map([[bad.id, "Labels starting with com.docker. are reserved."]]);
+    render(
+      <KeyValueEditor
+        value={[newRow("a", "1"), bad]}
+        onChange={() => {}}
+        labels={labels}
+        errors={errors}
+      />,
+    );
+    const names = screen.getAllByLabelText("Label name");
+    expect(names[0]?.getAttribute("aria-invalid")).toBeNull();
+    expect(names[1]?.getAttribute("aria-invalid")).toBe("true");
+    const message = screen.getByText("Labels starting with com.docker. are reserved.");
+    expect(names[1]?.getAttribute("aria-describedby")).toBe(message.id);
+    expect(message.id).not.toBe("");
+  });
+});
+
 describe("entriesOf", () => {
   it("leaves out a row with no name, trims names, and keeps the last value of a repeated name", () => {
     expect(

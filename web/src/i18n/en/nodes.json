@@ -172,7 +172,49 @@
     "labels": {
       "title": "Node labels",
       "helper": "Services use labels in placement constraints, such as node.labels.disk==ssd.",
-      "empty": "No labels."
+      "empty": "No labels.",
+      "add": "Add label",
+      "key": "Label name",
+      "value": "Label value",
+      "remove": "Remove label {{name}}",
+      "removeEmpty": "Remove label",
+      "save": "Save labels",
+      "discard": "Discard changes",
+      "saved": "Saved labels on {{name}}.",
+      "problem": {
+        "reserved": "Labels starting with {{prefix}} are reserved.",
+        "keyTooLong": "A label name can be at most 256 bytes.",
+        "valueTooLong": "A label value can be at most 4096 bytes.",
+        "duplicate": "This name is used twice.",
+        "tooMany": "A node can have at most 64 labels."
+      },
+      "impact": {
+        "title": "Effect on services",
+        "service": "Service",
+        "constraint": "Constraint",
+        "before": "Before",
+        "after": "After",
+        "matches": "Matches",
+        "doesNotMatch": "Doesn't match",
+        "noLongerMatches": "No longer matches",
+        "nowMatches": "Now matches",
+        "summary_one": "Swarm may move {{count, number}} task off this node.",
+        "summary_other": "Swarm may move {{count, number}} tasks off this node.",
+        "empty": "No service uses these labels in a placement constraint.",
+        "checking": "Checking services…",
+        "failed": "Couldn't check which services use these labels.",
+        "retry": "Retry checking services"
+      },
+      "confirm": {
+        "title": "Apply label changes?",
+        "body_one": "{{count, number}} service has a constraint this node would no longer meet. Swarm moves its tasks to other nodes, or leaves them pending if no node matches.",
+        "body_other": "{{count, number}} services have constraints this node would no longer meet. Swarm moves their tasks to other nodes, or leaves them pending if no node matches.",
+        "cancel": "Cancel",
+        "apply": "Apply labels"
+      },
+      "refusal": {
+        "node_changed": "This node changed after you started editing. Nothing was saved. Check the services below and save again."
+      }
     },
     "inspect": {
       "loadFailed": "Couldn't load the inspect document of {{name}}.",
