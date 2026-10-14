@@ -1290,6 +1290,53 @@ func TestClusterReadsNodesServicesAndTheAgentTasksFromAManager(t *testing.T) {
 	}
 }
 
+func TestClusterNodeRowsCarryTheFactsAConstraintReads(t *testing.T) {
+	cfg := dockertest.FakeConfig{
+		SwarmState: "active", SwarmControl: true,
+		NodeRows: []dockertest.FakeNode{
+			{
+				ID: "n1", Hostname: "mgr-a", Role: "manager", Leader: true, OS: "linux", Arch: "aarch64",
+				Address: "10.0.0.5", ManagerAddr: "10.0.0.5:2377", NanoCPUs: 4_000_000_000, MemoryBytes: 8 << 30,
+				Labels: map[string]string{"disk": "ssd"}, EngineLabels: map[string]string{"type": "gpu"},
+			},
+			{ID: "n2", Hostname: "wrk-a", OS: "linux"},
+		},
+		ServiceRows: []dockertest.FakeService{
+			{ID: "s1", Name: "web", Mode: "replicated", Desired: 1, Constraints: []string{"node.role==worker", "node.labels.disk==ssd"}},
+			{ID: "s2", Name: "plain", Mode: "global", Desired: 1},
+		},
+	}
+	got, err := newClient(t, dockertest.NewFake(t, cfg)).Cluster(context.Background())
+	if err != nil {
+		t.Fatalf("Cluster: %v", err)
+	}
+	byHost := map[string]dockerx.NodeRow{}
+	for _, n := range got.Nodes {
+		byHost[n.Hostname] = n
+	}
+	m := byHost["mgr-a"]
+	if m.Address != "10.0.0.5" || m.Arch != "aarch64" || m.NanoCPUs != 4_000_000_000 || m.MemoryBytes != 8<<30 || m.ManagerAddr != "10.0.0.5:2377" {
+		t.Errorf("mgr-a = %+v, want its address, architecture, resources and manager address", m)
+	}
+	if m.Labels["disk"] != "ssd" || m.EngineLabels["type"] != "gpu" {
+		t.Errorf("mgr-a labels = %v, engine labels = %v", m.Labels, m.EngineLabels)
+	}
+	w := byHost["wrk-a"]
+	if w.Labels == nil || w.EngineLabels == nil || len(w.Labels) != 0 || w.ManagerAddr != "" {
+		t.Errorf("wrk-a = %+v, want empty non-nil label maps and no manager address", w)
+	}
+	svc := map[string]dockerx.ServiceRow{}
+	for _, s := range got.Services {
+		svc[s.Name] = s
+	}
+	if want := []string{"node.role==worker", "node.labels.disk==ssd"}; !slices.Equal(svc["web"].Constraints, want) {
+		t.Errorf("web constraints = %v, want %v", svc["web"].Constraints, want)
+	}
+	if svc["plain"].Constraints == nil || len(svc["plain"].Constraints) != 0 {
+		t.Errorf("plain constraints = %#v, want empty and not nil", svc["plain"].Constraints)
+	}
+}
+
 func TestClusterServiceRowsCarryPortsUpdateMessagePreviousSpecAndCreatedAt(t *testing.T) {
 	created := time.Date(2026, 9, 1, 8, 30, 0, 0, time.UTC)
 	cfg := clusterManager()

@@ -1,0 +1,996 @@
+[
+  {
+    "constraint": "node.role==manager",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.role==manager",
+    "node": {
+      "id": "n2",
+      "hostname": "wrk-1",
+      "ip": "192.168.1.20",
+      "role": "worker",
+      "os": "windows",
+      "arch": "aarch64",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.role!=manager",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.role!=manager",
+    "node": {
+      "id": "n2",
+      "hostname": "wrk-1",
+      "ip": "192.168.1.20",
+      "role": "worker",
+      "os": "windows",
+      "arch": "aarch64",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": true
+  },
+  {
+    "constraint": "NODE.ROLE==Manager",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": true
+  },
+  {
+    "constraint": "  node.role  ==  manager ",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.role!=manager",
+    "node": {
+      "id": "n4",
+      "hostname": "",
+      "ip": "",
+      "role": "",
+      "os": "",
+      "arch": "",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.role==worker",
+    "node": {
+      "id": "n4",
+      "hostname": "",
+      "ip": "",
+      "role": "",
+      "os": "",
+      "arch": "",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.labels.disk==SSD",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.labels.disk==ssd",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.labels.Disk==ssd",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.labels.disk!=ssd",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.labels.disk!=hdd",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.labels.zone!=a",
+    "node": {
+      "id": "n2",
+      "hostname": "wrk-1",
+      "ip": "192.168.1.20",
+      "role": "worker",
+      "os": "windows",
+      "arch": "aarch64",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.labels.zone==a",
+    "node": {
+      "id": "n2",
+      "hostname": "wrk-1",
+      "ip": "192.168.1.20",
+      "role": "worker",
+      "os": "windows",
+      "arch": "aarch64",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.labels.zone==a",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.labels.Region==EU",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.labels.region==eu",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": false
+  },
+  {
+    "constraint": "NODE.LABELS.zone==a",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.ip==10.0.0.0/8",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.ip==10.0.0.0/8",
+    "node": {
+      "id": "n2",
+      "hostname": "wrk-1",
+      "ip": "192.168.1.20",
+      "role": "worker",
+      "os": "windows",
+      "arch": "aarch64",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.ip!=10.0.0.0/8",
+    "node": {
+      "id": "n2",
+      "hostname": "wrk-1",
+      "ip": "192.168.1.20",
+      "role": "worker",
+      "os": "windows",
+      "arch": "aarch64",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.ip!=10.0.0.0/8",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.ip==10.1.2.3",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.ip==10.1.2.4",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.ip!=10.1.2.4",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.ip==bogus",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.ip!=bogus",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.ip==192.168.1.0/24",
+    "node": {
+      "id": "n2",
+      "hostname": "wrk-1",
+      "ip": "192.168.1.20",
+      "role": "worker",
+      "os": "windows",
+      "arch": "aarch64",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.ip==192.168.1.128/25",
+    "node": {
+      "id": "n2",
+      "hostname": "wrk-1",
+      "ip": "192.168.1.20",
+      "role": "worker",
+      "os": "windows",
+      "arch": "aarch64",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.ip==010.1.2.3",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.ip==10.1.2.3/33",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.ip==2001:db8::2",
+    "node": {
+      "id": "n3",
+      "hostname": "v6-1",
+      "ip": "2001:db8::2",
+      "role": "worker",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.ip==2001:db8::/32",
+    "node": {
+      "id": "n3",
+      "hostname": "v6-1",
+      "ip": "2001:db8::2",
+      "role": "worker",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.ip==2001:db9::/32",
+    "node": {
+      "id": "n3",
+      "hostname": "v6-1",
+      "ip": "2001:db8::2",
+      "role": "worker",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.ip!=2001:db9::/32",
+    "node": {
+      "id": "n3",
+      "hostname": "v6-1",
+      "ip": "2001:db8::2",
+      "role": "worker",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.ip==10.0.0.0/8",
+    "node": {
+      "id": "n3",
+      "hostname": "v6-1",
+      "ip": "2001:db8::2",
+      "role": "worker",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.ip==::ffff:10.1.2.3",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.ip!=10.0.0.0/8",
+    "node": {
+      "id": "n4",
+      "hostname": "",
+      "ip": "",
+      "role": "",
+      "os": "",
+      "arch": "",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.ip==10.0.0.0/8",
+    "node": {
+      "id": "n4",
+      "hostname": "",
+      "ip": "",
+      "role": "",
+      "os": "",
+      "arch": "",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.platform.arch==x86_64",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.platform.arch==aarch64",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.platform.arch==AARCH64",
+    "node": {
+      "id": "n2",
+      "hostname": "wrk-1",
+      "ip": "192.168.1.20",
+      "role": "worker",
+      "os": "windows",
+      "arch": "aarch64",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.platform.os==linux",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.platform.os!=linux",
+    "node": {
+      "id": "n2",
+      "hostname": "wrk-1",
+      "ip": "192.168.1.20",
+      "role": "worker",
+      "os": "windows",
+      "arch": "aarch64",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.platform.os==linux",
+    "node": {
+      "id": "n4",
+      "hostname": "",
+      "ip": "",
+      "role": "",
+      "os": "",
+      "arch": "",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.platform.os!=linux",
+    "node": {
+      "id": "n4",
+      "hostname": "",
+      "ip": "",
+      "role": "",
+      "os": "",
+      "arch": "",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": true
+  },
+  {
+    "constraint": "engine.labels.type==gpu",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": true
+  },
+  {
+    "constraint": "engine.labels.type==gpu",
+    "node": {
+      "id": "n2",
+      "hostname": "wrk-1",
+      "ip": "192.168.1.20",
+      "role": "worker",
+      "os": "windows",
+      "arch": "aarch64",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": false
+  },
+  {
+    "constraint": "engine.labels.Tier==prod",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": true
+  },
+  {
+    "constraint": "engine.labels.tier==prod",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": false
+  },
+  {
+    "constraint": "engine.labels.type!=gpu",
+    "node": {
+      "id": "n2",
+      "hostname": "wrk-1",
+      "ip": "192.168.1.20",
+      "role": "worker",
+      "os": "windows",
+      "arch": "aarch64",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.hostname==mgr-1",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.hostname!=mgr-1",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.hostname==x",
+    "node": {
+      "id": "n4",
+      "hostname": "",
+      "ip": "",
+      "role": "",
+      "os": "",
+      "arch": "",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.hostname!=x",
+    "node": {
+      "id": "n4",
+      "hostname": "",
+      "ip": "",
+      "role": "",
+      "os": "",
+      "arch": "",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.id==n1",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.id==N1",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.id!=n1",
+    "node": {
+      "id": "n2",
+      "hostname": "wrk-1",
+      "ip": "192.168.1.20",
+      "role": "worker",
+      "os": "windows",
+      "arch": "aarch64",
+      "labels": {},
+      "engineLabels": {}
+    },
+    "matches": true
+  },
+  {
+    "constraint": "node.colour==red",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.colour!=red",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "matches": false
+  },
+  {
+    "constraint": "node.role=manager",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "error": true
+  },
+  {
+    "constraint": "",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "error": true
+  },
+  {
+    "constraint": "node.role==",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "error": true
+  },
+  {
+    "constraint": "==manager",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "error": true
+  },
+  {
+    "constraint": "1node==x",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "error": true
+  },
+  {
+    "constraint": "node role==manager",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "error": true
+  },
+  {
+    "constraint": "node.role===manager",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "error": true
+  },
+  {
+    "constraint": "node.labels.x==a@b",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "error": true
+  },
+  {
+    "constraint": "node.role<manager",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "error": true
+  },
+  {
+    "constraint": "x==a",
+    "node": {
+      "id": "n1",
+      "hostname": "Mgr-1",
+      "ip": "10.1.2.3",
+      "role": "manager",
+      "os": "linux",
+      "arch": "x86_64",
+      "labels": { "disk": "SSD", "zone": "a", "Region": "eu" },
+      "engineLabels": { "type": "gpu", "Tier": "Prod" }
+    },
+    "error": true
+  }
+]

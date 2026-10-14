@@ -56,6 +56,18 @@ type NodeRow struct {
 	// Reachability is the manager's reachability (reachable, unreachable or
 	// unknown), empty for a worker.
 	Reachability string
+	// Address is the address the swarm reaches the node at (Status.Addr), the one the
+	// node.ip constraint is matched against.
+	Address string
+	// Arch is the platform architecture the engine reports (x86_64, aarch64).
+	Arch string
+	// NanoCPUs and MemoryBytes are the node's resources, zero when not reported.
+	NanoCPUs, MemoryBytes int64
+	// Labels are the labels of the node's spec (node.labels.*), EngineLabels those of
+	// its engine (engine.labels.*). Never nil.
+	Labels, EngineLabels map[string]string
+	// ManagerAddr is the address a manager listens on for the swarm, empty for a worker.
+	ManagerAddr string
 }
 
 // ServiceRow is one swarm service with its task counts.
@@ -89,6 +101,9 @@ type ServiceRow struct {
 	// Labels are the labels of the service's spec. They stay on the server, where the
 	// list search reads them; no response carries them.
 	Labels map[string]string
+	// Constraints are the placement constraints of the service's spec, as written. Never
+	// nil.
+	Constraints []string
 }
 
 // ServicePort is one port a swarm service publishes.

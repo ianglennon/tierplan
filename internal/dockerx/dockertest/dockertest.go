@@ -208,6 +208,15 @@ type FakeNode struct {
 	OS            string
 	Leader        bool
 	Reachability  string
+	// Address is the node's Status.Addr, Arch its platform architecture (zero is
+	// "x86_64"), NanoCPUs and MemoryBytes its resources, Labels its spec labels,
+	// EngineLabels the labels of its engine and ManagerAddr the address a manager
+	// reports for the raft port.
+	Address               string
+	Arch                  string
+	NanoCPUs, MemoryBytes int64
+	Labels, EngineLabels  map[string]string
+	ManagerAddr           string
 }
 
 // FakeService is one entry of /services. Mode is "replicated" (the default),
@@ -229,6 +238,8 @@ type FakeService struct {
 	Mounts   []FakeServiceMount
 	// Image is the image the spec names; empty leaves the container spec without one.
 	Image string
+	// Constraints are the placement constraints of the service's spec.
+	Constraints []string
 	// Version is the version the service reports and a write must send back; zero is 1.
 	// Every update the fake accepts adds one.
 	Version uint64
@@ -1180,22 +1191,30 @@ func (c FakeConfig) nodeList() []swarm.Node {
 		if state == "" {
 			state = "ready"
 		}
+		arch := fn.Arch
+		if arch == "" {
+			arch = "x86_64"
+		}
 		n := swarm.Node{
-			ID:   fn.ID,
-			Spec: swarm.NodeSpec{Role: swarm.NodeRole(role), Availability: swarm.NodeAvailability(avail)},
-			Description: swarm.NodeDescription{
-				Hostname: fn.Hostname,
-				Platform: swarm.Platform{OS: fn.OS, Architecture: "x86_64"},
-				Engine:   swarm.EngineDescription{EngineVersion: fn.EngineVersion},
+			ID: fn.ID,
+			Spec: swarm.NodeSpec{
+				Annotations: swarm.Annotations{Labels: fn.Labels},
+				Role:        swarm.NodeRole(role), Availability: swarm.NodeAvailability(avail),
 			},
-			Status: swarm.NodeStatus{State: swarm.NodeState(state)},
+			Description: swarm.NodeDescription{
+				Hostname:  fn.Hostname,
+				Platform:  swarm.Platform{OS: fn.OS, Architecture: arch},
+				Resources: swarm.Resources{NanoCPUs: fn.NanoCPUs, MemoryBytes: fn.MemoryBytes},
+				Engine:    swarm.EngineDescription{EngineVersion: fn.EngineVersion, Labels: fn.EngineLabels},
+			},
+			Status: swarm.NodeStatus{State: swarm.NodeState(state), Addr: fn.Address},
 		}
 		if role == "manager" {
 			reach := fn.Reachability
 			if reach == "" {
 				reach = "reachable"
 			}
-			n.ManagerStatus = &swarm.ManagerStatus{Leader: fn.Leader, Reachability: swarm.Reachability(reach)}
+			n.ManagerStatus = &swarm.ManagerStatus{Leader: fn.Leader, Reachability: swarm.Reachability(reach), Addr: fn.ManagerAddr}
 		}
 		out = append(out, n)
 	}
@@ -1229,6 +1248,9 @@ func (c FakeConfig) serviceList(withStatus bool) []swarm.Service {
 		}
 		s.Spec.Name = fs.Name
 		s.Spec.Labels = fs.Labels
+		if len(fs.Constraints) > 0 {
+			s.Spec.TaskTemplate.Placement = &swarm.Placement{Constraints: slices.Clone(fs.Constraints)}
+		}
 		for _, target := range fs.Networks {
 			s.Spec.TaskTemplate.Networks = append(s.Spec.TaskTemplate.Networks, swarm.NetworkAttachmentConfig{Target: target})
 		}
