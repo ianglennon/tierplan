@@ -656,3 +656,171 @@ func TestServicesListCapsAt500(t *testing.T) {
 		t.Errorf("q=svc-5 = %d total %d items %d capped %v, want 100 rows", rec.code, got.Total, len(got.Items), got.Capped)
 	}
 }
+
+// Bulk scale (plan 06-05, RES-02, D-10, P4 D-13): the targets array of the scale route
+// behaves as the container bulk actions do.
+
+func bulkScaleServices() []dockertest.FakeService {
+	rep := func(id, name string) dockertest.FakeService {
+		return dockertest.FakeService{ID: id, Name: name, Mode: "replicated", Running: 2, Desired: 2, Image: scaleImage, Version: 3}
+	}
+	return []dockertest.FakeService{
+		rep("svc-a", "alpha"), rep("svc-b", "bravo"), rep("svc-c", "charlie"),
+		{ID: "svc-g", Name: "bayplan-agent", Mode: "global", Running: 1, Desired: 1},
+		{ID: "svc-j", Name: "backup", Mode: "replicated-job"},
+	}
+}
+
+const bulkScaleBody = `{"targets":[` +
+	`{"serviceId":"svc-a","replicas":4},{"serviceId":"svc-b","replicas":0},{"serviceId":"svc-c","replicas":7},` +
+	`{"serviceId":"svc-g","replicas":2},{"serviceId":"svc-j","replicas":2}]}`
+
+func TestBulkScaleSharesOneBulkID(t *testing.T) {
+	f, e := serviceEnv(t, bulkScaleServices()...)
+	rec := f.scale(t, e, bulkScaleBody)
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	ans := decode[scaleAnswer](t, rec)
+	if ans.BulkID == "" || len(ans.Results) != 5 {
+		t.Fatalf("answer = %s", rec.body)
+	}
+	var done, skipped int
+	for i, r := range ans.Results {
+		wantID := []string{"svc-a", "svc-b", "svc-c", "svc-g", "svc-j"}[i]
+		if r.ServiceID != wantID {
+			t.Errorf("result %d is %s, want %s (request order)", i, r.ServiceID, wantID)
+		}
+		switch r.Result {
+		case "done":
+			done++
+		case "skipped":
+			skipped++
+			if r.Code != "not_scalable" {
+				t.Errorf("%s skipped with code %q, want not_scalable", r.ServiceID, r.Code)
+			}
+		}
+	}
+	if done != 3 || skipped != 2 {
+		t.Errorf("done %d, skipped %d, want 3 and 2: %s", done, skipped, rec.body)
+	}
+
+	rows := f.serviceAudits(t)
+	if len(rows) != 5 {
+		t.Fatalf("audit rows = %+v, want one per target, skipped ones included", rows)
+	}
+	var ok, failed int
+	for _, row := range rows {
+		if row.Action != audit.ActionServiceScaled {
+			t.Errorf("row action = %s, want %s", row.Action, audit.ActionServiceScaled)
+		}
+		if row.Details["bulk"] != ans.BulkID {
+			t.Errorf("row %s has bulk %q, want the response's %q", row.TargetID, row.Details["bulk"], ans.BulkID)
+		}
+		switch row.Result {
+		case string(audit.ResultSuccess):
+			ok++
+		case string(audit.ResultFailure):
+			failed++
+			if row.Reason != "not_scalable" || row.Details["code"] != "not_scalable" {
+				t.Errorf("failed row %s = reason %q code %q, want not_scalable", row.TargetID, row.Reason, row.Details["code"])
+			}
+		}
+	}
+	if ok != 3 || failed != 2 {
+		t.Errorf("audit success %d, failure %d, want 3 and 2: %+v", ok, failed, rows)
+	}
+
+	t.Run("a bulk ID the caller sends is the one recorded", func(t *testing.T) {
+		const mine = "0192d7a4-3c4b-7c1e-9d6a-5b1f2e3a4c5d"
+		rec := f.scale(t, e, `{"bulkId":"`+mine+`","targets":[{"serviceId":"svc-a","replicas":9},{"serviceId":"svc-b","replicas":9}]}`)
+		if rec.code != http.StatusOK {
+			t.Fatalf("status = %d: %s", rec.code, rec.body)
+		}
+		if got := decode[scaleAnswer](t, rec).BulkID; got != mine {
+			t.Errorf("bulkId = %q, want %q", got, mine)
+		}
+	})
+}
+
+func TestBulkScaleIsANoOpTheSecondTime(t *testing.T) {
+	f, e := serviceEnv(t, bulkScaleServices()...)
+	const body = `{"targets":[{"serviceId":"svc-a","replicas":4},{"serviceId":"svc-b","replicas":0},{"serviceId":"svc-c","replicas":7}]}`
+	if rec := f.scale(t, e, body); rec.code != http.StatusOK {
+		t.Fatalf("first scale: %d %s", rec.code, rec.body)
+	}
+	writes := len(f.fake.Writes())
+	before := len(f.serviceAudits(t))
+
+	rec := f.scale(t, e, body)
+	if rec.code != http.StatusOK {
+		t.Fatalf("second scale: %d %s", rec.code, rec.body)
+	}
+	ans := decode[scaleAnswer](t, rec)
+	if len(ans.Results) != 3 {
+		t.Fatalf("answer = %s", rec.body)
+	}
+	for _, r := range ans.Results {
+		if r.Result != "done" || r.Changed {
+			t.Errorf("%s = %+v, want done with changed false", r.ServiceID, r)
+		}
+	}
+	if got := len(f.fake.Writes()); got != writes {
+		t.Errorf("writes grew from %d to %d on a repeat, want none", writes, got)
+	}
+	rows := f.serviceAudits(t)[before:]
+	if len(rows) != 3 {
+		t.Fatalf("the repeat wrote %d audit rows, want 3: %+v", len(rows), rows)
+	}
+	for _, row := range rows {
+		if row.Result != string(audit.ResultSuccess) || row.Details["code"] != "unchanged" || row.Details["bulk"] != ans.BulkID {
+			t.Errorf("repeat row %s = %+v, want success, code unchanged, bulk %q", row.TargetID, row, ans.BulkID)
+		}
+	}
+}
+
+func TestBulkScaleRefusesDuplicatesAndTooMany(t *testing.T) {
+	f, e := serviceEnv(t, bulkScaleServices()...)
+	before := len(f.fake.Writes())
+
+	t.Run("a service named twice", func(t *testing.T) {
+		rec := f.scale(t, e, `{"targets":[{"serviceId":"svc-a","replicas":1},{"serviceId":"svc-b","replicas":1},{"serviceId":"svc-a","replicas":2}]}`)
+		if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "duplicate_target" {
+			t.Errorf("= %d %s (%s), want 422 duplicate_target", rec.code, rec.body, rec.ptyp)
+		}
+	})
+
+	build := func(n int) string {
+		var b strings.Builder
+		b.WriteString(`{"targets":[`)
+		for i := range n {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			fmt.Fprintf(&b, `{"serviceId":"svc-%d","replicas":1}`, i)
+		}
+		b.WriteString(`]}`)
+		return b.String()
+	}
+
+	t.Run("more than 100 targets", func(t *testing.T) {
+		rec := f.scale(t, e, build(101))
+		if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "too_many_targets" {
+			t.Errorf("= %d (%s) %.200s, want 422 too_many_targets", rec.code, rec.ptyp, rec.body)
+		}
+	})
+
+	t.Run("exactly 100 targets is accepted", func(t *testing.T) {
+		rec := f.scale(t, e, build(100))
+		if rec.code != http.StatusOK {
+			t.Fatalf("status = %d: %.200s", rec.code, rec.body)
+		}
+		if got := len(decode[scaleAnswer](t, rec).Results); got != 100 {
+			t.Errorf("results = %d, want 100", got)
+		}
+	})
+
+	if got := len(f.fake.Writes()); got != before {
+		t.Errorf("writes grew from %d to %d, want no write for a refused or unknown-service request", before, got)
+	}
+}
