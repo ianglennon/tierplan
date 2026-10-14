@@ -27,11 +27,23 @@ type FakeServiceUpdate struct {
 	Spec      swarm.ServiceSpec
 }
 
-// fakeServiceState is what accepted updates left a service with.
+// fakeServiceState is what accepted updates left a service with: its version, its spec, the
+// spec before the last update and the update status a rollback left.
 type fakeServiceState struct {
-	version uint64
-	spec    swarm.ServiceSpec
+	version  uint64
+	spec     swarm.ServiceSpec
+	previous *swarm.ServiceSpec
+	// updateState and updateMessage are the UpdateStatus a rollback started, empty for none.
+	updateState, updateMessage string
 }
+
+// rollbackMessage is the message a manager gives the update status of a rollback an operator
+// asked for.
+const rollbackMessage = "manually requested rollback"
+
+// previousSpecRefusal is what a manager answers a rollback of a service that has never been
+// updated.
+const previousSpecRefusal = "service does not have a previous spec"
 
 // outOfSequenceRefusal is the message a real manager gives an update whose version is
 // not the service's current one (RESEARCH E8).
@@ -58,6 +70,13 @@ func (c FakeConfig) withServices(state map[string]fakeServiceState) FakeConfig {
 		}
 		spec := st.spec
 		fs.Spec, fs.Version = &spec, st.version
+		if st.previous != nil {
+			prev := *st.previous
+			fs.PreviousSpec = &prev
+		}
+		if st.updateState != "" {
+			fs.UpdateState, fs.UpdateMessage = st.updateState, st.updateMessage
+		}
 		if r := spec.Mode.Replicated; r != nil && r.Replicas != nil {
 			fs.Desired, fs.Running = *r.Replicas, *r.Replicas
 		}
@@ -171,11 +190,32 @@ func (f *Fake) serveServiceUpdate(w http.ResponseWriter, r *http.Request, p stri
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": outOfSequenceRefusal})
 		return true
 	}
+	var now swarm.ServiceSpec
+	for _, s := range cfg.serviceList(false) {
+		if s.ID == fs.ID {
+			now = s.Spec
+		}
+	}
+	next := fakeServiceState{version: current + 1, spec: spec, previous: &now}
+	if q.Get("rollback") == "previous" {
+		// A rollback ignores the spec in the body: the previous spec becomes the service's and
+		// the one it replaces becomes the previous one, so a second rollback toggles back.
+		switch {
+		case fs.RollbackError != "":
+			writeJSON(w, http.StatusBadRequest, map[string]string{"message": fs.RollbackError})
+			return true
+		case fs.PreviousSpec == nil:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"message": previousSpecRefusal})
+			return true
+		}
+		next.spec = *fs.PreviousSpec
+		next.updateState, next.updateMessage = "rollback_started", rollbackMessage
+	}
 	f.mu.Lock()
 	if f.svcState == nil {
 		f.svcState = map[string]fakeServiceState{}
 	}
-	f.svcState[fs.ID] = fakeServiceState{version: current + 1, spec: spec}
+	f.svcState[fs.ID] = next
 	f.svcUpdates = append(f.svcUpdates, FakeServiceUpdate{
 		ServiceID: fs.ID, Version: q.Get("version"), Query: q, Auth: r.Header.Get("X-Registry-Auth"), Spec: spec,
 	})

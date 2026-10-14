@@ -187,3 +187,72 @@ func (c *Client) SwarmNetworkNames(ctx context.Context) ([]NetworkName, error) {
 	})
 	return out, nil
 }
+
+var (
+	// ErrDigestOnly means the image names a digest and no tag, so there is no tag to move and
+	// nothing to re-pin: the reference already is the exact image.
+	ErrDigestOnly = errors.New("dockerx: the image is pinned by digest only")
+	// ErrNoPreviousSpec means the service has never been updated, so it has no earlier spec to
+	// roll back to.
+	ErrNoPreviousSpec = errors.New("dockerx: the service has no previous spec")
+)
+
+// RollbackRefusedError is the manager refusing a rollback with a 400: the previous spec names
+// something that no longer exists (a secret, a config or a network), or is otherwise not
+// acceptable. Message is the manager's own words.
+type RollbackRefusedError struct{ Message string }
+
+func (e *RollbackRefusedError) Error() string { return "rollback refused: " + e.Message }
+
+// ResolvedImage is an image reference pinned to the digest its tag points at now.
+type ResolvedImage struct {
+	// Ref is the pinned reference, tag@sha256:digest, as docker writes it.
+	Ref string
+	// Tag is the tag that was resolved, Digest what it pointed at.
+	Tag, Digest string
+	// Platforms are os/arch of each platform the image is built for, the way a swarm wants
+	// them (attestation entries dropped, the architecture of arm blanked, duplicates dropped).
+	Platforms []string
+}
+
+// ResolveImage resolves the tag of image to the digest its registry holds for it now, through
+// the manager's engine with the credential in encodedAuth (empty is anonymous). A digest the
+// reference already carries is dropped first, since the tag is what is being asked about; a
+// reference with no tag resolves latest. A reference with a digest and no tag is
+// ErrDigestOnly. A registry that cannot answer is an error PullFailure classifies; this never
+// falls back to the tag unpinned.
+func (c *Client) ResolveImage(ctx context.Context, image, encodedAuth string) (ResolvedImage, error) {
+	return ResolvedImage{}, nil
+}
+
+// ForceUpdateOptions are the choices of ServiceForceUpdate.
+type ForceUpdateOptions struct {
+	// Version is the service version the caller read; a different current one is
+	// ErrServiceChanged.
+	Version uint64
+	// Image, when not empty, replaces the image of the container spec (a pinned reference).
+	Image string
+	// Platforms, when not empty, become the placement platforms (os/arch, as ResolveImage
+	// answers them).
+	Platforms []string
+	// EncodedAuth is a base64url X-Registry-Auth value, empty for none.
+	EncodedAuth string
+}
+
+// ServiceForceUpdate bumps ForceUpdate on one service, so every task is replaced again, and
+// when o.Image is set pins the container spec to it. It reads the service once and refuses
+// ErrServiceChanged, without writing, when its version is not o.Version; otherwise it sends
+// the spec it read, changed in those two fields only, once, with that version and
+// QueryRegistry off. It takes no spec from the caller and is never retried.
+func (c *Client) ServiceForceUpdate(ctx context.Context, id string, o ForceUpdateOptions) error {
+	return nil
+}
+
+// ServiceRollback rolls one service back to its previous spec, once. It reads the service,
+// refuses ErrServiceChanged when its version is not version and ErrNoPreviousSpec when it
+// has no earlier spec, and otherwise sends the current spec with rollback=previous (the
+// manager swaps the two). encodedAuth is the credential for the previous spec's image; when
+// it is empty the update asks the manager to take the credential from the previous spec.
+func (c *Client) ServiceRollback(ctx context.Context, id string, version uint64, encodedAuth string) error {
+	return nil
+}

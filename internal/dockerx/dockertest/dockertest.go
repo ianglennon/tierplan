@@ -245,6 +245,9 @@ type FakeService struct {
 	PreviousSpec *swarm.ServiceSpec
 	// CreatedAt is when the service was created; zero is the Unix epoch.
 	CreatedAt time.Time
+	// RollbackError, when set, makes a rollback of the service answer 400 with this text, as a
+	// manager does when the previous spec names a secret, a config or a network that is gone.
+	RollbackError string
 }
 
 // FakeServiceMount is one mount of a service's container spec. Type is "volume",
@@ -480,6 +483,9 @@ type Fake struct {
 	// svcUpdates the updates themselves (fake_services.go).
 	svcState   map[string]fakeServiceState
 	svcUpdates []FakeServiceUpdate
+	// distDigest is the digest the distribution route answers a full reference with, where a
+	// test has moved a tag (SetDistributionDigest); a reference not in it gets fakeDigest.
+	distDigest map[string]string
 	// distAuth and distRefs are the header and reference of each distribution check.
 	distAuth, distRefs []string
 
