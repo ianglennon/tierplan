@@ -32,6 +32,7 @@ import { Route as AppEnvEnvIdContainersRouteImport } from './routes/_app/env/$en
 import { Route as AppEnvEnvIdEventsRouteImport } from './routes/_app/env/$envId/events'
 import { Route as AppEnvEnvIdImagesRouteImport } from './routes/_app/env/$envId/images'
 import { Route as AppEnvEnvIdNetworksRouteImport } from './routes/_app/env/$envId/networks'
+import { Route as AppEnvEnvIdServicesRouteImport } from './routes/_app/env/$envId/services'
 import { Route as AppEnvEnvIdVolumesRouteImport } from './routes/_app/env/$envId/volumes'
 import { Route as AppSettingsAccessIndexRouteImport } from './routes/_app/settings/access/index'
 import { Route as AppSettingsAccessTeamsRouteImport } from './routes/_app/settings/access/teams'
@@ -175,6 +176,11 @@ const AppEnvEnvIdImagesRoute = AppEnvEnvIdImagesRouteImport.update({
 const AppEnvEnvIdNetworksRoute = AppEnvEnvIdNetworksRouteImport.update({
   id: '/networks',
   path: '/networks',
+  getParentRoute: () => AppEnvEnvIdRoute,
+} as any)
+const AppEnvEnvIdServicesRoute = AppEnvEnvIdServicesRouteImport.update({
+  id: '/services',
+  path: '/services',
   getParentRoute: () => AppEnvEnvIdRoute,
 } as any)
 const AppEnvEnvIdVolumesRoute = AppEnvEnvIdVolumesRouteImport.update({
@@ -376,6 +382,7 @@ export interface FileRoutesByFullPath {
   '/env/$envId/events': typeof AppEnvEnvIdEventsRoute
   '/env/$envId/images': typeof AppEnvEnvIdImagesRoute
   '/env/$envId/networks': typeof AppEnvEnvIdNetworksRoute
+  '/env/$envId/services': typeof AppEnvEnvIdServicesRoute
   '/env/$envId/volumes': typeof AppEnvEnvIdVolumesRoute
   '/settings/access/teams': typeof AppSettingsAccessTeamsRoute
   '/settings/access/users': typeof AppSettingsAccessUsersRoute
@@ -427,6 +434,7 @@ export interface FileRoutesByTo {
   '/env/$envId/events': typeof AppEnvEnvIdEventsRoute
   '/env/$envId/images': typeof AppEnvEnvIdImagesRoute
   '/env/$envId/networks': typeof AppEnvEnvIdNetworksRoute
+  '/env/$envId/services': typeof AppEnvEnvIdServicesRoute
   '/env/$envId/volumes': typeof AppEnvEnvIdVolumesRoute
   '/settings/access/teams': typeof AppSettingsAccessTeamsRoute
   '/settings/access/users': typeof AppSettingsAccessUsersRoute
@@ -478,6 +486,7 @@ export interface FileRoutesById {
   '/_app/env/$envId/events': typeof AppEnvEnvIdEventsRoute
   '/_app/env/$envId/images': typeof AppEnvEnvIdImagesRoute
   '/_app/env/$envId/networks': typeof AppEnvEnvIdNetworksRoute
+  '/_app/env/$envId/services': typeof AppEnvEnvIdServicesRoute
   '/_app/env/$envId/volumes': typeof AppEnvEnvIdVolumesRoute
   '/_app/settings/access/teams': typeof AppSettingsAccessTeamsRoute
   '/_app/settings/access/users': typeof AppSettingsAccessUsersRoute
@@ -534,6 +543,7 @@ export interface FileRouteTypes {
     | '/env/$envId/events'
     | '/env/$envId/images'
     | '/env/$envId/networks'
+    | '/env/$envId/services'
     | '/env/$envId/volumes'
     | '/settings/access/teams'
     | '/settings/access/users'
@@ -585,6 +595,7 @@ export interface FileRouteTypes {
     | '/env/$envId/events'
     | '/env/$envId/images'
     | '/env/$envId/networks'
+    | '/env/$envId/services'
     | '/env/$envId/volumes'
     | '/settings/access/teams'
     | '/settings/access/users'
@@ -635,6 +646,7 @@ export interface FileRouteTypes {
     | '/_app/env/$envId/events'
     | '/_app/env/$envId/images'
     | '/_app/env/$envId/networks'
+    | '/_app/env/$envId/services'
     | '/_app/env/$envId/volumes'
     | '/_app/settings/access/teams'
     | '/_app/settings/access/users'
@@ -839,6 +851,13 @@ declare module '@tanstack/react-router' {
       path: '/networks'
       fullPath: '/env/$envId/networks'
       preLoaderRoute: typeof AppEnvEnvIdNetworksRouteImport
+      parentRoute: typeof AppEnvEnvIdRoute
+    }
+    '/_app/env/$envId/services': {
+      id: '/_app/env/$envId/services'
+      path: '/services'
+      fullPath: '/env/$envId/services'
+      preLoaderRoute: typeof AppEnvEnvIdServicesRouteImport
       parentRoute: typeof AppEnvEnvIdRoute
     }
     '/_app/env/$envId/volumes': {
@@ -1209,6 +1228,7 @@ interface AppEnvEnvIdRouteChildren {
   AppEnvEnvIdEventsRoute: typeof AppEnvEnvIdEventsRoute
   AppEnvEnvIdImagesRoute: typeof AppEnvEnvIdImagesRoute
   AppEnvEnvIdNetworksRoute: typeof AppEnvEnvIdNetworksRoute
+  AppEnvEnvIdServicesRoute: typeof AppEnvEnvIdServicesRoute
   AppEnvEnvIdVolumesRoute: typeof AppEnvEnvIdVolumesRoute
   AppEnvEnvIdIndexRoute: typeof AppEnvEnvIdIndexRoute
   AppEnvEnvIdContainersContainerIdRoute: typeof AppEnvEnvIdContainersContainerIdRouteWithChildren
@@ -1222,6 +1242,7 @@ const AppEnvEnvIdRouteChildren: AppEnvEnvIdRouteChildren = {
   AppEnvEnvIdEventsRoute: AppEnvEnvIdEventsRoute,
   AppEnvEnvIdImagesRoute: AppEnvEnvIdImagesRoute,
   AppEnvEnvIdNetworksRoute: AppEnvEnvIdNetworksRoute,
+  AppEnvEnvIdServicesRoute: AppEnvEnvIdServicesRoute,
   AppEnvEnvIdVolumesRoute: AppEnvEnvIdVolumesRoute,
   AppEnvEnvIdIndexRoute: AppEnvEnvIdIndexRoute,
   AppEnvEnvIdContainersContainerIdRoute:

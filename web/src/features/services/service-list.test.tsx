@@ -26,7 +26,7 @@ const svc = (extra: Partial<ServiceItem> = {}): ServiceItem => ({
   running: 2,
   desired: 2,
   updateState: "",
-  image: "registry.example.com/acme/web:1.4@sha256:" + "a".repeat(64),
+  image: `registry.example.com/acme/web:1.4@sha256:${"a".repeat(64)}`,
   stack: "",
   agent: false,
   updatedAt: "2026-10-01T10:00:00Z",
@@ -271,9 +271,11 @@ describe("ScaleDialog", () => {
     expect(alert.textContent).toContain("This service was changed by someone else");
     expect(alert.textContent).not.toContain("service_changed");
     expect(screen.queryByText("Scaled web to 5.")).toBeNull();
-    // The dialog is still open and the row is not waiting on anything.
+    // The dialog is still open and the row, hidden from assistive technology behind it, is
+    // not waiting on anything.
     expect(screen.getByRole("dialog", { name: "Scale web" })).toBeTruthy();
-    expect(within(screen.getByRole("row", { name: /^web/ })).queryByText("Scaling…")).toBeNull();
+    const row = screen.getByRole("row", { name: /^web/, hidden: true });
+    expect(within(row).queryByText("Scaling…")).toBeNull();
   });
 
   it("sends the request once however often Scale service is pressed", async () => {

@@ -27,7 +27,13 @@ import { type GroupCollapse, GroupHeaderRow } from "@/features/resources/group-h
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
-export type ResourceKind = "containers" | "images" | "volumes" | "networks" | "registries";
+export type ResourceKind =
+  | "containers"
+  | "images"
+  | "volumes"
+  | "networks"
+  | "registries"
+  | "services";
 
 // One column of a list. The cell renders from the row; the header is the
 // translated label.
