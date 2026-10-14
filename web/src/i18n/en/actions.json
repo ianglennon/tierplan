@@ -25,6 +25,8 @@
       "started": "Started {{name}}.",
       "stopped": "Stopped {{name}}.",
       "failed": "Couldn't {{verb}} {{name}}. {{reason}}",
+      "lost": "The connection dropped before Bayplan answered the request to {{verb}} {{name}}. The list shows whether it happened.",
+      "lostMany": "The connection dropped before Bayplan answered the request to {{verb}} {{count}} containers. The list shows what happened.",
       "restarted": "Restarted {{name}}.",
       "paused": "Paused {{name}}.",
       "unpaused": "Unpaused {{name}}.",
@@ -70,6 +72,7 @@
       "agent_policy_denied": "This host's agent needs an update",
       "permission": "You no longer have permission to do that. Your access may have changed.",
       "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening.",
+      "lost": "The connection dropped before Bayplan answered. The list shows whether it happened.",
       "confirmation": "Type the container's name to confirm this.",
       "host_read_only": "This host is read-only. Changes are turned off on the host itself, so Bayplan can only read from it.",
       "container_running": "{{name}} is running. Tick Force to remove it."

@@ -48,8 +48,9 @@ test("the audit log lists what happened, filters by action and exports CSV", asy
     page.getByRole("menuitem", { name: "Export CSV" }).click(),
   ]);
   expect(download.suggestedFilename()).toMatch(/\.csv$/);
-  const path = await download.path();
-  if (!path) throw new Error("the CSV download has no file on disk");
+  // saveAs, not path(): the browser may be a remote one, whose files are not on this disk.
+  const path = test.info().outputPath("audit.csv");
+  await download.saveAs(path);
   const csv = readFileSync(path, "utf8");
   expect(csv.split("\n")[0]).toMatch(/^id,time,actor_type/);
   expect(csv).toContain("auth.login");

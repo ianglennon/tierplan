@@ -17,7 +17,10 @@
 	admin off
 }
 
-https://:443 {
+# The browser of the run lives in this container's network namespace (see the
+# browser service in compose.yaml) and opens the address people use, so the site
+# also answers on the published port, BAYPLAN_E2E_HTTPS_PORT.
+https://:443, https://:{$BAYPLAN_E2E_HTTPS_PORT:8443} {
 	tls /certs/cert.pem /certs/key.pem
 
 	# The access log is how the run shows that the agent's WebSocket and the event

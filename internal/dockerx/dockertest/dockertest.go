@@ -134,6 +134,9 @@ type FakeConfig struct {
 	// as the engine does when the container it is stopping is the one that serves the
 	// caller (Bayplan's own server or an agent). The write is still recorded.
 	DropWrites bool
+	// WriteError makes every container write answer 500 with this message, as an engine
+	// does when it refuses one.
+	WriteError string
 	// PolicyDeny makes the four list endpoints and every write answer 403 with the
 	// message an agent gives for a request its policy refuses: agent_policy_denied:
 	// followed by the method and path.

@@ -4,6 +4,7 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -1337,5 +1338,62 @@ func TestContainerInspectShowsThePlaceholderForALogDriverTokenToAViewerAndTheTok
 	rec = f.detail(t, f.cookie, e, "web/inspect", "?nodeId="+e.ID)
 	if rec.code != http.StatusOK || !strings.Contains(string(rec.body), "s3cret-token") {
 		t.Fatalf("an admin should get the token: %d %s", rec.code, rec.body)
+	}
+}
+
+// A stop the engine was sent is seen through when the browser's request ends while it
+// runs (found by the end-to-end suite: Chromium abandons every request in flight when
+// the host's network changes). The engine finishes it either way, so the result and the
+// audit row say it was done, not "context canceled".
+func TestContainerActionAStopIsSeenThroughWhenTheRequestEndsWhileItRuns(t *testing.T) {
+	cfg := actionEngine()
+	cfg.WriteDelay = 300 * time.Millisecond
+	f, e := dashEnv(t, cfg)
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		for len(f.fake.Writes()) == 0 {
+			time.Sleep(5 * time.Millisecond)
+		}
+		cancel() // the stop has reached the engine; the browser goes away
+	}()
+	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/containers/actions",
+		body: actionJSON("stop", [2]string{e.ID, webID}), cookie: f.cookie, csrf: f.csrf, ctx: ctx})
+	cancel()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s\n%s", rec.Code, rec.Body, f.logs)
+	}
+	got := decode[actionBody](t, &envRec{code: rec.Code, body: rec.Body.Bytes()})
+	if len(got.Results) != 1 || got.Results[0].Result != "done" {
+		t.Fatalf("results = %+v, want done", got.Results)
+	}
+	rows := f.actionAudits(t)
+	if len(rows) != 1 || rows[0].Action != audit.ActionContainerStopped || rows[0].Result != "success" {
+		t.Fatalf("audit rows = %+v, want one container.stopped success", rows)
+	}
+}
+
+// An engine's refusal reaches the caller as action_failed with the engine's message, and
+// the server log records it whole: the audit row keeps only the code.
+func TestContainerActionAnEngineRefusalIsActionFailedWithItsMessageAndIsLogged(t *testing.T) {
+	cfg := actionEngine()
+	cfg.WriteError = "cannot stop container: web: tried to kill container, but did not receive an exit event"
+	f, e := dashEnv(t, cfg)
+	rec := f.act(t, e, actionJSON("stop", [2]string{e.ID, webID}))
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	got := decode[actionBody](t, rec)
+	if len(got.Results) != 1 || got.Results[0].Code != "action_failed" || !strings.Contains(got.Results[0].Detail, "did not receive an exit event") {
+		t.Fatalf("results = %+v, want action_failed with the engine's message", got.Results)
+	}
+	logs := f.logs.String()
+	if !strings.Contains(logs, "container action failed") || !strings.Contains(logs, "did not receive an exit event") ||
+		!strings.Contains(logs, `"action":"stop"`) || !strings.Contains(logs, `"container":"web"`) {
+		t.Fatalf("the server log does not record the refusal:\n%s", logs)
+	}
+	if rows := f.actionAudits(t); len(rows) != 1 || rows[0].Result != "failure" || rows[0].Reason != "action_failed" {
+		t.Fatalf("audit rows = %+v", rows)
 	}
 }

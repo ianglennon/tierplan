@@ -154,8 +154,10 @@ test("a container started behind Bayplan's back appears live, is stopped and sta
   const startedBefore = ["e2e-a", "e2e-b"].map((n) =>
     dind(`docker inspect -f '{{.State.StartedAt}}' ${n}`),
   );
-  await expect(rowOf(page, "e2e-a")).toBeVisible();
-  await expect(rowOf(page, "e2e-b")).toBeVisible();
+  // A row can show up while its container is still created, before the start event
+  // has been read, and a bulk leaves out a row its action does not apply to.
+  await expect(rowOf(page, "e2e-a")).toContainText("Running");
+  await expect(rowOf(page, "e2e-b")).toContainText("Running");
   await page.getByRole("checkbox", { name: "Select e2e-a" }).check();
   await page.getByRole("checkbox", { name: "Select e2e-b" }).check();
   const bar = page.getByRole("toolbar", { name: "Bulk actions" });
@@ -207,7 +209,10 @@ test("the Logs tab streams stdout and stderr, searches, downloads, and pops out 
   await page.getByRole("button", { name: "Download logs", exact: true }).click();
   const file = await download;
   expect(file.suggestedFilename()).toMatch(/^e2e-web-\d{8}-\d{4}\.log$/);
-  const body = readFileSync((await file.path()) as string, "utf8");
+  // saveAs, not path(): the browser may be a remote one, whose files are not on this disk.
+  const saved = test.info().outputPath(file.suggestedFilename());
+  await file.saveAs(saved);
+  const body = readFileSync(saved, "utf8");
   expect(body, "the downloaded file holds the container's lines").toMatch(/line-\d+/);
   await page.keyboard.press("Escape");
   await page.getByRole("searchbox", { name: "Search logs" }).fill("");

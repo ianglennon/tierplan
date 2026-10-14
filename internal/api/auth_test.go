@@ -375,6 +375,8 @@ type authReq struct {
 	ip                 string
 	// headers are added to the request as sent.
 	headers map[string]string
+	// ctx is the request's context when set, so a test can end the request while it runs.
+	ctx context.Context
 }
 
 func (f *authFixture) do(t *testing.T, h http.Handler, r authReq) *httptest.ResponseRecorder {
@@ -386,6 +388,9 @@ func (f *authFixture) do(t *testing.T, h http.Handler, r authReq) *httptest.Resp
 		body = strings.NewReader("")
 	}
 	req := httptest.NewRequest(r.method, r.path, body)
+	if r.ctx != nil {
+		req = req.WithContext(r.ctx)
+	}
 	req.Header.Set("User-Agent", authUA)
 	if r.body != "" {
 		req.Header.Set("Content-Type", "application/json")
