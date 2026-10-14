@@ -162,6 +162,8 @@ const (
 	ActionServiceForceUpdated        = "service.force_updated"
 	ActionServiceRolledBack          = "service.rolled_back"
 	ActionServiceRemoved             = "service.removed"
+	ActionNodeAvailabilityChanged    = "node.stub_availability"
+	ActionNodeRoleChanged            = "node.stub_role"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

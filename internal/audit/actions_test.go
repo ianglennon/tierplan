@@ -168,6 +168,11 @@ var phase6DetailKeys = map[string][]string{
 	audit.ActionServiceForceUpdated: {"name", "image", "digest", "retry", "pinned", "code"},
 	audit.ActionServiceRolledBack:   {"name", "version", "code"},
 	audit.ActionServiceRemoved:      {"name", "stack", "agent", "confirmed", "code"},
+	// An availability or role change records the node's name, the value it had and the one asked for,
+	// whether its name was typed to confirm, the warnings the change carried (comma separated) and the
+	// code (plan 06-15, RES-05).
+	audit.ActionNodeAvailabilityChanged: {"name", "from", "to", "confirmed", "warnings", "code"},
+	audit.ActionNodeRoleChanged:         {"name", "from", "to", "confirmed", "warnings", "code"},
 }
 
 func TestEveryPhase6ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -195,6 +200,9 @@ func TestEveryPhase6ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		"service.force_updated": audit.ActionServiceForceUpdated,
 		"service.rolled_back":   audit.ActionServiceRolledBack,
 		"service.removed":       audit.ActionServiceRemoved,
+
+		"node.availability_changed": audit.ActionNodeAvailabilityChanged,
+		"node.role_changed":         audit.ActionNodeRoleChanged,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)

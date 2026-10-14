@@ -64,6 +64,7 @@ const (
 	PermServicesControl       Perm = "services.control"
 	PermServicesManage        Perm = "services.manage"
 	PermNodesRead             Perm = "nodes.read"
+	PermNodesManage           Perm = "nodes.manage"
 )
 
 // Registry is a list of permissions. The Checker consults one, so a test can
