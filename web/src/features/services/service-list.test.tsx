@@ -116,7 +116,7 @@ beforeEach(() => {
   ];
   me = makeMe({ envs: { [ENV]: "operator" } });
   answerScale = () => scaleResult();
-  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 1 } } });
   setCsrfToken(null);
   vi.stubGlobal(
     "fetch",
@@ -361,7 +361,9 @@ describe("the State column", () => {
   it("explains a service's replicas in a tooltip", async () => {
     items = [svc({ running: 1, desired: 3 })];
     mount();
-    const word = await screen.findByText("Degraded");
+    // The Degraded chip has the same word until the counts arrive, so look in the row.
+    await screen.findByText("web");
+    const word = within(screen.getByRole("row", { name: /^web/ })).getByText("Degraded");
     await act(async () => {
       fireEvent.focus(word);
     });
@@ -712,6 +714,7 @@ describe("the services list: states", () => {
       screen.getByText("Showing the first 500 of 640. Narrow the search to see the rest."),
     ).toBeTruthy();
     cleanup();
+    client.clear();
     listExtra = {};
     mount();
     await screen.findByText("web");
@@ -795,7 +798,7 @@ describe("the services list: live updates", () => {
     expect(row.getAttribute("data-changed")).toBe("true");
   });
 
-  it("holds a new row behind the changes-waiting pill while a row menu is open, and shows it on request", async () => {
+  it("holds a new row behind the changes-waiting pill while a row menu is open, and shows it when the menu closes", async () => {
     mount();
     await openMenu("web");
     expect(await screen.findByRole("menuitem", { name: "Scale…" })).toBeTruthy();
@@ -806,8 +809,7 @@ describe("the services list: live updates", () => {
     expect(await screen.findByText("1 change waiting")).toBeTruthy();
     expect(screen.queryByText("newcomer")).toBeNull();
     fireEvent.keyDown(screen.getByRole("menuitem", { name: "Scale…" }), { key: "Escape" });
-    fireEvent.click(await screen.findByRole("button", { name: "Show changes" }));
     expect(await screen.findByText("newcomer")).toBeTruthy();
-    expect(screen.queryByText("1 change waiting")).toBeNull();
+    await waitFor(() => expect(screen.queryByText("1 change waiting")).toBeNull());
   });
 });

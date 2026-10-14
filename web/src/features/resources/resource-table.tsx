@@ -153,6 +153,8 @@ interface ResourceTableProps<T> {
   i18nKey?: string;
   // Replaces the sentence under the error heading.
   errorBody?: string;
+  // Replaces the words of the retry button ("Retry loading services").
+  retryLabel?: string;
   // The primary action of the page, at the right end of the header. Drawn while the
   // list loads, so the header does not move when it arrives.
   actions?: ReactNode;
@@ -326,6 +328,7 @@ export function ResourceTable<T>({
   bulkBar,
   i18nKey,
   errorBody,
+  retryLabel,
   actions,
 }: ResourceTableProps<T>) {
   const t = useT();
@@ -422,7 +425,7 @@ export function ResourceTable<T>({
               onClick={() => void query.refetch()}
             >
               {query.isFetching ? <Spinner aria-hidden="true" /> : null}
-              {t("dashboard.lists.retry")}
+              {retryLabel ?? t("dashboard.lists.retry")}
             </Button>
           </AlertDescription>
         </Alert>

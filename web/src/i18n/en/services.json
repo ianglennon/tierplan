@@ -12,7 +12,8 @@
         "mode": "Mode",
         "replicas": "Replicas",
         "image": "Image",
-        "updated": "Updated"
+        "updated": "Updated",
+        "ports": "Ports"
       },
       "mode": {
         "replicated": "Replicated",
@@ -40,6 +41,55 @@
       },
       "menu": {
         "scale": "Scale…"
+      },
+      "caption": {
+        "filtered_one": "{{n, number}} of {{count, number}} service",
+        "filtered_other": "{{n, number}} of {{count, number}} services"
+      },
+      "emptyCreateBody": "Services run your containers across the swarm. Create one, or deploy a stack that defines them.",
+      "emptyFilters": {
+        "title": "No services match these filters.",
+        "action": "Clear filters"
+      },
+      "emptySearch": {
+        "title": "No services match “{{q}}”.",
+        "action": "Clear search"
+      },
+      "errorRetry": "Retry loading services",
+      "search": {
+        "label": "Search services",
+        "placeholder": "Search by name, image, label or stack",
+        "clear": "Clear search"
+      },
+      "groupBy": {
+        "label": "Group by",
+        "stack": "Stack",
+        "none": "None"
+      },
+      "group": {
+        "ungrouped": "Ungrouped",
+        "healthy_one": "{{healthy, number}} of {{count, number}} healthy",
+        "healthy_other": "{{healthy, number}} of {{count, number}} healthy",
+        "kind": {
+          "stack": "Stack"
+        }
+      },
+      "collapseAll": "Collapse all groups",
+      "expandAll": "Expand all groups",
+      "clearFilters": "Clear filters",
+      "status": {
+        "label": "Filter by status",
+        "degraded": "Degraded",
+        "updating": "Updating",
+        "problem": "Update problem",
+        "chip": "{{label}} {{count, number}}"
+      },
+      "cap": "Showing the first 500 of {{total, number}}. Narrow the search to see the rest.",
+      "changes_one": "{{count}} change waiting",
+      "changes_other": "{{count}} changes waiting",
+      "showChanges": "Show changes",
+      "self": {
+        "agentService": "Bayplan agent"
       }
     },
     "notASwarm": {

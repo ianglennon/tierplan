@@ -180,8 +180,8 @@ const fingerprintOf = (c: ContainerRow) =>
   [c.state, c.status, c.health, c.image, (c.ports ?? []).join(",")].join("|");
 
 // PortsCell shows the first two published ports and "+n" for the rest, whose
-// tooltip lists them all. A container with none shows a dash.
-function PortsCell({ ports, missing }: { ports: string[] | null; missing: string }) {
+// tooltip lists them all. A container with none shows a dash. The services list uses it too.
+export function PortsCell({ ports, missing }: { ports: string[] | null; missing: string }) {
   const list = ports ?? [];
   if (list.length === 0) return missing;
   const rest = list.length - SHOWN_PORTS;

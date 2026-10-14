@@ -5,7 +5,7 @@ import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query
 
 import { api } from "@/api/client";
 import { readProblem } from "@/api/problem";
-import { LIST_REFETCH_MS } from "@/api/resources";
+import { LIST_REFETCH_MS, listKey } from "@/api/resources";
 import type { components } from "@/api/schema";
 
 export type ServiceItem = components["schemas"]["ServiceItem"];
@@ -15,7 +15,15 @@ export type ServiceScaleCode = NonNullable<ServiceScaleResult["code"]>;
 
 // The query key of an environment's services list, and of every read that extends it.
 export function servicesKey(envId: string) {
-  return ["env", envId, "services"] as const;
+  return listKey(envId, "services");
+}
+
+// What narrows the services list on the server, before its 500-row cap: the search text and
+// the comma list of statuses (degraded, updating, problem). Each is left out when it is not
+// set.
+export interface ServiceFilters {
+  q?: string;
+  status?: string;
 }
 
 // ServicesLoadError is a services list the server refused or could not answer. The status and
@@ -37,13 +45,25 @@ export function isNotASwarm(error: unknown): boolean {
   return error instanceof ServicesLoadError && error.status === 409 && error.type === "not_a_swarm";
 }
 
-// The services of a swarm environment. The rows stay on screen while a refetch is out.
-export function servicesQuery(envId: string) {
+// Changing the search or the chips keeps the rows on screen until the new ones arrive, so
+// the table does not jump to a skeleton. It never carries rows over from another environment.
+function keepForSameEnv(envId: string) {
+  return <T>(previous: T | undefined, previousQuery?: { queryKey: readonly unknown[] }) =>
+    previousQuery?.queryKey[1] === envId ? previous : undefined;
+}
+
+// The services of a swarm environment, narrowed by the filters. The unfiltered list keeps the
+// bare key and every filtered read extends it, so one invalidation refreshes them all.
+export function servicesQuery(envId: string, filters: ServiceFilters = {}) {
+  const set: ServiceFilters = {};
+  if (filters.q) set.q = filters.q;
+  if (filters.status) set.status = filters.status;
+  const filtered = Object.keys(set).length > 0;
   return queryOptions({
-    queryKey: servicesKey(envId),
+    queryKey: filtered ? ([...servicesKey(envId), set] as const) : servicesKey(envId),
     queryFn: async () => {
       const res = await api.GET("/api/env/{envId}/services", {
-        params: { path: { envId } },
+        params: { path: { envId }, query: filtered ? set : undefined },
       });
       if (!res.data) {
         const problem = readProblem(res.error, res.response);
@@ -51,6 +71,7 @@ export function servicesQuery(envId: string) {
       }
       return res.data;
     },
+    placeholderData: keepForSameEnv(envId),
     // A standalone host will not turn into a swarm on a second try.
     retry: (count, error) => !isNotASwarm(error) && count < 3,
     refetchInterval: LIST_REFETCH_MS,

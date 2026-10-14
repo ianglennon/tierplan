@@ -28,6 +28,10 @@ const web: ServiceItem = {
   stack: "",
   agent: false,
   updatedAt: "2026-10-01T10:00:00Z",
+  ports: [],
+  updateMessage: "",
+  hasPreviousSpec: false,
+  createdAt: "2026-09-01T10:00:00Z",
 };
 
 let posted: unknown[];
