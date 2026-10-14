@@ -67,7 +67,18 @@ type ServiceRow struct {
 	// UpdateState is the state of the service's last update, empty when it has none.
 	UpdateState string
 	UpdatedAt   time.Time
+	// Image is the image the service's spec names, as written; empty for a spec with no
+	// container spec.
+	Image string
+	// Stack is the stack the service belongs to (the com.docker.stack.namespace label of
+	// its spec), empty for a service made on its own.
+	Stack string
+	// Agent is true for a Bayplan agent service (see isAgentService).
+	Agent bool
 }
+
+// stackLabel is the label docker stack deploy puts on every service of a stack (E19).
+const stackLabel = "com.docker.stack.namespace"
 
 // AgentTaskRow is the state of the agent service's current task on one node.
 type AgentTaskRow struct{ NodeID, State, Error string }
@@ -152,7 +163,13 @@ func (c *Client) Cluster(ctx context.Context) (ClusterRead, error) {
 		if isAgentService(s) {
 			agentServices = append(agentServices, s.ID)
 		}
-		row := ServiceRow{ID: s.ID, Name: s.Spec.Name, Mode: serviceMode(s.Spec.Mode), UpdatedAt: s.UpdatedAt.UTC()}
+		row := ServiceRow{
+			ID: s.ID, Name: s.Spec.Name, Mode: serviceMode(s.Spec.Mode), UpdatedAt: s.UpdatedAt.UTC(),
+			Stack: s.Spec.Labels[stackLabel], Agent: isAgentService(s),
+		}
+		if cs := s.Spec.TaskTemplate.ContainerSpec; cs != nil {
+			row.Image = cs.Image
+		}
 		if s.ServiceStatus != nil {
 			row.Running, row.Desired = s.ServiceStatus.RunningTasks, s.ServiceStatus.DesiredTasks
 		}

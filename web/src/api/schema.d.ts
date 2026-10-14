@@ -1124,6 +1124,46 @@ export interface paths {
         patch: operations["updateEnvCredential"];
         trace?: never;
     };
+    "/api/env/{envId}/services": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the swarm services of an environment
+         * @description The services of a swarm environment with their mode, running and desired task counts, image, stack and last update, read through a manager's agent or through the local socket of a swarm manager, at most 500 rows sorted by name then ID. 409 not_a_swarm when the environment is a standalone host. When no manager is connected the answer is 200 with noManager true and the rows last read, or none. Needs services.read (Viewer) on the environment.
+         */
+        get: operations["listServices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/services/scale": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Scale swarm services
+         * @description Sets the replica count of one or more replicated services, once each and never retried. Each target is read from the manager, and the update is sent with the version just read, so a service somebody else changed in between is service_changed and nothing is changed. Only the replica count of the spec changes. The registry credential for the service's image is sent with the update. A service that already has the count is answered done with changed false and nothing is sent. A global or job service is skipped with not_scalable. replicas outside 0 to 1000 is 422 replicas_invalid, and a service named twice is 422 duplicate_target, both before anything is sent. 409 not_a_swarm for a standalone host. Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.scaled, with the new and the previous count.
+         */
+        post: operations["scaleServices"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/shells": {
         parameters: {
             query?: never;
@@ -5241,6 +5281,112 @@ export interface components {
              */
             size?: number;
         };
+        ServiceItem: {
+            /** @description True for a Bayplan agent service */
+            agent: boolean;
+            /**
+             * Format: int64
+             * @description Tasks the swarm wants running. For a global service this is the count of nodes it runs on; for a job, 0
+             */
+            desired: number;
+            /** @description The service ID */
+            id: string;
+            /** @description The image the service's spec names, as written; empty when it has none */
+            image: string;
+            /**
+             * @description How the swarm runs it
+             * @enum {string}
+             */
+            mode: "replicated" | "global" | "replicated-job" | "global-job";
+            /** @description The service name */
+            name: string;
+            /**
+             * Format: int64
+             * @description Tasks that are running now
+             */
+            running: number;
+            /** @description The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own */
+            stack: string;
+            /** @description The state of the service's last update or rollback (updating, paused, completed, rollback_started, rollback_paused, rollback_completed); empty when it has none */
+            updateState: string;
+            /**
+             * Format: date-time
+             * @description When the service's spec last changed
+             */
+            updatedAt: string;
+        };
+        ServiceListBody: {
+            /**
+             * Format: date-time
+             * @description When the rows were read from a manager; empty when none were
+             */
+            fetchedAt: string;
+            /** @description At most 500 rows, sorted by name then ID */
+            items: components["schemas"]["ServiceItem"][] | null;
+            /** @description True when no manager of the swarm is connected: the rows are the last ones read, or none */
+            noManager: boolean;
+            /**
+             * Format: int64
+             * @description How many services there are, whatever the cap
+             */
+            total: number;
+            /** @description True when total is more than the rows returned */
+            truncated: boolean;
+        };
+        ServiceScaleRequest: {
+            /**
+             * Format: uuid
+             * @description Groups the audit rows of one bulk request. Send a UUID to name the bulk yourself; with more than one target and none sent, the server makes one (a UUIDv7) and answers it
+             */
+            bulkId?: string;
+            /** @description The services to scale, at most 100, each named once (else 422 duplicate_target). Each is answered separately; one that fails never stops the others */
+            targets: components["schemas"]["ServiceScaleTarget"][] | null;
+        };
+        ServiceScaleResponse: {
+            /** @description The bulk ID recorded in the audit rows of this request: the one sent, or the one the server made for a request with more than one target. Absent for a single target with none sent */
+            bulkId?: string;
+            /** @description One entry per requested target, in request order */
+            results: components["schemas"]["ServiceScaleResult"][] | null;
+        };
+        ServiceScaleResult: {
+            /** @description False when the service already had that count: it was answered done and no update was sent */
+            changed: boolean;
+            /**
+             * @description Why a target failed or was skipped. not_scalable (with skipped): a global or job service has no replica count. service_changed: somebody else changed the service after it was read, so nothing was changed and nothing is retried; ask again. service_not_found: the swarm has no such service. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the manager's agent, so nothing was sent. agent_policy_denied: the manager's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. no_manager_connected: no manager of the swarm is connected, or the one reached is not a manager. no_quorum: the swarm has lost its quorum. registry_unresolved: the registry credential chosen for the image could not be read, so nothing was sent. scale_failed: the manager refused it; detail has its message
+             * @enum {string}
+             */
+            code?: "not_scalable" | "service_changed" | "service_not_found" | "host_read_only" | "agent_policy_denied" | "no_manager_connected" | "no_quorum" | "registry_unresolved" | "scale_failed";
+            /** @description The manager's message for scale_failed, at most 300 characters; for the other codes a plain sentence */
+            detail?: string;
+            /** @description The service name when the manager could be asked; otherwise what the request named */
+            name: string;
+            /**
+             * Format: int64
+             * @description The replica count the service had; absent when it was not read
+             */
+            previous?: number;
+            /**
+             * Format: int64
+             * @description The replica count that was asked for
+             */
+            replicas: number;
+            /**
+             * @description done: the service has the replica count asked for (changed says whether an update was sent). failed: it could not be scaled; code says why. skipped: it has no replica count to set (not_scalable)
+             * @enum {string}
+             */
+            result: "done" | "failed" | "skipped";
+            /** @description The service ID or name the request named */
+            serviceId: string;
+        };
+        ServiceScaleTarget: {
+            /**
+             * Format: int64
+             * @description The replica count to set, a whole number from 0 to 1000 (else 422 replicas_invalid)
+             */
+            replicas: number;
+            /** @description The service ID or name: the id of a row of the services list */
+            serviceId: string;
+        };
         SessionBody: {
             /**
              * Format: date-time
@@ -8366,6 +8512,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listServices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    scaleServices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceScaleRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceScaleResponse"];
                 };
             };
             /** @description Error */

@@ -14,6 +14,7 @@ import (
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/api/types/volume"
 )
 
@@ -103,6 +104,17 @@ var oracle = []oracleEntry{
 	oEntry("GET", `distribution/`+oImg+`/json`, nil),
 
 	oEntry("GET", `system/df`, map[string]*regexp.Regexp{"type": rx(`^volume$`), "verbose": oBool}),
+
+	// One service: the inspect, and the update that takes a whole spec as its body.
+	oEntry("GET", `services/`+oID, map[string]*regexp.Regexp{"insertDefaults": oBool}),
+	{
+		method: "POST", path: rx(oVer + `services/` + oID + `/update$`), body: true,
+		keys: map[string]*regexp.Regexp{
+			"version":          rx(`^[0-9]{1,20}$`),
+			"registryAuthFrom": rx(`^(spec|previous-spec)$`),
+			"rollback":         rx(`^(previous|none)$`),
+		},
+	},
 }
 
 // oracleFor returns every oracle entry a method and path fall under. HEAD stands
@@ -158,6 +170,18 @@ func FuzzAllowed(f *testing.F) {
 		{"DELETE", "/volumes/v1", "", false, false, false},
 		{"DELETE", "/volumes/v1", "force=1", false, false, false},
 		{"GET", "/system/df", "type=volume&verbose=1", false, false, false},
+		{"GET", "/services/web", "insertDefaults=1", false, false, false},
+		{"GET", "/services/web", "insertDefaults=maybe", false, false, false},
+		{"GET", "/services/web", "", true, false, false},
+		{"HEAD", "/v1.56/services/abc", "", false, false, true},
+		{"POST", "/services/web/update", "version=12&registryAuthFrom=spec&rollback=none", true, false, false},
+		{"POST", "/services/web/update", "version=12", false, false, false},
+		{"POST", "/services/web/update", "version=12", true, false, true},
+		{"POST", "/services/web/update", "version=12&force=1", true, false, false},
+		{"POST", "/services/web/update", "version=12", true, true, false},
+		{"POST", "/services/create", "", true, false, false},
+		{"DELETE", "/services/web", "", false, false, false},
+		{"GET", "/services/web/logs", "follow=1", false, false, false},
 		{"POST", "/images/create", "fromSrc=http://x", false, false, false},
 		{"POST", "/images/create", "fromImage=a&tag=b&platform=linux/arm64", false, false, false},
 		{"POST", "/images/create", "fromImage=ghcr.io/acme/app&tag=sha256:0000000000000000000000000000000000000000000000000000000000000000", false, false, false},
@@ -331,6 +355,19 @@ var bodyShapes = map[BodyKind]bodyShape{
 	BodyVolumeCreate: {
 		keys: map[string]*bodyShape{"Name": nil, "Driver": nil, "DriverOpts": nil, "Labels": nil},
 	},
+	// A service spec is the user's whole service, so the shape is its top-level keys.
+	// What it must not hold is a plugin or a network attachment task, and a runtime
+	// other than container (checked in FuzzBody).
+	BodyServiceSpec: {
+		keys: map[string]*bodyShape{
+			"Name": nil, "Labels": nil, "Mode": nil, "UpdateConfig": nil, "RollbackConfig": nil, "EndpointSpec": nil,
+			"TaskTemplate": {keys: map[string]*bodyShape{
+				"ContainerSpec": nil, "PluginSpec": nil, "NetworkAttachmentSpec": nil, "Resources": nil,
+				"RestartPolicy": nil, "Placement": nil, "Networks": nil, "LogDriver": nil, "ForceUpdate": nil, "Runtime": nil,
+			}},
+		},
+		zero: []string{"TaskTemplate.PluginSpec", "TaskTemplate.NetworkAttachmentSpec"},
+	},
 }
 
 // checkShape returns the first key under v that the shape does not name, or "".
@@ -427,13 +464,20 @@ func FuzzBody(f *testing.F) {
 		{uint8(BodyNetworkDisconnect), enc(network.DisconnectRequest{Container: "c", Force: true})},
 		{uint8(BodyVolumeCreate), enc(volume.CreateRequest{Name: "v", Driver: "local", DriverOpts: map[string]string{"type": "tmpfs"}, Labels: map[string]string{"a": "b"}})},
 		{uint8(BodyVolumeCreate), enc(volume.CreateRequest{Name: "v", ClusterVolumeSpec: &volume.ClusterVolumeSpec{Group: "g"}})},
+		{uint8(BodyServiceSpec), enc(swarm.ServiceSpec{
+			Annotations:  swarm.Annotations{Name: "web", Labels: map[string]string{"a": "b"}},
+			TaskTemplate: swarm.TaskSpec{ContainerSpec: &swarm.ContainerSpec{Image: "ghcr.io/acme/web:1", Env: []string{"A=1"}}},
+			Mode:         swarm.ServiceMode{Replicated: &swarm.ReplicatedService{Replicas: new(uint64)}},
+		})},
+		{uint8(BodyServiceSpec), enc(swarm.ServiceSpec{TaskTemplate: swarm.TaskSpec{Runtime: swarm.RuntimePlugin, PluginSpec: &swarm.RuntimeSpec{Name: "p"}}})},
+		{uint8(BodyServiceSpec), enc(swarm.ServiceSpec{TaskTemplate: swarm.TaskSpec{NetworkAttachmentSpec: &swarm.NetworkAttachmentSpec{ContainerID: "c"}}})},
 		{uint8(BodyNone), `{}`},
 	}
 	for _, s := range seeds {
 		f.Add(s.kind, s.body)
 	}
 	f.Fuzz(func(t *testing.T, kind uint8, body string) {
-		k := BodyKind(kind % 8)
+		k := BodyKind(kind % 8) // BodyNone and the seven kinds
 		out, err := validateBody(k, strings.NewReader(body))
 		if err != nil {
 			return
@@ -442,7 +486,7 @@ func FuzzBody(f *testing.F) {
 		if !known {
 			t.Fatalf("kind %d accepted a body but has no shape", k)
 		}
-		if len(out) > maxBody*2 {
+		if int64(len(out)) > bodyCap(k)*2 {
 			t.Fatalf("the forwarded body is %d bytes", len(out))
 		}
 		var m map[string]any
@@ -455,6 +499,15 @@ func FuzzBody(f *testing.F) {
 		for _, z := range shape.zero {
 			if !emptyAt(m, z) {
 				t.Fatalf("kind %d forwarded %s set: %s", k, z, out)
+			}
+		}
+		if k == BodyServiceSpec {
+			var spec swarm.ServiceSpec
+			if err := json.Unmarshal(out, &spec); err != nil {
+				t.Fatalf("the forwarded service spec does not decode: %v: %s", err, out)
+			}
+			if rt := spec.TaskTemplate.Runtime; rt != "" && rt != swarm.RuntimeContainer {
+				t.Fatalf("a service spec with the runtime %q was forwarded: %s", rt, out)
 			}
 		}
 	})

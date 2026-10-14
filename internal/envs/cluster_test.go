@@ -605,6 +605,37 @@ func TestALocalSwarmManagerCountsItsNodesAndFailingServices(t *testing.T) {
 	}
 }
 
+func TestClusterReadRunsOnALocalSwarmManager(t *testing.T) {
+	local := dockertest.NewFake(t, managerConfig(1, managerNodes(), []dockertest.FakeService{
+		{ID: "s1", Name: "web", Mode: "replicated", Running: 2, Desired: 2},
+	}))
+	r := newTunRig(t, local)
+	r.pastGrace()
+	c := NewClusters(r.svc, r.snaps, ClusterOptions{Now: r.clk.Now, Publisher: r.brk, Events: r.evs})
+	r.svc.WithClusters(c)
+	env, err := r.svc.AddLocal(context.Background(), admin, "", false, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.whenOnline(t, env.ID)
+	calls := 0
+	var host string
+	err = c.ClusterRead(context.Background(), env.ID, func(cli *dockerx.Client) error {
+		calls++
+		host = probeHost(t, cli)
+		return nil
+	})
+	if err != nil || calls != 1 || host != "mgr-1" {
+		t.Fatalf("ClusterRead = %v after %d calls on %q, want one call on the local socket's engine", err, calls, host)
+	}
+	// An error of fn comes back as it is and is not run again: there is no other manager.
+	boom := errors.New("boom")
+	calls = 0
+	if err := c.ClusterRead(context.Background(), env.ID, func(*dockerx.Client) error { calls++; return boom }); !errors.Is(err, boom) || calls != 1 {
+		t.Errorf("ClusterRead = %v after %d calls, want boom after one", err, calls)
+	}
+}
+
 func TestRunRefreshesEnvironmentsOnAnIntervalAndStopsWhenItsContextEnds(t *testing.T) {
 	s := newSwarmRig(t, managerNodes(), nil)
 	c := NewClusters(s.svc, s.snaps, ClusterOptions{Now: s.clk.Now, Publisher: s.brk, Events: s.evs, Interval: 10 * time.Millisecond})

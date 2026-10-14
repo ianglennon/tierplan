@@ -6801,6 +6801,249 @@
         ],
         "type": "object"
       },
+      "ServiceItem": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "description": "True for a Bayplan agent service",
+            "type": "boolean"
+          },
+          "desired": {
+            "description": "Tasks the swarm wants running. For a global service this is the count of nodes it runs on; for a job, 0",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "description": "The service ID",
+            "type": "string"
+          },
+          "image": {
+            "description": "The image the service's spec names, as written; empty when it has none",
+            "type": "string"
+          },
+          "mode": {
+            "description": "How the swarm runs it",
+            "enum": [
+              "replicated",
+              "global",
+              "replicated-job",
+              "global-job"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "The service name",
+            "type": "string"
+          },
+          "running": {
+            "description": "Tasks that are running now",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stack": {
+            "description": "The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own",
+            "type": "string"
+          },
+          "updateState": {
+            "description": "The state of the service's last update or rollback (updating, paused, completed, rollback_started, rollback_paused, rollback_completed); empty when it has none",
+            "type": "string"
+          },
+          "updatedAt": {
+            "description": "When the service's spec last changed",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "mode",
+          "running",
+          "desired",
+          "updateState",
+          "image",
+          "stack",
+          "agent",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "ServiceListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "fetchedAt": {
+            "description": "When the rows were read from a manager; empty when none were",
+            "format": "date-time",
+            "type": "string"
+          },
+          "items": {
+            "description": "At most 500 rows, sorted by name then ID",
+            "items": {
+              "$ref": "#/components/schemas/ServiceItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "noManager": {
+            "description": "True when no manager of the swarm is connected: the rows are the last ones read, or none",
+            "type": "boolean"
+          },
+          "total": {
+            "description": "How many services there are, whatever the cap",
+            "format": "int64",
+            "type": "integer"
+          },
+          "truncated": {
+            "description": "True when total is more than the rows returned",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "truncated",
+          "noManager",
+          "fetchedAt"
+        ],
+        "type": "object"
+      },
+      "ServiceScaleRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "bulkId": {
+            "description": "Groups the audit rows of one bulk request. Send a UUID to name the bulk yourself; with more than one target and none sent, the server makes one (a UUIDv7) and answers it",
+            "format": "uuid",
+            "type": "string"
+          },
+          "targets": {
+            "description": "The services to scale, at most 100, each named once (else 422 duplicate_target). Each is answered separately; one that fails never stops the others",
+            "items": {
+              "$ref": "#/components/schemas/ServiceScaleTarget"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "targets"
+        ],
+        "type": "object"
+      },
+      "ServiceScaleResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "bulkId": {
+            "description": "The bulk ID recorded in the audit rows of this request: the one sent, or the one the server made for a request with more than one target. Absent for a single target with none sent",
+            "type": "string"
+          },
+          "results": {
+            "description": "One entry per requested target, in request order",
+            "items": {
+              "$ref": "#/components/schemas/ServiceScaleResult"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "type": "object"
+      },
+      "ServiceScaleResult": {
+        "additionalProperties": false,
+        "properties": {
+          "changed": {
+            "description": "False when the service already had that count: it was answered done and no update was sent",
+            "type": "boolean"
+          },
+          "code": {
+            "description": "Why a target failed or was skipped. not_scalable (with skipped): a global or job service has no replica count. service_changed: somebody else changed the service after it was read, so nothing was changed and nothing is retried; ask again. service_not_found: the swarm has no such service. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the manager's agent, so nothing was sent. agent_policy_denied: the manager's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. no_manager_connected: no manager of the swarm is connected, or the one reached is not a manager. no_quorum: the swarm has lost its quorum. registry_unresolved: the registry credential chosen for the image could not be read, so nothing was sent. scale_failed: the manager refused it; detail has its message",
+            "enum": [
+              "not_scalable",
+              "service_changed",
+              "service_not_found",
+              "host_read_only",
+              "agent_policy_denied",
+              "no_manager_connected",
+              "no_quorum",
+              "registry_unresolved",
+              "scale_failed"
+            ],
+            "type": "string"
+          },
+          "detail": {
+            "description": "The manager's message for scale_failed, at most 300 characters; for the other codes a plain sentence",
+            "type": "string"
+          },
+          "name": {
+            "description": "The service name when the manager could be asked; otherwise what the request named",
+            "type": "string"
+          },
+          "previous": {
+            "description": "The replica count the service had; absent when it was not read",
+            "format": "int64",
+            "type": "integer"
+          },
+          "replicas": {
+            "description": "The replica count that was asked for",
+            "format": "int64",
+            "type": "integer"
+          },
+          "result": {
+            "description": "done: the service has the replica count asked for (changed says whether an update was sent). failed: it could not be scaled; code says why. skipped: it has no replica count to set (not_scalable)",
+            "enum": [
+              "done",
+              "failed",
+              "skipped"
+            ],
+            "type": "string"
+          },
+          "serviceId": {
+            "description": "The service ID or name the request named",
+            "type": "string"
+          }
+        },
+        "required": [
+          "serviceId",
+          "name",
+          "result",
+          "replicas",
+          "changed"
+        ],
+        "type": "object"
+      },
+      "ServiceScaleTarget": {
+        "additionalProperties": false,
+        "properties": {
+          "replicas": {
+            "description": "The replica count to set, a whole number from 0 to 1000 (else 422 replicas_invalid)",
+            "format": "int64",
+            "type": "integer"
+          },
+          "serviceId": {
+            "description": "The service ID or name: the id of a row of the services list",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "serviceId",
+          "replicas"
+        ],
+        "type": "object"
+      },
       "SessionBody": {
         "additionalProperties": false,
         "properties": {
@@ -12833,6 +13076,118 @@
         "summary": "Change an environment's registry credential",
         "tags": [
           "registries"
+        ]
+      }
+    },
+    "/api/env/{envId}/services": {
+      "get": {
+        "description": "The services of a swarm environment with their mode, running and desired task counts, image, stack and last update, read through a manager's agent or through the local socket of a swarm manager, at most 500 rows sorted by name then ID. 409 not_a_swarm when the environment is a standalone host. When no manager is connected the answer is 200 with noManager true and the rows last read, or none. Needs services.read (Viewer) on the environment.",
+        "operationId": "listServices",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the swarm services of an environment",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/services/scale": {
+      "post": {
+        "description": "Sets the replica count of one or more replicated services, once each and never retried. Each target is read from the manager, and the update is sent with the version just read, so a service somebody else changed in between is service_changed and nothing is changed. Only the replica count of the spec changes. The registry credential for the service's image is sent with the update. A service that already has the count is answered done with changed false and nothing is sent. A global or job service is skipped with not_scalable. replicas outside 0 to 1000 is 422 replicas_invalid, and a service named twice is 422 duplicate_target, both before anything is sent. 409 not_a_swarm for a standalone host. Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.scaled, with the new and the previous count.",
+        "operationId": "scaleServices",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceScaleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceScaleResponse"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Scale swarm services",
+        "tags": [
+          "environments"
         ]
       }
     },

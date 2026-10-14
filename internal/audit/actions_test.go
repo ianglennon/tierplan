@@ -156,6 +156,43 @@ var phase5DetailKeys = map[string][]string{
 	audit.ActionRegistryCredentialTested: {"name", "layer", "host", "prefix", "type", "reachable", "signed_in", "can_pull", "code", "via", "repository", "node"},
 }
 
+// phase6DetailKeys maps every Phase 6 action to the detail keys the plans that record it must
+// use, for the same reason as phase3DetailKeys. A scale records one row per service: its name, the new
+// replica count, the count it had, the code of a refusal, the bulk ID of a selection scaled at
+// once and the node the manager answered on (plan 06-01, RES-02).
+var phase6DetailKeys = map[string][]string{
+	audit.ActionServiceScaled: {"name", "replicas", "previous", "code", "bulk", "node"},
+}
+
+func TestEveryPhase6ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
+	f := newFixture(t)
+	for action, keys := range phase6DetailKeys {
+		details := make(map[string]string, len(keys))
+		for _, k := range keys {
+			details[k] = "x"
+		}
+		e := ent(action)
+		e.Details = details
+		if err := f.w.Record(context.Background(), e); err != nil {
+			if errors.Is(err, audit.ErrSecretField) {
+				t.Errorf("%s: a documented detail key trips the secret-word filter: %v", action, err)
+			} else {
+				t.Errorf("%s: Record: %v", action, err)
+			}
+		}
+	}
+	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase6DetailKeys) {
+		t.Fatalf("verify = %+v", got)
+	}
+	for key, constant := range map[string]string{
+		"service.scaled": audit.ActionServiceScaled,
+	} {
+		if key != constant {
+			t.Errorf("constant = %q, want %q", constant, key)
+		}
+	}
+}
+
 func TestEveryPhase5ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 	f := newFixture(t)
 	for action, keys := range phase5DetailKeys {

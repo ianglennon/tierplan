@@ -45,6 +45,8 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `registries.instance` | global | no | no | no | yes | yes | Manage registry credentials that apply to every environment |
 | `registries.manage` | environment | no | no | yes | yes | no | Manage this environment's registry credentials |
 | `secrets.reveal` | environment | no | extra | yes | yes | yes | Reveal secret values |
+| `services.control` | environment | no | yes | yes | yes | no | Scale, force update, roll back and change the settings of services, and mute their restart-loop alerts |
+| `services.read` | environment | yes | yes | yes | yes | no | View services, their tasks, logs, stats and placement |
 | `settings.read` | global | no | no | no | yes | no | View settings |
 | `settings.write` | global | no | no | no | yes | no | Change settings |
 | `shells.manage` | environment | no | no | yes | yes | no | See and end other people's shells |

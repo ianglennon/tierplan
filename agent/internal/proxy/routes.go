@@ -29,6 +29,8 @@ const (
 	BodyNetworkDisconnect
 	// BodyVolumeCreate is POST /volumes/create.
 	BodyVolumeCreate
+	// BodyServiceSpec is POST /services/{id}/update.
+	BodyServiceSpec
 )
 
 // route is one thing the agent forwards: a method, an anchored path, the query
@@ -91,6 +93,13 @@ var (
 	fromImageValue = regexp.MustCompile(`^` + imageNameShape + `$`)
 	// pullTag is a tag or a digest, which the engine takes in the same key.
 	pullTag = regexp.MustCompile(`^([A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|sha256:[a-f0-9]{64}|sha512:[a-f0-9]{128})$`)
+	// versionValue is the object version a service update carries, a swarm index.
+	versionValue = regexp.MustCompile(`^[0-9]{1,20}$`)
+	// authFromValue is where a service update takes the registry credential's
+	// registry from.
+	authFromValue = regexp.MustCompile(`^(spec|previous-spec)$`)
+	// rollbackValue is the rollback a service update may ask for.
+	rollbackValue = regexp.MustCompile(`^(previous|none)$`)
 	// platformValue is os/arch or os/arch/variant.
 	platformValue = regexp.MustCompile(`^[a-z0-9]{1,16}(/[A-Za-z0-9_.-]{1,32}){1,2}$`)
 )
@@ -129,6 +138,21 @@ var routes = []route{
 	read("services", `services`),
 	read("tasks", `tasks`),
 	read("container inspect", `containers/`+idShape+`/json`),
+
+	// One service: the inspect (matched after the list, so GET /services is never
+	// read as an inspect) and the update, which takes the service's whole spec as
+	// its body and the registry credential its image needs. The create, remove and
+	// logs of a service are added by the plans that need them.
+	{
+		name: "service inspect", method: http.MethodGet, path: pathOf(`services/` + idShape),
+		query: map[string]*regexp.Regexp{"insertDefaults": boolValue},
+	},
+	{
+		name: "service update", method: http.MethodPost, path: pathOf(`services/` + idShape + `/update`),
+		query:        map[string]*regexp.Regexp{"version": versionValue, "registryAuthFrom": authFromValue, "rollback": rollbackValue},
+		body:         BodyServiceSpec,
+		registryAuth: true,
+	},
 
 	// Container lifecycle.
 	{name: "container start", method: http.MethodPost, path: pathOf(`containers/` + idShape + `/start`)},

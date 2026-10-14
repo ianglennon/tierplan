@@ -203,6 +203,9 @@
         "opened": "Container shell opened",
         "closed": "Container shell closed",
         "ended": "Container shell ended by an administrator"
+      },
+      "service": {
+        "scaled": "Service scaled"
       }
     },
     "coalesced": {

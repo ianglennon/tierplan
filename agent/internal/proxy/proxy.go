@@ -178,7 +178,7 @@ func Handler(socketPath string, policy Policy, onDenied func(method, path, reaso
 		}
 		if kind != BodyNone {
 			// What is forwarded is the rebuilt body, never the bytes the server sent.
-			rebuilt, err := validateBody(kind, http.MaxBytesReader(w, r.Body, maxBody))
+			rebuilt, err := validateBody(kind, http.MaxBytesReader(w, r.Body, bodyCap(kind)))
 			if err != nil {
 				deny(wire.DeniedAllowlist)
 				return

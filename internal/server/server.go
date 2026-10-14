@@ -157,6 +157,7 @@ type RouterDeps struct {
 	Dashboard     api.DashboardDeps
 	Containers    api.ContainersDeps
 	Networks      api.NetworksDeps
+	Services      api.ServicesDeps
 	Volumes       api.VolumesDeps
 	Images        api.ImagesDeps
 	Pulls         api.PullsDeps
@@ -201,6 +202,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterDashboard(r, d.Dashboard)
 	api.RegisterContainers(r, d.Containers)
 	api.RegisterNetworks(r, d.Networks)
+	api.RegisterServices(r, d.Services)
 	api.RegisterVolumes(r, d.Volumes)
 	api.RegisterImages(r, d.Images)
 	api.RegisterPulls(r, d.Pulls)
@@ -736,6 +738,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Agents:        api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Updater: updater, Log: log},
 		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, SelfContainerID: selfID, Log: log},
 		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, SelfContainerID: selfID, Log: log},
+		Services:      api.ServicesDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Log: log},
 		Volumes:       api.VolumesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, Log: log},
 		Images:        api.ImagesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
 		Pulls:         api.PullsDeps{Aggregator: aggregator, Jobs: jobHub, Audit: aud, Checker: checker, Resolver: resolver, Log: log},

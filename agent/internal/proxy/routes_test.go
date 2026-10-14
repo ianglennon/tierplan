@@ -6,9 +6,12 @@ package proxy
 import (
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/moby/moby/api/types/swarm"
 )
 
 func TestRouteContainerActionsReachTheEngineUnchanged(t *testing.T) {
@@ -299,5 +302,221 @@ func TestRouteImageRemoveIsRefusedOnAReadOnlyHostAndInspectsStillAnswer(t *testi
 		if ok, reason, _ := Allowed("GET", p, "", false, false, Policy{ReadOnly: true}); !ok {
 			t.Errorf("GET %s on a read-only host was refused (%s)", p, reason)
 		}
+	}
+}
+
+func replicas(n uint64) *uint64 { return &n }
+
+func sampleSpec() swarm.ServiceSpec {
+	var s swarm.ServiceSpec
+	s.Name = "web"
+	s.Labels = map[string]string{"com.docker.stack.namespace": "shop"}
+	s.TaskTemplate.ContainerSpec = &swarm.ContainerSpec{Image: "ghcr.io/acme/web:1", Env: []string{"A=1"}}
+	s.Mode.Replicated = &swarm.ReplicatedService{Replicas: replicas(3)}
+	return s
+}
+
+func TestRouteServiceInspectAndUpdateQueryCases(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, path, query string
+		body                      bool
+		wantRoute                 string // "" means refused
+	}{
+		{"an inspect", "GET", "/services/web", "", false, "service inspect"},
+		{"a trailing slash on an inspect", "GET", "/v1.56/services/abc123/", "", false, ""},
+		{"an inspect by ID with insertDefaults", "GET", "/v1.56/services/abc123", "insertDefaults=1", false, "service inspect"},
+		{"a HEAD of an inspect", "HEAD", "/services/web", "", false, "service inspect"},
+		{"the list is only the list", "GET", "/services", "status=true&filters=x", false, "services"},
+		{"an update", "POST", "/services/web/update", "version=12", true, "service update"},
+		{"an update with the version prefix", "POST", "/v1.56/services/web/update", "version=12&registryAuthFrom=previous-spec", true, "service update"},
+		{"an update with rollback", "POST", "/services/web/update", "version=12&rollback=previous", true, "service update"},
+		{"an update with rollback none", "POST", "/services/web/update", "version=12&rollback=none", true, "service update"},
+		{"an update with spec credentials", "POST", "/services/web/update", "version=12&registryAuthFrom=spec", true, "service update"},
+
+		{"an inspect with an unknown key", "GET", "/services/web", "foo=1", false, ""},
+		{"an inspect with a bad bool", "GET", "/services/web", "insertDefaults=yes", false, ""},
+		{"an inspect with a body", "GET", "/services/web", "", true, ""},
+		{"an update with no body", "POST", "/services/web/update", "version=12", false, ""},
+		{"an update with an unknown key", "POST", "/services/web/update", "version=12&foo=1", true, ""},
+		{"an update with a non-numeric version", "POST", "/services/web/update", "version=abc", true, ""},
+		{"an update with a negative version", "POST", "/services/web/update", "version=-1", true, ""},
+		{"an update with a 21 digit version", "POST", "/services/web/update", "version=" + strings.Repeat("1", 21), true, ""},
+		{"an update with a 20 digit version", "POST", "/services/web/update", "version=" + strings.Repeat("1", 20), true, "service update"},
+		{"an update with a bad registryAuthFrom", "POST", "/services/web/update", "version=1&registryAuthFrom=other", true, ""},
+		{"an update with a bad rollback", "POST", "/services/web/update", "version=1&rollback=next", true, ""},
+		{"an update with a second bad version", "POST", "/services/web/update", "version=1&version=x", true, ""},
+		{"a dot-dot service", "GET", "/services/../x", "", false, ""},
+		{"a service starting with a dot", "GET", "/services/.x", "", false, ""},
+		{"a delete of a service", "DELETE", "/services/web", "", false, ""},
+		{"a service create", "POST", "/services/create", "", true, ""},
+		{"service logs", "GET", "/services/web/logs", "", false, ""},
+		{"a GET of update", "GET", "/services/web/update", "", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, _, kind := Allowed(tc.method, tc.path, tc.query, tc.body, false, Policy{})
+			if ok != (tc.wantRoute != "") {
+				t.Fatalf("Allowed(%s %s?%s) = %v, want %v", tc.method, tc.path, tc.query, ok, tc.wantRoute != "")
+			}
+			if !ok {
+				return
+			}
+			rt, found := Match(tc.method, tc.path)
+			if !found || rt.name != tc.wantRoute {
+				t.Fatalf("Match(%s %s) = %q, want %q", tc.method, tc.path, rt.name, tc.wantRoute)
+			}
+			if wantKind := map[string]BodyKind{"service update": BodyServiceSpec}[tc.wantRoute]; kind != wantKind {
+				t.Errorf("body kind = %d, want %d", kind, wantKind)
+			}
+			if wantAuth := tc.wantRoute == "service update"; rt.registryAuth != wantAuth {
+				t.Errorf("route %q has registryAuth %v, want %v", rt.name, rt.registryAuth, wantAuth)
+			}
+		})
+	}
+}
+
+func TestRouteServiceUpdateIsRefusedOnAReadOnlyHostAndInspectStillAnswers(t *testing.T) {
+	if ok, reason, _ := Allowed("POST", "/services/web/update", "version=1", true, false, Policy{ReadOnly: true}); ok || reason != "read_only_flag" {
+		t.Errorf("a service update on a read-only host = %v %q, want refused read_only_flag", ok, reason)
+	}
+	if ok, reason, _ := Allowed("GET", "/services/web", "", false, false, Policy{ReadOnly: true}); !ok {
+		t.Errorf("a service inspect on a read-only host was refused (%s)", reason)
+	}
+}
+
+func TestBodyServiceSpecIsRebuiltAndDecodesToTheSameSpec(t *testing.T) {
+	want := sampleSpec()
+	var got swarm.ServiceSpec
+	if err := roundTrip(t, BodyServiceSpec, enc(t, want), &got); err != nil {
+		t.Fatalf("a service spec was refused: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("rebuilt = %+v, want %+v", got, want)
+	}
+	// A spec with the container runtime named is the same service.
+	withRuntime := sampleSpec()
+	withRuntime.TaskTemplate.Runtime = swarm.RuntimeContainer
+	if err := roundTrip(t, BodyServiceSpec, enc(t, withRuntime), &got); err != nil {
+		t.Errorf("a spec with the container runtime was refused: %v", err)
+	}
+}
+
+func TestBodyServiceSpecRefusals(t *testing.T) {
+	plugin := sampleSpec()
+	plugin.TaskTemplate.Runtime = swarm.RuntimePlugin
+	pluginSpec := sampleSpec()
+	pluginSpec.TaskTemplate.PluginSpec = &swarm.RuntimeSpec{Name: "p"}
+	attach := sampleSpec()
+	attach.TaskTemplate.NetworkAttachmentSpec = &swarm.NetworkAttachmentSpec{ContainerID: "c"}
+	for name, body := range map[string]string{
+		"the plugin runtime":      enc(t, plugin),
+		"a plugin spec":           enc(t, pluginSpec),
+		"a network attachment":    enc(t, attach),
+		"an unknown top key":      `{"Name":"web","Foo":1}`,
+		"an unknown nested key":   `{"Name":"web","TaskTemplate":{"ContainerSpec":{"Image":"x","Foo":true}}}`,
+		"not an object":           `[1,2]`,
+		"data after the value":    `{"Name":"web"} {"Name":"x"}`,
+		"a runtime that is a lie": `{"Name":"web","TaskTemplate":{"Runtime":"host"}}`,
+		"an empty body":           ``,
+	} {
+		if _, err := validateBody(BodyServiceSpec, strings.NewReader(body)); err == nil {
+			t.Errorf("%s: the body was accepted", name)
+		}
+	}
+}
+
+func TestBodyServiceSpecCapIs256KiBAndOtherKindsKeep64KiB(t *testing.T) {
+	if bodyCap(BodyServiceSpec) != 256<<10 || bodyCap(BodyVolumeCreate) != 64<<10 || bodyCap(BodyExecCreate) != 64<<10 {
+		t.Fatalf("caps = %d / %d / %d", bodyCap(BodyServiceSpec), bodyCap(BodyVolumeCreate), bodyCap(BodyExecCreate))
+	}
+	spec := func(n int) string {
+		s := sampleSpec()
+		s.Labels["pad"] = strings.Repeat("a", n)
+		b, _ := json.Marshal(s)
+		return string(b)
+	}
+	// Over 64 KiB (four labels' worth is over the per-value limit of other kinds, but a
+	// service spec has no such limit) and under 256 KiB.
+	under := spec(100 << 10)
+	if _, err := validateBody(BodyServiceSpec, strings.NewReader(under)); err != nil {
+		t.Errorf("a 100 KiB service spec was refused: %v", err)
+	}
+	over := spec(260 << 10)
+	if _, err := validateBody(BodyServiceSpec, strings.NewReader(over)); err == nil {
+		t.Error("a service spec over 256 KiB was accepted")
+	}
+	if _, err := validateBody(BodyVolumeCreate, strings.NewReader(`{"Name":"`+strings.Repeat("a", 70<<10)+`"}`)); err == nil {
+		t.Error("a volume body over 64 KiB was accepted")
+	}
+}
+
+func TestServiceUpdateForwardsTheRebuiltSpecAndTheCredentialOnlyOnTheUpdate(t *testing.T) {
+	sock := newFakeSocket(t)
+	h := Handler(sock.path, Policy{}, nil)
+	body := enc(t, sampleSpec())
+	resp := do(t, h, postJSON("POST", "/v1.56/services/web/update?version=12&registryAuthFrom=previous-spec", body,
+		"X-Registry-Auth: "+testRegistryAuth+"\r\n", "X-Registry-Config: e30=\r\n",
+		"Content-Type: application/x-www-form-urlencoded\r\n"))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", resp.StatusCode)
+	}
+	// The inspect carries a credential header too; it must not cross.
+	resp = do(t, h, request("GET", "/services/web?insertDefaults=1", "X-Registry-Auth: "+testRegistryAuth+"\r\n"))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("inspect status %d, want 200", resp.StatusCode)
+	}
+	seen := sock.requests()
+	if len(seen) != 2 || seen[0] != "POST /v1.56/services/web/update?version=12&registryAuthFrom=previous-spec" || seen[1] != "GET /services/web?insertDefaults=1" {
+		t.Fatalf("the engine saw %v", seen)
+	}
+	hdrs := sock.headersSeen()
+	if got := hdrs[0].Values("X-Registry-Auth"); len(got) != 1 || got[0] != testRegistryAuth {
+		t.Errorf("update X-Registry-Auth = %q, want the one value untouched", got)
+	}
+	if got := hdrs[1].Values("X-Registry-Auth"); len(got) != 0 {
+		t.Errorf("inspect X-Registry-Auth = %q, want none", got)
+	}
+	if v := hdrs[0].Get("X-Registry-Config"); v != "" {
+		t.Errorf("update X-Registry-Config = %q, want none", v)
+	}
+	if ct := hdrs[0].Get("Content-Type"); ct != "application/json" {
+		t.Errorf("update content type = %q", ct)
+	}
+	var got, want swarm.ServiceSpec
+	_ = json.Unmarshal(sock.bodiesSeen()[0], &got)
+	_ = json.Unmarshal([]byte(body), &want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the engine received %s, want the same spec as %s", sock.bodiesSeen()[0], body)
+	}
+}
+
+func TestServiceUpdateRefusalsNeverReachTheEngine(t *testing.T) {
+	sock := newFakeSocket(t)
+	var reasons []string
+	h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+	plugin := sampleSpec()
+	plugin.TaskTemplate.Runtime = swarm.RuntimePlugin
+	big := sampleSpec()
+	big.Labels["pad"] = strings.Repeat("a", 260<<10)
+	for _, tc := range []struct{ name, raw string }{
+		{"a plugin runtime", postJSON("POST", "/services/web/update?version=1", enc(t, plugin))},
+		{"a spec over 256 KiB", postJSON("POST", "/services/web/update?version=1", enc(t, big))},
+		{"no body", request("POST", "/services/web/update?version=1")},
+		{"a bad version", postJSON("POST", "/services/web/update?version=x", enc(t, sampleSpec()))},
+		{"a credential of two values", postJSON("POST", "/services/web/update?version=1", enc(t, sampleSpec()),
+			"X-Registry-Auth: YQ==\r\n", "X-Registry-Auth: Yg==\r\n")},
+	} {
+		resp := do(t, h, tc.raw)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%s: status %d, want 403", tc.name, resp.StatusCode)
+		}
+	}
+	if got := sock.requests(); len(got) != 0 {
+		t.Fatalf("a refused request reached the engine: %v", got)
+	}
+	if len(reasons) != 5 {
+		t.Errorf("onDenied ran %d times, want 5", len(reasons))
 	}
 }

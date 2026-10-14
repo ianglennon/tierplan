@@ -15,12 +15,26 @@ import (
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/api/types/volume"
 )
 
-// maxBody caps a request body. Every validated body is a small JSON object, so a
-// larger one is a refusal, not a truncation.
+// maxBody caps a request body of every kind but a service spec. Every such body is
+// a small JSON object, so a larger one is a refusal, not a truncation.
 const maxBody = 64 << 10
+
+// maxServiceSpecBody caps a service spec, which carries a whole container spec
+// (environment, mounts, labels, healthcheck, secret and config references).
+const maxServiceSpecBody = 256 << 10
+
+// bodyCap is the most bytes a body of one kind may have. A body over the cap is
+// refused, never cut short.
+func bodyCap(kind BodyKind) int64 {
+	if kind == BodyServiceSpec {
+		return maxServiceSpecBody
+	}
+	return maxBody
+}
 
 const (
 	maxMapEntries = 64
@@ -58,12 +72,13 @@ func refuse(format string, args ...any) error {
 // is forwarded is the fresh value encoded again, so a field the decoder accepted
 // but the allowlist does not name cannot cross.
 func validateBody(kind BodyKind, r io.Reader) ([]byte, error) {
-	raw, err := io.ReadAll(io.LimitReader(r, maxBody+1))
+	limit := bodyCap(kind)
+	raw, err := io.ReadAll(io.LimitReader(r, limit+1))
 	if err != nil {
 		return nil, refuse("reading the body: %v", err)
 	}
-	if len(raw) > maxBody {
-		return nil, refuse("the body is over %d bytes", maxBody)
+	if int64(len(raw)) > limit {
+		return nil, refuse("the body is over %d bytes", limit)
 	}
 	var clean any
 	switch kind {
@@ -79,6 +94,8 @@ func validateBody(kind BodyKind, r io.Reader) ([]byte, error) {
 		clean, err = validateNetworkDisconnect(raw)
 	case BodyVolumeCreate:
 		clean, err = validateVolumeCreate(raw)
+	case BodyServiceSpec:
+		clean, err = validateServiceSpec(raw)
 	default:
 		return nil, refuse("a route with no body kind has no validator")
 	}
@@ -358,4 +375,28 @@ func validateVolumeCreate(raw []byte) (volume.CreateRequest, error) {
 		return in, err
 	}
 	return clean, nil
+}
+
+// validateServiceSpec decodes the body of a service update into the engine's own
+// swarm.ServiceSpec with unknown fields refused. The whole spec is the allowlist: it
+// is a user's service, and every field of it is the user's to set. What is refused is
+// what is not a container service: a plugin or a network attachment task, and a
+// runtime other than container. The value returned is encoded again, so what is
+// forwarded is what the decoder understood. The host-escalation refusal (privileged
+// settings, host mounts, host networking) is added to this validator by plan 06-03.
+func validateServiceSpec(raw []byte) (swarm.ServiceSpec, error) {
+	var in swarm.ServiceSpec
+	if err := decodeStrict(raw, &in); err != nil {
+		return in, err
+	}
+	tt := in.TaskTemplate
+	switch {
+	case tt.Runtime != "" && tt.Runtime != swarm.RuntimeContainer:
+		return in, refuse("the task runtime is not container")
+	case tt.PluginSpec != nil:
+		return in, refuse("a plugin spec is not forwarded")
+	case tt.NetworkAttachmentSpec != nil:
+		return in, refuse("a network attachment spec is not forwarded")
+	}
+	return in, nil
 }

@@ -325,9 +325,38 @@ func (c *Clusters) ClusterRead(ctx context.Context, envID string, fn func(*docke
 	return err
 }
 
+// IsSwarm reports whether the environment is a swarm: an agent environment whose agents
+// run on swarm nodes, or the local socket of a swarm node. A local socket that has not
+// been probed yet is ErrOffline, because what it is is not known.
+func (c *Clusters) IsSwarm(ctx context.Context, envID string) (bool, error) {
+	in, err := c.svc.Input(ctx, envID, c.now())
+	if err != nil {
+		return false, err
+	}
+	if in.Kind == KindLocal {
+		switch in.Local.Probe.Type {
+		case dockerx.TypeSwarmManager, dockerx.TypeSwarmWorker:
+			return true, nil
+		case "":
+			return false, fmt.Errorf("%w: the local engine has not been probed yet", ErrOffline)
+		}
+		return false, nil
+	}
+	return in.EnvType == envTypeSwarm, nil
+}
+
 // read is ClusterRead over an input already taken, and also says which manager
 // answered.
 func (c *Clusters) read(ctx context.Context, in RollupInput, fn func(*dockerx.Client) error) (AgentView, error) {
+	if in.Kind == KindLocal && in.Local.Probe.Type == dockerx.TypeSwarmManager {
+		// The server's own socket is a swarm manager: it is the one engine there is, so
+		// there is no choice to make and no other manager to fail over to.
+		cli, _, err := c.svc.mon.Client(in.EnvID)
+		if err != nil {
+			return AgentView{}, err
+		}
+		return AgentView{}, fn(cli)
+	}
 	if in.Kind != KindAgent || in.EnvType != envTypeSwarm {
 		return AgentView{}, fmt.Errorf("envs: %s is not a swarm environment reached through agents", in.EnvID)
 	}

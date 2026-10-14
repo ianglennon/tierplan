@@ -222,6 +222,14 @@ type FakeService struct {
 	Mounts   []FakeServiceMount
 	// Image is the image the spec names; empty leaves the container spec without one.
 	Image string
+	// Version is the version the service reports and a write must send back; zero is 1.
+	// Every update the fake accepts adds one.
+	Version uint64
+	// Replicas is the replica count of a replicated service's spec; zero takes Desired.
+	Replicas uint64
+	// Spec, when set, is the service's spec as /services answers it, in place of the one
+	// the fields above make up (fake_services.go).
+	Spec *swarm.ServiceSpec
 }
 
 // FakeServiceMount is one mount of a service's container spec. Type is "volume",
@@ -453,6 +461,10 @@ type Fake struct {
 	// (normalised) taken off an image, by its ID.
 	imgGone     map[string]bool
 	imgUntagged map[string]map[string]bool
+	// svcState is what the updates the fake accepted left each service with, by ID, and
+	// svcUpdates the updates themselves (fake_services.go).
+	svcState   map[string]fakeServiceState
+	svcUpdates []FakeServiceUpdate
 	// distAuth and distRefs are the header and reference of each distribution check.
 	distAuth, distRefs []string
 
@@ -577,7 +589,7 @@ func (f *Fake) Reconfigure(cfg FakeConfig) {
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged)
+	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withServices(f.svcState)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
@@ -1177,6 +1189,19 @@ func (c FakeConfig) serviceList(withStatus bool) []swarm.Service {
 	out := make([]swarm.Service, 0, len(c.ServiceRows))
 	for _, fs := range c.ServiceRows {
 		s := swarm.Service{ID: fs.ID}
+		s.Version.Index = max(fs.Version, 1)
+		if fs.Spec != nil {
+			s.Spec = *fs.Spec
+			s.UpdatedAt = fs.UpdatedAt
+			if fs.UpdateState != "" {
+				s.UpdateStatus = &swarm.UpdateStatus{State: swarm.UpdateState(fs.UpdateState)}
+			}
+			if withStatus {
+				s.ServiceStatus = &swarm.ServiceStatus{RunningTasks: fs.Running, DesiredTasks: fs.Desired}
+			}
+			out = append(out, s)
+			continue
+		}
 		s.Spec.Name = fs.Name
 		s.Spec.Labels = fs.Labels
 		for _, target := range fs.Networks {
@@ -1197,7 +1222,11 @@ func (c FakeConfig) serviceList(withStatus bool) []swarm.Service {
 		case "global-job":
 			s.Spec.Mode.GlobalJob = &swarm.GlobalJob{}
 		default:
-			s.Spec.Mode.Replicated = &swarm.ReplicatedService{}
+			replicas := fs.Replicas
+			if replicas == 0 {
+				replicas = fs.Desired
+			}
+			s.Spec.Mode.Replicated = &swarm.ReplicatedService{Replicas: &replicas}
 		}
 		if fs.UpdateState != "" {
 			s.UpdateStatus = &swarm.UpdateStatus{State: swarm.UpdateState(fs.UpdateState)}
