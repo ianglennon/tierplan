@@ -10,6 +10,7 @@ import { setCsrfToken } from "@/api/client";
 import type { components } from "@/api/schema";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { ServiceSearch, ServiceSearchPatch } from "@/features/services/list-search";
 import { ServiceList } from "@/features/services/service-list";
 import "@/i18n";
 import { makeMe } from "@/test-me";
@@ -30,14 +31,22 @@ const svc = (extra: Partial<ServiceItem> = {}): ServiceItem => ({
   stack: "",
   agent: false,
   updatedAt: "2026-10-01T10:00:00Z",
+  ports: [],
+  updateMessage: "",
+  hasPreviousSpec: false,
+  createdAt: "2026-09-01T10:00:00Z",
   ...extra,
 });
 
 interface Sent {
   method: string;
   path: string;
+  // The query string of the request, with its leading "?" when it has one.
+  search: string;
   body?: unknown;
 }
+
+const COUNTS = { degraded: 0, updating: 0, problem: 0 };
 
 let sent: Sent[];
 let items: ServiceItem[];
@@ -45,6 +54,24 @@ let noManager: boolean;
 let me: ReturnType<typeof makeMe>;
 let answerScale: () => Response | Promise<Response>;
 let client: QueryClient;
+// What the list adds to or replaces in its answer, and a full replacement of the answer.
+let listExtra: Record<string, unknown>;
+let answerList: ((url: URL) => Response | Promise<Response>) | undefined;
+// The changes the list asked its owner to make to the search.
+let changes: ServiceSearchPatch[];
+
+function listBody(rows: ServiceItem[], extra: Record<string, unknown> = {}) {
+  return {
+    items: rows,
+    total: rows.length,
+    unfilteredTotal: rows.length,
+    capped: false,
+    statusCounts: COUNTS,
+    noManager,
+    fetchedAt: "2026-10-14T09:00:00Z",
+    ...extra,
+  };
+}
 
 const scaleResult = (extra: Record<string, unknown> = {}) =>
   Response.json({
@@ -64,6 +91,9 @@ const scaleResult = (extra: Record<string, unknown> = {}) =>
 beforeEach(() => {
   sent = [];
   noManager = false;
+  listExtra = {};
+  answerList = undefined;
+  changes = [];
   items = [
     svc(),
     svc({
@@ -73,6 +103,7 @@ beforeEach(() => {
       running: 3,
       desired: 3,
       image: "bayplan/agent:1",
+      agent: true,
     }),
     svc({
       id: "id-backup",
@@ -98,16 +129,11 @@ beforeEach(() => {
               .json()
               .catch(() => undefined)
           : undefined;
-      sent.push({ method: req.method, path, body });
+      const url = new URL(req.url);
+      sent.push({ method: req.method, path, search: url.search, body });
       if (path === "/api/me") return Response.json(me);
       if (path === `/api/env/${ENV}/services` && req.method === "GET") {
-        return Response.json({
-          items,
-          total: items.length,
-          truncated: false,
-          noManager,
-          fetchedAt: "2026-10-14T09:00:00Z",
-        });
+        return answerList ? answerList(url) : Response.json(listBody(items, listExtra));
       }
       if (path === `/api/env/${ENV}/services/scale` && req.method === "POST") return answerScale();
       if (path === "/api/environments") {
@@ -128,18 +154,28 @@ afterEach(() => {
 
 const posts = () => sent.filter((s) => s.method === "POST" && s.path.endsWith("/services/scale"));
 
-function mount() {
-  render(
+function mount(search: ServiceSearch = {}) {
+  return render(
     <QueryClientProvider client={client}>
       <TestRouter>
         <TooltipProvider>
-          <ServiceList envId={ENV} />
+          <ServiceList
+            envId={ENV}
+            search={search}
+            onSearchChange={(patch) => changes.push(patch)}
+          />
           <Toaster />
         </TooltipProvider>
       </TestRouter>
     </QueryClientProvider>,
   );
 }
+
+// The list requests the server was asked for, as path and query.
+const listRequests = () =>
+  sent
+    .filter((s) => s.method === "GET" && s.path === `/api/env/${ENV}/services`)
+    .map((s) => s.search);
 
 // The menu needs the signed-in user, so it is opened once /api/me has answered.
 async function openMenu(name: string) {
@@ -384,5 +420,394 @@ describe("a standalone environment", () => {
     expect(back.getAttribute("href")).toBe(`/env/${ENV}/containers`);
     expect(screen.queryByRole("table")).toBeNull();
     expect(screen.queryByText("Couldn't load services.")).toBeNull();
+  });
+});
+
+const names = () =>
+  screen
+    .getAllByRole("row")
+    .map((r) => r.textContent ?? "")
+    .filter((t) => t !== "");
+
+describe("the services list: groups", () => {
+  const STACKED = () => [
+    svc({ id: "id-web", name: "shop_web", stack: "shop" }),
+    svc({ id: "id-db", name: "shop_db", stack: "shop", running: 0, desired: 1 }),
+    svc({ id: "id-blog", name: "blog_app", stack: "Blog" }),
+    svc({ id: "id-loose", name: "loose" }),
+  ];
+
+  it("groups the rows under their stack, A to Z, with Ungrouped last and a healthy count in each header", async () => {
+    items = STACKED();
+    mount();
+    await screen.findByText("shop_web");
+    const headers = Array.from(document.querySelectorAll('[data-slot="group-header-row"]')).map(
+      (h) => h.textContent,
+    );
+    expect(headers).toEqual([
+      expect.stringMatching(/^Blog\s*Stack\s*1 of 1 healthy$/),
+      expect.stringMatching(/^shop\s*Stack\s*1 of 2 healthy$/),
+      expect.stringMatching(/^Ungrouped\s*1 of 1 healthy$/),
+    ]);
+    // Inside a group the rows follow the sort: name ascending.
+    const rows = names();
+    expect(rows.findIndex((r) => r.startsWith("shop_db"))).toBeLessThan(
+      rows.findIndex((r) => r.startsWith("shop_web")),
+    );
+  });
+
+  it("shows one flat list, with no header bands, when Group by is None", async () => {
+    items = STACKED();
+    mount({ group: "none" });
+    await screen.findByText("shop_web");
+    expect(document.querySelectorAll('[data-slot="group-header-row"]')).toHaveLength(0);
+    expect(screen.getByRole("radio", { name: "None" }).getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("asks for None through the search and keeps Stack as the default that leaves the URL", async () => {
+    items = STACKED();
+    mount();
+    await screen.findByText("shop_web");
+    expect(screen.getByRole("radio", { name: "Stack" }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByRole("radio", { name: "None" }));
+    expect(changes).toEqual([{ group: "none" }]);
+    cleanup();
+    changes = [];
+    mount({ group: "none" });
+    await screen.findByText("shop_web");
+    fireEvent.click(screen.getByRole("radio", { name: "Stack" }));
+    expect(changes).toEqual([{ group: undefined }]);
+  });
+
+  it("folds every group away and opens them again with the collapse-all button", async () => {
+    items = STACKED();
+    mount();
+    await screen.findByText("shop_web");
+    fireEvent.click(screen.getByRole("button", { name: "Collapse all groups" }));
+    expect(screen.queryByText("shop_web")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Expand all groups" }));
+    expect(screen.getByText("shop_web")).toBeTruthy();
+  });
+});
+
+describe("the services list: search and status chips", () => {
+  it("has a search labelled Search services, with the words of the spec", async () => {
+    mount();
+    await screen.findByText("web");
+    const box = screen.getByRole("searchbox", { name: "Search services" });
+    expect(box.getAttribute("placeholder")).toBe("Search by name, image, label or stack");
+  });
+
+  it("waits 250 ms, then puts the search in the URL and asks the server for it", async () => {
+    mount();
+    await screen.findByText("web");
+    const box = screen.getByRole("searchbox", { name: "Search services" });
+    answerList = (url) =>
+      Response.json(
+        listBody(
+          items.filter((r) => r.name.includes(url.searchParams.get("q") ?? "")),
+          { unfilteredTotal: 3 },
+        ),
+      );
+    fireEvent.change(box, { target: { value: "web" } });
+    expect(changes).toEqual([]);
+    await waitFor(() => expect(changes).toEqual([{ q: "web" }]), { timeout: 1500 });
+  });
+
+  it("sends the search and the statuses of the URL to the server, and shows the rows it answers", async () => {
+    answerList = (url) => {
+      const q = url.searchParams.get("q");
+      return Response.json(
+        listBody(q ? items.filter((r) => r.name.includes(q)) : items, {
+          unfilteredTotal: 3,
+          statusCounts: { degraded: 2, updating: 1, problem: 0 },
+        }),
+      );
+    };
+    mount({ q: "web", status: "degraded,problem" });
+    await screen.findByText("web");
+    await waitFor(() => expect(listRequests()).toContain("?q=web&status=degraded%2Cproblem"));
+    expect(screen.queryByText("backup")).toBeNull();
+  });
+
+  it("shows Degraded, Updating and Update problem with the counts of the whole list, in a group named Filter by status", async () => {
+    listExtra = { statusCounts: { degraded: 3, updating: 1, problem: 0 }, unfilteredTotal: 9 };
+    mount();
+    await screen.findByText("web");
+    const group = screen.getByRole("group", { name: "Filter by status" });
+    expect(
+      within(group)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Degraded 3", "Updating 1", "Update problem 0"]);
+  });
+
+  it("toggles a chip through the search, in chip order, and shows it pressed", async () => {
+    listExtra = { statusCounts: { degraded: 3, updating: 1, problem: 2 } };
+    mount({ status: "problem" });
+    await screen.findByText("web");
+    expect(
+      screen.getByRole("button", { name: "Update problem 2" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(screen.getByRole("button", { name: "Degraded 3" }).getAttribute("aria-pressed")).toBe(
+      "false",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Degraded 3" }));
+    expect(changes).toEqual([{ status: "degraded,problem" }]);
+    fireEvent.click(screen.getByRole("button", { name: "Update problem 2" }));
+    expect(changes.at(-1)).toEqual({ status: undefined });
+  });
+
+  it("shows Clear filters only while a search or a chip is set, and clears both", async () => {
+    mount();
+    await screen.findByText("web");
+    expect(screen.queryByRole("button", { name: "Clear filters" })).toBeNull();
+    cleanup();
+    mount({ q: "web", status: "degraded" });
+    await screen.findByText("web");
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(changes).toEqual([{ q: undefined, status: undefined }]);
+  });
+
+  it("counts the matches against the whole list once a filter is set", async () => {
+    answerList = () => Response.json(listBody(items.slice(0, 2), { unfilteredTotal: 3, total: 2 }));
+    mount({ q: "a" });
+    expect(await screen.findByText("2 of 3 services")).toBeTruthy();
+    expect(screen.queryByText("3 services")).toBeNull();
+  });
+});
+
+describe("the services list: sorting", () => {
+  it("makes Name, State and Updated sortable with aria-sort, and Name ascending the default", async () => {
+    mount();
+    await screen.findByText("web");
+    const header = (name: string) => screen.getByRole("columnheader", { name });
+    expect(header("Name").getAttribute("aria-sort")).toBe("ascending");
+    expect(header("State").getAttribute("aria-sort")).toBe("none");
+    expect(header("Updated").getAttribute("aria-sort")).toBe("none");
+    expect(header("Mode").getAttribute("aria-sort")).toBeNull();
+    expect(header("Ports").getAttribute("aria-sort")).toBeNull();
+  });
+
+  it("reports a sort and flips the direction of the column that is sorted", async () => {
+    mount();
+    await screen.findByText("web");
+    fireEvent.click(
+      within(screen.getByRole("columnheader", { name: "State" })).getByRole("button"),
+    );
+    expect(changes).toEqual([{ sort: "state", dir: "asc" }]);
+    cleanup();
+    changes = [];
+    mount({ sort: "updated", dir: "asc" });
+    await screen.findByText("web");
+    fireEvent.click(
+      within(screen.getByRole("columnheader", { name: "Updated" })).getByRole("button"),
+    );
+    expect(changes).toEqual([{ sort: "updated", dir: "desc" }]);
+  });
+
+  it("orders the rows by the sort of the URL, descending when asked", async () => {
+    mount({ group: "none", sort: "name", dir: "desc" });
+    await screen.findByText("web");
+    const rows = names();
+    const at = (name: string) => rows.findIndex((r) => r.startsWith(name));
+    expect(at("web")).toBeLessThan(at("bayplan-agent"));
+    expect(at("bayplan-agent")).toBeLessThan(at("backup"));
+  });
+});
+
+describe("the services list: columns", () => {
+  it("shows the first two published ports as 8080→80/tcp, then +n with all of them in a tooltip", async () => {
+    items = [
+      svc({ ports: ["8080->80/tcp", "8443->443/tcp", "9000->9000/udp (host)"] }),
+      svc({ id: "id-one", name: "one", ports: ["53->53/udp"] }),
+      svc({ id: "id-none", name: "none" }),
+    ];
+    mount();
+    await screen.findByText("web");
+    expect(screen.getByRole("columnheader", { name: "Ports" })).toBeTruthy();
+    const web = screen.getByRole("row", { name: /^web/ });
+    expect(web.textContent).toContain("8080→80/tcp, 8443→443/tcp");
+    expect(web.textContent).not.toContain("9000");
+    const more = within(web).getByText("+1");
+    await act(async () => {
+      fireEvent.focus(more);
+    });
+    expect((await screen.findAllByText(/9000→9000\/udp \(host\)/)).length).toBeGreaterThan(0);
+    const one = screen.getByRole("row", { name: /^one/ });
+    expect(one.textContent).toContain("53→53/udp");
+    expect(within(one).queryByText(/^\+\d/)).toBeNull();
+    const none = screen.getByRole("row", { name: /^none/ });
+    expect(within(none).getAllByText("—").length).toBeGreaterThan(0);
+  });
+
+  it("marks Bayplan's agent service with the Bayplan agent badge", async () => {
+    mount();
+    await screen.findByText("web");
+    expect(
+      within(screen.getByRole("row", { name: /^bayplan-agent/ })).getByText("Bayplan agent"),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByRole("row", { name: /^web/ })).queryByText("Bayplan agent"),
+    ).toBeNull();
+  });
+
+  it("reads a global service's replicas as running/desired and shows — for an unknown mode", async () => {
+    items = [
+      svc({ id: "id-g", name: "gl", mode: "global", running: 2, desired: 3 }),
+      svc({ id: "id-x", name: "mystery", mode: "mystery" as ServiceItem["mode"] }),
+    ];
+    mount();
+    await screen.findByText("gl");
+    expect(within(screen.getByRole("row", { name: /^gl/ })).getByText("2/3")).toBeTruthy();
+    const cells = within(screen.getByRole("row", { name: /^mystery/ })).getAllByRole("cell");
+    // Name, State, Mode
+    expect(cells[2]?.textContent).toBe("—");
+  });
+
+  it("keeps the Name column at least 224px wide and cuts a long name with the whole of it in the text", async () => {
+    const long = "a-very-long-service-name-".repeat(6);
+    items = [svc({ name: long })];
+    mount();
+    await screen.findByText(long);
+    expect(screen.getByRole("columnheader", { name: "Name" }).className).toContain("min-w-[224px]");
+  });
+});
+
+describe("the services list: states", () => {
+  it("shows 8 skeleton rows and the toolbar at once while loading", async () => {
+    answerList = () => new Promise<Response>(() => {});
+    mount();
+    expect(await screen.findByRole("searchbox", { name: "Search services" })).toBeTruthy();
+    expect(screen.getByRole("group", { name: "Filter by status" })).toBeTruthy();
+    // The header row and eight placeholders.
+    expect(screen.getAllByRole("row")).toHaveLength(9);
+    expect(screen.getByRole("table").getAttribute("aria-busy")).toBe("true");
+  });
+
+  it("shows the list error with Retry loading services, and loads again on press", async () => {
+    answerList = () => Response.json({ title: "Bad", status: 500 }, { status: 500 });
+    mount();
+    expect(await screen.findByText("Couldn't load services.")).toBeTruthy();
+    expect(screen.getByText("Docker may be unreachable. Try again.")).toBeTruthy();
+    answerList = undefined;
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading services" }));
+    expect(await screen.findByText("web")).toBeTruthy();
+    expect(screen.queryByText("Couldn't load services.")).toBeNull();
+  });
+
+  it("shows the no-manager banner above the rows last read", async () => {
+    noManager = true;
+    mount();
+    expect(await screen.findByText("No manager is connected")).toBeTruthy();
+    expect(screen.getByText("web")).toBeTruthy();
+    expect(screen.getByRole("searchbox", { name: "Search services" })).toBeTruthy();
+  });
+
+  it("says Showing the first 500 of n when the server capped the list", async () => {
+    listExtra = { capped: true, total: 640, unfilteredTotal: 640 };
+    mount();
+    await screen.findByText("web");
+    expect(
+      screen.getByText("Showing the first 500 of 640. Narrow the search to see the rest."),
+    ).toBeTruthy();
+    cleanup();
+    listExtra = {};
+    mount();
+    await screen.findByText("web");
+    expect(screen.queryByText(/Showing the first 500/)).toBeNull();
+  });
+
+  it("counts one service in the singular", async () => {
+    items = [svc()];
+    mount();
+    expect(await screen.findByText("1 service")).toBeTruthy();
+  });
+
+  describe("when there is nothing to show", () => {
+    beforeEach(() => {
+      items = [];
+    });
+
+    it("says there are no services and what to do, to someone who can create one", async () => {
+      me = makeMe({
+        permissions: { global: [], environments: { "*": ["services.read", "services.manage"] } },
+      });
+      mount();
+      expect(await screen.findByRole("heading", { name: "No services" })).toBeTruthy();
+      expect(
+        screen.getByText(
+          "Services run your containers across the swarm. Create one, or deploy a stack that defines them.",
+        ),
+      ).toBeTruthy();
+    });
+
+    it("says nothing to show on the environment, to someone who cannot", async () => {
+      mount();
+      expect(await screen.findByRole("heading", { name: "No services" })).toBeTruthy();
+      expect(await screen.findByText("Nothing to show on Swarm right now.")).toBeTruthy();
+      expect(screen.queryByText(/Create one/)).toBeNull();
+    });
+
+    it("says no services match these filters, with Clear filters, when a chip is set", async () => {
+      mount({ status: "degraded" });
+      expect(
+        await screen.findByRole("heading", { name: "No services match these filters." }),
+      ).toBeTruthy();
+      const empty = screen
+        .getByRole("heading", { name: "No services match these filters." })
+        .closest("[data-slot=empty]") as HTMLElement;
+      fireEvent.click(within(empty).getByRole("button", { name: "Clear filters" }));
+      expect(changes).toEqual([{ q: undefined, status: undefined }]);
+    });
+
+    it("says no services match the search, with Clear search, when only a search is set", async () => {
+      mount({ q: "zzz" });
+      expect(await screen.findByRole("heading", { name: "No services match “zzz”." })).toBeTruthy();
+      const empty = screen
+        .getByRole("heading", { name: "No services match “zzz”." })
+        .closest("[data-slot=empty]") as HTMLElement;
+      fireEvent.click(within(empty).getByRole("button", { name: "Clear search" }));
+      expect(changes).toEqual([{ q: undefined }]);
+    });
+
+    it("writes the search as text, whatever it holds", async () => {
+      mount({ q: "<img src=x onerror=alert(1)>" });
+      expect(await screen.findByRole("heading", { name: /^No services match/ })).toBeTruthy();
+      expect(document.querySelector("img")).toBeNull();
+    });
+  });
+});
+
+describe("the services list: live updates", () => {
+  it("updates a changed row in place and highlights it", async () => {
+    mount();
+    await screen.findByText("web");
+    items = [svc({ running: 1, desired: 2 }), ...items.slice(1)];
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["env", ENV, "services"] });
+    });
+    const row = await waitFor(() => {
+      const r = screen.getByRole("row", { name: /^web/ });
+      expect(within(r).getByText("1/2")).toBeTruthy();
+      return r;
+    });
+    expect(row.getAttribute("data-changed")).toBe("true");
+  });
+
+  it("holds a new row behind the changes-waiting pill while a row menu is open, and shows it on request", async () => {
+    mount();
+    await openMenu("web");
+    expect(await screen.findByRole("menuitem", { name: "Scale…" })).toBeTruthy();
+    items = [...items, svc({ id: "id-new", name: "newcomer" })];
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["env", ENV, "services"] });
+    });
+    expect(await screen.findByText("1 change waiting")).toBeTruthy();
+    expect(screen.queryByText("newcomer")).toBeNull();
+    fireEvent.keyDown(screen.getByRole("menuitem", { name: "Scale…" }), { key: "Escape" });
+    fireEvent.click(await screen.findByRole("button", { name: "Show changes" }));
+    expect(await screen.findByText("newcomer")).toBeTruthy();
+    expect(screen.queryByText("1 change waiting")).toBeNull();
   });
 });

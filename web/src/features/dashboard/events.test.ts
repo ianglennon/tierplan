@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { imageDetailKey, imageUsedByQuery } from "@/api/images";
 import type { components } from "@/api/schema";
+import { servicesQuery } from "@/api/services";
 import {
   createEventsConnection,
   type EventsSnapshot,
@@ -177,9 +178,20 @@ describe("invalidationKeys", () => {
   });
 
   it("makes only the summary stale for swarm objects and for a row of Bayplan's own", () => {
-    for (const type of ["service", "node", "secret", "config", "bayplan"] as const) {
+    for (const type of ["node", "secret", "config", "bayplan"] as const) {
       expect(invalidationKeys(type, "e1")).toEqual([summary]);
     }
+  });
+
+  it("maps a service event to the summary and the services list", () => {
+    expect(invalidationKeys("service", "e1")).toEqual([summary, list("services")]);
+  });
+
+  it("refreshes every filtered read of the services list, since their keys extend the list's", () => {
+    const keys = invalidationKeys("service", "e1");
+    const services = keys.find((k) => k[2] === "services") ?? [];
+    const filtered = servicesQuery("e1", { q: "web", status: "degraded" }).queryKey;
+    expect(filtered.slice(0, services.length)).toEqual(services);
   });
 });
 
