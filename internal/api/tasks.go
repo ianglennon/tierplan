@@ -135,15 +135,7 @@ func listServiceTasks(ctx context.Context, d ServicesDeps, envID, serviceID stri
 		return ServiceTasksBody{}, serviceReadProblem(d, envID, err)
 	}
 
-	var targets map[string]envs.NodeRef
-	if d.Aggregator != nil {
-		// A node nothing reaches is a task that cannot be opened, not a failed read.
-		if t, e := d.Aggregator.SwarmNodeTargets(ctx, envID); e == nil {
-			targets = t
-		} else {
-			d.Log.Warn("mapping swarm nodes to agents failed", "environment", envID, "error", e)
-		}
-	}
+	targets := swarmNodeTargets(ctx, d, envID)
 	global := svc.Mode == "global" || svc.Mode == "global-job"
 	return ServiceTasksBody{
 		Slots: groupTasks(rows, global, read.Nodes, targets), Retention: retention, Total: len(rows), Global: global,

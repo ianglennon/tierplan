@@ -5628,6 +5628,236 @@
         ],
         "type": "object"
       },
+      "PlacementBody": {
+        "additionalProperties": false,
+        "properties": {
+          "nodes": {
+            "description": "Every node of the swarm, sorted by host name then ID",
+            "items": {
+              "$ref": "#/components/schemas/PlacementNode"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "services": {
+            "description": "The services the tasks belong to (every service, or the one asked for), sorted by name",
+            "items": {
+              "$ref": "#/components/schemas/PlacementService"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "tasks": {
+            "description": "The tasks whose desired state is running, sorted by service name, slot then task ID. A task with no node has an empty nodeId; one on a node the swarm no longer lists has nodeKnown false",
+            "items": {
+              "$ref": "#/components/schemas/PlacementTask"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "nodes",
+          "tasks",
+          "services"
+        ],
+        "type": "object"
+      },
+      "PlacementNode": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "description": "The address the swarm reaches the node at, which node.ip constraints are matched against; empty when unknown",
+            "type": "string"
+          },
+          "arch": {
+            "description": "The node's architecture (node.platform.arch)",
+            "type": "string"
+          },
+          "availability": {
+            "description": "active, pause or drain",
+            "type": "string"
+          },
+          "cpus": {
+            "description": "The CPUs the node reports; 0 when it reports none",
+            "format": "double",
+            "type": "number"
+          },
+          "engineLabels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "The labels of the node's engine (engine.labels.*); an empty object when it has none",
+            "type": "object"
+          },
+          "hostname": {
+            "description": "The node's host name",
+            "type": "string"
+          },
+          "id": {
+            "description": "The swarm node ID",
+            "type": "string"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "The node's labels (node.labels.*); an empty object when it has none",
+            "type": "object"
+          },
+          "leader": {
+            "description": "True for the manager that leads the swarm",
+            "type": "boolean"
+          },
+          "memoryBytes": {
+            "description": "The memory the node reports, in bytes; 0 when it reports none",
+            "format": "int64",
+            "type": "integer"
+          },
+          "os": {
+            "description": "The node's operating system (node.platform.os)",
+            "type": "string"
+          },
+          "role": {
+            "description": "The node's role",
+            "type": "string"
+          },
+          "state": {
+            "description": "The swarm's word for the node: ready, down, disconnected or unknown",
+            "type": "string"
+          },
+          "targetNodeId": {
+            "description": "The node ID the container routes of this environment take (?node= of the container page) for this node; empty when no connected agent or local socket reaches it now",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "hostname",
+          "role",
+          "leader",
+          "availability",
+          "state",
+          "cpus",
+          "memoryBytes",
+          "address",
+          "os",
+          "arch",
+          "labels",
+          "engineLabels",
+          "targetNodeId"
+        ],
+        "type": "object"
+      },
+      "PlacementService": {
+        "additionalProperties": false,
+        "properties": {
+          "constraints": {
+            "description": "The placement constraints of the service's spec, as written; an empty list when it has none",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "The service ID",
+            "type": "string"
+          },
+          "mode": {
+            "description": "replicated, global, replicated-job or global-job",
+            "type": "string"
+          },
+          "name": {
+            "description": "The service's name",
+            "type": "string"
+          },
+          "stack": {
+            "description": "The stack the service belongs to; empty for a service made on its own",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "stack",
+          "mode",
+          "constraints"
+        ],
+        "type": "object"
+      },
+      "PlacementTask": {
+        "additionalProperties": false,
+        "properties": {
+          "desiredState": {
+            "description": "The state the swarm wants the task in",
+            "type": "string"
+          },
+          "dockerState": {
+            "description": "The state Docker last recorded for the task",
+            "type": "string"
+          },
+          "error": {
+            "description": "Docker's error text about the task (for a task that could not be placed, why), cleaned of control characters; empty when there is none. To be shown as plain text",
+            "type": "string"
+          },
+          "id": {
+            "description": "The task ID",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The swarm node the task was placed on; empty while it is not placed. The swarm keeps the ID of a node that has since been removed",
+            "type": "string"
+          },
+          "nodeKnown": {
+            "description": "False when the task names a node the swarm no longer lists (a removed node); true otherwise, also for a task with no node",
+            "type": "boolean"
+          },
+          "service": {
+            "description": "The service's name",
+            "type": "string"
+          },
+          "serviceId": {
+            "description": "The service the task belongs to",
+            "type": "string"
+          },
+          "slot": {
+            "description": "The replica number of a replicated service's task; 0 for a global service's",
+            "format": "int64",
+            "type": "integer"
+          },
+          "stack": {
+            "description": "The stack the service belongs to; empty for a service made on its own",
+            "type": "string"
+          },
+          "state": {
+            "description": "The state to show: Docker's own word, except unknown for a task that has not ended on a node that is down, disconnected or removed, which cannot say it is still running",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "serviceId",
+          "service",
+          "stack",
+          "slot",
+          "nodeId",
+          "nodeKnown",
+          "state",
+          "dockerState",
+          "desiredState",
+          "error"
+        ],
+        "type": "object"
+      },
       "PlatformBody": {
         "additionalProperties": false,
         "properties": {
@@ -13579,6 +13809,69 @@
           }
         },
         "summary": "One network's raw inspect document",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/placement": {
+      "get": {
+        "description": "The nodes of the swarm, the tasks whose desired state is running and the services they belong to, read live from a manager in one read. A task with no node (pending, no suitable node) has an empty nodeId and its error; a task on a node the swarm no longer lists has nodeKnown false. A task that has not ended on a node that is down, disconnected or removed reads unknown, never running; dockerState keeps Docker's own word. With serviceId the tasks and services are narrowed to that service while every node stays, so empty columns show. Each node carries the facts a placement constraint is matched against, and each service its constraints. 404 service_not_found for an unknown serviceId; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs services.read (Viewer) on the environment.",
+        "operationId": "getPlacement",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only the tasks and the service of this service ID or name; every node is still listed. 404 service_not_found for a service the swarm does not have",
+            "explode": false,
+            "in": "query",
+            "name": "serviceId",
+            "schema": {
+              "description": "Only the tasks and the service of this service ID or name; every node is still listed. 404 service_not_found for a service the swarm does not have",
+              "maxLength": 128,
+              "pattern": "^$|^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlacementBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Where the tasks of a swarm run",
         "tags": [
           "environments"
         ]

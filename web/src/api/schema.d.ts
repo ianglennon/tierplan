@@ -1000,6 +1000,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/placement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Where the tasks of a swarm run
+         * @description The nodes of the swarm, the tasks whose desired state is running and the services they belong to, read live from a manager in one read. A task with no node (pending, no suitable node) has an empty nodeId and its error; a task on a node the swarm no longer lists has nodeKnown false. A task that has not ended on a node that is down, disconnected or removed reads unknown, never running; dockerState keeps Docker's own word. With serviceId the tasks and services are narrowed to that service while every node stays, so empty columns show. Each node carries the facts a placement constraint is matched against, and each service its constraints. 404 service_not_found for an unknown serviceId; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs services.read (Viewer) on the environment.
+         */
+        get: operations["getPlacement"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/reconnect": {
         parameters: {
             query?: never;
@@ -4975,6 +4995,93 @@ export interface components {
             /** @description Installation-wide permissions */
             global: string[] | null;
         };
+        PlacementBody: {
+            /** @description Every node of the swarm, sorted by host name then ID */
+            nodes: components["schemas"]["PlacementNode"][] | null;
+            /** @description The services the tasks belong to (every service, or the one asked for), sorted by name */
+            services: components["schemas"]["PlacementService"][] | null;
+            /** @description The tasks whose desired state is running, sorted by service name, slot then task ID. A task with no node has an empty nodeId; one on a node the swarm no longer lists has nodeKnown false */
+            tasks: components["schemas"]["PlacementTask"][] | null;
+        };
+        PlacementNode: {
+            /** @description The address the swarm reaches the node at, which node.ip constraints are matched against; empty when unknown */
+            address: string;
+            /** @description The node's architecture (node.platform.arch) */
+            arch: string;
+            /** @description active, pause or drain */
+            availability: string;
+            /**
+             * Format: double
+             * @description The CPUs the node reports; 0 when it reports none
+             */
+            cpus: number;
+            /** @description The labels of the node's engine (engine.labels.*); an empty object when it has none */
+            engineLabels: {
+                [key: string]: string;
+            };
+            /** @description The node's host name */
+            hostname: string;
+            /** @description The swarm node ID */
+            id: string;
+            /** @description The node's labels (node.labels.*); an empty object when it has none */
+            labels: {
+                [key: string]: string;
+            };
+            /** @description True for the manager that leads the swarm */
+            leader: boolean;
+            /**
+             * Format: int64
+             * @description The memory the node reports, in bytes; 0 when it reports none
+             */
+            memoryBytes: number;
+            /** @description The node's operating system (node.platform.os) */
+            os: string;
+            /** @description The node's role */
+            role: string;
+            /** @description The swarm's word for the node: ready, down, disconnected or unknown */
+            state: string;
+            /** @description The node ID the container routes of this environment take (?node= of the container page) for this node; empty when no connected agent or local socket reaches it now */
+            targetNodeId: string;
+        };
+        PlacementService: {
+            /** @description The placement constraints of the service's spec, as written; an empty list when it has none */
+            constraints: string[] | null;
+            /** @description The service ID */
+            id: string;
+            /** @description replicated, global, replicated-job or global-job */
+            mode: string;
+            /** @description The service's name */
+            name: string;
+            /** @description The stack the service belongs to; empty for a service made on its own */
+            stack: string;
+        };
+        PlacementTask: {
+            /** @description The state the swarm wants the task in */
+            desiredState: string;
+            /** @description The state Docker last recorded for the task */
+            dockerState: string;
+            /** @description Docker's error text about the task (for a task that could not be placed, why), cleaned of control characters; empty when there is none. To be shown as plain text */
+            error: string;
+            /** @description The task ID */
+            id: string;
+            /** @description The swarm node the task was placed on; empty while it is not placed. The swarm keeps the ID of a node that has since been removed */
+            nodeId: string;
+            /** @description False when the task names a node the swarm no longer lists (a removed node); true otherwise, also for a task with no node */
+            nodeKnown: boolean;
+            /** @description The service's name */
+            service: string;
+            /** @description The service the task belongs to */
+            serviceId: string;
+            /**
+             * Format: int64
+             * @description The replica number of a replicated service's task; 0 for a global service's
+             */
+            slot: number;
+            /** @description The stack the service belongs to; empty for a service made on its own */
+            stack: string;
+            /** @description The state to show: Docker's own word, except unknown for a task that has not ended on a node that is down, disconnected or removed, which cannot say it is still running */
+            state: string;
+        };
         PlatformBody: {
             /** @description The CPU architecture by its OCI name, like amd64, arm64 or arm */
             arch: string;
@@ -8812,6 +8919,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NetworkInspectBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getPlacement: {
+        parameters: {
+            query?: {
+                /** @description Only the tasks and the service of this service ID or name; every node is still listed. 404 service_not_found for a service the swarm does not have */
+                serviceId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlacementBody"];
                 };
             };
             /** @description Error */
