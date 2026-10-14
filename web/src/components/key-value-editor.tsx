@@ -60,49 +60,68 @@ const TOUCH_HEIGHT = "h-11 md:h-8";
 // KeyValueEditor is a list of name and value pairs: labels, driver options. Rows
 // repeat with a remove button each, and one button adds a row. Names and values
 // are text only, never markup.
-export function KeyValueEditor({ value, onChange, labels, className }: KeyValueEditorProps) {
+export function KeyValueEditor({
+  value,
+  onChange,
+  labels,
+  errors,
+  className,
+}: KeyValueEditorProps) {
   const group = useId();
   function update(id: string, patch: Partial<KeyValueRow>) {
     onChange(value.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   }
   return (
     <div className={cn("flex flex-col gap-2", className)}>
-      {value.map((r, i) => (
-        <div key={r.id} className="flex items-center gap-2">
-          <Input
-            id={`${group}-k${i}`}
-            aria-label={labels.key}
-            value={r.key}
-            onChange={(e) => update(r.id, { key: e.target.value })}
-            autoComplete="off"
-            autoCapitalize="off"
-            autoCorrect="off"
-            spellCheck={false}
-            className={cn("min-w-0 flex-1 font-mono", TOUCH_HEIGHT)}
-          />
-          <Input
-            id={`${group}-v${i}`}
-            aria-label={labels.value}
-            value={r.value}
-            onChange={(e) => update(r.id, { value: e.target.value })}
-            autoComplete="off"
-            autoCapitalize="off"
-            autoCorrect="off"
-            spellCheck={false}
-            className={cn("min-w-0 flex-1 font-mono", TOUCH_HEIGHT)}
-          />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="max-md:size-11"
-            aria-label={labels.remove(r.key)}
-            onClick={() => onChange(value.filter((x) => x.id !== r.id))}
-          >
-            <X aria-hidden="true" />
-          </Button>
-        </div>
-      ))}
+      {value.map((r, i) => {
+        const error = errors?.get(r.id);
+        const errorId = `${group}-e${i}`;
+        return (
+          <div key={r.id} className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <Input
+                id={`${group}-k${i}`}
+                aria-label={labels.key}
+                aria-invalid={error ? true : undefined}
+                aria-describedby={error ? errorId : undefined}
+                value={r.key}
+                onChange={(e) => update(r.id, { key: e.target.value })}
+                autoComplete="off"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                className={cn("min-w-0 flex-1 font-mono", TOUCH_HEIGHT)}
+              />
+              <Input
+                id={`${group}-v${i}`}
+                aria-label={labels.value}
+                value={r.value}
+                onChange={(e) => update(r.id, { value: e.target.value })}
+                autoComplete="off"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                className={cn("min-w-0 flex-1 font-mono", TOUCH_HEIGHT)}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="max-md:size-11"
+                aria-label={labels.remove(r.key)}
+                onClick={() => onChange(value.filter((x) => x.id !== r.id))}
+              >
+                <X aria-hidden="true" />
+              </Button>
+            </div>
+            {error ? (
+              <p id={errorId} className="text-xs text-destructive">
+                {error}
+              </p>
+            ) : null}
+          </div>
+        );
+      })}
       <div>
         <Button
           type="button"

@@ -510,8 +510,13 @@ describe("the Labels tab", () => {
         "Services use labels in placement constraints, such as node.labels.disk==ssd.",
       ),
     ).toBeTruthy();
-    // Editing comes with a later plan: nothing here changes a label.
-    expect(screen.queryByRole("button", { name: /label/i })).toBeNull();
+    // Below Admin nothing here changes a label: no inputs, no Add label, and Save labels is off.
+    expect(screen.queryByRole("button", { name: "Add label" })).toBeNull();
+    expect(screen.queryAllByLabelText("Label name")).toHaveLength(0);
+    const save = screen.getByRole("button", { name: "Save labels" });
+    expect(save.hasAttribute("disabled") || save.getAttribute("aria-disabled") === "true").toBe(
+      true,
+    );
   });
 
   it("says No labels. when the node has none", async () => {
