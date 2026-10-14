@@ -10,7 +10,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { canScale, itemOf } from "@/features/service-detail/header-actions";
 import { ScaleDialog } from "@/features/services/scale-dialog";
-import { TaskTable, TaskTableSkeleton } from "@/features/tasks/task-table";
+import { TasksSkeleton, TaskTable } from "@/features/tasks/task-table";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { z } from "@/lib/zod-config";
@@ -82,7 +82,7 @@ function ServiceTasksRoute() {
       </Alert>
     );
   }
-  return <TaskTableSkeleton />;
+  return <TasksSkeleton />;
 }
 
 export const Route = createFileRoute("/_app/env/$envId/services_/$serviceId/tasks")({

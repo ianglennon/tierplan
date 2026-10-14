@@ -292,9 +292,9 @@ function HeaderRow() {
   );
 }
 
-// TaskTableSkeleton is the table while the tasks load: the header and eight rows at 36px, with
+// TasksSkeleton is the table while the tasks load: the header and eight rows at 36px, with
 // the words a screen reader needs.
-export function TaskTableSkeleton() {
+export function TasksSkeleton() {
   const t = useT();
   return (
     <div aria-busy="true">
