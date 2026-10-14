@@ -138,6 +138,9 @@ type FakeConfig struct {
 	// WriteError makes every container write answer 500 with this message, as an engine
 	// does when it refuses one.
 	WriteError string
+	// NodeUpdateError makes every node update answer with this message, as a manager does when it
+	// refuses one: 400 for the last-manager refusal, 500 for any other text.
+	NodeUpdateError string
 	// PolicyDeny makes the four list endpoints and every write answer 403 with the
 	// message an agent gives for a request its policy refuses: agent_policy_denied:
 	// followed by the method and path.

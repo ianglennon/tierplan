@@ -18,6 +18,7 @@ import (
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/api/types/volume"
 )
 
@@ -273,6 +274,65 @@ func TestBodyVolumeCreate(t *testing.T) {
 		if _, err := validateBody(BodyVolumeCreate, strings.NewReader(body), bodyEnv{}); err == nil {
 			t.Errorf("%s: the body was accepted", name)
 		}
+	}
+}
+
+func TestBodyNodeSpec(t *testing.T) {
+	want := swarm.NodeSpec{
+		Annotations:  swarm.Annotations{Name: "alpha", Labels: map[string]string{"zone": "a", "disk": "ssd"}},
+		Role:         swarm.NodeRoleManager,
+		Availability: swarm.NodeAvailabilityDrain,
+	}
+	var got swarm.NodeSpec
+	if err := roundTrip(t, BodyNodeSpec, enc(t, want), &got); err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("accepted = %+v, %v; want %+v", got, err, want)
+	}
+	for _, role := range []swarm.NodeRole{swarm.NodeRoleManager, swarm.NodeRoleWorker} {
+		for _, avail := range []swarm.NodeAvailability{swarm.NodeAvailabilityActive, swarm.NodeAvailabilityPause, swarm.NodeAvailabilityDrain} {
+			if err := roundTrip(t, BodyNodeSpec, enc(t, swarm.NodeSpec{Role: role, Availability: avail}), &got); err != nil {
+				t.Errorf("role %s availability %s was refused: %v", role, avail, err)
+			}
+		}
+	}
+	// The client encodes unset labels as null and no name as nothing; both are the spec as read.
+	if err := roundTrip(t, BodyNodeSpec, `{"Labels":null,"Role":"worker","Availability":"active"}`, &got); err != nil {
+		t.Errorf("a spec with null labels was refused: %v", err)
+	}
+	if err := roundTrip(t, BodyNodeSpec, `{"Labels":{},"Role":"worker","Availability":"pause"}`, &got); err != nil {
+		t.Errorf("a spec with empty labels was refused: %v", err)
+	}
+}
+
+func TestBodyNodeSpecRefusals(t *testing.T) {
+	manyLabels := map[string]string{}
+	for i := range 65 {
+		manyLabels[strconv.Itoa(i)] = "v"
+	}
+	for name, body := range map[string]string{
+		"no role":                 `{"Availability":"active"}`,
+		"no availability":         `{"Role":"worker"}`,
+		"an unknown role":         `{"Role":"leader","Availability":"active"}`,
+		"an unknown availability": `{"Role":"worker","Availability":"down"}`,
+		"a role in other case":    `{"Role":"Manager","Availability":"active"}`,
+		"an unknown key":          `{"Role":"worker","Availability":"active","Foo":1}`,
+		"an ID":                   `{"ID":"x","Role":"worker","Availability":"active"}`,
+		"a version":               `{"Version":{"Index":3},"Role":"worker","Availability":"active"}`,
+		"a description":           `{"Description":{"Hostname":"x"},"Role":"worker","Availability":"active"}`,
+		"a status":                `{"Status":{"State":"ready"},"Role":"worker","Availability":"active"}`,
+		"data after the value":    `{"Role":"worker","Availability":"active"}{}`,
+		"not an object":           `["worker"]`,
+		"an empty body":           ``,
+		"too many labels":         enc(t, swarm.NodeSpec{Annotations: swarm.Annotations{Labels: manyLabels}, Role: "worker", Availability: "active"}),
+		"an over-long label key":  enc(t, swarm.NodeSpec{Annotations: swarm.Annotations{Labels: map[string]string{strings.Repeat("k", 257): "v"}}, Role: "worker", Availability: "active"}),
+		"an over-long label":      enc(t, swarm.NodeSpec{Annotations: swarm.Annotations{Labels: map[string]string{"k": strings.Repeat("v", 4097)}}, Role: "worker", Availability: "active"}),
+		"an over-long name":       enc(t, swarm.NodeSpec{Annotations: swarm.Annotations{Name: strings.Repeat("n", 254)}, Role: "worker", Availability: "active"}),
+	} {
+		if _, err := validateBody(BodyNodeSpec, strings.NewReader(body), bodyEnv{}); err == nil {
+			t.Errorf("%s: the body was accepted", name)
+		}
+	}
+	if bodyCap(BodyNodeSpec) != 64<<10 {
+		t.Errorf("the node spec cap = %d, want 64 KiB", bodyCap(BodyNodeSpec))
 	}
 }
 

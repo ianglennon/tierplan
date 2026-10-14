@@ -69,3 +69,27 @@ func nodeDetail(n swarm.Node) NodeDetail {
 	}
 	return d
 }
+
+// ErrNodeChanged means the node's version is no longer the one the caller read, so nothing was
+// written. The caller reads the node again.
+var ErrNodeChanged = errors.New("dockerx: the node changed since it was read")
+
+// ErrLastManager is the daemon's refusal to demote the last manager of the swarm.
+var ErrLastManager = errors.New("dockerx: attempting to demote the last manager of the swarm")
+
+// NodeChange is one change to a node: the version the caller read, and the fields to change.
+// An empty Availability or Role leaves that field alone. Labels replace the node's labels when
+// they are not nil, or when SetLabels is true (a nil or empty map then clears them); with
+// neither, labels are left alone.
+type NodeChange struct {
+	Version      uint64
+	Availability string
+	Role         string
+	Labels       map[string]string
+	SetLabels    bool
+}
+
+// NodeUpdate changes one node.
+func (c *Client) NodeUpdate(ctx context.Context, id string, ch NodeChange) error {
+	return errors.New("dockerx: NodeUpdate is not implemented")
+}

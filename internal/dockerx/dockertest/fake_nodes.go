@@ -6,6 +6,8 @@ package dockertest
 import (
 	"net/http"
 	"regexp"
+
+	"github.com/moby/moby/api/types/swarm"
 )
 
 var _ = registerFakeHandler((*Fake).serveNodeInspect)
@@ -35,3 +37,14 @@ func (f *Fake) serveNodeInspect(w http.ResponseWriter, r *http.Request, p string
 	writeJSON(w, http.StatusNotFound, map[string]string{"message": "node " + m[1] + " not found"})
 	return true
 }
+
+// FakeNodeUpdate is one node update the fake daemon accepted: the node, the version and the
+// spec the request carried.
+type FakeNodeUpdate struct {
+	NodeID  string
+	Version string
+	Spec    swarm.NodeSpec
+}
+
+// NodeUpdates returns every node update the daemon accepted, in order.
+func (f *Fake) NodeUpdates() []FakeNodeUpdate { return nil }

@@ -112,6 +112,8 @@ var oracle = []oracleEntry{
 	oEntry("GET", `services/`+oID, map[string]*regexp.Regexp{"insertDefaults": oBool}),
 	// One node: the inspect, which takes no key at all.
 	oEntry("GET", `nodes/`+oID, nil),
+	// A node update: a version and a node spec body.
+	{method: "POST", path: rx(oVer + `nodes/` + oID + `/update$`), body: true, keys: map[string]*regexp.Regexp{"version": rx(`^[0-9]{1,20}$`)}},
 	{method: "POST", path: rx(oVer + `services/create$`), body: true},
 	oEntry("DELETE", `services/`+oID, nil),
 	{
@@ -183,6 +185,11 @@ func FuzzAllowed(f *testing.F) {
 		{"HEAD", "/v1.56/nodes/abc123", "", false, false, true},
 		{"GET", "/nodes/abc123/tasks", "", false, false, false},
 		{"POST", "/nodes/abc123/update", "version=1", true, false, false},
+		{"POST", "/nodes/abc123/update", "version=1&x=2", true, false, false},
+		{"POST", "/nodes/abc123/update", "version=x", true, false, false},
+		{"POST", "/nodes/abc123/update", "version=1", false, false, false},
+		{"POST", "/nodes/abc123/update", "version=1", true, false, true},
+		{"POST", "/v1.56/nodes/abc123/update", "version=12", true, false, false},
 		{"DELETE", "/nodes/abc123", "", false, false, false},
 		{"GET", "/services/web", "insertDefaults=1", false, false, false},
 		{"GET", "/services/web", "insertDefaults=maybe", false, false, false},
@@ -369,6 +376,10 @@ var bodyShapes = map[BodyKind]bodyShape{
 	BodyVolumeCreate: {
 		keys: map[string]*bodyShape{"Name": nil, "Driver": nil, "DriverOpts": nil, "Labels": nil},
 	},
+	// A node spec is a name, labels, a role and an availability, and nothing else.
+	BodyNodeSpec: {
+		keys: map[string]*bodyShape{"Name": nil, "Labels": nil, "Role": nil, "Availability": nil},
+	},
 	// A service spec is the user's whole service, so the shape is its top-level keys.
 	// What it must not hold is a plugin or a network attachment task, and a runtime
 	// other than container (checked in FuzzBody).
@@ -491,13 +502,17 @@ func FuzzBody(f *testing.F) {
 		{uint8(BodyServiceSpec), enc(swarm.ServiceSpec{TaskTemplate: swarm.TaskSpec{ContainerSpec: &swarm.ContainerSpec{
 			Image: "x", CapabilityAdd: []string{"SYS_ADMIN"}, Privileges: &swarm.Privileges{Seccomp: &swarm.SeccompOpts{Mode: swarm.SeccompModeUnconfined}},
 		}}})},
+		{uint8(BodyNodeSpec), enc(swarm.NodeSpec{Annotations: swarm.Annotations{Name: "alpha", Labels: map[string]string{"a": "b"}}, Role: swarm.NodeRoleWorker, Availability: swarm.NodeAvailabilityDrain})},
+		{uint8(BodyNodeSpec), enc(swarm.NodeSpec{Role: swarm.NodeRoleManager, Availability: swarm.NodeAvailabilityActive})},
+		{uint8(BodyNodeSpec), `{"Role":"leader","Availability":"down"}`},
+		{uint8(BodyNodeSpec), `{"Role":"worker","Availability":"active","ID":"x"}`},
 		{uint8(BodyNone), `{}`},
 	}
 	for _, s := range seeds {
 		f.Add(s.kind, s.body)
 	}
 	f.Fuzz(func(t *testing.T, kind uint8, body string) {
-		k := BodyKind(kind % 8) // BodyNone and the seven kinds
+		k := BodyKind(kind % 9) // BodyNone and the eight kinds
 		out, err := validateBody(k, strings.NewReader(body), bodyEnv{})
 		if err != nil {
 			return
@@ -519,6 +534,21 @@ func FuzzBody(f *testing.F) {
 		for _, z := range shape.zero {
 			if !emptyAt(m, z) {
 				t.Fatalf("kind %d forwarded %s set: %s", k, z, out)
+			}
+		}
+		if k == BodyNodeSpec {
+			var spec swarm.NodeSpec
+			if err := json.Unmarshal(out, &spec); err != nil {
+				t.Fatalf("the forwarded node spec does not decode: %v: %s", err, out)
+			}
+			if spec.Role != swarm.NodeRoleManager && spec.Role != swarm.NodeRoleWorker {
+				t.Fatalf("a node spec with the role %q was forwarded: %s", spec.Role, out)
+			}
+			if a := spec.Availability; a != swarm.NodeAvailabilityActive && a != swarm.NodeAvailabilityPause && a != swarm.NodeAvailabilityDrain {
+				t.Fatalf("a node spec with the availability %q was forwarded: %s", a, out)
+			}
+			if len(spec.Labels) > maxMapEntries || len(spec.Name) > maxAliasChars {
+				t.Fatalf("a node spec over the bounds was forwarded: %s", out)
 			}
 		}
 		if k == BodyServiceSpec {

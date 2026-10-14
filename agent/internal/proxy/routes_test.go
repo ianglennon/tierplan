@@ -401,7 +401,6 @@ func TestRouteNodeInspectTakesNoQueryAndNeverShadowsTheList(t *testing.T) {
 		{"a 129 character node", "GET", "/nodes/" + strings.Repeat("a", 129), "", false, ""},
 		{"a 128 character node", "GET", "/nodes/" + strings.Repeat("a", 128), "", false, "node inspect"},
 		{"a node's sub-path", "GET", "/nodes/abc123/tasks", "", false, ""},
-		{"a node update", "POST", "/nodes/abc123/update", "version=1", true, ""},
 		{"a node delete", "DELETE", "/nodes/abc123", "", false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -419,6 +418,55 @@ func TestRouteNodeInspectTakesNoQueryAndNeverShadowsTheList(t *testing.T) {
 	}
 	if ok, reason, _ := Allowed("GET", "/nodes/abc123", "", false, false, Policy{ReadOnly: true}); !ok {
 		t.Errorf("a node inspect on a read-only host was refused (%s)", reason)
+	}
+}
+
+func TestRouteNodeUpdateTakesOnlyAVersionAndANodeSpecBody(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, path, query string
+		body                      bool
+		wantRoute                 string // "" means refused
+	}{
+		{"an update", "POST", "/nodes/abc123/update", "version=12", true, "node update"},
+		{"an update with the version prefix", "POST", "/v1.56/nodes/abc123/update", "version=12", true, "node update"},
+		{"an update with a 20 digit version", "POST", "/nodes/abc123/update", "version=" + strings.Repeat("1", 20), true, "node update"},
+		{"an update with a 21 digit version", "POST", "/nodes/abc123/update", "version=" + strings.Repeat("1", 21), true, ""},
+		{"an update with a non-numeric version", "POST", "/nodes/abc123/update", "version=abc", true, ""},
+		{"an update with a negative version", "POST", "/nodes/abc123/update", "version=-1", true, ""},
+		{"an update with a second bad version", "POST", "/nodes/abc123/update", "version=1&version=x", true, ""},
+		{"an update with another key", "POST", "/nodes/abc123/update", "version=12&force=1", true, ""},
+		{"an update with no body", "POST", "/nodes/abc123/update", "version=12", false, ""},
+		{"an update with a trailing slash", "POST", "/nodes/abc123/update/", "version=12", true, ""},
+		{"an update of a dot-dot node", "POST", "/nodes/../update", "version=12", true, ""},
+		{"an update of a node starting with a dot", "POST", "/nodes/.x/update", "version=12", true, ""},
+		{"an update of a 129 character node", "POST", "/nodes/" + strings.Repeat("a", 129) + "/update", "version=12", true, ""},
+		{"a GET of update", "GET", "/nodes/abc123/update", "", false, ""},
+		{"a PUT of update", "PUT", "/nodes/abc123/update", "version=12", true, ""},
+		{"a delete of a node", "DELETE", "/nodes/abc123", "", false, ""},
+		{"a POST to a node", "POST", "/nodes/abc123", "version=12", true, ""},
+		{"a node's other sub-path", "POST", "/nodes/abc123/join", "version=12", true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, _, kind := Allowed(tc.method, tc.path, tc.query, tc.body, false, Policy{})
+			if ok != (tc.wantRoute != "") {
+				t.Fatalf("Allowed(%s %s?%s) = %v, want %v", tc.method, tc.path, tc.query, ok, tc.wantRoute != "")
+			}
+			if !ok {
+				return
+			}
+			if rt, found := Match(tc.method, tc.path); !found || rt.name != tc.wantRoute || rt.registryAuth {
+				t.Fatalf("Match(%s %s) = %q (registryAuth %v), want %q without one", tc.method, tc.path, rt.name, rt.registryAuth, tc.wantRoute)
+			}
+			if kind != BodyNodeSpec {
+				t.Errorf("body kind = %d, want BodyNodeSpec (%d)", kind, BodyNodeSpec)
+			}
+		})
+	}
+	if ok, reason, _ := Allowed("POST", "/nodes/abc123/update", "version=1", true, false, Policy{ReadOnly: true}); ok || reason != "read_only_flag" {
+		t.Errorf("a node update on a read-only host = %v %q, want refused read_only_flag", ok, reason)
+	}
+	if ok, _, _ := Allowed("POST", "/nodes/abc123/update", "version=1", true, true, Policy{}); ok {
+		t.Error("a node update with an upgrade was allowed")
 	}
 }
 
