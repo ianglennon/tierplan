@@ -161,11 +161,13 @@ var phase5DetailKeys = map[string][]string{
 // replica count, the count it had, the code of a refusal, the bulk ID of a selection scaled at
 // once and the node the manager answered on (plan 06-01, RES-02). A force update records the image
 // the service was left with, its digest, whether it was pinned, whether it was a retry and the
-// code; a rollback records the version it was asked at and the code (plan 06-08, RES-02).
+// code; a rollback records the version it was asked at and the code (plan 06-08, RES-02). A remove records the name, the stack the service belonged to, whether it was
+// Bayplan's agent service, whether its name was typed to confirm, and the code (plan 06-10, RES-02).
 var phase6DetailKeys = map[string][]string{
 	audit.ActionServiceScaled:       {"name", "replicas", "previous", "code", "bulk", "node"},
 	audit.ActionServiceForceUpdated: {"name", "image", "digest", "retry", "pinned", "code"},
 	audit.ActionServiceRolledBack:   {"name", "version", "code"},
+	audit.ActionServiceRemoved:      {"name", "stack", "agent", "confirmed", "code"},
 }
 
 func TestEveryPhase6ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -192,6 +194,7 @@ func TestEveryPhase6ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		"service.scaled":        audit.ActionServiceScaled,
 		"service.force_updated": audit.ActionServiceForceUpdated,
 		"service.rolled_back":   audit.ActionServiceRolledBack,
+		"service.removed":       audit.ActionServiceRemoved,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)

@@ -520,3 +520,169 @@ func TestServiceSpecOfAnUnknownServiceIsNotFound(t *testing.T) {
 		t.Errorf("status = %d %s (%s), want 404 service_not_found", rec.code, rec.body, rec.ptyp)
 	}
 }
+
+// Remove a service (plan 06-10, RES-02, D-05, D-13).
+
+func (f *envFix) removeService(t *testing.T, e envBody, service, query string) *envRec {
+	t.Helper()
+	path := "/api/env/" + e.ID + "/services/" + service
+	if query != "" {
+		path += "?" + query
+	}
+	return f.req(t, http.MethodDelete, path, "")
+}
+
+// loneService is a service nobody's stack owns.
+func loneService() dockertest.FakeService {
+	return dockertest.FakeService{ID: "svc-lone", Name: "lone", Mode: "replicated", Running: 1, Desired: 1, Image: "lone:1", Version: 2}
+}
+
+// agentService is Bayplan's own agent, as the install command names it.
+func agentService() dockertest.FakeService {
+	return dockertest.FakeService{ID: "svc-agent", Name: "bayplan-agent", Mode: "global", Running: 1, Desired: 1, Image: "bayplan/agent:1", Version: 3}
+}
+
+func TestRemoveService(t *testing.T) {
+	f, e := actionsEnv(t, nil, loneService(), webService())
+	rec := f.removeService(t, e, "svc-lone", "")
+	if rec.code != http.StatusNoContent {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	if w := f.fake.Writes(); !slices.Equal(w, []string{"DELETE /services/svc-lone"}) {
+		t.Errorf("writes = %v, want one DELETE of the service", w)
+	}
+	list := f.get(t, e, "services")
+	if list.code != http.StatusOK || strings.Contains(string(list.body), "svc-lone") || !strings.Contains(string(list.body), "svc-web") {
+		t.Errorf("services after the remove = %d %s, want the other service only", list.code, list.body)
+	}
+	rows := f.serviceAudits(t)
+	if len(rows) != 1 {
+		t.Fatalf("audit rows = %+v, want exactly one", rows)
+	}
+	r := rows[0]
+	if r.Action != "service.removed" || r.Result != string(audit.ResultSuccess) || r.TargetID != "svc-lone" || r.EnvID != e.ID {
+		t.Errorf("row = %+v, want service.removed success on svc-lone", r)
+	}
+	for k, want := range map[string]string{"name": "lone", "stack": "", "agent": "false", "confirmed": "false", "code": "done"} {
+		if got, ok := r.Details[k]; !ok || got != want {
+			t.Errorf("details[%s] = %q (present %v), want %q", k, got, ok, want)
+		}
+	}
+	// A second remove finds nothing: it is not audited again.
+	if again := f.removeService(t, e, "svc-lone", ""); again.code != http.StatusNotFound || again.ptyp != "service_not_found" {
+		t.Errorf("second remove = %d %s (%s), want 404 service_not_found", again.code, again.body, again.ptyp)
+	}
+	if rows := f.serviceAudits(t); len(rows) != 1 {
+		t.Errorf("audit rows after the second remove = %+v, want still one", rows)
+	}
+}
+
+func TestRemoveServiceOfAnUnknownServiceIsNotFoundAndNotAudited(t *testing.T) {
+	f, e := actionsEnv(t, nil, loneService())
+	rec := f.removeService(t, e, "ghost", "")
+	if rec.code != http.StatusNotFound || rec.ptyp != "service_not_found" {
+		t.Fatalf("status = %d %s (%s), want 404 service_not_found", rec.code, rec.body, rec.ptyp)
+	}
+	if rows := f.serviceAudits(t); len(rows) != 0 {
+		t.Errorf("audit rows = %+v, want none for a service that does not exist", rows)
+	}
+}
+
+func TestRemoveServiceOfAStandaloneHostIsNotASwarm(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1", Version: "29.1.0"})
+	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
+	f.svc.WithClusters(f.clusters)
+	f.h = f.build(t)
+	e := f.add(t)
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	if rec := f.removeService(t, e, "web", ""); rec.code != http.StatusConflict || rec.ptyp != "not_a_swarm" {
+		t.Errorf("remove = %d %s (%s), want 409 not_a_swarm", rec.code, rec.body, rec.ptyp)
+	}
+}
+
+func TestRemoveAgentServiceNeedsItsName(t *testing.T) {
+	f, e := actionsEnv(t, nil, agentService())
+	for _, query := range []string{"", "confirm=lone", "confirm=Bayplan-Agent"} {
+		rec := f.removeService(t, e, "svc-agent", query)
+		if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "confirmation_required" {
+			t.Errorf("remove with %q = %d %s (%s), want 422 confirmation_required", query, rec.code, rec.body, rec.ptyp)
+		}
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("writes = %v, want none before its name is typed", w)
+	}
+	rows := f.serviceAudits(t)
+	if len(rows) != 3 {
+		t.Fatalf("audit rows = %+v, want one failure per refused attempt", rows)
+	}
+	for _, r := range rows {
+		if r.Action != "service.removed" || r.Result != string(audit.ResultFailure) || r.Reason != "confirmation_required" ||
+			r.Details["agent"] != "true" || r.Details["confirmed"] != "false" || r.Details["name"] != "bayplan-agent" {
+			t.Errorf("row = %+v, want a service.removed failure confirmation_required for the agent", r)
+		}
+	}
+
+	rec := f.removeService(t, e, "svc-agent", "confirm=bayplan-agent")
+	if rec.code != http.StatusNoContent {
+		t.Fatalf("with its name: %d %s, want 204", rec.code, rec.body)
+	}
+	if w := f.fake.Writes(); !slices.Equal(w, []string{"DELETE /services/svc-agent"}) {
+		t.Errorf("writes = %v, want one DELETE of the agent service", w)
+	}
+	rows = f.serviceAudits(t)
+	last := rows[len(rows)-1]
+	if last.Result != string(audit.ResultSuccess) || last.Details["agent"] != "true" || last.Details["confirmed"] != "true" || last.Details["code"] != "done" {
+		t.Errorf("last row = %+v, want a success with agent true and confirmed true", last)
+	}
+}
+
+func TestRemoveStackOwnedServiceIsRefused(t *testing.T) {
+	f, e := actionsEnv(t, nil, webService())
+	rec := f.removeService(t, e, "svc-web", "")
+	if rec.code != http.StatusConflict || rec.ptyp != "stack_owned" {
+		t.Fatalf("status = %d %s (%s), want 409 stack_owned", rec.code, rec.body, rec.ptyp)
+	}
+	var p actionProblem
+	if err := json.Unmarshal(rec.body, &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.at("stack") != "shop" || p.Detail != "Managed by stack shop. Change it through the stack." {
+		t.Errorf("problem = %+v, want the stack shop named", p)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, want none", w)
+	}
+	rows := f.serviceAudits(t)
+	if len(rows) != 1 || rows[0].Result != string(audit.ResultFailure) || rows[0].Reason != "stack_owned" || rows[0].Details["stack"] != "shop" {
+		t.Errorf("audit rows = %+v, want one failure stack_owned naming the stack", rows)
+	}
+	// Typing a name does not lift a stack's ownership.
+	if rec := f.removeService(t, e, "svc-web", "confirm=web"); rec.code != http.StatusConflict || rec.ptyp != "stack_owned" {
+		t.Errorf("with confirm = %d %s (%s), want 409 stack_owned", rec.code, rec.body, rec.ptyp)
+	}
+}
+
+func TestRemoveServiceNeedsAdmin(t *testing.T) {
+	f, e := actionsEnv(t, nil, loneService())
+	f.addUser(t, "operator", false)
+	f.addEnvRole(t, "operator", e.ID, "operator")
+	cookie, csrf := f.signIn(t, "operator", false)
+	rec := f.call(t, authReq{method: http.MethodDelete, path: "/api/env/" + e.ID + "/services/svc-lone", cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("an operator's remove = %d: %s, want 403", rec.Code, rec.Body)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, want none", w)
+	}
+	if rows := f.serviceAudits(t); len(rows) != 0 {
+		t.Errorf("audit rows = %+v, want none for a refused caller", rows)
+	}
+
+	f.addUser(t, "boss", false)
+	f.addEnvRole(t, "boss", e.ID, "admin")
+	cookie, csrf = f.signIn(t, "boss", false)
+	rec = f.call(t, authReq{method: http.MethodDelete, path: "/api/env/" + e.ID + "/services/svc-lone", cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("an env admin's remove = %d: %s, want 204", rec.Code, rec.Body)
+	}
+}

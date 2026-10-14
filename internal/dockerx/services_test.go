@@ -448,3 +448,26 @@ func TestServiceRollbackRefusedByTheManagerKeepsItsWords(t *testing.T) {
 		t.Errorf("writes = %d, want exactly one: never retried", got)
 	}
 }
+
+func TestServiceRemoveRemovesOneServiceOnceAndNothingElse(t *testing.T) {
+	c, fake := serviceFake(t)
+	if err := c.ServiceRemove(context.Background(), "web-id"); err != nil {
+		t.Fatalf("ServiceRemove: %v", err)
+	}
+	if got := fake.Writes(); !slices.Equal(got, []string{"DELETE /services/web-id"}) {
+		t.Errorf("writes = %v, want exactly one DELETE of the service", got)
+	}
+	if _, _, err := c.ServiceInspect(context.Background(), "web-id"); !errors.Is(err, dockerx.ErrServiceNotFound) {
+		t.Errorf("inspect after the remove: err = %v, want ErrServiceNotFound", err)
+	}
+	if _, _, err := c.ServiceInspect(context.Background(), "agent-id"); err != nil {
+		t.Errorf("another service went with it: %v", err)
+	}
+}
+
+func TestServiceRemoveOfAnUnknownServiceIsNotFound(t *testing.T) {
+	c, _ := serviceFake(t)
+	if err := c.ServiceRemove(context.Background(), "nope"); !errors.Is(err, dockerx.ErrServiceNotFound) {
+		t.Fatalf("err = %v, want ErrServiceNotFound", err)
+	}
+}
