@@ -161,6 +161,7 @@ const (
 	ActionServiceScaled              = "service.scaled"
 	ActionServiceForceUpdated        = "service.force_updated"
 	ActionServiceRolledBack          = "service.rolled_back"
+	ActionServiceRemoved             = "service.removed"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

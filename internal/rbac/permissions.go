@@ -62,6 +62,7 @@ const (
 	PermRegistriesManage      Perm = "registries.manage"
 	PermServicesRead          Perm = "services.read"
 	PermServicesControl       Perm = "services.control"
+	PermServicesManage        Perm = "services.manage"
 )
 
 // Registry is a list of permissions. The Checker consults one, so a test can
@@ -110,6 +111,7 @@ var defaultRegistry = Registry{
 	{Name: PermRegistriesManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Manage this environment's registry credentials"},
 	{Name: PermServicesRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View services, their tasks, logs, stats and placement"},
 	{Name: PermServicesControl, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Scale, force update, roll back and change the settings of services, and mute their restart-loop alerts"},
+	{Name: PermServicesManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Create and remove services"},
 }
 
 // DefaultRegistry returns a copy of the registry production runs with.

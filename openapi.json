@@ -14131,6 +14131,64 @@
       }
     },
     "/api/env/{envId}/services/{serviceId}": {
+      "delete": {
+        "description": "Removes one service, once and never retried: the swarm stops its tasks and deletes the service. Its images, volumes, networks, secrets and configs stay. A service that belongs to a stack (com.docker.stack.namespace) is refused: 409 stack_owned, with the stack in errors as stack, before anything is sent. Bayplan's own agent service is removed only when confirm is its name, else 422 confirmation_required and nothing is sent. 404 service_not_found for a service that is not there; 409 not_a_swarm for a standalone host. Needs services.manage (Admin) on the environment. Every attempt on a service that exists is audited as service.removed, with result failure and the code when it was refused.",
+        "operationId": "removeService",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The service ID or name: the id of a row of the services list",
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "description": "The service ID or name: the id of a row of the services list",
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The service's name, typed. Needed only to remove Bayplan's own agent service; ignored for any other service",
+            "explode": false,
+            "in": "query",
+            "name": "confirm",
+            "schema": {
+              "description": "The service's name, typed. Needed only to remove Bayplan's own agent service; ignored for any other service",
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Remove a service",
+        "tags": [
+          "environments"
+        ]
+      },
       "get": {
         "description": "Everything the service detail page shows, read live from a manager: mode, task counts, image (tag, digest, pinned), published ports, mounts, secrets and configs by reference, networks with their names, environment variables, resources, placement, restart and update policy and labels. The values of the environment variables can be credentials: they are withheld on the server, and sent only to a caller who holds secrets.reveal on the environment. env then lists the names with masked true and no value, and envMasked says so. The command line, the health check and the log driver's options are not part of this answer; they are in the inspect document, where they are withheld the same way. 404 service_not_found when the swarm has no such service; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs services.read (Viewer) on the environment.",
         "operationId": "getService",

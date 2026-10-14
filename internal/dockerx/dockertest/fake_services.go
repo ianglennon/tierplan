@@ -16,6 +16,7 @@ import (
 
 var _ = registerFakeHandler((*Fake).serveServiceInspect)
 var _ = registerFakeHandler((*Fake).serveServiceUpdate)
+var _ = registerFakeHandler((*Fake).serveServiceRemove)
 
 // FakeServiceUpdate is one update the fake daemon accepted: the service it was for, the
 // version and query it came with, the X-Registry-Auth header and the spec it carried.
@@ -257,5 +258,64 @@ func (f *Fake) BumpService(ref string) bool {
 		f.svcState = map[string]fakeServiceState{}
 	}
 	f.svcState[fs.ID] = st
+	return true
+}
+
+// withoutServices returns c without the services removed through the daemon. The slice is
+// copied, so the Fake's own configuration is not touched.
+func (c FakeConfig) withoutServices(gone map[string]bool) FakeConfig {
+	if len(gone) == 0 {
+		return c
+	}
+	kept := make([]FakeService, 0, len(c.ServiceRows))
+	for _, fs := range c.ServiceRows {
+		if !gone[fs.ID] {
+			kept = append(kept, fs)
+		}
+	}
+	c.ServiceRows = kept
+	return c
+}
+
+// serveServiceRemove answers DELETE /services/{id}, by ID or by name. A service the swarm
+// does not know is the 404 a real manager gives; otherwise it leaves every list. The write is
+// recorded whatever the answer.
+func (f *Fake) serveServiceRemove(w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) bool {
+	if r.Method != http.MethodDelete {
+		return false
+	}
+	m := servicePath.FindStringSubmatch(p)
+	if m == nil {
+		return false
+	}
+	f.recordWrite(r)
+	defer f.beginWrite(cfg.WriteDelay)()
+	cfg = f.config()
+	if cfg.DropWrites && dropConnection(w) {
+		return true
+	}
+	if cfg.PolicyDeny {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "agent_policy_denied: " + r.Method + " " + r.URL.Path})
+		return true
+	}
+	if cfg.WriteError != "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": cfg.WriteError})
+		return true
+	}
+	if clusterRefused(w, cfg) {
+		return true
+	}
+	fs, ok := cfg.resolveService(m[1])
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "service " + m[1] + " not found"})
+		return true
+	}
+	f.mu.Lock()
+	if f.svcGone == nil {
+		f.svcGone = map[string]bool{}
+	}
+	f.svcGone[fs.ID] = true
+	f.mu.Unlock()
+	w.WriteHeader(http.StatusOK)
 	return true
 }

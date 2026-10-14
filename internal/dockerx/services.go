@@ -62,6 +62,8 @@ type ServiceDetail struct {
 	UpdateStatus *ServiceUpdateStatus
 	// Agent is true for a Bayplan agent service.
 	Agent bool
+	// Labels are the service's own labels, for the rules that look at who owns it.
+	Labels map[string]string
 	// Replicas is the replica count of a replicated service, zero otherwise.
 	Replicas uint64
 	// TemplateHash identifies the spec's TaskTemplate, Runtime aside: the SpecHash of a task
@@ -92,7 +94,7 @@ func serviceDetail(s swarm.Service) (ServiceDetail, error) {
 	d := ServiceDetail{
 		ID: s.ID, Name: s.Spec.Name, Mode: serviceMode(s.Spec.Mode), Stack: s.Spec.Labels[stackLabel],
 		Version: s.Version.Index, CreatedAt: s.CreatedAt.UTC(), UpdatedAt: s.UpdatedAt.UTC(), Agent: isAgentService(s),
-		TemplateHash: specHash(s.Spec.TaskTemplate),
+		Labels: s.Spec.Labels, TemplateHash: specHash(s.Spec.TaskTemplate),
 	}
 	if cs := s.Spec.TaskTemplate.ContainerSpec; cs != nil {
 		d.Image = cs.Image
@@ -386,6 +388,20 @@ func (c *Client) ServiceRollback(ctx context.Context, id string, version uint64,
 			return fmt.Errorf("roll back service on %s: %w", c.t.Describe(), &RollbackRefusedError{Message: err.Error()})
 		}
 		return c.serviceWriteError("roll back", err)
+	}
+	return nil
+}
+
+// ServiceRemove removes the service id once and never retries: a remove whose answer was lost
+// may have happened. The swarm stops its tasks; its images, volumes, networks, secrets and
+// configs stay. A service the manager does not know is ErrServiceNotFound. The caller refuses
+// a service a stack owns and Bayplan's own agent service before this is called.
+func (c *Client) ServiceRemove(ctx context.Context, id string) error {
+	if _, err := c.cur().ServiceRemove(ctx, id, client.ServiceRemoveOptions{}); err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return fmt.Errorf("remove service on %s: %w", c.t.Describe(), ErrServiceNotFound)
+		}
+		return fmt.Errorf("remove service on %s: %w", c.t.Describe(), err)
 	}
 	return nil
 }

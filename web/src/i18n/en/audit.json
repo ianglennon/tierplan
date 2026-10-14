@@ -207,7 +207,8 @@
       "service": {
         "scaled": "Service scaled",
         "force_updated": "Service force-updated",
-        "rolled_back": "Service rolled back"
+        "rolled_back": "Service rolled back",
+        "removed": "Service removed"
       }
     },
     "coalesced": {

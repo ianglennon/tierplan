@@ -1178,7 +1178,11 @@ export interface paths {
         get: operations["getService"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Remove a service
+         * @description Removes one service, once and never retried: the swarm stops its tasks and deletes the service. Its images, volumes, networks, secrets and configs stay. A service that belongs to a stack (com.docker.stack.namespace) is refused: 409 stack_owned, with the stack in errors as stack, before anything is sent. Bayplan's own agent service is removed only when confirm is its name, else 422 confirmation_required and nothing is sent. 404 service_not_found for a service that is not there; 409 not_a_swarm for a standalone host. Needs services.manage (Admin) on the environment. Every attempt on a service that exists is audited as service.removed, with result failure and the code when it was refused.
+         */
+        delete: operations["removeService"];
         options?: never;
         head?: never;
         patch?: never;
@@ -9171,6 +9175,41 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ServiceDetailBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    removeService: {
+        parameters: {
+            query?: {
+                /** @description The service's name, typed. Needed only to remove Bayplan's own agent service; ignored for any other service */
+                confirm?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The service ID or name: the id of a row of the services list */
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

@@ -115,6 +115,7 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "service.scaled",
   "service.force_updated",
   "service.rolled_back",
+  "service.removed",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped

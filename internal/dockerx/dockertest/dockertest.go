@@ -483,6 +483,8 @@ type Fake struct {
 	// svcUpdates the updates themselves (fake_services.go).
 	svcState   map[string]fakeServiceState
 	svcUpdates []FakeServiceUpdate
+	// svcGone are the IDs of the services removed through the fake.
+	svcGone map[string]bool
 	// distDigest is the digest the distribution route answers a full reference with, where a
 	// test has moved a tag (SetDistributionDigest); a reference not in it gets fakeDigest.
 	distDigest map[string]string
@@ -610,7 +612,7 @@ func (f *Fake) Reconfigure(cfg FakeConfig) {
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withServices(f.svcState)
+	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withServices(f.svcState).withoutServices(f.svcGone)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {

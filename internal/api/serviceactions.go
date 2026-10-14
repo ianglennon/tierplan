@@ -31,6 +31,7 @@ const (
 	problemRollbackRefused      = "rollback_refused"
 	problemForceUpdateFailed    = "force_update_failed"
 	problemRollbackFailed       = "rollback_failed"
+	problemRemoveFailed         = "remove_failed"
 	problemRegistryUnresolved   = codeRegistryUnresolved
 
 	// reasonDigestOnly and reasonNoImage say why a force update did not pin an image.
@@ -110,7 +111,15 @@ type ServiceRollbackOutput struct {
 	Body         ServiceRollbackBody
 }
 
-// registerServiceActions mounts the force update and rollback routes.
+// ServiceRemoveInput is the path and query of DELETE .../services/{serviceId}.
+type ServiceRemoveInput struct {
+	ServiceDetailInput
+	Confirm string `query:"confirm" maxLength:"128" doc:"The service's name, typed. Needed only to remove Bayplan's own agent service; ignored for any other service"`
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
+// registerServiceActions mounts the force update, rollback and remove routes.
 func registerServiceActions(r *httpx.Router, d ServicesDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "forceUpdateService", Method: http.MethodPost, Path: "/api/env/{envId}/services/{serviceId}/force-update",
@@ -157,6 +166,24 @@ func registerServiceActions(r *httpx.Router, d ServicesDeps) {
 				return nil, err
 			}
 			return &ServiceRollbackOutput{CacheControl: "no-store", Body: body}, nil
+		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "removeService", Method: http.MethodDelete, Path: "/api/env/{envId}/services/{serviceId}",
+		Summary: "Remove a service",
+		Description: "Removes one service, once and never retried: the swarm stops its tasks and deletes the service. Its images, volumes, networks, secrets and configs stay. " +
+			"A service that belongs to a stack (com.docker.stack.namespace) is refused: 409 stack_owned, with the stack in errors as stack, before anything is sent. " +
+			"Bayplan's own agent service is removed only when confirm is its name, else 422 confirmation_required and nothing is sent. " +
+			"404 service_not_found for a service that is not there; 409 not_a_swarm for a standalone host. " +
+			"Needs services.manage (Admin) on the environment. Every attempt on a service that exists is audited as service.removed, with result failure and the code when it was refused.",
+		Tags: []string{"environments"}, DefaultStatus: http.StatusNoContent,
+	}, rbac.Requirement{Perm: rbac.PermServicesManage, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *ServiceRemoveInput) (*struct{}, error) {
+			p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+			if p == nil || env == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			return nil, removeService(ctx, d, p, env.ID, in)
 		})
 }
 
@@ -302,6 +329,71 @@ func rollbackService(ctx context.Context, d ServicesDeps, p *rbac.Principal, env
 	auditServiceAction(ctx, d, p, envID, in.UserAgent, audit.ActionServiceRolledBack, wo.id, in.ServiceID,
 		map[string]string{"name": wo.name, "version": version, "code": actionDone}, actionDone)
 	return out, nil
+}
+
+// serviceRemoveRefusedError is a remove the server turned down after reading the service:
+// nothing was sent. code is what the audit row records and problem what the caller is told.
+type serviceRemoveRefusedError struct {
+	code    string
+	problem error
+}
+
+func (e *serviceRemoveRefusedError) Error() string { return "remove refused: " + e.code }
+
+// removeService removes one service. In one write call on a manager it reads the service,
+// refuses one a stack owns (D-05) and Bayplan's own agent service unless its name was typed,
+// and otherwise removes it, once and never retried. Every attempt on a service that exists
+// is audited.
+func removeService(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID string, in *ServiceRemoveInput) error {
+	if err := requireSwarm(ctx, d, envID); err != nil {
+		return err
+	}
+	// The write is sent once and seen through, so a browser that goes away while it runs does
+	// not turn a removal that happened into a failure.
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), writeTimeout)
+	defer cancel()
+	var wo serviceWriteOutcome
+	var stack string
+	var agent, confirmed bool
+	err := d.Aggregator.WriteOnManager(writeCtx, envID, func(c *dockerx.Client) error {
+		detail, _, err := c.ServiceInspect(writeCtx, in.ServiceID)
+		if err != nil {
+			return err
+		}
+		wo.id, wo.name, wo.image = detail.ID, detail.Name, detail.Image
+		agent = detail.Agent
+		confirmed = detail.Agent && in.Confirm == detail.Name
+		if s, owned := stackOwner(detail.Labels); owned {
+			stack = s
+			return &serviceRemoveRefusedError{code: problemStackOwned, problem: stackOwnedProblem(s)}
+		}
+		if agent && !confirmed {
+			return &serviceRemoveRefusedError{code: codeConfirmationRequired, problem: httpx.Problem(http.StatusUnprocessableEntity, codeConfirmationRequired,
+				"This is Bayplan's agent service. Removing it disconnects every node it runs on. Type its name, "+detail.Name+", to confirm.")}
+		}
+		return c.ServiceRemove(writeCtx, detail.ID)
+	})
+	details := func(code string) map[string]string {
+		return map[string]string{
+			"name": wo.name, "stack": stack, "agent": strconv.FormatBool(agent),
+			"confirmed": strconv.FormatBool(confirmed), "code": code,
+		}
+	}
+	if err != nil {
+		var refused *serviceRemoveRefusedError
+		if errors.As(err, &refused) {
+			auditServiceAction(ctx, d, p, envID, in.UserAgent, audit.ActionServiceRemoved, wo.id, in.ServiceID, details(refused.code), refused.code)
+			return refused.problem
+		}
+		code, problem := serviceActionProblem(d, envID, problemRemoveFailed, err)
+		if code != codeServiceNotFound {
+			auditServiceAction(ctx, d, p, envID, in.UserAgent, audit.ActionServiceRemoved, wo.id, in.ServiceID, details(code), code)
+		}
+		return problem
+	}
+	refreshClusters(ctx, d, envID)
+	auditServiceAction(ctx, d, p, envID, in.UserAgent, audit.ActionServiceRemoved, wo.id, in.ServiceID, details(actionDone), actionDone)
+	return nil
 }
 
 // refreshClusters reads the cluster again so the list shows the update that was just sent. A
