@@ -13,6 +13,7 @@ import (
 	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/audit"
+	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
 )
@@ -179,7 +180,7 @@ func TestForceUpdateFailsWhenTheDigestCannotBeResolved(t *testing.T) {
 	if err := json.Unmarshal(rec.body, &prob); err != nil {
 		t.Fatal(err)
 	}
-	if prob.at("image.ref") != scaleImage || prob.at("image.host") != "localhost:5000" || prob.at("reason") != "unauthorized" {
+	if prob.at("image.ref") != scaleImage || prob.at("image.host") != "localhost:5000" || prob.at("reason") != dockerx.PullCodeUnauthorized {
 		t.Errorf("errors = %+v, want the ref, the registry host and the reason", prob.Errors)
 	}
 	if ups := f.fake.ServiceUpdates(); len(ups) != 0 {
@@ -391,12 +392,32 @@ func TestRollbackObjectMissing(t *testing.T) {
 	if !strings.Contains(prob.Detail, "secret not found: db_password") {
 		t.Errorf("detail = %q, want the manager's words", prob.Detail)
 	}
+	if prob.at("object.kind") != "secret" || prob.at("object.name") != "db_password" {
+		t.Errorf("errors = %+v, want the kind and the name of what is gone", prob.Errors)
+	}
 	if got := len(f.fake.Writes()); got != 1 {
 		t.Errorf("writes = %d, want exactly one: never retried", got)
 	}
 	rows := f.serviceAudits(t)
 	if len(rows) != 1 || rows[0].Result != string(audit.ResultFailure) || rows[0].Reason != "rollback_object_missing" {
 		t.Errorf("audit rows = %+v", rows)
+	}
+}
+
+func TestRollbackNamesANetworkThatIsGone(t *testing.T) {
+	svc := rollbackService()
+	svc.RollbackError = "network front_net not found"
+	f, e := actionsEnv(t, nil, svc)
+	rec := f.rollback(t, e, "svc-web", `{"version":9}`)
+	if rec.code != http.StatusConflict || rec.ptyp != "rollback_object_missing" {
+		t.Fatalf("status = %d %s (%s), want 409 rollback_object_missing", rec.code, rec.body, rec.ptyp)
+	}
+	var prob actionProblem
+	if err := json.Unmarshal(rec.body, &prob); err != nil {
+		t.Fatal(err)
+	}
+	if prob.at("object.kind") != "network" || prob.at("object.name") != "front_net" {
+		t.Errorf("errors = %+v, want network front_net", prob.Errors)
 	}
 }
 

@@ -230,9 +230,33 @@ func registerServiceDetail(r *httpx.Router, d ServicesDeps) {
 		})
 }
 
-// getServiceSpec is not written yet.
-func getServiceSpec(_ context.Context, _ ServicesDeps, _ *rbac.Principal, _, _ string) (ServiceSpecBody, error) {
-	return ServiceSpecBody{}, httpx.Problem(http.StatusNotImplemented, "not_implemented", "not implemented")
+// getServiceSpec answers the spec of one service and the one before its last update, masked
+// as the inspect document is: the same MaskServiceInspect decides what leaves (D-39).
+func getServiceSpec(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID, serviceID string) (ServiceSpecBody, error) {
+	detail, raw, _, err := readService(ctx, d, envID, serviceID, false)
+	if err != nil {
+		return ServiceSpecBody{}, err
+	}
+	shown, masked, err := redact.MaskServiceInspect(raw, redact.CanReveal(ctx, d.Checker, p, envID))
+	if err != nil {
+		d.Log.Error("masking a service spec failed", "environment", envID, "error", err)
+		return ServiceSpecBody{}, huma.Error500InternalServerError("internal error")
+	}
+	doc, err := decodeInspect(shown)
+	if err != nil {
+		d.Log.Error("reading a service spec failed", "environment", envID, "error", err)
+		return ServiceSpecBody{}, huma.Error500InternalServerError("internal error")
+	}
+	spec, ok := doc["Spec"].(map[string]any)
+	if !ok {
+		d.Log.Error("a service inspect has no spec", "environment", envID, "service", serviceID)
+		return ServiceSpecBody{}, huma.Error500InternalServerError("internal error")
+	}
+	previous, _ := doc["PreviousSpec"].(map[string]any)
+	return ServiceSpecBody{
+		Version: detail.Version, Name: detail.Name, Mode: detail.Mode, Stack: detail.Stack, Agent: detail.Agent,
+		Masked: masked, Spec: spec, PreviousSpec: previous,
+	}, nil
 }
 
 // readService reads one service from a manager, and the swarm's networks too when
