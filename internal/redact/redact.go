@@ -7,7 +7,9 @@
 // secrets.reveal on that environment, so no amount of client-side hiding is
 // relied on. Every endpoint that returns a container's or service's environment
 // (the inspect views of Phase 4 and Phase 6) must send it through Env, with
-// CanReveal deciding the second argument.
+// CanReveal deciding the second argument. A document that is sent as it is
+// structured (a container, service, volume or image inspect) is masked with
+// Placeholder, "<hidden>", the one sentinel there is (D-39).
 package redact
 
 import (

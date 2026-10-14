@@ -4,10 +4,12 @@
 package dockerx
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -160,4 +162,28 @@ func (c *Client) ServiceScale(ctx context.Context, id string, replicas uint64, e
 		return previous, false, fmt.Errorf("scale service on %s: %w", c.t.Describe(), ErrServiceNotFound)
 	}
 	return previous, false, fmt.Errorf("scale service on %s: %w", c.t.Describe(), err)
+}
+
+// NetworkName is a swarm network's ID and name, enough to say which network a service's spec
+// names.
+type NetworkName struct{ ID, Name string }
+
+// SwarmNetworkNames lists the swarm-scoped networks of the cluster this client talks to, by
+// name then ID, so a service's network targets (an ID or a name, as the spec wrote it) can be
+// shown by name. It is read-only.
+func (c *Client) SwarmNetworkNames(ctx context.Context) ([]NetworkName, error) {
+	ns, err := c.cur().NetworkList(ctx, client.NetworkListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list networks on %s: %w", c.t.Describe(), err)
+	}
+	out := make([]NetworkName, 0, len(ns.Items))
+	for _, n := range ns.Items {
+		if n.Scope == ScopeSwarm {
+			out = append(out, NetworkName{ID: n.ID, Name: n.Name})
+		}
+	}
+	slices.SortFunc(out, func(a, b NetworkName) int {
+		return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.ID, b.ID))
+	})
+	return out, nil
 }

@@ -131,7 +131,7 @@ func TestMaskServiceSpecDoesNotChangeTheSpecItWasGiven(t *testing.T) {
 
 func readFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	raw, err := os.ReadFile("testdata/servicespec/" + name)
+	raw, err := os.ReadFile("testdata/servicespec/" + name) //nolint:gosec // G304: a fixture name written in this file
 	if err != nil {
 		t.Fatal(err)
 	}

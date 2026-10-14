@@ -1164,6 +1164,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/services/{serviceId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One swarm service: its settings
+         * @description Everything the service detail page shows, read live from a manager: mode, task counts, image (tag, digest, pinned), published ports, mounts, secrets and configs by reference, networks with their names, environment variables, resources, placement, restart and update policy and labels. The values of the environment variables can be credentials: they are withheld on the server, and sent only to a caller who holds secrets.reveal on the environment. env then lists the names with masked true and no value, and envMasked says so. The command line, the health check and the log driver's options are not part of this answer; they are in the inspect document, where they are withheld the same way. 404 service_not_found when the swarm has no such service; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs services.read (Viewer) on the environment.
+         */
+        get: operations["getService"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/services/{serviceId}/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One swarm service's raw inspect document
+         * @description The manager's inspect document of the service, for the Inspect tab. The environment variables' values, the command line (Command and Args), the command of the health check and the log driver's option values, in Spec and in PreviousSpec, can be credentials: for a caller without secrets.reveal on the environment each is replaced by the placeholder <hidden> on the server, and masked says something was. The same problems as the service detail route (404 service_not_found, 409 not_a_swarm, 503 no_manager_connected). Needs services.read (Viewer) on the environment.
+         */
+        get: operations["inspectService"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/shells": {
         parameters: {
             query?: never;
@@ -5281,6 +5321,107 @@ export interface components {
              */
             size?: number;
         };
+        ServiceDetailBody: {
+            /** @description True for a Bayplan agent service */
+            agent: boolean;
+            /** @description The swarm configs the service uses, by reference */
+            configs: components["schemas"]["ServiceFileRefBody"][] | null;
+            /**
+             * Format: date-time
+             * @description When the service was created
+             */
+            createdAt: string;
+            /**
+             * Format: int64
+             * @description Tasks the swarm wants running, from the last cluster read; for a replicated service whose row was not read yet, the spec's replica count
+             */
+            desired: number;
+            /** @description The environment variables in spec order. Without secrets.reveal each is the name with masked true and no value */
+            env: components["schemas"]["EnvVar"][] | null;
+            /** @description True when the values were withheld because the caller may not reveal secrets on this environment */
+            envMasked: boolean;
+            /** @description True when the swarm still holds the spec before the last update, so a rollback has something to go back to */
+            hasPreviousSpec: boolean;
+            /** @description The service ID */
+            id: string;
+            /** @description The image the spec names */
+            image: components["schemas"]["ServiceImageBody"];
+            /** @description The service's own labels, as Docker reports them */
+            labels: {
+                [key: string]: string;
+            };
+            /**
+             * @description How the swarm runs it
+             * @enum {string}
+             */
+            mode: "replicated" | "global" | "replicated-job" | "global-job";
+            /** @description The mounts of the container spec */
+            mounts: components["schemas"]["ServiceMountBody"][] | null;
+            /** @description The service name */
+            name: string;
+            /** @description The networks the service is attached to */
+            networks: components["schemas"]["ServiceNetworkBody"][] | null;
+            /** @description Where tasks may run */
+            placement: components["schemas"]["ServicePlacementBody"];
+            /** @description The ports the service publishes, sorted by published port; empty when it publishes none */
+            ports: components["schemas"]["ServicePortBody"][] | null;
+            /** @description CPU and memory limits and reservations */
+            resources: components["schemas"]["ServiceResourcesBody"];
+            /** @description The restart policy; absent when the spec sets none (the engine's default, restart on any exit) */
+            restartPolicy?: components["schemas"]["ServiceRestartPolicyBody"];
+            /**
+             * Format: int64
+             * @description Tasks that are running now, from the last cluster read
+             */
+            running: number;
+            /** @description The swarm secrets the service uses, by reference; no value is ever sent */
+            secrets: components["schemas"]["ServiceFileRefBody"][] | null;
+            /** @description The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own */
+            stack: string;
+            /** @description The swarm's message about the last update; empty when it has none */
+            updateMessage: string;
+            /** @description The update policy; absent when the spec sets none (the engine's defaults) */
+            updatePolicy?: components["schemas"]["ServiceUpdatePolicyBody"];
+            /** @description The state of the last update or rollback (updating, paused, completed, rollback_started, rollback_paused, rollback_completed); empty when it has none */
+            updateStatus: string;
+            /**
+             * Format: date-time
+             * @description When the service's spec last changed
+             */
+            updatedAt: string;
+        };
+        ServiceFileRefBody: {
+            /** @description The file name in the container; empty for a config used at runtime rather than as a file */
+            file: string;
+            /** @description The file's group */
+            gid: string;
+            /** @description The secret's or config's ID */
+            id: string;
+            /** @description The file's permissions in octal (0444); empty when there is no file */
+            mode: string;
+            /** @description Its name */
+            name: string;
+            /** @description The file's owner */
+            uid: string;
+        };
+        ServiceImageBody: {
+            /** @description The digest the reference is pinned to (sha256:...); empty when it is not pinned */
+            digest: string;
+            /** @description True when the reference carries a digest */
+            pinned: boolean;
+            /** @description The image as the spec wrote it; empty when the spec has no container spec */
+            ref: string;
+            /** @description The tag, latest when the reference names none; empty for a reference by digest alone or one that is not a valid reference */
+            tag: string;
+        };
+        ServiceInspectBody: {
+            /** @description The manager's inspect document of the service, with the values of the environment variables, the command line, the health check command and the log driver's options replaced by <hidden>, in Spec and in PreviousSpec, unless the caller holds secrets.reveal */
+            document: {
+                [key: string]: unknown;
+            };
+            /** @description True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment */
+            masked: boolean;
+        };
         ServiceItem: {
             /** @description True for a Bayplan agent service */
             agent: boolean;
@@ -5350,6 +5491,86 @@ export interface components {
              * @description How many services there are before the search and the status filter, so a page can say 3 of 600
              */
             unfilteredTotal: number;
+        };
+        ServiceMountBody: {
+            /** @description True when mounted read-only */
+            readOnly: boolean;
+            /** @description The volume name or host path; empty for a tmpfs */
+            source: string;
+            /** @description Where it appears in the container */
+            target: string;
+            /** @description volume, bind, tmpfs, npipe, cluster or image */
+            type: string;
+        };
+        ServiceNetworkBody: {
+            /** @description The service's aliases on the network */
+            aliases: string[] | null;
+            /** @description The network's ID; what the spec wrote when no network of the swarm has that name or ID */
+            id: string;
+            /** @description The network's name; the ID when the swarm has no such network */
+            name: string;
+        };
+        ServicePlacementBody: {
+            /** @description The placement constraints, as written (node.role==worker) */
+            constraints: string[] | null;
+            /**
+             * Format: int64
+             * @description The most tasks of the service on one node; 0 for no limit
+             */
+            maxReplicas: number;
+            /** @description The spread preferences: the label each spreads over (node.labels.zone) */
+            preferences: string[] | null;
+        };
+        ServicePortBody: {
+            /** @description ingress (the routing mesh) or host (only the node that runs the task) */
+            mode: string;
+            /** @description tcp, udp or sctp */
+            protocol: string;
+            /**
+             * Format: int32
+             * @description The port on the swarm, or on the node for host mode; 0 while the swarm has not assigned one
+             */
+            published: number;
+            /**
+             * Format: int32
+             * @description The port in the container
+             */
+            target: number;
+        };
+        ServiceResourcesBody: {
+            /**
+             * Format: double
+             * @description CPU limit in cores; 0 for none
+             */
+            cpuLimit: number;
+            /**
+             * Format: double
+             * @description CPU reservation in cores; 0 for none
+             */
+            cpuReservation: number;
+            /**
+             * Format: int64
+             * @description Memory limit in bytes; 0 for none
+             */
+            memoryLimit: number;
+            /**
+             * Format: int64
+             * @description Memory reservation in bytes; 0 for none
+             */
+            memoryReservation: number;
+        };
+        ServiceRestartPolicyBody: {
+            /** @description none, on-failure or any */
+            condition: string;
+            /** @description How long to wait between restarts, as a Go duration (5s); empty for the engine's default */
+            delay: string;
+            /**
+             * Format: int64
+             * @description The most restart attempts before giving up; 0 for no limit
+             */
+            maxAttempts: number;
+            /** @description How long to wait before a restart counts as having worked, as a Go duration; empty for the engine's default */
+            window: string;
         };
         ServiceScaleRequest: {
             /**
@@ -5421,6 +5642,26 @@ export interface components {
              * @description Services whose update or rollback is in progress (updating, rollback_started)
              */
             updating: number;
+        };
+        ServiceUpdatePolicyBody: {
+            /** @description The pause between batches, as a Go duration; empty for none */
+            delay: string;
+            /** @description pause, continue or rollback; empty for the engine's default */
+            failureAction: string;
+            /**
+             * Format: double
+             * @description The share of failed tasks that is tolerated, 0 to 1
+             */
+            maxFailureRatio: number;
+            /** @description How long each task is watched for failure, as a Go duration; empty for the engine's default */
+            monitor: string;
+            /** @description stop-first or start-first; empty for the engine's default */
+            order: string;
+            /**
+             * Format: int64
+             * @description How many tasks are updated at once; 0 for all at once
+             */
+            parallelism: number;
         };
         SessionBody: {
             /**
@@ -8622,6 +8863,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ServiceScaleResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The service ID or name: the id of a row of the services list */
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    inspectService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The service ID or name: the id of a row of the services list */
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceInspectBody"];
                 };
             };
             /** @description Error */
