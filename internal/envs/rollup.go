@@ -85,6 +85,11 @@ type AgentView struct {
 	// ReadOnly is what the host owner set (BAYPLAN_AGENT_READ_ONLY): the agent
 	// refuses every write. It is known only while the agent is connected.
 	ReadOnly bool
+	// PrivilegedServices is what the host owner set
+	// (BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES): the agent forwards service specs
+	// that give tasks host access. Known only while the agent is connected; a later
+	// plan reads it to tell, before a write, that a manager refuses host access.
+	PrivilegedServices bool
 }
 
 // TargetKey is the monitor key of the view's Docker engine: the agent's target, or for

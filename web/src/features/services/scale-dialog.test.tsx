@@ -127,6 +127,31 @@ describe("ScaleDialog", () => {
     expect(onOpenChange).not.toHaveBeenCalled();
   });
 
+  it("says which setting lets Bayplan change a service with host access, and never shows the code", async () => {
+    answer = () =>
+      Response.json({
+        results: [
+          {
+            serviceId: "id-web",
+            name: "web",
+            result: "failed",
+            code: "agent_host_policy",
+            detail: "ignored: the dialog words this itself",
+            changed: false,
+          },
+        ],
+      });
+    const { onOpenChange } = mount();
+    fireEvent.change(field(), { target: { value: "5" } });
+    fireEvent.click(confirm());
+    const alert = await screen.findByText(
+      "This swarm's manager agents don't let Bayplan change services with host access. Set BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true on them to allow it.",
+    );
+    expect(alert.textContent).not.toContain("agent_host_policy");
+    expect(screen.getByRole("dialog", { name: "Scale web" })).toBeTruthy();
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
   it("warns that scaling to 0 stops every task, and still lets the scale through", async () => {
     mount();
     expect(screen.queryByText(/Scaling to 0 stops every task/)).toBeNull();

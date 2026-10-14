@@ -6,6 +6,7 @@ package envs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -233,6 +234,43 @@ func TestWriteOnNodeRefusesAReadOnlyHostBeforeAnyCallButReadsStillRun(t *testing
 		return e
 	}); err != nil || !read {
 		t.Fatalf("OnNode on a read-only host: err = %v, ran = %v; reads must still work", err, read)
+	}
+}
+
+func TestInputCarriesTheAgentsPrivilegedServicesFactAndAMissingFieldReadsFalse(t *testing.T) {
+	r := newTunRig(t, nil)
+	r.pastGrace()
+	i := 0
+	for name, tc := range map[string]struct {
+		policy wire.PolicyFacts
+		want   bool
+	}{
+		"opted in":                        {wire.PolicyFacts{PrivilegedServices: true}, true},
+		"not opted in":                    {wire.PolicyFacts{}, false},
+		"read-only and no field at all":   {wire.PolicyFacts{ReadOnly: true}, false},
+		"opted in beside the self-update": {wire.PolicyFacts{PrivilegedServices: true, SelfUpdate: true}, true},
+	} {
+		i++
+		env := r.srv.NewEnvironment(t, "Env "+name)
+		facts := &wire.Facts{EngineID: fmt.Sprintf("ENG:priv%d", i), Hostname: "host-1", EngineReachable: true, Policy: tc.policy}
+		a := r.connect(t, env, dockertest.FakeConfig{Hostname: "host-1", Containers: webContainers()}, facts)
+		r.whenOnline(t, env.ID)
+		in, err := r.svc.Input(context.Background(), env.ID, r.clk.Now())
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var found bool
+		for _, v := range in.Agents {
+			if v.ID == a.id {
+				found = true
+				if v.PrivilegedServices != tc.want {
+					t.Errorf("%s: PrivilegedServices = %v, want %v", name, v.PrivilegedServices, tc.want)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s: agent %s is not in the rollup input %+v", name, a.id, in.Agents)
+		}
 	}
 }
 

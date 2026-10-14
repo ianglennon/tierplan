@@ -33,6 +33,7 @@ const (
 	codeNotScalable        = "not_scalable"
 	codeServiceChanged     = "service_changed"
 	codeServiceNotFound    = "service_not_found"
+	codeAgentHostPolicy    = "agent_host_policy"
 	codeNoManagerConnected = problemNoManager
 	codeNoQuorum           = "no_quorum"
 	codeRegistryUnresolved = "registry_unresolved"

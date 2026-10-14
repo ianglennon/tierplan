@@ -899,12 +899,20 @@ var _ httpx.EnvResolver = (*Service)(nil)
 // doing what the host owner set.
 var ErrAgentPolicyDenied = errors.New("envs: the agent refused the request by policy")
 
+// ErrAgentHostPolicy means an agent refused a service spec because it gives tasks
+// host access and the host owner did not set BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES
+// (D-36). It is an ErrAgentPolicyDenied as well.
+var ErrAgentHostPolicy = errors.New("envs: the agent refused the service spec: it gives tasks host access")
+
 // AgentPolicyDeniedError is an ErrAgentPolicyDenied that names the request.
 type AgentPolicyDeniedError struct {
 	// Endpoint is "METHOD /path" as the agent reported it, capped and free of
 	// control characters. It is text for a person to read, nothing more.
 	Endpoint string
-	cause    error
+	// HostPolicy is true when the refusal is the host-policy one: the spec gives
+	// tasks host access and the host did not allow it.
+	HostPolicy bool
+	cause      error
 }
 
 func (e *AgentPolicyDeniedError) Error() string {

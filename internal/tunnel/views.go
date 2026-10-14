@@ -37,6 +37,10 @@ type AgentLive struct {
 	// an agent that is not connected: nothing is known then, and nothing can be
 	// written anyway.
 	ReadOnly bool
+	// PrivilegedServices is true while the connected agent reported that its host
+	// owner set BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES, so it forwards service specs
+	// that give tasks host access. Like ReadOnly it is a fact of the live session.
+	PrivilegedServices bool
 }
 
 // agentMemory is what the hub keeps of one agent between and during sessions. It

@@ -404,3 +404,45 @@ func TestAnAgentThatRefusesTheServiceUpdateByItsPolicyIsAgentPolicyDenied(t *tes
 		t.Errorf("result = %+v, want failed agent_policy_denied", r)
 	}
 }
+
+// D-36: a manager's agent refuses a service spec that gives tasks host access unless its owner
+// opted in. The fake answers the update in the words an agent uses for that refusal, and the
+// scale says which setting lifts it.
+func TestAScaleTheManagersAgentRefusesByHostPolicyIsAgentHostPolicyAndAuditedWithThatReason(t *testing.T) {
+	f, e := serviceEnv(t, webService())
+	f.fake.Reconfigure(func() dockertest.FakeConfig {
+		c := swarmManagerEngine(webService())
+		c.WriteError = "agent_policy_denied: host_policy: POST /services/svc-web/update"
+		return c
+	}())
+	rec := f.scale(t, e, `{"targets":[{"serviceId":"svc-web","replicas":4}]}`)
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	r := decode[scaleAnswer](t, rec).Results[0]
+	if r.Result != "failed" || r.Code != "agent_host_policy" {
+		t.Fatalf("result = %+v, want failed agent_host_policy", r)
+	}
+	if !strings.Contains(r.Detail, "BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES") {
+		t.Errorf("detail = %q, want it to name the setting that allows host access", r.Detail)
+	}
+	rows := f.serviceAudits(t)
+	if len(rows) != 1 || rows[0].Result != string(audit.ResultFailure) || rows[0].Reason != "agent_host_policy" || rows[0].Details["code"] != "agent_host_policy" {
+		t.Errorf("audit rows = %+v, want one failure row with agent_host_policy", rows)
+	}
+}
+
+// A refusal by the agent's plain policy keeps its own code, so the two are never confused.
+func TestAScaleTheAgentRefusesByPlainPolicyIsStillAgentPolicyDenied(t *testing.T) {
+	f, e := serviceEnv(t, webService())
+	f.fake.Reconfigure(func() dockertest.FakeConfig {
+		c := swarmManagerEngine(webService())
+		c.WriteError = "agent_policy_denied: POST /services/svc-web/update"
+		return c
+	}())
+	rec := f.scale(t, e, `{"targets":[{"serviceId":"svc-web","replicas":4}]}`)
+	r := decode[scaleAnswer](t, rec).Results[0]
+	if r.Result != "failed" || r.Code != "agent_policy_denied" {
+		t.Fatalf("result = %+v, want failed agent_policy_denied", r)
+	}
+}
