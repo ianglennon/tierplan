@@ -79,6 +79,105 @@
     "agent": {
       "reporting": "Reporting",
       "notReporting": "Not reporting"
+    },
+    "detail": {
+      "breadcrumb": {
+        "label": "Breadcrumb",
+        "nodes": "Nodes"
+      },
+      "tabs": {
+        "label": "Node sections",
+        "overview": "Overview",
+        "tasks": "Tasks",
+        "labels": "Labels",
+        "inspect": "Inspect"
+      },
+      "loading": "Loading the node",
+      "header": {
+        "docker": "Docker {{version}}",
+        "separator": " · "
+      },
+      "gone": {
+        "heading": "This node is gone",
+        "body": "It left the swarm or was removed. Go back to the list to find it.",
+        "back": "Back to nodes"
+      },
+      "error": {
+        "loadFailed": "Couldn't load {{name}}.",
+        "retry": "Retry loading {{name}}"
+      }
+    },
+    "overview": {
+      "node": {
+        "title": "Node",
+        "id": "ID",
+        "idLabel": "Node ID",
+        "hostname": "Hostname",
+        "address": "Address",
+        "role": "Role",
+        "status": "Status",
+        "availability": "Availability",
+        "created": "Created",
+        "updated": "Updated"
+      },
+      "system": {
+        "title": "System",
+        "engine": "Engine version",
+        "os": "Operating system",
+        "arch": "Architecture",
+        "cpus": "CPUs",
+        "memory": "Memory"
+      },
+      "manager": {
+        "title": "Manager",
+        "reachability": "Reachability",
+        "leader": "Leader",
+        "address": "Address",
+        "reachable": "Reachable",
+        "unreachable": "Unreachable",
+        "unknown": "Unknown"
+      },
+      "agent": {
+        "title": "Bayplan agent",
+        "reporting": "Reporting",
+        "version": "Version",
+        "lastSeen": "Last seen"
+      },
+      "engineLabels": {
+        "title": "Engine labels",
+        "caption": "Set in the node's Docker daemon settings. Bayplan can't change them.",
+        "empty": "No engine labels."
+      },
+      "yes": "Yes",
+      "no": "No"
+    },
+    "tasks": {
+      "columns": {
+        "service": "Service"
+      },
+      "caption_one": "{{count, number}} task",
+      "caption_other": "{{count, number}} tasks",
+      "capped": "Older tasks are left out. The swarm holds {{total, number}} for this node.",
+      "empty": {
+        "title": "No tasks on this node",
+        "body": "Tasks the swarm places here show up as they are created."
+      },
+      "loading": "Loading tasks",
+      "error": {
+        "title": "Couldn't load the tasks of this node.",
+        "body": "Docker may be unreachable. Try again.",
+        "retry": "Retry loading tasks"
+      }
+    },
+    "labels": {
+      "title": "Node labels",
+      "helper": "Services use labels in placement constraints, such as node.labels.disk==ssd.",
+      "empty": "No labels."
+    },
+    "inspect": {
+      "loadFailed": "Couldn't load the inspect document of {{name}}.",
+      "retry": "Retry loading the inspect document",
+      "loading": "Loading the inspect document"
     }
   }
 }

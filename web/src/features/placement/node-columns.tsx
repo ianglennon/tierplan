@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
+import { Link } from "@tanstack/react-router";
 import { Crown } from "lucide-react";
 import { useId } from "react";
 
@@ -71,12 +72,32 @@ export function ColumnsSkeleton() {
   );
 }
 
-function ColumnName({ name, id }: { name: string; id: string }) {
+// ColumnName is the column's h2. A node's name is a link to the node's page; the columns that are
+// not nodes (Not placed, Removed node) have no page to go to.
+function ColumnName({
+  name,
+  id,
+  link,
+}: {
+  name: string;
+  id: string;
+  link?: { envId: string; nodeId: string };
+}) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <h2 id={id} className="min-w-0 truncate text-base leading-6 font-semibold">
-          {name}
+          {link ? (
+            <Link
+              to="/env/$envId/nodes/$nodeId"
+              params={link}
+              className="rounded-sm text-accent-ink hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            >
+              {name}
+            </Link>
+          ) : (
+            name
+          )}
         </h2>
       </TooltipTrigger>
       <TooltipContent className="break-all">{name}</TooltipContent>
@@ -177,7 +198,11 @@ function NodeColumn({
           muted && "text-muted-foreground",
         )}
       >
-        <ColumnName name={name} id={headingId} />
+        <ColumnName
+          name={name}
+          id={headingId}
+          link={node && column.kind === "node" ? { envId, nodeId: node.id } : undefined}
+        />
         {node ? (
           <NodeHeaderFacts node={node} tasks={column.count} />
         ) : (

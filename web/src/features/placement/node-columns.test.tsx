@@ -70,7 +70,7 @@ describe("NodeColumns", () => {
     // Tasks of one column are in one list per stack group, service names in order.
     expect(
       within(mgr)
-        .getAllByRole("link")
+        .getAllByRole("link", { name: /^Open service/ })
         .map((l) => l.getAttribute("aria-label")),
     ).toEqual(["Open service api, slot 1, Pending", "Open service web, slot 2, Running"]);
   });

@@ -66,6 +66,9 @@ import { Route as AppEnvEnvIdNetworksNetworkIdIndexRouteImport } from './routes/
 import { Route as AppEnvEnvIdNetworksNetworkIdAttachmentsRouteImport } from './routes/_app/env/$envId/networks_.$networkId.attachments'
 import { Route as AppEnvEnvIdNetworksNetworkIdInspectRouteImport } from './routes/_app/env/$envId/networks_.$networkId.inspect'
 import { Route as AppEnvEnvIdNodesNodeIdIndexRouteImport } from './routes/_app/env/$envId/nodes_.$nodeId.index'
+import { Route as AppEnvEnvIdNodesNodeIdInspectRouteImport } from './routes/_app/env/$envId/nodes_.$nodeId.inspect'
+import { Route as AppEnvEnvIdNodesNodeIdLabelsRouteImport } from './routes/_app/env/$envId/nodes_.$nodeId.labels'
+import { Route as AppEnvEnvIdNodesNodeIdTasksRouteImport } from './routes/_app/env/$envId/nodes_.$nodeId.tasks'
 import { Route as AppEnvEnvIdServicesServiceIdIndexRouteImport } from './routes/_app/env/$envId/services_.$serviceId.index'
 import { Route as AppEnvEnvIdServicesServiceIdInspectRouteImport } from './routes/_app/env/$envId/services_.$serviceId.inspect'
 import { Route as AppEnvEnvIdServicesServiceIdPlacementRouteImport } from './routes/_app/env/$envId/services_.$serviceId.placement'
@@ -383,6 +386,24 @@ const AppEnvEnvIdNodesNodeIdIndexRoute =
     path: '/',
     getParentRoute: () => AppEnvEnvIdNodesNodeIdRoute,
   } as any)
+const AppEnvEnvIdNodesNodeIdInspectRoute =
+  AppEnvEnvIdNodesNodeIdInspectRouteImport.update({
+    id: '/inspect',
+    path: '/inspect',
+    getParentRoute: () => AppEnvEnvIdNodesNodeIdRoute,
+  } as any)
+const AppEnvEnvIdNodesNodeIdLabelsRoute =
+  AppEnvEnvIdNodesNodeIdLabelsRouteImport.update({
+    id: '/labels',
+    path: '/labels',
+    getParentRoute: () => AppEnvEnvIdNodesNodeIdRoute,
+  } as any)
+const AppEnvEnvIdNodesNodeIdTasksRoute =
+  AppEnvEnvIdNodesNodeIdTasksRouteImport.update({
+    id: '/tasks',
+    path: '/tasks',
+    getParentRoute: () => AppEnvEnvIdNodesNodeIdRoute,
+  } as any)
 const AppEnvEnvIdServicesServiceIdIndexRoute =
   AppEnvEnvIdServicesServiceIdIndexRouteImport.update({
     id: '/',
@@ -473,6 +494,9 @@ export interface FileRoutesByFullPath {
   '/env/$envId/images/$imageId/used-by': typeof AppEnvEnvIdImagesImageIdUsedByRoute
   '/env/$envId/networks/$networkId/attachments': typeof AppEnvEnvIdNetworksNetworkIdAttachmentsRoute
   '/env/$envId/networks/$networkId/inspect': typeof AppEnvEnvIdNetworksNetworkIdInspectRoute
+  '/env/$envId/nodes/$nodeId/inspect': typeof AppEnvEnvIdNodesNodeIdInspectRoute
+  '/env/$envId/nodes/$nodeId/labels': typeof AppEnvEnvIdNodesNodeIdLabelsRoute
+  '/env/$envId/nodes/$nodeId/tasks': typeof AppEnvEnvIdNodesNodeIdTasksRoute
   '/env/$envId/services/$serviceId/inspect': typeof AppEnvEnvIdServicesServiceIdInspectRoute
   '/env/$envId/services/$serviceId/placement': typeof AppEnvEnvIdServicesServiceIdPlacementRoute
   '/env/$envId/services/$serviceId/tasks': typeof AppEnvEnvIdServicesServiceIdTasksRoute
@@ -527,6 +551,9 @@ export interface FileRoutesByTo {
   '/env/$envId/images/$imageId/used-by': typeof AppEnvEnvIdImagesImageIdUsedByRoute
   '/env/$envId/networks/$networkId/attachments': typeof AppEnvEnvIdNetworksNetworkIdAttachmentsRoute
   '/env/$envId/networks/$networkId/inspect': typeof AppEnvEnvIdNetworksNetworkIdInspectRoute
+  '/env/$envId/nodes/$nodeId/inspect': typeof AppEnvEnvIdNodesNodeIdInspectRoute
+  '/env/$envId/nodes/$nodeId/labels': typeof AppEnvEnvIdNodesNodeIdLabelsRoute
+  '/env/$envId/nodes/$nodeId/tasks': typeof AppEnvEnvIdNodesNodeIdTasksRoute
   '/env/$envId/services/$serviceId/inspect': typeof AppEnvEnvIdServicesServiceIdInspectRoute
   '/env/$envId/services/$serviceId/placement': typeof AppEnvEnvIdServicesServiceIdPlacementRoute
   '/env/$envId/services/$serviceId/tasks': typeof AppEnvEnvIdServicesServiceIdTasksRoute
@@ -593,6 +620,9 @@ export interface FileRoutesById {
   '/_app/env/$envId/images_/$imageId/used-by': typeof AppEnvEnvIdImagesImageIdUsedByRoute
   '/_app/env/$envId/networks_/$networkId/attachments': typeof AppEnvEnvIdNetworksNetworkIdAttachmentsRoute
   '/_app/env/$envId/networks_/$networkId/inspect': typeof AppEnvEnvIdNetworksNetworkIdInspectRoute
+  '/_app/env/$envId/nodes_/$nodeId/inspect': typeof AppEnvEnvIdNodesNodeIdInspectRoute
+  '/_app/env/$envId/nodes_/$nodeId/labels': typeof AppEnvEnvIdNodesNodeIdLabelsRoute
+  '/_app/env/$envId/nodes_/$nodeId/tasks': typeof AppEnvEnvIdNodesNodeIdTasksRoute
   '/_app/env/$envId/services_/$serviceId/inspect': typeof AppEnvEnvIdServicesServiceIdInspectRoute
   '/_app/env/$envId/services_/$serviceId/placement': typeof AppEnvEnvIdServicesServiceIdPlacementRoute
   '/_app/env/$envId/services_/$serviceId/tasks': typeof AppEnvEnvIdServicesServiceIdTasksRoute
@@ -659,6 +689,9 @@ export interface FileRouteTypes {
     | '/env/$envId/images/$imageId/used-by'
     | '/env/$envId/networks/$networkId/attachments'
     | '/env/$envId/networks/$networkId/inspect'
+    | '/env/$envId/nodes/$nodeId/inspect'
+    | '/env/$envId/nodes/$nodeId/labels'
+    | '/env/$envId/nodes/$nodeId/tasks'
     | '/env/$envId/services/$serviceId/inspect'
     | '/env/$envId/services/$serviceId/placement'
     | '/env/$envId/services/$serviceId/tasks'
@@ -713,6 +746,9 @@ export interface FileRouteTypes {
     | '/env/$envId/images/$imageId/used-by'
     | '/env/$envId/networks/$networkId/attachments'
     | '/env/$envId/networks/$networkId/inspect'
+    | '/env/$envId/nodes/$nodeId/inspect'
+    | '/env/$envId/nodes/$nodeId/labels'
+    | '/env/$envId/nodes/$nodeId/tasks'
     | '/env/$envId/services/$serviceId/inspect'
     | '/env/$envId/services/$serviceId/placement'
     | '/env/$envId/services/$serviceId/tasks'
@@ -778,6 +814,9 @@ export interface FileRouteTypes {
     | '/_app/env/$envId/images_/$imageId/used-by'
     | '/_app/env/$envId/networks_/$networkId/attachments'
     | '/_app/env/$envId/networks_/$networkId/inspect'
+    | '/_app/env/$envId/nodes_/$nodeId/inspect'
+    | '/_app/env/$envId/nodes_/$nodeId/labels'
+    | '/_app/env/$envId/nodes_/$nodeId/tasks'
     | '/_app/env/$envId/services_/$serviceId/inspect'
     | '/_app/env/$envId/services_/$serviceId/placement'
     | '/_app/env/$envId/services_/$serviceId/tasks'
@@ -1201,6 +1240,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppEnvEnvIdNodesNodeIdIndexRouteImport
       parentRoute: typeof AppEnvEnvIdNodesNodeIdRoute
     }
+    '/_app/env/$envId/nodes_/$nodeId/inspect': {
+      id: '/_app/env/$envId/nodes_/$nodeId/inspect'
+      path: '/inspect'
+      fullPath: '/env/$envId/nodes/$nodeId/inspect'
+      preLoaderRoute: typeof AppEnvEnvIdNodesNodeIdInspectRouteImport
+      parentRoute: typeof AppEnvEnvIdNodesNodeIdRoute
+    }
+    '/_app/env/$envId/nodes_/$nodeId/labels': {
+      id: '/_app/env/$envId/nodes_/$nodeId/labels'
+      path: '/labels'
+      fullPath: '/env/$envId/nodes/$nodeId/labels'
+      preLoaderRoute: typeof AppEnvEnvIdNodesNodeIdLabelsRouteImport
+      parentRoute: typeof AppEnvEnvIdNodesNodeIdRoute
+    }
+    '/_app/env/$envId/nodes_/$nodeId/tasks': {
+      id: '/_app/env/$envId/nodes_/$nodeId/tasks'
+      path: '/tasks'
+      fullPath: '/env/$envId/nodes/$nodeId/tasks'
+      preLoaderRoute: typeof AppEnvEnvIdNodesNodeIdTasksRouteImport
+      parentRoute: typeof AppEnvEnvIdNodesNodeIdRoute
+    }
     '/_app/env/$envId/services_/$serviceId/': {
       id: '/_app/env/$envId/services_/$serviceId/'
       path: '/'
@@ -1379,11 +1439,17 @@ const AppEnvEnvIdNetworksNetworkIdRouteWithChildren =
   )
 
 interface AppEnvEnvIdNodesNodeIdRouteChildren {
+  AppEnvEnvIdNodesNodeIdInspectRoute: typeof AppEnvEnvIdNodesNodeIdInspectRoute
+  AppEnvEnvIdNodesNodeIdLabelsRoute: typeof AppEnvEnvIdNodesNodeIdLabelsRoute
+  AppEnvEnvIdNodesNodeIdTasksRoute: typeof AppEnvEnvIdNodesNodeIdTasksRoute
   AppEnvEnvIdNodesNodeIdIndexRoute: typeof AppEnvEnvIdNodesNodeIdIndexRoute
 }
 
 const AppEnvEnvIdNodesNodeIdRouteChildren: AppEnvEnvIdNodesNodeIdRouteChildren =
   {
+    AppEnvEnvIdNodesNodeIdInspectRoute: AppEnvEnvIdNodesNodeIdInspectRoute,
+    AppEnvEnvIdNodesNodeIdLabelsRoute: AppEnvEnvIdNodesNodeIdLabelsRoute,
+    AppEnvEnvIdNodesNodeIdTasksRoute: AppEnvEnvIdNodesNodeIdTasksRoute,
     AppEnvEnvIdNodesNodeIdIndexRoute: AppEnvEnvIdNodesNodeIdIndexRoute,
   }
 

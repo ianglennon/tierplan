@@ -163,8 +163,6 @@ function headerOf(): HTMLElement {
   return header;
 }
 
-const card = (name: string) => screen.getByRole("region", { name });
-
 describe("the page frame", () => {
   it("shows the breadcrumb Nodes / name, the name with its status and badges, and the address and Docker version", async () => {
     renderAt();
@@ -404,7 +402,9 @@ describe("the Tasks tab", () => {
         }),
       );
     renderAt(`${PAGE}/tasks`);
-    const table = await screen.findByRole("table", { name: "Tasks" });
+    // The skeleton is a table of the same name, so wait for the rows.
+    await screen.findByRole("link", { name: "web" });
+    const table = screen.getByRole("table", { name: "Tasks" });
     for (const header of ["Task", "Service", "State", "Desired", "Updated", "Error"]) {
       expect(within(table).getByRole("columnheader", { name: header })).toBeTruthy();
     }
@@ -467,7 +467,7 @@ describe("the Tasks tab", () => {
         }),
       );
     renderAt(`${PAGE}/tasks`);
-    await screen.findByRole("table", { name: "Tasks" });
+    expect(await screen.findByText("<b>boom</b>")).toBeTruthy();
     expect(document.querySelector("img")).toBeNull();
     expect(document.querySelector("b")).toBeNull();
   });

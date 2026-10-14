@@ -5,6 +5,7 @@ import { Link } from "@tanstack/react-router";
 import { ChevronRight, Ellipsis, ListTodo } from "lucide-react";
 import { useId, useRef, useState } from "react";
 
+import type { NodeTaskItem } from "@/api/nodes";
 import { copyText } from "@/components/copyable-code";
 import { RelativeTime } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
@@ -492,5 +493,139 @@ function SlotRows({
       {row}
       {expanded ? history : null}
     </>
+  );
+}
+
+// The columns of the node's task table: Task, Service, State, Desired, Updated, Error and the row
+// menu.
+const NODE_COLUMNS = 7;
+
+function NodeHeaderRow() {
+  const t = useT();
+  return (
+    <TableHeader>
+      <TableRow>
+        <TableHead>{t("tasks.table.columns.task")}</TableHead>
+        <TableHead>{t("nodes.tasks.columns.service")}</TableHead>
+        <TableHead>{t("tasks.table.columns.state")}</TableHead>
+        <TableHead>{t("tasks.table.columns.desired")}</TableHead>
+        <TableHead>{t("tasks.table.columns.updated")}</TableHead>
+        <TableHead>{t("tasks.table.columns.error")}</TableHead>
+        <TableHead>
+          <span className="sr-only">{t("tasks.table.columns.actions")}</span>
+        </TableHead>
+      </TableRow>
+    </TableHeader>
+  );
+}
+
+// NodeTasksSkeleton is the node's task table while the tasks load: the header and eight rows at
+// 36px, with the words a screen reader needs.
+export function NodeTasksSkeleton() {
+  const t = useT();
+  return (
+    <div aria-busy="true">
+      <span role="status" className="sr-only">
+        {t("nodes.tasks.loading")}
+      </span>
+      <Table aria-label={t("tasks.table.label")}>
+        <NodeHeaderRow />
+        <TableBody>
+          {Array.from({ length: 8 }, (_, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: placeholder rows have no identity
+            <TableRow key={i} className={ROW}>
+              <TableCell colSpan={NODE_COLUMNS}>
+                <Skeleton className="h-4 w-full" />
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+export interface NodeTaskTableProps {
+  envId: string;
+  // The tasks the swarm placed on the node: those that should be running, then the newest of the
+  // others.
+  tasks: readonly NodeTaskItem[];
+  // Every task the swarm holds for the node, and whether some are left out of `tasks`.
+  total: number;
+  capped: boolean;
+}
+
+// NodeTaskTable is TaskTable on the node's page (UI-SPEC "Nodes", Tasks tab): the tasks of one
+// node, one row each, with the service they belong to as a link in place of the Node column, which
+// is the page itself. It has no slot history: a node's tasks are a flat list. Docker's service
+// names and error texts are text only.
+export function NodeTaskTable({ envId, tasks, total, capped }: NodeTaskTableProps) {
+  const t = useT();
+  if (tasks.length === 0) {
+    return (
+      <Empty>
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <ListTodo aria-hidden="true" />
+          </EmptyMedia>
+          <EmptyTitle role="heading" aria-level={2}>
+            {t("nodes.tasks.empty.title")}
+          </EmptyTitle>
+          <EmptyDescription>{t("nodes.tasks.empty.body")}</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-sm text-muted-foreground">
+        {t("nodes.tasks.caption", { count: tasks.length })}
+      </p>
+      <Table aria-label={t("tasks.table.label")}>
+        <NodeHeaderRow />
+        <TableBody>
+          {tasks.map((task) => {
+            // A global service's task has no slot: the service names it.
+            const name = task.slot > 0 ? `${task.service}.${task.slot}` : task.service;
+            return (
+              <TableRow key={task.id} className={ROW}>
+                <TableCell>
+                  <TaskCell name={name} id={task.id} />
+                </TableCell>
+                <TableCell>
+                  {task.serviceId && task.service ? (
+                    <Link
+                      to="/env/$envId/services/$serviceId"
+                      params={{ envId, serviceId: task.serviceId }}
+                      className="rounded-sm text-accent-ink break-all hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                    >
+                      {task.service}
+                    </Link>
+                  ) : (
+                    <span>{t("tasks.table.missing")}</span>
+                  )}
+                </TableCell>
+                <TableCell>
+                  <TaskStateCell task={task} />
+                </TableCell>
+                <TableCell>{desiredLabel(t, task.desiredState)}</TableCell>
+                <TableCell>
+                  <RelativeTime value={task.updatedAt} />
+                </TableCell>
+                <TableCell>
+                  <ErrorCell task={task} />
+                </TableCell>
+                <TableCell>
+                  <TaskActions envId={envId} task={task} name={name || task.id} />
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+      {capped ? (
+        <p className="text-sm text-muted-foreground">{t("nodes.tasks.capped", { total })}</p>
+      ) : null}
+    </div>
   );
 }

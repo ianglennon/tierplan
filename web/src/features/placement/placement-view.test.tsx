@@ -110,9 +110,11 @@ describe("PlacementView", () => {
     expect(screen.getByRole("heading", { level: 1, name: "Placement" })).toBeTruthy();
     expect(screen.getByRole("region", { name: "wrk-1" })).toBeTruthy();
     expect(screen.getByText("Where tasks run across Prod swarm.")).toBeTruthy();
-    expect(within(screen.getByRole("region", { name: "wrk-1" })).getAllByRole("link")).toHaveLength(
-      2,
-    );
+    expect(
+      within(screen.getByRole("region", { name: "wrk-1" })).getAllByRole("link", {
+        name: /^Open service/,
+      }),
+    ).toHaveLength(2);
   });
 
   it("draws the toolbar and three skeleton columns at once, before the answer", async () => {
@@ -174,7 +176,7 @@ describe("PlacementView", () => {
     const change = vi.fn();
     renderView({ stack: "shop", q: "web" }, change);
     const region = await screen.findByRole("region", { name: "mgr-1" });
-    expect(within(region).getAllByRole("link")).toHaveLength(1);
+    expect(within(region).getAllByRole("link", { name: /^Open service/ })).toHaveLength(1);
     // The other node stays, empty.
     expect(
       within(screen.getByRole("region", { name: "wrk-1" })).getByText("No tasks"),
