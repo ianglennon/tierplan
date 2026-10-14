@@ -209,7 +209,10 @@ test("the Logs tab streams stdout and stderr, searches, downloads, and pops out 
   await page.getByRole("button", { name: "Download logs", exact: true }).click();
   const file = await download;
   expect(file.suggestedFilename()).toMatch(/^e2e-web-\d{8}-\d{4}\.log$/);
-  const body = readFileSync((await file.path()) as string, "utf8");
+  // saveAs, not path(): the browser may be a remote one, whose files are not on this disk.
+  const saved = test.info().outputPath(file.suggestedFilename());
+  await file.saveAs(saved);
+  const body = readFileSync(saved, "utf8");
   expect(body, "the downloaded file holds the container's lines").toMatch(/line-\d+/);
   await page.keyboard.press("Escape");
   await page.getByRole("searchbox", { name: "Search logs" }).fill("");

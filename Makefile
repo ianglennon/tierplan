@@ -360,19 +360,23 @@ e2e-copy:
 # which the agent spec gives the agent as BAYPLAN_AGENT_PIN. The agent image is
 # built and loaded into the remote host's Docker under the name the install
 # command uses for an edge server, so the run needs no registry.
+# The browser runs in the stack (the browser service, out of reach of the host's
+# network changes), from the e2e packages installed first; the local install is
+# for the copy suite and for running a spec by hand without the stack's browser.
 # The stack is always torn down, with its volumes, whatever the tests do, and
 # the exit status is the tests' own. A failed run prints the container logs.
+E2E_BROWSER_WS = ws://127.0.0.1:$${BAYPLAN_E2E_BROWSER_PORT:-8444}/
 e2e: e2e-image agent-image
 	@set -e; \
 	go run scripts/e2e-cert.go -out $(E2E_TLS); \
+	pnpm -C e2e install --frozen-lockfile; \
 	trap '$(E2E_COMPOSE) down -v' EXIT; \
 	$(E2E_COMPOSE) up -d --wait || { $(E2E_COMPOSE) logs --no-color --tail 100; exit 1; }; \
 	docker save bayplan-agent:dev | $(E2E_COMPOSE) exec -T agenthost docker load; \
 	$(E2E_COMPOSE) exec -T agenthost docker tag bayplan-agent:dev ghcr.io/ianglennon/bayplan-agent:edge; \
-	pnpm -C e2e install --frozen-lockfile; \
 	pnpm -C e2e exec playwright install $(E2E_BROWSER_ARGS); \
 	status=0; \
-	pnpm -C e2e exec playwright test || status=$$?; \
+	BAYPLAN_E2E_BROWSER_WS=$(E2E_BROWSER_WS) pnpm -C e2e exec playwright test || status=$$?; \
 	if [ "$$status" -ne 0 ]; then \
 		$(E2E_COMPOSE) logs --no-color --tail 100 bayplan || true; \
 		$(E2E_COMPOSE) logs --no-color --tail 50 caddy || true; \

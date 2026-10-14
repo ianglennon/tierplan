@@ -10,7 +10,14 @@ import { ORIGIN as baseURL } from "./tests/env";
 // unless told otherwise, so each spec is its own project that depends on the
 // one before it. A failure early on skips the rest, which is what a broken
 // setup deserves.
-const chromium = { ...devices["Desktop Chrome"], baseURL };
+// `make e2e` runs the browser in a container that cannot see the host's network
+// change (see the browser service in compose.yaml) and names its server here.
+const wsEndpoint = process.env.BAYPLAN_E2E_BROWSER_WS;
+const chromium = {
+  ...devices["Desktop Chrome"],
+  baseURL,
+  ...(wsEndpoint ? { connectOptions: { wsEndpoint } } : {}),
+};
 // The containers project follows the dashboard because it starts from the one
 // environment and the engine the dashboard spec left, and it clears what that spec
 // made under names it also uses.

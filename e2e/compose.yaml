@@ -96,14 +96,47 @@ services:
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ../.devdata/e2e-tls:/certs:ro
+    environment:
+      BAYPLAN_E2E_HTTPS_PORT: ${BAYPLAN_E2E_HTTPS_PORT:-8443}
     ports:
       # Loopback only (WR-12): the run claims this instance with a known admin
       # password and Bayplan controls privileged dind daemons, so nothing on the
       # LAN may reach it.
       - "127.0.0.1:${BAYPLAN_E2E_HTTPS_PORT:-8443}:443"
+      # The browser server below, which shares this container's network.
+      - "127.0.0.1:${BAYPLAN_E2E_BROWSER_PORT:-8444}:3333"
     depends_on:
       bayplan:
         condition: service_healthy
+
+  # The browser the specs drive: Playwright's Chromium served by `playwright
+  # run-server`, which the test runner on the host connects to. Chromium abandons
+  # every request in flight (net::ERR_NETWORK_CHANGED) when the network of its
+  # namespace changes, and on a shared CI host other jobs add and remove Docker
+  # networks all the time. In the proxy's network namespace nothing changes, and
+  # https://127.0.0.1:<port>/bayplan is still the proxy, so the browser sees the
+  # same address as a person at this machine would.
+  #
+  # The image's Chromium is the one the run's @playwright/test (from e2e's own
+  # node_modules, mounted read-only) expects: keep the tag on the same version.
+  browser:
+    image: mcr.microsoft.com/playwright:v1.63.0-noble
+    network_mode: "service:caddy"
+    init: true
+    user: pwuser
+    working_dir: /e2e
+    volumes:
+      - ./node_modules:/e2e/node_modules:ro
+    command: ["node", "node_modules/@playwright/test/cli.js", "run-server", "--port", "3333", "--host", "0.0.0.0"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('net').connect(3333, '127.0.0.1').on('connect', () => process.exit(0)).on('error', () => process.exit(1))"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+      start_period: 2s
+    depends_on:
+      caddy:
+        condition: service_started
 
 volumes:
   sock:
