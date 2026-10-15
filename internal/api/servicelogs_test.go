@@ -554,3 +554,284 @@ func TestServiceLogStreamNeedsServicesRead(t *testing.T) {
 		t.Errorf("a refused viewer reached the engine: %v", q)
 	}
 }
+
+// ---- markers, node notices and the tasks event (plan 06-30, OBS-02, D-34, D-37) ----
+
+type svcMarker struct {
+	Kind     string `json:"kind"`
+	Slot     int    `json:"slot"`
+	Old      string `json:"old"`
+	OldState string `json:"oldState"`
+	OldNode  string `json:"oldNode"`
+	ExitCode *int   `json:"exitCode"`
+	New      string `json:"new"`
+	Node     string `json:"node"`
+	At       string `json:"at"`
+}
+
+type svcNodeNotice struct {
+	Kind string `json:"kind"`
+	Node string `json:"node"`
+	At   string `json:"at"`
+}
+
+// fastRefresh makes the stream read its tasks every 20 ms, so a change shows within the time
+// it takes to wait for the event; the tests wait for events, not for the clock.
+func fastRefresh(f *envFix) { f.serviceLogsRefresh = 20 * time.Millisecond }
+
+// readEvents reads frames until n events called name have arrived and returns their data.
+func readEvents(t *testing.T, c *sseConn, name string, n int) []string {
+	t.Helper()
+	var out []string
+	for len(out) < n {
+		fr, ok := c.next(10 * time.Second)
+		if !ok {
+			t.Fatalf("only %d of %d %q events arrived: %v", len(out), n, name, out)
+		}
+		if fr.event == name {
+			out = append(out, fr.data)
+		}
+	}
+	return out
+}
+
+func readMarkers(t *testing.T, c *sseConn, n int) []svcMarker {
+	t.Helper()
+	var out []svcMarker
+	for _, data := range readEvents(t, c, "marker", n) {
+		var m svcMarker
+		if err := json.Unmarshal([]byte(data), &m); err != nil {
+			t.Fatalf("marker data %q: %v", data, err)
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+func readNotices(t *testing.T, c *sseConn, n int) []svcNodeNotice {
+	t.Helper()
+	var out []svcNodeNotice
+	for _, data := range readEvents(t, c, "node", n) {
+		var m svcNodeNotice
+		if err := json.Unmarshal([]byte(data), &m); err != nil {
+			t.Fatalf("node data %q: %v", data, err)
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// retask replaces the fake manager's tasks.
+func (f *svcLogsFix) retask(tasks []swarm.Task) {
+	cfg := f.cfg
+	cfg.Tasks = tasks
+	f.fake.Reconfigure(cfg)
+}
+
+// at sets the times a task was made and reached its state.
+func at(tk swarm.Task, created, since time.Time) swarm.Task {
+	tk.CreatedAt, tk.UpdatedAt, tk.Status.Timestamp = created, since, since
+	return tk
+}
+
+func TestServiceLogStreamMarksATaskThatWasReplacedAndAnnouncesTheNewOne(t *testing.T) {
+	f := newSvcLogsFix(t, svcTasks(), nil, fastRefresh)
+	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
+	nextEvent(t, c, "ready", 5*time.Second)
+
+	// tk-1 (slot 1) fails with exit 3 and the swarm starts tk-new in its slot on the worker.
+	f.retask([]swarm.Task{
+		tkExited("tk-1", "svc-web", "node-1", 1, "failed", "shutdown", 3, "boom", time.Minute),
+		tkTask("tk-new", "svc-web", "node-3", 1, "starting", "running", time.Second),
+		tkRunning("tk-2", "svc-web", "node-3", 2, "c2", time.Minute),
+		tkRunning("tk-3", "svc-web", "node-1", 3, "c3", time.Minute),
+		tkExited("tk-old", "svc-web", "node-1", 1, "failed", "shutdown", 1, "boom", 10*time.Minute),
+	})
+
+	var announced svcReady
+	var marker svcMarker
+	gotMarker := false
+	for !gotMarker {
+		fr, ok := c.next(10 * time.Second)
+		if !ok {
+			t.Fatal("no marker arrived")
+		}
+		switch fr.event {
+		case "tasks":
+			if err := json.Unmarshal([]byte(fr.data), &announced); err != nil {
+				t.Fatal(err)
+			}
+		case "marker":
+			if err := json.Unmarshal([]byte(fr.data), &marker); err != nil {
+				t.Fatal(err)
+			}
+			gotMarker = true
+		}
+	}
+	if marker.Kind != "replaced" || marker.Slot != 1 || marker.Old != "tk-1" || marker.OldState != "failed" || marker.New != "tk-new" || marker.Node != "wrk-ready" || marker.OldNode != "mgr-1" {
+		t.Errorf("marker = %+v, want tk-1 (failed) replaced by tk-new on wrk-ready in slot 1", marker)
+	}
+	if marker.ExitCode == nil || *marker.ExitCode != 3 {
+		t.Errorf("exit code = %v, want 3", marker.ExitCode)
+	}
+	if marker.At == "" {
+		t.Error("the marker has no time, so the viewer cannot put it where the task's last line was")
+	}
+	// The new task joins before the marker, so its lines have a name.
+	if !slices.ContainsFunc(announced.Tasks, func(x svcReadyTask) bool { return x.ID == "tk-new" && x.Slot == 1 && x.Node == "wrk-ready" }) {
+		t.Errorf("tasks event = %+v, want it to name tk-new in slot 1 on wrk-ready", announced.Tasks)
+	}
+}
+
+func TestServiceLogStreamSaysASlotStoppedWhenNoNewTaskHasStartedAndThenThatItWasReplaced(t *testing.T) {
+	f := newSvcLogsFix(t, svcTasks(), nil, fastRefresh)
+	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
+	nextEvent(t, c, "ready", 5*time.Second)
+
+	base := svcTasks()
+	failed := slices.Clone(base)
+	failed[1] = tkExited("tk-2", "svc-web", "node-3", 2, "rejected", "shutdown", 0, "no suitable node", time.Minute)
+	f.retask(failed)
+	m := readMarkers(t, c, 1)[0]
+	if m.Kind != "stopped" || m.Slot != 2 || m.Old != "tk-2" || m.OldState != "rejected" || m.New != "" {
+		t.Fatalf("marker = %+v, want slot 2 stopped: tk-2 rejected, with no new task", m)
+	}
+
+	f.retask(append(slices.Clone(failed), tkTask("tk-2b", "svc-web", "node-3", 2, "starting", "running", time.Second)))
+	m = readMarkers(t, c, 1)[0]
+	if m.Kind != "replaced" || m.Old != "tk-2" || m.New != "tk-2b" {
+		t.Fatalf("marker = %+v, want tk-2 replaced by tk-2b", m)
+	}
+}
+
+func TestServiceLogStreamOnlySendsMarkersForTheTasksAndNodesItWasNarrowedTo(t *testing.T) {
+	f := newSvcLogsFix(t, svcTasks(), nil, fastRefresh)
+	c := f.open(t, f.cookie, "web", "sid="+sidA+"&node=mgr-1", "")
+	nextEvent(t, c, "ready", 5*time.Second)
+
+	// tk-2 (on wrk-ready) and tk-3 (on mgr-1) both fail and are replaced on their nodes.
+	step1 := []swarm.Task{
+		tkRunning("tk-1", "svc-web", "node-1", 1, "c1", time.Minute),
+		tkExited("tk-2", "svc-web", "node-3", 2, "failed", "shutdown", 1, "x", time.Minute),
+		tkTask("tk-2n", "svc-web", "node-3", 2, "starting", "running", time.Second),
+		tkExited("tk-3", "svc-web", "node-1", 3, "failed", "shutdown", 1, "x", time.Minute),
+		tkTask("tk-3n", "svc-web", "node-1", 3, "starting", "running", time.Second),
+		tkExited("tk-old", "svc-web", "node-1", 1, "failed", "shutdown", 1, "boom", 10*time.Minute),
+	}
+	f.retask(step1)
+	if m := readMarkers(t, c, 1)[0]; m.Old != "tk-3" || m.New != "tk-3n" {
+		t.Fatalf("first marker = %+v, want the one on mgr-1 (tk-3)", m)
+	}
+	// Later, tk-1 (mgr-1) fails too: the next marker is its, so tk-2's was not sent in between.
+	step2 := slices.Clone(step1)
+	step2[0] = tkExited("tk-1", "svc-web", "node-1", 1, "shutdown", "shutdown", 0, "", time.Minute)
+	step2 = append(step2, tkTask("tk-1n", "svc-web", "node-1", 1, "starting", "running", time.Second))
+	f.retask(step2)
+	if m := readMarkers(t, c, 1)[0]; m.Old != "tk-1" || m.New != "tk-1n" || m.OldState != "shutdown" {
+		t.Fatalf("second marker = %+v, want tk-1 shut down and replaced by tk-1n", m)
+	}
+}
+
+func TestServiceLogStreamTellsOfANodeThatStopsReportingAndOfItsReturn(t *testing.T) {
+	f := newSvcLogsFix(t, svcTasks(), nil, fastRefresh)
+	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
+	nextEvent(t, c, "ready", 5*time.Second)
+
+	setNode := func(state string) {
+		cfg := f.cfg
+		cfg.NodeRows = tkNodes()
+		for i := range cfg.NodeRows {
+			if cfg.NodeRows[i].ID == "node-3" {
+				cfg.NodeRows[i].State = state
+			}
+		}
+		f.fake.Reconfigure(cfg)
+		if err := f.clusters.Refresh(t.Context(), f.env.ID); err != nil {
+			t.Fatalf("refresh the cluster: %v", err)
+		}
+	}
+	setNode("down")
+	n := readNotices(t, c, 1)[0]
+	if n.Kind != "down" || n.Node != "wrk-ready" || n.At == "" {
+		t.Fatalf("notice = %+v, want wrk-ready down", n)
+	}
+	setNode("ready")
+	n = readNotices(t, c, 1)[0]
+	if n.Kind != "back" || n.Node != "wrk-ready" {
+		t.Fatalf("notice = %+v, want wrk-ready back", n)
+	}
+}
+
+func TestServiceLogStreamTellsOnceAfterTheBurstOfANodeThatIsAlreadyDown(t *testing.T) {
+	tasks := append(svcTasks(), tkRunning("tk-dn", "svc-web", "node-2", 4, "c4", time.Minute))
+	f := newSvcLogsFix(t, tasks, svcBurstLines(), fastRefresh)
+	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
+	// The notice comes after the burst, so it is not above the lines it follows.
+	logs := 0
+	var notice svcNodeNotice
+	for notice.Kind == "" {
+		fr, ok := c.next(10 * time.Second)
+		if !ok {
+			t.Fatalf("no node notice arrived after %d log events", logs)
+		}
+		switch fr.event {
+		case "log":
+			logs++
+		case "node":
+			if err := json.Unmarshal([]byte(fr.data), &notice); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if logs == 0 {
+		t.Error("the node notice came before the burst's lines")
+	}
+	if notice.Kind != "down" || notice.Node != "wrk-down" {
+		t.Errorf("notice = %+v, want wrk-down down", notice)
+	}
+}
+
+func TestServiceLogStreamWithStoppedTasksShowsTheMarkersOfTheHistoryThatFallInTheBurst(t *testing.T) {
+	// tk-a (slot 1) failed at +20 ms and tk-b took over at +10 ms; tk-c (slot 2) failed an hour
+	// before the first line and tk-d replaced it: that marker is older than anything shown.
+	tasks := []swarm.Task{
+		at(tkExited("tk-a", "svc-web", "node-1", 1, "failed", "shutdown", 1, "x", 0), svcT0.Add(-time.Minute), svcT0.Add(20*time.Millisecond)),
+		at(tkRunning("tk-b", "svc-web", "node-1", 1, "cb", 0), svcT0.Add(10*time.Millisecond), svcT0.Add(10*time.Millisecond)),
+		at(tkExited("tk-c", "svc-web", "node-3", 2, "shutdown", "shutdown", 0, "", 0), svcT0.Add(-2*time.Hour), svcT0.Add(-time.Hour)),
+		at(tkRunning("tk-d", "svc-web", "node-3", 2, "cd", 0), svcT0.Add(-time.Hour), svcT0.Add(-time.Hour)),
+		tkRunning("tk-3", "svc-web", "node-1", 3, "c3", time.Minute),
+	}
+	lines := []dockertest.FakeServiceLogLine{
+		svcLine("tk-a", "node-1", 5, "a1"), svcLine("tk-a", "node-1", 15, "a2"), svcLine("tk-b", "node-1", 40, "b1"),
+	}
+	f := newSvcLogsFix(t, tasks, lines, fastRefresh)
+	c := f.open(t, f.cookie, "web", "sid="+sidA+"&stopped=1", "")
+	m := readMarkers(t, c, 1)[0]
+	if m.Kind != "replaced" || m.Old != "tk-a" || m.New != "tk-b" || m.At != svcStamp(20) {
+		t.Fatalf("marker = %+v, want tk-a replaced by tk-b at +20 ms", m)
+	}
+	// A live marker follows; tk-c's, older than the first line, was not sent before it.
+	f.retask(append(slices.Clone(tasks[:4]),
+		tkExited("tk-3", "svc-web", "node-1", 3, "failed", "shutdown", 2, "x", time.Minute),
+		tkTask("tk-3n", "svc-web", "node-1", 3, "starting", "running", time.Second)))
+	if next := readMarkers(t, c, 1)[0]; next.Old != "tk-3" {
+		t.Fatalf("next marker = %+v, want tk-3's: the history before the first line is not shown", next)
+	}
+}
+
+func TestServiceLogStreamWithoutStoppedTasksSendsNoHistoryMarkers(t *testing.T) {
+	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), fastRefresh)
+	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
+	readSvcLines(t, c, 6)
+	// The next marker is a live one: tk-old's replacement by tk-1 happened before the stream.
+	f.retask([]swarm.Task{
+		tkExited("tk-1", "svc-web", "node-1", 1, "failed", "shutdown", 1, "x", time.Minute),
+		tkTask("tk-1n", "svc-web", "node-1", 1, "starting", "running", time.Second),
+		tkRunning("tk-2", "svc-web", "node-3", 2, "c2", time.Minute),
+		tkRunning("tk-3", "svc-web", "node-1", 3, "c3", time.Minute),
+		tkExited("tk-old", "svc-web", "node-1", 1, "failed", "shutdown", 1, "boom", 10*time.Minute),
+	})
+	if m := readMarkers(t, c, 1)[0]; m.Old != "tk-1" {
+		t.Fatalf("first marker = %+v, want the live one (tk-1)", m)
+	}
+}

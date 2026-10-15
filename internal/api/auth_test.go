@@ -140,6 +140,7 @@ type authFixture struct {
 	// serviceLogsHeartbeat, serviceLogsMaxStreams and serviceLogsMaxLifetime tune the service
 	// log stream (plan 06-29); zero is the default.
 	serviceLogsHeartbeat   time.Duration
+	serviceLogsRefresh     time.Duration
 	serviceLogsMaxStreams  int
 	serviceLogsMaxLifetime time.Duration
 	// logsMaxPageBytes shortens how much one page of earlier lines may hold (plan 04-20).
@@ -328,7 +329,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		if f.clusters != nil {
 			api.RegisterServiceLogs(r, api.ServiceLogsDeps{
 				Clusters: f.clusters, Audit: f.aud, Checker: checker, Heartbeat: f.serviceLogsHeartbeat,
-				MaxStreamsPerUser: f.serviceLogsMaxStreams, MaxLifetime: f.serviceLogsMaxLifetime, Now: f.clk.now, Log: log,
+				TaskRefresh: f.serviceLogsRefresh, MaxStreamsPerUser: f.serviceLogsMaxStreams, MaxLifetime: f.serviceLogsMaxLifetime, Now: f.clk.now, Log: log,
 			})
 		}
 		if f.shellsReg == nil {

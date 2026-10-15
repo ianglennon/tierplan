@@ -67,6 +67,10 @@ type ServiceLogsDeps struct {
 	MaxStreamsPerUser int
 	// MaxLifetime is the longest one stream stays open. Zero means one hour.
 	MaxLifetime time.Duration
+	// TaskRefresh is how often the service's tasks and the state of their nodes are read again,
+	// to announce tasks that join, mark a task that was replaced and tell of a node that cannot
+	// be reached (D-34, D-37). Zero means 3 seconds; tests shorten it.
+	TaskRefresh time.Duration
 	// Now is the clock of the audit memory. Nil means the wall clock. The reorder window and the
 	// task cache measure real time and do not use it.
 	Now func() time.Time

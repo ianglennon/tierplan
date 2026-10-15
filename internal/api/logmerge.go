@@ -52,6 +52,13 @@ type taskInfo struct {
 	// it), Ended says Docker's own state is one the task cannot leave.
 	State string
 	Ended bool
+	// NodeState is the swarm's word for the node (empty when the swarm does not list it).
+	NodeState string
+	// Created is when the swarm made the task, Since when it reached its state (its last
+	// change when it has no state time), ExitCode the exit code of its container when it has
+	// one (plan 06-30, D-34).
+	Created, Since time.Time
+	ExitCode       *int
 }
 
 // slotOrLast is the slot of a task for ordering; a task nobody has listed goes after the
