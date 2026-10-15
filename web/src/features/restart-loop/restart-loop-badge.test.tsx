@@ -75,3 +75,45 @@ describe("RestartLoopBadge", () => {
     expect(document.querySelector("b")).toBeNull();
   });
 });
+
+// The muted variant (plan 06-35, RES-13, D-16): a neutral outline badge with BellOff and Muted.
+describe("RestartLoopBadge muted", () => {
+  const MUTED = { ...LOOP, state: "muted" as const };
+
+  it("is a neutral outline badge with BellOff reading Muted, and no offline dot", () => {
+    mount(MUTED);
+    const badge = screen.getByText("Muted").closest("[data-variant]");
+    expect(badge?.getAttribute("data-variant")).toBe("outline");
+    expect(badge?.querySelector(".lucide-bell-off")).not.toBeNull();
+    expect(badge?.querySelector(".bg-status-offline")).toBeNull();
+    expect(badge?.className ?? "").not.toMatch(/status-offline/);
+    expect(screen.queryByText("Restart loop")).toBeNull();
+  });
+
+  it("says in a tooltip that the alerts are muted and where to unmute them", async () => {
+    mount(MUTED);
+    fireEvent.focus(screen.getByText("Muted"));
+    const tip = await screen.findByRole("tooltip");
+    expect(tip.textContent).toBe(
+      "Restart-loop alerts are muted for this service. Unmute them from the More menu.",
+    );
+  });
+
+  it("shows for a muted service that is not looping, with no loop at all", () => {
+    render(
+      <TooltipProvider>
+        <RestartLoopBadge muted />
+      </TooltipProvider>,
+    );
+    expect(screen.getByText("Muted")).toBeTruthy();
+  });
+
+  it("shows nothing without a loop and without a mute", () => {
+    const { container } = render(
+      <TooltipProvider>
+        <RestartLoopBadge />
+      </TooltipProvider>,
+    );
+    expect(container.textContent).toBe("");
+  });
+});

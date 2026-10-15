@@ -148,6 +148,32 @@ describe("the page frame", () => {
     expect(screen.queryByText("Restart loop")).toBeNull();
   });
 
+  it("shows the Muted badge in the header whenever the service is muted, in a loop or not", async () => {
+    answerWith(serviceDetail({ muted: true }));
+    renderAt();
+    await screen.findByRole("heading", { name: "api" });
+    expect(within(headerOf()).getByText("Muted")).toBeTruthy();
+    expect(within(headerOf()).queryByText("Restart loop")).toBeNull();
+    cleanup();
+    queryClient.clear();
+    answerWith(
+      serviceDetail({
+        muted: true,
+        restartLoop: {
+          state: "muted",
+          count: 5,
+          windowMinutes: 10,
+          latestError: "boom",
+          since: "2026-10-14T09:00:00Z",
+        },
+      }),
+    );
+    renderAt();
+    await screen.findByRole("heading", { name: "api" });
+    expect(within(headerOf()).getByText("Muted")).toBeTruthy();
+    expect(within(headerOf()).queryByText("Restart loop")).toBeNull();
+  });
+
   it("asks for the service by the ID in the address", async () => {
     renderAt();
     await screen.findByRole("heading", { name: "api" });

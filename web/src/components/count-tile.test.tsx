@@ -136,3 +136,44 @@ describe("CountTile breakdown", () => {
     expect(screen.getByText("No manager connected")).toBeTruthy();
   });
 });
+
+// The restart-loop tile's dot (plan 06-35, RES-13, D-15): an offline dot before the label while the
+// value is above zero. The numerals stay the foreground colour.
+describe("CountTile dot", () => {
+  const dotOf = (label: string) =>
+    (screen.getByText(label).closest("[aria-busy], div, a") as HTMLElement).querySelector(
+      ".bg-status-offline",
+    );
+
+  it("renders an offline dot before the label when the value is above zero", async () => {
+    renderTile(<CountTile label="Restart loops" value={2} dot="offline" />);
+    await screen.findByText("Restart loops");
+    const dot = dotOf("Restart loops");
+    expect(dot).not.toBeNull();
+    expect(dot?.getAttribute("aria-hidden")).toBe("true");
+    const label = screen.getByText("Restart loops");
+    expect(dot?.compareDocumentPosition(label)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(screen.getByText("2").className).not.toContain("status-offline");
+  });
+
+  it("has no dot at zero, while loading or when the count errored", async () => {
+    renderTile(
+      <>
+        <CountTile label="Zero" value={0} dot="offline" />
+        <CountTile label="Loading" value={3} dot="offline" loading />
+        <CountTile label="Errored" value={3} dot="offline" error />
+        <CountTile label="Plain" value={3} />
+      </>,
+    );
+    await screen.findByText("Zero");
+    for (const label of ["Zero", "Loading", "Errored", "Plain"]) {
+      expect(dotOf(label), label).toBeNull();
+    }
+  });
+
+  it("passes a search to its link", async () => {
+    renderTile(<CountTile label="Services" value={1} to="/" search={{ status: "loop" }} />);
+    const link = await screen.findByRole("link", { name: /Services/ });
+    expect(link.getAttribute("href")).toBe("/?status=loop");
+  });
+});

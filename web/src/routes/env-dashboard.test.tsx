@@ -223,6 +223,68 @@ describe("dashboard", () => {
     expect(screen.queryByRole("link", { name: /Nodes|Services|Containers/ })).toBeNull();
   });
 
+  describe("the Restart loops tile (plan 06-35, RES-13, D-15)", () => {
+    const swarm = (restartLoops?: { flagged: number; muted: number }) =>
+      Response.json({
+        ...SUMMARY,
+        environment: { ...SUMMARY.environment, type: "swarm-manager" },
+        counts: { ...SUMMARY.counts, nodes: 3, services: 5 },
+        ...(restartLoops ? { restartLoops } : {}),
+      });
+    const loops = () => {
+      const label = screen.getByText("Restart loops", { selector: "span" });
+      return label.closest("a, div") as HTMLElement;
+    };
+
+    it("counts the services failing repeatedly, with an offline dot, and links to the loop filter", async () => {
+      me = makeMe({
+        instanceAdmin: true,
+        permissions: { global: [], environments: { "*": ["environments.read", "services.read"] } },
+      });
+      summary = () => swarm({ flagged: 2, muted: 0 });
+      renderAt("/env/e1");
+      await waitFor(() => expect(within(loops()).getByText("2")).toBeTruthy());
+      expect(within(loops()).getByText("services failing repeatedly")).toBeTruthy();
+      expect(loops().querySelector(".bg-status-offline")).not.toBeNull();
+      expect(loops().getAttribute("href")).toBe("/env/e1/services?status=loop");
+    });
+
+    it("is not a link for someone who may not read services", async () => {
+      summary = () => swarm({ flagged: 2, muted: 0 });
+      renderAt("/env/e1");
+      await waitFor(() => expect(within(loops()).getByText("2")).toBeTruthy());
+      expect(loops().getAttribute("href")).toBeNull();
+    });
+
+    it("reads None right now at zero, with no dot", async () => {
+      summary = () => swarm({ flagged: 0, muted: 0 });
+      renderAt("/env/e1");
+      await waitFor(() => expect(within(loops()).getByText("0")).toBeTruthy());
+      expect(within(loops()).getByText("None right now")).toBeTruthy();
+      expect(loops().querySelector(".bg-status-offline")).toBeNull();
+    });
+
+    it("says how many are muted", async () => {
+      summary = () => swarm({ flagged: 0, muted: 2 });
+      renderAt("/env/e1");
+      await waitFor(() => expect(within(loops()).getByText("0")).toBeTruthy());
+      expect(within(loops()).getByText("None right now · 2 muted")).toBeTruthy();
+    });
+
+    it("shows a dash while the swarm has not been read", async () => {
+      summary = () => swarm();
+      renderAt("/env/e1");
+      await waitFor(() => expect(within(tile("Nodes")).getByText("3")).toBeTruthy());
+      expect(within(loops()).getByText("—")).toBeTruthy();
+    });
+
+    it("is not on a standalone host", async () => {
+      renderAt("/env/e1");
+      await waitFor(() => expect(within(tile("Images")).getByText("12")).toBeTruthy());
+      expect(screen.queryByText("Restart loops", { selector: "span" })).toBeNull();
+    });
+  });
+
   it("shows the worker notice on a swarm worker (D-24)", async () => {
     summary = () => Response.json({ ...SUMMARY, isWorker: true });
     renderAt("/env/e1");

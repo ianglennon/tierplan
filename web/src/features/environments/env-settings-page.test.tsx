@@ -143,6 +143,9 @@ beforeEach(() => {
           disabled: false,
         });
       }
+      if (path.endsWith("/restart-loop-settings")) {
+        return Response.json({ failures: 3, windowMinutes: 10, historyLimit: 5 });
+      }
       if (path === "/api/env/e2/agents") return Response.json({ items: [NODE] });
       if (path === "/api/env/e2/adopt-cluster") {
         return Response.json({ clusterId: "x3k2m9t0q4w5e6r7t8y9u0i1o" });
@@ -232,6 +235,7 @@ describe("/settings/environments/$envId", () => {
       "Nodes and agents",
       "Join token",
       "Agent updates",
+      "Restart-loop detection",
       "Remove environment",
     ]);
   });
@@ -287,7 +291,13 @@ describe("/settings/environments/$envId", () => {
     renderAt("/settings/environments/e2");
     await screen.findByRole("heading", { level: 3, name: "General" });
     await screen.findByRole("heading", { level: 3, name: "Agent updates" });
-    expect(headings()).toEqual(["General", "Connection", "Nodes and agents", "Agent updates"]);
+    expect(headings()).toEqual([
+      "General",
+      "Connection",
+      "Nodes and agents",
+      "Agent updates",
+      "Restart-loop detection",
+    ]);
     // The token is never read, the settings page's URL is left out, and the node table acts.
     expect(seen).not.toContain("GET /api/environments/e2/token");
     expect(seen).not.toContain("GET /api/settings");
@@ -417,7 +427,13 @@ describe("/settings/environments/$envId", () => {
     ]);
     renderAt("/settings/environments/e2");
     await screen.findByRole("heading", { level: 3, name: "General" });
-    expect(headings()).toEqual(["General", "Connection", "Nodes and agents", "Agent updates"]);
+    expect(headings()).toEqual([
+      "General",
+      "Connection",
+      "Nodes and agents",
+      "Agent updates",
+      "Restart-loop detection",
+    ]);
     expect(seen).not.toContain("GET /api/environments/e2/token");
   });
 
@@ -483,7 +499,13 @@ describe("/settings/environments/$envId", () => {
     renderAt("/settings/environments/e1");
     await screen.findByRole("heading", { level: 3, name: "General" });
     await screen.findByRole("heading", { level: 3, name: "Remove environment" });
-    expect(headings()).toEqual(["General", "Connection", "Nodes and agents", "Remove environment"]);
+    expect(headings()).toEqual([
+      "General",
+      "Connection",
+      "Nodes and agents",
+      "Restart-loop detection",
+      "Remove environment",
+    ]);
     expect(screen.queryByText("Connects to")).toBeNull();
     await waitFor(() => expect(seen).toContain("GET /api/environments"));
     expect(seen).not.toContain("GET /api/environments/e1/token");
@@ -516,6 +538,7 @@ describe("/settings/environments/$envId", () => {
       "Nodes and agents",
       "Join token",
       "Agent updates",
+      "Restart-loop detection",
       "Local host",
       "Remove environment",
     ]);

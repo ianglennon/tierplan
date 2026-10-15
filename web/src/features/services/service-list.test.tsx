@@ -449,6 +449,39 @@ describe("the restart-loop badge", () => {
     ).toBeNull();
   });
 
+  it("draws the grey Muted badge in place of Restart loop for a muted loop", async () => {
+    items = [svc({ restartLoop: { ...LOOP, state: "muted" } })];
+    mount();
+    await screen.findByText("web");
+    const row = within(screen.getByRole("row", { name: /^Select web/ }));
+    expect(row.getByText("Muted")).toBeTruthy();
+    expect(row.queryByText("Restart loop")).toBeNull();
+  });
+
+  it("puts Mute restart-loop alerts in the row menu of a service in a loop", async () => {
+    items = [svc({ restartLoop: LOOP })];
+    mount();
+    await openMenu("web");
+    expect(await screen.findByRole("menuitem", { name: "Mute restart-loop alerts" })).toBeTruthy();
+  });
+
+  it("puts Unmute restart-loop alerts there when the loop is muted", async () => {
+    items = [svc({ restartLoop: { ...LOOP, state: "muted" } })];
+    mount();
+    await openMenu("web");
+    expect(
+      await screen.findByRole("menuitem", { name: "Unmute restart-loop alerts" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Mute restart-loop alerts" })).toBeNull();
+  });
+
+  it("leaves the item out for a service that is not in a loop", async () => {
+    mount();
+    await openMenu("web");
+    await screen.findByRole("menuitem", { name: /Force update/ });
+    expect(screen.queryByRole("menuitem", { name: /restart-loop alerts/ })).toBeNull();
+  });
+
   it("is not drawn for a service whose restartLoop is null", async () => {
     mount();
     await screen.findByText("web");

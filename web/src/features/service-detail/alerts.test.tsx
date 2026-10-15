@@ -2,12 +2,16 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { setCsrfToken } from "@/api/client";
 import { serviceRetry } from "@/api/services";
+import { Toaster } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { ServiceAlerts } from "@/features/service-detail/alerts";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
 import {
   bareServiceDetail,
@@ -23,10 +27,16 @@ import {
 
 let answer: ServiceRolloutBody;
 let reads: number;
+// What the page sent to the mute route, as "METHOD path".
+let muteCalls: string[];
+let me = makeMe({ envs: { [SERVICE_ENV]: "operator" } });
 
 beforeEach(() => {
   answer = rollout();
   reads = 0;
+  muteCalls = [];
+  me = makeMe({ envs: { [SERVICE_ENV]: "operator" } });
+  setCsrfToken("csrf-1");
   serviceRetry.attempts = 0;
   vi.stubGlobal(
     "fetch",
@@ -35,6 +45,11 @@ beforeEach(() => {
       if (path === `/api/env/${SERVICE_ENV}/services/${SERVICE_ID}/rollout`) {
         reads++;
         return Response.json(answer);
+      }
+      if (path === "/api/me") return Response.json(me);
+      if (path === `/api/env/${SERVICE_ENV}/services/${SERVICE_ID}/restart-loop-mute`) {
+        muteCalls.push(`${req.method} ${path}`);
+        return Response.json({ serviceId: SERVICE_ID, muted: req.method === "PUT", changed: true });
       }
       return Response.json({}, { status: 404 });
     }),
@@ -51,9 +66,12 @@ async function mount(detail: ServiceDetailBody) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <TestRouter>
-        <ServiceAlerts envId={SERVICE_ENV} detail={detail} />
-      </TestRouter>
+      <TooltipProvider>
+        <TestRouter>
+          <ServiceAlerts envId={SERVICE_ENV} detail={detail} />
+          <Toaster />
+        </TestRouter>
+      </TooltipProvider>
     </QueryClientProvider>,
   );
   // The rollout is read once before the alerts decide.
@@ -180,6 +198,37 @@ describe("the restart-loop alert", () => {
     cleanup();
     await mount(bareServiceDetail());
     expect(screen.queryByText(/restart loop/)).toBeNull();
+  });
+});
+
+// Mute alerts on the restart-loop alert (plan 06-35, RES-13, D-16).
+describe("Mute alerts on the restart-loop alert", () => {
+  it("mutes the service's alerts and says so, for an Operator", async () => {
+    await mount(bareServiceDetail({ restartLoop: LOOP }));
+    const button = await screen.findByRole("button", { name: "Mute alerts" });
+    await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(muteCalls).toEqual([
+        `PUT /api/env/${SERVICE_ENV}/services/${SERVICE_ID}/restart-loop-mute`,
+      ]),
+    );
+    expect(await screen.findByText("Muted restart-loop alerts for api.")).toBeTruthy();
+  });
+
+  it("is unavailable with the reason for a Viewer, and sends nothing", async () => {
+    me = makeMe({ envs: { [SERVICE_ENV]: "viewer" } });
+    await mount(bareServiceDetail({ restartLoop: LOOP }));
+    const button = await screen.findByRole("button", { name: "Mute alerts" });
+    await waitFor(() => expect(button.getAttribute("aria-disabled")).toBe("true"));
+    fireEvent.click(button);
+    expect(muteCalls).toEqual([]);
+  });
+
+  it("is not offered once the alerts are muted: the Muted badge and the menu carry that", async () => {
+    await mount(bareServiceDetail({ restartLoop: { ...LOOP, state: "muted" } }));
+    expect(await screen.findByText("api is in a restart loop")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Mute alerts" })).toBeNull();
   });
 });
 
