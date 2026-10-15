@@ -398,6 +398,22 @@ describe("apply", () => {
     expect(screen.getByRole("link", { name: "View service" }).getAttribute("href")).toBe(PAGE);
   });
 
+  it("applies the spec that was reviewed, not one edited while the review was out", async () => {
+    let answer: (r: Response) => void = () => {};
+    state.review = () => new Promise<Response>((r) => (answer = r));
+    renderAt();
+    await ready();
+    typeIntoEditor(yaml(withReplicas(5)));
+    fireEvent.click(reviewButton());
+    await waitFor(() => expect(reviewButton().textContent).toContain("Checking…"));
+    typeIntoEditor(yaml(withReplicas(7)));
+    answer(Response.json(reviewBody({ spec: withReplicas(5) })));
+    await screen.findByRole("heading", { name: "Review changes", level: 2 });
+    fireEvent.click(screen.getByRole("button", { name: "Apply changes" }));
+    await waitFor(() => expect(posts("/apply")).toHaveLength(1));
+    expect(posts("/apply")[0]?.body).toEqual({ version: EDIT_VERSION, spec: withReplicas(5) });
+  });
+
   it("sends what was typed and not the review's masked copy of it", async () => {
     renderAt();
     await ready();
@@ -972,6 +988,22 @@ describe("creating a service", () => {
     );
     // A new service has no rolling update to follow.
     expect(state.sent.filter((s) => s.path.endsWith("/rollout"))).toHaveLength(0);
+  });
+
+  it("creates the service that was reviewed, not one edited while the review was out", async () => {
+    let answer: (r: Response) => void = () => {};
+    state.createReview = () => new Promise<Response>((r) => (answer = r));
+    renderAt(NEW);
+    await fillIn();
+    fireEvent.click(reviewButton());
+    // A new image is looked up, so the review is on screen while the server is still judging.
+    expect(await screen.findByText("Looking up the digest…")).toBeTruthy();
+    fireEvent.change(await field("Name"), { target: { value: "other" } });
+    answer(Response.json(reviewBody({ spec: chatSpec(), version: 0, image: pinnedImage })));
+    await screen.findByRole("heading", { name: "Review chat", level: 2 });
+    fireEvent.click(screen.getByRole("button", { name: "Create service" }));
+    await waitFor(() => expect(posts("/services")).toHaveLength(1));
+    expect(posts("/services")[0]?.body).toEqual({ spec: chatSpec() });
   });
 
   it("says a name that exists in words, and offers the way back with the edits kept", async () => {
