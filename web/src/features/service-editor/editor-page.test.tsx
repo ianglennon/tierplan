@@ -524,6 +524,98 @@ describe("leaving the editor", () => {
   });
 });
 
+// Objects the spec names that do not exist (plan 06-26, D-06, D-07): the review lists them, the
+// values are typed there, and the apply sends them with the spec.
+describe("new objects", () => {
+  const withRefs = () =>
+    editSpec({
+      TaskTemplate: {
+        ContainerSpec: {
+          Image: `registry.example.com/shop/api:1.4@${DIGEST}`,
+          Env: ["MODE=prod", "DB_PASSWORD=<hidden>"],
+          Secrets: [
+            { SecretName: "db-pass", File: { Name: "db-pass", UID: "0", GID: "0", Mode: 292 } },
+          ],
+        },
+        Networks: [{ Target: "front" }],
+      },
+    });
+  const missing = { networks: ["front"], secrets: ["db-pass"], configs: [] };
+
+  async function reviewWithRefs() {
+    state.review = () => Response.json(reviewBody({ spec: withRefs(), missing }));
+    renderAt();
+    await ready();
+    typeIntoEditor(yaml(withRefs()));
+    fireEvent.click(reviewButton());
+    await screen.findByRole("heading", { name: "Review changes", level: 2 });
+  }
+
+  it("lists them on the review, blocks Apply until the secret has a value, then sends them with the spec", async () => {
+    await reviewWithRefs();
+    const card = within(screen.getByRole("region", { name: "New objects" }));
+    expect(card.getByText("Network front")).toBeTruthy();
+    const apply = () => screen.getByRole("button", { name: "Apply changes" });
+    expect(apply().getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(apply());
+    expect(posts("/apply")).toHaveLength(0);
+    fireEvent.change(card.getByLabelText("Value"), { target: { value: "hunter2" } });
+    expect(apply().getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(apply());
+    expect(await screen.findByRole("heading", { name: "Applying changes to api" })).toBeTruthy();
+    await waitFor(() => expect(posts("/apply")).toHaveLength(1));
+    expect(posts("/apply")[0]?.body).toEqual({
+      version: EDIT_VERSION,
+      spec: withRefs(),
+      objects: [
+        { kind: "network", name: "front" },
+        { kind: "secret", name: "db-pass", data: btoa("hunter2") },
+      ],
+    });
+    expect(screen.getByText("Create network front")).toBeTruthy();
+    expect(screen.getByText("Create secret db-pass")).toBeTruthy();
+    await screen.findByRole("heading", { name: "Update complete" });
+    expect(document.body.textContent).not.toContain("hunter2");
+  });
+
+  it("says the objects made for a failed apply were removed, and keeps the edits and the typed value on the way back", async () => {
+    state.apply = () =>
+      Response.json(
+        {
+          type: "spec_rejected",
+          title: "x",
+          status: 422,
+          detail:
+            "Couldn't update api. Docker rejected these settings: bad spec The 2 objects created for this change were removed.",
+          errors: [
+            { location: "reason", message: "Docker rejected these settings: bad spec" },
+            { location: "removed", message: "secret:db-pass" },
+            { location: "removed", message: "network:front" },
+          ],
+        },
+        { status: 422 },
+      );
+    await reviewWithRefs();
+    const card = within(screen.getByRole("region", { name: "New objects" }));
+    fireEvent.change(card.getByLabelText("Value"), { target: { value: "hunter2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply changes" }));
+    expect(
+      await screen.findByText(
+        "Couldn't update api. Docker rejected these settings: bad spec The 2 objects created for this change were removed.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Back to editing" }));
+    // The review asks again; the typed value is still there, so the second try needs no retyping.
+    fireEvent.click(reviewButton());
+    await screen.findByRole("heading", { name: "Review changes", level: 2 });
+    expect(
+      screen
+        .getByRole("button", { name: "Apply changes" })
+        .getAttribute("aria-disabled"),
+    ).toBeNull();
+  });
+});
+
 // The Form tab (plan 06-20, D-01, D-02, D-09): the same document as the Spec tab, patched by the
 // form's controls, with the caution bar for what it does not show.
 describe("the Form tab", () => {

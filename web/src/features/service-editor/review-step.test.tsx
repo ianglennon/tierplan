@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServiceReview } from "@/api/services";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ReviewStep } from "@/features/service-editor/review-step";
+import { createStagedStore, type StagedStore } from "@/features/service-editor/staged";
 import { setAutoRollback } from "@/features/service-editor/update-policy";
 import type { SpecValue } from "@/features/spec-editor/spec-format";
 import "@/i18n";
@@ -21,8 +22,10 @@ const NEW_IMAGE = `registry.example.com/shop/api:1.5@sha256:${"ab".repeat(32)}`;
 let onBack: ReturnType<typeof vi.fn<() => void>>;
 let onApply: ReturnType<typeof vi.fn<() => void>>;
 let onSpecChange: ReturnType<typeof vi.fn<(spec: SpecValue) => void>>;
+let staged: StagedStore;
 
 beforeEach(() => {
+  staged = createStagedStore();
   onBack = vi.fn<() => void>();
   onApply = vi.fn<() => void>();
   onSpecChange = vi.fn<(spec: SpecValue) => void>();
@@ -57,6 +60,7 @@ function renderStep({ current, edited, review, applying }: Options = {}) {
         edited={edited ?? changed}
         review={review === null ? undefined : (review ?? reviewBody({ spec: changed }))}
         applying={applying ?? false}
+        staged={staged}
         onBack={onBack}
         onApply={onApply}
         onSpecChange={onSpecChange}
@@ -258,19 +262,27 @@ describe("ReviewStep", () => {
     expect(apply().getAttribute("aria-disabled")).toBe("true");
   });
 
-  it("names what the spec uses that does not exist, and cannot be applied", () => {
+  it("lists the networks the spec names that do not exist as new objects, and can still be applied", () => {
     renderStep({
       review: reviewBody({
         spec: withReplicas(editSpec(), 5),
         missing: { networks: ["backend", "edge"], secrets: [], configs: [] },
       }),
     });
+    const card = within(screen.getByRole("region", { name: "New objects" }));
     expect(
-      screen.getByText(
-        "The spec names networks that don't exist: backend, edge. Create them first, then review again.",
-      ),
+      card.getByText("These don't exist yet. They're created first, then the service."),
     ).toBeTruthy();
-    expect(apply().getAttribute("aria-disabled")).toBe("true");
+    expect(card.getByText("Network backend")).toBeTruthy();
+    expect(card.getByText("Network edge")).toBeTruthy();
+    expect(card.getAllByText("Created as an attachable overlay network.")).toHaveLength(2);
+    expect(screen.queryByText(/Create them first, then review again/)).toBeNull();
+    expect(apply().getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("leaves the New objects card out when nothing is missing", () => {
+    renderStep();
+    expect(screen.queryByRole("region", { name: "New objects" })).toBeNull();
   });
 
   it("passes on the manager's notes as text", () => {
@@ -409,5 +421,63 @@ describe("ReviewStep, update behaviour", () => {
     expect(box().hasAttribute("disabled") || box().getAttribute("aria-disabled") === "true").toBe(
       true,
     );
+  });
+});
+
+describe("ReviewStep: New objects", () => {
+  const missing = (secrets: string[], configs: string[] = [], networks: string[] = []) =>
+    reviewBody({
+      spec: withReplicas(editSpec(), 5),
+      missing: { networks, secrets, configs },
+    });
+  const card = () => within(screen.getByRole("region", { name: "New objects" }));
+
+  it("asks for the value of a missing secret and blocks Apply until it is there", () => {
+    renderStep({ review: missing(["db-pass", "api-key"]) });
+    expect(card().getByText("Secret db-pass")).toBeTruthy();
+    expect(card().getByText("Secret api-key")).toBeTruthy();
+    expect(card().getAllByLabelText("Value")).toHaveLength(2);
+    expect(apply().getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getAllByText("Add a value for 2 secrets and configs first.").length).toBeGreaterThan(0);
+    fireEvent.click(apply());
+    expect(onApply).not.toHaveBeenCalled();
+  });
+
+  it("keeps the value in the staged store as it is typed, and Apply opens when every one has one", () => {
+    renderStep({ review: missing(["db-pass"], ["app.conf"]) });
+    fireEvent.change(card().getByLabelText("Value"), { target: { value: "hunter2" } });
+    expect(staged.get("secret", "db-pass")?.value?.text).toBe("hunter2");
+    expect(apply().getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getAllByText("Add a value for 1 secrets and configs first.").length).toBeGreaterThan(0);
+    fireEvent.change(card().getByLabelText("Content"), { target: { value: "level=debug" } });
+    expect(staged.get("config", "app.conf")?.value?.text).toBe("level=debug");
+    expect(apply().getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(apply());
+    expect(onApply).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows Value added with Edit for an object that was staged with a value", () => {
+    staged.put({ kind: "secret", name: "db-pass", value: { source: "type", text: "hunter2", file: null } });
+    renderStep({ review: missing(["db-pass"]) });
+    expect(card().getByText("Value added")).toBeTruthy();
+    expect(card().queryByLabelText("Value")).toBeNull();
+    expect(document.body.textContent).not.toContain("hunter2");
+    expect(apply().getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(card().getByRole("button", { name: "Edit" }));
+    expect(card().getByLabelText("Value")).toBeTruthy();
+  });
+
+  it("does not drop a typed value when the field goes away", () => {
+    const { unmount } = renderStep({ review: missing(["db-pass"]) });
+    fireEvent.change(card().getByLabelText("Value"), { target: { value: "hunter2" } });
+    unmount();
+    expect(staged.get("secret", "db-pass")?.value?.text).toBe("hunter2");
+  });
+
+  it("puts the card second, after the image and the notes and before the changes", () => {
+    renderStep({ review: missing(["db-pass"]) });
+    const card = screen.getByRole("region", { name: "New objects" });
+    const changes = screen.getByRole("heading", { name: "Changes" });
+    expect(card.compareDocumentPosition(changes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

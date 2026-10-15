@@ -63,9 +63,10 @@ interface Options {
   status: "pending" | "success" | "error";
   error?: ServiceActionError;
   lookup?: boolean;
+  objects?: { kind: "network" | "secret" | "config"; name: string }[];
 }
 
-function renderProgress({ status, error, lookup = true }: Options) {
+function renderProgress({ status, error, lookup = true, objects }: Options) {
   return render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
@@ -77,6 +78,7 @@ function renderProgress({ status, error, lookup = true }: Options) {
             status={status}
             error={error}
             lookup={lookup}
+            objects={objects}
             onBack={onBack}
             onClose={onClose}
             onReload={onReload}
@@ -261,5 +263,110 @@ describe("ApplyProgress", () => {
     renderProgress({ status: "error", error: new ServiceActionError(409, "service_changed") });
     await new Promise((r) => setTimeout(r, 50));
     await waitFor(() => expect(state.sent.filter((s) => s.method === "POST")).toHaveLength(0));
+  });
+});
+
+describe("ApplyProgress: objects made for the change", () => {
+  const objects = [
+    { kind: "network" as const, name: "front" },
+    { kind: "secret" as const, name: "db-pass" },
+  ];
+  const entries = (pairs: [string, string][]) => pairs.map(([location, message]) => ({ location, message }));
+  const failure = (type: string, status: number, detail: string, pairs: [string, string][] = []) =>
+    new ServiceActionError(status, type, fields({}), detail, entries(pairs));
+
+  it("shows a step for each object between the image and the update, the first one working", () => {
+    renderProgress({ status: "pending", lookup: false, objects });
+    const steps = within(screen.getByRole("list", { name: "Steps" })).getAllByRole("listitem");
+    expect(steps.map((s) => s.textContent)).toEqual([
+      expect.stringContaining("Create network front"),
+      expect.stringContaining("Create secret db-pass"),
+      expect.stringContaining("Update service api"),
+    ]);
+    expect(stepOf("Create network front").status).toBe("Working");
+    expect(stepOf("Create secret db-pass").status).toBe("Waiting");
+    expect(stepOf("Update service api").status).toBe("Waiting");
+  });
+
+  it("marks every step done when the update was accepted", async () => {
+    renderProgress({ status: "success", lookup: false, objects });
+    expect(stepOf("Create network front").status).toBe("Done");
+    expect(stepOf("Create secret db-pass").status).toBe("Done");
+    expect(stepOf("Update service api").status).toBe("Done");
+    expect(await screen.findByRole("heading", { name: "Update complete" })).toBeTruthy();
+  });
+
+  it("says the objects were removed when the update failed after they were made, and keeps the way back", () => {
+    renderProgress({
+      status: "error",
+      lookup: false,
+      objects,
+      error: failure("spec_rejected", 422, "Couldn't update api. Docker rejected these settings: bad spec The 2 objects created for this change were removed.", [
+        ["reason", "Docker rejected these settings: bad spec"],
+        ["removed", "secret:db-pass"],
+        ["removed", "network:front"],
+      ]),
+    });
+    expect(stepOf("Create network front").status).toBe("Done");
+    expect(stepOf("Create secret db-pass").status).toBe("Done");
+    expect(stepOf("Update service api").status).toBe("Failed");
+    expect(
+      screen.getByText(
+        "Couldn't update api. Docker rejected these settings: bad spec The 2 objects created for this change were removed.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Back to editing" }));
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it("names what could not be removed and where to remove it", () => {
+    renderProgress({
+      status: "error",
+      lookup: false,
+      objects,
+      error: failure("spec_rejected", 422, "ignored", [
+        ["reason", "Docker rejected these settings: bad spec"],
+        ["removed", "network:front"],
+        ["notRemoved", "secret:db-pass"],
+      ]),
+    });
+    expect(
+      screen.getByText(
+        "Couldn't update api. Docker rejected these settings: bad spec Bayplan couldn't remove secret db-pass. Remove them under Networks, Secrets or Configs.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("marks the object whose name was taken as failed and the steps after it as waiting", () => {
+    renderProgress({
+      status: "error",
+      lookup: false,
+      objects,
+      error: failure("name_taken", 409, "Couldn't update api. A secret named db-pass already exists. The 1 objects created for this change were removed.", [
+        ["object", "secret:db-pass"],
+        ["reason", "A secret named db-pass already exists."],
+        ["removed", "network:front"],
+      ]),
+    });
+    expect(stepOf("Create network front").status).toBe("Done");
+    expect(stepOf("Create secret db-pass").status).toBe("Failed");
+    expect(stepOf("Update service api").status).toBe("Waiting");
+    expect(
+      screen.getByText(
+        "Couldn't update api. A secret named db-pass already exists. The 1 objects created for this change were removed.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("says a caller who may not create the objects needs Admin, with nothing created", () => {
+    renderProgress({
+      status: "error",
+      lookup: false,
+      objects,
+      error: failure("object_permission", 403, "Needs Admin to create networks and secrets."),
+    });
+    expect(stepOf("Create network front").status).toBe("Failed");
+    expect(stepOf("Update service api").status).toBe("Waiting");
+    expect(screen.getByText("Needs Admin to create networks and secrets.")).toBeTruthy();
   });
 });
