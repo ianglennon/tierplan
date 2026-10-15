@@ -124,8 +124,25 @@ describe("reading a round", () => {
       t: 1,
       partial: true,
       nodes: [
-        { id: "n1", cpu: 170, mem: 450 * MIB, cpus: 4, memoryBytes: 8 * 1024 * MIB, counted: 3, silent: 0 },
-        { id: "n2", cpu: null, mem: 0, cpus: 2, memoryBytes: 0, counted: 0, silent: 1, notReporting: true },
+        {
+          id: "n1",
+          cpu: 170,
+          mem: 450 * MIB,
+          cpus: 4,
+          memoryBytes: 8 * 1024 * MIB,
+          counted: 3,
+          silent: 0,
+        },
+        {
+          id: "n2",
+          cpu: null,
+          mem: 0,
+          cpus: 2,
+          memoryBytes: 0,
+          counted: 0,
+          silent: 1,
+          notReporting: true,
+        },
       ],
     });
     expect(round.partial).toBe(true);
@@ -249,7 +266,9 @@ describe("useListStats", () => {
     rerender({ env: "e1", kind: "containers" });
     expect(FakeEventSource.instances).toHaveLength(2);
     expect(FakeEventSource.instances[0]?.closed).toBe(true);
-    expect(new URL(lastSource().url, "http://x").pathname).toBe("/api/env/e1/containers/stats/stream");
+    expect(new URL(lastSource().url, "http://x").pathname).toBe(
+      "/api/env/e1/containers/stats/stream",
+    );
   });
 });
 
@@ -272,9 +291,7 @@ describe("useNodeStats", () => {
       lastSource().sendFrame("sample", {
         t: 1,
         partial: false,
-        nodes: [
-          { id: "n1", cpu: 50, mem: 100, cpus: 4, memoryBytes: 1000, counted: 1, silent: 0 },
-        ],
+        nodes: [{ id: "n1", cpu: 50, mem: 100, cpus: 4, memoryBytes: 1000, counted: 1, silent: 0 }],
       }),
     );
     expect(result.current.nodes.get("n1")).toMatchObject({ cpu: 50, mem: 100, cpus: 4 });

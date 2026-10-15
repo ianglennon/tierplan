@@ -448,7 +448,10 @@ describe("Live stats on the node columns (06-33)", () => {
     act(() =>
       liveSource().sendFrame(
         "sample",
-        round([nodeEntry("n1"), nodeEntry("n2", { notReporting: true, cpu: null, mem: 0, counted: 0, silent: 2 })]),
+        round([
+          nodeEntry("n1"),
+          nodeEntry("n2", { notReporting: true, cpu: null, mem: 0, counted: 0, silent: 2 }),
+        ]),
       ),
     );
     const wrk = screen.getByRole("region", { name: "wrk-1" });
@@ -464,7 +467,9 @@ describe("Live stats on the node columns (06-33)", () => {
     );
     const mgr = screen.getByRole("region", { name: "mgr-1" });
     expect(
-      within(mgr).getByRole("progressbar", { name: "CPU used by tasks on mgr-1" }).getAttribute("aria-valuenow"),
+      within(mgr)
+        .getByRole("progressbar", { name: "CPU used by tasks on mgr-1" })
+        .getAttribute("aria-valuenow"),
     ).toBe("100");
   });
 
@@ -477,7 +482,12 @@ describe("Live stats on the node columns (06-33)", () => {
   });
 
   it("shows the switch and the bars on a service's Placement tab too", async () => {
-    answer = () => Response.json(placement([node({ id: "n1", hostname: "mgr-1" })], [], { services: [service({ id: "svc-web", name: "web" })] }));
+    answer = () =>
+      Response.json(
+        placement([node({ id: "n1", hostname: "mgr-1" })], [], {
+          services: [service({ id: "svc-web", name: "web" })],
+        }),
+      );
     renderView({ stats: 1 }, () => {}, "svc-web");
     await screen.findByRole("region", { name: "mgr-1" });
     expect(screen.getByRole("switch", { name: "Live stats" })).toBeTruthy();

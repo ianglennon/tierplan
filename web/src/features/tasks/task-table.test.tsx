@@ -470,6 +470,7 @@ describe("the Tasks tab", () => {
       "Tasks",
       "Placement",
       "Logs",
+      "Stats",
       "Inspect",
     ]);
     expect(screen.getByRole("tab", { name: "Tasks" }).getAttribute("href")).toBe(PAGE);

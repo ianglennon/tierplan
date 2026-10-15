@@ -44,6 +44,8 @@ import {
 } from "@/features/placement/project";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { NotASwarm } from "@/features/services/not-a-swarm";
+import { useNodeStats } from "@/features/stats/list-stats";
+import { StatsToggle } from "@/features/stats/stats-toggle";
 import { usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
@@ -91,6 +93,9 @@ export function PlacementView({ envId, search, onSearchChange, serviceId }: Plac
   const filters = serviceId ? {} : { stack: search.stack, q: search.q };
   const filtered = isFiltered(filters);
   const grid = search.view === "grid";
+  // Live stats (D-31) adds bars to the node columns; the grid has none, so it streams nothing.
+  const statsOn = search.stats === 1 && !grid;
+  const nodeStats = useNodeStats(envId, statsOn && allowed);
 
   if (!allowed) return <NoPermission />;
   if (isNotASwarm(query.error)) return <NotASwarm envId={envId} envName={envName} />;
@@ -179,6 +184,13 @@ export function PlacementView({ envId, search, onSearchChange, serviceId }: Plac
           </ToggleGroupItem>
         </ToggleGroup>
       </div>
+      {grid ? null : (
+        <StatsToggle
+          checked={statsOn}
+          onCheckedChange={(on) => onSearchChange({ stats: on ? 1 : undefined })}
+          hint={t("stats.placement.toggleHint")}
+        />
+      )}
       {filtered && !serviceId ? (
         <Button variant="ghost" className="max-md:h-11" onClick={clearFilters}>
           {t("placement.filters.clear")}
@@ -252,6 +264,7 @@ export function PlacementView({ envId, search, onSearchChange, serviceId }: Plac
       <NodeColumns
         envId={envId}
         columns={columns}
+        stats={statsOn ? nodeStats : undefined}
         emptyLabel={serviceId ? t("placement.column.noneOf", { name: serviceName }) : undefined}
       />
     );

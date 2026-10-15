@@ -36,8 +36,7 @@ export function serviceStatusParam(values: readonly ServiceStatusValue[]): strin
 
 // The services route's search (UI-SPEC "Services list"): the search text, the status chips,
 // how the rows are grouped and sorted. Every value that does not fit is dropped, not sent,
-// and a missing group means the default, stack. Later plans add the restart-loop chip and
-// the live-stats switch to it.
+// and a missing group means the default, stack. Later plans add the restart-loop chip to it.
 export const serviceSearchSchema = z.object({
   q: z.string().min(1).max(MAX_QUERY).optional().catch(undefined),
   status: z
@@ -49,6 +48,8 @@ export const serviceSearchSchema = z.object({
   group: z.enum(SERVICE_GROUP_VALUES).optional().catch(undefined),
   sort: z.enum(SERVICE_SORT_VALUES).optional().catch(undefined),
   dir: z.enum(["asc", "desc"]).optional().catch(undefined),
+  // The live-stats switch: stats=1 adds the CPU, Memory and Network columns.
+  stats: z.literal(1).optional().catch(undefined),
 });
 
 export type ServiceSearch = z.output<typeof serviceSearchSchema>;

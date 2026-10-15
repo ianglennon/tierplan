@@ -1323,7 +1323,9 @@ describe("the services list: Live stats (06-33)", () => {
   it("marks a total that leaves out tasks on nodes that are not reporting", async () => {
     mount({ stats: 1 });
     await screen.findByText("web");
-    act(() => liveSource().sendFrame("sample", { t: 1, services: [entry("id-web", { silent: 1 })] }));
+    act(() =>
+      liveSource().sendFrame("sample", { t: 1, services: [entry("id-web", { silent: 1 })] }),
+    );
     const row = screen.getByRole("row", { name: /^Select web/ });
     expect(
       within(row).getByRole("img", { name: "Not counting 1 task on a node that isn't reporting." }),

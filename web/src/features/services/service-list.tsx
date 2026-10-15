@@ -70,6 +70,9 @@ import { RollbackDialog } from "@/features/services/rollback-dialog";
 import { RollbackMenuItem } from "@/features/services/rollback-menu-item";
 import { ScaleDialog, type ScaledService } from "@/features/services/scale-dialog";
 import { ServiceStateCell } from "@/features/services/service-state-cell";
+import { MAX_LIST_STATS, useListStats } from "@/features/stats/list-stats";
+import { CpuCell, MemoryCell, NetworkCell } from "@/features/stats/stats-cells";
+import { StatsToggle } from "@/features/stats/stats-toggle";
 import { usePermission } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -435,6 +438,15 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
   );
   const selection = useSelection({ orderedKeys, isEligible }, chosen);
 
+  // Live stats (D-31): one stream for the rows on screen and in a group that is open, no more
+  // than the server takes. A folded group's rows are not streamed and read — until it opens.
+  const statsOn = search.stats === 1;
+  const statsIds = useMemo(
+    () => (statsOn && allowed ? orderedKeys.slice(0, MAX_LIST_STATS) : []),
+    [statsOn, allowed, orderedKeys],
+  );
+  const liveStats = useListStats(envId, "services", statsIds);
+
   const groups: TableGroup<ServiceItem>[] = baseGroups.map((g) =>
     g.header
       ? {
@@ -565,6 +577,29 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
       ? { count: everyKey.length, onSelect: () => selection.selectEvery(everyKey) }
       : undefined;
 
+  const statsColumns: Column<ServiceItem>[] = statsOn
+    ? [
+        {
+          id: "cpu",
+          header: t("stats.tiles.cpu"),
+          className: "w-24 min-w-24 text-end",
+          cell: (s) => <CpuCell stat={liveStats.get(s.id)} />,
+        },
+        {
+          id: "memory",
+          header: t("stats.tiles.memory"),
+          className: "w-36 min-w-36 text-end",
+          cell: (s) => <MemoryCell stat={liveStats.get(s.id)} />,
+        },
+        {
+          id: "network",
+          header: t("stats.tiles.network"),
+          className: "w-48 min-w-48 text-end",
+          cell: (s) => <NetworkCell stat={liveStats.get(s.id)} />,
+        },
+      ]
+    : [];
+
   const columns: Column<ServiceItem>[] = [
     {
       id: "name",
@@ -630,6 +665,7 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
       sortKey: "updated",
       cell: (s) => <RelativeTime value={s.updatedAt} />,
     },
+    ...statsColumns,
     {
       id: "actions",
       header: <span className="sr-only">{t("actions.column")}</span>,
@@ -700,6 +736,10 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
             ))}
           </ToggleGroup>
         </div>
+        <StatsToggle
+          checked={statsOn}
+          onCheckedChange={(on) => onSearchChange({ stats: on ? 1 : undefined })}
+        />
         {headed.length > 0 ? (
           <Button
             type="button"

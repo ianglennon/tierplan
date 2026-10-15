@@ -8,10 +8,12 @@ import { useId } from "react";
 import type { HealthState } from "@/api/environments";
 import { StatusDot } from "@/components/status-dot";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { PlacementColumn, PlacementNode } from "@/features/placement/project";
 import { TaskCard } from "@/features/placement/task-card";
+import type { NodeStat } from "@/features/stats/list-stats";
 import { useT } from "@/i18n/use-t";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -27,9 +29,17 @@ const NODE_TONE: Record<string, HealthState> = {
   unknown: "unknown",
 };
 
+// The latest round of the node stream, when the Live stats switch is on; left out when off.
+export interface NodeStatsView {
+  nodes: ReadonlyMap<string, NodeStat>;
+  partial: boolean;
+}
+
 export interface NodeColumnsProps {
   envId: string;
   columns: readonly PlacementColumn[];
+  // What the tasks use of each node. Left out, the headers show capacity alone.
+  stats?: NodeStatsView;
   // What a column with no tasks says in place of cards.
   emptyLabel?: string;
 }
@@ -37,14 +47,20 @@ export interface NodeColumnsProps {
 // NodeColumns is the By node layout (D-18): one column per node, the whole row scrolling
 // sideways with snap. Each column is a section named by its h2, its tasks cards in lists under
 // stack sub-headers. Down and disconnected nodes stay, muted, so their orphaned tasks are seen.
-export function NodeColumns({ envId, columns, emptyLabel }: NodeColumnsProps) {
+export function NodeColumns({ envId, columns, stats, emptyLabel }: NodeColumnsProps) {
   return (
     <div
       data-slot="node-columns"
       className="flex snap-x snap-proximity items-start gap-4 overflow-x-auto pb-2"
     >
       {columns.map((column) => (
-        <NodeColumn key={column.key} envId={envId} column={column} emptyLabel={emptyLabel} />
+        <NodeColumn
+          key={column.key}
+          envId={envId}
+          column={column}
+          stats={stats}
+          emptyLabel={emptyLabel}
+        />
       ))}
     </div>
   );
@@ -118,7 +134,66 @@ function availabilityText(node: PlacementNode, tasks: number, t: ReturnType<type
   }
 }
 
-function NodeHeaderFacts({ node, tasks }: { node: PlacementNode; tasks: number }) {
+const clampPercent = (n: number): number => Math.max(0, Math.min(100, Math.round(n)));
+
+// NodeUsage is what the tasks on a node use of it (D-31): a line in words and two 8px bars,
+// CPU against the node's CPUs and memory against its memory. A node that is not reporting
+// says so in place of the bars.
+function NodeUsage({
+  node,
+  stat,
+  partial,
+}: {
+  node: PlacementNode;
+  stat: NodeStat | undefined;
+  partial: boolean;
+}) {
+  const t = useT();
+  if (!stat) {
+    return <p className="text-xs text-muted-foreground">{t("stats.placement.waiting")}</p>;
+  }
+  if (stat.notReporting) {
+    return <p className="text-xs text-muted-foreground">{t("stats.placement.notReporting")}</p>;
+  }
+  const cpus = stat.cpus > 0 ? stat.cpus : node.cpus;
+  const total = stat.memoryBytes > 0 ? stat.memoryBytes : node.memoryBytes;
+  const cpu = cpus > 0 && stat.cpu !== null ? clampPercent((stat.cpu / (cpus * 100)) * 100) : null;
+  const mem = total > 0 ? clampPercent((stat.mem / total) * 100) : null;
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="truncate text-xs text-muted-foreground tabular-nums">
+        {t("stats.placement.usage", {
+          cpu: cpu ?? "—",
+          used: formatBytes(stat.mem),
+          total: total > 0 ? formatBytes(total) : "—",
+        })}
+      </p>
+      <Progress
+        value={cpu}
+        aria-label={t("stats.placement.cpuBar", { node: node.hostname })}
+        className="h-2"
+      />
+      <Progress
+        value={mem}
+        aria-label={t("stats.placement.memoryBar", { node: node.hostname })}
+        className="h-2"
+      />
+      {partial ? (
+        <p className="text-xs text-muted-foreground">{t("stats.placement.partial")}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function NodeHeaderFacts({
+  node,
+  tasks,
+  stats,
+}: {
+  node: PlacementNode;
+  tasks: number;
+  stats?: NodeStatsView;
+}) {
   const t = useT();
   const tone = NODE_TONE[node.state];
   const capacity =
@@ -151,6 +226,9 @@ function NodeHeaderFacts({ node, tasks }: { node: PlacementNode; tasks: number }
         <span className="text-xs text-muted-foreground">{availabilityText(node, tasks, t)}</span>
       </div>
       <p className="truncate text-xs text-muted-foreground">{capacity}</p>
+      {stats ? (
+        <NodeUsage node={node} stat={stats.nodes.get(node.id)} partial={stats.partial} />
+      ) : null}
     </>
   );
 }
@@ -158,10 +236,12 @@ function NodeHeaderFacts({ node, tasks }: { node: PlacementNode; tasks: number }
 function NodeColumn({
   envId,
   column,
+  stats,
   emptyLabel,
 }: {
   envId: string;
   column: PlacementColumn;
+  stats?: NodeStatsView;
   emptyLabel?: string;
 }) {
   const t = useT();
@@ -194,7 +274,7 @@ function NodeColumn({
     >
       <header
         className={cn(
-          "flex h-24 flex-col justify-center gap-1 border-b px-3",
+          "flex min-h-24 flex-col justify-center gap-1 border-b px-3 py-2",
           muted && "text-muted-foreground",
         )}
       >
@@ -204,7 +284,7 @@ function NodeColumn({
           link={node && column.kind === "node" ? { envId, nodeId: node.id } : undefined}
         />
         {node ? (
-          <NodeHeaderFacts node={node} tasks={column.count} />
+          <NodeHeaderFacts node={node} tasks={column.count} stats={stats} />
         ) : (
           <p className="text-xs text-muted-foreground">{note}</p>
         )}

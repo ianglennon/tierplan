@@ -129,7 +129,16 @@ describe("the totals", () => {
     ready();
     sample({
       t: 1,
-      total: { cpu: null, mem: 0, netRx: null, netTx: null, blkRead: null, blkWrite: null, counted: 0, silent: 3 },
+      total: {
+        cpu: null,
+        mem: 0,
+        netRx: null,
+        netTx: null,
+        blkRead: null,
+        blkWrite: null,
+        counted: 0,
+        silent: 3,
+      },
       tasks: TASKS.map((t) => ts(t.id, { cpu: null, mem: null, noData: true })),
     });
     const tiles = screen.getByRole("group", { name: "Current values" });
@@ -177,7 +186,10 @@ describe("the table by task", () => {
         limitBytes: null,
       }),
     );
-    const names = screen.getAllByRole("row").slice(1).map((r) => r.textContent);
+    const names = screen
+      .getAllByRole("row")
+      .slice(1)
+      .map((r) => r.textContent);
     expect(names.some((n) => n?.includes("web.4"))).toBe(true);
     expect(names.some((n) => n?.includes("web.2"))).toBe(false);
   });
@@ -213,7 +225,9 @@ describe("what is left out", () => {
     ).toBeTruthy();
     sample({ ...SAMPLE, total: { ...SAMPLE.total, silent: 2 } });
     expect(
-      screen.getByText("2 tasks run on nodes that aren't reporting, so these totals leave them out."),
+      screen.getByText(
+        "2 tasks run on nodes that aren't reporting, so these totals leave them out.",
+      ),
     ).toBeTruthy();
   });
 

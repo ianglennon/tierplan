@@ -46,7 +46,9 @@ describe("CpuCell", () => {
 
   it("marks a total that leaves out tasks on silent nodes, with the count in a Tooltip", async () => {
     wrap(<CpuCell stat={stat({ silent: 2 })} />);
-    const mark = screen.getByRole("img", { name: "Not counting 2 tasks on nodes that aren't reporting." });
+    const mark = screen.getByRole("img", {
+      name: "Not counting 2 tasks on nodes that aren't reporting.",
+    });
     act(() => mark.focus());
     expect(
       (await screen.findAllByText("Not counting 2 tasks on nodes that aren't reporting.")).length,
@@ -55,7 +57,9 @@ describe("CpuCell", () => {
 
   it("says Not counting 1 task for one, in the singular", () => {
     wrap(<CpuCell stat={stat({ silent: 1 })} />);
-    expect(screen.getByRole("img", { name: "Not counting 1 task on a node that isn't reporting." })).toBeTruthy();
+    expect(
+      screen.getByRole("img", { name: "Not counting 1 task on a node that isn't reporting." }),
+    ).toBeTruthy();
   });
 });
 

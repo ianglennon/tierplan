@@ -63,6 +63,8 @@ describe("StatsToggle", () => {
   it("takes other words for a page where it adds something else", async () => {
     renderToggle(false, vi.fn(), "Adds CPU and memory bars to each node.");
     act(() => screen.getByRole("switch", { name: "Live stats" }).focus());
-    expect((await screen.findAllByText("Adds CPU and memory bars to each node.")).length).toBeGreaterThan(0);
+    expect(
+      (await screen.findAllByText("Adds CPU and memory bars to each node.")).length,
+    ).toBeGreaterThan(0);
   });
 });

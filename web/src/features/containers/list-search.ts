@@ -51,6 +51,8 @@ export const containerSearchSchema = nodeSearchSchema.extend({
   group: z.enum(GROUP_VALUES).optional().catch(undefined),
   sort: z.enum(SORT_VALUES).optional().catch(undefined),
   dir: z.enum(["asc", "desc"]).optional().catch(undefined),
+  // The live-stats switch: stats=1 adds the CPU, Memory and Network columns.
+  stats: z.literal(1).optional().catch(undefined),
 });
 
 export type ContainerSearch = z.output<typeof containerSearchSchema>;

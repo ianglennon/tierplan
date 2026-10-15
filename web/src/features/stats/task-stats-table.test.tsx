@@ -5,7 +5,7 @@ import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { TaskStatsTable, type TaskStatsRow } from "@/features/stats/task-stats-table";
+import { type TaskStatsRow, TaskStatsTable } from "@/features/stats/task-stats-table";
 import "@/i18n";
 
 // The per-task table of a service's Stats tab (plan 06-33, RES-11, D-29, UI-SPEC "Stats",
@@ -80,11 +80,15 @@ describe("TaskStatsTable", () => {
     const cell = within(row).getByText("No data");
     expect(within(row).queryByText("142%")).toBeNull();
     act(() => cell.closest("button")?.focus());
-    expect((await screen.findAllByText("wrk-1 isn't reporting right now.")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("wrk-1 isn't reporting right now.")).length).toBeGreaterThan(
+      0,
+    );
   });
 
   it("shows a dash for a task that has not answered yet, and never No data", () => {
-    renderTable([task({ cpu: null, mem: null, netRx: null, netTx: null, blkRead: null, blkWrite: null })]);
+    renderTable([
+      task({ cpu: null, mem: null, netRx: null, netTx: null, blkRead: null, blkWrite: null }),
+    ]);
     expect(screen.queryByText("No data")).toBeNull();
     expect(screen.queryByText(/NaN/)).toBeNull();
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);

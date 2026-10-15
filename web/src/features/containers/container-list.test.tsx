@@ -12,12 +12,12 @@ import { type ContainerRow, listKey } from "@/api/resources";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ContainerList } from "@/features/containers/container-list";
-import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import {
   type ContainerSearch,
   type ContainerSearchPatch,
   containerSearchSchema,
 } from "@/features/containers/list-search";
+import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
