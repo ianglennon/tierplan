@@ -12,6 +12,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/ianglennon/bayplan/internal/agents"
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/envs"
@@ -25,6 +26,13 @@ const (
 	problemNodeChanged      = "node_changed"
 	problemLastManager      = "last_manager"
 	problemNodeUpdateFailed = "node_update_failed"
+	problemNodeNotDown      = "node_not_down"
+	problemNodeIsManager    = "node_is_manager"
+	problemNodeRemoveFailed = "node_remove_failed"
+
+	// nodeStateDown and nodeRoleManager are the values of a node's state and role the remove judges.
+	nodeStateDown   = "down"
+	nodeRoleManager = "manager"
 )
 
 // NodeAvailabilityRequest is the body of an availability change.
@@ -57,7 +65,15 @@ type NodeRoleInput struct {
 	UserAgent string `header:"User-Agent" hidden:"true"`
 }
 
-// registerNodeActions mounts the impact, availability and role routes.
+// NodeRemoveInput is the path and query of DELETE .../nodes/{nodeId}.
+type NodeRemoveInput struct {
+	NodeInput
+	Confirm string `query:"confirm" maxLength:"128" doc:"The node's host name, typed. Always needed: a node is removed only by typing its name"`
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
+// registerNodeActions mounts the impact, availability, role and remove routes.
 func registerNodeActions(r *httpx.Router, d NodesDeps) {
 	registerNodeImpact(r, d)
 	need := rbac.Requirement{Perm: rbac.PermNodesManage, Scope: rbac.ScopeEnvironment}
@@ -108,6 +124,152 @@ func registerNodeActions(r *httpx.Router, d NodesDeps) {
 			to: in.Body.Role, confirm: in.Body.Confirm, userAgent: in.UserAgent,
 		})
 	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "removeNode", Method: http.MethodDelete, Path: "/api/env/{envId}/nodes/{nodeId}",
+		Summary: "Remove a node that is down",
+		Description: "Removes one node from the swarm, never forced. Only a worker whose state is down is removed: a manager is refused 409 node_is_manager (demote it first) and a node that is not down 409 node_not_down, both before anything is written, " +
+			"and the query's confirm must be the node's host name, else 422 confirmation_required. The remove is sent once on a manager and never retried; the request to the agent carries no force key, so a node that is still up cannot be removed by any means. " +
+			"The swarm forgets the node, and Bayplan revokes the agent that ran on it at once with the reason node_removed and without blocking the host, so a host that rejoins the swarm can enrol again; " +
+			"a revoke that fails after the node is gone is logged and left to the reaper, which revokes the agent of a node missing from two node lists. " +
+			"404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected; Docker's own refusal comes back as 409 node_not_down or 502 node_remove_failed with Docker's words. " +
+			"Every attempt on a node that exists is audited as node.removed with the host name, the agent revoked and the code. Needs nodes.manage (Admin) on the environment.",
+		Tags: []string{"environments"}, DefaultStatus: http.StatusNoContent,
+	}, need, func(ctx context.Context, in *NodeRemoveInput) (*struct{}, error) {
+		p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+		if p == nil || env == nil {
+			return nil, huma.Error500InternalServerError("internal error")
+		}
+		return nil, removeNode(ctx, d, p, env.ID, in)
+	})
+}
+
+// removeNode removes one node that is down. It reads the node, refuses a manager and a node that
+// is not down and a name that was not typed, all before any write, then removes it once on a
+// manager, never forced. Once the node is gone the agent that ran on it is revoked without a
+// block; a revoke that fails is logged and left to the reaper. Every attempt on a node that
+// exists is audited.
+func removeNode(ctx context.Context, d NodesDeps, p *rbac.Principal, envID string, in *NodeRemoveInput) error {
+	if err := requireSwarm(ctx, d.services(), envID); err != nil {
+		return err
+	}
+	var detail dockerx.NodeDetail
+	readCtx, cancel := context.WithTimeout(ctx, inspectTimeout)
+	err := d.Clusters.ClusterRead(readCtx, envID, func(c *dockerx.Client) error {
+		var e error
+		detail, _, e = c.NodeInspect(readCtx, in.NodeID)
+		return e
+	})
+	cancel()
+	rec := nodeRemoval{hostname: cleanTaskText(detail.Hostname)}
+	if err != nil {
+		if errors.Is(err, dockerx.ErrNodeNotFound) {
+			return nodeNotFound()
+		}
+		code, problem := nodeActionProblem(d, envID, err)
+		rec.code = code
+		auditNodeRemoval(ctx, d, p, envID, in, rec)
+		return problem
+	}
+	name := rec.hostname
+	switch {
+	case detail.Role == nodeRoleManager:
+		rec.code = problemNodeIsManager
+		auditNodeRemoval(ctx, d, p, envID, in, rec)
+		return httpx.Problem(http.StatusConflict, problemNodeIsManager, "Demote "+name+" before removing it.")
+	case detail.State != nodeStateDown:
+		rec.code = problemNodeNotDown
+		auditNodeRemoval(ctx, d, p, envID, in, rec)
+		return nodeNotDown(name)
+	case in.Confirm == "" || (in.Confirm != detail.Hostname && in.Confirm != name):
+		rec.code = codeConfirmationRequired
+		auditNodeRemoval(ctx, d, p, envID, in, rec)
+		return httpx.Problem(http.StatusUnprocessableEntity, codeConfirmationRequired, "Type the node's name, "+name+", to confirm this.")
+	}
+
+	// The remove is sent once and seen through, so a browser that goes away while it runs does not
+	// turn a removal that happened into a failure.
+	writeCtx, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), writeTimeout)
+	defer cancelWrite()
+	err = d.Aggregator.WriteOnManager(writeCtx, envID, func(c *dockerx.Client) error {
+		return c.NodeRemove(writeCtx, in.NodeID)
+	})
+	if err != nil {
+		var problem error
+		if errors.Is(err, dockerx.ErrNodeNotDown) {
+			// The node came back between the read and the write.
+			rec.code, problem = problemNodeNotDown, nodeNotDown(name)
+		} else {
+			rec.code, problem = nodeProblemOf(d, envID, problemNodeRemoveFailed, err)
+		}
+		auditNodeRemoval(ctx, d, p, envID, in, rec)
+		return problem
+	}
+	refreshClusters(ctx, d.services(), envID)
+	rec.agent = revokeAgentOfRemovedNode(ctx, d, p, envID, in)
+	rec.code = actionDone
+	auditNodeRemoval(ctx, d, p, envID, in, rec)
+	return nil
+}
+
+// nodeNotDown is the refusal to remove a node that is not down.
+func nodeNotDown(name string) error {
+	return httpx.Problem(http.StatusConflict, problemNodeNotDown, name+" isn't down. Only a node that is down can be removed.")
+}
+
+// revokeAgentOfRemovedNode revokes the active agent that ran on the node just removed, without a
+// block, and returns its ID, or "" when there was none or the revoke failed. A failure is the
+// server's to log, not the caller's: the node is gone either way, and the reaper revokes the
+// agent of a node missing from two node lists.
+func revokeAgentOfRemovedNode(ctx context.Context, d NodesDeps, p *rbac.Principal, envID string, in *NodeRemoveInput) string {
+	if d.Agents == nil {
+		return ""
+	}
+	// The node is gone, so the revoke does not stop with the request.
+	wctx, cancel := doneActionAuditContext(ctx)
+	defer cancel()
+	agentID, err := d.Agents.ActiveAgentOfSwarmNode(wctx, envID, in.NodeID)
+	if err != nil {
+		d.Log.Warn("could not find the agent of a removed node; the reaper will revoke it", "node", in.NodeID, "error", err)
+		return ""
+	}
+	if agentID == "" {
+		return ""
+	}
+	switch err := d.Agents.RevokeRemovedNode(wctx, p.AuditActor(), envID, agentID, httpx.ClientIP(ctx), in.UserAgent); {
+	case err == nil:
+		return agentID
+	case errors.Is(err, agents.ErrAlreadyRevoked), errors.Is(err, agents.ErrAgentNotFound):
+		return ""
+	default:
+		d.Log.Warn("could not revoke the agent of a removed node; the reaper will revoke it", "node", in.NodeID, "agent", agentID, "error", err)
+		return ""
+	}
+}
+
+// nodeRemoval is what one remove attempt learned for its audit row.
+type nodeRemoval struct {
+	hostname, agent, code string
+}
+
+// auditNodeRemoval writes the row of one remove attempt: a success when the code is done, else a
+// failure whose reason is the code. It is written on a context that outlives the request: the
+// removal has already happened or been refused.
+func auditNodeRemoval(ctx context.Context, d NodesDeps, p *rbac.Principal, envID string, in *NodeRemoveInput, rec nodeRemoval) {
+	result, reason := audit.ResultSuccess, ""
+	if rec.code != actionDone {
+		result, reason = audit.ResultFailure, rec.code
+	}
+	wctx, cancel := doneActionAuditContext(ctx)
+	defer cancel()
+	if err := d.Audit.Record(wctx, audit.Entry{
+		Actor: p.AuditActor(), Action: audit.ActionNodeRemoved, TargetType: nodeTargetType, TargetID: in.NodeID,
+		EnvID: envID, Result: result, Reason: reason,
+		IP: httpx.ClientIP(ctx), UserAgent: in.UserAgent,
+		Details: map[string]string{"hostname": rec.hostname, "agent": rec.agent, "code": rec.code},
+	}); err != nil {
+		d.Log.Error("could not audit a node removal", "node", in.NodeID, "error", err)
+	}
 }
 
 // nodeChange is one availability or role change asked for.
@@ -183,6 +345,11 @@ func setNode(ctx context.Context, d NodesDeps, p *rbac.Principal, envID string, 
 // their own; the rest are the ones every swarm write shares, and any other refusal keeps
 // Docker's own words.
 func nodeActionProblem(d NodesDeps, envID string, err error) (string, error) {
+	return nodeProblemOf(d, envID, problemNodeUpdateFailed, err)
+}
+
+// nodeProblemOf is nodeActionProblem for a write whose other refusals are failedType.
+func nodeProblemOf(d NodesDeps, envID, failedType string, err error) (string, error) {
 	switch {
 	case errors.Is(err, dockerx.ErrLastManager):
 		return problemLastManager, httpx.Problem(http.StatusConflict, problemLastManager, "You can't demote the last manager. Promote another node first.")
@@ -195,7 +362,7 @@ func nodeActionProblem(d NodesDeps, envID string, err error) (string, error) {
 	if errors.Is(err, envs.ErrHostReadOnly) {
 		return codeHostReadOnly, httpx.Problem(http.StatusConflict, codeHostReadOnly, swarmWriteDetail[codeHostReadOnly])
 	}
-	return serviceActionProblem(d.services(), envID, problemNodeUpdateFailed, err)
+	return serviceActionProblem(d.services(), envID, failedType, err)
 }
 
 // nodeAudit is what one attempt learned for its audit row.

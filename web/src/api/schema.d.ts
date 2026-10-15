@@ -1034,7 +1034,11 @@ export interface paths {
         get: operations["getNode"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Remove a node that is down
+         * @description Removes one node from the swarm, never forced. Only a worker whose state is down is removed: a manager is refused 409 node_is_manager (demote it first) and a node that is not down 409 node_not_down, both before anything is written, and the query's confirm must be the node's host name, else 422 confirmation_required. The remove is sent once on a manager and never retried; the request to the agent carries no force key, so a node that is still up cannot be removed by any means. The swarm forgets the node, and Bayplan revokes the agent that ran on it at once with the reason node_removed and without blocking the host, so a host that rejoins the swarm can enrol again; a revoke that fails after the node is gone is logged and left to the reaper, which revokes the agent of a node missing from two node lists. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected; Docker's own refusal comes back as 409 node_not_down or 502 node_remove_failed with Docker's words. Every attempt on a node that exists is audited as node.removed with the host name, the agent revoked and the code. Needs nodes.manage (Admin) on the environment.
+         */
+        delete: operations["removeNode"];
         options?: never;
         head?: never;
         patch?: never;
@@ -9583,6 +9587,41 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["NodeDetailBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    removeNode: {
+        parameters: {
+            query?: {
+                /** @description The node's host name, typed. Always needed: a node is removed only by typing its name */
+                confirm?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm node ID: the id of a row of the nodes list */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

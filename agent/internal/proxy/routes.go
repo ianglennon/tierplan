@@ -144,8 +144,11 @@ var routes = []route{
 	// One node: the inspect, which takes no key. It sits after the list so GET /nodes is
 	// never read as an inspect. The update changes one node's availability, role or labels:
 	// it takes the version just read and a node spec body that carries a name, labels, a
-	// role and an availability and nothing else. Removing a node is absent on purpose.
+	// role and an availability and nothing else. The remove takes no key at all: with no force
+	// key a compromised server cannot remove a node that is still up (RES-05, D-22), and the
+	// daemon itself refuses a node that is not down.
 	{name: "node inspect", method: http.MethodGet, path: pathOf(`nodes/` + idShape)},
+	{name: "node remove", method: http.MethodDelete, path: pathOf(`nodes/` + idShape)},
 	{
 		name: "node update", method: http.MethodPost, path: pathOf(`nodes/` + idShape + `/update`),
 		query: map[string]*regexp.Regexp{"version": versionValue}, body: BodyNodeSpec,

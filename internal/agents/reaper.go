@@ -18,6 +18,9 @@ const (
 	reapAfterMisses = 2
 	// leftSwarmReason is the reason recorded for an agent whose node left the swarm.
 	leftSwarmReason = "left_swarm"
+	// removedNodeReason is the reason recorded for an agent whose node an administrator removed
+	// from its swarm.
+	removedNodeReason = "node_removed"
 )
 
 // Reaper revokes the agents of nodes that have left their swarm (D-10). A node that

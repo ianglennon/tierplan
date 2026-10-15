@@ -165,6 +165,7 @@ const (
 	ActionNodeAvailabilityChanged    = "node.availability_changed"
 	ActionNodeRoleChanged            = "node.role_changed"
 	ActionNodeLabelsChanged          = "node.labels_changed"
+	ActionNodeRemoved                = "node.removed"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

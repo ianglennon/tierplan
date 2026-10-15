@@ -174,3 +174,68 @@ func (f *Fake) BumpNode(id string) bool {
 	}
 	return false
 }
+
+var _ = registerFakeHandler((*Fake).serveNodeRemove)
+
+// withoutNodes returns c without the nodes removed through the daemon. The slice is copied, so
+// the Fake's own configuration is not touched.
+func (c FakeConfig) withoutNodes(gone map[string]bool) FakeConfig {
+	if len(gone) == 0 || len(c.NodeRows) == 0 {
+		return c
+	}
+	c.NodeRows = slices.DeleteFunc(slices.Clone(c.NodeRows), func(n FakeNode) bool { return gone[n.ID] })
+	return c
+}
+
+// serveNodeRemove answers DELETE /nodes/{id}. A node the swarm does not know is the 404 a real
+// manager gives, and a node that is not down the 400 it gives (RESEARCH E14); otherwise the node
+// leaves every list. The write is recorded whatever the answer, with its query, so a test can see
+// that force is never sent.
+func (f *Fake) serveNodeRemove(w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) bool {
+	if r.Method != http.MethodDelete {
+		return false
+	}
+	m := nodePath.FindStringSubmatch(p)
+	if m == nil {
+		return false
+	}
+	f.recordWrite(r)
+	defer f.beginWrite(cfg.WriteDelay)()
+	cfg = f.config()
+	if cfg.DropWrites && dropConnection(w) {
+		return true
+	}
+	if cfg.PolicyDeny {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "agent_policy_denied: " + r.Method + " " + r.URL.Path})
+		return true
+	}
+	if cfg.WriteError != "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": cfg.WriteError})
+		return true
+	}
+	if clusterRefused(w, cfg) {
+		return true
+	}
+	var node swarm.Node
+	for _, n := range cfg.nodeList() {
+		if n.ID == m[1] {
+			node = n
+		}
+	}
+	if node.ID == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "node " + m[1] + " not found"})
+		return true
+	}
+	if node.Status.State != swarm.NodeStateDown && r.URL.Query().Get("force") == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "rpc error: code = FailedPrecondition desc = node " + node.ID + " is not down and can't be removed"})
+		return true
+	}
+	f.mu.Lock()
+	if f.nodeGone == nil {
+		f.nodeGone = map[string]bool{}
+	}
+	f.nodeGone[node.ID] = true
+	f.mu.Unlock()
+	w.WriteHeader(http.StatusOK)
+	return true
+}

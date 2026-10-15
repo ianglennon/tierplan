@@ -401,7 +401,7 @@ func TestRouteNodeInspectTakesNoQueryAndNeverShadowsTheList(t *testing.T) {
 		{"a 129 character node", "GET", "/nodes/" + strings.Repeat("a", 129), "", false, ""},
 		{"a 128 character node", "GET", "/nodes/" + strings.Repeat("a", 128), "", false, "node inspect"},
 		{"a node's sub-path", "GET", "/nodes/abc123/tasks", "", false, ""},
-		{"a node delete", "DELETE", "/nodes/abc123", "", false, ""},
+		{"a node delete is the remove, which has its own test", "DELETE", "/nodes/abc123", "", false, "node remove"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ok, _, _ := Allowed(tc.method, tc.path, tc.query, tc.body, false, Policy{})

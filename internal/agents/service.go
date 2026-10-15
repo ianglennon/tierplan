@@ -688,7 +688,25 @@ func (s *Service) Revoke(ctx context.Context, actor audit.Actor, envID, agentID,
 //
 // An agent that is already revoked is ErrAlreadyRevoked and nothing changes.
 func (s *Service) AutoRevoke(ctx context.Context, envID, agentID string) error {
-	actor := rbac.System(reaperActor).AuditActor()
+	return s.revokeKeepingHost(ctx, rbac.System(reaperActor).AuditActor(), envID, agentID, leftSwarmReason, audit.ActionAgentAutoRevoked, "", "")
+}
+
+// RevokeRemovedNode revokes the agent of a node an administrator has just removed from its
+// swarm (D-22). It is AutoRevoke done at once, on the administrator's word: the actor is the
+// administrator, the action is agent.revoked, the reason is node_removed, and no block is made,
+// so a host that rejoins the swarm can enrol again with the join token. Once the change has
+// committed the agent's live session is closed and the environment's health is recomputed. It
+// never changes anything on the host.
+//
+// An agent that is already revoked is ErrAlreadyRevoked and nothing changes.
+func (s *Service) RevokeRemovedNode(ctx context.Context, actor audit.Actor, envID, agentID, ip, ua string) error {
+	return s.revokeKeepingHost(ctx, actor, envID, agentID, removedNodeReason, audit.ActionAgentRevoked, ip, ua)
+}
+
+// revokeKeepingHost is the revoke that makes no block, for an agent whose node has gone from its
+// swarm: its row becomes revoked and one audit row says why, in one transaction. After the commit
+// the agent's session is closed and the environment is told.
+func (s *Service) revokeKeepingHost(ctx context.Context, actor audit.Actor, envID, agentID, reason, action, ip, ua string) error {
 	ts := s.now().UTC().UnixNano()
 
 	tx, err := s.st.Write.BeginTx(ctx, nil)
@@ -703,7 +721,7 @@ func (s *Service) AutoRevoke(ctx context.Context, envID, agentID string) error {
 	}
 	changed, err := q.RevokeAgent(ctx, sqlc.RevokeAgentParams{
 		RevokedAt: sql.NullInt64{Int64: ts, Valid: true}, RevokedBy: sql.NullString{String: actor.ID, Valid: true},
-		RevokeReason: sql.NullString{String: leftSwarmReason, Valid: true}, ID: agentID, EnvID: envID,
+		RevokeReason: sql.NullString{String: reason, Valid: true}, ID: agentID, EnvID: envID,
 	})
 	if err != nil {
 		return fmt.Errorf("revoke the agent: %w", err)
@@ -712,13 +730,13 @@ func (s *Service) AutoRevoke(ctx context.Context, envID, agentID string) error {
 		return ErrAlreadyRevoked
 	}
 	if err := s.aud.RecordTx(ctx, tx, audit.Entry{
-		Actor: actor, Action: audit.ActionAgentAutoRevoked, TargetType: targetAgent, TargetID: agentID,
-		EnvID: envID, Result: audit.ResultSuccess,
+		Actor: actor, Action: action, TargetType: targetAgent, TargetID: agentID,
+		EnvID: envID, Result: audit.ResultSuccess, IP: ip, UserAgent: ua,
 		Details: map[string]string{
-			"node": row.Name, "fingerprint": row.CertFingerprint, "reason": leftSwarmReason, "swarm_node": row.SwarmNodeID.String,
+			"node": row.Name, "fingerprint": row.CertFingerprint, "reason": reason, "swarm_node": row.SwarmNodeID.String,
 		},
 	}); err != nil {
-		return fmt.Errorf("audit agent auto-revoked: %w", err)
+		return fmt.Errorf("audit %s: %w", action, err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
@@ -734,6 +752,26 @@ func (s *Service) AutoRevoke(ctx context.Context, envID, agentID string) error {
 		s.notifier.Notify(envID)
 	}
 	return nil
+}
+
+// ActiveAgentOfSwarmNode is the ID of the active agent of the environment that runs on the swarm
+// node nodeID, or "" when no active agent does (a node with no agent, an agent already revoked,
+// an empty ID). It reads the records, not the live sessions, so the agent of a node that is down
+// and disconnected is found.
+func (s *Service) ActiveAgentOfSwarmNode(ctx context.Context, envID, nodeID string) (string, error) {
+	if nodeID == "" {
+		return "", nil
+	}
+	rows, err := s.st.RQ.ListAgentsByEnv(ctx, envID)
+	if err != nil {
+		return "", fmt.Errorf("list the agents: %w", err)
+	}
+	for _, a := range rows {
+		if a.Status == statusActive && a.SwarmNodeID.Valid && a.SwarmNodeID.String == nodeID {
+			return a.ID, nil
+		}
+	}
+	return "", nil
 }
 
 // Unblock lifts the blocks a revoke of agentID made, so the host can enrol again

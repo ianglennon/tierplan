@@ -135,3 +135,27 @@ func (c *Client) NodeUpdate(ctx context.Context, id string, ch NodeChange) error
 	}
 	return nil
 }
+
+// ErrNodeNotDown is the daemon's refusal to remove a node that is not down.
+var ErrNodeNotDown = errors.New("dockerx: the node is not down and can't be removed")
+
+// notDownText is the daemon's words for that refusal (RESEARCH E14: HTTP 400).
+const notDownText = "is not down and can't be removed"
+
+// NodeRemove removes the node id from the swarm once, and never forced: the call takes no options
+// and sends no query, so the daemon itself refuses a node that is not down (ErrNodeNotDown). A node
+// the manager does not know is ErrNodeNotFound. It is never retried: a remove whose answer was lost
+// may have happened. The caller refuses a manager and a node that is not down before this is
+// called; the daemon's refusal is the second line.
+func (c *Client) NodeRemove(ctx context.Context, id string) error {
+	if _, err := c.cur().NodeRemove(ctx, id, client.NodeRemoveOptions{}); err != nil {
+		switch {
+		case strings.Contains(err.Error(), notDownText):
+			return fmt.Errorf("remove node on %s: %w", c.t.Describe(), ErrNodeNotDown)
+		case cerrdefs.IsNotFound(err):
+			return fmt.Errorf("remove node on %s: %w", c.t.Describe(), ErrNodeNotFound)
+		}
+		return fmt.Errorf("remove node on %s: %w", c.t.Describe(), err)
+	}
+	return nil
+}
