@@ -3,6 +3,12 @@
 
 package api
 
+import (
+	"cmp"
+	"slices"
+	"strconv"
+)
+
 // The marks a service's log shows between its lines (plan 06-30, OBS-02, D-34, D-37): a task
 // was replaced, a slot is waiting for a task, a node cannot be reached.
 
@@ -10,9 +16,12 @@ const (
 	markerReplaced = "replaced"
 	markerStopped  = "stopped"
 
-	noticeDown         = "down"
-	noticeDisconnected = "disconnected"
-	noticeBack         = "back"
+	// nodeStateDisconnected is the swarm's word for a node whose agent lost its manager; the
+	// notice kinds down and disconnected are the swarm's own words for the node.
+	nodeStateDisconnected = "disconnected"
+	noticeDown            = nodeStateDown
+	noticeDisconnected    = nodeStateDisconnected
+	noticeBack            = "back"
 )
 
 // slotMarker says what happened to the task that last ran in a slot. A replaced marker names
@@ -48,16 +57,104 @@ type nodeNotice struct {
 	At   string `json:"at"`
 }
 
+// markerState says whether a task state is one that ends a slot's task in a way the log marks.
+// A task that completed (a job's) is not replaced, and one on a node that cannot vouch for it
+// reads unknown, so neither is a marker.
+func markerState(state string) bool {
+	switch state {
+	case "failed", "shutdown", "rejected":
+		return true
+	}
+	return false
+}
+
+// markerGroup is the key tasks are paired by: the slot of a replicated service's task, the
+// node of a global service's.
+func markerGroup(ti taskInfo) string {
+	if ti.Slot > 0 {
+		return "slot:" + strconv.Itoa(ti.Slot)
+	}
+	return "node:" + ti.NodeID
+}
+
+// markerKey names a marker, so one that was told is not told again; a stopped marker that
+// becomes a replacement is a new key.
+func markerKey(m slotMarker) string { return m.Old + "\x00" + m.New }
+
+// markersOf returns every marker the tasks show, oldest first by the time the old task ended.
+func markersOf(tasks []taskInfo) []slotMarker {
+	groups := map[string][]taskInfo{}
+	for _, ti := range tasks {
+		k := markerGroup(ti)
+		groups[k] = append(groups[k], ti)
+	}
+	var out []slotMarker
+	for _, g := range groups {
+		slices.SortFunc(g, func(a, b taskInfo) int {
+			return cmp.Or(a.Created.Compare(b.Created), cmp.Compare(a.ID, b.ID))
+		})
+		for i, old := range g {
+			if !old.Ended || !markerState(old.State) {
+				continue
+			}
+			m := slotMarker{Kind: markerStopped, Slot: old.Slot, Old: old.ID, OldState: old.State, OldNode: old.Node, ExitCode: old.ExitCode}
+			if i+1 < len(g) {
+				next := g[i+1]
+				m.Kind, m.New, m.Node = markerReplaced, next.ID, next.Node
+			}
+			if when := cmp.Or(old.Since, old.Created); !when.IsZero() {
+				m.At = when.UTC().Format(logTimeLayout)
+			}
+			out = append(out, m)
+		}
+	}
+	slices.SortFunc(out, func(a, b slotMarker) int {
+		return cmp.Or(cmp.Compare(a.At, b.At), cmp.Compare(a.Old, b.Old))
+	})
+	return out
+}
+
 // slotMarkers returns the markers current has that previous did not: a slot's old task turned
 // failed, shutdown or rejected and a newer task is in its slot (replaced), or no newer task
 // exists yet (stopped). A global service's tasks are paired by node. With nothing before it,
 // it returns every marker the tasks show.
 func slotMarkers(previous, current []taskInfo) []slotMarker {
-	return nil
+	told := map[string]bool{}
+	for _, m := range markersOf(previous) {
+		told[markerKey(m)] = true
+	}
+	var out []slotMarker
+	for _, m := range markersOf(current) {
+		if !told[markerKey(m)] {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// notReachable says whether a node state is one in which the node's tasks cannot send logs.
+func notReachable(state string) bool {
+	return state == nodeStateDown || state == nodeStateDisconnected
 }
 
 // nodeNotices returns the changes in whether nodes can be reached. A node previous did not hold
-// counts as having been ready, so a node that is down when the stream opens is told once.
+// counts as having been ready, so a node that is down when the stream opens is told once. A
+// node the swarm does not describe, or describes as unknown, says nothing.
 func nodeNotices(previous, current []nodeInfo, at string) []nodeNotice {
-	return nil
+	before := make(map[string]string, len(previous))
+	for _, n := range previous {
+		before[n.ID] = n.State
+	}
+	var out []nodeNotice
+	for _, n := range current {
+		was := before[n.ID]
+		switch {
+		case notReachable(n.State) && was != n.State:
+			out = append(out, nodeNotice{Kind: n.State, Node: n.Name, At: at})
+		case n.State == nodeStateReady && notReachable(was):
+			out = append(out, nodeNotice{Kind: noticeBack, Node: n.Name, At: at})
+		}
+	}
+	slices.SortFunc(out, func(a, b nodeNotice) int { return cmp.Or(cmp.Compare(a.Node, b.Node), cmp.Compare(a.Kind, b.Kind)) })
+	return out
 }

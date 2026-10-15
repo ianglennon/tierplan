@@ -634,7 +634,7 @@ func at(tk swarm.Task, created, since time.Time) swarm.Task {
 	return tk
 }
 
-func TestServiceLogStreamMarksATaskThatWasReplacedAndAnnouncesTheNewOne(t *testing.T) {
+func TestServiceLogStreamMarkersTellOfATaskThatWasReplacedAndAnnounceTheNewOne(t *testing.T) {
 	f := newSvcLogsFix(t, svcTasks(), nil, fastRefresh)
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
 	nextEvent(t, c, "ready", 5*time.Second)

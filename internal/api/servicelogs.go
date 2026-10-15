@@ -105,6 +105,9 @@ func RegisterServiceLogs(r *httpx.Router, d ServiceLogsDeps) {
 	if d.MaxLifetime <= 0 {
 		d.MaxLifetime = defaultMaxStreamLifetime
 	}
+	if d.TaskRefresh <= 0 {
+		d.TaskRefresh = taskMetaTTL
+	}
 	if d.Now == nil {
 		d.Now = time.Now
 	}
@@ -206,6 +209,40 @@ func (p serviceLogParams) matches(ti taskInfo) bool {
 	return true
 }
 
+// matchesMarker says whether a marker concerns a task the stream is narrowed to: its old task
+// or the one that took over.
+func (p serviceLogParams) matchesMarker(m slotMarker, byID map[string]taskInfo) bool {
+	if old, ok := byID[m.Old]; ok && p.matches(old) {
+		return true
+	}
+	if next, ok := byID[m.New]; ok && m.New != "" && p.matches(next) {
+		return true
+	}
+	return false
+}
+
+// followedNodes are the nodes that run a task the stream follows: one it announced and that has
+// not ended, since a task that ended writes nothing more, whatever its node does.
+func followedNodes(tasks []taskInfo, announced map[string]ServiceLogTask) []nodeInfo {
+	seen := map[string]bool{}
+	var out []nodeInfo
+	for _, ti := range tasks {
+		if _, ok := announced[ti.ID]; !ok || ti.Ended || ti.NodeID == "" || seen[ti.NodeID] {
+			continue
+		}
+		seen[ti.NodeID] = true
+		out = append(out, nodeInfo{ID: ti.NodeID, Name: ti.Node, State: ti.NodeState})
+	}
+	return out
+}
+
+// dueMarker is a marker waiting for the reorder window to pass, so the lines of the task it
+// ends are sent before it.
+type dueMarker struct {
+	m   slotMarker
+	due time.Time
+}
+
 // loadTasks reads the tasks of a service and the nodes they are on in one cluster read and
 // the cluster reader's last node list.
 func (d ServiceLogsDeps) loadTasks(envID, serviceID string) func(context.Context) ([]taskInfo, error) {
@@ -237,6 +274,7 @@ func (d ServiceLogsDeps) loadTasks(envID, serviceID string) func(context.Context
 			out = append(out, taskInfo{
 				ID: r.ID, Slot: r.Slot, NodeID: r.NodeID, Node: host,
 				State: effectiveTaskState(r, n.State), Ended: taskEnded(r.State),
+				NodeState: n.State, Created: r.CreatedAt, Since: cmp.Or(r.StateSince, r.UpdatedAt), ExitCode: r.ExitCode,
 			})
 		}
 		return out, nil
@@ -403,6 +441,7 @@ func serveServiceLogStream(w http.ResponseWriter, req *http.Request, d ServiceLo
 	}
 
 	meta := newTaskMeta(d.loadTasks(env.ID, serviceID), time.Now)
+	meta.ttl = d.TaskRefresh
 	initial := meta.all(ctx)
 	// Tasks that had ended when the stream opened are left out, unless asked for; tasks
 	// first seen later are kept (D-33).
@@ -475,6 +514,12 @@ func serveServiceLogStream(w http.ResponseWriter, req *http.Request, d ServiceLo
 		// bursting is true until the engine's first answer is complete.
 		bursting = true
 	)
+	// prevTasks and prevNodes are what the markers and notices were last worked out from.
+	var (
+		prevTasks = initial
+		prevNodes []nodeInfo
+		pending   []dueMarker
+	)
 	flush := func() bool {
 		if len(b.lines) == 0 {
 			return true
@@ -535,7 +580,94 @@ func serveServiceLogStream(w http.ResponseWriter, req *http.Request, d ServiceLo
 		if n := len(sorted); n > 0 {
 			window.seed(sorted[n-1].T)
 		}
-		return flush()
+		if !flush() {
+			return false
+		}
+		// What happened before the stream opened is told after its lines: the markers of the
+		// tasks that had ended, when they are asked for and fall in what is shown (a marker
+		// older than the first line has nothing to sit beside), and the nodes that could not
+		// be reached already (D-34, D-37).
+		if params.stopped && len(sorted) > 0 {
+			byID := byTaskID(initial)
+			for _, m := range slotMarkers(nil, initial) {
+				if m.At == "" || m.At < sorted[0].T || !params.matchesMarker(m, byID) {
+					continue
+				}
+				if !send("marker", "", m) {
+					return false
+				}
+			}
+		}
+		prevNodes = followedNodes(initial, announced)
+		for _, n := range nodeNotices(nil, prevNodes, time.Now().UTC().Format(logTimeLayout)) {
+			if !send("node", "", n) {
+				return false
+			}
+		}
+		return true
+	}
+
+	// refreshTasks reads the tasks again and tells what changed: tasks that joined or changed
+	// state (a tasks event), slots whose task was replaced (a marker, once the lines of the old
+	// task have had their window) and nodes that stopped reporting or came back (a node event).
+	refreshTasks := func() bool {
+		cur, ok := meta.fresh(streamCtx)
+		if !ok {
+			return true
+		}
+		byID := byTaskID(cur)
+		changed := false
+		for _, ti := range cur {
+			if hidden[ti.ID] || !params.matches(ti) {
+				continue
+			}
+			st := ServiceLogTask{ID: ti.ID, Slot: ti.Slot, Node: ti.Node, State: ti.State}
+			if announced[ti.ID] != st {
+				announced[ti.ID] = st
+				delete(unresolved, ti.ID)
+				changed = true
+			}
+		}
+		if changed && (!flush() || !send("tasks", "", serviceLogTasks{TTY: tty, Tasks: tasksList()})) {
+			return false
+		}
+		for _, m := range slotMarkers(prevTasks, cur) {
+			if !params.matchesMarker(m, byID) {
+				continue
+			}
+			if m.At == "" {
+				m.At = time.Now().UTC().Format(logTimeLayout)
+			}
+			pending = append(pending, dueMarker{m: m, due: time.Now().Add(reorderHold)})
+		}
+		nodes := followedNodes(cur, announced)
+		for _, n := range nodeNotices(prevNodes, nodes, time.Now().UTC().Format(logTimeLayout)) {
+			if !flush() || !send("node", "", n) {
+				return false
+			}
+		}
+		prevTasks, prevNodes = cur, nodes
+		return true
+	}
+	// releaseMarkers sends the markers whose window has passed, after the lines before them.
+	releaseMarkers := func() bool {
+		n := 0
+		for n < len(pending) && !pending[n].due.After(time.Now()) {
+			n++
+		}
+		if n == 0 {
+			return true
+		}
+		if !flush() {
+			return false
+		}
+		for _, p := range pending[:n] {
+			if !send("marker", "", p.m) {
+				return false
+			}
+		}
+		pending = pending[n:]
+		return true
 	}
 
 	quiet := time.NewTimer(burstQuiet)
@@ -544,6 +676,8 @@ func serveServiceLogStream(w http.ResponseWriter, req *http.Request, d ServiceLo
 	defer maxWait.Stop()
 	winTick := time.NewTicker(windowTick)
 	defer winTick.Stop()
+	metaTick := time.NewTicker(d.TaskRefresh)
+	defer metaTick.Stop()
 	flushTick := time.NewTicker(batchInterval)
 	defer flushTick.Stop()
 	beat := time.NewTicker(d.Heartbeat)
@@ -616,6 +750,15 @@ func serveServiceLogStream(w http.ResponseWriter, req *http.Request, d ServiceLo
 					return
 				}
 			}
+			if !releaseMarkers() {
+				return
+			}
+		case <-metaTick.C:
+			// The burst is told first; what changed meanwhile is worked out against the tasks
+			// the burst was merged with, so nothing is missed by waiting.
+			if !bursting && !refreshTasks() {
+				return
+			}
 		case <-flushTick.C:
 			if !flush() {
 				return
@@ -662,4 +805,13 @@ func auditServiceLogsViewed(ctx context.Context, d ServiceLogsDeps, mem *logAudi
 		mem.forget(key)
 		d.Log.Error("could not audit a service log stream", "service", serviceID, "error", err)
 	}
+}
+
+// byTaskID indexes tasks by their ID.
+func byTaskID(tasks []taskInfo) map[string]taskInfo {
+	out := make(map[string]taskInfo, len(tasks))
+	for _, ti := range tasks {
+		out[ti.ID] = ti
+	}
+	return out
 }

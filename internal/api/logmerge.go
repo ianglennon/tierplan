@@ -207,11 +207,15 @@ func (w *reorderWindow) drain() []svcRec {
 type taskMeta struct {
 	load func(context.Context) ([]taskInfo, error)
 	now  func() time.Time
+	// ttl is how long what was read is believed; zero means taskMetaTTL.
+	ttl time.Duration
 
 	mu        sync.Mutex
 	byID      map[string]taskInfo
 	list      []taskInfo
 	attempted time.Time
+	// lastOK says the last read succeeded.
+	lastOK bool
 	// asked is when a read was last made for an unknown task ID.
 	asked map[string]time.Time
 }
@@ -224,6 +228,7 @@ func newTaskMeta(load func(context.Context) ([]taskInfo, error), now func() time
 func (m *taskMeta) refresh(ctx context.Context) {
 	m.attempted = m.now()
 	tasks, err := m.load(ctx)
+	m.lastOK = err == nil
 	if err != nil {
 		return
 	}
@@ -235,7 +240,7 @@ func (m *taskMeta) refresh(ctx context.Context) {
 }
 
 func (m *taskMeta) stale() bool {
-	return m.attempted.IsZero() || m.now().Sub(m.attempted) >= taskMetaTTL
+	return m.attempted.IsZero() || m.now().Sub(m.attempted) >= cmp.Or(m.ttl, taskMetaTTL)
 }
 
 // lookup finds a task, reading the tasks first when they are stale or the task is unknown.
@@ -267,6 +272,15 @@ func (m *taskMeta) all(ctx context.Context) []taskInfo {
 		m.refresh(ctx)
 	}
 	return slices.Clone(m.list)
+}
+
+// fresh reads the tasks now, whatever is held, and returns them; false when the read failed,
+// in which case what was known stays.
+func (m *taskMeta) fresh(ctx context.Context) ([]taskInfo, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.refresh(ctx)
+	return slices.Clone(m.list), m.lastOK
 }
 
 // byIDMap returns the tasks held by ID, without reading anything.
