@@ -498,6 +498,101 @@ func TestRollbackToAPrivilegedPreviousSpecIsRefusedForAnOperatorAndAppliedForAnE
 	}
 }
 
+func TestRollbackByAnOperatorToAPreviousSpecWithNoFindingIsAccepted(t *testing.T) {
+	cases := []struct {
+		name string
+		svc  dockertest.FakeService
+	}{
+		{"a clean image", privilegedRollback(nil)},
+		{"a bind under /srv", privilegedRollback(func(s *swarm.ServiceSpec) {
+			s.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{{Type: mount.TypeBind, Source: "/srv/data", Target: "/data"}}
+		})},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, e := actionsEnv(t, nil, tc.svc)
+			op := f.caller(t, e, "operator-1", "operator")
+			if rec := op.do(http.MethodPost, "services/svc-priv/rollback", `{"version":9}`); rec.Code != http.StatusAccepted {
+				t.Fatalf("rollback by an operator: %d %s, want 202", rec.Code, rec.Body)
+			}
+			ups := f.fake.ServiceUpdates()
+			if len(ups) != 1 || ups[0].Query.Get("rollback") != "previous" {
+				t.Errorf("updates = %+v, want one with rollback=previous", ups)
+			}
+		})
+	}
+}
+
+func TestRollbackToEachHostEscalationFormIsRefusedForAnOperator(t *testing.T) {
+	const hostNetID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	cases := []struct {
+		name     string
+		tune     func(*dockertest.FakeConfig)
+		prev     func(*swarm.ServiceSpec)
+		location string
+		message  string
+	}{
+		{
+			name: "bind of /etc",
+			prev: func(s *swarm.ServiceSpec) {
+				s.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{{Type: mount.TypeBind, Source: "/etc", Target: "/host-etc"}}
+			},
+			location: "TaskTemplate.ContainerSpec.Mounts[0].Source", message: "/etc",
+		},
+		{
+			name: "added capability",
+			prev: func(s *swarm.ServiceSpec) {
+				s.TaskTemplate.ContainerSpec.CapabilityAdd = []string{"SYS_ADMIN"}
+			},
+			location: "TaskTemplate.ContainerSpec.CapabilityAdd[0]", message: "SYS_ADMIN",
+		},
+		{
+			name: "lowered sandbox",
+			prev: func(s *swarm.ServiceSpec) {
+				s.TaskTemplate.ContainerSpec.Privileges = &swarm.Privileges{Seccomp: &swarm.SeccompOpts{Mode: swarm.SeccompModeUnconfined}}
+			},
+			location: "TaskTemplate.ContainerSpec.Privileges.Seccomp.Mode", message: "unconfined",
+		},
+		{
+			name: "host network by name",
+			prev: func(s *swarm.ServiceSpec) {
+				s.TaskTemplate.Networks = []swarm.NetworkAttachmentConfig{{Target: "host"}}
+			},
+			location: "TaskTemplate.Networks[0].Target", message: "host",
+		},
+		{
+			name: "host network by ID",
+			tune: func(c *dockertest.FakeConfig) {
+				c.Networks = []dockertest.FakeNetwork{{ID: hostNetID, Name: "host", Driver: "host", Scope: "local"}}
+			},
+			prev: func(s *swarm.ServiceSpec) {
+				s.TaskTemplate.Networks = []swarm.NetworkAttachmentConfig{{Target: hostNetID}}
+			},
+			location: "TaskTemplate.Networks[0].Target", message: hostNetID,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, e := actionsEnv(t, tc.tune, privilegedRollback(tc.prev))
+			op := f.caller(t, e, "operator-1", "operator")
+			rec := op.do(http.MethodPost, "services/svc-priv/rollback", `{"version":9}`)
+			if rec.Code != http.StatusForbidden || problemType(t, rec) != "privileged_service" {
+				t.Fatalf("rollback by an operator: %d %s, want 403 privileged_service", rec.Code, rec.Body)
+			}
+			var prob actionProblem
+			if err := json.Unmarshal(rec.Body.Bytes(), &prob); err != nil {
+				t.Fatal(err)
+			}
+			if prob.at(tc.location) != tc.message {
+				t.Errorf("problem = %+v, want %s: %s", prob, tc.location, tc.message)
+			}
+			if ups, w := f.fake.ServiceUpdates(), f.fake.Writes(); len(ups) != 0 || len(w) != 0 {
+				t.Errorf("updates = %v, writes = %v, a refused rollback sends nothing", ups, w)
+			}
+		})
+	}
+}
+
 func TestRollbackWithAStaleVersionChangesNothing(t *testing.T) {
 	f, e := actionsEnv(t, nil, rollbackService())
 	rec := f.rollback(t, e, "svc-web", `{"version":8}`)

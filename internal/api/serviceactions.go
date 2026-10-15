@@ -151,7 +151,9 @@ func registerServiceActions(r *httpx.Router, d ServicesDeps) {
 		Summary: "Roll a service back to its previous spec",
 		Description: "Sends the service's current spec with rollback=previous and the version, once and never retried; the manager swaps the current and the previous spec, so a second rollback goes back to the spec just replaced. " +
 			"The registry credential for the previous spec's image is sent with it. The answer is 202: the rollout continues in the swarm. " +
-			"A service that has no previous spec is 409 no_previous_spec. A manager that refuses because the previous spec names a secret, a config or a network that no longer exists is 409 rollback_object_missing, with its words in detail. " +
+			"A service that has no previous spec is 409 no_previous_spec. " +
+			"The previous spec is judged by the same host-access policy as an apply: a caller below env Admin is refused 403 privileged_service, with each setting in errors, when it binds the Docker socket or a host path outside /srv, /mnt and /media, adds a capability, lowers the sandbox or joins the host network, and nothing is sent. " +
+			"A manager that refuses because the previous spec names a secret, a config or a network that no longer exists is 409 rollback_object_missing, with its words in detail. " +
 			"A version that is not the current one is 409 service_changed; 409 not_a_swarm for a standalone host. Works on a service that belongs to a stack. " +
 			"Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.rolled_back.",
 		Tags:          []string{"environments"},
