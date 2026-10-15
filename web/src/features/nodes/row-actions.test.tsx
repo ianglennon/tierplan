@@ -174,7 +174,7 @@ beforeEach(() => {
           needsConfirm: false,
         });
       }
-      if (req.method === "POST") return answerPost();
+      if (req.method === "POST" || req.method === "DELETE") return answerPost();
       if (url.pathname === "/api/environments") {
         return Response.json({ items: [{ id: ENV, name: "Swarm", envType: "swarm" }] });
       }
@@ -235,25 +235,25 @@ describe("the node row menu", () => {
   it("offers a manager Open, Drain, Pause and Demote", async () => {
     mount();
     const { menu } = await openMenu("mgr-1");
-    expect(itemNames(menu)).toEqual(["Open", "Drain…", "Pause…", "Demote…"]);
+    expect(itemNames(menu)).toEqual(["Open", "Drain…", "Pause…", "Demote…", "Remove…"]);
   });
 
   it("offers an active worker Open, Drain, Pause and Promote", async () => {
     mount();
     const { menu } = await openMenu("wkr-active");
-    expect(itemNames(menu)).toEqual(["Open", "Drain…", "Pause…", "Promote…"]);
+    expect(itemNames(menu)).toEqual(["Open", "Drain…", "Pause…", "Promote…", "Remove…"]);
   });
 
   it("offers a drained worker Activate node and Promote only", async () => {
     mount();
     const { menu } = await openMenu("wkr-drained");
-    expect(itemNames(menu)).toEqual(["Open", "Activate node", "Promote…"]);
+    expect(itemNames(menu)).toEqual(["Open", "Activate node", "Promote…", "Remove…"]);
   });
 
   it("offers a paused worker Drain, Activate node and Promote", async () => {
     mount();
     const { menu } = await openMenu("wkr-paused");
-    expect(itemNames(menu)).toEqual(["Open", "Drain…", "Activate node", "Promote…"]);
+    expect(itemNames(menu)).toEqual(["Open", "Drain…", "Activate node", "Promote…", "Remove…"]);
   });
 
   it("opens the drain dialog from Drain…", async () => {
@@ -345,7 +345,7 @@ describe("the node row menu", () => {
     me = makeMe({ envs: { [ENV]: "operator" } });
     mount();
     const { menu } = await openMenu("wkr-active");
-    expect(itemNames(menu)).toEqual(["Open", "Drain…", "Pause…", "Promote…"]);
+    expect(itemNames(menu)).toEqual(["Open", "Drain…", "Pause…", "Promote…", "Remove…"]);
     const drain = within(menu).getByRole("menuitem", { name: "Drain…" });
     expect(drain.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(drain);
@@ -365,5 +365,97 @@ describe("the node row menu", () => {
       (await screen.findAllByText("No manager is connected, so swarm changes are off.")).length,
     ).toBeGreaterThan(0);
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("offers Remove… last, in destructive text, after a separator", async () => {
+    mount();
+    const { menu } = await openMenu("wkr-active");
+    const remove = within(menu).getByRole("menuitem", { name: "Remove…" });
+    expect(remove.getAttribute("data-variant")).toBe("destructive");
+    const items = within(menu).getAllByRole("menuitem");
+    expect(items[items.length - 1]).toBe(remove);
+    expect(within(menu).getAllByRole("separator").length).toBe(2);
+  });
+
+  it("disables Remove… for a node that is not down, with the reason", async () => {
+    mount();
+    const { menu } = await openMenu("wkr-active");
+    const remove = within(menu).getByRole("menuitem", { name: "Remove…" });
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(remove);
+    expect(
+      (await screen.findAllByText("Only a node that is down can be removed.")).length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("disables Remove… for a manager, telling the person to demote it first", async () => {
+    mount();
+    const { menu } = await openMenu("mgr-1");
+    const remove = within(menu).getByRole("menuitem", { name: "Remove…" });
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(remove);
+    expect((await screen.findAllByText("Demote mgr-1 before removing it.")).length).toBeGreaterThan(
+      0,
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("opens the remove dialog for a down worker and removes it by name", async () => {
+    items = [
+      ...NODES,
+      node({
+        id: "n5",
+        hostname: "wkr-down",
+        role: "worker",
+        leader: false,
+        runsBayplan: false,
+        state: "down",
+        reachability: "",
+        tasksRunning: 0,
+      }),
+    ];
+    mount();
+    const { menu } = await openMenu("wkr-down");
+    const remove = within(menu).getByRole("menuitem", { name: "Remove…" });
+    expect(remove.getAttribute("aria-disabled")).not.toBe("true");
+    choose(menu, "Remove…");
+    const dialog = await screen.findByRole("alertdialog", { name: "Remove wkr-down?" });
+    fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "wkr-down" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove node" }));
+    expect(await screen.findByText("Removed wkr-down.")).toBeTruthy();
+    expect(
+      sent.some(
+        (s) =>
+          s.method === "DELETE" &&
+          s.path === "/api/env/e1/nodes/n5" &&
+          s.search === "?confirm=wkr-down",
+      ),
+    ).toBe(true);
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  });
+
+  it("shows Remove… to an Operator unavailable with the reason", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    items = [
+      ...NODES,
+      node({
+        id: "n5",
+        hostname: "wkr-down",
+        role: "worker",
+        leader: false,
+        runsBayplan: false,
+        state: "down",
+        reachability: "",
+        tasksRunning: 0,
+      }),
+    ];
+    mount();
+    const { menu } = await openMenu("wkr-down");
+    const remove = within(menu).getByRole("menuitem", { name: "Remove…" });
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(remove);
+    expect((await screen.findAllByText("Needs Admin")).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 });

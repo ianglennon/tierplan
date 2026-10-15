@@ -42,6 +42,9 @@ interface State {
   // What was posted to the node's availability and role routes, with the route.
   posted: { path: string; body: unknown }[];
   post: () => Response | Promise<Response>;
+  // What was deleted: the route and its query.
+  deleted: { path: string; search: string }[];
+  remove: () => Response | Promise<Response>;
 }
 
 let state: State;
@@ -77,6 +80,8 @@ beforeEach(() => {
       }),
     posted: [],
     post: () => new Response(null, { status: 204 }),
+    deleted: [],
+    remove: () => new Response(null, { status: 204 }),
   };
   queryClient.setDefaultOptions({ queries: { retry: false, refetchOnWindowFocus: false } });
   nodeRetry.attempts = 0;
@@ -88,6 +93,10 @@ beforeEach(() => {
     vi.fn(async (req: Request): Promise<Response> => {
       const url = new URL(req.url);
       state.sent.push(url.pathname);
+      if (req.method === "DELETE") {
+        state.deleted.push({ path: url.pathname, search: url.search });
+        return state.remove();
+      }
       if (req.method === "POST") {
         state.posted.push({ path: url.pathname, body: await req.json() });
         return state.post();
@@ -568,7 +577,7 @@ describe("the node's actions", () => {
       within(menu)
         .getAllByRole("menuitem")
         .map((i) => i.textContent),
-    ).toEqual(["Demote…", "Copy node ID"]);
+    ).toEqual(["Demote…", "Copy node ID", "Remove…"]);
   });
 
   it("offers a paused worker Drain… and Activate node, and Promote… under More", async () => {
@@ -590,7 +599,7 @@ describe("the node's actions", () => {
       within(menu)
         .getAllByRole("menuitem")
         .map((i) => i.textContent),
-    ).toEqual(["Promote…", "Copy node ID"]);
+    ).toEqual(["Promote…", "Copy node ID", "Remove…"]);
   });
 
   it("offers a drained node Activate node only", async () => {
@@ -656,5 +665,87 @@ describe("the node's actions", () => {
     expect(
       within(menu).getByRole("menuitem", { name: "Copy node ID" }).getAttribute("aria-disabled"),
     ).toBeNull();
+  });
+
+  it("offers Remove… under More after a separator, in destructive text, disabled for a manager with the reason", async () => {
+    renderAt();
+    await screen.findByRole("heading", { name: "mgr-1" });
+    const menu = await openMore();
+    const remove = within(menu).getByRole("menuitem", { name: "Remove…" });
+    expect(remove.getAttribute("data-variant")).toBe("destructive");
+    expect(within(menu).getAllByRole("separator").length).toBe(1);
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(remove);
+    expect((await screen.findAllByText("Demote mgr-1 before removing it.")).length).toBeGreaterThan(
+      0,
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("disables Remove… for a worker that is not down, with the reason", async () => {
+    state.detail = () =>
+      node(nodeDetail({ role: "worker", leader: false, runsBayplan: false, reachability: "" }));
+    renderAt();
+    await screen.findByRole("heading", { name: "mgr-1" });
+    const menu = await openMore();
+    const remove = within(menu).getByRole("menuitem", { name: "Remove…" });
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(remove);
+    expect(
+      (await screen.findAllByText("Only a node that is down can be removed.")).length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("removes a down worker by name, goes to the nodes list and says so", async () => {
+    state.detail = () =>
+      node(
+        nodeDetail({
+          role: "worker",
+          leader: false,
+          runsBayplan: false,
+          reachability: "",
+          state: "down",
+        }),
+      );
+    const router = renderAt();
+    await screen.findByRole("heading", { name: "mgr-1" });
+    const menu = await openMore();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Remove…" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Remove mgr-1?" });
+    fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "mgr-1" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove node" }));
+    await waitFor(() => expect(state.deleted).toHaveLength(1));
+    expect(state.deleted[0]).toEqual({
+      path: `${BASE}/nodes/${NODE_ID}`,
+      search: "?confirm=mgr-1",
+    });
+    await waitFor(() => expect(router.state.location.pathname).toBe(`/env/${NODE_ENV}/nodes`));
+    expect(await screen.findByText("Removed mgr-1.")).toBeTruthy();
+  });
+
+  it("stays on the page, with the dialog open, when the swarm refuses", async () => {
+    state.detail = () =>
+      node(
+        nodeDetail({
+          role: "worker",
+          leader: false,
+          runsBayplan: false,
+          reachability: "",
+          state: "down",
+        }),
+      );
+    state.remove = () => problem(409, "node_not_down");
+    const router = renderAt();
+    await screen.findByRole("heading", { name: "mgr-1" });
+    const menu = await openMore();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Remove…" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Remove mgr-1?" });
+    fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "mgr-1" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove node" }));
+    expect(
+      await within(dialog).findByText("mgr-1 isn't down. Only a node that is down can be removed."),
+    ).toBeTruthy();
+    expect(router.state.location.pathname).toBe(PAGE);
   });
 });
