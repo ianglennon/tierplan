@@ -100,9 +100,11 @@ var phase4DetailKeys = map[string][]string{
 	audit.ActionContainerUnpaused:  {"container", "node", "code", "bulk", "stage", "own"},
 	audit.ActionContainerRemoved:   {"container", "node", "code", "bulk", "stage", "own", "force", "volumes"},
 	// A network create records what was asked and where it landed; the remove of plan
-	// 04-13 records the name, node and scope, and the code of a refusal.
-	audit.ActionNetworkCreated: {"name", "node", "driver", "scope", "subnet", "gateway", "internal", "attachable", "code"},
-	audit.ActionNetworkRemoved: {"name", "node", "driver", "scope", "code"},
+	// 04-13 records the name, node and scope, and the code of a refusal. A network, secret or config
+	// made or removed by a service apply also records its source, service_apply or
+	// service_apply_cleanup (plan 06-26).
+	audit.ActionNetworkCreated: {"name", "node", "driver", "scope", "subnet", "gateway", "internal", "attachable", "source", "code"},
+	audit.ActionNetworkRemoved: {"name", "node", "driver", "scope", "source", "code"},
 	// Connecting a container records the network, the container, its node and, when asked
 	// for, the alias and addresses; disconnecting the first three.
 	audit.ActionNetworkConnected:    {"network", "container", "node", "alias", "ipv4", "ipv6", "code"},
@@ -187,12 +189,12 @@ var phase6DetailKeys = map[string][]string{
 	// the request came from (typed, file, rotate, apply or api) and the code; never the value. A
 	// remove records the name and the code (plan 06-22, RES-08).
 	audit.ActionSecretCreated: {"name", "labels", "size", "source", "code"},
-	audit.ActionSecretRemoved: {"name", "code"},
+	audit.ActionSecretRemoved: {"name", "source", "code"},
 	// A config create records the name, how many labels it has, the size of the content in bytes, the
 	// templating driver (none or golang), where the request came from (typed, file, rotate, apply or api)
 	// and the code. A remove records the name and the code (plan 06-24, RES-08).
 	audit.ActionConfigCreated: {"name", "labels", "size", "templating", "source", "code"},
-	audit.ActionConfigRemoved: {"name", "code"},
+	audit.ActionConfigRemoved: {"name", "source", "code"},
 }
 
 func TestEveryPhase6ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {

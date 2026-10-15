@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/rbac/compose"
@@ -56,13 +57,17 @@ func (e *scrubbedError) Unwrap() error { return e.err }
 // does not decode (*SpecInvalidError), a hidden value with nothing behind it or a placeholder from a
 // revealing caller (*redact.PlaceholderError), a changed name or mode kind, a new stack label and a
 // spec equal to the current one (ErrNothingToApply); resolves the digest of a changed tag; runs the
-// host-escalation policy on the exact spec it will send (*RefusedError); refuses a network that does
-// not exist (*MissingError); and sends one ServiceUpdate with the version and the credential, never
-// retried. A refusal by Docker is a *RejectedError; a version taken by another writer in between is
-// dockerx.ErrServiceChanged. No error and no warning carries a value the caller may not see. The
-// result is filled as far as the work got.
+// host-escalation policy on the exact spec it will send (*RefusedError); refuses a network, secret
+// or config that does not exist and was not staged (*MissingError) and a caller who may not create
+// the kinds the staged ones are (*ObjectPermissionError), all before anything is written; creates the
+// staged objects in dependency order (networks, secrets, configs), fills their IDs into the spec and
+// judges it again; and sends one ServiceUpdate with the version and the credential, never retried.
+// When anything after the first creation fails, every object this apply made is removed again in
+// reverse order and the result says which were and which could not be. A refusal by Docker is a
+// *RejectedError; a version taken by another writer in between is dockerx.ErrServiceChanged. No error
+// and no warning carries a value the caller may not see. The result is filled as far as the work got.
 func Apply(ctx context.Context, deps Deps, in ApplyInput) (ApplyResult, error) {
-	c := common{envID: in.EnvID, serviceID: in.ServiceID, version: in.Version, spec: in.Spec, caller: in.Caller, client: in.Client}
+	c := common{envID: in.EnvID, serviceID: in.ServiceID, version: in.Version, spec: in.Spec, caller: in.Caller, client: in.Client, staged: in.Objects}
 	var res ApplyResult
 	p, err := prepare(ctx, deps, c)
 	res.ServiceID, res.Name = p.detail.ID, p.detail.Name
@@ -73,12 +78,17 @@ func Apply(ctx context.Context, deps Deps, in ApplyInput) (ApplyResult, error) {
 	if !p.changed {
 		return res, ErrNothingToApply
 	}
+	res.Steps = plannedSteps(p)
 	info, auth, unresolved, err := p.pinImage(ctx, deps, c)
 	res.Image = info
+	if info.Pinned {
+		res.Steps[0].State = StepDone
+	}
 	if err != nil {
 		return res, err
 	}
 	if unresolved != nil {
+		res.Steps[0].State, res.Steps[0].Code = StepFailed, stepCode(unresolved)
 		return res, unresolved
 	}
 	dec, raw, err := p.judge(ctx, deps, c)
@@ -89,8 +99,11 @@ func Apply(ctx context.Context, deps Deps, in ApplyInput) (ApplyResult, error) {
 	if !dec.Allowed {
 		return res, &RefusedError{Reason: dec.Reason, Message: dec.Message, Findings: dec.Findings}
 	}
-	if m := missingObjects(p.merged, p.networks); m.any() {
-		return res, &MissingError{Missing: m}
+	if p.plan.missing.any() {
+		return res, &MissingError{Missing: p.plan.missing}
+	}
+	if denied := deps.refusedKinds(p.plan.create); len(denied) > 0 {
+		return res, &ObjectPermissionError{Kinds: denied}
 	}
 	scrub := func(s string) string {
 		if in.Caller.Reveal {
@@ -98,20 +111,112 @@ func Apply(ctx context.Context, deps Deps, in ApplyInput) (ApplyResult, error) {
 		}
 		return redact.ScrubServiceText(s, p.merged)
 	}
-	warnings, err := in.Client.ServiceUpdate(ctx, p.detail.ID, in.Version, raw, auth)
-	if err != nil {
-		var rej *dockerx.SpecRejectedError
-		if errors.As(err, &rej) {
-			return res, &RejectedError{Message: scrub(rej.Message)}
-		}
-		if !in.Caller.Reveal {
-			return res, &scrubbedError{err: err, msg: scrub(err.Error())}
+
+	var created []CreatedObject
+	// fail ends the apply with err: whatever this apply made is removed again.
+	fail := func(err error) (ApplyResult, error) {
+		if len(created) > 0 {
+			res.Cleanup = cleanupObjects(ctx, in.Client, created, deps.Record)
 		}
 		return res, err
 	}
+	if len(p.plan.create) > 0 {
+		var cerr error
+		created, cerr = createObjects(ctx, in.Client, p.plan.create, deps.Record)
+		res.Steps = res.markObjects(created, cerr)
+		if cerr != nil {
+			return fail(cerr)
+		}
+		if raw, err = p.adopt(ctx, deps, c, created); err != nil {
+			return fail(err)
+		}
+	}
+
+	warnings, err := in.Client.ServiceUpdate(ctx, p.detail.ID, in.Version, raw, auth)
+	if err != nil {
+		var rej *dockerx.SpecRejectedError
+		switch {
+		case errors.As(err, &rej):
+			err = &RejectedError{Message: scrub(rej.Message)}
+		case !in.Caller.Reveal:
+			err = &scrubbedError{err: err, msg: scrub(err.Error())}
+		}
+		res.Steps[len(res.Steps)-1].State, res.Steps[len(res.Steps)-1].Code = StepFailed, stepCode(err)
+		return fail(err)
+	}
+	res.Steps[len(res.Steps)-1].State = StepDone
 	res.Warnings = make([]string, len(warnings))
 	for i, w := range warnings {
 		res.Warnings[i] = scrub(w)
 	}
 	return res, nil
+}
+
+// refusedKinds lists, in creation order, the kinds of the objects to create that the caller may not
+// create. Without a CanCreate nobody may.
+func (d Deps) refusedKinds(objects []StagedObject) []string {
+	var denied []string
+	for _, kind := range kinds(objects) {
+		if d.CanCreate == nil || !d.CanCreate(kind) {
+			denied = append(denied, kind)
+		}
+	}
+	return denied
+}
+
+// plannedSteps are the steps an apply will take, none reached yet: the image, each object to
+// create in creation order, the service.
+func plannedSteps(p *prepared) []ApplyStep {
+	steps := []ApplyStep{{Step: StepImage, State: StepSkipped}}
+	for _, o := range p.plan.create {
+		steps = append(steps, ApplyStep{Step: StepObject, Kind: o.Kind, Name: o.Name, State: StepSkipped})
+	}
+	return append(steps, ApplyStep{Step: StepService, Name: p.detail.Name, State: StepSkipped})
+}
+
+// markObjects marks the object steps: those made are done, the one that failed (err) is failed with
+// its code, the rest stay skipped.
+func (r ApplyResult) markObjects(made []CreatedObject, err error) []ApplyStep {
+	steps := slices.Clone(r.Steps)
+	n := 0
+	for i := range steps {
+		if steps[i].Step != StepObject {
+			continue
+		}
+		switch {
+		case n < len(made):
+			steps[i].State = StepDone
+		case n == len(made) && err != nil:
+			steps[i].State, steps[i].Code = StepFailed, stepCode(err)
+		}
+		n++
+	}
+	return steps
+}
+
+// adopt writes the IDs of the objects just made into the spec's references to them, adds the
+// networks to what the policy knows and judges the spec again, so the check still runs on exactly
+// the bytes that are sent. It returns those bytes.
+func (p *prepared) adopt(ctx context.Context, deps Deps, c common, made []CreatedObject) ([]byte, error) {
+	ids := map[string]string{}
+	for _, o := range made {
+		ids[objectKey(o.Kind, o.Name)] = o.ID
+		if o.Kind == KindNetwork {
+			p.networks = append(p.networks, dockerx.NetworkRow{ID: o.ID, Name: o.Name, Driver: dockerx.DriverOverlay, Scope: dockerx.ScopeSwarm, Attachable: true})
+		}
+	}
+	p.resolver = networkResolver(p.networks)
+	for _, f := range p.plan.fills {
+		if id, ok := ids[f.key]; ok {
+			f.setID(id)
+		}
+	}
+	dec, raw, err := p.judge(ctx, deps, c)
+	if err != nil {
+		return nil, err
+	}
+	if !dec.Allowed {
+		return nil, &RefusedError{Reason: dec.Reason, Message: dec.Message, Findings: dec.Findings}
+	}
+	return raw, nil
 }

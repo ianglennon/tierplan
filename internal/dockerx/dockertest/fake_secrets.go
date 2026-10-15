@@ -133,10 +133,6 @@ func (f *Fake) serveSecretInspect(w http.ResponseWriter, r *http.Request, p stri
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "secret " + m[1] + " not found"})
 		return true
 	}
-	if msg, bad := cfg.RemoveErrors[fs.Name]; bad {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": msg})
-		return true
-	}
 	writeJSON(w, http.StatusOK, fs.asSecret())
 	return true
 }
@@ -238,6 +234,10 @@ func (f *Fake) serveSecretRemove(w http.ResponseWriter, r *http.Request, p strin
 	fs, ok := cfg.resolveSecret(m[1])
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "secret " + m[1] + " not found"})
+		return true
+	}
+	if msg, bad := cfg.RemoveErrors[fs.Name]; bad {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": msg})
 		return true
 	}
 	for _, s := range cfg.serviceList(false) {

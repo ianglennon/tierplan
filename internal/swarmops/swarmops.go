@@ -186,6 +186,8 @@ type common struct {
 	spec             json.RawMessage
 	caller           Caller
 	client           *dockerx.Client
+	// staged are the objects the caller made in the editor; a review has none.
+	staged []StagedObject
 }
 
 // prepared is a spec after the steps Review and Apply share. Its fields are filled as far as the
@@ -197,6 +199,10 @@ type prepared struct {
 	changed  bool
 	networks []dockerx.NetworkRow
 	resolver swarmspec.NetworkResolver
+	// have is what the environment holds of the objects the spec can name, plan what the spec needs
+	// done about them.
+	have existing
+	plan objectPlan
 }
 
 // prepare reads the service fresh and judges the submitted spec against it: stack ownership, the
@@ -240,14 +246,55 @@ func prepare(ctx context.Context, deps Deps, c common) (*prepared, error) {
 	case newStackLabel(p.current, p.merged):
 		return p, ErrStackLabel
 	}
+	if err := p.planObjects(ctx, c); err != nil {
+		return p, err
+	}
 	if p.changed, err = specsDiffer(p.current, p.merged); err != nil {
 		return p, err
 	}
+	return p, nil
+}
+
+// planObjects reads the networks, secrets and configs of the environment (the last two only when
+// the spec names any) and works out what the spec needs done about the ones it names. The merged
+// spec is copied first, so giving a reference its ID changes nothing the current spec shares.
+func (p *prepared) planObjects(ctx context.Context, c common) error {
+	var err error
 	if p.networks, err = c.client.Networks(ctx); err != nil {
-		return p, err
+		return err
 	}
 	p.resolver = networkResolver(p.networks)
-	return p, nil
+	p.have = existing{networks: p.networks}
+	if cs := p.merged.TaskTemplate.ContainerSpec; cs != nil {
+		if len(cs.Secrets) > 0 {
+			if p.have.secrets, err = c.client.SecretList(ctx); err != nil {
+				return err
+			}
+		}
+		if len(cs.Configs) > 0 {
+			if p.have.configs, err = c.client.ConfigList(ctx); err != nil {
+				return err
+			}
+		}
+	}
+	if p.merged, err = cloneSpec(p.merged); err != nil {
+		return err
+	}
+	p.plan = planObjects(&p.merged, p.have, c.staged)
+	return nil
+}
+
+// cloneSpec copies a spec through its JSON form, so the copy shares nothing with the original.
+func cloneSpec(spec swarm.ServiceSpec) (swarm.ServiceSpec, error) {
+	raw, err := json.Marshal(spec)
+	if err != nil {
+		return swarm.ServiceSpec{}, fmt.Errorf("encode a spec: %w", err)
+	}
+	var out swarm.ServiceSpec
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return swarm.ServiceSpec{}, fmt.Errorf("read a spec: %w", err)
+	}
+	return out, nil
 }
 
 // decodeSpec decodes raw strictly: an unknown field, a wrong type or data after the object is
@@ -403,19 +450,6 @@ func networkResolver(rows []dockerx.NetworkRow) swarmspec.NetworkResolver {
 		n, found := findNetwork(rows, target)
 		return n.Name, n.Driver, found
 	}
-}
-
-// missingObjects lists what the spec names that the cluster does not have. Networks are checked
-// against the engine's network list; a secret or config the cluster lacks is refused by Docker
-// itself and reaches the caller as a RejectedError (06-26 lists them here).
-func missingObjects(spec swarm.ServiceSpec, networks []dockerx.NetworkRow) Missing {
-	m := Missing{Networks: []string{}, Secrets: []string{}, Configs: []string{}}
-	for _, n := range spec.TaskTemplate.Networks {
-		if _, ok := findNetwork(networks, n.Target); !ok && !containsString(m.Networks, n.Target) {
-			m.Networks = append(m.Networks, n.Target)
-		}
-	}
-	return m
 }
 
 func (m Missing) any() bool { return len(m.Networks)+len(m.Secrets)+len(m.Configs) > 0 }

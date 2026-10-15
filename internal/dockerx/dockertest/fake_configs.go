@@ -137,10 +137,6 @@ func (f *Fake) serveConfigInspect(w http.ResponseWriter, r *http.Request, p stri
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "config " + m[1] + " not found"})
 		return true
 	}
-	if msg, bad := cfg.RemoveErrors[fc.Name]; bad {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": msg})
-		return true
-	}
 	writeJSON(w, http.StatusOK, fc.asConfig())
 	return true
 }
@@ -240,6 +236,10 @@ func (f *Fake) serveConfigRemove(w http.ResponseWriter, r *http.Request, p strin
 	fc, ok := cfg.resolveConfig(m[1])
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "config " + m[1] + " not found"})
+		return true
+	}
+	if msg, bad := cfg.RemoveErrors[fc.Name]; bad {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": msg})
 		return true
 	}
 	for _, s := range cfg.serviceList(false) {

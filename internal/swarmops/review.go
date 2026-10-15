@@ -66,7 +66,7 @@ func Review(ctx context.Context, deps Deps, in ReviewInput) (ReviewResult, error
 	res := ReviewResult{
 		Spec: shown, Version: p.detail.Version, Changed: p.changed, Image: info,
 		Findings: dec.Findings, Allowed: dec.Allowed, Reason: dec.Reason, Refusal: dec.Message,
-		Missing: missingObjects(p.merged, p.networks), HostPolicy: in.HostPolicy, Warnings: []string{},
+		Missing: missingObjects(p.merged, p.have), HostPolicy: in.HostPolicy, Warnings: []string{},
 	}
 	if res.Findings == nil {
 		res.Findings = []compose.Finding{}
