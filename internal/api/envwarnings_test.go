@@ -262,3 +262,88 @@ func TestEnvWarningsRestartLoopIsShownToAViewerOfTheEnvironmentAndToNobodyElse(t
 		t.Errorf("a user with no grant got %+v, want nothing: the bell must not reveal what the caller cannot open", got)
 	}
 }
+
+// Restart loops of standalone containers in the bell (plan 06-36, RES-13, D-15).
+
+type containerLoopWarning struct {
+	ID            string `json:"id"`
+	Severity      string `json:"severity"`
+	EnvID         string `json:"envId"`
+	EnvName       string `json:"envName"`
+	Container     string `json:"container"`
+	ContainerID   string `json:"containerId"`
+	NodeID        string `json:"nodeId"`
+	Count         int    `json:"count"`
+	WindowMinutes int    `json:"windowMinutes"`
+	LastExitCode  string `json:"lastExitCode"`
+	Since         string `json:"since"`
+}
+
+func (f *envFix) containerLoopWarnings(t *testing.T, cookie, csrf string) []containerLoopWarning {
+	t.Helper()
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/environments/warnings", cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("warnings = %d %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Items []containerLoopWarning `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	var out []containerLoopWarning
+	for _, w := range body.Items {
+		if w.ID == "restart_loop_container" {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+func TestEnvWarningsRestartLoopContainerNamesTheContainerItsNodeAndTheLastExitCode(t *testing.T) {
+	f, e := containerLoopEnv(t)
+	got := f.containerLoopWarnings(t, f.cookie, f.csrf)
+	if len(got) != 1 {
+		t.Fatalf("restart_loop_container items = %+v, want one, for crashy", got)
+	}
+	w := got[0]
+	if w.Severity != "error" || w.EnvID != e.ID || w.EnvName != e.Name || w.Container != "crashy" || w.ContainerID != loopCrashyID || w.NodeID != e.ID ||
+		w.Count != 3 || w.WindowMinutes != 10 || w.LastExitCode != "3" {
+		t.Errorf("item = %+v", w)
+	}
+	if _, err := time.Parse(time.RFC3339, w.Since); err != nil {
+		t.Errorf("since = %q: %v", w.Since, err)
+	}
+}
+
+func TestEnvWarningsRestartLoopContainerLeavesOutAMutedContainerAndComesBackWhenItIsUnmuted(t *testing.T) {
+	f, e := containerLoopEnv(t)
+	op := loopAs(t, f, e, "bell-operator", "operator")
+	if rec := op(http.MethodPut, containerMutePath(e, "crashy"), ""); rec.code != http.StatusOK {
+		t.Fatalf("mute = %d %s", rec.code, rec.body)
+	}
+	if got := f.containerLoopWarnings(t, f.cookie, f.csrf); len(got) != 0 {
+		t.Fatalf("items after the mute = %+v, want none", got)
+	}
+	if rec := op(http.MethodDelete, containerMutePath(e, "crashy"), ""); rec.code != http.StatusOK {
+		t.Fatalf("unmute = %d %s", rec.code, rec.body)
+	}
+	if got := f.containerLoopWarnings(t, f.cookie, f.csrf); len(got) != 1 {
+		t.Fatalf("items after the unmute = %+v, want crashy again", got)
+	}
+}
+
+func TestEnvWarningsRestartLoopContainerIsShownToAViewerOfTheEnvironmentAndToNobodyElse(t *testing.T) {
+	f, e := containerLoopEnv(t)
+	f.addUser(t, "bell-viewer", false)
+	f.addEnvRole(t, "bell-viewer", e.ID, "viewer")
+	cookie, csrf := f.signIn(t, "bell-viewer", false)
+	if got := f.containerLoopWarnings(t, cookie, csrf); len(got) != 1 || got[0].Container != "crashy" {
+		t.Errorf("a Viewer's items = %+v, want crashy's", got)
+	}
+	f.addUser(t, "bell-nobody", false)
+	cookie, csrf = f.signIn(t, "bell-nobody", false)
+	if got := f.containerLoopWarnings(t, cookie, csrf); len(got) != 0 {
+		t.Errorf("a user with no grant got %+v, want nothing: the bell must not reveal what the caller cannot open", got)
+	}
+}

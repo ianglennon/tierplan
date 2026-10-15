@@ -1138,3 +1138,248 @@ func TestSettingAMuteUpdatesWhatIsServedAtOnceAndLeavesTheCopiesAlreadyHandedOut
 		t.Errorf("after an unmute = %+v / %v, want web not muted", back.RestartLoops, back.MutedServices)
 	}
 }
+
+// Restart-loop detection of standalone containers in the cluster read (plan 06-36, RES-13,
+// D-15, D-16). The die events are the ones the environment's feed holds, put there with
+// Inject; the cluster reader runs on its own clock, which the test moves.
+
+// die puts a die event of the container name into the feed of the target, dated ago before
+// the reader's clock. The feed starts asynchronously, so it retries until the feed exists.
+func dieIn(t *testing.T, hub *Hub, target string, now time.Time, id, name, containerID string, ago time.Duration, exit string) {
+	t.Helper()
+	at := now.Add(-ago)
+	ev := dockerx.EventRow{
+		ID: id, Time: at, TimeNano: at.UnixNano(), Type: "container", Action: "die", ActorID: containerID, Name: name,
+		Attributes: map[string]string{"name": name, "exitCode": exit},
+	}
+	eventually(t, "the target's event feed to open", func() bool { return hub.Inject(target, ev) })
+}
+
+// writesTo are the paths a daemon served that change a container.
+func writesTo(a *agentConn) []string {
+	var out []string
+	for _, p := range a.fake.Requests() {
+		for _, verb := range []string{"/restart", "/stop", "/kill", "/pause", "/rename", "/update"} {
+			if strings.HasSuffix(p, verb) {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+
+// standaloneLoopRig is a standalone host with a crash-looping container, a calm one and
+// the task container of a swarm service, all with a restart policy of always.
+type standaloneLoopRig struct {
+	*tunRig
+	c     *Clusters
+	clock *tunneltest.Clock
+	env   tunneltest.Environment
+	edge  *agentConn
+	key   string
+}
+
+func newStandaloneLoopRig(t *testing.T) *standaloneLoopRig {
+	t.Helper()
+	r := newTunRig(t, nil)
+	r.pastGrace()
+	g := &standaloneLoopRig{tunRig: r, clock: tunneltest.NewClock(r.clk.Now())}
+	g.c = NewClusters(r.svc, r.snaps, ClusterOptions{Now: g.clock.Now, Publisher: r.brk, Events: r.evs})
+	r.svc.WithClusters(g.c)
+	g.env = r.srv.NewEnvironment(t, "Standalone")
+	g.edge = r.connect(t, g.env, dockertest.FakeConfig{
+		Hostname: "edge-1",
+		Containers: []dockertest.FakeContainer{
+			{ID: "ctr-crashy", Names: []string{"/crashy"}, State: "restarting", Status: "Restarting (3) 3 seconds ago"},
+			{ID: "ctr-calm", Names: []string{"/calm"}, State: "running", Status: "Up 2 hours"},
+			{ID: "ctr-task", Names: []string{"/web.1.abcdef"}, State: "restarting", Status: "Restarting (1) 3 seconds ago",
+				Labels: map[string]string{"com.docker.swarm.task.id": "abcdef"}},
+		},
+		RestartPolicies: map[string]string{"ctr-crashy": "always", "ctr-calm": "always", "ctr-task": "always"},
+	}, nil)
+	r.whenOnline(t, g.env.ID)
+	g.key = AgentTarget(g.edge.id)
+	return g
+}
+
+func (g *standaloneLoopRig) refresh(t *testing.T) ClusterState {
+	t.Helper()
+	if err := g.c.Refresh(context.Background(), g.env.ID); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	st, ok := g.c.Cached(g.env.ID)
+	if !ok {
+		t.Fatal("no cluster state after a refresh")
+	}
+	return st
+}
+
+func (g *standaloneLoopRig) dies(t *testing.T, prefix, name, containerID string, n int, exit string) {
+	t.Helper()
+	for i := range n {
+		dieIn(t, g.evs, g.key, g.clock.Now(), fmt.Sprintf("%s-%d", prefix, i), name, containerID, time.Duration(i+1)*time.Minute, exit)
+	}
+}
+
+func TestAStandaloneHostFlagsAContainerThatKeepsDyingAndNeverATaskContainerOrACalmOne(t *testing.T) {
+	g := newStandaloneLoopRig(t)
+	g.dies(t, "crashy", "crashy", "ctr-crashy", 3, "3")
+	g.dies(t, "calm", "calm", "ctr-calm", 3, "0")
+	g.dies(t, "task", "web.1.abcdef", "ctr-task", 4, "1")
+	st := g.refresh(t)
+	key := ContainerLoopKey(g.edge.id, "crashy")
+	loop, ok := st.ContainerLoops[key]
+	if !ok || len(st.ContainerLoops) != 1 {
+		t.Fatalf("container loops = %+v, want crashy only", st.ContainerLoops)
+	}
+	if loop.Count != 3 || loop.LastExitCode != "3" || loop.ContainerID != "ctr-crashy" || loop.NodeID != g.edge.id || loop.Window != DefaultRestartLoopWindow {
+		t.Errorf("loop = %+v, want 3 deaths, exit code 3, on this node, in the default window", loop)
+	}
+	if st.RestartLoops != nil {
+		t.Errorf("service loops = %+v, want none on a standalone host", st.RestartLoops)
+	}
+	if bad := writesTo(g.edge); len(bad) != 0 {
+		t.Errorf("detection changed containers: %v", bad)
+	}
+}
+
+func TestAContainerLoopIsKeptAcrossReadsAndClearsAfterAQuietWindow(t *testing.T) {
+	g := newStandaloneLoopRig(t)
+	g.dies(t, "crashy", "crashy", "ctr-crashy", 3, "3")
+	if st := g.refresh(t); len(st.ContainerLoops) != 1 {
+		t.Fatalf("container loops = %+v, want the loop", st.ContainerLoops)
+	}
+	g.clock.Advance(30 * time.Second)
+	if st := g.refresh(t); st.ContainerLoops[ContainerLoopKey(g.edge.id, "crashy")].Count == 0 {
+		t.Fatalf("container loops = %+v, want the same loop on the next read", st.ContainerLoops)
+	}
+	g.clock.Advance(DefaultRestartLoopWindow + time.Minute)
+	if st := g.refresh(t); len(st.ContainerLoops) != 0 {
+		t.Fatalf("a quiet window later = %+v, want cleared", st.ContainerLoops)
+	}
+}
+
+func TestAContainerLoopUsesTheEnvironmentsThresholdAndNeverInspectsTwice(t *testing.T) {
+	g := newStandaloneLoopRig(t)
+	g.dies(t, "crashy", "crashy", "ctr-crashy", 2, "3")
+	if st := g.refresh(t); len(st.ContainerLoops) != 0 {
+		t.Fatalf("two deaths flagged %+v at the default threshold of 3", st.ContainerLoops)
+	}
+	if _, err := g.st.Write.Exec(`UPDATE environments SET restart_loop_failures = 2 WHERE id = ?`, g.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	if st := g.refresh(t); st.ContainerLoops[ContainerLoopKey(g.edge.id, "crashy")].Count != 2 {
+		t.Fatalf("with a threshold of 2 = %+v, want a loop of 2", st.ContainerLoops)
+	}
+	n := len(inspectRequests(g.edge))
+	g.refresh(t)
+	if got := len(inspectRequests(g.edge)); got != n {
+		t.Errorf("a third read inspected %d more containers, want none: the policy is remembered by container ID", got-n)
+	}
+}
+
+func TestASwarmEnvironmentFlagsAStandaloneContainerOnANodeAndInspectsOnlyThatOne(t *testing.T) {
+	l := newLoopRig(t)
+	cfg := managerConfig(1, l.nodes, l.services)
+	cfg.Containers = []dockertest.FakeContainer{
+		{ID: "ctr-crashy", Names: []string{"/crashy"}, State: "restarting", Status: "Restarting (2) 3 seconds ago"},
+		{ID: "ctr-calm", Names: []string{"/calm"}, State: "running", Status: "Up 2 hours"},
+		{ID: "ctr-task", Names: []string{"/web.1.abcdef"}, State: "restarting", Labels: map[string]string{"com.docker.swarm.task.id": "abcdef"}},
+	}
+	cfg.RestartPolicies = map[string]string{"ctr-crashy": "unless-stopped", "ctr-calm": "always", "ctr-task": "always"}
+	l.m[0].fake.Reconfigure(cfg)
+	target := AgentTarget(l.m[0].id)
+	now := l.clock.Now()
+	for i := range 3 {
+		dieIn(t, l.evs, target, now, fmt.Sprintf("x%d", i), "crashy", "ctr-crashy", time.Duration(i+1)*time.Minute, "2")
+		dieIn(t, l.evs, target, now, fmt.Sprintf("t%d", i), "web.1.abcdef", "ctr-task", time.Duration(i+1)*time.Minute, "1")
+		dieIn(t, l.evs, target, now, fmt.Sprintf("c%d", i), "calm", "ctr-calm", time.Duration(i+1)*time.Minute, "0")
+	}
+	st := l.refresh(t)
+	key := ContainerLoopKey(l.m[0].id, "crashy")
+	if loop, ok := st.ContainerLoops[key]; !ok || len(st.ContainerLoops) != 1 || loop.Count != 3 || loop.LastExitCode != "2" {
+		t.Fatalf("container loops = %+v, want crashy on mgr-1 only", st.ContainerLoops)
+	}
+	inspected := inspectRequests(l.m[0])
+	if len(inspected) != 1 || !strings.Contains(inspected[0], "ctr-crashy") {
+		t.Errorf("inspects = %v, want only the container over the threshold", inspected)
+	}
+	if bad := writesTo(l.m[0]); len(bad) != 0 {
+		t.Errorf("detection changed containers: %v", bad)
+	}
+}
+
+func TestAContainerLoopSurvivesALostQuorumBecauseItNeedsNoCluster(t *testing.T) {
+	l := newLoopRig(t)
+	target := AgentTarget(l.m[0].id)
+	now := l.clock.Now()
+	cfg := managerConfig(1, l.nodes, l.services)
+	cfg.Containers = []dockertest.FakeContainer{{ID: "ctr-crashy", Names: []string{"/crashy"}, State: "restarting"}}
+	cfg.RestartPolicies = map[string]string{"ctr-crashy": "always"}
+	cfg.QuorumLost = true
+	l.m[0].fake.Reconfigure(cfg)
+	for i := range 3 {
+		dieIn(t, l.evs, target, now, fmt.Sprintf("x%d", i), "crashy", "ctr-crashy", time.Duration(i+1)*time.Minute, "2")
+	}
+	_ = l.c.Refresh(context.Background(), l.env.ID)
+	st, _ := l.c.Cached(l.env.ID)
+	if len(st.ContainerLoops) != 1 {
+		t.Fatalf("container loops = %+v, want the loop even though the swarm has no quorum", st.ContainerLoops)
+	}
+}
+
+// Mutes of containers in the cluster read (plan 06-36, D-16, A12).
+
+func (g *standaloneLoopRig) mute(t *testing.T, key string) {
+	t.Helper()
+	if err := g.st.Q.InsertRestartLoopMute(context.Background(), sqlc.InsertRestartLoopMuteParams{
+		EnvID: g.env.ID, Kind: "container", TargetID: key, Name: key, MutedBy: "user-1", MutedAt: g.clock.Now().UnixNano(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAContainerMuteMarksTheFlaggedContainerMutedAndIsKeptWhileItIsQuiet(t *testing.T) {
+	g := newStandaloneLoopRig(t)
+	g.dies(t, "crashy", "crashy", "ctr-crashy", 3, "3")
+	key, quiet := ContainerLoopKey(g.edge.id, "crashy"), ContainerLoopKey(g.edge.id, "gone-for-now")
+	g.mute(t, key)
+	g.mute(t, quiet)
+	st := g.refresh(t)
+	if loop := st.ContainerLoops[key]; !loop.Muted || loop.Count != 3 {
+		t.Fatalf("container loops = %+v, want crashy still flagged and muted", st.ContainerLoops)
+	}
+	if !st.MutedContainers[key] || !st.MutedContainers[quiet] {
+		t.Errorf("muted containers = %v, want both: a container recreated under its name stays muted", st.MutedContainers)
+	}
+	rows, err := g.st.RQ.ListRestartLoopMutes(context.Background(), g.env.ID)
+	if err != nil || len(rows) != 2 {
+		t.Errorf("mute rows = %+v (%v), want both kept", rows, err)
+	}
+	if len(st.MutedServices) != 0 {
+		t.Errorf("muted services = %v, want a container mute to leave the services alone", st.MutedServices)
+	}
+}
+
+func TestSettingAContainerMuteUpdatesWhatIsServedAtOnceAndLeavesTheCopiesAlreadyHandedOutAlone(t *testing.T) {
+	g := newStandaloneLoopRig(t)
+	g.dies(t, "crashy", "crashy", "ctr-crashy", 3, "3")
+	key := ContainerLoopKey(g.edge.id, "crashy")
+	before := g.refresh(t)
+	if before.ContainerLoops[key].Muted {
+		t.Fatal("crashy muted before anyone muted it")
+	}
+	g.c.SetContainerRestartLoopMute(g.env.ID, key, true)
+	after, _ := g.c.Cached(g.env.ID)
+	if !after.ContainerLoops[key].Muted || !after.MutedContainers[key] {
+		t.Fatalf("after a mute = %+v / %v, want crashy muted without waiting for the next read", after.ContainerLoops, after.MutedContainers)
+	}
+	if before.ContainerLoops[key].Muted {
+		t.Error("a state handed out earlier changed: the maps are shared, a mute must replace them")
+	}
+	g.c.SetContainerRestartLoopMute(g.env.ID, key, false)
+	back, _ := g.c.Cached(g.env.ID)
+	if back.ContainerLoops[key].Muted || back.MutedContainers[key] {
+		t.Errorf("after an unmute = %+v / %v, want crashy not muted", back.ContainerLoops, back.MutedContainers)
+	}
+}

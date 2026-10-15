@@ -20,6 +20,9 @@ const (
 	// WarnRestartLoop is a swarm service whose tasks keep failing and whose alerts nobody
 	// muted (plan 06-35, RES-13, D-15).
 	WarnRestartLoop = "restart_loop"
+	// WarnRestartLoopContainer is a standalone container that keeps dying and whose alerts
+	// nobody muted (plan 06-36, RES-13, D-15).
+	WarnRestartLoopContainer = "restart_loop_container"
 )
 
 // maxWarnError is the longest latest-error text a restart-loop warning carries, in characters.
@@ -42,6 +45,9 @@ type EnvWarning struct {
 	// latest task error. Count is how many tasks failed in that window.
 	Service, ServiceID, LatestError string
 	WindowMinutes                   int
+	// For a container loop: the container's name and ID, the node it is on and its last
+	// exit code. Count and WindowMinutes are as for a service.
+	Container, ContainerID, NodeID, LastExitCode string
 }
 
 // AgentState is what the warnings need to know of one agent.
@@ -163,6 +169,9 @@ func RestartLoopWarnings(e Environment, loops map[string]RestartLoop) []EnvWarni
 	SortWarnings(out)
 	return out
 }
+
+// ContainerLoopWarnings is not written yet.
+func ContainerLoopWarnings(e Environment, loops map[string]ContainerLoop) []EnvWarning { return nil }
 
 // SortWarnings orders warnings errors first, then newest first, then by environment, node,
 // service and ID, so the same warnings always come out in the same order.

@@ -116,6 +116,13 @@ type ClusterState struct {
 	// MutedServices are the IDs of the listed services whose restart-loop alerts are muted,
 	// whether or not they are looping now.
 	MutedServices map[string]bool
+	// ContainerLoops are the standalone containers that keep dying, by ContainerLoopKey
+	// (node and name). They are kept for every kind of environment, whatever the swarm's
+	// quorum (RES-13, D-15).
+	ContainerLoops map[string]ContainerLoop
+	// MutedContainers are the ContainerLoopKeys whose restart-loop alerts are muted, whether
+	// or not the container is looping now.
+	MutedContainers map[string]bool
 	// HistoryLimit is how many tasks per slot Docker keeps in Read's cluster, 0 before the
 	// first read.
 	HistoryLimit int
@@ -274,6 +281,9 @@ func (c *Clusters) SetRestartLoopMute(envID, serviceID string, muted bool) {
 		e.state.RestartLoops = loops
 	}
 }
+
+// SetContainerRestartLoopMute is not written yet.
+func (c *Clusters) SetContainerRestartLoopMute(envID, key string, muted bool) {}
 
 // muteKindService is the kind of a mute of a swarm service.
 const muteKindService = "service"

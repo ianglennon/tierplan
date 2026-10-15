@@ -1397,3 +1397,69 @@ func TestContainerActionAnEngineRefusalIsActionFailedWithItsMessageAndIsLogged(t
 		t.Fatalf("audit rows = %+v", rows)
 	}
 }
+
+// Restart loops of standalone containers on the list and the detail (plan 06-36, RES-13,
+// D-15). The fixture is restartloop_test.go's containerLoopEnv.
+
+func TestContainersListFlagsAContainerInARestartLoopAndNoOtherNeverATaskContainer(t *testing.T) {
+	f, e := containerLoopEnv(t)
+	rec := f.get(t, e, "containers")
+	if rec.code != http.StatusOK {
+		t.Fatalf("list = %d %s", rec.code, rec.body)
+	}
+	var raw struct {
+		Items []map[string]json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(rec.body, &raw); err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]*containerLoopBody{}
+	for _, it := range raw.Items {
+		var name string
+		if err := json.Unmarshal(it["name"], &name); err != nil {
+			t.Fatal(err)
+		}
+		loop, present := it["restartLoop"]
+		if present != (name == "crashy") {
+			t.Errorf("row %s has restartLoop present = %v, want it only on crashy", name, present)
+		}
+		if present {
+			var b containerLoopBody
+			if err := json.Unmarshal(loop, &b); err != nil {
+				t.Fatal(err)
+			}
+			byName[name] = &b
+		}
+	}
+	if got := byName["crashy"]; got == nil || got.State != "flagged" || got.Count != 3 || got.WindowMinutes != 10 || got.LastExitCode != "3" {
+		t.Fatalf("crashy restartLoop = %+v, want flagged, 3 deaths in 10 minutes, last exit code 3", got)
+	}
+}
+
+func TestContainerDetailCarriesTheRestartLoopAndWhetherItsAlertsAreMuted(t *testing.T) {
+	f, e := containerLoopEnv(t)
+	_, detail, muted := loopOfContainer(t, f, e, "crashy")
+	if muted || detail == nil || detail.State != "flagged" || detail.Count != 3 || detail.LastExitCode != "3" || detail.WindowMinutes != 10 {
+		t.Fatalf("crashy detail = muted %v, loop %+v, want flagged with 3 deaths and exit code 3", muted, detail)
+	}
+	for _, name := range []string{"calm", "web.1.abcdef"} {
+		if _, d, m := loopOfContainer(t, f, e, name); d != nil || m {
+			t.Errorf("%s detail = muted %v, loop %+v, want neither: calm exited cleanly, and a task container's service has the loop", name, m, d)
+		}
+	}
+}
+
+func TestContainerDetailOfAMutedContainerThatIsNotLoopingSaysMutedWithNoLoop(t *testing.T) {
+	f, e := containerLoopEnv(t)
+	op := loopAs(t, f, e, "loop-operator", "operator")
+	if rec := op(http.MethodPut, containerMutePath(e, "calm"), ""); rec.code != http.StatusOK {
+		t.Fatalf("mute = %d %s", rec.code, rec.body)
+	}
+	list, detail, muted := loopOfContainer(t, f, e, "calm")
+	if !muted || detail != nil {
+		t.Errorf("calm detail = muted %v, loop %+v, want muted with no loop", muted, detail)
+	}
+	if list != nil {
+		t.Errorf("calm in the list = %+v, want no loop: a list shows the badge only while the loop holds", list)
+	}
+}

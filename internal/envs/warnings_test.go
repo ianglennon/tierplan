@@ -250,3 +250,48 @@ func TestRestartLoopWarningsCutLongNamesAndTextAndSortAfterTheirEnvironmentsOthe
 		t.Errorf("order = %v, want errors newest first, then by service ID", order)
 	}
 }
+
+// Container loops in the bell (plan 06-36, RES-13, D-15): one warning per flagged standalone
+// container that nobody muted, from the loops of the last read.
+
+func TestContainerLoopWarningsAreOneErrorPerUnmutedFlaggedContainerWithWhatTheBellSays(t *testing.T) {
+	e := warnEnv("e1", "Edge", StateOnline)
+	since := warnNow.Add(-3 * time.Minute)
+	loops := map[string]ContainerLoop{
+		ContainerLoopKey("n1", "crashy"): {NodeID: "n1", Name: "crashy", ContainerID: "cid-1", Count: 4, Window: 10 * time.Minute, LastExitCode: "137", Since: since},
+		ContainerLoopKey("n1", "quiet"):  {NodeID: "n1", Name: "quiet", ContainerID: "cid-2", Count: 3, Window: 10 * time.Minute, LastExitCode: "1", Since: since, Muted: true},
+	}
+	got := ContainerLoopWarnings(e, loops)
+	if len(got) != 1 {
+		t.Fatalf("warnings = %+v, want only the unmuted container", got)
+	}
+	w := got[0]
+	if w.ID != WarnRestartLoopContainer || w.Severity != SeverityError || w.EnvID != "e1" || w.EnvName != "Edge" ||
+		w.Container != "crashy" || w.ContainerID != "cid-1" || w.NodeID != "n1" || w.Count != 4 || w.WindowMinutes != 10 ||
+		w.LastExitCode != "137" || !w.Since.Equal(since) {
+		t.Fatalf("warning = %+v", w)
+	}
+	if got := ContainerLoopWarnings(e, nil); len(got) != 0 {
+		t.Errorf("no loops gave %+v, want none", got)
+	}
+}
+
+func TestContainerLoopWarningsCutLongNamesAndSortByNodeAndName(t *testing.T) {
+	e := warnEnv("e1", "Edge", StateOnline)
+	loops := map[string]ContainerLoop{
+		ContainerLoopKey("n1", "b"):                      {NodeID: "n1", Name: "b", Count: 3, Window: time.Minute, Since: warnNow},
+		ContainerLoopKey("n1", "a"):                      {NodeID: "n1", Name: "a", Count: 3, Window: time.Minute, Since: warnNow},
+		ContainerLoopKey("n0", strings.Repeat("n", 200)): {NodeID: "n0", Name: strings.Repeat("n", 200), Count: 3, Window: time.Minute, Since: warnNow},
+	}
+	ws := ContainerLoopWarnings(e, loops)
+	var order []string
+	for _, w := range ws {
+		if len(w.Container) > 64 {
+			t.Errorf("container is %d characters, want it cut to 64", len(w.Container))
+		}
+		order = append(order, w.NodeID+"/"+w.Container[:1])
+	}
+	if want := "n0/n,n1/a,n1/b"; strings.Join(order, ",") != want {
+		t.Errorf("order = %v, want the same order every time: by node, then name", order)
+	}
+}
