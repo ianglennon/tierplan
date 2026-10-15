@@ -61,6 +61,28 @@ The agent is the security boundary between Bayplan and the host's Docker socket.
 | Configs | list (`GET /configs`), inspect (`GET /configs/{id}`), create (`POST /configs/create`) and remove (`DELETE /configs/{id}`), none with a query key. The create body is a name, labels, content of 1 to 1,023,999 bytes and optionally the `golang` templating driver, capped at 2 MiB; any other templating driver, a driver option or any other field is refused. Docker returns every config's content with the list and with the inspect, and the agent forwards both as they are. |
 | Swarm nodes | update (`POST /nodes/{id}/update`, only the `version` key) and remove (`DELETE /nodes/{id}`, no query key, so a node can never be force-removed). The update body is a node spec with a name, labels, a role (`manager` or `worker`) and an availability (`active`, `pause` or `drain`) and nothing else; labels are bounded like every other label map |
 
+**The Phase 6 routes at a glance.** All of them are matched on the method and the whole path (with or without the `/vX.Y` prefix), and a key not listed is refused. Writes are refused on a read-only host before the table is consulted.
+
+| Route | Query keys | Body | Cap |
+|-------|------------|------|-----|
+| `GET /services/{id}` | `insertDefaults` | none | |
+| `POST /services/create` | none | service spec; `X-Registry-Auth` allowed | 256 KiB |
+| `POST /services/{id}/update` | `version`, `registryAuthFrom` (`spec` or `previous-spec`), `rollback` (`previous` or `none`) | service spec; `X-Registry-Auth` allowed | 256 KiB |
+| `DELETE /services/{id}` | none | none | |
+| `GET /services/{id}/logs`, `GET /tasks/{id}/logs` | `stdout`, `stderr`, `timestamps`, `follow`, `details`, `since`, `tail` | none | |
+| `GET /nodes/{id}` | none | none | |
+| `POST /nodes/{id}/update` | `version` | node spec: name, labels, role, availability | 64 KiB |
+| `DELETE /nodes/{id}` | none, so `force` can never be sent | none | |
+| `GET /secrets`, `GET /secrets/{id}` | none | none | |
+| `POST /secrets/create` | none | name, labels, value | 1 MiB |
+| `DELETE /secrets/{id}` | none | none | |
+| `GET /configs`, `GET /configs/{id}` | none | none | |
+| `POST /configs/create` | none | name, labels, content, optional `golang` templating | 2 MiB |
+| `DELETE /configs/{id}` | none | none | |
+| `GET /containers/{id}/stats` | `stream` (only `0` or `false`), `one-shot` | none | |
+
+There is no route to update a secret or a config (they are replaced by a new one), to read the swarm join tokens, or to create or change a container.
+
 For every call that carries a body (exec create and start, network create, connect and disconnect, volume create, service create and update, node update, secret create, config create) the agent reads the JSON into Docker's own request type, refuses any field it does not know, builds a fresh request from the fields it allows, and forwards that fresh request. Whatever else the sender put in the body does not arrive.
 
 **A registry credential crosses on four calls only.** `X-Registry-Auth` carries the credential Bayplan holds for a registry. The agent accepts it on an image pull, on the distribution check and on a service create and update, and deletes it from every other request before the request reaches Docker; `X-Registry-Config` is deleted from every request. On those calls the header must be absent or a single value of at most 16 KiB made only of base64url characters, otherwise the request is refused as `agent_policy_denied`. The agent never decodes, logs or keeps the value: a refusal is reported with the method, the path and the reason, without the query or any header.
@@ -75,7 +97,7 @@ For every call that carries a body (exec create and start, network create, conne
 - The legacy **`link`** key on a container remove, and **`force`** on a volume delete.
 - Importing an image (`fromSrc`, `repo`, `message` and `changes` on a pull), **`force`** on an image remove, and tagging, pushing, saving, loading, building and pruning images.
 - Creating or changing a container; creating or changing a **service whose spec gives tasks host access**, unless the host opted in (below); the export and file contents of a container, and a stats stream that is left open (`stream=true`); the swarm join tokens (`GET /swarm`).
-- A body larger than 64 KiB (256 KiB for a service spec), and a query larger than 4 KiB.
+- A body larger than 64 KiB (256 KiB for a service spec, 1 MiB for a secret and 2 MiB for a config), and a query larger than 4 KiB.
 
 ## Service specs and host access
 
@@ -95,7 +117,7 @@ The check runs after the read-only flag and after the body has been decoded stri
 
 **The read-only flag comes first.** On a host with `BAYPLAN_AGENT_READ_ONLY=true` the agent refuses every request that is not a `GET` or `HEAD` before it looks at the table, so no table entry can reach a change, no shell can be opened (creating an exec is a `POST`), and no image can be pulled or removed. Image inspect, history and the distribution check are reads and still answer. The distribution check is a read for the agent but not for the network: it has the host's Docker engine connect to a registry host that Bayplan names, using the credential Bayplan sends, and the engine treats loopback and its `insecure-registries` hosts as plain HTTP. A read-only host therefore still lets the Bayplan server make that host's network position issue requests to registries, so "read-only" does not mean "makes no outbound connections". If that matters, firewall the host's egress. See [Settings on the host](#settings-on-the-host-read-only-and-self-update).
 
-**An older agent refuses the newer calls.** The table ships with the agent. An agent from before this list grew refuses container actions, logs, shells, networks, volumes, image pulls, removes, inspects and distribution checks, and service inspects, creates, updates and removes with `agent_policy_denied` until it updates; Bayplan then says the agent needs an update, and updates it itself unless the host set `BAYPLAN_AGENT_SELF_UPDATE=false` (see [Updates](#updates)).
+**An older agent refuses the newer calls.** The table ships with the agent. An agent from before this list grew refuses container actions, logs, shells, networks, volumes, image pulls, removes, inspects and distribution checks, and service, node, secret and config calls, service and task logs and container stats with `agent_policy_denied` until it updates; Bayplan then says the agent needs an update, and updates it itself unless the host set `BAYPLAN_AGENT_SELF_UPDATE=false` (see [Updates](#updates)).
 
 ## Before you install
 
