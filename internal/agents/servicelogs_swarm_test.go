@@ -222,7 +222,7 @@ func TestSwarmServiceLogsMerged(t *testing.T) {
 	if len(slots) < 3 {
 		t.Errorf("the download names only %v: want every task, the replaced one's slot included", slots)
 	}
-	if first, last := times[0], times[len(times)-1]; !(first <= lastOld && last >= firstNew) {
+	if first, last := times[0], times[len(times)-1]; first > lastOld || last < firstNew {
 		t.Errorf("the download runs from %s to %s: want it to hold the dead task's lines (to %s) and the replacement's (from %s)", first, last, lastOld, firstNew)
 	}
 }

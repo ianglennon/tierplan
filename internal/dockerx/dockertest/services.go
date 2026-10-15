@@ -47,7 +47,10 @@ func CreateCrashLoopService(t testing.TB, manager *Node, name string, constraint
 // tasks may run.
 func CreateLoggingService(t testing.TB, manager *Node, name string, replicas int, constraints ...string) string {
 	t.Helper()
-	n := uint64(replicas)
+	if replicas < 1 {
+		t.Fatalf("a logging service needs at least one replica, got %d", replicas)
+	}
+	n := uint64(replicas) //nolint:gosec // G115: checked to be at least 1 just above
 	grace := time.Second
 	return createService(t, manager, swarm.ServiceSpec{
 		Annotations: swarm.Annotations{Name: name},

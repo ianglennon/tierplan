@@ -189,7 +189,7 @@ func TestServiceFacadeOnARealEngine(t *testing.T) {
 		t.Errorf("ServiceCreate of a spec with an unknown field = %v, want ErrServiceSpecInvalid", err)
 	}
 	bad := spec
-	bad.Annotations.Name = "facade-bad-network"
+	bad.Name = "facade-bad-network"
 	bad.TaskTemplate.Networks = []swarm.NetworkAttachmentConfig{{Target: "bp-no-such-network"}}
 	var rejected *dockerx.SpecRejectedError
 	if _, _, err := f.cli.ServiceCreate(ctx, specOf(t, bad), ""); !errors.As(err, &rejected) {
