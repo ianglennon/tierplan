@@ -630,3 +630,79 @@ func TestRouteNetworkVolumeAndExecReadsAndDeletes(t *testing.T) {
 		t.Fatalf("a refused request reached the engine: %v", got[before:])
 	}
 }
+
+func TestBodyConfigCreate(t *testing.T) {
+	want := swarm.ConfigSpec{
+		Annotations: swarm.Annotations{Name: "nginx.conf.v2", Labels: map[string]string{"app": "web"}},
+		Data:        []byte("worker_processes 1;\n"),
+	}
+	var got swarm.ConfigSpec
+	if err := roundTrip(t, BodyConfigCreate, enc(t, want), &got); err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("accepted = %+v, %v; want %+v", got, err, want)
+	}
+	// The golang templating driver, named alone, is the one driver a config may carry.
+	templated := want
+	templated.Templating = &swarm.Driver{Name: "golang"}
+	if err := roundTrip(t, BodyConfigCreate, enc(t, templated), &got); err != nil || !reflect.DeepEqual(got, templated) {
+		t.Fatalf("templated = %+v, %v; want %+v", got, err, templated)
+	}
+	// The client encodes unset labels as null.
+	if err := roundTrip(t, BodyConfigCreate, `{"Name":"a","Labels":null,"Data":"eA=="}`, &got); err != nil {
+		t.Errorf("a config with null labels was refused: %v", err)
+	}
+	// 1,023,999 bytes is the largest content the swarm takes, and its base64 is well inside the cap.
+	big := swarm.ConfigSpec{Annotations: swarm.Annotations{Name: "big"}, Data: bytes.Repeat([]byte("x"), 1023999)}
+	if err := roundTrip(t, BodyConfigCreate, enc(t, big), &got); err != nil || len(got.Data) != 1023999 {
+		t.Errorf("a 1,023,999 byte config = %d bytes, %v; want accepted", len(got.Data), err)
+	}
+}
+
+func TestBodyConfigCreateRefusals(t *testing.T) {
+	many := map[string]string{}
+	for i := range 65 {
+		many[strconv.Itoa(i)] = "v"
+	}
+	spec := func(mod func(*swarm.ConfigSpec)) string {
+		s := swarm.ConfigSpec{Annotations: swarm.Annotations{Name: "a"}, Data: []byte("x")}
+		mod(&s)
+		return enc(t, s)
+	}
+	for name, body := range map[string]string{
+		"another templating driver": spec(func(s *swarm.ConfigSpec) { s.Templating = &swarm.Driver{Name: "vault"} }),
+		"an unnamed templating":     spec(func(s *swarm.ConfigSpec) { s.Templating = &swarm.Driver{} }),
+		"templating options": spec(func(s *swarm.ConfigSpec) {
+			s.Templating = &swarm.Driver{Name: "golang", Options: map[string]string{"a": "b"}}
+		}),
+		"an unknown key":           `{"Name":"a","Data":"eA==","Foo":1}`,
+		"a driver key":             `{"Name":"a","Data":"eA==","Driver":{"Name":"vault"}}`,
+		"an ID":                    `{"ID":"x","Name":"a","Data":"eA=="}`,
+		"a version":                `{"Version":{"Index":3},"Name":"a","Data":"eA=="}`,
+		"no name":                  enc(t, swarm.ConfigSpec{Data: []byte("x")}),
+		"a name with a slash":      spec(func(s *swarm.ConfigSpec) { s.Name = "a/b" }),
+		"a leading dash":           spec(func(s *swarm.ConfigSpec) { s.Name = "-a" }),
+		"a trailing dot":           spec(func(s *swarm.ConfigSpec) { s.Name = "a." }),
+		"a 65 character name":      spec(func(s *swarm.ConfigSpec) { s.Name = strings.Repeat("a", 65) }),
+		"no content":               spec(func(s *swarm.ConfigSpec) { s.Data = nil }),
+		"a 1,024,000 byte content": spec(func(s *swarm.ConfigSpec) { s.Data = bytes.Repeat([]byte("x"), 1024000) }),
+		"too many labels":          spec(func(s *swarm.ConfigSpec) { s.Labels = many }),
+		"an over-long label":       spec(func(s *swarm.ConfigSpec) { s.Labels = map[string]string{"k": strings.Repeat("v", 4097)} }),
+		"data after the value":     `{"Name":"a","Data":"eA=="}{}`,
+		"not an object":            `["a"]`,
+		"an empty body":            ``,
+		"content that is no b64":   `{"Name":"a","Data":"!!!"}`,
+	} {
+		if _, err := validateBody(BodyConfigCreate, strings.NewReader(body), bodyEnv{}); err == nil {
+			t.Errorf("%s: the body was accepted", name)
+		}
+	}
+}
+
+func TestBodyConfigCreateCapIs2MiBAndRefusesAnythingOverIt(t *testing.T) {
+	if bodyCap(BodyConfigCreate) != 2<<20 {
+		t.Fatalf("the config create cap = %d, want 2 MiB", bodyCap(BodyConfigCreate))
+	}
+	over := `{"Name":"a","Data":"` + strings.Repeat("A", 2<<20) + `"}`
+	if _, err := validateBody(BodyConfigCreate, strings.NewReader(over), bodyEnv{}); err == nil {
+		t.Error("a config create body over 2 MiB was accepted")
+	}
+}

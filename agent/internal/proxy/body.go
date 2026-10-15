@@ -53,6 +53,9 @@ func bodyCap(kind BodyKind) int64 {
 	return maxBody
 }
 
+// maxConfigData is the most bytes of content the swarm takes in a config (its limit is 1,024,000).
+const maxConfigData = 1023999
+
 // maxSecretData is the most bytes of value the swarm takes in a secret (its limit is 512,000).
 const maxSecretData = 511999
 

@@ -109,6 +109,9 @@ type FakeConfig struct {
 	Networks   []FakeNetwork
 	// Secrets are the swarm secrets /secrets lists, none with a value (fake_secrets.go).
 	Secrets []FakeSecret
+	// Configs are the swarm configs /configs lists, each with its content, as a real manager
+	// lists them (fake_configs.go).
+	Configs []FakeConfigObject
 	// DiskUsageFail makes GET /system/df answer 500, as an engine does when a volume's files
 	// cannot be walked.
 	DiskUsageFail bool
@@ -535,6 +538,11 @@ type Fake struct {
 	secrets       []FakeSecret
 	secretCreates []FakeSecretCreate
 	secretGone    map[string]bool
+	// configs are the configs created through the fake, configCreates the requests that made
+	// them and configGone the IDs of those removed (fake_configs.go).
+	configs       []FakeConfigObject
+	configCreates []FakeConfigCreate
+	configGone    map[string]bool
 	// distDigest is the digest the distribution route answers a full reference with, where a
 	// test has moved a tag (SetDistributionDigest); a reference not in it gets fakeDigest.
 	distDigest map[string]string
@@ -662,7 +670,7 @@ func (f *Fake) Reconfigure(cfg FakeConfig) {
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withServices(f.svcState).withoutServices(f.svcGone).withNodes(f.nodeState).withoutNodes(f.nodeGone).withSecrets(f.secrets).withoutSecrets(f.secretGone)
+	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withServices(f.svcState).withoutServices(f.svcGone).withNodes(f.nodeState).withoutNodes(f.nodeGone).withSecrets(f.secrets).withoutSecrets(f.secretGone).withConfigs(f.configs).withoutConfigs(f.configGone)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {

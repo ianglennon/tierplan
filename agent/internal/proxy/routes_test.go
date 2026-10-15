@@ -576,6 +576,65 @@ func TestRouteSecretsTakeNoQueryAndTheListNeverShadowsTheInspect(t *testing.T) {
 	}
 }
 
+func TestRouteConfigsTakeNoQueryAndTheListNeverShadowsTheInspect(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, path, query string
+		body                      bool
+		wantRoute                 string // "" means refused
+	}{
+		{"the list", "GET", "/configs", "", false, "configs list"},
+		{"the list with the version prefix", "GET", "/v1.56/configs", "", false, "configs list"},
+		{"a HEAD of the list", "HEAD", "/configs", "", false, "configs list"},
+		{"the list with a filter", "GET", "/configs", "filters=%7B%7D", false, ""},
+		{"the list with a body", "GET", "/configs", "", true, ""},
+		{"an inspect", "GET", "/configs/abc123", "", false, "config inspect"},
+		{"an inspect with the version prefix", "GET", "/v1.56/configs/abc123", "", false, "config inspect"},
+		{"an inspect with a key", "GET", "/configs/abc123", "x=1", false, ""},
+		{"an inspect with a dot-dot", "GET", "/configs/../x", "", false, ""},
+		{"an inspect starting with a dot", "GET", "/configs/.x", "", false, ""},
+		{"a 129 character inspect", "GET", "/configs/" + strings.Repeat("a", 129), "", false, ""},
+		{"an inspect with a sub-path", "GET", "/configs/abc/update", "", false, ""},
+		{"a create", "POST", "/configs/create", "", true, "config create"},
+		{"a create with the version prefix", "POST", "/v1.56/configs/create", "", true, "config create"},
+		{"a create with a key", "POST", "/configs/create", "x=1", true, ""},
+		{"a create with no body", "POST", "/configs/create", "", false, ""},
+		{"a GET of create is an inspect of that name", "GET", "/configs/create", "", false, "config inspect"},
+		{"an update", "POST", "/configs/abc123/update", "version=1", true, ""},
+		{"a remove", "DELETE", "/configs/abc123", "", false, "config remove"},
+		{"a remove with the version prefix", "DELETE", "/v1.56/configs/abc123", "", false, "config remove"},
+		{"a remove with a key", "DELETE", "/configs/abc123", "force=1", false, ""},
+		{"a remove with a body", "DELETE", "/configs/abc123", "", true, ""},
+		{"a remove of the list", "DELETE", "/configs", "", false, ""},
+		{"a remove with a trailing slash", "DELETE", "/configs/abc123/", "", false, ""},
+		{"a PUT to a config", "PUT", "/configs/abc123", "", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, _, kind := Allowed(tc.method, tc.path, tc.query, tc.body, false, Policy{})
+			if ok != (tc.wantRoute != "") {
+				t.Fatalf("Allowed(%s %s?%s) = %v, want %v", tc.method, tc.path, tc.query, ok, tc.wantRoute != "")
+			}
+			if !ok {
+				return
+			}
+			rt, found := Match(tc.method, tc.path)
+			if !found || rt.name != tc.wantRoute || rt.registryAuth {
+				t.Fatalf("Match(%s %s) = %q (registryAuth %v), want %q without one", tc.method, tc.path, rt.name, rt.registryAuth, tc.wantRoute)
+			}
+			if wantKind := map[string]BodyKind{"config create": BodyConfigCreate}[tc.wantRoute]; kind != wantKind {
+				t.Errorf("body kind = %d, want %d", kind, wantKind)
+			}
+		})
+	}
+	if ok, reason, _ := Allowed("GET", "/configs", "", false, false, Policy{ReadOnly: true}); !ok {
+		t.Errorf("a configs list on a read-only host was refused (%s)", reason)
+	}
+	for _, w := range []struct{ method, path string }{{"POST", "/configs/create"}, {"DELETE", "/configs/abc123"}} {
+		if ok, reason, _ := Allowed(w.method, w.path, "", w.method == "POST", false, Policy{ReadOnly: true}); ok || reason != "read_only_flag" {
+			t.Errorf("%s %s on a read-only host = %v %q, want refused read_only_flag", w.method, w.path, ok, reason)
+		}
+	}
+}
+
 func TestRouteServiceWritesAreRefusedOnAReadOnlyHostAndInspectStillAnswers(t *testing.T) {
 	for _, tc := range []struct {
 		method, path, query string

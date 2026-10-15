@@ -124,6 +124,11 @@ var oracle = []oracleEntry{
 	oEntry("GET", `secrets/`+oID, nil),
 	{method: "POST", path: rx(oVer + `secrets/create$`), body: true},
 	oEntry("DELETE", `secrets/`+oID, nil),
+	// Configs: the same four, none with a key.
+	oEntry("GET", `configs`, nil),
+	oEntry("GET", `configs/`+oID, nil),
+	{method: "POST", path: rx(oVer + `configs/create$`), body: true},
+	oEntry("DELETE", `configs/`+oID, nil),
 	{
 		method: "POST", path: rx(oVer + `services/` + oID + `/update$`), body: true,
 		keys: map[string]*regexp.Regexp{
@@ -224,6 +229,20 @@ func FuzzAllowed(f *testing.F) {
 		{"DELETE", "/secrets/abc123", "", false, false, false},
 		{"DELETE", "/secrets/abc123", "force=1", false, false, false},
 		{"DELETE", "/secrets/abc123", "", true, false, false},
+		{"GET", "/configs", "", false, false, false},
+		{"GET", "/configs", "filters=%7B%7D", false, false, false},
+		{"HEAD", "/v1.56/configs", "", false, false, true},
+		{"GET", "/configs/abc123", "", false, false, false},
+		{"GET", "/configs/abc123", "x=1", false, false, false},
+		{"GET", "/configs/abc123/update", "", false, false, false},
+		{"POST", "/configs/create", "", true, false, false},
+		{"POST", "/configs/create", "x=1", true, false, false},
+		{"POST", "/configs/create", "", false, false, false},
+		{"POST", "/configs/create", "", true, false, true},
+		{"POST", "/configs/abc123/update", "version=1", true, false, false},
+		{"DELETE", "/configs/abc123", "", false, false, false},
+		{"DELETE", "/configs/abc123", "force=1", false, false, false},
+		{"DELETE", "/configs/abc123", "", true, false, false},
 		{"GET", "/services/web/logs", "follow=1", false, false, false},
 		{"POST", "/images/create", "fromSrc=http://x", false, false, false},
 		{"POST", "/images/create", "fromImage=a&tag=b&platform=linux/arm64", false, false, false},
@@ -406,6 +425,11 @@ var bodyShapes = map[BodyKind]bodyShape{
 	BodySecretCreate: {
 		keys: map[string]*bodyShape{"Name": nil, "Labels": nil, "Data": nil},
 	},
+	// A config to create is a name, labels, the content and the golang templating driver; no other driver
+	// and no driver option is ever forwarded.
+	BodyConfigCreate: {
+		keys: map[string]*bodyShape{"Name": nil, "Labels": nil, "Data": nil, "Templating": {keys: map[string]*bodyShape{"Name": nil}}},
+	},
 	// A service spec is the user's whole service, so the shape is its top-level keys.
 	// What it must not hold is a plugin or a network attachment task, and a runtime
 	// other than container (checked in FuzzBody).
@@ -536,13 +560,18 @@ func FuzzBody(f *testing.F) {
 		{uint8(BodySecretCreate), enc(swarm.SecretSpec{Annotations: swarm.Annotations{Name: "dbpw"}, Data: []byte("v"), Driver: &swarm.Driver{Name: "vault"}})},
 		{uint8(BodySecretCreate), enc(swarm.SecretSpec{Annotations: swarm.Annotations{Name: "dbpw"}, Data: []byte("v"), Templating: &swarm.Driver{Name: "golang"}})},
 		{uint8(BodySecretCreate), `{"Name":"dbpw","Data":""}`},
+		{uint8(BodyConfigCreate), enc(swarm.ConfigSpec{Annotations: swarm.Annotations{Name: "nginx.conf", Labels: map[string]string{"a": "b"}}, Data: []byte("v")})},
+		{uint8(BodyConfigCreate), enc(swarm.ConfigSpec{Annotations: swarm.Annotations{Name: "nginx.conf"}, Data: []byte("v"), Templating: &swarm.Driver{Name: "golang"}})},
+		{uint8(BodyConfigCreate), enc(swarm.ConfigSpec{Annotations: swarm.Annotations{Name: "nginx.conf"}, Data: []byte("v"), Templating: &swarm.Driver{Name: "vault"}})},
+		{uint8(BodyConfigCreate), enc(swarm.ConfigSpec{Annotations: swarm.Annotations{Name: "nginx.conf"}, Data: []byte("v"), Templating: &swarm.Driver{Name: "golang", Options: map[string]string{"a": "b"}}})},
+		{uint8(BodyConfigCreate), `{"Name":"nginx.conf","Data":"","Driver":{"Name":"vault"}}`},
 		{uint8(BodyNone), `{}`},
 	}
 	for _, s := range seeds {
 		f.Add(s.kind, s.body)
 	}
 	f.Fuzz(func(t *testing.T, kind uint8, body string) {
-		k := BodyKind(kind % 10) // BodyNone and the nine kinds
+		k := BodyKind(kind % 11) // BodyNone and the ten kinds
 		out, err := validateBody(k, strings.NewReader(body), bodyEnv{})
 		if err != nil {
 			return
@@ -594,6 +623,21 @@ func FuzzBody(f *testing.F) {
 			}
 			if !secretNameRe.MatchString(spec.Name) || len(spec.Labels) > maxMapEntries {
 				t.Fatalf("a secret spec over the bounds was forwarded: %.200s", out)
+			}
+		}
+		if k == BodyConfigCreate {
+			var spec swarm.ConfigSpec
+			if err := json.Unmarshal(out, &spec); err != nil {
+				t.Fatalf("the forwarded config spec does not decode: %v: %s", err, out)
+			}
+			if tpl := spec.Templating; tpl != nil && (tpl.Name != "golang" || len(tpl.Options) > 0) {
+				t.Fatalf("a config spec with the templating driver %+v was forwarded: %.200s", tpl, out)
+			}
+			if n := len(spec.Data); n < 1 || n > maxConfigData {
+				t.Fatalf("a config spec with %d bytes of content was forwarded", n)
+			}
+			if !secretNameRe.MatchString(spec.Name) || len(spec.Labels) > maxMapEntries {
+				t.Fatalf("a config spec over the bounds was forwarded: %.200s", out)
 			}
 		}
 		if k == BodyServiceSpec {
