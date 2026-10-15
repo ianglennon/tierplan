@@ -8,7 +8,7 @@ import { getPath, setPath } from "@/features/service-editor/spec-patch";
 import everyField from "@/features/service-editor/testdata/every-field-spec.json";
 
 describe("FORM_OWNED_PATHS", () => {
-  it("names the Basics, Environment, Ports and Resources paths", () => {
+  it("names the paths of the Basics, Environment, Ports, Mounts, Resources, Placement, Restart policy and Update policy cards", () => {
     expect([...FORM_OWNED_PATHS].sort()).toEqual(
       [
         "EndpointSpec.Ports",
@@ -18,10 +18,24 @@ describe("FORM_OWNED_PATHS", () => {
         "Name",
         "TaskTemplate.ContainerSpec.Env",
         "TaskTemplate.ContainerSpec.Image",
+        "TaskTemplate.ContainerSpec.Mounts",
+        "TaskTemplate.Placement.Constraints",
+        "TaskTemplate.Placement.MaxReplicas",
+        "TaskTemplate.Placement.Preferences",
         "TaskTemplate.Resources.Limits.MemoryBytes",
         "TaskTemplate.Resources.Limits.NanoCPUs",
         "TaskTemplate.Resources.Reservations.MemoryBytes",
         "TaskTemplate.Resources.Reservations.NanoCPUs",
+        "TaskTemplate.RestartPolicy.Condition",
+        "TaskTemplate.RestartPolicy.Delay",
+        "TaskTemplate.RestartPolicy.MaxAttempts",
+        "TaskTemplate.RestartPolicy.Window",
+        "UpdateConfig.Delay",
+        "UpdateConfig.FailureAction",
+        "UpdateConfig.MaxFailureRatio",
+        "UpdateConfig.Monitor",
+        "UpdateConfig.Order",
+        "UpdateConfig.Parallelism",
       ].sort(),
     );
   });
@@ -64,7 +78,6 @@ describe("unshownPaths", () => {
       "TaskTemplate.ContainerSpec.TTY",
       "TaskTemplate.ContainerSpec.OpenStdin",
       "TaskTemplate.ContainerSpec.ReadOnly",
-      "TaskTemplate.ContainerSpec.Mounts",
       "TaskTemplate.ContainerSpec.StopGracePeriod",
       "TaskTemplate.ContainerSpec.Healthcheck",
       "TaskTemplate.ContainerSpec.Hosts",
@@ -79,17 +92,42 @@ describe("unshownPaths", () => {
       "TaskTemplate.ContainerSpec.OomScoreAdj",
       "TaskTemplate.Resources.Limits.Pids",
       "TaskTemplate.Resources.Reservations.GenericResources",
-      "TaskTemplate.RestartPolicy",
-      "TaskTemplate.Placement",
+      "TaskTemplate.Placement.Platforms",
       "TaskTemplate.Networks",
       "TaskTemplate.LogDriver",
       "TaskTemplate.ForceUpdate",
       "TaskTemplate.Runtime",
-      "UpdateConfig",
       "RollbackConfig",
       "Networks",
       "EndpointSpec.Mode",
       "Extras",
+    ]);
+  });
+
+  it("no longer lists the mount, placement, restart policy and update policy settings the cards own", () => {
+    const paths = unshownPaths(everyField);
+    for (const p of [
+      "TaskTemplate.ContainerSpec.Mounts",
+      "TaskTemplate.Placement",
+      "TaskTemplate.Placement.Constraints",
+      "TaskTemplate.Placement.Preferences",
+      "TaskTemplate.Placement.MaxReplicas",
+      "TaskTemplate.RestartPolicy",
+      "UpdateConfig",
+    ]) {
+      expect(paths, p).not.toContain(p);
+    }
+  });
+
+  it("still names what the placement, rollback and platform cards do not show", () => {
+    const paths = unshownPaths(everyField);
+    expect(paths).toContain("TaskTemplate.Placement.Platforms");
+    expect(paths).toContain("RollbackConfig");
+  });
+
+  it("names a setting beside the owned ones of an update policy", () => {
+    expect(unshownPaths({ UpdateConfig: { Parallelism: 2, Unknown: 1 } })).toEqual([
+      "UpdateConfig.Unknown",
     ]);
   });
 
