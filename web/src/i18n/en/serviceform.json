@@ -1,0 +1,99 @@
+{
+  "serviceForm": {
+    "tabs": {
+      "label": "Editor view",
+      "form": "Form",
+      "spec": "Spec",
+      "refused": "The spec has errors, so the form can't show it. Fix them first."
+    },
+    "caution": {
+      "body": "This service has additional settings not shown here. Saving from this form keeps them unchanged. See the Spec tab.",
+      "open": "Open the Spec tab",
+      "notShown": "Not shown: {{paths}}",
+      "more": "and {{count}} more",
+      "list": "Settings not shown"
+    },
+    "basics": {
+      "title": "Basics",
+      "name": {
+        "label": "Name",
+        "helper": "Letters, numbers, dot, dash or underscore. Up to 63 characters.",
+        "readOnly": "A service's name can't change. Create a new service instead."
+      },
+      "image": {
+        "label": "Image",
+        "placeholder": "nginx:1.27 or ghcr.io/acme/app:latest",
+        "helper": "Bayplan pins the tag to its current digest when you apply.",
+        "browse": "Browse tags"
+      },
+      "mode": {
+        "label": "Mode",
+        "replicated": "Replicated",
+        "global": "Global",
+        "readOnly": "A service's mode can't change.",
+        "job": "Jobs are created and edited in the Spec tab only."
+      },
+      "replicas": {
+        "label": "Replicas",
+        "helper": "How many tasks to run."
+      },
+      "labels": {
+        "label": "Labels",
+        "add": "Add label",
+        "key": "Label name",
+        "value": "Label value",
+        "remove": "Remove label {{name}}",
+        "removeRow": "Remove label"
+      }
+    },
+    "environment": {
+      "title": "Environment variables",
+      "add": "Add variable",
+      "key": "Variable name",
+      "value": "Variable value",
+      "remove": "Remove variable {{name}}",
+      "removeRow": "Remove variable",
+      "reset": "Reset {{name}}",
+      "hiddenPlaceholder": "Hidden. Type to replace.",
+      "hiddenHelper": "Values are hidden. A hidden value stays as it is unless you type a new one."
+    },
+    "ports": {
+      "title": "Ports",
+      "row": "Port {{n}}",
+      "add": "Add port",
+      "remove": "Remove port {{n}}",
+      "published": "Published port (optional)",
+      "target": "Container port",
+      "protocol": "Protocol",
+      "mode": "Mode",
+      "modeHelper": "Ingress: any node answers on this port and passes traffic to a task. Host: only nodes running a task answer.",
+      "tcp": "TCP",
+      "udp": "UDP",
+      "sctp": "SCTP",
+      "ingress": "Ingress",
+      "host": "Host"
+    },
+    "resources": {
+      "title": "Resources",
+      "cpuLimit": "CPU limit (cores)",
+      "cpuReservation": "CPU reservation (cores)",
+      "memoryLimit": "Memory limit",
+      "memoryReservation": "Memory reservation",
+      "memoryLimitUnit": "Memory limit unit",
+      "memoryReservationUnit": "Memory reservation unit",
+      "limitHelper": "Leave empty for no limit.",
+      "reservationHelper": "Swarm only places a task on a node with this much free.",
+      "mib": "MiB",
+      "gib": "GiB"
+    },
+    "errors": {
+      "nameRequired": "Enter a name.",
+      "nameInvalid": "Use letters, numbers, dot, dash or underscore.",
+      "image": "Enter an image like nginx:1.27 or ghcr.io/acme/app:latest.",
+      "whole": "Enter a whole number of 0 or more.",
+      "port": "Enter a port from 1 to 65535.",
+      "portTwice": "That published port is used twice.",
+      "cores": "Enter a number of cores like 0.5."
+    }
+  }
+}

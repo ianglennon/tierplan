@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { Plus, X } from "lucide-react";
+import { Plus, RotateCcw, X } from "lucide-react";
 import { useId } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -58,7 +58,7 @@ interface KeyValueEditorProps {
   labels: KeyValueEditorLabels;
   // A message for each row that has a problem, by the row's id.
   errors?: ReadonlyMap<string, string>;
-  // Told when a masked row is put back (RED stub: not wired yet).
+  // Told when a masked row is put back, after the rows have been changed.
   onReset?: (row: KeyValueRow) => void;
   className?: string;
 }
@@ -69,11 +69,17 @@ const TOUCH_HEIGHT = "h-11 md:h-8";
 // KeyValueEditor is a list of name and value pairs: labels, driver options. Rows
 // repeat with a remove button each, and one button adds a row. Names and values
 // are text only, never markup.
+//
+// A row with masked set stands for a value the server withheld (D-09): the row never holds
+// it, the value box shows a placeholder, and the name can't be changed because the server
+// could not keep the value for another name. An empty value is "leave it as it is"; typing
+// one replaces it, and Reset puts the row back to hidden.
 export function KeyValueEditor({
   value,
   onChange,
   labels,
   errors,
+  onReset,
   className,
 }: KeyValueEditorProps) {
   const group = useId();
@@ -85,6 +91,8 @@ export function KeyValueEditor({
       {value.map((r, i) => {
         const error = errors?.get(r.id);
         const errorId = `${group}-e${i}`;
+        const hidden = r.masked === true && r.value === "";
+        const typedOver = r.masked === true && r.value !== "";
         return (
           <div key={r.id} className="flex flex-col gap-1">
             <div className="flex items-center gap-2">
@@ -94,6 +102,7 @@ export function KeyValueEditor({
                 aria-invalid={error ? true : undefined}
                 aria-describedby={error ? errorId : undefined}
                 value={r.key}
+                readOnly={r.masked === true}
                 onChange={(e) => update(r.id, { key: e.target.value })}
                 autoComplete="off"
                 autoCapitalize="off"
@@ -105,6 +114,7 @@ export function KeyValueEditor({
                 id={`${group}-v${i}`}
                 aria-label={labels.value}
                 value={r.value}
+                placeholder={hidden ? labels.maskedPlaceholder : undefined}
                 onChange={(e) => update(r.id, { value: e.target.value })}
                 autoComplete="off"
                 autoCapitalize="off"
@@ -112,6 +122,21 @@ export function KeyValueEditor({
                 spellCheck={false}
                 className={cn("min-w-0 flex-1 font-mono", TOUCH_HEIGHT)}
               />
+              {typedOver && labels.reset ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="max-md:size-11"
+                  aria-label={labels.reset(r.key)}
+                  onClick={() => {
+                    update(r.id, { value: "" });
+                    onReset?.(r);
+                  }}
+                >
+                  <RotateCcw aria-hidden="true" />
+                </Button>
+              ) : null}
               <Button
                 type="button"
                 variant="ghost"

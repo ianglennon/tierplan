@@ -38,11 +38,13 @@ import {
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { ApplyProgress } from "@/features/service-editor/apply-progress";
 import { editRefusalOf } from "@/features/service-editor/edit-refusal";
 import { EditorFooter } from "@/features/service-editor/editor-footer";
 import { ReviewStep } from "@/features/service-editor/review-step";
+import { ServiceForm } from "@/features/service-editor/service-form";
 import { imageOf } from "@/features/service-editor/spec-paths";
 import { StackOwnedState } from "@/features/service-editor/stack-owned-state";
 import { SpecEditor } from "@/features/spec-editor/spec-editor";
@@ -51,9 +53,14 @@ import { useDocumentTitle } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { toastSuccess } from "@/lib/toast";
 
+export type EditorTab = "form" | "spec";
+
 interface ServiceEditorPageProps {
   envId: string;
   serviceId: string;
+  // The tab the address names, and what to do to change it. The Form is the default.
+  tab?: EditorTab;
+  onTabChange?: (tab: EditorTab) => void;
 }
 
 type Stage = "edit" | "review" | "apply";
@@ -149,7 +156,12 @@ function EditFooter({
 // difference and what stops or qualifies an apply. Apply changes sends the version and the spec
 // the person typed (never the review's masked copy of it) once, and the third state follows the
 // update. The server decides every refusal; this words it. Leaving with changes asks first.
-export function ServiceEditorPage({ envId, serviceId }: ServiceEditorPageProps) {
+export function ServiceEditorPage({
+  envId,
+  serviceId,
+  tab = "form",
+  onTabChange,
+}: ServiceEditorPageProps) {
   const t = useT();
   const navigate = useNavigate();
   const environment = useEnvName(envId);
@@ -174,6 +186,14 @@ export function ServiceEditorPage({ envId, serviceId }: ServiceEditorPageProps) 
   const [review, setReview] = useState<ServiceReview>();
   const [editError, setEditError] = useState<ServiceActionError | null>(null);
   const [editorKey, setEditorKey] = useState(0);
+  // Whether every field of the Form can be written. Only the Form tab has fields.
+  const [formValid, setFormValid] = useState(true);
+  // The Spec tab opened on the Form's spec cannot show later Form edits, so it is started afresh
+  // each time it is opened.
+  const [specOpened, setSpecOpened] = useState(0);
+  // The switch to the Form was refused because the spec does not parse.
+  const [refused, setRefused] = useState(false);
+  const refusedRef = useRef<HTMLParagraphElement>(null);
   const turn = useRef(0);
 
   const current = (data?.spec ?? {}) as SpecValue;
@@ -187,12 +207,33 @@ export function ServiceEditorPage({ envId, serviceId }: ServiceEditorPageProps) 
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
   const blocker = useBlocker({
-    shouldBlockFn: () => dirtyRef.current,
+    // Changing the tab changes the address but not the page: only leaving it asks.
+    shouldBlockFn: ({ current, next }) => dirtyRef.current && current.pathname !== next.pathname,
     enableBeforeUnload: () => dirtyRef.current,
     withResolver: true,
   });
 
   const onChange = useCallback((value: SpecValue) => setEdited(value), []);
+
+  // A refused switch puts the message where a person who cannot see it is told, and keeps it
+  // there until the spec parses again or the Spec tab is left.
+  useEffect(() => {
+    if (refused) refusedRef.current?.focus();
+  }, [refused]);
+  useEffect(() => {
+    if (valid) setRefused(false);
+  }, [valid]);
+
+  function showTab(next: EditorTab) {
+    if (next === tab) return;
+    if (next === "form" && !valid) {
+      setRefused(true);
+      return;
+    }
+    setRefused(false);
+    if (next === "spec") setSpecOpened((k) => k + 1);
+    onTabChange?.(next);
+  }
 
   function onReview() {
     if (!data || !valid || reviewMutation.isPending) return;
@@ -247,6 +288,7 @@ export function ServiceEditorPage({ envId, serviceId }: ServiceEditorPageProps) 
     setReview(undefined);
     setEditError(null);
     setEditorKey((k) => k + 1);
+    setRefused(false);
     setStage("edit");
   }
 
@@ -388,12 +430,46 @@ export function ServiceEditorPage({ envId, serviceId }: ServiceEditorPageProps) 
       {/* The editor stays in the page while the review or the apply shows, so its text is
           still there when a person goes back to it. */}
       <div hidden={stage !== "edit"} className="flex flex-col gap-4">
-        <SpecEditor
-          key={editorKey}
-          initial={current}
-          onChange={onChange}
-          onValidityChange={setValid}
-        />
+        <Tabs value={tab} onValueChange={(next) => showTab(next as EditorTab)}>
+          <TabsList aria-label={t("serviceForm.tabs.label")} className="h-10">
+            <TabsTrigger value="form" className="px-4 max-md:min-h-11">
+              {t("serviceForm.tabs.form")}
+            </TabsTrigger>
+            <TabsTrigger value="spec" className="px-4 max-md:min-h-11">
+              {t("serviceForm.tabs.spec")}
+            </TabsTrigger>
+          </TabsList>
+          {refused ? (
+            <p
+              ref={refusedRef}
+              tabIndex={-1}
+              role="alert"
+              className="text-sm text-destructive outline-none"
+            >
+              {t("serviceForm.tabs.refused")}
+            </p>
+          ) : null}
+          <TabsContent value="form" className="pt-2">
+            <ServiceForm
+              key={editorKey}
+              spec={spec}
+              mode="edit"
+              envId={envId}
+              onSpecChange={onChange}
+              onValidityChange={setFormValid}
+              onOpenSpec={() => showTab("spec")}
+            />
+          </TabsContent>
+          <TabsContent value="spec" className="pt-2">
+            <SpecEditor
+              key={`${editorKey}-${specOpened}`}
+              initial={current}
+              start={spec}
+              onChange={onChange}
+              onValidityChange={setValid}
+            />
+          </TabsContent>
+        </Tabs>
         {refusal ? (
           <>
             {refusal.agentPolicy ? (
@@ -416,7 +492,7 @@ export function ServiceEditorPage({ envId, serviceId }: ServiceEditorPageProps) 
         <EditFooter
           envId={envId}
           serviceId={serviceId}
-          ready={valid}
+          ready={valid && formValid}
           checking={reviewMutation.isPending}
           onReview={onReview}
         />

@@ -38,6 +38,10 @@ export interface SpecEditorProps {
   // The spec to start from, and what Discard edits goes back to. Hidden values are in it as the
   // server sent them (D-09): the editor never asks for the real one.
   initial: SpecValue;
+  // The spec the text starts as, when that is not the spec Discard edits goes back to: the Spec
+  // tab opens on what the Form has made of the spec, and Discard edits still means the spec as
+  // it was loaded.
+  start?: SpecValue;
   // The parsed spec, each time the text parses. Text that does not parse is never passed on.
   onChange: (value: SpecValue) => void;
   // Whether the text parses, each time that changes. It is told at once, so a Review button can
@@ -50,11 +54,11 @@ export interface SpecEditorProps {
 // the text; a spec that does not parse cannot be converted, so the switch stays where it is and
 // says why. A parse error shows as "Line n: message" 400 ms after typing stops. The text lives
 // in memory only: the one thing stored in the browser is the format choice.
-export function SpecEditor({ initial, onChange, onValidityChange }: SpecEditorProps) {
+export function SpecEditor({ initial, start, onChange, onValidityChange }: SpecEditorProps) {
   const t = useT();
   const [doc, setDoc] = useState(() => {
     const format = loadSpecFormat();
-    return { format, text: renderSpec(initial, format) };
+    return { format, text: renderSpec(start ?? initial, format) };
   });
   const [shown, setShown] = useState<ShownError | null>(null);
   const [copied, setCopied] = useState(false);

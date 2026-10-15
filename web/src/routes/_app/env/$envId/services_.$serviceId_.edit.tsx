@@ -15,8 +15,8 @@ const ServiceEditorPage = lazy(() =>
   import("@/features/service-editor/editor-page").then((m) => ({ default: m.ServiceEditorPage })),
 );
 
-// The editor's tab: the Form is a later plan's, the Spec is this one's. A value that is neither
-// is dropped rather than refused, so an old or edited link still opens.
+// The editor's tab: the Form (the default) or the Spec. A value that is neither is dropped
+// rather than refused, so an old or edited link still opens.
 export const editSearchSchema = z.object({
   tab: z.enum(["form", "spec"]).optional().catch(undefined),
 });
@@ -26,11 +26,20 @@ export const editSearchSchema = z.object({
 // layout, so it has none of its tabs.
 function ServiceEditRoute() {
   const { envId, serviceId } = Route.useParams();
+  const { tab } = Route.useSearch();
+  const navigate = Route.useNavigate();
   const allowed = usePermission("services.control", envId);
   if (!allowed) return <NoPermission />;
   return (
     <Suspense fallback={<Skeleton className="h-80 w-full" />}>
-      <ServiceEditorPage envId={envId} serviceId={serviceId} />
+      <ServiceEditorPage
+        envId={envId}
+        serviceId={serviceId}
+        tab={tab ?? "form"}
+        onTabChange={(next) =>
+          void navigate({ search: (prev) => ({ ...prev, tab: next }), replace: true })
+        }
+      />
     </Suspense>
   );
 }

@@ -526,6 +526,8 @@ describe("leaving the editor", () => {
 describe("the Form tab", () => {
   const formImage = () => screen.findByLabelText("Image") as Promise<HTMLInputElement>;
   const tabButton = (name: "Form" | "Spec") => screen.getByRole("tab", { name });
+  // Radix tabs open on the press of the mouse, not on the click.
+  const openTab = (name: "Form" | "Spec") => fireEvent.mouseDown(tabButton(name), { button: 0 });
 
   const withCommand = () =>
     editSpec({
@@ -553,10 +555,10 @@ describe("the Form tab", () => {
   it("makes the address follow the tab", async () => {
     const router = renderAt(EDIT_PATH);
     await formImage();
-    fireEvent.click(tabButton("Spec"));
+    openTab("Spec");
     await ready();
     expect((router.state.location.search as { tab?: string }).tab).toBe("spec");
-    fireEvent.click(tabButton("Form"));
+    openTab("Form");
     await formImage();
     expect((router.state.location.search as { tab?: string }).tab).toBe("form");
   });
@@ -566,7 +568,7 @@ describe("the Form tab", () => {
     await formImage();
     tabButton("Form").focus();
     fireEvent.keyDown(tabButton("Form"), { key: "ArrowRight" });
-    expect(document.activeElement).toBe(tabButton("Spec"));
+    await waitFor(() => expect(document.activeElement).toBe(tabButton("Spec")));
   });
 
   it("shows on the Spec tab what the form patched, and nothing else changed", async () => {
@@ -574,7 +576,7 @@ describe("the Form tab", () => {
     renderAt(EDIT_PATH);
     const image = await formImage();
     fireEvent.change(image, { target: { value: "registry.example.com/shop/api:1.5" } });
-    fireEvent.click(tabButton("Spec"));
+    openTab("Spec");
     await ready();
     const expected = withCommand();
     (
@@ -588,7 +590,7 @@ describe("the Form tab", () => {
     renderAt(EDIT);
     await ready();
     typeIntoEditor(yaml(withReplicas(7)));
-    fireEvent.click(tabButton("Form"));
+    openTab("Form");
     expect(((await screen.findByLabelText("Replicas")) as HTMLInputElement).value).toBe("7");
   });
 
@@ -596,7 +598,7 @@ describe("the Form tab", () => {
     renderAt(EDIT);
     await ready();
     typeIntoEditor("Name: [oops\n");
-    fireEvent.click(tabButton("Form"));
+    openTab("Form");
     const message = await screen.findByText(
       "The spec has errors, so the form can't show it. Fix them first.",
     );
@@ -609,7 +611,7 @@ describe("the Form tab", () => {
         screen.queryByText("The spec has errors, so the form can't show it. Fix them first."),
       ).toBeNull(),
     );
-    fireEvent.click(tabButton("Form"));
+    openTab("Form");
     await formImage();
   });
 
@@ -640,9 +642,9 @@ describe("the Form tab", () => {
     renderAt(EDIT_PATH);
     const image = await formImage();
     fireEvent.change(image, { target: { value: "registry.example.com/shop/api:1.5" } });
-    fireEvent.click(tabButton("Spec"));
+    openTab("Spec");
     await ready();
-    fireEvent.click(tabButton("Form"));
+    openTab("Form");
     await formImage();
     fireEvent.click(reviewButton());
     await screen.findByRole("heading", { name: "Review changes", level: 2 });
@@ -684,7 +686,7 @@ describe("the Form tab", () => {
     const router = renderAt(EDIT_PATH);
     await formImage();
     fireEvent.change(screen.getByLabelText("Replicas"), { target: { value: "5" } });
-    fireEvent.click(tabButton("Spec"));
+    openTab("Spec");
     await ready();
     expect(screen.queryByText("Discard changes?")).toBeNull();
     void router.history.push(PAGE);
