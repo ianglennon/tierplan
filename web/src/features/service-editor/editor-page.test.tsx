@@ -1046,9 +1046,10 @@ describe("creating a service", () => {
   });
 
   it("asks before it throws a new service away, with the create words", async () => {
-    const router = renderAt(NEW);
+    renderAt(NEW);
     await fillIn();
-    await router.navigate({ to: PAGE });
-    expect(await screen.findByText("The service hasn't been created.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("link", { name: "Cancel" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Discard changes?" });
+    expect(within(dialog).getByText("The service hasn't been created.")).toBeTruthy();
   });
 });

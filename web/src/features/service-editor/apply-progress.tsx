@@ -34,7 +34,10 @@ type StepState = "waiting" | "working" | "done" | "failed";
 
 interface ApplyProgressProps {
   envId: string;
+  // The service being updated, or, for a create, the one that was made (empty until it is).
   serviceId: string;
+  // Whether the service is being made or changed. A new service has no rolling update to follow.
+  mode?: "edit" | "create";
   // The service's name. Text from Docker, drawn as text.
   name: string;
   // Where the apply request is: out, accepted, or refused.
@@ -86,6 +89,7 @@ function Step({ label, state }: { label: string; state: StepState }) {
 export function ApplyProgress({
   envId,
   serviceId,
+  mode = "edit",
   name,
   status,
   error,
@@ -97,10 +101,14 @@ export function ApplyProgress({
 }: ApplyProgressProps) {
   const t = useT();
   const environment = useEnvName(envId);
+  const create = mode === "create";
   const needs = useNeeds("services.control", envId);
-  const detail = useQuery(serviceQuery(envId, serviceId));
+  const detail = useQuery({ ...serviceQuery(envId, serviceId), enabled: !create });
   const accepted = status === "success";
-  const rollout = useQuery({ ...serviceRolloutQuery(envId, serviceId), enabled: accepted });
+  const rollout = useQuery({
+    ...serviceRolloutQuery(envId, serviceId),
+    enabled: accepted && !create,
+  });
   const [dialog, setDialog] = useState<"rollback" | "retry" | null>(null);
   const [settled, setSettled] = useState(false);
   const sawRunning = useRef(false);
@@ -128,7 +136,14 @@ export function ApplyProgress({
   }, [accepted, settled, state, running, refetch]);
 
   const refusal =
-    status === "error" ? editRefusalOf(t, error, { environment, image: "", name }) : undefined;
+    status === "error"
+      ? editRefusalOf(t, error, {
+          environment,
+          image: "",
+          name,
+          action: mode === "create" ? "create" : "update",
+        })
+      : undefined;
   // The steps in order, each with where the request has got to: the first is working while it is
   // out; once refused, those before the one that failed are done and those after it wait.
   const sequence: { key: string; label: string }[] = [
@@ -137,7 +152,12 @@ export function ApplyProgress({
       key: `${o.kind}:${o.name}`,
       label: t(`specEditor.apply.steps.${o.kind}`, { name: o.name }),
     })),
-    { key: "update", label: t("specEditor.apply.steps.update", { name }) },
+    {
+      key: "update",
+      label: create
+        ? t("specEditor.create.apply.step", { name })
+        : t("specEditor.apply.steps.update", { name }),
+    },
   ];
   const failedAt = (): number => {
     if (!refusal) return -1;
@@ -166,7 +186,11 @@ export function ApplyProgress({
   return (
     <section className="flex flex-col gap-6">
       <h2 className="text-base font-semibold break-words">
-        {t("specEditor.apply.title", { name })}
+        {create
+          ? status === "success"
+            ? t("specEditor.create.apply.done", { name })
+            : t("specEditor.create.apply.title", { name })
+          : t("specEditor.apply.title", { name })}
       </h2>
       <ol aria-label={t("specEditor.apply.steps.label")} className="flex flex-col gap-2">
         {sequence.map((step, i) => (
@@ -198,7 +222,16 @@ export function ApplyProgress({
           </div>
         </>
       ) : null}
-      {accepted ? (
+      {accepted && create ? (
+        <div>
+          <Button asChild className="max-md:h-11">
+            <Link to="/env/$envId/services/$serviceId" params={{ envId, serviceId }}>
+              {t("specEditor.apply.view")}
+            </Link>
+          </Button>
+        </div>
+      ) : null}
+      {accepted && !create ? (
         <>
           <RolloutProgress
             envId={envId}

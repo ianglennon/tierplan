@@ -6,7 +6,8 @@
         "change": "Change",
         "setting": "Setting",
         "current": "Current",
-        "next": "New"
+        "next": "New",
+        "value": "Value"
       },
       "change": {
         "added": "Added",
@@ -113,7 +114,8 @@
       "breadcrumb": {
         "label": "Breadcrumb",
         "services": "Services",
-        "edit": "Edit"
+        "edit": "Edit",
+        "create": "Create"
       },
       "title": "Edit {{name}}",
       "description": "Change its settings, review the difference, then apply.",
@@ -128,7 +130,8 @@
       "title": "Discard changes?",
       "body": "The service hasn't been updated.",
       "keep": "Keep editing",
-      "discard": "Discard changes"
+      "discard": "Discard changes",
+      "bodyCreate": "The service hasn't been created."
     },
     "stackOwned": {
       "heading": "{{name}} is managed by stack {{stack}}",
@@ -145,7 +148,8 @@
         "next": "New",
         "lookingUp": "Looking up the digest…",
         "credential": "Credential: “{{name}}”",
-        "unchanged": "The image stays {{ref}}."
+        "unchanged": "The image stays {{ref}}.",
+        "created": "Image"
       },
       "back": "Back to editing",
       "apply": "Apply changes",
@@ -211,7 +215,9 @@
           "network": "network {{name}}",
           "secret": "secret {{name}}",
           "config": "config {{name}}"
-        }
+        },
+        "createRemoved": "Couldn't create {{name}}. {{reason}} The {{count}} objects created for this change were removed.",
+        "createNotRemoved": "Couldn't create {{name}}. {{reason}} Bayplan couldn't remove {{list}}. Remove them under Networks, Secrets or Configs."
       }
     },
     "refusal": {
@@ -228,7 +234,24 @@
       "objects_missing": "The spec names networks that don't exist: {{names}}. Create them first, then review again.",
       "nothing_to_apply": "There's nothing to apply.",
       "object_permission": "{{message}}",
-      "too_many_objects": "One change can create at most 16 objects."
+      "too_many_objects": "One change can create at most 16 objects.",
+      "image_required": "Enter an image like nginx:1.27 or ghcr.io/acme/app:latest.",
+      "create_failed": "Docker couldn't create it: {{message}}"
+    },
+    "create": {
+      "title": "Create service",
+      "description": "Set up a service Swarm runs for you. Review it before anything is created.",
+      "review": {
+        "title": "Review {{name}}",
+        "body": "Check the service Bayplan will create, then create it.",
+        "confirm": "Create service"
+      },
+      "apply": {
+        "title": "Creating {{name}}",
+        "step": "Create service {{name}}",
+        "done": "Created {{name}}"
+      },
+      "toast": "Created service {{name}}."
     }
   }
 }

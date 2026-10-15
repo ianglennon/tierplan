@@ -13,6 +13,8 @@ import {
   type ServiceSpec,
   serviceSpecQuery,
   useApplyServiceUpdate,
+  useCreateService,
+  useReviewServiceCreate,
   useReviewServiceUpdate,
 } from "@/api/services";
 import { AgentUpdateNotice } from "@/components/agent-update-notice";
@@ -41,6 +43,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { ApplyProgress } from "@/features/service-editor/apply-progress";
+import { defaultServiceSpec } from "@/features/service-editor/create-defaults";
 import { editRefusalOf } from "@/features/service-editor/edit-refusal";
 import { EditorFooter } from "@/features/service-editor/editor-footer";
 import { ReviewStep } from "@/features/service-editor/review-step";
@@ -62,7 +65,10 @@ export type EditorTab = "form" | "spec";
 
 interface ServiceEditorPageProps {
   envId: string;
-  serviceId: string;
+  // The service being edited. Absent when the page creates one (mode "create").
+  serviceId?: string;
+  // Edit changes a service that exists; create makes a new one from the documented defaults.
+  mode?: "edit" | "create";
   // The tab the address names, and what to do to change it. The Form is the default.
   tab?: EditorTab;
   onTabChange?: (tab: EditorTab) => void;
@@ -74,10 +80,12 @@ function Breadcrumb({
   envId,
   serviceId,
   name,
+  create = false,
 }: {
   envId: string;
   serviceId: string;
   name: string | undefined;
+  create?: boolean;
 }) {
   const t = useT();
   return (
@@ -92,20 +100,24 @@ function Breadcrumb({
             {t("specEditor.page.breadcrumb.services")}
           </Link>
         </li>
-        <li className="min-w-0">
-          {name === undefined ? (
-            <Skeleton className="h-3 w-24" />
-          ) : (
-            <Link
-              to="/env/$envId/services/$serviceId"
-              params={{ envId, serviceId }}
-              className="rounded-sm break-all text-accent-ink hover:underline"
-            >
-              {name}
-            </Link>
-          )}
+        {create ? null : (
+          <li className="min-w-0">
+            {name === undefined ? (
+              <Skeleton className="h-3 w-24" />
+            ) : (
+              <Link
+                to="/env/$envId/services/$serviceId"
+                params={{ envId, serviceId }}
+                className="rounded-sm break-all text-accent-ink hover:underline"
+              >
+                {name}
+              </Link>
+            )}
+          </li>
+        )}
+        <li aria-current="page">
+          {create ? t("specEditor.page.breadcrumb.create") : t("specEditor.page.breadcrumb.edit")}
         </li>
-        <li aria-current="page">{t("specEditor.page.breadcrumb.edit")}</li>
       </ol>
     </nav>
   );
@@ -116,12 +128,14 @@ function Breadcrumb({
 function EditFooter({
   envId,
   serviceId,
+  create = false,
   ready,
   checking,
   onReview,
 }: {
   envId: string;
   serviceId: string;
+  create?: boolean;
   ready: boolean;
   checking: boolean;
   onReview: () => void;
@@ -130,9 +144,15 @@ function EditFooter({
   return (
     <EditorFooter>
       <Button asChild variant="outline" className="max-md:h-11">
-        <Link to="/env/$envId/services/$serviceId" params={{ envId, serviceId }}>
-          {t("specEditor.page.cancel")}
-        </Link>
+        {create ? (
+          <Link to="/env/$envId/services" params={{ envId }}>
+            {t("specEditor.page.cancel")}
+          </Link>
+        ) : (
+          <Link to="/env/$envId/services/$serviceId" params={{ envId, serviceId }}>
+            {t("specEditor.page.cancel")}
+          </Link>
+        )}
       </Button>
       <Button
         type="button"
@@ -163,25 +183,38 @@ function EditFooter({
 // update. The server decides every refusal; this words it. Leaving with changes asks first.
 export function ServiceEditorPage({
   envId,
-  serviceId,
+  serviceId: editedId = "",
+  mode = "edit",
   tab = "form",
   onTabChange,
 }: ServiceEditorPageProps) {
   const t = useT();
   const navigate = useNavigate();
   const environment = useEnvName(envId);
+  const create = mode === "create";
+  // A new service has no spec to read: the page opens on the documented defaults (D-04).
   const specQuery = useQuery({
-    ...serviceSpecQuery(envId, serviceId),
+    ...serviceSpecQuery(envId, editedId),
     refetchOnWindowFocus: false,
+    enabled: !create,
   });
   // The spec as it was first read. The events feed reads the service again as it changes, and a
   // spec that changed under the editor would otherwise change the version it sends.
   const [pinned, setPinned] = useState<ServiceSpec>();
-  const data = pinned ?? specQuery.data;
+  const [fresh] = useState<ServiceSpec>(() => ({
+    version: 0,
+    name: "",
+    mode: "replicated",
+    stack: "",
+    agent: false,
+    masked: false,
+    spec: defaultServiceSpec(),
+  }));
+  const data = create ? fresh : (pinned ?? specQuery.data);
   useEffect(() => {
     if (!pinned && specQuery.data) setPinned(specQuery.data);
   }, [pinned, specQuery.data]);
-  useDocumentTitle(data?.name);
+  useDocumentTitle(create ? t("specEditor.create.title") : data?.name);
 
   // The objects staged from the pickers and the values typed on the review. They live here, in
   // memory, and are cleared when the editor closes and when the apply is accepted.
@@ -192,6 +225,11 @@ export function ServiceEditorPage({
 
   const reviewMutation = useReviewServiceUpdate(envId);
   const applyMutation = useApplyServiceUpdate(envId);
+  const reviewCreateMutation = useReviewServiceCreate(envId);
+  const createMutation = useCreateService(envId);
+  // Whichever pair of requests this page makes.
+  const review$ = create ? reviewCreateMutation : reviewMutation;
+  const write$ = create ? createMutation : applyMutation;
   const [stage, setStage] = useState<Stage>("edit");
   const [edited, setEdited] = useState<SpecValue | null>(null);
   const [valid, setValid] = useState(true);
@@ -210,6 +248,12 @@ export function ServiceEditorPage({
 
   const current = (data?.spec ?? {}) as SpecValue;
   const spec = edited ?? current;
+  // What the service is called: its own name, or for a new service what has been typed.
+  const nameOf = (value: SpecValue): string => {
+    const typed = value.Name;
+    return typeof typed === "string" ? typed : "";
+  };
+  const name = create ? nameOf(spec) : (data?.name ?? "");
   const changed = useMemo(
     () => data !== undefined && JSON.stringify(spec) !== JSON.stringify(current),
     [data, spec, current],
@@ -250,7 +294,7 @@ export function ServiceEditorPage({
   // The review of the spec as it is, or of one the review step has just changed (the auto-rollback
   // box): that one replaces a review still on its way.
   function onReview(changed?: SpecValue) {
-    if (!data || !valid || (changed === undefined && reviewMutation.isPending)) return;
+    if (!data || !valid || (changed === undefined && review$.isPending)) return;
     const target = changed ?? spec;
     const mine = ++turn.current;
     setEditError(null);
@@ -258,21 +302,21 @@ export function ServiceEditorPage({
     // A new image is looked up, which can take a while: go to the review now, with the lookup
     // showing. Otherwise the button reads Checking… until the server has answered.
     if (imageOf(target) !== imageOf(current)) setStage("review");
-    reviewMutation.mutate(
-      { serviceId, version: data.version, spec: target },
-      {
-        onSuccess: (answer) => {
-          if (mine !== turn.current) return;
-          setReview(answer);
-          setStage("review");
-        },
-        onError: (err) => {
-          if (mine !== turn.current) return;
-          setEditError(err);
-          setStage("edit");
-        },
+    const handlers = {
+      onSuccess: (answer: ServiceReview) => {
+        if (mine !== turn.current) return;
+        setReview(answer);
+        setStage("review");
       },
-    );
+      onError: (err: ServiceActionError) => {
+        if (mine !== turn.current) return;
+        setEditError(err);
+        setStage("edit");
+      },
+    };
+    if (create) reviewCreateMutation.mutate({ spec: target }, handlers);
+    else
+      reviewMutation.mutate({ serviceId: editedId, version: data.version, spec: target }, handlers);
   }
 
   // The auto-rollback box on the review step changed the spec: the Form and the Spec tab hold the
@@ -284,13 +328,13 @@ export function ServiceEditorPage({
 
   function backToEditing() {
     turn.current++;
-    applyMutation.reset();
+    write$.reset();
     setReview(undefined);
     setStage("edit");
   }
 
   function onApply() {
-    if (!data || applyMutation.isPending) return;
+    if (!data || write$.isPending) return;
     // The networks the review lists are made with their defaults, the secrets and configs from
     // the values typed or staged; the server judges the spec again either way. The values are read
     // as the request is sent and not held in the mutation.
@@ -298,16 +342,24 @@ export function ServiceEditorPage({
     const planned = missing ? objectsForApply(missing, staged).objects : [];
     setCreating(planned.map((o) => ({ kind: o.kind, name: o.name })));
     setStage("apply");
+    const objects = () => (missing ? objectsForApply(missing, staged).objects : []);
+    // The values have been sent once the request is accepted; nothing of them stays in the page.
+    if (create) {
+      createMutation.mutate(
+        { spec, objects },
+        {
+          onSuccess: () => {
+            staged.reset();
+            toastSuccess(t("specEditor.create.toast", { name }));
+          },
+        },
+      );
+      return;
+    }
     applyMutation.mutate(
-      {
-        serviceId,
-        version: data.version,
-        spec,
-        objects: () => (missing ? objectsForApply(missing, staged).objects : []),
-      },
+      { serviceId: editedId, version: data.version, spec, objects },
       {
         onSuccess: () => {
-          // The values have been sent; nothing of them stays in the page.
           staged.reset();
           toastSuccess(t("specEditor.apply.toast", { name: data.name }));
         },
@@ -319,10 +371,10 @@ export function ServiceEditorPage({
     turn.current++;
     applyMutation.reset();
     reviewMutation.reset();
-    const fresh = await specQuery.refetch();
-    if (!fresh.data) return;
+    const reread = await specQuery.refetch();
+    if (!reread.data) return;
     staged.reset();
-    setPinned(fresh.data);
+    setPinned(reread.data);
     setEdited(null);
     setValid(true);
     setReview(undefined);
@@ -332,8 +384,12 @@ export function ServiceEditorPage({
     setStage("edit");
   }
 
+  // The service to go to: the one edited, or the one just made.
+  const serviceId = create ? (createMutation.data?.id ?? "") : editedId;
   const toService = () =>
-    void navigate({ to: "/env/$envId/services/$serviceId", params: { envId, serviceId } });
+    void (create
+      ? navigate({ to: "/env/$envId/services", params: { envId } })
+      : navigate({ to: "/env/$envId/services/$serviceId", params: { envId, serviceId } }));
 
   const discardGuard = (
     <AlertDialog
@@ -345,7 +401,9 @@ export function ServiceEditorPage({
       <AlertDialogContent className="sm:max-w-120">
         <AlertDialogHeader>
           <AlertDialogTitle>{t("specEditor.discard.title")}</AlertDialogTitle>
-          <AlertDialogDescription>{t("specEditor.discard.body")}</AlertDialogDescription>
+          <AlertDialogDescription>
+            {create ? t("specEditor.discard.bodyCreate") : t("specEditor.discard.body")}
+          </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel autoFocus>{t("specEditor.discard.keep")}</AlertDialogCancel>
@@ -455,17 +513,23 @@ export function ServiceEditorPage({
   }
 
   const refusal = editError
-    ? editRefusalOf(t, editError, { environment, image: imageOf(spec) })
+    ? editRefusalOf(t, editError, {
+        environment,
+        image: imageOf(spec),
+        action: create ? "create" : "update",
+      })
     : undefined;
 
   return (
     <div className="flex flex-col gap-6">
       <header className="flex flex-col gap-2">
-        <Breadcrumb envId={envId} serviceId={serviceId} name={data.name} />
+        <Breadcrumb envId={envId} serviceId={serviceId} name={data.name} create={create} />
         <h1 className="line-clamp-2 text-2xl font-semibold break-all">
-          {t("specEditor.page.title", { name: data.name })}
+          {create ? t("specEditor.create.title") : t("specEditor.page.title", { name: data.name })}
         </h1>
-        <p className="text-sm text-muted-foreground">{t("specEditor.page.description")}</p>
+        <p className="text-sm text-muted-foreground">
+          {create ? t("specEditor.create.description") : t("specEditor.page.description")}
+        </p>
       </header>
       {/* The editor stays in the page while the review or the apply shows, so its text is
           still there when a person goes back to it. */}
@@ -493,7 +557,7 @@ export function ServiceEditorPage({
             <ServiceForm
               key={editorKey}
               spec={spec}
-              mode="edit"
+              mode={mode}
               envId={envId}
               staged={staged}
               onSpecChange={onChange}
@@ -533,19 +597,21 @@ export function ServiceEditorPage({
         <EditFooter
           envId={envId}
           serviceId={serviceId}
+          create={create}
           ready={valid && formValid}
-          checking={reviewMutation.isPending}
+          checking={review$.isPending}
           onReview={() => onReview()}
         />
       </div>
       {stage === "review" ? (
         <ReviewStep
           envId={envId}
-          name={data.name}
-          current={current}
+          mode={mode}
+          name={name}
+          current={create ? {} : current}
           edited={spec}
           review={review}
-          applying={applyMutation.isPending}
+          applying={write$.isPending}
           staged={staged}
           onBack={backToEditing}
           onApply={onApply}
@@ -556,11 +622,10 @@ export function ServiceEditorPage({
         <ApplyProgress
           envId={envId}
           serviceId={serviceId}
-          name={data.name}
-          status={
-            applyMutation.isPending ? "pending" : applyMutation.isSuccess ? "success" : "error"
-          }
-          error={applyMutation.error ?? undefined}
+          mode={mode}
+          name={name}
+          status={write$.isPending ? "pending" : write$.isSuccess ? "success" : "error"}
+          error={write$.error ?? undefined}
           lookup={review?.image.changed ?? false}
           objects={creating}
           onBack={backToEditing}

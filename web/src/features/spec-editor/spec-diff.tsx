@@ -163,6 +163,9 @@ interface SpecDiffProps {
   next: unknown;
   // The headings of the two value columns; Current and New when left out.
   headings?: { current?: string; next?: string };
+  // The spec is of a service that does not exist yet: every setting is new, so the table has the
+  // columns Setting and Value and no Change or Current.
+  create?: boolean;
 }
 
 // SpecDiff is the field-level difference of two service specs: a native table that lists each
@@ -170,7 +173,7 @@ interface SpecDiffProps {
 // text, long values wrap, and a value the server withheld is shown as bullets on both sides
 // and never as the value (D-39). The review step, the rollback dialog and the rotate flow draw
 // it.
-export function SpecDiff({ name, current, next, headings }: SpecDiffProps) {
+export function SpecDiff({ name, current, next, headings, create = false }: SpecDiffProps) {
   const t = useT();
   const rows = useMemo(() => diffSpecs(current, next), [current, next]);
   if (rows.length === 0) {
@@ -191,18 +194,26 @@ export function SpecDiff({ name, current, next, headings }: SpecDiffProps) {
         <caption className="sr-only">{t("specEditor.diff.caption", { name })}</caption>
         <TableHeader>
           <TableRow>
-            <TableHead scope="col" className="w-28">
-              {t("specEditor.diff.columns.change")}
-            </TableHead>
+            {create ? null : (
+              <TableHead scope="col" className="w-28">
+                {t("specEditor.diff.columns.change")}
+              </TableHead>
+            )}
             <TableHead scope="col">{t("specEditor.diff.columns.setting")}</TableHead>
+            {create ? null : (
+              <TableHead scope="col">
+                {headings?.current ?? t("specEditor.diff.columns.current")}
+              </TableHead>
+            )}
             <TableHead scope="col">
-              {headings?.current ?? t("specEditor.diff.columns.current")}
+              {create
+                ? t("specEditor.diff.columns.value")
+                : (headings?.next ?? t("specEditor.diff.columns.next"))}
             </TableHead>
-            <TableHead scope="col">{headings?.next ?? t("specEditor.diff.columns.next")}</TableHead>
           </TableRow>
         </TableHeader>
         {sections.map((s) => (
-          <GroupRows key={s.group} group={s.group} rows={s.rows} t={t} />
+          <GroupRows key={s.group} group={s.group} rows={s.rows} t={t} create={create} />
         ))}
       </Table>
     </div>
@@ -213,31 +224,38 @@ interface GroupRowsProps {
   group: SpecGroup;
   rows: DiffRow[];
   t: Translate;
+  create: boolean;
 }
 
 // GroupRows is one group's heading row and the rows under it, in a body of their own so the
 // heading names the rows below it.
-function GroupRows({ group, rows, t }: GroupRowsProps) {
+function GroupRows({ group, rows, t, create }: GroupRowsProps) {
   return (
     <TableBody>
       <TableRow className="bg-muted/50 hover:bg-muted/50">
-        <th scope="rowgroup" colSpan={4} className="px-2 py-1 text-start text-xs font-semibold">
+        <th
+          scope="rowgroup"
+          colSpan={create ? 2 : 4}
+          className="px-2 py-1 text-start text-xs font-semibold"
+        >
           {t(`specEditor.groups.${group}`)}
         </th>
       </TableRow>
       {rows.map((row) => (
-        <TableRow key={`${row.path}:${row.change}`} className={TINT[row.change]}>
-          <TableCell className="align-top whitespace-nowrap">
-            <span aria-hidden="true" className="me-1 font-mono">
-              {GLYPH[row.change]}
-            </span>
-            {t(`specEditor.diff.change.${row.change}`)}
-          </TableCell>
+        <TableRow key={`${row.path}:${row.change}`} className={create ? "" : TINT[row.change]}>
+          {create ? null : (
+            <TableCell className="align-top whitespace-nowrap">
+              <span aria-hidden="true" className="me-1 font-mono">
+                {GLYPH[row.change]}
+              </span>
+              {t(`specEditor.diff.change.${row.change}`)}
+            </TableCell>
+          )}
           <TableCell className="align-top whitespace-normal">
             <div>{settingLabel(t, row.path)}</div>
             <div className="font-mono text-xs break-all text-muted-foreground">{row.path}</div>
           </TableCell>
-          <ValueCell text={valueText(t, row, "current")} t={t} />
+          {create ? null : <ValueCell text={valueText(t, row, "current")} t={t} />}
           <ValueCell text={valueText(t, row, "next")} t={t} />
         </TableRow>
       ))}

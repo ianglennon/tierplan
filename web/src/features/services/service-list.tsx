@@ -3,7 +3,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { ChevronsDownUp, ChevronsUpDown, Ellipsis, TriangleAlert } from "lucide-react";
+import { ChevronsDownUp, ChevronsUpDown, Ellipsis, Plus, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { isNotASwarm, type ServiceItem, servicesQuery } from "@/api/services";
@@ -258,6 +258,7 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
   const allowed = usePermission("services.read", envId);
   // Creating needs services.manage (Admin); the empty state says so only to those who can.
   const canCreate = usePermission("services.manage", envId);
+  const createNeeds = useNeeds("services.manage", envId);
   const query = useQuery({
     ...servicesQuery(envId, { q: search.q, status: search.status }),
     enabled: allowed,
@@ -278,6 +279,27 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
   const [pending, setPending] = useState<ReadonlyMap<string, number>>(new Map());
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
   const missing = t("dashboard.time.missing");
+
+  // Create service is the page's one accent button (D-04). Below Admin, and while no manager is
+  // connected, it is shown disabled with the reason; the server decides either way.
+  const createReason =
+    createNeeds.reason ?? (data?.noManager ? t("nodes.noManagerReason") : undefined);
+  const createControl =
+    createNeeds.allowed && !createReason ? (
+      <Button asChild className="max-md:h-11">
+        <Link to="/env/$envId/services/new" params={{ envId }}>
+          <Plus aria-hidden="true" />
+          {t("services.list.create")}
+        </Link>
+      </Button>
+    ) : (
+      <NeedsTooltip reason={createReason}>
+        <Button className="max-md:h-11" disabled={createReason === undefined}>
+          <Plus aria-hidden="true" />
+          {t("services.list.create")}
+        </Button>
+      </NeedsTooltip>
+    );
 
   const by = search.group ?? "stack";
   const sortKey: ServiceSortKey = search.sort ?? "name";
@@ -489,6 +511,7 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
         </EmptyTitle>
         <EmptyDescription>{t("services.list.emptyCreateBody")}</EmptyDescription>
       </EmptyHeader>
+      <EmptyContent>{createControl}</EmptyContent>
     </Empty>
   ) : undefined;
 
@@ -750,6 +773,7 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
             : undefined
         }
         empty={empty}
+        actions={<div className="ml-auto">{createControl}</div>}
         capNote={data ? t("services.list.cap", { total: data.total }) : undefined}
         retryLabel={t("services.list.errorRetry")}
         captionExtra={

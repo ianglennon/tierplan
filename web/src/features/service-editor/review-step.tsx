@@ -31,6 +31,9 @@ type Finding = components["schemas"]["ServiceFindingBody"];
 
 interface ReviewStepProps {
   envId: string;
+  // Whether the service already exists. A create has nothing to compare with: the table lists what
+  // will be made, and the confirmation reads Create service.
+  mode?: "edit" | "create";
   // The service's name. Text from Docker, drawn as text.
   name: string;
   // The spec as it was loaded, masked as the server sent it.
@@ -71,7 +74,8 @@ function findingText(t: Translate, f: Finding): string {
 }
 
 interface ImageRowProps {
-  current: string;
+  // The image the service runs now; absent for a service that does not exist yet.
+  current?: string;
   // The image the spec will carry; absent while its digest is looked up.
   next?: string;
   credential?: string;
@@ -89,12 +93,18 @@ function ImageRow({ current, next, credential }: ImageRowProps) {
       className="rounded-lg border bg-card p-3 text-sm"
     >
       <dl className="grid gap-x-4 gap-y-2 md:grid-cols-[auto_1fr]">
+        {current === undefined ? null : (
+          <>
+            <dt className="text-xs font-semibold text-muted-foreground">
+              {t("specEditor.review.image.current")}
+            </dt>
+            <dd className="font-mono text-xs break-all">{current}</dd>
+          </>
+        )}
         <dt className="text-xs font-semibold text-muted-foreground">
-          {t("specEditor.review.image.current")}
-        </dt>
-        <dd className="font-mono text-xs break-all">{current}</dd>
-        <dt className="text-xs font-semibold text-muted-foreground">
-          {t("specEditor.review.image.next")}
+          {current === undefined
+            ? t("specEditor.review.image.created")
+            : t("specEditor.review.image.next")}
         </dt>
         <dd className="font-mono text-xs break-all">
           {next === undefined ? (
@@ -128,6 +138,7 @@ function ImageRow({ current, next, credential }: ImageRowProps) {
 // settings in the spec, while the host is read-only, while the image cannot be found, and while a
 // secret or config the spec names that does not exist has no value (the New objects card asks for it).
 export function ReviewStep({
+  mode = "edit",
   name,
   current,
   edited,
@@ -139,6 +150,7 @@ export function ReviewStep({
   onSpecChange,
 }: ReviewStepProps) {
   const t = useT();
+  const create = mode === "create";
   // Re-judge when a value is typed.
   useStagedObjects(staged);
   const rollbackId = useId();
@@ -198,7 +210,7 @@ export function ReviewStep({
           {t("specEditor.review.applying")}
         </>
       ) : (
-        t("specEditor.review.apply")
+        t(create ? "specEditor.create.review.confirm" : "specEditor.review.apply")
       )}
     </Button>
   );
@@ -206,8 +218,12 @@ export function ReviewStep({
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-1">
-        <h2 className="text-base font-semibold">{t("specEditor.review.title")}</h2>
-        <p className="text-sm text-muted-foreground">{t("specEditor.review.body", { name })}</p>
+        <h2 className="text-base font-semibold break-words">
+          {create ? t("specEditor.create.review.title", { name }) : t("specEditor.review.title")}
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          {create ? t("specEditor.create.review.body") : t("specEditor.review.body", { name })}
+        </p>
       </div>
       {review && !review.allowed ? (
         <Alert variant="warning">
@@ -258,7 +274,7 @@ export function ReviewStep({
       ) : null}
       {imageChanged ? (
         <ImageRow
-          current={currentImage}
+          current={create ? undefined : currentImage}
           next={review ? nextImage : undefined}
           credential={review?.image.credential}
         />
@@ -283,7 +299,7 @@ export function ReviewStep({
             {t("specEditor.review.hiddenOnly")}
           </p>
         ) : (
-          <SpecDiff name={name} current={current} next={next} />
+          <SpecDiff name={name} current={current} next={next} create={create} />
         )}
       </section>
       <EditorFooter>

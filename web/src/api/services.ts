@@ -486,6 +486,7 @@ export function serviceRolloutQuery(envId: string, id: string) {
 export type ServiceReview = components["schemas"]["ServiceReviewBody"];
 export type ServiceApplyResult = components["schemas"]["ServiceApplyBody"];
 export type ServiceStagedObject = components["schemas"]["ServiceStagedObject"];
+export type ServiceCreateResult = components["schemas"]["ServiceCreateBody"];
 
 export interface EditRequest {
   serviceId: string;
@@ -542,6 +543,61 @@ export function useApplyServiceUpdate(envId: string) {
         const res = await api.POST("/api/env/{envId}/services/{serviceId}/apply", {
           params: { path: { envId, serviceId } },
           body: staged.length > 0 ? { version, spec, objects: [...staged] } : { version, spec },
+        });
+        if (!res.data) throw actionError(res.error, res.response);
+        return res.data;
+      } catch (e) {
+        throw e instanceof ServiceActionError ? e : new ServiceActionError(0);
+      }
+    },
+    retry: false,
+    gcTime: 0,
+    onSettled: () => refreshService(queryClient, envId),
+  });
+}
+
+// What a create sends: the spec of the new service, as the editor holds it, and the objects it
+// names that do not exist yet. There is no version: nothing exists to have moved on.
+export interface CreateRequest {
+  spec: Record<string, unknown>;
+  objects?: () => readonly ServiceStagedObject[];
+}
+
+// useReviewServiceCreate is the mutation behind Review changes on the Create service page. It
+// changes nothing in the swarm. It is never retried, and gcTime 0 drops the spec it carries from
+// the cache as soon as nothing is watching it.
+export function useReviewServiceCreate(envId: string) {
+  return useMutation<ServiceReview, ServiceActionError, Pick<CreateRequest, "spec">>({
+    mutationFn: async ({ spec }) => {
+      try {
+        const res = await api.POST("/api/env/{envId}/services/review", {
+          params: { path: { envId } },
+          body: { spec },
+        });
+        if (!res.data) throw actionError(res.error, res.response);
+        return res.data;
+      } catch (e) {
+        throw e instanceof ServiceActionError ? e : new ServiceActionError(0);
+      }
+    },
+    retry: false,
+    gcTime: 0,
+  });
+}
+
+// useCreateService is the mutation behind Create service. It is never retried, and reads the
+// services again whatever the answer: a write whose answer was lost may have happened (P2 D-42).
+// gcTime 0 keeps the spec out of the cache once nothing is watching.
+export function useCreateService(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<ServiceCreateResult, ServiceActionError, CreateRequest>({
+    mutationKey: serviceActionKey(envId),
+    mutationFn: async ({ spec, objects }) => {
+      try {
+        const staged = objects?.() ?? [];
+        const res = await api.POST("/api/env/{envId}/services", {
+          params: { path: { envId } },
+          body: staged.length > 0 ? { spec, objects: [...staged] } : { spec },
         });
         if (!res.data) throw actionError(res.error, res.response);
         return res.data;

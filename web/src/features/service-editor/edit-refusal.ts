@@ -28,6 +28,8 @@ interface EditRefusalContext {
   name?: string;
   // The image the service names now, said when the server did not say which it looked up.
   image: string;
+  // What was being done: an edit is an update, which is the default.
+  action?: "create" | "update";
 }
 
 // Docker's words arrive after this lead on a rejected spec; the page puts its own lead there.
@@ -72,17 +74,22 @@ export function editRefusalOf(t: Translate, err: unknown, ctx: EditRefusalContex
     return t(`specEditor.apply.cleanup.item.${kind}`, { name: rest.join(":") });
   };
   const name = ctx.name ?? "";
+  const creating = ctx.action === "create";
   return {
     ...refusal,
     made,
     message:
       notRemoved.length > 0
-        ? t("specEditor.apply.cleanup.notRemoved", {
+        ? t(`specEditor.apply.cleanup.${creating ? "createNotRemoved" : "notRemoved"}`, {
             name,
             reason: refusal.message,
             list: notRemoved.map(item).join(", "),
           })
-        : t("specEditor.apply.cleanup.removed", { name, reason: refusal.message, count: made }),
+        : t(`specEditor.apply.cleanup.${creating ? "createRemoved" : "removed"}`, {
+            name,
+            reason: refusal.message,
+            count: made,
+          }),
   };
 }
 
@@ -104,6 +111,16 @@ function refuse(t: Translate, e: ServiceActionError, ctx: EditRefusalContext): E
   switch (e.type) {
     case "service_changed":
       return say(t("specEditor.refusal.service_changed"), { reload: true });
+    case "image_required":
+      return say(t("specEditor.refusal.image_required"));
+    case "service_name_taken":
+      return say(e.detail || t("services.refusal.generic"));
+    case "create_failed":
+      return say(
+        e.detail
+          ? t("specEditor.refusal.create_failed", { message: e.detail })
+          : t("services.refusal.generic"),
+      );
     case "stack_owned":
     case "name_immutable":
     case "mode_immutable":

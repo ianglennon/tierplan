@@ -99,7 +99,8 @@
       },
       "bulk": {
         "none": "None of the selected services can be scaled."
-      }
+      },
+      "create": "Create service"
     },
     "notASwarm": {
       "heading": "This isn't a swarm",
