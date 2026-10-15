@@ -635,6 +635,11 @@
     "licence": "MIT"
   },
   {
+    "name": "@reduxjs/toolkit",
+    "version": "2.13.0",
+    "licence": "MIT"
+  },
+  {
     "name": "@rolldown/pluginutils",
     "version": "1.0.1",
     "licence": "MIT"
@@ -652,6 +657,11 @@
   {
     "name": "@sindresorhus/merge-streams",
     "version": "4.0.0",
+    "licence": "MIT"
+  },
+  {
+    "name": "@standard-schema/spec",
+    "version": "1.1.0",
     "licence": "MIT"
   },
   {
@@ -722,6 +732,56 @@
   {
     "name": "@ts-morph/common",
     "version": "0.27.0",
+    "licence": "MIT"
+  },
+  {
+    "name": "@types/d3-array",
+    "version": "3.2.2",
+    "licence": "MIT"
+  },
+  {
+    "name": "@types/d3-color",
+    "version": "3.1.3",
+    "licence": "MIT"
+  },
+  {
+    "name": "@types/d3-ease",
+    "version": "3.0.2",
+    "licence": "MIT"
+  },
+  {
+    "name": "@types/d3-interpolate",
+    "version": "3.0.4",
+    "licence": "MIT"
+  },
+  {
+    "name": "@types/d3-path",
+    "version": "3.1.1",
+    "licence": "MIT"
+  },
+  {
+    "name": "@types/d3-scale",
+    "version": "4.0.9",
+    "licence": "MIT"
+  },
+  {
+    "name": "@types/d3-shape",
+    "version": "3.2.0",
+    "licence": "MIT"
+  },
+  {
+    "name": "@types/d3-time",
+    "version": "3.0.4",
+    "licence": "MIT"
+  },
+  {
+    "name": "@types/d3-timer",
+    "version": "3.0.2",
+    "licence": "MIT"
+  },
+  {
+    "name": "@types/use-sync-external-store",
+    "version": "0.0.6",
     "licence": "MIT"
   },
   {
@@ -1000,6 +1060,61 @@
     "licence": "MIT"
   },
   {
+    "name": "d3-array",
+    "version": "3.2.4",
+    "licence": "ISC"
+  },
+  {
+    "name": "d3-color",
+    "version": "3.1.0",
+    "licence": "ISC"
+  },
+  {
+    "name": "d3-ease",
+    "version": "3.0.1",
+    "licence": "BSD-3-Clause"
+  },
+  {
+    "name": "d3-format",
+    "version": "3.1.2",
+    "licence": "ISC"
+  },
+  {
+    "name": "d3-interpolate",
+    "version": "3.0.1",
+    "licence": "ISC"
+  },
+  {
+    "name": "d3-path",
+    "version": "3.1.0",
+    "licence": "ISC"
+  },
+  {
+    "name": "d3-scale",
+    "version": "4.0.2",
+    "licence": "ISC"
+  },
+  {
+    "name": "d3-shape",
+    "version": "3.2.0",
+    "licence": "ISC"
+  },
+  {
+    "name": "d3-time",
+    "version": "3.1.0",
+    "licence": "ISC"
+  },
+  {
+    "name": "d3-time-format",
+    "version": "4.1.0",
+    "licence": "ISC"
+  },
+  {
+    "name": "d3-timer",
+    "version": "3.0.1",
+    "licence": "ISC"
+  },
+  {
     "name": "date-fns",
     "version": "4.4.0",
     "licence": "MIT"
@@ -1012,6 +1127,11 @@
   {
     "name": "debug",
     "version": "4.4.3",
+    "licence": "MIT"
+  },
+  {
+    "name": "decimal.js-light",
+    "version": "2.5.1",
     "licence": "MIT"
   },
   {
@@ -1135,6 +1255,11 @@
     "licence": "MIT"
   },
   {
+    "name": "es-toolkit",
+    "version": "1.52.0",
+    "licence": "MIT"
+  },
+  {
     "name": "escalade",
     "version": "3.2.0",
     "licence": "MIT"
@@ -1152,6 +1277,11 @@
   {
     "name": "etag",
     "version": "1.8.1",
+    "licence": "MIT"
+  },
+  {
+    "name": "eventemitter3",
+    "version": "5.0.4",
     "licence": "MIT"
   },
   {
@@ -1590,6 +1720,11 @@
     "licence": "MIT"
   },
   {
+    "name": "immer",
+    "version": "11.1.21",
+    "licence": "MIT"
+  },
+  {
     "name": "import-fresh",
     "version": "3.3.1",
     "licence": "MIT"
@@ -1597,6 +1732,11 @@
   {
     "name": "inherits",
     "version": "2.0.4",
+    "licence": "ISC"
+  },
+  {
+    "name": "internmap",
+    "version": "2.0.3",
     "licence": "ISC"
   },
   {
@@ -2170,6 +2310,16 @@
     "licence": "MIT"
   },
   {
+    "name": "react-is",
+    "version": "17.0.2",
+    "licence": "MIT"
+  },
+  {
+    "name": "react-redux",
+    "version": "9.3.0",
+    "licence": "MIT"
+  },
+  {
     "name": "react-remove-scroll",
     "version": "2.7.2",
     "licence": "MIT"
@@ -2190,8 +2340,33 @@
     "licence": "MIT"
   },
   {
+    "name": "recharts",
+    "version": "3.10.1",
+    "licence": "MIT"
+  },
+  {
+    "name": "redux",
+    "version": "5.0.1",
+    "licence": "MIT"
+  },
+  {
+    "name": "redux-thunk",
+    "version": "3.1.0",
+    "licence": "MIT"
+  },
+  {
     "name": "require-from-string",
     "version": "2.0.2",
+    "licence": "MIT"
+  },
+  {
+    "name": "reselect",
+    "version": "5.1.1",
+    "licence": "MIT"
+  },
+  {
+    "name": "reselect",
+    "version": "5.2.0",
     "licence": "MIT"
   },
   {
@@ -2533,6 +2708,11 @@
     "name": "vary",
     "version": "1.1.2",
     "licence": "MIT"
+  },
+  {
+    "name": "victory-vendor",
+    "version": "37.3.6",
+    "licence": "MIT AND ISC"
   },
   {
     "name": "vite",
