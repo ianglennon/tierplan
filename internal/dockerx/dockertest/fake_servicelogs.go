@@ -42,6 +42,7 @@ type fakeServiceLogs struct {
 	pushed  map[string][]FakeServiceLogLine
 	wake    chan struct{}
 	queries []url.Values
+	follows int
 }
 
 // PushServiceLog adds a line to the log of a service, named by ID or name, and wakes every
@@ -77,6 +78,14 @@ func (f *Fake) ServiceLogQueries() []url.Values {
 	f.svcLogs.mu.Lock()
 	defer f.svcLogs.mu.Unlock()
 	return append([]url.Values(nil), f.svcLogs.queries...)
+}
+
+// ServiceLogFollows is how many follow requests for the log of a service or a task are
+// open now.
+func (f *Fake) ServiceLogFollows() int {
+	f.svcLogs.mu.Lock()
+	defer f.svcLogs.mu.Unlock()
+	return f.svcLogs.follows
 }
 
 // serveServiceLogs answers GET /services/{id}/logs and GET /tasks/{id}/logs the way a
@@ -222,6 +231,16 @@ func (f *Fake) serveServiceLogs(w http.ResponseWriter, r *http.Request, p string
 		}
 	}
 	flush()
+	if follow {
+		l.mu.Lock()
+		l.follows++
+		l.mu.Unlock()
+		defer func() {
+			l.mu.Lock()
+			l.follows--
+			l.mu.Unlock()
+		}()
+	}
 	for follow {
 		l.mu.Lock()
 		next := append([]FakeServiceLogLine(nil), l.pushed[serviceID][seenPushed:]...)
