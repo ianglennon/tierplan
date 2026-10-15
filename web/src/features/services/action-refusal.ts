@@ -47,6 +47,11 @@ export function refusalOf(t: Translate, err: unknown, ctx: RefusalContext): Refu
     }
     case "no_previous_spec":
       return say(t("services.rollback.noEarlier"));
+    case "privileged_service": {
+      const list = e.entries.map((f) => `${f.location}: ${f.message}`).join("; ");
+      const key = ctx.action === "update" ? "privileged_update" : "privileged_rollback";
+      return say(t(`services.refusal.${key}`, { list }));
+    }
     case "service_changed":
     case "service_not_found":
     case "no_quorum":

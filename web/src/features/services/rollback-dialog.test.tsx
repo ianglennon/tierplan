@@ -245,6 +245,27 @@ describe("RollbackDialog", () => {
     expect(onOpenChange).not.toHaveBeenCalled();
   });
 
+  it("words a privileged earlier version as needing Admin, naming each setting, and keeps the dialog open", async () => {
+    answer = () =>
+      problem(403, "privileged_service", {
+        errors: [
+          {
+            location: "TaskTemplate.ContainerSpec.Mounts[0].Source",
+            message: "/var/run/docker.sock",
+          },
+        ],
+      });
+    const { onOpenChange } = mount();
+    await diff();
+    fireEvent.click(confirm());
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe(
+      "Can't roll back: the earlier version uses settings that need Admin (TaskTemplate.ContainerSpec.Mounts[0].Source: /var/run/docker.sock). Ask an administrator to roll it back.",
+    );
+    expect(alert.textContent).not.toContain("You no longer have permission");
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
   it("words a missing object the manager did not name without a name", async () => {
     answer = () => problem(409, "rollback_object_missing", { detail: "something odd not found" });
     mount();
