@@ -1,0 +1,21 @@
+{
+  "restartLoop": {
+    "badge": "Restart loop",
+    "minutes_one": "{{count}} minute",
+    "minutes_other": "{{count}} minutes",
+    "tooltip": {
+      "count_one": "{{count}} failed task in the last {{window}}.",
+      "count_other": "{{count}} failed tasks in the last {{window}}.",
+      "latest_one": "{{count}} failed task in the last {{window}}. Latest: {{error}}",
+      "latest_other": "{{count}} failed tasks in the last {{window}}. Latest: {{error}}"
+    },
+    "alert": {
+      "title": "{{name}} is in a restart loop",
+      "body_one": "{{count}} task failed in the last {{window}}.",
+      "body_other": "{{count}} tasks failed in the last {{window}}.",
+      "latest_one": "{{count}} task failed in the last {{window}}. Latest error: {{error}}",
+      "latest_other": "{{count}} tasks failed in the last {{window}}. Latest error: {{error}}",
+      "viewFailed": "View failed tasks"
+    }
+  }
+}

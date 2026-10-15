@@ -141,6 +141,7 @@ describe("the page frame", () => {
     expect(within(headerOf()).getAllByText("Degraded").length).toBeGreaterThanOrEqual(1);
     expect(await screen.findByText("api is in a restart loop")).toBeTruthy();
     cleanup();
+    queryClient.clear();
     answerWith(serviceDetail());
     renderAt();
     await screen.findByRole("heading", { name: "api" });

@@ -85,6 +85,7 @@
         "degraded": "Degraded",
         "updating": "Updating",
         "problem": "Update problem",
+        "loop": "Restart loop",
         "chip": "{{label}} {{count, number}}"
       },
       "cap": "Showing the first 500 of {{total, number}}. Narrow the search to see the rest.",

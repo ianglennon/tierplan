@@ -6,8 +6,8 @@ import { z } from "@/lib/zod-config";
 
 // The status chips, in the order they show and in the order a comma list is written, so the
 // same choice is always the same link. The server's own names for them (status= on
-// GET /services): Update problem is "problem".
-export const SERVICE_STATUS_VALUES = ["degraded", "updating", "problem"] as const;
+// GET /services): Update problem is "problem" and Restart loop is "loop".
+export const SERVICE_STATUS_VALUES = ["degraded", "updating", "problem", "loop"] as const;
 export type ServiceStatusValue = (typeof SERVICE_STATUS_VALUES)[number];
 
 export const SERVICE_GROUP_VALUES = ["stack", "none"] as const;
@@ -36,7 +36,7 @@ export function serviceStatusParam(values: readonly ServiceStatusValue[]): strin
 
 // The services route's search (UI-SPEC "Services list"): the search text, the status chips,
 // how the rows are grouped and sorted. Every value that does not fit is dropped, not sent,
-// and a missing group means the default, stack. Later plans add the restart-loop chip to it.
+// and a missing group means the default, stack.
 export const serviceSearchSchema = z.object({
   q: z.string().min(1).max(MAX_QUERY).optional().catch(undefined),
   status: z

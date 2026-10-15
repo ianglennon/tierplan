@@ -36,7 +36,6 @@ const svc = (extra: Partial<ServiceItem> = {}): ServiceItem => ({
   updateMessage: "",
   hasPreviousSpec: false,
   createdAt: "2026-09-01T10:00:00Z",
-  restartLoop: null,
   ...extra,
 });
 

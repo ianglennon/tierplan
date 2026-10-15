@@ -77,7 +77,6 @@ export function serviceDetail(extra: Partial<ServiceDetailBody> = {}): ServiceDe
     updateStatus: "completed",
     updateMessage: "update completed",
     hasPreviousSpec: true,
-    restartLoop: null,
     ...extra,
   };
 }
@@ -101,7 +100,6 @@ export function bareServiceDetail(extra: Partial<ServiceDetailBody> = {}): Servi
     updateStatus: "",
     updateMessage: "",
     hasPreviousSpec: false,
-    restartLoop: null,
     ...extra,
   });
 }

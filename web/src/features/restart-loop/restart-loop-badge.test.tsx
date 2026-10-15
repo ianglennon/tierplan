@@ -32,7 +32,7 @@ function mount(loop = LOOP) {
 describe("RestartLoopBadge", () => {
   it("is an outline badge reading Restart loop, never a red fill", () => {
     mount();
-    const badge = screen.getByText("Restart loop").closest("[data-slot='badge']");
+    const badge = screen.getByText("Restart loop").closest("[data-variant]");
     expect(badge?.getAttribute("data-variant")).toBe("outline");
     expect(badge?.className ?? "").not.toMatch(/bg-(destructive|status-offline|red)/);
   });

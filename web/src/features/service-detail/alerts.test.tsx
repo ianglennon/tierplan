@@ -178,7 +178,7 @@ describe("the restart-loop alert", () => {
     const stack = screen.getByText("Managed by stack shop");
     expect(title.compareDocumentPosition(stack) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     cleanup();
-    await mount(bareServiceDetail({ restartLoop: null }));
+    await mount(bareServiceDetail());
     expect(screen.queryByText(/restart loop/)).toBeNull();
   });
 });

@@ -49,6 +49,7 @@ import {
 } from "@/features/resources/resource-table";
 import { useChosenKeys, useSelection } from "@/features/resources/selection";
 import { useEnvName } from "@/features/resources/use-env-name";
+import { RestartLoopBadge } from "@/features/restart-loop/restart-loop-badge";
 import { scaleEligibility } from "@/features/services/eligibility";
 import { ForceUpdateDialog } from "@/features/services/force-update-dialog";
 import { groupServices, sortServices } from "@/features/services/group";
@@ -616,6 +617,7 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
             <TruncatedText>{s.name}</TruncatedText>
           </Link>
           {s.agent ? <SelfContainerBadge kind="agent-service" /> : null}
+          {s.restartLoop ? <RestartLoopBadge loop={s.restartLoop} /> : null}
         </span>
       ),
     },

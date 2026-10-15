@@ -24,6 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SelfContainerBadge } from "@/features/containers/self-container-badge";
+import { RestartLoopBadge } from "@/features/restart-loop/restart-loop-badge";
 import { ServiceAlerts } from "@/features/service-detail/alerts";
 import { itemOf, ServiceHeaderActions } from "@/features/service-detail/header-actions";
 import { SERVICE_TABS } from "@/features/service-detail/tabs";
@@ -178,6 +179,7 @@ function Header({ envId, data }: { envId: string; data: ServiceDetail }) {
             </Badge>
           ) : null}
           {data.agent ? <SelfContainerBadge kind="agent-service" /> : null}
+          {data.restartLoop ? <RestartLoopBadge loop={data.restartLoop} /> : null}
         </div>
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
           {data.image.ref ? (
@@ -234,8 +236,8 @@ function Alerts({ envId, data }: { envId: string; data: ServiceDetail }) {
 // ServiceDetailLayout is the frame of a service's page: the breadcrumb, the header with the
 // name, the state, the badges, the image line and the actions, the alerts, the tab bar (Link
 // triggers, the active tab follows the URL) and the tab under it. The tabs render at once,
-// before the service has loaded (UI-SPEC "Loading"). The restart-loop alert is added by a later
-// plan, in the alerts region.
+// before the service has loaded (UI-SPEC "Loading"). The restart-loop badge sits in the header and
+// its alert in the alerts region.
 export function ServiceDetailLayout({ envId, serviceId }: ServiceDetailLayoutProps) {
   const t = useT();
   const query = useQuery(serviceQuery(envId, serviceId));
