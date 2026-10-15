@@ -92,6 +92,9 @@ func (c *Client) Tasks(ctx context.Context, f TaskFilter) ([]TaskRow, error) {
 			CreatedAt: t.CreatedAt.UTC(), UpdatedAt: t.UpdatedAt.UTC(), StateSince: t.Status.Timestamp.UTC(),
 			SpecHash: specHash(t.Spec),
 		}
+		if r := t.Spec.Resources; r != nil && r.Limits != nil {
+			row.MemoryLimit = r.Limits.MemoryBytes
+		}
 		if cs := t.Status.ContainerStatus; cs != nil {
 			row.ContainerID = cs.ContainerID
 			code := cs.ExitCode

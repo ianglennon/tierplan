@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -25,6 +26,9 @@ var statsContainerID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 type StatsSource interface {
 	snapshotReader
 	statsNodes
+	// SwarmNodeTargets maps the swarm nodes Bayplan can reach now to the node the hub asks
+	// (the service, services-list and node streams, plan 06-33).
+	SwarmNodeTargets(ctx context.Context, envID string) (map[string]envs.NodeRef, error)
 }
 
 // StatsDeps are the dependencies of the container stats stream.
@@ -43,14 +47,19 @@ type StatsDeps struct {
 	MaxStreamsPerUser int
 	// MaxLifetime is the longest one stream stays open. Zero means one hour.
 	MaxLifetime time.Duration
+	// RoundWait is the longest a service, list or node stream waits for a container that is
+	// slow before it sends the round without it. Zero means 3 seconds.
+	RoundWait time.Duration
 	// Log receives server-side failures, never a sample. Nil means slog.Default().
 	Log *slog.Logger
 }
 
-// RegisterStats registers the live stats stream of a container under /api/env/{envId}/.
-// It is mounted through Router.Guarded because the contract cannot describe a stream
-// (D-47), and needs containers.read on the environment. The browser keeps the history;
-// the server keeps nothing (D-30).
+// RegisterStats registers the live stats stream of a container under /api/env/{envId}/,
+// and the streams of a service, of the rows of a services list or a containers list and of
+// the nodes of a swarm (plan 06-33). They are mounted through Router.Guarded because the
+// contract cannot describe a stream (D-47); the container streams need containers.read on
+// the environment and the swarm ones services.read. The browser keeps the history; the
+// server keeps nothing (D-30).
 func RegisterStats(r *httpx.Router, d StatsDeps) {
 	if d.Log == nil {
 		d.Log = slog.Default()
@@ -64,11 +73,25 @@ func RegisterStats(r *httpx.Router, d StatsDeps) {
 	if d.MaxLifetime <= 0 {
 		d.MaxLifetime = defaultMaxStreamLifetime
 	}
+	if d.RoundWait <= 0 {
+		d.RoundWait = statsRoundWait
+	}
 	need := rbac.Requirement{Perm: rbac.PermContainersRead, Scope: rbac.ScopeEnvironment}
+	needServices := rbac.Requirement{Perm: rbac.PermServicesRead, Scope: rbac.ScopeEnvironment}
 	lim := &streamLimiter{max: d.MaxStreamsPerUser, open: map[string]int{}}
 	r.Guarded(http.MethodGet, "/api/env/{envId}/containers/{containerId}/stats/stream", need, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		serveStatsStream(w, req, d, lim)
 	}))
+	// The streams that total many containers share a limit of their own, so the tabs and
+	// lists one person has open do not count against the container Stats tabs.
+	agg := &streamLimiter{max: d.MaxStreamsPerUser, open: map[string]int{}}
+	route := func(path string, need rbac.Requirement, h func(http.ResponseWriter, *http.Request, StatsDeps, *streamLimiter)) {
+		r.Guarded(http.MethodGet, path, need, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) { h(w, req, d, agg) }))
+	}
+	route("/api/env/{envId}/services/{serviceId}/stats/stream", needServices, serveServiceStatsStream)
+	route("/api/env/{envId}/services/stats/stream", needServices, serveServicesStatsStream)
+	route("/api/env/{envId}/containers/stats/stream", need, serveContainersStatsStream)
+	route("/api/env/{envId}/nodes/stats/stream", needServices, serveNodesStatsStream)
 }
 
 // statsReady is the first event of a stream: the container's own limits, which come from

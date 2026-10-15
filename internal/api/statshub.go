@@ -184,6 +184,14 @@ func (h *StatsHub) Subscribe(envID, nodeID, containerID string) (<-chan StatsUpd
 	}
 }
 
+// Ticker makes a ticker the way the samplers do. A stream that merges the samples of many
+// containers uses it for its own clock, so a test that supplies the hub's ticks drives the
+// merge and the refresh of the stream's tasks as well.
+func (h *StatsHub) Ticker(d time.Duration) (<-chan time.Time, func()) { return h.newTicker(d) }
+
+// Interval is how often a watched container is sampled.
+func (h *StatsHub) Interval() time.Duration { return h.interval }
+
 // Samplers is how many containers are being sampled now.
 func (h *StatsHub) Samplers() int {
 	h.mu.Lock()

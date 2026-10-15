@@ -309,7 +309,7 @@ func url2(s string) string { return strings.NewReplacer(" ", "%20", ";", "%3B").
 
 func TestServiceStatsStreamSharesItsSamplersWithTheContainerStream(t *testing.T) {
 	f := newSwFix(t, swTasks(0))
-	one := f.open(t, "containers/"+swWeb1+"/stats/stream")
+	one := f.open(t, "containers/"+swWeb1+"/stats/stream?nodeId="+f.env.ID)
 	decodeEvent[statsReady](t, one, "ready")
 	decodeEvent[statsSampleEvent](t, one, "sample")
 
@@ -409,8 +409,10 @@ func TestListStatsStreamsContainersSendOneSamplePerContainerAndMarkUnreachableOn
 	if !away.NoData || away.CPU != nil {
 		t.Errorf("a container named on a node that is not one of this environment's = %+v, want no data (T-06-97)", away)
 	}
-	if n := f.statsHub.Samplers(); n != 2 {
-		t.Errorf("%d samplers, want 2: the node that is not this environment's is never asked", n)
+	// Two readings of w1 so far, the first and the tick's, however many streams ask for it; the
+	// node that is not this environment's was refused before any engine was asked.
+	if n := f.fake.StatsCalls(swWeb1); n != 2 {
+		t.Errorf("%d stats requests for w1, want 2: one per round, and none for the node that is not this environment's", n)
 	}
 }
 
