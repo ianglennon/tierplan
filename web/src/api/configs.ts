@@ -8,7 +8,13 @@ import { DETAIL_REFETCH_MS, detailRetry } from "@/api/container-detail";
 import { readProblem } from "@/api/problem";
 import { LIST_REFETCH_MS, listKey } from "@/api/resources";
 import type { components } from "@/api/schema";
-import { isNotASwarm, ServicesLoadError } from "@/api/services";
+import {
+  actionError,
+  isNotASwarm,
+  ServiceActionError,
+  ServicesLoadError,
+  servicesKey,
+} from "@/api/services";
 
 export type ConfigItem = components["schemas"]["ConfigItem"];
 export type ConfigList = components["schemas"]["ConfigListBody"];
@@ -229,5 +235,75 @@ export function useCreateConfig(envId: string) {
     retry: false,
     gcTime: 0,
     onSettled: () => refreshConfigLists(queryClient, envId),
+  });
+}
+
+export type ConfigRotatePreview = components["schemas"]["RotatePreviewBody"];
+export type ConfigRotateInput = components["schemas"]["ConfigRotateRequest"];
+export type ConfigRotated = components["schemas"]["RotateBody"];
+
+// configRotatePreviewQuery is what a rotate of the config would do under that new name (empty for the
+// next version of the old name): the services that use it, each with its spec as it is and as it would
+// be, and the old config's templating and labels. It reads and changes nothing. gcTime 0 drops the
+// masked specs as soon as the dialog stops watching.
+export function configRotatePreviewQuery(envId: string, id: string, newName: string) {
+  return queryOptions({
+    queryKey: [...configDetailKey(envId, id), "rotate-preview", newName] as const,
+    queryFn: async () => {
+      const res = await api.POST("/api/env/{envId}/configs/{configId}/rotate/preview", {
+        params: { path: { envId, configId: id } },
+        body: newName ? { newName } : {},
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new ConfigLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    retry: false,
+    gcTime: 0,
+    staleTime: 0,
+  });
+}
+
+export interface ConfigRotateRequest {
+  id: string;
+  body: ConfigRotateInput;
+}
+
+// postConfigRotate rotates one config to a new version. The content goes out in the body, as base64,
+// and nowhere else. It never retries: a rotate whose answer was lost may have happened (P2 D-42), and
+// the next read of the list says which. A refusal keeps the problem's type, detail and entries, which
+// name the config and the services and never the content.
+export async function postConfigRotate(
+  envId: string,
+  req: ConfigRotateRequest,
+): Promise<ConfigRotated> {
+  try {
+    const res = await api.POST("/api/env/{envId}/configs/{configId}/rotate", {
+      params: { path: { envId, configId: req.id } },
+      body: req.body,
+    });
+    if (!res.data) throw actionError(res.error, res.response);
+    return res.data;
+  } catch (e) {
+    // A network failure has no status.
+    throw e instanceof ServiceActionError ? e : new ServiceActionError(0);
+  }
+}
+
+// useRotateConfig is the mutation behind the rotate dialog. It does not retry, reads the lists again
+// whatever the answer (a run that stopped part-way changed the swarm too), and keeps nothing: gcTime 0
+// drops the mutation, and the content in its variables with it, as soon as nothing observes it.
+export function useRotateConfig(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<ConfigRotated, ServiceActionError, ConfigRotateRequest>({
+    mutationFn: (req) => postConfigRotate(envId, req),
+    retry: false,
+    gcTime: 0,
+    onSettled: () => {
+      refreshConfigLists(queryClient, envId);
+      void queryClient.invalidateQueries({ queryKey: servicesKey(envId) });
+    },
   });
 }

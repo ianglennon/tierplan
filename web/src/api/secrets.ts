@@ -8,7 +8,13 @@ import { DETAIL_REFETCH_MS, detailRetry } from "@/api/container-detail";
 import { readProblem } from "@/api/problem";
 import { LIST_REFETCH_MS, listKey } from "@/api/resources";
 import type { components } from "@/api/schema";
-import { isNotASwarm, ServicesLoadError } from "@/api/services";
+import {
+  actionError,
+  isNotASwarm,
+  ServiceActionError,
+  ServicesLoadError,
+  servicesKey,
+} from "@/api/services";
 
 export type SecretItem = components["schemas"]["SecretItem"];
 export type SecretList = components["schemas"]["SecretListBody"];
@@ -229,5 +235,73 @@ export function useCreateSecret(envId: string) {
     retry: false,
     gcTime: 0,
     onSettled: () => refreshSecretLists(queryClient, envId),
+  });
+}
+
+export type RotatePreview = components["schemas"]["RotatePreviewBody"];
+export type RotateUser = components["schemas"]["RotateUserBody"];
+export type SecretRotateInput = components["schemas"]["SecretRotateRequest"];
+export type Rotated = components["schemas"]["RotateBody"];
+
+// secretRotatePreviewQuery is what a rotate of the secret would do under that new name (empty for the
+// next version of the old name): the services that use it, each with its spec as it is and as it would
+// be. It reads and changes nothing. gcTime 0 drops the masked specs as soon as the dialog stops
+// watching, and an error is read for its status and type like any detail read.
+export function secretRotatePreviewQuery(envId: string, id: string, newName: string) {
+  return queryOptions({
+    queryKey: [...secretDetailKey(envId, id), "rotate-preview", newName] as const,
+    queryFn: async () => {
+      const res = await api.POST("/api/env/{envId}/secrets/{secretId}/rotate/preview", {
+        params: { path: { envId, secretId: id } },
+        body: newName ? { newName } : {},
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new SecretLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    retry: false,
+    gcTime: 0,
+    staleTime: 0,
+  });
+}
+
+export interface SecretRotateRequest {
+  id: string;
+  body: SecretRotateInput;
+}
+
+// postSecretRotate rotates one secret to a new version. The value goes out in the body, as base64, and
+// nowhere else. It never retries: a rotate whose answer was lost may have happened (P2 D-42), and the
+// next read of the list says which. A refusal keeps the problem's type, detail and entries, which name
+// the secret and the services and never a value.
+export async function postSecretRotate(envId: string, req: SecretRotateRequest): Promise<Rotated> {
+  try {
+    const res = await api.POST("/api/env/{envId}/secrets/{secretId}/rotate", {
+      params: { path: { envId, secretId: req.id } },
+      body: req.body,
+    });
+    if (!res.data) throw actionError(res.error, res.response);
+    return res.data;
+  } catch (e) {
+    // A network failure has no status.
+    throw e instanceof ServiceActionError ? e : new ServiceActionError(0);
+  }
+}
+
+// useRotateSecret is the mutation behind the rotate dialog. It does not retry, reads the lists again
+// whatever the answer (a run that stopped part-way changed the swarm too), and keeps nothing: gcTime 0
+// drops the mutation, and the value in its variables with it, as soon as nothing observes it (T-06-82).
+export function useRotateSecret(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<Rotated, ServiceActionError, SecretRotateRequest>({
+    mutationFn: (req) => postSecretRotate(envId, req),
+    retry: false,
+    gcTime: 0,
+    onSettled: () => {
+      refreshSecretLists(queryClient, envId);
+      void queryClient.invalidateQueries({ queryKey: servicesKey(envId) });
+    },
   });
 }

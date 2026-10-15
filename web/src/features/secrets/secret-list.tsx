@@ -31,6 +31,7 @@ import {
 import { useEnvName } from "@/features/resources/use-env-name";
 import { DeleteSecretDialog, secretDeleteReason } from "@/features/secrets/delete-secret-dialog";
 import { ObjectSheet } from "@/features/secrets/object-sheet";
+import { RotateDialog } from "@/features/secrets/rotate-dialog";
 import { NotASwarm } from "@/features/services/not-a-swarm";
 import { usePermission } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
@@ -115,7 +116,11 @@ export function SecretList({
   const t = useT();
   const allowed = usePermission("secrets.read", envId);
   const manage = useNeeds("secrets.manage", envId);
+  // A new version updates the services that use the old one, which an Operator may do and an Admin may add to.
+  const control = useNeeds("services.control", envId);
+  const rotateReason = manage.reason ?? control.reason;
   const [deleting, setDeleting] = useState<SecretItem | null>(null);
+  const [rotating, setRotating] = useState<SecretItem | null>(null);
   const query = useQuery({ ...secretsQuery(envId, { q }), enabled: allowed });
   const envName = useEnvName(envId);
   const missing = t("secrets.list.missing");
@@ -194,6 +199,17 @@ export function SecretList({
                 {t("secrets.list.open")}
               </Link>
             </Button>
+            <NeedsTooltip reason={rotateReason}>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="max-md:h-11"
+                aria-label={t("secrets.rotate.label", { name: s.name })}
+                onClick={rotateReason ? undefined : () => setRotating(s)}
+              >
+                {t("secrets.rotate.action")}
+              </Button>
+            </NeedsTooltip>
             <NeedsTooltip reason={reason}>
               <Button
                 variant="ghost"
@@ -292,6 +308,14 @@ export function SecretList({
       ) : null}
       {manage.allowed ? (
         <DeleteSecretDialog envId={envId} secret={deleting} onClose={() => setDeleting(null)} />
+      ) : null}
+      {manage.allowed && control.allowed ? (
+        <RotateDialog
+          kind="secret"
+          envId={envId}
+          object={rotating ? { id: rotating.id, name: rotating.name } : null}
+          onClose={() => setRotating(null)}
+        />
       ) : null}
     </>
   );

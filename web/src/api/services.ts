@@ -340,7 +340,9 @@ export function isLostAction(err: unknown): boolean {
   return err instanceof ServiceActionError && err.status === 0;
 }
 
-function actionError(body: unknown, response?: { status: number }): ServiceActionError {
+// actionError reads a refused service write into the error the pages word. The rotate of a secret or a
+// config, which updates services, reads its refusals the same way.
+export function actionError(body: unknown, response?: { status: number }): ServiceActionError {
   const problem = readProblem(body, response);
   const detail =
     typeof body === "object" && body !== null && "detail" in body && typeof body.detail === "string"

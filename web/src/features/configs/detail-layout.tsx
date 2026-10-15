@@ -24,6 +24,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { UsedByList } from "@/components/used-by-list";
 import { configDeleteReason, DeleteConfigDialog } from "@/features/configs/delete-config-dialog";
 import { useEnvName } from "@/features/resources/use-env-name";
+import { RotateDialog } from "@/features/secrets/rotate-dialog";
 import { NotASwarm } from "@/features/services/not-a-swarm";
 import { useDocumentTitle } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
@@ -125,7 +126,10 @@ export function ConfigDetailLayout({ envId, configId }: ConfigDetailLayoutProps)
   const navigate = useNavigate();
   const envName = useEnvName(envId);
   const manage = useNeeds("configs.manage", envId);
+  const control = useNeeds("services.control", envId);
+  const rotateReason = manage.reason ?? control.reason;
   const [deleting, setDeleting] = useState(false);
+  const [rotating, setRotating] = useState(false);
   const query = useQuery(configDetailQuery(envId, configId));
   const { data } = query;
   const gone = isConfigGone(query.error);
@@ -182,17 +186,30 @@ export function ConfigDetailLayout({ envId, configId }: ConfigDetailLayoutProps)
                   : t("configs.detail.notInUse")}
               </p>
             </div>
-            <NeedsTooltip reason={reason}>
-              <Button
-                type="button"
-                variant="outline"
-                className="max-md:h-11 border-destructive-fill text-destructive"
-                aria-label={t("configs.delete.label", { name: data.name })}
-                onClick={reason ? undefined : () => setDeleting(true)}
-              >
-                {t("configs.delete.action")}
-              </Button>
-            </NeedsTooltip>
+            <div className="flex flex-wrap items-center gap-2">
+              <NeedsTooltip reason={rotateReason}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="max-md:h-11"
+                  aria-label={t("secrets.rotate.label", { name: data.name })}
+                  onClick={rotateReason ? undefined : () => setRotating(true)}
+                >
+                  {t("secrets.rotate.action")}
+                </Button>
+              </NeedsTooltip>
+              <NeedsTooltip reason={reason}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="max-md:h-11 border-destructive-fill text-destructive"
+                  aria-label={t("configs.delete.label", { name: data.name })}
+                  onClick={reason ? undefined : () => setDeleting(true)}
+                >
+                  {t("configs.delete.action")}
+                </Button>
+              </NeedsTooltip>
+            </div>
           </div>
         ) : (
           <Skeleton className="h-8 w-64" />
@@ -243,6 +260,14 @@ export function ConfigDetailLayout({ envId, configId }: ConfigDetailLayoutProps)
         </TabsList>
       </Tabs>
       <Outlet />
+      {data && manage.allowed && control.allowed ? (
+        <RotateDialog
+          kind="config"
+          envId={envId}
+          object={rotating ? { id: data.id, name: data.name } : null}
+          onClose={() => setRotating(false)}
+        />
+      ) : null}
       {data && manage.allowed ? (
         <DeleteConfigDialog
           envId={envId}

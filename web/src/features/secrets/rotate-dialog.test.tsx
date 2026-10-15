@@ -450,7 +450,7 @@ describe("RotateDialog run", () => {
     expect((screen.getByLabelText("Value") as HTMLInputElement).value).toBe(VALUE);
   });
 
-  it("words a value that was too big and a lost permission without showing a type", async () => {
+  it("words a value that was too big without ever showing the problem type", async () => {
     answerRotate = () => problem(422, "value_too_large");
     mount();
     await toReview();

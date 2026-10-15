@@ -54,7 +54,7 @@ const TOUCH_HEIGHT = "h-11 md:h-8";
 
 // A secret's or config's name: 1 to 64 letters, numbers, dots, dashes and underscores, starting and ending
 // with a letter or a number. The server checks it again.
-const NAME_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$/;
+export const NAME_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$/;
 
 // What the swarm fills a config in as when a task starts: nothing, or a Go template.
 type Templating = "none" | "golang";

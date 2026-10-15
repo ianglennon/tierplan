@@ -31,6 +31,7 @@ import {
 } from "@/features/resources/resource-table";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { ObjectSheet } from "@/features/secrets/object-sheet";
+import { RotateDialog } from "@/features/secrets/rotate-dialog";
 import { NotASwarm } from "@/features/services/not-a-swarm";
 import { usePermission } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
@@ -116,7 +117,11 @@ export function ConfigList({
   const t = useT();
   const allowed = usePermission("configs.read", envId);
   const manage = useNeeds("configs.manage", envId);
+  // A new version updates the services that use the old one, which an Operator may do and an Admin may add to.
+  const control = useNeeds("services.control", envId);
+  const rotateReason = manage.reason ?? control.reason;
   const [deleting, setDeleting] = useState<ConfigItem | null>(null);
+  const [rotating, setRotating] = useState<ConfigItem | null>(null);
   const query = useQuery({ ...configsQuery(envId, { q }), enabled: allowed });
   const envName = useEnvName(envId);
   const missing = t("configs.list.missing");
@@ -199,6 +204,17 @@ export function ConfigList({
                 {t("configs.list.open")}
               </Link>
             </Button>
+            <NeedsTooltip reason={rotateReason}>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="max-md:h-11"
+                aria-label={t("secrets.rotate.label", { name: s.name })}
+                onClick={rotateReason ? undefined : () => setRotating(s)}
+              >
+                {t("secrets.rotate.action")}
+              </Button>
+            </NeedsTooltip>
             <NeedsTooltip reason={reason}>
               <Button
                 variant="ghost"
@@ -298,6 +314,14 @@ export function ConfigList({
       ) : null}
       {manage.allowed ? (
         <DeleteConfigDialog envId={envId} config={deleting} onClose={() => setDeleting(null)} />
+      ) : null}
+      {manage.allowed && control.allowed ? (
+        <RotateDialog
+          kind="config"
+          envId={envId}
+          object={rotating ? { id: rotating.id, name: rotating.name } : null}
+          onClose={() => setRotating(null)}
+        />
       ) : null}
     </>
   );
