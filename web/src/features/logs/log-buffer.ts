@@ -181,7 +181,7 @@ export class LogBuffer {
         const l = this.at(i);
         if (l.marker) continue;
         if (l.t !== first.t) break;
-        const k = `${l.s}\u0000${l.m}`;
+        const k = `${l.s}\u0000${l.task ?? ""}\u0000${l.m}`;
         held.set(k, (held.get(k) ?? 0) + 1);
       }
     }
@@ -189,7 +189,7 @@ export class LogBuffer {
     for (const l of page) {
       if (first && l.t > first.t) continue;
       if (first && l.t === first.t) {
-        const k = `${l.s}\u0000${l.m}`;
+        const k = `${l.s}\u0000${l.task ?? ""}\u0000${l.m}`;
         const n = held.get(k) ?? 0;
         if (n > 0) {
           held.set(k, n - 1);

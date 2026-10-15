@@ -472,19 +472,34 @@ export interface LogPageOptions extends StreamTarget {
   tail?: number;
 }
 
-// fetchLogPage reads a page of earlier lines (GET .../logs), oldest first. It throws
-// when the server refuses or cannot be reached.
+// fetchLogPage reads a page of earlier lines (GET .../logs), oldest first: of a container on
+// its node, or of a service, whose tasks the server merges, narrowed as its stream is. It
+// throws when the server refuses or cannot be reached.
 export async function fetchLogPage(o: LogPageOptions): Promise<LogPage> {
   const src = sourceOf(o);
+  const tail = o.tail ?? 500;
+  if (src.kind === "service") {
+    const f = o.service;
+    const res = await api.GET("/api/env/{envId}/services/{serviceId}/logs", {
+      params: {
+        path: { envId: o.envId, serviceId: src.id },
+        query: {
+          sid: o.sid,
+          until: o.until,
+          tail,
+          task: f?.tasks?.length ? f.tasks.join(",") : undefined,
+          node: f?.nodes?.length ? f.nodes.join(",") : undefined,
+          stopped: f?.stopped ? true : undefined,
+        },
+      },
+    });
+    if (!res.data) throw new Error(`Could not read earlier log lines (${res.response.status})`);
+    return { lines: res.data.lines as LogLineData[], startOfLogs: res.data.startOfLogs };
+  }
   const res = await api.GET("/api/env/{envId}/containers/{containerId}/logs", {
     params: {
       path: { envId: o.envId, containerId: src.id },
-      query: {
-        sid: o.sid,
-        until: o.until,
-        tail: o.tail ?? 500,
-        nodeId: src.kind === "container" ? src.nodeId : undefined,
-      },
+      query: { sid: o.sid, until: o.until, tail, nodeId: src.nodeId },
     },
   });
   if (!res.data) throw new Error(`Could not read earlier log lines (${res.response.status})`);

@@ -4,14 +4,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 
-import { useMemo } from "react";
-
-import { nodesQuery } from "@/api/nodes";
-import { serviceQuery, serviceTasksQuery } from "@/api/services";
+import { serviceQuery } from "@/api/services";
 import { type LogViewParams, serviceLogSearchSchema } from "@/features/logs/log-prefs";
 import { LogViewer } from "@/features/logs/log-viewer";
-import { filterOptionsFrom } from "@/features/logs/task-filter-bar";
-import { usePermission } from "@/hooks/use-me";
+import { useServiceFilterOptions } from "@/features/logs/use-filter-options";
 
 // The Logs tab of a service: the log of all its tasks in one, live (plan 06-29, OBS-02,
 // D-35). The page frame owns the gone state and the permission check; this draws the viewer
@@ -42,15 +38,7 @@ function ServiceLogsRoute() {
     });
   // The layout reads the detail too, so this is the cached answer; it names the surface.
   const detail = useQuery(serviceQuery(envId, serviceId));
-  const tasks = useQuery(serviceTasksQuery(envId, serviceId));
-  // A caller without nodes.read is not asked: the read would be refused, and a refused read
-  // under an environment reads as lost access. The role badge is left out for them.
-  const mayReadNodes = usePermission("nodes.read", envId);
-  const nodes = useQuery({ ...nodesQuery(envId), enabled: mayReadNodes, refetchInterval: false });
-  const filterOptions = useMemo(
-    () => filterOptionsFrom(tasks.data, nodes.data),
-    [tasks.data, nodes.data],
-  );
+  const filterOptions = useServiceFilterOptions(envId, serviceId);
   return (
     <LogViewer
       envId={envId}

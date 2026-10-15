@@ -46,10 +46,12 @@ export function downloadUrl(
   if (src.kind === "container" && src.nodeId) q.set("nodeId", src.nodeId);
   if (range.since) q.set("since", range.since);
   if (range.until) q.set("until", range.until);
-  if (timestamps) q.set("timestamps", "1");
+  // A service's file always starts each line with its task and the UTC time.
+  if (src.kind === "container" && timestamps) q.set("timestamps", "1");
   const query = q.toString();
+  const what = src.kind === "service" ? "services" : "containers";
   return apiUrl(
-    `/api/env/${encodeURIComponent(target.envId)}/containers/${encodeURIComponent(src.id)}/logs/download${query ? `?${query}` : ""}`,
+    `/api/env/${encodeURIComponent(target.envId)}/${what}/${encodeURIComponent(src.id)}/logs/download${query ? `?${query}` : ""}`,
   );
 }
 
@@ -100,6 +102,7 @@ export interface DownloadFormProps {
 function DownloadForm({ target, show, timestamps, onCancel }: DownloadFormProps) {
   const t = useT();
   const id = useId();
+  const isService = sourceOf(target).kind === "service";
   const initial = useMemo(() => defaultRange(show, new Date()), [show]);
   const [from, setFrom] = useState(initial.from);
   const [to, setTo] = useState(initial.to);
@@ -160,17 +163,21 @@ function DownloadForm({ target, show, timestamps, onCancel }: DownloadFormProps)
         ) : null}
       </div>
       <p className="text-xs text-muted-foreground">{t("logs.download.empty")}</p>
-      <div className="flex items-center gap-2">
-        <Checkbox
-          id={`${id}-ts`}
-          checked={withStamps}
-          onCheckedChange={(v) => setWithStamps(v === true)}
-        />
-        <Label htmlFor={`${id}-ts`} className="font-normal">
-          {t("logs.download.timestamps")}
-        </Label>
-      </div>
-      <p className="text-xs text-muted-foreground">{t("logs.download.note")}</p>
+      {isService ? null : (
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id={`${id}-ts`}
+            checked={withStamps}
+            onCheckedChange={(v) => setWithStamps(v === true)}
+          />
+          <Label htmlFor={`${id}-ts`} className="font-normal">
+            {t("logs.download.timestamps")}
+          </Label>
+        </div>
+      )}
+      <p className="text-xs text-muted-foreground">
+        {t(isService ? "logs.download.serviceNote" : "logs.download.note")}
+      </p>
       <div className="flex justify-end gap-2">
         <Button type="button" variant="outline" size="sm" onClick={onCancel}>
           {t("logs.download.cancel")}
@@ -220,7 +227,13 @@ export function DownloadDialog({
       <DialogContent className="sm:max-w-160">
         <DialogHeader>
           <DialogTitle>{t("logs.download.title")}</DialogTitle>
-          <DialogDescription className="sr-only">{t("logs.download.note")}</DialogDescription>
+          <DialogDescription className="sr-only">
+            {t(
+              sourceOf(props.target).kind === "service"
+                ? "logs.download.serviceNote"
+                : "logs.download.note",
+            )}
+          </DialogDescription>
         </DialogHeader>
         <DownloadForm {...props} onCancel={() => onOpenChange(false)} />
       </DialogContent>

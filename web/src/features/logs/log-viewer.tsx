@@ -173,15 +173,24 @@ export function popoutLogsUrl(envId: string, source: LogSource, view: LogViewPar
     }
   };
   const q = new URLSearchParams();
+  // A container's pop-out names the node it is on; a service's names the task prefixes, the
+  // tasks and the nodes the log is narrowed to, and the stopped switch.
   if (source.kind === "container" && source.nodeId) q.set("node", text(source.nodeId));
   if (view.since) q.set("since", text(view.since));
   if (view.q) q.set("q", text(view.q));
   if (view.ts !== undefined) q.set("ts", String(view.ts));
   if (view.utc !== undefined) q.set("utc", String(view.utc));
   if (view.wrap !== undefined) q.set("wrap", String(view.wrap));
+  if (source.kind === "service") {
+    if (view.prefix !== undefined) q.set("prefix", String(view.prefix));
+    if (view.task) q.set("task", text(view.task));
+    if (view.node) q.set("node", text(view.node));
+    if (view.stopped !== undefined) q.set("stopped", String(view.stopped));
+  }
   const query = q.toString();
+  const what = source.kind === "service" ? "services" : "containers";
   return withBase(
-    `/popout/${encodeURIComponent(envId)}/containers/${encodeURIComponent(source.id)}/logs${query ? `?${query}` : ""}`,
+    `/popout/${encodeURIComponent(envId)}/${what}/${encodeURIComponent(source.id)}/logs${query ? `?${query}` : ""}`,
   );
 }
 
@@ -228,9 +237,8 @@ export function LogViewer(props: LogViewerProps) {
     popout = false,
   } = props;
   const src = sourceOf(props);
-  // A service's log shares everything with a container's but what the stream can serve
-  // (download, earlier lines, pop-out are the container's for now) and what it adds: the
-  // task of every line (plan 06-29, D-35).
+  // A service's log shares everything with a container's but what it adds: the task of every
+  // line, the filters on tasks and nodes and the markers (plans 06-29 to 06-31, D-35).
   const kind = src.kind;
   const isService = kind === "service";
   const sourceId = src.id;
@@ -369,7 +377,12 @@ export function LogViewer(props: LogViewerProps) {
       onReady: (info) => {
         if (firstReady) {
           firstReady = false;
-          if (reload) buffer.clear();
+          if (reload) {
+            buffer.clear();
+            // What the earlier lines reached was for the old set of tasks.
+            setStartReached(false);
+            setEarlier("idle");
+          }
           setLoadedFilters(filtersKey);
         }
         setTasks(info.tasks ?? null);
@@ -504,7 +517,7 @@ export function LogViewer(props: LogViewerProps) {
 
   const capped = buffer.droppedCount > 0;
   const allLoaded = show.kind === "all" && buffer.length < 50_000;
-  const hasOldest = !isService && buffer.length > 0;
+  const hasOldest = buffer.length > 0;
   const topRow = hasOldest
     ? capped
       ? "cap"
@@ -627,11 +640,11 @@ export function LogViewer(props: LogViewerProps) {
     try {
       const page = await fetchLogPage({
         envId,
-        containerId: sourceId,
-        nodeId: containerNode,
+        source: src,
         sid,
         until: plusNanosecond(oldest.t),
         tail: EARLIER_PAGE,
+        service: isService ? { tasks: taskIds, nodes: nodeNames, stopped: stoppedOn } : undefined,
       });
       anchor.current = {
         total: virtualizer.getTotalSize(),
@@ -673,7 +686,7 @@ export function LogViewer(props: LogViewerProps) {
     isService && (taskFilter !== "" || nodeFilter !== "") && tasks !== null && tasks.length === 0;
   const loadFailed = state.status === "closed" && state.reason === "failed" && !everLive.current;
   const [downloadOpen, setDownloadOpen] = useState(false);
-  const downloadTarget = { envId, containerId: sourceId, nodeId: containerNode };
+  const downloadTarget = { envId, source: src };
   const onShowChange = (next: ShowRange) => change({ since: formatShow(next) });
   // The window opens with what is on screen, so it reads the same: the range, the search
   // and the toggles, as they are now (not only the ones the address holds).
@@ -684,6 +697,14 @@ export function LogViewer(props: LogViewerProps) {
       ts: timestamps,
       utc: view.utc ?? prefs.utc,
       wrap,
+      ...(isService
+        ? {
+            prefix: taskNamesOn,
+            task: taskFilter || undefined,
+            node: nodeFilter || undefined,
+            stopped: stoppedOn || undefined,
+          }
+        : {}),
     });
     window.open(url, "_blank", "popup,noopener,width=1100,height=760");
   };
@@ -822,38 +843,28 @@ export function LogViewer(props: LogViewerProps) {
         }
         live={connected ? (state.status === "live" ? "live" : "reconnecting") : undefined}
         actions={
-          isService ? (
-            actions
-          ) : (
-            <>
-              <DownloadPopover target={downloadTarget} show={show} timestamps={timestamps} />
-              {actions}
-            </>
-          )
+          <>
+            <DownloadPopover target={downloadTarget} show={show} timestamps={timestamps} />
+            {actions}
+          </>
         }
-        onOpenPopout={popout || isService ? undefined : openPopout}
+        onOpenPopout={popout ? undefined : openPopout}
         moreItems={
-          isService ? (
-            moreItems
-          ) : (
-            <>
-              <DropdownMenuItem onSelect={() => setDownloadOpen(true)}>
-                {t("logs.download.trigger")}
-              </DropdownMenuItem>
-              {moreItems}
-            </>
-          )
+          <>
+            <DropdownMenuItem onSelect={() => setDownloadOpen(true)}>
+              {t("logs.download.trigger")}
+            </DropdownMenuItem>
+            {moreItems}
+          </>
         }
       />
-      {isService ? null : (
-        <DownloadDialog
-          open={downloadOpen}
-          onOpenChange={setDownloadOpen}
-          target={downloadTarget}
-          show={show}
-          timestamps={timestamps}
-        />
-      )}
+      <DownloadDialog
+        open={downloadOpen}
+        onOpenChange={setDownloadOpen}
+        target={downloadTarget}
+        show={show}
+        timestamps={timestamps}
+      />
       <div className="relative">
         <div
           ref={scrollRef}

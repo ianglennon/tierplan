@@ -1404,7 +1404,7 @@ describe("a service's log", () => {
       new URL(source().url, "http://x").searchParams.get("sid"),
     );
     const rows = Array.from(screen.getByRole("log").querySelectorAll("[data-stream]"));
-    expect(rows.map((r) => r.textContent)).toEqual(["2beta older", "1alpha held"]);
+    expect(rows.map((r) => r.textContent)).toEqual(["2@betaolder", "1@alphaheld"]);
   });
 
   it("opens the pop-out of the service with the range, the search, the toggles, the prefixes and the filters", async () => {

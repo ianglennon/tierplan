@@ -70,6 +70,7 @@
       "empty": "Leave a field empty to start at the beginning of the log or to run to the end.",
       "timestamps": "Include timestamps",
       "note": "Downloads come straight from Docker, so they aren't limited to what's loaded here. Times are in UTC.",
+      "serviceNote": "Lines from all of the service's tasks are merged in time order, each starting with its task name. Downloads come straight from Docker, so they aren't limited to what's loaded here. Times are in UTC.",
       "cancel": "Cancel",
       "submit": "Download logs",
       "starting": "Starting the download",
