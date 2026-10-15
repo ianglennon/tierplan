@@ -22,6 +22,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/registry"
+	"github.com/ianglennon/bayplan/internal/swarmops"
 )
 
 const (
@@ -282,7 +283,8 @@ func unresolved(image string, err error) error {
 
 // rollbackService sends the current spec back to the manager with rollback=previous. In one
 // write call it reads the service, compares the version the caller saw (so the rollback is
-// of the spec that was shown) and resolves the credential for the previous spec's image.
+// of the spec that was shown), judges the previous spec by the host-access policy for the caller
+// before anything is read or sent, and resolves the credential for the previous spec's image.
 func rollbackService(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID string, in *ServiceRollbackInput) (ServiceRollbackBody, error) {
 	if err := requireSwarm(ctx, d, envID); err != nil {
 		return ServiceRollbackBody{}, err
@@ -303,6 +305,20 @@ func rollbackService(ctx context.Context, d ServicesDeps, p *rbac.Principal, env
 		if detail.PreviousSpec == nil {
 			return dockerx.ErrNoPreviousSpec
 		}
+		if d.Checker == nil {
+			return errors.New("the host-access policy is not configured")
+		}
+		nets, err := c.Networks(writeCtx)
+		if err != nil {
+			return err
+		}
+		dec, err := d.Checker.CheckServiceSpec(writeCtx, p, envID, detail.PreviousSpec, swarmops.NetworkResolverOf(nets))
+		if err != nil {
+			return err
+		}
+		if !dec.Allowed {
+			return &swarmops.RefusedError{Reason: dec.Reason, Message: dec.Message, Findings: dec.Findings}
+		}
 		var prev swarm.ServiceSpec
 		if err := json.Unmarshal(detail.PreviousSpec, &prev); err != nil {
 			return fmt.Errorf("read the previous spec: %w", err)
@@ -318,10 +334,14 @@ func rollbackService(ctx context.Context, d ServicesDeps, p *rbac.Principal, env
 	})
 	version := strconv.FormatUint(in.Body.Version, 10)
 	if err != nil {
-		code, problem := serviceActionProblem(d, envID, problemRollbackFailed, err)
+		code, problem := serviceWriteProblem(d, envID, problemRollbackFailed, err)
 		if code != codeServiceNotFound {
-			auditServiceAction(ctx, d, p, envID, in.UserAgent, audit.ActionServiceRolledBack, wo.id, in.ServiceID,
-				map[string]string{"name": wo.name, "version": version, "code": code}, code)
+			details := map[string]string{"name": wo.name, "version": version, "code": code}
+			var refused *swarmops.RefusedError
+			if errors.As(err, &refused) {
+				details["findings"] = strconv.Itoa(len(refused.Findings))
+			}
+			auditServiceAction(ctx, d, p, envID, in.UserAgent, audit.ActionServiceRolledBack, wo.id, in.ServiceID, details, code)
 		}
 		return ServiceRollbackBody{}, problem
 	}

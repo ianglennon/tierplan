@@ -452,6 +452,12 @@ func networkResolver(rows []dockerx.NetworkRow) swarmspec.NetworkResolver {
 	}
 }
 
+// NetworkResolverOf is the lookup of a network target apply judges a spec with. A write outside this
+// package (the rollback route) judges a spec with the same network lookup apply uses.
+func NetworkResolverOf(rows []dockerx.NetworkRow) swarmspec.NetworkResolver {
+	return networkResolver(rows)
+}
+
 func (m Missing) any() bool { return len(m.Networks)+len(m.Secrets)+len(m.Configs) > 0 }
 
 func containsString(list []string, s string) bool {
