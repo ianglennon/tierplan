@@ -502,7 +502,7 @@ func TestScrubServiceTextReplacesEverySecretBearingValueOfTheSpec(t *testing.T) 
 		cs.Healthcheck = &container.HealthConfig{Test: []string{"CMD", "probe", "tokenvalue"}}
 		tt.LogDriver = &swarm.Driver{Name: "gelf", Options: map[string]string{"addr": "udp://logtoken@h"}}
 	})
-	text := "invalid env postgres://u:hunter2@h/db, command app --key=k3y, probe tokenvalue, udp://logtoken@h"
+	text := "invalid env postgres://u:hunter2@h/db, command app --key=k3y, probe tokenvalue, udp://logtoken@h" //nolint:gosec // G101: a fixture secret the scrub must remove
 	got := redact.ScrubServiceText(text, spec)
 	for _, secret := range []string{"hunter2", "k3y", "tokenvalue", "logtoken"} {
 		if strings.Contains(got, secret) {

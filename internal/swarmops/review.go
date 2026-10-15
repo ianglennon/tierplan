@@ -6,12 +6,12 @@ package swarmops
 import (
 	"context"
 	"encoding/json"
-	"errors"
 
 	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/rbac/compose"
+	"github.com/ianglennon/bayplan/internal/redact"
 )
 
 // ReviewInput is a spec to review: the service, the version the caller read, the spec they edited
@@ -43,7 +43,36 @@ type ReviewResult struct {
 	Warnings   []string
 }
 
-// Review judges a spec without changing anything.
+// Review judges a spec without changing anything. It reads the service fresh and refuses a version
+// that is not the current one, merges the masked values, resolves the image, runs the host-escalation
+// policy on the exact spec an apply would send and lists the networks the spec names that do not exist.
+// A refusal by the policy is not an error: it is Allowed false with the findings, so a page can show
+// what to change. Everything else a spec can be refused for is returned as an error (see Apply).
 func Review(ctx context.Context, deps Deps, in ReviewInput) (ReviewResult, error) {
-	return ReviewResult{}, errors.New("swarmops: not implemented")
+	c := common{envID: in.EnvID, serviceID: in.ServiceID, version: in.Version, spec: in.Spec, caller: in.Caller, client: in.Client}
+	p, err := prepare(ctx, deps, c)
+	if err != nil {
+		return ReviewResult{}, err
+	}
+	info, _, unresolved, err := p.pinImage(ctx, deps, c)
+	if err != nil {
+		return ReviewResult{}, err
+	}
+	dec, _, err := p.judge(ctx, deps, c)
+	if err != nil {
+		return ReviewResult{}, err
+	}
+	shown, _ := redact.MaskServiceSpec(p.merged, in.Caller.Reveal)
+	res := ReviewResult{
+		Spec: shown, Version: p.detail.Version, Changed: p.changed, Image: info,
+		Findings: dec.Findings, Allowed: dec.Allowed, Reason: dec.Reason, Refusal: dec.Message,
+		Missing: missingObjects(p.merged, p.networks), HostPolicy: in.HostPolicy, Warnings: []string{},
+	}
+	if res.Findings == nil {
+		res.Findings = []compose.Finding{}
+	}
+	if unresolved != nil {
+		res.ImageError = &ImageError{Ref: unresolved.Ref, Host: unresolved.Host, Reason: unresolved.Reason}
+	}
+	return res, nil
 }

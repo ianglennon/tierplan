@@ -32,7 +32,7 @@ import (
 const (
 	envID    = "env-a"
 	apiImage = "localhost:5000/app/api:1"
-	dbURL    = "postgres://user:hunter2@db/app"
+	dbURL    = "postgres://user:hunter2@db/app" //nolint:gosec // G101: a fixture secret the tests look for in every answer
 )
 
 // apiSpec is a standalone service whose spec holds a secret in each place a spec can: its

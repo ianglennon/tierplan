@@ -7928,6 +7928,40 @@
         ],
         "type": "object"
       },
+      "ServiceApplyBody": {
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "description": "The digest the image is pinned to; empty when it names none",
+            "type": "string"
+          },
+          "image": {
+            "description": "The image the service now names: tag@sha256:digest when the tag was resolved",
+            "type": "string"
+          },
+          "pinned": {
+            "description": "True when Bayplan resolved the tag and wrote the digest into the spec",
+            "type": "boolean"
+          },
+          "warnings": {
+            "description": "The manager's warnings about the update, scrubbed of masked values; empty when there are none",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "image",
+          "digest",
+          "pinned",
+          "warnings"
+        ],
+        "type": "object"
+      },
       "ServiceDetailBody": {
         "additionalProperties": false,
         "properties": {
@@ -8110,6 +8144,27 @@
         ],
         "type": "object"
       },
+      "ServiceEditRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "spec": {
+            "additionalProperties": true,
+            "description": "The full service spec to review or apply. Without secrets.reveal it is the masked spec the caller read, changed: a value left as \u003chidden\u003e keeps its current value, a value typed replaces it, a removed entry is removed",
+            "type": "object"
+          },
+          "version": {
+            "description": "The version of the service the caller read (what GET .../spec answered). When it is not the current one nothing is changed and the answer is 409 service_changed",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "spec"
+        ],
+        "type": "object"
+      },
       "ServiceFileRefBody": {
         "additionalProperties": false,
         "properties": {
@@ -8145,6 +8200,45 @@
           "uid",
           "gid",
           "mode"
+        ],
+        "type": "object"
+      },
+      "ServiceFindingBody": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "description": "Where it is in the spec, for example TaskTemplate.ContainerSpec.Mounts[1].Source",
+            "type": "string"
+          },
+          "rule": {
+            "description": "The rule that fired",
+            "enum": [
+              "bind_path",
+              "volume_device",
+              "npipe",
+              "cap_add",
+              "selinux",
+              "seccomp",
+              "apparmor",
+              "host_network",
+              "plugin_runtime"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "description": "The offending value",
+            "type": "string"
+          },
+          "why": {
+            "description": "Why the setting needs env Admin",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "value",
+          "rule",
+          "why"
         ],
         "type": "object"
       },
@@ -8198,6 +8292,24 @@
             "type": "integer"
           }
         },
+        "type": "object"
+      },
+      "ServiceHostPolicyBody": {
+        "additionalProperties": false,
+        "properties": {
+          "managerAllowsPrivileged": {
+            "description": "False when the manager's agent refuses services with host access because its owner did not set BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true; true when it allows them or there is no agent in the way",
+            "type": "boolean"
+          },
+          "readOnly": {
+            "description": "True when the manager's host is read-only (BAYPLAN_AGENT_READ_ONLY): nothing can be applied",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "managerAllowsPrivileged",
+          "readOnly"
+        ],
         "type": "object"
       },
       "ServiceImageBody": {
@@ -8395,6 +8507,47 @@
         ],
         "type": "object"
       },
+      "ServiceMissingBody": {
+        "additionalProperties": false,
+        "properties": {
+          "configs": {
+            "description": "Configs the spec names that the swarm does not have",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "networks": {
+            "description": "Networks the spec names, by the name or ID it used, that the swarm does not have",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "secrets": {
+            "description": "Secrets the spec names that the swarm does not have",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "networks",
+          "secrets",
+          "configs"
+        ],
+        "type": "object"
+      },
       "ServiceMountBody": {
         "additionalProperties": false,
         "properties": {
@@ -8580,6 +8733,144 @@
           "delay",
           "maxAttempts",
           "window"
+        ],
+        "type": "object"
+      },
+      "ServiceReviewBody": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed": {
+            "description": "False when the caller is below env Admin and findings is not empty",
+            "type": "boolean"
+          },
+          "changed": {
+            "description": "False when the spec equals the current one: an apply would answer 422 nothing_to_apply",
+            "type": "boolean"
+          },
+          "findings": {
+            "description": "The host-escalation settings of the spec, returned whether or not the caller may have them",
+            "items": {
+              "$ref": "#/components/schemas/ServiceFindingBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "hostPolicy": {
+            "$ref": "#/components/schemas/ServiceHostPolicyBody",
+            "description": "What the manager's agent will forward"
+          },
+          "image": {
+            "$ref": "#/components/schemas/ServiceReviewImageBody",
+            "description": "How the image resolved"
+          },
+          "imageError": {
+            "$ref": "#/components/schemas/ServiceReviewImageErrorBody",
+            "description": "Present when the digest of a changed tag could not be looked up; the spec is then unpinned, and an apply would answer 422 image_unresolved"
+          },
+          "missing": {
+            "$ref": "#/components/schemas/ServiceMissingBody",
+            "description": "Objects the spec names that do not exist; an apply would answer 422 objects_missing"
+          },
+          "refusal": {
+            "description": "When not allowed, one finding per line as {path}: {value}",
+            "type": "string"
+          },
+          "spec": {
+            "additionalProperties": {},
+            "description": "The merged, normalised spec the apply would send, with the image pinned when it could be, as the caller may see it: the values of the environment, the command line, the health check command and the log options are \u003chidden\u003e unless the caller holds secrets.reveal",
+            "type": "object"
+          },
+          "version": {
+            "description": "The service's current version",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "warnings": {
+            "description": "Notes about the review; empty when there are none",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "spec",
+          "version",
+          "changed",
+          "image",
+          "findings",
+          "allowed",
+          "refusal",
+          "missing",
+          "hostPolicy",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "ServiceReviewImageBody": {
+        "additionalProperties": false,
+        "properties": {
+          "changed": {
+            "description": "True when the spec's image differs from the service's current one",
+            "type": "boolean"
+          },
+          "credential": {
+            "description": "The name of the stored credential the lookup used; empty for none. Never its secret",
+            "type": "string"
+          },
+          "digest": {
+            "description": "The digest the image is pinned to; empty when it is not pinned",
+            "type": "string"
+          },
+          "host": {
+            "description": "The registry the image is on",
+            "type": "string"
+          },
+          "ref": {
+            "description": "The image the spec will carry: tag@sha256:digest when the tag was resolved, else as written",
+            "type": "string"
+          },
+          "tag": {
+            "description": "The tag; empty for a reference by digest alone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "tag",
+          "digest",
+          "host",
+          "credential",
+          "changed"
+        ],
+        "type": "object"
+      },
+      "ServiceReviewImageErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "description": "The registry asked",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why, as a pull failure code (unauthorized, not_found, rate_limited, unreachable, ...)",
+            "type": "string"
+          },
+          "ref": {
+            "description": "The image that could not be looked up",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "host",
+          "reason"
         ],
         "type": "object"
       },
@@ -16036,6 +16327,79 @@
         ]
       }
     },
+    "/api/env/{envId}/services/{serviceId}/apply": {
+      "post": {
+        "description": "Sends a full service spec once and never retried; the rollout continues in the swarm, so the answer is 202. In one write on a manager it inspects the service fresh, refuses a version that is not the one sent, merges the masked values back, runs the host-escalation policy on the merged spec that will be forwarded, resolves the digest when the image changed (a failed lookup is 422 image_unresolved and nothing is sent) and sends one update with the version and the registry credential. Two applies racing on one service: Docker's version check lets one through and the other gets 409 service_changed; neither is retried, and sending the same version twice makes the second 409. Also 422 nothing_to_apply for a spec equal to the current one, 422 objects_missing for a network the spec names that does not exist, and 422 spec_rejected, with Docker's words, for a spec Docker refuses (a missing secret or config, for one). Problems, all before anything is sent: 409 service_changed when the version is not the current one; 409 stack_owned for a service a stack owns; 404 service_not_found; 409 not_a_swarm for a standalone host; 422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec, whoever sends it; 422 placeholder_unmatched for a \u003chidden\u003e with no current value behind it; 422 placeholder_reserved when a caller who may reveal secrets sends \u003chidden\u003e; 422 name_immutable and 422 mode_immutable for a changed name or kind of mode; 422 stack_label_reserved for a com.docker.stack. label the service did not have; 403 privileged_service, with each finding in errors, when a caller below env Admin sends host access (a bind outside /srv, /mnt and /media or of a runtime socket, a local volume that mounts a host device, a named pipe, an added capability, SELinux disabled or spc_t, seccomp unconfined or custom, AppArmor disabled, the host network, a plugin runtime). No answer, error or audit row carries a value of the environment, the command line, the health check or the log options for a caller without secrets.reveal. Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.updated, with result failure and the code when it was refused.",
+        "operationId": "applyServiceUpdate",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The service ID or name: the id of a row of the services list",
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "description": "The service ID or name: the id of a row of the services list",
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceEditRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceApplyBody"
+                }
+              }
+            },
+            "description": "Accepted",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Apply a full service spec",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
     "/api/env/{envId}/services/{serviceId}/force-update": {
       "post": {
         "description": "Replaces every task of a service again with the settings it has now, once and never retried. Bayplan strips any digest from the spec's image, resolves the tag to its current digest through the manager with the stored registry credential, writes tag@sha256 into the spec, raises the spec's ForceUpdate counter and sends the update with the version just read, so a tag that moved is picked up. A lookup that fails is 422 image_unresolved (errors name image.ref, image.host and reason) and nothing is sent: a force update never falls back to the unpinned tag. An image that names a digest and no tag is not re-pinned: the answer says pinned false with reason digest_only. A version that is not the current one is 409 service_changed; 409 not_a_swarm for a standalone host. Works on a service that belongs to a stack. Repeating it replaces every task again: each call is its own rollout. Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.force_updated.",
@@ -16167,6 +16531,79 @@
           }
         },
         "summary": "One swarm service's raw inspect document",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/services/{serviceId}/review": {
+      "post": {
+        "description": "Judges a full service spec and answers what an apply would do, without changing Docker. The spec is read fresh against the service: the values a caller without secrets.reveal could not see (\u003chidden\u003e) are merged back in, a changed tag is resolved to its digest through the manager with the stored registry credential (a failed lookup is imageError, and the spec stays unpinned), and the host-escalation policy runs on the decoded spec an apply would forward. The answer is the merged, normalised spec (masked again for a caller without secrets.reveal), the image, the findings, whether the caller may have them (allowed) and the networks the spec names that do not exist (missing). A refusal by the policy is not an error here: allowed is false and refusal lists the findings. Problems, all before anything is sent: 409 service_changed when the version is not the current one; 409 stack_owned for a service a stack owns; 404 service_not_found; 409 not_a_swarm for a standalone host; 422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec, whoever sends it; 422 placeholder_unmatched for a \u003chidden\u003e with no current value behind it; 422 placeholder_reserved when a caller who may reveal secrets sends \u003chidden\u003e; 422 name_immutable and 422 mode_immutable for a changed name or kind of mode; 422 stack_label_reserved for a com.docker.stack. label the service did not have; 403 privileged_service, with each finding in errors, when a caller below env Admin sends host access (a bind outside /srv, /mnt and /media or of a runtime socket, a local volume that mounts a host device, a named pipe, an added capability, SELinux disabled or spc_t, seccomp unconfined or custom, AppArmor disabled, the host network, a plugin runtime). Needs services.control (Operator) on the environment. A review is not audited.",
+        "operationId": "reviewServiceUpdate",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The service ID or name: the id of a row of the services list",
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "description": "The service ID or name: the id of a row of the services list",
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceEditRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceReviewBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Review a full service spec",
         "tags": [
           "environments"
         ]

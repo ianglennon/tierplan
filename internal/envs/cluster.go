@@ -822,6 +822,18 @@ type ManagerPolicy struct {
 // ManagerPolicyOf reads the policy of the manager a cluster read would choose from a rollup input,
 // with no I/O.
 func (c *Clusters) ManagerPolicyOf(in RollupInput) ManagerPolicy {
+	if in.Kind != KindAgent {
+		return ManagerPolicy{}
+	}
+	key, ok := c.Manager(in)
+	if !ok {
+		return ManagerPolicy{}
+	}
+	for _, a := range connectedAgents(in) {
+		if a.TargetKey() == key {
+			return ManagerPolicy{Known: true, ReadOnly: a.ReadOnly, PrivilegedServices: a.PrivilegedServices}
+		}
+	}
 	return ManagerPolicy{}
 }
 

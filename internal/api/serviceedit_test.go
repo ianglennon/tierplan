@@ -24,7 +24,7 @@ import (
 // guard, registry resolver and audit writer are the real ones.
 
 const (
-	editDB    = "postgres://user:hunter2@db/app"
+	editDB    = "postgres://user:hunter2@db/app" //nolint:gosec // G101: a fixture secret the tests look for in every answer
 	editToken = "s3cr3t-token"
 	editImage = "localhost:5000/app/api:1"
 )
@@ -113,7 +113,9 @@ func (c *roleCaller) maskedSpec(service string, mut func(spec map[string]any)) (
 }
 
 func containerSpecOf(spec map[string]any) map[string]any {
-	return spec["TaskTemplate"].(map[string]any)["ContainerSpec"].(map[string]any)
+	tt, _ := spec["TaskTemplate"].(map[string]any)
+	cs, _ := tt["ContainerSpec"].(map[string]any)
+	return cs
 }
 
 func noSecrets(t *testing.T, what string, b []byte) {
@@ -195,8 +197,10 @@ func TestServiceEditReviewMasksEverySecretAndChangesNothing(t *testing.T) {
 
 func toStrings(v any) []string {
 	var out []string
-	for _, x := range v.([]any) {
-		out = append(out, x.(string))
+	list, _ := v.([]any)
+	for _, x := range list {
+		str, _ := x.(string)
+		out = append(out, str)
 	}
 	return out
 }
@@ -308,7 +312,8 @@ func TestServiceEditEachRefusalIsItsOwnProblemAndNoneSendsAnythingOrLeaksAValue(
 			containerSpecOf(m)["Env"] = []any{"GHOST=<hidden>"}
 		}, status: 422, typ: "placeholder_unmatched"},
 		{name: "a missing network", mut: func(m map[string]any) {
-			m["TaskTemplate"].(map[string]any)["Networks"] = []any{map[string]any{"Target": "front"}}
+			tt, _ := m["TaskTemplate"].(map[string]any)
+			tt["Networks"] = []any{map[string]any{"Target": "front"}}
 		}, status: 422, typ: "objects_missing"},
 		{name: "an unknown field", raw: `{"version":5,"spec":{"Name":"api","Bogus":1}}`, status: 422, typ: "spec_invalid"},
 		{name: "a stack-owned service", service: "svc-web", raw: `{"version":4,"spec":{"Name":"web"}}`, status: 409, typ: "stack_owned"},

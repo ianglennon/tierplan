@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 )
 
@@ -199,22 +200,7 @@ func (c *Client) Snapshot(ctx context.Context, swarmManager bool) (Snapshot, err
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("list networks on %s: %w", c.t.Describe(), err)
 	}
-	snap.Networks = make([]NetworkRow, 0, len(ns.Items))
-	for _, n := range ns.Items {
-		row := NetworkRow{
-			ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: []string{}, Created: n.Created.UTC(),
-			Labels: maps.Clone(n.Labels), Internal: n.Internal, Attachable: n.Attachable, IPv6: n.EnableIPv6, Ingress: n.Ingress,
-		}
-		for _, cfg := range n.IPAM.Config {
-			if cfg.Subnet.IsValid() {
-				row.Subnets = append(row.Subnets, cfg.Subnet.String())
-			}
-		}
-		snap.Networks = append(snap.Networks, row)
-	}
-	slices.SortFunc(snap.Networks, func(a, b NetworkRow) int {
-		return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.ID, b.ID))
-	})
+	snap.Networks = networkRows(ns.Items)
 
 	snap.Counts = Counts{
 		Containers: len(snap.Containers),
@@ -254,6 +240,27 @@ func (c *Client) Snapshot(ctx context.Context, swarmManager bool) (Snapshot, err
 
 	snap.FetchedAt = time.Now().UTC()
 	return snap, nil
+}
+
+// networkRows maps the engine's network summaries to rows sorted by name then ID.
+func networkRows(items []network.Summary) []NetworkRow {
+	out := make([]NetworkRow, 0, len(items))
+	for _, n := range items {
+		row := NetworkRow{
+			ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: []string{}, Created: n.Created.UTC(),
+			Labels: maps.Clone(n.Labels), Internal: n.Internal, Attachable: n.Attachable, IPv6: n.EnableIPv6, Ingress: n.Ingress,
+		}
+		for _, cfg := range n.IPAM.Config {
+			if cfg.Subnet.IsValid() {
+				row.Subnets = append(row.Subnets, cfg.Subnet.String())
+			}
+		}
+		out = append(out, row)
+	}
+	slices.SortFunc(out, func(a, b NetworkRow) int {
+		return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.ID, b.ID))
+	})
+	return out
 }
 
 // containerRows maps the engine's container summaries to rows. Only the
