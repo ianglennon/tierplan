@@ -325,6 +325,22 @@ describe("TaskTable", () => {
       );
     });
 
+    it("opens the Logs tab narrowed to the task, when the table knows its service", async () => {
+      renderTable({ serviceId: SERVICE_ID });
+      await openMenu("web.1");
+      const link = await screen.findByRole("menuitem", { name: "Logs for this task" });
+      expect(link.getAttribute("href")).toBe(
+        `/env/${SERVICE_ENV}/services/${SERVICE_ID}/logs?task=t1-now`,
+      );
+    });
+
+    it("leaves Logs for this task out where the service is not known, as on a node's page", async () => {
+      renderTable();
+      await openMenu("web.1");
+      await screen.findByRole("menuitem", { name: "Open container" });
+      expect(screen.queryByRole("menuitem", { name: "Logs for this task" })).toBeNull();
+    });
+
     it("disables Open container with the reason when the task has no container yet", async () => {
       renderTable({
         slots: [slotOf(1, task({ containerId: "", state: "pending", dockerState: "pending" }))],

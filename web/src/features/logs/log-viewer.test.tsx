@@ -1172,3 +1172,209 @@ describe("a hidden pop-out", () => {
     }
   });
 });
+
+// A service's log in the same viewer (plan 06-29, OBS-02, D-32, D-35): the source is the
+// service, every line names its task in a coloured prefix, and the Task names toggle takes
+// the prefixes out of the page.
+describe("a service's log", () => {
+  const tasks = [
+    { id: "t1", slot: 1, node: "alpha", state: "running" },
+    { id: "t2", slot: 2, node: "beta", state: "running" },
+    { id: "t3", slot: 3, node: "alpha", state: "running" },
+  ];
+
+  function svcLine(
+    i: number,
+    task: string,
+    slot: number,
+    node: string,
+    m = `msg ${i}`,
+  ): LogLineData {
+    return {
+      t: `2026-10-14T10:00:${String(i).padStart(2, "0")}.000000000Z`,
+      s: "o",
+      m,
+      task,
+      slot,
+      node,
+    };
+  }
+
+  function renderService(props: Partial<ComponentProps<typeof LogViewer>> = {}) {
+    return render(
+      <TooltipProvider>
+        <LogViewer envId="e1" source={{ kind: "service", id: "web" }} name="web" {...props} />
+      </TooltipProvider>,
+    );
+  }
+
+  async function connectService(list: unknown[] = tasks) {
+    await act(async () => {
+      source().open();
+      source().sendFrame("ready", { tty: false, tasks: list });
+    });
+  }
+
+  it("opens the service's stream on the last 500 lines, with the filters from the address", () => {
+    renderService({ params: { task: "t1,t2", node: "alpha", stopped: true } });
+    const url = new URL(source().url, "http://x");
+    expect(url.pathname).toBe("/api/env/e1/services/web/logs/stream");
+    expect(url.searchParams.get("tail")).toBe("500");
+    expect(url.searchParams.get("sid")).toMatch(/^[A-Za-z0-9_-]{22}$/);
+    expect(url.searchParams.get("task")).toBe("t1,t2");
+    expect(url.searchParams.get("node")).toBe("alpha");
+    expect(url.searchParams.get("stopped")).toBe("1");
+    expect(url.searchParams.has("nodeId")).toBe(false);
+  });
+
+  it("puts a coloured prefix on every line: slot@node, the colour of the slot", async () => {
+    renderService();
+    await connectService();
+    await send([
+      svcLine(1, "t1", 1, "alpha"),
+      svcLine(2, "t2", 2, "beta"),
+      svcLine(3, "t1", 1, "alpha"),
+    ]);
+    const prefixes = screen.getAllByText(/^\d@/);
+    expect(prefixes.map((p) => p.textContent)).toEqual(["1@alpha", "2@beta", "1@alpha"]);
+    expect((prefixes[0] as HTMLElement).style.color).toBe("var(--ansi-4)");
+    expect((prefixes[1] as HTMLElement).style.color).toBe("var(--ansi-5)");
+    expect((prefixes[2] as HTMLElement).style.color).toBe("var(--ansi-4)");
+    // A prefix is not part of what a copy takes.
+    expect((prefixes[0] as HTMLElement).className).toContain("select-none");
+    const row = screen.getByRole("log").querySelector("[data-stream]");
+    expect(row?.textContent).toContain("msg 1");
+  });
+
+  it("names a task of a global service by the service and colours it by its node", async () => {
+    renderService();
+    await connectService();
+    await send([
+      svcLine(1, "g1", 0, "alpha"),
+      svcLine(2, "g2", 0, "beta"),
+      svcLine(3, "g3", 0, "alpha"),
+    ]);
+    const prefixes = screen.getAllByText(/^web@/);
+    expect(prefixes.map((p) => p.textContent)).toEqual(["web@alpha", "web@beta", "web@alpha"]);
+    expect((prefixes[0] as HTMLElement).style.color).toBe("var(--ansi-4)");
+    expect((prefixes[1] as HTMLElement).style.color).toBe("var(--ansi-5)");
+    expect((prefixes[2] as HTMLElement).style.color).toBe("var(--ansi-4)");
+  });
+
+  it("keeps the service name in the prefix where the header is not on screen", async () => {
+    renderService({ showServiceName: true });
+    await connectService();
+    await send([svcLine(1, "t2", 2, "beta")]);
+    expect(screen.getByText("web.2@beta")).toBeTruthy();
+  });
+
+  it("takes the prefixes out of the page with Task names, remembers it, and says so in the address", async () => {
+    const onParamsChange = vi.fn();
+    renderService({ params: {}, onParamsChange });
+    await connectService();
+    await send([svcLine(1, "t1", 1, "alpha")]);
+    const toggle = screen.getByRole("button", { name: "Task names" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByText("1@alpha")).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+    expect(onParamsChange).toHaveBeenCalledWith(expect.objectContaining({ prefix: false }));
+    expect(JSON.parse(localStorage.getItem("bayplan.logs.view") ?? "{}").taskNames).toBe(false);
+  });
+
+  it("hides the prefixes from the DOM when the address says prefix is off", async () => {
+    renderService({ params: { prefix: false } });
+    await connectService();
+    await send([svcLine(1, "t1", 1, "alpha")]);
+    expect(screen.queryByText("1@alpha")).toBeNull();
+    expect(screen.getByRole("log").textContent).toContain("msg 1");
+    expect(screen.getByRole("button", { name: "Task names" }).getAttribute("aria-pressed")).toBe(
+      "false",
+    );
+  });
+
+  it("starts with the prefixes off when this browser remembers that", async () => {
+    localStorage.setItem("bayplan.logs.view", JSON.stringify({ taskNames: false }));
+    renderService();
+    await connectService();
+    await send([svcLine(1, "t1", 1, "alpha")]);
+    expect(screen.queryByText("1@alpha")).toBeNull();
+  });
+
+  it("makes the prefix gutter as wide as the longest loaded prefix, from 12 to 28 characters", async () => {
+    renderService();
+    await connectService();
+    await send([svcLine(1, "t1", 1, "alpha")]);
+    expect((screen.getByText("1@alpha") as HTMLElement).style.width).toBe("12ch");
+    const long = "a-node-with-a-very-long-host-name-indeed";
+    await send([svcLine(2, "t2", 2, long)]);
+    const wide = screen.getByText(`2@${long}`) as HTMLElement;
+    expect(wide.style.width).toBe("28ch");
+    expect(wide.className).toContain("truncate");
+    expect((screen.getByText("1@alpha") as HTMLElement).style.width).toBe("28ch");
+  });
+
+  it("says Following 3 tasks beside the Live chip, and follows the tasks event", async () => {
+    renderService();
+    expect(screen.queryByText(/Following/)).toBeNull();
+    await connectService();
+    expect(screen.getByText("Live")).toBeTruthy();
+    expect(screen.getByText("Following 3 tasks")).toBeTruthy();
+    await act(async () => {
+      source().sendFrame("tasks", { tty: false, tasks: tasks.slice(0, 1) });
+    });
+    expect(screen.getByText("Following 1 task")).toBeTruthy();
+  });
+
+  it("says there is no log output yet, and what will change that", async () => {
+    renderService();
+    await connectService();
+    expect(screen.getByText("No log output yet")).toBeTruthy();
+    expect(
+      screen.getByText("New lines appear here as the service's tasks write them."),
+    ).toBeTruthy();
+  });
+
+  it("says the same for a service with no tasks", async () => {
+    renderService();
+    await connectService([]);
+    expect(screen.getByText("No log output yet")).toBeTruthy();
+    expect(screen.getByText("Following 0 tasks")).toBeTruthy();
+  });
+
+  it("says no task matches when filters leave none", async () => {
+    renderService({ params: { task: "nope" } });
+    await connectService([]);
+    expect(screen.getByText("No tasks match these filters.")).toBeTruthy();
+    expect(screen.queryByText("No log output yet")).toBeNull();
+  });
+
+  it("draws a service line as text, never as markup", async () => {
+    renderService();
+    await connectService();
+    await send([svcLine(1, "t1", 1, "alpha", "<img src=x onerror=alert(1)>")]);
+    expect(screen.getByRole("log").querySelector("img")).toBeNull();
+    expect(screen.getByRole("log").textContent).toContain("<img src=x onerror=alert(1)>");
+  });
+
+  it("offers neither a download, a pop-out nor earlier lines, which the service stream does not serve yet", async () => {
+    renderService();
+    await connectService();
+    await send([svcLine(1, "t1", 1, "alpha")]);
+    expect(screen.queryByRole("button", { name: /Download/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open in new window" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Load earlier lines" })).toBeNull();
+  });
+
+  it("does not mistake the end of the stream for a stopped container", async () => {
+    renderService();
+    await connectService();
+    await send([svcLine(1, "t1", 1, "alpha")]);
+    await act(async () => {
+      source().sendFrame("state", { state: "stopped", at: "2026-10-14T10:05:00.000Z" });
+    });
+    expect(screen.queryByText(/Container stopped/)).toBeNull();
+  });
+});

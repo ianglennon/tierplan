@@ -530,3 +530,139 @@ describe("suspending", () => {
     expect(FakeEventSource.instances).toHaveLength(2);
   });
 });
+
+// A service's merged log (plan 06-29, OBS-02, D-35, D-37): the same stream, addressed by the
+// service, narrowed by the filters and naming the task of every line.
+describe("a service's log", () => {
+  const web = { kind: "service", id: "web" } as const;
+
+  function openService(extra: Partial<LogStreamOptions> = {}) {
+    const states: LogStreamState[] = [];
+    const lines: unknown[][] = [];
+    const stream = createLogStream({
+      envId: "e1",
+      source: web,
+      sid: SID,
+      onLines: (l) => lines.push(l),
+      onState: (s) => states.push(s),
+      ...extra,
+    } as LogStreamOptions);
+    const source = FakeEventSource.instances.at(-1);
+    if (!source) throw new Error("no source");
+    return { stream, source, states, lines };
+  }
+
+  it("is addressed by the service, with the viewer, the tail and the filters, and no node", () => {
+    const url = new URL(
+      logStreamUrl({
+        envId: "e 1",
+        source: { kind: "service", id: "web/api" },
+        sid: SID,
+        tail: 500,
+        service: { tasks: ["t1", "t2"], nodes: ["alpha"], stopped: true },
+      }),
+      "http://x",
+    );
+    expect(url.pathname).toBe("/api/env/e%201/services/web%2Fapi/logs/stream");
+    expect(url.searchParams.get("sid")).toBe(SID);
+    expect(url.searchParams.get("tail")).toBe("500");
+    expect(url.searchParams.get("task")).toBe("t1,t2");
+    expect(url.searchParams.get("node")).toBe("alpha");
+    expect(url.searchParams.get("stopped")).toBe("1");
+    expect(url.searchParams.has("nodeId")).toBe(false);
+  });
+
+  it("leaves out filters that are empty and stopped when it is off", () => {
+    const url = new URL(
+      logStreamUrl({
+        envId: "e1",
+        source: web,
+        sid: SID,
+        service: { tasks: [], nodes: [], stopped: false },
+      }),
+      "http://x",
+    );
+    expect(url.searchParams.has("task")).toBe(false);
+    expect(url.searchParams.has("node")).toBe(false);
+    expect(url.searchParams.has("stopped")).toBe(false);
+  });
+
+  it("resumes with after and the same filters, and no tail", () => {
+    vi.useFakeTimers();
+    const { source } = openService({ tail: 500, service: { tasks: ["t1"] } });
+    source.sendFrame("ready", { tty: false, tasks: [] });
+    source.sendFrame(
+      "log",
+      {
+        lines: [
+          { t: "2026-10-14T10:00:00.000000000Z", s: "o", m: "x", task: "t1", slot: 1, node: "a" },
+        ],
+      },
+      "2026-10-14T10:00:00.000000000Z",
+    );
+    source.fail();
+    vi.advanceTimersByTime(1000);
+    const next = FakeEventSource.instances.at(-1) as FakeEventSource;
+    const url = new URL(next.url, "http://x");
+    expect(url.searchParams.get("after")).toBe("2026-10-14T10:00:00.000000000Z");
+    expect(url.searchParams.has("tail")).toBe(false);
+    expect(url.searchParams.get("task")).toBe("t1");
+  });
+
+  it("tells onReady the tasks it was given and onTasks each time the list changes", () => {
+    const onReady = vi.fn();
+    const onTasks = vi.fn();
+    const { source } = openService({ onReady, onTasks });
+    const tasks = [{ id: "t1", slot: 1, node: "alpha", state: "running" }];
+    source.sendFrame("ready", { tty: false, tasks });
+    expect(onReady).toHaveBeenCalledWith({ tty: false, tasks });
+    const more = [...tasks, { id: "t2", slot: 2, node: "beta", state: "running" }];
+    source.sendFrame("tasks", { tty: false, tasks: more });
+    expect(onTasks).toHaveBeenCalledWith(more);
+  });
+
+  it("hands on the task, slot and node of every line", () => {
+    const { source, lines } = openService();
+    source.sendFrame("ready", { tty: false, tasks: [] });
+    const line = {
+      t: "2026-10-14T10:00:00.000000000Z",
+      s: "o",
+      m: "x",
+      task: "t1",
+      slot: 2,
+      node: "alpha",
+    };
+    source.sendFrame("log", { lines: [line] }, line.t);
+    expect(lines).toEqual([[line]]);
+  });
+
+  it("keeps two identical lines of different tasks that share a stamp apart at a reopen", () => {
+    vi.useFakeTimers();
+    const { source, lines } = openService();
+    source.sendFrame("ready", { tty: false, tasks: [] });
+    const t = "2026-10-14T10:00:00.000000000Z";
+    const a = { t, s: "o", m: "tick", task: "t1", slot: 1, node: "alpha" };
+    const b = { t, s: "o", m: "tick", task: "t2", slot: 2, node: "beta" };
+    source.sendFrame("log", { lines: [a] }, t);
+    source.fail();
+    vi.advanceTimersByTime(1000);
+    const next = FakeEventSource.instances.at(-1) as FakeEventSource;
+    next.sendFrame("ready", { tty: false, tasks: [] });
+    next.sendFrame("log", { lines: [a, b] }, t);
+    expect(lines.flat()).toEqual([a, b]);
+  });
+
+  it("asks the tasks route why a reopened stream was refused, and ends on a service that is gone", () => {
+    vi.useFakeTimers();
+    const onInterrupted = vi.fn();
+    const probe = vi.fn().mockResolvedValue(404);
+    const { source, states } = openService({ onInterrupted, probe });
+    source.sendFrame("ready", { tty: false, tasks: [] });
+    source.fail(true);
+    return vi.waitFor(() => {
+      expect(probe).toHaveBeenCalled();
+      expect(onInterrupted).toHaveBeenCalled();
+      expect(states.at(-1)).toEqual({ status: "closed", reason: "failed" });
+    });
+  });
+});
