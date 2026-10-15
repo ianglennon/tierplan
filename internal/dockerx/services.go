@@ -4,11 +4,13 @@
 package dockerx
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"time"
@@ -418,7 +420,37 @@ type SpecRejectedError struct{ Message string }
 func (e *SpecRejectedError) Error() string { return "service spec rejected: " + e.Message }
 
 // ServiceUpdate sends one full service spec for the service id, with the version the caller
-// read and encodedAuth (a base64url X-Registry-Auth value, empty for none).
+// read and encodedAuth (a base64url X-Registry-Auth value, empty for none), once, with
+// QueryRegistry off: the caller has already pinned the image, so a failed registry lookup is
+// never a silent warning here. spec is decoded strictly, so an unknown field or trailing data
+// is ErrServiceSpecInvalid and nothing is sent; what is sent is the decoded spec re-encoded.
+// The manager's warnings come back. A version the manager no longer holds is ErrServiceChanged,
+// a service that went away ErrServiceNotFound, and a spec the manager refuses a
+// *SpecRejectedError. The write is never retried: whoever asked for it asks again (P2 D-42).
 func (c *Client) ServiceUpdate(ctx context.Context, id string, version uint64, spec json.RawMessage, encodedAuth string) ([]string, error) {
-	return nil, errors.New("dockerx: not implemented")
+	var s swarm.ServiceSpec
+	dec := json.NewDecoder(bytes.NewReader(spec))
+	dec.DisallowUnknownFields()
+	err := dec.Decode(&s)
+	if err == nil {
+		if _, more := dec.Token(); !errors.Is(more, io.EOF) {
+			err = errors.New("unexpected data after the spec")
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrServiceSpecInvalid, err)
+	}
+	res, err := c.cur().ServiceUpdate(ctx, id, client.ServiceUpdateOptions{
+		Version:             swarm.Version{Index: version},
+		Spec:                s,
+		EncodedRegistryAuth: encodedAuth,
+		QueryRegistry:       false,
+	})
+	if err != nil {
+		if cerrdefs.IsInvalidArgument(err) {
+			return nil, fmt.Errorf("update service on %s: %w", c.t.Describe(), &SpecRejectedError{Message: err.Error()})
+		}
+		return nil, c.serviceWriteError("update", err)
+	}
+	return slices.Clone(res.Warnings), nil
 }

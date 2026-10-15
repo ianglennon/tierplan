@@ -191,6 +191,10 @@ func (f *Fake) serveServiceUpdate(w http.ResponseWriter, r *http.Request, p stri
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": outOfSequenceRefusal})
 		return true
 	}
+	if fs.UpdateError != "" && q.Get("rollback") != "previous" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": fs.UpdateError})
+		return true
+	}
 	var now swarm.ServiceSpec
 	for _, s := range cfg.serviceList(false) {
 		if s.ID == fs.ID {
@@ -221,7 +225,7 @@ func (f *Fake) serveServiceUpdate(w http.ResponseWriter, r *http.Request, p stri
 		ServiceID: fs.ID, Version: q.Get("version"), Query: q, Auth: r.Header.Get("X-Registry-Auth"), Spec: spec,
 	})
 	f.mu.Unlock()
-	writeJSON(w, http.StatusOK, swarm.ServiceUpdateResponse{})
+	writeJSON(w, http.StatusOK, swarm.ServiceUpdateResponse{Warnings: fs.UpdateWarnings})
 	return true
 }
 

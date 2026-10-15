@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/swarm"
 )
 
@@ -217,8 +218,171 @@ func (e *PlaceholderError) Unwrap() error { return e.Err }
 // real value typed by mistake: it is ErrPlaceholderReserved and nothing is merged.
 // Neither spec is modified.
 func MergeMaskedSpec(current, submitted swarm.ServiceSpec, reveal bool) (swarm.ServiceSpec, error) {
-	return submitted, nil
+	if reveal {
+		if err := reservedIn(submitted); err != nil {
+			return swarm.ServiceSpec{}, err
+		}
+		return submitted, nil
+	}
+	out := submitted
+	if cs := submitted.TaskTemplate.ContainerSpec; cs != nil {
+		c := *cs
+		var cur swarm.ContainerSpec
+		if cc := current.TaskTemplate.ContainerSpec; cc != nil {
+			cur = *cc
+		}
+		var err error
+		if c.Env, err = mergeEnv(cur.Env, c.Env); err != nil {
+			return swarm.ServiceSpec{}, err
+		}
+		if c.Command, err = mergeArgv(cur.Command, c.Command, containerSpecPath+"Command"); err != nil {
+			return swarm.ServiceSpec{}, err
+		}
+		if c.Args, err = mergeArgv(cur.Args, c.Args, containerSpecPath+"Args"); err != nil {
+			return swarm.ServiceSpec{}, err
+		}
+		if c.Healthcheck, err = mergeHealthcheck(cur.Healthcheck, c.Healthcheck); err != nil {
+			return swarm.ServiceSpec{}, err
+		}
+		out.TaskTemplate.ContainerSpec = &c
+	}
+	ld, err := mergeLogDriver(current.TaskTemplate.LogDriver, submitted.TaskTemplate.LogDriver)
+	if err != nil {
+		return swarm.ServiceSpec{}, err
+	}
+	out.TaskTemplate.LogDriver = ld
+	return out, nil
 }
+
+const (
+	containerSpecPath = "TaskTemplate.ContainerSpec."
+	logOptionsPath    = "TaskTemplate.LogDriver.Options"
+)
+
+// envValue splits an env entry; hidden is true when its value is exactly Placeholder.
+func envValue(kv string) (name string, hidden bool) {
+	name, v, has := strings.Cut(kv, "=")
+	return name, has && v == Placeholder
+}
+
+// reservedIn finds a Placeholder in a secret-bearing field of a spec a revealing caller sent.
+func reservedIn(spec swarm.ServiceSpec) error {
+	reserved := func(path string) error { return &PlaceholderError{Err: ErrPlaceholderReserved, Path: path} }
+	if cs := spec.TaskTemplate.ContainerSpec; cs != nil {
+		for _, kv := range cs.Env {
+			if name, hidden := envValue(kv); hidden {
+				return reserved(containerSpecPath + "Env[" + name + "]")
+			}
+		}
+		if slices.Contains(cs.Command, Placeholder) {
+			return reserved(containerSpecPath + "Command")
+		}
+		if slices.Contains(cs.Args, Placeholder) {
+			return reserved(containerSpecPath + "Args")
+		}
+		if hc := cs.Healthcheck; hc != nil && len(hc.Test) > 1 && slices.Contains(hc.Test[1:], Placeholder) {
+			return reserved(containerSpecPath + "Healthcheck.Test")
+		}
+	}
+	if ld := spec.TaskTemplate.LogDriver; ld != nil {
+		for _, name := range slices.Sorted(maps.Keys(ld.Options)) {
+			if ld.Options[name] == Placeholder {
+				return reserved(logOptionsPath + "[" + name + "]")
+			}
+		}
+	}
+	return nil
+}
+
+// mergeEnv replaces each NAME=<hidden> by the entry of the same name and position in cur.
+func mergeEnv(cur, sub []string) ([]string, error) {
+	if !slices.ContainsFunc(sub, func(kv string) bool { _, hidden := envValue(kv); return hidden }) {
+		return sub, nil
+	}
+	byName := map[string][]string{}
+	for _, kv := range cur {
+		name, _, _ := strings.Cut(kv, "=")
+		byName[name] = append(byName[name], kv)
+	}
+	seen := map[string]int{}
+	out := make([]string, len(sub))
+	for i, kv := range sub {
+		name, hidden := envValue(kv)
+		if !hidden {
+			name, _, _ = strings.Cut(kv, "=")
+		}
+		n := seen[name]
+		seen[name]++
+		if !hidden {
+			out[i] = kv
+			continue
+		}
+		entries := byName[name]
+		if n >= len(entries) || !strings.Contains(entries[n], "=") {
+			return nil, &PlaceholderError{Err: ErrPlaceholderUnmatched, Path: containerSpecPath + "Env[" + name + "]"}
+		}
+		out[i] = entries[n]
+	}
+	return out, nil
+}
+
+// mergeArgv keeps the current argv for a submitted one that is exactly [Placeholder].
+func mergeArgv(cur, sub []string, path string) ([]string, error) {
+	if !slices.Contains(sub, Placeholder) {
+		return sub, nil
+	}
+	if len(sub) == 1 && len(cur) > 0 {
+		return slices.Clone(cur), nil
+	}
+	return nil, &PlaceholderError{Err: ErrPlaceholderUnmatched, Path: path}
+}
+
+// mergeHealthcheck keeps the current command of a health check whose test is [mode, Placeholder],
+// under the submitted mode.
+func mergeHealthcheck(cur, sub *container.HealthConfig) (*container.HealthConfig, error) {
+	if sub == nil || len(sub.Test) < 2 || !slices.Contains(sub.Test[1:], Placeholder) {
+		return sub, nil
+	}
+	if len(sub.Test) != 2 || cur == nil || len(cur.Test) < 2 {
+		return nil, &PlaceholderError{Err: ErrPlaceholderUnmatched, Path: containerSpecPath + "Healthcheck.Test"}
+	}
+	h := *sub
+	h.Test = append([]string{sub.Test[0]}, cur.Test[1:]...)
+	return &h, nil
+}
+
+// mergeLogDriver keeps the current value of each log option submitted as Placeholder, while the
+// driver is the one the service has.
+func mergeLogDriver(cur, sub *swarm.Driver) (*swarm.Driver, error) {
+	if sub == nil {
+		return nil, nil
+	}
+	hiddenAny := false
+	for _, v := range sub.Options {
+		hiddenAny = hiddenAny || v == Placeholder
+	}
+	if !hiddenAny {
+		return sub, nil
+	}
+	opts := maps.Clone(sub.Options)
+	for _, name := range slices.Sorted(maps.Keys(sub.Options)) {
+		if sub.Options[name] != Placeholder {
+			continue
+		}
+		v, ok := "", false
+		if cur != nil && cur.Name == sub.Name {
+			v, ok = cur.Options[name]
+		}
+		if !ok {
+			return nil, &PlaceholderError{Err: ErrPlaceholderUnmatched, Path: logOptionsPath + "[" + name + "]"}
+		}
+		opts[name] = v
+	}
+	return &swarm.Driver{Name: sub.Name, Options: opts}, nil
+}
+
+// minScrub is the shortest value ScrubServiceText replaces.
+const minScrub = 4
 
 // ScrubServiceText returns text with every secret-bearing value of spec replaced by Placeholder:
 // the values of its environment, each element of its Command and Args, the command of its health
@@ -226,5 +390,43 @@ func MergeMaskedSpec(current, submitted swarm.ServiceSpec, reveal bool) (swarm.S
 // messages, and a caller who may not reveal secrets must not read them there (Pitfall 7). A value
 // shorter than four characters is left alone, since it cannot be told from the prose around it.
 func ScrubServiceText(text string, spec swarm.ServiceSpec) string {
-	return text
+	var secrets []string
+	add := func(v string) {
+		if len(v) >= minScrub {
+			secrets = append(secrets, v)
+		}
+	}
+	if cs := spec.TaskTemplate.ContainerSpec; cs != nil {
+		for _, kv := range cs.Env {
+			if _, v, has := strings.Cut(kv, "="); has {
+				add(v)
+			}
+		}
+		for _, v := range cs.Command {
+			add(v)
+		}
+		for _, v := range cs.Args {
+			add(v)
+		}
+		if hc := cs.Healthcheck; hc != nil && len(hc.Test) > 1 {
+			for _, v := range hc.Test[1:] {
+				add(v)
+			}
+		}
+	}
+	if ld := spec.TaskTemplate.LogDriver; ld != nil {
+		for _, v := range ld.Options {
+			add(v)
+		}
+	}
+	if len(secrets) == 0 {
+		return text
+	}
+	// Longest first, so a value that holds another is replaced whole.
+	slices.SortFunc(secrets, func(a, b string) int { return len(b) - len(a) })
+	pairs := make([]string, 0, 2*len(secrets))
+	for _, v := range slices.Compact(secrets) {
+		pairs = append(pairs, v, Placeholder)
+	}
+	return strings.NewReplacer(pairs...).Replace(text)
 }
