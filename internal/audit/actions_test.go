@@ -179,6 +179,13 @@ var phase6DetailKeys = map[string][]string{
 	// A create records the name, the image the service was made with and its digest, how many objects
 	// were made for it and the code; never a value of the spec (plan 06-27, RES-03).
 	audit.ActionServiceCreated: {"name", "image", "digest", "objects", "code"},
+	// A mute or an unmute of a restart-loop alert records what was muted (kind: service or
+	// container) and its name; a container's also the node it runs on. A change of the
+	// threshold records the new failures and window in minutes and the ones it replaced
+	// (plan 06-35, RES-13).
+	audit.ActionRestartLoopMuted:                      {"name", "kind", "node"},
+	audit.ActionRestartLoopUnmuted:                    {"name", "kind", "node"},
+	audit.ActionEnvironmentRestartLoopSettingsChanged: {"failures", "window_minutes", "previous_failures", "previous_window_minutes"},
 	// An availability or role change records the node's name, the value it had and the one asked for,
 	// whether its name was typed to confirm, the warnings the change carried (comma separated) and the
 	// code (plan 06-15, RES-05).
@@ -233,6 +240,11 @@ func TestEveryPhase6ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		"service.removed":       audit.ActionServiceRemoved,
 		"service.updated":       audit.ActionServiceUpdated,
 		"service.created":       audit.ActionServiceCreated,
+
+		"restart_loop.muted":   audit.ActionRestartLoopMuted,
+		"restart_loop.unmuted": audit.ActionRestartLoopUnmuted,
+
+		"environment.restart_loop_settings_changed": audit.ActionEnvironmentRestartLoopSettingsChanged,
 
 		"node.availability_changed": audit.ActionNodeAvailabilityChanged,
 		"node.role_changed":         audit.ActionNodeRoleChanged,

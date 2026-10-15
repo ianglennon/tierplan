@@ -112,6 +112,9 @@ type ClusterState struct {
 	// RestartLoops are the services flagged as in a restart loop by service ID, nil while
 	// the quorum is lost or before the first read (RES-13).
 	RestartLoops map[string]RestartLoop
+	// MutedServices are the IDs of the listed services whose restart-loop alerts are muted,
+	// whether or not they are looping now.
+	MutedServices map[string]bool
 	// HistoryLimit is how many tasks per slot Docker keeps in Read's cluster, 0 before the
 	// first read.
 	HistoryLimit int
@@ -238,6 +241,9 @@ func (c *Clusters) Cached(envID string) (ClusterState, bool) {
 	defer e.mu.Unlock()
 	return e.state, true
 }
+
+// SetRestartLoopMute updates the cached state to a mute or an unmute at once. (scaffold)
+func (c *Clusters) SetRestartLoopMute(envID, serviceID string, muted bool) {}
 
 // LeaderAgent is the ID of the agent on the leading manager as of the last read,
 // or empty. It does no I/O.

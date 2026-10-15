@@ -20,6 +20,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/agents"
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/internal/store/sqlc"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
 	"github.com/ianglennon/bayplan/proto/wire"
@@ -1048,5 +1049,92 @@ func TestALostQuorumHidesTheRestartLoopsAndTheyReturnWhenItComesBack(t *testing.
 	l.clock.Advance(15 * time.Second)
 	if st := l.refresh(t); st.RestartLoops["svc-web"].Count != 3 {
 		t.Fatalf("after the quorum came back = %+v, want the loop kept in memory", st.RestartLoops)
+	}
+}
+
+// Mutes in the cluster read (plan 06-35, RES-13, D-16).
+
+func (l *loopRig) mute(t *testing.T, serviceID string) {
+	t.Helper()
+	if err := l.st.Q.InsertRestartLoopMute(context.Background(), sqlc.InsertRestartLoopMuteParams{
+		EnvID: l.env.ID, Kind: "service", TargetID: serviceID, Name: serviceID, MutedBy: "user-1", MutedAt: l.clock.Now().UnixNano(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (l *loopRig) muteRows(t *testing.T) []string {
+	t.Helper()
+	rows, err := l.st.RQ.ListRestartLoopMutes(context.Background(), l.env.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, r := range rows {
+		ids = append(ids, r.TargetID)
+	}
+	return ids
+}
+
+func TestAMuteRowMarksTheFlaggedServiceMutedAndNothingElseAboutItChanges(t *testing.T) {
+	l := newLoopRig(t)
+	l.history(8, time.Minute, 2*time.Minute, 3*time.Minute)
+	l.mute(t, "svc-web")
+	st := l.refresh(t)
+	loop, ok := st.RestartLoops["svc-web"]
+	if !ok || !loop.Muted || loop.Count != 3 {
+		t.Fatalf("restart loops = %+v, want web still flagged with its 3 failures, and muted", st.RestartLoops)
+	}
+	if !st.MutedServices["svc-web"] {
+		t.Errorf("muted services = %v, want web", st.MutedServices)
+	}
+}
+
+func TestAMutedServiceStaysMutedWhileItIsNotLoopingAndTheMuteIsKept(t *testing.T) {
+	l := newLoopRig(t)
+	l.history(8)
+	l.mute(t, "svc-web")
+	st := l.refresh(t)
+	if len(st.RestartLoops) != 0 || !st.MutedServices["svc-web"] {
+		t.Fatalf("loops = %+v, muted = %v, want no loop and web still muted", st.RestartLoops, st.MutedServices)
+	}
+	if got := l.muteRows(t); len(got) != 1 {
+		t.Errorf("mute rows = %v, want the mute kept for when the loop returns", got)
+	}
+}
+
+func TestASuccessfulReadDeletesTheMutesOfServicesThatNoLongerExist(t *testing.T) {
+	l := newLoopRig(t)
+	l.history(8)
+	l.mute(t, "svc-web")
+	l.mute(t, "svc-gone")
+	st := l.refresh(t)
+	if got := l.muteRows(t); len(got) != 1 || got[0] != "svc-web" {
+		t.Fatalf("mute rows = %v, want only web's", got)
+	}
+	if st.MutedServices["svc-gone"] {
+		t.Errorf("muted services = %v, want the gone service dropped", st.MutedServices)
+	}
+}
+
+func TestSettingAMuteUpdatesWhatIsServedAtOnceAndLeavesTheCopiesAlreadyHandedOutAlone(t *testing.T) {
+	l := newLoopRig(t)
+	l.history(8, time.Minute, 2*time.Minute, 3*time.Minute)
+	before := l.refresh(t)
+	if before.RestartLoops["svc-web"].Muted {
+		t.Fatal("web muted before anyone muted it")
+	}
+	l.c.SetRestartLoopMute(l.env.ID, "svc-web", true)
+	after, _ := l.c.Cached(l.env.ID)
+	if !after.RestartLoops["svc-web"].Muted || !after.MutedServices["svc-web"] {
+		t.Fatalf("after a mute = %+v / %v, want web muted without waiting for the next read", after.RestartLoops, after.MutedServices)
+	}
+	if before.RestartLoops["svc-web"].Muted {
+		t.Error("a state handed out earlier changed: the maps are shared, a mute must replace them")
+	}
+	l.c.SetRestartLoopMute(l.env.ID, "svc-web", false)
+	back, _ := l.c.Cached(l.env.ID)
+	if back.RestartLoops["svc-web"].Muted || back.MutedServices["svc-web"] {
+		t.Errorf("after an unmute = %+v / %v, want web not muted", back.RestartLoops, back.MutedServices)
 	}
 }

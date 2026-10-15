@@ -90,7 +90,8 @@
         "failover": "Manager failover",
         "cluster_adopted": "Adopted a new cluster",
         "local_folded": "Folded the local host",
-        "auto_update_changed": "Changed agent auto-update"
+        "auto_update_changed": "Changed agent auto-update",
+        "restart_loop_settings_changed": "Changed restart-loop settings"
       },
       "agent": {
         "enrolled": "Agent enrolled",
@@ -211,6 +212,10 @@
         "removed": "Service removed",
         "updated": "Service updated",
         "created": "Service created"
+      },
+      "restart_loop": {
+        "muted": "Restart-loop alerts muted",
+        "unmuted": "Restart-loop alerts unmuted"
       },
       "node": {
         "availability_changed": "Node availability changed",

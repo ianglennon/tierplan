@@ -36,6 +36,9 @@ type RestartLoop struct {
 	LatestAt    time.Time
 	// Since is when the service was first flagged, in the current run of the flag.
 	Since time.Time
+	// Muted is true when a user muted the service's restart-loop alerts (D-16): the flag
+	// stays, the bell and the dashboard count leave it out.
+	Muted bool
 }
 
 // serviceFailures is what the tracker keeps of one service: when each of its failed tasks
@@ -147,4 +150,9 @@ func (t *RestartLoopTracker) Observe(now time.Time, failed []dockerx.FailedTaskR
 		}
 	}
 	return out
+}
+
+// ApplyMutes is the merge of the mutes into the tracker's answer. (scaffold)
+func ApplyMutes(loops map[string]RestartLoop, mutedIDs []string, services []dockerx.ServiceRow) (merged map[string]RestartLoop, muted map[string]bool, stale []string) {
+	return nil, nil, nil
 }

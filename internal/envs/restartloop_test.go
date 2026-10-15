@@ -300,3 +300,44 @@ func TestRestartLoopTrackerCannotReachDocker(t *testing.T) {
 	}
 	walk(reflect.TypeFor[RestartLoopTracker](), "RestartLoopTracker", map[reflect.Type]bool{})
 }
+
+// Mutes (plan 06-35, RES-13, D-16). Merging them is a pure step of its own, like the
+// tracker: the same inputs always give the same answer.
+
+func TestApplyMutesMarksAFlaggedMutedServiceAndKeepsTheOthersAsTheyWere(t *testing.T) {
+	loops := map[string]RestartLoop{
+		"svc-web": {ServiceID: "svc-web", Name: "web", Count: 3},
+		"svc-job": {ServiceID: "svc-job", Name: "nightly", Count: 4},
+	}
+	merged, muted, stale := ApplyMutes(loops, []string{"svc-web"}, rlServices)
+	if !merged["svc-web"].Muted || merged["svc-job"].Muted || merged["svc-web"].Count != 3 || len(merged) != 2 {
+		t.Fatalf("merged = %+v, want web muted and nightly not", merged)
+	}
+	if !reflect.DeepEqual(muted, map[string]bool{"svc-web": true}) || len(stale) != 0 {
+		t.Errorf("muted = %v, stale = %v, want only web muted and nothing stale", muted, stale)
+	}
+	if loops["svc-web"].Muted {
+		t.Error("ApplyMutes changed the tracker's map: it must return a copy, the tracker's answer is shared")
+	}
+}
+
+func TestApplyMutesKeepsAMuteOfAServiceThatIsNotLoopingAndNamesTheOnesWhoseServiceIsGone(t *testing.T) {
+	merged, muted, stale := ApplyMutes(nil, []string{"svc-web", "svc-gone", "svc-also-gone"}, rlServices)
+	if len(merged) != 0 {
+		t.Errorf("merged = %+v, want no loop invented for a mute", merged)
+	}
+	if !reflect.DeepEqual(muted, map[string]bool{"svc-web": true}) {
+		t.Errorf("muted = %v, want web, which exists, and not the services that are gone", muted)
+	}
+	if want := []string{"svc-also-gone", "svc-gone"}; !reflect.DeepEqual(stale, want) {
+		t.Errorf("stale = %v, want %v sorted", stale, want)
+	}
+}
+
+func TestApplyMutesWithNothingMutedLeavesAnEmptySetAndTheLoopsAlone(t *testing.T) {
+	loops := map[string]RestartLoop{"svc-web": {ServiceID: "svc-web", Count: 3}}
+	merged, muted, stale := ApplyMutes(loops, nil, rlServices)
+	if !reflect.DeepEqual(merged, loops) || len(muted) != 0 || len(stale) != 0 {
+		t.Errorf("merged = %+v, muted = %v, stale = %v", merged, muted, stale)
+	}
+}
