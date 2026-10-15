@@ -191,3 +191,27 @@ func TestTaskSpecHashIgnoresRuntimeAndMatchesTheTemplateOfTheSameSpec(t *testing
 		t.Errorf("a task on the old spec hashes like the template: %q", hash["t-old"])
 	}
 }
+
+func TestTasksCarryTheMemoryLimitOfTheirSpec(t *testing.T) {
+	limited := fakeTask("t-lim", "web-id", "node-a", 1, "running", "running", time.Minute)
+	limited.Spec.Resources = &swarm.ResourceRequirements{Limits: &swarm.Limit{MemoryBytes: 256 << 20}}
+	plain := fakeTask("t-plain", "web-id", "node-b", 2, "running", "running", time.Minute)
+	reservedOnly := fakeTask("t-res", "web-id", "node-b", 3, "running", "running", time.Minute)
+	reservedOnly.Spec.Resources = &swarm.ResourceRequirements{Reservations: &swarm.Resources{MemoryBytes: 64 << 20}}
+	c := taskFake(t, limited, plain, reservedOnly)
+
+	rows, err := c.Tasks(context.Background(), dockerx.TaskFilter{ServiceIDs: []string{"web-id"}})
+	if err != nil {
+		t.Fatalf("Tasks: %v", err)
+	}
+	got := map[string]int64{}
+	for _, r := range rows {
+		got[r.ID] = r.MemoryLimit
+	}
+	want := map[string]int64{"t-lim": 256 << 20, "t-plain": 0, "t-res": 0}
+	for id, w := range want {
+		if got[id] != w {
+			t.Errorf("memory limit of %s = %d, want %d (the spec's limit; a reservation is not a limit)", id, got[id], w)
+		}
+	}
+}

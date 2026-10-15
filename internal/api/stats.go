@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
+	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 )
@@ -29,6 +30,9 @@ type StatsSource interface {
 // StatsDeps are the dependencies of the container stats stream.
 type StatsDeps struct {
 	Aggregator StatsSource
+	// Clusters reads the service, tasks and nodes of a swarm for the service, services-list
+	// and node streams (06-33).
+	Clusters *envs.Clusters
 	// Hub samples the containers that are watched. One hub serves every viewer; the
 	// server builds it once and closes it on shutdown. Required.
 	Hub *StatsHub

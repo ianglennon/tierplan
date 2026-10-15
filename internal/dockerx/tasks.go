@@ -47,6 +47,9 @@ type TaskRow struct {
 	// SpecHash identifies the task's spec, Runtime aside. A task is on the service's
 	// current version when it equals ServiceDetail.TemplateHash (RESEARCH E10).
 	SpecHash string
+	// MemoryLimit is the memory limit in bytes of the task's spec (Resources.Limits), 0
+	// when the spec sets none. A reservation is not a limit.
+	MemoryLimit int64
 }
 
 // TaskFilter narrows a task read. At least one field must be set.

@@ -339,7 +339,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		})
 		if f.statsHub != nil {
 			api.RegisterStats(r, api.StatsDeps{
-				Aggregator: f.agg, Hub: f.statsHub, Heartbeat: f.statsHeartbeat,
+				Aggregator: f.agg, Clusters: f.clusters, Hub: f.statsHub, Heartbeat: f.statsHeartbeat,
 				MaxStreamsPerUser: f.statsMaxStreams, MaxLifetime: f.statsMaxLifetime, Log: log,
 			})
 		}
