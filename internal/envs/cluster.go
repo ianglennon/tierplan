@@ -16,6 +16,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx"
+	"github.com/ianglennon/bayplan/internal/store/sqlc"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 )
 
@@ -242,8 +243,71 @@ func (c *Clusters) Cached(envID string) (ClusterState, bool) {
 	return e.state, true
 }
 
-// SetRestartLoopMute updates the cached state to a mute or an unmute at once. (scaffold)
-func (c *Clusters) SetRestartLoopMute(envID, serviceID string, muted bool) {}
+// SetRestartLoopMute puts a mute or an unmute of a service into the cached state at once, so
+// the page that asked sees it without waiting for the next read (the mute itself is in the
+// store already). The maps of a state are shared with whoever holds a copy, so they are
+// replaced, never changed.
+func (c *Clusters) SetRestartLoopMute(envID, serviceID string, muted bool) {
+	e, ok := c.lookup(envID)
+	if !ok {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	set := make(map[string]bool, len(e.state.MutedServices)+1)
+	for id := range e.state.MutedServices {
+		set[id] = true
+	}
+	if muted {
+		set[serviceID] = true
+	} else {
+		delete(set, serviceID)
+	}
+	e.state.MutedServices = set
+	if l, flagged := e.state.RestartLoops[serviceID]; flagged && l.Muted != muted {
+		loops := make(map[string]RestartLoop, len(e.state.RestartLoops))
+		for id, v := range e.state.RestartLoops {
+			loops[id] = v
+		}
+		l.Muted = muted
+		loops[serviceID] = l
+		e.state.RestartLoops = loops
+	}
+}
+
+// muteKindService is the kind of a mute of a swarm service.
+const muteKindService = "service"
+
+// mutedServiceIDs reads the services whose alerts are muted in one environment. When the
+// store cannot be read the mutes the last read held are kept, so a database hiccup does not
+// unmute anything.
+func (c *Clusters) mutedServiceIDs(ctx context.Context, envID string, previous map[string]bool) []string {
+	rows, err := c.svc.st.RQ.ListRestartLoopMutes(ctx, envID)
+	if err != nil {
+		c.log.Error("could not read the restart-loop mutes", "environment", envID, "error", err)
+		ids := make([]string, 0, len(previous))
+		for id := range previous {
+			ids = append(ids, id)
+		}
+		return ids
+	}
+	var ids []string
+	for _, r := range rows {
+		if r.Kind == muteKindService {
+			ids = append(ids, r.TargetID)
+		}
+	}
+	return ids
+}
+
+// pruneMutes deletes the mutes of services a successful read no longer lists.
+func (c *Clusters) pruneMutes(ctx context.Context, envID string, stale []string) {
+	for _, id := range stale {
+		if _, err := c.svc.st.Q.DeleteRestartLoopMute(ctx, sqlc.DeleteRestartLoopMuteParams{EnvID: envID, Kind: muteKindService, TargetID: id}); err != nil {
+			c.log.Error("could not delete the restart-loop mute of a removed service", "environment", envID, "service", id, "error", err)
+		}
+	}
+}
 
 // LeaderAgent is the ID of the agent on the leading manager as of the last read,
 // or empty. It does no I/O.
@@ -581,7 +645,7 @@ func (c *Clusters) refreshSwarm(ctx context.Context, in RollupInput, e *clusterE
 		read = r
 		return err
 	})
-	c.apply(in, e, read, err)
+	c.apply(ctx, in, e, read, err)
 	if err == nil && c.reaper != nil {
 		// Each successful node list is what an agent's node is missing from or not
 		// (D-10). The read's own deadline is nearly spent, and the writes that may
@@ -603,7 +667,7 @@ func (c *Clusters) refreshLocal(ctx context.Context, in RollupInput, e *clusterE
 			return err
 		}
 		read, err := cli.Cluster(ctx)
-		c.apply(in, e, read, err)
+		c.apply(ctx, in, e, read, err)
 		return err
 	case dockerx.TypeStandalone:
 		return c.refreshContainers(ctx, in, e)
@@ -612,8 +676,21 @@ func (c *Clusters) refreshLocal(ctx context.Context, in RollupInput, e *clusterE
 }
 
 // apply records the outcome of a read of the cluster.
-func (c *Clusters) apply(in RollupInput, e *clusterEntry, read dockerx.ClusterRead, err error) {
+func (c *Clusters) apply(ctx context.Context, in RollupInput, e *clusterEntry, read dockerx.ClusterRead, err error) {
 	now := c.now()
+	// The mutes are read once per successful read, before the state is locked. The read's own
+	// deadline is nearly spent by now, so the store gets one of its own.
+	var mutedIDs []string
+	if err == nil {
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), auditTimeout)
+		defer cancel()
+		e.mu.Lock()
+		previous := e.state.MutedServices
+		e.mu.Unlock()
+		mutedIDs = c.mutedServiceIDs(sctx, in.EnvID, previous)
+		_, _, stale := ApplyMutes(nil, mutedIDs, read.Services)
+		c.pruneMutes(sctx, in.EnvID, stale)
+	}
 	changed := false
 	e.mu.Lock()
 	e.state.AttemptedAt = now
@@ -636,7 +713,8 @@ func (c *Clusters) apply(in RollupInput, e *clusterEntry, read dockerx.ClusterRe
 		}
 		failing, total := FailingServices(read.Services, now, c.grace)
 		e.state.Failing = &FailingCounts{Failing: failing, Total: total}
-		e.state.RestartLoops = e.loops.Observe(now, read.FailedTasks, read.Services, in.RestartLoopFailures, in.RestartLoopWindow)
+		found := e.loops.Observe(now, read.FailedTasks, read.Services, in.RestartLoopFailures, in.RestartLoopWindow)
+		e.state.RestartLoops, e.state.MutedServices, _ = ApplyMutes(found, mutedIDs, read.Services)
 		e.state.HistoryLimit = read.HistoryLimit
 	case ReasonFor(err) == ReasonNoQuorum:
 		if !e.state.NoQuorum {
@@ -646,6 +724,7 @@ func (c *Clusters) apply(in RollupInput, e *clusterEntry, read dockerx.ClusterRe
 		e.state.Failing = nil
 		// What was seen stays in the tracker, so the loops are back with the quorum.
 		e.state.RestartLoops = nil
+		e.state.MutedServices = nil
 	}
 	e.mu.Unlock()
 	if changed && c.pub != nil {

@@ -108,7 +108,7 @@ type ServiceItem struct {
 
 // RestartLoopBody says a service is in a restart loop (RES-13, D-14, D-15).
 type RestartLoopBody struct {
-	State         string `json:"state" enum:"flagged" doc:"flagged while the loop holds"`
+	State         string `json:"state" enum:"flagged,muted" doc:"flagged while the loop holds; muted when the loop holds and a user muted its alerts: the service raises no bell item and is not counted on the dashboard"`
 	Count         int    `json:"count" doc:"How many tasks failed or were rejected inside the window, as of the last read"`
 	WindowMinutes int    `json:"windowMinutes" doc:"The window the count is over, in minutes: the environment's restart-loop setting"`
 	LatestError   string `json:"latestError" doc:"The error text of the newest failed task; empty when Docker gave none"`
@@ -118,8 +118,12 @@ type RestartLoopBody struct {
 // restartLoopBody turns a flagged loop into its answer. The error is cut to maxLoopError
 // characters.
 func restartLoopBody(l envs.RestartLoop) *RestartLoopBody {
+	state := "flagged"
+	if l.Muted {
+		state = "muted"
+	}
 	return &RestartLoopBody{
-		State: "flagged", Count: l.Count, WindowMinutes: int(l.Window / time.Minute),
+		State: state, Count: l.Count, WindowMinutes: int(l.Window / time.Minute),
 		LatestError: truncateRunes(l.LatestError, maxLoopError), Since: rfc3339(l.Since),
 	}
 }

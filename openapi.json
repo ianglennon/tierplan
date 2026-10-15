@@ -7908,9 +7908,10 @@
             "type": "string"
           },
           "state": {
-            "description": "flagged while the loop holds",
+            "description": "flagged while the loop holds; muted when the loop holds and a user muted its alerts: the service raises no bell item and is not counted on the dashboard",
             "enum": [
-              "flagged"
+              "flagged",
+              "muted"
             ],
             "type": "string"
           },
@@ -7926,6 +7927,75 @@
           "windowMinutes",
           "latestError",
           "since"
+        ],
+        "type": "object"
+      },
+      "RestartLoopMuteBody": {
+        "additionalProperties": false,
+        "properties": {
+          "changed": {
+            "description": "False when the service was in that state already, so nothing was written",
+            "type": "boolean"
+          },
+          "muted": {
+            "description": "Whether the service's restart-loop alerts are muted now",
+            "type": "boolean"
+          },
+          "serviceId": {
+            "description": "The service's ID",
+            "type": "string"
+          }
+        },
+        "required": [
+          "serviceId",
+          "muted",
+          "changed"
+        ],
+        "type": "object"
+      },
+      "RestartLoopSettingsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "failures": {
+            "description": "How many failed tasks within the window make a restart loop, 2 to 50",
+            "format": "int64",
+            "type": "integer"
+          },
+          "historyLimit": {
+            "description": "How many tasks per slot Docker keeps (its task history limit, R): Docker shows R-1 failed tasks per slot. 0 when the environment has not been read yet or is not a swarm",
+            "format": "int64",
+            "type": "integer"
+          },
+          "windowMinutes": {
+            "description": "The window the failures are counted in, in minutes, 1 to 120",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "failures",
+          "windowMinutes",
+          "historyLimit"
+        ],
+        "type": "object"
+      },
+      "RestartLoopSettingsInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "failures": {
+            "description": "How many failed tasks within the window make a restart loop: 2 to 50, else 422 failures_invalid",
+            "format": "int64",
+            "type": "integer"
+          },
+          "windowMinutes": {
+            "description": "The window in minutes: 1 to 120, else 422 window_invalid",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "failures",
+          "windowMinutes"
         ],
         "type": "object"
       },
@@ -9172,6 +9242,10 @@
               "null"
             ]
           },
+          "muted": {
+            "description": "True when a user muted the service's restart-loop alerts, whether or not it is in a loop now",
+            "type": "boolean"
+          },
           "name": {
             "description": "The service name",
             "type": "string"
@@ -9273,7 +9347,8 @@
           "labels",
           "updateStatus",
           "updateMessage",
-          "hasPreviousSpec"
+          "hasPreviousSpec",
+          "muted"
         ],
         "type": "object"
       },
@@ -17778,6 +17853,116 @@
         ]
       }
     },
+    "/api/env/{envId}/restart-loop-settings": {
+      "get": {
+        "description": "How many failed tasks within how many minutes make a restart loop here (default 3 in 10), and Docker's task history limit as of the last cluster read, which says how many failed tasks Docker itself keeps per slot (the limit less one). Needs environments.configure (Env Admin) on the environment.",
+        "operationId": "getRestartLoopSettings",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestartLoopSettingsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The restart-loop threshold of an environment",
+        "tags": [
+          "environments"
+        ]
+      },
+      "put": {
+        "description": "failures is 2 to 50 (422 failures_invalid) and windowMinutes 1 to 120 (422 window_invalid), both checked before anything is written. The next cluster read uses them. A save that changes nothing answers 200 and records nothing. Needs environments.configure (Env Admin) on the environment. A change is audited as environment.restart_loop_settings_changed, with the new and the previous values.",
+        "operationId": "setRestartLoopSettings",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestartLoopSettingsInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestartLoopSettingsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Set the restart-loop threshold of an environment",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
     "/api/env/{envId}/secrets": {
       "get": {
         "description": "The secrets of a swarm environment with their labels, times, owner and how many services use each, at most 500 rows sorted by name then ID, read through a manager. No row has a value: the swarm never returns one. Optionally a search (q) that runs before the 500-row cap. 409 not_a_swarm when the environment is a standalone host; 503 no_manager_connected when no manager is connected. Needs secrets.read (Viewer) on the environment.",
@@ -18944,6 +19129,130 @@
           }
         },
         "summary": "A page of earlier lines of a service's log",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/services/{serviceId}/restart-loop-mute": {
+      "delete": {
+        "description": "Removes the mute. Unmuting a service that is not muted changes and records nothing and answers 200 with changed false. 404 service_not_found for a service that is neither held by the last cluster read nor muted; 409 not_a_swarm for a standalone host. Needs services.control (Operator) on the environment. Audited as restart_loop.unmuted.",
+        "operationId": "unmuteServiceRestartLoop",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The service ID or name: the id of a row of the services list",
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "description": "The service ID or name: the id of a row of the services list",
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestartLoopMuteBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Unmute the restart-loop alerts of a service",
+        "tags": [
+          "environments"
+        ]
+      },
+      "put": {
+        "description": "The service keeps being flagged as in a restart loop, but raises no health bell item and is not counted on the dashboard. The mute is kept until it is removed, and goes away by itself when the service is removed. Muting a service that is muted already changes and records nothing and answers 200 with changed false. 404 service_not_found for a service the last cluster read does not hold; 409 not_a_swarm for a standalone host. Needs services.control (Operator) on the environment. Audited as restart_loop.muted.",
+        "operationId": "muteServiceRestartLoop",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The service ID or name: the id of a row of the services list",
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "description": "The service ID or name: the id of a row of the services list",
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestartLoopMuteBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Mute the restart-loop alerts of a service",
         "tags": [
           "environments"
         ]

@@ -77,6 +77,7 @@ export function serviceDetail(extra: Partial<ServiceDetailBody> = {}): ServiceDe
     updateStatus: "completed",
     updateMessage: "update completed",
     hasPreviousSpec: true,
+    muted: false,
     ...extra,
   };
 }

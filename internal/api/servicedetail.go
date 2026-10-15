@@ -145,6 +145,7 @@ type ServiceDetailBody struct {
 	HasPreviousSpec bool   `json:"hasPreviousSpec" doc:"True when the swarm still holds the spec before the last update, so a rollback has something to go back to"`
 
 	RestartLoop *RestartLoopBody `json:"restartLoop,omitempty" doc:"Present while the service is in a restart loop: its tasks keep failing. Absent otherwise, and while the last cluster read does not hold the service"`
+	Muted       bool             `json:"muted" doc:"True when a user muted the service's restart-loop alerts, whether or not it is in a loop now"`
 }
 
 // ServiceDetailOutput wraps ServiceDetailBody for huma.
@@ -301,31 +302,33 @@ func getService(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID, s
 	reveal := redact.CanReveal(ctx, d.Checker, p, envID)
 	shown, _ := redact.MaskServiceSpec(spec, reveal)
 
-	row, loop, haveRow := serviceRow(ctx, d, envID, detail.ID)
+	row, loop, muted, haveRow := serviceRow(ctx, d, envID, detail.ID)
 	body := serviceDetailBody(detail, shown, nets, row, haveRow, reveal)
 	if loop != nil {
 		body.RestartLoop = restartLoopBody(*loop)
 	}
+	body.Muted = muted
 	return body, nil
 }
 
 // serviceRow finds the service in the last cluster read: its task counts and ports are not in
 // an inspect, and nor is whether its tasks keep failing, which the tracker works out from the
-// task history. A read that fails, or a service that read does not hold yet, is no row.
-func serviceRow(ctx context.Context, d ServicesDeps, envID, id string) (dockerx.ServiceRow, *envs.RestartLoop, bool) {
+// task history, or whether a user muted its restart-loop alerts (the third answer). A read
+// that fails, or a service that read does not hold yet, is no row.
+func serviceRow(ctx context.Context, d ServicesDeps, envID, id string) (dockerx.ServiceRow, *envs.RestartLoop, bool, bool) {
 	st, err := d.Clusters.State(ctx, envID)
 	if err != nil && st.FetchedAt.IsZero() {
-		return dockerx.ServiceRow{}, nil, false
+		return dockerx.ServiceRow{}, nil, false, false
 	}
 	i := slices.IndexFunc(st.Read.Services, func(r dockerx.ServiceRow) bool { return r.ID == id })
 	if i < 0 {
-		return dockerx.ServiceRow{}, nil, false
+		return dockerx.ServiceRow{}, nil, false, false
 	}
 	var loop *envs.RestartLoop
 	if l, flagged := st.RestartLoops[id]; flagged {
 		loop = &l
 	}
-	return st.Read.Services[i], loop, true
+	return st.Read.Services[i], loop, st.MutedServices[id], true
 }
 
 // getServiceInspect answers the raw inspect document of one service, masked.

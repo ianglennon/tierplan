@@ -1436,6 +1436,30 @@ export interface paths {
         patch: operations["updateEnvCredential"];
         trace?: never;
     };
+    "/api/env/{envId}/restart-loop-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The restart-loop threshold of an environment
+         * @description How many failed tasks within how many minutes make a restart loop here (default 3 in 10), and Docker's task history limit as of the last cluster read, which says how many failed tasks Docker itself keeps per slot (the limit less one). Needs environments.configure (Env Admin) on the environment.
+         */
+        get: operations["getRestartLoopSettings"];
+        /**
+         * Set the restart-loop threshold of an environment
+         * @description failures is 2 to 50 (422 failures_invalid) and windowMinutes 1 to 120 (422 window_invalid), both checked before anything is written. The next cluster read uses them. A save that changes nothing answers 200 and records nothing. Needs environments.configure (Env Admin) on the environment. A change is audited as environment.restart_loop_settings_changed, with the new and the previous values.
+         */
+        put: operations["setRestartLoopSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/secrets": {
         parameters: {
             query?: never;
@@ -1707,6 +1731,30 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/services/{serviceId}/restart-loop-mute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Mute the restart-loop alerts of a service
+         * @description The service keeps being flagged as in a restart loop, but raises no health bell item and is not counted on the dashboard. The mute is kept until it is removed, and goes away by itself when the service is removed. Muting a service that is muted already changes and records nothing and answers 200 with changed false. 404 service_not_found for a service the last cluster read does not hold; 409 not_a_swarm for a standalone host. Needs services.control (Operator) on the environment. Audited as restart_loop.muted.
+         */
+        put: operations["muteServiceRestartLoop"];
+        post?: never;
+        /**
+         * Unmute the restart-loop alerts of a service
+         * @description Removes the mute. Unmuting a service that is not muted changes and records nothing and answers 200 with changed false. 404 service_not_found for a service that is neither held by the last cluster read nor muted; 409 not_a_swarm for a standalone host. Needs services.control (Operator) on the environment. Audited as restart_loop.unmuted.
+         */
+        delete: operations["unmuteServiceRestartLoop"];
         options?: never;
         head?: never;
         patch?: never;
@@ -6467,13 +6515,50 @@ export interface components {
              */
             since: string;
             /**
-             * @description flagged while the loop holds
+             * @description flagged while the loop holds; muted when the loop holds and a user muted its alerts: the service raises no bell item and is not counted on the dashboard
              * @enum {string}
              */
-            state: "flagged";
+            state: "flagged" | "muted";
             /**
              * Format: int64
              * @description The window the count is over, in minutes: the environment's restart-loop setting
+             */
+            windowMinutes: number;
+        };
+        RestartLoopMuteBody: {
+            /** @description False when the service was in that state already, so nothing was written */
+            changed: boolean;
+            /** @description Whether the service's restart-loop alerts are muted now */
+            muted: boolean;
+            /** @description The service's ID */
+            serviceId: string;
+        };
+        RestartLoopSettingsBody: {
+            /**
+             * Format: int64
+             * @description How many failed tasks within the window make a restart loop, 2 to 50
+             */
+            failures: number;
+            /**
+             * Format: int64
+             * @description How many tasks per slot Docker keeps (its task history limit, R): Docker shows R-1 failed tasks per slot. 0 when the environment has not been read yet or is not a swarm
+             */
+            historyLimit: number;
+            /**
+             * Format: int64
+             * @description The window the failures are counted in, in minutes, 1 to 120
+             */
+            windowMinutes: number;
+        };
+        RestartLoopSettingsInputBody: {
+            /**
+             * Format: int64
+             * @description How many failed tasks within the window make a restart loop: 2 to 50, else 422 failures_invalid
+             */
+            failures: number;
+            /**
+             * Format: int64
+             * @description The window in minutes: 1 to 120, else 422 window_invalid
              */
             windowMinutes: number;
         };
@@ -6994,6 +7079,8 @@ export interface components {
             mode: "replicated" | "global" | "replicated-job" | "global-job";
             /** @description The mounts of the container spec */
             mounts: components["schemas"]["ServiceMountBody"][] | null;
+            /** @description True when a user muted the service's restart-loop alerts, whether or not it is in a loop now */
+            muted: boolean;
             /** @description The service name */
             name: string;
             /** @description The networks the service is attached to */
@@ -11374,6 +11461,76 @@ export interface operations {
             };
         };
     };
+    getRestartLoopSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestartLoopSettingsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setRestartLoopSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestartLoopSettingsInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestartLoopSettingsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     listSecrets: {
         parameters: {
             query?: {
@@ -11999,6 +12156,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ServiceLogsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    muteServiceRestartLoop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The service ID or name: the id of a row of the services list */
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestartLoopMuteBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    unmuteServiceRestartLoop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The service ID or name: the id of a row of the services list */
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestartLoopMuteBody"];
                 };
             };
             /** @description Error */

@@ -211,15 +211,16 @@ func TestRestartLoopMuteNeedsServicesControlAndTheMuteIsPerEnvironment(t *testin
 		t.Errorf("mutes = %+v, want none from a Viewer", got)
 	}
 	// A mute row of another environment's service ID does not mute this one's.
-	if _, err := f.st.Write.Exec(`INSERT INTO environments (id, name, kind, enabled, created_at, updated_at) VALUES ('other-env', 'other', 'local', 0, 1, 1)`); err == nil {
-		if _, err := f.st.Write.Exec(`INSERT INTO restart_loop_mutes (env_id, kind, target_id, name, muted_by, muted_at) VALUES ('other-env', 'service', 'svc-web', 'web', 'x', 1)`); err != nil {
-			t.Fatal(err)
-		}
-		_, list := listServicesQuery(t, f, e, "")
-		for _, it := range list.Items {
-			if it.Name == "web" && it.RestartLoop != nil && it.RestartLoop.State == "muted" {
-				t.Error("a mute of another environment muted this one's service")
-			}
+	if _, err := f.st.Write.Exec(`INSERT INTO environments (id, kind, name, enabled, created_at, updated_at) VALUES ('other-env', 'agent', 'other', 0, 1, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.Write.Exec(`INSERT INTO restart_loop_mutes (env_id, kind, target_id, name, muted_by, muted_at) VALUES ('other-env', 'service', 'svc-web', 'web', 'x', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	_, list := listServicesQuery(t, f, e, "")
+	for _, it := range list.Items {
+		if it.Name == "web" && (it.RestartLoop == nil || it.RestartLoop.State != "flagged") {
+			t.Errorf("web = %+v, want a mute of another environment to leave it flagged", it.RestartLoop)
 		}
 	}
 }

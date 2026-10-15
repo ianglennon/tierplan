@@ -4,6 +4,7 @@
 package envs
 
 import (
+	"sort"
 	"sync"
 	"time"
 
@@ -152,7 +153,34 @@ func (t *RestartLoopTracker) Observe(now time.Time, failed []dockerx.FailedTaskR
 	return out
 }
 
-// ApplyMutes is the merge of the mutes into the tracker's answer. (scaffold)
+// ApplyMutes merges the mutes of an environment into the loops the tracker found (D-16). It
+// is pure and returns copies: the tracker's answer is shared with readers of the state, so it
+// is never changed in place.
+//
+//   - merged is loops with Muted set on the ones a user muted. A mute never creates a loop:
+//     a muted service that is not looping is not in merged.
+//   - muted is every listed service that has a mute, looping or not, so a page can say a
+//     quiet service is muted.
+//   - stale are the mutes whose service is not listed any more, sorted: the caller deletes
+//     them after a successful read.
 func ApplyMutes(loops map[string]RestartLoop, mutedIDs []string, services []dockerx.ServiceRow) (merged map[string]RestartLoop, muted map[string]bool, stale []string) {
-	return nil, nil, nil
+	listed := make(map[string]bool, len(services))
+	for _, s := range services {
+		listed[s.ID] = true
+	}
+	muted = map[string]bool{}
+	for _, id := range mutedIDs {
+		if listed[id] {
+			muted[id] = true
+		} else {
+			stale = append(stale, id)
+		}
+	}
+	sort.Strings(stale)
+	merged = make(map[string]RestartLoop, len(loops))
+	for id, l := range loops {
+		l.Muted = muted[id]
+		merged[id] = l
+	}
+	return merged, muted, stale
 }
