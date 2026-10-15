@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -442,7 +443,7 @@ func (c *Client) ServiceUpdate(ctx context.Context, id string, version uint64, s
 		QueryRegistry:       false,
 	})
 	if err != nil {
-		if cerrdefs.IsInvalidArgument(err) {
+		if cerrdefs.IsInvalidArgument(err) || isMissingNetwork(err) {
 			return nil, fmt.Errorf("update service on %s: %w", c.t.Describe(), &SpecRejectedError{Message: err.Error()})
 		}
 		return nil, c.serviceWriteError("update", err)
@@ -471,12 +472,23 @@ func (c *Client) ServiceCreate(ctx context.Context, spec json.RawMessage, encode
 		switch {
 		case cerrdefs.IsConflict(err) || cerrdefs.IsAlreadyExists(err) || strings.Contains(err.Error(), alreadyExistsText):
 			return "", nil, fmt.Errorf("create service on %s: %w", c.t.Describe(), ErrServiceNameTaken)
-		case cerrdefs.IsInvalidArgument(err):
+		case cerrdefs.IsInvalidArgument(err) || isMissingNetwork(err):
 			return "", nil, fmt.Errorf("create service on %s: %w", c.t.Describe(), &SpecRejectedError{Message: err.Error()})
 		}
 		return "", nil, c.serviceWriteError("create", err)
 	}
 	return res.ID, slices.Clone(res.Warnings), nil
+}
+
+// missingNetworkText is how the engine words a service spec that names a network it does not have. Unlike a
+// missing secret or config, which a manager refuses as an invalid argument, this one is answered by the
+// engine itself with a status no errdefs class matches (observed on a real Engine 29, plan 06-37).
+var missingNetworkText = regexp.MustCompile(`^network \S+ not found$`)
+
+// isMissingNetwork reports whether err is the engine refusing a service spec because a network it names does
+// not exist: a refusal of the spec, like a missing secret, though it is not classed as one.
+func isMissingNetwork(err error) bool {
+	return err != nil && missingNetworkText.MatchString(DaemonText(err))
 }
 
 // decodeServiceSpec decodes raw strictly into a service spec: an unknown field, a wrong type or
