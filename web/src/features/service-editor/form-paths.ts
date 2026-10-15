@@ -5,9 +5,8 @@ import { parsePath } from "@/features/service-editor/spec-patch";
 
 // FORM_OWNED_PATHS are the paths of a swarm.ServiceSpec a control of the Form tab
 // reads and writes (D-01). Everything else in a loaded spec is carried through
-// untouched, and the caution bar names it (D-02). Plans 06-21 and 06-26 add the
-// paths of the mounts, secrets, configs, networks, placement, restart and update
-// cards; add them here, so the caution bar and the form can't disagree.
+// untouched, and the caution bar names it (D-02). Plan 06-26 adds the paths of the secrets,
+// configs and networks cards; add them here, so the caution bar and the form can't disagree.
 export const FORM_OWNED_PATHS: readonly string[] = [
   // Basics
   "Name",
@@ -24,6 +23,26 @@ export const FORM_OWNED_PATHS: readonly string[] = [
   "TaskTemplate.Resources.Limits.MemoryBytes",
   "TaskTemplate.Resources.Reservations.NanoCPUs",
   "TaskTemplate.Resources.Reservations.MemoryBytes",
+  // Mounts: the whole list, because a row is a mount. The card changes the type, source,
+  // destination and read-only flag of a mount and carries the rest of it (volume options) as it is.
+  "TaskTemplate.ContainerSpec.Mounts",
+  // Placement. Platforms are not here: Bayplan sets them when it pins an image.
+  "TaskTemplate.Placement.Constraints",
+  "TaskTemplate.Placement.Preferences",
+  "TaskTemplate.Placement.MaxReplicas",
+  // Restart policy
+  "TaskTemplate.RestartPolicy.Condition",
+  "TaskTemplate.RestartPolicy.Delay",
+  "TaskTemplate.RestartPolicy.MaxAttempts",
+  "TaskTemplate.RestartPolicy.Window",
+  // Update policy, with the auto-rollback box (UpdateConfig.FailureAction). RollbackConfig is
+  // not here.
+  "UpdateConfig.Parallelism",
+  "UpdateConfig.Delay",
+  "UpdateConfig.FailureAction",
+  "UpdateConfig.Monitor",
+  "UpdateConfig.MaxFailureRatio",
+  "UpdateConfig.Order",
 ];
 
 type Segment = string | number;
