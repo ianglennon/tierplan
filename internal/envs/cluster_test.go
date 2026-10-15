@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	swarmapi "github.com/moby/moby/api/types/swarm"
+
 	"github.com/ianglennon/bayplan/internal/agents"
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
@@ -921,5 +923,121 @@ func TestARefreshKeepsTheServiceReferencesOfTheManagersAnswer(t *testing.T) {
 	}
 	if len(idle.Networks) != 1 || idle.Networks[0] != "ovl-id" {
 		t.Errorf("idle = %+v, want the network it mentions with no task running", idle)
+	}
+}
+
+// Restart-loop detection in the cluster read (plan 06-34, RES-13, D-14). The clock is the
+// rig's; nothing waits for a real window.
+
+// loopRig is a swarm rig with the service web and a way to change the task history every
+// manager reports.
+type loopRig struct {
+	*swarmRig
+	services []dockertest.FakeService
+}
+
+func newLoopRig(t *testing.T) *loopRig {
+	t.Helper()
+	services := []dockertest.FakeService{{ID: "svc-web", Name: "web", Mode: "replicated", Running: 1, Desired: 1}}
+	return &loopRig{swarmRig: newSwarmRig(t, managerNodes(), services), services: services}
+}
+
+// history gives every manager the failed tasks of web that failed the given durations
+// before now, newest first by argument order, and a history limit.
+func (l *loopRig) history(limit int, ago ...time.Duration) {
+	now := l.clk.Now()
+	var tasks []swarmapi.Task
+	for i, d := range ago {
+		tk := swarmapi.Task{ID: fmt.Sprintf("task-%d-%d", i, d/time.Second), ServiceID: "svc-web", NodeID: "node-m1", Slot: 1, DesiredState: swarmapi.TaskStateShutdown}
+		tk.Status = swarmapi.TaskStatus{State: swarmapi.TaskStateFailed, Timestamp: now.Add(-d), Err: fmt.Sprintf("task: non-zero exit (%d)", i+1)}
+		tasks = append(tasks, tk)
+	}
+	for i, a := range l.m {
+		cfg := managerConfig(i+1, l.nodes, l.services)
+		cfg.Tasks, cfg.SwarmClusterID, cfg.HistoryLimit = tasks, "cluster-1", limit
+		a.fake.Reconfigure(cfg)
+	}
+}
+
+func (l *loopRig) refresh(t *testing.T) ClusterState {
+	t.Helper()
+	if err := l.c.Refresh(context.Background(), l.env.ID); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	st, ok := l.c.Cached(l.env.ID)
+	if !ok {
+		t.Fatal("no cluster state after a refresh")
+	}
+	return st
+}
+
+func TestAClusterReadFlagsARestartLoopAndTheFlagOutlivesDockersHistoryUntilAQuietWindow(t *testing.T) {
+	l := newLoopRig(t)
+	l.history(8, time.Minute, 2*time.Minute, 3*time.Minute)
+	st := l.refresh(t)
+	loop, ok := st.RestartLoops["svc-web"]
+	if !ok || loop.Count != 3 || loop.Name != "web" || loop.LatestError != "task: non-zero exit (1)" || len(st.RestartLoops) != 1 {
+		t.Fatalf("restart loops = %+v, want web with 3 failures and the newest task's error", st.RestartLoops)
+	}
+	if st.HistoryLimit != 8 {
+		t.Errorf("history limit = %d, want the cluster's 8", st.HistoryLimit)
+	}
+
+	// Docker prunes its history; the three failures are still inside the window.
+	l.history(8)
+	l.clk.Advance(30 * time.Second)
+	if st := l.refresh(t); st.RestartLoops["svc-web"].Count != 3 {
+		t.Fatalf("after Docker pruned its history = %+v, want the 3 seen failures kept", st.RestartLoops)
+	}
+
+	// A full window with nothing new clears it.
+	l.clk.Advance(DefaultRestartLoopWindow)
+	if st := l.refresh(t); len(st.RestartLoops) != 0 {
+		t.Fatalf("a quiet window later = %+v, want cleared", st.RestartLoops)
+	}
+}
+
+func TestARestartLoopUsesTheEnvironmentsThresholdAndWindow(t *testing.T) {
+	l := newLoopRig(t)
+	l.history(5, time.Minute, 2*time.Minute)
+	if st := l.refresh(t); len(st.RestartLoops) != 0 {
+		t.Fatalf("two failures flagged %+v at the default threshold of 3", st.RestartLoops)
+	}
+	if _, err := l.st.Write.Exec(`UPDATE environments SET restart_loop_failures = 2 WHERE id = ?`, l.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	if st := l.refresh(t); st.RestartLoops["svc-web"].Count != 2 {
+		t.Fatalf("with a threshold of 2 = %+v, want a loop of 2", st.RestartLoops)
+	}
+	// Tighten the window to one minute: the failures are two and three minutes old.
+	l.history(5, 2*time.Minute, 3*time.Minute)
+	if _, err := l.st.Write.Exec(`UPDATE environments SET restart_loop_window_minutes = 1 WHERE id = ?`, l.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	l.clk.Advance(time.Minute)
+	if st := l.refresh(t); len(st.RestartLoops) != 0 {
+		t.Fatalf("with a window of one minute = %+v, want none", st.RestartLoops)
+	}
+}
+
+func TestALostQuorumHidesTheRestartLoopsAndTheyReturnWhenItComesBack(t *testing.T) {
+	l := newLoopRig(t)
+	l.history(5, time.Minute, 2*time.Minute, 3*time.Minute)
+	if st := l.refresh(t); len(st.RestartLoops) != 1 {
+		t.Fatalf("not flagged before the quorum loss: %+v", st.RestartLoops)
+	}
+	for i, a := range l.m {
+		cfg := managerConfig(i+1, l.nodes, l.services)
+		cfg.QuorumLost = true
+		a.fake.Reconfigure(cfg)
+	}
+	_ = l.c.Refresh(context.Background(), l.env.ID)
+	if st, _ := l.c.Cached(l.env.ID); st.RestartLoops != nil {
+		t.Fatalf("restart loops while the quorum is lost = %+v, want none shown", st.RestartLoops)
+	}
+	l.history(5)
+	l.clk.Advance(15 * time.Second)
+	if st := l.refresh(t); st.RestartLoops["svc-web"].Count != 3 {
+		t.Fatalf("after the quorum came back = %+v, want the loop kept in memory", st.RestartLoops)
 	}
 }

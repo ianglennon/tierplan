@@ -109,6 +109,12 @@ type ClusterState struct {
 	// Failing counts failing services of a swarm or failing containers of a
 	// standalone host, nil until worked out or while the quorum is lost.
 	Failing *FailingCounts
+	// RestartLoops are the services flagged as in a restart loop by service ID, nil while
+	// the quorum is lost or before the first read (RES-13).
+	RestartLoops map[string]RestartLoop
+	// HistoryLimit is how many tasks per slot Docker keeps in Read's cluster, 0 before the
+	// first read.
+	HistoryLimit int
 }
 
 // Known is true when a node list is held and the quorum is not lost.

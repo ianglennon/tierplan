@@ -165,6 +165,10 @@ type RollupInput struct {
 	// Local is the monitor's status of the local socket, used when Kind is KindLocal.
 	Local   Status
 	Cluster *ClusterView
+	// RestartLoopFailures and RestartLoopWindow are the environment's restart-loop
+	// threshold and window (RES-13).
+	RestartLoopFailures int
+	RestartLoopWindow   time.Duration
 }
 
 // Issue is one reason an environment is degraded.

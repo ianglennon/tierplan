@@ -184,6 +184,19 @@ type ServiceVolumeMount struct {
 	ReadOnly       bool
 }
 
+// FailedTaskRow is one swarm task that ended failed or rejected, from the history Docker
+// keeps. A task that was shut down (by an update, a scale-down or a removal) or that
+// completed (a job's) is never one, whatever its exit code was (RESEARCH E12).
+type FailedTaskRow struct {
+	ID, ServiceID, NodeID string
+	// Slot is the replica number of a replicated service's task, 0 for a global one.
+	Slot int
+	// State is failed or rejected, Err the swarm's own text about why.
+	State, Err string
+	// At is when the task reached State, in UTC.
+	At time.Time
+}
+
 // ClusterRead is what one manager says about the cluster.
 type ClusterRead struct {
 	Nodes      []NodeRow
@@ -192,6 +205,12 @@ type ClusterRead struct {
 	// ServiceRefs are the networks and volumes each service's spec mentions, sorted
 	// by service name then ID.
 	ServiceRefs []ServiceRef
+	// FailedTasks are the failed and rejected tasks in the history Docker keeps, newest
+	// first, then by ID. Restart-loop detection counts them (RES-13).
+	FailedTasks []FailedTaskRow
+	// HistoryLimit is how many tasks per slot Docker keeps (TaskHistoryRetentionLimit),
+	// DefaultTaskHistoryLimit when the cluster never set it.
+	HistoryLimit int
 }
 
 // Cluster reads the nodes, the services with their task counts and the tasks of

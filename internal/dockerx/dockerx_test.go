@@ -1315,6 +1315,73 @@ func TestClusterReadsNodesServicesAndTheAgentTasksFromAManager(t *testing.T) {
 	}
 }
 
+// failedTaskFixture is a manager whose history holds every kind of task a restart-loop
+// count must tell apart (plan 06-34, RES-13, RESEARCH E11 and E12).
+func failedTaskFixture() dockertest.FakeConfig {
+	cfg := clusterManager()
+	at := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
+	mk := func(id, svc string, slot int, state, desired, errText string, ago time.Duration) swarm.Task {
+		tk := swarm.Task{ID: id, ServiceID: svc, NodeID: "n1", Slot: slot, DesiredState: swarm.TaskState(desired)}
+		tk.CreatedAt = at.Add(-ago - time.Minute)
+		tk.Status = swarm.TaskStatus{Timestamp: at.Add(-ago), State: swarm.TaskState(state), Err: errText}
+		return tk
+	}
+	forced := mk("t-forced", "s2", 1, "shutdown", "shutdown", "", 5*time.Minute)
+	forced.Status.ContainerStatus = &swarm.ContainerStatus{ExitCode: 137}
+	cfg.Tasks = []swarm.Task{
+		mk("t-failed", "s2", 1, "failed", "shutdown", "task: non-zero exit (1)", 3*time.Minute),
+		mk("t-rejected", "s2", 2, "rejected", "shutdown", "No such image: nope:latest", 2*time.Minute),
+		forced,
+		mk("t-complete", "s3", 1, "complete", "shutdown", "", 4*time.Minute),
+		mk("t-job-failed", "s3", 1, "failed", "shutdown", "task: non-zero exit (2)", time.Minute),
+		mk("t-live", "s2", 1, "running", "running", "", time.Minute),
+	}
+	return cfg
+}
+
+func TestClusterReadsTheFailedAndRejectedTasksOfTheShutdownHistoryAndNothingElse(t *testing.T) {
+	cfg := failedTaskFixture()
+	got, err := newClient(t, dockertest.NewFake(t, cfg)).Cluster(context.Background())
+	if err != nil {
+		t.Fatalf("Cluster: %v", err)
+	}
+	var ids []string
+	for _, f := range got.FailedTasks {
+		ids = append(ids, f.ID)
+	}
+	if want := []string{"t-job-failed", "t-rejected", "t-failed"}; !slices.Equal(ids, want) {
+		t.Fatalf("failed tasks are %v, want %v: newest first, no shutdown, complete or running task", ids, want)
+	}
+	at := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
+	want := dockerx.FailedTaskRow{ID: "t-rejected", ServiceID: "s2", NodeID: "n1", Slot: 2, State: "rejected", Err: "No such image: nope:latest", At: at.Add(-2 * time.Minute)}
+	if got.FailedTasks[1] != want || got.FailedTasks[1].At.Location() != time.UTC {
+		t.Errorf("rejected task = %+v, want %+v in UTC", got.FailedTasks[1], want)
+	}
+	if f := got.FailedTasks[2]; f.State != "failed" || f.Err != "task: non-zero exit (1)" || f.Slot != 1 || f.ServiceID != "s2" {
+		t.Errorf("failed task = %+v", f)
+	}
+}
+
+func TestClusterWithNoFailedTasksHasNone(t *testing.T) {
+	got, err := newClient(t, dockertest.NewFake(t, clusterManager())).Cluster(context.Background())
+	if err != nil || len(got.FailedTasks) != 0 {
+		t.Fatalf("failed tasks = %+v, %v; want none", got.FailedTasks, err)
+	}
+}
+
+func TestClusterReportsHowManyTasksPerSlotDockerKeeps(t *testing.T) {
+	cfg := clusterManager()
+	cfg.SwarmClusterID, cfg.HistoryLimit = "cluster-1", 9
+	got, err := newClient(t, dockertest.NewFake(t, cfg)).Cluster(context.Background())
+	if err != nil || got.HistoryLimit != 9 {
+		t.Fatalf("history limit = %d, %v; want 9", got.HistoryLimit, err)
+	}
+	got, err = newClient(t, dockertest.NewFake(t, clusterManager())).Cluster(context.Background())
+	if err != nil || got.HistoryLimit != dockerx.DefaultTaskHistoryLimit {
+		t.Fatalf("history limit = %d, %v; want the default %d", got.HistoryLimit, err, dockerx.DefaultTaskHistoryLimit)
+	}
+}
+
 func TestClusterNodeRowsCarryTheFactsAConstraintReads(t *testing.T) {
 	cfg := dockertest.FakeConfig{
 		SwarmState: "active", SwarmControl: true,
