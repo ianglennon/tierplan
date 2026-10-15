@@ -41,6 +41,10 @@ const maxServiceSpecBody = 256 << 10
 // JSON, so the cap is 1 MiB (D-40).
 const maxSecretBody = 1 << 20
 
+// maxConfigBody caps a config create: content of 1,023,999 bytes is about 1.37 MB as base64 in
+// JSON, so the cap is 2 MiB (D-40).
+const maxConfigBody = 2 << 20
+
 // bodyCap is the most bytes a body of one kind may have. A body over the cap is
 // refused, never cut short.
 func bodyCap(kind BodyKind) int64 {
@@ -49,6 +53,8 @@ func bodyCap(kind BodyKind) int64 {
 		return maxServiceSpecBody
 	case BodySecretCreate:
 		return maxSecretBody
+	case BodyConfigCreate:
+		return maxConfigBody
 	}
 	return maxBody
 }
@@ -124,6 +130,8 @@ func validateBody(kind BodyKind, r io.Reader, env bodyEnv) ([]byte, error) {
 		clean, err = validateNodeSpec(raw)
 	case BodySecretCreate:
 		clean, err = validateSecretCreate(raw)
+	case BodyConfigCreate:
+		clean, err = validateConfigCreate(raw)
 	default:
 		return nil, refuse("a route with no body kind has no validator")
 	}
@@ -429,6 +437,44 @@ func validateSecretCreate(raw []byte) (swarm.SecretSpec, error) {
 		return in, refuse("the secret has no value")
 	case len(clean.Data) > maxSecretData:
 		return in, refuse("the secret value is over %d bytes", maxSecretData)
+	}
+	if err := checkMap("Labels", clean.Labels); err != nil {
+		return in, err
+	}
+	return clean, nil
+}
+
+// templatingGolang is the one templating driver a config may name.
+const templatingGolang = "golang"
+
+// validateConfigCreate decodes a config to create into the engine's own swarm.ConfigSpec with
+// unknown fields refused and rebuilds it from a name, labels, the content and, when asked for,
+// the golang templating driver. A config has no driver of its own, so any other key is an
+// unknown field; any other templating driver, and any option of the golang one, is refused. The
+// content is checked for size only and is never logged: a refusal names the rule and not the
+// bytes.
+func validateConfigCreate(raw []byte) (swarm.ConfigSpec, error) {
+	var in swarm.ConfigSpec
+	if err := decodeStrict(raw, &in); err != nil {
+		return in, err
+	}
+	clean := swarm.ConfigSpec{
+		Annotations: swarm.Annotations{Name: in.Name, Labels: in.Labels},
+		Data:        in.Data,
+	}
+	if in.Templating != nil && in.Templating.Name == templatingGolang {
+		clean.Templating = &swarm.Driver{Name: templatingGolang}
+	}
+	if err := sameAsAllowlisted(in, clean); err != nil {
+		return in, err
+	}
+	switch {
+	case !secretNameRe.MatchString(clean.Name):
+		return in, refuse("the config name is not a valid name")
+	case len(clean.Data) == 0:
+		return in, refuse("the config has no content")
+	case len(clean.Data) > maxConfigData:
+		return in, refuse("the config content is over %d bytes", maxConfigData)
 	}
 	if err := checkMap("Labels", clean.Labels); err != nil {
 		return in, err

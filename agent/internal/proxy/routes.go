@@ -190,6 +190,16 @@ var routes = []route{
 	{name: "secret create", method: http.MethodPost, path: pathOf(`secrets/create`), body: BodySecretCreate},
 	{name: "secret remove", method: http.MethodDelete, path: pathOf(`secrets/` + idShape)},
 
+	// Configs. The same four routes, in the same order and for the same reason: the list sits
+	// ahead of the inspect, none takes a query key, and an update is absent on purpose (a config
+	// is replaced, not edited). The list and the inspect answer with the content, which a config
+	// has and a secret does not; the server drops it from the list. The create takes a name,
+	// labels, the content and the golang templating driver, and nothing else.
+	{name: "configs list", method: http.MethodGet, path: pathOf(`configs`)},
+	{name: "config inspect", method: http.MethodGet, path: pathOf(`configs/` + idShape)},
+	{name: "config create", method: http.MethodPost, path: pathOf(`configs/create`), body: BodyConfigCreate},
+	{name: "config remove", method: http.MethodDelete, path: pathOf(`configs/` + idShape)},
+
 	// Container lifecycle.
 	{name: "container start", method: http.MethodPost, path: pathOf(`containers/` + idShape + `/start`)},
 	{name: "container pause", method: http.MethodPost, path: pathOf(`containers/` + idShape + `/pause`)},
