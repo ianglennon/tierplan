@@ -454,3 +454,10 @@ func (c *Client) ServiceUpdate(ctx context.Context, id string, version uint64, s
 	}
 	return slices.Clone(res.Warnings), nil
 }
+
+// Networks lists every network of the engine this client talks to, the local ones too (host,
+// bridge, none) beside the swarm's, sorted by name then ID. It is read-only. A service spec can
+// name the host network by ID, and an ID says nothing until it is looked up here.
+func (c *Client) Networks(ctx context.Context) ([]NetworkRow, error) {
+	return nil, errors.New("dockerx: not implemented")
+}

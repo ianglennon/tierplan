@@ -570,3 +570,31 @@ func TestServiceUpdateTheDaemonsRefusalOfASpecKeepsItsWords(t *testing.T) {
 		t.Errorf("writes = %d, want exactly one", got)
 	}
 }
+
+// Networks (plan 06-18): the engine's networks, local ones too.
+
+func TestNetworksListsTheLocalAndTheSwarmNetworksSortedByNameThenID(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{
+		SwarmState: "active", SwarmControl: true,
+		Networks: []dockertest.FakeNetwork{
+			{ID: "ovl-1", Name: "app_net", Driver: "overlay", Scope: "swarm"},
+			{ID: "host-1", Name: "host", Driver: "host", Scope: "local"},
+			{ID: "br-1", Name: "bridge", Driver: "bridge", Scope: "local"},
+		},
+	})
+	rows, err := newClient(t, fake).Networks(context.Background())
+	if err != nil {
+		t.Fatalf("Networks: %v", err)
+	}
+	var got []string
+	for _, r := range rows {
+		got = append(got, r.Name+"/"+r.ID+"/"+r.Driver+"/"+r.Scope)
+	}
+	want := []string{"app_net/ovl-1/overlay/swarm", "bridge/br-1/bridge/local", "host/host-1/host/local"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("networks = %v, want %v", got, want)
+	}
+	if got := fake.Writes(); len(got) != 0 {
+		t.Errorf("writes = %v, want none", got)
+	}
+}

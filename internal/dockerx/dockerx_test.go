@@ -473,6 +473,8 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // ServiceUpdate (Phase 6, RES-03) sends one full service spec, strictly decoded inside dockerx (unknown fields are
 // refused before any call), with the version the caller read and an optional credential, QueryRegistry off, once; the
 // API judges the spec (host escalation, immutable fields, masked values) before it is called, and it is never retried.
+// Networks (Phase 6, RES-03) is a read: every network of the engine, local ones too, so a service spec that names the host
+// network by ID can be recognised.
 // ServiceRemove (Phase 6, RES-02) removes one service by ID, once; it takes no options, and the API refuses a
 // service a stack owns and a Bayplan agent service nobody confirmed before it is called.
 // NodeUpdate (Phase 6, RES-05) changes one node's availability, role or labels, once, with the version the
@@ -485,7 +487,7 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // cluster's task history retention limit, from the engine's info.
 // ContainerLogs (Phase 4, OBS-01) is a read: one inspect, then the engine's log of the container
 // with stdout, stderr and timestamps always on; it takes only the time range, the tail and follow.
-var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "DistributionInspect", "Events", "ImageDetail", "ImageHistory", "ImagePull", "ImageRemove", "ImageUntag", "ImageUsers", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "NodeInspect", "NodeRemove", "NodeUpdate", "Probe", "RestartPolicies", "ResolveImage", "ServiceForceUpdate", "ServiceInspect", "ServiceRefs", "ServiceRemove", "ServiceRollback", "ServiceScale", "ServiceUpdate", "Snapshot", "StartExec", "SwarmNetworkNames", "TaskHistoryLimit", "Tasks", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers"}
+var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "DistributionInspect", "Events", "ImageDetail", "ImageHistory", "ImagePull", "ImageRemove", "ImageUntag", "ImageUsers", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "Networks", "NodeInspect", "NodeRemove", "NodeUpdate", "Probe", "RestartPolicies", "ResolveImage", "ServiceForceUpdate", "ServiceInspect", "ServiceRefs", "ServiceRemove", "ServiceRollback", "ServiceScale", "ServiceUpdate", "Snapshot", "StartExec", "SwarmNetworkNames", "TaskHistoryLimit", "Tasks", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers"}
 
 // typedMethodsWithForbiddenWords are allowed methods whose names contain a word the
 // pattern below refuses, each reviewed one by one.

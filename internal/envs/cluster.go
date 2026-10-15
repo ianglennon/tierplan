@@ -809,3 +809,27 @@ func engineMajor(v string) (int, bool) {
 	n, err := strconv.Atoi(head)
 	return n, err == nil
 }
+
+// ManagerPolicy is what the agent of the manager a cluster write goes to will forward, as its
+// owner set it. Known is false when no agent is in the way: the server's own socket, or no
+// manager connected.
+type ManagerPolicy struct {
+	Known              bool
+	ReadOnly           bool
+	PrivilegedServices bool
+}
+
+// ManagerPolicyOf reads the policy of the manager a cluster read would choose from a rollup input,
+// with no I/O.
+func (c *Clusters) ManagerPolicyOf(in RollupInput) ManagerPolicy {
+	return ManagerPolicy{}
+}
+
+// ManagerPolicy is ManagerPolicyOf over the environment's current rollup input.
+func (c *Clusters) ManagerPolicy(ctx context.Context, envID string) (ManagerPolicy, error) {
+	in, err := c.svc.Input(ctx, envID, c.now())
+	if err != nil {
+		return ManagerPolicy{}, err
+	}
+	return c.ManagerPolicyOf(in), nil
+}

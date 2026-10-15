@@ -168,6 +168,10 @@ var phase6DetailKeys = map[string][]string{
 	audit.ActionServiceForceUpdated: {"name", "image", "digest", "retry", "pinned", "code"},
 	audit.ActionServiceRolledBack:   {"name", "version", "code"},
 	audit.ActionServiceRemoved:      {"name", "stack", "agent", "confirmed", "code"},
+	// An edit records the version it was applied at, the image the service was left with and its digest,
+	// whether the spec changed, how many host-escalation findings it had and the code; never a value of
+	// the spec (plan 06-18, RES-03).
+	audit.ActionServiceUpdated: {"name", "version", "image", "digest", "changed", "findings", "code"},
 	// An availability or role change records the node's name, the value it had and the one asked for,
 	// whether its name was typed to confirm, the warnings the change carried (comma separated) and the
 	// code (plan 06-15, RES-05).
@@ -206,6 +210,7 @@ func TestEveryPhase6ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		"service.force_updated": audit.ActionServiceForceUpdated,
 		"service.rolled_back":   audit.ActionServiceRolledBack,
 		"service.removed":       audit.ActionServiceRemoved,
+		"service.updated":       audit.ActionServiceUpdated,
 
 		"node.availability_changed": audit.ActionNodeAvailabilityChanged,
 		"node.role_changed":         audit.ActionNodeRoleChanged,
