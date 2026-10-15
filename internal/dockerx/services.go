@@ -405,3 +405,20 @@ func (c *Client) ServiceRemove(ctx context.Context, id string) error {
 	}
 	return nil
 }
+
+// ErrServiceSpecInvalid means the spec handed to ServiceUpdate does not decode strictly into a
+// service spec; nothing was sent.
+var ErrServiceSpecInvalid = errors.New("dockerx: the service spec is not valid")
+
+// SpecRejectedError is the manager refusing a service spec with a 400: it names a secret,
+// config or network that does not exist, or a setting the engine does not accept. Message is the
+// manager's own words, which can echo a value of the spec, so the caller scrubs it.
+type SpecRejectedError struct{ Message string }
+
+func (e *SpecRejectedError) Error() string { return "service spec rejected: " + e.Message }
+
+// ServiceUpdate sends one full service spec for the service id, with the version the caller
+// read and encodedAuth (a base64url X-Registry-Auth value, empty for none).
+func (c *Client) ServiceUpdate(ctx context.Context, id string, version uint64, spec json.RawMessage, encodedAuth string) ([]string, error) {
+	return nil, errors.New("dockerx: not implemented")
+}

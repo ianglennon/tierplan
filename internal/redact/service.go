@@ -4,6 +4,7 @@
 package redact
 
 import (
+	"errors"
 	"maps"
 	"slices"
 	"strings"
@@ -177,4 +178,53 @@ func objectAt(m map[string]any, key string) (obj map[string]any, withheld bool) 
 		m[key] = Placeholder
 		return nil, true
 	}
+}
+
+var (
+	// ErrPlaceholderUnmatched means the submitted spec holds a Placeholder that stands for no
+	// current value: a variable, argv, health check command or log option the service does not
+	// have. The error is a *PlaceholderError naming the field.
+	ErrPlaceholderUnmatched = errors.New("redact: a hidden value has nothing to stand for")
+	// ErrPlaceholderReserved means a caller who may reveal secrets sent Placeholder, which is
+	// reserved for the masked form and cannot be a real value. The error is a *PlaceholderError
+	// naming the field.
+	ErrPlaceholderReserved = errors.New("redact: the placeholder is reserved and cannot be a value")
+)
+
+// PlaceholderError is ErrPlaceholderUnmatched or ErrPlaceholderReserved with the spec path of
+// the field. The path names a variable or an option, never a value.
+type PlaceholderError struct {
+	Err  error
+	Path string
+}
+
+func (e *PlaceholderError) Error() string { return e.Err.Error() + " (" + e.Path + ")" }
+func (e *PlaceholderError) Unwrap() error { return e.Err }
+
+// MergeMaskedSpec puts the values a caller could not see back into the spec they submitted
+// (D-09, D-39). current is the spec as Docker holds it now, submitted the spec the caller
+// edited, which for a caller without secrets.reveal came from MaskServiceSpec.
+//
+// Only Placeholder is recognised. Each env entry NAME=<hidden> takes the value of NAME from
+// current, the nth entry of a name taking the nth of current so duplicate names stay
+// positional; Command or Args equal to [<hidden>] keep the current argv; a health check test of
+// [mode, <hidden>] keeps the current command under the submitted mode; a log option whose value
+// is <hidden> keeps the current value, while the driver is the one current has. An entry the
+// caller removed is gone, and a value they typed replaces the old one. A Placeholder with
+// nothing to stand for is ErrPlaceholderUnmatched.
+//
+// With reveal true the caller saw every value, so Placeholder in those fields can only be a
+// real value typed by mistake: it is ErrPlaceholderReserved and nothing is merged.
+// Neither spec is modified.
+func MergeMaskedSpec(current, submitted swarm.ServiceSpec, reveal bool) (swarm.ServiceSpec, error) {
+	return submitted, nil
+}
+
+// ScrubServiceText returns text with every secret-bearing value of spec replaced by Placeholder:
+// the values of its environment, each element of its Command and Args, the command of its health
+// check and the values of its log options. Docker echoes parts of a spec in some of its error
+// messages, and a caller who may not reveal secrets must not read them there (Pitfall 7). A value
+// shorter than four characters is left alone, since it cannot be told from the prose around it.
+func ScrubServiceText(text string, spec swarm.ServiceSpec) string {
+	return text
 }

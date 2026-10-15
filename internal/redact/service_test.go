@@ -5,6 +5,8 @@ package redact_test
 
 import (
 	"encoding/json"
+	"errors"
+	"maps"
 	"os"
 	"reflect"
 	"slices"
@@ -299,5 +301,219 @@ func TestServiceAndContainerMaskingAgree(t *testing.T) {
 				t.Errorf("the %s fixture has no %s secret %q", name, kind, token)
 			}
 		}
+	}
+}
+
+// MergeMaskedSpec puts back what the caller could not see (plan 06-18, D-09, D-39).
+
+func merge(t *testing.T, current, submitted swarm.ServiceSpec, reveal bool) (swarm.ServiceSpec, error) {
+	t.Helper()
+	return redact.MergeMaskedSpec(current, submitted, reveal)
+}
+
+func TestMergeMaskedSpecEnvKeepsHiddenValuesPositionallyAndTakesWhatTheCallerTyped(t *testing.T) {
+	cur := specWith(func(cs *swarm.ContainerSpec, _ *swarm.TaskSpec) { cs.Env = []string{"A=1", "A=2", "B=3"} })
+	sub := specWith(func(cs *swarm.ContainerSpec, _ *swarm.TaskSpec) {
+		cs.Env = []string{"A=<hidden>", "A=<hidden>", "C=4"}
+	})
+	got, err := merge(t, cur, sub, false)
+	if err != nil {
+		t.Fatalf("MergeMaskedSpec: %v", err)
+	}
+	if want := []string{"A=1", "A=2", "C=4"}; !slices.Equal(got.TaskTemplate.ContainerSpec.Env, want) {
+		t.Fatalf("Env = %v, want %v (B removed, C added)", got.TaskTemplate.ContainerSpec.Env, want)
+	}
+	// A real value replaces the old one, a name-only entry stays as written.
+	sub = specWith(func(cs *swarm.ContainerSpec, _ *swarm.TaskSpec) { cs.Env = []string{"A=new", "A=<hidden>", "NAMEONLY"} })
+	got, err = merge(t, cur, sub, false)
+	if want := []string{"A=new", "A=2", "NAMEONLY"}; err != nil || !slices.Equal(got.TaskTemplate.ContainerSpec.Env, want) {
+		t.Fatalf("Env = %v, %v; want %v", got.TaskTemplate.ContainerSpec.Env, err, want)
+	}
+}
+
+func TestMergeMaskedSpecAHiddenVariableTheServiceDoesNotHaveIsUnmatchedAndNamesIt(t *testing.T) {
+	cur := specWith(func(cs *swarm.ContainerSpec, _ *swarm.TaskSpec) { cs.Env = []string{"B=3"} })
+	sub := specWith(func(cs *swarm.ContainerSpec, _ *swarm.TaskSpec) { cs.Env = []string{"A=<hidden>"} })
+	_, err := merge(t, cur, sub, false)
+	var pe *redact.PlaceholderError
+	if !errors.Is(err, redact.ErrPlaceholderUnmatched) || !errors.As(err, &pe) || !strings.Contains(pe.Path, "A") {
+		t.Fatalf("err = %v, want ErrPlaceholderUnmatched naming A", err)
+	}
+	// One more hidden A than the service has is unmatched as well.
+	cur = specWith(func(cs *swarm.ContainerSpec, _ *swarm.TaskSpec) { cs.Env = []string{"A=1"} })
+	sub = specWith(func(cs *swarm.ContainerSpec, _ *swarm.TaskSpec) { cs.Env = []string{"A=<hidden>", "A=<hidden>"} })
+	if _, err := merge(t, cur, sub, false); !errors.Is(err, redact.ErrPlaceholderUnmatched) {
+		t.Fatalf("err = %v, want ErrPlaceholderUnmatched", err)
+	}
+}
+
+func TestMergeMaskedSpecCommandAndArgsEqualToThePlaceholderKeepTheCurrentArgv(t *testing.T) {
+	cur := specWith(func(cs *swarm.ContainerSpec, _ *swarm.TaskSpec) {
+		cs.Command = []string{"sh", "-c", "run --pw hunter2"}
+		cs.Args = []string{"--token", "t0ken"}
+	})
+	sub := specWith(func(cs *swarm.ContainerSpec, _ *swarm.TaskSpec) {
+		cs.Command = []string{"<hidden>"}
+		cs.Args = []string{"--token", "other"}
+	})
+	got, err := merge(t, cur, sub, false)
+	cs := got.TaskTemplate.ContainerSpec
+	if err != nil || !slices.Equal(cs.Command, []string{"sh", "-c", "run --pw hunter2"}) || !slices.Equal(cs.Args, []string{"--token", "other"}) {
+		t.Fatalf("Command = %v, Args = %v, %v", cs.Command, cs.Args, err)
+	}
+	// Args likewise.
+	sub = specWith(func(cs *swarm.ContainerSpec, _ *swarm.TaskSpec) { cs.Args = []string{"<hidden>"} })
+	got, err = merge(t, cur, sub, false)
+	if err != nil || !slices.Equal(got.TaskTemplate.ContainerSpec.Args, []string{"--token", "t0ken"}) || len(got.TaskTemplate.ContainerSpec.Command) != 0 {
+		t.Fatalf("Args = %v, Command = %v, %v", got.TaskTemplate.ContainerSpec.Args, got.TaskTemplate.ContainerSpec.Command, err)
+	}
+	// A placeholder with no argv behind it, or mixed into a longer argv, is unmatched.
+	empty := specWith(func(cs *swarm.ContainerSpec, _ *swarm.TaskSpec) {})
+	for name, in := range map[string][]string{"nothing to keep": {"<hidden>"}, "mixed": {"sh", "<hidden>"}} {
+		sub := specWith(func(cs *swarm.ContainerSpec, _ *swarm.TaskSpec) { cs.Command = in })
+		cur := cur
+		if name == "nothing to keep" {
+			cur = empty
+		}
+		if _, err := merge(t, cur, sub, false); !errors.Is(err, redact.ErrPlaceholderUnmatched) {
+			t.Errorf("%s: err = %v, want ErrPlaceholderUnmatched", name, err)
+		}
+	}
+}
+
+func TestMergeMaskedSpecAHiddenHealthCheckCommandKeepsTheCurrentOneUnderTheSubmittedMode(t *testing.T) {
+	cur := specWith(func(cs *swarm.ContainerSpec, _ *swarm.TaskSpec) {
+		cs.Healthcheck = &container.HealthConfig{Test: []string{"CMD", "curl", "-u", "a:secret", "http://x"}, Retries: 3}
+	})
+	sub := specWith(func(cs *swarm.ContainerSpec, _ *swarm.TaskSpec) {
+		cs.Healthcheck = &container.HealthConfig{Test: []string{"CMD-SHELL", "<hidden>"}, Retries: 5}
+	})
+	got, err := merge(t, cur, sub, false)
+	hc := got.TaskTemplate.ContainerSpec.Healthcheck
+	if err != nil || hc == nil || !slices.Equal(hc.Test, []string{"CMD-SHELL", "curl", "-u", "a:secret", "http://x"}) || hc.Retries != 5 {
+		t.Fatalf("Healthcheck = %+v, %v", hc, err)
+	}
+	// A health check typed anew is taken as it is; a hidden one with nothing behind it is unmatched.
+	sub = specWith(func(cs *swarm.ContainerSpec, _ *swarm.TaskSpec) {
+		cs.Healthcheck = &container.HealthConfig{Test: []string{"CMD", "true"}}
+	})
+	if got, err := merge(t, cur, sub, false); err != nil || !slices.Equal(got.TaskTemplate.ContainerSpec.Healthcheck.Test, []string{"CMD", "true"}) {
+		t.Fatalf("typed health check = %+v, %v", got.TaskTemplate.ContainerSpec.Healthcheck, err)
+	}
+	none := specWith(func(cs *swarm.ContainerSpec, _ *swarm.TaskSpec) {})
+	hidden := specWith(func(cs *swarm.ContainerSpec, _ *swarm.TaskSpec) {
+		cs.Healthcheck = &container.HealthConfig{Test: []string{"CMD", "<hidden>"}}
+	})
+	if _, err := merge(t, none, hidden, false); !errors.Is(err, redact.ErrPlaceholderUnmatched) {
+		t.Fatalf("err = %v, want ErrPlaceholderUnmatched", err)
+	}
+}
+
+func TestMergeMaskedSpecLogOptionsKeepTheHiddenValueAndTakeTheTypedOne(t *testing.T) {
+	cur := specWith(func(_ *swarm.ContainerSpec, tt *swarm.TaskSpec) {
+		tt.LogDriver = &swarm.Driver{Name: "splunk", Options: map[string]string{"a": "va", "b": "vb", "gone": "x"}}
+	})
+	sub := specWith(func(_ *swarm.ContainerSpec, tt *swarm.TaskSpec) {
+		tt.LogDriver = &swarm.Driver{Name: "splunk", Options: map[string]string{"a": "<hidden>", "b": "typed", "c": "vc"}}
+	})
+	got, err := merge(t, cur, sub, false)
+	want := map[string]string{"a": "va", "b": "typed", "c": "vc"}
+	if err != nil || !maps.Equal(got.TaskTemplate.LogDriver.Options, want) {
+		t.Fatalf("Options = %v, %v; want %v (gone removed)", got.TaskTemplate.LogDriver.Options, err, want)
+	}
+	// An option the service does not have, or a changed driver, has nothing to stand for.
+	for name, drv := range map[string]*swarm.Driver{
+		"no such option": {Name: "splunk", Options: map[string]string{"zzz": "<hidden>"}},
+		"other driver":   {Name: "syslog", Options: map[string]string{"a": "<hidden>"}},
+	} {
+		sub := specWith(func(_ *swarm.ContainerSpec, tt *swarm.TaskSpec) { tt.LogDriver = drv })
+		if _, err := merge(t, cur, sub, false); !errors.Is(err, redact.ErrPlaceholderUnmatched) {
+			t.Errorf("%s: err = %v, want ErrPlaceholderUnmatched", name, err)
+		}
+	}
+}
+
+func TestMergeMaskedSpecWithRevealAnyPlaceholderInASecretFieldIsReserved(t *testing.T) {
+	cur := specWith(func(cs *swarm.ContainerSpec, _ *swarm.TaskSpec) { cs.Env = []string{"A=1"} })
+	for name, sub := range map[string]swarm.ServiceSpec{
+		"env":     specWith(func(cs *swarm.ContainerSpec, _ *swarm.TaskSpec) { cs.Env = []string{"A=<hidden>"} }),
+		"command": specWith(func(cs *swarm.ContainerSpec, _ *swarm.TaskSpec) { cs.Command = []string{"<hidden>"} }),
+		"args":    specWith(func(cs *swarm.ContainerSpec, _ *swarm.TaskSpec) { cs.Args = []string{"x", "<hidden>"} }),
+		"health": specWith(func(cs *swarm.ContainerSpec, _ *swarm.TaskSpec) {
+			cs.Healthcheck = &container.HealthConfig{Test: []string{"CMD", "<hidden>"}}
+		}),
+		"log option": specWith(func(_ *swarm.ContainerSpec, tt *swarm.TaskSpec) {
+			tt.LogDriver = &swarm.Driver{Name: "x", Options: map[string]string{"a": "<hidden>"}}
+		}),
+	} {
+		_, err := merge(t, cur, sub, true)
+		var pe *redact.PlaceholderError
+		if !errors.Is(err, redact.ErrPlaceholderReserved) || !errors.As(err, &pe) || pe.Path == "" {
+			t.Errorf("%s: err = %v, want ErrPlaceholderReserved with a path", name, err)
+		}
+	}
+	// With reveal and no placeholder the submitted spec is taken as it is.
+	sub := specWith(func(cs *swarm.ContainerSpec, _ *swarm.TaskSpec) { cs.Env = []string{"A=typed"} })
+	if got, err := merge(t, cur, sub, true); err != nil || !slices.Equal(got.TaskTemplate.ContainerSpec.Env, []string{"A=typed"}) {
+		t.Fatalf("reveal without a placeholder = %+v, %v", got.TaskTemplate.ContainerSpec, err)
+	}
+}
+
+func TestMergeMaskedSpecRoundTripsAMaskedSpecAndChangesNeitherInput(t *testing.T) {
+	cur := specWith(func(cs *swarm.ContainerSpec, tt *swarm.TaskSpec) {
+		cs.Env = []string{"DB=postgres://u:pw@h/db", "MODE=prod", "BARE"}
+		cs.Command = []string{"app", "--key=k"}
+		cs.Args = []string{"serve"}
+		cs.Healthcheck = &container.HealthConfig{Test: []string{"CMD-SHELL", "wget -q --header=X:secret localhost"}}
+		tt.LogDriver = &swarm.Driver{Name: "gelf", Options: map[string]string{"gelf-address": "udp://tok@h:12201"}}
+	})
+	masked, was := redact.MaskServiceSpec(cur, false)
+	if !was {
+		t.Fatal("fixture was not masked")
+	}
+	snapCur, snapMasked := mustJSON(t, cur), mustJSON(t, masked)
+	got, err := merge(t, cur, masked, false)
+	if err != nil {
+		t.Fatalf("MergeMaskedSpec: %v", err)
+	}
+	if mustJSON(t, got) != snapCur {
+		t.Errorf("a masked spec sent back untouched did not round-trip:\n got %s\nwant %s", mustJSON(t, got), snapCur)
+	}
+	if mustJSON(t, cur) != snapCur || mustJSON(t, masked) != snapMasked {
+		t.Error("MergeMaskedSpec modified one of its inputs")
+	}
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// ScrubServiceText keeps a value Docker echoes out of an error (Pitfall 7).
+
+func TestScrubServiceTextReplacesEverySecretBearingValueOfTheSpec(t *testing.T) {
+	spec := specWith(func(cs *swarm.ContainerSpec, tt *swarm.TaskSpec) {
+		cs.Env = []string{"DB=postgres://u:hunter2@h/db", "SHORT=ab", "NAME"}
+		cs.Command = []string{"app", "--key=k3y"}
+		cs.Healthcheck = &container.HealthConfig{Test: []string{"CMD", "probe", "tokenvalue"}}
+		tt.LogDriver = &swarm.Driver{Name: "gelf", Options: map[string]string{"addr": "udp://logtoken@h"}}
+	})
+	text := "invalid env postgres://u:hunter2@h/db, command app --key=k3y, probe tokenvalue, udp://logtoken@h"
+	got := redact.ScrubServiceText(text, spec)
+	for _, secret := range []string{"hunter2", "k3y", "tokenvalue", "logtoken"} {
+		if strings.Contains(got, secret) {
+			t.Errorf("scrubbed text %q still holds %q", got, secret)
+		}
+	}
+	if !strings.Contains(got, redact.Placeholder) || !strings.Contains(got, "invalid env") {
+		t.Errorf("scrubbed text = %q, want the message kept around the placeholders", got)
+	}
+	// Values too short to be told from prose are not scrubbed, so an ordinary word survives.
+	if got := redact.ScrubServiceText("a bad value: ab", spec); got != "a bad value: ab" {
+		t.Errorf("a two-character value was scrubbed: %q", got)
 	}
 }

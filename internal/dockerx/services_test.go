@@ -471,3 +471,102 @@ func TestServiceRemoveOfAnUnknownServiceIsNotFound(t *testing.T) {
 		t.Fatalf("err = %v, want ErrServiceNotFound", err)
 	}
 }
+
+// ServiceUpdate (plan 06-18, RES-03, D-03, D-08).
+
+const editedSpec = `{"Name":"web","Labels":{"com.docker.stack.namespace":"shop"},"TaskTemplate":{"ContainerSpec":{"Image":"registry.example.com/web:2@sha256:abc","Env":["A=1"]}},"Mode":{"Replicated":{"Replicas":4}}}`
+
+func TestServiceUpdateSendsTheWholeSpecOnceWithTheVersionTheCredentialAndNoRegistryQuery(t *testing.T) {
+	c, fake := serviceFake(t)
+	warnings, err := c.ServiceUpdate(context.Background(), "web-id", 7, json.RawMessage(editedSpec), "Zm9v")
+	if err != nil || len(warnings) != 0 {
+		t.Fatalf("ServiceUpdate = %v, %v", warnings, err)
+	}
+	ups := fake.ServiceUpdates()
+	if len(ups) != 1 {
+		t.Fatalf("updates = %+v, want exactly one", ups)
+	}
+	u := ups[0]
+	if u.ServiceID != "web-id" || u.Version != "7" || u.Auth != "Zm9v" {
+		t.Errorf("update = %+v, want version 7 and the credential", u)
+	}
+	if got := u.Query.Get("registryAuthFrom") + u.Query.Get("rollback"); got != "" {
+		t.Errorf("query = %v, want only the version", u.Query)
+	}
+	cs := u.Spec.TaskTemplate.ContainerSpec
+	if cs == nil || cs.Image != "registry.example.com/web:2@sha256:abc" || !slices.Equal(cs.Env, []string{"A=1"}) ||
+		u.Spec.Mode.Replicated == nil || *u.Spec.Mode.Replicated.Replicas != 4 {
+		t.Errorf("the spec the daemon received is not the one sent: %+v", u.Spec)
+	}
+	if got := fake.Writes(); !slices.Equal(got, []string{"POST /services/web-id/update?version=7"}) {
+		t.Errorf("writes = %v", got)
+	}
+}
+
+func TestServiceUpdateRefusesUnknownFieldsAndTrailingDataBeforeAnyCall(t *testing.T) {
+	c, fake := serviceFake(t)
+	for name, raw := range map[string]string{
+		"unknown field": `{"Name":"web","Bogus":1}`,
+		"wrong type":    `{"Name":5}`,
+		"not json":      `{"Name":`,
+		"trailing data": editedSpec + ` {}`,
+		"empty":         ``,
+	} {
+		_, err := c.ServiceUpdate(context.Background(), "web-id", 7, json.RawMessage(raw), "")
+		if !errors.Is(err, dockerx.ErrServiceSpecInvalid) {
+			t.Errorf("%s: err = %v, want ErrServiceSpecInvalid", name, err)
+		}
+	}
+	if got := fake.Writes(); len(got) != 0 {
+		t.Errorf("writes = %v, want none: a spec that does not decode is never sent", got)
+	}
+}
+
+func TestServiceUpdateWithAStaleVersionIsServiceChangedAndSendsNoSecondUpdate(t *testing.T) {
+	c, fake := serviceFake(t)
+	_, err := c.ServiceUpdate(context.Background(), "web-id", 6, json.RawMessage(editedSpec), "")
+	if !errors.Is(err, dockerx.ErrServiceChanged) {
+		t.Fatalf("err = %v, want ErrServiceChanged", err)
+	}
+	if got := len(fake.Writes()); got != 1 {
+		t.Errorf("writes = %d, want exactly one: a refused write is never retried", got)
+	}
+	if got := len(fake.ServiceUpdates()); got != 0 {
+		t.Errorf("accepted updates = %d, want none", got)
+	}
+}
+
+func TestServiceUpdateOfAnUnknownServiceIsNotFound(t *testing.T) {
+	c, _ := serviceFake(t)
+	if _, err := c.ServiceUpdate(context.Background(), "nope", 1, json.RawMessage(editedSpec), ""); !errors.Is(err, dockerx.ErrServiceNotFound) {
+		t.Fatalf("err = %v, want ErrServiceNotFound", err)
+	}
+}
+
+func TestServiceUpdateReturnsTheDaemonsWarnings(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{
+		SwarmState: "active", SwarmControl: true,
+		ServiceRows: []dockertest.FakeService{{ID: "web-id", Name: "web", Version: 3, UpdateWarnings: []string{"unable to pin image"}}},
+	})
+	c := newClient(t, fake)
+	warnings, err := c.ServiceUpdate(context.Background(), "web-id", 3, json.RawMessage(editedSpec), "")
+	if err != nil || !slices.Equal(warnings, []string{"unable to pin image"}) {
+		t.Fatalf("ServiceUpdate = %v, %v; want the daemon's warning", warnings, err)
+	}
+}
+
+func TestServiceUpdateTheDaemonsRefusalOfASpecKeepsItsWords(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{
+		SwarmState: "active", SwarmControl: true,
+		ServiceRows: []dockertest.FakeService{{ID: "web-id", Name: "web", Version: 3, UpdateError: "secret not found: db_password"}},
+	})
+	c := newClient(t, fake)
+	_, err := c.ServiceUpdate(context.Background(), "web-id", 3, json.RawMessage(editedSpec), "")
+	var rej *dockerx.SpecRejectedError
+	if !errors.As(err, &rej) || rej.Message == "" || !strings.Contains(rej.Message, "secret not found: db_password") {
+		t.Fatalf("err = %v, want a SpecRejectedError with the daemon's words", err)
+	}
+	if got := len(fake.Writes()); got != 1 {
+		t.Errorf("writes = %d, want exactly one", got)
+	}
+}

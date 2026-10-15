@@ -270,6 +270,11 @@ type FakeService struct {
 	// RollbackError, when set, makes a rollback of the service answer 400 with this text, as a
 	// manager does when the previous spec names a secret, a config or a network that is gone.
 	RollbackError string
+	// UpdateError, when set, makes an update of the service answer 400 with this text, as a
+	// manager does for a spec it cannot accept (a secret or config that does not exist, a
+	// field it refuses). UpdateWarnings are the warnings an accepted update answers with.
+	UpdateError    string
+	UpdateWarnings []string
 }
 
 // FakeServiceMount is one mount of a service's container spec. Type is "volume",
