@@ -111,22 +111,24 @@ type EnvJoinToken struct {
 }
 
 type Environment struct {
-	ID               string
-	Kind             string
-	Name             string
-	SocketPath       string
-	Enabled          int64
-	CreatedAt        int64
-	UpdatedAt        int64
-	EnvType          sql.NullString
-	SwarmClusterID   sql.NullString
-	EngineID         sql.NullString
-	ClusterChangedAt sql.NullInt64
-	AutoUpdate       int64
-	PendingClusterID sql.NullString
-	NameAuto         int64
-	LocalNodeID      sql.NullString
-	LocalSocketPath  sql.NullString
+	ID                       string
+	Kind                     string
+	Name                     string
+	SocketPath               string
+	Enabled                  int64
+	CreatedAt                int64
+	UpdatedAt                int64
+	EnvType                  sql.NullString
+	SwarmClusterID           sql.NullString
+	EngineID                 sql.NullString
+	ClusterChangedAt         sql.NullInt64
+	AutoUpdate               int64
+	PendingClusterID         sql.NullString
+	NameAuto                 int64
+	LocalNodeID              sql.NullString
+	LocalSocketPath          sql.NullString
+	RestartLoopFailures      int64
+	RestartLoopWindowMinutes int64
 }
 
 type OwnedResource struct {
@@ -163,6 +165,15 @@ type RegistryCredential struct {
 	CreatedAt       int64
 	UpdatedAt       int64
 	CreatedBy       string
+}
+
+type RestartLoopMute struct {
+	EnvID    string
+	Kind     string
+	TargetID string
+	Name     string
+	MutedBy  string
+	MutedAt  int64
 }
 
 type Role struct {
