@@ -178,6 +178,16 @@ var routes = []route{
 		registryAuth: true,
 	},
 
+	// Secrets. The list sits ahead of the inspect so GET /secrets is never read as an
+	// inspect (Pitfall 19), and none of the four takes a query key: the list takes no filter,
+	// and a secret's value is never an answer, because the engine does not return one (E17).
+	// The create takes a name, labels and the value, and refuses a driver and templating in
+	// its body validator. An update is absent on purpose: a secret is replaced, not edited.
+	{name: "secrets list", method: http.MethodGet, path: pathOf(`secrets`)},
+	{name: "secret inspect", method: http.MethodGet, path: pathOf(`secrets/` + idShape)},
+	{name: "secret create", method: http.MethodPost, path: pathOf(`secrets/create`), body: BodySecretCreate},
+	{name: "secret remove", method: http.MethodDelete, path: pathOf(`secrets/` + idShape)},
+
 	// Container lifecycle.
 	{name: "container start", method: http.MethodPost, path: pathOf(`containers/` + idShape + `/start`)},
 	{name: "container pause", method: http.MethodPost, path: pathOf(`containers/` + idShape + `/pause`)},

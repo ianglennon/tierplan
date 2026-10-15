@@ -37,11 +37,18 @@ const maxBody = 64 << 10
 // (environment, mounts, labels, healthcheck, secret and config references).
 const maxServiceSpecBody = 256 << 10
 
+// maxSecretBody caps a secret create: a value of 511,999 bytes is about 683 KB as base64 in
+// JSON, so the cap is 1 MiB (D-40).
+const maxSecretBody = 1 << 20
+
 // bodyCap is the most bytes a body of one kind may have. A body over the cap is
 // refused, never cut short.
 func bodyCap(kind BodyKind) int64 {
-	if kind == BodyServiceSpec {
+	switch kind {
+	case BodyServiceSpec:
 		return maxServiceSpecBody
+	case BodySecretCreate:
+		return maxSecretBody
 	}
 	return maxBody
 }
@@ -112,6 +119,8 @@ func validateBody(kind BodyKind, r io.Reader, env bodyEnv) ([]byte, error) {
 		clean, err = validateServiceSpec(raw, env)
 	case BodyNodeSpec:
 		clean, err = validateNodeSpec(raw)
+	case BodySecretCreate:
+		clean, err = validateSecretCreate(raw)
 	default:
 		return nil, refuse("a route with no body kind has no validator")
 	}
@@ -386,6 +395,37 @@ func validateVolumeCreate(raw []byte) (volume.CreateRequest, error) {
 	}
 	if err := checkMap("DriverOpts", clean.DriverOpts); err != nil {
 		return in, err
+	}
+	if err := checkMap("Labels", clean.Labels); err != nil {
+		return in, err
+	}
+	return clean, nil
+}
+
+// validateSecretCreate decodes a secret to create into the engine's own swarm.SecretSpec with
+// unknown fields refused and rebuilds it from a name, labels and the value. A Driver or
+// Templating is refused: a secrets driver is a plugin that runs privileged code and a template
+// is evaluated by the swarm, and Bayplan offers neither. The value is checked for size only; it
+// is never logged, and a refusal names the rule and not the bytes.
+func validateSecretCreate(raw []byte) (swarm.SecretSpec, error) {
+	var in swarm.SecretSpec
+	if err := decodeStrict(raw, &in); err != nil {
+		return in, err
+	}
+	clean := swarm.SecretSpec{
+		Annotations: swarm.Annotations{Name: in.Name, Labels: in.Labels},
+		Data:        in.Data,
+	}
+	if err := sameAsAllowlisted(in, clean); err != nil {
+		return in, err
+	}
+	switch {
+	case !secretNameRe.MatchString(clean.Name):
+		return in, refuse("the secret name is not a valid name")
+	case len(clean.Data) == 0:
+		return in, refuse("the secret has no value")
+	case len(clean.Data) > maxSecretData:
+		return in, refuse("the secret value is over %d bytes", maxSecretData)
 	}
 	if err := checkMap("Labels", clean.Labels); err != nil {
 		return in, err

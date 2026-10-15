@@ -146,9 +146,10 @@ func servicePorts(in []swarm.PortConfig) []ServicePort {
 type AgentTaskRow struct{ NodeID, State, Error string }
 
 // ServiceRef is what one swarm service's spec mentions, whatever its tasks are doing:
-// the networks it attaches to, by network ID, and the volumes it mounts, by name. A
-// service scaled to zero still mentions them, which is why the rules for deleting a
-// network or a volume read specs and not tasks (D-41, RESEARCH Pitfall 7).
+// the networks it attaches to, by network ID, the volumes it mounts, by name, and the
+// secrets and configs it references. A service scaled to zero still mentions them, which is
+// why the rules for deleting a network, a volume, a secret or a config read specs and not
+// tasks (D-41, RESEARCH Pitfall 7).
 type ServiceRef struct {
 	ID, Name string
 	// Networks are network IDs. A spec that names a swarm network by name is resolved
@@ -398,7 +399,10 @@ func (c *Client) serviceRefsOf(ctx context.Context, cli *client.Client, services
 	}
 	refs := make([]ServiceRef, 0, len(services))
 	for _, s := range services {
-		ref := ServiceRef{ID: s.ID, Name: s.Spec.Name, Networks: []string{}, Volumes: []string{}, VolumeMounts: []ServiceVolumeMount{}}
+		ref := ServiceRef{
+			ID: s.ID, Name: s.Spec.Name, Networks: []string{}, Volumes: []string{}, VolumeMounts: []ServiceVolumeMount{},
+			Secrets: []ServiceObjectRef{}, Configs: []ServiceObjectRef{},
+		}
 		for _, a := range s.Spec.TaskTemplate.Networks {
 			target := a.Target
 			if id, ok := idOf[target]; ok {
@@ -418,6 +422,26 @@ func (c *Client) serviceRefsOf(ctx context.Context, cli *client.Client, services
 					ref.Volumes = append(ref.Volumes, m.Source)
 				}
 				ref.VolumeMounts = append(ref.VolumeMounts, ServiceVolumeMount{Source: m.Source, Target: m.Target, ReadOnly: m.ReadOnly})
+			}
+			for _, r := range cs.Secrets {
+				if r == nil {
+					continue
+				}
+				o := ServiceObjectRef{ID: r.SecretID, Name: r.SecretName}
+				if f := r.File; f != nil {
+					o.File, o.UID, o.GID, o.Mode = f.Name, f.UID, f.GID, uint32(f.Mode)
+				}
+				ref.Secrets = append(ref.Secrets, o)
+			}
+			for _, r := range cs.Configs {
+				if r == nil {
+					continue
+				}
+				o := ServiceObjectRef{ID: r.ConfigID, Name: r.ConfigName}
+				if f := r.File; f != nil {
+					o.File, o.UID, o.GID, o.Mode = f.Name, f.UID, f.GID, uint32(f.Mode)
+				}
+				ref.Configs = append(ref.Configs, o)
 			}
 		}
 		refs = append(refs, ref)

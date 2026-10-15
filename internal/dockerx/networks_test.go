@@ -233,10 +233,11 @@ func TestServiceRefsListsEachServicesNetworksAndVolumeMountsByIDWhateverItsTasks
 		t.Fatalf("ServiceRefs: %v", err)
 	}
 	want := []dockerx.ServiceRef{
-		{ID: "s1", Name: "idle", Networks: []string{"ovl-id-2"}, Volumes: []string{}, VolumeMounts: []dockerx.ServiceVolumeMount{}},
-		{ID: "s3", Name: "plain", Networks: []string{}, Volumes: []string{}, VolumeMounts: []dockerx.ServiceVolumeMount{}},
+		{ID: "s1", Name: "idle", Networks: []string{"ovl-id-2"}, Volumes: []string{}, VolumeMounts: []dockerx.ServiceVolumeMount{}, Secrets: []dockerx.ServiceObjectRef{}, Configs: []dockerx.ServiceObjectRef{}},
+		{ID: "s3", Name: "plain", Networks: []string{}, Volumes: []string{}, VolumeMounts: []dockerx.ServiceVolumeMount{}, Secrets: []dockerx.ServiceObjectRef{}, Configs: []dockerx.ServiceObjectRef{}},
 		{ID: "s2", Name: "web", Networks: []string{"ovl-id-1"}, Volumes: []string{"data"},
-			VolumeMounts: []dockerx.ServiceVolumeMount{{Source: "data", Target: "/var/lib/data", ReadOnly: true}}},
+			VolumeMounts: []dockerx.ServiceVolumeMount{{Source: "data", Target: "/var/lib/data", ReadOnly: true}},
+			Secrets:      []dockerx.ServiceObjectRef{}, Configs: []dockerx.ServiceObjectRef{}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ServiceRefs = %+v, want %+v (sorted by name, names resolved to IDs, only volume mounts)", got, want)
