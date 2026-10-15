@@ -520,6 +520,9 @@ export function ServiceEditorPage({
     );
   }
 
+  // A review is out and the editor is still the page: the button reads Checking….
+  const reviewing = review$.isPending && stage === "edit";
+
   const refusal = editError
     ? editRefusalOf(t, editError, {
         environment,
@@ -542,66 +545,74 @@ export function ServiceEditorPage({
       {/* The editor stays in the page while the review or the apply shows, so its text is
           still there when a person goes back to it. */}
       <div hidden={stage !== "edit"} className="flex flex-col gap-4">
-        <Tabs value={tab} onValueChange={(next) => showTab(next as EditorTab)}>
-          <TabsList aria-label={t("serviceForm.tabs.label")} className="h-10">
-            <TabsTrigger value="form" className="px-4 max-md:min-h-11">
-              {t("serviceForm.tabs.form")}
-            </TabsTrigger>
-            <TabsTrigger value="spec" className="px-4 max-md:min-h-11">
-              {t("serviceForm.tabs.spec")}
-            </TabsTrigger>
-          </TabsList>
-          {refused ? (
-            <p
-              ref={refusedRef}
-              tabIndex={-1}
-              role="alert"
-              className="text-sm text-destructive outline-none"
-            >
-              {t("serviceForm.tabs.refused")}
-            </p>
-          ) : null}
-          <TabsContent value="form" className="pt-2">
-            <ServiceForm
-              key={editorKey}
-              spec={spec}
-              mode={mode}
-              envId={envId}
-              staged={staged}
-              onSpecChange={onChange}
-              onValidityChange={setFormValid}
-              onOpenSpec={() => showTab("spec")}
-            />
-          </TabsContent>
-          <TabsContent value="spec" className="pt-2">
-            <SpecEditor
-              key={`${editorKey}-${specOpened}`}
-              initial={current}
-              start={spec}
-              onChange={onChange}
-              onValidityChange={setValid}
-            />
-          </TabsContent>
-        </Tabs>
-        {refusal ? (
-          <>
-            {refusal.agentPolicy ? (
-              <AgentUpdateNotice envId={envId} />
-            ) : (
-              <Alert variant="destructive">
-                <CircleX aria-hidden="true" />
-                <AlertDescription className="break-words">{refusal.message}</AlertDescription>
-              </Alert>
-            )}
-            {refusal.reload ? (
-              <div>
-                <Button type="button" className="max-md:h-11" onClick={() => void reload()}>
-                  {t("specEditor.page.reload")}
-                </Button>
-              </div>
+        {/* The editor cannot change under a review on its way, so the review judges what the
+            person sees. The footer stays outside, so Checking… is still announced. */}
+        <div
+          inert={reviewing ? true : undefined}
+          aria-busy={reviewing ? true : undefined}
+          className="flex flex-col gap-4"
+        >
+          <Tabs value={tab} onValueChange={(next) => showTab(next as EditorTab)}>
+            <TabsList aria-label={t("serviceForm.tabs.label")} className="h-10">
+              <TabsTrigger value="form" className="px-4 max-md:min-h-11">
+                {t("serviceForm.tabs.form")}
+              </TabsTrigger>
+              <TabsTrigger value="spec" className="px-4 max-md:min-h-11">
+                {t("serviceForm.tabs.spec")}
+              </TabsTrigger>
+            </TabsList>
+            {refused ? (
+              <p
+                ref={refusedRef}
+                tabIndex={-1}
+                role="alert"
+                className="text-sm text-destructive outline-none"
+              >
+                {t("serviceForm.tabs.refused")}
+              </p>
             ) : null}
-          </>
-        ) : null}
+            <TabsContent value="form" className="pt-2">
+              <ServiceForm
+                key={editorKey}
+                spec={spec}
+                mode={mode}
+                envId={envId}
+                staged={staged}
+                onSpecChange={onChange}
+                onValidityChange={setFormValid}
+                onOpenSpec={() => showTab("spec")}
+              />
+            </TabsContent>
+            <TabsContent value="spec" className="pt-2">
+              <SpecEditor
+                key={`${editorKey}-${specOpened}`}
+                initial={current}
+                start={spec}
+                onChange={onChange}
+                onValidityChange={setValid}
+              />
+            </TabsContent>
+          </Tabs>
+          {refusal ? (
+            <>
+              {refusal.agentPolicy ? (
+                <AgentUpdateNotice envId={envId} />
+              ) : (
+                <Alert variant="destructive">
+                  <CircleX aria-hidden="true" />
+                  <AlertDescription className="break-words">{refusal.message}</AlertDescription>
+                </Alert>
+              )}
+              {refusal.reload ? (
+                <div>
+                  <Button type="button" className="max-md:h-11" onClick={() => void reload()}>
+                    {t("specEditor.page.reload")}
+                  </Button>
+                </div>
+              ) : null}
+            </>
+          ) : null}
+        </div>
         <EditFooter
           envId={envId}
           serviceId={serviceId}
