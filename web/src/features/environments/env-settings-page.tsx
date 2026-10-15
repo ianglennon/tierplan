@@ -22,6 +22,7 @@ import { NodeTable } from "@/features/environments/node-table";
 import { ReasonText } from "@/features/environments/reason-text";
 import { RemoveEnvironmentCard } from "@/features/environments/remove-environment-card";
 import { SettingsCard } from "@/features/environments/settings-card";
+import { RestartLoopCard } from "@/features/restart-loop/restart-loop-card";
 import { settingsQuery } from "@/features/settings/general-form";
 import { hasPermission, useMe } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -178,7 +179,8 @@ interface EnvSettingsPageProps {
 }
 
 // EnvSettingsPage is the Settings tab of Settings > Environments > {env} (D-38): the
-// cards General, Connection, Nodes and agents, Join token and Agent updates, and
+// cards General, Connection, Nodes and agents, Join token, Agent updates and Restart-loop
+// detection (plan 06-35), and
 // Remove environment last (D-30). The breadcrumb, the title and the tab bar
 // (Settings, Access) belong to EnvSettingsLayout around it, which also answers
 // while the environment loads, is gone or is not the caller's to open. The page is
@@ -236,6 +238,7 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
       ) : null}
       {canToken && env.kind === "agent" ? <JoinTokenCard envId={env.id} /> : null}
       {canConfigure && canRead && env.kind === "agent" ? <AgentUpdatesCard env={env} /> : null}
+      {canConfigure ? <RestartLoopCard envId={env.id} /> : null}
       {canToken && env.kind === "agent" ? (
         <InstallDialog
           open={rotating}

@@ -19,10 +19,15 @@ interface CountTileProps {
   // Without one it is static: no hover state, not focusable (UI-SPEC).
   to?: LinkProps["to"];
   params?: LinkProps["params"];
+  // The destination's search, such as the services list filtered to restart loops.
+  search?: LinkProps["search"];
   // A skeleton replaces the value while the count loads.
   loading?: boolean;
   // The value shows "—" when the count could not be read.
   error?: boolean;
+  // An offline dot before the label while the value is above zero: the restart-loop tile, which
+  // counts a problem. The numerals stay the foreground colour (UI-SPEC "CountTile").
+  dot?: "offline";
   // A swarm's per-node share of the value, for a tooltip on desktop. Radix
   // tooltips ignore touch, and the trigger is the tile itself, so this adds no
   // tap target and no second tab stop (UI-SPEC: per-node breakdown on touch).
@@ -43,8 +48,10 @@ export function CountTile({
   subline,
   to,
   params,
+  search,
   loading,
   error,
+  dot,
   breakdown,
 }: CountTileProps) {
   const t = useT();
@@ -53,9 +60,20 @@ export function CountTile({
     error || value === undefined
       ? t("dashboard.engine.missing")
       : new Intl.NumberFormat().format(value);
+  const showDot = dot === "offline" && !loading && !error && value !== undefined && value > 0;
   const body = (
     <>
-      <span className="text-xs font-semibold text-muted-foreground">{label}</span>
+      {showDot ? (
+        <span className="flex items-center gap-1.5">
+          <span
+            aria-hidden="true"
+            className="inline-block size-2 shrink-0 rounded-full bg-status-offline"
+          />
+          <span className="text-xs font-semibold text-muted-foreground">{label}</span>
+        </span>
+      ) : (
+        <span className="text-xs font-semibold text-muted-foreground">{label}</span>
+      )}
       {loading ? (
         <Skeleton className="h-8 w-16" aria-hidden="true" />
       ) : (
@@ -71,6 +89,7 @@ export function CountTile({
     <Link
       to={to}
       params={params}
+      search={search}
       aria-busy={loading || undefined}
       className={cn(
         FRAME,

@@ -49,6 +49,7 @@ import {
 } from "@/features/resources/resource-table";
 import { useChosenKeys, useSelection } from "@/features/resources/selection";
 import { useEnvName } from "@/features/resources/use-env-name";
+import { MuteMenuItem } from "@/features/restart-loop/mute-menu-item";
 import { RestartLoopBadge } from "@/features/restart-loop/restart-loop-badge";
 import { scaleEligibility } from "@/features/services/eligibility";
 import { ForceUpdateDialog } from "@/features/services/force-update-dialog";
@@ -117,7 +118,9 @@ interface RowActionsProps {
 // RowActions is the row menu of the services list. Open goes to the service's page; Scale… is
 // for replicated services only; Force update… and Roll back… are for every service, Roll back…
 // unavailable with the reason when the service has no earlier version. Remove…, last and in
-// destructive text, needs Admin and is unavailable for a service a stack owns. A caller below the
+// destructive text, needs Admin and is unavailable for a service a stack owns. A service in a
+// restart loop also has Mute or Unmute restart-loop alerts, which a quiet service does not (the
+// list does not know whether a quiet service is muted; its page does). A caller below the
 // permission sees them disabled with the reason (D-19). The server decides either way.
 function RowActions({
   envId,
@@ -199,6 +202,15 @@ function RowActions({
             onRollback(service);
           }}
         />
+        {service.restartLoop ? (
+          <MuteMenuItem
+            envId={envId}
+            serviceId={service.id}
+            name={service.name}
+            muted={service.restartLoop.state === "muted"}
+            needs={needs}
+          />
+        ) : null}
         <DropdownMenuSeparator />
         <RemoveServiceMenuItem
           stack={service.stack}

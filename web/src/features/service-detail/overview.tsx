@@ -145,6 +145,10 @@ function ServiceCard({ detail }: { detail: ServiceDetail }) {
           { key: t(`${key}.service.created`), value: <RelativeTime value={detail.createdAt} /> },
           { key: t(`${key}.service.updated`), value: <RelativeTime value={detail.updatedAt} /> },
           { key: t(`${key}.service.stack`), value: detail.stack || missing },
+          {
+            key: t(`${key}.service.restartAlerts`),
+            value: t(`${key}.service.${detail.muted ? "alertsMuted" : "alertsOn"}`),
+          },
         ]}
       />
     </SettingsCard>

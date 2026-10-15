@@ -15,7 +15,50 @@
       "body_other": "{{count}} tasks failed in the last {{window}}.",
       "latest_one": "{{count}} task failed in the last {{window}}. Latest error: {{error}}",
       "latest_other": "{{count}} tasks failed in the last {{window}}. Latest error: {{error}}",
-      "viewFailed": "View failed tasks"
+      "viewFailed": "View failed tasks",
+      "mute": "Mute alerts"
+    },
+    "muted": {
+      "badge": "Muted",
+      "tooltipService": "Restart-loop alerts are muted for this service. Unmute them from the More menu.",
+      "tooltipContainer": "Restart-loop alerts are muted for this container. Unmute them from the More menu."
+    },
+    "mute": {
+      "mute": "Mute restart-loop alerts",
+      "unmute": "Unmute restart-loop alerts",
+      "done": "Muted restart-loop alerts for {{name}}.",
+      "undone": "Unmuted restart-loop alerts for {{name}}.",
+      "failed": "Couldn't change the restart-loop alerts for {{name}}. Try again."
+    },
+    "bell": {
+      "title": "{{env}}: {{name}} is in a restart loop",
+      "open": "Open service",
+      "manyTitle_one": "{{env}}: {{count}} service is in a restart loop",
+      "manyTitle_other": "{{env}}: {{count}} services are in a restart loop",
+      "manyBody": "See which, or mute the ones that are meant to fail.",
+      "manyShow": "Show services"
+    },
+    "tile": {
+      "label": "Restart loops",
+      "subline": "services failing repeatedly",
+      "none": "None right now",
+      "muted": "{{count}} muted"
+    },
+    "settings": {
+      "title": "Restart-loop detection",
+      "caption": "Flag a service, or a container with a restart policy, that keeps failing.",
+      "failures": "Failed tasks",
+      "failuresHelper": "How many failures inside the window raise the flag.",
+      "window": "Within (minutes)",
+      "windowHelper": "The flag clears after a full window with no new failures.",
+      "failuresInvalid": "Enter a whole number from 2 to 50.",
+      "windowInvalid": "Enter a whole number from 1 to 120.",
+      "retention": "Docker keeps {{kept}} failed tasks per slot. Bayplan also counts failures it saw in earlier checks, so a value above {{kept}} is met reliably only by loops slower than its 15-second check.",
+      "save": "Save settings",
+      "saving": "Saving…",
+      "saved": "Settings saved.",
+      "saveFailed": "Couldn't save the settings. Check the connection and try again.",
+      "loadFailed": "Couldn't load the settings."
     }
   }
 }

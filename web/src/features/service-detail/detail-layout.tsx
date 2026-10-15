@@ -179,7 +179,7 @@ function Header({ envId, data }: { envId: string; data: ServiceDetail }) {
             </Badge>
           ) : null}
           {data.agent ? <SelfContainerBadge kind="agent-service" /> : null}
-          {data.restartLoop ? <RestartLoopBadge loop={data.restartLoop} /> : null}
+          <RestartLoopBadge loop={data.restartLoop} muted={data.muted} />
         </div>
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
           {data.image.ref ? (

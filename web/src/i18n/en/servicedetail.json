@@ -106,7 +106,10 @@
         "replicasValue_other": "{{running}} of {{count}} tasks running",
         "created": "Created",
         "updated": "Updated",
-        "stack": "Stack"
+        "stack": "Stack",
+        "restartAlerts": "Restart-loop alerts",
+        "alertsOn": "On",
+        "alertsMuted": "Muted"
       },
       "scaledToZero": {
         "text": "Scaled to 0 replicas",

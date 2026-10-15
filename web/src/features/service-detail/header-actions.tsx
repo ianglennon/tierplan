@@ -17,6 +17,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { MuteMenuItem } from "@/features/restart-loop/mute-menu-item";
 import { ForceUpdateDialog } from "@/features/services/force-update-dialog";
 import {
   RemoveServiceDialog,
@@ -60,8 +61,8 @@ interface ServiceHeaderActionsProps {
 }
 
 // ServiceHeaderActions are the buttons in a service page's header: Edit…, Scale… (not for a
-// global service or a job), Force update… and More, which holds Roll back…, Copy service ID and,
-// last, Remove…. A caller below Operator sees the first four unavailable with the reason, and
+// global service or a job), Force update… and More, which holds Roll back…, Mute or Unmute
+// restart-loop alerts, Copy service ID and, last, Remove…. A caller below Operator sees the first four unavailable with the reason, and
 // Remove… needs Admin; the server decides either way. Scale, force update and roll back stay
 // available on a service that belongs to a stack, with the stack's warning in their dialogs, but
 // Edit… and Remove… do not: a stack's service is changed through the stack (D-05). Edit… is a
@@ -149,6 +150,13 @@ export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProp
             hasPreviousSpec={detail.hasPreviousSpec}
             needs={needs}
             onSelect={() => setRollingBack(true)}
+          />
+          <MuteMenuItem
+            envId={envId}
+            serviceId={detail.id}
+            name={detail.name}
+            muted={detail.muted}
+            needs={needs}
           />
           <DropdownMenuItem className="max-md:min-h-11" onSelect={() => void copyId()}>
             {t("servicedetail.actions.copyId")}

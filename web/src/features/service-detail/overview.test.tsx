@@ -110,6 +110,17 @@ describe("the Overview cards", () => {
     expect(c.getByText("shop")).toBeTruthy();
   });
 
+  it("says whether the restart-loop alerts are on or muted", async () => {
+    await overview();
+    const c = within(card("Service"));
+    expect(c.getByText("Restart-loop alerts")).toBeTruthy();
+    expect(c.getByText("On")).toBeTruthy();
+    cleanup();
+    queryClient.clear();
+    await overview(serviceDetail({ muted: true }));
+    expect(within(card("Service")).getByText("Muted")).toBeTruthy();
+  });
+
   it("uses the singular for one task", async () => {
     await overview(serviceDetail({ running: 1, desired: 1 }));
     expect(within(card("Service")).getByText("1 of 1 task running")).toBeTruthy();

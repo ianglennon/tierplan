@@ -5,7 +5,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { RestartLoopBadge } from "@/features/restart-loop/restart-loop-badge";
+import { type RestartLoop, RestartLoopBadge } from "@/features/restart-loop/restart-loop-badge";
 import "@/i18n";
 
 // The Restart loop badge (plan 06-34, RES-13, D-15, UI-SPEC "Restart loop" and Color
@@ -21,7 +21,7 @@ const LOOP = {
   since: "2026-10-14T09:00:00Z",
 };
 
-function mount(loop = LOOP) {
+function mount(loop: RestartLoop = LOOP) {
   return render(
     <TooltipProvider>
       <RestartLoopBadge loop={loop} />

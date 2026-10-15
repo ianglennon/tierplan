@@ -5,10 +5,13 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { CircleX, TriangleAlert } from "lucide-react";
 
+import { useSetRestartLoopMute } from "@/api/restart-loops";
 import { type RolloutState, type ServiceDetail, serviceRolloutQuery } from "@/api/services";
+import { NeedsTooltip } from "@/components/needs-tooltip";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ManagedByStackNotice } from "@/features/services/managed-by-stack-notice";
+import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 
 // The rollout states whose alert or progress region stays on the page. The replicas-short alert
@@ -28,9 +31,13 @@ interface ServiceAlertsProps {
 
 // RestartLoopAlert says the service's tasks keep failing (RES-13, D-14): the count and the
 // window, Docker's latest error as wrapping text, and a link to the Tasks tab with only the
-// failed tasks. The icon is the offline red, the alert the warning treatment.
+// failed tasks. The icon is the offline red, the alert the warning treatment. While the alerts
+// are not muted it offers Mute alerts (D-16); once they are, the Muted badge and the More menu
+// carry that, and the button is gone.
 function RestartLoopAlert({ envId, detail }: { envId: string; detail: ServiceDetail }) {
   const t = useT();
+  const needs = useNeeds("services.control", envId);
+  const mute = useSetRestartLoopMute(envId);
   const loop = detail.restartLoop;
   if (!loop) return null;
   const window = t("restartLoop.minutes", { count: loop.windowMinutes });
@@ -54,6 +61,24 @@ function RestartLoopAlert({ envId, detail }: { envId: string; detail: ServiceDet
             {t("restartLoop.alert.viewFailed")}
           </Link>
         </Button>
+        {loop.state === "flagged" ? (
+          <NeedsTooltip reason={needs.reason}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="max-md:h-11"
+              disabled={!needs.allowed && !needs.reason}
+              onClick={
+                needs.allowed
+                  ? () => mute.mutate({ serviceId: detail.id, name: detail.name, muted: true })
+                  : undefined
+              }
+            >
+              {t("restartLoop.alert.mute")}
+            </Button>
+          </NeedsTooltip>
+        ) : null}
       </div>
     </Alert>
   );
