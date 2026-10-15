@@ -96,6 +96,9 @@ type ContainersDeps struct {
 	Checker *rbac.Checker
 	// SelfContainerID is Bayplan's own container ID; empty when it cannot tell.
 	SelfContainerID string
+	// Clusters is the cluster reader whose last read says which containers are in a restart
+	// loop and which are muted (RES-13). Nil says none are.
+	Clusters *envs.Clusters
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
@@ -254,6 +257,9 @@ type ContainerDetailBody struct {
 	Project  string `json:"project" doc:"The compose project (com.docker.compose.project); empty when the container has none"`
 	Stack    string `json:"stack" doc:"The swarm stack namespace (com.docker.stack.namespace); empty when the container has none"`
 	Service  string `json:"service" doc:"The swarm service name (com.docker.swarm.service.name); empty when the container has none"`
+
+	RestartLoop *ContainerRestartLoopBody `json:"restartLoop,omitempty" doc:"Present while the container is in a restart loop: it died with a non-zero exit code the environment's threshold of times inside its window. Absent otherwise"`
+	Muted       bool                      `json:"muted" doc:"True when a user muted the container's restart-loop alerts, whether or not it is in a loop now. The mute is keyed by node and name"`
 }
 
 // ContainerDetailOutput wraps ContainerDetailBody for huma.
@@ -318,6 +324,12 @@ func RegisterContainers(r *httpx.Router, d ContainersDeps) {
 			}
 			reveal := redact.CanReveal(ctx, d.Checker, p, env.ID)
 			body := containerDetailBody(detail, nodeID, node, isSelf(detail.ID), reveal)
+			loops, muted := containerLoopsOf(d.Clusters, env.ID)
+			key := envs.ContainerLoopKey(nodeID, detail.Name)
+			if l, flagged := loops[key]; flagged {
+				body.RestartLoop = containerRestartLoopBody(l)
+			}
+			body.Muted = muted[key]
 			return &ContainerDetailOutput{CacheControl: "no-store", Body: body}, nil
 		})
 

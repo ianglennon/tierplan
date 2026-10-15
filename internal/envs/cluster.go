@@ -152,6 +152,8 @@ type clusterEntry struct {
 	policies *PolicyCache
 	// loops remembers the failed tasks seen across reads (RES-13).
 	loops *RestartLoopTracker
+	// containerLoops remembers the container deaths seen across reads (RES-13, D-15).
+	containerLoops *ContainerLoopTracker
 }
 
 // Clusters reads the cluster of swarm environments: from which manager, with what
@@ -208,7 +210,7 @@ func (c *Clusters) entry(envID string) *clusterEntry {
 	defer c.mu.Unlock()
 	e := c.entries[envID]
 	if e == nil {
-		e = &clusterEntry{failures: map[string][]time.Time{}, away: map[string]awayManager{}, policies: NewPolicyCache(), loops: NewRestartLoopTracker()}
+		e = &clusterEntry{failures: map[string][]time.Time{}, away: map[string]awayManager{}, policies: NewPolicyCache(), loops: NewRestartLoopTracker(), containerLoops: NewContainerLoopTracker()}
 		c.entries[envID] = e
 	}
 	return e
@@ -282,8 +284,61 @@ func (c *Clusters) SetRestartLoopMute(envID, serviceID string, muted bool) {
 	}
 }
 
-// SetContainerRestartLoopMute is not written yet.
-func (c *Clusters) SetContainerRestartLoopMute(envID, key string, muted bool) {}
+// SetContainerRestartLoopMute puts a mute or an unmute of a container (by ContainerLoopKey)
+// into the cached state at once, as SetRestartLoopMute does for a service: the maps are
+// replaced, never changed, because copies of the state share them.
+func (c *Clusters) SetContainerRestartLoopMute(envID, key string, muted bool) {
+	e, ok := c.lookup(envID)
+	if !ok {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	set := make(map[string]bool, len(e.state.MutedContainers)+1)
+	for k := range e.state.MutedContainers {
+		set[k] = true
+	}
+	if muted {
+		set[key] = true
+	} else {
+		delete(set, key)
+	}
+	e.state.MutedContainers = set
+	if l, flagged := e.state.ContainerLoops[key]; flagged && l.Muted != muted {
+		loops := make(map[string]ContainerLoop, len(e.state.ContainerLoops))
+		for k, v := range e.state.ContainerLoops {
+			loops[k] = v
+		}
+		l.Muted = muted
+		loops[key] = l
+		e.state.ContainerLoops = loops
+	}
+}
+
+// muteKindContainer is the kind of a mute of a standalone container. Its target is the
+// container's ContainerLoopKey.
+const muteKindContainer = "container"
+
+// mutedContainerKeys reads the containers whose alerts are muted in one environment. When the
+// store cannot be read the mutes the last read held are kept.
+func (c *Clusters) mutedContainerKeys(ctx context.Context, envID string, previous map[string]bool) []string {
+	rows, err := c.svc.st.RQ.ListRestartLoopMutes(ctx, envID)
+	if err != nil {
+		c.log.Error("could not read the restart-loop mutes", "environment", envID, "error", err)
+		keys := make([]string, 0, len(previous))
+		for k := range previous {
+			keys = append(keys, k)
+		}
+		return keys
+	}
+	var keys []string
+	for _, r := range rows {
+		if r.Kind == muteKindContainer {
+			keys = append(keys, r.TargetID)
+		}
+	}
+	return keys
+}
 
 // muteKindService is the kind of a mute of a swarm service.
 const muteKindService = "service"
@@ -638,14 +693,22 @@ func (c *Clusters) refresh(ctx context.Context, envID string, e *clusterEntry) e
 	}
 	rctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
+	var rerr error
+	standalone := false
 	switch {
 	case in.Kind == KindLocal:
-		return c.refreshLocal(rctx, in, e)
+		standalone = in.Local.Probe.Type == dockerx.TypeStandalone
+		rerr = c.refreshLocal(rctx, in, e)
 	case in.EnvType == envTypeSwarm:
-		return c.refreshSwarm(rctx, in, e)
+		rerr = c.refreshSwarm(rctx, in, e)
 	default:
-		return c.refreshContainers(rctx, in, e)
+		standalone = true
+		rerr = c.refreshContainers(rctx, in, e)
 	}
+	// Containers that keep dying are told from the events of every node, so whatever kind of
+	// environment this is, and whatever came of the cluster read.
+	c.observeContainerLoops(ctx, in, e, standalone)
+	return rerr
 }
 
 func (c *Clusters) refreshSwarm(ctx context.Context, in RollupInput, e *clusterEntry) error {

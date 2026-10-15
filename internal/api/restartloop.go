@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -35,8 +37,9 @@ const (
 	minRestartLoopFailures, maxRestartLoopFailures = 2, 50
 	minRestartLoopWindow, maxRestartLoopWindow     = 1, 120
 
-	restartLoopTargetService  = "service"
-	restartLoopAuditTargetEnv = "environment"
+	restartLoopTargetService   = "service"
+	restartLoopTargetContainer = "container"
+	restartLoopAuditTargetEnv  = "environment"
 )
 
 // RestartLoopDeps are the dependencies of the restart-loop mute and settings routes.
@@ -45,7 +48,9 @@ type RestartLoopDeps struct {
 	// Clusters is the cluster reader a mute is shown in at once, and whose last read says
 	// which services exist and what Docker's history limit is.
 	Clusters *envs.Clusters
-	Audit    *audit.Writer
+	// Aggregator finds the container a container mute names, on its node (06-36).
+	Aggregator *envs.Aggregator
+	Audit      *audit.Writer
 	// Now is the clock; it defaults to time.Now.
 	Now func() time.Time
 	// Log receives server-side failures. Nil means slog.Default().
@@ -71,6 +76,31 @@ type RestartLoopMuteBody struct {
 type RestartLoopMuteOutput struct {
 	CacheControl string `header:"Cache-Control"`
 	Body         RestartLoopMuteBody
+}
+
+// ContainerRestartLoopMuteInput names the container whose alerts are muted or unmuted, and the
+// node it is on.
+type ContainerRestartLoopMuteInput struct {
+	EnvironmentPathInput
+	ContainerID string `path:"containerId" pattern:"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$" maxLength:"128" doc:"The container ID or name"`
+	NodeID      string `query:"nodeId" maxLength:"128" doc:"The node the container is on: the nodeId of its row in the containers list. May be left out on an environment of one node; on a swarm it is required (422 node_required)"`
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
+// ContainerRestartLoopMuteBody is the answer to a mute or an unmute of a container.
+type ContainerRestartLoopMuteBody struct {
+	ContainerID string `json:"containerId" doc:"The container's ID as the last read holds it; the name that was asked when the container is gone"`
+	Name        string `json:"name" doc:"The container's name: with the node, what the mute is keyed by, so a container recreated under the same name stays muted"`
+	NodeID      string `json:"nodeId" doc:"The node the container is on"`
+	Muted       bool   `json:"muted" doc:"Whether the container's restart-loop alerts are muted now"`
+	Changed     bool   `json:"changed" doc:"False when the container was in that state already, so nothing was written"`
+}
+
+// ContainerRestartLoopMuteOutput wraps ContainerRestartLoopMuteBody for huma.
+type ContainerRestartLoopMuteOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         ContainerRestartLoopMuteBody
 }
 
 // RestartLoopSettingsBody is the threshold of one environment.
@@ -144,6 +174,48 @@ func RegisterRestartLoop(r *httpx.Router, d RestartLoopDeps) {
 				return nil, err
 			}
 			return &RestartLoopMuteOutput{CacheControl: "no-store", Body: body}, nil
+		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "muteContainerRestartLoop", Method: http.MethodPut, Path: "/api/env/{envId}/containers/{containerId}/restart-loop-mute",
+		Summary: "Mute the restart-loop alerts of a standalone container",
+		Description: "The container keeps being flagged as in a restart loop, but raises no health bell item. " +
+			"The mute is keyed by the node and the container's name, so a container recreated under the same name stays muted, and it is kept until it is removed. " +
+			"Muting a container that is muted already changes and records nothing and answers 200 with changed false. " +
+			"The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). " +
+			"Needs containers.control (Operator) on the environment. Audited as restart_loop.muted, with kind container.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermContainersControl, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *ContainerRestartLoopMuteInput) (*ContainerRestartLoopMuteOutput, error) {
+			p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+			if p == nil || env == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			body, err := setContainerRestartLoopMute(ctx, d, p, env.ID, in, true)
+			if err != nil {
+				return nil, err
+			}
+			return &ContainerRestartLoopMuteOutput{CacheControl: "no-store", Body: body}, nil
+		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "unmuteContainerRestartLoop", Method: http.MethodDelete, Path: "/api/env/{envId}/containers/{containerId}/restart-loop-mute",
+		Summary: "Unmute the restart-loop alerts of a standalone container",
+		Description: "Removes the mute. Unmuting a container that is not muted changes and records nothing and answers 200 with changed false. " +
+			"A container that is gone can be unmuted by its name. Same node rules and problems as the mute. " +
+			"Needs containers.control (Operator) on the environment. Audited as restart_loop.unmuted, with kind container.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermContainersControl, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *ContainerRestartLoopMuteInput) (*ContainerRestartLoopMuteOutput, error) {
+			p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+			if p == nil || env == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			body, err := setContainerRestartLoopMute(ctx, d, p, env.ID, in, false)
+			if err != nil {
+				return nil, err
+			}
+			return &ContainerRestartLoopMuteOutput{CacheControl: "no-store", Body: body}, nil
 		})
 
 	httpx.Register(r, huma.Operation{
@@ -277,6 +349,131 @@ func setServiceRestartLoopMute(ctx context.Context, d RestartLoopDeps, p *rbac.P
 	d.Clusters.SetRestartLoopMute(envID, id, mute)
 	body.Changed = true
 	return body, nil
+}
+
+// findLoopContainer finds the container the path names, by name, full ID or an ID prefix, among
+// the containers of one node in the last snapshot. The answer is false when it holds none.
+func findLoopContainer(rows []envs.ContainerRow, nodeID, idOrName string) (envs.ContainerRow, bool) {
+	var prefix *envs.ContainerRow
+	for i, r := range rows {
+		if r.NodeID != nodeID {
+			continue
+		}
+		if r.ID == idOrName || r.Name == idOrName {
+			return r, true
+		}
+		if prefix == nil && len(idOrName) >= minContainerIDPrefix && strings.HasPrefix(r.ID, idOrName) {
+			prefix = &rows[i]
+		}
+	}
+	if prefix != nil {
+		return *prefix, true
+	}
+	return envs.ContainerRow{}, false
+}
+
+// minContainerIDPrefix is the shortest ID prefix that names a container, as Docker's own 12
+// character short ID does.
+const minContainerIDPrefix = 12
+
+// setContainerRestartLoopMute mutes or unmutes one standalone container, keyed by its node and
+// name. The store row and its audit row are one transaction, and a request that changes
+// nothing writes neither.
+func setContainerRestartLoopMute(ctx context.Context, d RestartLoopDeps, p *rbac.Principal, envID string, in *ContainerRestartLoopMuteInput, mute bool) (ContainerRestartLoopMuteBody, error) {
+	agg, nodeID, node, err := resolveContainerNode(ctx, d.Aggregator, d.Log, envID, in.NodeID)
+	if err != nil {
+		return ContainerRestartLoopMuteBody{}, err
+	}
+	if node.ID == "" {
+		return ContainerRestartLoopMuteBody{}, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Bayplan.")
+	}
+	id, name := in.ContainerID, in.ContainerID
+	row, found := findLoopContainer(agg.Containers, nodeID, in.ContainerID)
+	if found {
+		id, name = row.ID, row.Name
+	}
+	key := envs.ContainerLoopKey(nodeID, name)
+
+	tx, err := d.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return ContainerRestartLoopMuteBody{}, restartLoopInternal(d, "begin", envID, err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := d.Store.Q.WithTx(tx)
+	mutes, err := q.ListRestartLoopMutes(ctx, envID)
+	if err != nil {
+		return ContainerRestartLoopMuteBody{}, restartLoopInternal(d, "list the mutes", envID, err)
+	}
+	existing := slices.ContainsFunc(mutes, func(m sqlc.RestartLoopMute) bool { return m.Kind == restartLoopTargetContainer && m.TargetID == key })
+	// A container the last snapshot does not hold can still be unmuted by its name when its
+	// mute is there: a mute outlives its container, which may come back under that name.
+	if !found && (mute || !existing) {
+		return ContainerRestartLoopMuteBody{}, httpx.Problem(http.StatusNotFound, problemContainerNotFound, "This container does not exist on that node. It may have been removed.")
+	}
+	body := ContainerRestartLoopMuteBody{ContainerID: id, Name: name, NodeID: nodeID, Muted: mute}
+	if mute == existing {
+		return body, nil // already so: nothing to write or record
+	}
+	action := audit.ActionRestartLoopUnmuted
+	if mute {
+		action = audit.ActionRestartLoopMuted
+		if err := q.InsertRestartLoopMute(ctx, sqlc.InsertRestartLoopMuteParams{
+			EnvID: envID, Kind: restartLoopTargetContainer, TargetID: key, Name: name, MutedBy: p.ID, MutedAt: d.Now().UTC().UnixNano(),
+		}); err != nil {
+			return ContainerRestartLoopMuteBody{}, restartLoopInternal(d, "mute", envID, err)
+		}
+	} else if _, err := q.DeleteRestartLoopMute(ctx, sqlc.DeleteRestartLoopMuteParams{EnvID: envID, Kind: restartLoopTargetContainer, TargetID: key}); err != nil {
+		return ContainerRestartLoopMuteBody{}, restartLoopInternal(d, "unmute", envID, err)
+	}
+	if err := d.Audit.RecordTx(ctx, tx, audit.Entry{
+		Actor: p.AuditActor(), Action: action, TargetType: restartLoopTargetContainer, TargetID: key, EnvID: envID,
+		Result: audit.ResultSuccess, IP: httpx.ClientIP(ctx), UserAgent: in.UserAgent,
+		Details: map[string]string{"name": name, "kind": restartLoopTargetContainer, "node": nodeID},
+	}); err != nil {
+		return ContainerRestartLoopMuteBody{}, restartLoopInternal(d, "audit", envID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return ContainerRestartLoopMuteBody{}, restartLoopInternal(d, "commit", envID, err)
+	}
+	d.Clusters.SetContainerRestartLoopMute(envID, key, mute)
+	body.Changed = true
+	return body, nil
+}
+
+// ContainerRestartLoopBody says a standalone container is in a restart loop (RES-13, D-15).
+type ContainerRestartLoopBody struct {
+	State         string `json:"state" enum:"flagged,muted" doc:"flagged while the loop holds; muted when the loop holds and a user muted its alerts: the container raises no bell item"`
+	Count         int    `json:"count" doc:"How many times the container died with a non-zero exit code inside the window"`
+	WindowMinutes int    `json:"windowMinutes" doc:"The window the deaths are counted in, in minutes: the environment's setting"`
+	LastExitCode  string `json:"lastExitCode" doc:"The exit code of its newest death, at most 12 characters"`
+}
+
+// containerRestartLoopBody turns a flagged loop into its answer.
+func containerRestartLoopBody(l envs.ContainerLoop) *ContainerRestartLoopBody {
+	state := "flagged"
+	if l.Muted {
+		state = "muted"
+	}
+	return &ContainerRestartLoopBody{
+		State: state, Count: l.Count, WindowMinutes: int(l.Window / time.Minute), LastExitCode: truncateRunes(l.LastExitCode, maxExitCodeLen),
+	}
+}
+
+// maxExitCodeLen is the longest exit code the API sends. A real one is a small integer.
+const maxExitCodeLen = 12
+
+// containerLoopsOf are the container loops and mutes of an environment's last cluster read.
+// Nothing is read from Docker for a list or a page. Both are nil before the first read or
+// without a cluster reader.
+func containerLoopsOf(c *envs.Clusters, envID string) (loops map[string]envs.ContainerLoop, muted map[string]bool) {
+	if c == nil {
+		return nil, nil
+	}
+	st, ok := c.Cached(envID)
+	if !ok {
+		return nil, nil
+	}
+	return st.ContainerLoops, st.MutedContainers
 }
 
 // getRestartLoopSettings answers the environment's threshold and Docker's history limit.

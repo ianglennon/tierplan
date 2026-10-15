@@ -170,6 +170,9 @@ type ContainerItem struct {
 	Project  string   `json:"project" doc:"The compose project (com.docker.compose.project); empty when the container has none"`
 	Stack    string   `json:"stack" doc:"The swarm stack namespace (com.docker.stack.namespace); empty when the container has none"`
 	Service  string   `json:"service" doc:"The swarm service name (com.docker.swarm.service.name); empty when the container has none"`
+	// RestartLoop is present while the container keeps dying and is restarted by its policy.
+	// A task container of a swarm service never has one: the service does.
+	RestartLoop *ContainerRestartLoopBody `json:"restartLoop,omitempty" doc:"Present while the container is in a restart loop: it died with a non-zero exit code the environment's threshold of times inside its window. Absent otherwise"`
 }
 
 // VolumeItem is one row of the volumes list.
@@ -474,9 +477,15 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 			}
 			onNode := filterNode(agg.Containers, in.Node, func(c envs.ContainerRow) string { return c.Node })
 			rows := filterContainers(onNode, in.Q, statuses)
+			loops, _ := containerLoopsOf(d.Clusters, in.EnvID)
 			items, total, truncated := capRows(rows, func(c envs.ContainerRow) ContainerItem {
+				var loop *ContainerRestartLoopBody
+				if l, flagged := loops[envs.ContainerLoopKey(c.NodeID, c.Name)]; flagged {
+					loop = containerRestartLoopBody(l)
+				}
 				return ContainerItem{
-					Node: c.Node, NodeID: c.NodeID, ID: c.ID, Name: c.Name, State: c.State, Status: c.Status, Image: c.Image,
+					RestartLoop: loop,
+					Node:        c.Node, NodeID: c.NodeID, ID: c.ID, Name: c.Name, State: c.State, Status: c.Status, Image: c.Image,
 					Created: rfc3339(c.Created), Ports: c.Ports, IsSelf: isSelf(c.ID),
 					Health: c.Health, SelfKind: selfKindOf(isSelf(c.ID), c.Labels), ReadOnly: readOnly[c.NodeID],
 					Project: c.Labels[labelProject], Stack: c.Labels[labelStack], Service: c.Labels[labelService],

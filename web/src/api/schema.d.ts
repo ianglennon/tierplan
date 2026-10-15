@@ -740,6 +740,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/containers/{containerId}/restart-loop-mute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Mute the restart-loop alerts of a standalone container
+         * @description The container keeps being flagged as in a restart loop, but raises no health bell item. The mute is keyed by the node and the container's name, so a container recreated under the same name stays muted, and it is kept until it is removed. Muting a container that is muted already changes and records nothing and answers 200 with changed false. The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). Needs containers.control (Operator) on the environment. Audited as restart_loop.muted, with kind container.
+         */
+        put: operations["muteContainerRestartLoop"];
+        post?: never;
+        /**
+         * Unmute the restart-loop alerts of a standalone container
+         * @description Removes the mute. Unmuting a container that is not muted changes and records nothing and answers 200 with changed false. A container that is gone can be unmuted by its name. Same node rules and problems as the mute. Needs containers.control (Operator) on the environment. Audited as restart_loop.unmuted, with kind container.
+         */
+        delete: operations["unmuteContainerRestartLoop"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/containers/{containerId}/shell": {
         parameters: {
             query?: never;
@@ -2097,7 +2121,7 @@ export interface paths {
         };
         /**
          * List the environment problems that need attention
-         * @description Derived from live state, never stored, so an item is there exactly while its cause is and cannot be dismissed: an environment that is offline (env_offline, with since and reason), a certificate that is not renewing or has expired (cert_not_renewing), agents that need an update by hand (manual_update_needed, one item with a count), a clock that is out of step (clock_skew), an environment still waiting for its first agent after 7 days (pending_long), a swarm that was re-initialised (cluster_changed) and a local host that can be folded into a swarm environment it manages (fold_offered, only for callers who hold environments.manage) and a swarm service whose tasks keep failing (restart_loop, one item per service that is not muted, only for callers who hold services.read on that environment; with service, serviceId, count, windowMinutes, latestError and since). Only environments the caller holds environments.read for are considered, so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. Errors come first, then the newest. Names are at most 64 characters.
+         * @description Derived from live state, never stored, so an item is there exactly while its cause is and cannot be dismissed: an environment that is offline (env_offline, with since and reason), a certificate that is not renewing or has expired (cert_not_renewing), agents that need an update by hand (manual_update_needed, one item with a count), a clock that is out of step (clock_skew), an environment still waiting for its first agent after 7 days (pending_long), a swarm that was re-initialised (cluster_changed) and a local host that can be folded into a swarm environment it manages (fold_offered, only for callers who hold environments.manage) and a swarm service whose tasks keep failing (restart_loop, one item per service that is not muted, only for callers who hold services.read on that environment; with service, serviceId, count, windowMinutes, latestError and since) and a standalone container that keeps dying (restart_loop_container, one item per container that is not muted, only for callers who hold containers.read on that environment; with container, containerId, nodeId, count, windowMinutes, lastExitCode and since). Only environments the caller holds environments.read for are considered, so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. Errors come first, then the newest. Names are at most 64 characters.
          */
         get: operations["listEnvironmentWarnings"];
         put?: never;
@@ -3951,6 +3975,8 @@ export interface components {
             /** @description True when any value was withheld from env, logConfig.options, command or entrypoint */
             masked: boolean;
             mounts: components["schemas"]["ContainerMountBody"][] | null;
+            /** @description True when a user muted the container's restart-loop alerts, whether or not it is in a loop now. The mute is keyed by node and name */
+            muted: boolean;
             /** @description The container name without the leading slash */
             name: string;
             networks: components["schemas"]["ContainerNetworkBody"][] | null;
@@ -3971,6 +3997,8 @@ export interface components {
              * @description How many times the engine has restarted it
              */
             restartCount: number;
+            /** @description Present while the container is in a restart loop: it died with a non-zero exit code the environment's threshold of times inside its window. Absent otherwise */
+            restartLoop?: components["schemas"]["ContainerRestartLoopBody"];
             /**
              * Format: int64
              * @description The on-failure maximum; 0 when none is set
@@ -4040,6 +4068,8 @@ export interface components {
             project: string;
             /** @description True when the host of this container's node is read-only, so no change to it will be accepted */
             readOnly: boolean;
+            /** @description Present while the container is in a restart loop: it died with a non-zero exit code the environment's threshold of times inside its window. Absent otherwise */
+            restartLoop?: components["schemas"]["ContainerRestartLoopBody"];
             /**
              * @description server for the container Bayplan itself runs in, agent for a Bayplan agent's container (marked by the label bayplan.agent=true), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect
              * @enum {string}
@@ -4141,6 +4171,37 @@ export interface components {
             removeVolumes: boolean;
             /** @description The containers to remove, at most 25. Each is answered separately; one that fails never stops the others */
             targets: components["schemas"]["ContainerActionTarget"][] | null;
+        };
+        ContainerRestartLoopBody: {
+            /**
+             * Format: int64
+             * @description How many times the container died with a non-zero exit code inside the window
+             */
+            count: number;
+            /** @description The exit code of its newest death, at most 12 characters */
+            lastExitCode: string;
+            /**
+             * @description flagged while the loop holds; muted when the loop holds and a user muted its alerts: the container raises no bell item
+             * @enum {string}
+             */
+            state: "flagged" | "muted";
+            /**
+             * Format: int64
+             * @description The window the deaths are counted in, in minutes: the environment's setting
+             */
+            windowMinutes: number;
+        };
+        ContainerRestartLoopMuteBody: {
+            /** @description False when the container was in that state already, so nothing was written */
+            changed: boolean;
+            /** @description The container's ID as the last read holds it; the name that was asked when the container is gone */
+            containerId: string;
+            /** @description Whether the container's restart-loop alerts are muted now */
+            muted: boolean;
+            /** @description The container's name: with the node, what the mute is keyed by, so a container recreated under the same name stays muted */
+            name: string;
+            /** @description The node the container is on */
+            nodeId: string;
         };
         CreateTeamInputBody: {
             /** @description 1 to 64 characters; not case-sensitive for uniqueness */
@@ -4548,9 +4609,13 @@ export interface components {
         EnvWarningBody: {
             /** @description For cert_not_renewing and clock_skew: the agent */
             agentId?: string;
+            /** @description For restart_loop_container: the container's name, at most 64 characters */
+            container?: string;
+            /** @description For restart_loop_container: the container's ID as the last read holds it */
+            containerId?: string;
             /**
              * Format: int64
-             * @description For manual_update_needed: how many agents need an update by hand. For restart_loop: how many tasks of the service failed inside the window
+             * @description For manual_update_needed: how many agents need an update by hand. For restart_loop: how many tasks of the service failed inside the window. For restart_loop_container: how many times the container died inside the window
              */
             count?: number;
             /**
@@ -4571,11 +4636,15 @@ export interface components {
              * @description Which problem this is
              * @enum {string}
              */
-            id: "env_offline" | "cert_not_renewing" | "manual_update_needed" | "clock_skew" | "pending_long" | "cluster_changed" | "fold_offered" | "restart_loop";
+            id: "env_offline" | "cert_not_renewing" | "manual_update_needed" | "clock_skew" | "pending_long" | "cluster_changed" | "fold_offered" | "restart_loop" | "restart_loop_container";
+            /** @description For restart_loop_container: the exit code of the container's newest death */
+            lastExitCode?: string;
             /** @description For restart_loop: the error text of the newest failed task, at most 300 characters; absent when Docker gave none */
             latestError?: string;
             /** @description For cert_not_renewing and clock_skew: the node's host name, at most 64 characters */
             node?: string;
+            /** @description For restart_loop_container: the node the container is on, as the container routes take it */
+            nodeId?: string;
             /**
              * Format: int64
              * @description For clock_skew: how far the agent's clock is ahead of the server's, in seconds; negative is behind
@@ -4599,7 +4668,7 @@ export interface components {
             since?: string;
             /**
              * Format: int64
-             * @description For restart_loop: the window the count is over, in minutes
+             * @description For restart_loop and restart_loop_container: the window the count is over, in minutes
              */
             windowMinutes?: number;
         };
@@ -10034,6 +10103,82 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ContainerLogsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    muteContainerRestartLoop: {
+        parameters: {
+            query?: {
+                /** @description The node the container is on: the nodeId of its row in the containers list. May be left out on an environment of one node; on a swarm it is required (422 node_required) */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The container ID or name */
+                containerId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerRestartLoopMuteBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    unmuteContainerRestartLoop: {
+        parameters: {
+            query?: {
+                /** @description The node the container is on: the nodeId of its row in the containers list. May be left out on an environment of one node; on a swarm it is required (422 node_required) */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The container ID or name */
+                containerId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerRestartLoopMuteBody"];
                 };
             };
             /** @description Error */
