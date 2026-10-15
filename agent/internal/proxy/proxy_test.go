@@ -20,6 +20,7 @@ import (
 
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/api/types/volume"
 )
 
 // fakeSocket is a Docker daemon stand-in on a unix socket. It records every
@@ -846,6 +847,72 @@ func TestHostPolicyOptInForwardsTheSameSpec(t *testing.T) {
 	if got := sock.requests(); !slices.Equal(got, []string{"POST /services/web/update?version=3"}) {
 		t.Fatalf("the engine saw %v", got)
 	}
+}
+
+// The create-then-mount sequence (S2-CR-01): the service that mounts a volume by name
+// carries no host path for escalations() to judge, so the volume create is where the
+// host access is refused. With the volume never made, the mount has nothing of the host.
+func TestHostPolicyAVolumeThatMountsTheHostIsRefusedSoAServiceCannotMountItByName(t *testing.T) {
+	bind := volume.CreateRequest{
+		Name: "hostroot", Driver: "local",
+		DriverOpts: map[string]string{"type": "none", "o": "bind", "device": "/"},
+	}
+	plugin := volume.CreateRequest{Name: "plug", Driver: "rexray/ebs"}
+	for _, tc := range []struct {
+		name string
+		req  volume.CreateRequest
+	}{
+		{"a local volume that binds the host root", bind},
+		{"a volume of a plugin driver", plugin},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sock := newFakeSocket(t)
+			var reasons []string
+			h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+			resp := do(t, h, postJSON("POST", "/volumes/create", enc(t, tc.req)))
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("status %d, want 403", resp.StatusCode)
+			}
+			var msg struct{ Message string }
+			if err := json.NewDecoder(resp.Body).Decode(&msg); err != nil || msg.Message != "agent_policy_denied: host_policy: POST /volumes/create" {
+				t.Fatalf("message = %q (%v)", msg.Message, err)
+			}
+			if !slices.Equal(reasons, []string{"host_policy"}) {
+				t.Errorf("onDenied reasons = %v, want [host_policy]", reasons)
+			}
+			if got := sock.requests(); len(got) != 0 {
+				t.Fatalf("a refused volume create reached the engine: %v", got)
+			}
+		})
+	}
+
+	t.Run("the service that mounts the name afterwards is judged by its own spec", func(t *testing.T) {
+		sock := newFakeSocket(t)
+		h := Handler(sock.path, Policy{}, nil)
+		spec := sampleSpec()
+		spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{{Type: mount.TypeVolume, Source: "hostroot", Target: "/host"}}
+		resp := do(t, h, postJSON("POST", "/services/create", enc(t, spec)))
+		_ = resp.Body.Close()
+		// The guard is the refused volume create above: the volume was never made, so
+		// the engine has nothing of the host to mount under this name.
+		if got := sock.requests(); !slices.Contains(got, "POST /services/create") {
+			t.Fatalf("the engine saw %v, want the service create", got)
+		}
+	})
+
+	t.Run("the opt-in forwards the bind volume create", func(t *testing.T) {
+		sock := newFakeSocket(t)
+		h := Handler(sock.path, Policy{AllowPrivilegedServices: true}, nil)
+		resp := do(t, h, postJSON("POST", "/volumes/create", enc(t, bind)))
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status %d, want 200", resp.StatusCode)
+		}
+		if got := sock.requests(); !slices.Equal(got, []string{"POST /volumes/create"}) {
+			t.Fatalf("the engine saw %v", got)
+		}
+	})
 }
 
 func TestHostPolicyAHostNetworkNamedByIDIsFoundOnTheAgentsOwnEngine(t *testing.T) {
