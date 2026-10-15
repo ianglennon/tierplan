@@ -79,6 +79,13 @@ var oracle = []oracleEntry{
 		"since": rx(`^[0-9TZ:.+-]{1,40}$`), "until": rx(`^[0-9TZ:.+-]{1,40}$`), "tail": rx(`^(all|[0-9]{1,6})$`),
 	}),
 
+	// The logs of a service and of a task: the container log keys without until, which the
+	// engine ignores on these routes (RESEARCH E2).
+	oEntry("GET", `(services|tasks)/`+oID+`/logs`, map[string]*regexp.Regexp{
+		"stdout": oBool, "stderr": oBool, "timestamps": oBool, "follow": oBool, "details": oBool,
+		"since": rx(`^[0-9TZ:.+-]{1,40}$`), "tail": rx(`^(all|[0-9]{1,6})$`),
+	}),
+
 	{method: "POST", path: rx(oVer + `containers/` + oID + `/exec$`), body: true},
 	{method: "POST", path: oExecStart, body: true, upgrade: true},
 	oEntry("POST", `exec/`+oID+`/resize`, map[string]*regexp.Regexp{"h": rx(`^[0-9]{1,4}$`), "w": rx(`^[0-9]{1,4}$`)}),
@@ -244,6 +251,16 @@ func FuzzAllowed(f *testing.F) {
 		{"DELETE", "/configs/abc123", "force=1", false, false, false},
 		{"DELETE", "/configs/abc123", "", true, false, false},
 		{"GET", "/services/web/logs", "follow=1", false, false, false},
+		{"GET", "/v1.56/services/web/logs", "follow=1&details=1&timestamps=1&stdout=1&stderr=1&tail=500&since=1700000000.5", false, false, false},
+		{"GET", "/services/web/logs", "until=1700000000", false, false, false},
+		{"GET", "/tasks/abc/logs", "follow=1&tail=all", false, false, false},
+		{"GET", "/tasks/abc/logs", "until=1", false, false, false},
+		{"GET", "/tasks/abc", "", false, false, false},
+		{"GET", "/tasks/abc/logs/x", "", false, false, false},
+		{"GET", "/services/a/b/logs", "", false, false, false},
+		{"GET", "/tasks/../logs", "", false, false, false},
+		{"HEAD", "/tasks/abc/logs", "follow=1", false, false, true},
+		{"POST", "/tasks/abc/logs", "", false, false, false},
 		{"POST", "/images/create", "fromSrc=http://x", false, false, false},
 		{"POST", "/images/create", "fromImage=a&tag=b&platform=linux/arm64", false, false, false},
 		{"POST", "/images/create", "fromImage=ghcr.io/acme/app&tag=sha256:0000000000000000000000000000000000000000000000000000000000000000", false, false, false},

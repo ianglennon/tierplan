@@ -370,6 +370,70 @@ func TestATunnelErrorIsRetriedOnceAndNoMoreAndSaysNothingWhenTheRetryFails(t *te
 	}
 }
 
+// StreamOnManager (plan 06-29, D-37) is a read for a stream the caller keeps open for as
+// long as it likes: it goes to the manager a cluster read would choose, runs once and never
+// moves to another, because a stream that dropped has already shown part of its answer.
+func TestStreamOnManagerRunsOnceOnTheLeaderAndNeverFailsOverToAnotherManager(t *testing.T) {
+	s := newSwarmRig(t, managerNodes(), nil)
+	ctx := context.Background()
+	if err := s.c.Refresh(ctx, s.env.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	var host string
+	var calls atomic.Int32
+	if err := s.c.StreamOnManager(ctx, s.env.ID, func(cli *dockerx.Client) error {
+		calls.Add(1)
+		host = probeHost(t, cli)
+		return nil
+	}); err != nil || calls.Load() != 1 || host != "mgr-2" {
+		t.Fatalf("StreamOnManager = %v after %d calls on %q, want one call on the leader mgr-2", err, calls.Load(), host)
+	}
+
+	// A plain error comes back as it is.
+	boom := errors.New("boom")
+	calls.Store(0)
+	if err := s.c.StreamOnManager(ctx, s.env.ID, func(*dockerx.Client) error { calls.Add(1); return boom }); !errors.Is(err, boom) || calls.Load() != 1 {
+		t.Fatalf("a plain error: %v after %d calls, want boom after 1", err, calls.Load())
+	}
+
+	// A tunnel error is not retried either: ClusterRead would run again on another manager.
+	calls.Store(0)
+	err := s.c.StreamOnManager(ctx, s.env.ID, func(*dockerx.Client) error {
+		calls.Add(1)
+		return fmt.Errorf("lost: %w", tunnel.ErrAgentGone)
+	})
+	if !errors.Is(err, tunnel.ErrAgentGone) || calls.Load() != 1 {
+		t.Fatalf("a tunnel error: %v after %d calls, want the tunnel error after exactly 1", err, calls.Load())
+	}
+	if len(s.failovers(t)) != 0 || s.failoverAudits(t, s.env.ID) != 0 {
+		t.Error("a stream that was not retried produced a failover record")
+	}
+}
+
+func TestStreamOnManagerRunsOnALocalSwarmManagersSocket(t *testing.T) {
+	local := dockertest.NewFake(t, managerConfig(1, managerNodes(), nil))
+	r := newTunRig(t, local)
+	r.pastGrace()
+	c := NewClusters(r.svc, r.snaps, ClusterOptions{Now: r.clk.Now, Publisher: r.brk, Events: r.evs})
+	r.svc.WithClusters(c)
+	env, err := r.svc.AddLocal(context.Background(), admin, "", false, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.whenOnline(t, env.ID)
+	calls := 0
+	var host string
+	err = c.StreamOnManager(context.Background(), env.ID, func(cli *dockerx.Client) error {
+		calls++
+		host = probeHost(t, cli)
+		return nil
+	})
+	if err != nil || calls != 1 || host != "mgr-1" {
+		t.Fatalf("StreamOnManager = %v after %d calls on %q, want one call on the local socket's engine", err, calls, host)
+	}
+}
+
 func TestReadOnlyClusterCallerOffersOnlyReadFunctions(t *testing.T) {
 	typ := reflect.TypeOf(&Clusters{})
 	bad := regexp.MustCompile(`Write|Update|Create|Remove|Mutate|Delete|Scale|Deploy`)

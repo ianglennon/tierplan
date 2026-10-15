@@ -177,6 +177,9 @@ type FakeConfig struct {
 	// Tasks are whole swarm tasks /tasks lists, with the filters of a real daemon (service,
 	// node, desired-state and id), beside AgentTasks (fake_tasks.go).
 	Tasks []swarm.Task
+	// ServiceLogs are the lines the tasks of each service wrote, by service ID, which
+	// /services/{id}/logs and /tasks/{id}/logs answer (fake_servicelogs.go).
+	ServiceLogs map[string][]FakeServiceLogLine
 	// HistoryLimit is Swarm.Cluster.Spec.Orchestration.TaskHistoryRetentionLimit /info
 	// reports; zero leaves the field unset, as a cluster that never set it does.
 	HistoryLimit int

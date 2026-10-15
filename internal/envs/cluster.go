@@ -325,6 +325,10 @@ func (c *Clusters) ClusterRead(ctx context.Context, envID string, fn func(*docke
 	return err
 }
 
+func (c *Clusters) StreamOnManager(ctx context.Context, envID string, fn func(*dockerx.Client) error) error {
+	return errors.New("not implemented")
+}
+
 // IsSwarm reports whether the environment is a swarm: an agent environment whose agents
 // run on swarm nodes, or the local socket of a swarm node. A local socket that has not
 // been probed yet is ErrOffline, because what it is is not known.
