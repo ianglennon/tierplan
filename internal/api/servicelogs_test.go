@@ -143,7 +143,9 @@ func svcTexts(lines []svcLogLine) []string {
 	return out
 }
 
-func svcStamp(ms int) string { return svcT0.Add(time.Duration(ms) * time.Millisecond).Format("2006-01-02T15:04:05.000000000Z") }
+func svcStamp(ms int) string {
+	return svcT0.Add(time.Duration(ms) * time.Millisecond).Format("2006-01-02T15:04:05.000000000Z")
+}
 
 func (f *svcLogsFix) viewedRows(t *testing.T) []struct {
 	TargetType, TargetID string
@@ -268,6 +270,8 @@ func TestServiceLogStreamHoldsLiveLinesInAWindowAndSendsThemInTimeOrder(t *testi
 	f := newSvcLogsFix(t, svcTasks(), nil, nil)
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
 	nextEvent(t, c, "ready", 5*time.Second)
+	// Let the (empty) burst end, so what follows is live.
+	time.Sleep(600 * time.Millisecond)
 	// The later line is written first; both are within the window.
 	f.fake.PushServiceLog("web", svcLine("tk-2", "node-3", 200, "later"))
 	f.fake.PushServiceLog("web", svcLine("tk-1", "node-1", 100, "earlier"))
@@ -284,6 +288,7 @@ func TestServiceLogStreamKeepsATaskFirstSeenAfterTheStreamOpenedAndAnnouncesIt(t
 	f := newSvcLogsFix(t, svcTasks(), nil, nil)
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
 	nextEvent(t, c, "ready", 5*time.Second)
+	time.Sleep(600 * time.Millisecond)
 
 	cfg := f.cfg
 	cfg.Tasks = append(slices.Clone(svcTasks()), tkRunning("tk-new", "svc-web", "node-3", 4, "c4", time.Second))
@@ -291,17 +296,32 @@ func TestServiceLogStreamKeepsATaskFirstSeenAfterTheStreamOpenedAndAnnouncesIt(t
 	f.fake.Reconfigure(cfg)
 	f.fake.PushServiceLog("web", svcLine("tk-new", "node-3", 300, "from a replacement"))
 
-	lines, _ := readSvcLines(t, c, 1)
+	// The tasks event comes before the batch that holds the new task's first line.
+	var announced svcReady
+	var lines []svcLogLine
+	for len(lines) == 0 {
+		fr, ok := c.next(8 * time.Second)
+		if !ok {
+			t.Fatal("neither a tasks event nor the new task's line arrived")
+		}
+		switch fr.event {
+		case "tasks":
+			if err := json.Unmarshal([]byte(fr.data), &announced); err != nil {
+				t.Fatal(err)
+			}
+		case "log":
+			var ev svcLogEvent
+			if err := json.Unmarshal([]byte(fr.data), &ev); err != nil {
+				t.Fatal(err)
+			}
+			lines = ev.Lines
+		}
+	}
 	if lines[0].M != "from a replacement" || lines[0].Task != "tk-new" || lines[0].Slot != 4 || lines[0].Node != "wrk-ready" {
 		t.Fatalf("line = %+v, want the new task's, resolved to slot 4 on wrk-ready", lines[0])
 	}
-	ev := nextEvent(t, c, "tasks", 5*time.Second)
-	var rd svcReady
-	if err := json.Unmarshal([]byte(ev.data), &rd); err != nil {
-		t.Fatal(err)
-	}
-	if !slices.ContainsFunc(rd.Tasks, func(x svcReadyTask) bool { return x.ID == "tk-new" }) {
-		t.Errorf("tasks event = %+v, want it to name tk-new", rd.Tasks)
+	if !slices.ContainsFunc(announced.Tasks, func(x svcReadyTask) bool { return x.ID == "tk-new" && x.Slot == 4 }) {
+		t.Errorf("tasks event = %+v, want it to name tk-new in slot 4", announced.Tasks)
 	}
 }
 
@@ -313,7 +333,7 @@ func TestServiceLogStreamNarrowsToTasksAndNodesAndUsesTheTaskRouteForOne(t *test
 	if got, want := svcTexts(lines), []string{"b1", "b2"}; !slices.Equal(got, want) {
 		t.Fatalf("task=tk-2 gave %v, want %v", got, want)
 	}
-	if !slices.Contains(f.fake.Requests(), "/tasks/tk-2/logs") {
+	if !slices.ContainsFunc(f.fake.Requests(), func(r string) bool { return strings.HasSuffix(r, "/tasks/tk-2/logs") }) {
 		t.Errorf("requests = %v, want one task's logs asked of the engine for a single task filter", f.fake.Requests())
 	}
 	one.close()

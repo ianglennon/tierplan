@@ -40,6 +40,7 @@ The agent is the security boundary between Bayplan and the host's Docker socket.
 - The swarm lists: nodes, services and tasks.
 - The inspect of one container, one network, one volume, one service (`GET /services/{id}`, only the `insertDefaults` key) and one swarm node (`GET /nodes/{id}`, no query key), and the state of one exec.
 - A container's logs (`stdout`, `stderr`, `since`, `until`, `timestamps`, `follow`, `tail`, `details` only).
+- On a swarm manager, the logs of a service (`GET /services/{id}/logs`) and of one task (`GET /tasks/{id}/logs`), with `stdout`, `stderr`, `timestamps`, `follow`, `details`, `since` and `tail` only. There is no `until`: the engine ignores it on these routes. Both are long streams like a container's logs and take one of the agent's interactive slots.
 - Disk usage for volumes (`system/df` with `type=volume`).
 - Images, by repository, `repository:tag`, `repository@digest` or image ID:
   - `GET /images/{name}/json` (inspect) and `GET /images/{name}/history`, with no query keys.

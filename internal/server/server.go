@@ -168,6 +168,7 @@ type RouterDeps struct {
 	Tags          api.TagsDeps
 	Events        api.EventsDeps
 	Logs          api.LogsDeps
+	ServiceLogs   api.ServiceLogsDeps
 	Shells        api.ShellsDeps
 	EnvStream     api.EnvStreamDeps
 	Recent        api.RecentDeps
@@ -216,6 +217,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterTags(r, d.Tags)
 	api.RegisterEvents(r, d.Events)
 	api.RegisterLogs(r, d.Logs)
+	api.RegisterServiceLogs(r, d.ServiceLogs)
 	api.RegisterShells(r, d.Shells)
 	api.RegisterEnvStream(r, d.EnvStream)
 	api.RegisterRecent(r, d.Recent)
@@ -756,6 +758,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Containers:    api.ContainersDeps{Aggregator: aggregator, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
 		Events:        api.EventsDeps{Aggregator: aggregator, Log: log},
 		Logs:          api.LogsDeps{Aggregator: aggregator, Audit: aud, Checker: checker, Log: log},
+		ServiceLogs:   api.ServiceLogsDeps{Clusters: clusters, Audit: aud, Checker: checker, Log: log},
 		Shells:        api.ShellsDeps{Aggregator: aggregator, Registry: shellRegistry, Audit: aud, Checker: checker, Instance: inst, SelfContainerID: selfID, Store: st, Log: log},
 		EnvStream:     api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
 		Recent:        api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Refusals: refusals, Log: log},

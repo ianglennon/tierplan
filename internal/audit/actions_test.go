@@ -115,8 +115,10 @@ var phase4DetailKeys = map[string][]string{
 	audit.ActionVolumeCreated: {"name", "node", "driver", "options", "code"},
 	audit.ActionVolumeRemoved: {"name", "node", "driver", "bulk", "code"},
 	// Opening a log stream records the container, its node, the viewer's random ID (sid)
-	// and what was asked for; never any line of the log (plan 04-19, D-23, D-24).
-	audit.ActionLogsViewed: {"container", "node", "sid", "since", "tail"},
+	// and what was asked for; never any line of the log (plan 04-19, D-23, D-24). A service's
+	// log records the service in place of the container, and the task and node filters
+	// (plan 06-29, D-35).
+	audit.ActionLogsViewed: {"container", "service", "node", "task", "sid", "since", "tail"},
 	// A browser shell records that a session began and how it ended, never what was
 	// typed or shown (plan 04-22, D-28): the container, its node, the session's ID
 	// (sid), the command as chosen, the user and working directory (empty for the

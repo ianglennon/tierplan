@@ -155,7 +155,7 @@ func TestReorderWindowBreaksTiesByLowerSlotThenArrivalAndDrainsEverything(t *tes
 	}
 }
 
-func TestTaskMetaRefreshesWhenStaleAndOnAnUnknownTaskButNotMoreOftenThanOncePerSecond(t *testing.T) {
+func TestTaskMetaRefreshesWhenStaleAndOnAnUnknownTaskButNotInABurst(t *testing.T) {
 	clk := &fakeClock{t: mergeT0}
 	calls := 0
 	tasks := []taskInfo{{ID: "t1", Slot: 1, Node: "alpha", State: "running"}}
@@ -173,7 +173,8 @@ func TestTaskMetaRefreshesWhenStaleAndOnAnUnknownTaskButNotMoreOftenThanOncePerS
 		t.Errorf("calls = %d after a lookup of a known task inside 3 s, want 1", calls)
 	}
 
-	// A task the cache does not know is loaded for, but only once a second.
+	// A task the cache does not know is loaded for, but not right after a read, and the same one
+	// not more than once a second.
 	tasks = append(tasks, taskInfo{ID: "t2", Slot: 2, Node: "beta"})
 	clk.t = clk.t.Add(1500 * time.Millisecond)
 	if ti, ok := m.lookup(ctx, "t2"); !ok || ti.Slot != 2 || calls != 2 {
