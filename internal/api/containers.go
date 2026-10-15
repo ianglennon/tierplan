@@ -501,14 +501,27 @@ func resolveContainerNode(ctx context.Context, src snapshotReader, log *slog.Log
 // that is not a swarm has an answer (422 node_required). The errors are already
 // problems: 404 container_not_found, 503 node_unavailable, or the environment's own.
 func inspectOnNode(ctx context.Context, d ContainersDeps, envID, wantNode, containerID string) (detail dockerx.ContainerDetail, raw []byte, nodeID string, node envs.NodeRef, err error) {
-	_, nodeID, node, err = resolveContainerNode(ctx, d.Aggregator, d.Log, envID, wantNode)
+	return inspectOn(ctx, d.Aggregator, d.Log, envID, wantNode, containerID)
+}
+
+// nodeInspector is what reading one container's inspect needs: the aggregate, to find
+// the node, and that node's engine. *envs.Aggregator implements it.
+type nodeInspector interface {
+	snapshotReader
+	OnNode(ctx context.Context, envID, nodeID string, fn func(*dockerx.Client) error) error
+}
+
+// inspectOn is inspectOnNode for any source that can reach a node: the container routes
+// and the stats stream read a container the same way and map the same problems.
+func inspectOn(ctx context.Context, src nodeInspector, log *slog.Logger, envID, wantNode, containerID string) (detail dockerx.ContainerDetail, raw []byte, nodeID string, node envs.NodeRef, err error) {
+	_, nodeID, node, err = resolveContainerNode(ctx, src, log, envID, wantNode)
 	if err != nil {
 		return detail, nil, "", node, err
 	}
 
 	inspectCtx, cancel := context.WithTimeout(ctx, inspectTimeout)
 	defer cancel()
-	err = d.Aggregator.OnNode(inspectCtx, envID, nodeID, func(c *dockerx.Client) error {
+	err = src.OnNode(inspectCtx, envID, nodeID, func(c *dockerx.Client) error {
 		var e error
 		detail, raw, e = c.ContainerDetail(inspectCtx, containerID)
 		return e
@@ -521,7 +534,7 @@ func inspectOnNode(ctx context.Context, d ContainersDeps, envID, wantNode, conta
 	case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound):
 		return detail, nil, nodeID, node, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Bayplan.")
 	default:
-		return detail, nil, nodeID, node, snapshotProblem(d.Log, envID, err)
+		return detail, nil, nodeID, node, snapshotProblem(log, envID, err)
 	}
 }
 

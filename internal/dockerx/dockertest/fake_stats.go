@@ -127,7 +127,7 @@ func (f *Fake) serveStats(w http.ResponseWriter, r *http.Request, p string, cfg 
 	}
 	f.mu.Lock()
 	st.calls[c.ID]++
-	n := uint64(st.calls[c.ID])
+	n := uint64(st.calls[c.ID]) //nolint:gosec // a call count is never negative
 	f.mu.Unlock()
 
 	// The engine answers a container that is not running with an empty document: no read
@@ -160,7 +160,7 @@ func (s FakeStats) sample(id string, n uint64) container.StatsResponse {
 	}
 	out := container.StatsResponse{
 		ID:   id,
-		Read: statsEpoch.Add(time.Duration(n) * step),
+		Read: statsEpoch.Add(time.Duration(n) * step), //nolint:gosec // a call count is far below overflow
 		CPUStats: container.CPUStats{
 			CPUUsage:    container.CPUUsage{TotalUsage: n * s.CPUPerCall},
 			SystemUsage: n * sysStep,

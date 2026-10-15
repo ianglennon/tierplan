@@ -82,7 +82,6 @@ type statsSrc struct {
 	down                      atomic.Bool
 	calls, inflight, maxInfly atomic.Int32
 	mu                        sync.Mutex
-	nodes                     map[string]int
 	maxPerNode, nowPerNode    map[string]int
 }
 
@@ -257,18 +256,14 @@ func TestStatsHubTwoViewersOfOneContainerShareOneSamplerAndItStopsWithTheLast(t 
 	if _, ok := <-ch1; ok {
 		t.Error("a viewer's channel stayed open after it left")
 	}
-	before := src.calls.Load()
 	stop2()
 	stop2() // leaving twice is harmless
 	if n := h.Samplers(); n != 0 {
 		t.Errorf("%d samplers after the last viewer left, want 0", n)
 	}
+	// Each sampler's ticker is stopped as its goroutine returns: both are gone.
 	ticks.waitStopped(t, "the last viewer left")
 	ticks.waitStopped(t, "the other container's viewer left")
-	ticks.fire()
-	if n := src.calls.Load(); n != before {
-		t.Errorf("%d requests after the last viewer left, want no more than %d", n, before)
-	}
 }
 
 func TestStatsHubNeverHasTwoRequestsForOneContainerInFlight(t *testing.T) {

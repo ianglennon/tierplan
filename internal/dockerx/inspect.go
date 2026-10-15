@@ -138,6 +138,7 @@ func detailOf(in container.InspectResponse) ContainerDetail {
 			d.RestartPolicy = string(hc.RestartPolicy.Name)
 		}
 		d.RestartMaxRetries = hc.RestartPolicy.MaximumRetryCount
+		d.MemoryLimit, d.NanoCPUs = hc.Memory, hc.NanoCPUs
 		d.LogConfig.Type = hc.LogConfig.Type
 		for k, v := range hc.LogConfig.Config {
 			d.LogConfig.Options[k] = v

@@ -114,6 +114,8 @@ type Server struct {
 	shells *shells.Registry
 	// jobs holds the image pulls in progress and the ones that finished a few minutes ago.
 	jobs *jobs.Hub
+	// stats samples the containers that browsers watch; closed with the server.
+	stats *api.StatsHub
 	// tunnel holds the live agent connections; agents creates agent
 	// environments and enrols agents.
 	tunnel  *tunnel.Hub
@@ -169,6 +171,7 @@ type RouterDeps struct {
 	Events        api.EventsDeps
 	Logs          api.LogsDeps
 	ServiceLogs   api.ServiceLogsDeps
+	Stats         api.StatsDeps
 	Shells        api.ShellsDeps
 	EnvStream     api.EnvStreamDeps
 	Recent        api.RecentDeps
@@ -218,6 +221,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterEvents(r, d.Events)
 	api.RegisterLogs(r, d.Logs)
 	api.RegisterServiceLogs(r, d.ServiceLogs)
+	api.RegisterStats(r, d.Stats)
 	api.RegisterShells(r, d.Shells)
 	api.RegisterEnvStream(r, d.EnvStream)
 	api.RegisterRecent(r, d.Recent)
@@ -678,6 +682,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// The job hub holds the pulls in progress. It is memory only; the audit log is the
 	// record, and Close ends every running job before the database closes (D-26).
 	jobHub := jobs.New(jobs.Options{})
+	// One sampler hub serves every viewer of any container's stats (D-29 to D-31).
+	statsHub := api.NewStatsHub(aggregator, api.StatsHubOptions{Log: log})
 	registryStore := registry.NewStore(st, vlt, nil)
 	resolver := registry.NewResolver(registryStore)
 	// Every call the server makes to a registry dials through one egress policy (T-05-38).
@@ -759,6 +765,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Events:        api.EventsDeps{Aggregator: aggregator, Log: log},
 		Logs:          api.LogsDeps{Aggregator: aggregator, Audit: aud, Checker: checker, Log: log},
 		ServiceLogs:   api.ServiceLogsDeps{Clusters: clusters, Audit: aud, Checker: checker, Log: log},
+		Stats:         api.StatsDeps{Aggregator: aggregator, Hub: statsHub, Log: log},
 		Shells:        api.ShellsDeps{Aggregator: aggregator, Registry: shellRegistry, Audit: aud, Checker: checker, Instance: inst, SelfContainerID: selfID, Store: st, Log: log},
 		EnvStream:     api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
 		Recent:        api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Refusals: refusals, Log: log},
@@ -777,6 +784,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).
 	if err := httpx.VerifyAllGuarded(router); err != nil {
 		jobHub.Close()
+		statsHub.Close()
 		tunnelHub.Close()
 		aggregator.Close()
 		hub.Close()
@@ -806,6 +814,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		broker:     broker,
 		shells:     shellRegistry,
 		jobs:       jobHub,
+		stats:      statsHub,
 		resolver:   resolver,
 		tunnel:     tunnelHub,
 		agents:     agentSvc,
@@ -835,6 +844,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		stop()
 		srv.background.Wait()
 		jobHub.Close()
+		statsHub.Close()
 		tunnelHub.Close()
 		aggregator.Close()
 		hub.Close()
@@ -933,6 +943,8 @@ func (s *Server) Close() error {
 	s.shells.CloseAll("server_shutdown")
 	// Pulls in flight are cancelled and waited for, so their audit rows are written.
 	s.jobs.Close()
+	// Before the aggregator, so no sample is asked of an engine that is going away.
+	s.stats.Close()
 	s.broker.Close()
 	s.updater.Close()
 	s.tunnel.Close()
