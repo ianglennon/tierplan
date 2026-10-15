@@ -503,6 +503,8 @@ type Fake struct {
 	execs fakeExecs
 	// logs is the container log state (fake_logs.go).
 	logs fakeLogs
+	// svcLogs is the service log state (fake_servicelogs.go).
+	svcLogs fakeServiceLogs
 	// nets are the networks created through the fake, and netCreates the bodies of
 	// those requests (fake_networks.go).
 	nets       []FakeNetwork

@@ -325,8 +325,21 @@ func (c *Clusters) ClusterRead(ctx context.Context, envID string, fn func(*docke
 	return err
 }
 
+// StreamOnManager runs fn on one manager of the environment, once, for a stream the
+// caller keeps open for as long as it reads it (a followed service log). The manager is the
+// one a cluster read would choose: the leader when it is connected, else the best of the
+// others, and the server's own socket for a local swarm manager. fn is never run again
+// on another manager, whatever it returns: a stream that dropped has already shown part
+// of its answer, so the caller resumes from what it showed, and a tunnel error is noted
+// against the manager so that the next choice leaves it. It is a read: nothing may be
+// changed through it. ErrNoManager means no manager agent is connected.
 func (c *Clusters) StreamOnManager(ctx context.Context, envID string, fn func(*dockerx.Client) error) error {
-	return errors.New("not implemented")
+	in, err := c.svc.Input(ctx, envID, c.now())
+	if err != nil {
+		return err
+	}
+	_, err = c.readWith(ctx, in, fn, false)
+	return err
 }
 
 // IsSwarm reports whether the environment is a swarm: an agent environment whose agents
@@ -352,6 +365,12 @@ func (c *Clusters) IsSwarm(ctx context.Context, envID string) (bool, error) {
 // read is ClusterRead over an input already taken, and also says which manager
 // answered.
 func (c *Clusters) read(ctx context.Context, in RollupInput, fn func(*dockerx.Client) error) (AgentView, error) {
+	return c.readWith(ctx, in, fn, true)
+}
+
+// readWith is read, and when retry is false it never runs fn on a second manager: a tunnel
+// error is noted against the manager and returned.
+func (c *Clusters) readWith(ctx context.Context, in RollupInput, fn func(*dockerx.Client) error, retry bool) (AgentView, error) {
 	if in.Kind == KindLocal && in.Local.Probe.Type == dockerx.TypeSwarmManager {
 		// The server's own socket is a swarm manager: it is the one engine there is, so
 		// there is no choice to make and no other manager to fail over to.
@@ -386,7 +405,7 @@ func (c *Clusters) read(ctx context.Context, in RollupInput, fn func(*dockerx.Cl
 	}
 	// The tunnel to that manager is gone: a read is safe to repeat, once.
 	c.noteFailure(e, first.ID)
-	if len(cands) < 2 {
+	if !retry || len(cands) < 2 {
 		return first, err
 	}
 	next := cands[1]

@@ -295,7 +295,7 @@ func TestTaskLogsOfAnUnknownTaskIsAnError(t *testing.T) {
 func frame(kind byte, text string) []byte {
 	h := make([]byte, 8, 8+len(text))
 	h[0] = kind
-	binary.BigEndian.PutUint32(h[4:], uint32(len(text)))
+	binary.BigEndian.PutUint32(h[4:], uint32(len(text))) //nolint:gosec // a test line is far below 4 GiB
 	return append(h, text...)
 }
 

@@ -399,7 +399,8 @@ const (
 	streamOther streamKind = iota
 	// streamEvents is the events feed: endless, uncapped, not interactive.
 	streamEvents
-	// streamLogs is a container's logs, which a client may follow for hours.
+	// streamLogs is the logs of a container, a service or a task, which a client may follow
+	// for hours.
 	streamLogs
 	// streamExec is the start of an exec, whose stream carries a shell.
 	streamExec
@@ -419,14 +420,17 @@ var (
 	requestLine = regexp.MustCompile(`^([A-Z]+) (\S+) HTTP/1\.[01]\r\n`)
 	// versionedPath splits an optional /vX.Y prefix off a Docker path.
 	versionedPath = regexp.MustCompile(`^/v[0-9]+(?:\.[0-9]+)?(/.*)$`)
-	// logsPath and execStartPath are the two stream routes besides the events feed.
-	logsPath      = regexp.MustCompile(`^/containers/[^/]+/logs$`)
+	// logsPath and execStartPath are the two stream routes besides the events feed. A
+	// service's and a task's logs are as long-lived as a container's (a swarm manager
+	// answers them on one stream), so without services and tasks here a followed service
+	// log would be an ordinary call and die at the response cap (plan 06-29, D-37).
+	logsPath      = regexp.MustCompile(`^/(containers|services|tasks)/[^/]+/logs$`)
 	execStartPath = regexp.MustCompile(`^/exec/[^/]+/start$`)
 )
 
 // startsStreamRequest classifies p when it begins an HTTP request: the events feed
-// (any method, a path ending in /events), a container's logs (GET
-// /containers/{id}/logs) or an exec start (POST /exec/{id}/start), each with or
+// (any method, a path ending in /events), the logs of a container, a service or a task (GET
+// /containers/{id}/logs, /services/{id}/logs, /tasks/{id}/logs) or an exec start (POST /exec/{id}/start), each with or
 // without a /vX.Y prefix, and every other request as streamOther. It reports ok false
 // when p is not the start of a request at all, for example the next piece of a body,
 // or a first write too short to hold the whole request line, so the caller keeps what

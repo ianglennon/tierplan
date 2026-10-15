@@ -121,6 +121,13 @@ func read(name, tail string) route {
 	return route{name: name, method: http.MethodGet, path: pathOf(tail), anyQuery: true}
 }
 
+// serviceLogKeys are the query keys of a service's and a task's logs: the seven the server
+// sends, with the same value shapes as a container's logs, and no until.
+var serviceLogKeys = map[string]*regexp.Regexp{
+	"stdout": boolValue, "stderr": boolValue, "timestamps": boolValue, "follow": boolValue,
+	"details": boolValue, "since": logTime, "tail": tailValue,
+}
+
 // routes is the whole surface the agent forwards, and the first place to look
 // when asking whether the agent may do something. It is consulted after the
 // read-only flag, so no entry can reach a write on a read-only host (D-35).
@@ -162,8 +169,8 @@ var routes = []route{
 	// read as an inspect), the create and the update, which take the service's whole
 	// spec as their body and the registry credential its image needs, and the
 	// remove, which takes no key. A spec that gives tasks host access is refused by
-	// the body validator unless the host allows it (D-36). The logs of a service are
-	// added by the plan that needs them.
+	// the body validator unless the host allows it (D-36). The logs of a service and of a
+	// task are further down, beside the container logs.
 	{
 		name: "service inspect", method: http.MethodGet, path: pathOf(`services/` + idShape),
 		query: map[string]*regexp.Regexp{"insertDefaults": boolValue},
@@ -229,6 +236,19 @@ var routes = []route{
 			"stdout": boolValue, "stderr": boolValue, "timestamps": boolValue, "follow": boolValue,
 			"details": boolValue, "since": logTime, "until": logTime, "tail": tailValue,
 		},
+	},
+
+	// The logs of a service (all its tasks, on one stream a manager answers) and of one
+	// task, followed or not. The keys are the container log keys without until, which the
+	// engine ignores on both routes (RESEARCH E2); the server cuts by time itself. They sit
+	// after "service inspect" and "tasks", which cannot match a path ending in /logs.
+	{
+		name: "service logs", method: http.MethodGet, path: pathOf(`services/` + idShape + `/logs`),
+		query: serviceLogKeys,
+	},
+	{
+		name: "task logs", method: http.MethodGet, path: pathOf(`tasks/` + idShape + `/logs`),
+		query: serviceLogKeys,
 	},
 
 	// A shell: create the exec, start it (the one HTTP upgrade the agent
