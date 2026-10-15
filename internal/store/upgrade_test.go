@@ -155,19 +155,21 @@ func TestVersion14DatabaseUpgradesToHeadWithRestartLoopDefaults(t *testing.T) {
 func assertRestartLoopChecks(t *testing.T, s *store.Store) {
 	t.Helper()
 	ctx := context.Background()
+	const failures = `UPDATE environments SET restart_loop_failures = ? WHERE id = 'env-a'`
+	const window = `UPDATE environments SET restart_loop_window_minutes = ? WHERE id = 'env-a'`
 	for _, c := range []struct {
-		col  string
-		val  int
-		want bool
+		name, query string
+		val         int
+		want        bool
 	}{
-		{"restart_loop_failures", 1, false}, {"restart_loop_failures", 2, true},
-		{"restart_loop_failures", 50, true}, {"restart_loop_failures", 51, false},
-		{"restart_loop_window_minutes", 0, false}, {"restart_loop_window_minutes", 1, true},
-		{"restart_loop_window_minutes", 120, true}, {"restart_loop_window_minutes", 121, false},
+		{"restart_loop_failures", failures, 1, false}, {"restart_loop_failures", failures, 2, true},
+		{"restart_loop_failures", failures, 50, true}, {"restart_loop_failures", failures, 51, false},
+		{"restart_loop_window_minutes", window, 0, false}, {"restart_loop_window_minutes", window, 1, true},
+		{"restart_loop_window_minutes", window, 120, true}, {"restart_loop_window_minutes", window, 121, false},
 	} {
-		_, err := s.Write.ExecContext(ctx, `UPDATE environments SET `+c.col+` = ? WHERE id = 'env-a'`, c.val)
+		_, err := s.Write.ExecContext(ctx, c.query, c.val)
 		if (err == nil) != c.want {
-			t.Errorf("%s = %d: accepted = %v, want %v (%v)", c.col, c.val, err == nil, c.want, err)
+			t.Errorf("%s = %d: accepted = %v, want %v (%v)", c.name, c.val, err == nil, c.want, err)
 		}
 	}
 	if _, err := s.Write.ExecContext(ctx, `UPDATE environments SET restart_loop_failures = 3, restart_loop_window_minutes = 10 WHERE id = 'env-a'`); err != nil {

@@ -943,7 +943,7 @@ func newLoopRig(t *testing.T) *loopRig {
 	t.Helper()
 	services := []dockertest.FakeService{{ID: "svc-web", Name: "web", Mode: "replicated", Running: 1, Desired: 1}}
 	l := &loopRig{swarmRig: newSwarmRig(t, managerNodes(), services), services: services}
-	l.clock = tunneltest.NewClock(l.swarmRig.clk.Now())
+	l.clock = tunneltest.NewClock(l.clk.Now())
 	l.c = NewClusters(l.svc, l.snaps, ClusterOptions{
 		Now: l.clock.Now, Publisher: l.brk, Events: l.evs, Grace: 2 * time.Minute,
 	})
