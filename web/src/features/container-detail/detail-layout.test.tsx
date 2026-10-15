@@ -159,7 +159,11 @@ beforeEach(() => {
         case `/api/env/${ENV}/containers/web-id/inspect`:
           return inspectAnswer();
         case `/api/env/${ENV}/containers/web-id/restart-loop-mute`:
-          return Response.json({ containerId: "web-id", muted: req.method === "PUT", changed: true });
+          return Response.json({
+            containerId: "web-id",
+            muted: req.method === "PUT",
+            changed: true,
+          });
         case `/api/env/${ENV}/containers/actions`:
         case `/api/env/${ENV}/containers/remove`:
           return actionAnswer();

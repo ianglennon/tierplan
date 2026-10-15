@@ -144,7 +144,7 @@ type Entry =
     }
   | { kind: "manyOffline"; key: string; severity: "error"; since?: string; count: number }
   | {
-      kind: "manyLoops";
+      kind: "manyLoops" | "manyContainerLoops";
       key: string;
       severity: "error";
       since?: string;
@@ -157,7 +157,7 @@ type Entry =
 const REGISTRY_KINDS = ["expired", "auth_failed", "expiring"] as const;
 
 const entryKey = (w: EnvWarning) =>
-  `${w.id}:${w.envId ?? ""}:${w.agentId ?? w.node ?? w.serviceId ?? ""}`;
+  `${w.id}:${w.envId ?? ""}:${w.agentId ?? w.node ?? w.serviceId ?? w.containerId ?? ""}`;
 
 // bellEntries is what the bell lists, in order: errors before warnings, then newest
 // first, and what has no time after what has, in the order it came. More than five
@@ -193,42 +193,53 @@ export function bellEntries(
   }
   // Restart loops: one named item for one service, one item for several in the same
   // environment (UI-SPEC "Restart loop"), so a stack that is meant to fail does not fill the bell.
+  // Standalone containers that keep restarting are told the same way, apart from the services.
   const loops = new Map<string, EnvWarning[]>();
+  const containerLoops = new Map<string, EnvWarning[]>();
   for (const w of env) {
     if (w.id === "restart_loop") {
       loops.set(w.envId ?? "", [...(loops.get(w.envId ?? "") ?? []), w]);
       continue;
     }
+    if (w.id === "restart_loop_container") {
+      containerLoops.set(w.envId ?? "", [...(containerLoops.get(w.envId ?? "") ?? []), w]);
+      continue;
+    }
     if (collapse && w.id === "env_offline") continue;
     entries.push({ kind: "env", key: entryKey(w), severity: w.severity, since: w.since, w });
   }
-  for (const [envId, ws] of loops) {
-    const [first] = ws;
-    if (!first) continue;
-    if (ws.length === 1) {
+  for (const [kind, groups] of [
+    ["manyLoops", loops],
+    ["manyContainerLoops", containerLoops],
+  ] as const) {
+    for (const [envId, ws] of groups) {
+      const [first] = ws;
+      if (!first) continue;
+      if (ws.length === 1) {
+        entries.push({
+          kind: "env",
+          key: entryKey(first),
+          severity: first.severity,
+          since: first.since,
+          w: first,
+        });
+        continue;
+      }
+      const newest =
+        ws
+          .map((w) => w.since ?? "")
+          .sort()
+          .at(-1) || undefined;
       entries.push({
-        kind: "env",
-        key: entryKey(first),
-        severity: first.severity,
-        since: first.since,
-        w: first,
+        kind,
+        key: `${kind === "manyLoops" ? "restart_loops" : "restart_loop_containers"}:${envId}`,
+        severity: "error",
+        since: newest,
+        envId,
+        envName: first.envName ?? "",
+        count: ws.length,
       });
-      continue;
     }
-    const newest =
-      ws
-        .map((w) => w.since ?? "")
-        .sort()
-        .at(-1) || undefined;
-    entries.push({
-      kind: "manyLoops",
-      key: `restart_loops:${envId}`,
-      severity: "error",
-      since: newest,
-      envId,
-      envName: first.envName ?? "",
-      count: ws.length,
-    });
   }
   if (instance.plainHttp)
     entries.push({ kind: "plainHttp", key: "plain_http", severity: "warning" });
@@ -537,6 +548,32 @@ function EnvEntry({ w, close, finishSetup, canFinishSetup }: { w: EnvWarning } &
         </BellItem>
       );
     }
+    case "restart_loop_container": {
+      const window = t("restartLoop.minutes", { count: w.windowMinutes ?? 0 });
+      return (
+        <BellItem
+          id={w.id}
+          title={t("restartLoop.container.bell.title", { env: name, name: w.container ?? "" })}
+        >
+          <ItemDescription className="line-clamp-none wrap-anywhere">
+            {t("restartLoop.container.bell.body", {
+              count: w.count ?? 0,
+              window,
+              code: w.lastExitCode ?? "",
+            })}
+          </ItemDescription>
+          <Link
+            to="/env/$envId/containers/$containerId"
+            params={{ envId, containerId: w.containerId ?? w.container ?? "" }}
+            search={{ node: w.nodeId }}
+            className={`${linkClass} text-sm ${touchLink}`}
+            onClick={close}
+          >
+            {t("restartLoop.container.bell.open")}
+          </Link>
+        </BellItem>
+      );
+    }
     case "clock_skew":
       return (
         <BellItem id={w.id} title={t("bell.env.clock.title", { node })}>
@@ -780,6 +817,29 @@ export function HealthBell() {
                             onClick={actions.close}
                           >
                             {t("restartLoop.bell.manyShow")}
+                          </Link>
+                        </BellItem>
+                      );
+                    case "manyContainerLoops":
+                      return (
+                        <BellItem
+                          key={entry.key}
+                          id="restart_loop_container"
+                          title={t("restartLoop.container.bell.manyTitle", {
+                            env: entry.envName,
+                            count: entry.count,
+                          })}
+                        >
+                          <ItemDescription className="line-clamp-none wrap-anywhere">
+                            {t("restartLoop.bell.manyBody")}
+                          </ItemDescription>
+                          <Link
+                            to="/env/$envId/containers"
+                            params={{ envId: entry.envId }}
+                            className={`${linkClass} text-sm ${touchLink}`}
+                            onClick={actions.close}
+                          >
+                            {t("restartLoop.container.bell.manyShow")}
                           </Link>
                         </BellItem>
                       );

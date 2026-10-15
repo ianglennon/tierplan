@@ -39,7 +39,11 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (req: Request) => {
       const url = new URL(req.url);
-      sent.push({ method: req.method, path: url.pathname, ...(url.search && { search: url.search }) });
+      sent.push({
+        method: req.method,
+        path: url.pathname,
+        ...(url.search && { search: url.search }),
+      });
       return answer();
     }),
   );

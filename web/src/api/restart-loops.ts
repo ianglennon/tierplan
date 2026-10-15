@@ -6,6 +6,7 @@ import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query
 import { api } from "@/api/client";
 import { summaryQuery } from "@/api/environments";
 import { readProblem } from "@/api/problem";
+import { listKey } from "@/api/resources";
 import type { components } from "@/api/schema";
 import { servicesKey } from "@/api/services";
 import { ENV_WARNINGS_KEY } from "@/api/warnings";
@@ -129,6 +130,54 @@ export function useSetRestartLoopMute(envId: string) {
       void queryClient.invalidateQueries({ queryKey: servicesKey(envId) });
       void queryClient.invalidateQueries({ queryKey: ENV_WARNINGS_KEY });
       void queryClient.invalidateQueries({ queryKey: summaryQuery(envId).queryKey });
+    },
+  });
+}
+
+export interface ContainerMuteRequest {
+  // The node the container is on, as its row of the containers list names it.
+  nodeId: string;
+  containerId: string;
+  // The name, for the toast: the person knows the container by it.
+  name: string;
+  // True to mute, false to unmute.
+  muted: boolean;
+}
+
+// useSetContainerRestartLoopMute mutes or unmutes the restart-loop alerts of one standalone
+// container (RES-13, D-16). The server keys the mute by node and name. Like the service's, the
+// toasts belong to the mutation because the menu closes before the answer arrives, and it reads
+// again everything the mute changes: the containers list and pages, the bell and the summary.
+export function useSetContainerRestartLoopMute(envId: string) {
+  const t = useT();
+  const queryClient = useQueryClient();
+  return useMutation<unknown, RestartLoopRequestError, ContainerMuteRequest>({
+    retry: false,
+    mutationFn: async ({ nodeId, containerId, muted }) => {
+      try {
+        const params = { params: { path: { envId, containerId }, query: { nodeId } } };
+        const res = muted
+          ? await api.PUT("/api/env/{envId}/containers/{containerId}/restart-loop-mute", params)
+          : await api.DELETE("/api/env/{envId}/containers/{containerId}/restart-loop-mute", params);
+        if (!res.data) {
+          const problem = readProblem(res.error, res.response);
+          throw new RestartLoopRequestError(problem.status, problem.type);
+        }
+        return res.data;
+      } catch (e) {
+        throw e instanceof RestartLoopRequestError ? e : new RestartLoopRequestError(0);
+      }
+    },
+    onSuccess: (_data, { name, muted }) => {
+      toastSuccess(t(muted ? "restartLoop.mute.done" : "restartLoop.mute.undone", { name }));
+    },
+    onError: (_error, { name }) => {
+      toastError(t("restartLoop.mute.failed", { name }));
+    },
+    onSettled: () => {
+      // The detail pages share the list's key prefix.
+      void queryClient.invalidateQueries({ queryKey: listKey(envId, "containers") });
+      void queryClient.invalidateQueries({ queryKey: ENV_WARNINGS_KEY });
     },
   });
 }

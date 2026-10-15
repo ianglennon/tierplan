@@ -26,6 +26,7 @@ import { CONTAINER_TABS, type ContainerTab } from "@/features/container-detail/t
 import { ContainerStateCell } from "@/features/containers/container-state-cell";
 import { SelfContainerBadge } from "@/features/containers/self-container-badge";
 import { useEnvIsSwarm } from "@/features/resources/swarm-lists";
+import { RestartLoopBadge } from "@/features/restart-loop/restart-loop-badge";
 import { useDocumentTitle } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -177,6 +178,7 @@ export function DetailLayout({ envId, containerId, node }: DetailLayoutProps) {
                   <TooltipContent className="break-all">{data.name}</TooltipContent>
                 </Tooltip>
                 <ContainerStateCell state={data.state} health={data.health} />
+                <RestartLoopBadge loop={data.restartLoop} muted={data.muted} kind="container" />
                 {isSwarm && data.node ? (
                   <Badge variant="outline" className="shrink-0">
                     {data.node}

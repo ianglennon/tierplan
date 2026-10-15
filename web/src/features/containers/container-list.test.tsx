@@ -1340,7 +1340,9 @@ describe("container list: restart loops", () => {
     mount();
     const crashy = (await screen.findByRole("row", { name: /crashy/ })) as HTMLElement;
     expect(within(crashy).getByText("Restart loop")).toBeTruthy();
-    expect(within(screen.getByRole("row", { name: /calm/ })).queryByText("Restart loop")).toBeNull();
+    expect(
+      within(screen.getByRole("row", { name: /calm/ })).queryByText("Restart loop"),
+    ).toBeNull();
   });
 
   it("says the restarts and the last exit code in the badge's tooltip", async () => {

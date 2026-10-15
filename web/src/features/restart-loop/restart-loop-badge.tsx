@@ -10,10 +10,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useT } from "@/i18n/use-t";
 
 export type RestartLoop = components["schemas"]["RestartLoopBody"];
+export type ContainerRestartLoop = components["schemas"]["ContainerRestartLoopBody"];
 
 interface RestartLoopBadgeProps {
-  // The loop, while the service is in one. Its state says whether the alerts are muted.
-  loop?: RestartLoop;
+  // The loop, while the service or the container is in one. Its state says whether the alerts
+  // are muted, and a container's loop (kind "container") tells restarts and the last exit code
+  // where a service's tells failed tasks and the latest error.
+  loop?: RestartLoop | ContainerRestartLoop;
   // True when the service's alerts are muted, looping or not: the detail header shows the
   // Muted badge whenever it is (D-16). A list passes only the loop, so a quiet muted service
   // shows nothing there.
@@ -22,7 +25,8 @@ interface RestartLoopBadgeProps {
   kind?: "service" | "container";
 }
 
-// RestartLoopBadge flags a service whose tasks keep failing (RES-13, D-15): an outline badge
+// RestartLoopBadge flags a service whose tasks keep failing, or a standalone container that keeps
+// dying (RES-13, D-15): an outline badge
 // with the offline dot and "Restart loop" in the offline text colour. The user confirmed that
 // this treatment, and not a red fill, meets D-15's red badge (UI-SPEC Color "Restart-loop badge
 // treatment"). A tooltip gives the numbers and the latest error, clamped to three lines. The
@@ -55,9 +59,22 @@ export function RestartLoopBadge({ loop, muted = false, kind = "service" }: Rest
     );
   }
   const window = t("restartLoop.minutes", { count: loop.windowMinutes });
-  const tooltip = loop.latestError
-    ? t("restartLoop.tooltip.latest", { count: loop.count, window, error: loop.latestError })
-    : t("restartLoop.tooltip.count", { count: loop.count, window });
+  let tooltip: string;
+  if ("lastExitCode" in loop) {
+    tooltip = t("restartLoop.container.tooltip", {
+      count: loop.count,
+      window,
+      code: loop.lastExitCode,
+    });
+  } else if (loop.latestError) {
+    tooltip = t("restartLoop.tooltip.latest", {
+      count: loop.count,
+      window,
+      error: loop.latestError,
+    });
+  } else {
+    tooltip = t("restartLoop.tooltip.count", { count: loop.count, window });
+  }
   return (
     <Tooltip>
       <TooltipTrigger asChild>

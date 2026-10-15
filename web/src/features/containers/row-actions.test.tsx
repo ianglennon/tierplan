@@ -667,7 +667,9 @@ describe("ContainerRowActions restart-loop mute", () => {
   it("offers Unmute for a muted loop", async () => {
     mount(flagged("muted"));
     await openMenu("crashy");
-    expect(await screen.findByRole("menuitem", { name: "Unmute restart-loop alerts" })).toBeTruthy();
+    expect(
+      await screen.findByRole("menuitem", { name: "Unmute restart-loop alerts" }),
+    ).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: "Mute restart-loop alerts" })).toBeNull();
   });
 

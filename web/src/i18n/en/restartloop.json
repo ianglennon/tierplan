@@ -59,6 +59,19 @@
       "saved": "Settings saved.",
       "saveFailed": "Couldn't save the settings. Check the connection and try again.",
       "loadFailed": "Couldn't load the settings."
+    },
+    "container": {
+      "tooltip_one": "{{count}} restart in the last {{window}}. Last exit code {{code}}.",
+      "tooltip_other": "{{count}} restarts in the last {{window}}. Last exit code {{code}}.",
+      "bell": {
+        "title": "{{env}}: {{name}} keeps restarting",
+        "body_one": "{{count}} restart in the last {{window}}. Last exit code {{code}}.",
+        "body_other": "{{count}} restarts in the last {{window}}. Last exit code {{code}}.",
+        "open": "Open container",
+        "manyTitle_one": "{{env}}: {{count}} container keeps restarting",
+        "manyTitle_other": "{{env}}: {{count}} containers keep restarting",
+        "manyShow": "Show containers"
+      }
     }
   }
 }
