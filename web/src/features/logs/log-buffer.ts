@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import type { SwarmMark } from "@/features/logs/log-source";
+import { isSlotMark, type SwarmMark } from "@/features/logs/log-source";
 
 // How many lines the browser keeps (D-17). Past it the oldest are dropped and counted,
 // and the viewer says so, because the page would otherwise grow with the log for as
@@ -127,8 +127,37 @@ export class LogBuffer {
   // before it is dropped (a reconnect tells again). A marker older than every line held has
   // nothing to sit beside and is not kept. It counts as a line for the jump pill.
   insertSwarmMarker(mark: SwarmMark, at: string): void {
-    void mark;
-    void at;
+    for (let i = this.items.length - 1; i >= this.start; i--) {
+      const row = this.items[i] as BufferedLine;
+      const held = row.swarm;
+      if (!held) continue;
+      if (isSlotMark(mark)) {
+        if (!isSlotMark(held) || held.old !== mark.old) continue;
+        if (held.kind === mark.kind && held.new === mark.new) return;
+        this.items[i] = { ...row, swarm: mark };
+        this.bump();
+        return;
+      }
+      if (isSlotMark(held) || held.node !== mark.node) continue;
+      // The last thing said about this node: the same again says nothing new.
+      if (held.kind === mark.kind) return;
+      break;
+    }
+    const when = at || new Date().toISOString();
+    let i = this.items.length;
+    while (i > this.start && (this.items[i - 1] as BufferedLine).t > when) i--;
+    if (i === this.start && this.length > 0) return;
+    this.items.splice(i, 0, {
+      t: when,
+      s: "o",
+      m: "",
+      seq: this.nextSeq++,
+      marker: "swarm",
+      swarm: mark,
+    });
+    this.pushedLines++;
+    this.trim();
+    this.bump();
   }
 
   // Adds a page of earlier lines at the top (Load earlier lines). The page may repeat

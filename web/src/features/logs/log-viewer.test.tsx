@@ -1520,17 +1520,22 @@ describe("a service's markers and filters", () => {
     expect(screen.getAllByRole("separator")).toHaveLength(2);
   });
 
-  it("does not search or count a marker as a line of the log", async () => {
+  it("does not search a marker as a line of the log", async () => {
     renderService();
     await ready();
     await lines([row(1, "t1", 1, "alpha", "one")]);
     await frame("marker", replaced);
-    fireEvent.change(screen.getByRole("searchbox", { name: "Search logs" }), {
-      target: { value: "replaced" },
-    });
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 200));
-    });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      fireEvent.change(screen.getByRole("searchbox", { name: "Search logs" }), {
+        target: { value: "replaced" },
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
     expect(screen.getByText("No matches")).toBeTruthy();
   });
 

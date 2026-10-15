@@ -60,3 +60,15 @@ export type SwarmMark = Omit<ServiceMarkerEvent, "at"> | Omit<ServiceNodeEvent, 
 
 export const isSlotMark = (m: SwarmMark): m is Omit<ServiceMarkerEvent, "at"> =>
   m.kind === "replaced" || m.kind === "stopped";
+
+// The states after which a task writes nothing more: Docker's own, as a task row gives them.
+const ENDED_TASK_STATES: ReadonlySet<string> = new Set([
+  "complete",
+  "failed",
+  "shutdown",
+  "rejected",
+  "remove",
+  "orphaned",
+]);
+
+export const isEndedTaskState = (state: string): boolean => ENDED_TASK_STATES.has(state);

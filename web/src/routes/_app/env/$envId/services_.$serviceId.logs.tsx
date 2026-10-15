@@ -4,16 +4,23 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 
-import { serviceQuery } from "@/api/services";
+import { useMemo } from "react";
+
+import { nodesQuery } from "@/api/nodes";
+import { serviceQuery, serviceTasksQuery } from "@/api/services";
 import { type LogViewParams, serviceLogSearchSchema } from "@/features/logs/log-prefs";
 import { LogViewer } from "@/features/logs/log-viewer";
+import { filterOptionsFrom } from "@/features/logs/task-filter-bar";
+import { usePermission } from "@/hooks/use-me";
 
 // The Logs tab of a service: the log of all its tasks in one, live (plan 06-29, OBS-02,
 // D-35). The page frame owns the gone state and the permission check; this draws the viewer
 // for the service the URL names. The range, the search, the toggles, the task prefixes, the
 // tasks and nodes the log is narrowed to and the stopped switch live in the address, so a link
 // and a reload open the same view; changing one replaces the address rather than adding a
-// history entry per keystroke.
+// history entry per keystroke. The Tasks and Nodes lists of the filters come from the service's
+// tasks (the Tasks tab's own query, so one read serves both) and, for a caller who may read
+// nodes, the swarm's nodes, which add the role badge (plan 06-30, D-33).
 function ServiceLogsRoute() {
   const { envId, serviceId } = Route.useParams();
   const { since, q, ts, utc, wrap, prefix, task, node, stopped } = Route.useSearch();
@@ -35,6 +42,15 @@ function ServiceLogsRoute() {
     });
   // The layout reads the detail too, so this is the cached answer; it names the surface.
   const detail = useQuery(serviceQuery(envId, serviceId));
+  const tasks = useQuery(serviceTasksQuery(envId, serviceId));
+  // A caller without nodes.read is not asked: the read would be refused, and a refused read
+  // under an environment reads as lost access. The role badge is left out for them.
+  const mayReadNodes = usePermission("nodes.read", envId);
+  const nodes = useQuery({ ...nodesQuery(envId), enabled: mayReadNodes, refetchInterval: false });
+  const filterOptions = useMemo(
+    () => filterOptionsFrom(tasks.data, nodes.data),
+    [tasks.data, nodes.data],
+  );
   return (
     <LogViewer
       envId={envId}
@@ -42,6 +58,7 @@ function ServiceLogsRoute() {
       name={detail.data?.name ?? serviceId}
       params={{ since, q, ts, utc, wrap, prefix, task, node, stopped }}
       onParamsChange={onParamsChange}
+      filterOptions={filterOptions}
     />
   );
 }

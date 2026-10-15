@@ -71,6 +71,9 @@ export interface LogToolbarProps {
   // follows, said beside the Live chip once connected. A container's log has neither.
   taskNames?: { on: boolean; onChange: (on: boolean) => void };
   following?: number;
+  // The third row of a service's log: the task and node filters and the stopped switch
+  // (plan 06-30, D-33).
+  filterBar?: ReactNode;
 
   // Shown when the stream is connected or retrying; absent otherwise.
   live?: "live" | "reconnecting";
@@ -217,6 +220,7 @@ export function LogToolbar(p: LogToolbarProps) {
           </>
         )}
       </div>
+      {p.filterBar ? <div className="flex flex-wrap items-center gap-2">{p.filterBar}</div> : null}
       <span role="status" aria-live="polite" className="sr-only">
         {p.announcement}
       </span>

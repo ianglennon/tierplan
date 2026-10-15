@@ -161,6 +161,49 @@ export const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000] as const;
 // of the key.
 const lineKey = (l: LogLineData): string => `${l.s}\u0000${l.task ?? ""}\u0000${l.m}`;
 
+const text = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+const count = (v: unknown): number | undefined =>
+  typeof v === "number" && Number.isFinite(v) ? v : undefined;
+
+// readMarker takes the marker event of a service's stream for what it should be, or nothing:
+// only the fields the viewer uses, and only when they are the right kind of value.
+function readMarker(body: unknown): ServiceMarkerEvent | undefined {
+  if (typeof body !== "object" || body === null) return undefined;
+  const b = body as Record<string, unknown>;
+  const slot = count(b.slot);
+  const old = text(b.old);
+  if ((b.kind !== "replaced" && b.kind !== "stopped") || slot === undefined || !old) {
+    return undefined;
+  }
+  const exitCode = count(b.exitCode);
+  const next = text(b.new);
+  const node = text(b.node);
+  const at = text(b.at);
+  return {
+    kind: b.kind,
+    slot,
+    old,
+    oldState: text(b.oldState) ?? "",
+    oldNode: text(b.oldNode) ?? "",
+    ...(exitCode !== undefined ? { exitCode } : {}),
+    ...(next ? { new: next } : {}),
+    ...(node ? { node } : {}),
+    ...(at ? { at } : {}),
+  };
+}
+
+// readNodeNotice does the same for the node event.
+function readNodeNotice(body: unknown): ServiceNodeEvent | undefined {
+  if (typeof body !== "object" || body === null) return undefined;
+  const b = body as Record<string, unknown>;
+  const node = text(b.node);
+  if ((b.kind !== "down" && b.kind !== "disconnected" && b.kind !== "back") || !node) {
+    return undefined;
+  }
+  const at = text(b.at);
+  return { kind: b.kind, node, ...(at ? { at } : {}) };
+}
+
 function parse<T>(event: Event): T | undefined {
   try {
     return JSON.parse((event as MessageEvent<string>).data) as T;
@@ -303,6 +346,17 @@ export function createLogStream(options: LogStreamOptions): LogStream {
       if (!live()) return;
       const body = parse<{ tasks?: ServiceLogTask[] }>(event);
       if (Array.isArray(body?.tasks)) options.onTasks?.(body.tasks);
+    });
+    // A task of the service was replaced, or a node dropped out or came back.
+    mine.addEventListener("marker", (event) => {
+      if (!live()) return;
+      const marker = readMarker(parse<unknown>(event));
+      if (marker) options.onMarker?.(marker);
+    });
+    mine.addEventListener("node", (event) => {
+      if (!live()) return;
+      const notice = readNodeNotice(parse<unknown>(event));
+      if (notice) options.onNode?.(notice);
     });
     mine.addEventListener("log", (event) => {
       if (!live()) return;

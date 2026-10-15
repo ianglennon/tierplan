@@ -94,6 +94,49 @@
     "service": {
       "emptyBody": "New lines appear here as the service's tasks write them.",
       "noTasksMatch": "No tasks match these filters."
+    },
+    "marker": {
+      "replaced": "— {{label}} replaced: task {{old}} {{what}} → task {{new}} starting on {{node}} —",
+      "stopped": "— {{label}} stopped: task {{old}} {{what}}. Waiting for a new task. —",
+      "what": {
+        "failed": "failed",
+        "failedExit": "failed (exit {{code}})",
+        "shutdown": "shut down",
+        "rejected": "was rejected"
+      }
+    },
+    "nodeNotice": {
+      "down": "— {{node}} is down, so new lines from its tasks can't reach Bayplan. —",
+      "disconnected": "— {{node}} is disconnected, so new lines from its tasks can't reach Bayplan. —",
+      "back": "— {{node}} is back. —"
+    },
+    "filter": {
+      "tasks": "Tasks",
+      "tasksCount": "Tasks ({{count}})",
+      "nodes": "Nodes",
+      "nodesCount": "Nodes ({{count}})",
+      "findTask": "Find a task",
+      "findNode": "Find a node",
+      "taskList": "Tasks of this service",
+      "nodeList": "Nodes running this service",
+      "noTasks": "No tasks",
+      "noNodes": "No nodes",
+      "noMatch": "No match",
+      "clear": "Clear",
+      "selected": "Selected",
+      "taskChip": "Task: {{name}}",
+      "nodeChip": "Node: {{name}}",
+      "taskNotFound": "Task not found",
+      "removeTask": "Remove task filter {{name}}",
+      "removeNode": "Remove node filter {{name}}",
+      "stopped": "Include stopped tasks",
+      "stoppedTooltip": "Off shows only the tasks running now, and new ones as they start.",
+      "role": {
+        "manager": "Manager",
+        "worker": "Worker"
+      },
+      "taskCount_one": "{{count}} task",
+      "taskCount_other": "{{count}} tasks"
     }
   }
 }

@@ -5,6 +5,7 @@ import type { CSSProperties, ReactNode } from "react";
 
 import { type AnsiSpan, ansiToSpans, type Theme } from "@/features/logs/ansi";
 import { type BufferedLine, stampTime } from "@/features/logs/log-buffer";
+import { ReplacementMarker } from "@/features/logs/replacement-marker";
 import { cn } from "@/lib/utils";
 
 // The height of a row. The virtualiser sizes every row by it, so the line height of
@@ -115,6 +116,10 @@ export function LogLineRow({
   theme = "light",
   prefix,
 }: LogLineRowProps) {
+  if (line.marker === "swarm") {
+    // A task of the service was replaced, or a node dropped out: a separator of its own.
+    return <ReplacementMarker text={markerLabel(line)} kind={line.swarm?.kind} />;
+  }
   if (line.marker) {
     // The container started again or stopped: not a line of the log, so it is set
     // apart by hairlines and drawn in the muted colour.
