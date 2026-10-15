@@ -408,3 +408,22 @@ describe("the Inspect tab", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 });
+
+describe("the list route", () => {
+  it("opens the create sheet for new=1 and drops it from the address when the sheet closes", async () => {
+    const router = renderAt(`/env/${ENV}/secrets?new=1`);
+    expect(await screen.findByText("Create a secret")).toBeTruthy();
+    expect(router.state.location.search).toEqual({ new: 1 });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByText("Create a secret")).toBeNull());
+    expect(router.state.location.search).toEqual({});
+  });
+
+  it("puts new=1 in the address when Create secret is pressed", async () => {
+    const router = renderAt(`/env/${ENV}/secrets`);
+    const buttons = await screen.findAllByRole("button", { name: "Create secret" });
+    fireEvent.click(buttons[0] as HTMLElement);
+    await screen.findByText("Create a secret");
+    expect(router.state.location.search).toEqual({ new: 1 });
+  });
+});

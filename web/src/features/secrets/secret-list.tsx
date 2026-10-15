@@ -3,6 +3,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
+import { Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { type SecretItem, secretDetailQuery, secretsQuery } from "@/api/secrets";
@@ -11,7 +12,13 @@ import { NoPermission } from "@/components/full-page-state";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
-import { Empty, EmptyContent, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SearchBox } from "@/features/containers/container-list";
@@ -23,6 +30,7 @@ import {
 } from "@/features/resources/resource-table";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { DeleteSecretDialog, secretDeleteReason } from "@/features/secrets/delete-secret-dialog";
+import { ObjectSheet } from "@/features/secrets/object-sheet";
 import { NotASwarm } from "@/features/services/not-a-swarm";
 import { usePermission } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
@@ -97,7 +105,13 @@ function UsedByPopover({ envId, secret }: { envId: string; secret: SecretItem })
 // secret, who owns it and when it was made and last updated. Nothing in it is a value: the swarm
 // never returns one. For an env Admin it has Delete…; someone who may read but not manage sees it
 // disabled with the reason, and so does Delete… on a secret any service spec mentions (D-27).
-export function SecretList({ envId, q, onSearchChange }: SecretListProps) {
+export function SecretList({
+  envId,
+  q,
+  onSearchChange,
+  creating,
+  onCreatingChange,
+}: SecretListProps) {
   const t = useT();
   const allowed = usePermission("secrets.read", envId);
   const manage = useNeeds("secrets.manage", envId);
@@ -223,6 +237,20 @@ export function SecretList({ envId, q, onSearchChange }: SecretListProps) {
         </Button>
       </EmptyContent>
     </Empty>
+  ) : manage.allowed ? (
+    <Empty className="min-h-[30svh] border">
+      <EmptyHeader>
+        <EmptyTitle role="heading" aria-level={2} className="text-base">
+          {t("secrets.list.empty")}
+        </EmptyTitle>
+        <EmptyDescription>{t("secrets.list.emptyCreateBody")}</EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent>
+        <Button className="max-md:h-11" onClick={() => onCreatingChange(true)}>
+          {t("secrets.create.button")}
+        </Button>
+      </EmptyContent>
+    </Empty>
   ) : undefined;
 
   if (!allowed) return <NoPermission />;
@@ -245,7 +273,23 @@ export function SecretList({ envId, q, onSearchChange }: SecretListProps) {
         capNote={data ? t("secrets.list.cap", { total: data.total }) : undefined}
         retryLabel={t("secrets.list.errorRetry")}
         getRowKey={(s) => s.id}
+        captionExtra={
+          <div className="ml-auto">
+            <NeedsTooltip reason={manage.reason}>
+              <Button
+                className="max-md:h-11"
+                onClick={manage.allowed ? () => onCreatingChange(true) : undefined}
+              >
+                <Plus aria-hidden="true" />
+                {t("secrets.create.button")}
+              </Button>
+            </NeedsTooltip>
+          </div>
+        }
       />
+      {manage.allowed ? (
+        <ObjectSheet envId={envId} kind="secret" open={creating} onOpenChange={onCreatingChange} />
+      ) : null}
       {manage.allowed ? (
         <DeleteSecretDialog envId={envId} secret={deleting} onClose={() => setDeleting(null)} />
       ) : null}

@@ -201,18 +201,33 @@ export function useDeleteSecret(envId: string) {
 export type SecretCreateInput = components["schemas"]["SecretCreateRequest"];
 export type SecretCreated = components["schemas"]["SecretCreateBody"];
 
-// postSecret creates one secret. It never retries: a create whose answer was lost may have
-// happened (P2 D-42). Not built yet.
-export async function postSecret(_envId: string, _body: SecretCreateInput): Promise<SecretCreated> {
-  throw new SecretRequestError(0);
+// postSecret creates one secret. The value goes out in the body, as base64, and nowhere else. It
+// never retries: a create whose answer was lost may have happened (P2 D-42), and the next read of
+// the list says which. A refusal is read for its status and type only; nothing of the request is
+// kept in the error.
+export async function postSecret(envId: string, body: SecretCreateInput): Promise<SecretCreated> {
+  try {
+    const res = await api.POST("/api/env/{envId}/secrets", { params: { path: { envId } }, body });
+    if (!res.data) {
+      const problem = readProblem(res.error, res.response);
+      throw new SecretRequestError(problem.status, problem.type);
+    }
+    return res.data;
+  } catch (e) {
+    // A network failure has no status.
+    throw e instanceof SecretRequestError ? e : new SecretRequestError(0);
+  }
 }
 
-// useCreateSecret is the mutation behind the create sheet. Not built yet.
+// useCreateSecret is the mutation behind the create sheet. It does not retry, reads the list again
+// whatever the answer, and keeps nothing: gcTime 0 drops the mutation, and the value in its
+// variables with it, as soon as nothing observes it (T-06-113).
 export function useCreateSecret(envId: string) {
   const queryClient = useQueryClient();
   return useMutation<SecretCreated, SecretRequestError, SecretCreateInput>({
     mutationFn: (body) => postSecret(envId, body),
     retry: false,
+    gcTime: 0,
     onSettled: () => refreshSecretLists(queryClient, envId),
   });
 }

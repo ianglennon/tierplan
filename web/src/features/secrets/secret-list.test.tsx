@@ -238,7 +238,9 @@ describe("SecretList states", () => {
     me = makeMe({ envs: { [ENV]: "viewer" } });
     mount();
     await screen.findByText("No secrets");
-    expect(document.body.textContent).toContain("Nothing to show on Swarm right now.");
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("Nothing to show on Swarm right now."),
+    );
   });
 
   it("says nothing matches the search with Clear search", async () => {
