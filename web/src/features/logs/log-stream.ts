@@ -4,7 +4,13 @@
 import { api } from "@/api/client";
 import type { EventSourceLike } from "@/features/dashboard/events";
 import type { LogLineData } from "@/features/logs/log-buffer";
-import type { LogSource, ServiceLogFilter, ServiceLogTask } from "@/features/logs/log-source";
+import type {
+  LogSource,
+  ServiceLogFilter,
+  ServiceLogTask,
+  ServiceMarkerEvent,
+  ServiceNodeEvent,
+} from "@/features/logs/log-source";
 import { apiUrl } from "@/lib/base-path";
 
 // Where a log stream stands, as the viewer and its LiveChip need to know it.
@@ -71,6 +77,10 @@ export interface LogStreamOptions extends StreamTarget {
   onReady?: (info: { tty: boolean; tasks?: ServiceLogTask[] }) => void;
   // A service's tasks changed: one was first seen after the stream opened.
   onTasks?: (tasks: ServiceLogTask[]) => void;
+  // A task of the service was replaced, or a slot is waiting for one (D-34), and a node that
+  // runs a followed task stopped reporting or is back (D-37).
+  onMarker?: (marker: ServiceMarkerEvent) => void;
+  onNode?: (notice: ServiceNodeEvent) => void;
   onContainerState?: (state: ContainerLogState) => void;
   // The engine cannot read this container's log. The stream is closed.
   onUnreadable?: (info: UnreadableInfo) => void;

@@ -666,3 +666,88 @@ describe("a service's log", () => {
     });
   });
 });
+
+// The marker and node events of a service's stream (plan 06-30, D-34, D-37).
+describe("a service's markers and node notices", () => {
+  const web = { kind: "service", id: "web" } as const;
+
+  function openService(extra: Partial<LogStreamOptions> = {}) {
+    const markers: unknown[] = [];
+    const notices: unknown[] = [];
+    const stream = createLogStream({
+      envId: "e1",
+      source: web,
+      sid: SID,
+      onLines: () => {},
+      onState: () => {},
+      onMarker: (m) => markers.push(m),
+      onNode: (n) => notices.push(n),
+      ...extra,
+    } as LogStreamOptions);
+    const source = FakeEventSource.instances.at(-1);
+    if (!source) throw new Error("no source");
+    return { stream, source, markers, notices };
+  }
+
+  it("hands on a marker event", () => {
+    const { source, markers } = openService();
+    source.sendFrame("ready", { tty: false, tasks: [] });
+    const m = {
+      kind: "replaced",
+      slot: 2,
+      old: "t1",
+      oldState: "failed",
+      oldNode: "alpha",
+      exitCode: 1,
+      new: "t2",
+      node: "beta",
+      at: "2026-10-14T10:00:02.000000000Z",
+    };
+    source.sendFrame("marker", m);
+    expect(markers).toEqual([m]);
+  });
+
+  it("hands on a stopped marker that has no new task", () => {
+    const { source, markers } = openService();
+    source.sendFrame("marker", {
+      kind: "stopped",
+      slot: 2,
+      old: "t1",
+      oldState: "rejected",
+      oldNode: "alpha",
+    });
+    expect(markers).toEqual([
+      { kind: "stopped", slot: 2, old: "t1", oldState: "rejected", oldNode: "alpha" },
+    ]);
+  });
+
+  it("hands on a node event", () => {
+    const { source, notices } = openService();
+    source.sendFrame("node", { kind: "down", node: "beta", at: "2026-10-14T10:00:02.000Z" });
+    expect(notices).toEqual([{ kind: "down", node: "beta", at: "2026-10-14T10:00:02.000Z" }]);
+  });
+
+  it("ignores events that are not what the server sends", () => {
+    const { source, markers, notices } = openService();
+    source.sendFrame("marker", { kind: "exploded", slot: 1, old: "t1" });
+    source.sendFrame("marker", { kind: "replaced", slot: "x" });
+    source.sendFrame("marker", "nonsense");
+    source.sendFrame("node", { kind: "sideways", node: "beta" });
+    source.sendFrame("node", { kind: "down" });
+    expect(markers).toEqual([]);
+    expect(notices).toEqual([]);
+  });
+
+  it("says nothing once it is closed", () => {
+    const { stream, source, markers } = openService();
+    stream.close();
+    source.sendFrame("marker", {
+      kind: "stopped",
+      slot: 1,
+      old: "t1",
+      oldState: "failed",
+      oldNode: "a",
+    });
+    expect(markers).toEqual([]);
+  });
+});

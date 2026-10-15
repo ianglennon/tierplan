@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
+import type { SwarmMark } from "@/features/logs/log-source";
+
 // How many lines the browser keeps (D-17). Past it the oldest are dropped and counted,
 // and the viewer says so, because the page would otherwise grow with the log for as
 // long as it stays open.
@@ -28,11 +30,14 @@ export interface BufferedLine extends LogLineData {
   // Set on a row that is not a line of the log but a mark the viewer put between lines:
   // the container started again, or stopped. t is when, m is empty.
   marker?: ContainerMarker;
+  // What a "swarm" marker row says: a task of a service was replaced, a slot is waiting for
+  // one, or a node cannot be reached (plan 06-30, D-34, D-37).
+  swarm?: SwarmMark;
 }
 
 // What a marker row says happened to the container (D-20), or to the stream that
 // follows it: it was cut and could not be resumed, so lines may be missing.
-export type ContainerMarker = "restarted" | "stopped" | "interrupted";
+export type ContainerMarker = "restarted" | "stopped" | "interrupted" | "swarm";
 
 type Listener = () => void;
 
@@ -114,6 +119,16 @@ export class LogBuffer {
     this.items.push({ t: at, s: "o", m: "", seq: this.nextSeq++, marker: kind });
     this.trim();
     this.bump();
+  }
+
+  // Puts a swarm marker row where the old task's last line was: after the last line that is
+  // not newer than at. A marker about a task that already has one is updated in place (a
+  // slot that was waiting for a task now has one), and a node notice that repeats the one
+  // before it is dropped (a reconnect tells again). A marker older than every line held has
+  // nothing to sit beside and is not kept. It counts as a line for the jump pill.
+  insertSwarmMarker(mark: SwarmMark, at: string): void {
+    void mark;
+    void at;
   }
 
   // Adds a page of earlier lines at the top (Load earlier lines). The page may repeat

@@ -31,3 +31,32 @@ export interface ServiceLogTask {
   node: string;
   state: string;
 }
+
+// A slot's task ended and (replaced) another took over, or (stopped) none has yet: the
+// marker event of a service's stream (plan 06-30, D-34). at is when the old task ended, in
+// the log's time layout, so the viewer puts it where that task's last line is.
+export interface ServiceMarkerEvent {
+  kind: "replaced" | "stopped";
+  // The replica number; 0 for a task of a global service.
+  slot: number;
+  old: string;
+  oldState: string;
+  oldNode: string;
+  exitCode?: number;
+  new?: string;
+  node?: string;
+  at?: string;
+}
+
+// A node that runs a followed task cannot be reached, or can again: the node event (D-37).
+export interface ServiceNodeEvent {
+  kind: "down" | "disconnected" | "back";
+  node: string;
+  at?: string;
+}
+
+// What a marker row in the buffer says.
+export type SwarmMark = Omit<ServiceMarkerEvent, "at"> | Omit<ServiceNodeEvent, "at">;
+
+export const isSlotMark = (m: SwarmMark): m is Omit<ServiceMarkerEvent, "at"> =>
+  m.kind === "replaced" || m.kind === "stopped";

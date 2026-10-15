@@ -9,6 +9,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import type { LogLineData } from "@/features/logs/log-buffer";
 import { LogViewer, popoutLogsUrl } from "@/features/logs/log-viewer";
+import type { FilterOptions } from "@/features/logs/task-filter-bar";
 import "@/i18n";
 
 // The live log viewer (plan 04-19, OBS-01, D-15, D-16, T-04-67). jsdom lays nothing
@@ -1376,5 +1377,238 @@ describe("a service's log", () => {
       source().sendFrame("state", { state: "stopped", at: "2026-10-14T10:05:00.000Z" });
     });
     expect(screen.queryByText(/Container stopped/)).toBeNull();
+  });
+});
+
+// Markers between a service's lines, and its task and node filters (plan 06-30, OBS-02, D-33,
+// D-34, D-37).
+describe("a service's markers and filters", () => {
+  const tasks = [
+    { id: "t1", slot: 1, node: "alpha", state: "running" },
+    { id: "t2", slot: 2, node: "beta", state: "running" },
+  ];
+  const options: FilterOptions = {
+    loaded: true,
+    tasks: [
+      { id: "t1", slot: 1, node: "alpha", state: "running", ended: false },
+      { id: "t2", slot: 2, node: "beta", state: "running", ended: false },
+    ],
+    nodes: [
+      { name: "alpha", role: "manager", tasks: 1 },
+      { name: "beta", role: "worker", tasks: 1 },
+    ],
+  };
+  const at = (n: number) => `2026-10-14T10:00:${String(n).padStart(2, "0")}.000000000Z`;
+  const row = (n: number, task: string, slot: number, node: string, m: string): LogLineData => ({
+    t: at(n),
+    s: "o",
+    m,
+    task,
+    slot,
+    node,
+  });
+
+  function renderService(props: Partial<ComponentProps<typeof LogViewer>> = {}) {
+    return render(
+      <TooltipProvider>
+        <LogViewer
+          envId="e1"
+          source={{ kind: "service", id: "web" }}
+          name="web"
+          filterOptions={options}
+          {...props}
+        />
+      </TooltipProvider>,
+    );
+  }
+
+  async function ready(index = 0, list: unknown[] = tasks) {
+    await act(async () => {
+      const s = FakeEventSource.instances[index];
+      s?.open();
+      s?.sendFrame("ready", { tty: false, tasks: list });
+    });
+  }
+
+  async function frame(type: string, data: unknown, index = 0) {
+    await act(async () => {
+      FakeEventSource.instances[index]?.sendFrame(type, data);
+    });
+  }
+
+  async function lines(batch: LogLineData[], index = 0) {
+    await act(async () => {
+      FakeEventSource.instances[index]?.sendFrame("log", { lines: batch }, batch.at(-1)?.t ?? "");
+    });
+  }
+
+  const replaced = {
+    kind: "replaced",
+    slot: 1,
+    old: "t1",
+    oldState: "failed",
+    oldNode: "alpha",
+    exitCode: 1,
+    new: "t3",
+    node: "beta",
+    at: at(2),
+  };
+
+  it("puts a replacement marker between the old task's last line and the new task's first", async () => {
+    renderService();
+    await ready();
+    await lines([
+      row(1, "t1", 1, "alpha", "old one"),
+      row(2, "t1", 1, "alpha", "old two"),
+      row(5, "t3", 1, "beta", "new one"),
+    ]);
+    await frame("marker", replaced);
+    const marker = screen.getByRole("separator", {
+      name: "— web.1 replaced: task t1 failed (exit 1) → task t3 starting on beta —",
+    });
+    const two = screen.getByText("old two");
+    const next = screen.getByText("new one");
+    expect(two.compareDocumentPosition(marker) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(marker.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("does not announce a marker: the surface stays aria-live off", async () => {
+    renderService();
+    await ready();
+    await lines([row(1, "t1", 1, "alpha", "one")]);
+    await frame("marker", replaced);
+    const marker = screen.getByRole("separator");
+    expect(marker.closest("[aria-live]")?.getAttribute("aria-live")).toBe("off");
+  });
+
+  it("says a slot is waiting for a task and then that it was replaced, in the same place", async () => {
+    renderService();
+    await ready();
+    await lines([row(1, "t1", 1, "alpha", "one")]);
+    await frame("marker", {
+      kind: "stopped",
+      slot: 1,
+      old: "t1",
+      oldState: "rejected",
+      oldNode: "alpha",
+      at: at(1),
+    });
+    expect(
+      screen.getByRole("separator", {
+        name: "— web.1 stopped: task t1 was rejected. Waiting for a new task. —",
+      }),
+    ).toBeTruthy();
+    await frame("marker", { ...replaced, oldState: "rejected", exitCode: undefined });
+    expect(screen.getAllByRole("separator")).toHaveLength(1);
+    expect(screen.getByRole("separator").getAttribute("aria-label")).toContain("replaced");
+  });
+
+  it("tells that a node cannot be reached, and that it is back, as rows of the log", async () => {
+    renderService();
+    await ready();
+    await lines([row(1, "t2", 2, "beta", "one")]);
+    await frame("node", { kind: "down", node: "beta", at: at(3) });
+    expect(
+      screen.getByRole("separator", {
+        name: "— beta is down, so new lines from its tasks can't reach Bayplan. —",
+      }),
+    ).toBeTruthy();
+    await frame("node", { kind: "back", node: "beta", at: at(4) });
+    expect(screen.getByRole("separator", { name: "— beta is back. —" })).toBeTruthy();
+    // A reconnect that tells the same thing again adds nothing.
+    await frame("node", { kind: "back", node: "beta", at: at(5) });
+    expect(screen.getAllByRole("separator")).toHaveLength(2);
+  });
+
+  it("does not search or count a marker as a line of the log", async () => {
+    renderService();
+    await ready();
+    await lines([row(1, "t1", 1, "alpha", "one")]);
+    await frame("marker", replaced);
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search logs" }), {
+      target: { value: "replaced" },
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 200));
+    });
+    expect(screen.getByText("No matches")).toBeTruthy();
+  });
+
+  it("shows the filter row for a service and none for a container", async () => {
+    renderService();
+    expect(screen.getByRole("button", { name: "Tasks" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Nodes" })).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "Include stopped tasks" })).toBeTruthy();
+    cleanup();
+    render(<LogViewer envId="e1" containerId="c1" name="web" />);
+    expect(screen.queryByRole("switch", { name: "Include stopped tasks" })).toBeNull();
+  });
+
+  it("shows what the address filters by as chips, and a task that matches none as not found", () => {
+    renderService({ params: { task: "t2,nope0000", node: "alpha" } });
+    expect(screen.getByText("Task: web.2")).toBeTruthy();
+    expect(screen.getByText("Task not found")).toBeTruthy();
+    expect(screen.getByText("Node: alpha")).toBeTruthy();
+  });
+
+  it("writes a chosen task, node and the stopped switch to the address", async () => {
+    const onParamsChange = vi.fn();
+    renderService({ params: {}, onParamsChange });
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Tasks" }));
+    fireEvent.click(within(screen.getByRole("listbox")).getAllByRole("option")[1] as HTMLElement);
+    expect(onParamsChange).toHaveBeenLastCalledWith(expect.objectContaining({ task: "t2" }));
+    cleanup();
+
+    const again = vi.fn();
+    renderService({ params: { task: "t2" }, onParamsChange: again });
+    fireEvent.click(screen.getByRole("button", { name: "Remove task filter web.2" }));
+    expect(again).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ task: expect.anything() }),
+    );
+    fireEvent.click(screen.getByRole("switch", { name: "Include stopped tasks" }));
+    expect(again).toHaveBeenLastCalledWith(expect.objectContaining({ stopped: true }));
+  });
+
+  it("narrows the lines already loaded at once and reopens the stream for the new set", async () => {
+    renderService();
+    await ready();
+    await lines([row(1, "t1", 1, "alpha", "from one"), row(2, "t2", 2, "beta", "from two")]);
+    fireEvent.click(screen.getByRole("button", { name: "Tasks" }));
+    fireEvent.click(within(screen.getByRole("listbox")).getAllByRole("option")[1] as HTMLElement);
+
+    expect(FakeEventSource.instances).toHaveLength(2);
+    expect(FakeEventSource.instances[0]?.closed).toBe(true);
+    const url = new URL(FakeEventSource.instances[1]?.url ?? "", "http://x");
+    expect(url.searchParams.get("task")).toBe("t2");
+    expect(url.searchParams.get("tail")).toBe("500");
+    // Before the new stream answers, the lines of the other task are already gone and the
+    // others are not replaced by a skeleton.
+    expect(screen.queryByText("from one")).toBeNull();
+    expect(screen.getByText("from two")).toBeTruthy();
+    expect(screen.getByRole("log").querySelectorAll('[data-slot="skeleton"]')).toHaveLength(0);
+
+    // The new stream's lines replace what was loaded, and the view stays at the end.
+    await ready(1, tasks.slice(1));
+    await lines([row(2, "t2", 2, "beta", "from two"), row(3, "t2", 2, "beta", "and more")], 1);
+    expect(screen.getAllByText("from two")).toHaveLength(1);
+    expect(screen.getByText("and more")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Jump to latest/ })).toBeNull();
+  });
+
+  it("reopens the stream with stopped=1 when stopped tasks are included", async () => {
+    renderService();
+    await ready();
+    fireEvent.click(screen.getByRole("switch", { name: "Include stopped tasks" }));
+    expect(FakeEventSource.instances).toHaveLength(2);
+    expect(
+      new URL(FakeEventSource.instances[1]?.url ?? "", "http://x").searchParams.get("stopped"),
+    ).toBe("1");
+  });
+
+  it("counts the tasks still running, not the ones that ended, as the ones it follows", async () => {
+    renderService();
+    await ready(0, [...tasks, { id: "t0", slot: 1, node: "alpha", state: "failed" }]);
+    expect(screen.getByText("Following 2 tasks")).toBeTruthy();
   });
 });

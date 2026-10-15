@@ -52,6 +52,7 @@ import {
 } from "@/features/logs/log-stream";
 import { counterText, LogToolbar } from "@/features/logs/log-toolbar";
 import { searchLines } from "@/features/logs/search";
+import type { FilterOptions } from "@/features/logs/task-filter-bar";
 import {
   formatTaskPrefix,
   prefixColour,
@@ -98,6 +99,8 @@ export interface LogViewerProps extends StreamTarget {
   // address owns them; without it the viewer keeps them itself.
   params?: LogViewParams;
   onParamsChange?: (params: LogViewParams) => void;
+  // What the Tasks and Nodes filters of a service's log offer (plan 06-30, D-33).
+  filterOptions?: FilterOptions;
   // Controls after Download… at the right of the toolbar's second row, and the items of
   // the More menu that stand in for them on a narrow screen.
   actions?: ReactNode;

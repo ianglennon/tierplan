@@ -163,3 +163,134 @@ describe("LogBuffer", () => {
     });
   });
 });
+
+// The marks a service's log shows between its lines (plan 06-30, OBS-02, D-34, D-37).
+describe("swarm markers", () => {
+  const stamp = (n: number) => `2026-10-14T10:00:${String(n).padStart(2, "0")}.000000000Z`;
+  const line = (n: number, task = "t1"): LogLineData => ({
+    t: stamp(n),
+    s: "o",
+    m: `line ${n}`,
+    task,
+    slot: 1,
+    node: "alpha",
+  });
+  const replaced = (old: string, next: string, extra = {}) => ({
+    kind: "replaced" as const,
+    slot: 1,
+    old,
+    oldState: "failed",
+    oldNode: "alpha",
+    new: next,
+    node: "beta",
+    ...extra,
+  });
+  const rows = (b: LogBuffer) =>
+    Array.from({ length: b.length }, (_, i) => {
+      const l = b.at(i);
+      return l.marker ? `[${l.swarm?.kind}]` : l.m;
+    });
+
+  it("goes where the old task's last line was: after the last line that is not newer than it", () => {
+    const b = new LogBuffer();
+    b.push([line(1), line(2), line(5, "t2"), line(6, "t2")]);
+    b.insertSwarmMarker(replaced("t1", "t2"), stamp(2));
+    expect(rows(b)).toEqual(["line 1", "line 2", "[replaced]", "line 5", "line 6"]);
+    expect(b.at(2).marker).toBe("swarm");
+    expect(b.at(2).t).toBe(stamp(2));
+  });
+
+  it("goes at the end when every line is older", () => {
+    const b = new LogBuffer();
+    b.push([line(1), line(2)]);
+    b.insertSwarmMarker(replaced("t1", "t2"), stamp(9));
+    expect(rows(b)).toEqual(["line 1", "line 2", "[replaced]"]);
+  });
+
+  it("goes after the lines at its own time", () => {
+    const b = new LogBuffer();
+    b.push([line(2), line(2, "t3"), line(3)]);
+    b.insertSwarmMarker(replaced("t1", "t2"), stamp(2));
+    expect(rows(b)).toEqual(["line 2", "line 2", "[replaced]", "line 3"]);
+  });
+
+  it("is not kept when it is older than every line held, but goes into an empty buffer", () => {
+    const b = new LogBuffer();
+    b.insertSwarmMarker(replaced("t0", "t1"), stamp(1));
+    expect(b.length).toBe(1);
+    const held = new LogBuffer();
+    held.push([line(5), line(6)]);
+    held.insertSwarmMarker(replaced("t1", "t2"), stamp(1));
+    expect(rows(held)).toEqual(["line 5", "line 6"]);
+  });
+
+  it("counts as a line for the jump pill, and gets a number of its own", () => {
+    const b = new LogBuffer();
+    b.push([line(1), line(5)]);
+    const before = b.pushed;
+    b.insertSwarmMarker(replaced("t1", "t2"), stamp(2));
+    expect(b.pushed).toBe(before + 1);
+    expect(new Set([0, 1, 2].map((i) => b.at(i).seq)).size).toBe(3);
+  });
+
+  it("tells the listeners once", () => {
+    const b = new LogBuffer();
+    b.push([line(1)]);
+    const seen = vi.fn();
+    b.subscribe(seen);
+    b.insertSwarmMarker(replaced("t1", "t2"), stamp(2));
+    expect(seen).toHaveBeenCalledTimes(1);
+  });
+
+  it("turns the marker of a slot that was waiting for a task into the replacement, in place", () => {
+    const b = new LogBuffer();
+    b.push([line(1), line(2)]);
+    b.insertSwarmMarker(
+      { kind: "stopped", slot: 1, old: "t1", oldState: "failed", oldNode: "alpha" },
+      stamp(2),
+    );
+    b.push([line(8, "t2")]);
+    b.insertSwarmMarker(replaced("t1", "t2"), stamp(2));
+    expect(rows(b)).toEqual(["line 1", "line 2", "[replaced]", "line 8"]);
+    expect(b.at(2).swarm).toMatchObject({ kind: "replaced", new: "t2" });
+  });
+
+  it("keeps one marker when the same one is told again", () => {
+    const b = new LogBuffer();
+    b.push([line(1)]);
+    b.insertSwarmMarker(replaced("t1", "t2"), stamp(1));
+    const seen = vi.fn();
+    b.subscribe(seen);
+    b.insertSwarmMarker(replaced("t1", "t2"), stamp(1));
+    expect(rows(b)).toEqual(["line 1", "[replaced]"]);
+    expect(seen).not.toHaveBeenCalled();
+  });
+
+  it("does not repeat a node notice that says what the last one for that node said", () => {
+    const b = new LogBuffer();
+    b.push([line(1)]);
+    b.insertSwarmMarker({ kind: "down", node: "beta" }, stamp(3));
+    b.insertSwarmMarker({ kind: "down", node: "beta" }, stamp(4));
+    b.insertSwarmMarker({ kind: "down", node: "gamma" }, stamp(4));
+    b.insertSwarmMarker({ kind: "back", node: "beta" }, stamp(5));
+    b.insertSwarmMarker({ kind: "down", node: "beta" }, stamp(6));
+    expect(b.length).toBe(5);
+    expect(Array.from({ length: b.length }, (_, i) => b.at(i).swarm?.kind ?? "line")).toEqual([
+      "line",
+      "down",
+      "down",
+      "back",
+      "down",
+    ]);
+  });
+
+  it("is dropped from the top with the lines past the cap, and is not a search or prepend anchor", () => {
+    const b = new LogBuffer(4);
+    b.push([line(1), line(2), line(3)]);
+    b.insertSwarmMarker(replaced("t1", "t2"), stamp(3));
+    b.push([line(4), line(5)]);
+    expect(b.length).toBe(4);
+    expect(b.droppedCount).toBe(2);
+    expect(rows(b)).toEqual(["line 3", "[replaced]", "line 4", "line 5"]);
+  });
+});
