@@ -7928,6 +7928,279 @@
         ],
         "type": "object"
       },
+      "SecretCreateBody": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The ID of the secret the swarm made",
+            "type": "string"
+          },
+          "name": {
+            "description": "The secret name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "SecretCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "description": "The value, as standard base64. 1 to 511,999 bytes once decoded: empty is 422 value_required, 512,000 or more is 422 value_too_large, and text that is not base64 is 422 value_invalid. It is sent to the swarm once and never kept, logged, audited or returned",
+            "type": "string"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels, at most 64",
+            "maxProperties": 64,
+            "type": "object"
+          },
+          "name": {
+            "description": "The secret name: letters, numbers, dot, dash and underscore, starting and ending with a letter or number, at most 64 characters (else 422 name_invalid)",
+            "type": "string"
+          },
+          "source": {
+            "description": "Where the value came from, for the audit log only: typed or file (the create sheet), rotate (a new version of a secret) or apply (a secret staged with a service). Left out, the audit log says api",
+            "enum": [
+              "typed",
+              "file",
+              "rotate",
+              "apply"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "SecretDetailBody": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "description": "When the secret was created",
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "The secret ID",
+            "type": "string"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Every label of the secret",
+            "type": "object"
+          },
+          "name": {
+            "description": "The secret name",
+            "type": "string"
+          },
+          "owner": {
+            "description": "The stack (com.docker.stack.namespace) label value; empty when the secret has none",
+            "type": "string"
+          },
+          "ownerKind": {
+            "description": "stack, or empty when the secret has no owner",
+            "enum": [
+              "stack",
+              ""
+            ],
+            "type": "string"
+          },
+          "updatedAt": {
+            "description": "When the secret was last updated",
+            "format": "date-time",
+            "type": "string"
+          },
+          "usedBy": {
+            "description": "How many services' specs reference the secret",
+            "format": "int64",
+            "type": "integer"
+          },
+          "usedByRows": {
+            "description": "Every service whose spec references the secret, sorted by service name then ID",
+            "items": {
+              "$ref": "#/components/schemas/SecretUserBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "labels",
+          "createdAt",
+          "updatedAt",
+          "usedBy",
+          "owner",
+          "ownerKind",
+          "usedByRows"
+        ],
+        "type": "object"
+      },
+      "SecretInspectBody": {
+        "additionalProperties": false,
+        "properties": {
+          "inspect": {
+            "additionalProperties": {},
+            "description": "The manager's inspect document: the ID, the version, the times and the spec's name and labels. It has no data field, and none is ever added",
+            "type": "object"
+          }
+        },
+        "required": [
+          "inspect"
+        ],
+        "type": "object"
+      },
+      "SecretItem": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "description": "When the secret was created",
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "The secret ID",
+            "type": "string"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Every label of the secret",
+            "type": "object"
+          },
+          "name": {
+            "description": "The secret name",
+            "type": "string"
+          },
+          "owner": {
+            "description": "The stack (com.docker.stack.namespace) label value; empty when the secret has none",
+            "type": "string"
+          },
+          "ownerKind": {
+            "description": "stack, or empty when the secret has no owner",
+            "enum": [
+              "stack",
+              ""
+            ],
+            "type": "string"
+          },
+          "updatedAt": {
+            "description": "When the secret was last updated",
+            "format": "date-time",
+            "type": "string"
+          },
+          "usedBy": {
+            "description": "How many services' specs reference the secret, whatever their tasks are doing, a service scaled to 0 included",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "labels",
+          "createdAt",
+          "updatedAt",
+          "usedBy",
+          "owner",
+          "ownerKind"
+        ],
+        "type": "object"
+      },
+      "SecretListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "capped": {
+            "description": "True when total is more than the rows returned",
+            "type": "boolean"
+          },
+          "items": {
+            "description": "At most 500 rows that match the search, sorted by name then ID",
+            "items": {
+              "$ref": "#/components/schemas/SecretItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "total": {
+            "description": "How many secrets match the search, whatever the cap",
+            "format": "int64",
+            "type": "integer"
+          },
+          "unfilteredTotal": {
+            "description": "How many secrets there are before the search",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "unfilteredTotal",
+          "capped"
+        ],
+        "type": "object"
+      },
+      "SecretUserBody": {
+        "additionalProperties": false,
+        "properties": {
+          "file": {
+            "description": "The file name the secret appears as in the container",
+            "type": "string"
+          },
+          "gid": {
+            "description": "The group of the file",
+            "type": "string"
+          },
+          "mode": {
+            "description": "The file mode in octal, for example 0444",
+            "type": "string"
+          },
+          "service": {
+            "description": "The service name",
+            "type": "string"
+          },
+          "serviceId": {
+            "description": "The service ID",
+            "type": "string"
+          },
+          "stack": {
+            "description": "The stack the service belongs to; empty for a service made on its own",
+            "type": "string"
+          },
+          "uid": {
+            "description": "The owner of the file",
+            "type": "string"
+          }
+        },
+        "required": [
+          "serviceId",
+          "service",
+          "stack",
+          "file",
+          "uid",
+          "gid",
+          "mode"
+        ],
+        "type": "object"
+      },
       "ServiceApplyBody": {
         "additionalProperties": false,
         "properties": {
@@ -16070,6 +16343,307 @@
         "summary": "Change an environment's registry credential",
         "tags": [
           "registries"
+        ]
+      }
+    },
+    "/api/env/{envId}/secrets": {
+      "get": {
+        "description": "The secrets of a swarm environment with their labels, times, owner and how many services use each, at most 500 rows sorted by name then ID, read through a manager. No row has a value: the swarm never returns one. Optionally a search (q) that runs before the 500-row cap. 409 not_a_swarm when the environment is a standalone host; 503 no_manager_connected when no manager is connected. Needs secrets.read (Viewer) on the environment.",
+        "operationId": "listSecrets",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Search: a case-insensitive substring of the secret name, its owner or any label key or value, at most 128 characters (else 422 query_too_long)",
+            "explode": false,
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "description": "Search: a case-insensitive substring of the secret name, its owner or any label key or value, at most 128 characters (else 422 query_too_long)",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the swarm secrets of an environment",
+        "tags": [
+          "environments"
+        ]
+      },
+      "post": {
+        "description": "Creates a secret once, through a manager, and never retries. The value goes to the swarm's encrypted store and nowhere else: Bayplan does not return, log, audit, cache or store it, and the answer holds the new secret's ID and name only. A name that is not 1 to 64 letters, numbers, dots, dashes and underscores starting and ending with a letter or number is 422 name_invalid; a value that is missing or empty is 422 value_required; one of 512,000 bytes or more is 422 value_too_large (a value of 511,999 bytes is accepted); more than 64 labels is 422, and a label key over 256 or value over 4096 characters is 422 labels_invalid. All are checked before anything is sent. A request body over 1 MiB is refused. 409 name_taken when the swarm has the name already, 409 not_a_swarm for a standalone host, 409 host_read_only on a read-only host. Needs secrets.manage (Admin) on the environment. Every attempt is audited as secret.created with the name, the number of labels, the size in bytes and where the request came from, never the value; a refusal is a failure row with its code.",
+        "operationId": "createSecret",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecretCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretCreateBody"
+                }
+              }
+            },
+            "description": "Created",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Create a swarm secret",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/secrets/{secretId}": {
+      "delete": {
+        "description": "Deletes one secret, once and never retried. The secret's name must be typed in confirm, else 422 confirmation_required and nothing is sent. A secret that any service's spec references is 409 object_in_use, naming up to three of the services, read live just before the delete and counting a service scaled to 0. 404 secret_not_found for a secret that is not there (not audited); 409 not_a_swarm for a standalone host. Needs secrets.manage (Admin) on the environment. Every attempt on a secret that exists is audited as secret.removed, with result failure and the code when it was refused.",
+        "operationId": "deleteSecret",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The secret ID or name: the id of a row of the secrets list",
+            "in": "path",
+            "name": "secretId",
+            "required": true,
+            "schema": {
+              "description": "The secret ID or name: the id of a row of the secrets list",
+              "maxLength": 128,
+              "type": "string"
+            }
+          },
+          {
+            "description": "The secret's name, typed (else 422 confirmation_required and nothing is sent)",
+            "explode": false,
+            "in": "query",
+            "name": "confirm",
+            "schema": {
+              "description": "The secret's name, typed (else 422 confirmation_required and nothing is sent)",
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Delete a swarm secret",
+        "tags": [
+          "environments"
+        ]
+      },
+      "get": {
+        "description": "The secret's metadata and every service whose spec references it, with the file name, owner, group and mode each mounts it with. The secret is named by its ID or its name. There is no value, ever. 404 secret_not_found; 409 not_a_swarm. Needs secrets.read (Viewer) on the environment.",
+        "operationId": "getSecret",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The secret ID or name: the id of a row of the secrets list",
+            "in": "path",
+            "name": "secretId",
+            "required": true,
+            "schema": {
+              "description": "The secret ID or name: the id of a row of the secrets list",
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretDetailBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "One swarm secret and the services that use it",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/secrets/{secretId}/inspect": {
+      "get": {
+        "description": "The manager's inspect document of the secret, for the Inspect tab. It carries no data field, and a data field is removed if one ever appears. 404 secret_not_found; 409 not_a_swarm. Needs secrets.read (Viewer) on the environment.",
+        "operationId": "inspectSecret",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The secret ID or name: the id of a row of the secrets list",
+            "in": "path",
+            "name": "secretId",
+            "required": true,
+            "schema": {
+              "description": "The secret ID or name: the id of a row of the secrets list",
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretInspectBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "One swarm secret's raw inspect document",
+        "tags": [
+          "environments"
         ]
       }
     },

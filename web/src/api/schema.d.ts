@@ -1328,6 +1328,74 @@ export interface paths {
         patch: operations["updateEnvCredential"];
         trace?: never;
     };
+    "/api/env/{envId}/secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the swarm secrets of an environment
+         * @description The secrets of a swarm environment with their labels, times, owner and how many services use each, at most 500 rows sorted by name then ID, read through a manager. No row has a value: the swarm never returns one. Optionally a search (q) that runs before the 500-row cap. 409 not_a_swarm when the environment is a standalone host; 503 no_manager_connected when no manager is connected. Needs secrets.read (Viewer) on the environment.
+         */
+        get: operations["listSecrets"];
+        put?: never;
+        /**
+         * Create a swarm secret
+         * @description Creates a secret once, through a manager, and never retries. The value goes to the swarm's encrypted store and nowhere else: Bayplan does not return, log, audit, cache or store it, and the answer holds the new secret's ID and name only. A name that is not 1 to 64 letters, numbers, dots, dashes and underscores starting and ending with a letter or number is 422 name_invalid; a value that is missing or empty is 422 value_required; one of 512,000 bytes or more is 422 value_too_large (a value of 511,999 bytes is accepted); more than 64 labels is 422, and a label key over 256 or value over 4096 characters is 422 labels_invalid. All are checked before anything is sent. A request body over 1 MiB is refused. 409 name_taken when the swarm has the name already, 409 not_a_swarm for a standalone host, 409 host_read_only on a read-only host. Needs secrets.manage (Admin) on the environment. Every attempt is audited as secret.created with the name, the number of labels, the size in bytes and where the request came from, never the value; a refusal is a failure row with its code.
+         */
+        post: operations["createSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/secrets/{secretId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One swarm secret and the services that use it
+         * @description The secret's metadata and every service whose spec references it, with the file name, owner, group and mode each mounts it with. The secret is named by its ID or its name. There is no value, ever. 404 secret_not_found; 409 not_a_swarm. Needs secrets.read (Viewer) on the environment.
+         */
+        get: operations["getSecret"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a swarm secret
+         * @description Deletes one secret, once and never retried. The secret's name must be typed in confirm, else 422 confirmation_required and nothing is sent. A secret that any service's spec references is 409 object_in_use, naming up to three of the services, read live just before the delete and counting a service scaled to 0. 404 secret_not_found for a secret that is not there (not audited); 409 not_a_swarm for a standalone host. Needs secrets.manage (Admin) on the environment. Every attempt on a secret that exists is audited as secret.removed, with result failure and the code when it was refused.
+         */
+        delete: operations["deleteSecret"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/secrets/{secretId}/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One swarm secret's raw inspect document
+         * @description The manager's inspect document of the secret, for the Inspect tab. It carries no data field, and a data field is removed if one ever appears. 404 secret_not_found; 409 not_a_swarm. Needs secrets.read (Viewer) on the environment.
+         */
+        get: operations["inspectSecret"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/services": {
         parameters: {
             query?: never;
@@ -6197,6 +6265,131 @@ export interface components {
              */
             size?: number;
         };
+        SecretCreateBody: {
+            /** @description The ID of the secret the swarm made */
+            id: string;
+            /** @description The secret name */
+            name: string;
+        };
+        SecretCreateRequest: {
+            /** @description The value, as standard base64. 1 to 511,999 bytes once decoded: empty is 422 value_required, 512,000 or more is 422 value_too_large, and text that is not base64 is 422 value_invalid. It is sent to the swarm once and never kept, logged, audited or returned */
+            data?: string;
+            /** @description Labels, at most 64 */
+            labels?: {
+                [key: string]: string;
+            };
+            /** @description The secret name: letters, numbers, dot, dash and underscore, starting and ending with a letter or number, at most 64 characters (else 422 name_invalid) */
+            name: string;
+            /**
+             * @description Where the value came from, for the audit log only: typed or file (the create sheet), rotate (a new version of a secret) or apply (a secret staged with a service). Left out, the audit log says api
+             * @enum {string}
+             */
+            source?: "typed" | "file" | "rotate" | "apply";
+        };
+        SecretDetailBody: {
+            /**
+             * Format: date-time
+             * @description When the secret was created
+             */
+            createdAt: string;
+            /** @description The secret ID */
+            id: string;
+            /** @description Every label of the secret */
+            labels: {
+                [key: string]: string;
+            };
+            /** @description The secret name */
+            name: string;
+            /** @description The stack (com.docker.stack.namespace) label value; empty when the secret has none */
+            owner: string;
+            /**
+             * @description stack, or empty when the secret has no owner
+             * @enum {string}
+             */
+            ownerKind: "stack" | "";
+            /**
+             * Format: date-time
+             * @description When the secret was last updated
+             */
+            updatedAt: string;
+            /**
+             * Format: int64
+             * @description How many services' specs reference the secret
+             */
+            usedBy: number;
+            /** @description Every service whose spec references the secret, sorted by service name then ID */
+            usedByRows: components["schemas"]["SecretUserBody"][] | null;
+        };
+        SecretInspectBody: {
+            /** @description The manager's inspect document: the ID, the version, the times and the spec's name and labels. It has no data field, and none is ever added */
+            inspect: {
+                [key: string]: unknown;
+            };
+        };
+        SecretItem: {
+            /**
+             * Format: date-time
+             * @description When the secret was created
+             */
+            createdAt: string;
+            /** @description The secret ID */
+            id: string;
+            /** @description Every label of the secret */
+            labels: {
+                [key: string]: string;
+            };
+            /** @description The secret name */
+            name: string;
+            /** @description The stack (com.docker.stack.namespace) label value; empty when the secret has none */
+            owner: string;
+            /**
+             * @description stack, or empty when the secret has no owner
+             * @enum {string}
+             */
+            ownerKind: "stack" | "";
+            /**
+             * Format: date-time
+             * @description When the secret was last updated
+             */
+            updatedAt: string;
+            /**
+             * Format: int64
+             * @description How many services' specs reference the secret, whatever their tasks are doing, a service scaled to 0 included
+             */
+            usedBy: number;
+        };
+        SecretListBody: {
+            /** @description True when total is more than the rows returned */
+            capped: boolean;
+            /** @description At most 500 rows that match the search, sorted by name then ID */
+            items: components["schemas"]["SecretItem"][] | null;
+            /**
+             * Format: int64
+             * @description How many secrets match the search, whatever the cap
+             */
+            total: number;
+            /**
+             * Format: int64
+             * @description How many secrets there are before the search
+             */
+            unfilteredTotal: number;
+        };
+        SecretUserBody: {
+            /** @description The file name the secret appears as in the container */
+            file: string;
+            /** @description The group of the file */
+            gid: string;
+            /** @description The file mode in octal, for example 0444 */
+            mode: string;
+            /** @description The service name */
+            service: string;
+            /** @description The service ID */
+            serviceId: string;
+            /** @description The stack the service belongs to; empty for a service made on its own */
+            stack: string;
+            /** @description The owner of the file */
+            uid: string;
+        };
         ServiceApplyBody: {
             /** @description The digest the image is pinned to; empty when it names none */
             digest: string;
@@ -10303,6 +10496,184 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listSecrets: {
+        parameters: {
+            query?: {
+                /** @description Search: a case-insensitive substring of the secret name, its owner or any label key or value, at most 128 characters (else 422 query_too_long) */
+                q?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecretCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretCreateBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The secret ID or name: the id of a row of the secrets list */
+                secretId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteSecret: {
+        parameters: {
+            query?: {
+                /** @description The secret's name, typed (else 422 confirmation_required and nothing is sent) */
+                confirm?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The secret ID or name: the id of a row of the secrets list */
+                secretId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    inspectSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The secret ID or name: the id of a row of the secrets list */
+                secretId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretInspectBody"];
                 };
             };
             /** @description Error */

@@ -46,6 +46,8 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `nodes.read` | environment | yes | yes | yes | yes | no | View swarm nodes |
 | `registries.instance` | global | no | no | no | yes | yes | Manage registry credentials that apply to every environment |
 | `registries.manage` | environment | no | no | yes | yes | no | Manage this environment's registry credentials |
+| `secrets.manage` | environment | no | no | yes | yes | no | Create, rotate and delete swarm secrets |
+| `secrets.read` | environment | yes | yes | yes | yes | no | View swarm secrets' names, labels and users, never their values |
 | `secrets.reveal` | environment | no | extra | yes | yes | yes | Reveal secret values |
 | `services.control` | environment | no | yes | yes | yes | no | Scale, force update, roll back and change the settings of services, and mute their restart-loop alerts |
 | `services.manage` | environment | no | no | yes | yes | no | Create and remove services |

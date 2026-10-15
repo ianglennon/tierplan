@@ -216,6 +216,10 @@
         "role_changed": "Node role changed",
         "labels_changed": "Node labels changed",
         "removed": "Node removed"
+      },
+      "secret": {
+        "created": "Secret created",
+        "removed": "Secret deleted"
       }
     },
     "coalesced": {

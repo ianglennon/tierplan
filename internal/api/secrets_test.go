@@ -211,6 +211,8 @@ func TestCreateSecretValueBoundsAreCheckedBeforeAnythingIsForwarded(t *testing.T
 		{"a name with a slash", secretBody("a/b", []byte("v"), ""), "name_invalid"},
 		{"no name", secretBody("", []byte("v"), ""), "name_invalid"},
 		{"a 65 character name", secretBody(strings.Repeat("a", 65), []byte("v"), ""), "name_invalid"},
+		{"a value that is not base64", `{"name":"notb64","data":"!!!not base64!!!"}`, "value_invalid"},
+		{"a long label value", secretBody("longlabel", []byte("v"), `,"labels":{"k":"`+strings.Repeat("v", 4097)+`"}`), "labels_invalid"},
 	}
 	for _, tc := range cases {
 		rec := f.createSecret(t, e, tc.body)
@@ -259,6 +261,9 @@ func TestListSecretsCountsUsersFromServiceSpecsAndNamesTheOwner(t *testing.T) {
 	}
 	if !slices.Equal(names, []string{"alpha", "dbpw", "zeta"}) || list.Total != 3 || list.UnfilteredTotal != 3 || list.Capped {
 		t.Fatalf("list = %+v", list)
+	}
+	if rec := f.get(t, e, "secrets?q="+strings.Repeat("a", 129)); rec.code != http.StatusUnprocessableEntity || rec.ptyp != "query_too_long" {
+		t.Errorf("a 129 character search = %d (%s), want 422 query_too_long", rec.code, rec.ptyp)
 	}
 	by := map[string]secretItem{}
 	for _, it := range list.Items {
