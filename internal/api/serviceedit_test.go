@@ -4,7 +4,9 @@
 package api_test
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -414,5 +416,330 @@ func TestServiceEditOfAStandaloneHostIsNotASwarm(t *testing.T) {
 		if rec.code != http.StatusConflict || rec.ptyp != "not_a_swarm" {
 			t.Errorf("%s = %d %s (%s), want 409 not_a_swarm", route, rec.code, rec.body, rec.ptyp)
 		}
+	}
+}
+
+// Staged objects (plan 06-26, RES-03, D-06, D-07, D-13).
+
+const stagedValue = "staged-value-9f2c" //nolint:gosec // G101: a fixture value the tests look for in every answer and audit row
+
+func b64(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+
+// refsStaged makes the masked spec name a network, a secret and a config by name only.
+func refsStaged(spec map[string]any) {
+	tt, _ := spec["TaskTemplate"].(map[string]any)
+	tt["Networks"] = []any{map[string]any{"Target": "front", "Aliases": []any{"web"}}}
+	cs := containerSpecOf(spec)
+	cs["Secrets"] = []any{map[string]any{"SecretName": "db-pass", "File": map[string]any{"Name": "db-pass", "UID": "0", "GID": "0", "Mode": 292}}}
+	cs["Configs"] = []any{map[string]any{"ConfigName": "app.conf", "File": map[string]any{"Name": "/app.conf", "UID": "0", "GID": "0", "Mode": 292}}}
+}
+
+func stagedObjects() []map[string]any {
+	return []map[string]any{
+		{"kind": "config", "name": "app.conf", "data": b64("level=" + stagedValue), "templating": "golang"},
+		{"kind": "secret", "name": "db-pass", "data": b64(stagedValue), "labels": map[string]string{"team": "core"}},
+		{"kind": "network", "name": "front", "subnet": "10.77.0.0/24"},
+	}
+}
+
+// withObjects adds objects to an apply body.
+func withObjects(t *testing.T, body string, objects any) string {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(body), &m); err != nil {
+		t.Fatal(err)
+	}
+	m["objects"] = objects
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func (f *envFix) auditLike(t *testing.T, like string) []auditRowFull {
+	t.Helper()
+	rows, err := f.st.Read.Query(`SELECT action, target_type, target_id, COALESCE(env_id, ''), result, COALESCE(reason, ''), COALESCE(details, '{}')
+		FROM audit_log WHERE action LIKE ? ORDER BY seq`, like)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []auditRowFull
+	for rows.Next() {
+		var r auditRowFull
+		var details string
+		if err := rows.Scan(&r.Action, &r.TargetType, &r.TargetID, &r.EnvID, &r.Result, &r.Reason, &details); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal([]byte(details), &r.Details); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+type applyAnswer struct {
+	Image string `json:"image"`
+	Steps []struct {
+		Step  string `json:"step"`
+		Kind  string `json:"kind"`
+		Name  string `json:"name"`
+		State string `json:"state"`
+		Code  string `json:"code"`
+	} `json:"steps"`
+	Cleanup struct {
+		Removed    []struct{ Kind, Name, ID string } `json:"removed"`
+		NotRemoved []struct{ Kind, Name, ID string } `json:"notRemoved"`
+	} `json:"cleanup"`
+}
+
+func noStagedValue(t *testing.T, what string, v any) {
+	t.Helper()
+	b, _ := json.Marshal(v)
+	if strings.Contains(string(b), stagedValue) || strings.Contains(string(b), b64(stagedValue)) {
+		t.Errorf("%s holds the staged value: %s", what, b)
+	}
+}
+
+func writeVerbs(writes []string) []string {
+	out := make([]string, 0, len(writes))
+	for _, w := range writes {
+		method, rest, _ := strings.Cut(w, " ")
+		out = append(out, method+" /"+strings.SplitN(strings.TrimPrefix(rest, "/"), "/", 2)[0])
+	}
+	return out
+}
+
+func TestApplyWithStagedObjects(t *testing.T) {
+	f, e := actionsEnv(t, nil, editableService(nil))
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	_, body := admin.maskedSpec("svc-api", refsStaged)
+	rec := admin.apply("svc-api", withObjects(t, body, stagedObjects()))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("apply: %d %s", rec.Code, rec.Body)
+	}
+	noStagedValue(t, "the answer", rec.Body.String())
+	var got applyAnswer
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	var steps []string
+	for _, s := range got.Steps {
+		steps = append(steps, fmt.Sprintf("%s/%s/%s/%s", s.Step, s.Kind, s.Name, s.State))
+	}
+	want := []string{"image//" + "/skipped", "object/network/front/done", "object/secret/db-pass/done", "object/config/app.conf/done", "service//api/done"}
+	if !slices.Equal(steps, want) {
+		t.Errorf("steps = %v, want %v", steps, want)
+	}
+	if !strings.Contains(rec.Body.String(), `"removed":[]`) || !strings.Contains(rec.Body.String(), `"notRemoved":[]`) {
+		t.Errorf("body = %s, want empty cleanup lists, not null", rec.Body)
+	}
+	if got, want := writeVerbs(f.fake.Writes()), []string{"POST /networks", "POST /secrets", "POST /configs", "POST /services"}; !slices.Equal(got, want) {
+		t.Errorf("writes = %v, want %v", got, want)
+	}
+	ups := f.fake.ServiceUpdates()
+	cs := ups[0].Spec.TaskTemplate.ContainerSpec
+	if len(cs.Secrets) != 1 || cs.Secrets[0].SecretID == "" || len(cs.Configs) != 1 || cs.Configs[0].ConfigID == "" {
+		t.Errorf("references = %+v %+v, want the new IDs filled in", cs.Secrets, cs.Configs)
+	}
+	if n := f.fake.NetworkCreates(); len(n) != 1 || !n[0].Attachable || n[0].Driver != "overlay" {
+		t.Errorf("network creates = %+v", n)
+	}
+	if c := f.fake.ConfigCreates(); len(c) != 1 || c[0].Templating != "golang" {
+		t.Errorf("config creates = %+v", c)
+	}
+
+	for action, targetType := range map[string]string{"network.created": "network", "secret.created": "secret", "config.created": "config"} {
+		rows := f.auditLike(t, action)
+		if len(rows) != 1 || rows[0].Result != string(audit.ResultSuccess) || rows[0].TargetType != targetType || rows[0].EnvID != e.ID ||
+			rows[0].Details["source"] != "service_apply" || rows[0].Details["code"] != "created" {
+			t.Errorf("%s rows = %+v, want one success with source service_apply", action, rows)
+		}
+		noStagedValue(t, action+" rows", rows)
+	}
+	if rows := f.auditLike(t, "secret.created"); rows[0].Details["size"] != fmt.Sprint(len(stagedValue)) {
+		t.Errorf("secret row = %+v, want the size and no value", rows[0].Details)
+	}
+	if rows := f.serviceAudits(t); len(rows) != 1 || rows[0].Result != string(audit.ResultSuccess) {
+		t.Errorf("service rows = %+v", rows)
+	}
+}
+
+func TestApplyCleanupIsReported(t *testing.T) {
+	f, e := actionsEnv(t, nil, editableService(func(fs *dockertest.FakeService) { fs.UpdateError = "the manager refuses this spec" }))
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	_, body := admin.maskedSpec("svc-api", refsStaged)
+	rec := admin.apply("svc-api", withObjects(t, body, stagedObjects()))
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "spec_rejected" {
+		t.Fatalf("apply: %d %s, want 422 spec_rejected", rec.Code, rec.Body)
+	}
+	noStagedValue(t, "the problem", rec.Body.String())
+	var prob actionProblem
+	if err := json.Unmarshal(rec.Body.Bytes(), &prob); err != nil {
+		t.Fatal(err)
+	}
+	if want := "Couldn't update api. Docker rejected these settings: the manager refuses this spec The 3 objects created for this change were removed."; prob.Detail != want {
+		t.Errorf("detail = %q, want %q", prob.Detail, want)
+	}
+	var removed []string
+	for _, er := range prob.Errors {
+		if er.Location == "removed" {
+			removed = append(removed, er.Message)
+		}
+	}
+	if want := []string{"config:app.conf", "secret:db-pass", "network:front"}; !slices.Equal(removed, want) {
+		t.Errorf("removed = %v, want %v", removed, want)
+	}
+	if got, want := writeVerbs(f.fake.Writes()), []string{"POST /networks", "POST /secrets", "POST /configs", "POST /services", "DELETE /configs", "DELETE /secrets", "DELETE /networks"}; !slices.Equal(got, want) {
+		t.Errorf("writes = %v, want %v", got, want)
+	}
+	for _, action := range []string{"network.removed", "secret.removed", "config.removed"} {
+		rows := f.auditLike(t, action)
+		if len(rows) != 1 || rows[0].Result != string(audit.ResultSuccess) || rows[0].Details["source"] != "service_apply_cleanup" {
+			t.Errorf("%s rows = %+v, want one success with source service_apply_cleanup", action, rows)
+		}
+	}
+	if rows := f.serviceAudits(t); len(rows) != 1 || rows[0].Reason != "spec_rejected" {
+		t.Errorf("service rows = %+v, want the spec_rejected failure", rows)
+	}
+}
+
+func TestApplyCleanupThatCouldNotFinishNamesWhatIsLeft(t *testing.T) {
+	f, e := actionsEnv(t, func(c *dockertest.FakeConfig) { c.RemoveErrors = map[string]string{"db-pass": "the manager is busy"} },
+		editableService(func(fs *dockertest.FakeService) { fs.UpdateError = "the manager refuses this spec" }))
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	_, body := admin.maskedSpec("svc-api", refsStaged)
+	rec := admin.apply("svc-api", withObjects(t, body, stagedObjects()))
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("apply: %d %s", rec.Code, rec.Body)
+	}
+	var prob actionProblem
+	if err := json.Unmarshal(rec.Body.Bytes(), &prob); err != nil {
+		t.Fatal(err)
+	}
+	if want := "Couldn't update api. Docker rejected these settings: the manager refuses this spec Bayplan couldn't remove secret db-pass. Remove them under Networks, Secrets or Configs."; prob.Detail != want {
+		t.Errorf("detail = %q, want %q", prob.Detail, want)
+	}
+	if !strings.HasPrefix(prob.at("notRemoved"), "secret:db-pass") {
+		t.Errorf("notRemoved = %q, want the secret", prob.at("notRemoved"))
+	}
+	rows := f.auditLike(t, "secret.removed")
+	if len(rows) != 1 || rows[0].Result != string(audit.ResultFailure) || rows[0].Reason != "remove_failed" || rows[0].Details["source"] != "service_apply_cleanup" {
+		t.Errorf("secret.removed rows = %+v, want a remove_failed failure", rows)
+	}
+}
+
+func TestApplyNameTakenMidwayRemovesWhatWasMade(t *testing.T) {
+	f, e := actionsEnv(t, func(c *dockertest.FakeConfig) {
+		c.Secrets = []dockertest.FakeSecret{{ID: "sec-elsewhere", Name: "db-pass"}}
+	}, editableService(nil))
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	_, body := admin.maskedSpec("svc-api", refsStaged)
+	rec := admin.apply("svc-api", withObjects(t, body, stagedObjects()))
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "name_taken" {
+		t.Fatalf("apply: %d %s, want 409 name_taken", rec.Code, rec.Body)
+	}
+	var prob actionProblem
+	if err := json.Unmarshal(rec.Body.Bytes(), &prob); err != nil {
+		t.Fatal(err)
+	}
+	if want := "Couldn't update api. A secret named db-pass already exists. The 1 objects created for this change were removed."; prob.Detail != want {
+		t.Errorf("detail = %q, want %q", prob.Detail, want)
+	}
+	if got, want := writeVerbs(f.fake.Writes()), []string{"POST /networks", "POST /secrets", "DELETE /networks"}; !slices.Equal(got, want) {
+		t.Errorf("writes = %v, want %v", got, want)
+	}
+}
+
+func TestApplyObjectPermissionForAnOperator(t *testing.T) {
+	f, e := actionsEnv(t, nil, editableService(nil))
+	op := f.caller(t, e, "operator-1", "operator")
+	_, body := op.maskedSpec("svc-api", refsStaged)
+	rec := op.apply("svc-api", withObjects(t, body, stagedObjects()))
+	if rec.Code != http.StatusForbidden || problemType(t, rec) != "object_permission" {
+		t.Fatalf("apply: %d %s, want 403 object_permission", rec.Code, rec.Body)
+	}
+	var prob actionProblem
+	if err := json.Unmarshal(rec.Body.Bytes(), &prob); err != nil {
+		t.Fatal(err)
+	}
+	if want := "Needs Admin to create networks, secrets and configs."; prob.Detail != want {
+		t.Errorf("detail = %q, want %q", prob.Detail, want)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v: nothing is created before the permission is judged", w)
+	}
+	rows := f.serviceAudits(t)
+	if len(rows) != 1 || rows[0].Result != string(audit.ResultFailure) || rows[0].Reason != "object_permission" {
+		t.Errorf("service rows = %+v, want one object_permission failure", rows)
+	}
+	noStagedValue(t, "the problem", rec.Body.String())
+}
+
+func TestApplyOnlyAsksForThePermissionsTheNewObjectsNeed(t *testing.T) {
+	f, e := actionsEnv(t, nil, editableService(nil))
+	op := f.caller(t, e, "operator-1", "operator")
+	// The secret and config exist already; only the network is new, and creating it needs Admin.
+	_, body := op.maskedSpec("svc-api", func(spec map[string]any) {
+		tt, _ := spec["TaskTemplate"].(map[string]any)
+		tt["Networks"] = []any{map[string]any{"Target": "front"}}
+	})
+	rec := op.apply("svc-api", withObjects(t, body, []map[string]any{{"kind": "network", "name": "front"}}))
+	var prob actionProblem
+	if err := json.Unmarshal(rec.Body.Bytes(), &prob); err != nil || rec.Code != http.StatusForbidden || prob.Detail != "Needs Admin to create networks." {
+		t.Fatalf("apply: %d %s, want 403 Needs Admin to create networks.", rec.Code, rec.Body)
+	}
+}
+
+func TestApplyRefusesBadObjectsBeforeAnythingIsSent(t *testing.T) {
+	f, e := actionsEnv(t, nil, editableService(nil))
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	_, body := admin.maskedSpec("svc-api", refsStaged)
+	many := make([]map[string]any, 17)
+	for i := range many {
+		many[i] = map[string]any{"kind": "network", "name": fmt.Sprintf("net%d", i)}
+	}
+	cases := []struct {
+		name    string
+		objects any
+		typ     string
+	}{
+		{"seventeen objects", many, "too_many_objects"},
+		{"a bad name", []map[string]any{{"kind": "secret", "name": "-bad", "data": b64("v")}}, "name_invalid"},
+		{"a secret without a value", []map[string]any{{"kind": "secret", "name": "db-pass"}}, "value_required"},
+		{"a value that is not base64", []map[string]any{{"kind": "config", "name": "app.conf", "data": "***"}}, "value_invalid"},
+		{"a secret that is too large", []map[string]any{{"kind": "secret", "name": "db-pass", "data": b64(strings.Repeat("x", 512000))}}, "value_too_large"},
+		{"templating that is not known", []map[string]any{{"kind": "config", "name": "app.conf", "data": b64("v"), "templating": "jinja"}}, "templating_invalid"},
+		{"a subnet that is not a subnet", []map[string]any{{"kind": "network", "name": "front", "subnet": "10.0.0.1"}}, "subnet_invalid"},
+		{"the same object twice", []map[string]any{{"kind": "network", "name": "front"}, {"kind": "network", "name": "front"}}, "object_duplicate"},
+		{"a label that is too long", []map[string]any{{"kind": "secret", "name": "db-pass", "data": b64("v"), "labels": map[string]string{strings.Repeat("k", 300): "v"}}}, "labels_invalid"},
+	}
+	for _, c := range cases {
+		rec := admin.apply("svc-api", withObjects(t, body, c.objects))
+		if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != c.typ {
+			t.Errorf("%s: %d %s, want 422 %s", c.name, rec.Code, rec.Body, c.typ)
+		}
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, a bad request sends nothing", w)
+	}
+}
+
+func TestReviewListsMissingSecretsAndConfigs(t *testing.T) {
+	f, e := actionsEnv(t, nil, editableService(nil))
+	op := f.caller(t, e, "operator-1", "operator")
+	_, body := op.maskedSpec("svc-api", refsStaged)
+	rec := op.review("svc-api", body)
+	var got struct {
+		Missing struct{ Networks, Secrets, Configs []string } `json:"missing"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &got) != nil ||
+		!slices.Equal(got.Missing.Networks, []string{"front"}) || !slices.Equal(got.Missing.Secrets, []string{"db-pass"}) || !slices.Equal(got.Missing.Configs, []string{"app.conf"}) {
+		t.Fatalf("review = %d %s, want all three kinds missing", rec.Code, rec.Body)
 	}
 }
