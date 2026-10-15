@@ -159,3 +159,38 @@ describe("SpecDiff", () => {
     expect(screen.getByText("Other settings")).toBeTruthy();
   });
 });
+
+describe("SpecDiff for a service that does not exist yet (06-27)", () => {
+  it("has the columns Setting and Value, and lists every setting of the new spec once", () => {
+    render(
+      <SpecDiff
+        name="api"
+        create
+        current={{}}
+        next={spec({ Image: "api:2" }, { Mode: { Replicated: { Replicas: 2 } } })}
+      />,
+    );
+    const heads = within(table()).getAllByRole("columnheader");
+    expect(heads.map((h) => h.textContent)).toEqual(["Setting", "Value"]);
+    const rows = within(table())
+      .getAllByRole("row")
+      .map((r) => r.textContent ?? "");
+    const image = rows.find((t) => t.includes("TaskTemplate.ContainerSpec.Image"));
+    expect(image).toContain("api:2");
+    expect(image).not.toContain("Added");
+    const replicas = rows.find((t) => t.includes("Mode.Replicated.Replicas"));
+    expect(replicas).toContain("2");
+  });
+
+  it("shows a value the server withheld as bullets, never as the value", () => {
+    render(
+      <SpecDiff
+        name="api"
+        create
+        current={{}}
+        next={spec({ Image: "api:2", Env: [`DB=${HIDDEN}`] })}
+      />,
+    );
+    expect(within(table()).getByText("••••")).toBeTruthy();
+  });
+});

@@ -876,6 +876,60 @@ describe("the services list: states", () => {
   });
 });
 
+describe("the services list: Create service (06-27)", () => {
+  const adminMe = () => makeMe({ envs: { [ENV]: "admin" } });
+  const create = () => screen.getAllByRole("link", { name: "Create service" });
+
+  it("is a link to the create page for an Env Admin", async () => {
+    me = adminMe();
+    mount();
+    await screen.findByText("web");
+    const link = await screen.findByRole("link", { name: "Create service" });
+    expect(link.getAttribute("href")).toBe(`/env/${ENV}/services/new`);
+  });
+
+  it("is shown disabled with Needs Admin to an Operator, and goes nowhere", async () => {
+    mount();
+    await screen.findByText("web");
+    const button = await screen.findByRole("button", { name: "Create service" });
+    await waitFor(() => expect(button.getAttribute("aria-disabled")).toBe("true"));
+    expect(document.body.textContent).toContain("Needs Admin");
+    expect(screen.queryByRole("link", { name: "Create service" })).toBeNull();
+    fireEvent.click(button);
+  });
+
+  it("is disabled with the reason when no manager is connected", async () => {
+    me = adminMe();
+    noManager = true;
+    mount();
+    await screen.findByText("web");
+    const button = await screen.findByRole("button", { name: "Create service" });
+    await waitFor(() => expect(button.getAttribute("aria-disabled")).toBe("true"));
+    expect(document.body.textContent).toContain(
+      "No manager is connected, so swarm changes are off.",
+    );
+    expect(screen.queryByRole("link", { name: "Create service" })).toBeNull();
+  });
+
+  it("is offered again in the empty state, to someone who can create", async () => {
+    me = adminMe();
+    items = [];
+    mount();
+    expect(await screen.findByRole("heading", { name: "No services" })).toBeTruthy();
+    await waitFor(() => expect(create()).toHaveLength(2));
+    for (const link of create()) expect(link.getAttribute("href")).toBe(`/env/${ENV}/services/new`);
+  });
+
+  it("is not offered in the empty state to someone who cannot", async () => {
+    items = [];
+    mount();
+    expect(await screen.findByRole("heading", { name: "No services" })).toBeTruthy();
+    await screen.findByText("Nothing to show on Swarm right now.");
+    expect(screen.queryByRole("link", { name: "Create service" })).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Create service" })).toHaveLength(1);
+  });
+});
+
 describe("the services list: live updates", () => {
   it("updates a changed row in place and highlights it", async () => {
     mount();

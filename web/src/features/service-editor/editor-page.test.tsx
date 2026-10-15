@@ -19,6 +19,8 @@ import "@/i18n";
 import { editorText, typeIntoEditor } from "@/test-editor";
 import { makeMe } from "@/test-me";
 import {
+  CREATED_ID,
+  createdBody,
   DIGEST,
   EDIT_VERSION,
   editSpec,
@@ -841,5 +843,212 @@ describe("the Form tab", () => {
     expect(formBox.getAttribute("aria-checked")).toBe("true");
     expect((screen.getByLabelText("Tasks at a time") as HTMLInputElement).value).toBe("1");
     expect((screen.getByLabelText("Monitor") as HTMLInputElement).value).toBe("5s");
+  });
+});
+
+// Create a service (plan 06-27, D-04, RES-03; UI-SPEC "Service editor", "Review and apply"): the
+// same page, the Form opened on the documented defaults, the review a table of what will be made,
+// and the apply a create.
+describe("creating a service", () => {
+  const NEW = `/env/${SERVICE_ENV}/services/new`;
+  const CREATED_PAGE = `/env/${SERVICE_ENV}/services/${CREATED_ID}`;
+
+  // What the review answers for the service the tests make.
+  const chatSpec = () => ({
+    Name: "chat",
+    TaskTemplate: {
+      ContainerSpec: { Image: "nginx:1.27" },
+      RestartPolicy: { Condition: "any", Delay: 5_000_000_000 },
+    },
+    Mode: { Replicated: { Replicas: 1 } },
+    UpdateConfig: {
+      Parallelism: 1,
+      Delay: 0,
+      FailureAction: "pause",
+      Monitor: 5_000_000_000,
+      MaxFailureRatio: 0,
+      Order: "stop-first",
+    },
+  });
+  const pinnedImage = {
+    ref: `nginx:1.27@${DIGEST}`,
+    tag: "1.27",
+    digest: DIGEST,
+    host: "docker.io",
+    credential: "",
+    changed: true,
+  };
+
+  beforeEach(() => {
+    state.me = makeMe({ envs: { [SERVICE_ENV]: "admin" } });
+    state.createReview = () =>
+      Response.json(reviewBody({ spec: chatSpec(), version: 0, image: pinnedImage }));
+    state.create = () => Response.json(createdBody(), { status: 201 });
+  });
+
+  const field = (name: string) => screen.findByLabelText(name) as Promise<HTMLInputElement>;
+
+  async function fillIn(name = "chat", image = "nginx:1.27") {
+    fireEvent.change(await field("Name"), { target: { value: name } });
+    fireEvent.change(await field("Image"), { target: { value: image } });
+  }
+
+  async function reviewIt() {
+    await fillIn();
+    fireEvent.click(reviewButton());
+    await screen.findByRole("heading", { name: "Review chat", level: 2 });
+  }
+
+  it("opens with the create title, the breadcrumb and an empty name and image, and asks nothing of the service", async () => {
+    renderAt(NEW);
+    expect(await screen.findByRole("heading", { name: "Create service", level: 1 })).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Set up a service Swarm runs for you. Review it before anything is created.",
+      ),
+    ).toBeTruthy();
+    const crumb = screen.getByRole("navigation", { name: "Breadcrumb" });
+    expect(within(crumb).getByRole("link", { name: "Services" }).getAttribute("href")).toBe(
+      `/env/${SERVICE_ENV}/services`,
+    );
+    expect(within(crumb).getByText("Create").getAttribute("aria-current")).toBe("page");
+    expect((await field("Name")).value).toBe("");
+    expect((await field("Name")).readOnly).toBe(false);
+    expect((await field("Image")).value).toBe("");
+    expect((await field("Replicas")).value).toBe("1");
+    // A new service has no spec to read.
+    expect(state.sent.filter((s) => s.path.endsWith("/spec"))).toHaveLength(0);
+  });
+
+  it("does not let a service without a name and an image be reviewed", async () => {
+    renderAt(NEW);
+    await field("Name");
+    const blocked = () =>
+      (reviewButton() as HTMLButtonElement).disabled ||
+      reviewButton().getAttribute("aria-disabled") === "true";
+    expect(blocked()).toBe(true);
+    fireEvent.change(await field("Name"), { target: { value: "chat" } });
+    expect(blocked()).toBe(true);
+    fireEvent.change(await field("Image"), { target: { value: "nginx:1.27" } });
+    await waitFor(() => expect(blocked()).toBe(false));
+    fireEvent.change(await field("Name"), { target: { value: "has space" } });
+    expect(await screen.findByText("Use letters, numbers, dot, dash or underscore.")).toBeTruthy();
+    expect(blocked()).toBe(true);
+    expect(posts("/review")).toHaveLength(0);
+  });
+
+  it("sends the defaults and what was typed to be reviewed, with no version", async () => {
+    renderAt(NEW);
+    await reviewIt();
+    expect(posts("/services/review")).toHaveLength(1);
+    expect(posts("/services/review")[0]?.body).toEqual({ spec: chatSpec() });
+  });
+
+  it("reviews as Review {name} with the table of what will be created and Create service to confirm", async () => {
+    renderAt(NEW);
+    await reviewIt();
+    expect(screen.getByText("Check the service Bayplan will create, then create it.")).toBeTruthy();
+    const table = await screen.findByRole("table", { name: "Changes to chat" });
+    const heads = within(table).getAllByRole("columnheader");
+    expect(heads.map((h) => h.textContent)).toEqual(["Setting", "Value"]);
+    expect(within(table).getByText("Replicas").closest("tr")?.textContent).toContain("1");
+    expect(screen.getByText(`nginx:1.27@${DIGEST}`)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Apply changes" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Create service" })).toBeTruthy();
+  });
+
+  it("creates once, shows Creating {name}, then Created {name} with the way to the new service and a toast", async () => {
+    renderAt(NEW);
+    await reviewIt();
+    fireEvent.click(screen.getByRole("button", { name: "Create service" }));
+    expect(await screen.findByRole("heading", { name: "Creating chat" })).toBeTruthy();
+    await screen.findByRole("heading", { name: "Created chat" });
+    expect(posts("/services")).toHaveLength(1);
+    expect(posts("/services")[0]?.body).toEqual({ spec: chatSpec() });
+    expect(screen.getByText("Create service chat")).toBeTruthy();
+    expect(await screen.findByText("Created service chat.")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "View service" }).getAttribute("href")).toBe(
+      CREATED_PAGE,
+    );
+    // A new service has no rolling update to follow.
+    expect(state.sent.filter((s) => s.path.endsWith("/rollout"))).toHaveLength(0);
+  });
+
+  it("says a name that exists in words, and offers the way back with the edits kept", async () => {
+    state.create = () =>
+      Response.json(
+        {
+          type: "service_name_taken",
+          title: "x",
+          status: 409,
+          detail: "A service named chat already exists.",
+        },
+        { status: 409 },
+      );
+    renderAt(NEW);
+    await reviewIt();
+    fireEvent.click(screen.getByRole("button", { name: "Create service" }));
+    expect(await screen.findByText("A service named chat already exists.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Back to editing" }));
+    expect((await field("Name")).value).toBe("chat");
+    expect(posts("/services")).toHaveLength(1);
+  });
+
+  it("words a missing image from the review in the editor", async () => {
+    state.createReview = () =>
+      Response.json(
+        {
+          type: "image_required",
+          title: "x",
+          status: 422,
+          detail: "Enter an image like nginx:1.27 or ghcr.io/acme/app:latest.",
+        },
+        { status: 422 },
+      );
+    renderAt(`${NEW}?tab=spec`);
+    await ready();
+    fireEvent.click(reviewButton());
+    expect(
+      await screen.findByText("Enter an image like nginx:1.27 or ghcr.io/acme/app:latest."),
+    ).toBeTruthy();
+  });
+
+  it("says the objects made for a failed create were removed, as Couldn't create {name}", async () => {
+    state.create = () =>
+      Response.json(
+        {
+          type: "spec_rejected",
+          title: "x",
+          status: 422,
+          detail: "Couldn't create chat. Docker rejected these settings: bad spec",
+          errors: [
+            { location: "reason", message: "Docker rejected these settings: bad spec" },
+            { location: "removed", message: "secret:db-pass" },
+          ],
+        },
+        { status: 422 },
+      );
+    renderAt(NEW);
+    await reviewIt();
+    fireEvent.click(screen.getByRole("button", { name: "Create service" }));
+    expect(
+      await screen.findByText(
+        "Couldn't create chat. Docker rejected these settings: bad spec The 1 objects created for this change were removed.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("turns away a caller below Admin", async () => {
+    state.me = makeMe({ envs: { [SERVICE_ENV]: "operator" } });
+    renderAt(NEW);
+    expect(await screen.findByText("You don't have permission to view this page")).toBeTruthy();
+    expect(posts("/services/review")).toHaveLength(0);
+  });
+
+  it("asks before it throws a new service away, with the create words", async () => {
+    const router = renderAt(NEW);
+    await fillIn();
+    await router.navigate({ to: PAGE });
+    expect(await screen.findByText("The service hasn't been created.")).toBeTruthy();
   });
 });

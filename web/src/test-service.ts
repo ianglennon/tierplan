@@ -179,6 +179,26 @@ export function reviewBody(extra: Partial<ServiceReviewBody> = {}): ServiceRevie
   };
 }
 
+export type ServiceCreateBody = components["schemas"]["ServiceCreateBody"];
+
+// The ID the created service gets in the create tests.
+export const CREATED_ID = "svc-new";
+
+// What POST .../services answers for a service that was made.
+export function createdBody(extra: Partial<ServiceCreateBody> = {}): ServiceCreateBody {
+  return {
+    id: CREATED_ID,
+    name: "chat",
+    image: `nginx:1.27@${DIGEST}`,
+    digest: DIGEST,
+    pinned: true,
+    warnings: [],
+    steps: [],
+    cleanup: { removed: [], notRemoved: [] },
+    ...extra,
+  };
+}
+
 export interface Sent {
   method: string;
   path: string;
@@ -205,6 +225,9 @@ export interface ServiceApiState {
   // routes answer 404.
   review?: () => Response | Promise<Response>;
   apply?: () => Response | Promise<Response>;
+  // The create page's review (POST .../services/review) and create (POST .../services).
+  createReview?: () => Response | Promise<Response>;
+  create?: () => Response | Promise<Response>;
 }
 
 // serviceFetch answers the page's requests: the app shell's, the service and its inspect, and
@@ -291,7 +314,12 @@ export function serviceFetch(state: ServiceApiState) {
         return state.apply ? state.apply() : new Response(null, { status: 404 });
       case `${base}/services/scale`:
         return state.scale();
+      case `${base}/services/review`:
+        return state.createReview ? state.createReview() : new Response(null, { status: 404 });
       case `${base}/services`:
+        if (req.method === "POST") {
+          return state.create ? state.create() : new Response(null, { status: 404 });
+        }
         return Response.json({
           items: [],
           total: 0,
