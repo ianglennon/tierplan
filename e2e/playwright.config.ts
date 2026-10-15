@@ -26,7 +26,11 @@ const chromium = {
 // The agent project adds a second environment and revokes it, so the specs before
 // it assume the one environment they started with. The access project follows it
 // because it needs that second, revoked environment as the one a new user must not
-// see. The backup project runs last: its restore replaces the state of the shared
+// see. The services project turns the engine Bayplan manages into a one-node swarm,
+// runs one service on it and leaves the swarm again, so it comes after every spec
+// that assumes a standalone host and before the restore. It finds the local
+// environment by what it is, not by its position, because the agent spec left a
+// second one. The backup project runs last: its restore replaces the state of the shared
 // server, which signs everyone out and drops everything made after the backup.
 const order = [
   "setup-and-login",
@@ -39,6 +43,7 @@ const order = [
   "access",
   "registries",
   "responsive",
+  "services",
   "backup",
 ] as const;
 

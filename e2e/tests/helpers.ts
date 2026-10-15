@@ -81,6 +81,24 @@ export function runLogger(name: string): void {
   );
 }
 
+// swarmInit makes the dind engine Bayplan manages a one-node swarm, the way a person
+// would on a fresh host: `docker swarm init --advertise-addr 127.0.0.1`. It leaves any
+// swarm a failed earlier attempt left behind first, so it can run twice. The dind has no
+// route to a registry, so a swarm service has to use an image that is already there.
+export function swarmInit(): void {
+  swarmLeave();
+  dind("docker swarm init --advertise-addr 127.0.0.1 >/dev/null");
+}
+
+// swarmLeave takes the dind engine out of its swarm, which removes the services, secrets
+// and configs the swarm held, and the bridge it made. It is safe when the engine is in no swarm.
+export function swarmLeave(): void {
+  dind("docker swarm leave --force >/dev/null 2>&1 || true");
+  // The bridge the swarm made for its containers outlives it on some engines; a swarm made
+  // again creates it afresh.
+  dind("docker network rm docker_gwbridge >/dev/null 2>&1 || true");
+}
+
 // dockerExec runs a shell script inside one service of the stack with
 // `docker compose exec -T <service> sh -c <script>`, as a person at a prompt on
 // that machine would. For "agenthost" it is a shell on the remote Docker host:
