@@ -427,3 +427,26 @@ describe("the list route", () => {
     expect(router.state.location.search).toEqual({ new: 1 });
   });
 });
+
+describe("New version…", () => {
+  it("is in the header beside Delete…, and opens the two-step rotate dialog", async () => {
+    renderAt();
+    const button = await screen.findByRole("button", { name: "New version of db-password" });
+    expect(
+      within(headerOf()).getByRole("button", { name: "Delete secret db-password" }),
+    ).toBeTruthy();
+    fireEvent.click(button);
+    expect(await screen.findByRole("heading", { name: "New version of db-password" })).toBeTruthy();
+    expect(screen.getByText("Step 1 of 2")).toBeTruthy();
+  });
+
+  it("shows a Viewer New version… disabled with Needs Admin", async () => {
+    state.me = makeMe({ envs: { [ENV]: "viewer" } });
+    renderAt();
+    const button = await screen.findByRole("button", { name: "New version of db-password" });
+    await waitFor(() => expect(button.getAttribute("aria-disabled")).toBe("true"));
+    expect(document.body.textContent).toContain("Needs Admin");
+    fireEvent.click(button);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});

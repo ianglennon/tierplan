@@ -461,3 +461,27 @@ describe("ConfigList create", () => {
     );
   });
 });
+
+describe("ConfigList New version…", () => {
+  it("has a New version… item on every row that opens the two-step rotate dialog", async () => {
+    mount();
+    const button = await screen.findByRole("button", { name: "New version of app.yaml" });
+    expect(button.textContent).toBe("New version…");
+    fireEvent.click(button);
+    expect(await screen.findByRole("heading", { name: "New version of app.yaml" })).toBeTruthy();
+    expect(screen.getByText("Step 1 of 2")).toBeTruthy();
+  });
+
+  it("shows an Operator and a Viewer New version… disabled with Needs Admin, and never the dialog", async () => {
+    for (const role of ["operator", "viewer"] as const) {
+      cleanup();
+      me = makeMe({ envs: { [ENV]: role } });
+      mount();
+      const button = await screen.findByRole("button", { name: "New version of app.yaml" });
+      await waitFor(() => expect(button.getAttribute("aria-disabled")).toBe("true"));
+      expect(document.body.textContent).toContain("Needs Admin");
+      fireEvent.click(button);
+      expect(screen.queryByRole("dialog")).toBeNull();
+    }
+  });
+});
