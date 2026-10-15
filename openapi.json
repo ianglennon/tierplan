@@ -1091,6 +1091,28 @@
         ],
         "type": "object"
       },
+      "ConfigRotateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "description": "The new content, as standard base64, with the limits of a create: empty is 422 value_required, 1,024,000 bytes or more 422 value_too_large, text that is not base64 422 value_invalid",
+            "type": "string"
+          },
+          "name": {
+            "description": "The new config's name, as for a create (else 422 name_invalid); left out, the next version of the old name",
+            "type": "string"
+          },
+          "removeOld": {
+            "description": "Remove the old config when no service spec names it any more",
+            "type": "boolean"
+          },
+          "templating": {
+            "description": "none (the default) or golang, as for a create (else 422 templating_invalid). The page prefills the old config's",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "ConfigUserBody": {
         "additionalProperties": false,
         "properties": {
@@ -8079,6 +8101,193 @@
         ],
         "type": "object"
       },
+      "RotateBody": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The ID of the new object",
+            "type": "string"
+          },
+          "name": {
+            "description": "Its name",
+            "type": "string"
+          },
+          "oldName": {
+            "description": "The name of the object it replaces",
+            "type": "string"
+          },
+          "oldRemoved": {
+            "description": "True when the old object was removed",
+            "type": "boolean"
+          },
+          "removeCode": {
+            "description": "Why the old object stayed although removeOld was asked for: object_in_use (a service spec, a stack's, still names it) or remove_failed; empty otherwise",
+            "enum": [
+              "object_in_use",
+              "remove_failed",
+              ""
+            ],
+            "type": "string"
+          },
+          "services": {
+            "description": "The services that used the old object, in the order they were taken",
+            "items": {
+              "$ref": "#/components/schemas/RotateServiceBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "skipped": {
+            "description": "How many services a stack owns, which were left alone",
+            "format": "int64",
+            "type": "integer"
+          },
+          "updated": {
+            "description": "How many services now use the new object",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "oldName",
+          "services",
+          "updated",
+          "skipped",
+          "oldRemoved",
+          "removeCode"
+        ],
+        "type": "object"
+      },
+      "RotatePreviewBody": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The ID of the object to replace",
+            "type": "string"
+          },
+          "kind": {
+            "description": "secret or config",
+            "enum": [
+              "secret",
+              "config"
+            ],
+            "type": "string"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "The labels the new version would be given: the old object's",
+            "type": "object"
+          },
+          "name": {
+            "description": "Its name",
+            "type": "string"
+          },
+          "nameTaken": {
+            "description": "True when the swarm has an object of that name already, so the rotate would answer 409 name_taken",
+            "type": "boolean"
+          },
+          "newName": {
+            "description": "The name the new version would have",
+            "type": "string"
+          },
+          "skipped": {
+            "description": "How many of them a stack owns",
+            "format": "int64",
+            "type": "integer"
+          },
+          "templating": {
+            "description": "A config's templating (none or golang); empty for a secret",
+            "enum": [
+              "none",
+              "golang",
+              ""
+            ],
+            "type": "string"
+          },
+          "users": {
+            "description": "The services whose spec references the object, in name order",
+            "items": {
+              "$ref": "#/components/schemas/RotateUserBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "name",
+          "newName",
+          "nameTaken",
+          "templating",
+          "labels",
+          "users",
+          "skipped"
+        ],
+        "type": "object"
+      },
+      "RotatePreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "newName": {
+            "description": "The name the new version would have; left out, the next version of the old name ({base}_v{n}: the old name without a trailing _v\u003cdigits\u003e, then the lowest unused number above the old version). Not a valid name is 422 name_invalid; a taken one is nameTaken in the answer",
+            "maxLength": 128,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RotateServiceBody": {
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "description": "Its digest; empty when it names none",
+            "type": "string"
+          },
+          "image": {
+            "description": "The image the service was updated with; empty when it was not updated",
+            "type": "string"
+          },
+          "service": {
+            "description": "The service name",
+            "type": "string"
+          },
+          "serviceId": {
+            "description": "The service ID",
+            "type": "string"
+          },
+          "stack": {
+            "description": "The stack that owns a skipped service",
+            "type": "string"
+          },
+          "state": {
+            "description": "updated (now uses the new object; its rollout continues in the swarm), skipped (a stack owns it) or unchanged (it no longer used the old object when it was read)",
+            "enum": [
+              "updated",
+              "skipped",
+              "unchanged"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "serviceId",
+          "service",
+          "stack",
+          "state",
+          "image",
+          "digest"
+        ],
+        "type": "object"
+      },
       "RotateTokenBody": {
         "additionalProperties": false,
         "properties": {
@@ -8102,6 +8311,64 @@
         "required": [
           "install",
           "hasAgents"
+        ],
+        "type": "object"
+      },
+      "RotateUserBody": {
+        "additionalProperties": false,
+        "properties": {
+          "current": {
+            "additionalProperties": {},
+            "description": "The service's spec as it is, masked for a caller without secrets.reveal; left out for a skipped service",
+            "type": "object"
+          },
+          "file": {
+            "description": "The file name or path the object appears as in the container; kept by the rotate",
+            "type": "string"
+          },
+          "gid": {
+            "description": "The group of the file; kept",
+            "type": "string"
+          },
+          "mode": {
+            "description": "The file mode in octal; kept",
+            "type": "string"
+          },
+          "next": {
+            "additionalProperties": {},
+            "description": "The spec after the rotate, masked in the same way, with the reference to the new object and no ID, which it doesn't have yet; left out for a skipped service",
+            "type": "object"
+          },
+          "service": {
+            "description": "The service name",
+            "type": "string"
+          },
+          "serviceId": {
+            "description": "The service ID",
+            "type": "string"
+          },
+          "skipped": {
+            "description": "True for a service a stack owns: a rotate does not change it, because the stack's next deploy would put the old object back",
+            "type": "boolean"
+          },
+          "stack": {
+            "description": "The stack that owns the service; empty for a standalone service",
+            "type": "string"
+          },
+          "uid": {
+            "description": "The owner of the file; kept",
+            "type": "string"
+          }
+        },
+        "required": [
+          "serviceId",
+          "service",
+          "stack",
+          "skipped",
+          "file",
+          "uid",
+          "gid",
+          "mode"
         ],
         "type": "object"
       },
@@ -8470,6 +8737,24 @@
           "unfilteredTotal",
           "capped"
         ],
+        "type": "object"
+      },
+      "SecretRotateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "description": "The new value, as standard base64, with the limits of a create: empty is 422 value_required, 512,000 bytes or more 422 value_too_large, text that is not base64 422 value_invalid. It is sent to the swarm once and never kept, logged, audited or returned",
+            "type": "string"
+          },
+          "name": {
+            "description": "The new secret's name, as for a create (else 422 name_invalid); left out, the next version of the old name",
+            "type": "string"
+          },
+          "removeOld": {
+            "description": "Remove the old secret when no service spec names it any more",
+            "type": "boolean"
+          }
+        },
         "type": "object"
       },
       "SecretUserBody": {
@@ -14190,6 +14475,150 @@
         ]
       }
     },
+    "/api/env/{envId}/configs/{configId}/rotate": {
+      "post": {
+        "description": "Creates a new config with the new content under {base}_v{n} (or the name given), with the templating given and the old config's labels, points every standalone service that uses the old config at the new one, with the same file name or path, owner, group and mode, and removes the old config when removeOld is set and nothing uses it any more. Each service is updated through the same steps as an edit (the host-escalation policy on its whole spec for the caller, the registry credential, the version just read), one at a time in name order and never retried. Services a stack owns are skipped. The first failure stops the run and leaves the old config and the services after it as they were: the answer is that failure's problem (for example 409 service_changed, 422 spec_rejected, 403 privileged_service), with errors listing the new config (created), the services already moved (updated), the stack's (skipped), the one it stopped at (failedAt) and the reason, and a detail that says Updated k of n services. A failed create of the new config (409 name_taken, ...) changes nothing else and says so. A body over 2 MiB is refused. Needs configs.manage (Admin) and services.control (Operator) on the environment; a caller without the second is refused 403 and audited as permission.denied. Audited as config.rotated (from, to, updated, skipped, removed_old, code) with the new config as config.created (source rotate), the old one as config.removed when it was removed and each service attempted as service.updated.",
+        "operationId": "rotateConfig",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The config ID or name: the id of a row of the configs list",
+            "in": "path",
+            "name": "configId",
+            "required": true,
+            "schema": {
+              "description": "The config ID or name: the id of a row of the configs list",
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigRotateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotateBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Rotate a swarm config to a new version",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/configs/{configId}/rotate/preview": {
+      "post": {
+        "description": "What a new version of the config would do, without changing anything: the name the new config would have (the next {base}_v{n}, or the one given in newName, with nameTaken when the swarm has it), its templating and labels, which the new version copies, and every service whose spec references the config in name order, with how it mounts the config and, for a standalone service, its spec as it is and as it would be (current and next, masked for a caller without secrets.reveal). Services a stack owns are listed as skipped. 404 config_not_found; 409 not_a_swarm. Needs configs.manage (Admin) and services.control (Operator) on the environment; a caller without the second is refused 403 and audited as permission.denied. A preview is not audited otherwise.",
+        "operationId": "previewConfigRotate",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The config ID or name: the id of a row of the configs list",
+            "in": "path",
+            "name": "configId",
+            "required": true,
+            "schema": {
+              "description": "The config ID or name: the id of a row of the configs list",
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotatePreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotatePreviewBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Preview the rotate of a swarm config",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
     "/api/env/{envId}/containers": {
       "get": {
         "description": "Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server or agent for Bayplan's own containers) and readOnly (its host refuses changes). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.",
@@ -17535,6 +17964,150 @@
           }
         },
         "summary": "One swarm secret's raw inspect document",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/secrets/{secretId}/rotate": {
+      "post": {
+        "description": "Creates a new secret with the new value under {base}_v{n} (or the name given), copies the old secret's labels, points every standalone service that uses the old secret at the new one, with the same file name, owner, group and mode, and removes the old secret when removeOld is set and nothing uses it any more. Each service is updated through the same steps as an edit (the host-escalation policy on its whole spec for the caller, the registry credential, the version just read), one at a time in name order and never retried. Services a stack owns are skipped. The first failure stops the run and leaves the old secret and the services after it as they were: the answer is that failure's problem (for example 409 service_changed for a service somebody edited in between, 422 spec_rejected, 403 privileged_service), with errors listing the new secret (created), the services already moved (updated), the stack's (skipped), the one it stopped at (failedAt) and the reason, and a detail that says Updated k of n services. A failed create of the new secret (409 name_taken, 422 spec_rejected, ...) changes nothing else and says so. The value goes to the swarm once and is never kept, logged, audited or returned. A body over 1 MiB is refused. Needs secrets.manage (Admin) and services.control (Operator) on the environment; a caller without the second is refused 403 and audited as permission.denied. Audited as secret.rotated (from, to, updated, skipped, removed_old, code) with the new secret as secret.created (source rotate), the old one as secret.removed when it was removed and each service attempted as service.updated, never with a value.",
+        "operationId": "rotateSecret",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The secret ID or name: the id of a row of the secrets list",
+            "in": "path",
+            "name": "secretId",
+            "required": true,
+            "schema": {
+              "description": "The secret ID or name: the id of a row of the secrets list",
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecretRotateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotateBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Rotate a swarm secret to a new version",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/secrets/{secretId}/rotate/preview": {
+      "post": {
+        "description": "What a new version of the secret would do, without changing anything: the name the new secret would have (the next {base}_v{n}, or the one given in newName, with nameTaken when the swarm has it), the labels it would copy, and every service whose spec references the secret in name order, with how it mounts the secret and, for a standalone service, its spec as it is and as it would be (current and next, masked for a caller without secrets.reveal). Services a stack owns are listed as skipped. 404 secret_not_found; 409 not_a_swarm. Needs secrets.manage (Admin) and services.control (Operator) on the environment; a caller without the second is refused 403 and audited as permission.denied. A preview is not audited otherwise.",
+        "operationId": "previewSecretRotate",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The secret ID or name: the id of a row of the secrets list",
+            "in": "path",
+            "name": "secretId",
+            "required": true,
+            "schema": {
+              "description": "The secret ID or name: the id of a row of the secrets list",
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotatePreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotatePreviewBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Preview the rotate of a swarm secret",
         "tags": [
           "environments"
         ]

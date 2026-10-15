@@ -220,11 +220,13 @@
       },
       "secret": {
         "created": "Secret created",
-        "removed": "Secret deleted"
+        "removed": "Secret deleted",
+        "rotated": "Secret rotated"
       },
       "config": {
         "created": "Config created",
-        "removed": "Config deleted"
+        "removed": "Config deleted",
+        "rotated": "Config rotated"
       }
     },
     "coalesced": {

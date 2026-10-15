@@ -22,6 +22,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/registry"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 )
 
@@ -51,14 +52,18 @@ type ConfigsDeps struct {
 	Aggregator *envs.Aggregator
 	// Clusters is the cluster reader the lists and the in-use check are served from.
 	Clusters *envs.Clusters
+	// Resolver chooses the registry credential a rotate's service updates are sent with.
+	Resolver *registry.Resolver
 	Audit    *audit.Writer
+	// Checker decides the second permission a rotate needs (services.control) and who may have host access.
+	Checker *rbac.Checker
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
 
-// services is the part of the dependencies the shared swarm problem mapping reads.
+// services is the part of the dependencies the shared swarm problem mapping and a rotate read.
 func (d ConfigsDeps) services() ServicesDeps {
-	return ServicesDeps{Aggregator: d.Aggregator, Clusters: d.Clusters, Audit: d.Audit, Log: d.Log}
+	return ServicesDeps(d)
 }
 
 // ConfigItem is one swarm config as the list shows it. There is no content: the manager sends
@@ -287,6 +292,8 @@ func RegisterConfigs(r *httpx.Router, d ConfigsDeps) {
 			}
 			return nil, deleteConfig(ctx, d, p, env.ID, in)
 		})
+
+	registerConfigRotate(r, d)
 }
 
 // configOwner is the stack a config belongs to, from its labels.

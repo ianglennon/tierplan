@@ -126,6 +126,8 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "secret.removed",
   "config.created",
   "config.removed",
+  "secret.rotated",
+  "config.rotated",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped

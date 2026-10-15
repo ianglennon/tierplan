@@ -580,6 +580,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/configs/{configId}/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate a swarm config to a new version
+         * @description Creates a new config with the new content under {base}_v{n} (or the name given), with the templating given and the old config's labels, points every standalone service that uses the old config at the new one, with the same file name or path, owner, group and mode, and removes the old config when removeOld is set and nothing uses it any more. Each service is updated through the same steps as an edit (the host-escalation policy on its whole spec for the caller, the registry credential, the version just read), one at a time in name order and never retried. Services a stack owns are skipped. The first failure stops the run and leaves the old config and the services after it as they were: the answer is that failure's problem (for example 409 service_changed, 422 spec_rejected, 403 privileged_service), with errors listing the new config (created), the services already moved (updated), the stack's (skipped), the one it stopped at (failedAt) and the reason, and a detail that says Updated k of n services. A failed create of the new config (409 name_taken, ...) changes nothing else and says so. A body over 2 MiB is refused. Needs configs.manage (Admin) and services.control (Operator) on the environment; a caller without the second is refused 403 and audited as permission.denied. Audited as config.rotated (from, to, updated, skipped, removed_old, code) with the new config as config.created (source rotate), the old one as config.removed when it was removed and each service attempted as service.updated.
+         */
+        post: operations["rotateConfig"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/configs/{configId}/rotate/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview the rotate of a swarm config
+         * @description What a new version of the config would do, without changing anything: the name the new config would have (the next {base}_v{n}, or the one given in newName, with nameTaken when the swarm has it), its templating and labels, which the new version copies, and every service whose spec references the config in name order, with how it mounts the config and, for a standalone service, its spec as it is and as it would be (current and next, masked for a caller without secrets.reveal). Services a stack owns are listed as skipped. 404 config_not_found; 409 not_a_swarm. Needs configs.manage (Admin) and services.control (Operator) on the environment; a caller without the second is refused 403 and audited as permission.denied. A preview is not audited otherwise.
+         */
+        post: operations["previewConfigRotate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/containers": {
         parameters: {
             query?: never;
@@ -1458,6 +1498,46 @@ export interface paths {
         get: operations["inspectSecret"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/secrets/{secretId}/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate a swarm secret to a new version
+         * @description Creates a new secret with the new value under {base}_v{n} (or the name given), copies the old secret's labels, points every standalone service that uses the old secret at the new one, with the same file name, owner, group and mode, and removes the old secret when removeOld is set and nothing uses it any more. Each service is updated through the same steps as an edit (the host-escalation policy on its whole spec for the caller, the registry credential, the version just read), one at a time in name order and never retried. Services a stack owns are skipped. The first failure stops the run and leaves the old secret and the services after it as they were: the answer is that failure's problem (for example 409 service_changed for a service somebody edited in between, 422 spec_rejected, 403 privileged_service), with errors listing the new secret (created), the services already moved (updated), the stack's (skipped), the one it stopped at (failedAt) and the reason, and a detail that says Updated k of n services. A failed create of the new secret (409 name_taken, 422 spec_rejected, ...) changes nothing else and says so. The value goes to the swarm once and is never kept, logged, audited or returned. A body over 1 MiB is refused. Needs secrets.manage (Admin) and services.control (Operator) on the environment; a caller without the second is refused 403 and audited as permission.denied. Audited as secret.rotated (from, to, updated, skipped, removed_old, code) with the new secret as secret.created (source rotate), the old one as secret.removed when it was removed and each service attempted as service.updated, never with a value.
+         */
+        post: operations["rotateSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/secrets/{secretId}/rotate/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview the rotate of a swarm secret
+         * @description What a new version of the secret would do, without changing anything: the name the new secret would have (the next {base}_v{n}, or the one given in newName, with nameTaken when the swarm has it), the labels it would copy, and every service whose spec references the secret in name order, with how it mounts the secret and, for a standalone service, its spec as it is and as it would be (current and next, masked for a caller without secrets.reveal). Services a stack owns are listed as skipped. 404 secret_not_found; 409 not_a_swarm. Needs secrets.manage (Admin) and services.control (Operator) on the environment; a caller without the second is refused 403 and audited as permission.denied. A preview is not audited otherwise.
+         */
+        post: operations["previewSecretRotate"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3665,6 +3745,16 @@ export interface components {
              * @description How many configs there are before the search
              */
             unfilteredTotal: number;
+        };
+        ConfigRotateRequest: {
+            /** @description The new content, as standard base64, with the limits of a create: empty is 422 value_required, 1,024,000 bytes or more 422 value_too_large, text that is not base64 422 value_invalid */
+            data?: string;
+            /** @description The new config's name, as for a create (else 422 name_invalid); left out, the next version of the old name */
+            name?: string;
+            /** @description Remove the old config when no service spec names it any more */
+            removeOld?: boolean;
+            /** @description none (the default) or golang, as for a create (else 422 templating_invalid). The page prefills the old config's */
+            templating?: string;
         };
         ConfigUserBody: {
             /** @description The file name the config appears as in the container; empty when the service reads it at runtime only */
@@ -6444,6 +6534,85 @@ export interface components {
              */
             updated: number;
         };
+        RotateBody: {
+            /** @description The ID of the new object */
+            id: string;
+            /** @description Its name */
+            name: string;
+            /** @description The name of the object it replaces */
+            oldName: string;
+            /** @description True when the old object was removed */
+            oldRemoved: boolean;
+            /**
+             * @description Why the old object stayed although removeOld was asked for: object_in_use (a service spec, a stack's, still names it) or remove_failed; empty otherwise
+             * @enum {string}
+             */
+            removeCode: "object_in_use" | "remove_failed" | "";
+            /** @description The services that used the old object, in the order they were taken */
+            services: components["schemas"]["RotateServiceBody"][] | null;
+            /**
+             * Format: int64
+             * @description How many services a stack owns, which were left alone
+             */
+            skipped: number;
+            /**
+             * Format: int64
+             * @description How many services now use the new object
+             */
+            updated: number;
+        };
+        RotatePreviewBody: {
+            /** @description The ID of the object to replace */
+            id: string;
+            /**
+             * @description secret or config
+             * @enum {string}
+             */
+            kind: "secret" | "config";
+            /** @description The labels the new version would be given: the old object's */
+            labels: {
+                [key: string]: string;
+            };
+            /** @description Its name */
+            name: string;
+            /** @description True when the swarm has an object of that name already, so the rotate would answer 409 name_taken */
+            nameTaken: boolean;
+            /** @description The name the new version would have */
+            newName: string;
+            /**
+             * Format: int64
+             * @description How many of them a stack owns
+             */
+            skipped: number;
+            /**
+             * @description A config's templating (none or golang); empty for a secret
+             * @enum {string}
+             */
+            templating: "none" | "golang" | "";
+            /** @description The services whose spec references the object, in name order */
+            users: components["schemas"]["RotateUserBody"][] | null;
+        };
+        RotatePreviewRequest: {
+            /** @description The name the new version would have; left out, the next version of the old name ({base}_v{n}: the old name without a trailing _v<digits>, then the lowest unused number above the old version). Not a valid name is 422 name_invalid; a taken one is nameTaken in the answer */
+            newName?: string;
+        };
+        RotateServiceBody: {
+            /** @description Its digest; empty when it names none */
+            digest: string;
+            /** @description The image the service was updated with; empty when it was not updated */
+            image: string;
+            /** @description The service name */
+            service: string;
+            /** @description The service ID */
+            serviceId: string;
+            /** @description The stack that owns a skipped service */
+            stack: string;
+            /**
+             * @description updated (now uses the new object; its rollout continues in the swarm), skipped (a stack owns it) or unchanged (it no longer used the old object when it was read)
+             * @enum {string}
+             */
+            state: "updated" | "skipped" | "unchanged";
+        };
         RotateTokenBody: {
             /**
              * @description What the environment's active agents run on. Absent while it has none
@@ -6454,6 +6623,32 @@ export interface components {
             hasAgents: boolean;
             /** @description The new token and every command and file built from it. Shown only in this answer: the server keeps the token's hash and cannot show it again. install.generation is one more than the token it replaced, and the swarm secret is named for it */
             install: components["schemas"]["InstallBody"];
+        };
+        RotateUserBody: {
+            /** @description The service's spec as it is, masked for a caller without secrets.reveal; left out for a skipped service */
+            current?: {
+                [key: string]: unknown;
+            };
+            /** @description The file name or path the object appears as in the container; kept by the rotate */
+            file: string;
+            /** @description The group of the file; kept */
+            gid: string;
+            /** @description The file mode in octal; kept */
+            mode: string;
+            /** @description The spec after the rotate, masked in the same way, with the reference to the new object and no ID, which it doesn't have yet; left out for a skipped service */
+            next?: {
+                [key: string]: unknown;
+            };
+            /** @description The service name */
+            service: string;
+            /** @description The service ID */
+            serviceId: string;
+            /** @description True for a service a stack owns: a rotate does not change it, because the stack's next deploy would put the old object back */
+            skipped: boolean;
+            /** @description The stack that owns the service; empty for a standalone service */
+            stack: string;
+            /** @description The owner of the file; kept */
+            uid: string;
         };
         RunningContainerBody: {
             /** @description The container's ID */
@@ -6611,6 +6806,14 @@ export interface components {
              * @description How many secrets there are before the search
              */
             unfilteredTotal: number;
+        };
+        SecretRotateRequest: {
+            /** @description The new value, as standard base64, with the limits of a create: empty is 422 value_required, 512,000 bytes or more 422 value_too_large, text that is not base64 422 value_invalid. It is sent to the swarm once and never kept, logged, audited or returned */
+            data?: string;
+            /** @description The new secret's name, as for a create (else 422 name_invalid); left out, the next version of the old name */
+            name?: string;
+            /** @description Remove the old secret when no service spec names it any more */
+            removeOld?: boolean;
         };
         SecretUserBody: {
             /** @description The file name the secret appears as in the container */
@@ -9332,6 +9535,84 @@ export interface operations {
             };
         };
     };
+    rotateConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The config ID or name: the id of a row of the configs list */
+                configId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigRotateRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotateBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewConfigRotate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The config ID or name: the id of a row of the configs list */
+                configId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RotatePreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotatePreviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     listContainers: {
         parameters: {
             query?: {
@@ -11190,6 +11471,84 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SecretInspectBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    rotateSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The secret ID or name: the id of a row of the secrets list */
+                secretId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecretRotateRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotateBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewSecretRotate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The secret ID or name: the id of a row of the secrets list */
+                secretId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RotatePreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotatePreviewBody"];
                 };
             };
             /** @description Error */

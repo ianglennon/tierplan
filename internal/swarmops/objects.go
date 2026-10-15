@@ -31,6 +31,8 @@ const (
 const (
 	SourceApply        = "service_apply"
 	SourceApplyCleanup = "service_apply_cleanup"
+	// SourceRotate is the source of the rows of the new object and of the old one a rotate removes.
+	SourceRotate = "rotate"
 )
 
 // The states and codes of an ApplyStep and the codes of an audit row of an object.
@@ -322,11 +324,16 @@ func createOne(ctx context.Context, cli *dockerx.Client, o StagedObject) (string
 // createdRow is the audit row of an attempt to make a staged object: what was asked and the code.
 // It never carries the value, only its size.
 func createdRow(o StagedObject, targetID, code string) audit.Entry {
+	return createdRowFrom(o, targetID, code, SourceApply)
+}
+
+// createdRowFrom is createdRow for an object made for another reason than a service apply.
+func createdRowFrom(o StagedObject, targetID, code, source string) audit.Entry {
 	e := audit.Entry{TargetType: o.Kind, TargetID: targetID, Result: audit.ResultSuccess}
 	if code != codeCreated {
 		e.Result, e.Reason = audit.ResultFailure, code
 	}
-	d := map[string]string{"name": o.Name, "source": SourceApply, "code": code}
+	d := map[string]string{"name": o.Name, "source": source, "code": code}
 	switch o.Kind {
 	case KindNetwork:
 		e.Action = audit.ActionNetworkCreated
@@ -386,11 +393,16 @@ func cleanupObjects(ctx context.Context, cli *dockerx.Client, created []CreatedO
 
 // removedRow is the audit row of removing an object the apply made.
 func removedRow(o CreatedObject, code string) audit.Entry {
+	return removedRowFrom(o, code, SourceApplyCleanup)
+}
+
+// removedRowFrom is removedRow for an object removed for another reason than the cleanup of an apply.
+func removedRowFrom(o CreatedObject, code, source string) audit.Entry {
 	e := audit.Entry{TargetType: o.Kind, TargetID: o.ID, Result: audit.ResultSuccess}
 	if code != codeRemoved {
 		e.Result, e.Reason = audit.ResultFailure, code
 	}
-	d := map[string]string{"name": o.Name, "source": SourceApplyCleanup, "code": code}
+	d := map[string]string{"name": o.Name, "source": source, "code": code}
 	switch o.Kind {
 	case KindNetwork:
 		e.Action = audit.ActionNetworkRemoved
@@ -422,6 +434,10 @@ func stepCode(err error) string {
 		return "image_unresolved"
 	case errors.Is(err, ErrRegistryUnresolved):
 		return "registry_unresolved"
+	case errors.Is(err, ErrObjectsMissing):
+		return "objects_missing"
+	case errors.Is(err, dockerx.ErrServiceNotFound):
+		return "service_not_found"
 	}
 	var ce *ObjectCreateError
 	if errors.As(err, &ce) {

@@ -23,6 +23,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/registry"
 )
 
 const (
@@ -63,14 +64,18 @@ type SecretsDeps struct {
 	Aggregator *envs.Aggregator
 	// Clusters is the cluster reader the lists and the in-use check are served from.
 	Clusters *envs.Clusters
+	// Resolver chooses the registry credential a rotate's service updates are sent with.
+	Resolver *registry.Resolver
 	Audit    *audit.Writer
+	// Checker decides the second permission a rotate needs (services.control) and who may have host access.
+	Checker *rbac.Checker
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
 
-// services is the part of the dependencies the shared swarm problem mapping reads.
+// services is the part of the dependencies the shared swarm problem mapping and a rotate read.
 func (d SecretsDeps) services() ServicesDeps {
-	return ServicesDeps{Aggregator: d.Aggregator, Clusters: d.Clusters, Audit: d.Audit, Log: d.Log}
+	return ServicesDeps(d)
 }
 
 // SecretItem is one swarm secret as the list shows it. There is no value: the swarm never
@@ -291,6 +296,8 @@ func RegisterSecrets(r *httpx.Router, d SecretsDeps) {
 			}
 			return nil, deleteSecret(ctx, d, p, env.ID, in)
 		})
+
+	registerSecretRotate(r, d)
 }
 
 // secretOwner is the stack a secret belongs to, from its labels.

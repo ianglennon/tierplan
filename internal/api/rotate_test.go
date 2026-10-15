@@ -6,6 +6,7 @@ package api_test
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -130,9 +131,8 @@ func (f *envFix) rotateCall(t *testing.T, e envBody, kind, id, tail, body string
 	return f.req(t, http.MethodPost, "/api/env/"+e.ID+"/"+kind+"/"+id+"/"+tail, body)
 }
 
-func (c *roleCaller) rotateCall(kind, id, tail, body string) *http.Response {
-	rec := c.do(http.MethodPost, kind+"/"+id+"/"+tail, body)
-	return rec.Result()
+func (c *roleCaller) rotateCall(kind, id, tail, body string) *httptest.ResponseRecorder {
+	return c.do(http.MethodPost, kind+"/"+id+"/"+tail, body)
 }
 
 func rotateBody(value string, extra string) string {
@@ -219,8 +219,8 @@ func TestRotateNeedsTheObjectsManagePermissionAndAnOperatorIsForbiddenOnAllFourR
 			{"configs", "cfg-app", "rotate/preview", `{}`},
 			{"configs", "cfg-app", "rotate", rotateBody("x=1", "")},
 		} {
-			if rec := who.rotateCall(tc.kind, tc.id, tc.tail, tc.body); rec.StatusCode != http.StatusForbidden {
-				t.Errorf("%s %s/%s by a %s: %d, want 403", tc.kind, tc.id, tc.tail, role, rec.StatusCode)
+			if rec := who.rotateCall(tc.kind, tc.id, tc.tail, tc.body); rec.Code != http.StatusForbidden {
+				t.Errorf("%s %s/%s by a %s: %d, want 403", tc.kind, tc.id, tc.tail, role, rec.Code)
 			}
 		}
 	}
@@ -484,15 +484,15 @@ func TestRotateAConfigCopiesLabelsAndTemplatingAndAuditsConfigRotated(t *testing
 
 func TestRotateOfASecretThatIsGoneIsNotFoundAndOfAStandaloneHostIsNotASwarm(t *testing.T) {
 	f, e := rotateEnv(t, rotateServices()...)
-	for _, tail := range []string{"rotate/preview", "rotate"} {
-		rec := f.rotateCall(t, e, "secrets", "sec-gone", tail, rotateBody("v", ""))
+	for tail, body := range map[string]string{"rotate/preview": `{}`, "rotate": rotateBody("v", "")} {
+		rec := f.rotateCall(t, e, "secrets", "sec-gone", tail, body)
 		if rec.code != http.StatusNotFound || rec.ptyp != "secret_not_found" {
 			t.Errorf("%s of a missing secret: %d %s (%s), want 404 secret_not_found", tail, rec.code, rec.body, rec.ptyp)
 		}
 	}
 	f, e = actionsEnv(t, func(c *dockertest.FakeConfig) { c.SwarmState, c.SwarmControl = "inactive", false })
-	for _, tail := range []string{"rotate/preview", "rotate"} {
-		rec := f.rotateCall(t, e, "secrets", "x", tail, rotateBody("v", ""))
+	for tail, body := range map[string]string{"rotate/preview": `{}`, "rotate": rotateBody("v", "")} {
+		rec := f.rotateCall(t, e, "secrets", "x", tail, body)
 		if rec.code != http.StatusConflict || rec.ptyp != "not_a_swarm" {
 			t.Errorf("%s on a standalone host: %d %s (%s), want 409 not_a_swarm", tail, rec.code, rec.body, rec.ptyp)
 		}
