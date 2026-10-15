@@ -25,6 +25,8 @@ export function TestRouter({ children }: { children: ReactNode }) {
       createRoute({ getParentRoute: () => root, path: "/env/$envId/services/$serviceId" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/secrets" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/secrets/$secretId" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/configs" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/configs/$configId" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/nodes" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/nodes/$nodeId" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/events" }),

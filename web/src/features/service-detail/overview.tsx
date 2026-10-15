@@ -253,7 +253,7 @@ function MountsCard({ envId, detail }: { envId: string; detail: ServiceDetail })
 type FileRef = NonNullable<ServiceDetail["secrets"]>[number] & { kind: "secret" | "config" };
 
 // FilesCard lists the secrets and configs the service uses, by reference: their values are
-// never sent. A secret's name links to its page; the config pages come with a later plan.
+// never sent. A secret's or a config's name links to its page.
 function FilesCard({ envId, detail }: { envId: string; detail: ServiceDetail }) {
   const t = useT();
   const missing = useMissing();
@@ -282,7 +282,13 @@ function FilesCard({ envId, detail }: { envId: string; detail: ServiceDetail }) 
                   {r.name}
                 </Link>
               ) : (
-                r.name
+                <Link
+                  to="/env/$envId/configs/$configId"
+                  params={{ envId, configId: r.id }}
+                  className="rounded-sm text-accent-ink hover:underline"
+                >
+                  {r.name}
+                </Link>
               ),
           },
           { header: t(`${key}.files.file`), cell: (r) => r.file || missing },

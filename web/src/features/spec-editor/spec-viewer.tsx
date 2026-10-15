@@ -18,13 +18,22 @@ export interface SpecViewerProps {
   // that says neither YAML nor JSON is plain text.
   format?: SpecFormat;
   fileName?: string;
+  // The least height the text area takes, as a CSS length. A spec is read beside a form, so it
+  // is short; a config is the page's content, so it is taller.
+  minHeight?: string;
 }
 
 // SpecViewer is a spec or a config shown read-only, with the editor's look: a labelled multiline
 // textbox that cannot be changed, line numbers, YAML or JSON colours, and a Wrap switch that is
 // on by default. The text can still be focused, scrolled, selected and searched. It never writes
 // anything anywhere.
-export function SpecViewer({ text, label, format, fileName }: SpecViewerProps) {
+export function SpecViewer({
+  text,
+  label,
+  format,
+  fileName,
+  minHeight = "320px",
+}: SpecViewerProps) {
   const t = useT();
   const [wrap, setWrap] = useState(true);
   const language = languageOf(format, fileName);
@@ -50,7 +59,7 @@ export function SpecViewer({ text, label, format, fileName }: SpecViewerProps) {
         value={text}
         readOnly
         extensions={extensions}
-        minHeight="320px"
+        minHeight={minHeight}
         maxHeight="calc(100svh - 320px)"
       />
     </div>

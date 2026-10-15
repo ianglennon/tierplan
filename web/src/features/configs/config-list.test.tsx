@@ -186,7 +186,9 @@ describe("ConfigList columns", () => {
     mount();
     await screen.findByText("app.yaml");
     expect(
-      sent.filter((s) => s.method === "GET" && s.path !== "/api/me" && s.path.includes("/configs/")),
+      sent.filter(
+        (s) => s.method === "GET" && s.path !== "/api/me" && s.path.includes("/configs/"),
+      ),
     ).toHaveLength(0);
   });
 });

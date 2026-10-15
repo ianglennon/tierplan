@@ -26,6 +26,7 @@
       "nodes": "Nodes",
       "placement": "Placement",
       "secrets": "Secrets",
+      "configs": "Configs",
       "audit": "Audit",
       "settings": "Settings"
     },

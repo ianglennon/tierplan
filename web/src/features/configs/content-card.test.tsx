@@ -42,6 +42,13 @@ afterEach(() => {
 
 const YAML_TEXT = "name: api\nreplicas: 2\n";
 
+// The blob the nth download was made from.
+function downloaded(n = 0): Blob {
+  const blob = createObjectURL.mock.calls[n]?.[0];
+  if (!blob) throw new Error("nothing was downloaded");
+  return blob;
+}
+
 function viewOf(): EditorView {
   const dom = document.querySelector<HTMLElement>(".cm-editor");
   const view = dom ? EditorView.findFromDOM(dom) : null;
@@ -85,8 +92,9 @@ describe("ConfigContentCard viewer", () => {
   it("is at least 480px tall", async () => {
     mount();
     await screen.findByRole("textbox");
-    const sized = document.querySelector<HTMLElement>("[style*='min-height']");
-    expect(sized?.style.minHeight).toBe("480px");
+    // The editor's own style rule carries the height the viewer was asked for.
+    const editor = document.querySelector<HTMLElement>(".cm-editor");
+    expect(editor && getComputedStyle(editor).minHeight).toBe("480px");
   });
 
   it("shows text as text, never as markup", async () => {
@@ -110,7 +118,7 @@ describe("ConfigContentCard Copy and Download", () => {
     mount();
     fireEvent.click(await screen.findByRole("button", { name: "Download" }));
     expect(createObjectURL).toHaveBeenCalledTimes(1);
-    const blob = createObjectURL.mock.calls[0]?.[0] as Blob;
+    const blob = downloaded();
     expect(blob.type).toBe("application/octet-stream");
     expect(blob.size).toBe(YAML_TEXT.length);
     expect(clicked).toEqual([{ download: "app.yaml", href: "blob:config" }]);
@@ -139,7 +147,7 @@ describe("ConfigContentCard of content that is not text", () => {
     expect(screen.queryByRole("button", { name: "Copy" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Wrap" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Download" }));
-    const blob = createObjectURL.mock.calls[0]?.[0] as Blob;
+    const blob = downloaded();
     expect(blob.size).toBe(3);
     expect(clicked[0]?.download).toBe("blob.bin");
   });
@@ -156,8 +164,8 @@ describe("ConfigContentCard of a large config", () => {
     expect(document.querySelectorAll(".cm-line").length).toBeLessThan(2000);
     fireEvent.click(screen.getByRole("button", { name: "Copy" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-    expect(writeText.mock.calls[0]?.[0].length).toBe(big.length);
+    expect(writeText.mock.calls[0]?.[0]?.length).toBe(big.length);
     fireEvent.click(screen.getByRole("button", { name: "Download" }));
-    expect((createObjectURL.mock.calls[0]?.[0] as Blob).size).toBe(big.length);
+    expect(downloaded().size).toBe(big.length);
   });
 });

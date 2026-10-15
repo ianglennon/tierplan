@@ -21,7 +21,15 @@ export const LIST_REFETCH_MS = 30_000;
 // one of the names in the lists' `nodes`. The server says "Cluster" (envs.NodeCluster).
 export const CLUSTER_NODE = "Cluster";
 
-type Resource = "containers" | "images" | "volumes" | "networks" | "services" | "nodes" | "secrets";
+type Resource =
+  | "containers"
+  | "images"
+  | "volumes"
+  | "networks"
+  | "services"
+  | "nodes"
+  | "secrets"
+  | "configs";
 
 // The query keys of the lists, so the events feed can invalidate them.
 export function listKey(envId: string, resource: Resource) {

@@ -355,9 +355,7 @@ describe("delete", () => {
     expect(document.body.textContent).toContain("In use by 2 services.");
     fireEvent.click(button);
     expect(screen.queryByRole("alertdialog")).toBeNull();
-    const callout = screen
-      .getByText("app.yaml is in use")
-      .closest("[role='alert']") as HTMLElement;
+    const callout = screen.getByText("app.yaml is in use").closest("[role='alert']") as HTMLElement;
     expect(
       within(callout).getByText(
         "Services that mention it count, even with no running tasks. Remove it from them first.",
