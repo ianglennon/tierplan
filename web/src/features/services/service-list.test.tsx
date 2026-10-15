@@ -36,6 +36,7 @@ const svc = (extra: Partial<ServiceItem> = {}): ServiceItem => ({
   updateMessage: "",
   hasPreviousSpec: false,
   createdAt: "2026-09-01T10:00:00Z",
+  restartLoop: null,
   ...extra,
 });
 
@@ -47,7 +48,7 @@ interface Sent {
   body?: unknown;
 }
 
-const COUNTS = { degraded: 0, updating: 0, problem: 0 };
+const COUNTS = { degraded: 0, updating: 0, problem: 0, loop: 0 };
 
 let sent: Sent[];
 let items: ServiceItem[];
@@ -425,6 +426,39 @@ describe("ScaleDialog", () => {
   });
 });
 
+describe("the restart-loop badge", () => {
+  const LOOP = {
+    state: "flagged" as const,
+    count: 4,
+    windowMinutes: 10,
+    latestError: "task: non-zero exit (1)",
+    since: "2026-10-14T09:00:00Z",
+  };
+
+  it("sits after the name of a flagged service and beside its state, never in place of it", async () => {
+    items = [
+      svc({ running: 0, desired: 2, restartLoop: LOOP }),
+      svc({ id: "id-ok", name: "calm" }),
+    ];
+    mount();
+    await screen.findByText("web");
+    const flagged = within(screen.getByRole("row", { name: /^Select web/ }));
+    expect(flagged.getByText("Restart loop")).toBeTruthy();
+    expect(flagged.getByText("Not running")).toBeTruthy();
+    expect(
+      within(screen.getByRole("row", { name: /^Select calm/ })).queryByText("Restart loop"),
+    ).toBeNull();
+  });
+
+  it("is not drawn for a service whose restartLoop is null", async () => {
+    mount();
+    await screen.findByText("web");
+    expect(
+      screen.queryAllByText("Restart loop").map((e) => e.closest("[data-slot='badge']")),
+    ).toEqual([]);
+  });
+});
+
 describe("the State column", () => {
   it("comes after Name and shows each row's state word by the priority rule", async () => {
     items = [
@@ -627,8 +661,11 @@ describe("the services list: search and status chips", () => {
     expect(screen.queryByText("backup")).toBeNull();
   });
 
-  it("shows Degraded, Updating and Update problem with the counts of the whole list, in a group named Filter by status", async () => {
-    listExtra = { statusCounts: { degraded: 3, updating: 1, problem: 0 }, unfilteredTotal: 9 };
+  it("shows Degraded, Updating, Update problem and Restart loop with the counts of the whole list, in a group named Filter by status", async () => {
+    listExtra = {
+      statusCounts: { degraded: 3, updating: 1, problem: 0, loop: 2 },
+      unfilteredTotal: 9,
+    };
     mount();
     await screen.findByText("web");
     const group = screen.getByRole("group", { name: "Filter by status" });
@@ -636,7 +673,24 @@ describe("the services list: search and status chips", () => {
       within(group)
         .getAllByRole("button")
         .map((b) => b.textContent),
-    ).toEqual(["Degraded 3", "Updating 1", "Update problem 0"]);
+    ).toEqual(["Degraded 3", "Updating 1", "Update problem 0", "Restart loop 2"]);
+  });
+
+  it("toggles the Restart loop chip through the search as status=loop", async () => {
+    listExtra = { statusCounts: { degraded: 0, updating: 0, problem: 1, loop: 2 } };
+    mount({ status: "problem" });
+    await screen.findByText("web");
+    fireEvent.click(screen.getByRole("button", { name: "Restart loop 2" }));
+    expect(changes).toEqual([{ status: "problem,loop" }]);
+  });
+
+  it("sends status=loop to the server, which filters before its cap", async () => {
+    mount({ status: "loop" });
+    await screen.findByText("web");
+    await waitFor(() => expect(listRequests()).toContain("?status=loop"));
+    expect(screen.getByRole("button", { name: /^Restart loop/ }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
   });
 
   it("toggles a chip through the search, in chip order, and shows it pressed", async () => {

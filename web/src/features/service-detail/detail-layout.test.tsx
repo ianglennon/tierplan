@@ -123,6 +123,30 @@ describe("the page frame", () => {
     expect(document.title).toBe("api · Lab");
   });
 
+  it("shows the Restart loop badge in the header beside the state, and the alert under it, only for a service in a loop", async () => {
+    answerWith(
+      serviceDetail({
+        restartLoop: {
+          state: "flagged",
+          count: 5,
+          windowMinutes: 10,
+          latestError: "boom",
+          since: "2026-10-14T09:00:00Z",
+        },
+      }),
+    );
+    renderAt();
+    await screen.findByRole("heading", { name: "api" });
+    expect(within(headerOf()).getByText("Restart loop")).toBeTruthy();
+    expect(within(headerOf()).getAllByText("Degraded").length).toBeGreaterThanOrEqual(1);
+    expect(await screen.findByText("api is in a restart loop")).toBeTruthy();
+    cleanup();
+    answerWith(serviceDetail());
+    renderAt();
+    await screen.findByRole("heading", { name: "api" });
+    expect(screen.queryByText("Restart loop")).toBeNull();
+  });
+
   it("asks for the service by the ID in the address", async () => {
     renderAt();
     await screen.findByRole("heading", { name: "api" });

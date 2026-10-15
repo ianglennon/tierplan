@@ -77,6 +77,7 @@ export function serviceDetail(extra: Partial<ServiceDetailBody> = {}): ServiceDe
     updateStatus: "completed",
     updateMessage: "update completed",
     hasPreviousSpec: true,
+    restartLoop: null,
     ...extra,
   };
 }
@@ -100,6 +101,7 @@ export function bareServiceDetail(extra: Partial<ServiceDetailBody> = {}): Servi
     updateStatus: "",
     updateMessage: "",
     hasPreviousSpec: false,
+    restartLoop: null,
     ...extra,
   });
 }
@@ -325,7 +327,7 @@ export function serviceFetch(state: ServiceApiState) {
           total: 0,
           unfilteredTotal: 0,
           capped: false,
-          statusCounts: { degraded: 0, updating: 0, problem: 0 },
+          statusCounts: { degraded: 0, updating: 0, problem: 0, loop: 0 },
           noManager: false,
           fetchedAt: "2026-10-14T09:00:00Z",
         });

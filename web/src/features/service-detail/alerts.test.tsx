@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { serviceRetry } from "@/api/services";
 import { ServiceAlerts } from "@/features/service-detail/alerts";
 import "@/i18n";
+import { TestRouter } from "@/test-router";
 import {
   bareServiceDetail,
   rollout,
@@ -46,11 +47,13 @@ afterEach(() => {
   serviceRetry.attempts = 1;
 });
 
-async function mount(detail: ServiceDetailBody, restartLoop?: React.ReactNode) {
+async function mount(detail: ServiceDetailBody) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <ServiceAlerts envId={SERVICE_ENV} detail={detail} restartLoop={restartLoop} />
+      <TestRouter>
+        <ServiceAlerts envId={SERVICE_ENV} detail={detail} />
+      </TestRouter>
     </QueryClientProvider>,
   );
   // The rollout is read once before the alerts decide.
@@ -113,17 +116,78 @@ describe("the replicas-short alert", () => {
   });
 
   it("is not shown while the restart-loop alert is", async () => {
-    await mount(short(), <div>restart loop alert</div>);
-    expect(screen.getByText("restart loop alert")).toBeTruthy();
+    await mount(short({ restartLoop: LOOP }));
+    expect(screen.getByText("api is in a restart loop")).toBeTruthy();
     expect(screen.queryByText(/tasks aren't running/)).toBeNull();
+  });
+});
+
+const LOOP = {
+  state: "flagged" as const,
+  count: 4,
+  windowMinutes: 10,
+  latestError: "task: non-zero exit (1)",
+  since: "2026-10-14T09:00:00Z",
+};
+
+describe("the restart-loop alert", () => {
+  it("names the service, counts the failed tasks in the window and gives the latest error", async () => {
+    await mount(bareServiceDetail({ restartLoop: LOOP }));
+    expect(await screen.findByText("api is in a restart loop")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "4 tasks failed in the last 10 minutes. Latest error: task: non-zero exit (1)",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("offers View failed tasks, which opens the Tasks tab with only the failed ones", async () => {
+    await mount(bareServiceDetail({ restartLoop: LOOP }));
+    const link = await screen.findByRole("link", { name: "View failed tasks" });
+    const href = link.getAttribute("href") ?? "";
+    expect(href).toContain(`/env/${SERVICE_ENV}/services/${SERVICE_ID}/tasks`);
+    expect(href).toContain("failed=1");
+  });
+
+  it("is a warning with the offline icon, not a destructive alert", async () => {
+    await mount(bareServiceDetail({ restartLoop: LOOP }));
+    const alert = (await screen.findByText("api is in a restart loop")).closest(
+      "[data-slot='alert']",
+    );
+    expect(alert?.className).toContain("text-status-warning-text");
+    expect(alert?.querySelector("svg.text-status-offline-text")).not.toBeNull();
+  });
+
+  it("wraps a long error as text, never as markup", async () => {
+    await mount(bareServiceDetail({ restartLoop: { ...LOOP, latestError: "<b>boom</b>" } }));
+    expect(await screen.findByText(/Latest error: <b>boom<\/b>/)).toBeTruthy();
+    expect(document.querySelector("b")).toBeNull();
+    const body = screen.getByText(/Latest error/);
+    expect(body.className).toContain("break-words");
+  });
+
+  it("leaves out the error when none is known", async () => {
+    await mount(bareServiceDetail({ restartLoop: { ...LOOP, latestError: "" } }));
+    expect(await screen.findByText("4 tasks failed in the last 10 minutes.")).toBeTruthy();
+    expect(screen.queryByText(/Latest error/)).toBeNull();
+  });
+
+  it("comes before the stack and agent notices, and is absent for a service not in a loop", async () => {
+    await mount(bareServiceDetail({ restartLoop: LOOP, stack: "shop", agent: true }));
+    const title = await screen.findByText("api is in a restart loop");
+    const stack = screen.getByText("Managed by stack shop");
+    expect(title.compareDocumentPosition(stack) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    cleanup();
+    await mount(bareServiceDetail({ restartLoop: null }));
+    expect(screen.queryByText(/restart loop/)).toBeNull();
   });
 });
 
 describe("the order of the alerts", () => {
   it("is restart loop, replicas short, stack-owned, agent service", async () => {
-    await mount(short({ stack: "shop", agent: true }), <div>restart loop alert</div>);
+    await mount(short({ stack: "shop", agent: true, restartLoop: LOOP }));
     // The restart-loop alert hides replicas-short, so check the two pairs in turn.
-    const loop = screen.getByText("restart loop alert");
+    const loop = screen.getByText("api is in a restart loop");
     const stack = screen.getByText("Managed by stack shop");
     const agent = screen.getByText(/This is Bayplan's agent service/);
     expect(loop.compareDocumentPosition(stack) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

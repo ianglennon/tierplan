@@ -56,8 +56,14 @@ describe("serviceSearchSchema", () => {
 });
 
 describe("the status chips", () => {
-  it("are degraded, updating and problem", () => {
-    expect(SERVICE_STATUS_VALUES).toEqual(["degraded", "updating", "problem"]);
+  it("are degraded, updating, problem and loop", () => {
+    expect(SERVICE_STATUS_VALUES).toEqual(["degraded", "updating", "problem", "loop"]);
+  });
+
+  it("keep the loop chip last whatever order the link wrote them in", () => {
+    expect(serviceStatusList("loop,degraded")).toEqual(["degraded", "loop"]);
+    expect(serviceStatusParam(["loop", "problem"])).toBe("problem,loop");
+    expect(serviceSearchSchema.parse({ status: "loop" }).status).toBe("loop");
   });
 
   it("read a comma list into known values, once each, in chip order, ignoring case and spaces", () => {

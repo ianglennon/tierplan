@@ -47,7 +47,13 @@ func webService() dockertest.FakeService {
 // reader a real server has.
 func serviceEnv(t *testing.T, services ...dockertest.FakeService) (*envFix, envBody) {
 	t.Helper()
-	f := newEnvFix(t, swarmManagerEngine(services...))
+	return serviceEnvOf(t, swarmManagerEngine(services...))
+}
+
+// serviceEnvOf is serviceEnv for a manager the caller configured, tasks and all.
+func serviceEnvOf(t *testing.T, cfg dockertest.FakeConfig) (*envFix, envBody) {
+	t.Helper()
+	f := newEnvFix(t, cfg)
 	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
 	f.svc.WithClusters(f.clusters)
 	f.h = f.build(t)
@@ -72,12 +78,24 @@ type serviceItem struct {
 	UpdateMessage   string   `json:"updateMessage"`
 	HasPreviousSpec bool     `json:"hasPreviousSpec"`
 	CreatedAt       string   `json:"createdAt"`
+
+	RestartLoop *restartLoopBody `json:"restartLoop"`
+}
+
+// restartLoopBody is the restartLoop field of a service row and of the detail.
+type restartLoopBody struct {
+	State         string `json:"state"`
+	Count         int    `json:"count"`
+	WindowMinutes int    `json:"windowMinutes"`
+	LatestError   string `json:"latestError"`
+	Since         string `json:"since"`
 }
 
 type serviceStatusCounts struct {
 	Degraded int `json:"degraded"`
 	Updating int `json:"updating"`
 	Problem  int `json:"problem"`
+	Loop     int `json:"loop"`
 }
 
 type serviceList struct {
@@ -822,5 +840,146 @@ func TestBulkScaleRefusesDuplicatesAndTooMany(t *testing.T) {
 
 	if got := len(f.fake.Writes()); got != before {
 		t.Errorf("writes grew from %d to %d, want no write for a refused or unknown-service request", before, got)
+	}
+}
+
+// Restart loops on the services list and the detail (plan 06-34, RES-13, D-14, D-15).
+
+// failedTask is a task of a service that ended failed or rejected ago before now, with the
+// desired state a finished task has.
+func failedTask(id, service, state, errText string, now time.Time, ago time.Duration) swarm.Task {
+	tk := swarm.Task{ID: id, ServiceID: service, NodeID: "node-1", Slot: 1, DesiredState: swarm.TaskStateShutdown}
+	tk.CreatedAt = now.Add(-ago - time.Second)
+	tk.Status = swarm.TaskStatus{State: swarm.TaskState(state), Err: errText, Timestamp: now.Add(-ago)}
+	return tk
+}
+
+// loopEnv is a swarm manager whose history holds a service in a restart loop (web: three
+// failures in three minutes, the newest says why), one close to it (api: two), one that
+// was only updated by force (calm: four shutdown tasks that exited 137) and a job whose
+// finished tasks are complete.
+func loopEnv(t *testing.T) (*envFix, envBody) {
+	t.Helper()
+	cfg := swarmManagerEngine(
+		dockertest.FakeService{ID: "svc-web", Name: "web", Mode: "replicated", Running: 0, Desired: 1, Image: scaleImage},
+		dockertest.FakeService{ID: "svc-api", Name: "api", Mode: "replicated", Running: 1, Desired: 1},
+		dockertest.FakeService{ID: "svc-calm", Name: "calm", Mode: "replicated", Running: 1, Desired: 1},
+		dockertest.FakeService{ID: "svc-job", Name: "nightly", Mode: "replicated-job", Running: 0, Desired: 0},
+	)
+	f, e := serviceEnvOf(t, cfg)
+	// The tasks are dated from the fixture's clock, which the session also reads; the
+	// cluster is not read until the first request, after the manager is given its history.
+	now := f.clk.now()
+	cfg.Tasks = []swarm.Task{
+		failedTask("w1", "svc-web", "failed", "task: non-zero exit (1)", now, time.Minute),
+		failedTask("w2", "svc-web", "failed", "task: non-zero exit (2)", now, 2*time.Minute),
+		failedTask("w3", "svc-web", "rejected", "No such image: web:9", now, 3*time.Minute),
+		failedTask("a1", "svc-api", "failed", "boom", now, time.Minute),
+		failedTask("a2", "svc-api", "failed", "boom", now, 2*time.Minute),
+		failedTask("c1", "svc-calm", "shutdown", "", now, time.Minute),
+		failedTask("c2", "svc-calm", "shutdown", "", now, 2*time.Minute),
+		failedTask("c3", "svc-calm", "shutdown", "", now, 3*time.Minute),
+		failedTask("c4", "svc-calm", "shutdown", "", now, 4*time.Minute),
+		failedTask("j1", "svc-job", "complete", "", now, time.Minute),
+		failedTask("j2", "svc-job", "complete", "", now, 2*time.Minute),
+		failedTask("j3", "svc-job", "complete", "", now, 3*time.Minute),
+	}
+	cfg.SwarmClusterID, cfg.HistoryLimit = "cluster-1", 5
+	f.fake.Reconfigure(cfg)
+	return f, e
+}
+
+func TestServicesListFlagsAServiceInARestartLoopAndNoOther(t *testing.T) {
+	f, e := loopEnv(t)
+	rec, got := listServicesQuery(t, f, e, "")
+	if rec.code != http.StatusOK {
+		t.Fatalf("%d %s", rec.code, rec.body)
+	}
+	byName := map[string]serviceItem{}
+	for _, it := range got.Items {
+		byName[it.Name] = it
+	}
+	loop := byName["web"].RestartLoop
+	if loop == nil || loop.State != "flagged" || loop.Count != 3 || loop.WindowMinutes != 10 || loop.LatestError != "task: non-zero exit (1)" {
+		t.Fatalf("web restartLoop = %+v, want flagged, 3 failures in 10 minutes, the newest task's error", loop)
+	}
+	if _, err := time.Parse(time.RFC3339, loop.Since); err != nil {
+		t.Errorf("since = %q: %v", loop.Since, err)
+	}
+	for _, name := range []string{"api", "calm", "nightly"} {
+		if byName[name].RestartLoop != nil {
+			t.Errorf("%s restartLoop = %+v, want null: two failures, forced-update shutdowns and a job's complete tasks are no loop", name, byName[name].RestartLoop)
+		}
+	}
+	var raw struct {
+		Items []map[string]json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(rec.body, &raw); err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range raw.Items {
+		if v, ok := it["restartLoop"]; !ok || (string(it["name"]) != `"web"` && string(v) != "null") {
+			t.Errorf("row %s has restartLoop %s, want the key present and null for a service not in a loop", it["name"], v)
+		}
+	}
+	if got.StatusCounts.Loop != 1 {
+		t.Errorf("statusCounts.loop = %d, want 1", got.StatusCounts.Loop)
+	}
+}
+
+func TestServicesListFiltersByTheLoopStatusBeforeTheCapAndCountsItBeforeTheSearch(t *testing.T) {
+	f, e := loopEnv(t)
+	rec, got := listServicesQuery(t, f, e, "?status=loop")
+	if rec.code != http.StatusOK || !slices.Equal(namesOf(got.Items), []string{"web"}) || got.Total != 1 || got.UnfilteredTotal != 4 {
+		t.Fatalf("status=loop = %d %v (total %d of %d), want only web of 4", rec.code, namesOf(got.Items), got.Total, got.UnfilteredTotal)
+	}
+	// The chip number does not shrink with the search, and the search still narrows the rows.
+	_, got = listServicesQuery(t, f, e, "?q=api&status=loop")
+	if len(got.Items) != 0 || got.StatusCounts.Loop != 1 {
+		t.Errorf("q=api&status=loop = %v with loop count %d, want no rows and the chip still 1", namesOf(got.Items), got.StatusCounts.Loop)
+	}
+	// It joins the other statuses as a union.
+	_, got = listServicesQuery(t, f, e, "?status=loop,degraded")
+	if want := []string{"web"}; !slices.Equal(namesOf(got.Items), want) {
+		// web has 0 of 1 running (not degraded) and is in a loop; api and calm run fully.
+		t.Errorf("status=loop,degraded = %v, want %v", namesOf(got.Items), want)
+	}
+	rec, _ = listServicesQuery(t, f, e, "?status=sleepy")
+	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "status_invalid" || !strings.Contains(string(rec.body), "loop") {
+		t.Errorf("unknown status = %d %s, want 422 status_invalid naming loop among the values", rec.code, rec.body)
+	}
+}
+
+func TestTheServiceDetailCarriesTheRestartLoopOrNull(t *testing.T) {
+	f, e := loopEnv(t)
+	web := decode[struct {
+		RestartLoop *restartLoopBody `json:"restartLoop"`
+	}](t, f.get(t, e, "services/svc-web"))
+	if web.RestartLoop == nil || web.RestartLoop.State != "flagged" || web.RestartLoop.Count != 3 || web.RestartLoop.WindowMinutes != 10 || web.RestartLoop.LatestError != "task: non-zero exit (1)" {
+		t.Fatalf("web detail restartLoop = %+v", web.RestartLoop)
+	}
+	rec := f.get(t, e, "services/svc-api")
+	if rec.code != http.StatusOK || !strings.Contains(string(rec.body), `"restartLoop":null`) {
+		t.Fatalf("api detail = %d %s, want restartLoop null", rec.code, rec.body)
+	}
+}
+
+// TestDetectingARestartLoopChangesNothingInDocker is the prohibition of RES-13: detection
+// only flags. Listing and reading a flagged service sends the manager no request that
+// could restart, stop, scale or update anything.
+func TestDetectingARestartLoopChangesNothingInDocker(t *testing.T) {
+	f, e := loopEnv(t)
+	listServicesQuery(t, f, e, "")
+	f.get(t, e, "services/svc-web")
+	for _, req := range f.fake.Requests() {
+		for _, write := range []string{"/update", "/restart", "/stop", "/kill", "/create", "/remove", "/delete", "/scale", "/rollback"} {
+			if strings.Contains(req, write) {
+				t.Errorf("a request to the manager, %s, could change a service", req)
+			}
+		}
+	}
+	rec := f.get(t, e, "services/svc-web")
+	if d := decode[sdDetail](t, rec); d.Running != 0 || d.Desired != 1 {
+		t.Errorf("web = %d of %d after being flagged, want it left at 0 of 1", d.Running, d.Desired)
 	}
 }
