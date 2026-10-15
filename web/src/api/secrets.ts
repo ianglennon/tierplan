@@ -197,3 +197,22 @@ export function useDeleteSecret(envId: string) {
     onSettled: () => refreshSecretLists(queryClient, envId),
   });
 }
+
+export type SecretCreateInput = components["schemas"]["SecretCreateRequest"];
+export type SecretCreated = components["schemas"]["SecretCreateBody"];
+
+// postSecret creates one secret. It never retries: a create whose answer was lost may have
+// happened (P2 D-42). Not built yet.
+export async function postSecret(_envId: string, _body: SecretCreateInput): Promise<SecretCreated> {
+  throw new SecretRequestError(0);
+}
+
+// useCreateSecret is the mutation behind the create sheet. Not built yet.
+export function useCreateSecret(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<SecretCreated, SecretRequestError, SecretCreateInput>({
+    mutationFn: (body) => postSecret(envId, body),
+    retry: false,
+    onSettled: () => refreshSecretLists(queryClient, envId),
+  });
+}

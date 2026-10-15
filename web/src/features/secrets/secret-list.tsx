@@ -33,6 +33,9 @@ interface SecretListProps {
   // The search text, from the URL.
   q?: string;
   onSearchChange: (q: string | undefined) => void;
+  // Whether the create sheet is open: the address says so (new=1), so a link can open it.
+  creating: boolean;
+  onCreatingChange: (open: boolean) => void;
 }
 
 // UsedByPopover is the "Used by {n} services" button of a row. It opens the services as links; the

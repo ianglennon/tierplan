@@ -13,7 +13,7 @@ function Secrets() {
   const { envId } = Route.useParams();
   const t = useT();
   useDocumentTitle(t("secrets.list.title"));
-  const { q } = Route.useSearch();
+  const { q, new: creating } = Route.useSearch();
   const navigate = Route.useNavigate();
   return (
     <SecretList
@@ -22,13 +22,19 @@ function Secrets() {
       onSearchChange={(next) =>
         void navigate({ search: (prev) => ({ ...prev, q: next }), replace: true })
       }
+      creating={creating === 1}
+      onCreatingChange={(open) =>
+        void navigate({ search: (prev) => ({ ...prev, new: open ? 1 : undefined }), replace: true })
+      }
     />
   );
 }
 
-// The secrets route's search: the search text. A search that does not fit is dropped, not sent.
+// The secrets route's search: the search text, and new=1, which opens the create sheet. A search
+// that does not fit is dropped, not sent.
 const secretSearchSchema = z.object({
   q: z.string().min(1).max(MAX_QUERY).optional().catch(undefined),
+  new: z.literal(1).optional().catch(undefined),
 });
 
 export const Route = createFileRoute("/_app/env/$envId/secrets")({
