@@ -154,7 +154,7 @@ describe("renderSpec and parseSpec", () => {
 
 describe("parseSpec errors", () => {
   it("names the line of a YAML syntax error", () => {
-    const result = parseSpec("Name: web\nLabels:\n  a: 1\n   b: 2\n", "yaml");
+    const result = parseSpec("Name: web\nLabels:\n  a: 1\n  - b\n", "yaml");
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.line).toBe(4);

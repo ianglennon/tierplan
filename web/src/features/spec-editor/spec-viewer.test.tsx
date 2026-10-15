@@ -79,7 +79,7 @@ describe("SpecViewer", () => {
   it("follows a new text", async () => {
     const { rerender } = render(<SpecViewer text={YAML_TEXT} label="Spec" format="yaml" />);
     await screen.findByRole("textbox", { name: "Spec" });
-    rerender(<SpecViewer text="Name: other\n" label="Spec" format="yaml" />);
+    rerender(<SpecViewer text={"Name: other\n"} label="Spec" format="yaml" />);
     expect(viewOf().state.doc.toString()).toBe("Name: other\n");
   });
 

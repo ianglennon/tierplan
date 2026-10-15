@@ -199,7 +199,8 @@ describe("SpecEditor", () => {
     fireEvent.click(screen.getByRole("radio", { name: "JSON" }));
     await screen.findByRole("textbox", { name: "Service spec, JSON" });
     expect(screen.queryByText(note)).toBeNull();
-    expect(docText()).not.toContain("the api");
+    // The editor holds a change from outside back while the person is still typing.
+    await waitFor(() => expect(docText()).not.toContain("the api"));
   });
 
   it("copies the text as it is now", async () => {
@@ -220,7 +221,7 @@ describe("SpecEditor", () => {
     typeSpec("Name: [oops\n");
     await waitFor(() => expect((discard as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(discard);
-    expect(docText()).toBe(renderSpec(SPEC, "yaml"));
+    await waitFor(() => expect(docText()).toBe(renderSpec(SPEC, "yaml")));
     expect(onChange).toHaveBeenLastCalledWith(SPEC);
     expect(onValidityChange).toHaveBeenLastCalledWith(true);
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());

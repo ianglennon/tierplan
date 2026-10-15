@@ -72,6 +72,42 @@
       "UpdateConfig/Monitor": "Monitor",
       "UpdateConfig/MaxFailureRatio": "Max failure ratio",
       "EndpointSpec/Mode": "Endpoint mode"
+    },
+    "parse": {
+      "unexpectedChar": "Unexpected character {{char}}",
+      "unexpectedEnd": "The spec ends too soon",
+      "empty": "The spec is empty",
+      "expectedKey": "Expected a property name in double quotes",
+      "expectedColon": "Expected a colon after the property name",
+      "expectedCommaOrEnd": "Expected a comma or the closing bracket",
+      "badEscape": "That is not a valid escape in a string",
+      "controlChar": "A string can't hold a line break or a control character. Write it as an escape, like \\n",
+      "unterminated": "A string is missing its closing quote",
+      "badNumber": "That is not a valid number",
+      "notObject": "The spec must be an object",
+      "afterEnd": "Unexpected content after the end of the spec",
+      "unsafeInteger": "{{path}} is {{value}}, a whole number too large to edit here without changing it. Use a smaller number.",
+      "notFinite": "{{path}} is not a number a service spec can hold",
+      "duplicateKey": "The key {{key}} appears twice",
+      "tooDeep": "The spec is nested too deeply",
+      "tooBig": "The spec expands to too many values",
+      "complexKey": "A key must be a plain name, not a list or a map"
+    },
+    "editor": {
+      "format": "Format",
+      "yaml": "YAML",
+      "json": "JSON",
+      "name": "Service spec, {{format}}",
+      "helper": "The full service spec as Docker stores it. Hidden values show as <hidden>. They stay as they are unless you replace them.",
+      "copy": "Copy spec",
+      "copied": "Copied",
+      "discard": "Discard edits",
+      "comments": "Comments are dropped if you switch to JSON.",
+      "error": {
+        "line": "Line {{line}}: {{message}}",
+        "fix": "Fix the spec before you review changes."
+      },
+      "wrap": "Wrap"
     }
   }
 }
