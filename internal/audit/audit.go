@@ -169,6 +169,8 @@ const (
 	ActionNodeRemoved                = "node.removed"
 	ActionSecretCreated              = "secret.created"
 	ActionSecretRemoved              = "secret.removed"
+	ActionConfigCreated              = "config.created"
+	ActionConfigRemoved              = "config.removed"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

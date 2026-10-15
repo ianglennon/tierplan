@@ -188,6 +188,11 @@ var phase6DetailKeys = map[string][]string{
 	// remove records the name and the code (plan 06-22, RES-08).
 	audit.ActionSecretCreated: {"name", "labels", "size", "source", "code"},
 	audit.ActionSecretRemoved: {"name", "code"},
+	// A config create records the name, how many labels it has, the size of the content in bytes, the
+	// templating driver (none or golang), where the request came from (typed, file, rotate, apply or api)
+	// and the code. A remove records the name and the code (plan 06-24, RES-08).
+	audit.ActionConfigCreated: {"name", "labels", "size", "templating", "source", "code"},
+	audit.ActionConfigRemoved: {"name", "code"},
 }
 
 func TestEveryPhase6ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -224,6 +229,8 @@ func TestEveryPhase6ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 
 		"secret.created": audit.ActionSecretCreated,
 		"secret.removed": audit.ActionSecretRemoved,
+		"config.created": audit.ActionConfigCreated,
+		"config.removed": audit.ActionConfigRemoved,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)
