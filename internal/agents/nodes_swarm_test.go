@@ -97,6 +97,36 @@ func (f *swarmFix) waitNode(t *testing.T, n *dockertest.Node, what string, d tim
 	return got
 }
 
+// changeNode sends a node change (the availability or the role route) with the version of a node read just
+// before, and reads again and sends again when the answer is node_changed: the node object moves on its own as the
+// swarm settles a change (a demotion takes the node out of the managers a moment after its spec says worker), and
+// the version check that refuses a stale change is the very thing these tests show works. It gives up after five
+// tries and answers the last. The body is sent with its version filled in.
+func (f *swarmFix) changeNode(t *testing.T, id, route string, body map[string]any) (int, []byte) {
+	t.Helper()
+	for attempt := 1; ; attempt++ {
+		body["version"] = f.nodeByID(t, id).Version
+		code, raw := f.srv.Do(http.MethodPost, "/api/env/"+f.env.ID+"/nodes/"+id+"/"+route, body)
+		if code != http.StatusConflict || problemType(raw) != "node_changed" || attempt == 5 {
+			return code, raw
+		}
+		t.Logf("the node moved between the read and the %s change (attempt %d of 5); reading it again", route, attempt)
+	}
+}
+
+// nodeAudit are the rows of an action as "result:to:code", in order.
+func (f *swarmFix) nodeAudit(action string) (successes, failures []string) {
+	for _, r := range f.srv.AuditRows(action) {
+		line := r.Result + ":" + r.Details["to"] + ":" + r.Details["code"]
+		if r.Result == "success" {
+			successes = append(successes, line)
+		} else {
+			failures = append(failures, line)
+		}
+	}
+	return successes, failures
+}
+
 // nodeImpact is the answer of the impact route.
 type nodeImpact struct {
 	Hostname string `json:"hostname"`
@@ -179,8 +209,7 @@ func TestSwarmNodeDrainAndRoles(t *testing.T) {
 	if outcomes["drain-web"] != "moves" || outcomes[agentName] != "stops" || in.Version != w.Version || in.Hostname != worker.Hostname {
 		t.Errorf("impact of draining the worker = %+v, want drain-web to move, the agent to stop, at the node's version %d", in, w.Version)
 	}
-	drain := map[string]any{"availability": "drain", "version": w.Version, "confirm": worker.Hostname}
-	if code, body := f.srv.Do(http.MethodPost, base+"/nodes/"+w.ID+"/availability", drain); code != http.StatusNoContent {
+	if code, body := f.changeNode(t, w.ID, "availability", map[string]any{"availability": "drain", "confirm": worker.Hostname}); code != http.StatusNoContent {
 		t.Fatalf("POST availability drain = %d %s", code, body)
 	}
 	dockertest.Wait(t, 3*time.Minute, "the service to run its four tasks on the three other nodes", func() (bool, string) {
@@ -202,18 +231,19 @@ func TestSwarmNodeDrainAndRoles(t *testing.T) {
 		t.Errorf("the refused change left the node %s, want it still drained", still.Availability)
 	}
 	// With the version just read it is accepted, and the global agent service puts its agent back on the node.
-	activate := map[string]any{"availability": "active", "version": drained.Version, "confirm": worker.Hostname}
-	if code, body = f.srv.Do(http.MethodPost, base+"/nodes/"+w.ID+"/availability", activate); code != http.StatusNoContent {
+	if code, body = f.changeNode(t, w.ID, "availability", map[string]any{"availability": "active", "confirm": worker.Hostname}); code != http.StatusNoContent {
 		t.Fatalf("POST availability active = %d %s", code, body)
 	}
 	f.waitNode(t, worker, "to be active again", time.Minute, func(n nodeView) bool { return n.Availability == "active" })
 	f.waitSwarmOnlineWithin(t, 4, recoverWait)
-	var results []string
-	for _, r := range f.srv.AuditRows("node.availability_changed") {
-		results = append(results, r.Result+":"+r.Details["to"]+":"+r.Details["code"])
+	// The audit log has the drain and the activation, and the refusal in between; any other failure would be a retry
+	// after the node moved on its own, which is node_changed too.
+	ok, failed := f.nodeAudit("node.availability_changed")
+	if want := []string{"success:drain:done", "success:active:done"}; !slices.Equal(ok, want) {
+		t.Errorf("successful node.availability_changed rows = %v, want %v", ok, want)
 	}
-	if want := []string{"success:drain:done", "failure:active:node_changed", "success:active:done"}; !slices.Equal(results, want) {
-		t.Errorf("node.availability_changed rows = %v, want %v", results, want)
+	if !slices.Contains(failed, "failure:active:node_changed") || slices.ContainsFunc(failed, func(l string) bool { return !strings.HasSuffix(l, ":node_changed") }) {
+		t.Errorf("failed node.availability_changed rows = %v, want only node_changed refusals, the stale one among them", failed)
 	}
 
 	// Roles: demote a manager that does not lead, then promote it again.
@@ -230,7 +260,7 @@ func TestSwarmNodeDrainAndRoles(t *testing.T) {
 	if dm.Managers.Total != 3 || dm.Managers.After != 2 || !slices.Contains(dm.Warnings, "even_count") {
 		t.Errorf("impact of the demotion = %+v, want 3 managers now, 2 after and the even_count warning", dm)
 	}
-	if code, body = f.srv.Do(http.MethodPost, base+"/nodes/"+n.ID+"/role", map[string]any{"role": "worker", "version": n.Version, "confirm": target.Hostname}); code != http.StatusNoContent {
+	if code, body = f.changeNode(t, n.ID, "role", map[string]any{"role": "worker", "confirm": target.Hostname}); code != http.StatusNoContent {
 		t.Fatalf("POST role worker = %d %s", code, body)
 	}
 	demoted := f.waitNode(t, target, "to be a worker", 2*time.Minute, func(v nodeView) bool { return v.Role == "worker" })
@@ -243,7 +273,7 @@ func TestSwarmNodeDrainAndRoles(t *testing.T) {
 	if pm.Managers.Total != 2 || pm.Managers.After != 3 {
 		t.Errorf("impact of the promotion = %+v, want 2 managers now and 3 after", pm)
 	}
-	if code, body = f.srv.Do(http.MethodPost, base+"/nodes/"+demoted.ID+"/role", map[string]any{"role": "manager", "version": demoted.Version, "confirm": target.Hostname}); code != http.StatusNoContent {
+	if code, body = f.changeNode(t, demoted.ID, "role", map[string]any{"role": "manager", "confirm": target.Hostname}); code != http.StatusNoContent {
 		t.Fatalf("POST role manager = %d %s", code, body)
 	}
 	f.waitNode(t, target, "to be a manager", 2*time.Minute, func(v nodeView) bool { return v.Role == "manager" })
@@ -251,12 +281,12 @@ func TestSwarmNodeDrainAndRoles(t *testing.T) {
 		t.Errorf("after the promotion: %v", err)
 	}
 	f.waitSwarmOnlineWithin(t, 4, recoverWait)
-	results = nil
-	for _, r := range f.srv.AuditRows("node.role_changed") {
-		results = append(results, r.Result+":"+r.Details["to"]+":"+r.Details["code"])
+	ok, failed = f.nodeAudit("node.role_changed")
+	if want := []string{"success:worker:done", "success:manager:done"}; !slices.Equal(ok, want) {
+		t.Errorf("successful node.role_changed rows = %v, want %v", ok, want)
 	}
-	if want := []string{"success:worker:done", "success:manager:done"}; !slices.Equal(results, want) {
-		t.Errorf("node.role_changed rows = %v, want %v", results, want)
+	if slices.ContainsFunc(failed, func(l string) bool { return !strings.HasSuffix(l, ":node_changed") }) {
+		t.Errorf("failed node.role_changed rows = %v, want none but node_changed retries", failed)
 	}
 }
 
