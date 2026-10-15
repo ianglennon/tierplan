@@ -14,6 +14,9 @@ export interface KeyValueRow {
   id: string;
   key: string;
   value: string;
+  // The stored value is hidden from the person (D-09): it is not in the row, and an empty value
+  // means "leave it as it is". Typing a value replaces it.
+  masked?: boolean;
 }
 
 let nextRow = 0;
@@ -43,6 +46,10 @@ export interface KeyValueEditorLabels {
   value: string;
   // The accessible name of a row's remove button, given the row's key.
   remove: (key: string) => string;
+  // For rows with masked set: the placeholder of an untouched one, and the name of the button that
+  // puts it back once a value has been typed over it.
+  maskedPlaceholder?: string;
+  reset?: (key: string) => string;
 }
 
 interface KeyValueEditorProps {
@@ -51,6 +58,8 @@ interface KeyValueEditorProps {
   labels: KeyValueEditorLabels;
   // A message for each row that has a problem, by the row's id.
   errors?: ReadonlyMap<string, string>;
+  // Told when a masked row is put back (RED stub: not wired yet).
+  onReset?: (row: KeyValueRow) => void;
   className?: string;
 }
 

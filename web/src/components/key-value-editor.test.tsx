@@ -83,6 +83,62 @@ describe("KeyValueEditor row errors", () => {
   });
 });
 
+// A row whose stored value the server withheld (D-09): the editor is never given it.
+const maskedLabels: KeyValueEditorLabels = {
+  ...labels,
+  maskedPlaceholder: "Hidden. Type to replace.",
+  reset: (key) => `Reset ${key}`,
+};
+
+function MaskedHost({ onReset }: { onReset?: (row: KeyValueRow) => void }) {
+  const [rows, setRows] = useState<KeyValueRow[]>([
+    { ...newRow("TOKEN", ""), masked: true },
+    newRow("MODE", "prod"),
+  ]);
+  latest = rows;
+  return <KeyValueEditor value={rows} onChange={setRows} labels={maskedLabels} onReset={onReset} />;
+}
+
+const tokenValue = () => screen.getAllByLabelText("Label value")[0] as HTMLInputElement;
+
+describe("KeyValueEditor masked rows", () => {
+  it("shows the placeholder with no value in the page, and a name that can't be changed", () => {
+    render(<MaskedHost />);
+    expect(tokenValue().value).toBe("");
+    expect(tokenValue().placeholder).toBe("Hidden. Type to replace.");
+    expect((screen.getAllByLabelText("Label name")[0] as HTMLInputElement).readOnly).toBe(true);
+    expect((screen.getAllByLabelText("Label name")[1] as HTMLInputElement).readOnly).toBe(false);
+    expect(screen.queryByRole("button", { name: "Reset TOKEN" })).toBeNull();
+    expect(document.body.innerHTML).not.toContain("&lt;hidden&gt;");
+  });
+
+  it("gives an ordinary row no placeholder", () => {
+    render(<MaskedHost />);
+    expect((screen.getAllByLabelText("Label value")[1] as HTMLInputElement).placeholder).toBe("");
+  });
+
+  it("shows Reset once a value is typed over it, and Reset puts the hidden row back", () => {
+    const reset: KeyValueRow[] = [];
+    render(<MaskedHost onReset={(row) => reset.push(row)} />);
+    fireEvent.change(tokenValue(), { target: { value: "fresh" } });
+    expect(tokenValue().value).toBe("fresh");
+    expect(latest[0]?.masked).toBe(true);
+    expect(latest[0]?.value).toBe("fresh");
+    fireEvent.click(screen.getByRole("button", { name: "Reset TOKEN" }));
+    expect(tokenValue().value).toBe("");
+    expect(tokenValue().placeholder).toBe("Hidden. Type to replace.");
+    expect(latest[0]?.value).toBe("");
+    expect(screen.queryByRole("button", { name: "Reset TOKEN" })).toBeNull();
+    expect(reset.map((r) => r.key)).toEqual(["TOKEN"]);
+  });
+
+  it("removes a masked row like any other", () => {
+    render(<MaskedHost />);
+    fireEvent.click(screen.getByRole("button", { name: "Remove label TOKEN" }));
+    expect(latest.map((r) => r.key)).toEqual(["MODE"]);
+  });
+});
+
 describe("entriesOf", () => {
   it("leaves out a row with no name, trims names, and keeps the last value of a repeated name", () => {
     expect(

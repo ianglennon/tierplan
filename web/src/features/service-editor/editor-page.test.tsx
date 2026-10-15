@@ -34,7 +34,10 @@ import {
 // The edit page (plan 06-19, D-01, D-03, D-05, RES-03; UI-SPEC "Service editor", "Review and
 // apply"): the Spec tab, the review, the apply with its progress, and the states around them.
 
-const EDIT = `/env/${SERVICE_ENV}/services/${SERVICE_ID}/edit`;
+const EDIT_PATH = `/env/${SERVICE_ENV}/services/${SERVICE_ID}/edit`;
+// The tests of the Spec tab, the review and the apply open on the Spec tab; the Form is the
+// default, and its tests ask for it.
+const EDIT = `${EDIT_PATH}?tab=spec`;
 const PAGE = `/env/${SERVICE_ENV}/services/${SERVICE_ID}`;
 
 function problem(status: number, type: string, extra: Record<string, unknown> = {}) {
@@ -192,9 +195,19 @@ describe("the page", () => {
     expect(screen.queryByRole("button", { name: "Review changes" })).toBeNull();
   });
 
-  it.each(["bogus", "spec", "form"])("opens with tab=%s in the address", async (tab) => {
-    renderAt(`${EDIT}?tab=${tab}`);
-    await ready();
+  it.each([
+    ["bogus", "form"],
+    ["spec", "spec"],
+    ["form", "form"],
+  ])("opens with tab=%s in the address on the %s tab", async (tab, shown) => {
+    renderAt(`${EDIT_PATH}?tab=${tab}`);
+    if (shown === "spec") await ready();
+    else await screen.findByLabelText("Image");
+    expect(
+      screen
+        .getByRole("tab", { name: shown === "spec" ? "Spec" : "Form" })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
   });
 });
 
@@ -475,7 +488,7 @@ describe("leaving the editor", () => {
     expect(within(dialog).getByText("The service hasn't been updated.")).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Keep editing" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
-    expect(router.state.location.pathname).toBe(EDIT);
+    expect(router.state.location.pathname).toBe(EDIT_PATH);
     expect(editorText()).toBe(yaml(withReplicas(5)));
   });
 
@@ -505,5 +518,192 @@ describe("leaving the editor", () => {
     fireEvent.click(screen.getByRole("link", { name: "View service" }));
     await waitFor(() => expect(router.state.location.pathname).toBe(PAGE));
     expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+});
+
+// The Form tab (plan 06-20, D-01, D-02, D-09): the same document as the Spec tab, patched by the
+// form's controls, with the caution bar for what it does not show.
+describe("the Form tab", () => {
+  const formImage = () => screen.findByLabelText("Image") as Promise<HTMLInputElement>;
+  const tabButton = (name: "Form" | "Spec") => screen.getByRole("tab", { name });
+
+  const withCommand = () =>
+    editSpec({
+      TaskTemplate: {
+        ContainerSpec: {
+          Image: `registry.example.com/shop/api:1.4@${DIGEST}`,
+          Command: ["/bin/api"],
+          Healthcheck: { Test: ["CMD", "true"], Retries: 3 },
+          Env: ["MODE=prod", "DB_PASSWORD=<hidden>"],
+        },
+      },
+    });
+
+  it("is the tab the editor opens on, with the cards filled from the spec", async () => {
+    renderAt(EDIT_PATH);
+    const image = await formImage();
+    expect(image.value).toBe(`registry.example.com/shop/api:1.4@${DIGEST}`);
+    expect(tabButton("Form").getAttribute("aria-selected")).toBe("true");
+    expect(tabButton("Spec").getAttribute("aria-selected")).toBe("false");
+    expect(screen.queryByRole("textbox", { name: "Service spec, YAML" })).toBeNull();
+    expect((screen.getByLabelText("Replicas") as HTMLInputElement).value).toBe("3");
+    expect((screen.getByLabelText("Name") as HTMLInputElement).readOnly).toBe(true);
+  });
+
+  it("makes the address follow the tab", async () => {
+    const router = renderAt(EDIT_PATH);
+    await formImage();
+    fireEvent.click(tabButton("Spec"));
+    await ready();
+    expect((router.state.location.search as { tab?: string }).tab).toBe("spec");
+    fireEvent.click(tabButton("Form"));
+    await formImage();
+    expect((router.state.location.search as { tab?: string }).tab).toBe("form");
+  });
+
+  it("moves between the tabs with the arrow keys", async () => {
+    renderAt(EDIT_PATH);
+    await formImage();
+    tabButton("Form").focus();
+    fireEvent.keyDown(tabButton("Form"), { key: "ArrowRight" });
+    expect(document.activeElement).toBe(tabButton("Spec"));
+  });
+
+  it("shows on the Spec tab what the form patched, and nothing else changed", async () => {
+    state.spec = () => Response.json(specBody({ spec: withCommand() }));
+    renderAt(EDIT_PATH);
+    const image = await formImage();
+    fireEvent.change(image, { target: { value: "registry.example.com/shop/api:1.5" } });
+    fireEvent.click(tabButton("Spec"));
+    await ready();
+    const expected = withCommand();
+    (
+      (expected.TaskTemplate as Record<string, unknown>).ContainerSpec as Record<string, unknown>
+    ).Image = "registry.example.com/shop/api:1.5";
+    expect(editorText()).toBe(yaml(expected));
+    expect(editorText()).toContain("DB_PASSWORD=<hidden>");
+  });
+
+  it("shows on the Form tab what was typed on the Spec tab", async () => {
+    renderAt(EDIT);
+    await ready();
+    typeIntoEditor(yaml(withReplicas(7)));
+    fireEvent.click(tabButton("Form"));
+    expect(((await screen.findByLabelText("Replicas")) as HTMLInputElement).value).toBe("7");
+  });
+
+  it("keeps the Spec tab, says why, and moves focus to the message when the spec does not parse", async () => {
+    renderAt(EDIT);
+    await ready();
+    typeIntoEditor("Name: [oops\n");
+    fireEvent.click(tabButton("Form"));
+    const message = await screen.findByText(
+      "The spec has errors, so the form can't show it. Fix them first.",
+    );
+    expect(tabButton("Spec").getAttribute("aria-selected")).toBe("true");
+    expect(screen.queryByLabelText("Image")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(message));
+    typeIntoEditor(yaml(withReplicas(5)));
+    await waitFor(() =>
+      expect(
+        screen.queryByText("The spec has errors, so the form can't show it. Fix them first."),
+      ).toBeNull(),
+    );
+    fireEvent.click(tabButton("Form"));
+    await formImage();
+  });
+
+  it("raises the caution bar for settings the form does not show, and opens the Spec tab from it", async () => {
+    state.spec = () => Response.json(specBody({ spec: withCommand() }));
+    renderAt(EDIT_PATH);
+    await formImage();
+    expect(screen.getByText(/This service has additional settings not shown here/)).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Not shown: TaskTemplate.ContainerSpec.Command, TaskTemplate.ContainerSpec.Healthcheck",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open the Spec tab" }));
+    await ready();
+    expect(tabButton("Spec").getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("has no caution bar when the form shows everything", async () => {
+    renderAt(EDIT_PATH);
+    await formImage();
+    expect(screen.queryByText(/This service has additional settings/)).toBeNull();
+  });
+
+  it("reviews only the image when only the image was changed, with the hidden value sent as hidden", async () => {
+    state.spec = () => Response.json(specBody({ spec: withCommand() }));
+    state.review = () => Response.json(reviewBody({ spec: withCommand() }));
+    renderAt(EDIT_PATH);
+    const image = await formImage();
+    fireEvent.change(image, { target: { value: "registry.example.com/shop/api:1.5" } });
+    fireEvent.click(tabButton("Spec"));
+    await ready();
+    fireEvent.click(tabButton("Form"));
+    await formImage();
+    fireEvent.click(reviewButton());
+    await screen.findByRole("heading", { name: "Review changes", level: 2 });
+    const body = posts("/review")[0]?.body as { version: number; spec: Record<string, unknown> };
+    const expected = withCommand();
+    (
+      (expected.TaskTemplate as Record<string, unknown>).ContainerSpec as Record<string, unknown>
+    ).Image = "registry.example.com/shop/api:1.5";
+    expect(body).toEqual({ version: EDIT_VERSION, spec: expected });
+  });
+
+  it("does not let a form with a field error be reviewed", async () => {
+    renderAt(EDIT_PATH);
+    await formImage();
+    fireEvent.change(screen.getByLabelText("Replicas"), { target: { value: "many" } });
+    expect(screen.getByText("Enter a whole number of 0 or more.")).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        (reviewButton() as HTMLButtonElement).disabled ||
+          reviewButton().getAttribute("aria-disabled") === "true",
+      ).toBe(true),
+    );
+    fireEvent.click(reviewButton());
+    expect(posts("/review")).toHaveLength(0);
+  });
+
+  it("goes back to the Form from the review with the edits kept", async () => {
+    state.review = () => Response.json(reviewBody({ spec: withReplicas(5) }));
+    renderAt(EDIT_PATH);
+    await formImage();
+    fireEvent.change(screen.getByLabelText("Replicas"), { target: { value: "5" } });
+    fireEvent.click(reviewButton());
+    await screen.findByRole("heading", { name: "Review changes", level: 2 });
+    fireEvent.click(screen.getByRole("button", { name: "Back to editing" }));
+    expect(((await screen.findByLabelText("Replicas")) as HTMLInputElement).value).toBe("5");
+  });
+
+  it("asks before leaving with form changes, but not when only the tab changes", async () => {
+    const router = renderAt(EDIT_PATH);
+    await formImage();
+    fireEvent.change(screen.getByLabelText("Replicas"), { target: { value: "5" } });
+    fireEvent.click(tabButton("Spec"));
+    await ready();
+    expect(screen.queryByText("Discard changes?")).toBeNull();
+    void router.history.push(PAGE);
+    expect(await screen.findByText("Discard changes?")).toBeTruthy();
+  });
+
+  it("sends a masked value typed over, once, and never a real one it was not given", async () => {
+    state.review = () => Response.json(reviewBody({ spec: withReplicas(3) }));
+    renderAt(EDIT_PATH);
+    await formImage();
+    const values = screen.getAllByLabelText("Variable value") as HTMLInputElement[];
+    expect(values.map((v) => v.value)).toEqual(["prod", ""]);
+    fireEvent.change(values[1] as HTMLInputElement, { target: { value: "n3w" } });
+    fireEvent.click(reviewButton());
+    await screen.findByRole("heading", { name: "Review changes", level: 2 });
+    const body = posts("/review")[0]?.body as { spec: Record<string, unknown> };
+    const env = (
+      (body.spec.TaskTemplate as Record<string, unknown>).ContainerSpec as Record<string, unknown>
+    ).Env;
+    expect(env).toEqual(["MODE=prod", "DB_PASSWORD=n3w"]);
   });
 });
