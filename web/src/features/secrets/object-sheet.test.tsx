@@ -46,11 +46,17 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (req: Request) => {
       const url = new URL(req.url);
-      if (req.method === "POST" && url.pathname === `/api/env/${ENV}/secrets`) {
+      if (
+        req.method === "POST" &&
+        (url.pathname === `/api/env/${ENV}/secrets` || url.pathname === `/api/env/${ENV}/configs`)
+      ) {
         posted.push({ path: url.pathname, body: (await req.json()) as Record<string, unknown> });
         return answer();
       }
-      if (url.pathname === `/api/env/${ENV}/secrets`) {
+      if (
+        url.pathname === `/api/env/${ENV}/secrets` ||
+        url.pathname === `/api/env/${ENV}/configs`
+      ) {
         return Response.json({ items: [], total: 0, unfilteredTotal: 0, capped: false });
       }
       return Response.json({}, { status: 404 });
@@ -66,7 +72,13 @@ afterEach(() => {
   client.clear();
 });
 
-function Host({ startOpen = true }: { startOpen?: boolean }) {
+function Host({
+  startOpen = true,
+  kind = "secret",
+}: {
+  startOpen?: boolean;
+  kind?: "secret" | "config";
+}) {
   const [open, setOpen] = useState(startOpen);
   onOpenChange = (next) => {
     openCalls.push(next);
@@ -77,16 +89,16 @@ function Host({ startOpen = true }: { startOpen?: boolean }) {
       <button type="button" onClick={() => setOpen(true)}>
         reopen
       </button>
-      <ObjectSheet envId={ENV} kind="secret" open={open} onOpenChange={onOpenChange} />
+      <ObjectSheet envId={ENV} kind={kind} open={open} onOpenChange={onOpenChange} />
     </>
   );
 }
 
-function mount(startOpen = true) {
+function mount(startOpen = true, kind: "secret" | "config" = "secret") {
   render(
     <QueryClientProvider client={client}>
       <TooltipProvider>
-        <Host startOpen={startOpen} />
+        <Host startOpen={startOpen} kind={kind} />
         <Toaster />
       </TooltipProvider>
     </QueryClientProvider>,
@@ -360,5 +372,213 @@ describe("closing", () => {
           .map((q) => q.state.data),
       ),
     ).not.toContain("s3cret-cache-check");
+  });
+});
+
+// The config mode of the sheet (plan 06-25, RES-08, D-24, D-25, D-28): the same sheet with the
+// content in a text area, an optional Go template driver and a limit of 1000 KB.
+describe("the config mode", () => {
+  const createConfig = () => screen.getByRole("button", { name: "Create config" });
+  const content = () => screen.getByLabelText("Content") as HTMLTextAreaElement;
+
+  async function open() {
+    mount(true, "config");
+    return sheet();
+  }
+
+  function fillConfig(nameText: string, text?: string) {
+    fireEvent.change(name(), { target: { value: nameText } });
+    if (text !== undefined) fireEvent.change(content(), { target: { value: text } });
+  }
+
+  async function choose(file: File) {
+    fireEvent.click(screen.getByRole("radio", { name: "Upload a file" }));
+    fireEvent.change(document.querySelector("input[type='file']") as HTMLInputElement, {
+      target: { files: [file] },
+    });
+  }
+
+  it("says configs aren't encrypted and points to secrets", async () => {
+    const dialog = await open();
+    expect(within(dialog).getByText("Create a config")).toBeTruthy();
+    expect(
+      within(dialog).getByText(
+        "Configs aren't encrypted. Don't put passwords or keys in one. Use a secret instead.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("has Name, Labels, Value source, a 12-row Content text area, Templating and the size line", async () => {
+    await open();
+    expect(name()).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add label" })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "Type it" })).toBeTruthy();
+    expect(content().tagName).toBe("TEXTAREA");
+    expect(content().rows).toBe(12);
+    expect(screen.getByRole("combobox", { name: "Templating (optional)" }).textContent).toContain(
+      "None",
+    );
+    expect(
+      screen.getByText("Go template fills in values such as the service name when a task starts."),
+    ).toBeTruthy();
+    expect(screen.getByText("0 KB of 1000 KB")).toBeTruthy();
+    expect(screen.queryByLabelText("Value")).toBeNull();
+  });
+
+  it("posts the name, the labels and the content as base64 once, with no templating, and toasts", async () => {
+    await open();
+    fillConfig("app.yaml", "name: api\nport: 8080\n");
+    fireEvent.click(screen.getByRole("button", { name: "Add label" }));
+    fireEvent.change(screen.getByLabelText("Label name"), { target: { value: "team" } });
+    fireEvent.change(screen.getByLabelText("Label value"), { target: { value: "web" } });
+    fireEvent.click(createConfig());
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]).toEqual({
+      path: `/api/env/${ENV}/configs`,
+      body: {
+        name: "app.yaml",
+        labels: { team: "web" },
+        data: b64("name: api\nport: 8080\n"),
+        source: "typed",
+      },
+    });
+    await waitFor(() => expect(openCalls).toEqual([false]));
+    await waitFor(() => expect(document.body.textContent).toContain("Created config app.yaml."));
+  });
+
+  it("sends templating golang when Go template is chosen", async () => {
+    await open();
+    fillConfig("tmpl.conf", "host={{ .Service.Name }}");
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Templating (optional)" }), {
+      key: "Enter",
+    });
+    fireEvent.click(await screen.findByRole("option", { name: "Go template" }));
+    fireEvent.click(createConfig());
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]?.body).toMatchObject({ name: "tmpl.conf", templating: "golang" });
+  });
+
+  it("puts the text of a UTF-8 file in the text area and says the content came from a file", async () => {
+    await open();
+    fillConfig("nginx.conf");
+    await choose(new File(["server { listen 80; }\n"], "nginx.conf"));
+    await waitFor(() => expect(content().value).toBe("server { listen 80; }\n"));
+    fireEvent.click(createConfig());
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]?.body).toMatchObject({
+      name: "nginx.conf",
+      data: b64("server { listen 80; }\n"),
+      source: "file",
+    });
+  });
+
+  it("says the content came from the keyboard again once the text is edited", async () => {
+    await open();
+    fillConfig("nginx.conf");
+    await choose(new File(["a=1\n"], "a.conf"));
+    await waitFor(() => expect(content().value).toBe("a=1\n"));
+    fireEvent.change(content(), { target: { value: "a=2\n" } });
+    fireEvent.click(createConfig());
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]?.body).toMatchObject({ data: b64("a=2\n"), source: "typed" });
+  });
+
+  it("keeps a file that is not text as it is, with its name and size, and sends its bytes", async () => {
+    await open();
+    fillConfig("blob.bin");
+    const bytes = new Uint8Array([0xff, 0xfe, 0x00, 0x01]);
+    await choose(new File([bytes], "blob.bin"));
+    await screen.findByText("blob.bin (4 B)");
+    expect(screen.queryByLabelText("Content")).toBeNull();
+    fireEvent.click(createConfig());
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]?.body).toMatchObject({
+      name: "blob.bin",
+      data: btoa(String.fromCharCode(...bytes)),
+      source: "file",
+    });
+  });
+
+  it("asks for content, or for a file", async () => {
+    await open();
+    fillConfig("app.yaml");
+    fireEvent.click(createConfig());
+    await screen.findByText("Enter a value.");
+    fireEvent.click(screen.getByRole("radio", { name: "Upload a file" }));
+    fireEvent.click(createConfig());
+    await screen.findByText("Choose a file.");
+    expect(posted).toHaveLength(0);
+  });
+
+  it("takes 1000 KB less a byte and refuses more without sending", async () => {
+    await open();
+    fillConfig("big.conf", "x".repeat(1_023_999));
+    expect(screen.queryByText("Configs can be at most 1000 KB.")).toBeNull();
+    fireEvent.change(content(), { target: { value: "x".repeat(1_024_000) } });
+    await waitFor(() =>
+      expect(screen.getAllByText("Configs can be at most 1000 KB.").length).toBeGreaterThan(0),
+    );
+    fireEvent.click(createConfig());
+    expect(posted).toHaveLength(0);
+  });
+
+  it("says a name that is taken at the name and keeps what was typed", async () => {
+    answer = () => problem(409, "name_taken");
+    await open();
+    fillConfig("app.yaml", "a=1");
+    fireEvent.click(createConfig());
+    await screen.findByText("A config named app.yaml already exists.");
+    expect(openCalls).toEqual([]);
+    expect(content().value).toBe("a=1");
+  });
+
+  it("puts a refused templating at the templating field and a too-big answer at the content", async () => {
+    answer = () => problem(422, "templating_invalid");
+    await open();
+    fillConfig("app.yaml", "a=1");
+    fireEvent.click(createConfig());
+    await screen.findByText("Choose None or Go template.");
+    cleanup();
+    posted = [];
+    answer = () => problem(422, "value_too_large");
+    await open();
+    fillConfig("app.yaml", "a=1");
+    fireEvent.click(createConfig());
+    await screen.findByText("Configs can be at most 1000 KB.");
+  });
+
+  it("says in the words of configs that the environment is not a swarm", async () => {
+    answer = () => problem(409, "not_a_swarm");
+    await open();
+    fillConfig("app.yaml", "a=1");
+    fireEvent.click(createConfig());
+    await screen.findByText("This environment isn't a swarm, so it has no configs.");
+  });
+
+  it("asks before throwing away what was typed, in the words of configs, and clears it when discarded", async () => {
+    await open();
+    fillConfig("app.yaml", "a=1");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await screen.findByText("Discard this config?");
+    expect(
+      screen.getByText("The config hasn't been created yet. What you entered will be lost."),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(openCalls).toEqual([false]));
+    fireEvent.click(screen.getByRole("button", { name: "reopen" }));
+    await sheet();
+    expect(name().value).toBe("");
+    expect(content().value).toBe("");
+  });
+
+  it("keeps nothing of the content in a toast or in storage", async () => {
+    await open();
+    fillConfig("app.yaml", "unique-config-text-91");
+    fireEvent.click(createConfig());
+    await waitFor(() => expect(openCalls).toEqual([false]));
+    await waitFor(() => expect(document.body.textContent).toContain("Created config app.yaml."));
+    expect(document.body.textContent).not.toContain("unique-config-text-91");
+    expect(JSON.stringify({ ...localStorage })).not.toContain("unique-config-text-91");
+    expect(JSON.stringify({ ...sessionStorage })).not.toContain("unique-config-text-91");
   });
 });

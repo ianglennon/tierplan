@@ -3,6 +3,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
@@ -34,6 +35,7 @@ let sent: Sent[];
 let items: ConfigItem[];
 let details: Record<string, ConfigDetail>;
 let onSearch: Mock<(q: string | undefined) => void>;
+let onCreating: Mock<(open: boolean) => void>;
 let answerList: () => Response | Promise<Response>;
 let answerDelete: (req: Sent) => Response;
 let client: QueryClient;
@@ -74,6 +76,7 @@ const detailOf = (c: ConfigItem, services: string[]): ConfigDetail => ({
 beforeEach(() => {
   sent = [];
   onSearch = vi.fn<(q: string | undefined) => void>();
+  onCreating = vi.fn<(open: boolean) => void>();
   me = makeMe({ envs: { [ENV]: "admin" } });
   items = [config("app.yaml"), config("nginx.conf")];
   details = {};
@@ -100,6 +103,9 @@ beforeEach(() => {
         if (res.ok) items = items.filter((c) => `/api/env/${ENV}/configs/${c.id}` !== entry.path);
         return res;
       }
+      if (entry.path === `/api/env/${ENV}/configs` && req.method === "POST") {
+        return Response.json({ id: "cid-new", name: "new-config" }, { status: 201 });
+      }
       if (entry.path === "/api/environments") {
         return Response.json({ items: [{ id: ENV, name: "Swarm", envType: "swarm" }] });
       }
@@ -118,12 +124,30 @@ afterEach(() => {
 
 const deletes = () => sent.filter((s) => s.method === "DELETE");
 
-function mount(props: { q?: string } = {}) {
+// The route owns whether the sheet is open (new=1 in the address); this holds it as the route
+// would.
+function Host({ q, startOpen }: { q?: string; startOpen: boolean }) {
+  const [creating, setCreating] = useState(startOpen);
+  return (
+    <ConfigList
+      envId={ENV}
+      q={q}
+      onSearchChange={onSearch}
+      creating={creating}
+      onCreatingChange={(open) => {
+        onCreating(open);
+        setCreating(open);
+      }}
+    />
+  );
+}
+
+function mount(props: { q?: string; creating?: boolean } = {}) {
   render(
     <QueryClientProvider client={client}>
       <TestRouter>
         <TooltipProvider>
-          <ConfigList envId={ENV} q={props.q} onSearchChange={onSearch} />
+          <Host q={props.q} startOpen={props.creating ?? false} />
           <Toaster />
         </TooltipProvider>
       </TestRouter>
@@ -367,6 +391,73 @@ describe("ConfigList delete", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete config" }));
     await within(dialog).findByText(
       "You no longer have permission to do that. Your access may have changed.",
+    );
+  });
+});
+
+describe("ConfigList create", () => {
+  it("has a Create config button that asks the route to open the sheet", async () => {
+    mount();
+    await screen.findByText("app.yaml");
+    fireEvent.click(screen.getByRole("button", { name: "Create config" }));
+    expect(onCreating).toHaveBeenCalledWith(true);
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(screen.getByText("Create a config")).toBeTruthy();
+  });
+
+  it("opens the sheet when the address says new=1", async () => {
+    mount({ creating: true });
+    expect(await screen.findByText("Create a config")).toBeTruthy();
+  });
+
+  it("tells the route when the sheet closes", async () => {
+    mount({ creating: true });
+    await screen.findByText("Create a config");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(onCreating).toHaveBeenCalledWith(false));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("shows an Operator and a Viewer Create config disabled with Needs Admin, and never the sheet", async () => {
+    for (const role of ["operator", "viewer"] as const) {
+      cleanup();
+      me = makeMe({ envs: { [ENV]: role } });
+      mount({ creating: true });
+      const button = await screen.findByRole("button", { name: "Create config" });
+      await waitFor(() => expect(button.getAttribute("aria-disabled")).toBe("true"));
+      expect(document.body.textContent).toContain("Needs Admin");
+      fireEvent.click(button);
+      expect(screen.queryByRole("dialog")).toBeNull();
+    }
+  });
+
+  it("in an empty list says what a config is and offers Create config to someone who may create one", async () => {
+    items = [];
+    mount();
+    await screen.findByText("No configs");
+    expect(
+      screen.getByText(
+        "Configs hold files that services read at run time, such as a settings file or a certificate.",
+      ),
+    ).toBeTruthy();
+    // The header button and the empty state's.
+    expect(screen.getAllByRole("button", { name: "Create config" })).toHaveLength(2);
+  });
+
+  it("adds the new config to the list after it is created", async () => {
+    mount({ creating: true });
+    await screen.findByText("Create a config");
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "new-config" } });
+    fireEvent.change(screen.getByLabelText("Content"), { target: { value: "v" } });
+    const before = sent.filter((s) => s.method === "GET" && s.path.endsWith("/configs")).length;
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Create config" }),
+    );
+    await waitFor(() => expect(sent.some((s) => s.method === "POST")).toBe(true));
+    await waitFor(() =>
+      expect(
+        sent.filter((s) => s.method === "GET" && s.path.endsWith("/configs")).length,
+      ).toBeGreaterThan(before),
     );
   });
 });

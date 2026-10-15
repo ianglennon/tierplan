@@ -411,3 +411,22 @@ describe("the Inspect tab", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 });
+
+describe("the list route", () => {
+  it("opens the create sheet for new=1 and drops it from the address when the sheet closes", async () => {
+    const router = renderAt(`/env/${ENV}/configs?new=1`);
+    expect(await screen.findByText("Create a config")).toBeTruthy();
+    expect(router.state.location.search).toEqual({ new: 1 });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByText("Create a config")).toBeNull());
+    expect(router.state.location.search).toEqual({});
+  });
+
+  it("puts new=1 in the address when Create config is pressed", async () => {
+    const router = renderAt(`/env/${ENV}/configs`);
+    const buttons = await screen.findAllByRole("button", { name: "Create config" });
+    fireEvent.click(buttons[0] as HTMLElement);
+    await screen.findByText("Create a config");
+    expect(router.state.location.search).toEqual({ new: 1 });
+  });
+});
