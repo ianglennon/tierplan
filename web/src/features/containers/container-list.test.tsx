@@ -12,6 +12,7 @@ import { type ContainerRow, listKey } from "@/api/resources";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ContainerList } from "@/features/containers/container-list";
+import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import {
   type ContainerSearch,
   type ContainerSearchPatch,
@@ -244,6 +245,10 @@ describe("container list: groups", () => {
     expect(parsed.dir).toBeUndefined();
     expect(parsed.q).toBe("x");
     expect(containerSearchSchema.parse({ group: "node" }).group).toBe("node");
+    // The live stats switch is stats=1 and nothing else.
+    expect(containerSearchSchema.parse({ stats: 1 }).stats).toBe(1);
+    expect(containerSearchSchema.parse({ stats: "1" }).stats).toBeUndefined();
+    expect(containerSearchSchema.parse({ stats: 2 }).stats).toBeUndefined();
     expect(containerSearchSchema.parse({ status: "exited,bogus,running,exited" }).status).toBe(
       "running,exited",
     );
@@ -1220,5 +1225,99 @@ describe("container list: Bayplan's own container", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(actionPosts).toEqual([]);
+  });
+});
+
+describe("container list: Live stats (06-33)", () => {
+  beforeEach(() => {
+    FakeEventSource.reset();
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+
+  const liveSource = (): FakeEventSource => {
+    const s = FakeEventSource.instances[FakeEventSource.instances.length - 1];
+    if (!s) throw new Error("no stats stream was opened");
+    return s;
+  };
+  const idsOf = (s: FakeEventSource) => new URL(s.url, "http://x").searchParams.get("ids");
+
+  it("has the switch, off by default, with no stats columns and no stream", async () => {
+    mount();
+    await screen.findByText("shop-web");
+    expect(screen.getByRole("switch", { name: "Live stats" }).getAttribute("aria-checked")).toBe(
+      "false",
+    );
+    for (const name of ["CPU", "Memory", "Network"]) {
+      expect(screen.queryByRole("columnheader", { name })).toBeNull();
+    }
+    expect(FakeEventSource.instances).toHaveLength(0);
+  });
+
+  it("asks for stats through the search when the switch is turned on, and takes it out when off", async () => {
+    mount();
+    await screen.findByText("shop-web");
+    fireEvent.click(screen.getByRole("switch", { name: "Live stats" }));
+    expect(changes).toEqual([{ stats: 1 }]);
+    await waitFor(() =>
+      expect(screen.getByRole("switch", { name: "Live stats" }).getAttribute("aria-checked")).toBe(
+        "true",
+      ),
+    );
+    fireEvent.click(screen.getByRole("switch", { name: "Live stats" }));
+    expect(changes.at(-1)).toEqual({ stats: undefined });
+  });
+
+  it("adds CPU, Memory and Network after Created, and one stream for the running rows on screen", async () => {
+    mount({ stats: 1 });
+    await screen.findByText("shop-web");
+    const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
+    expect(heads.slice(heads.indexOf("Created"))).toEqual(
+      expect.arrayContaining(["Created", "CPU", "Memory", "Network"]),
+    );
+    expect(FakeEventSource.instances).toHaveLength(1);
+    const url = new URL(liveSource().url, "http://x");
+    expect(url.pathname).toBe("/api/env/e1/containers/stats/stream");
+    // The node and the container, as the row is named; the exited container is not sampled.
+    expect((idsOf(liveSource()) ?? "").split(",").sort()).toEqual([
+      "n1|id-blog",
+      "n1|id-loose",
+      "n1|id-shop-web",
+    ]);
+  });
+
+  it("fills a row's cells from the stream and leaves a stopped container's as dashes", async () => {
+    mount({ stats: 1 });
+    await screen.findByText("shop-web");
+    act(() =>
+      liveSource().sendFrame("sample", {
+        t: 1,
+        containers: [
+          {
+            id: "n1|id-shop-web",
+            cpu: 142.4,
+            mem: 1.2 * 1024 ** 3,
+            netRx: 1.2 * 1024 ** 2,
+            netTx: 340 * 1024,
+            noData: false,
+            stopped: false,
+          },
+        ],
+      }),
+    );
+    const web = screen.getByRole("row", { name: /shop-web/ });
+    expect(within(web).getByText("142%")).toBeTruthy();
+    expect(within(web).getByText("1.2 GiB")).toBeTruthy();
+    expect(within(web).getByText("↓ 1.2 MiB/s ↑ 340 KiB/s")).toBeTruthy();
+    const db = screen.getByRole("row", { name: /shop-db/ });
+    expect(within(db).getAllByText("—").length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("closes the stream and takes the columns away when the switch is turned off", async () => {
+    mount({ stats: 1 });
+    await screen.findByText("shop-web");
+    const s = liveSource();
+    fireEvent.click(screen.getByRole("switch", { name: "Live stats" }));
+    await waitFor(() => expect(s.closed).toBe(true));
+    expect(screen.queryByRole("columnheader", { name: "CPU" })).toBeNull();
   });
 });

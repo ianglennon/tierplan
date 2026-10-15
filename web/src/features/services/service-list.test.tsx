@@ -10,6 +10,7 @@ import { setCsrfToken } from "@/api/client";
 import type { components } from "@/api/schema";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import type { ServiceSearch, ServiceSearchPatch } from "@/features/services/list-search";
 import { ServiceList } from "@/features/services/service-list";
 import "@/i18n";
@@ -1237,5 +1238,118 @@ describe("the services list: selection and bulk scale", () => {
         ["shop_web", "Done", "—"],
       ],
     );
+  });
+});
+
+describe("the services list: Live stats (06-33)", () => {
+  beforeEach(() => {
+    FakeEventSource.reset();
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+
+  const liveSource = (): FakeEventSource => {
+    const s = FakeEventSource.instances[FakeEventSource.instances.length - 1];
+    if (!s) throw new Error("no stats stream was opened");
+    return s;
+  };
+  const idsOf = (s: FakeEventSource) =>
+    (new URL(s.url, "http://x").searchParams.get("ids") ?? "").split(",").sort();
+
+  const entry = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    cpu: 142.4,
+    mem: 1.2 * 1024 ** 3,
+    netRx: 1.2 * 1024 ** 2,
+    netTx: 340 * 1024,
+    counted: 2,
+    silent: 0,
+    limitBytes: null,
+    ...extra,
+  });
+
+  it("has the switch, off by default, with no stats columns and no stream", async () => {
+    mount();
+    await screen.findByText("web");
+    expect(screen.getByRole("switch", { name: "Live stats" }).getAttribute("aria-checked")).toBe(
+      "false",
+    );
+    for (const name of ["CPU", "Memory", "Network"]) {
+      expect(screen.queryByRole("columnheader", { name })).toBeNull();
+    }
+    expect(FakeEventSource.instances).toHaveLength(0);
+  });
+
+  it("asks for stats through the search when the switch is turned on", async () => {
+    mount();
+    await screen.findByText("web");
+    fireEvent.click(screen.getByRole("switch", { name: "Live stats" }));
+    expect(changes).toEqual([{ stats: 1 }]);
+  });
+
+  it("takes the switch out of the search when it is turned off", async () => {
+    mount({ stats: 1 });
+    await screen.findByText("web");
+    fireEvent.click(screen.getByRole("switch", { name: "Live stats" }));
+    expect(changes).toEqual([{ stats: undefined }]);
+  });
+
+  it("adds CPU, Memory and Network after Updated, and one stream for the rows on screen", async () => {
+    mount({ stats: 1 });
+    await screen.findByText("web");
+    const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
+    const updated = heads.indexOf("Updated");
+    expect(heads.slice(updated, updated + 4)).toEqual(["Updated", "CPU", "Memory", "Network"]);
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(new URL(liveSource().url, "http://x").pathname).toBe(
+      `/api/env/${ENV}/services/stats/stream`,
+    );
+    expect(idsOf(liveSource())).toEqual(["id-agent", "id-backup", "id-web"]);
+  });
+
+  it("shows — while waiting and the numbers once the stream has them", async () => {
+    mount({ stats: 1 });
+    await screen.findByText("web");
+    const row = () => screen.getByRole("row", { name: /^Select web/ });
+    expect(within(row()).getAllByText("—").length).toBeGreaterThanOrEqual(3);
+    act(() => liveSource().sendFrame("sample", { t: 1, services: [entry("id-web")] }));
+    expect(within(row()).getByText("142%")).toBeTruthy();
+    expect(within(row()).getByText("1.2 GiB")).toBeTruthy();
+    expect(within(row()).getByText("↓ 1.2 MiB/s ↑ 340 KiB/s")).toBeTruthy();
+    // The other rows were not in the round and still wait.
+    const agent = screen.getByRole("row", { name: /^Select bayplan-agent/ });
+    expect(within(agent).queryByText("142%")).toBeNull();
+  });
+
+  it("marks a total that leaves out tasks on nodes that are not reporting", async () => {
+    mount({ stats: 1 });
+    await screen.findByText("web");
+    act(() => liveSource().sendFrame("sample", { t: 1, services: [entry("id-web", { silent: 1 })] }));
+    const row = screen.getByRole("row", { name: /^Select web/ });
+    expect(
+      within(row).getByRole("img", { name: "Not counting 1 task on a node that isn't reporting." }),
+    ).toBeTruthy();
+  });
+
+  it("streams only the rows of groups that are open, and nothing when every group is folded", async () => {
+    items = [
+      svc({ id: "id-web", name: "shop_web", stack: "shop" }),
+      svc({ id: "id-loose", name: "loose" }),
+    ];
+    mount({ stats: 1 });
+    await screen.findByText("shop_web");
+    expect(idsOf(liveSource())).toEqual(["id-loose", "id-web"]);
+    const first = liveSource();
+    act(() => liveSource().sendFrame("sample", { t: 1, services: [entry("id-web")] }));
+    fireEvent.click(screen.getByRole("button", { name: "Collapse all groups" }));
+    // Both groups are folded: nothing is on screen, so the stream closes at once.
+    expect(first.closed).toBe(true);
+  });
+
+  it("closes the stream when the list is left", async () => {
+    mount({ stats: 1 });
+    await screen.findByText("web");
+    const s = liveSource();
+    cleanup();
+    expect(s.closed).toBe(true);
   });
 });

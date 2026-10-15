@@ -15,6 +15,7 @@ import {
 import { queryClient } from "@/api/query-client";
 import { servicesKey } from "@/api/services";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { node, placement, service, task } from "@/features/placement/fixtures";
 import type { PlacementSearch, PlacementSearchPatch } from "@/features/placement/placement-search";
 import { PlacementView } from "@/features/placement/placement-view";
@@ -369,5 +370,118 @@ describe("placementQuery", () => {
       await queryClient.fetchQuery(placementQuery(ENV, "svc-web"));
     });
     expect(seen).toEqual(["?serviceId=svc-web"]);
+  });
+});
+
+describe("Live stats on the node columns (06-33)", () => {
+  beforeEach(() => {
+    FakeEventSource.reset();
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+
+  const GIB = 1024 ** 3;
+  const liveSource = (): FakeEventSource => {
+    const s = FakeEventSource.instances[FakeEventSource.instances.length - 1];
+    if (!s) throw new Error("no node stats stream was opened");
+    return s;
+  };
+  const round = (nodes: object[], partial = false) => ({ t: 1, partial, nodes });
+  const nodeEntry = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    cpu: 160,
+    mem: 2 * GIB,
+    cpus: 4,
+    memoryBytes: 8 * GIB,
+    counted: 1,
+    silent: 0,
+    notReporting: false,
+    ...extra,
+  });
+
+  it("has the switch, off by default, with no stream and no bars", async () => {
+    renderView();
+    await screen.findByRole("region", { name: "mgr-1" });
+    expect(screen.getByRole("switch", { name: "Live stats" }).getAttribute("aria-checked")).toBe(
+      "false",
+    );
+    expect(FakeEventSource.instances).toHaveLength(0);
+    expect(screen.queryByRole("progressbar")).toBeNull();
+  });
+
+  it("asks for stats through the search when it is turned on and off", async () => {
+    const change = vi.fn();
+    renderView({}, change);
+    await screen.findByRole("region", { name: "mgr-1" });
+    fireEvent.click(screen.getByRole("switch", { name: "Live stats" }));
+    expect(change).toHaveBeenCalledWith({ stats: 1 });
+    cleanup();
+    renderView({ stats: 1 }, change);
+    await screen.findByRole("region", { name: "mgr-1" });
+    fireEvent.click(screen.getByRole("switch", { name: "Live stats" }));
+    expect(change).toHaveBeenLastCalledWith({ stats: undefined });
+  });
+
+  it("opens the node stream with the switch on and says it is waiting", async () => {
+    renderView({ stats: 1 });
+    await screen.findByRole("region", { name: "mgr-1" });
+    expect(liveSource().url).toBe(`/api/env/${ENV}/nodes/stats/stream`);
+    const mgr = screen.getByRole("region", { name: "mgr-1" });
+    expect(within(mgr).getByText("Waiting for stats…")).toBeTruthy();
+    expect(within(mgr).queryAllByRole("progressbar")).toHaveLength(0);
+  });
+
+  it("shows what the tasks use of each node, in words and in two bars", async () => {
+    renderView({ stats: 1 });
+    await screen.findByRole("region", { name: "mgr-1" });
+    act(() => liveSource().sendFrame("sample", round([nodeEntry("n1")])));
+    const mgr = screen.getByRole("region", { name: "mgr-1" });
+    expect(within(mgr).getByText("Tasks use 40% CPU and 2 GiB of 8 GiB memory")).toBeTruthy();
+    const cpu = within(mgr).getByRole("progressbar", { name: "CPU used by tasks on mgr-1" });
+    const mem = within(mgr).getByRole("progressbar", { name: "Memory used by tasks on mgr-1" });
+    expect(cpu.getAttribute("aria-valuenow")).toBe("40");
+    expect(mem.getAttribute("aria-valuenow")).toBe("25");
+  });
+
+  it("says Not reporting in place of the bars for a node that is silent", async () => {
+    renderView({ stats: 1 });
+    await screen.findByRole("region", { name: "wrk-1" });
+    act(() =>
+      liveSource().sendFrame(
+        "sample",
+        round([nodeEntry("n1"), nodeEntry("n2", { notReporting: true, cpu: null, mem: 0, counted: 0, silent: 2 })]),
+      ),
+    );
+    const wrk = screen.getByRole("region", { name: "wrk-1" });
+    expect(within(wrk).getByText("Not reporting")).toBeTruthy();
+    expect(within(wrk).queryAllByRole("progressbar")).toHaveLength(0);
+  });
+
+  it("never lets a bar run past full", async () => {
+    renderView({ stats: 1 });
+    await screen.findByRole("region", { name: "mgr-1" });
+    act(() =>
+      liveSource().sendFrame("sample", round([nodeEntry("n1", { cpu: 900, mem: 20 * GIB })])),
+    );
+    const mgr = screen.getByRole("region", { name: "mgr-1" });
+    expect(
+      within(mgr).getByRole("progressbar", { name: "CPU used by tasks on mgr-1" }).getAttribute("aria-valuenow"),
+    ).toBe("100");
+  });
+
+  it("closes the stream when the switch is off or the page is left", async () => {
+    const { unmount } = renderView({ stats: 1 });
+    await screen.findByRole("region", { name: "mgr-1" });
+    const s = liveSource();
+    unmount();
+    expect(s.closed).toBe(true);
+  });
+
+  it("shows the switch and the bars on a service's Placement tab too", async () => {
+    answer = () => Response.json(placement([node({ id: "n1", hostname: "mgr-1" })], [], { services: [service({ id: "svc-web", name: "web" })] }));
+    renderView({ stats: 1 }, () => {}, "svc-web");
+    await screen.findByRole("region", { name: "mgr-1" });
+    expect(screen.getByRole("switch", { name: "Live stats" })).toBeTruthy();
+    act(() => liveSource().sendFrame("sample", round([nodeEntry("n1")])));
+    expect(screen.getByRole("progressbar", { name: "CPU used by tasks on mgr-1" })).toBeTruthy();
   });
 });

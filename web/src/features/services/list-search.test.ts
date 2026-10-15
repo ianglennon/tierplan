@@ -71,3 +71,12 @@ describe("the status chips", () => {
     expect(serviceStatusParam([])).toBeUndefined();
   });
 });
+
+describe("the live stats switch", () => {
+  it("is kept as stats=1 and nothing else, so the URL says it once", () => {
+    expect(serviceSearchSchema.parse({ stats: 1 })).toEqual({ stats: 1 });
+    expect(serviceSearchSchema.parse({ stats: "1" })).toEqual({});
+    expect(serviceSearchSchema.parse({ stats: 2 })).toEqual({});
+    expect(serviceSearchSchema.parse({ stats: true })).toEqual({});
+  });
+});

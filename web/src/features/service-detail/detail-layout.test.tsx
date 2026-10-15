@@ -139,7 +139,7 @@ describe("the page frame", () => {
     );
   });
 
-  it("has a Placement tab after Tasks and, after it, a Logs tab and the Inspect tab", async () => {
+  it("has a Placement tab after Tasks and, after it, a Logs tab, the Stats tab and the Inspect tab", async () => {
     renderAt();
     const placement = await screen.findByRole("tab", { name: "Placement" });
     expect(placement.getAttribute("href")).toBe(`/env/e1/services/${SERVICE_ID}/placement`);
@@ -148,10 +148,14 @@ describe("the page frame", () => {
       "Tasks",
       "Placement",
       "Logs",
+      "Stats",
       "Inspect",
     ]);
     expect(screen.getByRole("tab", { name: "Logs" }).getAttribute("href")).toBe(
       `/env/e1/services/${SERVICE_ID}/logs`,
+    );
+    expect(screen.getByRole("tab", { name: "Stats" }).getAttribute("href")).toBe(
+      `/env/e1/services/${SERVICE_ID}/stats`,
     );
   });
 

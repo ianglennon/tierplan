@@ -255,3 +255,13 @@ export function StatsPanel({
     </section>
   );
 }
+
+// Scaffold for the red step of plan 06-33.
+export function ServiceStatsPanel(_props: {
+  envId: string;
+  serviceId: string;
+  name: string;
+  createSource?: (url: string) => EventSourceLike;
+}) {
+  return null;
+}
