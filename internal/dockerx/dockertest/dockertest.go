@@ -143,6 +143,9 @@ type FakeConfig struct {
 	// WriteError makes every container write answer 500 with this message, as an engine
 	// does when it refuses one.
 	WriteError string
+	// RemoveErrors makes the removal of the secret, config or network of that name answer 500 with the
+	// message, as a manager does when it cannot remove one. A name not listed removes as usual.
+	RemoveErrors map[string]string
 	// NodeUpdateError makes every node update answer with this message, as a manager does when it
 	// refuses one: 400 for the last-manager refusal, 500 for any other text.
 	NodeUpdateError string

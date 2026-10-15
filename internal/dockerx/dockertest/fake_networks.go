@@ -134,6 +134,10 @@ func (f *Fake) serveNetworkRemove(w http.ResponseWriter, r *http.Request, p stri
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "network " + m[1] + " not found"})
 		return true
 	}
+	if msg, bad := cfg.RemoveErrors[found.Name]; bad {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": msg})
+		return true
+	}
 	switch found.Name {
 	case "bridge", "host", "none":
 		writeJSON(w, http.StatusForbidden, map[string]string{"message": found.Name + " is a pre-defined network and cannot be removed"})

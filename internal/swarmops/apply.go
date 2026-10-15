@@ -21,6 +21,9 @@ type ApplyInput struct {
 	Version   uint64
 	Spec      json.RawMessage
 	Caller    Caller
+	// Objects are the objects the spec names that do not exist yet, with the values to make them
+	// from. Those the spec does not name are ignored.
+	Objects []StagedObject
 }
 
 // ApplyResult is what an apply did. It is filled as far as the work got, also when Apply returns an
@@ -32,6 +35,10 @@ type ApplyResult struct {
 	Image    ImageInfo
 	Findings []compose.Finding
 	Warnings []string
+	// Steps are the steps of the apply, in order, as far as it got. Cleanup is what removing the
+	// objects of a failed apply did.
+	Steps   []ApplyStep
+	Cleanup CleanupReport
 }
 
 // scrubbedError is an error whose text has been scrubbed of the values of a spec the caller may not

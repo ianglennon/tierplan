@@ -136,6 +136,12 @@ type Deps struct {
 	// StackOwner says which stack owns a service from its labels. Nil reads the label
 	// docker stack deploy writes.
 	StackOwner func(labels map[string]string) (stack string, owned bool)
+	// Record takes the audit row of each object an apply makes and each it removes again. Nil
+	// records nothing.
+	Record Recorder
+	// CanCreate says whether the caller may create an object of a kind (KindNetwork, KindSecret,
+	// KindConfig). Nil means nobody may: an apply that needs an object made is then refused.
+	CanCreate func(kind string) bool
 }
 
 // HostPolicy is what the manager's agent will forward: whether its owner allowed services with
