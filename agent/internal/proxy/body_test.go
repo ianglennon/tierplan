@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -276,6 +277,73 @@ func TestBodyVolumeCreate(t *testing.T) {
 			t.Errorf("%s: the body was accepted", name)
 		}
 	}
+}
+
+func TestBodyVolumeCreateHostPolicy(t *testing.T) {
+	local := func(driver string, opts map[string]string) volume.CreateRequest {
+		return volume.CreateRequest{Name: "v", Driver: driver, DriverOpts: opts}
+	}
+	bind := func(device string) map[string]string {
+		return map[string]string{"type": "none", "o": "bind", "device": device}
+	}
+	optIn := bodyEnv{policy: Policy{AllowPrivilegedServices: true}}
+
+	refused := map[string]volume.CreateRequest{
+		"a bind of /etc":                       local("local", bind("/etc")),
+		"a bind of / with the driver left out": local("", bind("/")),
+		"a block device":                       local("local", map[string]string{"type": "ext4", "device": "/dev/sda1"}),
+		"a bind among other flags":             local("local", map[string]string{"o": "bind,ro", "device": "/var/lib/docker"}),
+		"a climbing relative device":           local("local", map[string]string{"type": "btrfs", "device": "../../etc"}),
+		"the docker socket":                    local("local", bind("/var/run/docker.sock")),
+		"the driver in upper case":             local("LOCAL", bind("/")),
+		"a volume plugin":                      local("rexray/ebs", map[string]string{"size": "10"}),
+	}
+	for name, req := range refused {
+		t.Run("refused: "+name, func(t *testing.T) {
+			if _, err := validateBody(BodyVolumeCreate, strings.NewReader(enc(t, req)), bodyEnv{}); !errors.Is(err, errHostPolicy) {
+				t.Fatalf("err = %v, want errHostPolicy", err)
+			}
+			var got volume.CreateRequest
+			clean, err := validateBody(BodyVolumeCreate, strings.NewReader(enc(t, req)), optIn)
+			if err != nil {
+				t.Fatalf("the opt-in refused it: %v", err)
+			}
+			if err := json.Unmarshal(clean, &got); err != nil || !reflect.DeepEqual(got, req) {
+				t.Fatalf("the opt-in forwarded %+v (%v), want %+v", got, err, req)
+			}
+		})
+	}
+
+	forwarded := map[string]volume.CreateRequest{
+		"an nfs share":            local("local", map[string]string{"type": "nfs", "o": "addr=10.0.0.2,rw", "device": ":/export"}),
+		"a cifs share":            local("local", map[string]string{"type": "cifs", "device": "//server/share"}),
+		"a bind under /srv":       local("local", bind("/srv/data")),
+		"a bind under /mnt":       local("local", bind("/mnt/backups")),
+		"tmpfs":                   local("local", map[string]string{"type": "tmpfs", "device": "tmpfs"}),
+		"an anonymous volume":     {},
+		"a local volume, no opts": local("local", nil),
+	}
+	for name, req := range forwarded {
+		t.Run("forwarded: "+name, func(t *testing.T) {
+			var got volume.CreateRequest
+			if err := roundTrip(t, BodyVolumeCreate, enc(t, req), &got); err != nil {
+				t.Fatalf("refused: %v", err)
+			}
+			if !reflect.DeepEqual(got, req) {
+				t.Fatalf("rebuilt %+v, want %+v", got, req)
+			}
+		})
+	}
+
+	t.Run("a driver with spaces is refused by the name rule under either env", func(t *testing.T) {
+		body := enc(t, local(" local ", bind("/")))
+		for name, env := range map[string]bodyEnv{"without the opt-in": {}, "with the opt-in": optIn} {
+			_, err := validateBody(BodyVolumeCreate, strings.NewReader(body), env)
+			if !errors.Is(err, errBodyRefused) || errors.Is(err, errHostPolicy) {
+				t.Errorf("%s: err = %v, want the driver-name refusal", name, err)
+			}
+		}
+	})
 }
 
 func TestBodyNodeSpec(t *testing.T) {
