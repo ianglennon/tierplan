@@ -86,6 +86,9 @@ var oracle = []oracleEntry{
 		"since": rx(`^[0-9TZ:.+-]{1,40}$`), "tail": rx(`^(all|[0-9]{1,6})$`),
 	}),
 
+	// The stats of a container: only the two keys a one-shot read sends.
+	oEntry("GET", `containers/`+oID+`/stats`, map[string]*regexp.Regexp{"stream": oBool, "one-shot": oBool}),
+
 	{method: "POST", path: rx(oVer + `containers/` + oID + `/exec$`), body: true},
 	{method: "POST", path: oExecStart, body: true, upgrade: true},
 	oEntry("POST", `exec/`+oID+`/resize`, map[string]*regexp.Regexp{"h": rx(`^[0-9]{1,4}$`), "w": rx(`^[0-9]{1,4}$`)}),
@@ -250,6 +253,16 @@ func FuzzAllowed(f *testing.F) {
 		{"DELETE", "/configs/abc123", "", false, false, false},
 		{"DELETE", "/configs/abc123", "force=1", false, false, false},
 		{"DELETE", "/configs/abc123", "", true, false, false},
+		{"GET", "/containers/abc/stats", "stream=false&one-shot=true", false, false, false},
+		{"GET", "/v1.56/containers/abc/stats", "stream=0&one-shot=1", false, false, false},
+		{"GET", "/containers/abc/stats", "", false, false, false},
+		{"GET", "/containers/abc/stats", "stream=true&decode=1", false, false, false},
+		{"GET", "/containers/abc/stats", "stream=maybe", false, false, false},
+		{"GET", "/containers/abc/stats", "", true, false, false},
+		{"GET", "/containers/abc/stats/x", "", false, false, false},
+		{"GET", "/containers/../stats", "", false, false, false},
+		{"HEAD", "/containers/abc/stats", "stream=false", false, false, true},
+		{"POST", "/containers/abc/stats", "", false, false, false},
 		{"GET", "/services/web/logs", "follow=1", false, false, false},
 		{"GET", "/v1.56/services/web/logs", "follow=1&details=1&timestamps=1&stdout=1&stderr=1&tail=500&since=1700000000.5", false, false, false},
 		{"GET", "/services/web/logs", "until=1700000000", false, false, false},

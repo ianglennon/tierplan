@@ -180,6 +180,9 @@ type FakeConfig struct {
 	// ServiceLogs are the lines the tasks of each service wrote, by service ID, which
 	// /services/{id}/logs and /tasks/{id}/logs answer (fake_servicelogs.go).
 	ServiceLogs map[string][]FakeServiceLogLine
+	// Stats is the resource use each container reports, by container ID, which
+	// /containers/{id}/stats answers one more sample of per call (fake_stats.go).
+	Stats map[string]FakeStats
 	// HistoryLimit is Swarm.Cluster.Spec.Orchestration.TaskHistoryRetentionLimit /info
 	// reports; zero leaves the field unset, as a cluster that never set it does.
 	HistoryLimit int
@@ -505,6 +508,8 @@ type Fake struct {
 	logs fakeLogs
 	// svcLogs is the service log state (fake_servicelogs.go).
 	svcLogs fakeServiceLogs
+	// stats is the container stats state (fake_stats.go).
+	stats fakeStatsState
 	// nets are the networks created through the fake, and netCreates the bodies of
 	// those requests (fake_networks.go).
 	nets       []FakeNetwork

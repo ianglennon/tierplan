@@ -210,7 +210,8 @@ func TestEverythingElseIsRefusedWithATypedAnswerAndNeverReachesTheEngine(t *test
 		name, raw, wantMessage string
 	}{
 		{"create a container", request("POST", "/containers/create", "Content-Length: 2\r\n") + "{}", "agent_policy_denied: POST /containers/create"},
-		{"the stats of a container", get("/containers/abc/stats"), "agent_policy_denied: GET /containers/abc/stats"},
+		{"the archive of a container", get("/containers/abc/archive"), "agent_policy_denied: GET /containers/abc/archive"},
+		{"the stats of a container with a key the one-shot read does not send", get("/containers/abc/stats?decode=1"), "agent_policy_denied: GET /containers/abc/stats"},
 		{"inspect a container with a POST", request("POST", "/containers/abc/json"), "agent_policy_denied: POST /containers/abc/json"},
 		{"swarm inspect returns the join tokens", get("/swarm"), "agent_policy_denied: GET /swarm"},
 		{"plugins", get("/plugins"), "agent_policy_denied: GET /plugins"},
@@ -515,8 +516,8 @@ func TestHopByHopAndForwardingHeadersDoNotReachTheEngine(t *testing.T) {
 // The one thing opened up for plan 20 (D-27, T-02-70): GET and HEAD of
 // /containers/{id}/json, which Bayplan reads only for a container's restart
 // policy. Phase 4 adds the lifecycle, the logs and the exec create under
-// /containers/{id}/ (routes_test.go, body_test.go); the stats, archive, attach and
-// export stay refused.
+// /containers/{id}/ (routes_test.go, body_test.go) and Phase 6 the stats; the archive,
+// attach and export stay refused.
 func TestAllowedOpensOnlyTheInspectOfOneContainer(t *testing.T) {
 	for _, tc := range []struct {
 		name, method, path string
@@ -529,7 +530,7 @@ func TestAllowedOpensOnlyTheInspectOfOneContainer(t *testing.T) {
 		{"a POST of an inspect", "POST", "/containers/abc/json", false},
 		{"a DELETE of an inspect", "DELETE", "/containers/abc/json", false},
 		{"the logs", "GET", "/containers/abc/logs", true},
-		{"a stats stream", "GET", "/containers/abc/stats", false},
+		{"the stats", "GET", "/containers/abc/stats", true},
 		{"a file archive", "GET", "/containers/abc/archive", false},
 		{"an export", "GET", "/containers/abc/export", false},
 		{"a dot-dot ID", "GET", "/containers/../json", false},
