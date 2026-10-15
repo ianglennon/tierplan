@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
-import { Link, Outlet } from "@tanstack/react-router";
+import { Link, Outlet, useNavigate } from "@tanstack/react-router";
 import { Crown, Lock, Server } from "lucide-react";
 import { useMemo } from "react";
 
@@ -138,13 +138,17 @@ function Header({ data }: { data: NodeDetail }) {
 // host name, the status and the badges, the tab bar (Link triggers, the active tab follows the URL)
 // and the tab under it. The tabs render at once, before the node has loaded. A node that leaves
 // the swarm while its page is open turns the page into the gone state. The header carries the
-// node's availability and role changes.
+// node's availability and role changes and its removal.
 export function NodeDetailLayout({ envId, nodeId }: NodeDetailLayoutProps) {
   const t = useT();
   const query = useQuery(nodeQuery(envId, nodeId));
   const { data } = query;
   const rows = useMemo(() => (data ? [data] : undefined), [data]);
-  const actions = useNodeActions(envId, rows);
+  const navigate = useNavigate();
+  // A node that was removed has no page left, so the page goes to the list.
+  const actions = useNodeActions(envId, rows, {
+    onRemoved: () => void navigate({ to: "/env/$envId/nodes", params: { envId } }),
+  });
   const gone = isNodeGone(query.error);
   useDocumentTitle(gone ? t("nodes.detail.gone.heading") : data?.hostname);
 

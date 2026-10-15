@@ -228,7 +228,8 @@
       "promote": "Promote…",
       "demote": "Demote…",
       "copyId": "Copy node ID",
-      "more": "More"
+      "more": "More",
+      "remove": "Remove…"
     },
     "pending": {
       "drain": "Draining…",
@@ -316,6 +317,23 @@
         "node_not_found": "{{name}} is no longer in the swarm.",
         "confirmation_required": "Type {{name}} to confirm this.",
         "rejected": "Docker refused: {{message}}"
+      }
+    },
+    "remove": {
+      "title": "Remove {{name}}?",
+      "body": "{{name}} is down, so Swarm forgets it. If it comes back, it has to join the swarm again. Bayplan also marks its agent as gone.",
+      "cancel": "Cancel",
+      "confirm": "Remove node",
+      "pending": "Removing…",
+      "done": "Removed {{name}}.",
+      "gone": "{{name}} is already gone.",
+      "reason": {
+        "notDown": "Only a node that is down can be removed.",
+        "manager": "Demote {{name}} before removing it."
+      },
+      "refusal": {
+        "node_not_down": "{{name}} isn't down. Only a node that is down can be removed.",
+        "node_is_manager": "Demote {{name}} before removing it."
       }
     }
   }

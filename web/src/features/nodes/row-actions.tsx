@@ -25,6 +25,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { NodeActionDialog, nodeActionWording } from "@/features/nodes/node-action-dialog";
+import { NodeRemoveDialog } from "@/features/nodes/node-remove-dialog";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -43,6 +44,18 @@ export interface NodeActionTarget {
   hostname: string;
   role: string;
   availability: string;
+  // The manager's view of the node (ready, down, ...); Remove… needs it.
+  state?: string;
+}
+
+// nodeRemovalBlock says why a node cannot be removed, or nothing when it can: a manager is
+// demoted first, and only a node that is down is removed (D-22).
+export function nodeRemovalBlock(
+  node: Pick<NodeActionTarget, "role" | "state">,
+): "manager" | "notDown" | undefined {
+  if (node.role === "manager") return "manager";
+  if (node.state !== "down") return "notDown";
+  return undefined;
 }
 
 export interface NodeActions {
@@ -52,7 +65,9 @@ export interface NodeActions {
   open: (node: NodeActionTarget, action: NodeImpactAction) => void;
   // Activates a node, with no dialog.
   activate: (node: NodeActionTarget) => void;
-  // The dialog to draw once, beside the menus.
+  // Opens the dialog that removes a node that is down.
+  remove: (node: NodeActionTarget) => void;
+  // The dialogs to draw once, beside the menus.
   dialog: ReactNode;
 }
 
@@ -95,7 +110,9 @@ function reached(node: NodeActionTarget, action: NodeAction): boolean {
 export function useNodeActions(
   envId: string,
   rows: readonly NodeActionTarget[] | undefined,
+  options: { onRemoved?: (nodeId: string) => void } = {},
 ): NodeActions {
+  const { onRemoved } = options;
   const t = useT();
   const queryClient = useQueryClient();
   const environment = useEnvName(envId);
@@ -103,6 +120,7 @@ export function useNodeActions(
   const [target, setTarget] = useState<{ node: NodeActionTarget; action: NodeImpactAction } | null>(
     null,
   );
+  const [removing, setRemoving] = useState<NodeActionTarget | null>(null);
   const [pending, setPending] = useState<ReadonlyMap<string, NodeAction>>(new Map());
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
 
@@ -155,6 +173,8 @@ export function useNodeActions(
     setTarget({ node, action });
   }, []);
 
+  const remove = useCallback((node: NodeActionTarget) => setRemoving(node), []);
+
   const activate = useCallback(
     async (node: NodeActionTarget) => {
       mark(node.id, "activate");
@@ -177,16 +197,24 @@ export function useNodeActions(
   );
 
   const dialog = (
-    <NodeActionDialog
-      envId={envId}
-      node={target?.node ?? null}
-      mode={target?.action ?? "drain"}
-      onClose={() => setTarget(null)}
-      onDone={({ nodeId, action }) => mark(nodeId, action)}
-    />
+    <>
+      <NodeActionDialog
+        envId={envId}
+        node={target?.node ?? null}
+        mode={target?.action ?? "drain"}
+        onClose={() => setTarget(null)}
+        onDone={({ nodeId, action }) => mark(nodeId, action)}
+      />
+      <NodeRemoveDialog
+        envId={envId}
+        node={removing}
+        onClose={() => setRemoving(null)}
+        onRemoved={({ nodeId }) => onRemoved?.(nodeId)}
+      />
+    </>
   );
 
-  return { pending, open, activate: (node) => void activate(node), dialog };
+  return { pending, open, activate: (node) => void activate(node), remove, dialog };
 }
 
 interface ChangeItemProps {
@@ -199,14 +227,17 @@ interface ChangeItemProps {
   // Set when an item was chosen, so the menu does not hand focus back to its button before the
   // dialog has opened.
   chose?: { current: boolean };
+  // Destructive text, for the one change that cannot be undone.
+  destructive?: boolean;
 }
 
 // ChangeItem is one change in a node's menu. Unavailable it keeps its place, with the reason as a
 // tooltip, since a person below Admin should see what exists (D-19). The server decides either way.
-function ChangeItem({ label, reason, blocked, onSelect, chose }: ChangeItemProps) {
+function ChangeItem({ label, reason, blocked, onSelect, chose, destructive }: ChangeItemProps) {
   return (
     <NeedsTooltip reason={blocked ? reason : undefined}>
       <DropdownMenuItem
+        variant={destructive ? "destructive" : "default"}
         className="max-md:min-h-11"
         disabled={blocked && !reason}
         onSelect={() => {
@@ -229,6 +260,39 @@ function useChangeAvailability(envId: string, noManager: boolean | undefined) {
   const blocked = !needs.allowed || noManager === true;
   const reason = noManager ? t("nodes.noManagerReason") : needs.reason;
   return { blocked, reason };
+}
+
+interface RemoveItemProps {
+  node: NodeActionTarget;
+  // True when the person may not change nodes, or nothing can be changed now, with its reason.
+  blocked: boolean;
+  reason: string | undefined;
+  onSelect: () => void;
+  chose: { current: boolean };
+}
+
+// RemoveItem is Remove… at the foot of a node's menu, in destructive text. It is offered to every
+// node and unavailable with the reason when the node is a manager (demote it first) or is not
+// down, after the reason a person below Admin or a swarm with no manager gives.
+function RemoveItem({ node, blocked, reason, onSelect, chose }: RemoveItemProps) {
+  const t = useT();
+  const why = nodeRemovalBlock(node);
+  const whyText =
+    why === "manager"
+      ? t("nodes.remove.reason.manager", { name: node.hostname })
+      : why === "notDown"
+        ? t("nodes.remove.reason.notDown")
+        : undefined;
+  return (
+    <ChangeItem
+      destructive
+      label={t("nodes.menu.remove")}
+      reason={blocked ? reason : whyText}
+      blocked={blocked || why !== undefined}
+      chose={chose}
+      onSelect={onSelect}
+    />
+  );
 }
 
 interface NodeRowActionsProps {
@@ -327,6 +391,14 @@ export function NodeRowActions({
             onSelect={() => actions.open(node, "demote")}
           />
         ) : null}
+        <DropdownMenuSeparator />
+        <RemoveItem
+          node={node}
+          blocked={blocked}
+          reason={reason}
+          chose={chose}
+          onSelect={() => actions.remove(node)}
+        />
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -413,6 +485,14 @@ export function NodeHeaderActions({ envId, node, actions, noManager }: NodeHeade
           <DropdownMenuItem className="max-md:min-h-11" onSelect={() => void copyId()}>
             {t("nodes.menu.copyId")}
           </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <RemoveItem
+            node={node}
+            blocked={blocked || waiting !== undefined}
+            reason={reason}
+            chose={chose}
+            onSelect={() => actions.remove(node)}
+          />
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

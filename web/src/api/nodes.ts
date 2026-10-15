@@ -287,6 +287,37 @@ export function useSetNodeRole(envId: string) {
   });
 }
 
+export interface NodeRemoval {
+  nodeId: string;
+  // The node's host name, typed. The server always asks for it.
+  confirm: string;
+}
+
+// useRemoveNode is the mutation behind Remove… for a node that is down. It does not retry: a
+// removal whose answer was lost may have happened. The nodes are read again whatever the answer,
+// and so are the agents, since the server revokes the agent that ran on the node.
+export function useRemoveNode(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, NodeActionError, NodeRemoval>({
+    mutationKey: ["env", envId, "node-remove"],
+    mutationFn: async ({ nodeId, confirm }) => {
+      try {
+        const res = await api.DELETE("/api/env/{envId}/nodes/{nodeId}", {
+          params: { path: { envId, nodeId }, query: { confirm } },
+        });
+        if (!res.response.ok) throw nodeActionError(res.error, res.response);
+      } catch (e) {
+        throw e instanceof NodeActionError ? e : new NodeActionError(0);
+      }
+    },
+    retry: false,
+    onSettled: () => {
+      refreshNodes(queryClient, envId);
+      void queryClient.invalidateQueries({ queryKey: ["agents", envId] });
+    },
+  });
+}
+
 export type NodeLabelImpact = components["schemas"]["NodeLabelImpactBody"];
 export type NodeLabelImpactRow = components["schemas"]["NodeLabelImpactRow"];
 
