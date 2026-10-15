@@ -198,6 +198,10 @@ var phase6DetailKeys = map[string][]string{
 	// and the code. A remove records the name and the code (plan 06-24, RES-08).
 	audit.ActionConfigCreated: {"name", "labels", "size", "templating", "source", "code"},
 	audit.ActionConfigRemoved: {"name", "source", "code"},
+	// A rotate records the name of the object it replaced and of the new one, how many services it moved
+	// and skipped, whether the old object was removed and the code; never a value (plan 06-28, RES-08).
+	audit.ActionSecretRotated: {"from", "to", "updated", "skipped", "removed_old", "code"},
+	audit.ActionConfigRotated: {"from", "to", "updated", "skipped", "removed_old", "code"},
 }
 
 func TestEveryPhase6ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -237,6 +241,9 @@ func TestEveryPhase6ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		"secret.removed": audit.ActionSecretRemoved,
 		"config.created": audit.ActionConfigCreated,
 		"config.removed": audit.ActionConfigRemoved,
+
+		"secret.rotated": audit.ActionSecretRotated,
+		"config.rotated": audit.ActionConfigRotated,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)
