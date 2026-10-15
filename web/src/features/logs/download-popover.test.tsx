@@ -57,6 +57,22 @@ describe("downloadUrl", () => {
   });
 });
 
+describe("downloadUrl of a service", () => {
+  it("is the service's download route with the range and neither a node nor timestamps", () => {
+    const web = { envId: "env 1", source: { kind: "service", id: "web/api" } } as const;
+    expect(downloadUrl(web, {}, false)).toBe("/api/env/env%201/services/web%2Fapi/logs/download");
+    expect(
+      downloadUrl(
+        web,
+        { since: "2026-10-09T10:00:00.000Z", until: "2026-10-09T11:00:00.000Z" },
+        true,
+      ),
+    ).toBe(
+      "/api/env/env%201/services/web%2Fapi/logs/download?since=2026-10-09T10%3A00%3A00.000Z&until=2026-10-09T11%3A00%3A00.000Z",
+    );
+  });
+});
+
 describe("defaultRange", () => {
   const now = new Date("2026-10-09T12:00:00.000Z");
   it("is the viewer's range", () => {
@@ -201,5 +217,34 @@ describe("DownloadDialog", () => {
     expect(clicked).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("DownloadPopover of a service", () => {
+  const web = { envId: "e1", source: { kind: "service", id: "web" } } as const;
+
+  it("says the lines of all the tasks are merged in time order, and leaves out the timestamps choice", () => {
+    render(<DownloadPopover target={web} show={{ kind: "lines" }} timestamps={true} />);
+    open();
+    expect(screen.getByRole("form", { name: "Download logs" })).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Lines from all of the service's tasks are merged in time order, each starting with its task name. Downloads come straight from Docker, so they aren't limited to what's loaded here. Times are in UTC.",
+      ),
+    ).toBeTruthy();
+    // Every line carries its task and its UTC time, so there is nothing to choose.
+    expect(screen.queryByRole("checkbox", { name: "Include timestamps" })).toBeNull();
+  });
+
+  it("starts a browser download of the chosen range from the service's route", () => {
+    render(<DownloadPopover target={web} show={{ kind: "lines" }} timestamps={true} />);
+    open();
+    fireEvent.change(fromBox(), { target: { value: "2026-10-09T08:00" } });
+    fireEvent.click(submit());
+    expect(clicked).toHaveLength(1);
+    const url = new URL(clicked[0]?.getAttribute("href") ?? "", "http://x");
+    expect(url.pathname).toBe("/api/env/e1/services/web/logs/download");
+    expect(url.searchParams.get("since")).toBe(new Date("2026-10-09T08:00").toISOString());
+    expect(url.searchParams.has("timestamps")).toBe(false);
   });
 });

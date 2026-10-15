@@ -38,7 +38,12 @@ import {
   saveTaskNames,
   streamRange,
 } from "@/features/logs/log-prefs";
-import { isEndedTaskState, isSlotMark, type ServiceLogTask } from "@/features/logs/log-source";
+import {
+  isEndedTaskState,
+  isSlotMark,
+  type LogSource,
+  type ServiceLogTask,
+} from "@/features/logs/log-source";
 import {
   createLogStream,
   fetchLogPage,
@@ -158,12 +163,7 @@ export const HIDDEN_POPOUT_MS = 60_000;
 // toggles carried in the query the way the route reads them. A text that would read as
 // a number, a boolean or JSON is quoted, since the router parses every value as JSON
 // first; the address is under the base path.
-export function popoutLogsUrl(
-  envId: string,
-  containerId: string,
-  nodeId: string | undefined,
-  view: LogViewParams,
-): string {
+export function popoutLogsUrl(envId: string, source: LogSource, view: LogViewParams): string {
   const text = (v: string): string => {
     try {
       JSON.parse(v);
@@ -173,7 +173,7 @@ export function popoutLogsUrl(
     }
   };
   const q = new URLSearchParams();
-  if (nodeId) q.set("node", text(nodeId));
+  if (source.kind === "container" && source.nodeId) q.set("node", text(source.nodeId));
   if (view.since) q.set("since", text(view.since));
   if (view.q) q.set("q", text(view.q));
   if (view.ts !== undefined) q.set("ts", String(view.ts));
@@ -181,7 +181,7 @@ export function popoutLogsUrl(
   if (view.wrap !== undefined) q.set("wrap", String(view.wrap));
   const query = q.toString();
   return withBase(
-    `/popout/${encodeURIComponent(envId)}/containers/${encodeURIComponent(containerId)}/logs${query ? `?${query}` : ""}`,
+    `/popout/${encodeURIComponent(envId)}/containers/${encodeURIComponent(source.id)}/logs${query ? `?${query}` : ""}`,
   );
 }
 
@@ -678,7 +678,7 @@ export function LogViewer(props: LogViewerProps) {
   // The window opens with what is on screen, so it reads the same: the range, the search
   // and the toggles, as they are now (not only the ones the address holds).
   const openPopout = () => {
-    const url = popoutLogsUrl(envId, sourceId, containerNode, {
+    const url = popoutLogsUrl(envId, src, {
       since: sinceKey || undefined,
       q: queryInput || undefined,
       ts: timestamps,

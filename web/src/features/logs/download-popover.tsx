@@ -18,6 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Spinner } from "@/components/ui/spinner";
 import { fromLocalInput, type ShowRange, toLocalInput } from "@/features/logs/log-prefs";
+import { type StreamTarget, sourceOf } from "@/features/logs/log-stream";
 import { useT } from "@/i18n/use-t";
 import { apiUrl } from "@/lib/base-path";
 import { toastError } from "@/lib/toast";
@@ -27,10 +28,10 @@ export const DOWNLOAD_SPINNER_MS = 1000;
 
 const PRESET_MS = { "5m": 5 * 60_000, "1h": 3_600_000, "24h": 86_400_000 } as const;
 
-export interface DownloadTarget {
+// What a download reads: a container on its node, given as containerId (and nodeId), or any
+// source, a service among them (plan 06-31, D-35). A container caller keeps using containerId.
+export interface DownloadTarget extends StreamTarget {
   envId: string;
-  containerId: string;
-  nodeId?: string;
 }
 
 // downloadUrl is the address of the server's download of a range (D-18). It is a plain
@@ -40,14 +41,15 @@ export function downloadUrl(
   range: { since?: string; until?: string },
   timestamps: boolean,
 ): string {
+  const src = sourceOf(target);
   const q = new URLSearchParams();
-  if (target.nodeId) q.set("nodeId", target.nodeId);
+  if (src.kind === "container" && src.nodeId) q.set("nodeId", src.nodeId);
   if (range.since) q.set("since", range.since);
   if (range.until) q.set("until", range.until);
   if (timestamps) q.set("timestamps", "1");
   const query = q.toString();
   return apiUrl(
-    `/api/env/${encodeURIComponent(target.envId)}/containers/${encodeURIComponent(target.containerId)}/logs/download${query ? `?${query}` : ""}`,
+    `/api/env/${encodeURIComponent(target.envId)}/containers/${encodeURIComponent(src.id)}/logs/download${query ? `?${query}` : ""}`,
   );
 }
 

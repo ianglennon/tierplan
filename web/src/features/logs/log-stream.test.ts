@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import {
   createLogStream,
+  fetchLogPage,
   type LogStreamOptions,
   type LogStreamState,
   logStreamUrl,
@@ -749,5 +750,98 @@ describe("a service's markers and node notices", () => {
       oldNode: "a",
     });
     expect(markers).toEqual([]);
+  });
+});
+
+// A page of earlier lines of a service's log (plan 06-31, OBS-02, D-35).
+describe("a page of a service's log", () => {
+  function stubPage(body: unknown = { lines: [], startOfLogs: true }) {
+    const fetchMock = vi.fn(async (_req: Request) => Response.json(body));
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+  const requestUrl = (m: ReturnType<typeof stubPage>) =>
+    new URL((m.mock.calls[0] as [Request])[0].url);
+
+  it("asks the service's page route with the viewer, the tail and the filters, and no node", async () => {
+    const m = stubPage();
+    await fetchLogPage({
+      envId: "e 1",
+      source: { kind: "service", id: "web/api" },
+      sid: SID,
+      until: "2026-10-14T10:00:05.000000001Z",
+      tail: 300,
+      service: { tasks: ["t1", "t2"], nodes: ["alpha"], stopped: true },
+    });
+    const url = requestUrl(m);
+    expect(url.pathname).toBe("/api/env/e%201/services/web%2Fapi/logs");
+    expect(url.searchParams.get("sid")).toBe(SID);
+    expect(url.searchParams.get("until")).toBe("2026-10-14T10:00:05.000000001Z");
+    expect(url.searchParams.get("tail")).toBe("300");
+    expect(url.searchParams.get("task")).toBe("t1,t2");
+    expect(url.searchParams.get("node")).toBe("alpha");
+    expect(url.searchParams.get("stopped")).toBe("true");
+    expect(url.searchParams.has("nodeId")).toBe(false);
+  });
+
+  it("leaves out the filters that are not set", async () => {
+    const m = stubPage();
+    await fetchLogPage({
+      envId: "e1",
+      source: { kind: "service", id: "web" },
+      sid: SID,
+      until: "2026-10-14T10:00:05.000000001Z",
+    });
+    const url = requestUrl(m);
+    expect(url.searchParams.get("tail")).toBe("500");
+    expect(["task", "node", "stopped"].some((k) => url.searchParams.has(k))).toBe(false);
+  });
+
+  it("gives back the lines of the page, with the task of each, and whether it is the start", async () => {
+    stubPage({
+      lines: [
+        { t: "2026-10-14T10:00:01.000000000Z", s: "o", m: "hi", task: "t1", slot: 1, node: "a" },
+      ],
+      startOfLogs: true,
+    });
+    const page = await fetchLogPage({
+      envId: "e1",
+      source: { kind: "service", id: "web" },
+      sid: SID,
+      until: "2026-10-14T10:00:05.000000001Z",
+    });
+    expect(page.startOfLogs).toBe(true);
+    expect(page.lines).toEqual([
+      { t: "2026-10-14T10:00:01.000000000Z", s: "o", m: "hi", task: "t1", slot: 1, node: "a" },
+    ]);
+  });
+
+  it("still reads a container's page from the container's route", async () => {
+    const m = stubPage();
+    await fetchLogPage({
+      envId: "e1",
+      containerId: "c1",
+      nodeId: "n1",
+      sid: SID,
+      until: "2026-10-14T10:00:05.000000001Z",
+    });
+    const url = requestUrl(m);
+    expect(url.pathname).toBe("/api/env/e1/containers/c1/logs");
+    expect(url.searchParams.get("nodeId")).toBe("n1");
+  });
+
+  it("throws when the server refuses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({}, { status: 503 })),
+    );
+    await expect(
+      fetchLogPage({
+        envId: "e1",
+        source: { kind: "service", id: "web" },
+        sid: SID,
+        until: "2026-10-14T10:00:05.000000001Z",
+      }),
+    ).rejects.toThrow();
   });
 });

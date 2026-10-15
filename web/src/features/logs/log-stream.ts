@@ -461,10 +461,11 @@ export interface LogPage {
   startOfLogs: boolean;
 }
 
-export interface LogPageOptions {
+export interface LogPageOptions extends StreamTarget {
   envId: string;
-  containerId: string;
-  nodeId?: string;
+  // The tasks, nodes and stopped switch a service's page is narrowed by; ignored for a
+  // container.
+  service?: ServiceLogFilter;
   sid: string;
   // Only lines written before this stamp.
   until: string;
@@ -474,10 +475,16 @@ export interface LogPageOptions {
 // fetchLogPage reads a page of earlier lines (GET .../logs), oldest first. It throws
 // when the server refuses or cannot be reached.
 export async function fetchLogPage(o: LogPageOptions): Promise<LogPage> {
+  const src = sourceOf(o);
   const res = await api.GET("/api/env/{envId}/containers/{containerId}/logs", {
     params: {
-      path: { envId: o.envId, containerId: o.containerId },
-      query: { sid: o.sid, until: o.until, tail: o.tail ?? 500, nodeId: o.nodeId },
+      path: { envId: o.envId, containerId: src.id },
+      query: {
+        sid: o.sid,
+        until: o.until,
+        tail: o.tail ?? 500,
+        nodeId: src.kind === "container" ? src.nodeId : undefined,
+      },
     },
   });
   if (!res.data) throw new Error(`Could not read earlier log lines (${res.response.status})`);

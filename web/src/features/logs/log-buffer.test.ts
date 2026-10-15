@@ -146,6 +146,21 @@ describe("LogBuffer", () => {
       expect(texts(b)).toEqual(["one", "other", "tick", "tick", "tick", "six"]);
     });
 
+    it("tells identical lines of two tasks at the oldest stamp apart, so the other task's line is kept", () => {
+      const b = new LogBuffer();
+      b.push([{ ...at(5, "ping"), task: "t1" }, at(6, "six")]);
+      // The page ends with the same text written by t2 at that stamp and the held line of t1.
+      const added = b.prepend([
+        at(1, "one"),
+        { ...at(5, "ping"), task: "t2" },
+        { ...at(5, "ping"), task: "t1" },
+      ]);
+      expect(added).toBe(2);
+      expect(
+        Array.from({ length: b.length }, (_, i) => `${b.at(i).task ?? ""}:${b.at(i).m}`),
+      ).toEqual([":one", "t2:ping", "t1:ping", ":six"]);
+    });
+
     it("adds nothing for a page that is only what is held", () => {
       const b = new LogBuffer();
       b.push([at(5, "tick")]);

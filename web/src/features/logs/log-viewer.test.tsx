@@ -1036,13 +1036,17 @@ describe("the pop-out", () => {
 
   it("builds the address of the pop-out with the settings carried", () => {
     const url = new URL(
-      popoutLogsUrl("e 1", "web/id", "n1", {
-        since: "1h",
-        q: "404",
-        ts: true,
-        utc: false,
-        wrap: true,
-      }),
+      popoutLogsUrl(
+        "e 1",
+        { kind: "container", id: "web/id", nodeId: "n1" },
+        {
+          since: "1h",
+          q: "404",
+          ts: true,
+          utc: false,
+          wrap: true,
+        },
+      ),
       "http://x",
     );
     expect(url.pathname).toBe("/popout/e%201/containers/web%2Fid/logs");
@@ -1056,7 +1060,7 @@ describe("the pop-out", () => {
   });
 
   it("leaves out what is not set", () => {
-    const url = new URL(popoutLogsUrl("e1", "c", undefined, {}), "http://x");
+    const url = new URL(popoutLogsUrl("e1", { kind: "container", id: "c" }, {}), "http://x");
     expect(url.search).toBe("");
   });
 
@@ -1360,13 +1364,128 @@ describe("a service's log", () => {
     expect(screen.getByRole("log").textContent).toContain("<img src=x onerror=alert(1)>");
   });
 
-  it("offers neither a download, a pop-out nor earlier lines, which the service stream does not serve yet", async () => {
+  it("offers a download, a pop-out and earlier lines, as a container's log does", async () => {
     renderService();
     await connectService();
     await send([svcLine(1, "t1", 1, "alpha")]);
-    expect(screen.queryByRole("button", { name: /Download/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Download…" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open in new window" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Load earlier lines" })).toBeTruthy();
+  });
+
+  it("asks the service's page route for earlier lines with the viewer, the filters and the stopped switch", async () => {
+    const fetchMock = vi.fn(
+      async (_req: Request) =>
+        new Response(
+          JSON.stringify({
+            lines: [svcLine(0, "t2", 2, "beta", "older")],
+            startOfLogs: false,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    renderService({
+      params: { task: "t1,t2", node: "alpha", stopped: true },
+      onParamsChange: vi.fn(),
+    });
+    await connectService();
+    await send([svcLine(5, "t1", 1, "alpha", "held")]);
+    fireEvent.click(screen.getByRole("button", { name: "Load earlier lines" }));
+    await act(async () => {});
+    const url = new URL((fetchMock.mock.calls[0] as [Request])[0].url);
+    expect(url.pathname).toBe("/api/env/e1/services/web/logs");
+    expect(url.searchParams.get("until")).toBe("2026-10-14T10:00:05.000000001Z");
+    expect(url.searchParams.get("tail")).toBe("500");
+    expect(url.searchParams.get("task")).toBe("t1,t2");
+    expect(url.searchParams.get("node")).toBe("alpha");
+    expect(url.searchParams.get("stopped")).toBe("true");
+    expect(url.searchParams.get("sid")).toBe(
+      new URL(source().url, "http://x").searchParams.get("sid"),
+    );
+    const rows = Array.from(screen.getByRole("log").querySelectorAll("[data-stream]"));
+    expect(rows.map((r) => r.textContent)).toEqual(["2beta older", "1alpha held"]);
+  });
+
+  it("opens the pop-out of the service with the range, the search, the toggles, the prefixes and the filters", async () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    renderService({
+      params: {
+        since: "5m",
+        q: "boom",
+        ts: true,
+        utc: false,
+        wrap: true,
+        prefix: false,
+        task: "t1",
+        node: "alpha",
+        stopped: true,
+      },
+      onParamsChange: vi.fn(),
+    });
+    await connectService();
+    fireEvent.click(screen.getByRole("button", { name: "Open in new window" }));
+    const url = new URL((open.mock.calls[0] as [string])[0], "http://x");
+    expect(url.pathname).toBe("/popout/e1/services/web/logs");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      since: "5m",
+      q: "boom",
+      ts: "true",
+      utc: "false",
+      wrap: "true",
+      prefix: "false",
+      task: "t1",
+      node: "alpha",
+      stopped: "true",
+    });
+    open.mockRestore();
+  });
+
+  it("does not offer another pop-out inside the pop-out of a service", async () => {
+    renderService({ popout: true });
+    await connectService();
     expect(screen.queryByRole("button", { name: "Open in new window" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Load earlier lines" })).toBeNull();
+  });
+
+  it("lets go of the stream of a pop-out hidden for a minute and picks it up from the last line", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const hide = (hidden: boolean) => {
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+      document.dispatchEvent(new Event("visibilitychange"));
+    };
+    try {
+      renderService({ popout: true });
+      await connectService();
+      await send([svcLine(1, "t1", 1, "alpha")]);
+      const first = source();
+      await act(async () => {
+        hide(true);
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(first.closed).toBe(true);
+      await act(async () => {
+        hide(false);
+      });
+      const again = FakeEventSource.instances[1] as FakeEventSource;
+      expect(new URL(again.url, "http://x").searchParams.get("after")).toBe(
+        "2026-10-14T10:00:01.000000000Z",
+      );
+    } finally {
+      Reflect.deleteProperty(document, "hidden");
+      vi.useRealTimers();
+    }
+  });
+
+  it("opens the download of the service in the toolbar, with the merge note and no timestamps choice", async () => {
+    renderService();
+    await connectService();
+    fireEvent.click(screen.getByRole("button", { name: "Download…" }));
+    expect(
+      screen.getByText(
+        "Lines from all of the service's tasks are merged in time order, each starting with its task name. Downloads come straight from Docker, so they aren't limited to what's loaded here. Times are in UTC.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: "Include timestamps" })).toBeNull();
   });
 
   it("does not mistake the end of the stream for a stopped container", async () => {
