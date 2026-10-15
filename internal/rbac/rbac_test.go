@@ -81,6 +81,8 @@ func TestRegistryPinsEveryPermissionsScopeMinRoleAndExtra(t *testing.T) {
 		"services.manage":        e(rbac.RoleAdmin),
 		"nodes.read":             e(rbac.RoleViewer),
 		"nodes.manage":           e(rbac.RoleAdmin),
+		"secrets.read":           e(rbac.RoleViewer),
+		"secrets.manage":         e(rbac.RoleAdmin),
 	}
 	for name, w := range want {
 		p, ok := m[name]

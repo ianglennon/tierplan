@@ -183,6 +183,11 @@ var phase6DetailKeys = map[string][]string{
 	// A node remove records the node's host name, the agent that was revoked with it (empty when no
 	// agent ran on the node) and the code (plan 06-17, RES-05).
 	audit.ActionNodeRemoved: {"hostname", "agent", "code"},
+	// A secret create records the name, how many labels it has, the size of the value in bytes, where
+	// the request came from (typed, file, rotate, apply or api) and the code; never the value. A
+	// remove records the name and the code (plan 06-22, RES-08).
+	audit.ActionSecretCreated: {"name", "labels", "size", "source", "code"},
+	audit.ActionSecretRemoved: {"name", "code"},
 }
 
 func TestEveryPhase6ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -216,6 +221,9 @@ func TestEveryPhase6ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		"node.role_changed":         audit.ActionNodeRoleChanged,
 		"node.labels_changed":       audit.ActionNodeLabelsChanged,
 		"node.removed":              audit.ActionNodeRemoved,
+
+		"secret.created": audit.ActionSecretCreated,
+		"secret.removed": audit.ActionSecretRemoved,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)

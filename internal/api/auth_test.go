@@ -294,6 +294,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
 			Audit: f.aud, Checker: checker, Log: log,
 		})
+		api.RegisterSecrets(r, api.SecretsDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Log: log})
 		api.RegisterNodes(r, api.NodesDeps{
 			Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, Agents: agentSvc, Live: f.liveAgents,
 			SelfContainerID: f.envSvc.SelfContainerID(), Log: log,
