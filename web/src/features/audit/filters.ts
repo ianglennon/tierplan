@@ -117,6 +117,7 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "service.rolled_back",
   "service.removed",
   "service.updated",
+  "service.created",
   "node.availability_changed",
   "node.role_changed",
   "node.labels_changed",

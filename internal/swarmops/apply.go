@@ -27,19 +27,25 @@ type ApplyInput struct {
 	Objects []StagedObject
 }
 
+// Outcome is what a write that may make objects and then sends a service (an apply, a create) did, as
+// far as it got.
+type Outcome struct {
+	Image    ImageInfo
+	Findings []compose.Finding
+	Warnings []string
+	// Steps are the steps of the write, in order, as far as it got. Cleanup is what removing the
+	// objects of a failed write did.
+	Steps   []ApplyStep
+	Cleanup CleanupReport
+}
+
 // ApplyResult is what an apply did. It is filled as far as the work got, also when Apply returns an
 // error, so the caller can audit the attempt.
 type ApplyResult struct {
 	ServiceID, Name string
 	// Changed is true when the spec differs from the service's current one.
-	Changed  bool
-	Image    ImageInfo
-	Findings []compose.Finding
-	Warnings []string
-	// Steps are the steps of the apply, in order, as far as it got. Cleanup is what removing the
-	// objects of a failed apply did.
-	Steps   []ApplyStep
-	Cleanup CleanupReport
+	Changed bool
+	Outcome
 }
 
 // scrubbedError is an error whose text has been scrubbed of the values of a spec the caller may not
@@ -78,52 +84,70 @@ func Apply(ctx context.Context, deps Deps, in ApplyInput) (ApplyResult, error) {
 	if !p.changed {
 		return res, ErrNothingToApply
 	}
-	res.Steps = plannedSteps(p)
+	err = p.commit(ctx, deps, c, &res.Outcome, false, func(raw []byte, auth string) ([]string, error) {
+		return in.Client.ServiceUpdate(ctx, p.detail.ID, in.Version, raw, auth)
+	})
+	return res, err
+}
+
+// commit is the part of a write that an apply and a create share, from the image on. In order it:
+// resolves the digest of a changed tag and sends nothing unpinned; runs the host-escalation policy on
+// the exact spec it will send (*RefusedError); refuses a network, secret or config that does not exist
+// and was not staged (*MissingError) and a caller who may not create the kinds the staged ones are
+// (*ObjectPermissionError), all before anything is written; creates the staged objects in dependency
+// order (networks, secrets, configs), fills their IDs into the spec and judges it again; and calls
+// send once with the bytes and the credential, never retried. When anything after the first creation
+// fails, every object this write made is removed again in reverse order and out says which were and
+// which could not be. A refusal by Docker is a *RejectedError. No error and no warning carries a value
+// the caller may not see. out is filled as far as the work got. creating names the service step's
+// failure create_failed rather than update_failed.
+func (p *prepared) commit(ctx context.Context, deps Deps, c common, out *Outcome, creating bool, send func(raw []byte, auth string) ([]string, error)) error {
+	out.Steps = plannedSteps(p)
 	info, auth, unresolved, err := p.pinImage(ctx, deps, c)
-	res.Image = info
+	out.Image = info
 	if info.Pinned {
-		res.Steps[0].State = StepDone
+		out.Steps[0].State = StepDone
 	}
 	if err != nil {
-		return res, err
+		return err
 	}
 	if unresolved != nil {
-		res.Steps[0].State, res.Steps[0].Code = StepFailed, stepCode(unresolved)
-		return res, unresolved
+		out.Steps[0].State, out.Steps[0].Code = StepFailed, stepCode(unresolved)
+		return unresolved
 	}
 	dec, raw, err := p.judge(ctx, deps, c)
-	res.Findings = dec.Findings
+	out.Findings = dec.Findings
 	if err != nil {
-		return res, err
+		return err
 	}
 	if !dec.Allowed {
-		return res, &RefusedError{Reason: dec.Reason, Message: dec.Message, Findings: dec.Findings}
+		return &RefusedError{Reason: dec.Reason, Message: dec.Message, Findings: dec.Findings}
 	}
 	if p.plan.missing.any() {
-		return res, &MissingError{Missing: p.plan.missing}
+		return &MissingError{Missing: p.plan.missing}
 	}
 	if denied := deps.refusedKinds(p.plan.create); len(denied) > 0 {
-		return res, &ObjectPermissionError{Kinds: denied}
+		return &ObjectPermissionError{Kinds: denied}
 	}
 	scrub := func(s string) string {
-		if in.Caller.Reveal {
+		if c.caller.Reveal {
 			return s
 		}
 		return redact.ScrubServiceText(s, p.merged)
 	}
 
 	var created []CreatedObject
-	// fail ends the apply with err: whatever this apply made is removed again.
-	fail := func(err error) (ApplyResult, error) {
+	// fail ends the write with err: whatever this write made is removed again.
+	fail := func(err error) error {
 		if len(created) > 0 {
-			res.Cleanup = cleanupObjects(ctx, in.Client, created, deps.Record)
+			out.Cleanup = cleanupObjects(ctx, c.client, created, deps.Record)
 		}
-		return res, err
+		return err
 	}
 	if len(p.plan.create) > 0 {
 		var cerr error
-		created, cerr = createObjects(ctx, in.Client, p.plan.create, deps.Record)
-		res.Steps = res.markObjects(created, cerr)
+		created, cerr = createObjects(ctx, c.client, p.plan.create, deps.Record)
+		out.Steps = out.markObjects(created, cerr)
 		if cerr != nil {
 			return fail(cerr)
 		}
@@ -132,24 +156,28 @@ func Apply(ctx context.Context, deps Deps, in ApplyInput) (ApplyResult, error) {
 		}
 	}
 
-	warnings, err := in.Client.ServiceUpdate(ctx, p.detail.ID, in.Version, raw, auth)
+	warnings, err := send(raw, auth)
+	last := len(out.Steps) - 1
 	if err != nil {
 		var rej *dockerx.SpecRejectedError
 		switch {
 		case errors.As(err, &rej):
 			err = &RejectedError{Message: scrub(rej.Message)}
-		case !in.Caller.Reveal:
+		case !c.caller.Reveal:
 			err = &scrubbedError{err: err, msg: scrub(err.Error())}
 		}
-		res.Steps[len(res.Steps)-1].State, res.Steps[len(res.Steps)-1].Code = StepFailed, stepCode(err)
+		out.Steps[last].State, out.Steps[last].Code = StepFailed, stepCode(err)
+		if creating && out.Steps[last].Code == codeUpdateFailed {
+			out.Steps[last].Code = codeCreateFailed
+		}
 		return fail(err)
 	}
-	res.Steps[len(res.Steps)-1].State = StepDone
-	res.Warnings = make([]string, len(warnings))
+	out.Steps[last].State = StepDone
+	out.Warnings = make([]string, len(warnings))
 	for i, w := range warnings {
-		res.Warnings[i] = scrub(w)
+		out.Warnings[i] = scrub(w)
 	}
-	return res, nil
+	return nil
 }
 
 // refusedKinds lists, in creation order, the kinds of the objects to create that the caller may not
@@ -176,7 +204,7 @@ func plannedSteps(p *prepared) []ApplyStep {
 
 // markObjects marks the object steps: those made are done, the one that failed (err) is failed with
 // its code, the rest stay skipped.
-func (r ApplyResult) markObjects(made []CreatedObject, err error) []ApplyStep {
+func (r Outcome) markObjects(made []CreatedObject, err error) []ApplyStep {
 	steps := slices.Clone(r.Steps)
 	n := 0
 	for i := range steps {

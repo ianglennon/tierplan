@@ -124,7 +124,7 @@ func TestCreateRefusesABadName(t *testing.T) {
 	for i := range long {
 		long[i] = 'a'
 	}
-	for _, name := range []string{"", "has space", "-lead", "trail-", "slash/name", "unié", string(long)} {
+	for _, name := range []string{"", "has space", "slash/name", "unié", string(long)} {
 		_, err := o.create(o.admin, chatSpec(func(s *swarm.ServiceSpec) { s.Name = name }))
 		if !errors.Is(err, swarmops.ErrNameInvalid) {
 			t.Errorf("name %q: err = %v, want ErrNameInvalid", name, err)

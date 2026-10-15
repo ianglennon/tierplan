@@ -26,6 +26,9 @@ var (
 	// read and the moment the update arrived: the daemon refused the version as out of
 	// sequence (RESEARCH E8). The write did not happen and is never retried.
 	ErrServiceChanged = errors.New("dockerx: the service was changed by someone else")
+	// ErrServiceNameTaken means the swarm already has a service of that name: a create was refused
+	// as a name conflict (RESEARCH E16). Nothing was made.
+	ErrServiceNameTaken = errors.New("dockerx: a service of that name already exists")
 	// ErrServiceNotFound means the manager knows no such service.
 	ErrServiceNotFound = errors.New("dockerx: no such service")
 	// ErrNotScalable means the service is not in replicated mode: a global service runs one
@@ -428,17 +431,9 @@ func (e *SpecRejectedError) Error() string { return "service spec rejected: " + 
 // a service that went away ErrServiceNotFound, and a spec the manager refuses a
 // *SpecRejectedError. The write is never retried: whoever asked for it asks again (P2 D-42).
 func (c *Client) ServiceUpdate(ctx context.Context, id string, version uint64, spec json.RawMessage, encodedAuth string) ([]string, error) {
-	var s swarm.ServiceSpec
-	dec := json.NewDecoder(bytes.NewReader(spec))
-	dec.DisallowUnknownFields()
-	err := dec.Decode(&s)
-	if err == nil {
-		if _, more := dec.Token(); !errors.Is(more, io.EOF) {
-			err = errors.New("unexpected data after the spec")
-		}
-	}
+	s, err := decodeServiceSpec(spec)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrServiceSpecInvalid, err)
+		return nil, err
 	}
 	res, err := c.cur().ServiceUpdate(ctx, id, client.ServiceUpdateOptions{
 		Version:             swarm.Version{Index: version},
@@ -453,6 +448,53 @@ func (c *Client) ServiceUpdate(ctx context.Context, id string, version uint64, s
 		return nil, c.serviceWriteError("update", err)
 	}
 	return slices.Clone(res.Warnings), nil
+}
+
+// ServiceCreate creates one service from a full service spec, with encodedAuth (a base64url
+// X-Registry-Auth value, empty for none), once, with QueryRegistry off: the caller has already pinned
+// the image, so a registry that cannot be reached is never a silent warning here (RESEARCH E23).
+// spec is decoded strictly, so an unknown field or trailing data is ErrServiceSpecInvalid and
+// nothing is sent; what is sent is the decoded spec re-encoded. It returns the new service's ID and
+// the manager's warnings. A name the swarm has is ErrServiceNameTaken and a spec the manager refuses a
+// *SpecRejectedError. The write is never retried: whoever asked for it asks again (P2 D-42).
+func (c *Client) ServiceCreate(ctx context.Context, spec json.RawMessage, encodedAuth string) (string, []string, error) {
+	s, err := decodeServiceSpec(spec)
+	if err != nil {
+		return "", nil, err
+	}
+	res, err := c.cur().ServiceCreate(ctx, client.ServiceCreateOptions{
+		Spec:                s,
+		EncodedRegistryAuth: encodedAuth,
+		QueryRegistry:       false,
+	})
+	if err != nil {
+		switch {
+		case cerrdefs.IsConflict(err) || cerrdefs.IsAlreadyExists(err) || strings.Contains(err.Error(), alreadyExistsText):
+			return "", nil, fmt.Errorf("create service on %s: %w", c.t.Describe(), ErrServiceNameTaken)
+		case cerrdefs.IsInvalidArgument(err):
+			return "", nil, fmt.Errorf("create service on %s: %w", c.t.Describe(), &SpecRejectedError{Message: err.Error()})
+		}
+		return "", nil, c.serviceWriteError("create", err)
+	}
+	return res.ID, slices.Clone(res.Warnings), nil
+}
+
+// decodeServiceSpec decodes raw strictly into a service spec: an unknown field, a wrong type or
+// data after the object is ErrServiceSpecInvalid.
+func decodeServiceSpec(raw json.RawMessage) (swarm.ServiceSpec, error) {
+	var s swarm.ServiceSpec
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	err := dec.Decode(&s)
+	if err == nil {
+		if _, more := dec.Token(); !errors.Is(more, io.EOF) {
+			err = errors.New("unexpected data after the spec")
+		}
+	}
+	if err != nil {
+		return swarm.ServiceSpec{}, fmt.Errorf("%w: %w", ErrServiceSpecInvalid, err)
+	}
+	return s, nil
 }
 
 // Networks lists every network of the engine this client talks to, the local ones too (host,

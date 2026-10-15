@@ -1477,7 +1477,31 @@ export interface paths {
          */
         get: operations["listServices"];
         put?: never;
-        post?: never;
+        /**
+         * Create a service
+         * @description Creates one standalone service from a full spec, once and never retried; the tasks start in the swarm, so the answer is 201. The spec is decoded strictly, the host-escalation policy runs on the whole of it, the image is required and resolved to its digest (a failed lookup is 422 image_unresolved and nothing is created), and one create is sent with the registry credential and without the engine's own registry lookup. The networks, secrets and configs in objects are created first, networks then secrets then configs, their IDs are written into the spec's references, and then the service is created; each is audited as network.created, secret.created or config.created with source service_apply, never with a value. If the service cannot be created, every object this request made is removed again in reverse order (audited with source service_apply_cleanup); the problem's detail says so and its errors carry the reason on its own (location reason) and the objects as removed and notRemoved, each as kind:name. Also 422 objects_missing for a network, secret or config the spec names that does not exist and was not sent in objects, 422 spec_rejected, with Docker's words, for a spec Docker refuses, 422 too_many_objects for more than 16 objects, 422 object_duplicate for the same kind and name twice, the name, value, labels, templating and subnet problems of the secrets, configs and networks routes for a bad object, 409 name_taken when an object's name exists already, and 403 object_permission, before anything is created, for a caller without networks.manage, secrets.manage or configs.manage for a kind it would create. Problems, all before anything is created: 409 service_name_taken for a name a service has; 422 image_required for no image; 422 name_invalid for a name that is not 1 to 63 letters, numbers, dot, dash or underscore; 422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec; 422 placeholder_unmatched for a <hidden> in the spec; 422 stack_label_reserved for a com.docker.stack. label; 422 image_unresolved when the tag cannot be resolved to a digest (a new service is never created unpinned); 409 not_a_swarm for a standalone host; 403 privileged_service, with each finding in errors, when the caller is below env Admin and the spec asks for host access. No answer, error or audit row carries a value of the environment, the command line, the health check or the log options for a caller without secrets.reveal, or the value of a staged secret or config. Needs services.manage (Env Admin) on the environment. Every attempt is audited as service.created, with result failure and the code when it was refused.
+         */
+        post: operations["createService"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/services/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Review a new service
+         * @description Judges the full spec of a service that does not exist yet and answers what a create would do, without changing Docker. The image is required and is resolved to its digest through the manager with the stored registry credential (a failed lookup is imageError, and the spec stays unpinned), and the host-escalation policy runs on the decoded spec a create would forward. The answer is the normalised spec (masked for a caller without secrets.reveal), the image, the findings, whether the caller may have them (allowed) and the networks, secrets and configs the spec names that do not exist (missing). version is 0 and changed is true. Problems, all before anything is created: 409 service_name_taken for a name a service has; 422 image_required for no image; 422 name_invalid for a name that is not 1 to 63 letters, numbers, dot, dash or underscore; 422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec; 422 placeholder_unmatched for a <hidden> in the spec; 422 stack_label_reserved for a com.docker.stack. label; 422 image_unresolved when the tag cannot be resolved to a digest (a new service is never created unpinned); 409 not_a_swarm for a standalone host; 403 privileged_service, with each finding in errors, when the caller is below env Admin and the spec asks for host access. Needs services.manage (Env Admin) on the environment. A review is not audited.
+         */
+        post: operations["reviewServiceCreate"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6655,6 +6679,38 @@ export interface components {
             /** @description The objects made by the apply that were removed again, in the order they were removed. Empty after a successful apply */
             removed: components["schemas"]["ServiceObjectBody"][] | null;
         };
+        ServiceCreateBody: {
+            /** @description Empty after a successful create. A failed create answers a problem whose errors carry the same lists */
+            cleanup: components["schemas"]["ServiceCleanupBody"];
+            /** @description The digest the image is pinned to; empty when it names none */
+            digest: string;
+            /** @description The ID the swarm gave the new service */
+            id: string;
+            /** @description The image the service was created with: tag@sha256:digest when the tag was resolved */
+            image: string;
+            /** @description The service's name */
+            name: string;
+            /** @description True when Bayplan resolved the tag and wrote the digest into the spec */
+            pinned: boolean;
+            /** @description The steps of the create in order: the image, each object created, the service */
+            steps: components["schemas"]["ServiceApplyStepBody"][] | null;
+            /** @description The manager's warnings about the creation, scrubbed of masked values; empty when there are none */
+            warnings: string[] | null;
+        };
+        ServiceCreateRequest: {
+            /** @description The networks, secrets and configs the spec names by name that do not exist yet, with the values to make them from, exactly as for an apply. At most 16 (else 422 too_many_objects). Each is created before the service, and every one is removed again if the service cannot be created */
+            objects?: components["schemas"]["ServiceStagedObject"][] | null;
+            /** @description The full service spec to create, as Docker states it (Name, Labels, TaskTemplate, Mode, ...), decoded strictly: an unknown field is 422 spec_invalid. A <hidden> placeholder stands for nothing in a new service and is 422 placeholder_unmatched */
+            spec: {
+                [key: string]: unknown;
+            };
+        };
+        ServiceCreateReviewRequest: {
+            /** @description The full service spec to create, as Docker states it (Name, Labels, TaskTemplate, Mode, ...), decoded strictly: an unknown field is 422 spec_invalid. A <hidden> placeholder stands for nothing in a new service and is 422 placeholder_unmatched */
+            spec: {
+                [key: string]: unknown;
+            };
+        };
         ServiceDetailBody: {
             /** @description True for a Bayplan agent service */
             agent: boolean;
@@ -11172,6 +11228,80 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ServiceListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceCreateBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    reviewServiceCreate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceCreateReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceReviewBody"];
                 };
             };
             /** @description Error */

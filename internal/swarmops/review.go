@@ -54,6 +54,12 @@ func Review(ctx context.Context, deps Deps, in ReviewInput) (ReviewResult, error
 	if err != nil {
 		return ReviewResult{}, err
 	}
+	return p.review(ctx, deps, c, in.HostPolicy)
+}
+
+// review resolves the image, runs the policy and answers what an apply or a create would do, without
+// changing anything.
+func (p *prepared) review(ctx context.Context, deps Deps, c common, hp HostPolicy) (ReviewResult, error) {
 	info, _, unresolved, err := p.pinImage(ctx, deps, c)
 	if err != nil {
 		return ReviewResult{}, err
@@ -62,11 +68,11 @@ func Review(ctx context.Context, deps Deps, in ReviewInput) (ReviewResult, error
 	if err != nil {
 		return ReviewResult{}, err
 	}
-	shown, _ := redact.MaskServiceSpec(p.merged, in.Caller.Reveal)
+	shown, _ := redact.MaskServiceSpec(p.merged, c.caller.Reveal)
 	res := ReviewResult{
 		Spec: shown, Version: p.detail.Version, Changed: p.changed, Image: info,
 		Findings: dec.Findings, Allowed: dec.Allowed, Reason: dec.Reason, Refusal: dec.Message,
-		Missing: missingObjects(p.merged, p.have), HostPolicy: in.HostPolicy, Warnings: []string{},
+		Missing: missingObjects(p.merged, p.have), HostPolicy: hp, Warnings: []string{},
 	}
 	if res.Findings == nil {
 		res.Findings = []compose.Finding{}

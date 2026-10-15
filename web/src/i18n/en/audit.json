@@ -209,7 +209,8 @@
         "force_updated": "Service force-updated",
         "rolled_back": "Service rolled back",
         "removed": "Service removed",
-        "updated": "Service updated"
+        "updated": "Service updated",
+        "created": "Service created"
       },
       "node": {
         "availability_changed": "Node availability changed",

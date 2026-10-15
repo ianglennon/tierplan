@@ -163,6 +163,7 @@ const (
 	ActionServiceRolledBack          = "service.rolled_back"
 	ActionServiceRemoved             = "service.removed"
 	ActionServiceUpdated             = "service.updated"
+	ActionServiceCreated             = "service.created"
 	ActionNodeAvailabilityChanged    = "node.availability_changed"
 	ActionNodeRoleChanged            = "node.role_changed"
 	ActionNodeLabelsChanged          = "node.labels_changed"

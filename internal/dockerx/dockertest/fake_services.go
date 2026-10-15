@@ -5,6 +5,7 @@ package dockertest
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -16,6 +17,7 @@ import (
 
 var _ = registerFakeHandler((*Fake).serveServiceInspect)
 var _ = registerFakeHandler((*Fake).serveServiceUpdate)
+var _ = registerFakeHandler((*Fake).serveServiceCreate)
 var _ = registerFakeHandler((*Fake).serveServiceRemove)
 
 // FakeServiceUpdate is one update the fake daemon accepted: the service it was for, the
@@ -26,6 +28,14 @@ type FakeServiceUpdate struct {
 	Query     url.Values
 	Auth      string
 	Spec      swarm.ServiceSpec
+}
+
+// FakeServiceCreate is one service create the fake daemon accepted: the query and the
+// X-Registry-Auth header it came with and the spec it carried.
+type FakeServiceCreate struct {
+	Query url.Values
+	Auth  string
+	Spec  swarm.ServiceSpec
 }
 
 // fakeServiceState is what accepted updates left a service with: its version, its spec, the
@@ -322,4 +332,86 @@ func (f *Fake) serveServiceRemove(w http.ResponseWriter, r *http.Request, p stri
 	f.mu.Unlock()
 	w.WriteHeader(http.StatusOK)
 	return true
+}
+
+// withCreatedServices returns c with the services created through the daemon listed after its own.
+// The slice is copied, so the Fake's own configuration is not touched.
+func (c FakeConfig) withCreatedServices(created []FakeService) FakeConfig {
+	if len(created) == 0 {
+		return c
+	}
+	c.ServiceRows = append(slices.Clone(c.ServiceRows), created...)
+	return c
+}
+
+// serveServiceCreate answers POST /services/create. It refuses a name a service already has with
+// the 409 a real manager gives (RESEARCH E16) and the configured ServiceCreateError with a 400. An
+// accepted create joins the lists at version 1 and is kept for ServiceCreates. The write is recorded
+// whatever the answer.
+func (f *Fake) serveServiceCreate(w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) bool {
+	if r.Method != http.MethodPost || p != "/services/create" {
+		return false
+	}
+	f.recordWrite(r)
+	defer f.beginWrite(cfg.WriteDelay)()
+	cfg = f.config()
+	if cfg.DropWrites && dropConnection(w) {
+		return true
+	}
+	if cfg.PolicyDeny {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "agent_policy_denied: " + r.Method + " " + r.URL.Path})
+		return true
+	}
+	if cfg.WriteError != "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": cfg.WriteError})
+		return true
+	}
+	if clusterRefused(w, cfg) {
+		return true
+	}
+	var spec swarm.ServiceSpec
+	if err := json.NewDecoder(r.Body).Decode(&spec); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid request body: " + err.Error()})
+		return true
+	}
+	for _, fs := range cfg.ServiceRows {
+		if fs.Name == spec.Name {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"message": "rpc error: code = AlreadyExists desc = name conflicts with an existing object: service " + spec.Name + " already exists"})
+			return true
+		}
+	}
+	if cfg.ServiceCreateError != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": cfg.ServiceCreateError})
+		return true
+	}
+	row := FakeService{Name: spec.Name, Version: 1, Spec: &spec}
+	switch {
+	case spec.Mode.Global != nil:
+		row.Mode = "global"
+	case spec.Mode.ReplicatedJob != nil:
+		row.Mode = "replicated-job"
+	case spec.Mode.GlobalJob != nil:
+		row.Mode = "global-job"
+	default:
+		row.Mode = "replicated"
+		if rep := spec.Mode.Replicated; rep != nil && rep.Replicas != nil {
+			row.Desired, row.Running = *rep.Replicas, *rep.Replicas
+		}
+	}
+	q := r.URL.Query()
+	f.mu.Lock()
+	row.ID = fmt.Sprintf("svcnew%02d", len(f.svcCreated)+1)
+	f.svcCreated = append(f.svcCreated, row)
+	f.svcCreates = append(f.svcCreates, FakeServiceCreate{Query: q, Auth: r.Header.Get("X-Registry-Auth"), Spec: spec})
+	f.mu.Unlock()
+	writeJSON(w, http.StatusCreated, swarm.ServiceCreateResponse{ID: row.ID, Warnings: cfg.ServiceCreateWarnings})
+	return true
+}
+
+// ServiceCreates returns every service create the daemon accepted, in order.
+func (f *Fake) ServiceCreates() []FakeServiceCreate {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.svcCreates)
 }

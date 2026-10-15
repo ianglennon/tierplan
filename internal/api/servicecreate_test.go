@@ -125,7 +125,7 @@ func TestCreateServiceWithStagedObjectsMakesThemFirstAndNeverEchoesTheirValues(t
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	rec := admin.create(chatBody(t, func(spec map[string]any) {
 		refsStaged(spec)
-		spec["TaskTemplate"].(map[string]any)["ContainerSpec"].(map[string]any)["Image"] = chatImageRef
+		containerSpecOf(spec)["Image"] = chatImageRef
 	}, stagedObjects()))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body)
@@ -167,12 +167,12 @@ func TestCreateServiceRefusals(t *testing.T) {
 		detail string
 	}{
 		"no image": {func(s map[string]any) {
-			s["TaskTemplate"].(map[string]any)["ContainerSpec"].(map[string]any)["Image"] = ""
+			containerSpecOf(s)["Image"] = ""
 		}, 422, "image_required", "Enter an image like nginx:1.27 or ghcr.io/acme/app:latest."},
 		"bad name":   {func(s map[string]any) { s["Name"] = "has space" }, 422, "name_invalid", "Use letters, numbers, dot, dash or underscore"},
 		"name taken": {func(s map[string]any) { s["Name"] = "api" }, 409, "service_name_taken", "A service named api already exists."},
 		"placeholder": {func(s map[string]any) {
-			s["TaskTemplate"].(map[string]any)["ContainerSpec"].(map[string]any)["Env"] = []any{"DB=<hidden>"}
+			containerSpecOf(s)["Env"] = []any{"DB=<hidden>"}
 		}, 422, "placeholder_unmatched", ""},
 		"stack label":   {func(s map[string]any) { s["Labels"] = map[string]any{"com.docker.stack.namespace": "shop"} }, 422, "stack_label_reserved", ""},
 		"unknown field": {func(s map[string]any) { s["Bogus"] = 1 }, 422, "spec_invalid", ""},

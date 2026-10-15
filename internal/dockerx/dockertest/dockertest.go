@@ -166,6 +166,11 @@ type FakeConfig struct {
 	// ServiceRows are the services /services lists, in place of the Services count.
 	// With ?status=true each carries its ServiceStatus.
 	ServiceRows []FakeService
+	// ServiceCreateError, when set, makes the creation of a service answer 400 with this text, as a
+	// manager does for a spec it cannot accept; ServiceCreateWarnings are the warnings an accepted
+	// creation answers with (fake_services.go).
+	ServiceCreateError    string
+	ServiceCreateWarnings []string
 	// AgentTasks are the tasks /tasks lists. A task is listed when the request's
 	// service filter names its service, by ID or by name, as a real daemon matches.
 	AgentTasks []FakeAgentTask
@@ -528,6 +533,10 @@ type Fake struct {
 	// svcUpdates the updates themselves (fake_services.go).
 	svcState   map[string]fakeServiceState
 	svcUpdates []FakeServiceUpdate
+	// svcCreated are the services created through the fake, listed after the configured ones, and
+	// svcCreates the creates themselves (fake_services.go).
+	svcCreated []FakeService
+	svcCreates []FakeServiceCreate
 	// nodeState is what the updates the fake accepted left each node with, by ID, and
 	// nodeUpdates the updates themselves (fake_nodes.go).
 	nodeState   map[string]fakeNodeState
@@ -673,7 +682,7 @@ func (f *Fake) Reconfigure(cfg FakeConfig) {
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withServices(f.svcState).withoutServices(f.svcGone).withNodes(f.nodeState).withoutNodes(f.nodeGone).withSecrets(f.secrets).withoutSecrets(f.secretGone).withConfigs(f.configs).withoutConfigs(f.configGone)
+	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withCreatedServices(f.svcCreated).withServices(f.svcState).withoutServices(f.svcGone).withNodes(f.nodeState).withoutNodes(f.nodeGone).withSecrets(f.secrets).withoutSecrets(f.secretGone).withConfigs(f.configs).withoutConfigs(f.configGone)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {

@@ -230,6 +230,7 @@ func RegisterServices(r *httpx.Router, d ServicesDeps) {
 	registerServiceRollout(r, d)
 	registerServiceActions(r, d)
 	registerServiceEdit(r, d)
+	registerServiceCreate(r, d)
 }
 
 // requireSwarm answers 409 not_a_swarm for an environment that is a standalone host.

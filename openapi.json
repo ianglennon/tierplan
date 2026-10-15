@@ -8669,6 +8669,104 @@
         ],
         "type": "object"
       },
+      "ServiceCreateBody": {
+        "additionalProperties": false,
+        "properties": {
+          "cleanup": {
+            "$ref": "#/components/schemas/ServiceCleanupBody",
+            "description": "Empty after a successful create. A failed create answers a problem whose errors carry the same lists"
+          },
+          "digest": {
+            "description": "The digest the image is pinned to; empty when it names none",
+            "type": "string"
+          },
+          "id": {
+            "description": "The ID the swarm gave the new service",
+            "type": "string"
+          },
+          "image": {
+            "description": "The image the service was created with: tag@sha256:digest when the tag was resolved",
+            "type": "string"
+          },
+          "name": {
+            "description": "The service's name",
+            "type": "string"
+          },
+          "pinned": {
+            "description": "True when Bayplan resolved the tag and wrote the digest into the spec",
+            "type": "boolean"
+          },
+          "steps": {
+            "description": "The steps of the create in order: the image, each object created, the service",
+            "items": {
+              "$ref": "#/components/schemas/ServiceApplyStepBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "warnings": {
+            "description": "The manager's warnings about the creation, scrubbed of masked values; empty when there are none",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "image",
+          "digest",
+          "pinned",
+          "warnings",
+          "steps",
+          "cleanup"
+        ],
+        "type": "object"
+      },
+      "ServiceCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "objects": {
+            "description": "The networks, secrets and configs the spec names by name that do not exist yet, with the values to make them from, exactly as for an apply. At most 16 (else 422 too_many_objects). Each is created before the service, and every one is removed again if the service cannot be created",
+            "items": {
+              "$ref": "#/components/schemas/ServiceStagedObject"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "spec": {
+            "additionalProperties": true,
+            "description": "The full service spec to create, as Docker states it (Name, Labels, TaskTemplate, Mode, ...), decoded strictly: an unknown field is 422 spec_invalid. A \u003chidden\u003e placeholder stands for nothing in a new service and is 422 placeholder_unmatched",
+            "type": "object"
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "type": "object"
+      },
+      "ServiceCreateReviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "spec": {
+            "additionalProperties": true,
+            "description": "The full service spec to create, as Docker states it (Name, Labels, TaskTemplate, Mode, ...), decoded strictly: an unknown field is 422 spec_invalid. A \u003chidden\u003e placeholder stands for nothing in a new service and is 422 placeholder_unmatched",
+            "type": "object"
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "type": "object"
+      },
       "ServiceDetailBody": {
         "additionalProperties": false,
         "properties": {
@@ -17509,6 +17607,126 @@
           }
         },
         "summary": "List the swarm services of an environment",
+        "tags": [
+          "environments"
+        ]
+      },
+      "post": {
+        "description": "Creates one standalone service from a full spec, once and never retried; the tasks start in the swarm, so the answer is 201. The spec is decoded strictly, the host-escalation policy runs on the whole of it, the image is required and resolved to its digest (a failed lookup is 422 image_unresolved and nothing is created), and one create is sent with the registry credential and without the engine's own registry lookup. The networks, secrets and configs in objects are created first, networks then secrets then configs, their IDs are written into the spec's references, and then the service is created; each is audited as network.created, secret.created or config.created with source service_apply, never with a value. If the service cannot be created, every object this request made is removed again in reverse order (audited with source service_apply_cleanup); the problem's detail says so and its errors carry the reason on its own (location reason) and the objects as removed and notRemoved, each as kind:name. Also 422 objects_missing for a network, secret or config the spec names that does not exist and was not sent in objects, 422 spec_rejected, with Docker's words, for a spec Docker refuses, 422 too_many_objects for more than 16 objects, 422 object_duplicate for the same kind and name twice, the name, value, labels, templating and subnet problems of the secrets, configs and networks routes for a bad object, 409 name_taken when an object's name exists already, and 403 object_permission, before anything is created, for a caller without networks.manage, secrets.manage or configs.manage for a kind it would create. Problems, all before anything is created: 409 service_name_taken for a name a service has; 422 image_required for no image; 422 name_invalid for a name that is not 1 to 63 letters, numbers, dot, dash or underscore; 422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec; 422 placeholder_unmatched for a \u003chidden\u003e in the spec; 422 stack_label_reserved for a com.docker.stack. label; 422 image_unresolved when the tag cannot be resolved to a digest (a new service is never created unpinned); 409 not_a_swarm for a standalone host; 403 privileged_service, with each finding in errors, when the caller is below env Admin and the spec asks for host access. No answer, error or audit row carries a value of the environment, the command line, the health check or the log options for a caller without secrets.reveal, or the value of a staged secret or config. Needs services.manage (Env Admin) on the environment. Every attempt is audited as service.created, with result failure and the code when it was refused.",
+        "operationId": "createService",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceCreateBody"
+                }
+              }
+            },
+            "description": "Created",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Create a service",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/services/review": {
+      "post": {
+        "description": "Judges the full spec of a service that does not exist yet and answers what a create would do, without changing Docker. The image is required and is resolved to its digest through the manager with the stored registry credential (a failed lookup is imageError, and the spec stays unpinned), and the host-escalation policy runs on the decoded spec a create would forward. The answer is the normalised spec (masked for a caller without secrets.reveal), the image, the findings, whether the caller may have them (allowed) and the networks, secrets and configs the spec names that do not exist (missing). version is 0 and changed is true. Problems, all before anything is created: 409 service_name_taken for a name a service has; 422 image_required for no image; 422 name_invalid for a name that is not 1 to 63 letters, numbers, dot, dash or underscore; 422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec; 422 placeholder_unmatched for a \u003chidden\u003e in the spec; 422 stack_label_reserved for a com.docker.stack. label; 422 image_unresolved when the tag cannot be resolved to a digest (a new service is never created unpinned); 409 not_a_swarm for a standalone host; 403 privileged_service, with each finding in errors, when the caller is below env Admin and the spec asks for host access. Needs services.manage (Env Admin) on the environment. A review is not audited.",
+        "operationId": "reviewServiceCreate",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceCreateReviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceReviewBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Review a new service",
         "tags": [
           "environments"
         ]

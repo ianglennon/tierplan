@@ -210,6 +210,8 @@ const (
 	problemTooManyObjects      = "too_many_objects"
 	problemObjectPermission    = "object_permission"
 	problemObjectDuplicate     = "object_duplicate"
+	problemImageRequired       = "image_required"
+	problemServiceNameTaken    = "service_name_taken"
 )
 
 // registerServiceEdit mounts the review and apply routes.
@@ -301,6 +303,11 @@ func reviewServiceUpdate(ctx context.Context, d ServicesDeps, p *rbac.Principal,
 		_, problem := serviceEditProblem(d, envID, err)
 		return ServiceReviewBody{}, problem
 	}
+	return reviewBody(d, envID, res)
+}
+
+// reviewBody is the answer of a review of an edit or of a create.
+func reviewBody(d ServicesDeps, envID string, res swarmops.ReviewResult) (ServiceReviewBody, error) {
 	raw, err := json.Marshal(res.Spec)
 	if err != nil {
 		d.Log.Error("encoding a reviewed spec failed", "environment", envID, "error", err)
@@ -461,7 +468,7 @@ func applyServiceUpdate(ctx context.Context, d ServicesDeps, p *rbac.Principal, 
 		if code != codeServiceNotFound {
 			auditServiceAction(ctx, d, p, envID, in.UserAgent, audit.ActionServiceUpdated, res.ServiceID, in.ServiceID, details(code), code)
 		}
-		return ServiceApplyBody{}, withCleanup(problem, res.Name, res.Cleanup)
+		return ServiceApplyBody{}, withCleanup(problem, "update", res.Name, res.Cleanup)
 	}
 	refreshClusters(ctx, d, envID)
 	auditServiceAction(ctx, d, p, envID, in.UserAgent, audit.ActionServiceUpdated, res.ServiceID, in.ServiceID, details(actionDone), actionDone)
@@ -490,7 +497,7 @@ func objectBodies(objects []swarmops.CreatedObject) []ServiceObjectBody {
 // withCleanup adds what the cleanup of a failed apply did to its problem: the sentence that says
 // the objects made for the change were removed, or names what could not be, and, in the problem's
 // errors, the reason on its own and the lists as kind:name. A problem is left as it is when the apply made nothing.
-func withCleanup(problem error, service string, rep swarmops.CleanupReport) error {
+func withCleanup(problem error, verb, service string, rep swarmops.CleanupReport) error {
 	m, ok := problem.(*huma.ErrorModel)
 	n := len(rep.Removed) + len(rep.NotRemoved)
 	if !ok || n == 0 {
@@ -505,7 +512,7 @@ func withCleanup(problem error, service string, rep swarmops.CleanupReport) erro
 		tail = "Bayplan couldn't remove " + strings.Join(left, ", ") + ". Remove them under Networks, Secrets or Configs."
 	}
 	reason := m.Detail
-	m.Detail = "Couldn't update " + service + ". " + reason + " " + tail
+	m.Detail = "Couldn't " + verb + " " + service + ". " + reason + " " + tail
 	// The reason on its own, so a page can word the whole sentence itself.
 	m.Errors = append(m.Errors, &huma.ErrorDetail{Location: "reason", Message: reason})
 	for _, o := range rep.Removed {
@@ -532,6 +539,12 @@ func kindsSentence(kinds []string) string {
 // serviceEditProblem turns the error of a review or an apply into the code its audit row records and
 // the problem the SPA words. None of the sentences holds a value of the spec.
 func serviceEditProblem(d ServicesDeps, envID string, err error) (string, error) {
+	return serviceWriteProblem(d, envID, problemUpdateFailed, err)
+}
+
+// serviceWriteProblem is serviceEditProblem with the type of the problem for a refusal that is none of
+// the known ones: update_failed for an edit, create_failed for a create.
+func serviceWriteProblem(d ServicesDeps, envID, failed string, err error) (string, error) {
 	problem := func(status int, typ, detail string, errs ...*huma.ErrorDetail) (string, error) {
 		return typ, &huma.ErrorModel{Type: typ, Title: http.StatusText(status), Status: status, Detail: detail, Errors: errs}
 	}
@@ -545,6 +558,7 @@ func serviceEditProblem(d ServicesDeps, envID string, err error) (string, error)
 		ph       *redact.PlaceholderError
 		perm     *swarmops.ObjectPermissionError
 		made     *swarmops.ObjectCreateError
+		taken    *swarmops.NameTakenError
 	)
 	switch {
 	case errors.As(err, &invalid):
@@ -604,11 +618,18 @@ func serviceEditProblem(d ServicesDeps, envID string, err error) (string, error)
 			&huma.ErrorDetail{Location: "object", Message: made.Kind + ":" + made.Name})
 	case errors.As(err, &made):
 		return serviceActionProblem(d, envID, problemCreateFailed, made.Err)
+	case errors.Is(err, swarmops.ErrImageRequired):
+		return problem(http.StatusUnprocessableEntity, problemImageRequired, "Enter an image like nginx:1.27 or ghcr.io/acme/app:latest.")
+	case errors.Is(err, swarmops.ErrNameInvalid):
+		return problem(http.StatusUnprocessableEntity, problemNameInvalid,
+			"Use letters, numbers, dot, dash or underscore, up to 63 characters.")
+	case errors.As(err, &taken):
+		return problem(http.StatusConflict, problemServiceNameTaken, "A service named "+taken.Name+" already exists.")
 	case errors.As(err, &rejected):
 		return problem(http.StatusUnprocessableEntity, problemSpecRejected, "Docker rejected these settings: "+clipDetail(rejected.Message))
 	case errors.Is(err, swarmops.ErrRegistryUnresolved):
 		d.Log.Error("could not resolve the registry credential of a service update", "environment", envID, "error", err)
 		err = errRegistryUnresolved
 	}
-	return serviceActionProblem(d, envID, problemUpdateFailed, err)
+	return serviceActionProblem(d, envID, failed, err)
 }

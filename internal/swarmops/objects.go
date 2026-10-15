@@ -49,6 +49,8 @@ const (
 	codeCreateFailed = "create_failed"
 	codeRemoveFailed = "remove_failed"
 	codeInUse        = "object_in_use"
+	codeUpdateFailed = "update_failed"
+	codeNameTakenSvc = "service_name_taken"
 )
 
 // cleanupTimeout bounds the removal of the objects of a failed apply. It has a clock of its own
@@ -408,6 +410,8 @@ func stepCode(err error) string {
 	switch {
 	case errors.Is(err, dockerx.ErrNameTaken):
 		return codeNameTaken
+	case errors.Is(err, dockerx.ErrServiceNameTaken):
+		return codeNameTakenSvc
 	case errors.Is(err, dockerx.ErrServiceChanged):
 		return "service_changed"
 	case errors.As(err, &rej):
@@ -423,5 +427,5 @@ func stepCode(err error) string {
 	if errors.As(err, &ce) {
 		return codeCreateFailed
 	}
-	return "update_failed"
+	return codeUpdateFailed
 }
