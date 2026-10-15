@@ -179,8 +179,10 @@ function EditFooter({
 // the first the Spec tab holds the whole service spec as Docker states it. Review changes sends
 // the version it loaded and the spec as parsed, and the server's answer is the second state, the
 // difference and what stops or qualifies an apply. Apply changes sends the version and the spec
-// the person typed (never the review's masked copy of it) once, and the third state follows the
-// update. The server decides every refusal; this words it. Leaving with changes asks first.
+// the review judged (never the review's masked copy of it) once, and the third state follows the
+// update. Edits typed while a review was on its way stay in the editor for the next review and are
+// never applied unreviewed. The server decides every refusal; this words it. Leaving with changes
+// asks first.
 export function ServiceEditorPage({
   envId,
   serviceId: editedId = "",
@@ -234,6 +236,9 @@ export function ServiceEditorPage({
   const [edited, setEdited] = useState<SpecValue | null>(null);
   const [valid, setValid] = useState(true);
   const [review, setReview] = useState<ServiceReview>();
+  // The spec the review on screen, or on its way, judges. Apply and Create send it and the review
+  // step reads it, so what the person confirms is what is sent, whatever the editor holds by then.
+  const [judged, setJudged] = useState<SpecValue>();
   const [editError, setEditError] = useState<ServiceActionError | null>(null);
   const [editorKey, setEditorKey] = useState(0);
   // Whether every field of the Form can be written. Only the Form tab has fields.
@@ -253,7 +258,7 @@ export function ServiceEditorPage({
     const typed = value.Name;
     return typeof typed === "string" ? typed : "";
   };
-  const name = create ? nameOf(spec) : (data?.name ?? "");
+  const name = create ? nameOf(judged ?? spec) : (data?.name ?? "");
   const changed = useMemo(
     () => data !== undefined && JSON.stringify(spec) !== JSON.stringify(current),
     [data, spec, current],
@@ -299,6 +304,7 @@ export function ServiceEditorPage({
     const mine = ++turn.current;
     setEditError(null);
     setReview(undefined);
+    setJudged(target);
     // A new image is looked up, which can take a while: go to the review now, with the lookup
     // showing. Otherwise the button reads Checking… until the server has answered.
     if (imageOf(target) !== imageOf(current)) setStage("review");
@@ -330,23 +336,24 @@ export function ServiceEditorPage({
     turn.current++;
     write$.reset();
     setReview(undefined);
+    setJudged(undefined);
     setStage("edit");
   }
 
   function onApply() {
-    if (!data || write$.isPending) return;
+    if (!data || !review || !judged || write$.isPending) return;
     // The networks the review lists are made with their defaults, the secrets and configs from
     // the values typed or staged; the server judges the spec again either way. The values are read
     // as the request is sent and not held in the mutation.
-    const missing = review?.missing;
-    const planned = missing ? objectsForApply(missing, staged).objects : [];
+    const missing = review.missing;
+    const planned = objectsForApply(missing, staged).objects;
     setCreating(planned.map((o) => ({ kind: o.kind, name: o.name })));
     setStage("apply");
-    const objects = () => (missing ? objectsForApply(missing, staged).objects : []);
+    const objects = () => objectsForApply(missing, staged).objects;
     // The values have been sent once the request is accepted; nothing of them stays in the page.
     if (create) {
       createMutation.mutate(
-        { spec, objects },
+        { spec: judged, objects },
         {
           onSuccess: () => {
             staged.reset();
@@ -357,7 +364,7 @@ export function ServiceEditorPage({
       return;
     }
     applyMutation.mutate(
-      { serviceId: editedId, version: data.version, spec, objects },
+      { serviceId: editedId, version: data.version, spec: judged, objects },
       {
         onSuccess: () => {
           staged.reset();
@@ -378,6 +385,7 @@ export function ServiceEditorPage({
     setEdited(null);
     setValid(true);
     setReview(undefined);
+    setJudged(undefined);
     setEditError(null);
     setEditorKey((k) => k + 1);
     setRefused(false);
@@ -609,7 +617,7 @@ export function ServiceEditorPage({
           mode={mode}
           name={name}
           current={create ? {} : current}
-          edited={spec}
+          edited={judged ?? spec}
           review={review}
           applying={write$.isPending}
           staged={staged}
