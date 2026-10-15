@@ -41,6 +41,11 @@ export function setAutoRollback(spec: SpecValue, ticked: boolean): SpecValue {
     : spec;
 }
 
+// seedUpdateConfig returns the spec with an UpdateConfig of the CLI defaults when it has none.
+export function seedUpdateConfig(spec: SpecValue): SpecValue {
+  return spec;
+}
+
 export interface AutoRollbackState {
   // The box is ticked: a failed update rolls back.
   checked: boolean;

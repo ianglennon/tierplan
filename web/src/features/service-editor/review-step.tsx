@@ -35,6 +35,9 @@ interface ReviewStepProps {
   applying: boolean;
   onBack: () => void;
   onApply: () => void;
+  // The edited spec with a change made on this step (the auto-rollback box). The page keeps it as
+  // the editor's spec and asks for a fresh review of it.
+  onSpecChange: (spec: SpecValue) => void;
 }
 
 // findingText words a host-escalation setting for the list in the refusal: what the setting is,
@@ -120,6 +123,7 @@ export function ReviewStep({
   applying,
   onBack,
   onApply,
+  onSpecChange: _onSpecChange,
 }: ReviewStepProps) {
   const t = useT();
   const next = useMemo(

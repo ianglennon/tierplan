@@ -5,8 +5,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { BasicsCard } from "@/features/service-editor/cards/basics-card";
 import { EnvironmentCard } from "@/features/service-editor/cards/environment-card";
+import { MountsCard } from "@/features/service-editor/cards/mounts-card";
+import { PlacementCard } from "@/features/service-editor/cards/placement-card";
 import { PortsCard } from "@/features/service-editor/cards/ports-card";
 import { ResourcesCard } from "@/features/service-editor/cards/resources-card";
+import { RestartCard } from "@/features/service-editor/cards/restart-card";
+import { UpdateCard } from "@/features/service-editor/cards/update-card";
 import { CautionBar } from "@/features/service-editor/caution-bar";
 import { removePath, setPath } from "@/features/service-editor/spec-patch";
 import type { SpecValue } from "@/features/spec-editor/spec-format";
@@ -26,7 +30,7 @@ export interface ServiceFormProps {
   onValidityChange?: (valid: boolean) => void;
 }
 
-// ServiceForm is the Form tab (D-01): four cards whose controls each read and write one path of
+// ServiceForm is the Form tab (D-01): cards whose controls each read and write one path of
 // the spec that was loaded. The form never builds a spec from its fields; a control changes its
 // own path of the spec as it is now and nothing else, so what the form does not show (the caution
 // bar names it, D-02) is carried through byte for byte. Text that is not a usable value is told
@@ -77,7 +81,11 @@ export function ServiceForm({
       <BasicsCard {...card} />
       <EnvironmentCard {...card} />
       <PortsCard {...card} />
+      <MountsCard {...card} />
       <ResourcesCard {...card} />
+      <PlacementCard {...card} />
+      <RestartCard {...card} />
+      <UpdateCard {...card} />
     </div>
   );
 }

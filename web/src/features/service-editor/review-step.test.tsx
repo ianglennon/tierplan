@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServiceReview } from "@/api/services";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ReviewStep } from "@/features/service-editor/review-step";
+import { setAutoRollback } from "@/features/service-editor/update-policy";
 import type { SpecValue } from "@/features/spec-editor/spec-format";
 import "@/i18n";
 import { DIGEST, editSpec, reviewBody } from "@/test-service";
@@ -19,10 +20,12 @@ const NEW_IMAGE = `registry.example.com/shop/api:1.5@sha256:${"ab".repeat(32)}`;
 
 let onBack: ReturnType<typeof vi.fn<() => void>>;
 let onApply: ReturnType<typeof vi.fn<() => void>>;
+let onSpecChange: ReturnType<typeof vi.fn<(spec: SpecValue) => void>>;
 
 beforeEach(() => {
   onBack = vi.fn<() => void>();
   onApply = vi.fn<() => void>();
+  onSpecChange = vi.fn<(spec: SpecValue) => void>();
 });
 
 afterEach(() => cleanup());
@@ -56,6 +59,7 @@ function renderStep({ current, edited, review, applying }: Options = {}) {
         applying={applying ?? false}
         onBack={onBack}
         onApply={onApply}
+        onSpecChange={onSpecChange}
       />
     </TooltipProvider>,
   );
@@ -303,5 +307,107 @@ describe("ReviewStep", () => {
     const cell = screen.getAllByText(`registry.example.com/${long}:1`)[0];
     expect(cell?.className).toMatch(/break-all/);
     expect(cell?.className).toMatch(/font-mono/);
+  });
+});
+
+// The Update behaviour row (D-12 amended): the same field as the Update policy card's box, shown
+// again on Review. Changing it hands the spec with the choice applied back to the page, which
+// asks for a fresh review.
+describe("ReviewStep, update behaviour", () => {
+  const LABEL = "Roll back automatically if an update fails";
+  const box = () => screen.getByRole("checkbox", { name: LABEL });
+  const withUpdate = (action?: string): SpecValue =>
+    withReplicas(
+      editSpec({
+        UpdateConfig:
+          action === undefined ? { Parallelism: 2 } : { Parallelism: 2, FailureAction: action },
+      }),
+      5,
+    );
+
+  it("shows the box unticked with its helper for a service that does not roll back", () => {
+    renderStep();
+    expect(box().getAttribute("aria-checked")).toBe("false");
+    expect(
+      screen.getByText(
+        "Saved on the service. Later updates, including one-click image updates, use the same policy.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Update behaviour" })).toBeTruthy();
+  });
+
+  it("shows the box ticked when the edited spec rolls back", () => {
+    renderStep({
+      edited: withUpdate("rollback"),
+      review: reviewBody({ spec: withUpdate("rollback") }),
+    });
+    expect(box().getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("says a service that continues on failure shows unticked", () => {
+    renderStep({
+      edited: withUpdate("continue"),
+      review: reviewBody({ spec: withUpdate("continue") }),
+    });
+    expect(box().getAttribute("aria-checked")).toBe("false");
+    expect(
+      screen.getByText(
+        "Currently set to continue on failure. Ticking this changes it to roll back.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("hands back the edited spec with the CLI defaults seeded when ticked on a service with no UpdateConfig", () => {
+    const edited = withReplicas(editSpec(), 5);
+    renderStep({ edited });
+    fireEvent.click(box());
+    expect(onSpecChange).toHaveBeenCalledTimes(1);
+    expect(onSpecChange).toHaveBeenCalledWith(setAutoRollback(edited, true));
+    const sent = onSpecChange.mock.calls[0]?.[0] as SpecValue;
+    expect(sent.UpdateConfig).toEqual({
+      Parallelism: 1,
+      Delay: 0,
+      FailureAction: "rollback",
+      Monitor: 5_000_000_000,
+      MaxFailureRatio: 0,
+      Order: "stop-first",
+    });
+  });
+
+  it("hands back pause when unticked", () => {
+    const edited = withUpdate("rollback");
+    renderStep({ edited, review: reviewBody({ spec: edited }) });
+    fireEvent.click(box());
+    expect(onSpecChange).toHaveBeenCalledWith(setAutoRollback(edited, false));
+    expect((onSpecChange.mock.calls[0]?.[0] as SpecValue | undefined)?.UpdateConfig).toEqual({
+      Parallelism: 2,
+      FailureAction: "pause",
+    });
+  });
+
+  it("lists the change as On failure in the Changes table", () => {
+    const edited = withUpdate("rollback");
+    renderStep({
+      current: withReplicas(
+        editSpec({ UpdateConfig: { Parallelism: 2, FailureAction: "pause" } }),
+        3,
+      ),
+      edited,
+      review: reviewBody({ spec: edited }),
+    });
+    const row = within(screen.getByRole("table", { name: "Changes to api" }))
+      .getByText("On failure")
+      .closest("tr");
+    expect(row?.textContent).toContain("pause");
+    expect(row?.textContent).toContain("rollback");
+  });
+
+  it("cannot be changed while the apply is out", () => {
+    renderStep({ applying: true });
+    fireEvent.click(box());
+    expect(onSpecChange).not.toHaveBeenCalled();
+    expect(box().hasAttribute("disabled") || box().getAttribute("aria-disabled") === "true").toBe(
+      true,
+    );
   });
 });

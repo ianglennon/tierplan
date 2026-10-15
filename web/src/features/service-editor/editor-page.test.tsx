@@ -708,4 +708,45 @@ describe("the Form tab", () => {
     ).Env;
     expect(env).toEqual(["MODE=prod", "DB_PASSWORD=n3w"]);
   });
+  it("shows the auto-rollback box on Review as the Update policy card's own field, and a change there asks for a fresh review", async () => {
+    const rolled = editSpec({
+      Mode: { Replicated: { Replicas: 5 } },
+      UpdateConfig: {
+        Parallelism: 1,
+        Delay: 0,
+        FailureAction: "rollback",
+        Monitor: 5_000_000_000,
+        MaxFailureRatio: 0,
+        Order: "stop-first",
+      },
+    });
+    let asked = 0;
+    state.review = () =>
+      Response.json(reviewBody({ spec: asked++ === 0 ? withReplicas(5) : rolled }));
+    renderAt(EDIT_PATH);
+    await formImage();
+    fireEvent.change(screen.getByLabelText("Replicas"), { target: { value: "5" } });
+    fireEvent.click(reviewButton());
+    await screen.findByRole("heading", { name: "Review changes", level: 2 });
+    const label = "Roll back automatically if an update fails";
+    const reviewBox = screen.getByRole("checkbox", { name: label });
+    expect(reviewBox.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(reviewBox);
+    await waitFor(() => expect(posts("/review")).toHaveLength(2));
+    const sent = posts("/review")[1]?.body as { spec: Record<string, unknown> };
+    expect(sent.spec.UpdateConfig).toEqual(rolled.UpdateConfig);
+    expect(sent.spec.Mode).toEqual({ Replicated: { Replicas: 5 } });
+    expect(
+      (await screen.findByRole("checkbox", { name: label })).getAttribute("aria-checked"),
+    ).toBe("true");
+    const table = await screen.findByRole("table", { name: "Changes to api" });
+    await waitFor(() => expect(within(table).getByText("On failure")).toBeTruthy());
+    expect(within(table).getByText("On failure").closest("tr")?.textContent).toContain("rollback");
+    // The Form has the same value when the person goes back to it.
+    fireEvent.click(screen.getByRole("button", { name: "Back to editing" }));
+    const formBox = await screen.findByRole("checkbox", { name: label });
+    expect(formBox.getAttribute("aria-checked")).toBe("true");
+    expect((screen.getByLabelText("Tasks at a time") as HTMLInputElement).value).toBe("1");
+    expect((screen.getByLabelText("Monitor") as HTMLInputElement).value).toBe("5s");
+  });
 });

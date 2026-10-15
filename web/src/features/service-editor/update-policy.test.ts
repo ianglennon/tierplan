@@ -2,10 +2,11 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { describe, expect, it } from "vitest";
-import { getPath } from "@/features/service-editor/spec-patch";
+import { getPath, setPath } from "@/features/service-editor/spec-patch";
 import {
   AUTO_ROLLBACK_DEFAULTS,
   autoRollbackState,
+  seedUpdateConfig,
   setAutoRollback,
 } from "@/features/service-editor/update-policy";
 import type { SpecValue } from "@/features/spec-editor/spec-format";
@@ -113,6 +114,49 @@ describe("setAutoRollback", () => {
       Parallelism: 1,
       FailureAction: "pause",
     });
+  });
+});
+
+describe("setAutoRollback, ticked and unticked again", () => {
+  it("takes the UpdateConfig it created back out, so the review shows nothing changed", () => {
+    const spec = bare();
+    const next = setAutoRollback(setAutoRollback(spec, true), false);
+    expect(next).toEqual(spec);
+    expect(getPath(next, "UpdateConfig")).toBeUndefined();
+  });
+
+  it("keeps an UpdateConfig that says anything beyond the defaults", () => {
+    const seeded = setAutoRollback(bare(), true);
+    const faster = setPath(seeded, "UpdateConfig.Parallelism", 3);
+    expect(getPath(setAutoRollback(faster, false), "UpdateConfig")).toEqual({
+      Parallelism: 3,
+      Delay: 0,
+      FailureAction: "pause",
+      Monitor: 5_000_000_000,
+      MaxFailureRatio: 0,
+      Order: "stop-first",
+    });
+  });
+});
+
+describe("seedUpdateConfig", () => {
+  it("gives a service with no UpdateConfig the CLI defaults, with pause as the failure action", () => {
+    expect(getPath(seedUpdateConfig(bare()), "UpdateConfig")).toEqual({
+      Parallelism: 1,
+      Delay: 0,
+      FailureAction: "pause",
+      Monitor: 5_000_000_000,
+      MaxFailureRatio: 0,
+      Order: "stop-first",
+    });
+    expect(
+      getPath(seedUpdateConfig({ ...bare(), UpdateConfig: null }), "UpdateConfig.Parallelism"),
+    ).toBe(1);
+  });
+
+  it("leaves an UpdateConfig that exists alone", () => {
+    const spec: SpecValue = { ...bare(), UpdateConfig: { Parallelism: 0 } };
+    expect(seedUpdateConfig(spec)).toBe(spec);
   });
 });
 

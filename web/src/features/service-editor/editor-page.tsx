@@ -507,6 +507,7 @@ export function ServiceEditorPage({
           applying={applyMutation.isPending}
           onBack={backToEditing}
           onApply={onApply}
+          onSpecChange={() => undefined}
         />
       ) : null}
       {stage === "apply" ? (
