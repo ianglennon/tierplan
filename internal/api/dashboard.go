@@ -56,6 +56,9 @@ type DashboardDeps struct {
 	// Clusters is the cluster reader of swarm environments: the networks list counts
 	// the services that mention a network from its last read. Nil counts none.
 	Clusters *envs.Clusters
+	// Checker says whether the caller may read services, which the restart-loop count needs.
+	// Nil leaves the count out.
+	Checker *rbac.Checker
 	// SelfContainerID is Bayplan's own container ID, for the isSelf flag. Empty
 	// when Bayplan does not run in a container, or cannot tell.
 	SelfContainerID string
@@ -132,6 +135,13 @@ type EnvironmentSummaryBody struct {
 	IsWorker        bool                   `json:"isWorker" doc:"True on a swarm worker, which can show only its own containers, images, volumes and networks (D-24)"`
 	SelfContainerID string                 `json:"selfContainerId,omitempty" doc:"The ID of Bayplan's own container, when it can tell (D-27)"`
 	FetchedAt       string                 `json:"fetchedAt" format:"date-time" doc:"When the counts were read from Docker; they are cached for a few seconds"`
+	RestartLoops    *RestartLoopCountsBody `json:"restartLoops,omitempty" doc:"Swarm managers only, and only for a caller who may read services: how many services are in a restart loop, from the last cluster read. Absent on a standalone host, on a worker, and while the swarm has not been read or has lost its quorum"`
+}
+
+// RestartLoopCountsBody counts the services in a restart loop (RES-13, D-15).
+type RestartLoopCountsBody struct {
+	Flagged int `json:"flagged" doc:"Services in a restart loop whose alerts are not muted"`
+	Muted   int `json:"muted" doc:"Services in a restart loop whose alerts are muted"`
 }
 
 // EnvironmentSummaryOutput wraps EnvironmentSummaryBody for huma.
@@ -418,6 +428,10 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 				return nil, huma.Error500InternalServerError("internal error")
 			}
 			p, c := agg.Target.Probe, agg.Counts
+			var loops *RestartLoopCountsBody
+			if c.Services != nil {
+				loops = restartLoopCounts(ctx, d, env.ID)
+			}
 			return &EnvironmentSummaryOutput{CacheControl: "no-store", Body: EnvironmentSummaryBody{
 				Environment: SummaryEnvironmentBody{
 					ID: env.ID, Name: env.Name, Type: p.Type,
@@ -436,6 +450,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 				IsWorker:        p.Type == dockerx.TypeSwarmWorker,
 				SelfContainerID: d.SelfContainerID,
 				FetchedAt:       rfc3339(agg.FetchedAt),
+				RestartLoops:    loops,
 			}}, nil
 		})
 
@@ -614,4 +629,11 @@ func notOnlineProblem(e envs.ErrNotOnline) error {
 func shortImageID(id string) string {
 	id = strings.TrimPrefix(id, "sha256:")
 	return id[:min(len(id), 12)]
+}
+
+// restartLoopCounts counts the restart loops of a swarm from the cluster reader's last read, for
+// a caller who may read its services. It is nil when there is nothing to say: no reader, no
+// checker, no right to read services, no read yet, or a lost quorum (which hides the loops).
+func restartLoopCounts(ctx context.Context, d DashboardDeps, envID string) *RestartLoopCountsBody {
+	return nil
 }

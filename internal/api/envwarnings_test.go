@@ -173,3 +173,92 @@ func TestAFoldOfferIsAnItemOnlyForAnInstanceAdmin(t *testing.T) {
 		}
 	}
 }
+
+// Restart-loop items (plan 06-35, RES-13, D-15). loopEnv is a swarm manager whose history
+// holds web in a loop; the bell reads the cluster reader's last read, which the first list of
+// services (or the background loop, in production) has made.
+
+type loopWarning struct {
+	ID            string `json:"id"`
+	Severity      string `json:"severity"`
+	EnvID         string `json:"envId"`
+	EnvName       string `json:"envName"`
+	Service       string `json:"service"`
+	ServiceID     string `json:"serviceId"`
+	Count         int    `json:"count"`
+	WindowMinutes int    `json:"windowMinutes"`
+	LatestError   string `json:"latestError"`
+	Since         string `json:"since"`
+}
+
+func (f *envFix) loopWarnings(t *testing.T, cookie, csrf string) []loopWarning {
+	t.Helper()
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/environments/warnings", cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("warnings = %d %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Items []loopWarning `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	var out []loopWarning
+	for _, w := range body.Items {
+		if w.ID == "restart_loop" {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+func TestEnvWarningsRestartLoopNamesTheServiceItsFailuresAndTheLatestError(t *testing.T) {
+	f, e := loopEnv(t)
+	listServicesQuery(t, f, e, "")
+	got := f.loopWarnings(t, f.cookie, f.csrf)
+	if len(got) != 1 {
+		t.Fatalf("restart_loop items = %+v, want one, for web", got)
+	}
+	w := got[0]
+	if w.Severity != "error" || w.EnvID != e.ID || w.EnvName != e.Name || w.Service != "web" || w.ServiceID != "svc-web" ||
+		w.Count != 3 || w.WindowMinutes != 10 || w.LatestError != "task: non-zero exit (1)" {
+		t.Errorf("item = %+v", w)
+	}
+	if _, err := time.Parse(time.RFC3339, w.Since); err != nil {
+		t.Errorf("since = %q: %v", w.Since, err)
+	}
+}
+
+func TestEnvWarningsRestartLoopLeavesOutAMutedServiceAndComesBackWhenItIsUnmuted(t *testing.T) {
+	f, e := loopEnv(t)
+	listServicesQuery(t, f, e, "")
+	op := loopAs(t, f, e, "bell-operator", "operator")
+	if rec := op(http.MethodPut, "services/svc-web/restart-loop-mute", ""); rec.code != http.StatusOK {
+		t.Fatalf("mute = %d %s", rec.code, rec.body)
+	}
+	if got := f.loopWarnings(t, f.cookie, f.csrf); len(got) != 0 {
+		t.Fatalf("items after the mute = %+v, want none", got)
+	}
+	if rec := op(http.MethodDelete, "services/svc-web/restart-loop-mute", ""); rec.code != http.StatusOK {
+		t.Fatalf("unmute = %d %s", rec.code, rec.body)
+	}
+	if got := f.loopWarnings(t, f.cookie, f.csrf); len(got) != 1 {
+		t.Fatalf("items after the unmute = %+v, want web again", got)
+	}
+}
+
+func TestEnvWarningsRestartLoopIsShownToAViewerOfTheEnvironmentAndToNobodyElse(t *testing.T) {
+	f, e := loopEnv(t)
+	listServicesQuery(t, f, e, "")
+	f.addUser(t, "bell-viewer", false)
+	f.addEnvRole(t, "bell-viewer", e.ID, "viewer")
+	cookie, csrf := f.signIn(t, "bell-viewer", false)
+	if got := f.loopWarnings(t, cookie, csrf); len(got) != 1 || got[0].Service != "web" {
+		t.Errorf("a Viewer's items = %+v, want web's", got)
+	}
+	f.addUser(t, "bell-nobody", false)
+	cookie, csrf = f.signIn(t, "bell-nobody", false)
+	if got := f.loopWarnings(t, cookie, csrf); len(got) != 0 {
+		t.Errorf("a user with no grant got %+v, want nothing: the bell must not reveal what the caller cannot open", got)
+	}
+}

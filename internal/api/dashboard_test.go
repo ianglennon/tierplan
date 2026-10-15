@@ -1056,3 +1056,37 @@ func TestLocalSocketListsNameTheEngineAsTheOnlyNode(t *testing.T) {
 		t.Errorf("containers = %+v, want all three on node-1", l)
 	}
 }
+
+// Restart loops on the dashboard of a swarm (plan 06-35, RES-13, D-15): the tile counts the
+// flagged services nobody muted, and says how many are muted.
+
+type loopCounts struct {
+	RestartLoops *struct {
+		Flagged int `json:"flagged"`
+		Muted   int `json:"muted"`
+	} `json:"restartLoops"`
+}
+
+func TestDashboardRestartLoopsCountsTheFlaggedServicesAndTheMutedOnesApart(t *testing.T) {
+	f, e := loopEnv(t)
+	listServicesQuery(t, f, e, "")
+	got := decode[loopCounts](t, f.get(t, e, "summary"))
+	if got.RestartLoops == nil || got.RestartLoops.Flagged != 1 || got.RestartLoops.Muted != 0 {
+		t.Fatalf("restartLoops = %+v, want 1 flagged and none muted", got.RestartLoops)
+	}
+	op := loopAs(t, f, e, "dash-operator", "operator")
+	if rec := op(http.MethodPut, "services/svc-web/restart-loop-mute", ""); rec.code != http.StatusOK {
+		t.Fatalf("mute = %d %s", rec.code, rec.body)
+	}
+	got = decode[loopCounts](t, f.get(t, e, "summary"))
+	if got.RestartLoops == nil || got.RestartLoops.Flagged != 0 || got.RestartLoops.Muted != 1 {
+		t.Fatalf("restartLoops after the mute = %+v, want none flagged and 1 muted", got.RestartLoops)
+	}
+}
+
+func TestDashboardRestartLoopsIsLeftOutOfAStandaloneHostAndOfASwarmNothingWasReadFor(t *testing.T) {
+	f, e := dashEnv(t, richEngine())
+	if rec := f.get(t, e, "summary"); rec.code != http.StatusOK || strings.Contains(string(rec.body), "restartLoops") {
+		t.Errorf("standalone summary = %d %s, want no restartLoops", rec.code, rec.body)
+	}
+}

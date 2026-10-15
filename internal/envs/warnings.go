@@ -17,7 +17,13 @@ const (
 	WarnPendingLong        = "pending_long"
 	WarnClusterChanged     = "cluster_changed"
 	WarnFoldOffered        = "fold_offered"
+	// WarnRestartLoop is a swarm service whose tasks keep failing and whose alerts nobody
+	// muted (plan 06-35, RES-13, D-15).
+	WarnRestartLoop = "restart_loop"
 )
+
+// maxWarnError is the longest latest-error text a restart-loop warning carries, in characters.
+const maxWarnError = 300
 
 // The severities of an environment warning.
 const (
@@ -32,6 +38,10 @@ type EnvWarning struct {
 	Days, Count                                         int
 	Offset                                              time.Duration
 	ExpiresAt                                           time.Time
+	// For a restart loop: the service, how long a window the count is over, and Docker's
+	// latest task error. Count is how many tasks failed in that window.
+	Service, ServiceID, LatestError string
+	WindowMinutes                   int
 }
 
 // AgentState is what the warnings need to know of one agent.
@@ -131,6 +141,20 @@ func Warnings(envs []Environment, agents map[string][]AgentState, now time.Time)
 		}
 		out = append(out, w)
 	}
+	SortWarnings(out)
+	return out
+}
+
+// RestartLoopWarnings are the bell items of the restart loops one environment's last cluster
+// read found: one error per flagged service whose alerts nobody muted. The loops are by
+// service ID. The caller passes only the loops of an environment it may show.
+func RestartLoopWarnings(e Environment, loops map[string]RestartLoop) []EnvWarning {
+	return nil
+}
+
+// SortWarnings orders warnings errors first, then newest first, then by environment, node,
+// service and ID, so the same warnings always come out in the same order.
+func SortWarnings(out []EnvWarning) {
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := out[i], out[j]
 		if ra, rb := a.Severity == SeverityError, b.Severity == SeverityError; ra != rb {
@@ -145,7 +169,9 @@ func Warnings(envs []Environment, agents map[string][]AgentState, now time.Time)
 		if a.Node != b.Node {
 			return a.Node < b.Node
 		}
+		if a.ServiceID != b.ServiceID {
+			return a.ServiceID < b.ServiceID
+		}
 		return a.ID < b.ID
 	})
-	return out
 }
