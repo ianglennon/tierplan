@@ -475,6 +475,8 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // API judges the spec (host escalation, immutable fields, masked values) before it is called, and it is never retried.
 // Networks (Phase 6, RES-03) is a read: every network of the engine, local ones too, so a service spec that names the host
 // network by ID can be recognised.
+// ServiceCreate (Phase 6, RES-03) creates one service from a strictly decoded spec with QueryRegistry false and an optional
+// credential, once and never retried; the API judges the spec before it is called.
 // ServiceRemove (Phase 6, RES-02) removes one service by ID, once; it takes no options, and the API refuses a
 // service a stack owns and a Bayplan agent service nobody confirmed before it is called.
 // NodeUpdate (Phase 6, RES-05) changes one node's availability, role or labels, once, with the version the
@@ -495,11 +497,11 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // removes one config by ID, once, and the manager itself refuses a config a service's spec still references.
 // ContainerLogs (Phase 4, OBS-01) is a read: one inspect, then the engine's log of the container
 // with stdout, stderr and timestamps always on; it takes only the time range, the tail and follow.
-var allowedMethods = []string{"Close", "Cluster", "ConfigCreate", "ConfigInspect", "ConfigList", "ConfigRemove", "ContainerAction", "ContainerDetail", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "DistributionInspect", "Events", "ImageDetail", "ImageHistory", "ImagePull", "ImageRemove", "ImageUntag", "ImageUsers", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "Networks", "NodeInspect", "NodeRemove", "NodeUpdate", "Probe", "RestartPolicies", "ResolveImage", "SecretCreate", "SecretInspect", "SecretList", "SecretRemove", "ServiceForceUpdate", "ServiceInspect", "ServiceRefs", "ServiceRemove", "ServiceRollback", "ServiceScale", "ServiceUpdate", "Snapshot", "StartExec", "SwarmNetworkNames", "TaskHistoryLimit", "Tasks", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers"}
+var allowedMethods = []string{"Close", "Cluster", "ConfigCreate", "ConfigInspect", "ConfigList", "ConfigRemove", "ContainerAction", "ContainerDetail", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "DistributionInspect", "Events", "ImageDetail", "ImageHistory", "ImagePull", "ImageRemove", "ImageUntag", "ImageUsers", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "Networks", "NodeInspect", "NodeRemove", "NodeUpdate", "Probe", "RestartPolicies", "ResolveImage", "SecretCreate", "SecretInspect", "SecretList", "SecretRemove", "ServiceCreate", "ServiceForceUpdate", "ServiceInspect", "ServiceRefs", "ServiceRemove", "ServiceRollback", "ServiceScale", "ServiceUpdate", "Snapshot", "StartExec", "SwarmNetworkNames", "TaskHistoryLimit", "Tasks", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers"}
 
 // typedMethodsWithForbiddenWords are allowed methods whose names contain a word the
 // pattern below refuses, each reviewed one by one.
-var typedMethodsWithForbiddenWords = []string{"ServiceForceUpdate", "ServiceUpdate", "ServiceRemove", "StartExec", "ContainerRemove", "NetworkCreate", "NetworkRemove", "VolumeCreate", "VolumeRemove", "ImageRemove", "NodeRemove", "NodeUpdate", "SecretCreate", "SecretRemove", "ConfigCreate", "ConfigRemove"}
+var typedMethodsWithForbiddenWords = []string{"ServiceCreate", "ServiceForceUpdate", "ServiceUpdate", "ServiceRemove", "StartExec", "ContainerRemove", "NetworkCreate", "NetworkRemove", "VolumeCreate", "VolumeRemove", "ImageRemove", "NodeRemove", "NodeUpdate", "SecretCreate", "SecretRemove", "ConfigCreate", "ConfigRemove"}
 
 var forbiddenName = regexp.MustCompile(`Plugin|Swarm(Init|Join|Leave|Unlock)|Create|Remove|Start|Stop|Kill|Exec|Update|Prune|Raw|Do$|Passthrough`)
 

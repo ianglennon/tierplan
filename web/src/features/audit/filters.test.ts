@@ -335,3 +335,11 @@ describe("the bulk filter", () => {
     }
   });
 });
+
+describe("the service.created action (06-27)", () => {
+  it("is in the Action filter with its own label", () => {
+    expect(KNOWN_ACTIONS).toContain("service.created");
+    const labels = audit.audit.actions as Record<string, Record<string, string>>;
+    expect(labels.service?.created).toBe("Service created");
+  });
+});

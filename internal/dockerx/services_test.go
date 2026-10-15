@@ -598,3 +598,92 @@ func TestNetworksListsTheLocalAndTheSwarmNetworksSortedByNameThenID(t *testing.T
 		t.Errorf("writes = %v, want none", got)
 	}
 }
+
+// ServiceCreate (plan 06-27, RES-03, D-04, D-08).
+
+const createdSpec = `{"Name":"chat","TaskTemplate":{"ContainerSpec":{"Image":"registry.example.com/chat:1@sha256:abc","Env":["A=1"]}},"Mode":{"Replicated":{"Replicas":1}}}`
+
+func TestServiceCreateSendsTheWholeSpecOnceWithTheCredentialAndNoRegistryQuery(t *testing.T) {
+	c, fake := serviceFake(t)
+	id, warnings, err := c.ServiceCreate(context.Background(), json.RawMessage(createdSpec), "Zm9v")
+	if err != nil || id == "" || len(warnings) != 0 {
+		t.Fatalf("ServiceCreate = %q, %v, %v", id, warnings, err)
+	}
+	creates := fake.ServiceCreates()
+	if len(creates) != 1 {
+		t.Fatalf("creates = %+v, want exactly one", creates)
+	}
+	u := creates[0]
+	if u.Auth != "Zm9v" || u.Query.Get("registryAuthFrom") != "" {
+		t.Errorf("create = %+v, want the credential and nothing else in the query", u)
+	}
+	cs := u.Spec.TaskTemplate.ContainerSpec
+	if u.Spec.Name != "chat" || cs == nil || cs.Image != "registry.example.com/chat:1@sha256:abc" || !slices.Equal(cs.Env, []string{"A=1"}) ||
+		u.Spec.Mode.Replicated == nil || *u.Spec.Mode.Replicated.Replicas != 1 {
+		t.Errorf("the spec the daemon received is not the one sent: %+v", u.Spec)
+	}
+	if got := fake.Writes(); !slices.Equal(got, []string{"POST /services/create"}) {
+		t.Errorf("writes = %v, want exactly one create", got)
+	}
+	// The service is there afterwards, under the ID it was answered with.
+	if d, _, err := c.ServiceInspect(context.Background(), id); err != nil || d.Name != "chat" {
+		t.Errorf("inspect after the create = %+v, %v", d, err)
+	}
+}
+
+func TestServiceCreateRefusesUnknownFieldsAndTrailingDataBeforeAnyCall(t *testing.T) {
+	c, fake := serviceFake(t)
+	for name, raw := range map[string]string{
+		"unknown field": `{"Name":"chat","Bogus":1}`,
+		"wrong type":    `{"Name":5}`,
+		"not json":      `{"Name":`,
+		"trailing data": createdSpec + ` {}`,
+		"empty":         ``,
+	} {
+		_, _, err := c.ServiceCreate(context.Background(), json.RawMessage(raw), "")
+		if !errors.Is(err, dockerx.ErrServiceSpecInvalid) {
+			t.Errorf("%s: err = %v, want ErrServiceSpecInvalid", name, err)
+		}
+	}
+	if got := fake.Writes(); len(got) != 0 {
+		t.Errorf("writes = %v, want none: a spec that does not decode is never sent", got)
+	}
+}
+
+func TestServiceCreateOfATakenNameIsServiceNameTakenAndIsNotRetried(t *testing.T) {
+	c, fake := serviceFake(t)
+	_, _, err := c.ServiceCreate(context.Background(), json.RawMessage(strings.Replace(createdSpec, `"chat"`, `"web"`, 1)), "")
+	if !errors.Is(err, dockerx.ErrServiceNameTaken) {
+		t.Fatalf("err = %v, want ErrServiceNameTaken", err)
+	}
+	if got := len(fake.Writes()); got != 1 {
+		t.Errorf("writes = %d, want exactly one: never retried", got)
+	}
+	if got := len(fake.ServiceCreates()); got != 0 {
+		t.Errorf("accepted creates = %d, want none", got)
+	}
+}
+
+func TestServiceCreateReturnsTheDaemonsWarnings(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{
+		SwarmState: "active", SwarmControl: true, ServiceCreateWarnings: []string{"unable to pin image"},
+	})
+	_, warnings, err := newClient(t, fake).ServiceCreate(context.Background(), json.RawMessage(createdSpec), "")
+	if err != nil || !slices.Equal(warnings, []string{"unable to pin image"}) {
+		t.Fatalf("ServiceCreate warnings = %v, %v; want the daemon's warning", warnings, err)
+	}
+}
+
+func TestServiceCreateTheDaemonsRefusalOfASpecKeepsItsWords(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{
+		SwarmState: "active", SwarmControl: true, ServiceCreateError: "secret not found: db_password",
+	})
+	_, _, err := newClient(t, fake).ServiceCreate(context.Background(), json.RawMessage(createdSpec), "")
+	var rej *dockerx.SpecRejectedError
+	if !errors.As(err, &rej) || !strings.Contains(rej.Message, "secret not found: db_password") {
+		t.Fatalf("err = %v, want a SpecRejectedError with the daemon's words", err)
+	}
+	if got := len(fake.Writes()); got != 1 {
+		t.Errorf("writes = %d, want exactly one", got)
+	}
+}
