@@ -394,7 +394,10 @@ describe("apply", () => {
     typeIntoEditor(yaml(typed));
     fireEvent.click(reviewButton());
     await screen.findByRole("heading", { name: "Review changes", level: 2 });
-    expect(document.body.textContent).not.toContain("brand-new-secret");
+    // The editor, out of sight, still holds what was typed; the review never prints it.
+    const table = screen.getByRole("table", { name: "Changes to api" });
+    expect(within(table).getByText("Hidden value replaced")).toBeTruthy();
+    expect(table.textContent).not.toContain("brand-new-secret");
     fireEvent.click(screen.getByRole("button", { name: "Apply changes" }));
     await screen.findByRole("heading", { name: "Applying changes to api" });
     await waitFor(() => expect(posts("/apply")).toHaveLength(1));

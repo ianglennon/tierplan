@@ -245,11 +245,12 @@ describe("ReviewStep", () => {
         },
       }),
     });
+    // Once in the alert, and once as the reason Apply is unavailable.
     expect(
-      screen.getByText(
+      screen.getAllByText(
         "Couldn't look up registry.example.com/shop/api:1.5 on registry.example.com to pin it to a digest. Check the name, the tag and the credential, then try again.",
-      ),
-    ).toBeTruthy();
+      ).length,
+    ).toBeGreaterThanOrEqual(1);
     expect(apply().getAttribute("aria-disabled")).toBe("true");
   });
 

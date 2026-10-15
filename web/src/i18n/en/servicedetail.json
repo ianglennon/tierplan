@@ -70,6 +70,7 @@
       }
     },
     "actions": {
+      "edit": "Edit…",
       "scale": "Scale…",
       "forceUpdate": "Force update…",
       "more": "More actions",

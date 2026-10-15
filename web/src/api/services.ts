@@ -4,7 +4,7 @@
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
-import { readProblem } from "@/api/problem";
+import { type ProblemField, readProblem } from "@/api/problem";
 import { LIST_REFETCH_MS, listKey } from "@/api/resources";
 import type { components } from "@/api/schema";
 
@@ -314,11 +314,15 @@ export class ServiceActionError extends Error {
   readonly type?: string;
   readonly fields: ReadonlyMap<string, string>;
   readonly detail?: string;
+  // The same entries in the order the problem listed them, kept whole where several share a
+  // location (the networks a spec names that do not exist, all under "networks").
+  readonly entries: readonly ProblemField[];
   constructor(
     status: number,
     type?: string,
     fields: ReadonlyMap<string, string> = new Map(),
     detail?: string,
+    entries?: readonly ProblemField[],
   ) {
     super(`POST service action failed (${status})`);
     this.name = "ServiceActionError";
@@ -326,6 +330,7 @@ export class ServiceActionError extends Error {
     this.type = type;
     this.fields = fields;
     this.detail = detail;
+    this.entries = entries ?? [...fields].map(([location, message]) => ({ location, message }));
   }
 }
 
@@ -346,6 +351,7 @@ function actionError(body: unknown, response?: { status: number }): ServiceActio
     problem.type,
     new Map(problem.fields.map((f) => [f.location, f.message])),
     detail,
+    problem.fields,
   );
 }
 
@@ -482,24 +488,60 @@ export type ServiceApplyResult = components["schemas"]["ServiceApplyBody"];
 
 export interface EditRequest {
   serviceId: string;
-  // The version of the service the spec was loaded at.
+  // The version of the service the spec was loaded at: the server refuses to change a service
+  // that has moved on since.
   version: number;
+  // The whole service spec, as the editor holds it. A value left as <hidden> keeps its current
+  // value on the server.
   spec: Record<string, unknown>;
 }
 
-export function useReviewServiceUpdate(_envId: string) {
+// useReviewServiceUpdate is the mutation behind Review changes. It changes nothing in the swarm,
+// so it reads nothing again. It is never retried, and gcTime 0 drops the spec it carries from the
+// cache as soon as nothing is watching it (the spec is held in memory by the editor and nowhere
+// else).
+export function useReviewServiceUpdate(envId: string) {
   return useMutation<ServiceReview, ServiceActionError, EditRequest>({
-    mutationFn: async () => {
-      throw new ServiceActionError(0);
+    mutationFn: async ({ serviceId, version, spec }) => {
+      try {
+        const res = await api.POST("/api/env/{envId}/services/{serviceId}/review", {
+          params: { path: { envId, serviceId } },
+          body: { version, spec },
+        });
+        if (!res.data) throw actionError(res.error, res.response);
+        return res.data;
+      } catch (e) {
+        // A network failure has no status.
+        throw e instanceof ServiceActionError ? e : new ServiceActionError(0);
+      }
     },
+    retry: false,
+    gcTime: 0,
   });
 }
 
-export function useApplyServiceUpdate(_envId: string) {
+// useApplyServiceUpdate is the mutation behind Apply changes. It is never retried, and reads the
+// services again whatever the answer: a write whose answer was lost may have happened (P2 D-42).
+// gcTime 0 keeps the spec out of the cache once nothing is watching.
+export function useApplyServiceUpdate(envId: string) {
+  const queryClient = useQueryClient();
   return useMutation<ServiceApplyResult, ServiceActionError, EditRequest>({
-    mutationFn: async () => {
-      throw new ServiceActionError(0);
+    mutationKey: serviceActionKey(envId),
+    mutationFn: async ({ serviceId, version, spec }) => {
+      try {
+        const res = await api.POST("/api/env/{envId}/services/{serviceId}/apply", {
+          params: { path: { envId, serviceId } },
+          body: { version, spec },
+        });
+        if (!res.data) throw actionError(res.error, res.response);
+        return res.data;
+      } catch (e) {
+        throw e instanceof ServiceActionError ? e : new ServiceActionError(0);
+      }
     },
+    retry: false,
+    gcTime: 0,
+    onSettled: () => refreshService(queryClient, envId),
   });
 }
 

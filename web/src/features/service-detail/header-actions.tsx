@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useIsMutating } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { ChevronDown } from "lucide-react";
 import { useRef, useState } from "react";
 
@@ -59,12 +59,13 @@ interface ServiceHeaderActionsProps {
   detail: ServiceDetail;
 }
 
-// ServiceHeaderActions are the buttons in a service page's header: Scale… (not for a global
-// service or a job), Force update… and More, which holds Roll back…, Copy service ID and, last,
-// Remove…. A caller below Operator sees the first three unavailable with the reason, and Remove…
-// needs Admin; the server decides either way. Scale, force update and roll back stay available on
-// a service that belongs to a stack, with the stack's warning in their dialogs, but Remove… does
-// not: a stack's service is changed through the stack (D-05). A later plan adds Edit… here.
+// ServiceHeaderActions are the buttons in a service page's header: Edit…, Scale… (not for a
+// global service or a job), Force update… and More, which holds Roll back…, Copy service ID and,
+// last, Remove…. A caller below Operator sees the first four unavailable with the reason, and
+// Remove… needs Admin; the server decides either way. Scale, force update and roll back stay
+// available on a service that belongs to a stack, with the stack's warning in their dialogs, but
+// Edit… and Remove… do not: a stack's service is changed through the stack (D-05). Edit… is a
+// link to the editor when it is available, and a button that only says why when it is not.
 export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProps) {
   const t = useT();
   const needs = useNeeds("services.control", envId);
@@ -78,6 +79,10 @@ export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProp
   const [rollingBack, setRollingBack] = useState(false);
   const [removing, setRemoving] = useState(false);
   const host = useRef<HTMLDivElement>(null);
+  const editBlocked = !needs.allowed || detail.stack !== "";
+  const editReason =
+    needs.reason ??
+    (detail.stack ? t("services.remove.stackOwned", { stack: detail.stack }) : undefined);
 
   async function copyId() {
     if (await copyText(detail.id, host.current)) {
@@ -89,6 +94,19 @@ export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProp
 
   return (
     <div ref={host} className="flex flex-wrap items-center gap-2">
+      {editBlocked ? (
+        <NeedsTooltip reason={editReason}>
+          <Button type="button" variant="outline" className="max-md:h-11">
+            {t("servicedetail.actions.edit")}
+          </Button>
+        </NeedsTooltip>
+      ) : (
+        <Button asChild variant="outline" className="max-md:h-11">
+          <Link to="/env/$envId/services/$serviceId/edit" params={{ envId, serviceId: detail.id }}>
+            {t("servicedetail.actions.edit")}
+          </Link>
+        </Button>
+      )}
       {canScale(detail) ? (
         <NeedsTooltip reason={needs.reason}>
           <Button
