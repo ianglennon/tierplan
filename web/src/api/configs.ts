@@ -196,3 +196,38 @@ export function useDeleteConfig(envId: string) {
     onSettled: () => refreshConfigLists(queryClient, envId),
   });
 }
+
+export type ConfigCreateInput = components["schemas"]["ConfigCreateRequest"];
+export type ConfigCreated = components["schemas"]["ConfigCreateBody"];
+
+// postConfig creates one config. The content goes out in the body, as base64, and nowhere else. It
+// never retries: a create whose answer was lost may have happened (P2 D-42), and the next read of
+// the list says which. A refusal is read for its status and type only; nothing of the request is
+// kept in the error.
+export async function postConfig(envId: string, body: ConfigCreateInput): Promise<ConfigCreated> {
+  try {
+    const res = await api.POST("/api/env/{envId}/configs", { params: { path: { envId } }, body });
+    if (!res.data) {
+      const problem = readProblem(res.error, res.response);
+      throw new ConfigRequestError(problem.status, problem.type);
+    }
+    return res.data;
+  } catch (e) {
+    // A network failure has no status.
+    throw e instanceof ConfigRequestError ? e : new ConfigRequestError(0);
+  }
+}
+
+// useCreateConfig is the mutation behind the create sheet. It does not retry, reads the list again
+// whatever the answer, and keeps nothing: gcTime 0 drops the mutation, and the content in its
+// variables with it, as soon as nothing observes it. A config is not a secret, but what the
+// person typed is still theirs alone until the request is answered.
+export function useCreateConfig(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<ConfigCreated, ConfigRequestError, ConfigCreateInput>({
+    mutationFn: (body) => postConfig(envId, body),
+    retry: false,
+    gcTime: 0,
+    onSettled: () => refreshConfigLists(queryClient, envId),
+  });
+}

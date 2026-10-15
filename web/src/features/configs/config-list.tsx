@@ -3,6 +3,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
+import { Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { type ConfigItem, configDetailQuery, configsQuery } from "@/api/configs";
@@ -11,7 +12,13 @@ import { NoPermission } from "@/components/full-page-state";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
-import { Empty, EmptyContent, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { configDeleteReason, DeleteConfigDialog } from "@/features/configs/delete-config-dialog";
@@ -23,6 +30,7 @@ import {
   TruncatedText,
 } from "@/features/resources/resource-table";
 import { useEnvName } from "@/features/resources/use-env-name";
+import { ObjectSheet } from "@/features/secrets/object-sheet";
 import { NotASwarm } from "@/features/services/not-a-swarm";
 import { usePermission } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
@@ -33,6 +41,9 @@ interface ConfigListProps {
   // The search text, from the URL.
   q?: string;
   onSearchChange: (q: string | undefined) => void;
+  // Whether the create sheet is open: the address says so (new=1), so a link can open it.
+  creating: boolean;
+  onCreatingChange: (open: boolean) => void;
 }
 
 // UsedByPopover is the "Used by {n} services" button of a row. It opens the services as links; the
@@ -95,7 +106,13 @@ function UsedByPopover({ envId, config }: { envId: string; config: ConfigItem })
 // is read on a config's own page. For an env Admin it has Delete…; someone who may read but not
 // manage sees it disabled with the reason, and so does Delete… on a config any service spec
 // mentions (D-27).
-export function ConfigList({ envId, q, onSearchChange }: ConfigListProps) {
+export function ConfigList({
+  envId,
+  q,
+  onSearchChange,
+  creating,
+  onCreatingChange,
+}: ConfigListProps) {
   const t = useT();
   const allowed = usePermission("configs.read", envId);
   const manage = useNeeds("configs.manage", envId);
@@ -225,6 +242,20 @@ export function ConfigList({ envId, q, onSearchChange }: ConfigListProps) {
         </Button>
       </EmptyContent>
     </Empty>
+  ) : manage.allowed ? (
+    <Empty className="min-h-[30svh] border">
+      <EmptyHeader>
+        <EmptyTitle role="heading" aria-level={2} className="text-base">
+          {t("configs.list.empty")}
+        </EmptyTitle>
+        <EmptyDescription>{t("configs.list.emptyCreateBody")}</EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent>
+        <Button className="max-md:h-11" onClick={() => onCreatingChange(true)}>
+          {t("configs.create.button")}
+        </Button>
+      </EmptyContent>
+    </Empty>
   ) : undefined;
 
   if (!allowed) return <NoPermission />;
@@ -248,7 +279,23 @@ export function ConfigList({ envId, q, onSearchChange }: ConfigListProps) {
         retryLabel={t("configs.list.errorRetry")}
         errorBody={tooLarge ? t("configs.list.tooLarge") : undefined}
         getRowKey={(s) => s.id}
+        captionExtra={
+          <div className="ml-auto">
+            <NeedsTooltip reason={manage.reason}>
+              <Button
+                className="max-md:h-11"
+                onClick={manage.allowed ? () => onCreatingChange(true) : undefined}
+              >
+                <Plus aria-hidden="true" />
+                {t("configs.create.button")}
+              </Button>
+            </NeedsTooltip>
+          </div>
+        }
       />
+      {manage.allowed ? (
+        <ObjectSheet envId={envId} kind="config" open={creating} onOpenChange={onCreatingChange} />
+      ) : null}
       {manage.allowed ? (
         <DeleteConfigDialog envId={envId} config={deleting} onClose={() => setDeleting(null)} />
       ) : null}

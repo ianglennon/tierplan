@@ -32,6 +32,9 @@ export interface ObjectValue {
   source: "type" | "file";
   text: string;
   file: PickedFile | null;
+  // True when the text was read from a file and has not been edited since: a config file that is
+  // valid UTF-8 fills the text area, and the audit log still says where it came from.
+  fromFile?: boolean;
 }
 
 export const EMPTY_VALUE: ObjectValue = { source: "type", text: "", file: null };
@@ -77,6 +80,16 @@ function kbOf(bytes: number): number {
 // formatSize words a size in bytes: "12 B", "2 KB", "1.5 KB".
 export function formatSize(bytes: number): string {
   return bytes < 1024 ? `${bytes} B` : `${kbOf(bytes)} KB`;
+}
+
+// textOf is the text of bytes that are valid UTF-8, else null. A byte order mark is kept, so the
+// text is exactly the file and encodes back to the same bytes.
+function textOf(bytes: Uint8Array): string | null {
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    return null;
+  }
 }
 
 // readBytes reads a chosen file into memory with the File API. Nothing is uploaded: the bytes wait
@@ -163,9 +176,13 @@ export function ValueSourceField({
     }
     try {
       const bytes = await readBytes(file);
-      if (alive.current) {
+      if (!alive.current) return;
+      // A config that is text fills the text area, to be read and edited; one that is not stays
+      // an opaque file with its name and size. A secret is never shown, so it stays a file.
+      const text = kind === "config" ? textOf(bytes) : null;
+      if (text !== null) onChange({ source: "type", text, file: null, fromFile: true });
+      else
         onChange({ source: "file", text: "", file: { name: file.name, size: file.size, bytes } });
-      }
     } catch {
       if (alive.current) {
         setReadFailed(true);
@@ -182,7 +199,7 @@ export function ValueSourceField({
   const errorText = readFailed
     ? t("secrets.value.readFailed")
     : shownProblem === "tooBig"
-      ? t("secrets.value.tooBig", { max })
+      ? t(kind === "config" ? "configs.value.tooBig" : "secrets.value.tooBig", { max })
       : shownProblem
         ? t(`secrets.value.${shownProblem}`)
         : undefined;

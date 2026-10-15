@@ -3,6 +3,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
+import { ConfigRequestError, useCreateConfig } from "@/api/configs";
 import { SecretRequestError, useCreateSecret } from "@/api/secrets";
 import { entriesOf, KeyValueEditor, type KeyValueRow } from "@/components/key-value-editor";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -20,6 +21,13 @@ import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Sheet,
   SheetContent,
   SheetDescription,
@@ -30,6 +38,7 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import {
   EMPTY_VALUE,
+  type ObjectKind,
   type ObjectValue,
   type ValueProblem,
   ValueSourceField,
@@ -42,7 +51,7 @@ import { toastSuccess } from "@/lib/toast";
 // 44px targets under 768px (D-64), the dense 32px size from there up.
 const TOUCH_HEIGHT = "h-11 md:h-8";
 
-// A secret's name: 1 to 64 letters, numbers, dots, dashes and underscores, starting and ending
+// A secret's or config's name: 1 to 64 letters, numbers, dots, dashes and underscores, starting and ending
 // with a letter or a number. The server checks it again.
 const NAME_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$/;
 
@@ -57,45 +66,56 @@ function toBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+// What the swarm fills a config in as when a task starts: nothing, or a Go template.
+type Templating = "none" | "golang";
+
 interface ObjectSheetProps {
   envId: string;
-  // A secret now; the config sheet comes with the configs pages.
-  kind: "secret";
+  // What is created: a secret (a masked value, 500 KB) or a config (a text area, an optional Go
+  // template, 1000 KB). They share the sheet, the name, the labels and the value field.
+  kind: ObjectKind;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-// ObjectSheet is the right-hand sheet that creates a secret (UI-SPEC "Secrets and configs"): a
-// name that cannot change later, labels, and a value typed in a masked field or read from a file.
-// The value lives in this component's state until it is sent, once, as base64; it is cleared when
-// the sheet closes, is cancelled or discarded, and when the create succeeds, and it is in no toast,
-// storage, address or cache. Closing with something entered asks first, and nothing closes the
-// sheet while the request is out.
-export function ObjectSheet({ envId, open, onOpenChange }: ObjectSheetProps) {
+// ObjectSheet is the right-hand sheet that creates a secret or a config (UI-SPEC "Secrets and
+// configs"): a name that cannot change later, labels, and a value typed or read from a file; a
+// config also has its content in a text area and an optional Go template. The value lives in this
+// component's state until it is sent, once, as base64; it is cleared when the sheet closes, is
+// cancelled or discarded, and when the create succeeds, and it is in no toast, storage, address or
+// cache. Closing with something entered asks first, and nothing closes the sheet while the request
+// is out.
+export function ObjectSheet({ envId, kind, open, onOpenChange }: ObjectSheetProps) {
   const t = useT();
   const ids = useId();
-  const mutation = useCreateSecret(envId);
+  // The words of the sheet are the secrets' or the configs'; the structure is the same.
+  const ns = kind === "config" ? "configs" : "secrets";
+  const secretMutation = useCreateSecret(envId);
+  const configMutation = useCreateConfig(envId);
   const [name, setName] = useState("");
   const [labels, setLabels] = useState<KeyValueRow[]>([]);
   const [value, setValue] = useState<ObjectValue>(EMPTY_VALUE);
   const [submitted, setSubmitted] = useState(false);
   const [serverName, setServerName] = useState<string | null>(null);
   const [serverValue, setServerValue] = useState<ValueProblem | null>(null);
+  const [templating, setTemplating] = useState<Templating>("none");
+  const [serverTemplating, setServerTemplating] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [discarding, setDiscarding] = useState(false);
   // A second press can land before the pending state has rendered.
   const inFlight = useRef(false);
-  const pending = mutation.isPending;
+  const pending = secretMutation.isPending || configMutation.isPending;
 
   const trimmed = name.trim();
   const nameProblem: "required" | "invalid" | undefined =
     trimmed === "" ? "required" : NAME_PATTERN.test(trimmed) ? undefined : "invalid";
-  const typedValueProblem = useMemo(() => valueProblem("secret", value), [value]);
+  const typedValueProblem = useMemo(() => valueProblem(kind, value), [kind, value]);
   const dirty =
     name !== "" ||
     labels.some((r) => r.key !== "" || r.value !== "") ||
     value.text !== "" ||
-    value.file !== null;
+    value.file !== null ||
+    templating !== "none";
 
   function reset() {
     setName("");
@@ -104,9 +124,12 @@ export function ObjectSheet({ envId, open, onOpenChange }: ObjectSheetProps) {
     setSubmitted(false);
     setServerName(null);
     setServerValue(null);
+    setTemplating("none");
+    setServerTemplating(false);
     setFormError(null);
     setDiscarding(false);
-    mutation.reset();
+    secretMutation.reset();
+    configMutation.reset();
   }
 
   // Whatever way the sheet is closed, even by its owner, nothing of it is kept.
@@ -129,13 +152,13 @@ export function ObjectSheet({ envId, open, onOpenChange }: ObjectSheetProps) {
     else close();
   }
 
-  function place(err: SecretRequestError) {
+  function place(err: SecretRequestError | ConfigRequestError) {
     switch (err.type) {
       case "name_taken":
-        setServerName(t("secrets.errors.nameTaken", { name: trimmed }));
+        setServerName(t(`${ns}.errors.nameTaken`, { name: trimmed }));
         return;
       case "name_invalid":
-        setServerName(t("secrets.errors.nameInvalid"));
+        setServerName(t(`${ns}.errors.nameInvalid`));
         return;
       case "value_required":
         setServerValue("empty");
@@ -143,22 +166,23 @@ export function ObjectSheet({ envId, open, onOpenChange }: ObjectSheetProps) {
       case "value_too_large":
         setServerValue("tooBig");
         return;
+      case "templating_invalid":
+        setServerTemplating(true);
+        return;
       case "labels_invalid":
-        setFormError(t("secrets.errors.labels"));
+        setFormError(t(`${ns}.errors.labels`));
         return;
       case "host_read_only":
-        setFormError(t("secrets.errors.hostReadOnly"));
+        setFormError(t(`${ns}.errors.hostReadOnly`));
         return;
       case "no_manager_connected":
-        setFormError(t("secrets.errors.noManager"));
+        setFormError(t(`${ns}.errors.noManager`));
         return;
       case "not_a_swarm":
-        setFormError(t("secrets.errors.notASwarm"));
+        setFormError(t(`${ns}.errors.notASwarm`));
         return;
       default:
-        setFormError(
-          err.status === 403 ? t("secrets.errors.permission") : t("secrets.errors.generic"),
-        );
+        setFormError(err.status === 403 ? t(`${ns}.errors.permission`) : t(`${ns}.errors.generic`));
     }
   }
 
@@ -167,22 +191,35 @@ export function ObjectSheet({ envId, open, onOpenChange }: ObjectSheetProps) {
     setSubmitted(true);
     setServerName(null);
     setServerValue(null);
+    setServerTemplating(false);
     setFormError(null);
     const bytes = valueBytes(value);
     if (nameProblem || typedValueProblem || bytes === null) return;
     inFlight.current = true;
     const entered = entriesOf(labels);
     try {
-      await mutation.mutateAsync({
+      const body = {
         name: trimmed,
         ...(Object.keys(entered).length > 0 ? { labels: entered } : {}),
         data: toBase64(bytes),
-        source: value.source === "file" ? "file" : "typed",
-      });
-      toastSuccess(t("secrets.sheet.done", { name: trimmed }));
+        source: value.source === "file" || value.fromFile ? ("file" as const) : ("typed" as const),
+      };
+      if (kind === "config") {
+        await configMutation.mutateAsync({
+          ...body,
+          ...(templating === "golang" ? { templating } : {}),
+        });
+      } else {
+        await secretMutation.mutateAsync(body);
+      }
+      toastSuccess(t(`${ns}.sheet.done`, { name: trimmed }));
       close();
     } catch (e) {
-      place(e instanceof SecretRequestError ? e : new SecretRequestError(0));
+      place(
+        e instanceof SecretRequestError || e instanceof ConfigRequestError
+          ? e
+          : new SecretRequestError(0),
+      );
     } finally {
       inFlight.current = false;
     }
@@ -191,7 +228,7 @@ export function ObjectSheet({ envId, open, onOpenChange }: ObjectSheetProps) {
   const nameError = serverName
     ? serverName
     : submitted && nameProblem
-      ? t(nameProblem === "required" ? "secrets.errors.nameRequired" : "secrets.errors.nameInvalid")
+      ? t(nameProblem === "required" ? `${ns}.errors.nameRequired` : `${ns}.errors.nameInvalid`)
       : undefined;
   const valueError = serverValue ?? (submitted ? typedValueProblem : undefined);
 
@@ -208,9 +245,9 @@ export function ObjectSheet({ envId, open, onOpenChange }: ObjectSheetProps) {
           aria-describedby={`${ids}-description`}
         >
           <SheetHeader className="border-b pe-12">
-            <SheetTitle className="break-words">{t("secrets.sheet.title")}</SheetTitle>
+            <SheetTitle className="break-words">{t(`${ns}.sheet.title`)}</SheetTitle>
             <SheetDescription id={`${ids}-description`}>
-              {t("secrets.sheet.description")}
+              {t(`${ns}.sheet.description`)}
             </SheetDescription>
           </SheetHeader>
           <form
@@ -228,7 +265,7 @@ export function ObjectSheet({ envId, open, onOpenChange }: ObjectSheetProps) {
             ) : null}
 
             <Field data-invalid={nameError ? true : undefined}>
-              <FieldLabel htmlFor={`${ids}-name`}>{t("secrets.sheet.name.label")}</FieldLabel>
+              <FieldLabel htmlFor={`${ids}-name`}>{t(`${ns}.sheet.name.label`)}</FieldLabel>
               <Input
                 id={`${ids}-name`}
                 value={name}
@@ -247,27 +284,27 @@ export function ObjectSheet({ envId, open, onOpenChange }: ObjectSheetProps) {
                 }}
               />
               <FieldDescription id={`${ids}-name-helper`}>
-                {t("secrets.sheet.name.helper")}
+                {t(`${ns}.sheet.name.helper`)}
               </FieldDescription>
               {nameError ? <FieldError id={`${ids}-name-error`}>{nameError}</FieldError> : null}
             </Field>
 
             <Field>
-              <FieldLabel>{t("secrets.sheet.labels.label")}</FieldLabel>
+              <FieldLabel>{t(`${ns}.sheet.labels.label`)}</FieldLabel>
               <KeyValueEditor
                 value={labels}
                 onChange={setLabels}
                 labels={{
-                  add: t("secrets.sheet.labels.add"),
-                  key: t("secrets.sheet.labels.key"),
-                  value: t("secrets.sheet.labels.value"),
-                  remove: (key) => t("secrets.sheet.labels.remove", { key }),
+                  add: t(`${ns}.sheet.labels.add`),
+                  key: t(`${ns}.sheet.labels.key`),
+                  value: t(`${ns}.sheet.labels.value`),
+                  remove: (key) => t(`${ns}.sheet.labels.remove`, { key }),
                 }}
               />
             </Field>
 
             <ValueSourceField
-              kind="secret"
+              kind={kind}
               value={value}
               disabled={pending}
               problem={valueError}
@@ -276,6 +313,42 @@ export function ObjectSheet({ envId, open, onOpenChange }: ObjectSheetProps) {
                 setServerValue(null);
               }}
             />
+            {kind === "config" ? (
+              <Field data-invalid={serverTemplating ? true : undefined}>
+                <FieldLabel htmlFor={`${ids}-templating`}>
+                  {t("configs.sheet.templating.label")}
+                </FieldLabel>
+                <Select
+                  value={templating}
+                  disabled={pending}
+                  onValueChange={(next) => {
+                    setTemplating(next === "golang" ? "golang" : "none");
+                    setServerTemplating(false);
+                  }}
+                >
+                  <SelectTrigger
+                    id={`${ids}-templating`}
+                    className="w-full max-md:h-11"
+                    aria-invalid={serverTemplating ? true : undefined}
+                    aria-describedby={`${ids}-templating-helper${serverTemplating ? ` ${ids}-templating-error` : ""}`}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">{t("configs.sheet.templating.none")}</SelectItem>
+                    <SelectItem value="golang">{t("configs.sheet.templating.golang")}</SelectItem>
+                  </SelectContent>
+                </Select>
+                <FieldDescription id={`${ids}-templating-helper`}>
+                  {t("configs.sheet.templating.helper")}
+                </FieldDescription>
+                {serverTemplating ? (
+                  <FieldError id={`${ids}-templating-error`}>
+                    {t("configs.errors.templating")}
+                  </FieldError>
+                ) : null}
+              </Field>
+            ) : null}
             <button type="submit" hidden aria-hidden="true" tabIndex={-1} />
           </form>
           <SheetFooter className="sticky bottom-0 mt-0 flex-row justify-end border-t bg-popover">
@@ -286,7 +359,7 @@ export function ObjectSheet({ envId, open, onOpenChange }: ObjectSheetProps) {
               disabled={pending}
               onClick={requestClose}
             >
-              {t("secrets.sheet.cancel")}
+              {t(`${ns}.sheet.cancel`)}
             </Button>
             <Button
               type="button"
@@ -295,7 +368,7 @@ export function ObjectSheet({ envId, open, onOpenChange }: ObjectSheetProps) {
               onClick={() => void submit()}
             >
               {pending ? <Spinner aria-hidden="true" /> : null}
-              {t("secrets.sheet.submit")}
+              {t(`${ns}.sheet.submit`)}
             </Button>
           </SheetFooter>
         </SheetContent>
@@ -304,13 +377,13 @@ export function ObjectSheet({ envId, open, onOpenChange }: ObjectSheetProps) {
       <AlertDialog open={discarding} onOpenChange={setDiscarding}>
         <AlertDialogContent className="sm:max-w-120">
           <AlertDialogHeader>
-            <AlertDialogTitle>{t("secrets.sheet.discard.title")}</AlertDialogTitle>
-            <AlertDialogDescription>{t("secrets.sheet.discard.body")}</AlertDialogDescription>
+            <AlertDialogTitle>{t(`${ns}.sheet.discard.title`)}</AlertDialogTitle>
+            <AlertDialogDescription>{t(`${ns}.sheet.discard.body`)}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel autoFocus>{t("secrets.sheet.discard.keep")}</AlertDialogCancel>
+            <AlertDialogCancel autoFocus>{t(`${ns}.sheet.discard.keep`)}</AlertDialogCancel>
             <AlertDialogAction onClick={close}>
-              {t("secrets.sheet.discard.discard")}
+              {t(`${ns}.sheet.discard.discard`)}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
