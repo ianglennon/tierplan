@@ -73,6 +73,23 @@
       "ingress": "Ingress",
       "host": "Host"
     },
+    "mounts": {
+      "title": "Mounts",
+      "row": "Mount {{n}}",
+      "add": "Add mount",
+      "remove": "Remove mount {{n}}",
+      "type": "Type",
+      "volume": "Volume",
+      "bind": "Bind",
+      "tmpfs": "Tmpfs",
+      "source": "Source",
+      "sourceVolumePlaceholder": "Volume name",
+      "sourceBindPlaceholder": "/srv/data",
+      "destination": "Destination",
+      "destinationPlaceholder": "/data",
+      "readOnly": "Read-only",
+      "bindNotice": "A bind mount gives tasks access to a folder on whichever node runs them, and the folder must exist on every node that can run the service. Folders under /srv, /mnt and /media are open to Operators; any other host path or the Docker socket needs Admin."
+    },
     "resources": {
       "title": "Resources",
       "cpuLimit": "CPU limit (cores)",
@@ -86,6 +103,61 @@
       "mib": "MiB",
       "gib": "GiB"
     },
+    "placement": {
+      "title": "Placement",
+      "constraints": "Constraints",
+      "constraint": "Constraint {{n}}",
+      "add": "Add constraint",
+      "remove": "Remove constraint {{n}}",
+      "helper": "For example node.role==worker or node.labels.disk==ssd.",
+      "matches_one": "Matches {{matched, number}} of {{count, number}} node",
+      "matches_other": "Matches {{matched, number}} of {{count, number}} nodes",
+      "matchesNone": "Matches no nodes",
+      "spread": "Spread over (label)",
+      "spreadPlaceholder": "node.labels.zone",
+      "spreadHelper": "Swarm spreads the tasks evenly across the values of this node label.",
+      "moreSpreads_one": "{{count}} more preference is kept as it is. Edit it in the Spec tab.",
+      "moreSpreads_other": "{{count}} more preferences are kept as they are. Edit them in the Spec tab.",
+      "maxReplicas": "Max replicas per node",
+      "maxReplicasHelper": "Leave empty for no limit."
+    },
+    "restart": {
+      "title": "Restart policy",
+      "condition": "Restart when",
+      "any": "Any exit",
+      "onFailure": "Failure only",
+      "none": "Never",
+      "delay": "Delay",
+      "delayPlaceholder": "5s",
+      "maxAttempts": "Max attempts",
+      "maxAttemptsHelper": "Leave empty to retry forever.",
+      "window": "Window",
+      "windowPlaceholder": "120s",
+      "windowHelper": "How long a task must run before it counts as started."
+    },
+    "update": {
+      "title": "Update policy",
+      "parallelism": "Tasks at a time",
+      "parallelismHelper": "0 updates all at once.",
+      "delay": "Delay between batches",
+      "delayPlaceholder": "10s",
+      "order": "Order",
+      "stopFirst": "Stop first",
+      "startFirst": "Start first",
+      "orderHelper": "Start first brings the new task up before the old one stops.",
+      "monitor": "Monitor",
+      "monitorPlaceholder": "5s",
+      "monitorHelper": "How long to watch each updated task for a failure.",
+      "maxFailureRatio": "Max failure ratio",
+      "maxFailureRatioHelper": "The share of tasks that may fail, from 0 to 1, before the update counts as failed.",
+      "behaviour": "Update behaviour",
+      "autoRollback": {
+        "label": "Roll back automatically if an update fails",
+        "helper": "Saved on the service, so every later update uses it, including one-click image updates.",
+        "reviewHelper": "Saved on the service. Later updates, including one-click image updates, use the same policy.",
+        "continues": "Currently set to continue on failure. Ticking this changes it to roll back."
+      }
+    },
     "errors": {
       "nameRequired": "Enter a name.",
       "nameInvalid": "Use letters, numbers, dot, dash or underscore.",
@@ -93,7 +165,11 @@
       "whole": "Enter a whole number of 0 or more.",
       "port": "Enter a port from 1 to 65535.",
       "portTwice": "That published port is used twice.",
-      "cores": "Enter a number of cores like 0.5."
+      "cores": "Enter a number of cores like 0.5.",
+      "duration": "Enter a duration like 5s, 30s or 2m.",
+      "absolutePath": "Enter an absolute path that starts with /.",
+      "constraint": "Enter a constraint like node.role==worker.",
+      "ratio": "Enter a number from 0 to 1."
     }
   }
 }

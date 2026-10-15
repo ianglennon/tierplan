@@ -14,6 +14,9 @@ export interface CardProps {
   set: (path: string, value: unknown) => void;
   // Takes the setting out of the spec, if it is there.
   unset: (path: string) => void;
+  // Changes the spec as it is now by a function of it, for a change that is more than one path
+  // (the auto-rollback box seeds an UpdateConfig). Nothing else in the spec moves.
+  change: (fn: (spec: SpecValue) => SpecValue) => void;
   mode: "edit" | "create";
   envId: string;
   // Tells the form whether this card holds a field that can't be written. A card keeps its own

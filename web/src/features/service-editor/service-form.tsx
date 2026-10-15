@@ -59,6 +59,10 @@ export function ServiceForm({
     [apply],
   );
   const unset = useCallback((path: string) => apply(removePath(current.current, path)), [apply]);
+  const change = useCallback(
+    (fn: (spec: SpecValue) => SpecValue) => apply(fn(current.current)),
+    [apply],
+  );
 
   const [bad, setBad] = useState<Readonly<Record<string, boolean>>>({});
   const report = useCallback(
@@ -74,7 +78,7 @@ export function ServiceForm({
   }, [valid]);
   useEffect(() => () => tell.current?.(true), []);
 
-  const card = { spec, set, unset, mode, envId, report };
+  const card = { spec, set, unset, change, mode, envId, report };
   return (
     <div className="mx-auto flex w-full max-w-240 flex-col gap-8">
       <CautionBar spec={spec} onOpenSpec={onOpenSpec} />

@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { Info, TriangleAlert } from "lucide-react";
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import type { components } from "@/api/schema";
 import type { ServiceReview } from "@/api/services";
 import { NeedsTooltip } from "@/components/needs-tooltip";
@@ -10,9 +10,11 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { AutoRollbackBox } from "@/features/service-editor/cards/auto-rollback-box";
 import { EditorFooter } from "@/features/service-editor/editor-footer";
 import { imageOf } from "@/features/service-editor/spec-paths";
 import { withTypedValues } from "@/features/service-editor/typed-values";
+import { autoRollbackState, setAutoRollback } from "@/features/service-editor/update-policy";
 import { diffSpecs } from "@/features/spec-editor/diff";
 import { SpecDiff } from "@/features/spec-editor/spec-diff";
 import type { SpecValue } from "@/features/spec-editor/spec-format";
@@ -111,7 +113,9 @@ function ImageRow({ current, next, credential }: ImageRowProps) {
 // ReviewStep is the second state of the editor (D-03): the field-level difference between the
 // spec as it was loaded and the one the server judged, grouped under the cards of the form, with
 // the image and its digest above it and, above that, whatever the server said that stops or
-// qualifies an apply. The server decides every refusal; this only words it (T-06-60). Apply is
+// qualifies an apply, and the auto-rollback box, which is the Update policy card's own field
+// (D-12 amended): changing it here hands the page the spec with the choice applied. The server
+// decides every refusal; this only words it (T-06-60). Apply is
 // unavailable, with the reason, while there is nothing to apply, while the caller may not have the
 // settings in the spec, while the host is read-only, and while the image or an object the spec
 // names cannot be found.
@@ -123,9 +127,10 @@ export function ReviewStep({
   applying,
   onBack,
   onApply,
-  onSpecChange: _onSpecChange,
+  onSpecChange,
 }: ReviewStepProps) {
   const t = useT();
+  const rollbackId = useId();
   const next = useMemo(
     () => (review ? withTypedValues(review.spec, edited) : edited),
     [review, edited],
@@ -255,6 +260,16 @@ export function ReviewStep({
           credential={review?.image.credential}
         />
       ) : null}
+      <section className="flex flex-col gap-2">
+        <h3 className="text-base font-semibold">{t("serviceForm.update.behaviour")}</h3>
+        <AutoRollbackBox
+          id={rollbackId}
+          state={autoRollbackState(edited)}
+          helper="reviewHelper"
+          disabled={applying}
+          onChange={(ticked) => onSpecChange(setAutoRollback(edited, ticked))}
+        />
+      </section>
       <section className="flex flex-col gap-2">
         <h3 className="text-base font-semibold">{t("specEditor.review.changes")}</h3>
         {hiddenOnly ? (

@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
+import { placementRetry } from "@/api/placement";
 import { queryClient } from "@/api/query-client";
 import { serviceRetry } from "@/api/services";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
@@ -74,6 +75,7 @@ beforeEach(() => {
   };
   queryClient.setDefaultOptions({ queries: { retry: false, refetchOnWindowFocus: false } });
   serviceRetry.attempts = 0;
+  placementRetry.attempts = 0;
   applyTiming.settleMs = 10;
   setCsrfToken(null);
   FakeEventSource.reset();
@@ -88,6 +90,7 @@ afterEach(() => {
   queryClient.clear();
   queryClient.setDefaultOptions(defaults);
   serviceRetry.attempts = 1;
+  placementRetry.attempts = 3;
   applyTiming.settleMs = 2000;
   localStorage.clear();
   document.title = "";

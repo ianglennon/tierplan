@@ -170,7 +170,16 @@ describe("the cards", () => {
   it("is one column, the cards in the order of the copy", () => {
     render(<Host />);
     const titles = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent);
-    expect(titles).toEqual(["Basics", "Environment variables", "Ports", "Resources"]);
+    expect(titles).toEqual([
+      "Basics",
+      "Environment variables",
+      "Ports",
+      "Mounts",
+      "Resources",
+      "Placement",
+      "Restart policy",
+      "Update policy",
+    ]);
   });
 });
 

@@ -18,7 +18,7 @@ export interface PlacementRulesCardProps {
   nodes: readonly PlacementNode[];
 }
 
-const factsOf = (n: PlacementNode): NodeFacts => ({
+export const factsOf = (n: PlacementNode): NodeFacts => ({
   id: n.id,
   hostname: n.hostname,
   ip: n.address,

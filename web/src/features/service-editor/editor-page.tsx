@@ -235,16 +235,19 @@ export function ServiceEditorPage({
     onTabChange?.(next);
   }
 
-  function onReview() {
-    if (!data || !valid || reviewMutation.isPending) return;
+  // The review of the spec as it is, or of one the review step has just changed (the auto-rollback
+  // box): that one replaces a review still on its way.
+  function onReview(changed?: SpecValue) {
+    if (!data || !valid || (changed === undefined && reviewMutation.isPending)) return;
+    const target = changed ?? spec;
     const mine = ++turn.current;
     setEditError(null);
     setReview(undefined);
     // A new image is looked up, which can take a while: go to the review now, with the lookup
     // showing. Otherwise the button reads Checking… until the server has answered.
-    if (imageOf(spec) !== imageOf(current)) setStage("review");
+    if (imageOf(target) !== imageOf(current)) setStage("review");
     reviewMutation.mutate(
-      { serviceId, version: data.version, spec },
+      { serviceId, version: data.version, spec: target },
       {
         onSuccess: (answer) => {
           if (mine !== turn.current) return;
@@ -258,6 +261,13 @@ export function ServiceEditorPage({
         },
       },
     );
+  }
+
+  // The auto-rollback box on the review step changed the spec: the Form and the Spec tab hold the
+  // new one, and the difference is worked out again for it.
+  function onReviewSpecChange(next: SpecValue) {
+    setEdited(next);
+    onReview(next);
   }
 
   function backToEditing() {
@@ -494,7 +504,7 @@ export function ServiceEditorPage({
           serviceId={serviceId}
           ready={valid && formValid}
           checking={reviewMutation.isPending}
-          onReview={onReview}
+          onReview={() => onReview()}
         />
       </div>
       {stage === "review" ? (
@@ -507,7 +517,7 @@ export function ServiceEditorPage({
           applying={applyMutation.isPending}
           onBack={backToEditing}
           onApply={onApply}
-          onSpecChange={() => undefined}
+          onSpecChange={onReviewSpecChange}
         />
       ) : null}
       {stage === "apply" ? (
