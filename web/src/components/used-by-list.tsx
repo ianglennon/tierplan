@@ -7,7 +7,8 @@ interface UsedByListProps {
   // The containers that use the network, volume or image, each with the node it runs on.
   containers: { name: string; node: string }[];
   // The swarm services whose specs mention it.
-  services: { name: string }[];
+  // A secret or a config also says how the service mounts it: the file, owner and mode.
+  services: { name: string; file?: string; uid?: string; gid?: string; mode?: string }[];
 }
 
 // UsedByList is the "in use by" content the network Delete callout, the volume callout and
@@ -31,4 +32,27 @@ export function UsedByList({ containers, services }: UsedByListProps) {
       ))}
     </ul>
   );
+}
+
+// One service that mentions a secret or a config, with how it mounts it.
+export interface ObjectUser {
+  service: string;
+  serviceId: string;
+  stack: string;
+  file: string;
+  uid: string;
+  gid: string;
+  mode: string;
+}
+
+interface ObjectUsersTableProps {
+  envId: string;
+  users: readonly ObjectUser[];
+  // "secret" or "config": the empty line says which.
+  kind: "secret" | "config";
+}
+
+// ObjectUsersTable is the Used by tab of a secret or a config. Not built yet.
+export function ObjectUsersTable(_props: ObjectUsersTableProps): null {
+  return null;
 }

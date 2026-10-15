@@ -180,9 +180,15 @@ describe("invalidationKeys", () => {
   });
 
   it("makes only the summary stale for the swarm objects without a list yet and for a row of Bayplan's own", () => {
-    for (const type of ["secret", "config", "bayplan"] as const) {
+    for (const type of ["config", "bayplan"] as const) {
       expect(invalidationKeys(type, "e1")).toEqual([summary]);
     }
+  });
+
+  it("maps a secret event to the summary and the secrets list, which an open secret page extends", () => {
+    expect(invalidationKeys("secret", "e1")).toEqual([summary, list("secrets")]);
+    const secrets = list("secrets");
+    expect(["env", "e1", "secrets", "detail", "sid"].slice(0, secrets.length)).toEqual(secrets);
   });
 
   it("maps a node event to the summary, the nodes list and the services list (which holds the placement view)", () => {
@@ -198,8 +204,8 @@ describe("invalidationKeys", () => {
     expect(placementKey("e1").slice(0, 3)).toEqual(keys.find((k) => k[2] === "services"));
   });
 
-  it("maps a service event to the summary and the services list", () => {
-    expect(invalidationKeys("service", "e1")).toEqual([summary, list("services")]);
+  it("maps a service event to the summary, the services list and the secrets list, whose Used by counts follow the services' specs", () => {
+    expect(invalidationKeys("service", "e1")).toEqual([summary, list("services"), list("secrets")]);
   });
 
   it("refreshes every filtered read of the services list, since their keys extend the list's", () => {
