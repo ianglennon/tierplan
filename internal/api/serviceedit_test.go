@@ -583,8 +583,12 @@ func TestApplyCleanupIsReported(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &prob); err != nil {
 		t.Fatal(err)
 	}
-	if want := "Couldn't update api. Docker rejected these settings: the manager refuses this spec The 3 objects created for this change were removed."; prob.Detail != want {
-		t.Errorf("detail = %q, want %q", prob.Detail, want)
+	if !strings.HasPrefix(prob.Detail, "Couldn't update api. Docker rejected these settings: ") || !strings.Contains(prob.Detail, "the manager refuses this spec") ||
+		!strings.HasSuffix(prob.Detail, " The 3 objects created for this change were removed.") {
+		t.Errorf("detail = %q, want the reason followed by the 3 objects were removed", prob.Detail)
+	}
+	if reason := prob.at("reason"); !strings.HasPrefix(reason, "Docker rejected these settings: ") || strings.Contains(reason, "Couldn't update") {
+		t.Errorf("reason = %q, want Docker's refusal on its own", reason)
 	}
 	var removed []string
 	for _, er := range prob.Errors {
@@ -622,8 +626,9 @@ func TestApplyCleanupThatCouldNotFinishNamesWhatIsLeft(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &prob); err != nil {
 		t.Fatal(err)
 	}
-	if want := "Couldn't update api. Docker rejected these settings: the manager refuses this spec Bayplan couldn't remove secret db-pass. Remove them under Networks, Secrets or Configs."; prob.Detail != want {
-		t.Errorf("detail = %q, want %q", prob.Detail, want)
+	if !strings.HasPrefix(prob.Detail, "Couldn't update api. Docker rejected these settings: ") ||
+		!strings.HasSuffix(prob.Detail, " Bayplan couldn't remove secret db-pass. Remove them under Networks, Secrets or Configs.") {
+		t.Errorf("detail = %q, want the reason followed by what could not be removed", prob.Detail)
 	}
 	if !strings.HasPrefix(prob.at("notRemoved"), "secret:db-pass") {
 		t.Errorf("notRemoved = %q, want the secret", prob.at("notRemoved"))

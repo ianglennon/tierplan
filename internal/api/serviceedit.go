@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -57,7 +58,39 @@ type ServiceEditRequest struct {
 	Spec    SpecJSON `json:"spec" doc:"The full service spec to review or apply. Without secrets.reveal it is the masked spec the caller read, changed: a value left as <hidden> keeps its current value, a value typed replaces it, a removed entry is removed"`
 }
 
-// ServiceEditInput is the path and body of the review and apply routes.
+// maxStagedObjects is the most objects one apply creates, and maxApplyBody the most bytes its request
+// may have: the per-kind size limits of the secrets and configs routes apply to each object.
+const (
+	maxStagedObjects = 16
+	maxApplyBody     = 8 << 20
+)
+
+// ServiceStagedObject is an object the editor made that does not exist yet.
+type ServiceStagedObject struct {
+	Kind       string            `json:"kind" enum:"network,secret,config" doc:"What to create. A network is made as an attachable overlay"`
+	Name       string            `json:"name" doc:"The name the spec uses for it: letters, numbers, dot, dash and underscore, starting and ending with a letter or number, at most 64 characters (else 422 name_invalid)"`
+	Data       string            `json:"data,omitempty" doc:"A secret's value or a config's content, as standard base64: 1 to 511,999 bytes for a secret and 1 to 1,023,999 for a config (else 422 value_required, value_invalid or value_too_large). It is sent to the swarm once and never kept, logged, audited or returned. Ignored for a network"`
+	Templating string            `json:"templating,omitempty" doc:"A config only: none (the default) or golang, to have the swarm fill the content in as a Go template; anything else is 422 templating_invalid"`
+	Labels     map[string]string `json:"labels,omitempty" maxProperties:"64" doc:"Labels of a secret or config, at most 64 (422 labels_invalid for a key over 256 or a value over 4096 characters)"`
+	Subnet     string            `json:"subnet,omitempty" doc:"A network only: the subnet in CIDR form; left out, the swarm chooses (422 subnet_invalid)"`
+}
+
+// ServiceApplyRequest is the body of the apply route: the review's body and the objects the spec
+// names that do not exist yet.
+type ServiceApplyRequest struct {
+	ServiceEditRequest
+	Objects []ServiceStagedObject `json:"objects,omitempty" doc:"The networks, secrets and configs the spec names by name that do not exist yet, with the values to make them from. At most 16 (else 422 too_many_objects). Each is created, networks then secrets then configs, before the service is updated, and every one is removed again if anything after the first creation fails. One the spec does not name is ignored. The caller needs networks.manage, secrets.manage or configs.manage (Env Admin) for each kind created, else 403 object_permission before anything is created"`
+}
+
+// ServiceApplyInput is the path and body of the apply route.
+type ServiceApplyInput struct {
+	ServiceDetailInput
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      ServiceApplyRequest
+}
+
+// ServiceEditInput is the path and body of the review route.
 type ServiceEditInput struct {
 	ServiceDetailInput
 	// UserAgent is read only to record it in the audit log; it is not part of the contract.
@@ -124,12 +157,36 @@ type ServiceReviewOutput struct {
 	Body         ServiceReviewBody
 }
 
+// ServiceApplyStepBody is one step of an apply.
+type ServiceApplyStepBody struct {
+	Step  string `json:"step" enum:"image,object,service" doc:"image (the tag resolved to a digest), object (one network, secret or config created) or service (the update)"`
+	Kind  string `json:"kind" doc:"For an object step: network, secret or config; empty otherwise"`
+	Name  string `json:"name" doc:"For an object step the object's name, for the service step the service's; empty for the image"`
+	State string `json:"state" enum:"done,failed,skipped" doc:"skipped is a step with nothing to do or one that was not reached"`
+	Code  string `json:"code" doc:"Why a step failed; empty otherwise"`
+}
+
+// ServiceObjectBody names an object an apply made.
+type ServiceObjectBody struct {
+	Kind string `json:"kind" enum:"network,secret,config" doc:"network, secret or config"`
+	Name string `json:"name" doc:"The object's name"`
+	ID   string `json:"id" doc:"The ID the swarm gave it"`
+}
+
+// ServiceCleanupBody is what removing the objects of a failed apply did.
+type ServiceCleanupBody struct {
+	Removed    []ServiceObjectBody `json:"removed" doc:"The objects made by the apply that were removed again, in the order they were removed. Empty after a successful apply"`
+	NotRemoved []ServiceObjectBody `json:"notRemoved" doc:"The objects made by the apply that could not be removed and are still there; empty when none"`
+}
+
 // ServiceApplyBody is what an apply sent.
 type ServiceApplyBody struct {
-	Image    string   `json:"image" doc:"The image the service now names: tag@sha256:digest when the tag was resolved"`
-	Digest   string   `json:"digest" doc:"The digest the image is pinned to; empty when it names none"`
-	Pinned   bool     `json:"pinned" doc:"True when Bayplan resolved the tag and wrote the digest into the spec"`
-	Warnings []string `json:"warnings" doc:"The manager's warnings about the update, scrubbed of masked values; empty when there are none"`
+	Image    string                 `json:"image" doc:"The image the service now names: tag@sha256:digest when the tag was resolved"`
+	Digest   string                 `json:"digest" doc:"The digest the image is pinned to; empty when it names none"`
+	Pinned   bool                   `json:"pinned" doc:"True when Bayplan resolved the tag and wrote the digest into the spec"`
+	Warnings []string               `json:"warnings" doc:"The manager's warnings about the update, scrubbed of masked values; empty when there are none"`
+	Steps    []ServiceApplyStepBody `json:"steps" doc:"The steps of the apply in order: the image, each object created, the service"`
+	Cleanup  ServiceCleanupBody     `json:"cleanup" doc:"Empty after a successful apply. A failed apply answers a problem whose errors carry the same lists"`
 }
 
 // ServiceApplyOutput wraps ServiceApplyBody for huma.
@@ -150,6 +207,9 @@ const (
 	problemNothingToApply      = "nothing_to_apply"
 	problemPrivilegedService   = rbac.ReasonPrivilegedService
 	problemUpdateFailed        = "update_failed"
+	problemTooManyObjects      = "too_many_objects"
+	problemObjectPermission    = "object_permission"
+	problemObjectDuplicate     = "object_duplicate"
 )
 
 // registerServiceEdit mounts the review and apply routes.
@@ -186,12 +246,15 @@ func registerServiceEdit(r *httpx.Router, d ServicesDeps) {
 		Description: "Sends a full service spec once and never retried; the rollout continues in the swarm, so the answer is 202. " +
 			"In one write on a manager it inspects the service fresh, refuses a version that is not the one sent, merges the masked values back, runs the host-escalation policy on the merged spec that will be forwarded, resolves the digest when the image changed (a failed lookup is 422 image_unresolved and nothing is sent) and sends one update with the version and the registry credential. " +
 			"Two applies racing on one service: Docker's version check lets one through and the other gets 409 service_changed; neither is retried, and sending the same version twice makes the second 409. " +
-			"Also 422 nothing_to_apply for a spec equal to the current one, 422 objects_missing for a network the spec names that does not exist, and 422 spec_rejected, with Docker's words, for a spec Docker refuses (a missing secret or config, for one). " + problems +
-			"No answer, error or audit row carries a value of the environment, the command line, the health check or the log options for a caller without secrets.reveal. " +
+			"Also 422 nothing_to_apply for a spec equal to the current one, 422 objects_missing for a network, secret or config the spec names that does not exist and was not sent in objects, and 422 spec_rejected, with Docker's words, for a spec Docker refuses. " +
+			"The networks, secrets and configs in objects are created first, networks then secrets then configs, their IDs are written into the spec's references, and then the service is updated; each is audited as network.created, secret.created or config.created with source service_apply, never with a value. " +
+			"If anything after the first creation fails, every object this apply made is removed again in reverse order (audited with source service_apply_cleanup); the problem's detail says so and its errors carry the reason on its own (location reason) and the objects as removed and notRemoved, each as kind:name. " +
+			"Also 422 too_many_objects for more than 16 objects, 422 object_duplicate for the same kind and name twice, the name, value, labels, templating and subnet problems of the secrets, configs and networks routes for a bad object, 409 name_taken when an object's name exists already (nothing is retried), and 403 object_permission, before anything is created, for a caller without networks.manage, secrets.manage or configs.manage (Env Admin) for a kind it would create. " + problems +
+			"No answer, error or audit row carries a value of the environment, the command line, the health check or the log options for a caller without secrets.reveal, or the value of a staged secret or config. " +
 			"Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.updated, with result failure and the code when it was refused.",
-		Tags: []string{"environments"}, DefaultStatus: http.StatusAccepted,
+		Tags: []string{"environments"}, DefaultStatus: http.StatusAccepted, MaxBodyBytes: maxApplyBody,
 	}, rbac.Requirement{Perm: rbac.PermServicesControl, Scope: rbac.ScopeEnvironment},
-		func(ctx context.Context, in *ServiceEditInput) (*ServiceApplyOutput, error) {
+		func(ctx context.Context, in *ServiceApplyInput) (*ServiceApplyOutput, error) {
 			p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
 			if p == nil || env == nil {
 				return nil, huma.Error500InternalServerError("internal error")
@@ -273,20 +336,117 @@ func findingBodies(fs []compose.Finding) []ServiceFindingBody {
 	return out
 }
 
+// objectPermissions are the permission each kind of object needs to be created (D-13).
+var objectPermissions = map[string]rbac.Perm{
+	swarmops.KindNetwork: rbac.PermNetworksManage,
+	swarmops.KindSecret:  rbac.PermSecretsManage,
+	swarmops.KindConfig:  rbac.PermConfigsManage,
+}
+
+// objectNouns are how the kinds are worded in a sentence about several of them.
+var objectNouns = map[string]string{swarmops.KindNetwork: "networks", swarmops.KindSecret: "secrets", swarmops.KindConfig: "configs"}
+
+// stagedObjects checks the objects of an apply the way the networks, secrets and configs routes
+// check theirs, before anything is sent, and turns them into what swarmops creates from. The caller
+// clears the values when it is done.
+func stagedObjects(in []ServiceStagedObject) ([]swarmops.StagedObject, error) {
+	if len(in) > maxStagedObjects {
+		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemTooManyObjects,
+			"One change can create at most "+strconv.Itoa(maxStagedObjects)+" objects.")
+	}
+	out := make([]swarmops.StagedObject, 0, len(in))
+	seen := map[string]bool{}
+	fail := func(err error) ([]swarmops.StagedObject, error) {
+		for _, o := range out {
+			clear(o.Data)
+		}
+		return nil, err
+	}
+	for _, o := range in {
+		if !secretNameRe.MatchString(o.Name) {
+			return fail(httpx.Problem(http.StatusUnprocessableEntity, problemNameInvalid,
+				"Use letters, numbers, dot, dash or underscore, up to 64 characters, starting and ending with a letter or number."))
+		}
+		key := o.Kind + "/" + o.Name
+		if seen[key] {
+			return fail(httpx.Problem(http.StatusUnprocessableEntity, problemObjectDuplicate, "The "+o.Kind+" "+o.Name+" is listed twice."))
+		}
+		seen[key] = true
+		so := swarmops.StagedObject{Kind: o.Kind, Name: o.Name}
+		var err error
+		switch o.Kind {
+		case swarmops.KindNetwork:
+			if err = validateAddressing(o.Subnet, "", ""); err == nil {
+				so.Subnet = o.Subnet
+			}
+		case swarmops.KindSecret:
+			if so.Data, err = decodeSecretValue(o.Data); err == nil {
+				err = validateSecretLabels(o.Labels)
+			}
+			so.Labels = o.Labels
+		case swarmops.KindConfig:
+			if so.Templating, _, err = configTemplating(o.Templating); err == nil {
+				if so.Data, err = decodeConfigValue(o.Data); err == nil {
+					err = validateSecretLabels(o.Labels)
+				}
+			}
+			so.Labels = o.Labels
+		default:
+			err = httpx.Problem(http.StatusUnprocessableEntity, problemNameInvalid, "Unknown kind of object "+o.Kind+".")
+		}
+		out = append(out, so)
+		if err != nil {
+			return fail(err)
+		}
+	}
+	return out, nil
+}
+
+// applyDeps are swarmopsDeps with the two hooks that need the caller: whether they may create a
+// kind of object, and the audit row of each object an apply makes or removes.
+func applyDeps(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID, userAgent string) swarmops.Deps {
+	sd := swarmopsDeps(d)
+	sd.CanCreate = func(kind string) bool {
+		perm, ok := objectPermissions[kind]
+		return ok && d.Checker.Check(ctx, p, rbac.Requirement{Perm: perm, Scope: rbac.ScopeEnvironment}, envID).Allowed
+	}
+	sd.Record = func(e audit.Entry) {
+		e.Actor, e.EnvID, e.IP, e.UserAgent = p.AuditActor(), envID, httpx.ClientIP(ctx), userAgent
+		wctx, cancel := doneActionAuditContext(ctx)
+		defer cancel()
+		if err := d.Audit.Record(wctx, e); err != nil {
+			// The object has been made or removed and the caller must still be told which; the
+			// lost row is the server's fault and is logged.
+			d.Log.Error("could not audit an object of a service apply", "action", e.Action, "object", e.Details["name"], "error", err)
+		}
+	}
+	return sd
+}
+
 // applyServiceUpdate sends a spec once. The write is sent and seen through, so a browser that goes
 // away while it runs does not turn an update that happened into a failure.
-func applyServiceUpdate(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID string, in *ServiceEditInput) (ServiceApplyBody, error) {
+func applyServiceUpdate(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID string, in *ServiceApplyInput) (ServiceApplyBody, error) {
+	objects, err := stagedObjects(in.Body.Objects)
+	if err != nil {
+		return ServiceApplyBody{}, err
+	}
+	defer func() {
+		for _, o := range objects {
+			clear(o.Data)
+		}
+	}()
 	if err := requireSwarm(ctx, d, envID); err != nil {
 		return ServiceApplyBody{}, err
 	}
 	caller := swarmops.Caller{Principal: p, Reveal: redact.CanReveal(ctx, d.Checker, p, envID)}
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), writeTimeout)
 	defer cancel()
+	sd := applyDeps(writeCtx, d, p, envID, in.UserAgent)
 	var res swarmops.ApplyResult
-	err := d.Aggregator.WriteOnManager(writeCtx, envID, func(c *dockerx.Client) error {
+	err = d.Aggregator.WriteOnManager(writeCtx, envID, func(c *dockerx.Client) error {
 		var e error
-		res, e = swarmops.Apply(writeCtx, swarmopsDeps(d), swarmops.ApplyInput{
-			EnvID: envID, Client: c, ServiceID: in.ServiceID, Version: in.Body.Version, Spec: json.RawMessage(in.Body.Spec), Caller: caller,
+		res, e = swarmops.Apply(writeCtx, sd, swarmops.ApplyInput{
+			EnvID: envID, Client: c, ServiceID: in.ServiceID, Version: in.Body.Version, Spec: json.RawMessage(in.Body.Spec), Caller: caller, Objects: objects,
 		})
 		return e
 	})
@@ -301,11 +461,72 @@ func applyServiceUpdate(ctx context.Context, d ServicesDeps, p *rbac.Principal, 
 		if code != codeServiceNotFound {
 			auditServiceAction(ctx, d, p, envID, in.UserAgent, audit.ActionServiceUpdated, res.ServiceID, in.ServiceID, details(code), code)
 		}
-		return ServiceApplyBody{}, problem
+		return ServiceApplyBody{}, withCleanup(problem, res.Name, res.Cleanup)
 	}
 	refreshClusters(ctx, d, envID)
 	auditServiceAction(ctx, d, p, envID, in.UserAgent, audit.ActionServiceUpdated, res.ServiceID, in.ServiceID, details(actionDone), actionDone)
-	return ServiceApplyBody{Image: res.Image.Ref, Digest: res.Image.Digest, Pinned: res.Image.Pinned, Warnings: nonNil(res.Warnings)}, nil
+	return ServiceApplyBody{
+		Image: res.Image.Ref, Digest: res.Image.Digest, Pinned: res.Image.Pinned, Warnings: nonNil(res.Warnings),
+		Steps: stepBodies(res.Steps), Cleanup: ServiceCleanupBody{Removed: objectBodies(res.Cleanup.Removed), NotRemoved: objectBodies(res.Cleanup.NotRemoved)},
+	}, nil
+}
+
+func stepBodies(steps []swarmops.ApplyStep) []ServiceApplyStepBody {
+	out := make([]ServiceApplyStepBody, len(steps))
+	for i, s := range steps {
+		out[i] = ServiceApplyStepBody{Step: s.Step, Kind: s.Kind, Name: s.Name, State: s.State, Code: s.Code}
+	}
+	return out
+}
+
+func objectBodies(objects []swarmops.CreatedObject) []ServiceObjectBody {
+	out := make([]ServiceObjectBody, len(objects))
+	for i, o := range objects {
+		out[i] = ServiceObjectBody{Kind: o.Kind, Name: o.Name, ID: o.ID}
+	}
+	return out
+}
+
+// withCleanup adds what the cleanup of a failed apply did to its problem: the sentence that says
+// the objects made for the change were removed, or names what could not be, and, in the problem's
+// errors, the reason on its own and the lists as kind:name. A problem is left as it is when the apply made nothing.
+func withCleanup(problem error, service string, rep swarmops.CleanupReport) error {
+	m, ok := problem.(*huma.ErrorModel)
+	n := len(rep.Removed) + len(rep.NotRemoved)
+	if !ok || n == 0 {
+		return problem
+	}
+	tail := fmt.Sprintf("The %d objects created for this change were removed.", n)
+	if len(rep.NotRemoved) > 0 {
+		left := make([]string, len(rep.NotRemoved))
+		for i, o := range rep.NotRemoved {
+			left[i] = o.Kind + " " + o.Name
+		}
+		tail = "Bayplan couldn't remove " + strings.Join(left, ", ") + ". Remove them under Networks, Secrets or Configs."
+	}
+	reason := m.Detail
+	m.Detail = "Couldn't update " + service + ". " + reason + " " + tail
+	// The reason on its own, so a page can word the whole sentence itself.
+	m.Errors = append(m.Errors, &huma.ErrorDetail{Location: "reason", Message: reason})
+	for _, o := range rep.Removed {
+		m.Errors = append(m.Errors, &huma.ErrorDetail{Location: "removed", Message: o.Kind + ":" + o.Name})
+	}
+	for _, o := range rep.NotRemoved {
+		m.Errors = append(m.Errors, &huma.ErrorDetail{Location: "notRemoved", Message: o.Kind + ":" + o.Name})
+	}
+	return m
+}
+
+// kindsSentence words kinds of object as "networks", "networks and secrets", "networks, secrets and configs".
+func kindsSentence(kinds []string) string {
+	nouns := make([]string, len(kinds))
+	for i, k := range kinds {
+		nouns[i] = objectNouns[k]
+	}
+	if len(nouns) <= 1 {
+		return strings.Join(nouns, "")
+	}
+	return strings.Join(nouns[:len(nouns)-1], ", ") + " and " + nouns[len(nouns)-1]
 }
 
 // serviceEditProblem turns the error of a review or an apply into the code its audit row records and
@@ -322,6 +543,8 @@ func serviceEditProblem(d ServicesDeps, envID string, err error) (string, error)
 		unres    *swarmops.ImageUnresolvedError
 		rejected *swarmops.RejectedError
 		ph       *redact.PlaceholderError
+		perm     *swarmops.ObjectPermissionError
+		made     *swarmops.ObjectCreateError
 	)
 	switch {
 	case errors.As(err, &invalid):
@@ -374,6 +597,13 @@ func serviceEditProblem(d ServicesDeps, envID string, err error) (string, error)
 				{Location: "reason", Message: unres.Reason},
 			},
 		}
+	case errors.As(err, &perm):
+		return problem(http.StatusForbidden, problemObjectPermission, "Needs Admin to create "+kindsSentence(perm.Kinds)+".")
+	case errors.As(err, &made) && errors.Is(err, dockerx.ErrNameTaken):
+		return problem(http.StatusConflict, problemNameTaken, "A "+made.Kind+" named "+made.Name+" already exists.",
+			&huma.ErrorDetail{Location: "object", Message: made.Kind + ":" + made.Name})
+	case errors.As(err, &made):
+		return serviceActionProblem(d, envID, problemCreateFailed, made.Err)
 	case errors.As(err, &rejected):
 		return problem(http.StatusUnprocessableEntity, problemSpecRejected, "Docker rejected these settings: "+clipDetail(rejected.Message))
 	case errors.Is(err, swarmops.ErrRegistryUnresolved):

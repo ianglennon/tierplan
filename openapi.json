@@ -8518,6 +8518,10 @@
       "ServiceApplyBody": {
         "additionalProperties": false,
         "properties": {
+          "cleanup": {
+            "$ref": "#/components/schemas/ServiceCleanupBody",
+            "description": "Empty after a successful apply. A failed apply answers a problem whose errors carry the same lists"
+          },
           "digest": {
             "description": "The digest the image is pinned to; empty when it names none",
             "type": "string"
@@ -8529,6 +8533,16 @@
           "pinned": {
             "description": "True when Bayplan resolved the tag and wrote the digest into the spec",
             "type": "boolean"
+          },
+          "steps": {
+            "description": "The steps of the apply in order: the image, each object created, the service",
+            "items": {
+              "$ref": "#/components/schemas/ServiceApplyStepBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "warnings": {
             "description": "The manager's warnings about the update, scrubbed of masked values; empty when there are none",
@@ -8545,7 +8559,113 @@
           "image",
           "digest",
           "pinned",
-          "warnings"
+          "warnings",
+          "steps",
+          "cleanup"
+        ],
+        "type": "object"
+      },
+      "ServiceApplyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "objects": {
+            "description": "The networks, secrets and configs the spec names by name that do not exist yet, with the values to make them from. At most 16 (else 422 too_many_objects). Each is created, networks then secrets then configs, before the service is updated, and every one is removed again if anything after the first creation fails. One the spec does not name is ignored. The caller needs networks.manage, secrets.manage or configs.manage (Env Admin) for each kind created, else 403 object_permission before anything is created",
+            "items": {
+              "$ref": "#/components/schemas/ServiceStagedObject"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "spec": {
+            "additionalProperties": true,
+            "description": "The full service spec to review or apply. Without secrets.reveal it is the masked spec the caller read, changed: a value left as \u003chidden\u003e keeps its current value, a value typed replaces it, a removed entry is removed",
+            "type": "object"
+          },
+          "version": {
+            "description": "The version of the service the caller read (what GET .../spec answered). When it is not the current one nothing is changed and the answer is 409 service_changed",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "spec"
+        ],
+        "type": "object"
+      },
+      "ServiceApplyStepBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "Why a step failed; empty otherwise",
+            "type": "string"
+          },
+          "kind": {
+            "description": "For an object step: network, secret or config; empty otherwise",
+            "type": "string"
+          },
+          "name": {
+            "description": "For an object step the object's name, for the service step the service's; empty for the image",
+            "type": "string"
+          },
+          "state": {
+            "description": "skipped is a step with nothing to do or one that was not reached",
+            "enum": [
+              "done",
+              "failed",
+              "skipped"
+            ],
+            "type": "string"
+          },
+          "step": {
+            "description": "image (the tag resolved to a digest), object (one network, secret or config created) or service (the update)",
+            "enum": [
+              "image",
+              "object",
+              "service"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "step",
+          "kind",
+          "name",
+          "state",
+          "code"
+        ],
+        "type": "object"
+      },
+      "ServiceCleanupBody": {
+        "additionalProperties": false,
+        "properties": {
+          "notRemoved": {
+            "description": "The objects made by the apply that could not be removed and are still there; empty when none",
+            "items": {
+              "$ref": "#/components/schemas/ServiceObjectBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "removed": {
+            "description": "The objects made by the apply that were removed again, in the order they were removed. Empty after a successful apply",
+            "items": {
+              "$ref": "#/components/schemas/ServiceObjectBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "removed",
+          "notRemoved"
         ],
         "type": "object"
       },
@@ -9192,6 +9312,34 @@
         ],
         "type": "object"
       },
+      "ServiceObjectBody": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The ID the swarm gave it",
+            "type": "string"
+          },
+          "kind": {
+            "description": "network, secret or config",
+            "enum": [
+              "network",
+              "secret",
+              "config"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "The object's name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "id"
+        ],
+        "type": "object"
+      },
       "ServicePlacementBody": {
         "additionalProperties": false,
         "properties": {
@@ -9676,6 +9824,49 @@
           "agent",
           "masked",
           "spec"
+        ],
+        "type": "object"
+      },
+      "ServiceStagedObject": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "description": "A secret's value or a config's content, as standard base64: 1 to 511,999 bytes for a secret and 1 to 1,023,999 for a config (else 422 value_required, value_invalid or value_too_large). It is sent to the swarm once and never kept, logged, audited or returned. Ignored for a network",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What to create. A network is made as an attachable overlay",
+            "enum": [
+              "network",
+              "secret",
+              "config"
+            ],
+            "type": "string"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels of a secret or config, at most 64 (422 labels_invalid for a key over 256 or a value over 4096 characters)",
+            "maxProperties": 64,
+            "type": "object"
+          },
+          "name": {
+            "description": "The name the spec uses for it: letters, numbers, dot, dash and underscore, starting and ending with a letter or number, at most 64 characters (else 422 name_invalid)",
+            "type": "string"
+          },
+          "subnet": {
+            "description": "A network only: the subnet in CIDR form; left out, the swarm chooses (422 subnet_invalid)",
+            "type": "string"
+          },
+          "templating": {
+            "description": "A config only: none (the default) or golang, to have the swarm fill the content in as a Go template; anything else is 422 templating_invalid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name"
         ],
         "type": "object"
       },
@@ -17507,7 +17698,7 @@
     },
     "/api/env/{envId}/services/{serviceId}/apply": {
       "post": {
-        "description": "Sends a full service spec once and never retried; the rollout continues in the swarm, so the answer is 202. In one write on a manager it inspects the service fresh, refuses a version that is not the one sent, merges the masked values back, runs the host-escalation policy on the merged spec that will be forwarded, resolves the digest when the image changed (a failed lookup is 422 image_unresolved and nothing is sent) and sends one update with the version and the registry credential. Two applies racing on one service: Docker's version check lets one through and the other gets 409 service_changed; neither is retried, and sending the same version twice makes the second 409. Also 422 nothing_to_apply for a spec equal to the current one, 422 objects_missing for a network the spec names that does not exist, and 422 spec_rejected, with Docker's words, for a spec Docker refuses (a missing secret or config, for one). Problems, all before anything is sent: 409 service_changed when the version is not the current one; 409 stack_owned for a service a stack owns; 404 service_not_found; 409 not_a_swarm for a standalone host; 422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec, whoever sends it; 422 placeholder_unmatched for a \u003chidden\u003e with no current value behind it; 422 placeholder_reserved when a caller who may reveal secrets sends \u003chidden\u003e; 422 name_immutable and 422 mode_immutable for a changed name or kind of mode; 422 stack_label_reserved for a com.docker.stack. label the service did not have; 403 privileged_service, with each finding in errors, when a caller below env Admin sends host access (a bind outside /srv, /mnt and /media or of a runtime socket, a local volume that mounts a host device, a named pipe, an added capability, SELinux disabled or spc_t, seccomp unconfined or custom, AppArmor disabled, the host network, a plugin runtime). No answer, error or audit row carries a value of the environment, the command line, the health check or the log options for a caller without secrets.reveal. Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.updated, with result failure and the code when it was refused.",
+        "description": "Sends a full service spec once and never retried; the rollout continues in the swarm, so the answer is 202. In one write on a manager it inspects the service fresh, refuses a version that is not the one sent, merges the masked values back, runs the host-escalation policy on the merged spec that will be forwarded, resolves the digest when the image changed (a failed lookup is 422 image_unresolved and nothing is sent) and sends one update with the version and the registry credential. Two applies racing on one service: Docker's version check lets one through and the other gets 409 service_changed; neither is retried, and sending the same version twice makes the second 409. Also 422 nothing_to_apply for a spec equal to the current one, 422 objects_missing for a network, secret or config the spec names that does not exist and was not sent in objects, and 422 spec_rejected, with Docker's words, for a spec Docker refuses. The networks, secrets and configs in objects are created first, networks then secrets then configs, their IDs are written into the spec's references, and then the service is updated; each is audited as network.created, secret.created or config.created with source service_apply, never with a value. If anything after the first creation fails, every object this apply made is removed again in reverse order (audited with source service_apply_cleanup); the problem's detail says so and its errors carry the reason on its own (location reason) and the objects as removed and notRemoved, each as kind:name. Also 422 too_many_objects for more than 16 objects, 422 object_duplicate for the same kind and name twice, the name, value, labels, templating and subnet problems of the secrets, configs and networks routes for a bad object, 409 name_taken when an object's name exists already (nothing is retried), and 403 object_permission, before anything is created, for a caller without networks.manage, secrets.manage or configs.manage (Env Admin) for a kind it would create. Problems, all before anything is sent: 409 service_changed when the version is not the current one; 409 stack_owned for a service a stack owns; 404 service_not_found; 409 not_a_swarm for a standalone host; 422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec, whoever sends it; 422 placeholder_unmatched for a \u003chidden\u003e with no current value behind it; 422 placeholder_reserved when a caller who may reveal secrets sends \u003chidden\u003e; 422 name_immutable and 422 mode_immutable for a changed name or kind of mode; 422 stack_label_reserved for a com.docker.stack. label the service did not have; 403 privileged_service, with each finding in errors, when a caller below env Admin sends host access (a bind outside /srv, /mnt and /media or of a runtime socket, a local volume that mounts a host device, a named pipe, an added capability, SELinux disabled or spc_t, seccomp unconfined or custom, AppArmor disabled, the host network, a plugin runtime). No answer, error or audit row carries a value of the environment, the command line, the health check or the log options for a caller without secrets.reveal, or the value of a staged secret or config. Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.updated, with result failure and the code when it was refused.",
         "operationId": "applyServiceUpdate",
         "parameters": [
           {
@@ -17537,7 +17728,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ServiceEditRequest"
+                "$ref": "#/components/schemas/ServiceApplyRequest"
               }
             }
           },
