@@ -41,6 +41,7 @@ function ServiceTasksRoute() {
       <>
         <TaskTable
           envId={envId}
+          serviceId={serviceId}
           serviceName={detail?.name}
           slots={query.data.slots ?? []}
           retention={query.data.retention}

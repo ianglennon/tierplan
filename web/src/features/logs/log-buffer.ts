@@ -6,13 +6,18 @@
 // long as it stays open.
 export const BUFFER_CAP = 50_000;
 
-// One line of a container's log as the stream sends it. t is the engine's timestamp,
+// One line of a container's or a service's log as the stream sends it. t is the engine's timestamp,
 // s is "o" for stdout and "e" for stderr, and m is the text exactly as the program wrote
 // it: it is only ever rendered as text, never as markup.
 export interface LogLineData {
   t: string;
   s: "o" | "e";
   m: string;
+  // A line of a service's log also says which task wrote it: the task's ID, its slot (0
+  // for a task of a global service) and the host name of its node (plan 06-29, D-35).
+  task?: string;
+  slot?: number;
+  node?: string;
 }
 
 // A line in the buffer, with the number that names it for as long as it is held.

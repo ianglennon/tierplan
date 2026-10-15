@@ -80,6 +80,20 @@
       "body": "This container sends its logs to {{driver}}, so Docker has none to show.",
       "options": "Driver options",
       "noOptions": "No driver options."
+    },
+    "taskNames": {
+      "label": "Task names",
+      "tooltip": "Show which task wrote each line"
+    },
+    "following_one": "Following {{count}} task",
+    "following_other": "Following {{count}} tasks",
+    "prefix": {
+      "task": "Task {{id}}",
+      "state": "State: {{state}}"
+    },
+    "service": {
+      "emptyBody": "New lines appear here as the service's tasks write them.",
+      "noTasksMatch": "No tasks match these filters."
     }
   }
 }

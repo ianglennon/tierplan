@@ -139,7 +139,7 @@ describe("the page frame", () => {
     );
   });
 
-  it("has a Placement tab after Tasks and before Inspect", async () => {
+  it("has a Placement tab after Tasks and, after it, a Logs tab and the Inspect tab", async () => {
     renderAt();
     const placement = await screen.findByRole("tab", { name: "Placement" });
     expect(placement.getAttribute("href")).toBe(`/env/e1/services/${SERVICE_ID}/placement`);
@@ -147,8 +147,12 @@ describe("the page frame", () => {
       "Overview",
       "Tasks",
       "Placement",
+      "Logs",
       "Inspect",
     ]);
+    expect(screen.getByRole("tab", { name: "Logs" }).getAttribute("href")).toBe(
+      `/env/e1/services/${SERVICE_ID}/logs`,
+    );
   });
 
   it("shows the tabs and skeletons at once, before the service has loaded", async () => {

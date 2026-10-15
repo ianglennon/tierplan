@@ -82,6 +82,7 @@ import { Route as AppEnvEnvIdSecretsSecretIdInspectRouteImport } from './routes/
 import { Route as AppEnvEnvIdSecretsSecretIdUsedByRouteImport } from './routes/_app/env/$envId/secrets_.$secretId.used-by'
 import { Route as AppEnvEnvIdServicesServiceIdIndexRouteImport } from './routes/_app/env/$envId/services_.$serviceId.index'
 import { Route as AppEnvEnvIdServicesServiceIdInspectRouteImport } from './routes/_app/env/$envId/services_.$serviceId.inspect'
+import { Route as AppEnvEnvIdServicesServiceIdLogsRouteImport } from './routes/_app/env/$envId/services_.$serviceId.logs'
 import { Route as AppEnvEnvIdServicesServiceIdPlacementRouteImport } from './routes/_app/env/$envId/services_.$serviceId.placement'
 import { Route as AppEnvEnvIdServicesServiceIdTasksRouteImport } from './routes/_app/env/$envId/services_.$serviceId.tasks'
 import { Route as AppEnvEnvIdServicesServiceIdEditRouteImport } from './routes/_app/env/$envId/services_.$serviceId_.edit'
@@ -491,6 +492,12 @@ const AppEnvEnvIdServicesServiceIdInspectRoute =
     path: '/inspect',
     getParentRoute: () => AppEnvEnvIdServicesServiceIdRoute,
   } as any)
+const AppEnvEnvIdServicesServiceIdLogsRoute =
+  AppEnvEnvIdServicesServiceIdLogsRouteImport.update({
+    id: '/logs',
+    path: '/logs',
+    getParentRoute: () => AppEnvEnvIdServicesServiceIdRoute,
+  } as any)
 const AppEnvEnvIdServicesServiceIdPlacementRoute =
   AppEnvEnvIdServicesServiceIdPlacementRouteImport.update({
     id: '/placement',
@@ -588,6 +595,7 @@ export interface FileRoutesByFullPath {
   '/env/$envId/secrets/$secretId/inspect': typeof AppEnvEnvIdSecretsSecretIdInspectRoute
   '/env/$envId/secrets/$secretId/used-by': typeof AppEnvEnvIdSecretsSecretIdUsedByRoute
   '/env/$envId/services/$serviceId/inspect': typeof AppEnvEnvIdServicesServiceIdInspectRoute
+  '/env/$envId/services/$serviceId/logs': typeof AppEnvEnvIdServicesServiceIdLogsRoute
   '/env/$envId/services/$serviceId/placement': typeof AppEnvEnvIdServicesServiceIdPlacementRoute
   '/env/$envId/services/$serviceId/tasks': typeof AppEnvEnvIdServicesServiceIdTasksRoute
   '/env/$envId/services/$serviceId/edit': typeof AppEnvEnvIdServicesServiceIdEditRoute
@@ -655,6 +663,7 @@ export interface FileRoutesByTo {
   '/env/$envId/secrets/$secretId/inspect': typeof AppEnvEnvIdSecretsSecretIdInspectRoute
   '/env/$envId/secrets/$secretId/used-by': typeof AppEnvEnvIdSecretsSecretIdUsedByRoute
   '/env/$envId/services/$serviceId/inspect': typeof AppEnvEnvIdServicesServiceIdInspectRoute
+  '/env/$envId/services/$serviceId/logs': typeof AppEnvEnvIdServicesServiceIdLogsRoute
   '/env/$envId/services/$serviceId/placement': typeof AppEnvEnvIdServicesServiceIdPlacementRoute
   '/env/$envId/services/$serviceId/tasks': typeof AppEnvEnvIdServicesServiceIdTasksRoute
   '/env/$envId/services/$serviceId/edit': typeof AppEnvEnvIdServicesServiceIdEditRoute
@@ -736,6 +745,7 @@ export interface FileRoutesById {
   '/_app/env/$envId/secrets_/$secretId/inspect': typeof AppEnvEnvIdSecretsSecretIdInspectRoute
   '/_app/env/$envId/secrets_/$secretId/used-by': typeof AppEnvEnvIdSecretsSecretIdUsedByRoute
   '/_app/env/$envId/services_/$serviceId/inspect': typeof AppEnvEnvIdServicesServiceIdInspectRoute
+  '/_app/env/$envId/services_/$serviceId/logs': typeof AppEnvEnvIdServicesServiceIdLogsRoute
   '/_app/env/$envId/services_/$serviceId/placement': typeof AppEnvEnvIdServicesServiceIdPlacementRoute
   '/_app/env/$envId/services_/$serviceId/tasks': typeof AppEnvEnvIdServicesServiceIdTasksRoute
   '/_app/env/$envId/services_/$serviceId_/edit': typeof AppEnvEnvIdServicesServiceIdEditRoute
@@ -817,6 +827,7 @@ export interface FileRouteTypes {
     | '/env/$envId/secrets/$secretId/inspect'
     | '/env/$envId/secrets/$secretId/used-by'
     | '/env/$envId/services/$serviceId/inspect'
+    | '/env/$envId/services/$serviceId/logs'
     | '/env/$envId/services/$serviceId/placement'
     | '/env/$envId/services/$serviceId/tasks'
     | '/env/$envId/services/$serviceId/edit'
@@ -884,6 +895,7 @@ export interface FileRouteTypes {
     | '/env/$envId/secrets/$secretId/inspect'
     | '/env/$envId/secrets/$secretId/used-by'
     | '/env/$envId/services/$serviceId/inspect'
+    | '/env/$envId/services/$serviceId/logs'
     | '/env/$envId/services/$serviceId/placement'
     | '/env/$envId/services/$serviceId/tasks'
     | '/env/$envId/services/$serviceId/edit'
@@ -964,6 +976,7 @@ export interface FileRouteTypes {
     | '/_app/env/$envId/secrets_/$secretId/inspect'
     | '/_app/env/$envId/secrets_/$secretId/used-by'
     | '/_app/env/$envId/services_/$serviceId/inspect'
+    | '/_app/env/$envId/services_/$serviceId/logs'
     | '/_app/env/$envId/services_/$serviceId/placement'
     | '/_app/env/$envId/services_/$serviceId/tasks'
     | '/_app/env/$envId/services_/$serviceId_/edit'
@@ -1501,6 +1514,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppEnvEnvIdServicesServiceIdInspectRouteImport
       parentRoute: typeof AppEnvEnvIdServicesServiceIdRoute
     }
+    '/_app/env/$envId/services_/$serviceId/logs': {
+      id: '/_app/env/$envId/services_/$serviceId/logs'
+      path: '/logs'
+      fullPath: '/env/$envId/services/$serviceId/logs'
+      preLoaderRoute: typeof AppEnvEnvIdServicesServiceIdLogsRouteImport
+      parentRoute: typeof AppEnvEnvIdServicesServiceIdRoute
+    }
     '/_app/env/$envId/services_/$serviceId/placement': {
       id: '/_app/env/$envId/services_/$serviceId/placement'
       path: '/placement'
@@ -1733,6 +1753,7 @@ const AppEnvEnvIdSecretsSecretIdRouteWithChildren =
 
 interface AppEnvEnvIdServicesServiceIdRouteChildren {
   AppEnvEnvIdServicesServiceIdInspectRoute: typeof AppEnvEnvIdServicesServiceIdInspectRoute
+  AppEnvEnvIdServicesServiceIdLogsRoute: typeof AppEnvEnvIdServicesServiceIdLogsRoute
   AppEnvEnvIdServicesServiceIdPlacementRoute: typeof AppEnvEnvIdServicesServiceIdPlacementRoute
   AppEnvEnvIdServicesServiceIdTasksRoute: typeof AppEnvEnvIdServicesServiceIdTasksRoute
   AppEnvEnvIdServicesServiceIdIndexRoute: typeof AppEnvEnvIdServicesServiceIdIndexRoute
@@ -1742,6 +1763,8 @@ const AppEnvEnvIdServicesServiceIdRouteChildren: AppEnvEnvIdServicesServiceIdRou
   {
     AppEnvEnvIdServicesServiceIdInspectRoute:
       AppEnvEnvIdServicesServiceIdInspectRoute,
+    AppEnvEnvIdServicesServiceIdLogsRoute:
+      AppEnvEnvIdServicesServiceIdLogsRoute,
     AppEnvEnvIdServicesServiceIdPlacementRoute:
       AppEnvEnvIdServicesServiceIdPlacementRoute,
     AppEnvEnvIdServicesServiceIdTasksRoute:

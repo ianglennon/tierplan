@@ -57,6 +57,9 @@ const SHORT_ID = 12;
 
 export interface TaskTableProps {
   envId: string;
+  // The service whose tasks these are, to open its Logs tab narrowed to one task. A page
+  // that lists tasks of several services (a node's) leaves it out and the action with it.
+  serviceId?: string;
   // The name the tasks are shown under: web.2 for slot 2 of the service web. A page that lists
   // tasks of several services leaves it out and shows the slot number alone.
   serviceName?: string;
@@ -121,7 +124,17 @@ function ErrorCell({ task, wrap }: { task: TaskItem; wrap?: boolean }) {
   return <TruncatedText className={cn("max-w-64 truncate", tone)}>{text}</TruncatedText>;
 }
 
-function TaskActions({ envId, task, name }: { envId: string; task: TaskItem; name: string }) {
+function TaskActions({
+  envId,
+  serviceId,
+  task,
+  name,
+}: {
+  envId: string;
+  serviceId?: string;
+  task: TaskItem;
+  name: string;
+}) {
   const t = useT();
   const host = useRef<HTMLSpanElement>(null);
   // Why the container cannot be opened, in the words of the disabled-with-reason pattern.
@@ -169,6 +182,17 @@ function TaskActions({ envId, task, name }: { envId: string; task: TaskItem; nam
               </Link>
             </DropdownMenuItem>
           )}
+          {serviceId ? (
+            <DropdownMenuItem asChild className="max-md:min-h-11">
+              <Link
+                to="/env/$envId/services/$serviceId/logs"
+                params={{ envId, serviceId }}
+                search={{ task: task.id }}
+              >
+                {t("tasks.actions.logs")}
+              </Link>
+            </DropdownMenuItem>
+          ) : null}
           <DropdownMenuItem className="max-md:min-h-11" onSelect={() => void copyId()}>
             {t("tasks.actions.copyId")}
           </DropdownMenuItem>
@@ -193,6 +217,7 @@ const desiredLabel = (t: ReturnType<typeof useT>, state: string) => t(taskState(
 
 interface HistoryProps {
   envId: string;
+  serviceId?: string;
   serviceName?: string;
   slot: TaskSlot;
   slotName: string;
@@ -202,7 +227,15 @@ interface HistoryProps {
 
 // History is the earlier tasks of one slot, in a table of its own under the slot's row, on the
 // muted surface: the same columns, and the exit code, the start and the finish of each.
-function History({ envId, serviceName, slot, slotName, retention, global }: HistoryProps) {
+function History({
+  envId,
+  serviceId,
+  serviceName,
+  slot,
+  slotName,
+  retention,
+  global,
+}: HistoryProps) {
   const t = useT();
   const history = slot.history ?? [];
   return (
@@ -259,7 +292,12 @@ function History({ envId, serviceName, slot, slotName, retention, global }: Hist
                     <ErrorCell task={task} wrap />
                   </TableCell>
                   <TableCell>
-                    <TaskActions envId={envId} task={task} name={name || slotName} />
+                    <TaskActions
+                      envId={envId}
+                      serviceId={serviceId}
+                      task={task}
+                      name={name || slotName}
+                    />
                   </TableCell>
                 </TableRow>
               );
@@ -325,6 +363,7 @@ export function TasksSkeleton() {
 // is down reads Unknown, never Running (the server decides the state). The node page reuses it.
 export function TaskTable({
   envId,
+  serviceId,
   serviceName,
   slots,
   retention,
@@ -449,7 +488,12 @@ export function TaskTable({
                         <ErrorCell task={task} />
                       </TableCell>
                       <TableCell>
-                        <TaskActions envId={envId} task={task} name={slotName} />
+                        <TaskActions
+                          envId={envId}
+                          serviceId={serviceId}
+                          task={task}
+                          name={slotName}
+                        />
                       </TableCell>
                     </TableRow>
                   }
@@ -458,6 +502,7 @@ export function TaskTable({
                       <TableCell colSpan={COLUMNS} className="p-0 whitespace-normal">
                         <History
                           envId={envId}
+                          serviceId={serviceId}
                           serviceName={serviceName}
                           slot={slot}
                           slotName={slotName}

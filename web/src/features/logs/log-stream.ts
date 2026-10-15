@@ -4,6 +4,7 @@
 import { api } from "@/api/client";
 import type { EventSourceLike } from "@/features/dashboard/events";
 import type { LogLineData } from "@/features/logs/log-buffer";
+import type { LogSource, ServiceLogFilter, ServiceLogTask } from "@/features/logs/log-source";
 import { apiUrl } from "@/lib/base-path";
 
 // Where a log stream stands, as the viewer and its LiveChip need to know it.
@@ -33,11 +34,26 @@ export interface ContainerLogState {
   at: string;
 }
 
-export interface LogStreamOptions {
-  envId: string;
-  containerId: string;
-  // The node the container is on; left out on an environment of one node.
+// What a stream reads: a container on its node, given as containerId (and nodeId), or any
+// source, a service among them (plan 06-29, D-35). A container caller keeps using
+// containerId; a service caller gives the source and, to narrow it, the filter. Give one or
+// the other; a source wins.
+export interface StreamTarget {
+  containerId?: string;
   nodeId?: string;
+  source?: LogSource;
+}
+
+// sourceOf is the source a target names.
+export function sourceOf(t: StreamTarget): LogSource {
+  if (t.source) return t.source;
+  return t.nodeId
+    ? { kind: "container", id: t.containerId ?? "", nodeId: t.nodeId }
+    : { kind: "container", id: t.containerId ?? "" };
+}
+
+export interface LogStreamOptions extends StreamTarget {
+  envId: string;
   // The viewer's random ID (makeViewerId): the same on every stream, page and
   // reconnect of one viewer, so the server audits the viewer once (D-24).
   sid: string;
@@ -47,9 +63,14 @@ export interface LogStreamOptions {
   // that ends is not followed past its end.
   since?: string;
   until?: string;
+  // The tasks, nodes and stopped switch a service's log is narrowed by; ignored for a
+  // container.
+  service?: ServiceLogFilter;
   onLines: (lines: LogLineData[]) => void;
   onState: (state: LogStreamState) => void;
-  onReady?: (info: { tty: boolean }) => void;
+  onReady?: (info: { tty: boolean; tasks?: ServiceLogTask[] }) => void;
+  // A service's tasks changed: one was first seen after the stream opened.
+  onTasks?: (tasks: ServiceLogTask[]) => void;
   onContainerState?: (state: ContainerLogState) => void;
   // The engine cannot read this container's log. The stream is closed.
   onUnreadable?: (info: UnreadableInfo) => void;
@@ -59,7 +80,7 @@ export interface LogStreamOptions {
   // The real EventSource unless a test supplies one.
   createSource?: (url: string) => EventSourceLike;
   // Asks the server why a reopened stream was refused, as the HTTP status of a cheap
-  // read of the same container (0 when the server could not be reached). An
+  // read of the same container or service (0 when the server could not be reached). An
   // EventSource cannot see the status of a refusal itself. The real read unless a
   // test supplies one.
   probe?: () => Promise<number>;
@@ -91,17 +112,16 @@ export function makeViewerId(): string {
 }
 
 export function logStreamUrl(
-  o: Pick<
-    LogStreamOptions,
-    "envId" | "containerId" | "nodeId" | "sid" | "tail" | "since" | "until"
-  > & {
-    // Resume after the line with this stamp: the server then sends the lines written
-    // since, with no tail, and nothing at or before it.
-    after?: string;
-  },
+  o: StreamTarget &
+    Pick<LogStreamOptions, "envId" | "sid" | "tail" | "since" | "until" | "service"> & {
+      // Resume after the line with this stamp: the server then sends the lines written
+      // since, with no tail, and nothing at or before it.
+      after?: string;
+    },
 ): string {
+  const src = sourceOf(o);
   const q = new URLSearchParams({ sid: o.sid });
-  if (o.nodeId) q.set("nodeId", o.nodeId);
+  if (src.kind === "container" && src.nodeId) q.set("nodeId", src.nodeId);
   if (o.after) {
     q.set("after", o.after);
     if (o.until) q.set("until", o.until);
@@ -110,8 +130,14 @@ export function logStreamUrl(
     if (o.since) q.set("since", o.since);
     if (o.until) q.set("until", o.until);
   }
+  if (src.kind === "service") {
+    if (o.service?.tasks?.length) q.set("task", o.service.tasks.join(","));
+    if (o.service?.nodes?.length) q.set("node", o.service.nodes.join(","));
+    if (o.service?.stopped) q.set("stopped", "1");
+  }
+  const what = src.kind === "service" ? "services" : "containers";
   return apiUrl(
-    `/api/env/${encodeURIComponent(o.envId)}/containers/${encodeURIComponent(o.containerId)}/logs/stream?${q}`,
+    `/api/env/${encodeURIComponent(o.envId)}/${what}/${encodeURIComponent(src.id)}/logs/stream?${q}`,
   );
 }
 
@@ -121,7 +147,9 @@ export const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000] as const;
 
 // What tells two lines with the same stamp apart: their stream and their text. A
 // reopened stream may repeat the lines it already holds at its seam.
-const lineKey = (l: LogLineData): string => `${l.s}\u0000${l.m}`;
+// A service's identical lines from two tasks at one stamp are two lines, so the task is part
+// of the key.
+const lineKey = (l: LogLineData): string => `${l.s}\u0000${l.task ?? ""}\u0000${l.m}`;
 
 function parse<T>(event: Event): T | undefined {
   try {
@@ -133,13 +161,21 @@ function parse<T>(event: Event): T | undefined {
 
 // probeLog asks the server whether the container's log can still be read, by the status
 // of a page of one line (GET .../logs). The page is audited with the viewer's own ID,
-// so it writes no row of its own.
+// so it writes no row of its own. A service's is asked of its tasks route, which needs the
+// same permission.
 async function probeLog(o: LogStreamOptions): Promise<number> {
+  const src = sourceOf(o);
   try {
+    if (src.kind === "service") {
+      const res = await api.GET("/api/env/{envId}/services/{serviceId}/tasks", {
+        params: { path: { envId: o.envId, serviceId: src.id } },
+      });
+      return res.response.status;
+    }
     const res = await api.GET("/api/env/{envId}/containers/{containerId}/logs", {
       params: {
-        path: { envId: o.envId, containerId: o.containerId },
-        query: { sid: o.sid, until: new Date().toISOString(), tail: 1, nodeId: o.nodeId },
+        path: { envId: o.envId, containerId: src.id },
+        query: { sid: o.sid, until: new Date().toISOString(), tail: 1, nodeId: src.nodeId },
       },
     });
     return res.response.status;
@@ -245,8 +281,18 @@ export function createLogStream(options: LogStreamOptions): LogStream {
       if (!live()) return;
       attempt = 0;
       everLive = true;
-      options.onReady?.({ tty: parse<{ tty: boolean }>(event)?.tty === true });
+      const body = parse<{ tty?: boolean; tasks?: ServiceLogTask[] }>(event);
+      options.onReady?.({
+        tty: body?.tty === true,
+        ...(Array.isArray(body?.tasks) ? { tasks: body.tasks } : {}),
+      });
       report({ status: "live" });
+    });
+    // A service's tasks changed: the list in full, so the viewer need not diff.
+    mine.addEventListener("tasks", (event) => {
+      if (!live()) return;
+      const body = parse<{ tasks?: ServiceLogTask[] }>(event);
+      if (Array.isArray(body?.tasks)) options.onTasks?.(body.tasks);
     });
     mine.addEventListener("log", (event) => {
       if (!live()) return;

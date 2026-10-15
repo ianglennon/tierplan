@@ -58,6 +58,7 @@
     "failedOnly": "Show only failed",
     "actions": {
       "open": "Open container",
+      "logs": "Logs for this task",
       "noContainer": "No container yet",
       "nodeNotReporting": "{{node}} isn't reporting right now.",
       "nodeNotReportingUnnamed": "The task's node isn't reporting right now.",
