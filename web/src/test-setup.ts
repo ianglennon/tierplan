@@ -40,3 +40,28 @@ if (typeof window.matchMedia === "undefined") {
 if (typeof Element.prototype.scrollIntoView === "undefined") {
   Element.prototype.scrollIntoView = () => {};
 }
+
+// jsdom has no layout, so a Range cannot measure itself, which CodeMirror does after every
+// change. These report an empty box, which is all it needs to run.
+if (typeof Range !== "undefined" && typeof Range.prototype.getClientRects === "undefined") {
+  Range.prototype.getClientRects = () =>
+    ({
+      length: 0,
+      item: () => null,
+      [Symbol.iterator]: [][Symbol.iterator],
+    }) as unknown as DOMRectList;
+}
+if (typeof Range !== "undefined" && typeof Range.prototype.getBoundingClientRect === "undefined") {
+  Range.prototype.getBoundingClientRect = () =>
+    ({
+      x: 0,
+      y: 0,
+      width: 0,
+      height: 0,
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      toJSON: () => ({}),
+    }) as DOMRect;
+}
