@@ -33,6 +33,8 @@ const (
 	BodyServiceSpec
 	// BodyNodeSpec is POST /nodes/{id}/update.
 	BodyNodeSpec
+	// BodySecretCreate is POST /secrets/create.
+	BodySecretCreate
 )
 
 // route is one thing the agent forwards: a method, an anchored path, the query

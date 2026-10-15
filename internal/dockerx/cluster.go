@@ -162,6 +162,18 @@ type ServiceRef struct {
 	// Image is the image the service's spec names, as written: a tag, and a digest too once
 	// the swarm has pinned it. Empty for a spec with no container spec.
 	Image string
+	// Secrets and Configs are the secrets and configs the service's container spec references,
+	// whatever its tasks are doing. Never nil.
+	Secrets, Configs []ServiceObjectRef
+}
+
+// ServiceObjectRef is one secret or config reference of a service's container spec: which
+// object, and the file it appears as in the container. File is empty for a config with a
+// runtime target.
+type ServiceObjectRef struct {
+	ID, Name, File string
+	UID, GID       string
+	Mode           uint32
 }
 
 // ServiceVolumeMount is one volume mount of a service's container spec.

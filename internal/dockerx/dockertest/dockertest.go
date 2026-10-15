@@ -107,6 +107,8 @@ type FakeConfig struct {
 	Images     []FakeImage
 	Volumes    []FakeVolume
 	Networks   []FakeNetwork
+	// Secrets are the swarm secrets /secrets lists, none with a value (fake_secrets.go).
+	Secrets []FakeSecret
 	// DiskUsageFail makes GET /system/df answer 500, as an engine does when a volume's files
 	// cannot be walked.
 	DiskUsageFail bool
@@ -245,6 +247,8 @@ type FakeService struct {
 	Mounts   []FakeServiceMount
 	// Image is the image the spec names; empty leaves the container spec without one.
 	Image string
+	// Secrets and Configs are the secrets and configs the spec's container spec references.
+	Secrets, Configs []FakeServiceObject
 	// Constraints are the placement constraints of the service's spec.
 	Constraints []string
 	// Preferences are the spread descriptors of the spec's placement preferences.
@@ -275,6 +279,14 @@ type FakeService struct {
 	// field it refuses). UpdateWarnings are the warnings an accepted update answers with.
 	UpdateError    string
 	UpdateWarnings []string
+}
+
+// FakeServiceObject is one secret or config reference of a service's container spec. File
+// is the file name in the container, empty for a config with a runtime target.
+type FakeServiceObject struct {
+	ID, Name, File string
+	UID, GID       string
+	Mode           uint32
 }
 
 // FakeServiceMount is one mount of a service's container spec. Type is "volume",
@@ -518,6 +530,11 @@ type Fake struct {
 	nodeGone map[string]bool
 	// svcGone are the IDs of the services removed through the fake.
 	svcGone map[string]bool
+	// secrets are the secrets created through the fake, secretCreates the requests that made
+	// them (as byte counts) and secretGone the IDs of those removed (fake_secrets.go).
+	secrets       []FakeSecret
+	secretCreates []FakeSecretCreate
+	secretGone    map[string]bool
 	// distDigest is the digest the distribution route answers a full reference with, where a
 	// test has moved a tag (SetDistributionDigest); a reference not in it gets fakeDigest.
 	distDigest map[string]string
@@ -645,7 +662,7 @@ func (f *Fake) Reconfigure(cfg FakeConfig) {
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withServices(f.svcState).withoutServices(f.svcGone).withNodes(f.nodeState).withoutNodes(f.nodeGone)
+	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withServices(f.svcState).withoutServices(f.svcGone).withNodes(f.nodeState).withoutNodes(f.nodeGone).withSecrets(f.secrets).withoutSecrets(f.secretGone)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
@@ -1281,8 +1298,24 @@ func (c FakeConfig) serviceList(withStatus bool) []swarm.Service {
 		for _, target := range fs.Networks {
 			s.Spec.TaskTemplate.Networks = append(s.Spec.TaskTemplate.Networks, swarm.NetworkAttachmentConfig{Target: target})
 		}
-		if len(fs.Mounts) > 0 || fs.Image != "" {
+		if len(fs.Mounts) > 0 || fs.Image != "" || len(fs.Secrets) > 0 || len(fs.Configs) > 0 {
 			s.Spec.TaskTemplate.ContainerSpec = &swarm.ContainerSpec{Image: fs.Image}
+			for _, o := range fs.Secrets {
+				ref := &swarm.SecretReference{SecretID: o.ID, SecretName: o.Name}
+				if o.File != "" {
+					ref.File = &swarm.SecretReferenceFileTarget{Name: o.File, UID: o.UID, GID: o.GID, Mode: os.FileMode(o.Mode)}
+				}
+				s.Spec.TaskTemplate.ContainerSpec.Secrets = append(s.Spec.TaskTemplate.ContainerSpec.Secrets, ref)
+			}
+			for _, o := range fs.Configs {
+				ref := &swarm.ConfigReference{ConfigID: o.ID, ConfigName: o.Name}
+				if o.File != "" {
+					ref.File = &swarm.ConfigReferenceFileTarget{Name: o.File, UID: o.UID, GID: o.GID, Mode: os.FileMode(o.Mode)}
+				} else {
+					ref.Runtime = &swarm.ConfigReferenceRuntimeTarget{}
+				}
+				s.Spec.TaskTemplate.ContainerSpec.Configs = append(s.Spec.TaskTemplate.ContainerSpec.Configs, ref)
+			}
 			for _, m := range fs.Mounts {
 				s.Spec.TaskTemplate.ContainerSpec.Mounts = append(s.Spec.TaskTemplate.ContainerSpec.Mounts, mount.Mount{Type: mount.Type(m.Type), Source: m.Source, Target: m.Target, ReadOnly: m.ReadOnly})
 			}

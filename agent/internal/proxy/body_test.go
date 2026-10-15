@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"io"
 	"net"
@@ -333,6 +334,67 @@ func TestBodyNodeSpecRefusals(t *testing.T) {
 	}
 	if bodyCap(BodyNodeSpec) != 64<<10 {
 		t.Errorf("the node spec cap = %d, want 64 KiB", bodyCap(BodyNodeSpec))
+	}
+}
+
+func TestBodySecretCreate(t *testing.T) {
+	want := swarm.SecretSpec{
+		Annotations: swarm.Annotations{Name: "db_password.v2", Labels: map[string]string{"app": "db"}},
+		Data:        []byte("hunter2\n"),
+	}
+	var got swarm.SecretSpec
+	if err := roundTrip(t, BodySecretCreate, enc(t, want), &got); err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("accepted = %+v, %v; want %+v", got, err, want)
+	}
+	// The client encodes unset labels as null.
+	if err := roundTrip(t, BodySecretCreate, `{"Name":"a","Labels":null,"Data":"eA=="}`, &got); err != nil {
+		t.Errorf("a secret with null labels was refused: %v", err)
+	}
+	// 511,999 bytes is the largest value the swarm takes, and its base64 is well inside the cap.
+	big := swarm.SecretSpec{Annotations: swarm.Annotations{Name: "big"}, Data: bytes.Repeat([]byte("x"), 511999)}
+	if err := roundTrip(t, BodySecretCreate, enc(t, big), &got); err != nil || len(got.Data) != 511999 {
+		t.Errorf("a 511,999 byte secret = %d bytes, %v; want accepted", len(got.Data), err)
+	}
+}
+
+func TestBodySecretCreateRefusals(t *testing.T) {
+	many := map[string]string{}
+	for i := range 65 {
+		many[strconv.Itoa(i)] = "v"
+	}
+	for name, body := range map[string]string{
+		"a driver":               enc(t, swarm.SecretSpec{Annotations: swarm.Annotations{Name: "a"}, Data: []byte("x"), Driver: &swarm.Driver{Name: "vault"}}),
+		"templating":             enc(t, swarm.SecretSpec{Annotations: swarm.Annotations{Name: "a"}, Data: []byte("x"), Templating: &swarm.Driver{Name: "golang"}}),
+		"an unknown key":         `{"Name":"a","Data":"eA==","Foo":1}`,
+		"an ID":                  `{"ID":"x","Name":"a","Data":"eA=="}`,
+		"a version":              `{"Version":{"Index":3},"Name":"a","Data":"eA=="}`,
+		"no name":                enc(t, swarm.SecretSpec{Data: []byte("x")}),
+		"a name with a slash":    enc(t, swarm.SecretSpec{Annotations: swarm.Annotations{Name: "a/b"}, Data: []byte("x")}),
+		"a leading dash":         enc(t, swarm.SecretSpec{Annotations: swarm.Annotations{Name: "-a"}, Data: []byte("x")}),
+		"a trailing dot":         enc(t, swarm.SecretSpec{Annotations: swarm.Annotations{Name: "a."}, Data: []byte("x")}),
+		"a 65 character name":    enc(t, swarm.SecretSpec{Annotations: swarm.Annotations{Name: strings.Repeat("a", 65)}, Data: []byte("x")}),
+		"no value":               enc(t, swarm.SecretSpec{Annotations: swarm.Annotations{Name: "a"}}),
+		"a 512,000 byte value":   enc(t, swarm.SecretSpec{Annotations: swarm.Annotations{Name: "a"}, Data: bytes.Repeat([]byte("x"), 512000)}),
+		"too many labels":        enc(t, swarm.SecretSpec{Annotations: swarm.Annotations{Name: "a", Labels: many}, Data: []byte("x")}),
+		"an over-long label":     enc(t, swarm.SecretSpec{Annotations: swarm.Annotations{Name: "a", Labels: map[string]string{"k": strings.Repeat("v", 4097)}}, Data: []byte("x")}),
+		"data after the value":   `{"Name":"a","Data":"eA=="}{}`,
+		"not an object":          `["a"]`,
+		"an empty body":          ``,
+		"a value that is no b64": `{"Name":"a","Data":"!!!"}`,
+	} {
+		if _, err := validateBody(BodySecretCreate, strings.NewReader(body), bodyEnv{}); err == nil {
+			t.Errorf("%s: the body was accepted", name)
+		}
+	}
+}
+
+func TestBodySecretCreateCapIs1MiBAndRefusesAnythingOverIt(t *testing.T) {
+	if bodyCap(BodySecretCreate) != 1<<20 {
+		t.Fatalf("the secret create cap = %d, want 1 MiB", bodyCap(BodySecretCreate))
+	}
+	over := `{"Name":"a","Data":"` + strings.Repeat("A", 1<<20) + `"}`
+	if _, err := validateBody(BodySecretCreate, strings.NewReader(over), bodyEnv{}); err == nil {
+		t.Error("a secret create body over 1 MiB was accepted")
 	}
 }
 

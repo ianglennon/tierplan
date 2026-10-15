@@ -118,6 +118,12 @@ var oracle = []oracleEntry{
 	{method: "POST", path: rx(oVer + `nodes/` + oID + `/update$`), body: true, keys: map[string]*regexp.Regexp{"version": rx(`^[0-9]{1,20}$`)}},
 	{method: "POST", path: rx(oVer + `services/create$`), body: true},
 	oEntry("DELETE", `services/`+oID, nil),
+	// Secrets: the list and the inspect take no key at all, the create takes a SecretSpec body, and the
+	// remove takes no key either.
+	oEntry("GET", `secrets`, nil),
+	oEntry("GET", `secrets/`+oID, nil),
+	{method: "POST", path: rx(oVer + `secrets/create$`), body: true},
+	oEntry("DELETE", `secrets/`+oID, nil),
 	{
 		method: "POST", path: rx(oVer + `services/` + oID + `/update$`), body: true,
 		keys: map[string]*regexp.Regexp{
@@ -204,6 +210,20 @@ func FuzzAllowed(f *testing.F) {
 		{"POST", "/services/web/update", "version=12", true, true, false},
 		{"POST", "/services/create", "", true, false, false},
 		{"DELETE", "/services/web", "", false, false, false},
+		{"GET", "/secrets", "", false, false, false},
+		{"GET", "/secrets", "filters=%7B%7D", false, false, false},
+		{"HEAD", "/v1.56/secrets", "", false, false, true},
+		{"GET", "/secrets/abc123", "", false, false, false},
+		{"GET", "/secrets/abc123", "x=1", false, false, false},
+		{"GET", "/secrets/abc123/update", "", false, false, false},
+		{"POST", "/secrets/create", "", true, false, false},
+		{"POST", "/secrets/create", "x=1", true, false, false},
+		{"POST", "/secrets/create", "", false, false, false},
+		{"POST", "/secrets/create", "", true, false, true},
+		{"POST", "/secrets/abc123/update", "version=1", true, false, false},
+		{"DELETE", "/secrets/abc123", "", false, false, false},
+		{"DELETE", "/secrets/abc123", "force=1", false, false, false},
+		{"DELETE", "/secrets/abc123", "", true, false, false},
 		{"GET", "/services/web/logs", "follow=1", false, false, false},
 		{"POST", "/images/create", "fromSrc=http://x", false, false, false},
 		{"POST", "/images/create", "fromImage=a&tag=b&platform=linux/arm64", false, false, false},
@@ -382,6 +402,10 @@ var bodyShapes = map[BodyKind]bodyShape{
 	BodyNodeSpec: {
 		keys: map[string]*bodyShape{"Name": nil, "Labels": nil, "Role": nil, "Availability": nil},
 	},
+	// A secret to create is a name, labels and the value; a driver and templating are never forwarded.
+	BodySecretCreate: {
+		keys: map[string]*bodyShape{"Name": nil, "Labels": nil, "Data": nil},
+	},
 	// A service spec is the user's whole service, so the shape is its top-level keys.
 	// What it must not hold is a plugin or a network attachment task, and a runtime
 	// other than container (checked in FuzzBody).
@@ -508,13 +532,17 @@ func FuzzBody(f *testing.F) {
 		{uint8(BodyNodeSpec), enc(swarm.NodeSpec{Role: swarm.NodeRoleManager, Availability: swarm.NodeAvailabilityActive})},
 		{uint8(BodyNodeSpec), `{"Role":"leader","Availability":"down"}`},
 		{uint8(BodyNodeSpec), `{"Role":"worker","Availability":"active","ID":"x"}`},
+		{uint8(BodySecretCreate), enc(swarm.SecretSpec{Annotations: swarm.Annotations{Name: "dbpw", Labels: map[string]string{"a": "b"}}, Data: []byte("v")})},
+		{uint8(BodySecretCreate), enc(swarm.SecretSpec{Annotations: swarm.Annotations{Name: "dbpw"}, Data: []byte("v"), Driver: &swarm.Driver{Name: "vault"}})},
+		{uint8(BodySecretCreate), enc(swarm.SecretSpec{Annotations: swarm.Annotations{Name: "dbpw"}, Data: []byte("v"), Templating: &swarm.Driver{Name: "golang"}})},
+		{uint8(BodySecretCreate), `{"Name":"dbpw","Data":""}`},
 		{uint8(BodyNone), `{}`},
 	}
 	for _, s := range seeds {
 		f.Add(s.kind, s.body)
 	}
 	f.Fuzz(func(t *testing.T, kind uint8, body string) {
-		k := BodyKind(kind % 9) // BodyNone and the eight kinds
+		k := BodyKind(kind % 10) // BodyNone and the nine kinds
 		out, err := validateBody(k, strings.NewReader(body), bodyEnv{})
 		if err != nil {
 			return
@@ -551,6 +579,21 @@ func FuzzBody(f *testing.F) {
 			}
 			if len(spec.Labels) > maxMapEntries || len(spec.Name) > maxAliasChars {
 				t.Fatalf("a node spec over the bounds was forwarded: %s", out)
+			}
+		}
+		if k == BodySecretCreate {
+			var spec swarm.SecretSpec
+			if err := json.Unmarshal(out, &spec); err != nil {
+				t.Fatalf("the forwarded secret spec does not decode: %v: %s", err, out)
+			}
+			if spec.Driver != nil || spec.Templating != nil {
+				t.Fatalf("a secret spec with a driver or templating was forwarded: %.200s", out)
+			}
+			if n := len(spec.Data); n < 1 || n > maxSecretData {
+				t.Fatalf("a secret spec with %d bytes of value was forwarded", n)
+			}
+			if !secretNameRe.MatchString(spec.Name) || len(spec.Labels) > maxMapEntries {
+				t.Fatalf("a secret spec over the bounds was forwarded: %.200s", out)
 			}
 		}
 		if k == BodyServiceSpec {

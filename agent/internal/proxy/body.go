@@ -46,6 +46,9 @@ func bodyCap(kind BodyKind) int64 {
 	return maxBody
 }
 
+// maxSecretData is the most bytes of value the swarm takes in a secret (its limit is 512,000).
+const maxSecretData = 511999
+
 const (
 	maxMapEntries = 64
 	maxMapKey     = 256
@@ -61,6 +64,7 @@ var (
 	idRe            = regexp.MustCompile(`^` + idShape + `$`)
 	networkNameRe   = idRe
 	volumeNameRe    = regexp.MustCompile(`^` + volumeShape + `$`)
+	secretNameRe    = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9_.-]{0,62}[A-Za-z0-9])?$`)
 	volumeDriverRe  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$`)
 	errBodyRefused  = errors.New("request body refused")
 	networkDrivers  = []string{"", "bridge", "overlay", "macvlan", "ipvlan"}

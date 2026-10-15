@@ -485,13 +485,17 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // Tasks (Phase 6, RES-04) is a read: swarm tasks by service, node, task ID or desired state, typed; a
 // filter that names none is refused before any call. TaskHistoryLimit (Phase 6, RES-04) is a read: the
 // cluster's task history retention limit, from the engine's info.
+// SecretList and SecretInspect (Phase 6, RES-08) are reads: the swarm's secrets by name, labels and times, never a
+// value, which the manager does not return. SecretCreate (Phase 6, RES-08) sends one secret's name, labels and value
+// once and never retries; it takes no driver and no templating, and the value is not kept anywhere. SecretRemove (Phase 6,
+// RES-08) removes one secret by ID, once; the manager itself refuses a secret a service's spec still references.
 // ContainerLogs (Phase 4, OBS-01) is a read: one inspect, then the engine's log of the container
 // with stdout, stderr and timestamps always on; it takes only the time range, the tail and follow.
-var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "DistributionInspect", "Events", "ImageDetail", "ImageHistory", "ImagePull", "ImageRemove", "ImageUntag", "ImageUsers", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "Networks", "NodeInspect", "NodeRemove", "NodeUpdate", "Probe", "RestartPolicies", "ResolveImage", "ServiceForceUpdate", "ServiceInspect", "ServiceRefs", "ServiceRemove", "ServiceRollback", "ServiceScale", "ServiceUpdate", "Snapshot", "StartExec", "SwarmNetworkNames", "TaskHistoryLimit", "Tasks", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers"}
+var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "DistributionInspect", "Events", "ImageDetail", "ImageHistory", "ImagePull", "ImageRemove", "ImageUntag", "ImageUsers", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "Networks", "NodeInspect", "NodeRemove", "NodeUpdate", "Probe", "RestartPolicies", "ResolveImage", "SecretCreate", "SecretInspect", "SecretList", "SecretRemove", "ServiceForceUpdate", "ServiceInspect", "ServiceRefs", "ServiceRemove", "ServiceRollback", "ServiceScale", "ServiceUpdate", "Snapshot", "StartExec", "SwarmNetworkNames", "TaskHistoryLimit", "Tasks", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers"}
 
 // typedMethodsWithForbiddenWords are allowed methods whose names contain a word the
 // pattern below refuses, each reviewed one by one.
-var typedMethodsWithForbiddenWords = []string{"ServiceForceUpdate", "ServiceUpdate", "ServiceRemove", "StartExec", "ContainerRemove", "NetworkCreate", "NetworkRemove", "VolumeCreate", "VolumeRemove", "ImageRemove", "NodeRemove", "NodeUpdate"}
+var typedMethodsWithForbiddenWords = []string{"ServiceForceUpdate", "ServiceUpdate", "ServiceRemove", "StartExec", "ContainerRemove", "NetworkCreate", "NetworkRemove", "VolumeCreate", "VolumeRemove", "ImageRemove", "NodeRemove", "NodeUpdate", "SecretCreate", "SecretRemove"}
 
 var forbiddenName = regexp.MustCompile(`Plugin|Swarm(Init|Join|Leave|Unlock)|Create|Remove|Start|Stop|Kill|Exec|Update|Prune|Raw|Do$|Passthrough`)
 
