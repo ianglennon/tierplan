@@ -748,3 +748,16 @@ func TestReviewListsMissingSecretsAndConfigs(t *testing.T) {
 		t.Fatalf("review = %d %s, want all three kinds missing", rec.Code, rec.Body)
 	}
 }
+
+func TestApplyBodyOverEightMiBIsRefusedBeforeAnythingIsSent(t *testing.T) {
+	f, e := actionsEnv(t, nil, editableService(nil))
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	body := `{"version":5,"spec":{"Name":"api"},"objects":[{"kind":"config","name":"big","data":"` + strings.Repeat("A", 9<<20) + `"}]}`
+	rec := admin.apply("svc-api", body)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("apply: %d, want 413 for a body over 8 MiB", rec.Code)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v", w)
+	}
+}
