@@ -6,10 +6,12 @@ package api_test
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/audit"
@@ -17,6 +19,12 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
 )
+
+// envRecOf is a recorded answer in the shape the default caller's helpers return.
+func envRecOf(t *testing.T, rec *httptest.ResponseRecorder) *envRec {
+	t.Helper()
+	return &envRec{code: rec.Code, body: rec.Body.Bytes(), ptyp: problemType(t, rec)}
+}
 
 // Force update, rollback and the spec route (plan 06-08, RES-02, D-08, D-11, E23). Docker is a
 // fake daemon behind the real monitor, aggregator and cluster reader; the router, policy, CSRF
@@ -407,17 +415,86 @@ func TestRollbackObjectMissing(t *testing.T) {
 func TestRollbackNamesANetworkThatIsGone(t *testing.T) {
 	svc := rollbackService()
 	svc.RollbackError = "network front_net not found"
+	svc.PreviousSpec.TaskTemplate.Networks = []swarm.NetworkAttachmentConfig{{Target: "front_net"}}
 	f, e := actionsEnv(t, nil, svc)
-	rec := f.rollback(t, e, "svc-web", `{"version":9}`)
-	if rec.code != http.StatusConflict || rec.ptyp != "rollback_object_missing" {
-		t.Fatalf("status = %d %s (%s), want 409 rollback_object_missing", rec.code, rec.body, rec.ptyp)
+	op := f.caller(t, e, "operator-1", "operator")
+	for who, rec := range map[string]*envRec{
+		"the default caller": f.rollback(t, e, "svc-web", `{"version":9}`),
+		"an operator":        envRecOf(t, op.do(http.MethodPost, "services/svc-web/rollback", `{"version":9}`)),
+	} {
+		if rec.code != http.StatusConflict || rec.ptyp != "rollback_object_missing" {
+			t.Fatalf("%s: status = %d %s (%s), want 409 rollback_object_missing", who, rec.code, rec.body, rec.ptyp)
+		}
+		var prob actionProblem
+		if err := json.Unmarshal(rec.body, &prob); err != nil {
+			t.Fatal(err)
+		}
+		if prob.at("object.kind") != "network" || prob.at("object.name") != "front_net" {
+			t.Errorf("%s: errors = %+v, want network front_net", who, prob.Errors)
+		}
+	}
+	// An unresolved network is not a finding: both calls reached the manager, which refused them.
+	if got := len(f.fake.Writes()); got != 2 {
+		t.Errorf("writes = %d, want one per caller", got)
+	}
+}
+
+// privilegedRollback is a standalone service whose current spec is clean and whose previous spec
+// is prev, at version 9.
+func privilegedRollback(prev func(*swarm.ServiceSpec)) dockertest.FakeService {
+	spec := func() *swarm.ServiceSpec {
+		replicas := uint64(1)
+		return &swarm.ServiceSpec{
+			Annotations:  swarm.Annotations{Name: "api"},
+			TaskTemplate: swarm.TaskSpec{ContainerSpec: &swarm.ContainerSpec{Image: "localhost:5000/private/api:2"}},
+			Mode:         swarm.ServiceMode{Replicated: &swarm.ReplicatedService{Replicas: &replicas}},
+		}
+	}
+	before := spec()
+	before.TaskTemplate.ContainerSpec.Image = "localhost:5000/private/api:1"
+	if prev != nil {
+		prev(before)
+	}
+	return dockertest.FakeService{
+		ID: "svc-priv", Name: "api", Mode: "replicated", Running: 1, Desired: 1, Version: 9,
+		Spec: spec(), PreviousSpec: before,
+	}
+}
+
+func TestRollbackToAPrivilegedPreviousSpecIsRefusedForAnOperatorAndAppliedForAnEnvAdmin(t *testing.T) {
+	f, e := actionsEnv(t, nil, privilegedRollback(func(s *swarm.ServiceSpec) {
+		s.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{{Type: mount.TypeBind, Source: "/var/run/docker.sock", Target: "/sock"}}
+	}))
+	op := f.caller(t, e, "operator-1", "operator")
+
+	rec := op.do(http.MethodPost, "services/svc-priv/rollback", `{"version":9}`)
+	if rec.Code != http.StatusForbidden || problemType(t, rec) != "privileged_service" {
+		t.Fatalf("rollback by an operator: %d %s, want 403 privileged_service", rec.Code, rec.Body)
 	}
 	var prob actionProblem
-	if err := json.Unmarshal(rec.body, &prob); err != nil {
+	if err := json.Unmarshal(rec.Body.Bytes(), &prob); err != nil {
 		t.Fatal(err)
 	}
-	if prob.at("object.kind") != "network" || prob.at("object.name") != "front_net" {
-		t.Errorf("errors = %+v, want network front_net", prob.Errors)
+	if prob.at("TaskTemplate.ContainerSpec.Mounts[0].Source") != "/var/run/docker.sock" {
+		t.Errorf("problem = %+v, want each finding listed", prob)
+	}
+	if ups, w := f.fake.ServiceUpdates(), f.fake.Writes(); len(ups) != 0 || len(w) != 0 {
+		t.Fatalf("updates = %v, writes = %v, a refused rollback sends nothing", ups, w)
+	}
+	rows := f.serviceAudits(t)
+	if len(rows) != 1 || rows[0].Action != audit.ActionServiceRolledBack || rows[0].Result != string(audit.ResultFailure) ||
+		rows[0].Reason != "privileged_service" || rows[0].Details["code"] != "privileged_service" || rows[0].Details["findings"] != "1" ||
+		rows[0].Details["name"] != "api" || rows[0].Details["version"] != "9" {
+		t.Fatalf("audit rows = %+v, want one privileged_service failure with one finding", rows)
+	}
+
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	if rec := admin.do(http.MethodPost, "services/svc-priv/rollback", `{"version":9}`); rec.Code != http.StatusAccepted {
+		t.Fatalf("rollback by an env admin: %d %s", rec.Code, rec.Body)
+	}
+	ups := f.fake.ServiceUpdates()
+	if len(ups) != 1 || ups[0].Query.Get("rollback") != "previous" || ups[0].Version != "9" {
+		t.Errorf("updates = %+v, want the admin's one at version 9 with rollback=previous", ups)
 	}
 }
 
