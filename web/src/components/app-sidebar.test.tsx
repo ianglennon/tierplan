@@ -172,6 +172,24 @@ describe("the Swarm group", () => {
     expect(swarm.indexOf("Secrets")).toBe(swarm.indexOf("Placement") + 1);
   });
 
+  it("lists Configs after Secrets, for a user who can read configs", async () => {
+    mount(1280, "/env/e1");
+    const link = await screen.findByRole("link", { name: "Configs" });
+    expect(link.getAttribute("href")).toBe("/env/e1/configs");
+    const swarm = screen.getAllByRole("link").map((l) => l.textContent);
+    expect(swarm.indexOf("Configs")).toBe(swarm.indexOf("Secrets") + 1);
+  });
+
+  it("leaves Configs out for a user who can read services but not configs", async () => {
+    me = makeMe({
+      envs: { e1: "viewer" },
+      permissions: splitPermissions(["containers.read", "environments.read", "services.read"]),
+    });
+    mount(1280, "/env/e1");
+    expect(await screen.findByRole("link", { name: "Services" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Configs" })).toBeNull();
+  });
+
   it("leaves Secrets out for a user who can read services but not secrets", async () => {
     me = makeMe({
       envs: { e1: "viewer" },
