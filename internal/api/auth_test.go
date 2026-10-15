@@ -148,6 +148,12 @@ type authFixture struct {
 	serviceLogsMaxPageBytes     int
 	serviceLogsMaxDownloadBytes int
 	serviceLogsMaxDownloads     int
+	// statsHub, when set, is the sampler behind the container stats stream (plan 06-32);
+	// statsHeartbeat, statsMaxStreams and statsMaxLifetime tune the stream, zero is the default.
+	statsHub         *api.StatsHub
+	statsHeartbeat   time.Duration
+	statsMaxStreams  int
+	statsMaxLifetime time.Duration
 	// logsMaxPageBytes shortens how much one page of earlier lines may hold (plan 04-20).
 	logsMaxPageBytes int
 	// volumeSizesTimeout shortens the per-node time limit of the volume sizes route.
@@ -331,6 +337,12 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			Aggregator: logsSrc, Audit: f.aud, Checker: checker, Heartbeat: f.logsHeartbeat, MaxStreamsPerUser: f.logsMaxStreams,
 			MaxLifetime: f.logsMaxLifetime, MaxPageBytes: f.logsMaxPageBytes, Now: f.clk.now, Log: log,
 		})
+		if f.statsHub != nil {
+			api.RegisterStats(r, api.StatsDeps{
+				Aggregator: f.agg, Hub: f.statsHub, Heartbeat: f.statsHeartbeat,
+				MaxStreamsPerUser: f.statsMaxStreams, MaxLifetime: f.statsMaxLifetime, Log: log,
+			})
+		}
 		if f.clusters != nil {
 			api.RegisterServiceLogs(r, api.ServiceLogsDeps{
 				Clusters: f.clusters, Audit: f.aud, Checker: checker, Heartbeat: f.serviceLogsHeartbeat,

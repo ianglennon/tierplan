@@ -83,7 +83,7 @@ func (f *Fake) StatsQueries() []string {
 
 // serveStats answers GET /containers/{id}/stats with the next sample of the container's
 // FakeStats. An ID the daemon does not know is the 404 a real one gives, and a container
-// that is not running answers the zero sample the engine gives it. PolicyDeny answers the
+// that is not running answers the empty document the engine gives it. PolicyDeny answers the
 // agent's refusal.
 func (f *Fake) serveStats(w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) bool {
 	m := statsRoute.FindStringSubmatch(p)
@@ -130,6 +130,12 @@ func (f *Fake) serveStats(w http.ResponseWriter, r *http.Request, p string, cfg 
 	n := uint64(st.calls[c.ID])
 	f.mu.Unlock()
 
+	// The engine answers a container that is not running with an empty document: no read
+	// time and every counter zero.
+	if c.State != "running" {
+		writeJSON(w, http.StatusOK, container.StatsResponse{ID: c.ID})
+		return true
+	}
 	writeJSON(w, http.StatusOK, s.sample(c.ID, n))
 	return true
 }
