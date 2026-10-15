@@ -40,6 +40,7 @@ The agent is the security boundary between Bayplan and the host's Docker socket.
 - The swarm lists: nodes, services and tasks.
 - The inspect of one container, one network, one volume, one service (`GET /services/{id}`, only the `insertDefaults` key) and one swarm node (`GET /nodes/{id}`, no query key), and the state of one exec.
 - A container's logs (`stdout`, `stderr`, `since`, `until`, `timestamps`, `follow`, `tail`, `details` only).
+- A container's stats, one sample at a time (`GET /containers/{id}/stats`, only the `stream` key, which must be `0` or `false`, and the `one-shot` key). The agent never holds a stats stream open, so this takes no interactive slot. A sample holds the container's CPU time, memory, network and block I/O counters and nothing else; Bayplan turns two samples into rates and keeps neither.
 - On a swarm manager, the logs of a service (`GET /services/{id}/logs`) and of one task (`GET /tasks/{id}/logs`), with `stdout`, `stderr`, `timestamps`, `follow`, `details`, `since` and `tail` only. There is no `until`: the engine ignores it on these routes. Both are long streams like a container's logs and take one of the agent's interactive slots.
 - Disk usage for volumes (`system/df` with `type=volume`).
 - Images, by repository, `repository:tag`, `repository@digest` or image ID:
@@ -73,7 +74,7 @@ For every call that carries a body (exec create and start, network create, conne
 - A **cluster volume** (a volume with a cluster spec).
 - The legacy **`link`** key on a container remove, and **`force`** on a volume delete.
 - Importing an image (`fromSrc`, `repo`, `message` and `changes` on a pull), **`force`** on an image remove, and tagging, pushing, saving, loading, building and pruning images.
-- Creating or changing a container; creating or changing a **service whose spec gives tasks host access**, unless the host opted in (below); the stats, export and file contents of a container; the swarm join tokens (`GET /swarm`).
+- Creating or changing a container; creating or changing a **service whose spec gives tasks host access**, unless the host opted in (below); the export and file contents of a container, and a stats stream that is left open (`stream=true`); the swarm join tokens (`GET /swarm`).
 - A body larger than 64 KiB (256 KiB for a service spec), and a query larger than 4 KiB.
 
 ## Service specs and host access

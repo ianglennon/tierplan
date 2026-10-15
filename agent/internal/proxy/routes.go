@@ -80,6 +80,9 @@ var (
 	// boolValue is every spelling of a boolean the engine accepts and the
 	// server's client sends.
 	boolValue = regexp.MustCompile(`^(0|1|true|false)$`)
+	// streamOff is the one value the stream key of a stats read may have: the agent
+	// answers one sample and never holds a stats stream open.
+	streamOff = regexp.MustCompile(`^(0|false)$`)
 	// secondsValue is a timeout in seconds, -1 to 86400.
 	secondsValue = regexp.MustCompile(`^(-1|[0-9]{1,4}|[0-7][0-9]{4}|8[0-5][0-9]{3}|86[0-3][0-9]{2}|86400)$`)
 	// logTime is a log bound: a Unix time or an RFC 3339 time.
@@ -134,8 +137,9 @@ var serviceLogKeys = map[string]*regexp.Regexp{
 //
 // GET /swarm is deliberately absent: its answer carries the swarm join tokens,
 // which are credentials to add nodes. The cluster ID is read from /info on a
-// manager instead. Container create, attach, archive, export and stats are
-// absent too.
+// manager instead. Container create, attach, archive and export are absent too. The stats
+// of a container are forwarded for one sample at a time only (RES-11): the two keys a
+// one-shot read sends, and never a stream the agent would have to hold open.
 var routes = []route{
 	// The read surface of Phase 2: ping, version, info, the lists the dashboard
 	// reads, events, the swarm lists and the inspect of one container.
@@ -236,6 +240,15 @@ var routes = []route{
 			"stdout": boolValue, "stderr": boolValue, "timestamps": boolValue, "follow": boolValue,
 			"details": boolValue, "since": logTime, "until": logTime, "tail": tailValue,
 		},
+	},
+
+	// The stats of one container, read one sample at a time: the engine's stream and
+	// one-shot switches are the only keys, so a request that follows the stats of a
+	// container without end is as refused as any other key. Block I/O and the network are
+	// in the sample; nothing in it names a secret.
+	{
+		name: "container stats", method: http.MethodGet, path: pathOf(`containers/` + idShape + `/stats`),
+		query: map[string]*regexp.Regexp{"stream": streamOff, "one-shot": boolValue},
 	},
 
 	// The logs of a service (all its tasks, on one stream a manager answers) and of one

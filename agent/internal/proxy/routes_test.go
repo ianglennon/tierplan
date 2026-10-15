@@ -379,6 +379,8 @@ func TestRouteServiceInspectAndUpdateQueryCases(t *testing.T) {
 		{"the task list is only the list", "GET", "/tasks", "filters=x", false, "tasks"},
 		{"container stats, one shot", "GET", "/containers/web/stats", "stream=false&one-shot=true", false, "container stats"},
 		{"container stats, versioned, with the numeric bools", "GET", "/v1.56/containers/abc123/stats", "stream=0&one-shot=1", false, "container stats"},
+		{"container stats followed is refused, the agent answers one sample", "GET", "/containers/web/stats", "stream=true", false, ""},
+		{"container stats followed with 1 is refused", "GET", "/containers/web/stats", "stream=1&one-shot=0", false, ""},
 		{"container stats with no key", "GET", "/containers/web/stats", "", false, "container stats"},
 		{"a HEAD of container stats", "HEAD", "/containers/web/stats", "stream=false", false, "container stats"},
 		{"container stats with an unknown key", "GET", "/containers/web/stats", "stream=false&foo=1", false, ""},

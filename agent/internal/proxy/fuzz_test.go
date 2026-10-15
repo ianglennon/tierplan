@@ -86,8 +86,8 @@ var oracle = []oracleEntry{
 		"since": rx(`^[0-9TZ:.+-]{1,40}$`), "tail": rx(`^(all|[0-9]{1,6})$`),
 	}),
 
-	// The stats of a container: only the two keys a one-shot read sends.
-	oEntry("GET", `containers/`+oID+`/stats`, map[string]*regexp.Regexp{"stream": oBool, "one-shot": oBool}),
+	// The stats of a container: only the two keys a one-shot read sends, and never a stream.
+	oEntry("GET", `containers/`+oID+`/stats`, map[string]*regexp.Regexp{"stream": rx(`^(0|false)$`), "one-shot": oBool}),
 
 	{method: "POST", path: rx(oVer + `containers/` + oID + `/exec$`), body: true},
 	{method: "POST", path: oExecStart, body: true, upgrade: true},
