@@ -37,6 +37,7 @@ import reason from "./en/reason.json";
 import registries from "./en/registries.json";
 import restore from "./en/restore.json";
 import schedule from "./en/schedule.json";
+import secrets from "./en/secrets.json";
 import servicedetail from "./en/servicedetail.json";
 import serviceform from "./en/serviceform.json";
 import services from "./en/services.json";
@@ -58,7 +59,7 @@ import volumes from "./en/volumes.json";
 // English only for now (D-65). Resources are bundled statically, so there is
 // no language detector and no backend plugin: nothing is fetched at runtime.
 // Each later plan adds its own namespace file (setup, auth, shell, env,
-// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule, actions, activeshells, containers, containerdetail, networks, volumes, logs, terminal, events, pulls, registries, images, usedBy, tags, services, servicedetail, serviceForm, tasks, specedit, placement, nodes) and registers it
+// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule, actions, activeshells, containers, containerdetail, networks, volumes, logs, terminal, events, pulls, registries, images, usedBy, tags, services, servicedetail, serviceForm, tasks, specedit, placement, nodes, secrets) and registers it
 // here, so parallel work never edits the same JSON. The "containers" namespace
 // holds the containers list copy, and the "terminal" namespace the browser shell's
 // (never "shell", which is the app chrome's). Keys are shaped
@@ -98,6 +99,7 @@ export const resources = {
     registries,
     restore,
     schedule,
+    secrets,
     servicedetail,
     serviceForm: serviceform,
     services,

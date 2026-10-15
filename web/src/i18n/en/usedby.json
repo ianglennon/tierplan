@@ -5,6 +5,22 @@
     "image": {
       "title": "{{name}} is in use",
       "body": "Stopped containers and swarm services that mention it count, even with no running tasks. Remove them first."
+    },
+    "serviceMount": "Service {{name}}: {{file}}, UID / GID {{owner}}, mode {{mode}}",
+    "objects": {
+      "title": "Used by",
+      "columns": {
+        "service": "Service",
+        "stack": "Stack",
+        "file": "File",
+        "owner": "UID / GID",
+        "mode": "Mode"
+      },
+      "empty": {
+        "secret": "Nothing uses this secret.",
+        "config": "Nothing uses this config."
+      },
+      "missing": "—"
     }
   }
 }

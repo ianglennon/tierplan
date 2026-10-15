@@ -163,6 +163,15 @@ describe("the Overview cards", () => {
     expect(c.getByText("0440")).toBeTruthy();
   });
 
+  it("links a secret's name to the secret's page, and leaves a config's name as text", async () => {
+    await overview();
+    const c = within(card("Secrets and configs"));
+    expect(c.getByRole("link", { name: "db_pw" }).getAttribute("href")).toBe(
+      "/env/e1/secrets/sec1",
+    );
+    expect(c.queryByRole("link", { name: "app_conf" })).toBeNull();
+  });
+
   it("lists the networks by name, linking to the network, with their aliases", async () => {
     await overview();
     const c = within(card("Networks"));

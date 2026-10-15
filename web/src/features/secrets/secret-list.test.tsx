@@ -34,7 +34,7 @@ let sent: Sent[];
 let items: SecretItem[];
 let details: Record<string, SecretDetail>;
 let onSearch: Mock<(q: string | undefined) => void>;
-let answerList: () => Response;
+let answerList: () => Response | Promise<Response>;
 let answerDelete: (req: Sent) => Response;
 let client: QueryClient;
 let me: ReturnType<typeof makeMe>;
@@ -76,7 +76,7 @@ beforeEach(() => {
   answerList = () =>
     Response.json({ items, total: items.length, unfilteredTotal: items.length, capped: false });
   answerDelete = () => new Response(null, { status: 204 });
-  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 1 } } });
   setCsrfToken(null);
   vi.stubGlobal(
     "fetch",
@@ -180,13 +180,13 @@ describe("SecretList columns", () => {
 });
 
 describe("SecretList states", () => {
-  it("shows skeleton rows while the list loads", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => new Promise<Response>(() => {})),
-    );
+  it("shows eight skeleton rows while the list loads", async () => {
+    answerList = () => new Promise<Response>(() => {});
     mount();
-    await waitFor(() => expect(document.querySelector("[aria-busy='true']")).not.toBeNull());
+    expect(await screen.findByRole("searchbox", { name: "Search secrets" })).toBeTruthy();
+    // The header row and eight placeholders.
+    expect(screen.getAllByRole("row")).toHaveLength(9);
+    expect(screen.getByRole("table").getAttribute("aria-busy")).toBe("true");
   });
 
   it("says Couldn't load secrets with Retry loading secrets, which reads the list again", async () => {

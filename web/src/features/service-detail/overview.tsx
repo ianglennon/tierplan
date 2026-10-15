@@ -253,8 +253,8 @@ function MountsCard({ envId, detail }: { envId: string; detail: ServiceDetail })
 type FileRef = NonNullable<ServiceDetail["secrets"]>[number] & { kind: "secret" | "config" };
 
 // FilesCard lists the secrets and configs the service uses, by reference: their values are
-// never sent. The names are not links yet; the pages come with a later plan.
-function FilesCard({ detail }: { detail: ServiceDetail }) {
+// never sent. A secret's name links to its page; the config pages come with a later plan.
+function FilesCard({ envId, detail }: { envId: string; detail: ServiceDetail }) {
   const t = useT();
   const missing = useMissing();
   const rows: FileRef[] = [
@@ -270,7 +270,21 @@ function FilesCard({ detail }: { detail: ServiceDetail }) {
         rowKey={(r, i) => `${i}|${r.kind}|${r.id}`}
         columns={[
           { header: t(`${key}.files.kind`), cell: (r) => t(`${key}.files.${r.kind}`) },
-          { header: t(`${key}.files.name`), cell: (r) => r.name },
+          {
+            header: t(`${key}.files.name`),
+            cell: (r) =>
+              r.kind === "secret" ? (
+                <Link
+                  to="/env/$envId/secrets/$secretId"
+                  params={{ envId, secretId: r.id }}
+                  className="rounded-sm text-accent-ink hover:underline"
+                >
+                  {r.name}
+                </Link>
+              ) : (
+                r.name
+              ),
+          },
           { header: t(`${key}.files.file`), cell: (r) => r.file || missing },
           {
             header: t(`${key}.files.owner`),
@@ -534,7 +548,7 @@ export function ServiceOverview({ envId, serviceId }: ServiceOverviewProps) {
           <ImageCard detail={data} />
           <PortsCard detail={data} />
           <MountsCard envId={envId} detail={data} />
-          <FilesCard detail={data} />
+          <FilesCard envId={envId} detail={data} />
           <NetworksCard envId={envId} detail={data} />
         </div>
         <div className="flex min-w-0 flex-col gap-4">

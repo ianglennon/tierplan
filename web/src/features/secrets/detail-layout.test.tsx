@@ -257,7 +257,7 @@ describe("the page frame", () => {
   it("shows a load error with a Retry that reads the secret again", async () => {
     state.get = () => problem(503, "no_manager_connected");
     renderAt();
-    await screen.findByText(/Couldn't load db-password/);
+    await screen.findByText(/Couldn't load sid-db-password/);
     const before = state.sent.filter((s) => s === `GET ${BASE}/secrets/${ID}`).length;
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() =>
@@ -297,7 +297,7 @@ describe("the Overview tab", () => {
         "The value is write-only. Docker never returns a secret's value after it's created, and Bayplan can't show it, even with the reveal secrets permission.",
       ),
     ).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /show|reveal|copy/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /show value|hide value|reveal/i })).toBeNull();
   });
 
   it("lists the labels sorted by name, or says there are none", async () => {

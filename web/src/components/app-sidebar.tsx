@@ -11,6 +11,7 @@ import {
   Layers,
   LayoutDashboard,
   LayoutGrid,
+  LockKeyhole,
   Network,
   ScrollText,
   Server,
@@ -67,11 +68,12 @@ const RESOURCE_ITEMS = [
 
 // The Swarm group (Phase 6, UI-SPEC "Sidebar"): the swarm-only pages of the selected
 // environment, below Resources. Shown on a swarm environment alone, each item to a user who may
-// read it. Later plans add Secrets and Configs to this array.
+// read it. Secrets is here; a later plan adds Configs.
 const SWARM_ITEMS = [
   { key: "services", perm: "services.read", to: "/env/$envId/services", icon: Boxes },
   { key: "nodes", perm: "nodes.read", to: "/env/$envId/nodes", icon: Server },
   { key: "placement", perm: "services.read", to: "/env/$envId/placement", icon: LayoutGrid },
+  { key: "secrets", perm: "secrets.read", to: "/env/$envId/secrets", icon: LockKeyhole },
 ] as const;
 
 type NavItem = (typeof RESOURCE_ITEMS)[number] | (typeof SWARM_ITEMS)[number];

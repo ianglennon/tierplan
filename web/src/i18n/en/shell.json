@@ -25,6 +25,7 @@
       "services": "Services",
       "nodes": "Nodes",
       "placement": "Placement",
+      "secrets": "Secrets",
       "audit": "Audit",
       "settings": "Settings"
     },
