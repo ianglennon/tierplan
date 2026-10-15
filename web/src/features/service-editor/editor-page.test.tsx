@@ -263,6 +263,66 @@ describe("the Spec tab", () => {
     await screen.findByRole("heading", { name: "Review changes", level: 2 });
   });
 
+  it("holds the editor inert while the review is out and frees it when the answer comes", async () => {
+    let answer: (r: Response) => void = () => {};
+    state.review = () => new Promise<Response>((r) => (answer = r));
+    renderAt();
+    const box = await ready();
+    typeIntoEditor(yaml(withReplicas(5)));
+    fireEvent.click(reviewButton());
+    await waitFor(() => expect(reviewButton().textContent).toContain("Checking…"));
+    const held = box.closest("[inert]");
+    expect(held).not.toBeNull();
+    expect(held?.getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByRole("tab", { name: "Form" }).closest("[inert]")).toBe(held);
+    expect(screen.getByRole("tab", { name: "Spec" }).closest("[inert]")).toBe(held);
+    // The footer stays out of it, so Checking… is still announced.
+    expect(reviewButton().closest("[inert]")).toBeNull();
+    answer(Response.json(reviewBody({ spec: withReplicas(5) })));
+    await screen.findByRole("heading", { name: "Review changes", level: 2 });
+    fireEvent.click(screen.getByRole("button", { name: "Back to editing" }));
+    const again = await screen.findByRole("textbox", { name: "Service spec, YAML" });
+    expect(again.closest("[inert]")).toBeNull();
+    expect(document.querySelector("[inert]")).toBeNull();
+    expect(document.querySelector("[aria-busy=true]")).toBeNull();
+  });
+
+  it("frees the editor when the review is refused", async () => {
+    let answer: (r: Response) => void = () => {};
+    state.review = () => new Promise<Response>((r) => (answer = r));
+    renderAt();
+    const box = await ready();
+    typeIntoEditor(yaml(withReplicas(5)));
+    fireEvent.click(reviewButton());
+    await waitFor(() => expect(box.closest("[inert]")).not.toBeNull());
+    answer(problem(409, "service_changed"));
+    await screen.findByRole("alert");
+    expect(document.querySelector("[inert]")).toBeNull();
+    expect(
+      screen.getByRole("textbox", { name: "Service spec, YAML" }).closest("[inert]"),
+    ).toBeNull();
+  });
+
+  it("shows in the review the change that was judged, not one made while the review was out", async () => {
+    let answer: (r: Response) => void = () => {};
+    state.review = () => new Promise<Response>((r) => (answer = r));
+    renderAt();
+    await ready();
+    typeIntoEditor(yaml(withReplicas(5)));
+    fireEvent.click(reviewButton());
+    await waitFor(() => expect(reviewButton().textContent).toContain("Checking…"));
+    typeIntoEditor(yaml(withReplicas(7)));
+    answer(Response.json(reviewBody({ spec: withReplicas(5) })));
+    const table = await screen.findByRole("table", { name: "Changes to api" });
+    const row = within(table).getByText("Replicas").closest("tr");
+    expect(row?.textContent).toContain("5");
+    expect(row?.textContent).not.toContain("7");
+    // What was typed during the review is kept for the next one.
+    fireEvent.click(screen.getByRole("button", { name: "Back to editing" }));
+    await screen.findByRole("textbox", { name: "Service spec, YAML" });
+    expect(editorText()).toBe(yaml(withReplicas(7)));
+  });
+
   it("goes to the review at once, with the digest being looked up, when the image changed", async () => {
     let answer: (r: Response) => void = () => {};
     state.review = () => new Promise<Response>((r) => (answer = r));
