@@ -2097,7 +2097,7 @@ export interface paths {
         };
         /**
          * List the environment problems that need attention
-         * @description Derived from live state, never stored, so an item is there exactly while its cause is and cannot be dismissed: an environment that is offline (env_offline, with since and reason), a certificate that is not renewing or has expired (cert_not_renewing), agents that need an update by hand (manual_update_needed, one item with a count), a clock that is out of step (clock_skew), an environment still waiting for its first agent after 7 days (pending_long), a swarm that was re-initialised (cluster_changed) and a local host that can be folded into a swarm environment it manages (fold_offered, only for callers who hold environments.manage). Only environments the caller holds environments.read for are considered, so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. Errors come first, then the newest. Names are at most 64 characters.
+         * @description Derived from live state, never stored, so an item is there exactly while its cause is and cannot be dismissed: an environment that is offline (env_offline, with since and reason), a certificate that is not renewing or has expired (cert_not_renewing), agents that need an update by hand (manual_update_needed, one item with a count), a clock that is out of step (clock_skew), an environment still waiting for its first agent after 7 days (pending_long), a swarm that was re-initialised (cluster_changed) and a local host that can be folded into a swarm environment it manages (fold_offered, only for callers who hold environments.manage) and a swarm service whose tasks keep failing (restart_loop, one item per service that is not muted, only for callers who hold services.read on that environment; with service, serviceId, count, windowMinutes, latestError and since). Only environments the caller holds environments.read for are considered, so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. Errors come first, then the newest. Names are at most 64 characters.
          */
         get: operations["listEnvironmentWarnings"];
         put?: never;
@@ -4550,7 +4550,7 @@ export interface components {
             agentId?: string;
             /**
              * Format: int64
-             * @description For manual_update_needed: how many agents need an update by hand
+             * @description For manual_update_needed: how many agents need an update by hand. For restart_loop: how many tasks of the service failed inside the window
              */
             count?: number;
             /**
@@ -4571,7 +4571,9 @@ export interface components {
              * @description Which problem this is
              * @enum {string}
              */
-            id: "env_offline" | "cert_not_renewing" | "manual_update_needed" | "clock_skew" | "pending_long" | "cluster_changed" | "fold_offered";
+            id: "env_offline" | "cert_not_renewing" | "manual_update_needed" | "clock_skew" | "pending_long" | "cluster_changed" | "fold_offered" | "restart_loop";
+            /** @description For restart_loop: the error text of the newest failed task, at most 300 characters; absent when Docker gave none */
+            latestError?: string;
             /** @description For cert_not_renewing and clock_skew: the node's host name, at most 64 characters */
             node?: string;
             /**
@@ -4581,6 +4583,10 @@ export interface components {
             offsetSeconds?: number;
             /** @description For env_offline and cluster_changed: the environment's reason code, as in its status */
             reason?: string;
+            /** @description For restart_loop: the service's name, at most 64 characters */
+            service?: string;
+            /** @description For restart_loop: the service's ID */
+            serviceId?: string;
             /**
              * @description error: an environment is out of reach or a certificate has expired. warning: something needs attention
              * @enum {string}
@@ -4591,6 +4597,11 @@ export interface components {
              * @description When the problem began, where that is known. Items are shown newest first
              */
             since?: string;
+            /**
+             * Format: int64
+             * @description For restart_loop: the window the count is over, in minutes
+             */
+            windowMinutes?: number;
         };
         EnvWarningsBody: {
             /** @description Only the warnings that apply, errors first, then newest first; empty when there are none */
@@ -4800,6 +4811,8 @@ export interface components {
             isWorker: boolean;
             /** @description Nodes that should have answered and did not: no agent connected, or its read failed or timed out. Their rows are left out of the counts, so when this is not empty the counts are not the whole cluster */
             notReporting: string[] | null;
+            /** @description Swarm managers only, and only for a caller who may read services: how many services are in a restart loop, from the last cluster read. Absent on a standalone host, on a worker, and while the swarm has not been read or has lost its quorum */
+            restartLoops?: components["schemas"]["RestartLoopCountsBody"];
             /** @description The ID of Bayplan's own container, when it can tell (D-27) */
             selfContainerId?: string;
         };
@@ -6524,6 +6537,18 @@ export interface components {
              * @description The window the count is over, in minutes: the environment's restart-loop setting
              */
             windowMinutes: number;
+        };
+        RestartLoopCountsBody: {
+            /**
+             * Format: int64
+             * @description Services in a restart loop whose alerts are not muted
+             */
+            flagged: number;
+            /**
+             * Format: int64
+             * @description Services in a restart loop whose alerts are muted
+             */
+            muted: number;
         };
         RestartLoopMuteBody: {
             /** @description False when the service was in that state already, so nothing was written */

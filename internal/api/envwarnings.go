@@ -176,5 +176,17 @@ func canReadServices(perEnv map[string][]rbac.Perm, id string) bool {
 // from the cluster reader's last read of each: nothing is read from Docker for the bell, and a
 // loop that stopped is gone with the next read.
 func restartLoopWarnings(d EnvWarningsDeps, perEnv map[string][]rbac.Perm, visible []envs.Environment) []envs.EnvWarning {
-	return nil
+	if d.Clusters == nil {
+		return nil
+	}
+	var out []envs.EnvWarning
+	for _, e := range visible {
+		if !canReadServices(perEnv, e.ID) {
+			continue
+		}
+		if st, ok := d.Clusters.Cached(e.ID); ok && len(st.RestartLoops) > 0 {
+			out = append(out, envs.RestartLoopWarnings(e, st.RestartLoops)...)
+		}
+	}
+	return out
 }

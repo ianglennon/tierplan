@@ -3104,7 +3104,7 @@
             "type": "string"
           },
           "count": {
-            "description": "For manual_update_needed: how many agents need an update by hand",
+            "description": "For manual_update_needed: how many agents need an update by hand. For restart_loop: how many tasks of the service failed inside the window",
             "format": "int64",
             "type": "integer"
           },
@@ -3135,8 +3135,13 @@
               "clock_skew",
               "pending_long",
               "cluster_changed",
-              "fold_offered"
+              "fold_offered",
+              "restart_loop"
             ],
+            "type": "string"
+          },
+          "latestError": {
+            "description": "For restart_loop: the error text of the newest failed task, at most 300 characters; absent when Docker gave none",
             "type": "string"
           },
           "node": {
@@ -3152,6 +3157,14 @@
             "description": "For env_offline and cluster_changed: the environment's reason code, as in its status",
             "type": "string"
           },
+          "service": {
+            "description": "For restart_loop: the service's name, at most 64 characters",
+            "type": "string"
+          },
+          "serviceId": {
+            "description": "For restart_loop: the service's ID",
+            "type": "string"
+          },
           "severity": {
             "description": "error: an environment is out of reach or a certificate has expired. warning: something needs attention",
             "enum": [
@@ -3164,6 +3177,11 @@
             "description": "When the problem began, where that is known. Items are shown newest first",
             "format": "date-time",
             "type": "string"
+          },
+          "windowMinutes": {
+            "description": "For restart_loop: the window the count is over, in minutes",
+            "format": "int64",
+            "type": "integer"
           }
         },
         "required": [
@@ -3648,6 +3666,10 @@
               "array",
               "null"
             ]
+          },
+          "restartLoops": {
+            "$ref": "#/components/schemas/RestartLoopCountsBody",
+            "description": "Swarm managers only, and only for a caller who may read services: how many services are in a restart loop, from the last cluster read. Absent on a standalone host, on a worker, and while the swarm has not been read or has lost its quorum"
           },
           "selfContainerId": {
             "description": "The ID of Bayplan's own container, when it can tell (D-27)",
@@ -7927,6 +7949,26 @@
           "windowMinutes",
           "latestError",
           "since"
+        ],
+        "type": "object"
+      },
+      "RestartLoopCountsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "flagged": {
+            "description": "Services in a restart loop whose alerts are not muted",
+            "format": "int64",
+            "type": "integer"
+          },
+          "muted": {
+            "description": "Services in a restart loop whose alerts are muted",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "flagged",
+          "muted"
         ],
         "type": "object"
       },
@@ -20393,7 +20435,7 @@
     },
     "/api/environments/warnings": {
       "get": {
-        "description": "Derived from live state, never stored, so an item is there exactly while its cause is and cannot be dismissed: an environment that is offline (env_offline, with since and reason), a certificate that is not renewing or has expired (cert_not_renewing), agents that need an update by hand (manual_update_needed, one item with a count), a clock that is out of step (clock_skew), an environment still waiting for its first agent after 7 days (pending_long), a swarm that was re-initialised (cluster_changed) and a local host that can be folded into a swarm environment it manages (fold_offered, only for callers who hold environments.manage). Only environments the caller holds environments.read for are considered, so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. Errors come first, then the newest. Names are at most 64 characters.",
+        "description": "Derived from live state, never stored, so an item is there exactly while its cause is and cannot be dismissed: an environment that is offline (env_offline, with since and reason), a certificate that is not renewing or has expired (cert_not_renewing), agents that need an update by hand (manual_update_needed, one item with a count), a clock that is out of step (clock_skew), an environment still waiting for its first agent after 7 days (pending_long), a swarm that was re-initialised (cluster_changed) and a local host that can be folded into a swarm environment it manages (fold_offered, only for callers who hold environments.manage) and a swarm service whose tasks keep failing (restart_loop, one item per service that is not muted, only for callers who hold services.read on that environment; with service, serviceId, count, windowMinutes, latestError and since). Only environments the caller holds environments.read for are considered, so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. Errors come first, then the newest. Names are at most 64 characters.",
         "operationId": "listEnvironmentWarnings",
         "responses": {
           "200": {

@@ -149,7 +149,19 @@ func Warnings(envs []Environment, agents map[string][]AgentState, now time.Time)
 // read found: one error per flagged service whose alerts nobody muted. The loops are by
 // service ID. The caller passes only the loops of an environment it may show.
 func RestartLoopWarnings(e Environment, loops map[string]RestartLoop) []EnvWarning {
-	return nil
+	var out []EnvWarning
+	for id, l := range loops {
+		if l.Muted {
+			continue
+		}
+		out = append(out, EnvWarning{
+			ID: WarnRestartLoop, Severity: SeverityError, EnvID: e.ID, EnvName: cleanText(e.Name, maxNodeLen),
+			Service: cleanText(l.Name, maxNodeLen), ServiceID: id, Count: l.Count, WindowMinutes: int(l.Window / time.Minute),
+			LatestError: cleanText(l.LatestError, maxWarnError), Since: l.Since,
+		})
+	}
+	SortWarnings(out)
+	return out
 }
 
 // SortWarnings orders warnings errors first, then newest first, then by environment, node,

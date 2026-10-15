@@ -635,5 +635,24 @@ func shortImageID(id string) string {
 // a caller who may read its services. It is nil when there is nothing to say: no reader, no
 // checker, no right to read services, no read yet, or a lost quorum (which hides the loops).
 func restartLoopCounts(ctx context.Context, d DashboardDeps, envID string) *RestartLoopCountsBody {
-	return nil
+	p := httpx.PrincipalFrom(ctx)
+	if d.Clusters == nil || d.Checker == nil || p == nil {
+		return nil
+	}
+	if !d.Checker.Check(ctx, p, rbac.Requirement{Perm: rbac.PermServicesRead, Scope: rbac.ScopeEnvironment}, envID).Allowed {
+		return nil
+	}
+	st, ok := d.Clusters.Cached(envID)
+	if !ok || !st.Known() {
+		return nil
+	}
+	out := &RestartLoopCountsBody{}
+	for _, l := range st.RestartLoops {
+		if l.Muted {
+			out.Muted++
+		} else {
+			out.Flagged++
+		}
+	}
+	return out
 }
