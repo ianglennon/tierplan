@@ -71,8 +71,17 @@ type ServiceLogsDeps struct {
 	// to announce tasks that join, mark a task that was replaced and tell of a node that cannot
 	// be reached (D-34, D-37). Zero means 3 seconds; tests shorten it.
 	TaskRefresh time.Duration
-	// Now is the clock of the audit memory. Nil means the wall clock. The reorder window and the
-	// task cache measure real time and do not use it.
+	// MaxPageBytes is the most one page of earlier lines holds, in bytes of log text. Zero means
+	// 8 MiB; tests shorten it.
+	MaxPageBytes int
+	// MaxDownloadBytes is the most one merged download holds while it is merged. Zero means 32
+	// MiB; tests shorten it.
+	MaxDownloadBytes int
+	// MaxServerDownloads caps the downloads of service logs running at once on the server, whoever
+	// asks. Zero means 4; tests shorten it.
+	MaxServerDownloads int
+	// Now is the clock of the audit memory and of a download's file name. Nil means the wall
+	// clock. The reorder window and the task cache measure real time and do not use it.
 	Now func() time.Time
 	// Log receives server-side failures. Nil means slog.Default(). It is never given a line of
 	// a service's log.

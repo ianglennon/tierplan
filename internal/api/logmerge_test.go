@@ -220,3 +220,115 @@ func TestTaskMetaKeepsWhatItKnewWhenARefreshFails(t *testing.T) {
 		t.Errorf("all = %s tasks, want 1", got)
 	}
 }
+
+// The k-way merge and the holder of a service's merged download (plan 06-31, D-35, T-06-91).
+
+func mergedTexts(lists []taskLines) []string {
+	var out []string
+	for r := range kWayMerge(lists) {
+		out = append(out, r.M)
+	}
+	return out
+}
+
+func TestKWayMergeInterleavesOrderedTaskListsInTimeOrder(t *testing.T) {
+	lists := []taskLines{
+		{Slot: 1, Lines: []svcRec{rec("t1", 10, "a1"), rec("t1", 40, "a2"), rec("t1", 70, "a3")}},
+		{Slot: 2, Lines: []svcRec{rec("t2", 20, "b1"), rec("t2", 50, "b2")}},
+		{Slot: 3, Lines: []svcRec{rec("t3", 30, "c1")}},
+	}
+	if got, want := mergedTexts(lists), []string{"a1", "b1", "c1", "a2", "b2", "a3"}; !slices.Equal(got, want) {
+		t.Errorf("merged = %v, want %v", got, want)
+	}
+}
+
+func TestKWayMergeBreaksTiesByTheLowerSlotWhateverTheOrderOfTheLists(t *testing.T) {
+	lists := []taskLines{
+		{Slot: 3, Lines: []svcRec{rec("t3", 10, "c1")}},
+		{Slot: 1, Lines: []svcRec{rec("t1", 10, "a1"), rec("t1", 10, "a2")}},
+		{Slot: 2, Lines: []svcRec{rec("t2", 10, "b1")}},
+	}
+	if got, want := mergedTexts(lists), []string{"a1", "a2", "b1", "c1"}; !slices.Equal(got, want) {
+		t.Errorf("merged = %v, want %v: same stamp, lower slot first, a task's own order kept", got, want)
+	}
+}
+
+func TestKWayMergeOfNothingOrOneListIsTheListAsItIs(t *testing.T) {
+	if got := mergedTexts(nil); len(got) != 0 {
+		t.Errorf("merged nothing = %v", got)
+	}
+	if got := mergedTexts([]taskLines{{Slot: 1}, {Slot: 2}}); len(got) != 0 {
+		t.Errorf("merged empty lists = %v", got)
+	}
+	one := []taskLines{{Slot: 1, Lines: []svcRec{rec("t1", 5, "x"), rec("t1", 6, "y")}}}
+	if got, want := mergedTexts(one), []string{"x", "y"}; !slices.Equal(got, want) {
+		t.Errorf("merged one list = %v, want %v", got, want)
+	}
+}
+
+func TestKWayMergeStopsWhenTheConsumerDoes(t *testing.T) {
+	lists := []taskLines{{Slot: 1, Lines: []svcRec{rec("t1", 1, "a"), rec("t1", 3, "c")}}, {Slot: 2, Lines: []svcRec{rec("t2", 2, "b")}}}
+	var got []string
+	for r := range kWayMerge(lists) {
+		got = append(got, r.M)
+		if len(got) == 2 {
+			break
+		}
+	}
+	if !slices.Equal(got, []string{"a", "b"}) {
+		t.Errorf("got %v", got)
+	}
+}
+
+// recSize is what the holder counts a record as: its stamp and its text.
+func recSize(r svcRec) int { return len(r.T) + len(r.M) }
+
+func TestLineHolderKeepsEverythingUnderItsSizeGroupedByTaskInTheOrderGiven(t *testing.T) {
+	h := newLineHolder(1 << 20)
+	h.add(rec("t1", 10, "a1"), 1)
+	h.add(rec("t1", 40, "a2"), 1)
+	h.add(rec("t2", 20, "b1"), 2)
+	if h.cut() {
+		t.Error("the holder says it cut lines though it is far under its size")
+	}
+	if got, want := mergedTexts(h.lists()), []string{"a1", "b1", "a2"}; !slices.Equal(got, want) {
+		t.Errorf("held = %v, want %v", got, want)
+	}
+}
+
+func TestLineHolderDropsTheOldestLineOfAnyTaskWhenOverItsSizeAndSaysSo(t *testing.T) {
+	limit := 3 * recSize(rec("t1", 10, "a1"))
+	h := newLineHolder(limit)
+	// The engine gives a service's log task by task, so the oldest line is not the first.
+	for _, r := range []svcRec{rec("t1", 10, "a1"), rec("t1", 40, "a2"), rec("t1", 70, "a3")} {
+		h.add(r, 1)
+	}
+	for _, r := range []svcRec{rec("t2", 20, "b1"), rec("t2", 50, "b2")} {
+		h.add(r, 2)
+	}
+	h.add(rec("t3", 30, "c1"), 3)
+	h.add(rec("t3", 5, "c0"), 3)
+	if !h.cut() {
+		t.Error("the holder does not say it cut lines")
+	}
+	if got, want := mergedTexts(h.lists()), []string{"a2", "b2", "a3"}; !slices.Equal(got, want) {
+		t.Errorf("held = %v, want the newest three %v", got, want)
+	}
+}
+
+func TestLineHolderNeverHoldsMoreThanItsSize(t *testing.T) {
+	limit := 5 * recSize(rec("t1", 10, "aa"))
+	h := newLineHolder(limit)
+	for i := range 200 {
+		h.add(rec(fmt.Sprintf("t%d", i%4), i, "aa"), i%4)
+		size := 0
+		for _, l := range h.lists() {
+			for _, r := range l.Lines {
+				size += recSize(r)
+			}
+		}
+		if size > limit {
+			t.Fatalf("after %d records the holder holds %d bytes, over %d", i+1, size, limit)
+		}
+	}
+}

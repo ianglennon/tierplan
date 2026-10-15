@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"container/heap"
 	"context"
+	"iter"
 	"maps"
 	"math"
 	"slices"
@@ -289,3 +290,38 @@ func (m *taskMeta) byIDMap() map[string]taskInfo {
 	defer m.mu.Unlock()
 	return maps.Clone(m.byID)
 }
+
+// maxDownloadBytes is the most one merged download holds while it is merged (plan 06-31, D-35,
+// T-06-91): past it the oldest lines are left out.
+const maxDownloadBytes = 32 << 20
+
+// taskLines are the lines of one task of a service in the order the engine gave them (time
+// order), and the task's slot.
+type taskLines struct {
+	Slot  int
+	Lines []svcRec
+}
+
+// kWayMerge yields the lines of lists, each already in time order, as one list in time order;
+// lines with the same stamp go lower slot first, then in the order of lists.
+func kWayMerge(lists []taskLines) iter.Seq[svcRec] {
+	return func(yield func(svcRec) bool) {}
+}
+
+// lineHolder holds a range of a service's log by task while it is merged, up to a size; past
+// it the oldest line of any task is dropped.
+type lineHolder struct {
+	limit int
+}
+
+func newLineHolder(limit int) *lineHolder { return &lineHolder{limit: limit} }
+
+// add holds a record of a task in the given slot, dropping the oldest lines held while the
+// holder is over its size.
+func (h *lineHolder) add(r svcRec, slot int) {}
+
+// lists returns what is held, by task.
+func (h *lineHolder) lists() []taskLines { return nil }
+
+// cut says lines were dropped for size.
+func (h *lineHolder) cut() bool { return false }

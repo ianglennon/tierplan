@@ -143,6 +143,11 @@ type authFixture struct {
 	serviceLogsRefresh     time.Duration
 	serviceLogsMaxStreams  int
 	serviceLogsMaxLifetime time.Duration
+	// serviceLogsMaxPageBytes, serviceLogsMaxDownloadBytes and serviceLogsMaxDownloads tune the
+	// page and the download of a service's log (plan 06-31).
+	serviceLogsMaxPageBytes     int
+	serviceLogsMaxDownloadBytes int
+	serviceLogsMaxDownloads     int
 	// logsMaxPageBytes shortens how much one page of earlier lines may hold (plan 04-20).
 	logsMaxPageBytes int
 	// volumeSizesTimeout shortens the per-node time limit of the volume sizes route.
@@ -329,7 +334,9 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		if f.clusters != nil {
 			api.RegisterServiceLogs(r, api.ServiceLogsDeps{
 				Clusters: f.clusters, Audit: f.aud, Checker: checker, Heartbeat: f.serviceLogsHeartbeat,
-				TaskRefresh: f.serviceLogsRefresh, MaxStreamsPerUser: f.serviceLogsMaxStreams, MaxLifetime: f.serviceLogsMaxLifetime, Now: f.clk.now, Log: log,
+				TaskRefresh: f.serviceLogsRefresh, MaxStreamsPerUser: f.serviceLogsMaxStreams, MaxLifetime: f.serviceLogsMaxLifetime,
+				MaxPageBytes: f.serviceLogsMaxPageBytes, MaxDownloadBytes: f.serviceLogsMaxDownloadBytes, MaxServerDownloads: f.serviceLogsMaxDownloads,
+				Now: f.clk.now, Log: log,
 			})
 		}
 		if f.shellsReg == nil {
