@@ -73,6 +73,7 @@ import { Route as AppEnvEnvIdServicesServiceIdIndexRouteImport } from './routes/
 import { Route as AppEnvEnvIdServicesServiceIdInspectRouteImport } from './routes/_app/env/$envId/services_.$serviceId.inspect'
 import { Route as AppEnvEnvIdServicesServiceIdPlacementRouteImport } from './routes/_app/env/$envId/services_.$serviceId.placement'
 import { Route as AppEnvEnvIdServicesServiceIdTasksRouteImport } from './routes/_app/env/$envId/services_.$serviceId.tasks'
+import { Route as AppEnvEnvIdServicesServiceIdEditRouteImport } from './routes/_app/env/$envId/services_.$serviceId_.edit'
 import { Route as AppEnvEnvIdVolumesVolumeNameIndexRouteImport } from './routes/_app/env/$envId/volumes_.$volumeName.index'
 import { Route as AppEnvEnvIdVolumesVolumeNameInspectRouteImport } from './routes/_app/env/$envId/volumes_.$volumeName.inspect'
 
@@ -428,6 +429,12 @@ const AppEnvEnvIdServicesServiceIdTasksRoute =
     path: '/tasks',
     getParentRoute: () => AppEnvEnvIdServicesServiceIdRoute,
   } as any)
+const AppEnvEnvIdServicesServiceIdEditRoute =
+  AppEnvEnvIdServicesServiceIdEditRouteImport.update({
+    id: '/services_/$serviceId_/edit',
+    path: '/services/$serviceId/edit',
+    getParentRoute: () => AppEnvEnvIdRoute,
+  } as any)
 const AppEnvEnvIdVolumesVolumeNameIndexRoute =
   AppEnvEnvIdVolumesVolumeNameIndexRouteImport.update({
     id: '/',
@@ -500,6 +507,7 @@ export interface FileRoutesByFullPath {
   '/env/$envId/services/$serviceId/inspect': typeof AppEnvEnvIdServicesServiceIdInspectRoute
   '/env/$envId/services/$serviceId/placement': typeof AppEnvEnvIdServicesServiceIdPlacementRoute
   '/env/$envId/services/$serviceId/tasks': typeof AppEnvEnvIdServicesServiceIdTasksRoute
+  '/env/$envId/services/$serviceId/edit': typeof AppEnvEnvIdServicesServiceIdEditRoute
   '/env/$envId/volumes/$volumeName/inspect': typeof AppEnvEnvIdVolumesVolumeNameInspectRoute
   '/env/$envId/containers/$containerId/': typeof AppEnvEnvIdContainersContainerIdIndexRoute
   '/env/$envId/images/$imageId/': typeof AppEnvEnvIdImagesImageIdIndexRoute
@@ -557,6 +565,7 @@ export interface FileRoutesByTo {
   '/env/$envId/services/$serviceId/inspect': typeof AppEnvEnvIdServicesServiceIdInspectRoute
   '/env/$envId/services/$serviceId/placement': typeof AppEnvEnvIdServicesServiceIdPlacementRoute
   '/env/$envId/services/$serviceId/tasks': typeof AppEnvEnvIdServicesServiceIdTasksRoute
+  '/env/$envId/services/$serviceId/edit': typeof AppEnvEnvIdServicesServiceIdEditRoute
   '/env/$envId/volumes/$volumeName/inspect': typeof AppEnvEnvIdVolumesVolumeNameInspectRoute
   '/env/$envId/containers/$containerId': typeof AppEnvEnvIdContainersContainerIdIndexRoute
   '/env/$envId/images/$imageId': typeof AppEnvEnvIdImagesImageIdIndexRoute
@@ -626,6 +635,7 @@ export interface FileRoutesById {
   '/_app/env/$envId/services_/$serviceId/inspect': typeof AppEnvEnvIdServicesServiceIdInspectRoute
   '/_app/env/$envId/services_/$serviceId/placement': typeof AppEnvEnvIdServicesServiceIdPlacementRoute
   '/_app/env/$envId/services_/$serviceId/tasks': typeof AppEnvEnvIdServicesServiceIdTasksRoute
+  '/_app/env/$envId/services_/$serviceId_/edit': typeof AppEnvEnvIdServicesServiceIdEditRoute
   '/_app/env/$envId/volumes_/$volumeName/inspect': typeof AppEnvEnvIdVolumesVolumeNameInspectRoute
   '/_app/env/$envId/containers_/$containerId/': typeof AppEnvEnvIdContainersContainerIdIndexRoute
   '/_app/env/$envId/images_/$imageId/': typeof AppEnvEnvIdImagesImageIdIndexRoute
@@ -695,6 +705,7 @@ export interface FileRouteTypes {
     | '/env/$envId/services/$serviceId/inspect'
     | '/env/$envId/services/$serviceId/placement'
     | '/env/$envId/services/$serviceId/tasks'
+    | '/env/$envId/services/$serviceId/edit'
     | '/env/$envId/volumes/$volumeName/inspect'
     | '/env/$envId/containers/$containerId/'
     | '/env/$envId/images/$imageId/'
@@ -752,6 +763,7 @@ export interface FileRouteTypes {
     | '/env/$envId/services/$serviceId/inspect'
     | '/env/$envId/services/$serviceId/placement'
     | '/env/$envId/services/$serviceId/tasks'
+    | '/env/$envId/services/$serviceId/edit'
     | '/env/$envId/volumes/$volumeName/inspect'
     | '/env/$envId/containers/$containerId'
     | '/env/$envId/images/$imageId'
@@ -820,6 +832,7 @@ export interface FileRouteTypes {
     | '/_app/env/$envId/services_/$serviceId/inspect'
     | '/_app/env/$envId/services_/$serviceId/placement'
     | '/_app/env/$envId/services_/$serviceId/tasks'
+    | '/_app/env/$envId/services_/$serviceId_/edit'
     | '/_app/env/$envId/volumes_/$volumeName/inspect'
     | '/_app/env/$envId/containers_/$containerId/'
     | '/_app/env/$envId/images_/$imageId/'
@@ -1289,6 +1302,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppEnvEnvIdServicesServiceIdTasksRouteImport
       parentRoute: typeof AppEnvEnvIdServicesServiceIdRoute
     }
+    '/_app/env/$envId/services_/$serviceId_/edit': {
+      id: '/_app/env/$envId/services_/$serviceId_/edit'
+      path: '/services/$serviceId/edit'
+      fullPath: '/env/$envId/services/$serviceId/edit'
+      preLoaderRoute: typeof AppEnvEnvIdServicesServiceIdEditRouteImport
+      parentRoute: typeof AppEnvEnvIdRoute
+    }
     '/_app/env/$envId/volumes_/$volumeName/': {
       id: '/_app/env/$envId/volumes_/$volumeName/'
       path: '/'
@@ -1516,6 +1536,7 @@ interface AppEnvEnvIdRouteChildren {
   AppEnvEnvIdNodesNodeIdRoute: typeof AppEnvEnvIdNodesNodeIdRouteWithChildren
   AppEnvEnvIdServicesServiceIdRoute: typeof AppEnvEnvIdServicesServiceIdRouteWithChildren
   AppEnvEnvIdVolumesVolumeNameRoute: typeof AppEnvEnvIdVolumesVolumeNameRouteWithChildren
+  AppEnvEnvIdServicesServiceIdEditRoute: typeof AppEnvEnvIdServicesServiceIdEditRoute
 }
 
 const AppEnvEnvIdRouteChildren: AppEnvEnvIdRouteChildren = {
@@ -1538,6 +1559,7 @@ const AppEnvEnvIdRouteChildren: AppEnvEnvIdRouteChildren = {
     AppEnvEnvIdServicesServiceIdRouteWithChildren,
   AppEnvEnvIdVolumesVolumeNameRoute:
     AppEnvEnvIdVolumesVolumeNameRouteWithChildren,
+  AppEnvEnvIdServicesServiceIdEditRoute: AppEnvEnvIdServicesServiceIdEditRoute,
 }
 
 const AppEnvEnvIdRouteWithChildren = AppEnvEnvIdRoute._addFileChildren(

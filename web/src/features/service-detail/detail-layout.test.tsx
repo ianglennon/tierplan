@@ -459,3 +459,47 @@ describe("the Inspect tab", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 });
+
+describe("Edit… in the header", () => {
+  it("is the first action: an outline link to the editor, for an Operator", async () => {
+    renderAt();
+    const edit = await screen.findByRole("link", { name: "Edit…" });
+    expect(edit.getAttribute("href")).toBe(`/env/${SERVICE_ENV}/services/${SERVICE_ID}/edit`);
+    expect(edit.getAttribute("data-variant")).toBe("outline");
+    expect(edit.getAttribute("aria-disabled")).toBeNull();
+    const scale = await screen.findByRole("button", { name: "Scale…" });
+    expect(edit.compareDocumentPosition(scale) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("is shown to a Viewer unavailable, with the reason, and goes nowhere", async () => {
+    state.me = makeMe({ envs: { [SERVICE_ENV]: "viewer" } });
+    const router = renderAt();
+    const edit = await screen.findByRole("button", { name: "Edit…" });
+    expect(edit.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getAllByText("Needs Operator").length).toBeGreaterThan(0);
+    fireEvent.click(edit);
+    expect(router.state.location.pathname).toBe(PAGE);
+  });
+
+  it("is unavailable for a service a stack owns, saying to change it through the stack", async () => {
+    answerWith(serviceDetail({ stack: "shop" }));
+    const router = renderAt();
+    const edit = await screen.findByRole("button", { name: "Edit…" });
+    expect(edit.getAttribute("aria-disabled")).toBe("true");
+    expect(
+      screen.getAllByText("Managed by stack shop. Change it through the stack.").length,
+    ).toBeGreaterThan(0);
+    fireEvent.click(edit);
+    expect(router.state.location.pathname).toBe(PAGE);
+  });
+
+  it("is shown for a global service and a job too", async () => {
+    for (const mode of ["global", "replicated-job"] as const) {
+      answerWith(serviceDetail({ mode }));
+      renderAt();
+      await screen.findByRole("link", { name: "Edit…" });
+      cleanup();
+      queryClient.clear();
+    }
+  });
+});

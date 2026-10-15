@@ -477,6 +477,32 @@ export function serviceRolloutQuery(envId: string, id: string) {
   });
 }
 
+export type ServiceReview = components["schemas"]["ServiceReviewBody"];
+export type ServiceApplyResult = components["schemas"]["ServiceApplyBody"];
+
+export interface EditRequest {
+  serviceId: string;
+  // The version of the service the spec was loaded at.
+  version: number;
+  spec: Record<string, unknown>;
+}
+
+export function useReviewServiceUpdate(_envId: string) {
+  return useMutation<ServiceReview, ServiceActionError, EditRequest>({
+    mutationFn: async () => {
+      throw new ServiceActionError(0);
+    },
+  });
+}
+
+export function useApplyServiceUpdate(_envId: string) {
+  return useMutation<ServiceApplyResult, ServiceActionError, EditRequest>({
+    mutationFn: async () => {
+      throw new ServiceActionError(0);
+    },
+  });
+}
+
 // The key every service action (scale, force update, rollback) carries, so the page can tell one
 // is pending.
 export function serviceActionKey(envId: string) {

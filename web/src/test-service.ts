@@ -118,6 +118,67 @@ export function rollout(extra: Partial<ServiceRolloutBody> = {}): ServiceRollout
   };
 }
 
+export type ServiceSpecBody = components["schemas"]["ServiceSpecBody"];
+export type ServiceReviewBody = components["schemas"]["ServiceReviewBody"];
+
+// The version the editor tests load the service at.
+export const EDIT_VERSION = 7;
+
+// A service spec as the server states it to a caller who may not reveal secrets: the value of
+// DB_PASSWORD is withheld.
+export function editSpec(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    Name: "api",
+    Labels: { tier: "backend" },
+    TaskTemplate: {
+      ContainerSpec: {
+        Image: `registry.example.com/shop/api:1.4@${DIGEST}`,
+        Env: ["MODE=prod", "DB_PASSWORD=<hidden>"],
+      },
+    },
+    Mode: { Replicated: { Replicas: 3 } },
+    ...extra,
+  };
+}
+
+// What GET .../spec answers for the editor.
+export function specBody(extra: Partial<ServiceSpecBody> = {}): ServiceSpecBody {
+  return {
+    version: EDIT_VERSION,
+    name: "api",
+    mode: "replicated",
+    stack: "",
+    agent: false,
+    masked: true,
+    spec: editSpec(),
+    ...extra,
+  };
+}
+
+// What POST .../review answers for a spec with one change in it.
+export function reviewBody(extra: Partial<ServiceReviewBody> = {}): ServiceReviewBody {
+  return {
+    spec: editSpec(),
+    version: EDIT_VERSION,
+    changed: true,
+    image: {
+      ref: `registry.example.com/shop/api:1.4@${DIGEST}`,
+      tag: "1.4",
+      digest: DIGEST,
+      host: "registry.example.com",
+      credential: "",
+      changed: false,
+    },
+    findings: [],
+    allowed: true,
+    refusal: "",
+    missing: { networks: [], secrets: [], configs: [] },
+    hostPolicy: { managerAllowsPrivileged: true, readOnly: false },
+    warnings: [],
+    ...extra,
+  };
+}
+
 export interface Sent {
   method: string;
   path: string;
@@ -140,6 +201,10 @@ export interface ServiceApiState {
   rollout?: () => Response | Promise<Response>;
   forceUpdate?: () => Response | Promise<Response>;
   rollback?: () => Response | Promise<Response>;
+  // The editor's review and apply. A test that does not use them leaves them out, and the
+  // routes answer 404.
+  review?: () => Response | Promise<Response>;
+  apply?: () => Response | Promise<Response>;
 }
 
 // serviceFetch answers the page's requests: the app shell's, the service and its inspect, and
@@ -220,6 +285,10 @@ export function serviceFetch(state: ServiceApiState) {
         return state.forceUpdate ? state.forceUpdate() : new Response(null, { status: 404 });
       case `${base}/services/${SERVICE_ID}/rollback`:
         return state.rollback ? state.rollback() : new Response(null, { status: 404 });
+      case `${base}/services/${SERVICE_ID}/review`:
+        return state.review ? state.review() : new Response(null, { status: 404 });
+      case `${base}/services/${SERVICE_ID}/apply`:
+        return state.apply ? state.apply() : new Response(null, { status: 404 });
       case `${base}/services/scale`:
         return state.scale();
       case `${base}/services`:
