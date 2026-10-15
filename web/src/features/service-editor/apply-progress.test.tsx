@@ -271,7 +271,8 @@ describe("ApplyProgress: objects made for the change", () => {
     { kind: "network" as const, name: "front" },
     { kind: "secret" as const, name: "db-pass" },
   ];
-  const entries = (pairs: [string, string][]) => pairs.map(([location, message]) => ({ location, message }));
+  const entries = (pairs: [string, string][]) =>
+    pairs.map(([location, message]) => ({ location, message }));
   const failure = (type: string, status: number, detail: string, pairs: [string, string][] = []) =>
     new ServiceActionError(status, type, fields({}), detail, entries(pairs));
 
@@ -301,11 +302,16 @@ describe("ApplyProgress: objects made for the change", () => {
       status: "error",
       lookup: false,
       objects,
-      error: failure("spec_rejected", 422, "Couldn't update api. Docker rejected these settings: bad spec The 2 objects created for this change were removed.", [
-        ["reason", "Docker rejected these settings: bad spec"],
-        ["removed", "secret:db-pass"],
-        ["removed", "network:front"],
-      ]),
+      error: failure(
+        "spec_rejected",
+        422,
+        "Couldn't update api. Docker rejected these settings: bad spec The 2 objects created for this change were removed.",
+        [
+          ["reason", "Docker rejected these settings: bad spec"],
+          ["removed", "secret:db-pass"],
+          ["removed", "network:front"],
+        ],
+      ),
     });
     expect(stepOf("Create network front").status).toBe("Done");
     expect(stepOf("Create secret db-pass").status).toBe("Done");
@@ -342,11 +348,16 @@ describe("ApplyProgress: objects made for the change", () => {
       status: "error",
       lookup: false,
       objects,
-      error: failure("name_taken", 409, "Couldn't update api. A secret named db-pass already exists. The 1 objects created for this change were removed.", [
-        ["object", "secret:db-pass"],
-        ["reason", "A secret named db-pass already exists."],
-        ["removed", "network:front"],
-      ]),
+      error: failure(
+        "name_taken",
+        409,
+        "Couldn't update api. A secret named db-pass already exists. The 1 objects created for this change were removed.",
+        [
+          ["object", "secret:db-pass"],
+          ["reason", "A secret named db-pass already exists."],
+          ["removed", "network:front"],
+        ],
+      ),
     });
     expect(stepOf("Create network front").status).toBe("Done");
     expect(stepOf("Create secret db-pass").status).toBe("Failed");

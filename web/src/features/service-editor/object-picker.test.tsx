@@ -11,9 +11,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ObjectPicker, type PickedObject } from "@/features/service-editor/object-picker";
 import {
   createStagedStore,
+  StagedContext,
   type StagedKind,
   type StagedStore,
-  StagedContext,
 } from "@/features/service-editor/staged";
 import "@/i18n";
 import { makeMe } from "@/test-me";
@@ -86,10 +86,21 @@ beforeEach(() => {
       if (method !== "GET") writes.push(`${method} ${url.pathname}`);
       if (url.pathname === "/api/me") return Response.json(me);
       if (url.pathname === `/api/env/${ENV}/secrets`) {
-        return Response.json({ items: secrets, total: secrets.length, unfilteredTotal: secrets.length, capped: false });
+        return Response.json({
+          items: secrets,
+          total: secrets.length,
+          unfilteredTotal: secrets.length,
+          capped: false,
+        });
       }
       if (url.pathname === `/api/env/${ENV}/networks`) {
-        return Response.json({ items: networks, total: networks.length, truncated: false, nodes: [], notReporting: [] });
+        return Response.json({
+          items: networks,
+          total: networks.length,
+          truncated: false,
+          nodes: [],
+          notReporting: [],
+        });
       }
       return Response.json({}, { status: 404 });
     }),
@@ -107,7 +118,13 @@ function renderPicker(kind: StagedKind = "secret", value: PickedObject | null = 
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <StagedContext.Provider value={store}>
-          <ObjectPicker kind={kind} envId={ENV} label={kind === "secret" ? "Secret" : "Network"} value={value} onSelect={onSelect} />
+          <ObjectPicker
+            kind={kind}
+            envId={ENV}
+            label={kind === "secret" ? "Secret" : "Network"}
+            value={value}
+            onSelect={onSelect}
+          />
         </StagedContext.Provider>
       </TooltipProvider>
     </QueryClientProvider>,
@@ -134,7 +151,8 @@ describe("ObjectPicker", () => {
     renderPicker();
     const list = await open();
     expect(screen.getByPlaceholderText("Find a secret…")).toBeTruthy();
-    const items = await within(list).findAllByRole("option");
+    await within(list).findByRole("option", { name: "db_pw" });
+    const items = within(list).getAllByRole("option");
     expect(items.map((i) => i.textContent)).toEqual(["api_key", "db_pw", "Create new secret…"]);
   });
 
@@ -214,6 +232,6 @@ describe("ObjectPicker", () => {
     await waitFor(() => expect(create.getAttribute("aria-disabled")).toBe("true"));
     expect(create.textContent).toContain("Needs Admin");
     fireEvent.click(create);
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Create a secret" })).toBeNull();
   });
 });

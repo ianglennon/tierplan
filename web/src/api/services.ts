@@ -485,6 +485,7 @@ export function serviceRolloutQuery(envId: string, id: string) {
 
 export type ServiceReview = components["schemas"]["ServiceReviewBody"];
 export type ServiceApplyResult = components["schemas"]["ServiceApplyBody"];
+export type ServiceStagedObject = components["schemas"]["ServiceStagedObject"];
 
 export interface EditRequest {
   serviceId: string;
@@ -494,6 +495,14 @@ export interface EditRequest {
   // The whole service spec, as the editor holds it. A value left as <hidden> keeps its current
   // value on the server.
   spec: Record<string, unknown>;
+}
+
+// What an apply sends: the review's request and the objects the spec names that do not exist yet,
+// with the values to make them from. The objects are read when the request is sent, from a function,
+// so that the mutation's own record of what it was asked (kept while the page watches it) holds no
+// value: they are sent once, as base64, and kept nowhere.
+export interface ApplyRequest extends EditRequest {
+  objects?: () => readonly ServiceStagedObject[];
 }
 
 // useReviewServiceUpdate is the mutation behind Review changes. It changes nothing in the swarm,
@@ -525,13 +534,14 @@ export function useReviewServiceUpdate(envId: string) {
 // gcTime 0 keeps the spec out of the cache once nothing is watching.
 export function useApplyServiceUpdate(envId: string) {
   const queryClient = useQueryClient();
-  return useMutation<ServiceApplyResult, ServiceActionError, EditRequest>({
+  return useMutation<ServiceApplyResult, ServiceActionError, ApplyRequest>({
     mutationKey: serviceActionKey(envId),
-    mutationFn: async ({ serviceId, version, spec }) => {
+    mutationFn: async ({ serviceId, version, spec, objects }) => {
       try {
+        const staged = objects?.() ?? [];
         const res = await api.POST("/api/env/{envId}/services/{serviceId}/apply", {
           params: { path: { envId, serviceId } },
-          body: { version, spec },
+          body: staged.length > 0 ? { version, spec, objects: [...staged] } : { version, spec },
         });
         if (!res.data) throw actionError(res.error, res.response);
         return res.data;

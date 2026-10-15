@@ -12,11 +12,20 @@ export interface EditRefusal extends Refusal {
   reload: boolean;
   // The step of an apply that did not happen: the image's lookup, or the update itself.
   step: "lookup" | "update";
+  // How many of the objects the apply made before it failed (each removed again, or named in the
+  // message if it could not be). The apply makes them in the order of its steps.
+  made: number;
+  // The object whose creation failed, as kind:name, when one did.
+  failedObject?: string;
+  // True when the caller may not create the kinds of object the change needs, so nothing was made.
+  denied: boolean;
 }
 
 interface EditRefusalContext {
   // The display name of the environment, for the words about a swarm with no manager.
   environment: string;
+  // The service's name, for the words about the objects a failed apply made and removed.
+  name?: string;
   // The image the service names now, said when the server did not say which it looked up.
   image: string;
 }
@@ -24,20 +33,74 @@ interface EditRefusalContext {
 // Docker's words arrive after this lead on a rejected spec; the page puts its own lead there.
 const REJECTED_LEAD = "Docker rejected these settings: ";
 
+// The problem types the server names for an object it was asked to create that is not right, in
+// the words it chose.
+const OBJECT_PROBLEMS = new Set([
+  "too_many_objects",
+  "object_duplicate",
+  "name_invalid",
+  "value_required",
+  "value_invalid",
+  "value_too_large",
+  "templating_invalid",
+  "labels_invalid",
+  "subnet_invalid",
+]);
+
 // editRefusalOf words a review or an apply that was refused, from the problem type the server
 // named. A type is never shown. The settings and paths the server lists are, because they say
-// what to change; none of them holds a value of the spec.
+// what to change; none of them holds a value of the spec. An apply that failed after it made
+// objects says so: that they were removed again, or which could not be.
 export function editRefusalOf(t: Translate, err: unknown, ctx: EditRefusalContext): EditRefusal {
   const e = err instanceof ServiceActionError ? err : new ServiceActionError(0);
+  const entries = (location: string) =>
+    e.entries.filter((f) => f.location === location).map((f) => f.message);
+  const removed = entries("removed");
+  const notRemoved = entries("notRemoved");
+  // The reason on its own, without the sentence the server put around it, so the page words the
+  // whole of it.
+  const reason = entries("reason")[0];
+  const base =
+    reason === undefined
+      ? e
+      : new ServiceActionError(e.status, e.type, e.fields, reason, e.entries);
+  const refusal = refuse(t, base, ctx);
+  const made = removed.length + notRemoved.length;
+  if (made === 0) return refusal;
+  const item = (o: string) => {
+    const [kind = "", ...rest] = o.split(":");
+    return t(`specEditor.apply.cleanup.item.${kind}`, { name: rest.join(":") });
+  };
+  const name = ctx.name ?? "";
+  return {
+    ...refusal,
+    made,
+    message:
+      notRemoved.length > 0
+        ? t("specEditor.apply.cleanup.notRemoved", {
+            name,
+            reason: refusal.message,
+            list: notRemoved.map(item).join(", "),
+          })
+        : t("specEditor.apply.cleanup.removed", { name, reason: refusal.message, count: made }),
+  };
+}
+
+function refuse(t: Translate, e: ServiceActionError, ctx: EditRefusalContext): EditRefusal {
   const say = (message: string, extra: Partial<EditRefusal> = {}): EditRefusal => ({
     message,
     agentPolicy: false,
     reload: false,
     step: "update",
+    made: 0,
+    denied: false,
     ...extra,
   });
   const listed = (location: string) =>
     e.entries.filter((f) => f.location === location).map((f) => f.message);
+  if (e.type !== undefined && OBJECT_PROBLEMS.has(e.type)) {
+    return say(e.detail || t("services.refusal.generic"));
+  }
   switch (e.type) {
     case "service_changed":
       return say(t("specEditor.refusal.service_changed"), { reload: true });
@@ -82,16 +145,24 @@ export function editRefusalOf(t: Translate, err: unknown, ctx: EditRefusalContex
           ? t("services.refusal.rejectedUpdate", { message: e.detail })
           : t("services.refusal.generic"),
       );
+    case "name_taken":
+      return say(e.detail || t("services.refusal.generic"), { failedObject: listed("object")[0] });
+    case "object_permission":
+      return say(e.detail || t("services.refusal.generic"), { denied: true });
     case "image_unresolved":
       return {
         ...refusalOf(t, e, { environment: ctx.environment, image: ctx.image, action: "update" }),
         reload: false,
         step: "lookup",
+        made: 0,
+        denied: false,
       };
   }
   return {
     ...refusalOf(t, e, { environment: ctx.environment, image: ctx.image, action: "update" }),
     reload: false,
     step: "update",
+    made: 0,
+    denied: false,
   };
 }

@@ -438,7 +438,9 @@ describe("ReviewStep: New objects", () => {
     expect(card().getByText("Secret api-key")).toBeTruthy();
     expect(card().getAllByLabelText("Value")).toHaveLength(2);
     expect(apply().getAttribute("aria-disabled")).toBe("true");
-    expect(screen.getAllByText("Add a value for 2 secrets and configs first.").length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText("Add a value for 2 secrets and configs first.").length,
+    ).toBeGreaterThan(0);
     fireEvent.click(apply());
     expect(onApply).not.toHaveBeenCalled();
   });
@@ -448,7 +450,9 @@ describe("ReviewStep: New objects", () => {
     fireEvent.change(card().getByLabelText("Value"), { target: { value: "hunter2" } });
     expect(staged.get("secret", "db-pass")?.value?.text).toBe("hunter2");
     expect(apply().getAttribute("aria-disabled")).toBe("true");
-    expect(screen.getAllByText("Add a value for 1 secrets and configs first.").length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText("Add a value for 1 secrets and configs first.").length,
+    ).toBeGreaterThan(0);
     fireEvent.change(card().getByLabelText("Content"), { target: { value: "level=debug" } });
     expect(staged.get("config", "app.conf")?.value?.text).toBe("level=debug");
     expect(apply().getAttribute("aria-disabled")).toBeNull();
@@ -457,7 +461,11 @@ describe("ReviewStep: New objects", () => {
   });
 
   it("shows Value added with Edit for an object that was staged with a value", () => {
-    staged.put({ kind: "secret", name: "db-pass", value: { source: "type", text: "hunter2", file: null } });
+    staged.put({
+      kind: "secret",
+      name: "db-pass",
+      value: { source: "type", text: "hunter2", file: null },
+    });
     renderStep({ review: missing(["db-pass"]) });
     expect(card().getByText("Value added")).toBeTruthy();
     expect(card().queryByLabelText("Value")).toBeNull();

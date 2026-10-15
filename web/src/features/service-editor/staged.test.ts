@@ -54,7 +54,10 @@ describe("createStagedStore", () => {
     expect(store.get("secret", "db")?.value?.text).toBe("hunter2");
     store.put({ kind: "config", name: "app", templating: "golang" });
     store.setValue("config", "app", typed("x=1"));
-    expect(store.get("config", "app")).toMatchObject({ templating: "golang", value: { text: "x=1" } });
+    expect(store.get("config", "app")).toMatchObject({
+      templating: "golang",
+      value: { text: "x=1" },
+    });
   });
 
   it("clears every value on reset, zeroing the bytes of a file", () => {
@@ -75,9 +78,13 @@ describe("hasValue", () => {
     expect(hasValue({ kind: "secret", name: "a", value: typed("x") })).toBe(true);
     expect(hasValue({ kind: "secret", name: "a" })).toBe(false);
     expect(hasValue({ kind: "secret", name: "a", value: typed("") })).toBe(false);
-    expect(hasValue({ kind: "config", name: "a", value: { source: "file", text: "", file: null } })).toBe(false);
+    expect(
+      hasValue({ kind: "config", name: "a", value: { source: "file", text: "", file: null } }),
+    ).toBe(false);
     const over = { name: "big", size: 600 * 1024, bytes: null };
-    expect(hasValue({ kind: "secret", name: "a", value: { source: "file", text: "", file: over } })).toBe(false);
+    expect(
+      hasValue({ kind: "secret", name: "a", value: { source: "file", text: "", file: over } }),
+    ).toBe(false);
   });
 
   it("is true for a network, which has no value to add", () => {
@@ -93,7 +100,10 @@ describe("objectsForApply", () => {
     store.put({ kind: "network", name: "front", subnet: "10.9.0.0/24" });
     store.put({ kind: "secret", name: "db", value: typed("hunter2") });
     store.put({ kind: "config", name: "app", value: typed("x=1"), templating: "golang" });
-    const got = objectsForApply({ networks: ["front", "back"], secrets: ["db"], configs: ["app"] }, store);
+    const got = objectsForApply(
+      { networks: ["front", "back"], secrets: ["db"], configs: ["app"] },
+      store,
+    );
     expect(got.lacking).toBe(0);
     expect(got.objects).toEqual([
       { kind: "network", name: "front", subnet: "10.9.0.0/24" },
@@ -106,7 +116,11 @@ describe("objectsForApply", () => {
   it("encodes a value as UTF-8, and a file as its bytes", () => {
     const store = createStagedStore();
     store.put({ kind: "secret", name: "pw", value: typed("pässword") });
-    store.put({ kind: "secret", name: "key", value: fileValue(new Uint8Array([0xff, 0x00, 0x7f])) });
+    store.put({
+      kind: "secret",
+      name: "key",
+      value: fileValue(new Uint8Array([0xff, 0x00, 0x7f])),
+    });
     const got = objectsForApply({ networks: [], secrets: ["pw", "key"], configs: [] }, store);
     expect(got.objects).toEqual([
       { kind: "secret", name: "pw", data: b64("p\xc3\xa4ssword") },
@@ -117,7 +131,10 @@ describe("objectsForApply", () => {
   it("counts the secrets and configs that still lack a value and sends none of them", () => {
     const store = createStagedStore();
     store.put({ kind: "secret", name: "db", value: typed("hunter2") });
-    const got = objectsForApply({ networks: [], secrets: ["db", "other"], configs: ["app"] }, store);
+    const got = objectsForApply(
+      { networks: [], secrets: ["db", "other"], configs: ["app"] },
+      store,
+    );
     expect(got.lacking).toBe(2);
     expect(got.objects.map((o) => o.name)).toEqual(["db"]);
   });
@@ -125,6 +142,9 @@ describe("objectsForApply", () => {
   it("leaves out a staged object that nothing names any more", () => {
     const store = createStagedStore();
     store.put({ kind: "secret", name: "gone", value: typed("x") });
-    expect(objectsForApply({ networks: [], secrets: [], configs: [] }, store)).toEqual({ objects: [], lacking: 0 });
+    expect(objectsForApply({ networks: [], secrets: [], configs: [] }, store)).toEqual({
+      objects: [],
+      lacking: 0,
+    });
   });
 });

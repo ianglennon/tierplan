@@ -72,6 +72,17 @@ export function valueProblem(kind: ObjectKind, value: ObjectValue): ValueProblem
   return undefined;
 }
 
+// toBase64 is the standard base64 of bytes, built in pieces so a large value does not overflow
+// the call stack.
+export function toBase64(bytes: Uint8Array): string {
+  const piece = 0x8000;
+  let binary = "";
+  for (let at = 0; at < bytes.length; at += piece) {
+    binary += String.fromCharCode(...bytes.subarray(at, at + piece));
+  }
+  return btoa(binary);
+}
+
 // kbOf is a size in KB, to one decimal and without a trailing ".0".
 function kbOf(bytes: number): number {
   return Math.round((bytes / 1024) * 10) / 10;

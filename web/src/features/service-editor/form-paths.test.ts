@@ -8,7 +8,7 @@ import { getPath, setPath } from "@/features/service-editor/spec-patch";
 import everyField from "@/features/service-editor/testdata/every-field-spec.json";
 
 describe("FORM_OWNED_PATHS", () => {
-  it("names the paths of the Basics, Environment, Ports, Mounts, Resources, Placement, Restart policy and Update policy cards", () => {
+  it("names the paths of the Basics, Environment, Ports, Secrets, Configs, Networks, Mounts, Resources, Placement, Restart policy and Update policy cards", () => {
     expect([...FORM_OWNED_PATHS].sort()).toEqual(
       [
         "EndpointSpec.Ports",
@@ -16,9 +16,12 @@ describe("FORM_OWNED_PATHS", () => {
         "Mode.Global",
         "Mode.Replicated.Replicas",
         "Name",
+        "TaskTemplate.ContainerSpec.Configs",
         "TaskTemplate.ContainerSpec.Env",
         "TaskTemplate.ContainerSpec.Image",
         "TaskTemplate.ContainerSpec.Mounts",
+        "TaskTemplate.ContainerSpec.Secrets",
+        "TaskTemplate.Networks",
         "TaskTemplate.Placement.Constraints",
         "TaskTemplate.Placement.MaxReplicas",
         "TaskTemplate.Placement.Preferences",
@@ -82,8 +85,6 @@ describe("unshownPaths", () => {
       "TaskTemplate.ContainerSpec.Healthcheck",
       "TaskTemplate.ContainerSpec.Hosts",
       "TaskTemplate.ContainerSpec.DNSConfig",
-      "TaskTemplate.ContainerSpec.Secrets",
-      "TaskTemplate.ContainerSpec.Configs",
       "TaskTemplate.ContainerSpec.Isolation",
       "TaskTemplate.ContainerSpec.Sysctls",
       "TaskTemplate.ContainerSpec.CapabilityAdd",
@@ -93,7 +94,6 @@ describe("unshownPaths", () => {
       "TaskTemplate.Resources.Limits.Pids",
       "TaskTemplate.Resources.Reservations.GenericResources",
       "TaskTemplate.Placement.Platforms",
-      "TaskTemplate.Networks",
       "TaskTemplate.LogDriver",
       "TaskTemplate.ForceUpdate",
       "TaskTemplate.Runtime",
@@ -104,9 +104,12 @@ describe("unshownPaths", () => {
     ]);
   });
 
-  it("no longer lists the mount, placement, restart policy and update policy settings the cards own", () => {
+  it("no longer lists the secret, config, network, mount, placement, restart policy and update policy settings the cards own", () => {
     const paths = unshownPaths(everyField);
     for (const p of [
+      "TaskTemplate.ContainerSpec.Secrets",
+      "TaskTemplate.ContainerSpec.Configs",
+      "TaskTemplate.Networks",
       "TaskTemplate.ContainerSpec.Mounts",
       "TaskTemplate.Placement",
       "TaskTemplate.Placement.Constraints",

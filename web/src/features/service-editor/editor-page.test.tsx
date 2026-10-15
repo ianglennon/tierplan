@@ -609,9 +609,7 @@ describe("new objects", () => {
     fireEvent.click(reviewButton());
     await screen.findByRole("heading", { name: "Review changes", level: 2 });
     expect(
-      screen
-        .getByRole("button", { name: "Apply changes" })
-        .getAttribute("aria-disabled"),
+      screen.getByRole("button", { name: "Apply changes" }).getAttribute("aria-disabled"),
     ).toBeNull();
   });
 });

@@ -92,13 +92,16 @@ async function choose(combobox: HTMLElement, option: string) {
 }
 
 describe("the cards", () => {
-  it("renders Mounts, Placement, Restart policy and Update policy between the older cards, in order", () => {
+  it("renders Secrets, Configs, Networks, Mounts, Placement, Restart policy and Update policy between the older cards, in order", () => {
     render(<Host />);
     const titles = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent);
     expect(titles).toEqual([
       "Basics",
       "Environment variables",
       "Ports",
+      "Secrets",
+      "Configs",
+      "Networks",
       "Mounts",
       "Resources",
       "Placement",

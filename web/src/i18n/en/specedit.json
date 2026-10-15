@@ -164,21 +164,29 @@
         "plugin_runtime": "a plugin runtime",
         "other": "{{path}}: {{value}}"
       },
-      "missing": {
-        "networks": "The spec names networks that don't exist: {{names}}. Create them first, then review again.",
-        "secrets": "The spec names secrets that don't exist: {{names}}. Create them first, then review again.",
-        "configs": "The spec names configs that don't exist: {{names}}. Create them first, then review again.",
-        "reason": "Create the {{count}} missing objects first."
-      },
       "notes": "Notes from the review",
-      "hiddenOnly": "The changes are to values that are hidden from you, so they aren't listed."
+      "hiddenOnly": "The changes are to values that are hidden from you, so they aren't listed.",
+      "newObjects": {
+        "title": "New objects",
+        "intro": "These don't exist yet. They're created first, then the service.",
+        "network": "Network {{name}}",
+        "networkNote": "Created as an attachable overlay network.",
+        "secret": "Secret {{name}}",
+        "config": "Config {{name}}",
+        "added": "Value added",
+        "edit": "Edit",
+        "reason": "Add a value for {{count}} secrets and configs first."
+      }
     },
     "apply": {
       "title": "Applying changes to {{name}}",
       "steps": {
         "label": "Steps",
         "lookup": "Look up the image",
-        "update": "Update service {{name}}"
+        "update": "Update service {{name}}",
+        "network": "Create network {{name}}",
+        "secret": "Create secret {{name}}",
+        "config": "Create config {{name}}"
       },
       "status": {
         "waiting": "Waiting",
@@ -195,7 +203,16 @@
       "back": "Back to editing",
       "close": "Close editor",
       "reload": "Reload service",
-      "toast": "Updated {{name}}."
+      "toast": "Updated {{name}}.",
+      "cleanup": {
+        "removed": "Couldn't update {{name}}. {{reason}} The {{count}} objects created for this change were removed.",
+        "notRemoved": "Couldn't update {{name}}. {{reason}} Bayplan couldn't remove {{list}}. Remove them under Networks, Secrets or Configs.",
+        "item": {
+          "network": "network {{name}}",
+          "secret": "secret {{name}}",
+          "config": "config {{name}}"
+        }
+      }
     },
     "refusal": {
       "service_changed": "This service was changed by someone else while you were editing. Reload it, then make your changes again.",
@@ -209,7 +226,9 @@
       "placeholder_unmatched": "A hidden value in the spec has nothing behind it: {{path}} isn't in the service. Type its value or remove it.",
       "placeholder_reserved": "<hidden> is what Bayplan shows for a value it withholds, so it can't be a value. Type the real value or remove it.",
       "objects_missing": "The spec names networks that don't exist: {{names}}. Create them first, then review again.",
-      "nothing_to_apply": "There's nothing to apply."
+      "nothing_to_apply": "There's nothing to apply.",
+      "object_permission": "{{message}}",
+      "too_many_objects": "One change can create at most 16 objects."
     }
   }
 }

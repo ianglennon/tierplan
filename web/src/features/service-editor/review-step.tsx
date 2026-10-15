@@ -12,7 +12,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { AutoRollbackBox } from "@/features/service-editor/cards/auto-rollback-box";
 import { EditorFooter } from "@/features/service-editor/editor-footer";
+import { NewObjectsCard } from "@/features/service-editor/new-objects-card";
 import { imageOf } from "@/features/service-editor/spec-paths";
+import {
+  objectsForApply,
+  type StagedStore,
+  useStagedObjects,
+} from "@/features/service-editor/staged";
 import { withTypedValues } from "@/features/service-editor/typed-values";
 import { autoRollbackState, setAutoRollback } from "@/features/service-editor/update-policy";
 import { diffSpecs } from "@/features/spec-editor/diff";
@@ -35,6 +41,8 @@ interface ReviewStepProps {
   review?: ServiceReview;
   // True while the apply request is out.
   applying: boolean;
+  // The objects staged in the editor, and where the values of the missing ones are typed.
+  staged: StagedStore;
   onBack: () => void;
   onApply: () => void;
   // The edited spec with a change made on this step (the auto-rollback box). The page keeps it as
@@ -117,19 +125,22 @@ function ImageRow({ current, next, credential }: ImageRowProps) {
 // (D-12 amended): changing it here hands the page the spec with the choice applied. The server
 // decides every refusal; this only words it (T-06-60). Apply is
 // unavailable, with the reason, while there is nothing to apply, while the caller may not have the
-// settings in the spec, while the host is read-only, and while the image or an object the spec
-// names cannot be found.
+// settings in the spec, while the host is read-only, while the image cannot be found, and while a
+// secret or config the spec names that does not exist has no value (the New objects card asks for it).
 export function ReviewStep({
   name,
   current,
   edited,
   review,
   applying,
+  staged,
   onBack,
   onApply,
   onSpecChange,
 }: ReviewStepProps) {
   const t = useT();
+  // Re-judge when a value is typed.
+  useStagedObjects(staged);
   const rollbackId = useId();
   const next = useMemo(
     () => (review ? withTypedValues(review.spec, edited) : edited),
@@ -141,12 +152,13 @@ export function ReviewStep({
   const imageChanged = review ? review.image.changed : currentImage !== nextImage;
 
   const findings = review?.findings ?? [];
-  const missing = review?.missing;
-  const missingKinds = (["networks", "secrets", "configs"] as const).flatMap((kind) => {
-    const names = missing?.[kind] ?? [];
-    return names.length > 0 ? [{ kind, names }] : [];
-  });
-  const missingCount = missingKinds.reduce((n, m) => n + m.names.length, 0);
+  const missing = {
+    networks: review?.missing.networks ?? [],
+    secrets: review?.missing.secrets ?? [],
+    configs: review?.missing.configs ?? [],
+  };
+  const missingCount = missing.networks.length + missing.secrets.length + missing.configs.length;
+  const lacking = review ? objectsForApply(missing, staged).lacking : 0;
   const refusalList = review
     ? findings.length > 0
       ? findings.map((f) => findingText(t, f)).join(", ")
@@ -167,8 +179,7 @@ export function ReviewStep({
     else if (!review.allowed) reason = t("needs.role.admin");
     else if (readOnly) reason = t("actions.readOnlyHost");
     else if (imageProblem) reason = imageProblem;
-    else if (missingCount > 0)
-      reason = t("specEditor.review.missing.reason", { count: missingCount });
+    else if (lacking > 0) reason = t("specEditor.review.newObjects.reason", { count: lacking });
   }
   const lookingUp = review === undefined;
   const blocked = lookingUp || reason !== undefined;
@@ -230,14 +241,6 @@ export function ReviewStep({
           </AlertDescription>
         </Alert>
       ) : null}
-      {missingKinds.map(({ kind, names }) => (
-        <Alert key={kind} variant="warning">
-          <TriangleAlert aria-hidden="true" />
-          <AlertDescription className="break-words text-status-warning-text">
-            {t(`specEditor.review.missing.${kind}`, { names: names.join(", ") })}
-          </AlertDescription>
-        </Alert>
-      ))}
       {review?.warnings && review.warnings.length > 0 ? (
         <Alert role="status">
           <Info aria-hidden="true" />
@@ -259,6 +262,9 @@ export function ReviewStep({
           next={review ? nextImage : undefined}
           credential={review?.image.credential}
         />
+      ) : null}
+      {missingCount > 0 ? (
+        <NewObjectsCard missing={missing} staged={staged} disabled={applying} />
       ) : null}
       <section className="flex flex-col gap-2">
         <h3 className="text-base font-semibold">{t("serviceForm.update.behaviour")}</h3>

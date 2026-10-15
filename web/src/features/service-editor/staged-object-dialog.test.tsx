@@ -3,9 +3,8 @@
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import { StagedObjectDialog } from "@/features/service-editor/staged-object-dialog";
 import type { StagedKind, StagedObject } from "@/features/service-editor/staged";
+import { StagedObjectDialog } from "@/features/service-editor/staged-object-dialog";
 import "@/i18n";
 
 // The staged object dialog (plan 06-26, D-06; UI-SPEC "Service editor" Staged dialogs): a secret,
@@ -23,7 +22,9 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 function renderDialog(kind: StagedKind, taken: string[] = []) {
-  return render(<StagedObjectDialog kind={kind} open onOpenChange={onOpenChange} taken={taken} onAdd={onAdd} />);
+  return render(
+    <StagedObjectDialog kind={kind} open onOpenChange={onOpenChange} taken={taken} onAdd={onAdd} />,
+  );
 }
 
 const name = () => screen.getByLabelText("Name");
@@ -34,7 +35,9 @@ describe("StagedObjectDialog: a secret", () => {
     renderDialog("secret");
     expect(screen.getByRole("dialog", { name: "Create a secret" })).toBeTruthy();
     expect(
-      screen.getByText("It's created when you apply the service. Docker never shows the value again."),
+      screen.getByText(
+        "It's created when you apply the service. Docker never shows the value again.",
+      ),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Add secret" })).toBeTruthy();
   });
@@ -65,7 +68,11 @@ describe("StagedObjectDialog: a secret", () => {
     type(screen.getByLabelText("Value"), "hunter2");
     fireEvent.click(screen.getByRole("button", { name: "Add secret" }));
     expect(onAdd).toHaveBeenCalledTimes(1);
-    expect(onAdd.mock.calls[0]?.[0]).toMatchObject({ kind: "secret", name: "fresh", value: { source: "type", text: "hunter2" } });
+    expect(onAdd.mock.calls[0]?.[0]).toMatchObject({
+      kind: "secret",
+      name: "fresh",
+      value: { source: "type", text: "hunter2" },
+    });
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
@@ -80,8 +87,24 @@ describe("StagedObjectDialog: a secret", () => {
     const { rerender } = renderDialog("secret");
     type(name(), "fresh");
     type(screen.getByLabelText("Value"), "hunter2");
-    rerender(<StagedObjectDialog kind="secret" open={false} onOpenChange={onOpenChange} taken={[]} onAdd={onAdd} />);
-    rerender(<StagedObjectDialog kind="secret" open onOpenChange={onOpenChange} taken={[]} onAdd={onAdd} />);
+    rerender(
+      <StagedObjectDialog
+        kind="secret"
+        open={false}
+        onOpenChange={onOpenChange}
+        taken={[]}
+        onAdd={onAdd}
+      />,
+    );
+    rerender(
+      <StagedObjectDialog
+        kind="secret"
+        open
+        onOpenChange={onOpenChange}
+        taken={[]}
+        onAdd={onAdd}
+      />,
+    );
     expect((name() as HTMLInputElement).value).toBe("");
     expect((screen.getByLabelText("Value") as HTMLInputElement).value).toBe("");
   });
@@ -126,7 +149,9 @@ describe("StagedObjectDialog: a network", () => {
     renderDialog("network");
     expect(screen.getByRole("dialog", { name: "Create a network" })).toBeTruthy();
     expect(
-      screen.getByText("It's created when you apply the service, as an attachable overlay network."),
+      screen.getByText(
+        "It's created when you apply the service, as an attachable overlay network.",
+      ),
     ).toBeTruthy();
     expect(screen.queryByLabelText("Subnet (optional)")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
@@ -137,7 +162,11 @@ describe("StagedObjectDialog: a network", () => {
     type(within(dialog).getByLabelText("Subnet (optional)"), "10.9.0.0/24");
     type(name(), "front");
     fireEvent.click(screen.getByRole("button", { name: "Add network" }));
-    expect(onAdd.mock.calls[0]?.[0]).toMatchObject({ kind: "network", name: "front", subnet: "10.9.0.0/24" });
+    expect(onAdd.mock.calls[0]?.[0]).toMatchObject({
+      kind: "network",
+      name: "front",
+      subnet: "10.9.0.0/24",
+    });
   });
 
   it("needs only a name, and says so when the subnet is not a subnet", async () => {

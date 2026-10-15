@@ -47,6 +47,11 @@ import { ReviewStep } from "@/features/service-editor/review-step";
 import { ServiceForm } from "@/features/service-editor/service-form";
 import { imageOf } from "@/features/service-editor/spec-paths";
 import { StackOwnedState } from "@/features/service-editor/stack-owned-state";
+import {
+  createStagedStore,
+  objectsForApply,
+  type StagedKind,
+} from "@/features/service-editor/staged";
 import { SpecEditor } from "@/features/spec-editor/spec-editor";
 import type { SpecValue } from "@/features/spec-editor/spec-format";
 import { useDocumentTitle } from "@/hooks/use-me";
@@ -178,6 +183,13 @@ export function ServiceEditorPage({
   }, [pinned, specQuery.data]);
   useDocumentTitle(data?.name);
 
+  // The objects staged from the pickers and the values typed on the review. They live here, in
+  // memory, and are cleared when the editor closes and when the apply is accepted.
+  const [staged] = useState(createStagedStore);
+  useEffect(() => () => staged.reset(), [staged]);
+  // The objects the apply in flight makes first, for its steps.
+  const [creating, setCreating] = useState<{ kind: StagedKind; name: string }[]>([]);
+
   const reviewMutation = useReviewServiceUpdate(envId);
   const applyMutation = useApplyServiceUpdate(envId);
   const [stage, setStage] = useState<Stage>("edit");
@@ -279,10 +291,27 @@ export function ServiceEditorPage({
 
   function onApply() {
     if (!data || applyMutation.isPending) return;
+    // The networks the review lists are made with their defaults, the secrets and configs from
+    // the values typed or staged; the server judges the spec again either way. The values are read
+    // as the request is sent and not held in the mutation.
+    const missing = review?.missing;
+    const planned = missing ? objectsForApply(missing, staged).objects : [];
+    setCreating(planned.map((o) => ({ kind: o.kind, name: o.name })));
     setStage("apply");
     applyMutation.mutate(
-      { serviceId, version: data.version, spec },
-      { onSuccess: () => toastSuccess(t("specEditor.apply.toast", { name: data.name })) },
+      {
+        serviceId,
+        version: data.version,
+        spec,
+        objects: () => (missing ? objectsForApply(missing, staged).objects : []),
+      },
+      {
+        onSuccess: () => {
+          // The values have been sent; nothing of them stays in the page.
+          staged.reset();
+          toastSuccess(t("specEditor.apply.toast", { name: data.name }));
+        },
+      },
     );
   }
 
@@ -292,6 +321,7 @@ export function ServiceEditorPage({
     reviewMutation.reset();
     const fresh = await specQuery.refetch();
     if (!fresh.data) return;
+    staged.reset();
     setPinned(fresh.data);
     setEdited(null);
     setValid(true);
@@ -465,6 +495,7 @@ export function ServiceEditorPage({
               spec={spec}
               mode="edit"
               envId={envId}
+              staged={staged}
               onSpecChange={onChange}
               onValidityChange={setFormValid}
               onOpenSpec={() => showTab("spec")}
@@ -515,6 +546,7 @@ export function ServiceEditorPage({
           edited={spec}
           review={review}
           applying={applyMutation.isPending}
+          staged={staged}
           onBack={backToEditing}
           onApply={onApply}
           onSpecChange={onReviewSpecChange}
@@ -530,6 +562,7 @@ export function ServiceEditorPage({
           }
           error={applyMutation.error ?? undefined}
           lookup={review?.image.changed ?? false}
+          objects={creating}
           onBack={backToEditing}
           onClose={toService}
           onReload={() => void reload()}

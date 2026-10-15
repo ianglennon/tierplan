@@ -4,15 +4,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { BasicsCard } from "@/features/service-editor/cards/basics-card";
+import { ConfigsCard } from "@/features/service-editor/cards/configs-card";
 import { EnvironmentCard } from "@/features/service-editor/cards/environment-card";
 import { MountsCard } from "@/features/service-editor/cards/mounts-card";
+import { NetworksCard } from "@/features/service-editor/cards/networks-card";
 import { PlacementCard } from "@/features/service-editor/cards/placement-card";
 import { PortsCard } from "@/features/service-editor/cards/ports-card";
 import { ResourcesCard } from "@/features/service-editor/cards/resources-card";
 import { RestartCard } from "@/features/service-editor/cards/restart-card";
+import { SecretsCard } from "@/features/service-editor/cards/secrets-card";
 import { UpdateCard } from "@/features/service-editor/cards/update-card";
 import { CautionBar } from "@/features/service-editor/caution-bar";
 import { removePath, setPath } from "@/features/service-editor/spec-patch";
+import {
+  createStagedStore,
+  StagedContext,
+  type StagedStore,
+} from "@/features/service-editor/staged";
 import type { SpecValue } from "@/features/spec-editor/spec-format";
 
 export interface ServiceFormProps {
@@ -23,6 +31,9 @@ export interface ServiceFormProps {
   onSpecChange: (spec: SpecValue) => void;
   mode: "edit" | "create";
   envId: string;
+  // The objects staged from the pickers. The page holds them, so the review and the apply see the
+  // same ones; a form without a page of its own keeps its own.
+  staged?: StagedStore;
   // Switches to the Spec tab, from the caution bar.
   onOpenSpec?: () => void;
   // Whether every field of the form can be written, each time that changes. The form is valid
@@ -40,9 +51,11 @@ export function ServiceForm({
   onSpecChange,
   mode,
   envId,
+  staged,
   onOpenSpec,
   onValidityChange,
 }: ServiceFormProps) {
+  const [ownStore] = useState(createStagedStore);
   // The spec as the form last made it or was given it, so two changes in one event both land.
   const current = useRef(spec);
   current.current = spec;
@@ -80,16 +93,21 @@ export function ServiceForm({
 
   const card = { spec, set, unset, change, mode, envId, report };
   return (
-    <div className="mx-auto flex w-full max-w-240 flex-col gap-8">
-      <CautionBar spec={spec} onOpenSpec={onOpenSpec} />
-      <BasicsCard {...card} />
-      <EnvironmentCard {...card} />
-      <PortsCard {...card} />
-      <MountsCard {...card} />
-      <ResourcesCard {...card} />
-      <PlacementCard {...card} />
-      <RestartCard {...card} />
-      <UpdateCard {...card} />
-    </div>
+    <StagedContext.Provider value={staged ?? ownStore}>
+      <div className="mx-auto flex w-full max-w-240 flex-col gap-8">
+        <CautionBar spec={spec} onOpenSpec={onOpenSpec} />
+        <BasicsCard {...card} />
+        <EnvironmentCard {...card} />
+        <PortsCard {...card} />
+        <SecretsCard {...card} />
+        <ConfigsCard {...card} />
+        <NetworksCard {...card} />
+        <MountsCard {...card} />
+        <ResourcesCard {...card} />
+        <PlacementCard {...card} />
+        <RestartCard {...card} />
+        <UpdateCard {...card} />
+      </div>
+    </StagedContext.Provider>
   );
 }

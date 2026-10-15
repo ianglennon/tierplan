@@ -24,9 +24,21 @@ const SECRETS = "TaskTemplate.ContainerSpec.Secrets";
 const CONFIGS = "TaskTemplate.ContainerSpec.Configs";
 const NETWORKS = "TaskTemplate.Networks";
 
-const stamp = { createdAt: "2026-10-01T10:00:00Z", updatedAt: "2026-10-01T10:00:00Z", labels: {}, owner: "", ownerKind: "" };
+const stamp = {
+  createdAt: "2026-10-01T10:00:00Z",
+  updatedAt: "2026-10-01T10:00:00Z",
+  labels: {},
+  owner: "",
+  ownerKind: "",
+};
 const secretItem = (id: string, name: string) => ({ id, name, usedBy: 0, ...stamp });
-const configItem = (id: string, name: string) => ({ id, name, usedBy: 0, templating: "none", ...stamp });
+const configItem = (id: string, name: string) => ({
+  id,
+  name,
+  usedBy: 0,
+  templating: "none",
+  ...stamp,
+});
 const netItem = (id: string, name: string) => ({
   id,
   name,
@@ -51,7 +63,10 @@ const base = (): SpecValue => ({
   Mode: { Replicated: { Replicas: 2 } },
 });
 
-function withContainer(extra: Record<string, unknown>, task: Record<string, unknown> = {}): SpecValue {
+function withContainer(
+  extra: Record<string, unknown>,
+  task: Record<string, unknown> = {},
+): SpecValue {
   return {
     Name: "api",
     TaskTemplate: { ContainerSpec: { Image: "nginx:1.27", ...extra }, ...task },
@@ -101,15 +116,25 @@ beforeEach(() => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
-      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, "http://localhost");
-      const list = (items: unknown[]) => ({ items, total: items.length, unfilteredTotal: items.length, capped: false });
+      const url = new URL(
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+        "http://localhost",
+      );
+      const list = (items: unknown[]) => ({
+        items,
+        total: items.length,
+        unfilteredTotal: items.length,
+        capped: false,
+      });
       switch (url.pathname) {
         case "/api/me":
           return Response.json(me);
         case `/api/env/${ENV}/secrets`:
           return Response.json(list([secretItem("sec1", "db_pw"), secretItem("sec2", "api_key")]));
         case `/api/env/${ENV}/configs`:
-          return Response.json(list([configItem("cfg1", "app_conf"), configItem("cfg2", "nginx.conf")]));
+          return Response.json(
+            list([configItem("cfg1", "app_conf"), configItem("cfg2", "nginx.conf")]),
+          );
         case `/api/env/${ENV}/networks`:
           return Response.json({
             items: [netItem("net1", "shop_front"), netItem("net2", "shop_back")],
@@ -134,7 +159,7 @@ const type = (el: HTMLElement, value: string) => fireEvent.change(el, { target: 
 const card = (name: string) => within(screen.getByRole("region", { name }));
 const lastValid = () => validity[validity.length - 1];
 
-async function pick(scope: ReturnType<typeof within>, option: string) {
+async function pick(scope: ReturnType<typeof within>, option: string | RegExp) {
   fireEvent.click(scope.getByRole("combobox"));
   fireEvent.click(await screen.findByRole("option", { name: option }));
 }
@@ -165,7 +190,9 @@ describe("SecretsCard", () => {
     render(<Host />);
     fireEvent.click(card("Secrets").getByRole("button", { name: "Add secret" }));
     await pick(row(1), "api_key");
-    await waitFor(() => expect(getPath(latest, SECRETS)).toEqual([secretRef("sec2", "api_key", "api_key")]));
+    await waitFor(() =>
+      expect(getPath(latest, SECRETS)).toEqual([secretRef("sec2", "api_key", "api_key")]),
+    );
     expect((row(1).getByLabelText("File name") as HTMLInputElement).value).toBe("api_key");
     expect(lastValid()).toBe(true);
   });
@@ -174,7 +201,11 @@ describe("SecretsCard", () => {
     render(<Host initial={withSecrets()} />);
     type(row(1).getByLabelText("File name"), "pw");
     expect(getPath(latest, SECRETS)).toEqual([
-      { SecretID: "sec1", SecretName: "db_pw", File: { Name: "pw", UID: "0", GID: "0", Mode: 292 } },
+      {
+        SecretID: "sec1",
+        SecretName: "db_pw",
+        File: { Name: "pw", UID: "0", GID: "0", Mode: 292 },
+      },
     ]);
     type(row(1).getByLabelText("Mode"), "0400");
     expect((getPath(latest, SECRETS) as { File: { Mode: number } }[])[0]?.File.Mode).toBe(0o400);
@@ -206,9 +237,11 @@ describe("SecretsCard", () => {
     store.put({ kind: "secret", name: "fresh", value: { source: "type", text: "x", file: null } });
     render(<Host />);
     fireEvent.click(card("Secrets").getByRole("button", { name: "Add secret" }));
-    await pick(row(1), "fresh New");
+    await pick(row(1), /^fresh/);
     await waitFor(() =>
-      expect(getPath(latest, SECRETS)).toEqual([{ SecretName: "fresh", File: { Name: "fresh", UID: "0", GID: "0", Mode: 292 } }]),
+      expect(getPath(latest, SECRETS)).toEqual([
+        { SecretName: "fresh", File: { Name: "fresh", UID: "0", GID: "0", Mode: 292 } },
+      ]),
     );
   });
 
@@ -234,12 +267,16 @@ describe("ConfigsCard", () => {
     render(<Host />);
     fireEvent.click(card("Configs").getByRole("button", { name: "Add config" }));
     await pick(row(1), "nginx.conf");
-    await waitFor(() => expect(getPath(latest, CONFIGS)).toEqual([cfgRef("cfg2", "nginx.conf", "/nginx.conf")]));
+    await waitFor(() =>
+      expect(getPath(latest, CONFIGS)).toEqual([cfgRef("cfg2", "nginx.conf", "/nginx.conf")]),
+    );
     expect((row(1).getByLabelText("Path") as HTMLInputElement).value).toBe("/nginx.conf");
   });
 
   it("needs an absolute path once it is touched", () => {
-    render(<Host initial={withContainer({ Configs: [cfgRef("cfg1", "app_conf", "/etc/app.conf")] })} />);
+    render(
+      <Host initial={withContainer({ Configs: [cfgRef("cfg1", "app_conf", "/etc/app.conf")] })} />,
+    );
     type(row(1).getByLabelText("Path"), "etc/app.conf");
     expect(screen.getByText("Enter an absolute path that starts with /.")).toBeTruthy();
     expect(lastValid()).toBe(false);
@@ -249,7 +286,11 @@ describe("ConfigsCard", () => {
 
   it("keeps a runtime config, which is not mounted anywhere, as it is", () => {
     const runtime = { ConfigID: "cfg9", ConfigName: "rt", Runtime: {} };
-    render(<Host initial={withContainer({ Configs: [runtime, cfgRef("cfg1", "app_conf", "/etc/app.conf")] })} />);
+    render(
+      <Host
+        initial={withContainer({ Configs: [runtime, cfgRef("cfg1", "app_conf", "/etc/app.conf")] })}
+      />,
+    );
     fireEvent.click(row(1).getByRole("button", { name: "Remove config 1" }));
     expect(getPath(latest, CONFIGS)).toEqual([runtime]);
   });
@@ -259,7 +300,11 @@ describe("NetworksCard", () => {
   const row = (n: number) => within(screen.getByRole("group", { name: `Network ${n}` }));
 
   it("shows the network by name when the spec holds its ID, with its aliases", async () => {
-    render(<Host initial={withContainer({}, { Networks: [{ Target: "net1", Aliases: ["web", "api"] }] })} />);
+    render(
+      <Host
+        initial={withContainer({}, { Networks: [{ Target: "net1", Aliases: ["web", "api"] }] })}
+      />,
+    );
     await waitFor(() => expect(row(1).getByRole("combobox").textContent).toContain("shop_front"));
     expect((row(1).getByLabelText("Aliases") as HTMLInputElement).value).toBe("web, api");
   });
@@ -272,9 +317,15 @@ describe("NetworksCard", () => {
   });
 
   it("writes the aliases as a list and keeps what else the attachment holds", () => {
-    render(<Host initial={withContainer({}, { Networks: [{ Target: "net1", DriverOpts: { a: "b" } }] })} />);
+    render(
+      <Host
+        initial={withContainer({}, { Networks: [{ Target: "net1", DriverOpts: { a: "b" } }] })}
+      />,
+    );
     type(row(1).getByLabelText("Aliases"), "web, api ,");
-    expect(getPath(latest, NETWORKS)).toEqual([{ Target: "net1", Aliases: ["web", "api"], DriverOpts: { a: "b" } }]);
+    expect(getPath(latest, NETWORKS)).toEqual([
+      { Target: "net1", Aliases: ["web", "api"], DriverOpts: { a: "b" } },
+    ]);
     type(row(1).getByLabelText("Aliases"), "");
     expect(getPath(latest, NETWORKS)).toEqual([{ Target: "net1", DriverOpts: { a: "b" } }]);
   });
@@ -283,7 +334,7 @@ describe("NetworksCard", () => {
     store.put({ kind: "network", name: "front" });
     render(<Host />);
     fireEvent.click(card("Networks").getByRole("button", { name: "Add network" }));
-    await pick(row(1), "front New");
+    await pick(row(1), /^front/);
     await waitFor(() => expect(getPath(latest, NETWORKS)).toEqual([{ Target: "front" }]));
   });
 

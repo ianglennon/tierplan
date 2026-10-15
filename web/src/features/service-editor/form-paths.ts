@@ -5,8 +5,8 @@ import { parsePath } from "@/features/service-editor/spec-patch";
 
 // FORM_OWNED_PATHS are the paths of a swarm.ServiceSpec a control of the Form tab
 // reads and writes (D-01). Everything else in a loaded spec is carried through
-// untouched, and the caution bar names it (D-02). Plan 06-26 adds the paths of the secrets,
-// configs and networks cards; add them here, so the caution bar and the form can't disagree.
+// untouched, and the caution bar names it (D-02). A control that is added to the form adds its
+// path here, so the caution bar and the form can't disagree.
 export const FORM_OWNED_PATHS: readonly string[] = [
   // Basics
   "Name",
@@ -23,6 +23,12 @@ export const FORM_OWNED_PATHS: readonly string[] = [
   "TaskTemplate.Resources.Limits.MemoryBytes",
   "TaskTemplate.Resources.Reservations.NanoCPUs",
   "TaskTemplate.Resources.Reservations.MemoryBytes",
+  // Secrets, configs and networks: the whole lists, because a row is a reference. A row changes the
+  // object, its file, UID, GID and mode (or a network's aliases) and carries the rest of the
+  // reference as it is.
+  "TaskTemplate.ContainerSpec.Secrets",
+  "TaskTemplate.ContainerSpec.Configs",
+  "TaskTemplate.Networks",
   // Mounts: the whole list, because a row is a mount. The card changes the type, source,
   // destination and read-only flag of a mount and carries the rest of it (volume options) as it is.
   "TaskTemplate.ContainerSpec.Mounts",
