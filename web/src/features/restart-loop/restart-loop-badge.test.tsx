@@ -5,7 +5,11 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { type RestartLoop, RestartLoopBadge } from "@/features/restart-loop/restart-loop-badge";
+import {
+  type ContainerRestartLoop,
+  type RestartLoop,
+  RestartLoopBadge,
+} from "@/features/restart-loop/restart-loop-badge";
 import "@/i18n";
 
 // The Restart loop badge (plan 06-34, RES-13, D-15, UI-SPEC "Restart loop" and Color
@@ -115,5 +119,48 @@ describe("RestartLoopBadge muted", () => {
       </TooltipProvider>,
     );
     expect(container.textContent).toBe("");
+  });
+});
+
+// A standalone container's loop (plan 06-36, RES-13, D-15, UI-SPEC "Restart loop" Badge): the
+// same badge, with the tooltip of restarts and the last exit code.
+describe("RestartLoopBadge for a container", () => {
+  const CONTAINER_LOOP = {
+    state: "flagged" as const,
+    count: 3,
+    windowMinutes: 10,
+    lastExitCode: "137",
+  };
+
+  function mountContainer(loop: ContainerRestartLoop = CONTAINER_LOOP) {
+    return render(
+      <TooltipProvider>
+        <RestartLoopBadge loop={loop} kind="container" />
+      </TooltipProvider>,
+    );
+  }
+
+  it("reads Restart loop and says the restarts, the window and the last exit code", async () => {
+    mountContainer();
+    fireEvent.focus(screen.getByText("Restart loop"));
+    const tip = await screen.findByRole("tooltip");
+    expect(tip.textContent).toBe("3 restarts in the last 10 minutes. Last exit code 137.");
+  });
+
+  it("reads as singular for one restart and one minute", async () => {
+    mountContainer({ ...CONTAINER_LOOP, count: 1, windowMinutes: 1, lastExitCode: "1" });
+    fireEvent.focus(screen.getByText("Restart loop"));
+    const tip = await screen.findByRole("tooltip");
+    expect(tip.textContent).toBe("1 restart in the last 1 minute. Last exit code 1.");
+  });
+
+  it("is the Muted badge once muted, whose tooltip says container", async () => {
+    mountContainer({ ...CONTAINER_LOOP, state: "muted" });
+    expect(screen.queryByText("Restart loop")).toBeNull();
+    fireEvent.focus(screen.getByText("Muted"));
+    const tip = await screen.findByRole("tooltip");
+    expect(tip.textContent).toBe(
+      "Restart-loop alerts are muted for this container. Unmute them from the More menu.",
+    );
   });
 });

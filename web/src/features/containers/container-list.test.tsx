@@ -1321,3 +1321,42 @@ describe("container list: Live stats (06-33)", () => {
     expect(screen.queryByRole("columnheader", { name: "CPU" })).toBeNull();
   });
 });
+
+// Restart loops of standalone containers (plan 06-36, RES-13, D-15): the badge sits in the Name
+// cell, beside the self badge, and only on a container the server flagged.
+describe("container list: restart loops", () => {
+  const LOOPING = [
+    row("crashy", {
+      restartLoop: { state: "flagged", count: 3, windowMinutes: 10, lastExitCode: "3" },
+    }),
+    row("hushed", {
+      restartLoop: { state: "muted", count: 4, windowMinutes: 10, lastExitCode: "1" },
+    }),
+    row("calm"),
+  ];
+
+  it("flags the container the server flagged, and no other", async () => {
+    answer = () => Response.json(body(LOOPING));
+    mount();
+    const crashy = (await screen.findByRole("row", { name: /crashy/ })) as HTMLElement;
+    expect(within(crashy).getByText("Restart loop")).toBeTruthy();
+    expect(within(screen.getByRole("row", { name: /calm/ })).queryByText("Restart loop")).toBeNull();
+  });
+
+  it("says the restarts and the last exit code in the badge's tooltip", async () => {
+    answer = () => Response.json(body(LOOPING));
+    mount();
+    const crashy = (await screen.findByRole("row", { name: /crashy/ })) as HTMLElement;
+    fireEvent.focus(within(crashy).getByText("Restart loop"));
+    const tip = await screen.findByRole("tooltip");
+    expect(tip.textContent).toBe("3 restarts in the last 10 minutes. Last exit code 3.");
+  });
+
+  it("shows a muted loop as the grey Muted badge, not as Restart loop", async () => {
+    answer = () => Response.json(body(LOOPING));
+    mount();
+    const hushed = (await screen.findByRole("row", { name: /hushed/ })) as HTMLElement;
+    expect(within(hushed).getByText("Muted")).toBeTruthy();
+    expect(within(hushed).queryByText("Restart loop")).toBeNull();
+  });
+});

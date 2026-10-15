@@ -52,6 +52,7 @@ function detail(extra: Partial<ContainerDetail> = {}): ContainerDetail {
     project: "",
     stack: "",
     service: "",
+    muted: false,
     ...extra,
   };
 }

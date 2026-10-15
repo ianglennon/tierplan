@@ -23,6 +23,7 @@ import "@/i18n";
 interface Sent {
   method: string;
   path: string;
+  search?: string;
 }
 
 let sent: Sent[];
@@ -37,7 +38,8 @@ beforeEach(() => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (req: Request) => {
-      sent.push({ method: req.method, path: new URL(req.url).pathname });
+      const url = new URL(req.url);
+      sent.push({ method: req.method, path: url.pathname, ...(url.search && { search: url.search }) });
       return answer();
     }),
   );
@@ -114,6 +116,88 @@ describe("MuteMenuItem", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "Mute restart-loop alerts" }));
     expect(
       await screen.findByText("Couldn't change the restart-loop alerts for web. Try again."),
+    ).toBeTruthy();
+  });
+});
+
+// The container variant (plan 06-36, RES-13, D-16): the same item, for a standalone container,
+// named by the node it is on.
+
+async function mountContainer(props: {
+  muted: boolean;
+  needs?: { allowed: boolean; reason?: string };
+}) {
+  render(
+    <QueryClientProvider client={client}>
+      <TooltipProvider>
+        <DropdownMenu defaultOpen>
+          <DropdownMenuTrigger>menu</DropdownMenuTrigger>
+          <DropdownMenuContent>
+            <MuteMenuItem
+              kind="container"
+              envId="e1"
+              nodeId="n1"
+              containerId="crashy-id"
+              name="crashy"
+              muted={props.muted}
+              needs={props.needs ?? ALLOWED}
+            />
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <Toaster />
+      </TooltipProvider>
+    </QueryClientProvider>,
+  );
+  await act(async () => {});
+}
+
+describe("MuteMenuItem for a container", () => {
+  it("mutes the container on its node and toasts 'Muted restart-loop alerts for crashy.'", async () => {
+    answer = () => Response.json({ containerId: "crashy-id", muted: true, changed: true });
+    await mountContainer({ muted: false });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Mute restart-loop alerts" }));
+    await waitFor(() =>
+      expect(sent).toEqual([
+        {
+          method: "PUT",
+          path: "/api/env/e1/containers/crashy-id/restart-loop-mute",
+          search: "?nodeId=n1",
+        },
+      ]),
+    );
+    expect(await screen.findByText("Muted restart-loop alerts for crashy.")).toBeTruthy();
+  });
+
+  it("unmutes a muted container and toasts 'Unmuted restart-loop alerts for crashy.'", async () => {
+    answer = () => Response.json({ containerId: "crashy-id", muted: false, changed: true });
+    await mountContainer({ muted: true });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Unmute restart-loop alerts" }));
+    await waitFor(() =>
+      expect(sent).toEqual([
+        {
+          method: "DELETE",
+          path: "/api/env/e1/containers/crashy-id/restart-loop-mute",
+          search: "?nodeId=n1",
+        },
+      ]),
+    );
+    expect(await screen.findByText("Unmuted restart-loop alerts for crashy.")).toBeTruthy();
+  });
+
+  it("is unavailable with 'Needs Operator' below Operator, and sends nothing", async () => {
+    await mountContainer({ muted: false, needs: OPERATOR_NEEDED });
+    const item = await screen.findByRole("menuitem", { name: "Mute restart-loop alerts" });
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(item);
+    expect(sent).toEqual([]);
+  });
+
+  it("says what went wrong when the server refuses", async () => {
+    answer = () => Response.json({ status: 404, type: "container_not_found" }, { status: 404 });
+    await mountContainer({ muted: false });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Mute restart-loop alerts" }));
+    expect(
+      await screen.findByText("Couldn't change the restart-loop alerts for crashy. Try again."),
     ).toBeTruthy();
   });
 });

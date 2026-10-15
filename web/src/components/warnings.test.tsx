@@ -910,6 +910,84 @@ describe("HealthBell restart-loop items", () => {
   });
 });
 
+// Container-loop items (plan 06-36, RES-13, D-15, UI-SPEC "Restart loop"): one named item for one
+// container, one collapsed item per environment for several. The services have theirs apart.
+
+const containerLoop = (
+  container: string,
+  extra: Record<string, unknown> = {},
+  envId = "e1",
+  envName = "Lab",
+) => ({
+  id: "restart_loop_container",
+  severity: "error",
+  envId,
+  envName,
+  container,
+  containerId: `id-${container}`,
+  nodeId: "n1",
+  count: 3,
+  windowMinutes: 10,
+  lastExitCode: "137",
+  since: "2026-10-04T14:05:00Z",
+  ...extra,
+});
+
+describe("HealthBell container restart-loop items", () => {
+  beforeEach(() => {
+    me = READER;
+  });
+
+  it("names the container, counts its restarts, gives the last exit code and links to it", async () => {
+    envItems = [containerLoop("crashy")];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("Lab: crashy keeps restarting")).toBeTruthy();
+    expect(
+      screen.getByText("3 restarts in the last 10 minutes. Last exit code 137."),
+    ).toBeTruthy();
+    const link = screen.getByRole("link", { name: "Open container" });
+    expect(link.getAttribute("href")).toBe("/env/e1/containers/id-crashy?node=n1");
+  });
+
+  it("reads as singular for one restart in one minute", async () => {
+    envItems = [containerLoop("crashy", { count: 1, windowMinutes: 1, lastExitCode: "1" })];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("1 restart in the last 1 minute. Last exit code 1.")).toBeTruthy();
+  });
+
+  it("collapses several containers of one environment into one item that opens the list", async () => {
+    envItems = [containerLoop("a"), containerLoop("b"), containerLoop("c")];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("Lab: 3 containers keep restarting")).toBeTruthy();
+    expect(screen.queryByText(/a keeps restarting/)).toBeNull();
+    expect(screen.getByRole("link", { name: "Show containers" }).getAttribute("href")).toBe(
+      "/env/e1/containers",
+    );
+  });
+
+  it("keeps the containers and the services of one environment apart", async () => {
+    envItems = [loop("web"), containerLoop("crashy")];
+    renderWarnings();
+    await openBell("Warnings, 2 items");
+    expect(await screen.findByText("Lab: web is in a restart loop")).toBeTruthy();
+    expect(screen.getByText("Lab: crashy keeps restarting")).toBeTruthy();
+  });
+
+  it("draws a hostile name as text and keeps a long title to one line with the whole text on hover", async () => {
+    const long = "n".repeat(120);
+    envItems = [containerLoop(long, { lastExitCode: "<b>1</b>" })];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    const title = await screen.findByText(`Lab: ${long} keeps restarting`);
+    expect(title.className).toContain("truncate");
+    expect(title.getAttribute("title")).toBe(`Lab: ${long} keeps restarting`);
+    expect(document.querySelector("b")).toBeNull();
+  });
+});
+
 describe("HealthBell refusal bursts", () => {
   it("lists a burst for an instance admin with the user, the count and a link to the audit log", async () => {
     items = [{ id: "refusal_burst", subject: "mallory", count: 12 }];
