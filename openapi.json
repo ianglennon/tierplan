@@ -820,6 +820,320 @@
         ],
         "type": "object"
       },
+      "ConfigCreateBody": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The ID of the config the swarm made",
+            "type": "string"
+          },
+          "name": {
+            "description": "The config name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "ConfigCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "description": "The content, as standard base64. 1 to 1,023,999 bytes once decoded: empty is 422 value_required, 1,024,000 or more is 422 value_too_large, and text that is not base64 is 422 value_invalid",
+            "type": "string"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels, at most 64",
+            "maxProperties": 64,
+            "type": "object"
+          },
+          "name": {
+            "description": "The config name: letters, numbers, dot, dash and underscore, starting and ending with a letter or number, at most 64 characters (else 422 name_invalid)",
+            "type": "string"
+          },
+          "source": {
+            "description": "Where the content came from, for the audit log only: typed or file (the create sheet), rotate (a new version of a config) or apply (a config staged with a service). Left out, the audit log says api",
+            "enum": [
+              "typed",
+              "file",
+              "rotate",
+              "apply"
+            ],
+            "type": "string"
+          },
+          "templating": {
+            "description": "none (the default) or golang, to have the swarm fill the content in as a Go template when a task starts; anything else is 422 templating_invalid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "ConfigDetailBody": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "description": "When the config was created",
+            "format": "date-time",
+            "type": "string"
+          },
+          "data": {
+            "description": "The content as standard base64",
+            "type": "string"
+          },
+          "id": {
+            "description": "The config ID",
+            "type": "string"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Every label of the config",
+            "type": "object"
+          },
+          "name": {
+            "description": "The config name",
+            "type": "string"
+          },
+          "owner": {
+            "description": "The stack (com.docker.stack.namespace) label value; empty when the config has none",
+            "type": "string"
+          },
+          "ownerKind": {
+            "description": "stack, or empty when the config has no owner",
+            "enum": [
+              "stack",
+              ""
+            ],
+            "type": "string"
+          },
+          "size": {
+            "description": "The content's size in bytes",
+            "format": "int64",
+            "type": "integer"
+          },
+          "templating": {
+            "description": "golang when the swarm fills the content in as a Go template when a task starts, else none",
+            "enum": [
+              "none",
+              "golang"
+            ],
+            "type": "string"
+          },
+          "text": {
+            "description": "The content as text; null when it is not valid UTF-8, which the page shows as a file to download",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "description": "When the config was last updated",
+            "format": "date-time",
+            "type": "string"
+          },
+          "usedBy": {
+            "description": "How many services' specs reference the config",
+            "format": "int64",
+            "type": "integer"
+          },
+          "usedByRows": {
+            "description": "Every service whose spec references the config, sorted by service name then ID",
+            "items": {
+              "$ref": "#/components/schemas/ConfigUserBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "labels",
+          "createdAt",
+          "updatedAt",
+          "templating",
+          "size",
+          "data",
+          "text",
+          "usedBy",
+          "owner",
+          "ownerKind",
+          "usedByRows"
+        ],
+        "type": "object"
+      },
+      "ConfigInspectBody": {
+        "additionalProperties": false,
+        "properties": {
+          "inspect": {
+            "additionalProperties": {},
+            "description": "The manager's inspect document: the ID, the version, the times and the spec's name, labels, content (as base64) and templating",
+            "type": "object"
+          }
+        },
+        "required": [
+          "inspect"
+        ],
+        "type": "object"
+      },
+      "ConfigItem": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "description": "When the config was created",
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "The config ID",
+            "type": "string"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Every label of the config",
+            "type": "object"
+          },
+          "name": {
+            "description": "The config name",
+            "type": "string"
+          },
+          "owner": {
+            "description": "The stack (com.docker.stack.namespace) label value; empty when the config has none",
+            "type": "string"
+          },
+          "ownerKind": {
+            "description": "stack, or empty when the config has no owner",
+            "enum": [
+              "stack",
+              ""
+            ],
+            "type": "string"
+          },
+          "templating": {
+            "description": "golang when the swarm fills the content in as a Go template when a task starts, else none",
+            "enum": [
+              "none",
+              "golang"
+            ],
+            "type": "string"
+          },
+          "updatedAt": {
+            "description": "When the config was last updated",
+            "format": "date-time",
+            "type": "string"
+          },
+          "usedBy": {
+            "description": "How many services' specs reference the config, whatever their tasks are doing, a service scaled to 0 included",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "labels",
+          "createdAt",
+          "updatedAt",
+          "templating",
+          "usedBy",
+          "owner",
+          "ownerKind"
+        ],
+        "type": "object"
+      },
+      "ConfigListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "capped": {
+            "description": "True when total is more than the rows returned",
+            "type": "boolean"
+          },
+          "items": {
+            "description": "At most 500 rows that match the search, sorted by name then ID",
+            "items": {
+              "$ref": "#/components/schemas/ConfigItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "total": {
+            "description": "How many configs match the search, whatever the cap",
+            "format": "int64",
+            "type": "integer"
+          },
+          "unfilteredTotal": {
+            "description": "How many configs there are before the search",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "unfilteredTotal",
+          "capped"
+        ],
+        "type": "object"
+      },
+      "ConfigUserBody": {
+        "additionalProperties": false,
+        "properties": {
+          "file": {
+            "description": "The file name the config appears as in the container; empty when the service reads it at runtime only",
+            "type": "string"
+          },
+          "gid": {
+            "description": "The group of the file",
+            "type": "string"
+          },
+          "mode": {
+            "description": "The file mode in octal, for example 0444; empty when none is set",
+            "type": "string"
+          },
+          "service": {
+            "description": "The service name",
+            "type": "string"
+          },
+          "serviceId": {
+            "description": "The service ID",
+            "type": "string"
+          },
+          "stack": {
+            "description": "The stack the service belongs to; empty for a service made on its own",
+            "type": "string"
+          },
+          "uid": {
+            "description": "The owner of the file",
+            "type": "string"
+          }
+        },
+        "required": [
+          "serviceId",
+          "service",
+          "stack",
+          "file",
+          "uid",
+          "gid",
+          "mode"
+        ],
+        "type": "object"
+      },
       "ConsideredCredentialBody": {
         "additionalProperties": false,
         "properties": {
@@ -13292,6 +13606,296 @@
           }
         },
         "summary": "Update an agent to this server's version",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/configs": {
+      "get": {
+        "description": "The configs of a swarm environment with their labels, times, templating, owner and how many services use each, at most 500 rows sorted by name then ID, read through a manager. No row has content: the manager sends every config's content with the list and Bayplan drops it, so the content is read on one config's own route. Optionally a search (q) that runs before the 500-row cap. 502 config_list_too_large when the configs are too many or too large for one answer; 409 not_a_swarm when the environment is a standalone host; 503 no_manager_connected when no manager is connected. Needs configs.read (Viewer) on the environment.",
+        "operationId": "listConfigs",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Search: a case-insensitive substring of the config name, its owner or any label key or value, at most 128 characters (else 422 query_too_long)",
+            "explode": false,
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "description": "Search: a case-insensitive substring of the config name, its owner or any label key or value, at most 128 characters (else 422 query_too_long)",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the swarm configs of an environment",
+        "tags": [
+          "environments"
+        ]
+      },
+      "post": {
+        "description": "Creates a config once, through a manager, and never retries. The answer holds the new config's ID and name. A name that is not 1 to 64 letters, numbers, dots, dashes and underscores starting and ending with a letter or number is 422 name_invalid; templating other than none or golang is 422 templating_invalid; content that is missing or empty is 422 value_required; content of 1,024,000 bytes or more is 422 value_too_large (1,023,999 bytes is accepted); more than 64 labels is 422, and a label key over 256 or value over 4096 characters is 422 labels_invalid. All are checked before anything is sent. A request body over 2 MiB is refused. 409 name_taken when the swarm has the name already, 409 not_a_swarm for a standalone host, 409 host_read_only on a read-only host. Needs configs.manage (Admin) on the environment. Every attempt is audited as config.created with the name, the number of labels, the size in bytes, the templating and where the request came from; a refusal is a failure row with its code.",
+        "operationId": "createConfig",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigCreateBody"
+                }
+              }
+            },
+            "description": "Created",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Create a swarm config",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/configs/{configId}": {
+      "delete": {
+        "description": "Deletes one config, once and never retried. No name needs to be typed. A config that any service's spec references is 409 object_in_use, naming up to three of the services, read live just before the delete and counting a service scaled to 0. 404 config_not_found for a config that is not there (not audited); 409 not_a_swarm for a standalone host. Needs configs.manage (Admin) on the environment. Every attempt on a config that exists is audited as config.removed, with result failure and the code when it was refused.",
+        "operationId": "deleteConfig",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The config ID or name: the id of a row of the configs list",
+            "in": "path",
+            "name": "configId",
+            "required": true,
+            "schema": {
+              "description": "The config ID or name: the id of a row of the configs list",
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Delete a swarm config",
+        "tags": [
+          "environments"
+        ]
+      },
+      "get": {
+        "description": "The config's metadata, templating, size and content (as base64, and as text when it is valid UTF-8, else text is null), and every service whose spec references it, with the file name, owner, group and mode each mounts it with. The config is named by its ID or its name. A config is not encrypted: anyone who can read configs can read its content. 404 config_not_found; 409 not_a_swarm. Needs configs.read (Viewer) on the environment.",
+        "operationId": "getConfig",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The config ID or name: the id of a row of the configs list",
+            "in": "path",
+            "name": "configId",
+            "required": true,
+            "schema": {
+              "description": "The config ID or name: the id of a row of the configs list",
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigDetailBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "One swarm config, its content and the services that use it",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/configs/{configId}/inspect": {
+      "get": {
+        "description": "The manager's inspect document of the config, for the Inspect tab. Like the detail it carries the content (as base64). 404 config_not_found; 409 not_a_swarm. Needs configs.read (Viewer) on the environment.",
+        "operationId": "inspectConfig",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The config ID or name: the id of a row of the configs list",
+            "in": "path",
+            "name": "configId",
+            "required": true,
+            "schema": {
+              "description": "The config ID or name: the id of a row of the configs list",
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigInspectBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "One swarm config's raw inspect document",
         "tags": [
           "environments"
         ]

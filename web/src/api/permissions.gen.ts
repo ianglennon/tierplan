@@ -18,6 +18,8 @@ export const GLOBAL_PERMISSIONS = [
 
 // Permissions checked against one environment.
 export const ENVIRONMENT_PERMISSIONS = [
+  "configs.manage",
+  "configs.read",
   "containers.control",
   "containers.exec",
   "containers.read",
@@ -82,6 +84,8 @@ export interface PermissionRequirement {
 export const PERMISSION_REQUIREMENTS: Record<PermissionName, PermissionRequirement> = {
   "audit.read": { kind: "instance" },
   "backup.manage": { kind: "instance" },
+  "configs.manage": { kind: "role", role: "admin" },
+  "configs.read": { kind: "role", role: "viewer" },
   "containers.control": { kind: "role", role: "operator" },
   "containers.exec": { kind: "extra", role: "operator" },
   "containers.read": { kind: "role", role: "viewer" },

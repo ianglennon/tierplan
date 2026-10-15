@@ -159,6 +159,7 @@ type RouterDeps struct {
 	Networks      api.NetworksDeps
 	Services      api.ServicesDeps
 	Secrets       api.SecretsDeps
+	Configs       api.ConfigsDeps
 	Nodes         api.NodesDeps
 	Volumes       api.VolumesDeps
 	Images        api.ImagesDeps
@@ -206,6 +207,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterNetworks(r, d.Networks)
 	api.RegisterServices(r, d.Services)
 	api.RegisterSecrets(r, d.Secrets)
+	api.RegisterConfigs(r, d.Configs)
 	api.RegisterNodes(r, d.Nodes)
 	api.RegisterVolumes(r, d.Volumes)
 	api.RegisterImages(r, d.Images)
@@ -744,6 +746,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, SelfContainerID: selfID, Log: log},
 		Services:      api.ServicesDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Log: log},
 		Secrets:       api.SecretsDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Log: log},
+		Configs:       api.ConfigsDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Log: log},
 		Nodes:         api.NodesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, Agents: agentSvc, Live: tunnelHub, SelfContainerID: selfID, Log: log},
 		Volumes:       api.VolumesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, Log: log},
 		Images:        api.ImagesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},

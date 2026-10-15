@@ -512,6 +512,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/configs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the swarm configs of an environment
+         * @description The configs of a swarm environment with their labels, times, templating, owner and how many services use each, at most 500 rows sorted by name then ID, read through a manager. No row has content: the manager sends every config's content with the list and Bayplan drops it, so the content is read on one config's own route. Optionally a search (q) that runs before the 500-row cap. 502 config_list_too_large when the configs are too many or too large for one answer; 409 not_a_swarm when the environment is a standalone host; 503 no_manager_connected when no manager is connected. Needs configs.read (Viewer) on the environment.
+         */
+        get: operations["listConfigs"];
+        put?: never;
+        /**
+         * Create a swarm config
+         * @description Creates a config once, through a manager, and never retries. The answer holds the new config's ID and name. A name that is not 1 to 64 letters, numbers, dots, dashes and underscores starting and ending with a letter or number is 422 name_invalid; templating other than none or golang is 422 templating_invalid; content that is missing or empty is 422 value_required; content of 1,024,000 bytes or more is 422 value_too_large (1,023,999 bytes is accepted); more than 64 labels is 422, and a label key over 256 or value over 4096 characters is 422 labels_invalid. All are checked before anything is sent. A request body over 2 MiB is refused. 409 name_taken when the swarm has the name already, 409 not_a_swarm for a standalone host, 409 host_read_only on a read-only host. Needs configs.manage (Admin) on the environment. Every attempt is audited as config.created with the name, the number of labels, the size in bytes, the templating and where the request came from; a refusal is a failure row with its code.
+         */
+        post: operations["createConfig"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/configs/{configId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One swarm config, its content and the services that use it
+         * @description The config's metadata, templating, size and content (as base64, and as text when it is valid UTF-8, else text is null), and every service whose spec references it, with the file name, owner, group and mode each mounts it with. The config is named by its ID or its name. A config is not encrypted: anyone who can read configs can read its content. 404 config_not_found; 409 not_a_swarm. Needs configs.read (Viewer) on the environment.
+         */
+        get: operations["getConfig"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a swarm config
+         * @description Deletes one config, once and never retried. No name needs to be typed. A config that any service's spec references is 409 object_in_use, naming up to three of the services, read live just before the delete and counting a service scaled to 0. 404 config_not_found for a config that is not there (not audited); 409 not_a_swarm for a standalone host. Needs configs.manage (Admin) on the environment. Every attempt on a config that exists is audited as config.removed, with result failure and the code when it was refused.
+         */
+        delete: operations["deleteConfig"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/configs/{configId}/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One swarm config's raw inspect document
+         * @description The manager's inspect document of the config, for the Inspect tab. Like the detail it carries the content (as base64). 404 config_not_found; 409 not_a_swarm. Needs configs.read (Viewer) on the environment.
+         */
+        get: operations["inspectConfig"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/containers": {
         parameters: {
             query?: never;
@@ -3443,6 +3511,152 @@ export interface components {
             token: string;
             /** @description 3 to 32 characters from a-z, 0-9, dot, dash and underscore; stored lower-case */
             username: string;
+        };
+        ConfigCreateBody: {
+            /** @description The ID of the config the swarm made */
+            id: string;
+            /** @description The config name */
+            name: string;
+        };
+        ConfigCreateRequest: {
+            /** @description The content, as standard base64. 1 to 1,023,999 bytes once decoded: empty is 422 value_required, 1,024,000 or more is 422 value_too_large, and text that is not base64 is 422 value_invalid */
+            data?: string;
+            /** @description Labels, at most 64 */
+            labels?: {
+                [key: string]: string;
+            };
+            /** @description The config name: letters, numbers, dot, dash and underscore, starting and ending with a letter or number, at most 64 characters (else 422 name_invalid) */
+            name: string;
+            /**
+             * @description Where the content came from, for the audit log only: typed or file (the create sheet), rotate (a new version of a config) or apply (a config staged with a service). Left out, the audit log says api
+             * @enum {string}
+             */
+            source?: "typed" | "file" | "rotate" | "apply";
+            /** @description none (the default) or golang, to have the swarm fill the content in as a Go template when a task starts; anything else is 422 templating_invalid */
+            templating?: string;
+        };
+        ConfigDetailBody: {
+            /**
+             * Format: date-time
+             * @description When the config was created
+             */
+            createdAt: string;
+            /** @description The content as standard base64 */
+            data: string;
+            /** @description The config ID */
+            id: string;
+            /** @description Every label of the config */
+            labels: {
+                [key: string]: string;
+            };
+            /** @description The config name */
+            name: string;
+            /** @description The stack (com.docker.stack.namespace) label value; empty when the config has none */
+            owner: string;
+            /**
+             * @description stack, or empty when the config has no owner
+             * @enum {string}
+             */
+            ownerKind: "stack" | "";
+            /**
+             * Format: int64
+             * @description The content's size in bytes
+             */
+            size: number;
+            /**
+             * @description golang when the swarm fills the content in as a Go template when a task starts, else none
+             * @enum {string}
+             */
+            templating: "none" | "golang";
+            /** @description The content as text; null when it is not valid UTF-8, which the page shows as a file to download */
+            text: string | null;
+            /**
+             * Format: date-time
+             * @description When the config was last updated
+             */
+            updatedAt: string;
+            /**
+             * Format: int64
+             * @description How many services' specs reference the config
+             */
+            usedBy: number;
+            /** @description Every service whose spec references the config, sorted by service name then ID */
+            usedByRows: components["schemas"]["ConfigUserBody"][] | null;
+        };
+        ConfigInspectBody: {
+            /** @description The manager's inspect document: the ID, the version, the times and the spec's name, labels, content (as base64) and templating */
+            inspect: {
+                [key: string]: unknown;
+            };
+        };
+        ConfigItem: {
+            /**
+             * Format: date-time
+             * @description When the config was created
+             */
+            createdAt: string;
+            /** @description The config ID */
+            id: string;
+            /** @description Every label of the config */
+            labels: {
+                [key: string]: string;
+            };
+            /** @description The config name */
+            name: string;
+            /** @description The stack (com.docker.stack.namespace) label value; empty when the config has none */
+            owner: string;
+            /**
+             * @description stack, or empty when the config has no owner
+             * @enum {string}
+             */
+            ownerKind: "stack" | "";
+            /**
+             * @description golang when the swarm fills the content in as a Go template when a task starts, else none
+             * @enum {string}
+             */
+            templating: "none" | "golang";
+            /**
+             * Format: date-time
+             * @description When the config was last updated
+             */
+            updatedAt: string;
+            /**
+             * Format: int64
+             * @description How many services' specs reference the config, whatever their tasks are doing, a service scaled to 0 included
+             */
+            usedBy: number;
+        };
+        ConfigListBody: {
+            /** @description True when total is more than the rows returned */
+            capped: boolean;
+            /** @description At most 500 rows that match the search, sorted by name then ID */
+            items: components["schemas"]["ConfigItem"][] | null;
+            /**
+             * Format: int64
+             * @description How many configs match the search, whatever the cap
+             */
+            total: number;
+            /**
+             * Format: int64
+             * @description How many configs there are before the search
+             */
+            unfilteredTotal: number;
+        };
+        ConfigUserBody: {
+            /** @description The file name the config appears as in the container; empty when the service reads it at runtime only */
+            file: string;
+            /** @description The group of the file */
+            gid: string;
+            /** @description The file mode in octal, for example 0444; empty when none is set */
+            mode: string;
+            /** @description The service name */
+            service: string;
+            /** @description The service ID */
+            serviceId: string;
+            /** @description The stack the service belongs to; empty for a service made on its own */
+            stack: string;
+            /** @description The owner of the file */
+            uid: string;
         };
         ConsideredCredentialBody: {
             /** @description The credential's ID */
@@ -8804,6 +9018,181 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listConfigs: {
+        parameters: {
+            query?: {
+                /** @description Search: a case-insensitive substring of the config name, its owner or any label key or value, at most 128 characters (else 422 query_too_long) */
+                q?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigCreateBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The config ID or name: the id of a row of the configs list */
+                configId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The config ID or name: the id of a row of the configs list */
+                configId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    inspectConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The config ID or name: the id of a row of the configs list */
+                configId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigInspectBody"];
+                };
             };
             /** @description Error */
             default: {

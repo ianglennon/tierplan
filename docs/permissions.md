@@ -22,6 +22,8 @@ This page is generated from the permission registry in `internal/rbac/permission
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `audit.read` | global | no | no | no | yes | no | Read the audit log |
 | `backup.manage` | global | no | no | no | yes | yes | Back up and restore Bayplan |
+| `configs.manage` | environment | no | no | yes | yes | no | Create, rotate and delete swarm configs |
+| `configs.read` | environment | yes | yes | yes | yes | no | View swarm configs and their content |
 | `containers.control` | environment | no | yes | yes | yes | no | Start, stop, restart, kill, pause and unpause containers |
 | `containers.exec` | environment | no | extra | yes | yes | yes | Open a shell in a container |
 | `containers.read` | environment | yes | yes | yes | yes | no | View containers |

@@ -122,6 +122,8 @@ var defaultRegistry = Registry{
 	{Name: PermNodesManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Drain, pause, activate, promote, demote, label and remove nodes"},
 	{Name: PermSecretsRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View swarm secrets' names, labels and users, never their values"},
 	{Name: PermSecretsManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Create, rotate and delete swarm secrets"},
+	{Name: PermConfigsRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View swarm configs and their content"},
+	{Name: PermConfigsManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Create, rotate and delete swarm configs"},
 }
 
 // DefaultRegistry returns a copy of the registry production runs with.
