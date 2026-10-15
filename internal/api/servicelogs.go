@@ -120,12 +120,16 @@ func RegisterServiceLogs(r *httpx.Router, d ServiceLogsDeps) {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
+	if d.MaxServerDownloads <= 0 {
+		d.MaxServerDownloads = maxServerDownloads
+	}
 	need := rbac.Requirement{Perm: rbac.PermServicesRead, Scope: rbac.ScopeEnvironment}
 	lim := &streamLimiter{max: d.MaxStreamsPerUser, open: map[string]int{}}
 	mem := newLogAuditMemory(logAuditTTL, logAuditMax, d.Now)
 	r.Guarded(http.MethodGet, "/api/env/{envId}/services/{serviceId}/logs/stream", need, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		serveServiceLogStream(w, req, d, lim, mem)
 	}))
+	registerServiceLogPages(r, d, need, mem)
 }
 
 // parseServiceLogParams reads the query of the container log stream (sid, since, tail, after)
@@ -145,21 +149,33 @@ func parseServiceLogParams(req *http.Request) (serviceLogParams, error) {
 		return p, errors.New("stopped must be 1 or 0")
 	}
 	for name, dst := range map[string]*[]string{"task": &p.tasks, "node": &p.nodes} {
-		for part := range strings.SplitSeq(q.Get(name), ",") {
-			part = strings.TrimSpace(part)
-			if part == "" {
-				continue
-			}
-			if len(part) > 128 {
-				return p, fmt.Errorf("a %s name is too long", name)
-			}
-			*dst = append(*dst, part)
+		names, err := splitLogFilter(name, q.Get(name))
+		if err != nil {
+			return p, err
 		}
-		if len(*dst) > maxLogFilters {
-			return p, fmt.Errorf("at most %d %s names may be given", maxLogFilters, name)
-		}
+		*dst = names
 	}
 	return p, nil
+}
+
+// splitLogFilter reads a comma list of task or node names (what is the filter's kind, for the
+// sentence of the 422).
+func splitLogFilter(what, raw string) ([]string, error) {
+	var out []string
+	for part := range strings.SplitSeq(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if len(part) > 128 {
+			return nil, fmt.Errorf("a %s name is too long", what)
+		}
+		out = append(out, part)
+	}
+	if len(out) > maxLogFilters {
+		return nil, fmt.Errorf("at most %d %s names may be given", maxLogFilters, what)
+	}
+	return out, nil
 }
 
 // ServiceLogTask is one task of the service the stream follows, as the ready and tasks events
@@ -365,19 +381,14 @@ func openServiceLogRun(ctx context.Context, d ServiceLogsDeps, envID, serviceID,
 			answer <- opened{tty: tty}
 			var seq uint64
 			return dockerx.ServiceLogFrames(rc, tty, func(stream string, b []byte) {
-				rec, perr := dockerx.ParseServiceLogRecord(string(b))
-				if perr != nil {
-					// Not a record of a service log; it may hold application text, so it is
-					// dropped without being logged.
+				rec, ok := parseSvcRec(stream, b)
+				if !ok {
 					return
 				}
-				s := streamOut
-				if stream == "stderr" {
-					s = streamErr
-				}
 				seq++
+				rec.seq = seq
 				select {
-				case r.records <- svcRec{T: rec.T.Format(logTimeLayout), S: s, M: rec.Message, TaskID: rec.TaskID, NodeID: rec.NodeID, seq: seq}:
+				case r.records <- rec:
 				case <-runCtx.Done():
 				}
 			})
@@ -398,6 +409,20 @@ func openServiceLogRun(ctx context.Context, d ServiceLogsDeps, envID, serviceID,
 		return nil, false, res.err
 	}
 	return r, res.tty, nil
+}
+
+// parseSvcRec reads one frame of a service log into a record. A frame that is not a record of
+// a service log may hold application text, so it is dropped without being logged.
+func parseSvcRec(stream string, b []byte) (svcRec, bool) {
+	rec, err := dockerx.ParseServiceLogRecord(string(b))
+	if err != nil {
+		return svcRec{}, false
+	}
+	s := streamOut
+	if stream == "stderr" {
+		s = streamErr
+	}
+	return svcRec{T: rec.T.Format(logTimeLayout), S: s, M: rec.Message, TaskID: rec.TaskID, NodeID: rec.NodeID}, true
 }
 
 // serveServiceLogStream is the SSE handler of a service's merged log. The policy has already

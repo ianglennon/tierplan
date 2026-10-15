@@ -9597,6 +9597,63 @@
         ],
         "type": "object"
       },
+      "ServiceLogLine": {
+        "additionalProperties": false,
+        "properties": {
+          "m": {
+            "type": "string"
+          },
+          "node": {
+            "type": "string"
+          },
+          "s": {
+            "type": "string"
+          },
+          "slot": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "t": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "t",
+          "s",
+          "m",
+          "task",
+          "slot",
+          "node"
+        ],
+        "type": "object"
+      },
+      "ServiceLogsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "lines": {
+            "description": "The lines, oldest first, merged across tasks. t is the engine's timestamp (UTC, nine digits), s is o for stdout and e for stderr, m is the text as written, task is the task that wrote it, slot its replica number (0 for a global service) and node its host",
+            "items": {
+              "$ref": "#/components/schemas/ServiceLogLine"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "startOfLogs": {
+            "description": "True when there are no earlier lines than these",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "lines",
+          "startOfLogs"
+        ],
+        "type": "object"
+      },
       "ServiceMissingBody": {
         "additionalProperties": false,
         "properties": {
@@ -18691,6 +18748,149 @@
           }
         },
         "summary": "One swarm service's raw inspect document",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/services/{serviceId}/logs": {
+      "get": {
+        "description": "Up to tail lines of the service's log, merged across its tasks in time order and oldest first, that were written before until, for \"Load earlier lines\". It does not follow the log. until is an RFC 3339 time or Unix seconds and is exclusive; leave it out for the newest lines. since, when given, is the earliest time to look back to. startOfLogs is true when fewer than tail lines came back because the log has no more, and false when more may be earlier (including when the page was cut to a size limit, newest lines kept). To page without losing a line that shares its timestamp with the one before, ask for until one nanosecond after the oldest line held and drop the lines already held by timestamp, task and text. task and node narrow the page to those tasks and nodes as the live stream does. Tasks that have already ended are left out unless stopped is set. sid is the viewer's ID, the one its live stream uses: a viewer is audited once however many pages it reads. Lines are returned as the application wrote them and are never masked. Needs services.read (Viewer) on the environment.",
+        "operationId": "getServiceLogs",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The service ID or name",
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "description": "The service ID or name",
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The viewer's ID: 16 to 64 letters, digits, dashes or underscores",
+            "explode": false,
+            "in": "query",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "description": "The viewer's ID: 16 to 64 letters, digits, dashes or underscores",
+              "pattern": "^[A-Za-z0-9_-]{16,64}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only lines written before this time: an RFC 3339 time or Unix seconds. Left out, the newest lines",
+            "explode": false,
+            "in": "query",
+            "name": "until",
+            "schema": {
+              "description": "Only lines written before this time: an RFC 3339 time or Unix seconds. Left out, the newest lines",
+              "maxLength": 40,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Do not look further back than this time: an RFC 3339 time or Unix seconds",
+            "explode": false,
+            "in": "query",
+            "name": "since",
+            "schema": {
+              "description": "Do not look further back than this time: an RFC 3339 time or Unix seconds",
+              "maxLength": 40,
+              "type": "string"
+            }
+          },
+          {
+            "description": "How many lines at most; 500 by default",
+            "explode": false,
+            "in": "query",
+            "name": "tail",
+            "schema": {
+              "default": 500,
+              "description": "How many lines at most; 500 by default",
+              "format": "int64",
+              "maximum": 2000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Only these tasks: comma-separated task IDs, or the first eight or more characters of one",
+            "explode": false,
+            "in": "query",
+            "name": "task",
+            "schema": {
+              "description": "Only these tasks: comma-separated task IDs, or the first eight or more characters of one",
+              "maxLength": 8300,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only tasks on these nodes: comma-separated host names or node IDs",
+            "explode": false,
+            "in": "query",
+            "name": "node",
+            "schema": {
+              "description": "Only tasks on these nodes: comma-separated host names or node IDs",
+              "maxLength": 8300,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Also the lines of tasks that have ended",
+            "explode": false,
+            "in": "query",
+            "name": "stopped",
+            "schema": {
+              "description": "Also the lines of tasks that have ended",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceLogsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "A page of earlier lines of a service's log",
         "tags": [
           "environments"
         ]

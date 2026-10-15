@@ -302,26 +302,149 @@ type taskLines struct {
 	Lines []svcRec
 }
 
+// mergeCursor is a place in one of the lists being merged.
+type mergeCursor struct {
+	list, pos int
+	slot      int
+	t         string
+}
+
+type mergeHeap []mergeCursor
+
+func (h mergeHeap) Len() int { return len(h) }
+func (h mergeHeap) Less(i, j int) bool {
+	return cmp.Or(cmp.Compare(h[i].t, h[j].t), cmp.Compare(h[i].slot, h[j].slot), cmp.Compare(h[i].list, h[j].list)) < 0
+}
+func (h mergeHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+func (h *mergeHeap) Push(x any) {
+	if c, ok := x.(mergeCursor); ok {
+		*h = append(*h, c)
+	}
+}
+func (h *mergeHeap) Pop() any {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
+}
+
 // kWayMerge yields the lines of lists, each already in time order, as one list in time order;
-// lines with the same stamp go lower slot first, then in the order of lists.
+// lines with the same stamp go lower slot first, then in the order of lists. It holds one place
+// in each list and nothing else, so a list of any length costs it no memory.
 func kWayMerge(lists []taskLines) iter.Seq[svcRec] {
-	return func(yield func(svcRec) bool) {}
+	return func(yield func(svcRec) bool) {
+		h := make(mergeHeap, 0, len(lists))
+		for i, l := range lists {
+			if len(l.Lines) > 0 {
+				h = append(h, mergeCursor{list: i, slot: l.Slot, t: l.Lines[0].T})
+			}
+		}
+		heap.Init(&h)
+		for len(h) > 0 {
+			c := h[0]
+			if !yield(lists[c.list].Lines[c.pos]) {
+				return
+			}
+			if c.pos+1 < len(lists[c.list].Lines) {
+				h[0].pos++
+				h[0].t = lists[c.list].Lines[c.pos+1].T
+				heap.Fix(&h, 0)
+			} else {
+				heap.Pop(&h)
+			}
+		}
+	}
+}
+
+// recSize is what a record counts as in a holder or a page: its stamp and its text.
+func recSize(r svcRec) int { return len(r.T) + len(r.M) }
+
+// heldTask is the lines held of one task; off is how many of the oldest were dropped.
+type heldTask struct {
+	slot  int
+	lines []svcRec
+	off   int
 }
 
 // lineHolder holds a range of a service's log by task while it is merged, up to a size; past
-// it the oldest line of any task is dropped.
+// it the oldest line of any task is dropped (T-06-91). The engine gives each task's lines in
+// time order, so a task's oldest line is its first.
 type lineHolder struct {
-	limit int
+	limit, size int
+	byTask      map[string]*heldTask
+	order       []string
+	dropped     bool
 }
 
-func newLineHolder(limit int) *lineHolder { return &lineHolder{limit: limit} }
+func newLineHolder(limit int) *lineHolder {
+	return &lineHolder{limit: limit, byTask: map[string]*heldTask{}}
+}
 
 // add holds a record of a task in the given slot, dropping the oldest lines held while the
-// holder is over its size.
-func (h *lineHolder) add(r svcRec, slot int) {}
+// holder is over its size (which can be the record itself).
+func (h *lineHolder) add(r svcRec, slot int) {
+	ht, ok := h.byTask[r.TaskID]
+	if !ok {
+		ht = &heldTask{slot: slot}
+		h.byTask[r.TaskID] = ht
+		h.order = append(h.order, r.TaskID)
+	}
+	ht.lines = append(ht.lines, r)
+	h.size += recSize(r)
+	for h.size > h.limit && h.dropOldest() {
+	}
+}
 
-// lists returns what is held, by task.
-func (h *lineHolder) lists() []taskLines { return nil }
+// dropOldest drops the oldest line of all the tasks, and says whether there was one.
+func (h *lineHolder) dropOldest() bool {
+	var best *heldTask
+	for _, id := range h.order {
+		ht := h.byTask[id]
+		if ht.off >= len(ht.lines) {
+			continue
+		}
+		if best == nil {
+			best = ht
+			continue
+		}
+		a, b := ht.lines[ht.off], best.lines[best.off]
+		if cmp.Or(cmp.Compare(a.T, b.T), cmp.Compare(ht.slot, best.slot)) < 0 {
+			best = ht
+		}
+	}
+	if best == nil {
+		return false
+	}
+	h.size -= recSize(best.lines[best.off])
+	best.lines[best.off] = svcRec{}
+	best.off++
+	// Give the dropped front back once it is most of the slice, so a task that goes on
+	// being trimmed does not keep what it dropped.
+	if best.off >= 256 && best.off*2 >= len(best.lines) {
+		best.lines = slices.Clone(best.lines[best.off:])
+		best.off = 0
+	}
+	h.dropped = true
+	return true
+}
+
+// lists returns what is held, by task, each in time order.
+func (h *lineHolder) lists() []taskLines {
+	out := make([]taskLines, 0, len(h.order))
+	for _, id := range h.order {
+		ht := h.byTask[id]
+		lines := ht.lines[ht.off:]
+		if len(lines) == 0 {
+			continue
+		}
+		if !slices.IsSortedFunc(lines, func(a, b svcRec) int { return cmp.Compare(a.T, b.T) }) {
+			slices.SortStableFunc(lines, func(a, b svcRec) int { return cmp.Compare(a.T, b.T) })
+		}
+		out = append(out, taskLines{Slot: ht.slot, Lines: lines})
+	}
+	return out
+}
 
 // cut says lines were dropped for size.
-func (h *lineHolder) cut() bool { return false }
+func (h *lineHolder) cut() bool { return h.dropped }

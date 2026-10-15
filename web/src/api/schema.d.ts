@@ -1692,6 +1692,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/services/{serviceId}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A page of earlier lines of a service's log
+         * @description Up to tail lines of the service's log, merged across its tasks in time order and oldest first, that were written before until, for "Load earlier lines". It does not follow the log. until is an RFC 3339 time or Unix seconds and is exclusive; leave it out for the newest lines. since, when given, is the earliest time to look back to. startOfLogs is true when fewer than tail lines came back because the log has no more, and false when more may be earlier (including when the page was cut to a size limit, newest lines kept). To page without losing a line that shares its timestamp with the one before, ask for until one nanosecond after the oldest line held and drop the lines already held by timestamp, task and text. task and node narrow the page to those tasks and nodes as the live stream does. Tasks that have already ended are left out unless stopped is set. sid is the viewer's ID, the one its live stream uses: a viewer is audited once however many pages it reads. Lines are returned as the application wrote them and are never masked. Needs services.read (Viewer) on the environment.
+         */
+        get: operations["getServiceLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/services/{serviceId}/review": {
         parameters: {
             query?: never;
@@ -7139,6 +7159,21 @@ export interface components {
              */
             unfilteredTotal: number;
         };
+        ServiceLogLine: {
+            m: string;
+            node: string;
+            s: string;
+            /** Format: int64 */
+            slot: number;
+            t: string;
+            task: string;
+        };
+        ServiceLogsBody: {
+            /** @description The lines, oldest first, merged across tasks. t is the engine's timestamp (UTC, nine digits), s is o for stdout and e for stderr, m is the text as written, task is the task that wrote it, slot its replica number (0 for a global service) and node its host */
+            lines: components["schemas"]["ServiceLogLine"][] | null;
+            /** @description True when there are no earlier lines than these */
+            startOfLogs: boolean;
+        };
         ServiceMissingBody: {
             /** @description Configs the spec names that the swarm does not have */
             configs: string[] | null;
@@ -11881,6 +11916,56 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ServiceInspectBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getServiceLogs: {
+        parameters: {
+            query: {
+                /** @description The viewer's ID: 16 to 64 letters, digits, dashes or underscores */
+                sid: string;
+                /** @description Only lines written before this time: an RFC 3339 time or Unix seconds. Left out, the newest lines */
+                until?: string;
+                /** @description Do not look further back than this time: an RFC 3339 time or Unix seconds */
+                since?: string;
+                /** @description How many lines at most; 500 by default */
+                tail?: number;
+                /** @description Only these tasks: comma-separated task IDs, or the first eight or more characters of one */
+                task?: string;
+                /** @description Only tasks on these nodes: comma-separated host names or node IDs */
+                node?: string;
+                /** @description Also the lines of tasks that have ended */
+                stopped?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The service ID or name */
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceLogsBody"];
                 };
             };
             /** @description Error */

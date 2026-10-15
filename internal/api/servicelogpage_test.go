@@ -128,9 +128,13 @@ func TestServiceLogPageAnswersTheNewestMergedLinesBeforeUntilWithTheirTasksAndSa
 	// A page is a bounded read of the whole service: it does not follow, and it asks for a
 	// window of time, not for a tail the engine would apply per task before any until.
 	qs := f.fake.ServiceLogQueries()
-	last := qs[len(qs)-1]
-	if last.Get("follow") == "1" || last.Get("tail") != "" || last.Get("since") == "" {
-		t.Errorf("the page asked the engine %v, want no follow, no tail and a since", last)
+	for _, q := range qs {
+		if q.Get("follow") == "1" || q.Get("tail") != "" {
+			t.Errorf("the page asked the engine %v, want no follow and no tail", q)
+		}
+	}
+	if qs[0].Get("since") == "" {
+		t.Errorf("the first read had no since: %v", qs[0])
 	}
 }
 

@@ -280,9 +280,6 @@ func TestKWayMergeStopsWhenTheConsumerDoes(t *testing.T) {
 	}
 }
 
-// recSize is what the holder counts a record as: its stamp and its text.
-func recSize(r svcRec) int { return len(r.T) + len(r.M) }
-
 func TestLineHolderKeepsEverythingUnderItsSizeGroupedByTaskInTheOrderGiven(t *testing.T) {
 	h := newLineHolder(1 << 20)
 	h.add(rec("t1", 10, "a1"), 1)
