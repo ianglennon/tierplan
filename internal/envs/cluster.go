@@ -139,6 +139,8 @@ type clusterEntry struct {
 	// away are the managers a read failed over from that are not back yet.
 	away     map[string]awayManager
 	policies *PolicyCache
+	// loops remembers the failed tasks seen across reads (RES-13).
+	loops *RestartLoopTracker
 }
 
 // Clusters reads the cluster of swarm environments: from which manager, with what
@@ -195,7 +197,7 @@ func (c *Clusters) entry(envID string) *clusterEntry {
 	defer c.mu.Unlock()
 	e := c.entries[envID]
 	if e == nil {
-		e = &clusterEntry{failures: map[string][]time.Time{}, away: map[string]awayManager{}, policies: NewPolicyCache()}
+		e = &clusterEntry{failures: map[string][]time.Time{}, away: map[string]awayManager{}, policies: NewPolicyCache(), loops: NewRestartLoopTracker()}
 		c.entries[envID] = e
 	}
 	return e
@@ -628,12 +630,16 @@ func (c *Clusters) apply(in RollupInput, e *clusterEntry, read dockerx.ClusterRe
 		}
 		failing, total := FailingServices(read.Services, now, c.grace)
 		e.state.Failing = &FailingCounts{Failing: failing, Total: total}
+		e.state.RestartLoops = e.loops.Observe(now, read.FailedTasks, read.Services, in.RestartLoopFailures, in.RestartLoopWindow)
+		e.state.HistoryLimit = read.HistoryLimit
 	case ReasonFor(err) == ReasonNoQuorum:
 		if !e.state.NoQuorum {
 			e.state.NoQuorum, e.state.NoQuorumSince = true, now
 			changed = true
 		}
 		e.state.Failing = nil
+		// What was seen stays in the tracker, so the loops are back with the quorum.
+		e.state.RestartLoops = nil
 	}
 	e.mu.Unlock()
 	if changed && c.pub != nil {

@@ -930,22 +930,31 @@ func TestARefreshKeepsTheServiceReferencesOfTheManagersAnswer(t *testing.T) {
 // rig's; nothing waits for a real window.
 
 // loopRig is a swarm rig with the service web and a way to change the task history every
-// manager reports.
+// manager reports. The cluster reader runs on its own clock, which the test moves by whole
+// windows: the tunnel hub's clock stays put, because a heartbeat that is minutes old
+// would end the agents' sessions.
 type loopRig struct {
 	*swarmRig
 	services []dockertest.FakeService
+	clock    *tunneltest.Clock
 }
 
 func newLoopRig(t *testing.T) *loopRig {
 	t.Helper()
 	services := []dockertest.FakeService{{ID: "svc-web", Name: "web", Mode: "replicated", Running: 1, Desired: 1}}
-	return &loopRig{swarmRig: newSwarmRig(t, managerNodes(), services), services: services}
+	l := &loopRig{swarmRig: newSwarmRig(t, managerNodes(), services), services: services}
+	l.clock = tunneltest.NewClock(l.swarmRig.clk.Now())
+	l.c = NewClusters(l.svc, l.snaps, ClusterOptions{
+		Now: l.clock.Now, Publisher: l.brk, Events: l.evs, Grace: 2 * time.Minute,
+	})
+	l.svc.WithClusters(l.c)
+	return l
 }
 
 // history gives every manager the failed tasks of web that failed the given durations
 // before now, newest first by argument order, and a history limit.
 func (l *loopRig) history(limit int, ago ...time.Duration) {
-	now := l.clk.Now()
+	now := l.clock.Now()
 	var tasks []swarmapi.Task
 	for i, d := range ago {
 		tk := swarmapi.Task{ID: fmt.Sprintf("task-%d-%d", i, d/time.Second), ServiceID: "svc-web", NodeID: "node-m1", Slot: 1, DesiredState: swarmapi.TaskStateShutdown}
@@ -985,13 +994,13 @@ func TestAClusterReadFlagsARestartLoopAndTheFlagOutlivesDockersHistoryUntilAQuie
 
 	// Docker prunes its history; the three failures are still inside the window.
 	l.history(8)
-	l.clk.Advance(30 * time.Second)
+	l.clock.Advance(30 * time.Second)
 	if st := l.refresh(t); st.RestartLoops["svc-web"].Count != 3 {
 		t.Fatalf("after Docker pruned its history = %+v, want the 3 seen failures kept", st.RestartLoops)
 	}
 
 	// A full window with nothing new clears it.
-	l.clk.Advance(DefaultRestartLoopWindow)
+	l.clock.Advance(DefaultRestartLoopWindow)
 	if st := l.refresh(t); len(st.RestartLoops) != 0 {
 		t.Fatalf("a quiet window later = %+v, want cleared", st.RestartLoops)
 	}
@@ -1014,7 +1023,7 @@ func TestARestartLoopUsesTheEnvironmentsThresholdAndWindow(t *testing.T) {
 	if _, err := l.st.Write.Exec(`UPDATE environments SET restart_loop_window_minutes = 1 WHERE id = ?`, l.env.ID); err != nil {
 		t.Fatal(err)
 	}
-	l.clk.Advance(time.Minute)
+	l.clock.Advance(time.Minute)
 	if st := l.refresh(t); len(st.RestartLoops) != 0 {
 		t.Fatalf("with a window of one minute = %+v, want none", st.RestartLoops)
 	}
@@ -1036,7 +1045,7 @@ func TestALostQuorumHidesTheRestartLoopsAndTheyReturnWhenItComesBack(t *testing.
 		t.Fatalf("restart loops while the quorum is lost = %+v, want none shown", st.RestartLoops)
 	}
 	l.history(5)
-	l.clk.Advance(15 * time.Second)
+	l.clock.Advance(15 * time.Second)
 	if st := l.refresh(t); st.RestartLoops["svc-web"].Count != 3 {
 		t.Fatalf("after the quorum came back = %+v, want the loop kept in memory", st.RestartLoops)
 	}

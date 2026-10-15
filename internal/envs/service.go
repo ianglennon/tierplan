@@ -268,6 +268,8 @@ func (s *Service) input(ctx context.Context, row sqlc.Environment, now time.Time
 	in := RollupInput{
 		EnvID: row.ID, Kind: row.Kind, Now: now,
 		ServerStart: s.health.ServerStart, OfflineAfter: s.health.OfflineAfter, Grace: s.health.Grace,
+		RestartLoopFailures: int(row.RestartLoopFailures),
+		RestartLoopWindow:   time.Duration(row.RestartLoopWindowMinutes) * time.Minute,
 	}
 	if row.Kind != KindAgent {
 		in.Local = s.mon.Status(row.ID)

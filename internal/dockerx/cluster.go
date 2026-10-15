@@ -298,17 +298,60 @@ func (c *Client) Cluster(ctx context.Context) (ClusterRead, error) {
 		return ClusterRead{}, err
 	}
 
-	if len(agentServices) == 0 {
-		return out, nil // no agent service, so no agent tasks to ask for
+	if len(agentServices) > 0 {
+		// The services are named by ID: a service filter that names none would list
+		// every task, and an ID cannot be mistaken for another service's name.
+		ts, err := cli.TaskList(ctx, client.TaskListOptions{Filters: make(client.Filters).Add("service", agentServices...)})
+		if err != nil {
+			return ClusterRead{}, fmt.Errorf("list the agent service's tasks on %s: %w", c.t.Describe(), err)
+		}
+		out.AgentTasks = currentAgentTasks(ts.Items)
 	}
-	// The services are named by ID: a service filter that names none would list
-	// every task, and an ID cannot be mistaken for another service's name.
-	ts, err := cli.TaskList(ctx, client.TaskListOptions{Filters: make(client.Filters).Add("service", agentServices...)})
+
+	// The history restart-loop detection counts: every task the swarm has finished with is
+	// desired shutdown, so one filtered list holds all the failures Docker still keeps.
+	hs, err := cli.TaskList(ctx, client.TaskListOptions{Filters: make(client.Filters).Add("desired-state", string(swarm.TaskStateShutdown))})
 	if err != nil {
-		return ClusterRead{}, fmt.Errorf("list the agent service's tasks on %s: %w", c.t.Describe(), err)
+		return ClusterRead{}, fmt.Errorf("list the task history on %s: %w", c.t.Describe(), err)
 	}
-	out.AgentTasks = currentAgentTasks(ts.Items)
+	out.FailedTasks = failedTasks(hs.Items)
+
+	// How many tasks per slot Docker keeps says how much of a loop the history can show.
+	// It is context for the reader, so an engine that will not say is not a failed read.
+	if out.HistoryLimit, err = c.TaskHistoryLimit(ctx); err != nil {
+		if ctx.Err() != nil {
+			return ClusterRead{}, err
+		}
+		out.HistoryLimit = DefaultTaskHistoryLimit
+	}
 	return out, nil
+}
+
+// failedTasks keeps the tasks that ended failed or rejected, newest first, then by ID. A
+// task's state is what counts and never its exit code: the old tasks of a rolling or forced
+// update are shutdown with exit 137, and a job's finished tasks are complete (RESEARCH E12).
+func failedTasks(tasks []swarm.Task) []FailedTaskRow {
+	out := []FailedTaskRow{}
+	for _, t := range tasks {
+		if t.Status.State != swarm.TaskStateFailed && t.Status.State != swarm.TaskStateRejected {
+			continue
+		}
+		at := t.Status.Timestamp
+		if at.IsZero() {
+			at = t.UpdatedAt
+		}
+		if at.IsZero() {
+			at = t.CreatedAt
+		}
+		out = append(out, FailedTaskRow{
+			ID: t.ID, ServiceID: t.ServiceID, NodeID: t.NodeID, Slot: t.Slot,
+			State: string(t.Status.State), Err: t.Status.Err, At: at.UTC(),
+		})
+	}
+	slices.SortFunc(out, func(a, b FailedTaskRow) int {
+		return cmp.Or(b.At.Compare(a.At), cmp.Compare(a.ID, b.ID))
+	})
+	return out
 }
 
 // nonNilLabels returns the labels as a map that is never nil, so a consumer can range
