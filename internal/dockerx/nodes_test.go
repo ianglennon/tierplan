@@ -199,3 +199,60 @@ func TestNodeUpdateOfAnUnknownNodeIsNotFound(t *testing.T) {
 		t.Fatalf("err = %v, want ErrNodeNotFound", err)
 	}
 }
+
+// nodeRemoveFake is a swarm of a manager, a worker that is ready and a worker that is down.
+func nodeRemoveFake(t *testing.T, cfg dockertest.FakeConfig) (*dockerx.Client, *dockertest.Fake) {
+	t.Helper()
+	cfg.SwarmState, cfg.SwarmControl = "active", true
+	cfg.NodeRows = []dockertest.FakeNode{
+		{ID: "mgr1", Hostname: "alpha", Role: "manager", Leader: true, Version: 12},
+		{ID: "wrk1", Hostname: "bravo", Version: 3},
+		{ID: "wrk2", Hostname: "charlie", Version: 4, State: "down"},
+	}
+	fake := dockertest.NewFake(t, cfg)
+	return newClient(t, fake), fake
+}
+
+func TestNodeRemoveRemovesOneDownNodeOnceAndNeverForced(t *testing.T) {
+	c, fake := nodeRemoveFake(t, dockertest.FakeConfig{})
+	if err := c.NodeRemove(context.Background(), "wrk2"); err != nil {
+		t.Fatalf("NodeRemove: %v", err)
+	}
+	if got := fake.Writes(); len(got) != 1 || got[0] != "DELETE /nodes/wrk2" {
+		t.Errorf("writes = %v, want exactly one DELETE of the node with no query: force is never sent", got)
+	}
+	if _, _, err := c.NodeInspect(context.Background(), "wrk2"); !errors.Is(err, dockerx.ErrNodeNotFound) {
+		t.Errorf("inspect after the remove: err = %v, want ErrNodeNotFound", err)
+	}
+	for _, id := range []string{"mgr1", "wrk1"} {
+		if _, _, err := c.NodeInspect(context.Background(), id); err != nil {
+			t.Errorf("%s went with it: %v", id, err)
+		}
+	}
+}
+
+func TestNodeRemoveOfANodeThatIsNotDownIsErrNodeNotDownAndItStays(t *testing.T) {
+	c, _ := nodeRemoveFake(t, dockertest.FakeConfig{})
+	err := c.NodeRemove(context.Background(), "wrk1")
+	if !errors.Is(err, dockerx.ErrNodeNotDown) {
+		t.Fatalf("err = %v, want ErrNodeNotDown", err)
+	}
+	if _, _, err := c.NodeInspect(context.Background(), "wrk1"); err != nil {
+		t.Errorf("a ready node was removed: %v", err)
+	}
+}
+
+func TestNodeRemoveOfAnUnknownNodeIsNotFound(t *testing.T) {
+	c, _ := nodeRemoveFake(t, dockertest.FakeConfig{})
+	if err := c.NodeRemove(context.Background(), "nope"); !errors.Is(err, dockerx.ErrNodeNotFound) {
+		t.Fatalf("err = %v, want ErrNodeNotFound", err)
+	}
+}
+
+func TestNodeRemoveKeepsAnyOtherRefusalsWords(t *testing.T) {
+	c, _ := nodeRemoveFake(t, dockertest.FakeConfig{WriteError: "rpc error: code = Unavailable desc = no leader"})
+	err := c.NodeRemove(context.Background(), "wrk2")
+	if err == nil || !strings.Contains(err.Error(), "no leader") || errors.Is(err, dockerx.ErrNodeNotDown) || errors.Is(err, dockerx.ErrNodeNotFound) {
+		t.Fatalf("err = %v, want the daemon's own words and no typed refusal", err)
+	}
+}

@@ -555,3 +555,230 @@ func TestNodeImpactDoesNotWarnWhenAnotherManagerAgentIsConnected(t *testing.T) {
 		}
 	}
 }
+
+// Remove a node that is down (plan 06-17, RES-05, D-22): only a Down worker, by typing its name, never
+// forced, and the agent of that swarm node is revoked without a block.
+
+// nrEnv is naEnv with a worker that is down and a manager that is down.
+func nrEnv(t *testing.T, tune func(*dockertest.FakeConfig)) (*envFix, envBody) {
+	t.Helper()
+	return naEnv(t, func(c *dockertest.FakeConfig) {
+		c.NodeRows = append(c.NodeRows,
+			dockertest.FakeNode{ID: "node-7", Hostname: "wrk-dead", Address: "10.0.0.7", Version: 9, OS: "linux", State: "down"},
+			dockertest.FakeNode{ID: "node-8", Hostname: "mgr-dead", Role: "manager", Address: "10.0.0.8", Version: 8, OS: "linux", State: "down", Reachability: "unreachable"},
+		)
+		if tune != nil {
+			tune(c)
+		}
+	})
+}
+
+func (f *envFix) removeNode(t *testing.T, e envBody, node, confirm string) *envRec {
+	t.Helper()
+	path := "/api/env/" + e.ID + "/nodes/" + node
+	if confirm != "" {
+		path += "?confirm=" + confirm
+	}
+	return f.req(t, http.MethodDelete, path, "")
+}
+
+func TestRemoveNode(t *testing.T) {
+	f, e := nrEnv(t, nil)
+	rec := f.removeNode(t, e, "node-7", "wrk-dead")
+	if rec.code != http.StatusNoContent {
+		t.Fatalf("status = %d %s, want 204", rec.code, rec.body)
+	}
+	if w := f.fake.Writes(); len(w) != 1 || w[0] != "DELETE /nodes/node-7" {
+		t.Errorf("writes = %v, want exactly one DELETE of the node with no query: force is never sent", w)
+	}
+	if rec := f.get(t, e, "nodes/node-7"); rec.code != http.StatusNotFound || rec.ptyp != "node_not_found" {
+		t.Errorf("the node after the remove = %d %s (%s), want 404 node_not_found", rec.code, rec.body, rec.ptyp)
+	}
+	rows := f.nodeAudits(t)
+	if len(rows) != 1 {
+		t.Fatalf("audit rows = %+v, want one", rows)
+	}
+	r := rows[0]
+	if r.Action != "node.removed" || r.TargetType != "node" || r.TargetID != "node-7" || r.EnvID != e.ID || r.Result != string(audit.ResultSuccess) ||
+		r.Details["hostname"] != "wrk-dead" || r.Details["agent"] != "" || r.Details["code"] != "done" {
+		t.Errorf("audit row = %+v, want a success naming the host and no agent", r)
+	}
+}
+
+func TestRemoveNodeNeedsTheNodesNameTyped(t *testing.T) {
+	f, e := nrEnv(t, nil)
+	for _, confirm := range []string{"", "wrk-dea", "WRK-DEAD", "node-7"} {
+		rec := f.removeNode(t, e, "node-7", confirm)
+		if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "confirmation_required" {
+			t.Errorf("confirm %q = %d %s (%s), want 422 confirmation_required", confirm, rec.code, rec.body, rec.ptyp)
+		}
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, want none before the name is typed", w)
+	}
+	rows := f.nodeAudits(t)
+	if len(rows) != 4 || rows[0].Result != string(audit.ResultFailure) || rows[0].Reason != "confirmation_required" || rows[0].Details["code"] != "confirmation_required" {
+		t.Errorf("audit rows = %+v, want a failure row for each refused attempt", rows)
+	}
+}
+
+func TestRemoveNodeRefusals(t *testing.T) {
+	f, e := nrEnv(t, nil)
+	for _, tc := range []struct {
+		name, node string
+		code       int
+		ptyp       string
+	}{
+		{"a worker that is ready", "node-4", http.StatusConflict, "node_not_down"},
+		{"a worker that is paused", "node-6", http.StatusConflict, "node_not_down"},
+		{"a manager that is ready", "node-2", http.StatusConflict, "node_is_manager"},
+		{"Bayplan's own manager", "node-1", http.StatusConflict, "node_is_manager"},
+		{"a manager that is down", "node-8", http.StatusConflict, "node_is_manager"},
+		{"a node the swarm does not have", "node-99", http.StatusNotFound, "node_not_found"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The name is typed correctly, so only the refusal can stop it.
+			rec := f.removeNode(t, e, tc.node, "anything")
+			if rec.code != tc.code || rec.ptyp != tc.ptyp {
+				t.Errorf("status = %d %s (%s), want %d %s", rec.code, rec.body, rec.ptyp, tc.code, tc.ptyp)
+			}
+		})
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, want none: the server refuses before any write", w)
+	}
+	rows := f.nodeAudits(t)
+	byNode := map[string]auditRowFull{}
+	for _, r := range rows {
+		byNode[r.TargetID] = r
+	}
+	if r := byNode["node-4"]; r.Action != "node.removed" || r.Result != string(audit.ResultFailure) || r.Reason != "node_not_down" || r.Details["hostname"] != "wrk-1" {
+		t.Errorf("audit row of the ready worker = %+v, want a failure node_not_down", r)
+	}
+	if r := byNode["node-2"]; r.Reason != "node_is_manager" {
+		t.Errorf("audit row of the manager = %+v, want a failure node_is_manager", r)
+	}
+	if _, ok := byNode["node-99"]; ok {
+		t.Errorf("audit rows = %+v, want none for a node that does not exist", rows)
+	}
+}
+
+func TestRemoveNodeMapsDockersOwnRefusals(t *testing.T) {
+	// The node came back between the read and the write.
+	f, e := nrEnv(t, func(c *dockertest.FakeConfig) {
+		c.WriteError = "rpc error: code = FailedPrecondition desc = node node-7 is not down and can't be removed"
+	})
+	rec := f.removeNode(t, e, "node-7", "wrk-dead")
+	if rec.code != http.StatusConflict || rec.ptyp != "node_not_down" {
+		t.Fatalf("status = %d %s (%s), want 409 node_not_down", rec.code, rec.body, rec.ptyp)
+	}
+	rows := f.nodeAudits(t)
+	if len(rows) != 1 || rows[0].Result != string(audit.ResultFailure) || rows[0].Reason != "node_not_down" {
+		t.Errorf("audit rows = %+v, want one failure node_not_down", rows)
+	}
+
+	f, e = nrEnv(t, func(c *dockertest.FakeConfig) {
+		c.WriteError = "rpc error: code = Unavailable desc = no leader elected"
+	})
+	rec = f.removeNode(t, e, "node-7", "wrk-dead")
+	if rec.code != http.StatusBadGateway || rec.ptyp != "node_remove_failed" || !strings.Contains(string(rec.body), "no leader elected") {
+		t.Errorf("status = %d %s (%s), want 502 node_remove_failed with Docker's words", rec.code, rec.body, rec.ptyp)
+	}
+}
+
+func TestRemoveNodeNeedsAdmin(t *testing.T) {
+	f, e := nrEnv(t, nil)
+	f.addUser(t, "nr-operator", false)
+	f.addEnvRole(t, "nr-operator", e.ID, "operator")
+	cookie, csrf := f.signIn(t, "nr-operator", false)
+	rec := f.call(t, authReq{method: http.MethodDelete, path: "/api/env/" + e.ID + "/nodes/node-7?confirm=wrk-dead", cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("an Operator's DELETE = %d: %s, want 403", rec.Code, rec.Body)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, want none", w)
+	}
+	if rows := f.nodeAudits(t); len(rows) != 0 {
+		t.Errorf("audit rows = %+v, want none for a refused caller", rows)
+	}
+
+	f.addUser(t, "nr-boss", false)
+	f.addEnvRole(t, "nr-boss", e.ID, "admin")
+	cookie, csrf = f.signIn(t, "nr-boss", false)
+	rec = f.call(t, authReq{method: http.MethodDelete, path: "/api/env/" + e.ID + "/nodes/node-7?confirm=wrk-dead", cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("an env Admin's DELETE = %d: %s, want 204", rec.Code, rec.Body)
+	}
+}
+
+func TestRemoveNodeOnAStandaloneHostIsNotASwarm(t *testing.T) {
+	sf := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1", Version: "29.1.0"})
+	sf.clusters = envs.NewClusters(sf.svc, sf.snaps, envs.ClusterOptions{Now: sf.clk.now})
+	sf.svc.WithClusters(sf.clusters)
+	sf.h = sf.build(t)
+	se := sf.add(t)
+	waitFor(t, "the monitor's first probe", func() bool { return sf.mon.Status(se.ID).State == envs.StateOnline })
+	if rec := sf.removeNode(t, se, "node-1", "node-1"); rec.code != http.StatusConflict || rec.ptyp != "not_a_swarm" {
+		t.Errorf("remove = %d %s (%s), want 409 not_a_swarm", rec.code, rec.body, rec.ptyp)
+	}
+}
+
+// nrAgentSwarm is a swarm of a manager and a worker with an agent each, the worker's node down.
+func nrAgentSwarm(t *testing.T) (*agentFix, tunneltest.Environment, *agentConn, *agentConn) {
+	t.Helper()
+	f := newAgentFix(t)
+	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.tclk.Now, Publisher: f.brk, Events: f.hub})
+	f.svc.WithClusters(f.clusters)
+	f.h = f.build(t)
+	env := f.srv.NewEnvironment(t, "Swarm")
+	rows := []dockertest.FakeNode{
+		{ID: "node-mgr-1", Hostname: "mgr-1", Role: "manager", Leader: true, Address: "10.1.0.1", Version: 9},
+		{ID: "node-wrk-1", Hostname: "wrk-1", Address: "10.1.0.3", Version: 4, State: "down"},
+	}
+	mgr := f.connect(t, env, dockertest.FakeConfig{Hostname: "mgr-1", SwarmState: "active", SwarmControl: true, NodeRows: rows}, &wire.Facts{
+		EngineID: "ENG:mgr-1", Hostname: "mgr-1", EngineReachable: true,
+		Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-mgr-1", ClusterID: "cluster-1", Control: true},
+	})
+	wrk := f.connect(t, env, dockertest.FakeConfig{Hostname: "wrk-1", SwarmState: "active"}, &wire.Facts{
+		EngineID: "ENG:wrk-1", Hostname: "wrk-1", EngineReachable: true, Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-wrk-1"},
+	})
+	f.whenState(t, env.ID, "online")
+	f.whenProbed(t, envs.AgentTarget(mgr.id), envs.AgentTarget(wrk.id))
+	return f, env, mgr, wrk
+}
+
+func TestRemoveNodeRevokesTheAgentOfThatNodeWithoutBlockingTheHost(t *testing.T) {
+	f, env, mgr, wrk := nrAgentSwarm(t)
+	rec := f.req(t, http.MethodDelete, "/api/env/"+env.ID+"/nodes/node-wrk-1?confirm=wrk-1", "")
+	if rec.code != http.StatusNoContent {
+		t.Fatalf("status = %d %s, want 204", rec.code, rec.body)
+	}
+	if w := mgr.fake.Writes(); len(w) != 1 || w[0] != "DELETE /nodes/node-wrk-1" {
+		t.Errorf("writes through the manager's agent = %v, want one DELETE of the node", w)
+	}
+
+	var status, reason, revokedBy string
+	if err := f.st.Read.QueryRow(`SELECT status, COALESCE(revoke_reason, ''), COALESCE(revoked_by, '') FROM agents WHERE id = ?`, wrk.id).Scan(&status, &reason, &revokedBy); err != nil {
+		t.Fatal(err)
+	}
+	if status != "revoked" || reason != "node_removed" || revokedBy == "" || revokedBy == "system:agent-reaper" {
+		t.Errorf("the worker's agent = %s %q by %q, want revoked with node_removed by the admin", status, reason, revokedBy)
+	}
+	if err := f.st.Read.QueryRow(`SELECT status FROM agents WHERE id = ?`, mgr.id).Scan(&status); err != nil || status != "active" {
+		t.Errorf("the manager's agent = %q, %v, want it left active", status, err)
+	}
+	var blocks int
+	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM agent_blocks WHERE env_id = ?`, env.ID).Scan(&blocks); err != nil || blocks != 0 {
+		t.Errorf("blocks = %d, %v, want none: the host must be able to rejoin", blocks, err)
+	}
+
+	var revoked int
+	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'agent.revoked' AND target_id = ? AND actor_id = ?`, wrk.id, revokedBy).Scan(&revoked); err != nil || revoked != 1 {
+		t.Errorf("agent.revoked rows by the admin = %d, %v, want one", revoked, err)
+	}
+	rows := f.nodeAudits(t)
+	if len(rows) != 1 || rows[0].Action != "node.removed" || rows[0].Result != string(audit.ResultSuccess) || rows[0].Details["agent"] != wrk.id || rows[0].Details["hostname"] != "wrk-1" {
+		t.Errorf("audit rows = %+v, want one success naming the revoked agent", rows)
+	}
+
+}

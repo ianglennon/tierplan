@@ -295,7 +295,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			Audit: f.aud, Checker: checker, Log: log,
 		})
 		api.RegisterNodes(r, api.NodesDeps{
-			Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, Live: f.liveAgents,
+			Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, Agents: agentSvc, Live: f.liveAgents,
 			SelfContainerID: f.envSvc.SelfContainerID(), Log: log,
 		})
 		api.RegisterVolumes(r, api.VolumesDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, SizesTimeout: f.volumeSizesTimeout, Log: log})

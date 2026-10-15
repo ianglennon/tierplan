@@ -112,6 +112,8 @@ var oracle = []oracleEntry{
 	oEntry("GET", `services/`+oID, map[string]*regexp.Regexp{"insertDefaults": oBool}),
 	// One node: the inspect, which takes no key at all.
 	oEntry("GET", `nodes/`+oID, nil),
+	// A node remove takes no key at all: force is never sent.
+	oEntry("DELETE", `nodes/`+oID, nil),
 	// A node update: a version and a node spec body.
 	{method: "POST", path: rx(oVer + `nodes/` + oID + `/update$`), body: true, keys: map[string]*regexp.Regexp{"version": rx(`^[0-9]{1,20}$`)}},
 	{method: "POST", path: rx(oVer + `services/create$`), body: true},

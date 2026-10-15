@@ -442,7 +442,6 @@ func TestRouteNodeUpdateTakesOnlyAVersionAndANodeSpecBody(t *testing.T) {
 		{"an update of a 129 character node", "POST", "/nodes/" + strings.Repeat("a", 129) + "/update", "version=12", true, ""},
 		{"a GET of update", "GET", "/nodes/abc123/update", "", false, ""},
 		{"a PUT of update", "PUT", "/nodes/abc123/update", "version=12", true, ""},
-		{"a delete of a node", "DELETE", "/nodes/abc123", "", false, ""},
 		{"a POST to a node", "POST", "/nodes/abc123", "version=12", true, ""},
 		{"a node's other sub-path", "POST", "/nodes/abc123/join", "version=12", true, ""},
 	} {
@@ -467,6 +466,54 @@ func TestRouteNodeUpdateTakesOnlyAVersionAndANodeSpecBody(t *testing.T) {
 	}
 	if ok, _, _ := Allowed("POST", "/nodes/abc123/update", "version=1", true, true, Policy{}); ok {
 		t.Error("a node update with an upgrade was allowed")
+	}
+}
+
+func TestRouteNodeRemoveTakesNoKeysSoForceCanNeverBeSent(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, path, query string
+		wantRoute                 string // "" means refused
+	}{
+		{"a remove", "DELETE", "/nodes/abc123", "", "node remove"},
+		{"a remove with the version prefix", "DELETE", "/v1.56/nodes/abc123", "", "node remove"},
+		{"a remove with force=1", "DELETE", "/nodes/abc123", "force=1", ""},
+		{"a remove with force=true", "DELETE", "/nodes/abc123", "force=true", ""},
+		{"a remove with force=0", "DELETE", "/nodes/abc123", "force=0", ""},
+		{"a remove with an empty force", "DELETE", "/nodes/abc123", "force=", ""},
+		{"a remove with any other key", "DELETE", "/nodes/abc123", "version=1", ""},
+		{"a remove with a trailing slash", "DELETE", "/nodes/abc123/", "", ""},
+		{"a remove of a dot-dot node", "DELETE", "/nodes/../update", "", ""},
+		{"a remove of a node starting with a dot", "DELETE", "/nodes/.x", "", ""},
+		{"a remove of a 129 character node", "DELETE", "/nodes/" + strings.Repeat("a", 129), "", ""},
+		{"a remove of the node list", "DELETE", "/nodes", "", ""},
+		{"a remove of a node's sub-path", "DELETE", "/nodes/abc123/update", "", ""},
+		{"a POST to a node", "POST", "/nodes/abc123", "", ""},
+		{"a PUT to a node", "PUT", "/nodes/abc123", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, _, kind := Allowed(tc.method, tc.path, tc.query, false, false, Policy{})
+			if ok != (tc.wantRoute != "") {
+				t.Fatalf("Allowed(%s %s?%s) = %v, want %v", tc.method, tc.path, tc.query, ok, tc.wantRoute != "")
+			}
+			if !ok {
+				return
+			}
+			if rt, found := Match(tc.method, tc.path); !found || rt.name != tc.wantRoute || rt.registryAuth {
+				t.Fatalf("Match(%s %s) = %q (registryAuth %v), want %q without one", tc.method, tc.path, rt.name, rt.registryAuth, tc.wantRoute)
+			}
+			if kind != BodyNone {
+				t.Errorf("body kind = %d, want none", kind)
+			}
+		})
+	}
+	if ok, _, _ := Allowed("DELETE", "/nodes/abc123", "", true, false, Policy{}); ok {
+		t.Error("a node remove with a body was allowed")
+	}
+	if ok, _, _ := Allowed("DELETE", "/nodes/abc123", "", false, true, Policy{}); ok {
+		t.Error("a node remove with an upgrade was allowed")
+	}
+	if ok, reason, _ := Allowed("DELETE", "/nodes/abc123", "", false, false, Policy{ReadOnly: true}); ok || reason != "read_only_flag" {
+		t.Errorf("a node remove on a read-only host = %v %q, want refused read_only_flag", ok, reason)
 	}
 }
 
