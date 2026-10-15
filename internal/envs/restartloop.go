@@ -29,6 +29,8 @@ type RestartLoop struct {
 	ServiceID, Name string
 	// Count is how many distinct tasks failed inside the window as of the last read.
 	Count int
+	// Window is the window they were counted in.
+	Window time.Duration
 	// LatestError is the error text of the newest failed task, LatestAt when it failed.
 	LatestError string
 	LatestAt    time.Time
@@ -140,7 +142,7 @@ func (t *RestartLoopTracker) Observe(now time.Time, failed []dockerx.FailedTaskR
 			continue
 		}
 		out[id] = RestartLoop{
-			ServiceID: id, Name: names[id], Count: count,
+			ServiceID: id, Name: names[id], Count: count, Window: window,
 			LatestError: sf.latestError, LatestAt: sf.latestAt, Since: sf.flaggedAt,
 		}
 	}

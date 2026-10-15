@@ -7890,6 +7890,45 @@
         ],
         "type": "object"
       },
+      "RestartLoopBody": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "description": "How many tasks failed or were rejected inside the window, as of the last read",
+            "format": "int64",
+            "type": "integer"
+          },
+          "latestError": {
+            "description": "The error text of the newest failed task; empty when Docker gave none",
+            "type": "string"
+          },
+          "since": {
+            "description": "When the service was flagged",
+            "format": "date-time",
+            "type": "string"
+          },
+          "state": {
+            "description": "flagged while the loop holds",
+            "enum": [
+              "flagged"
+            ],
+            "type": "string"
+          },
+          "windowMinutes": {
+            "description": "The window the count is over, in minutes: the environment's restart-loop setting",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "state",
+          "count",
+          "windowMinutes",
+          "latestError",
+          "since"
+        ],
+        "type": "object"
+      },
       "RestoreApplyBody": {
         "additionalProperties": false,
         "properties": {
@@ -9165,6 +9204,10 @@
             "$ref": "#/components/schemas/ServiceResourcesBody",
             "description": "CPU and memory limits and reservations"
           },
+          "restartLoop": {
+            "$ref": "#/components/schemas/RestartLoopBody",
+            "description": "Present while the service is in a restart loop: its tasks keep failing. Absent otherwise, and while the last cluster read does not hold the service"
+          },
           "restartPolicy": {
             "$ref": "#/components/schemas/ServiceRestartPolicyBody",
             "description": "The restart policy; absent when the spec sets none (the engine's default, restart on any exit)"
@@ -9502,6 +9545,10 @@
               "array",
               "null"
             ]
+          },
+          "restartLoop": {
+            "$ref": "#/components/schemas/RestartLoopBody",
+            "description": "Present while the service is in a restart loop: its tasks keep failing. Absent otherwise"
           },
           "running": {
             "description": "Tasks that are running now",
@@ -10318,6 +10365,11 @@
             "format": "int64",
             "type": "integer"
           },
+          "loop": {
+            "description": "Services in a restart loop: their tasks keep failing (RES-13)",
+            "format": "int64",
+            "type": "integer"
+          },
           "problem": {
             "description": "Services whose update or rollback stopped or went wrong (paused, rollback_paused, rollback_completed)",
             "format": "int64",
@@ -10332,7 +10384,8 @@
         "required": [
           "degraded",
           "updating",
-          "problem"
+          "problem",
+          "loop"
         ],
         "type": "object"
       },
@@ -18172,7 +18225,7 @@
     },
     "/api/env/{envId}/services": {
       "get": {
-        "description": "The services of a swarm environment with their mode, running and desired task counts, image, stack and last update, read through a manager's agent or through the local socket of a swarm manager, at most 500 rows sorted by name then ID. Optionally a search (q) and a status filter (status: degraded, updating, problem). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Each row has its published ports, the update message, whether a rollback has a spec to go back to and its creation time. 409 not_a_swarm when the environment is a standalone host. When no manager is connected the answer is 200 with noManager true and the rows last read, or none. Needs services.read (Viewer) on the environment.",
+        "description": "The services of a swarm environment with their mode, running and desired task counts, image, stack and last update, read through a manager's agent or through the local socket of a swarm manager, at most 500 rows sorted by name then ID. Optionally a search (q) and a status filter (status: degraded, updating, problem, loop). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Each row has its published ports, the update message, whether a rollback has a spec to go back to and its creation time. 409 not_a_swarm when the environment is a standalone host. When no manager is connected the answer is 200 with noManager true and the rows last read, or none. Needs services.read (Viewer) on the environment.",
         "operationId": "listServices",
         "parameters": [
           {
@@ -18196,12 +18249,12 @@
             }
           },
           {
-            "description": "Only services in one of these statuses, comma separated: degraded (some but not all tasks running), updating (updating, rollback_started) or problem (paused, rollback_paused, rollback_completed). Applied before the 500-row cap; any other value is refused 422 status_invalid",
+            "description": "Only services in one of these statuses, comma separated: degraded (some but not all tasks running), updating (updating, rollback_started), problem (paused, rollback_paused, rollback_completed) or loop (in a restart loop). Applied before the 500-row cap; any other value is refused 422 status_invalid",
             "explode": false,
             "in": "query",
             "name": "status",
             "schema": {
-              "description": "Only services in one of these statuses, comma separated: degraded (some but not all tasks running), updating (updating, rollback_started) or problem (paused, rollback_paused, rollback_completed). Applied before the 500-row cap; any other value is refused 422 status_invalid",
+              "description": "Only services in one of these statuses, comma separated: degraded (some but not all tasks running), updating (updating, rollback_started), problem (paused, rollback_paused, rollback_completed) or loop (in a restart loop). Applied before the 500-row cap; any other value is refused 422 status_invalid",
               "maxLength": 64,
               "type": "string"
             }

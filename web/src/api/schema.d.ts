@@ -1553,7 +1553,7 @@ export interface paths {
         };
         /**
          * List the swarm services of an environment
-         * @description The services of a swarm environment with their mode, running and desired task counts, image, stack and last update, read through a manager's agent or through the local socket of a swarm manager, at most 500 rows sorted by name then ID. Optionally a search (q) and a status filter (status: degraded, updating, problem). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Each row has its published ports, the update message, whether a rollback has a spec to go back to and its creation time. 409 not_a_swarm when the environment is a standalone host. When no manager is connected the answer is 200 with noManager true and the rows last read, or none. Needs services.read (Viewer) on the environment.
+         * @description The services of a swarm environment with their mode, running and desired task counts, image, stack and last update, read through a manager's agent or through the local socket of a swarm manager, at most 500 rows sorted by name then ID. Optionally a search (q) and a status filter (status: degraded, updating, problem, loop). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Each row has its published ports, the update message, whether a rollback has a spec to go back to and its creation time. 409 not_a_swarm when the environment is a standalone host. When no manager is connected the answer is 200 with noManager true and the rows last read, or none. Needs services.read (Viewer) on the environment.
          */
         get: operations["listServices"];
         put?: never;
@@ -6453,6 +6453,30 @@ export interface components {
             /** @description Where it applies */
             scope: components["schemas"]["CredentialScopeBody"];
         };
+        RestartLoopBody: {
+            /**
+             * Format: int64
+             * @description How many tasks failed or were rejected inside the window, as of the last read
+             */
+            count: number;
+            /** @description The error text of the newest failed task; empty when Docker gave none */
+            latestError: string;
+            /**
+             * Format: date-time
+             * @description When the service was flagged
+             */
+            since: string;
+            /**
+             * @description flagged while the loop holds
+             * @enum {string}
+             */
+            state: "flagged";
+            /**
+             * Format: int64
+             * @description The window the count is over, in minutes: the environment's restart-loop setting
+             */
+            windowMinutes: number;
+        };
         RestoreApplyBody: {
             /** @description Always true: Bayplan is swapping the database and restarting, and everyone is signed out */
             restarting: boolean;
@@ -6980,6 +7004,8 @@ export interface components {
             ports: components["schemas"]["ServicePortBody"][] | null;
             /** @description CPU and memory limits and reservations */
             resources: components["schemas"]["ServiceResourcesBody"];
+            /** @description Present while the service is in a restart loop: its tasks keep failing. Absent otherwise, and while the last cluster read does not hold the service */
+            restartLoop?: components["schemas"]["RestartLoopBody"];
             /** @description The restart policy; absent when the spec sets none (the engine's default, restart on any exit) */
             restartPolicy?: components["schemas"]["ServiceRestartPolicyBody"];
             /**
@@ -7117,6 +7143,8 @@ export interface components {
             name: string;
             /** @description The ports the service publishes, as published->target/protocol (8080->80/tcp), with (host) after a port published in host mode; sorted by published port. Empty when it publishes none */
             ports: string[] | null;
+            /** @description Present while the service is in a restart loop: its tasks keep failing. Absent otherwise */
+            restartLoop?: components["schemas"]["RestartLoopBody"];
             /**
              * Format: int64
              * @description Tasks that are running now
@@ -7442,6 +7470,11 @@ export interface components {
              * @description Services with some but not all of their tasks running
              */
             degraded: number;
+            /**
+             * Format: int64
+             * @description Services in a restart loop: their tasks keep failing (RES-13)
+             */
+            loop: number;
             /**
              * Format: int64
              * @description Services whose update or rollback stopped or went wrong (paused, rollback_paused, rollback_completed)
@@ -11602,7 +11635,7 @@ export interface operations {
             query?: {
                 /** @description Search: a case-insensitive substring of the service name, image, stack or any label key or value, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap */
                 q?: string;
-                /** @description Only services in one of these statuses, comma separated: degraded (some but not all tasks running), updating (updating, rollback_started) or problem (paused, rollback_paused, rollback_completed). Applied before the 500-row cap; any other value is refused 422 status_invalid */
+                /** @description Only services in one of these statuses, comma separated: degraded (some but not all tasks running), updating (updating, rollback_started), problem (paused, rollback_paused, rollback_completed) or loop (in a restart loop). Applied before the 500-row cap; any other value is refused 422 status_invalid */
                 status?: string;
             };
             header?: never;

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -53,6 +54,12 @@ const (
 	serviceStatusDegraded = "degraded"
 	serviceStatusUpdating = "updating"
 	serviceStatusProblem  = "problem"
+	serviceStatusLoop     = "loop"
+
+	// maxLoopError is the longest latest-error text a restart loop carries, in characters.
+	// Docker's task error is text from the engine and the image; the page clamps it for the
+	// eye and this keeps a runaway one off the wire.
+	maxLoopError = 512
 
 	// maxReplicas is the most replicas a scale may ask for.
 	maxReplicas = 1000
@@ -95,6 +102,34 @@ type ServiceItem struct {
 	UpdateMessage   string   `json:"updateMessage" doc:"The swarm's message about the last update; empty when it has none"`
 	HasPreviousSpec bool     `json:"hasPreviousSpec" doc:"True when the swarm still holds the spec before the last update, so a rollback has something to go back to"`
 	CreatedAt       string   `json:"createdAt" format:"date-time" doc:"When the service was created"`
+
+	RestartLoop *RestartLoopBody `json:"restartLoop,omitempty" doc:"Present while the service is in a restart loop: its tasks keep failing. Absent otherwise"`
+}
+
+// RestartLoopBody says a service is in a restart loop (RES-13, D-14, D-15).
+type RestartLoopBody struct {
+	State         string `json:"state" enum:"flagged" doc:"flagged while the loop holds"`
+	Count         int    `json:"count" doc:"How many tasks failed or were rejected inside the window, as of the last read"`
+	WindowMinutes int    `json:"windowMinutes" doc:"The window the count is over, in minutes: the environment's restart-loop setting"`
+	LatestError   string `json:"latestError" doc:"The error text of the newest failed task; empty when Docker gave none"`
+	Since         string `json:"since" format:"date-time" doc:"When the service was flagged"`
+}
+
+// restartLoopBody turns a flagged loop into its answer. The error is cut to maxLoopError
+// characters.
+func restartLoopBody(l envs.RestartLoop) *RestartLoopBody {
+	return &RestartLoopBody{
+		State: "flagged", Count: l.Count, WindowMinutes: int(l.Window / time.Minute),
+		LatestError: truncateRunes(l.LatestError, maxLoopError), Since: rfc3339(l.Since),
+	}
+}
+
+// truncateRunes keeps the first n characters of s.
+func truncateRunes(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return string([]rune(s)[:n])
 }
 
 // ServiceStatusCountsBody is how many services each status chip of the list counts. A
@@ -103,6 +138,7 @@ type ServiceStatusCountsBody struct {
 	Degraded int `json:"degraded" doc:"Services with some but not all of their tasks running"`
 	Updating int `json:"updating" doc:"Services whose update or rollback is in progress (updating, rollback_started)"`
 	Problem  int `json:"problem" doc:"Services whose update or rollback stopped or went wrong (paused, rollback_paused, rollback_completed)"`
+	Loop     int `json:"loop" doc:"Services in a restart loop: their tasks keep failing (RES-13)"`
 }
 
 // ServiceListBody is the answer of the services list.
@@ -120,7 +156,7 @@ type ServiceListBody struct {
 type ServicesListInput struct {
 	EnvironmentPathInput
 	Q      string `query:"q" doc:"Search: a case-insensitive substring of the service name, image, stack or any label key or value, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap"`
-	Status string `query:"status" maxLength:"64" doc:"Only services in one of these statuses, comma separated: degraded (some but not all tasks running), updating (updating, rollback_started) or problem (paused, rollback_paused, rollback_completed). Applied before the 500-row cap; any other value is refused 422 status_invalid"`
+	Status string `query:"status" maxLength:"64" doc:"Only services in one of these statuses, comma separated: degraded (some but not all tasks running), updating (updating, rollback_started), problem (paused, rollback_paused, rollback_completed) or loop (in a restart loop). Applied before the 500-row cap; any other value is refused 422 status_invalid"`
 }
 
 // ServiceListOutput wraps ServiceListBody for huma.
@@ -183,7 +219,7 @@ func RegisterServices(r *httpx.Router, d ServicesDeps) {
 		Summary: "List the swarm services of an environment",
 		Description: "The services of a swarm environment with their mode, running and desired task counts, image, stack and last update, " +
 			"read through a manager's agent or through the local socket of a swarm manager, at most 500 rows sorted by name then ID. " +
-			"Optionally a search (q) and a status filter (status: degraded, updating, problem). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. " +
+			"Optionally a search (q) and a status filter (status: degraded, updating, problem, loop). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. " +
 			"Each row has its published ports, the update message, whether a rollback has a spec to go back to and its creation time. " +
 			"409 not_a_swarm when the environment is a standalone host. When no manager is connected the answer is 200 with noManager true and the rows last read, or none. " +
 			"Needs services.read (Viewer) on the environment.",
@@ -250,7 +286,7 @@ func requireSwarm(ctx context.Context, d ServicesDeps, envID string) error {
 }
 
 // serviceStatuses are the values status= takes.
-var serviceStatuses = []string{serviceStatusDegraded, serviceStatusUpdating, serviceStatusProblem}
+var serviceStatuses = []string{serviceStatusDegraded, serviceStatusUpdating, serviceStatusProblem, serviceStatusLoop}
 
 // parseServiceStatuses reads the comma list of status=. An empty list means no filter and
 // an unknown value is a 422.
@@ -274,8 +310,9 @@ func parseServiceStatuses(raw string) ([]string, error) {
 
 // serviceHasStatus says whether a row counts under one status value. Degraded is some
 // tasks running and not all of them: a service with none running is not running, not
-// degraded, and a job (which wants 0) never is.
-func serviceHasStatus(row dockerx.ServiceRow, status string) bool {
+// degraded, and a job (which wants 0) never is. Loop is a service the restart-loop tracker
+// flagged, whatever its state.
+func serviceHasStatus(row dockerx.ServiceRow, status string, loops map[string]envs.RestartLoop) bool {
 	switch status {
 	case serviceStatusDegraded:
 		return row.Running > 0 && row.Running < row.Desired
@@ -283,6 +320,9 @@ func serviceHasStatus(row dockerx.ServiceRow, status string) bool {
 		return row.UpdateState == "updating" || row.UpdateState == "rollback_started"
 	case serviceStatusProblem:
 		return row.UpdateState == "paused" || row.UpdateState == "rollback_paused" || row.UpdateState == "rollback_completed"
+	case serviceStatusLoop:
+		_, flagged := loops[row.ID]
+		return flagged
 	}
 	return false
 }
@@ -290,17 +330,20 @@ func serviceHasStatus(row dockerx.ServiceRow, status string) bool {
 // serviceStatusCounts counts the rows by status. It is called on every row, before the
 // search and the status filter, so the numbers on the chips never shrink with what the
 // caller typed.
-func serviceStatusCounts(rows []dockerx.ServiceRow) ServiceStatusCountsBody {
+func serviceStatusCounts(rows []dockerx.ServiceRow, loops map[string]envs.RestartLoop) ServiceStatusCountsBody {
 	var c ServiceStatusCountsBody
 	for _, r := range rows {
-		if serviceHasStatus(r, serviceStatusDegraded) {
+		if serviceHasStatus(r, serviceStatusDegraded, loops) {
 			c.Degraded++
 		}
-		if serviceHasStatus(r, serviceStatusUpdating) {
+		if serviceHasStatus(r, serviceStatusUpdating, loops) {
 			c.Updating++
 		}
-		if serviceHasStatus(r, serviceStatusProblem) {
+		if serviceHasStatus(r, serviceStatusProblem, loops) {
 			c.Problem++
+		}
+		if serviceHasStatus(r, serviceStatusLoop, loops) {
+			c.Loop++
 		}
 	}
 	return c
@@ -328,7 +371,7 @@ func serviceMatchesQuery(row dockerx.ServiceRow, q string) bool {
 
 // filterServices keeps the rows that match q and any of statuses, in their order. It runs
 // before the row cap, so the cap applies to what the caller asked for.
-func filterServices(rows []dockerx.ServiceRow, q string, statuses []string) []dockerx.ServiceRow {
+func filterServices(rows []dockerx.ServiceRow, q string, statuses []string, loops map[string]envs.RestartLoop) []dockerx.ServiceRow {
 	if q == "" && len(statuses) == 0 {
 		return rows
 	}
@@ -337,7 +380,7 @@ func filterServices(rows []dockerx.ServiceRow, q string, statuses []string) []do
 		if !serviceMatchesQuery(r, q) {
 			continue
 		}
-		if len(statuses) > 0 && !slices.ContainsFunc(statuses, func(s string) bool { return serviceHasStatus(r, s) }) {
+		if len(statuses) > 0 && !slices.ContainsFunc(statuses, func(s string) bool { return serviceHasStatus(r, s, loops) }) {
 			continue
 		}
 		out = append(out, r)
@@ -385,19 +428,24 @@ func listServices(ctx context.Context, d ServicesDeps, envID string, in *Service
 		// Otherwise the last read is served, with its age in fetchedAt.
 	}
 	all := st.Read.Services
-	rows := filterServices(all, strings.ToLower(strings.TrimSpace(in.Q)), statuses)
+	loops := st.RestartLoops
+	rows := filterServices(all, strings.ToLower(strings.TrimSpace(in.Q)), statuses, loops)
 	shown := rows[:min(len(rows), maxListRows)]
 	body := ServiceListBody{
 		Items: make([]ServiceItem, 0, len(shown)), Total: len(rows), UnfilteredTotal: len(all), Capped: len(rows) > maxListRows,
-		StatusCounts: serviceStatusCounts(all), NoManager: noManager, FetchedAt: rfc3339(st.FetchedAt),
+		StatusCounts: serviceStatusCounts(all, loops), NoManager: noManager, FetchedAt: rfc3339(st.FetchedAt),
 	}
 	for _, row := range shown {
-		body.Items = append(body.Items, ServiceItem{
+		item := ServiceItem{
 			ID: row.ID, Name: row.Name, Mode: row.Mode, Running: row.Running, Desired: row.Desired,
 			UpdateState: row.UpdateState, Image: row.Image, Stack: row.Stack, Agent: row.Agent, UpdatedAt: rfc3339(row.UpdatedAt),
 			Ports: servicePortStrings(row.Ports), UpdateMessage: row.UpdateMessage, HasPreviousSpec: row.HasPreviousSpec,
 			CreatedAt: rfc3339(row.CreatedAt),
-		})
+		}
+		if l, flagged := loops[row.ID]; flagged {
+			item.RestartLoop = restartLoopBody(l)
+		}
+		body.Items = append(body.Items, item)
 	}
 	return body, nil
 }

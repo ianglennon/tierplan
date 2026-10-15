@@ -908,7 +908,7 @@ func TestServicesListFlagsAServiceInARestartLoopAndNoOther(t *testing.T) {
 	}
 	for _, name := range []string{"api", "calm", "nightly"} {
 		if byName[name].RestartLoop != nil {
-			t.Errorf("%s restartLoop = %+v, want null: two failures, forced-update shutdowns and a job's complete tasks are no loop", name, byName[name].RestartLoop)
+			t.Errorf("%s restartLoop = %+v, want none: two failures, forced-update shutdowns and a job's complete tasks are no loop", name, byName[name].RestartLoop)
 		}
 	}
 	var raw struct {
@@ -918,8 +918,8 @@ func TestServicesListFlagsAServiceInARestartLoopAndNoOther(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, it := range raw.Items {
-		if v, ok := it["restartLoop"]; !ok || (string(it["name"]) != `"web"` && string(v) != "null") {
-			t.Errorf("row %s has restartLoop %s, want the key present and null for a service not in a loop", it["name"], v)
+		if _, ok := it["restartLoop"]; ok != (string(it["name"]) == `"web"`) {
+			t.Errorf("row %s has restartLoop present = %v, want it only on web", it["name"], ok)
 		}
 	}
 	if got.StatusCounts.Loop != 1 {
@@ -950,7 +950,7 @@ func TestServicesListFiltersByTheLoopStatusBeforeTheCapAndCountsItBeforeTheSearc
 	}
 }
 
-func TestTheServiceDetailCarriesTheRestartLoopOrNull(t *testing.T) {
+func TestTheServiceDetailCarriesTheRestartLoopOnlyWhileItHolds(t *testing.T) {
 	f, e := loopEnv(t)
 	web := decode[struct {
 		RestartLoop *restartLoopBody `json:"restartLoop"`
@@ -959,8 +959,8 @@ func TestTheServiceDetailCarriesTheRestartLoopOrNull(t *testing.T) {
 		t.Fatalf("web detail restartLoop = %+v", web.RestartLoop)
 	}
 	rec := f.get(t, e, "services/svc-api")
-	if rec.code != http.StatusOK || !strings.Contains(string(rec.body), `"restartLoop":null`) {
-		t.Fatalf("api detail = %d %s, want restartLoop null", rec.code, rec.body)
+	if rec.code != http.StatusOK || strings.Contains(string(rec.body), `restartLoop`) {
+		t.Fatalf("api detail = %d %s, want no restartLoop", rec.code, rec.body)
 	}
 }
 

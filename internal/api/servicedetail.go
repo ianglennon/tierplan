@@ -16,6 +16,7 @@ import (
 	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
+	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/redact"
@@ -142,6 +143,8 @@ type ServiceDetailBody struct {
 	UpdateStatus    string `json:"updateStatus" doc:"The state of the last update or rollback (updating, paused, completed, rollback_started, rollback_paused, rollback_completed); empty when it has none"`
 	UpdateMessage   string `json:"updateMessage" doc:"The swarm's message about the last update; empty when it has none"`
 	HasPreviousSpec bool   `json:"hasPreviousSpec" doc:"True when the swarm still holds the spec before the last update, so a rollback has something to go back to"`
+
+	RestartLoop *RestartLoopBody `json:"restartLoop,omitempty" doc:"Present while the service is in a restart loop: its tasks keep failing. Absent otherwise, and while the last cluster read does not hold the service"`
 }
 
 // ServiceDetailOutput wraps ServiceDetailBody for huma.
@@ -298,22 +301,31 @@ func getService(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID, s
 	reveal := redact.CanReveal(ctx, d.Checker, p, envID)
 	shown, _ := redact.MaskServiceSpec(spec, reveal)
 
-	row, haveRow := serviceRow(ctx, d, envID, detail.ID)
-	return serviceDetailBody(detail, shown, nets, row, haveRow, reveal), nil
+	row, loop, haveRow := serviceRow(ctx, d, envID, detail.ID)
+	body := serviceDetailBody(detail, shown, nets, row, haveRow, reveal)
+	if loop != nil {
+		body.RestartLoop = restartLoopBody(*loop)
+	}
+	return body, nil
 }
 
 // serviceRow finds the service in the last cluster read: its task counts and ports are not in
-// an inspect. A read that fails, or a service that read does not hold yet, is no row.
-func serviceRow(ctx context.Context, d ServicesDeps, envID, id string) (dockerx.ServiceRow, bool) {
+// an inspect, and nor is whether its tasks keep failing, which the tracker works out from the
+// task history. A read that fails, or a service that read does not hold yet, is no row.
+func serviceRow(ctx context.Context, d ServicesDeps, envID, id string) (dockerx.ServiceRow, *envs.RestartLoop, bool) {
 	st, err := d.Clusters.State(ctx, envID)
 	if err != nil && st.FetchedAt.IsZero() {
-		return dockerx.ServiceRow{}, false
+		return dockerx.ServiceRow{}, nil, false
 	}
 	i := slices.IndexFunc(st.Read.Services, func(r dockerx.ServiceRow) bool { return r.ID == id })
 	if i < 0 {
-		return dockerx.ServiceRow{}, false
+		return dockerx.ServiceRow{}, nil, false
 	}
-	return st.Read.Services[i], true
+	var loop *envs.RestartLoop
+	if l, flagged := st.RestartLoops[id]; flagged {
+		loop = &l
+	}
+	return st.Read.Services[i], loop, true
 }
 
 // getServiceInspect answers the raw inspect document of one service, masked.

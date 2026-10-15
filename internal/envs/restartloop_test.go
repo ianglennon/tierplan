@@ -46,7 +46,7 @@ func TestRestartLoopFlagsAServiceWhoseTasksFailThresholdTimesInTheWindow(t *test
 	three := append([]dockerx.FailedTaskRow{rlFail("c", "svc-web", time.Minute, "task: non-zero exit (1)")}, twoOnly...)
 	got := observe(NewRestartLoopTracker(), rlNow, three...)
 	want := RestartLoop{
-		ServiceID: "svc-web", Name: "web", Count: 3,
+		ServiceID: "svc-web", Name: "web", Count: 3, Window: rlWindow,
 		LatestError: "task: non-zero exit (1)", LatestAt: rlNow.Add(-time.Minute), Since: rlNow,
 	}
 	if len(got) != 1 || got["svc-web"] != want {
