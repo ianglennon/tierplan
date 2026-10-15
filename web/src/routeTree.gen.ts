@@ -66,6 +66,7 @@ import { Route as AppEnvEnvIdContainersContainerIdIndexRouteImport } from './rou
 import { Route as AppEnvEnvIdContainersContainerIdInspectRouteImport } from './routes/_app/env/$envId/containers_.$containerId.inspect'
 import { Route as AppEnvEnvIdContainersContainerIdLogsRouteImport } from './routes/_app/env/$envId/containers_.$containerId.logs'
 import { Route as AppEnvEnvIdContainersContainerIdShellRouteImport } from './routes/_app/env/$envId/containers_.$containerId.shell'
+import { Route as AppEnvEnvIdContainersContainerIdStatsRouteImport } from './routes/_app/env/$envId/containers_.$containerId.stats'
 import { Route as AppEnvEnvIdImagesImageIdIndexRouteImport } from './routes/_app/env/$envId/images_.$imageId.index'
 import { Route as AppEnvEnvIdImagesImageIdInspectRouteImport } from './routes/_app/env/$envId/images_.$imageId.inspect'
 import { Route as AppEnvEnvIdImagesImageIdLayersRouteImport } from './routes/_app/env/$envId/images_.$imageId.layers'
@@ -397,6 +398,12 @@ const AppEnvEnvIdContainersContainerIdShellRoute =
     path: '/shell',
     getParentRoute: () => AppEnvEnvIdContainersContainerIdRoute,
   } as any)
+const AppEnvEnvIdContainersContainerIdStatsRoute =
+  AppEnvEnvIdContainersContainerIdStatsRouteImport.update({
+    id: '/stats',
+    path: '/stats',
+    getParentRoute: () => AppEnvEnvIdContainersContainerIdRoute,
+  } as any)
 const AppEnvEnvIdImagesImageIdIndexRoute =
   AppEnvEnvIdImagesImageIdIndexRouteImport.update({
     id: '/',
@@ -591,6 +598,7 @@ export interface FileRoutesByFullPath {
   '/env/$envId/containers/$containerId/inspect': typeof AppEnvEnvIdContainersContainerIdInspectRoute
   '/env/$envId/containers/$containerId/logs': typeof AppEnvEnvIdContainersContainerIdLogsRoute
   '/env/$envId/containers/$containerId/shell': typeof AppEnvEnvIdContainersContainerIdShellRoute
+  '/env/$envId/containers/$containerId/stats': typeof AppEnvEnvIdContainersContainerIdStatsRoute
   '/env/$envId/images/$imageId/inspect': typeof AppEnvEnvIdImagesImageIdInspectRoute
   '/env/$envId/images/$imageId/layers': typeof AppEnvEnvIdImagesImageIdLayersRoute
   '/env/$envId/images/$imageId/tags': typeof AppEnvEnvIdImagesImageIdTagsRoute
@@ -660,6 +668,7 @@ export interface FileRoutesByTo {
   '/env/$envId/containers/$containerId/inspect': typeof AppEnvEnvIdContainersContainerIdInspectRoute
   '/env/$envId/containers/$containerId/logs': typeof AppEnvEnvIdContainersContainerIdLogsRoute
   '/env/$envId/containers/$containerId/shell': typeof AppEnvEnvIdContainersContainerIdShellRoute
+  '/env/$envId/containers/$containerId/stats': typeof AppEnvEnvIdContainersContainerIdStatsRoute
   '/env/$envId/images/$imageId/inspect': typeof AppEnvEnvIdImagesImageIdInspectRoute
   '/env/$envId/images/$imageId/layers': typeof AppEnvEnvIdImagesImageIdLayersRoute
   '/env/$envId/images/$imageId/tags': typeof AppEnvEnvIdImagesImageIdTagsRoute
@@ -743,6 +752,7 @@ export interface FileRoutesById {
   '/_app/env/$envId/containers_/$containerId/inspect': typeof AppEnvEnvIdContainersContainerIdInspectRoute
   '/_app/env/$envId/containers_/$containerId/logs': typeof AppEnvEnvIdContainersContainerIdLogsRoute
   '/_app/env/$envId/containers_/$containerId/shell': typeof AppEnvEnvIdContainersContainerIdShellRoute
+  '/_app/env/$envId/containers_/$containerId/stats': typeof AppEnvEnvIdContainersContainerIdStatsRoute
   '/_app/env/$envId/images_/$imageId/inspect': typeof AppEnvEnvIdImagesImageIdInspectRoute
   '/_app/env/$envId/images_/$imageId/layers': typeof AppEnvEnvIdImagesImageIdLayersRoute
   '/_app/env/$envId/images_/$imageId/tags': typeof AppEnvEnvIdImagesImageIdTagsRoute
@@ -826,6 +836,7 @@ export interface FileRouteTypes {
     | '/env/$envId/containers/$containerId/inspect'
     | '/env/$envId/containers/$containerId/logs'
     | '/env/$envId/containers/$containerId/shell'
+    | '/env/$envId/containers/$containerId/stats'
     | '/env/$envId/images/$imageId/inspect'
     | '/env/$envId/images/$imageId/layers'
     | '/env/$envId/images/$imageId/tags'
@@ -895,6 +906,7 @@ export interface FileRouteTypes {
     | '/env/$envId/containers/$containerId/inspect'
     | '/env/$envId/containers/$containerId/logs'
     | '/env/$envId/containers/$containerId/shell'
+    | '/env/$envId/containers/$containerId/stats'
     | '/env/$envId/images/$imageId/inspect'
     | '/env/$envId/images/$imageId/layers'
     | '/env/$envId/images/$imageId/tags'
@@ -977,6 +989,7 @@ export interface FileRouteTypes {
     | '/_app/env/$envId/containers_/$containerId/inspect'
     | '/_app/env/$envId/containers_/$containerId/logs'
     | '/_app/env/$envId/containers_/$containerId/shell'
+    | '/_app/env/$envId/containers_/$containerId/stats'
     | '/_app/env/$envId/images_/$imageId/inspect'
     | '/_app/env/$envId/images_/$imageId/layers'
     | '/_app/env/$envId/images_/$imageId/tags'
@@ -1416,6 +1429,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppEnvEnvIdContainersContainerIdShellRouteImport
       parentRoute: typeof AppEnvEnvIdContainersContainerIdRoute
     }
+    '/_app/env/$envId/containers_/$containerId/stats': {
+      id: '/_app/env/$envId/containers_/$containerId/stats'
+      path: '/stats'
+      fullPath: '/env/$envId/containers/$containerId/stats'
+      preLoaderRoute: typeof AppEnvEnvIdContainersContainerIdStatsRouteImport
+      parentRoute: typeof AppEnvEnvIdContainersContainerIdRoute
+    }
     '/_app/env/$envId/images_/$imageId/': {
       id: '/_app/env/$envId/images_/$imageId/'
       path: '/'
@@ -1669,6 +1689,7 @@ interface AppEnvEnvIdContainersContainerIdRouteChildren {
   AppEnvEnvIdContainersContainerIdInspectRoute: typeof AppEnvEnvIdContainersContainerIdInspectRoute
   AppEnvEnvIdContainersContainerIdLogsRoute: typeof AppEnvEnvIdContainersContainerIdLogsRoute
   AppEnvEnvIdContainersContainerIdShellRoute: typeof AppEnvEnvIdContainersContainerIdShellRoute
+  AppEnvEnvIdContainersContainerIdStatsRoute: typeof AppEnvEnvIdContainersContainerIdStatsRoute
   AppEnvEnvIdContainersContainerIdIndexRoute: typeof AppEnvEnvIdContainersContainerIdIndexRoute
 }
 
@@ -1680,6 +1701,8 @@ const AppEnvEnvIdContainersContainerIdRouteChildren: AppEnvEnvIdContainersContai
       AppEnvEnvIdContainersContainerIdLogsRoute,
     AppEnvEnvIdContainersContainerIdShellRoute:
       AppEnvEnvIdContainersContainerIdShellRoute,
+    AppEnvEnvIdContainersContainerIdStatsRoute:
+      AppEnvEnvIdContainersContainerIdStatsRoute,
     AppEnvEnvIdContainersContainerIdIndexRoute:
       AppEnvEnvIdContainersContainerIdIndexRoute,
   }

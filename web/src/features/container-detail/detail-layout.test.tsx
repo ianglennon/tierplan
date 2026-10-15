@@ -417,7 +417,7 @@ describe("the Logs tab", () => {
     renderAt();
     await screen.findByRole("heading", { name: "web" });
     const tabs = screen.getAllByRole("tab").map((tab) => tab.textContent);
-    expect(tabs).toEqual(["Overview", "Logs", "Shell", "Inspect"]);
+    expect(tabs).toEqual(["Overview", "Logs", "Stats", "Shell", "Inspect"]);
     expect(screen.getByRole("tab", { name: "Logs" }).getAttribute("href")).toBe(
       "/env/e1/containers/web-id/logs?node=n1",
     );
@@ -512,12 +512,24 @@ describe("the Shell tab on Bayplan's own containers (plan 04-23, D-36)", () => {
   });
 });
 
+describe("the Stats tab", () => {
+  it("follows Logs and keeps the node in its address (plan 06-32)", async () => {
+    renderAt();
+    await screen.findByRole("heading", { name: "web" });
+    const tabs = screen.getAllByRole("tab").map((tab) => tab.textContent);
+    expect(tabs.indexOf("Stats")).toBe(tabs.indexOf("Logs") + 1);
+    expect(screen.getByRole("tab", { name: "Stats" }).getAttribute("href")).toBe(
+      "/env/e1/containers/web-id/stats?node=n1",
+    );
+  });
+});
+
 describe("the Inspect tab", () => {
   it("is the last tab and keeps the node in its address", async () => {
     renderAt();
     await screen.findByRole("heading", { name: "web" });
     const tabs = screen.getAllByRole("tab").map((tab) => tab.textContent);
-    expect(tabs).toEqual(["Overview", "Logs", "Shell", "Inspect"]);
+    expect(tabs).toEqual(["Overview", "Logs", "Stats", "Shell", "Inspect"]);
     expect(screen.getByRole("tab", { name: "Inspect" }).getAttribute("href")).toBe(
       "/env/e1/containers/web-id/inspect?node=n1",
     );

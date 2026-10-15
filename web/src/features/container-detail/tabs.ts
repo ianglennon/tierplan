@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 // The tabs of the container detail page, in the order they show: Overview, Logs,
-// Shell, Inspect (UI-SPEC "Container detail"). Each later plan adds its own entry
+// Stats, Shell, Inspect (UI-SPEC "Container detail"). Each later plan adds its own entry
 // here, in that order, and its route file under containers_.$containerId.*.
 export interface ContainerTab {
   id: string;
@@ -11,6 +11,7 @@ export interface ContainerTab {
   to:
     | "/env/$envId/containers/$containerId"
     | "/env/$envId/containers/$containerId/logs"
+    | "/env/$envId/containers/$containerId/stats"
     | "/env/$envId/containers/$containerId/shell"
     | "/env/$envId/containers/$containerId/inspect";
   // The i18n key of the tab's label.
@@ -34,6 +35,12 @@ export const CONTAINER_TABS = [
     id: "logs",
     to: "/env/$envId/containers/$containerId/logs",
     labelKey: "containerdetail.tabs.logs",
+    exact: false,
+  },
+  {
+    id: "stats",
+    to: "/env/$envId/containers/$containerId/stats",
+    labelKey: "stats.title",
     exact: false,
   },
   {

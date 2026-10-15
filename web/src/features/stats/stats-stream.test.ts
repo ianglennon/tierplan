@@ -8,6 +8,7 @@ import {
   createStatsStream,
   HIDDEN_CLOSE_MS,
   STATS_RECONNECT_DELAYS_MS,
+  type StatsStream,
   type StatsStreamOptions,
   type StatsStreamState,
   statsStreamUrl,
@@ -23,7 +24,11 @@ beforeEach(() => {
   vi.stubGlobal("EventSource", FakeEventSource);
 });
 
+const opened: StatsStream[] = [];
+
 afterEach(() => {
+  // A stream listens to the tab for as long as it is open; none may outlive its test.
+  for (const s of opened.splice(0)) s.close();
   setHidden(false);
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -47,6 +52,7 @@ function open(extra: Partial<StatsStreamOptions> = {}) {
     now: () => 1234,
     ...extra,
   });
+  opened.push(stream);
   const source = (n = 0): FakeEventSource => {
     const s = FakeEventSource.instances[n];
     if (!s) throw new Error(`no source ${n}`);

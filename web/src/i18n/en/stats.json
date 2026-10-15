@@ -1,0 +1,51 @@
+{
+  "stats": {
+    "title": "Stats",
+    "surface": "Live resource use of {{name}}",
+    "note": "Live from each node, every 2 seconds. The last 5 minutes are kept in this browser tab and clear when you leave.",
+    "waiting": "Waiting for the first sample…",
+    "paused": "Paused while this tab is hidden.",
+    "closed": {
+      "failed": "Stats stopped. Reload the page to try again.",
+      "access_lost": "Your access changed. Stats were closed.",
+      "not_running": "Stats stopped because the container isn't running."
+    },
+    "notReporting": "{{node}} isn't reporting right now. Stats resume when it does.",
+    "stopped": "The container stopped. Stats resume when it starts.",
+    "empty": {
+      "title": "{{name}} isn't running",
+      "body": "Start it to see its stats."
+    },
+    "tiles": {
+      "label": "Current values",
+      "cpu": "CPU",
+      "cpuHint": "Percent of one core. 100% is one core fully used.",
+      "memory": "Memory",
+      "memoryLimit": "{{percent}}% of a {{size}} limit",
+      "memoryNoLimit": "No limit set",
+      "network": "Network",
+      "networkIn": "In {{rate}}",
+      "networkOut": "Out {{rate}}",
+      "block": "Block I/O",
+      "blockRead": "Read {{rate}}",
+      "blockWrite": "Write {{rate}}"
+    },
+    "charts": {
+      "cpu": "CPU",
+      "memory": "Memory",
+      "network": "Network in and out",
+      "block": "Block I/O read and write",
+      "ago": "5 min ago",
+      "now": "now",
+      "limit": "Limit {{size}}",
+      "in": "In",
+      "out": "Out",
+      "read": "Read",
+      "write": "Write",
+      "loading": "Loading the chart",
+      "summary": "{{title}}, now {{now}}, highest {{high}} in the last 5 minutes",
+      "summaryWaiting": "{{title}}, waiting for the first sample"
+    },
+    "thisNode": "This node"
+  }
+}
