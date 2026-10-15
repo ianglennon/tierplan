@@ -123,7 +123,7 @@ func validateBody(kind BodyKind, r io.Reader, env bodyEnv) ([]byte, error) {
 	case BodyNetworkDisconnect:
 		clean, err = validateNetworkDisconnect(raw)
 	case BodyVolumeCreate:
-		clean, err = validateVolumeCreate(raw)
+		clean, err = validateVolumeCreate(raw, env)
 	case BodyServiceSpec:
 		clean, err = validateServiceSpec(raw, env)
 	case BodyNodeSpec:
@@ -383,7 +383,10 @@ func validateNetworkDisconnect(raw []byte) (network.DisconnectRequest, error) {
 	return clean, nil
 }
 
-func validateVolumeCreate(raw []byte) (volume.CreateRequest, error) {
+// validateVolumeCreate rebuilds a volume create from its allowlisted fields. Unless the
+// host owner opted in, it also refuses a volume whose options mount the host or whose
+// driver is a plugin (errHostPolicy), so a later service cannot mount it by name.
+func validateVolumeCreate(raw []byte, env bodyEnv) (volume.CreateRequest, error) {
 	var in volume.CreateRequest
 	if err := decodeStrict(raw, &in); err != nil {
 		return in, err
@@ -409,6 +412,11 @@ func validateVolumeCreate(raw []byte) (volume.CreateRequest, error) {
 	}
 	if err := checkMap("Labels", clean.Labels); err != nil {
 		return in, err
+	}
+	if !env.policy.AllowPrivilegedServices {
+		if found := volumeEscalation(clean); found != "" {
+			return in, fmt.Errorf("%w: %w: %s", errBodyRefused, errHostPolicy, found)
+		}
 	}
 	return clean, nil
 }

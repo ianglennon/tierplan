@@ -57,7 +57,9 @@ type Policy struct {
 	// allowlist says.
 	ReadOnly bool
 	// AllowPrivilegedServices lets a service spec that gives tasks host access
-	// through (BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES).
+	// through, and a volume create that mounts a host path or a device or names a
+	// volume plugin, on every agent-managed host: a swarm node or a standalone host
+	// (BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES).
 	AllowPrivilegedServices bool
 }
 

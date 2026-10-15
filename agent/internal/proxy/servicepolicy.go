@@ -11,14 +11,16 @@ import (
 
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/api/types/volume"
 
 	"github.com/ianglennon/bayplan/proto/hostpath"
 )
 
-// errHostPolicy is the refusal of a service spec that gives tasks host access on a
-// host whose owner did not set BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES (D-36). The
-// handler answers it 403 with the host_policy message, not as a plain allowlist
-// refusal, so the server can tell the user which setting lifts it.
+// errHostPolicy is the refusal of a service spec that gives tasks host access, or of a
+// volume create that would mount the host or name a volume plugin, on a host whose
+// owner did not set BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES (D-36, and D-36/D-38 as
+// amended). The handler answers it 403 with the host_policy message, not as a plain
+// allowlist refusal, so the server can tell the user which setting lifts it.
 var errHostPolicy = errors.New("the service spec gives tasks host access")
 
 // networkLookup answers the name and driver of a network on the agent's own
@@ -101,6 +103,23 @@ func escalations(ctx context.Context, spec swarm.ServiceSpec, lookup networkLook
 		}
 	}
 	return out
+}
+
+// volumeEscalation names what gives tasks host access in a volume create, or returns
+// "" when nothing does. It is the volume-create half of the D-36 host-access
+// definition (D-36/D-38 as amended): a volume created here can be mounted by name in
+// a service whose spec carries no host path for escalations to judge. A local volume
+// (named or not) whose options mount a device that fails hostpath.Bad is
+// "DriverOpts.device"; any other driver is "Driver", because a plugin's options cannot
+// be judged and so are host access until the owner opts in.
+func volumeEscalation(req volume.CreateRequest) string {
+	if name := strings.ToLower(strings.TrimSpace(req.Driver)); name != "" && name != "local" {
+		return "Driver"
+	}
+	if dev, mounted := hostpath.LocalDeviceMounted(req.DriverOpts); mounted && hostpath.Bad(dev) {
+		return "DriverOpts.device"
+	}
+	return ""
 }
 
 // checkHostPolicy refuses a spec that gives tasks host access unless the host
