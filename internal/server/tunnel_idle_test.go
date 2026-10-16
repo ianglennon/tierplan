@@ -34,11 +34,13 @@ func TestTunnelIdleLongerThanTheReadTimeoutStaysConnected(t *testing.T) {
 		t.Fatal("no session")
 	}
 
-	time.Sleep(3 * readTimeout)
+	// This asserts an absence, so time has to pass: the session must stay open for
+	// three read timeouts. It returns as soon as the session ends, which is the
+	// failure, instead of waiting out the whole period.
 	select {
 	case <-s.Done():
-		t.Fatalf("the tunnel was closed after %v idle with a ReadTimeout of %v", 3*readTimeout, readTimeout)
-	default:
+		t.Fatalf("the tunnel was closed within %v idle with a ReadTimeout of %v", 3*readTimeout, readTimeout)
+	case <-time.After(3 * readTimeout):
 	}
 
 	client := &http.Client{Transport: &http.Transport{DialContext: s.Transport().DialContext}}

@@ -37,6 +37,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/store/sqlc"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 func testConfig(t *testing.T, env map[string]string) config.Config {
@@ -121,17 +122,13 @@ func TestReadyzTurns503WhenTheDataDirDisappears(t *testing.T) {
 	// Background work started by Build (the work-file sweep, SQLite's WAL) can
 	// write into the directory while it is being removed; keep removing until it
 	// is gone.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
+	testsupport.Poll(t, 5*time.Second, "the data directory to be removed", func() (bool, string) { // testsupport: external, the store's WAL and the sweep writing into the directory while it is removed
 		err := os.RemoveAll(dir)
-		if err == nil {
-			break
+		if err != nil {
+			return false, err.Error()
 		}
-		if time.Now().After(deadline) {
-			t.Fatal(err)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+		return true, ""
+	})
 	if code, body := httpGet(t, ts.URL+"/readyz"); code != 503 || body != "not ready" {
 		t.Fatalf("/readyz after removing the data dir = %d %q, want 503 not ready", code, body)
 	}
@@ -594,19 +591,15 @@ func TestBuildAddsNoEnvironmentAndNeverContactsDockerUntilAnAdminOptsIn(t *testi
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = srv.Close() })
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		got, err := srv.Environments().Get(context.Background(), added.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got.Status.State == envs.StateOnline {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the restarted server never monitored the environment: %+v", got.Status)
-		}
-		time.Sleep(5 * time.Millisecond)
+	if st, err := srv.monitor.AwaitStatus(testsupport.Context(t), added.ID, func(st envs.Status) bool { return st.State == envs.StateOnline }); err != nil {
+		t.Fatalf("the restarted server never monitored the environment: %+v: %v", st, err)
+	}
+	got, err := srv.Environments().Get(context.Background(), added.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.State != envs.StateOnline {
+		t.Fatalf("the restarted server lists the environment as %+v after the monitor saw it online", got.Status)
 	}
 	env, err := srv.Environments().Resolve(context.Background(), added.ID)
 	if err != nil || env.Name != "node-1" {
@@ -660,11 +653,8 @@ func TestBuildFeedsEventsPerEnvironmentAndShutdownDoesNotWaitForAnOpenStream(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	for deadline := time.Now().Add(10 * time.Second); len(srv.Hub().Recent(added.ID, 10)) == 0; {
-		if time.Now().After(deadline) {
-			t.Fatal("the hub never received the daemon's buffered event")
-		}
-		time.Sleep(5 * time.Millisecond)
+	if err := srv.Hub().Await(testsupport.Context(t), func() bool { return len(srv.Hub().Recent(added.ID, 10)) > 0 }); err != nil {
+		t.Fatalf("the hub never received the daemon's buffered event: %v", err)
 	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -983,7 +973,7 @@ func TestAStreamingResponseOutlivesTheReadTimeout(t *testing.T) {
 		for range chunks {
 			_, _ = w.Write([]byte("x"))
 			fl.Flush()
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(100 * time.Millisecond) //nolint:forbidigo // the handler streams one byte every 100 ms; the pace is what the read-timeout check measures
 		}
 	}))
 	resp, err := http.Get("http://" + addr + "/stream") //nolint:noctx // test against a loopback listener
