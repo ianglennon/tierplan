@@ -98,6 +98,10 @@ type Controls struct {
 	// TickInterval is how often Idle and StillAllowed are consulted. Zero means 5
 	// seconds.
 	TickInterval time.Duration
+	// Ticks, when set, drives the checks of Idle and StillAllowed instead of a ticker of
+	// TickInterval: each value received is one tick. It is for tests, which send exactly
+	// the ticks they mean; production leaves it nil.
+	Ticks <-chan time.Time
 }
 
 func (c Controls) withDefaults() Controls {
@@ -344,14 +348,18 @@ func pinger(ctx context.Context, conn *websocket.Conn, ctl Controls) string {
 // closing frame is sent before the reason is returned. Both the limit and the access
 // are read on every tick, never captured when the shell opened.
 func watcher(ctx context.Context, conn *websocket.Conn, s *Session, ctl Controls) string {
-	t := time.NewTicker(ctl.TickInterval)
-	defer t.Stop()
+	ticks := ctl.Ticks
+	if ticks == nil {
+		t := time.NewTicker(ctl.TickInterval)
+		defer t.Stop()
+		ticks = t.C
+	}
 	var warnedFor time.Time // the activity the last warning was sent for
 	for {
 		select {
 		case <-ctx.Done():
 			return ""
-		case <-t.C:
+		case <-ticks:
 		}
 		if ctl.StillAllowed != nil && !ctl.StillAllowed() {
 			writeControl(ctx, conn, ctl, Control{Type: "closed", Reason: ReasonAccessLost})

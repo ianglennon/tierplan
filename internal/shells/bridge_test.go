@@ -19,6 +19,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // The bridge between a WebSocket and a session's process, over a real HTTP server and
@@ -140,18 +141,6 @@ func (r *rig) send(t *testing.T, typ websocket.MessageType, data string) {
 	}
 }
 
-// waitFor polls until cond holds.
-func waitFor(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}
-
 func TestOutputReachesTheBrowserAsBinaryAndInputReachesTheProcess(t *testing.T) {
 	x := newFakeExec()
 	r := newRig(t, Controls{}, x)
@@ -160,7 +149,7 @@ func TestOutputReachesTheBrowserAsBinaryAndInputReachesTheProcess(t *testing.T) 
 	r.readUntil(t, "prompt$ ")
 	r.send(t, websocket.MessageBinary, "ls\n")
 	r.send(t, websocket.MessageBinary, "pwd\n")
-	waitFor(t, "the input to reach the process", func() bool { return x.written() == "ls\npwd\n" })
+	x.await(t, "the input to reach the process", func() bool { return x.written() == "ls\npwd\n" })
 }
 
 func TestTheProcessEndingSendsTheExitCodeAndClosesTheSocketNormally(t *testing.T) {
@@ -274,12 +263,12 @@ func TestAnUnknownTextFrameAndAMalformedResizeAreIgnored(t *testing.T) {
 	// A good one after them: it is the only one to reach the process, and the session
 	// is alive to take it.
 	r.send(t, websocket.MessageText, `{"type":"resize","cols":100,"rows":30}`)
-	waitFor(t, "the good resize", func() bool { return len(x.sizes()) == 1 })
+	x.await(t, "the good resize", func() bool { return len(x.sizes()) == 1 })
 	if got := x.sizes(); got[0] != [2]uint{100, 30} {
 		t.Errorf("resizes = %v, want only 100x30", got)
 	}
 	r.send(t, websocket.MessageBinary, "still alive\n")
-	waitFor(t, "input after the ignored frames", func() bool { return x.written() == "still alive\n" })
+	x.await(t, "input after the ignored frames", func() bool { return x.written() == "still alive\n" })
 }
 
 func TestAMissingExecutableIsReportedAsNoShell(t *testing.T) {
@@ -394,12 +383,14 @@ type idleRig struct {
 
 	mu     sync.Mutex
 	output bytes.Buffer
+	// outSig is signalled (without blocking) after each chunk of output reaches the client.
+	outSig chan struct{}
 }
 
 func newIdleRig(t *testing.T, limit time.Duration) *idleRig {
 	t.Helper()
 	clk := newFakeClock()
-	ir := &idleRig{clk: clk, frames: make(chan Control, 16)}
+	ir := &idleRig{clk: clk, frames: make(chan Control, 16), outSig: make(chan struct{}, 1)}
 	ir.limit.Store(int64(limit))
 	ir.rig = newRig(t, Controls{
 		Clock: clk, TickInterval: 5 * time.Millisecond,
@@ -416,6 +407,10 @@ func newIdleRig(t *testing.T, limit time.Duration) *idleRig {
 				ir.mu.Lock()
 				ir.output.Write(data)
 				ir.mu.Unlock()
+				select {
+				case ir.outSig <- struct{}{}:
+				default:
+				}
 				continue
 			}
 			var c Control
@@ -431,6 +426,20 @@ func (ir *idleRig) printed() string {
 	ir.mu.Lock()
 	defer ir.mu.Unlock()
 	return ir.output.String()
+}
+
+// awaitOutput waits until cond holds, re-checking it after each chunk of output that reaches
+// the client.
+func (ir *idleRig) awaitOutput(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	for !cond() {
+		select {
+		case <-ir.outSig:
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for %s", what)
+		}
+	}
 }
 
 // next waits for the next control frame.
@@ -491,7 +500,7 @@ func TestAKeystrokeAfterTheWarningStartsTheSilenceAfresh(t *testing.T) {
 		t.Fatalf("frame = %+v, want idle_warning", c)
 	}
 	ir.send(t, websocket.MessageBinary, "x")
-	waitFor(t, "the keystroke to reach the process", func() bool { return ir.exec.written() == "x" })
+	ir.exec.await(t, "the keystroke to reach the process", func() bool { return ir.exec.written() == "x" })
 	ir.clk.Advance(4*time.Minute + 59*time.Second) // nearly a stretch of silence again
 	ir.none(t, 150*time.Millisecond)               // not closed, and no warning yet
 	ir.clk.Advance(time.Second)
@@ -511,7 +520,7 @@ func TestOutputFromTheShellAlsoStartsTheSilenceAfresh(t *testing.T) {
 		t.Fatalf("frame = %+v, want idle_warning", c)
 	}
 	go ir.exec.Print([]byte("tick\r\n"))
-	waitFor(t, "the output", func() bool { return strings.Contains(ir.printed(), "tick") })
+	ir.awaitOutput(t, "the output", func() bool { return strings.Contains(ir.printed(), "tick") })
 	ir.clk.Advance(4*time.Minute + 59*time.Second)
 	ir.none(t, 150*time.Millisecond) // five minutes since the printing would be a warning
 	ir.clk.Advance(time.Second)
@@ -565,19 +574,42 @@ func TestAShellWhoseUserLosesAccessIsClosedWithReasonAccessLostWithinATickAndKee
 	var allowed atomic.Bool
 	allowed.Store(true)
 	x := newFakeExec()
-	r := newRig(t, Controls{TickInterval: 20 * time.Millisecond, StillAllowed: allowed.Load}, x)
+	// The test sends the ticks, and StillAllowed reports each check it answers, so the test
+	// knows a check is over before it changes the answer.
+	ticks := make(chan time.Time)
+	checked := make(chan struct{}, 16)
+	ctx := testsupport.Context(t)
+	tick := func() {
+		t.Helper()
+		select {
+		case ticks <- time.Time{}:
+		case <-ctx.Done():
+			t.Fatal("the bridge took no tick")
+		}
+	}
+	r := newRig(t, Controls{Ticks: ticks, StillAllowed: func() bool {
+		ok := allowed.Load()
+		checked <- struct{}{}
+		return ok
+	}}, x)
 	go x.Print([]byte("prompt$ "))
 	r.readUntil(t, "prompt$ ")
-	time.Sleep(100 * time.Millisecond) // several ticks while still allowed; a close now would be the frame read next
+	// Several ticks while still allowed: each is checked, and none closes the shell, so a
+	// close from here on is the frame read next.
+	for range 3 {
+		tick()
+		select {
+		case <-checked:
+		case <-ctx.Done():
+			t.Fatal("the bridge did not check the access on a tick")
+		}
+	}
 
 	allowed.Store(false)
-	start := time.Now()
+	tick() // the first tick after the access went closes the shell
 	c := r.control(t)
 	if c.Type != "closed" || c.Reason != ReasonAccessLost {
 		t.Fatalf("frame = %+v, want closed with reason access_lost", c)
-	}
-	if took := time.Since(start); took > time.Second {
-		t.Errorf("the shell took %v to close after the access went", took)
 	}
 	r.drain()
 	if got := r.gotReason(t); got != ReasonAccessLost {
