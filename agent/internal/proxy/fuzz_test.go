@@ -709,6 +709,18 @@ func FuzzBody(f *testing.F) {
 			if len(found) > 0 {
 				t.Fatalf("a service spec with the named volume mounts %v was forwarded: %.200s", found, out)
 			}
+			// An inline local volume is judged by the oracle, apart from the rule.
+			if cs := spec.TaskTemplate.ContainerSpec; cs != nil {
+				for i, m := range cs.Mounts {
+					if m.VolumeOptions == nil || m.VolumeOptions.DriverConfig == nil {
+						continue
+					}
+					dc := m.VolumeOptions.DriverConfig
+					if reason := volumeOracle(dc.Name, dc.Options); reason != "" {
+						t.Fatalf("a service spec with host access in the inline volume of mount %d (%s) was forwarded: %.200s", i, reason, out)
+					}
+				}
+			}
 		}
 		if k == BodyServiceSpec {
 			// A named volume the engine does not have is created from the mount's own
@@ -729,6 +741,17 @@ func FuzzBody(f *testing.F) {
 			}
 			if found := pluginVolumes(spec); len(found) > 0 {
 				t.Fatalf("a service spec with the plugin volume mounts %v was forwarded for an absent volume: %.200s", found, again)
+			}
+			if cs := spec.TaskTemplate.ContainerSpec; cs != nil {
+				for i, m := range cs.Mounts {
+					if m.VolumeOptions == nil || m.VolumeOptions.DriverConfig == nil {
+						continue
+					}
+					dc := m.VolumeOptions.DriverConfig
+					if reason := volumeOracle(dc.Name, dc.Options); reason != "" {
+						t.Fatalf("a service spec with host access in the inline volume of mount %d (%s) was forwarded for an absent volume: %.200s", i, reason, again)
+					}
+				}
 			}
 		}
 	})
