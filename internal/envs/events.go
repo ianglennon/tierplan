@@ -71,6 +71,47 @@ type Hub struct {
 	mu     sync.Mutex
 	feeds  map[string]*feed
 	closed bool
+
+	// changed is closed and replaced whenever something Await may be waiting for happens: a
+	// feed opens or closes, or an event is buffered. Its own mutex is a leaf, so a feed
+	// may notify while holding its own lock.
+	changeMu sync.Mutex
+	changed  chan struct{}
+}
+
+// notify wakes every Await.
+func (h *Hub) notify() {
+	h.changeMu.Lock()
+	defer h.changeMu.Unlock()
+	if h.changed != nil {
+		close(h.changed)
+		h.changed = nil
+	}
+}
+
+// Await returns nil once cond is true, and the context's error if ctx ends first. cond is
+// evaluated now and again after every change: a feed opening or closing (so an Inject that
+// reported false because the target was not yet monitored now succeeds) and every event
+// buffered, whether it came from the daemon or from Inject. It never polls, so the deadline in
+// ctx only guards against a hang. cond may call Recent, Inject and Subscribe but not Await.
+func (h *Hub) Await(ctx context.Context, cond func() bool) error {
+	for {
+		// Taken before cond is evaluated, so a change in between is not missed.
+		h.changeMu.Lock()
+		if h.changed == nil {
+			h.changed = make(chan struct{})
+		}
+		ch := h.changed
+		h.changeMu.Unlock()
+		if cond() {
+			return nil
+		}
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 // feed is the state of one environment's stream.
@@ -78,6 +119,8 @@ type feed struct {
 	env    string
 	cancel context.CancelFunc
 	done   chan struct{}
+	// changed tells the hub's Await that an event was buffered; nil in a feed built bare.
+	changed func()
 
 	mu sync.Mutex
 	// ring is the buffered events, oldest first.
@@ -135,10 +178,11 @@ func (h *Hub) Start(envID string) {
 	}
 	ctx, cancel := context.WithCancel(h.ctx)
 	f := &feed{
-		env: envID, cancel: cancel, done: make(chan struct{}),
+		env: envID, cancel: cancel, done: make(chan struct{}), changed: h.notify,
 		seen: map[string]struct{}{}, subs: map[*subscriber]struct{}{},
 	}
 	h.feeds[envID] = f
+	h.notify()
 	h.wg.Go(func() {
 		defer close(f.done)
 		h.run(ctx, f)
@@ -158,6 +202,7 @@ func (h *Hub) Stop(envID string) {
 	f.cancel()
 	<-f.done
 	f.closeSubscribers()
+	h.notify()
 }
 
 // Close ends every stream and closes every subscriber. A subscriber that
@@ -178,6 +223,7 @@ func (h *Hub) Close() {
 	for _, f := range feeds {
 		f.closeSubscribers()
 	}
+	h.notify()
 }
 
 // Subscribe returns the buffered events of envID, oldest first, and a channel
@@ -370,6 +416,14 @@ func (f *feed) ingest(snaps *Snapshots, ev dockerx.EventRow) {
 		snaps.Invalidate(f.env)
 	}
 	f.fanOutLocked(ev)
+	f.notifyLocked()
+}
+
+// notifyLocked tells the hub an event was buffered. The caller holds f.mu.
+func (f *feed) notifyLocked() {
+	if f.changed != nil {
+		f.changed()
+	}
 }
 
 // inject records an event of Bayplan's own. Unlike ingest it leaves the resume
@@ -385,6 +439,7 @@ func (f *feed) inject(ev dockerx.EventRow) {
 	f.remember(ev.ID)
 	f.addLocked(ev)
 	f.fanOutLocked(ev)
+	f.notifyLocked()
 }
 
 // addLocked puts ev in the ring, dropping the oldest when it is full. The caller

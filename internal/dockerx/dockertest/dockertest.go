@@ -590,6 +590,57 @@ type Fake struct {
 	evHistory []FakeEvent
 	evSubs    map[*eventSub]struct{}
 	evQueries []url.Values
+
+	// await wakes Await whenever the fake served or finished a request, was reconfigured or
+	// stopped, or a long-lived handler changed a counter a test reads.
+	await awaitHub
+}
+
+// awaitHub is a change broadcast: notify wakes everyone who took the channel before it.
+// Its mutex is a leaf, so notify may be called with any other lock of the fake held.
+type awaitHub struct {
+	mu sync.Mutex
+	ch chan struct{}
+}
+
+func (a *awaitHub) channel() <-chan struct{} {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.ch == nil {
+		a.ch = make(chan struct{})
+	}
+	return a.ch
+}
+
+func (a *awaitHub) notify() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.ch != nil {
+		close(a.ch)
+		a.ch = nil
+	}
+}
+
+// Await returns nil once cond is true, and ctx's error if ctx ends first. cond is evaluated
+// now and again after every change of the fake: a request served or finished (so a counter a
+// handler changes, such as writes in flight, is seen after the handler returns), a
+// Reconfigure or Stop, and each change a long-lived handler makes while it runs (an event
+// stream, a log or service log follow, a stats stream or an exec session opening or ending).
+// It never polls, so the deadline in ctx only guards against a hang. cond may read the
+// fake's counters (for example ServiceLogFollows() == 1) but must not call Await.
+func (f *Fake) Await(ctx context.Context, cond func() bool) error {
+	for {
+		// The channel is taken before cond is evaluated, so a change in between is not missed.
+		ch := f.await.channel()
+		if cond() {
+			return nil
+		}
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 var versionPrefix = regexp.MustCompile(`^/v(\d+)\.(\d+)(/.*)$`)
@@ -655,6 +706,7 @@ func (f *Fake) Stop() {
 	srv := f.srv
 	f.srv = nil
 	f.mu.Unlock()
+	defer f.await.notify()
 	if srv != nil {
 		// An open /events stream would keep Close waiting.
 		f.DropEventStreams()
@@ -711,6 +763,7 @@ func (f *Fake) Reconfigure(cfg FakeConfig) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.cfg = cfg.withDefaults()
+	f.await.notify()
 }
 
 func (f *Fake) config() FakeConfig {
@@ -724,6 +777,8 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.requests = append(f.requests, r.URL.Path)
 	f.mu.Unlock()
+	f.await.notify()
+	defer f.await.notify()
 
 	p := r.URL.Path
 	if p == "/_ping" {
@@ -1200,10 +1255,12 @@ func (f *Fake) serveEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	f.evSubs[sub] = struct{}{}
 	f.evMu.Unlock()
+	f.await.notify()
 	defer func() {
 		f.evMu.Lock()
 		delete(f.evSubs, sub)
 		f.evMu.Unlock()
+		f.await.notify()
 	}()
 
 	rc := http.NewResponseController(w)

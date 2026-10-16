@@ -235,10 +235,12 @@ func (f *Fake) serveServiceLogs(w http.ResponseWriter, r *http.Request, p string
 		l.mu.Lock()
 		l.follows++
 		l.mu.Unlock()
+		f.await.notify()
 		defer func() {
 			l.mu.Lock()
 			l.follows--
 			l.mu.Unlock()
+			f.await.notify()
 		}()
 	}
 	for follow {

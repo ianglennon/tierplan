@@ -100,10 +100,12 @@ func (f *Fake) serveStats(w http.ResponseWriter, r *http.Request, p string, cfg 
 	st.inflight++
 	st.maxInflight = max(st.maxInflight, st.inflight)
 	f.mu.Unlock()
+	f.await.notify()
 	defer func() {
 		f.mu.Lock()
 		st.inflight--
 		f.mu.Unlock()
+		f.await.notify()
 	}()
 	if cfg.PolicyDeny {
 		writeJSON(w, http.StatusForbidden, map[string]string{"message": "agent_policy_denied: " + r.Method + " " + r.URL.Path})
