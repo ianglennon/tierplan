@@ -112,7 +112,7 @@ func TestNodeLabelImpactRefusals(t *testing.T) {
 	sf.svc.WithClusters(sf.clusters)
 	sf.h = sf.build(t)
 	se := sf.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return sf.mon.Status(se.ID).State == envs.StateOnline })
+	awaitOnline(t, sf.mon, se.ID)
 	if rec := sf.labelImpact(t, se, "node-1", `{"labels":{}}`); rec.code != http.StatusConflict || rec.ptyp != "not_a_swarm" {
 		t.Errorf("a standalone host = %d %s (%s), want 409 not_a_swarm", rec.code, rec.body, rec.ptyp)
 	}
@@ -260,7 +260,7 @@ func TestNodeLabelsOnAStandaloneHostAreNotASwarm(t *testing.T) {
 	sf.svc.WithClusters(sf.clusters)
 	sf.h = sf.build(t)
 	se := sf.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return sf.mon.Status(se.ID).State == envs.StateOnline })
+	awaitOnline(t, sf.mon, se.ID)
 	if rec := sf.setLabels(t, se, "node-1", `{"labels":{},"version":1}`); rec.code != http.StatusConflict || rec.ptyp != "not_a_swarm" {
 		t.Errorf("labels = %d %s (%s), want 409 not_a_swarm", rec.code, rec.body, rec.ptyp)
 	}

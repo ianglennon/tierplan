@@ -88,7 +88,7 @@ func naEnv(t *testing.T, tune func(*dockertest.FakeConfig)) (*envFix, envBody) {
 	f.svc.WithClusters(f.clusters)
 	f.h = f.build(t)
 	e := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	return f, e
 }
 
@@ -213,7 +213,7 @@ func TestNodeImpactRefusals(t *testing.T) {
 	sf.svc.WithClusters(sf.clusters)
 	sf.h = sf.build(t)
 	se := sf.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return sf.mon.Status(se.ID).State == envs.StateOnline })
+	awaitOnline(t, sf.mon, se.ID)
 	if rec := sf.nodeImpact(t, se, "node-1", "drain"); rec.code != http.StatusConflict || rec.ptyp != "not_a_swarm" {
 		t.Errorf("a standalone host = %d %s (%s), want 409 not_a_swarm", rec.code, rec.body, rec.ptyp)
 	}
@@ -458,7 +458,7 @@ func TestNodeActionsOnAStandaloneHostAreNotASwarm(t *testing.T) {
 	sf.svc.WithClusters(sf.clusters)
 	sf.h = sf.build(t)
 	se := sf.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return sf.mon.Status(se.ID).State == envs.StateOnline })
+	awaitOnline(t, sf.mon, se.ID)
 	if rec := sf.setAvailability(t, se, "node-1", `{"availability":"drain","version":1}`); rec.code != http.StatusConflict || rec.ptyp != "not_a_swarm" {
 		t.Errorf("availability = %d %s (%s), want 409 not_a_swarm", rec.code, rec.body, rec.ptyp)
 	}
@@ -503,15 +503,15 @@ func naAgentSwarm(t *testing.T, both bool) (*agentFix, tunneltest.Environment, *
 
 func TestNodeImpactWarnsWhenTheNodeHasTheOnlyConnectedManagerAgent(t *testing.T) {
 	f, env, m1 := naAgentSwarm(t, false)
-	var b niBody
-	waitFor(t, "the impact to name the only manager agent", func() bool {
-		rec := f.get(t, env.ID, "nodes/node-mgr-1/impact?action=drain")
-		if rec.code != http.StatusOK {
-			return false
-		}
-		b = decode[niBody](t, rec)
-		return slices.Contains(b.Warnings, "only_manager_agent")
-	})
+	// naAgentSwarm returned with the manager agent probed, so the impact is read once.
+	rec := f.get(t, env.ID, "nodes/node-mgr-1/impact?action=drain")
+	if rec.code != http.StatusOK {
+		t.Fatalf("impact: %d %s", rec.code, rec.body)
+	}
+	b := decode[niBody](t, rec)
+	if !slices.Contains(b.Warnings, "only_manager_agent") {
+		t.Fatalf("impact = %+v, want it to name the only manager agent", b)
+	}
 	if !b.NeedsConfirm {
 		t.Errorf("impact = %+v, want the typed confirm", b)
 	}
@@ -536,19 +536,20 @@ func TestNodeImpactWarnsWhenTheNodeHasTheOnlyConnectedManagerAgent(t *testing.T)
 
 func TestNodeImpactDoesNotWarnWhenAnotherManagerAgentIsConnected(t *testing.T) {
 	f, env, _ := naAgentSwarm(t, true)
-	waitFor(t, "both manager agents to be mapped", func() bool {
-		rec := f.get(t, env.ID, "nodes")
-		if rec.code != http.StatusOK {
-			return false
+	// naAgentSwarm returned with both manager agents probed, so the node list is read once.
+	rec := f.get(t, env.ID, "nodes")
+	if rec.code != http.StatusOK {
+		t.Fatalf("nodes: %d %s", rec.code, rec.body)
+	}
+	reporting := 0
+	for _, it := range decode[ndList](t, rec).Items {
+		if it.AgentReporting {
+			reporting++
 		}
-		n := 0
-		for _, it := range decode[ndList](t, rec).Items {
-			if it.AgentReporting {
-				n++
-			}
-		}
-		return n == 2
-	})
+	}
+	if reporting != 2 {
+		t.Fatalf("%d nodes have a reporting agent, want both manager agents mapped: %s", reporting, rec.body)
+	}
 	for _, node := range []string{"node-mgr-1", "node-mgr-2"} {
 		if b := niOf(t, f.get(t, env.ID, "nodes/"+node+"/impact?action=drain")); slices.Contains(b.Warnings, "only_manager_agent") || b.NeedsConfirm {
 			t.Errorf("%s impact = %+v, want no only_manager_agent warning with two manager agents connected", node, b)
@@ -717,7 +718,7 @@ func TestRemoveNodeOnAStandaloneHostIsNotASwarm(t *testing.T) {
 	sf.svc.WithClusters(sf.clusters)
 	sf.h = sf.build(t)
 	se := sf.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return sf.mon.Status(se.ID).State == envs.StateOnline })
+	awaitOnline(t, sf.mon, se.ID)
 	if rec := sf.removeNode(t, se, "node-1", "node-1"); rec.code != http.StatusConflict || rec.ptyp != "not_a_swarm" {
 		t.Errorf("remove = %d %s (%s), want 409 not_a_swarm", rec.code, rec.body, rec.ptyp)
 	}

@@ -264,7 +264,7 @@ func TestPlacementIsForASwarmAndForAViewer(t *testing.T) {
 	solo.svc.WithClusters(solo.clusters)
 	solo.h = solo.build(t)
 	se := solo.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return solo.mon.Status(se.ID).State == envs.StateOnline })
+	awaitOnline(t, solo.mon, se.ID)
 	if rec := solo.get(t, se, "placement"); rec.code != http.StatusConflict || rec.ptyp != "not_a_swarm" {
 		t.Errorf("a standalone host = %d %s (%s), want 409 not_a_swarm", rec.code, rec.body, rec.ptyp)
 	}

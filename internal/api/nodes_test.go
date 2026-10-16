@@ -143,7 +143,7 @@ func ndEnv(t *testing.T, services []dockertest.FakeService, tasks ...swarm.Task)
 	f.svc.WithClusters(f.clusters)
 	f.h = f.build(t)
 	e := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	return f, e
 }
 
@@ -367,7 +367,7 @@ func TestNodesAreForASwarmAndForAViewer(t *testing.T) {
 	sf.svc.WithClusters(sf.clusters)
 	sf.h = sf.build(t)
 	se := sf.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return sf.mon.Status(se.ID).State == envs.StateOnline })
+	awaitOnline(t, sf.mon, se.ID)
 	for _, path := range []string{"nodes", "nodes/node-1", "nodes/node-1/inspect", "nodes/node-1/tasks"} {
 		if rec := sf.get(t, se, path); rec.code != http.StatusConflict || rec.ptyp != "not_a_swarm" {
 			t.Errorf("GET %s on a standalone host = %d %s (%s), want 409 not_a_swarm", path, rec.code, rec.body, rec.ptyp)
@@ -432,20 +432,12 @@ func TestRunsBayplanNode(t *testing.T) {
 	// On the node of the container that is Bayplan's own, found through the agents.
 	s := newNodesSwarm(t)
 	s.whenProbed(t, envs.AgentTarget(s.m1.id), envs.AgentTarget(s.m2.id), envs.AgentTarget(s.w.id))
-	var l ndList
-	waitFor(t, "the node list", func() bool {
-		rec := s.get(t, s.env.ID, "nodes")
-		if rec.code != http.StatusOK {
-			return false
-		}
-		l = decode[ndList](t, rec)
-		for _, n := range l.Items {
-			if n.RunsBayplan {
-				return true
-			}
-		}
-		return false
-	})
+	// Every agent target has answered its first probe, so the node list is read once.
+	rec := s.get(t, s.env.ID, "nodes")
+	if rec.code != http.StatusOK {
+		t.Fatalf("nodes: %d %s", rec.code, rec.body)
+	}
+	l := decode[ndList](t, rec)
 	runs = nil
 	for _, n := range l.Items {
 		if n.RunsBayplan {
