@@ -436,6 +436,8 @@ func stepCode(err error) string {
 		return "registry_unresolved"
 	case errors.Is(err, ErrObjectsMissing):
 		return "objects_missing"
+	case errors.Is(err, ErrRevealRequired):
+		return "secret_reveal_required"
 	case errors.Is(err, dockerx.ErrServiceNotFound):
 		return "service_not_found"
 	}
