@@ -13,6 +13,9 @@
 # make e2e-copy (the clipboard fallback on an insecure origin) to the e2e job.
 # Plan 03-21 adds the upgrade job (an image swap on one volume, D-34), which edge waits for;
 # plan 03-25 adds a restore over a running container to it (D-30).
+# Plan 06.1-15 splits the web unit suite into its own job (web), so the Vitest minutes
+# are off the Go unit job's (test) critical path, and adds a failing-test summary
+# (make test-summary) to every test job.
 name: CI
 
 on:
@@ -99,6 +102,38 @@ jobs:
         with:
           name: go-test-json-${{ github.job }}
           path: .devdata/test/*.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # D-18: the web unit suite in a job of its own, shuffled with a printed seed
+  # (make test-web WEB_SEED=<seed> reproduces it). Its failing tests are named in
+  # the summary the same way as the Go jobs' (D-21).
+  web:
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          # Per runner, not ~/setup-pnpm: two runners share each VM and its home directory.
+          dest: ${{ runner.temp }}/setup-pnpm
+          package_json_file: web/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - run: pnpm -C web install --frozen-lockfile
+      - run: make test-web
+      - name: Name the failing tests
+        if: always()
+        run: make test-summary
+      - name: Upload the test results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: web-test-json
+          path: |
+            .devdata/test/web.json
+            .devdata/test/web.seed
           retention-days: 7
           if-no-files-found: ignore
 
@@ -467,7 +502,7 @@ jobs:
   # :edge pushed but unsigned (WR-11).
   edge:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [lint, test, gen-check, licences, spdx, build, integration, swarm, release-check, e2e, proxy-smoke, upgrade]
+    needs: [lint, test, web, gen-check, licences, spdx, build, integration, swarm, release-check, e2e, proxy-smoke, upgrade]
     concurrency:
       group: edge-publish
       cancel-in-progress: false

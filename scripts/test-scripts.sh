@@ -244,6 +244,20 @@ expect fail "summary-empty-file" scripts/test-summary.sh "${scratch}/empty.json"
 expect fail "summary-one-bad-file-fails-the-run" scripts/test-summary.sh "${summ}/go-pass.json" "${scratch}/no-such-results.json"
 expect_out "summary-one-bad-file-still-reads-the-rest" "No failing tests (go-pass.json)"
 
+expect pass "summary-vitest-fail" scripts/test-summary.sh "${summ}/vitest-fail.json"
+expect_out "summary-vitest-fail names the file and test" "web/src/zz-summary-fixture.test.ts > summary fixture fails with a message"
+expect_out "summary-vitest-fail names the seed" "shuffle seed 1234"
+
+# --- test-web (06.1-15, D-03, D-18): shuffled, with a seed that reproduces the run ---
+expect pass "test-web-seeded" mk test-web WEB_SEED=42
+expect_out "test-web takes the seed from WEB_SEED" "seed=42"
+expect_out "test-web shuffles with it" '--sequence.shuffle --sequence.seed=$seed'
+expect_out "test-web writes the JSON" "--outputFile.json="
+expect fail "test-web-bad-seed" env -u MAKEFLAGS -u MAKELEVEL make test-web WEB_SEED=4x2
+expect pass "test-is-go-and-web" mk test
+expect_out "test runs the Go modules" "gotest.tools/gotestsum@v1.13.0"
+expect_out "test runs the web suite" "vitest run"
+
 # --- test-go (06.1-15, D-21, D-15): every Go module through the pinned gotestsum ---
 expect pass "test-go-gotestsum" mk test-go
 expect_out "test-go uses the pinned gotestsum" "gotest.tools/gotestsum@v1.13.0"

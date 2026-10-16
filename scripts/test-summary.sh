@@ -71,7 +71,7 @@ def first_line: (. // "") | split("\n")[0];
 [ .[0].testResults[]
   | . as $f
   | ( [ ($f.assertionResults // [])[] | select(.status == "failed")
-        | {kind: "test", pkg: ($f.name | rel), test: (.fullName // .title // "?"),
+        | {kind: "test", pkg: ($f.name | rel), test: ("> " + (.fullName // .title // "?")),
            seed: $seed, detail: ((.failureMessages // [])[0] | first_line)} ]
     + (if $f.status == "failed" and (($f.assertionResults // []) | length) == 0
        then [ {kind: "package", pkg: ($f.name | rel), test: "", seed: $seed,

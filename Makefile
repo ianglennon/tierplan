@@ -21,7 +21,7 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check tidy-check test test-go test-summary test-int test-swarm smoke dev dev-go dev-web dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke
+.PHONY: web build gen gen-check tidy-check test test-go test-web test-summary test-int test-swarm smoke dev dev-go dev-web dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke
 
 web:
 	pnpm -C web install --frozen-lockfile
@@ -63,9 +63,10 @@ GOTESTSUM_VERSION := v1.13.0
 GOTESTSUM := go run gotest.tools/gotestsum@$(GOTESTSUM_VERSION)
 TEST_RESULTS := .devdata/test
 
-# The whole unit suite. 06.1-15 Task 3 adds the web suite here.
-test: test-go
-	pnpm -C web exec vitest run
+# The whole unit suite, as it always meant: the Go modules, then the web suite.
+# CI runs the two as separate jobs (test and web), so the web minutes are off the
+# Go unit job's critical path.
+test: test-go test-web
 
 # gotestsum cannot wrap `go -C dir test`, so each module runs from a subshell. A
 # failing module does not stop the next one, so one red run reports them all.
@@ -77,6 +78,17 @@ test-go:
 	  (cd $$m && $(GOTESTSUM) --format pkgname --jsonfile $(CURDIR)/$(TEST_RESULTS)/go-$$name.json -- ./... -race -count=1 -shuffle=on -timeout 20m) || rc=1; \
 	done; \
 	exit $$rc
+
+# The web unit suite, shuffled with a printed seed: WEB_SEED=<n> reproduces a run
+# (D-03, D-18). The seed is also left next to the JSON so test-summary can name
+# it. In CI the github-actions reporter adds the failures as annotations.
+test-web:
+	@set -e; seed=$(if $(WEB_SEED),$(WEB_SEED),$$(date +%s)); \
+	case "$$seed" in *[!0-9]*) echo "test-web: WEB_SEED must be a number, got $$seed" >&2; exit 1;; esac; \
+	mkdir -p $(TEST_RESULTS); rm -f $(TEST_RESULTS)/web.json $(TEST_RESULTS)/web.seed; \
+	echo "test-web: seed $$seed (reproduce with make test-web WEB_SEED=$$seed)"; \
+	echo "$$seed" > $(TEST_RESULTS)/web.seed; \
+	pnpm -C web exec vitest run --sequence.shuffle --sequence.seed=$$seed --reporter=default --reporter=json --outputFile.json=$(CURDIR)/$(TEST_RESULTS)/web.json $(if $(CI),--reporter=github-actions)
 
 # Turns every results file into a list of failing tests, hung tests and build
 # failures (stdout, and $GITHUB_STEP_SUMMARY when set). CI runs it with
