@@ -25,6 +25,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // The events routes (plan 21, ENV-07, D-47, D-57, Pitfall 8, T-01-87 to
@@ -78,24 +79,15 @@ func newEventsFix(t *testing.T, cfg dockertest.FakeConfig, heartbeat time.Durati
 
 func (f *eventsFix) waitBuffered(t *testing.T, n int) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for len(f.hub.Recent(f.env.ID, 1000)) < n {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %d buffered events", n)
-		}
-		time.Sleep(2 * time.Millisecond)
+	// The hub wakes the wait on every event it buffers.
+	if err := f.hub.Await(testsupport.Context(t), func() bool { return len(f.hub.Recent(f.env.ID, 1000)) >= n }); err != nil {
+		t.Fatalf("waiting for %d buffered events: %v; %d are buffered", n, err, len(f.hub.Recent(f.env.ID, 1000)))
 	}
 }
 
 func (f *eventsFix) waitStream(t *testing.T) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for f.fake.OpenEventStreams() != 1 {
-		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for the daemon stream")
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
+	awaitFake(t, f.fake, "exactly one open event stream", func() bool { return f.fake.OpenEventStreams() == 1 })
 }
 
 func (f *eventsFix) streamPath() string { return "/api/env/" + f.env.ID + "/events/stream" }
@@ -122,6 +114,9 @@ type sseConn struct {
 	started chan struct{}
 	frames  chan frame
 	body    chan string // chunks on their way to the frame parser
+
+	// changed is closed, and replaced, by every Write; awaitBody waits on it.
+	changed chan struct{}
 }
 
 // Header, Write, WriteHeader, Flush and SetWriteDeadline make sseConn an
@@ -142,6 +137,10 @@ func (c *sseConn) Write(b []byte) (int, error) {
 	c.WriteHeader(http.StatusOK)
 	c.mu.Lock()
 	c.raw.Write(b)
+	if c.changed != nil {
+		close(c.changed)
+		c.changed = nil
+	}
 	c.mu.Unlock()
 	select {
 	case c.body <- string(b):
@@ -171,6 +170,31 @@ func (c *sseConn) bodyString() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.raw.String()
+}
+
+// awaitBody waits until cond is true of everything the handler has written. It wakes on every
+// write and never polls; the 30 s of testsupport.Context only guards against a hang.
+func (c *sseConn) awaitBody(t *testing.T, what string, cond func(body string) bool) {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	for {
+		// The channel is taken in the same critical section as the read, so a write between
+		// the read and the wait is not missed.
+		c.mu.Lock()
+		if c.changed == nil {
+			c.changed = make(chan struct{})
+		}
+		ch, body := c.changed, c.raw.String()
+		c.mu.Unlock()
+		if cond(body) {
+			return
+		}
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			t.Fatalf("waiting for %s: %v; the stream had written %q", what, ctx.Err(), body)
+		}
+	}
 }
 
 // openStream sends the request and waits for the response to start. cookie is

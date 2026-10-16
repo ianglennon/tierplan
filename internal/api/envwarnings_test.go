@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
 )
 
@@ -66,9 +67,7 @@ func TestTheEnvironmentWarningsListAnOfflineEnvironmentWithSinceAndReasonAndNoth
 	// Only the first environment hears nothing: its heartbeat lapses, the other's goes on.
 	f.tclk.Advance(20 * time.Second)
 	tunneltest.SendHeartbeat(t, steady.control, true, f.tclk.Now().UnixMilli())
-	waitFor(t, "the steady agent's heartbeat", func() bool {
-		return f.srv.Hub.Session(steady.id).Status().LastHeartbeat.Equal(f.tclk.Now())
-	})
+	awaitHeartbeat(t, f.srv.Hub.Session(steady.id), func(st tunnel.SessionStatus) bool { return st.LastHeartbeat.Equal(f.tclk.Now()) })
 	f.tclk.Advance(11 * time.Second)
 	f.srv.Events.WaitLen(t, 3)
 	droppedAt := f.tclk.Now()

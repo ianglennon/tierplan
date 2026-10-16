@@ -10,6 +10,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
@@ -161,23 +162,23 @@ func TestTheNodeListOfAFoldedEnvironmentHasALocalSocketRowWithNoCertificateAndNo
 	}
 	var row map[string]any
 	// The fold re-registers the socket, so its row reads as unprobed until the
-	// next probe answers; wait for that rather than racing it.
-	waitFor(t, "the folded host to be probed", func() bool {
-		rec := f.req(t, http.MethodGet, "/api/env/"+f.env.ID+"/agents", "")
-		if rec.code != http.StatusOK {
-			t.Fatalf("agents: %d %s", rec.code, rec.body)
+	// next probe answers; wait for that probe, then read the list once.
+	awaitProbed(t, f.mon, envs.SocketTarget(f.env.ID))
+	rec := f.req(t, http.MethodGet, "/api/env/"+f.env.ID+"/agents", "")
+	if rec.code != http.StatusOK {
+		t.Fatalf("agents: %d %s", rec.code, rec.body)
+	}
+	if err := json.Unmarshal(rec.body, &list); err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range list.Items {
+		if it["role"] == "local" {
+			row = it
 		}
-		if err := json.Unmarshal(rec.body, &list); err != nil {
-			t.Fatal(err)
-		}
-		row = nil
-		for _, it := range list.Items {
-			if it["role"] == "local" {
-				row = it
-			}
-		}
-		return row != nil && row["connected"] == true
-	})
+	}
+	if row == nil || row["connected"] != true {
+		t.Fatalf("the folded host's row after its first probe is %v in %s, want it connected", row, rec.body)
+	}
 	if len(list.Items) != 2 {
 		t.Fatalf("items = %v, want mgr-1 and the folded host", list.Items)
 	}

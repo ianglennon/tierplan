@@ -202,7 +202,7 @@ func TestEnvironmentListShowsEachEnvironmentWithItsStatus(t *testing.T) {
 	added := f.add(t)
 	// Right after add the monitor has not finished its first probe, and the
 	// list shows its state; wait for it so the assertions below do not race it.
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(added.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, added.ID)
 	rec := f.req(t, http.MethodGet, "/api/environments", "")
 	var list struct {
 		Items []envBody `json:"items"`
@@ -283,13 +283,7 @@ func TestEnvironmentReconnectReturns202AndProbesNow(t *testing.T) {
 		}
 		return n
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for f.mon.Status(e.ID).State != envs.StateOnline {
-		if time.Now().After(deadline) {
-			t.Fatal("the monitor never saw the engine")
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
+	awaitOnline(t, f.mon, e.ID)
 	before := infoCalls()
 	rec := f.req(t, http.MethodPost, "/api/env/"+e.ID+"/reconnect", "")
 	if rec.code != http.StatusAccepted {
@@ -298,12 +292,7 @@ func TestEnvironmentReconnectReturns202AndProbesNow(t *testing.T) {
 	if got := rec.env(t); got.ID != e.ID || got.Status.State != "online" {
 		t.Errorf("reconnect body = %+v", got)
 	}
-	for infoCalls() <= before {
-		if time.Now().After(deadline) {
-			t.Fatal("reconnect did not cause a probe")
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
+	awaitFake(t, f.fake, "the reconnect to cause a probe", func() bool { return infoCalls() > before })
 	if got := f.audits(t, "environment.reconnect"); len(got) != 0 {
 		t.Errorf("reconnect changes no state and must not be audited as a mutation: %+v", got)
 	}
@@ -1009,14 +998,17 @@ func TestAgentEnvironmentIsPendingThenOnlineThenOfflineWithReasonTimeoutAndSince
 
 	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1", Version: "28.4.0"}, nil)
 	e := f.whenState(t, env.ID, "online")
-	waitFor(t, "the engine read through the tunnel", func() bool { return f.environment(t, env.ID).Engine.Version == "28.4.0" })
+	// connect returned after the first probe, which is what records the engine version.
+	if e.Engine.Version != "28.4.0" {
+		t.Fatalf("the engine read through the tunnel is %q, want 28.4.0 after the first probe", e.Engine.Version)
+	}
 	if e.Name != "Remote" || e.Status.Reason != "" || len(e.Status.Issues) != 0 {
 		t.Fatalf("environment = %+v, want the name the admin gave and plain online", e)
 	}
 
 	f.srv.Events.WaitLen(t, 1)
 	s := f.srv.Hub.Session(a.id)
-	waitFor(t, "the heartbeat", func() bool { return !s.Status().LastHeartbeat.IsZero() })
+	awaitHeartbeat(t, s, func(st tunnel.SessionStatus) bool { return !st.LastHeartbeat.IsZero() })
 	f.tclk.Advance(31 * time.Second) // silent past the window: the hub closes it with the reason timeout
 	closedAt := f.tclk.Now()
 	f.srv.Events.WaitLen(t, 2)
@@ -1044,7 +1036,7 @@ func TestAgentEnvironmentWithAMissingNodeIsDegradedAndListsItsIssues(t *testing.
 
 	f.tclk.Advance(20 * time.Second)
 	tunneltest.SendHeartbeat(t, m.control, true, f.tclk.Now().UnixMilli())
-	waitFor(t, "the manager's heartbeat", func() bool { return f.srv.Hub.Session(m.id).Status().LastHeartbeat.Equal(f.tclk.Now()) })
+	awaitHeartbeat(t, f.srv.Hub.Session(m.id), func(st tunnel.SessionStatus) bool { return st.LastHeartbeat.Equal(f.tclk.Now()) })
 	f.tclk.Advance(11 * time.Second) // the worker has been silent for 31 s, the manager for 11
 	f.srv.Events.WaitLen(t, 3)
 	droppedAt := f.tclk.Now()
@@ -1152,8 +1144,9 @@ func TestOverviewOfAStandaloneAgentEnvironmentFollowsItsAgentAndTheServerVersion
 	f.svc.WithHealth(envs.HealthConfig{ServerVersion: "v0.2.0"})
 	env := f.srv.NewEnvironment(t, "Remote")
 	f.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1", Version: "28.4.0"}, nil)
-	f.whenState(t, env.ID, "online")
-	waitFor(t, "the engine read through the tunnel", func() bool { return f.environment(t, env.ID).Engine.Version == "28.4.0" })
+	if e := f.whenState(t, env.ID, "online"); e.Engine.Version != "28.4.0" {
+		t.Fatalf("the engine read through the tunnel is %q, want 28.4.0 after the first probe", e.Engine.Version)
+	}
 	connectedAt := f.tclk.Now()
 
 	o := overviewOf(t, f.envFix, env.ID)
@@ -1271,6 +1264,12 @@ func TestOverviewOfASwarmCountsNodesAndAgentsSeparatelyAndTakesTheOldestAgentVer
 	tunneltest.SendHeartbeat(t, mc, true, f.tclk.Now().UnixMilli())
 	tunneltest.SendHeartbeat(t, wc, true, f.tclk.Now().UnixMilli())
 	f.srv.Events.WaitLen(t, 2)
+	// The overview counts the nodes the monitor has probed, so both agents are ready (as
+	// connect leaves them) before it is read once.
+	for _, c := range []*tunneltest.Conn{cm, cw} {
+		f.awaitFirstHeartbeat(t, c)
+		awaitFirstProbe(t, f.mon, envs.AgentTarget(c.Identity.AgentID))
+	}
 	f.whenState(t, env.ID, "online")
 
 	o := overviewOf(t, f.envFix, env.ID)
@@ -1294,7 +1293,7 @@ func TestOverviewOfASwarmCountsNodesAndAgentsSeparatelyAndTakesTheOldestAgentVer
 			mid = s.AgentID
 		}
 	}
-	waitFor(t, "the manager's heartbeat", func() bool { return f.srv.Hub.Session(mid).Status().LastHeartbeat.Equal(f.tclk.Now()) })
+	awaitHeartbeat(t, f.srv.Hub.Session(mid), func(st tunnel.SessionStatus) bool { return st.LastHeartbeat.Equal(f.tclk.Now()) })
 	f.tclk.Advance(11 * time.Second)
 	f.srv.Events.WaitLen(t, 3)
 	o = overviewOf(t, f.envFix, env.ID)

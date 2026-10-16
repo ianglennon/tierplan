@@ -84,7 +84,7 @@ func pings(c *sseConn) int { return strings.Count(c.bodyString(), ": ping") }
 func waitPings(t *testing.T, c *sseConn, n int) {
 	t.Helper()
 	want := pings(c) + n
-	waitFor(t, "pings", func() bool { return pings(c) >= want })
+	c.awaitBody(t, "pings", func(body string) bool { return strings.Count(body, ": ping") >= want })
 }
 
 // grantRead gives user the Viewer role on one environment only.

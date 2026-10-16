@@ -18,6 +18,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -391,7 +392,7 @@ func TestAgentListGivesEveryNodeItsCertificateAndLivenessWithProblemsFirst(t *te
 	if _, err := zulu.control.Write(append(b, '\n')); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the denial", func() bool { return f.node(t, env.ID, zulu.id).LastDenial != nil })
+	awaitHeartbeat(t, f.srv.Hub.Session(zulu.id), func(st tunnel.SessionStatus) bool { return st.LastDenial != nil })
 
 	got := f.nodes(t, env.ID)
 	var order []string
@@ -520,7 +521,7 @@ func TestRevokeNeedsRevokeOnTheEnvironmentAndDisconnectsTheAgentAndBlocksTheHost
 	if rec2.code != http.StatusNoContent {
 		t.Fatalf("revoke: %d %s", rec2.code, rec2.body)
 	}
-	waitFor(t, "the session to close", func() bool { return isClosed(s) })
+	testsupport.Await(t, "the session to close", s.Done())
 	if took := time.Since(start); took > time.Second {
 		t.Errorf("the agent was disconnected %v after the revoke", took)
 	}
@@ -978,7 +979,7 @@ func TestUpdatingAnAgentThatIsOfflineUnknownUpToDateOrRefusingIsAProblem(t *test
 	base = "/api/env/" + env.ID + "/agents/"
 	s := f.srv.Hub.Session(off.id)
 	_ = off.conn.WS.CloseNow()
-	waitFor(t, "the session to end", func() bool { return isClosed(s) })
+	testsupport.Await(t, "the session to end", s.Done())
 	if rec := f.req(t, http.MethodPost, base+off.id+"/update", ``); rec.code != http.StatusConflict || rec.ptyp != "agent_offline" {
 		t.Errorf("an offline agent: %d type %q %s, want 409 agent_offline", rec.code, rec.ptyp, rec.body)
 	}

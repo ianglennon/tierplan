@@ -23,6 +23,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -438,7 +439,7 @@ func TestListOfAnOfflineEnvironmentIs503WithSinceAndReason(t *testing.T) {
 	f, e := dashEnv(t, richEngine())
 	f.fake.Stop()
 	f.mon.Kick(e.ID)
-	waitFor(t, "the monitor to see the engine offline", func() bool { return f.mon.Status(e.ID).State == envs.StateOffline })
+	awaitOffline(t, f.mon, e.ID)
 	for _, what := range dataPaths {
 		rec := f.get(t, e, what)
 		if rec.code != http.StatusServiceUnavailable || rec.ptyp != "environment_offline" {
@@ -643,15 +644,12 @@ func TestAgentEnvironmentSummaryAndListsAreReadThroughTheTunnel(t *testing.T) {
 	}, nil)
 	f.whenState(t, env.ID, "online")
 
-	var s summaryBody
-	waitFor(t, "the summary", func() bool {
-		rec := f.get(t, env.ID, "summary")
-		if rec.code != http.StatusOK {
-			return false
-		}
-		s = decode[summaryBody](t, rec)
-		return true
-	})
+	// connect left the agent probed, so the summary is read once.
+	rec := f.get(t, env.ID, "summary")
+	if rec.code != http.StatusOK {
+		t.Fatalf("summary: %d %s", rec.code, rec.body)
+	}
+	s := decode[summaryBody](t, rec)
 	if s.Environment.ID != env.ID || s.Environment.Name != "Remote" || s.Environment.Type != "standalone" || s.Environment.Status.State != "online" {
 		t.Errorf("environment = %+v", s.Environment)
 	}
@@ -791,10 +789,14 @@ func TestAgentEnvironmentEventsStreamDeliversAnEventPublishedOnTheAgentsDaemon(t
 	}
 
 	// The polling fallback shows the same event.
-	waitFor(t, "the recent list", func() bool {
+	// The hub wakes the wait on every event it buffers.
+	err = f.hub.Await(testsupport.Context(t), func() bool {
 		rec := f.get(t, env.ID, "events")
 		return rec.code == http.StatusOK && strings.Contains(string(rec.body), `"name":"web"`)
 	})
+	if err != nil {
+		t.Fatalf("the recent list never showed the event: %v", err)
+	}
 }
 
 // The summary and lists of a swarm: every node, each row with its node, the
@@ -908,15 +910,12 @@ func newSwarmFixWith(t *testing.T, tune func(host string, cfg *dockertest.FakeCo
 
 func TestSwarmSummaryHasClusterTotalsAPerNodeBreakdownAndNobodyMissing(t *testing.T) {
 	s := newSwarmFix(t)
-	var sum swarmSummary
-	waitFor(t, "the summary", func() bool {
-		rec := s.get(t, s.env.ID, "summary")
-		if rec.code != http.StatusOK {
-			return false
-		}
-		sum = decode[swarmSummary](t, rec)
-		return true
-	})
+	// newSwarmFix returned with every agent connected and probed, so the summary is read once.
+	rec := s.get(t, s.env.ID, "summary")
+	if rec.code != http.StatusOK {
+		t.Fatalf("summary: %d %s", rec.code, rec.body)
+	}
+	sum := decode[swarmSummary](t, rec)
 	if sum.Counts.Containers != 503 || sum.Counts.Images != 2 || sum.Counts.Volumes != 2 {
 		t.Errorf("counts = %+v, want the totals over the three nodes", sum.Counts)
 	}
@@ -945,14 +944,9 @@ func TestSwarmSummaryHasClusterTotalsAPerNodeBreakdownAndNobodyMissing(t *testin
 func TestSwarmSummaryNamesTheNodeThatDidNotAnswer(t *testing.T) {
 	s := newSwarmFix(t)
 	s.srv.Hub.Kick(s.w.id, tunnel.DisconnectClosed)
-	waitFor(t, "the worker to be gone", func() bool {
-		for _, v := range s.srv.Hub.Views(s.env.ID) {
-			if v.AgentID == s.w.id && v.Connected {
-				return false
-			}
-		}
-		return true
-	})
+	if _, err := s.srv.Hub.AwaitSession(testsupport.Context(t), s.w.id, func(sess *tunnel.Session) bool { return sess == nil }); err != nil {
+		t.Fatalf("the worker's session never went: %v", err)
+	}
 	rec := s.get(t, s.env.ID, "summary")
 	if rec.code != http.StatusOK {
 		t.Fatalf("summary: %d %s", rec.code, rec.body)
@@ -1026,15 +1020,11 @@ func TestStandaloneListsAndSummaryAreUnchangedApartFromTheOneNode(t *testing.T) 
 	env := f.srv.NewEnvironment(t, "Remote")
 	f.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1", Containers: []dockertest.FakeContainer{{ID: "a1", Names: []string{"/web"}, State: "running"}}}, nil)
 	f.whenState(t, env.ID, "online")
-	var sum swarmSummary
-	waitFor(t, "the summary", func() bool {
-		rec := f.get(t, env.ID, "summary")
-		if rec.code != http.StatusOK {
-			return false
-		}
-		sum = decode[swarmSummary](t, rec)
-		return true
-	})
+	rec := f.get(t, env.ID, "summary")
+	if rec.code != http.StatusOK {
+		t.Fatalf("summary: %d %s", rec.code, rec.body)
+	}
+	sum := decode[swarmSummary](t, rec)
 	if len(sum.ByNode) != 1 || sum.ByNode[0].Node != "edge-1" || sum.ByNode[0].Containers != 1 || sum.NotReporting == nil || len(*sum.NotReporting) != 0 {
 		t.Errorf("summary = %+v, want the one host and nobody missing", sum)
 	}
@@ -1046,7 +1036,7 @@ func TestStandaloneListsAndSummaryAreUnchangedApartFromTheOneNode(t *testing.T) 
 
 func TestLocalSocketListsNameTheEngineAsTheOnlyNode(t *testing.T) {
 	f, e := dashEnv(t, richEngine())
-	waitFor(t, "the summary", func() bool { return f.get(t, e, "summary").code == http.StatusOK })
+	awaitOnline(t, f.mon, e.ID)
 	sum := decode[swarmSummary](t, f.get(t, e, "summary"))
 	if len(sum.ByNode) != 1 || sum.ByNode[0].Node != "node-1" || sum.ByNode[0].Containers != 3 {
 		t.Errorf("byNode = %+v, want the one engine", sum.ByNode)
