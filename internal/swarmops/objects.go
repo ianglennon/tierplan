@@ -438,6 +438,8 @@ func stepCode(err error) string {
 		return "objects_missing"
 	case errors.Is(err, ErrRevealRequired):
 		return "secret_reveal_required"
+	case errors.Is(err, ErrSpecInvalid):
+		return "spec_invalid"
 	case errors.Is(err, dockerx.ErrServiceNotFound):
 		return "service_not_found"
 	}
