@@ -64,7 +64,7 @@ func buildTemplate() (data []byte, err error) {
 	if err := s.Close(); err != nil {
 		return nil, fmt.Errorf("close: %w", err)
 	}
-	data, err = os.ReadFile(filepath.Join(dir, store.DatabaseFile))
+	data, err = os.ReadFile(filepath.Join(dir, store.DatabaseFile)) //nolint:gosec // G304: a file in the temporary directory this function just created
 	if err != nil {
 		return nil, fmt.Errorf("read: %w", err)
 	}
