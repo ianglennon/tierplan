@@ -66,7 +66,7 @@ type ServiceCreateOutput struct {
 // registerServiceCreate mounts the create review and create routes.
 func registerServiceCreate(r *httpx.Router, d ServicesDeps) {
 	const problems = "Problems, all before anything is created: 409 service_name_taken for a name a service has; 422 image_required for no image; 422 name_invalid for a name that is not 1 to 63 letters, numbers, dot, dash or underscore; " +
-		"422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec; 422 placeholder_unmatched for a <hidden> in the spec; 422 stack_label_reserved for a com.docker.stack. label; " +
+		"422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec, or for a secret reference whose SecretName is not the name of the secret its SecretID points at; 422 placeholder_unmatched for a <hidden> in the spec; 422 stack_label_reserved for a com.docker.stack. label; " +
 		"422 image_unresolved when the tag cannot be resolved to a digest (a new service is never created unpinned); 409 not_a_swarm for a standalone host; " +
 		"403 privileged_service, with each finding in errors, when the caller is below env Admin and the spec asks for host access. "
 	httpx.Register(r, huma.Operation{

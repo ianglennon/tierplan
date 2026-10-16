@@ -218,10 +218,10 @@ const (
 // registerServiceEdit mounts the review and apply routes.
 func registerServiceEdit(r *httpx.Router, d ServicesDeps) {
 	const problems = "Problems, all before anything is sent: 409 service_changed when the version is not the current one; 409 stack_owned for a service a stack owns; 404 service_not_found; 409 not_a_swarm for a standalone host; " +
-		"422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec, whoever sends it; 422 placeholder_unmatched for a <hidden> with no current value behind it; 422 placeholder_reserved when a caller who may reveal secrets sends <hidden>; " +
+		"422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec, or for a secret reference whose SecretName is not the name of the secret its SecretID points at, whoever sends it; 422 placeholder_unmatched for a <hidden> with no current value behind it; 422 placeholder_reserved when a caller who may reveal secrets sends <hidden>; " +
 		"422 name_immutable and 422 mode_immutable for a changed name or kind of mode; 422 stack_label_reserved for a com.docker.stack. label the service did not have; " +
-		"403 privileged_service, with each finding in errors, when a caller below env Admin sends host access (a bind outside /srv, /mnt and /media or of a runtime socket, a local volume that mounts a host device, a named pipe, an added capability, SELinux disabled or spc_t, seccomp unconfined or custom, AppArmor disabled, the host network, a plugin runtime). " +
-		"403 secret_reveal_required, with each added reference in errors, when a caller without secrets.reveal adds a secret the service does not use; "
+		"403 privileged_service, with each finding in errors, when a caller below env Admin sends host access (a bind outside /srv, /mnt and /media or of a runtime socket, a local volume that binds a relative host path or one outside those roots, or mounts a filesystem type other than tmpfs or a network share, a named pipe, an added capability, SELinux disabled or spc_t, seccomp unconfined or custom, AppArmor disabled, the host network, a plugin runtime). " +
+		"403 secret_reveal_required, with each added reference in errors, when a caller without secrets.reveal adds a secret the service does not use (compared by the engine's secret ID, a name being resolved through the swarm's secret list); "
 	httpx.Register(r, huma.Operation{
 		OperationID: "reviewServiceUpdate", Method: http.MethodPost, Path: "/api/env/{envId}/services/{serviceId}/review",
 		Summary: "Review a full service spec",
