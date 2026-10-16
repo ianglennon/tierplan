@@ -9,12 +9,14 @@ import { setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ObjectPicker, type PickedObject } from "@/features/service-editor/object-picker";
+import { ServiceForm } from "@/features/service-editor/service-form";
 import {
   createStagedStore,
   StagedContext,
   type StagedKind,
   type StagedStore,
 } from "@/features/service-editor/staged";
+import type { SpecValue } from "@/features/spec-editor/spec-format";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 
@@ -113,7 +115,13 @@ afterEach(() => {
   queryClient.clear();
 });
 
-function renderPicker(kind: StagedKind = "secret", value: PickedObject | null = null) {
+const NEEDS_REVEAL = "Needs the reveal secrets permission to add a secret";
+
+function renderPicker(
+  kind: StagedKind = "secret",
+  value: PickedObject | null = null,
+  restrict?: { keep: readonly string[]; reason: string },
+) {
   return render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
@@ -124,6 +132,7 @@ function renderPicker(kind: StagedKind = "secret", value: PickedObject | null = 
             label={kind === "secret" ? "Secret" : "Network"}
             value={value}
             onSelect={onSelect}
+            restrict={restrict}
           />
         </StagedContext.Provider>
       </TooltipProvider>
@@ -233,5 +242,89 @@ describe("ObjectPicker", () => {
     expect(create.textContent).toContain("Needs Admin");
     fireEvent.click(create);
     expect(screen.queryByRole("dialog", { name: "Create a secret" })).toBeNull();
+  });
+
+  it("offers a caller without the reveal secrets permission only the secrets the service uses, and says why", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    renderPicker("secret", null, { keep: ["sec1", "db_pw"], reason: NEEDS_REVEAL });
+    await open();
+    const kept = await screen.findByRole("option", { name: "db_pw" });
+    const refused = screen.getByRole("option", { name: /api_key/ });
+    expect(kept.getAttribute("aria-disabled")).not.toBe("true");
+    expect(refused.getAttribute("aria-disabled")).toBe("true");
+    expect(refused.textContent).toContain(NEEDS_REVEAL);
+    fireEvent.click(refused);
+    expect(onSelect).not.toHaveBeenCalled();
+    fireEvent.click(kept);
+    expect(onSelect).toHaveBeenCalledWith({ name: "db_pw", id: "sec1", staged: false });
+  });
+});
+
+// The secrets card hands the picker the restriction: it knows the secrets the service uses as the
+// server holds them, and whether the caller may reveal secrets (D-13 as amended by plan 06-47).
+describe("the secrets card of the Form", () => {
+  const mounted = (): SpecValue => ({
+    Name: "api",
+    TaskTemplate: {
+      ContainerSpec: {
+        Image: "nginx:1.27",
+        Secrets: [
+          { SecretID: "sec1", SecretName: "db_pw", File: { Name: "db_pw", UID: "0", GID: "0" } },
+        ],
+      },
+    },
+    Mode: { Replicated: { Replicas: 2 } },
+  });
+
+  function renderForm(attached: readonly string[], mode: "edit" | "create" = "edit") {
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ServiceForm
+            spec={mode === "edit" ? mounted() : { Name: "api" }}
+            mode={mode}
+            envId={ENV}
+            staged={store}
+            attachedSecrets={attached}
+            onSpecChange={() => {}}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+  }
+
+  async function openSecretRow() {
+    fireEvent.click(screen.getByRole("combobox", { name: "Secret" }));
+    await screen.findByRole("listbox");
+  }
+
+  it("restricts its pickers for an Operator without the reveal permission", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    renderForm(["sec1", "db_pw"]);
+    await openSecretRow();
+    const refused = await screen.findByRole("option", { name: /api_key/ });
+    expect(refused.getAttribute("aria-disabled")).toBe("true");
+    expect(refused.textContent).toContain(NEEDS_REVEAL);
+    expect(screen.getByRole("option", { name: "db_pw" }).getAttribute("aria-disabled")).not.toBe(
+      "true",
+    );
+  });
+
+  it("offers every secret to an environment Admin", async () => {
+    me = makeMe({ envs: { [ENV]: "admin" } });
+    renderForm(["sec1", "db_pw"]);
+    await openSecretRow();
+    const other = await screen.findByRole("option", { name: "api_key" });
+    expect(other.getAttribute("aria-disabled")).not.toBe("true");
+    expect(screen.queryByText(NEEDS_REVEAL)).toBeNull();
+  });
+
+  it("offers every secret to an Operator who was granted the reveal permission", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" }, extras: { [ENV]: ["secrets.reveal"] } });
+    renderForm(["sec1", "db_pw"]);
+    await openSecretRow();
+    const other = await screen.findByRole("option", { name: "api_key" });
+    expect(other.getAttribute("aria-disabled")).not.toBe("true");
+    expect(screen.queryByText(NEEDS_REVEAL)).toBeNull();
   });
 });
