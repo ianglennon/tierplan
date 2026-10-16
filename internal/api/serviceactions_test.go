@@ -498,6 +498,58 @@ func TestRollbackToAPrivilegedPreviousSpecIsRefusedForAnOperatorAndAppliedForAnE
 	}
 }
 
+func TestRollbackToASpecWithASecretTheServiceDoesNotUseNeedsTheRevealPermission(t *testing.T) {
+	withDBPass := func(cfg *dockertest.FakeConfig) {
+		cfg.Secrets = []dockertest.FakeSecret{{ID: "sec-db", Name: "db-pass"}}
+	}
+	f, e := actionsEnv(t, withDBPass, privilegedRollback(func(s *swarm.ServiceSpec) {
+		s.TaskTemplate.ContainerSpec.Secrets = []*swarm.SecretReference{{
+			SecretID: "sec-db", SecretName: "db-pass",
+			File: &swarm.SecretReferenceFileTarget{Name: "/run/secrets/db-pass", UID: "0", GID: "0", Mode: 0o444},
+		}}
+	}), rollbackService())
+	op := f.caller(t, e, "operator-1", "operator")
+
+	rec := op.do(http.MethodPost, "services/svc-priv/rollback", `{"version":9}`)
+	if rec.Code != http.StatusForbidden || problemType(t, rec) != "secret_reveal_required" {
+		t.Fatalf("rollback by an operator: %d %s, want 403 secret_reveal_required", rec.Code, rec.Body)
+	}
+	var prob actionProblem
+	if err := json.Unmarshal(rec.Body.Bytes(), &prob); err != nil {
+		t.Fatal(err)
+	}
+	if len(prob.Errors) != 1 || prob.at("TaskTemplate.ContainerSpec.Secrets[0]") != "db-pass" || !strings.Contains(prob.Detail, "db-pass") {
+		t.Errorf("problem = %+v, want Secrets[0]: db-pass named", prob)
+	}
+	if ups, w := f.fake.ServiceUpdates(), f.fake.Writes(); len(ups) != 0 || len(w) != 0 {
+		t.Fatalf("updates = %v, writes = %v, a refused rollback sends nothing", ups, w)
+	}
+	rows := f.serviceAudits(t)
+	if len(rows) != 1 || rows[0].Action != audit.ActionServiceRolledBack || rows[0].Result != string(audit.ResultFailure) ||
+		rows[0].Reason != "secret_reveal_required" || rows[0].Details["code"] != "secret_reveal_required" || rows[0].Details["name"] != "api" {
+		t.Fatalf("audit rows = %+v, want one secret_reveal_required failure", rows)
+	}
+
+	// A previous spec that adds no secret is unaffected, whoever rolls back.
+	if rec := op.do(http.MethodPost, "services/svc-web/rollback", `{"version":9}`); rec.Code != http.StatusAccepted {
+		t.Fatalf("rollback by an operator of a service with no secrets: %d %s, want 202", rec.Code, rec.Body)
+	}
+
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	if rec := admin.do(http.MethodPost, "services/svc-priv/rollback", `{"version":9}`); rec.Code != http.StatusAccepted {
+		t.Fatalf("rollback by an env admin: %d %s", rec.Code, rec.Body)
+	}
+	var privUpdates int
+	for _, u := range f.fake.ServiceUpdates() {
+		if u.ServiceID == "svc-priv" && u.Query.Get("rollback") == "previous" && u.Version == "9" {
+			privUpdates++
+		}
+	}
+	if privUpdates != 1 {
+		t.Errorf("updates = %+v, want the admin's one at rollback=previous", f.fake.ServiceUpdates())
+	}
+}
+
 func TestRollbackByAnOperatorToAPreviousSpecWithNoFindingIsAccepted(t *testing.T) {
 	cases := []struct {
 		name string

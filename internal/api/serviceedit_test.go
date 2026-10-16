@@ -866,4 +866,69 @@ func TestServiceApplyASecretTheServiceDoesNotUseNeedsTheRevealPermission(t *test
 		b, _ := json.Marshal(rows)
 		noSecrets(t, "the audit rows", b)
 	})
+
+	usesDBPass := func(fs *dockertest.FakeService) {
+		fs.Spec.TaskTemplate.ContainerSpec.Secrets = []*swarm.SecretReference{{
+			SecretID: "sec-db", SecretName: "db-pass",
+			File: &swarm.SecretReferenceFileTarget{Name: "/run/secrets/db-pass", UID: "0", GID: "0", Mode: 0o444},
+		}}
+	}
+	secretRefOf := func(spec map[string]any) map[string]any {
+		refs, _ := containerSpecOf(spec)["Secrets"].([]any)
+		ref, _ := refs[0].(map[string]any)
+		return ref
+	}
+
+	t.Run("an operator keeps the service's secret and changes the replicas", func(t *testing.T) {
+		f, e := actionsEnv(t, withDBPass, editableService(usesDBPass))
+		op := f.caller(t, e, "operator-1", "operator")
+		_, body := op.maskedSpec("svc-api", func(spec map[string]any) {
+			mode, _ := spec["Mode"].(map[string]any)
+			rep, _ := mode["Replicated"].(map[string]any)
+			rep["Replicas"] = 3
+		})
+		if rec := op.apply("svc-api", body); rec.Code != http.StatusAccepted {
+			t.Fatalf("apply by an operator: %d %s, want 202", rec.Code, rec.Body)
+		}
+		ups := f.fake.ServiceUpdates()
+		if len(ups) != 1 || ups[0].Spec.Mode.Replicated == nil || *ups[0].Spec.Mode.Replicated.Replicas != 3 {
+			t.Fatalf("updates = %+v, want one with 3 replicas", ups)
+		}
+	})
+
+	t.Run("an operator changes the mode of the secret the service uses", func(t *testing.T) {
+		f, e := actionsEnv(t, withDBPass, editableService(usesDBPass))
+		op := f.caller(t, e, "operator-1", "operator")
+		_, body := op.maskedSpec("svc-api", func(spec map[string]any) {
+			secretRefOf(spec)["File"].(map[string]any)["Mode"] = 0o400
+		})
+		if rec := op.apply("svc-api", body); rec.Code != http.StatusAccepted {
+			t.Fatalf("apply by an operator: %d %s, want 202", rec.Code, rec.Body)
+		}
+		ups := f.fake.ServiceUpdates()
+		if len(ups) != 1 {
+			t.Fatalf("updates = %+v, want one", ups)
+		}
+		refs := ups[0].Spec.TaskTemplate.ContainerSpec.Secrets
+		if len(refs) != 1 || refs[0].SecretID != "sec-db" || refs[0].File.Mode != 0o400 {
+			t.Errorf("secrets sent = %+v, want sec-db at mode 0400", refs)
+		}
+	})
+
+	t.Run("an env admin adds the secret", func(t *testing.T) {
+		f, e := actionsEnv(t, withDBPass, editableService(nil))
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		_, body := admin.maskedSpec("svc-api", addSecretRef)
+		if rec := admin.apply("svc-api", body); rec.Code != http.StatusAccepted {
+			t.Fatalf("apply by an env admin: %d %s, want 202", rec.Code, rec.Body)
+		}
+		ups := f.fake.ServiceUpdates()
+		if len(ups) != 1 {
+			t.Fatalf("updates = %+v, want the admin's one", ups)
+		}
+		refs := ups[0].Spec.TaskTemplate.ContainerSpec.Secrets
+		if len(refs) != 1 || refs[0].SecretID != "sec-db" {
+			t.Errorf("secrets sent = %+v, want one carrying SecretID sec-db", refs)
+		}
+	})
 }
