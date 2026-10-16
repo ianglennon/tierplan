@@ -98,6 +98,13 @@ func TestServicePolicyAZeroEnvIsTheStrictestReading(t *testing.T) {
 	if _, err := validateBody(BodyServiceSpec, bytes.NewReader([]byte(enc(t, spec))), bodyEnv{}); !errors.Is(err, errHostPolicy) {
 		t.Fatalf("err = %v, want errHostPolicy", err)
 	}
+
+	// With no volume lookup the zero env cannot see what backs a name.
+	spec = sampleSpec()
+	spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{{Type: mount.TypeVolume, Source: "data", Target: "/data"}}
+	if _, err := validateBody(BodyServiceSpec, bytes.NewReader([]byte(enc(t, spec))), bodyEnv{}); !errors.Is(err, errHostPolicy) {
+		t.Fatalf("a named volume: err = %v, want errHostPolicy", err)
+	}
 }
 
 func TestPluginVolumesNameEachMountWithAnotherDriver(t *testing.T) {
@@ -205,6 +212,85 @@ func TestEscalationsLookUpANetworkTargetOnTheAgentsOwnEngine(t *testing.T) {
 		})
 		if calls != 2 {
 			t.Fatalf("lookups = %d, want 2", calls)
+		}
+	})
+}
+
+func TestNamedVolumesJudgeWhatTheEngineHolds(t *testing.T) {
+	const path = "TaskTemplate.ContainerSpec.Mounts[0].Source"
+	spec := sampleSpec()
+	spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{{Type: mount.TypeVolume, Source: "data", Target: "/data"}}
+	exists := func(driver string, opts map[string]string) volumeLookup {
+		return func(context.Context, string) (string, map[string]string, bool, error) {
+			return driver, opts, true, nil
+		}
+	}
+	for name, tc := range map[string]struct {
+		lookup volumeLookup
+		want   []string
+	}{
+		"exists, local, binds the host root":     {exists("local", map[string]string{"type": "none", "o": "bind", "device": "/"}), []string{path}},
+		"exists, local, a device":                {exists("local", map[string]string{"type": "ext4", "device": "/dev/sda1"}), []string{path}},
+		"exists, driver in capitals, binds /etc": {exists("LOCAL", map[string]string{"type": "none", "o": "bind", "device": "/etc"}), []string{path}},
+		"exists, a plugin driver":                {exists("rexray/ebs", nil), []string{path}},
+		"exists, local, an nfs share":            {exists("local", map[string]string{"type": "nfs", "o": "addr=10.0.0.5,rw", "device": ":/export"}), nil},
+		"exists, local, binds a path under /srv": {exists("local", map[string]string{"type": "none", "o": "bind", "device": "/srv/data"}), nil},
+		"exists, local, no options":              {exists("local", nil), nil},
+		"does not exist": {func(context.Context, string) (string, map[string]string, bool, error) {
+			return "", nil, false, nil
+		}, nil},
+		"the lookup fails": {func(context.Context, string) (string, map[string]string, bool, error) {
+			return "", nil, false, errors.New("engine unreachable")
+		}, []string{path}},
+		"no lookup at all": {nil, []string{path}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := namedVolumes(context.Background(), spec, tc.lookup); !slices.Equal(got, tc.want) {
+				t.Fatalf("namedVolumes = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	never := func(t *testing.T) volumeLookup {
+		return func(_ context.Context, name string) (string, map[string]string, bool, error) {
+			t.Errorf("the lookup ran for %q", name)
+			return "", nil, false, errors.New("unused")
+		}
+	}
+	t.Run("a Source that is not a volume name is refused without a lookup", func(t *testing.T) {
+		spec := sampleSpec()
+		spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{{Type: mount.TypeVolume, Source: "../etc", Target: "/data"}}
+		if got := namedVolumes(context.Background(), spec, never(t)); !slices.Equal(got, []string{path}) {
+			t.Fatalf("namedVolumes = %v, want %v", got, []string{path})
+		}
+	})
+	t.Run("an anonymous volume is never looked up", func(t *testing.T) {
+		spec := sampleSpec()
+		spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{{Type: mount.TypeVolume, Target: "/data"}}
+		if got := namedVolumes(context.Background(), spec, never(t)); len(got) != 0 {
+			t.Fatalf("namedVolumes = %v, want none", got)
+		}
+		if got := namedVolumes(context.Background(), spec, nil); len(got) != 0 {
+			t.Fatalf("with no lookup, namedVolumes = %v, want none", got)
+		}
+	})
+	t.Run("one lookup per distinct Source", func(t *testing.T) {
+		spec := sampleSpec()
+		spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{
+			{Type: mount.TypeVolume, Source: "data", Target: "/a"},
+			{Type: mount.TypeVolume, Source: "data", Target: "/b"},
+		}
+		calls := 0
+		got := namedVolumes(context.Background(), spec, func(context.Context, string) (string, map[string]string, bool, error) {
+			calls++
+			return "rexray/ebs", nil, true, nil
+		})
+		if calls != 1 {
+			t.Fatalf("lookups = %d, want 1", calls)
+		}
+		want := []string{path, "TaskTemplate.ContainerSpec.Mounts[1].Source"}
+		if !slices.Equal(got, want) {
+			t.Fatalf("namedVolumes = %v, want %v", got, want)
 		}
 	})
 }

@@ -978,6 +978,70 @@ func TestHostPolicyAServiceCannotMountAPreExistingVolumeThatMountsTheHost(t *tes
 	})
 }
 
+// Docker mounts an existing volume as it is, so unlike the network lookup a volume
+// lookup that cannot answer refuses the spec.
+func TestHostPolicyAVolumeLookupThatFailsRefusesTheSpec(t *testing.T) {
+	sock := newFakeSocket(t)
+	sock.answers = map[string]string{"/volumes/data": `{"message":"boom"}`}
+	sock.status = map[string]int{"/volumes/data": http.StatusInternalServerError}
+	var reasons []string
+	h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+	spec := sampleSpec()
+	spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{{Type: mount.TypeVolume, Source: "data", Target: "/data"}}
+	resp := do(t, h, postJSON("POST", "/services/create", enc(t, spec)))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden || !slices.Equal(reasons, []string{"host_policy"}) {
+		t.Fatalf("status %d reasons %v, want 403 host_policy", resp.StatusCode, reasons)
+	}
+	if got := sock.requests(); !slices.Equal(got, []string{"GET /volumes/data"}) {
+		t.Fatalf("the engine saw %v, want the one volume lookup", got)
+	}
+}
+
+// A volume the manager's engine does not have is created by Docker from the mount's
+// own options, so those options are what is judged.
+func TestHostPolicyANamedVolumeTheEngineDoesNotHaveIsJudgedByTheMountsOwnOptions(t *testing.T) {
+	mountWith := func(opts map[string]string) swarm.ServiceSpec {
+		spec := sampleSpec()
+		spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{{
+			Type: mount.TypeVolume, Source: "fresh", Target: "/data",
+			VolumeOptions: &mount.VolumeOptions{DriverConfig: &mount.Driver{Name: "local", Options: opts}},
+		}}
+		return spec
+	}
+
+	t.Run("an nfs share is forwarded", func(t *testing.T) {
+		sock := newFakeSocket(t)
+		h := Handler(sock.path, Policy{}, nil)
+		spec := mountWith(map[string]string{"type": "nfs", "o": "addr=10.0.0.5,rw", "device": ":/export"})
+		resp := do(t, h, postJSON("POST", "/services/create", enc(t, spec)))
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status %d, want 200", resp.StatusCode)
+		}
+		if got := sock.requests(); !slices.Equal(got, []string{"GET /volumes/fresh", "POST /services/create"}) {
+			t.Fatalf("the engine saw %v", got)
+		}
+	})
+
+	t.Run("a bind of /etc is refused", func(t *testing.T) {
+		sock := newFakeSocket(t)
+		var reasons []string
+		h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+		spec := mountWith(map[string]string{"type": "none", "o": "bind", "device": "/etc"})
+		resp := do(t, h, postJSON("POST", "/services/create", enc(t, spec)))
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden || !slices.Equal(reasons, []string{"host_policy"}) {
+			t.Fatalf("status %d reasons %v, want 403 host_policy", resp.StatusCode, reasons)
+		}
+		for _, r := range sock.requests() {
+			if strings.HasPrefix(r, "POST ") {
+				t.Fatalf("a refused spec reached the engine: %v", sock.requests())
+			}
+		}
+	})
+}
+
 func TestHostPolicyAHostNetworkNamedByIDIsFoundOnTheAgentsOwnEngine(t *testing.T) {
 	const id = "7a1c0f3e9b2d4c5f8e6a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e"
 	sock := newFakeSocket(t)
