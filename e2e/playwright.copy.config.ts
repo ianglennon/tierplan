@@ -14,7 +14,16 @@ export default defineConfig({
   testDir: "./copy",
   workers: 1,
   forbidOnly: Boolean(process.env.CI),
-  reporter: [["list"]],
+  // D-15: never retried. D-22: a hang ends in Playwright's own report; the e2e
+  // job's timeout-minutes (30) is the outer bound.
+  retries: 0,
+  globalTimeout: 5 * 60_000,
+  reporter: [
+    ["list"],
+    // D-21: scripts/test-summary.sh names the failing specs from this file.
+    ["json", { outputFile: "../.devdata/test/e2e-copy.json" }],
+    ...(process.env.CI ? ([["github"]] as const) : []),
+  ],
   outputDir: "../.devdata/playwright-copy-results",
   use: {
     ...devices["Desktop Chrome"],

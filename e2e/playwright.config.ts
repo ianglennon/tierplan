@@ -52,10 +52,21 @@ export default defineConfig({
   workers: 1,
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
-  retries: process.env.CI ? 1 : 0,
+  // D-15: a failing e2e test is a defect, never retried. A retry would also hide
+  // it: a trace taken only on a first retry would never record, so failures keep
+  // theirs with "retain-on-failure" below.
+  retries: 0,
+  // D-22: a hang ends in Playwright's own report, not in the job's silent kill.
+  // The e2e job's timeout-minutes is 30; the image and agent builds and the stack
+  // start take part of it, so the suite itself gets 20.
+  globalTimeout: 20 * 60_000,
   reporter: [
     ["list"],
     ["html", { outputFolder: "../.devdata/playwright-report", open: "never" }],
+    // D-21: scripts/test-summary.sh names the failing specs from this file.
+    ["json", { outputFile: "../.devdata/test/e2e.json" }],
+    // In CI a failing spec is annotated on the run.
+    ...(process.env.CI ? ([["github"]] as const) : []),
   ],
   outputDir: "../.devdata/playwright-results",
   use: {
@@ -66,7 +77,7 @@ export default defineConfig({
     // test's own timeout.
     actionTimeout: 15_000,
     navigationTimeout: 30_000,
-    trace: "on-first-retry",
+    trace: "retain-on-failure",
     screenshot: "only-on-failure",
     // A pinned timezone and locale keep date text stable between machines.
     locale: "en-GB",

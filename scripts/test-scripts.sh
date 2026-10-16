@@ -248,6 +248,17 @@ expect pass "summary-vitest-fail" scripts/test-summary.sh "${summ}/vitest-fail.j
 expect_out "summary-vitest-fail names the file and test" "web/src/zz-summary-fixture.test.ts > summary fixture fails with a message"
 expect_out "summary-vitest-fail names the seed" "shuffle seed 1234"
 
+expect pass "summary-playwright-fail" scripts/test-summary.sh "${summ}/playwright-fail.json"
+expect_out "summary-playwright-fail names the file, spec and project" "FAIL zz-fixture.spec.ts > fails at top level [zzfixture]: Error: boom"
+expect_out "summary-playwright-fail names a spec inside a describe" "zz-fixture.spec.ts > fixture group > fails with a message [zzfixture]"
+expect_out "summary-playwright-fail names a timed-out spec" "times out waiting [zzfixture]: Test timeout of 200ms exceeded."
+printf '%s' '{"config":{},"suites":[{"title":"a.spec.ts","file":"a.spec.ts","specs":[{"title":"ok","ok":true,"tests":[{"projectName":"p","results":[{"status":"passed"}]}]}]}],"errors":[{"message":"Timed out waiting 1200s for the entire test run"}],"stats":{}}' >"${scratch}/playwright-global-timeout.json"
+expect pass "summary-playwright-global-timeout" scripts/test-summary.sh "${scratch}/playwright-global-timeout.json"
+expect_out "summary-playwright-global-timeout names the run error" "the run reported an error: Timed out waiting 1200s for the entire test run"
+printf '%s' '{"config":{},"suites":[{"title":"a.spec.ts","file":"a.spec.ts","specs":[{"title":"ok","ok":true,"tests":[{"projectName":"p","results":[{"status":"passed"}]}]}]}],"stats":{}}' >"${scratch}/playwright-pass.json"
+expect pass "summary-playwright-pass" scripts/test-summary.sh "${scratch}/playwright-pass.json"
+expect_out "summary-playwright-pass says so" "No failing tests (playwright-pass.json)"
+
 # --- test-web (06.1-15, D-03, D-18): shuffled, with a seed that reproduces the run ---
 expect pass "test-web-seeded" mk test-web WEB_SEED=42
 expect_out "test-web takes the seed from WEB_SEED" "seed=42"

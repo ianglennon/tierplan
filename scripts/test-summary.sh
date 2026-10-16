@@ -12,6 +12,11 @@
 #   - Vitest --reporter=json files. The seed is read from a sibling FILE.seed
 #     (make test-web writes it), because the JSON does not carry it.
 #
+#   - Playwright --reporter=json files (the e2e job writes e2e.json and
+#     e2e-copy.json). Each failing, timed-out or interrupted test is named as
+#     FILE > describe > spec title [project], and a run-level error (the
+#     globalTimeout message, a config failure) gets a line of its own.
+#
 # The list goes to stdout (the job log) and, when GITHUB_STEP_SUMMARY is set, to
 # that file as Markdown. Test names and output are data: they are only ever read
 # by jq, control characters are replaced, so a name cannot start a new log line
@@ -21,7 +26,7 @@
 # Usage: scripts/test-summary.sh FILE...
 # Exit: 0 when every file was read, with or without failures (the job's own
 # pass or fail comes from the test step); 1 when a file is missing, empty or
-# is neither format.
+# is none of these formats.
 set -euo pipefail
 
 if [ "$#" -eq 0 ]; then
@@ -80,6 +85,28 @@ def first_line: (. // "") | split("\n")[0];
 ] | add // []
 '
 
+# Records out of a Playwright JSON report. The top-level suites are files; nested
+# suites are describe blocks. A test counts as failing when any of its results
+# failed, timed out or was interrupted (retries are 0, so there is one result,
+# but a retry added later must not hide the failure).
+PLAYWRIGHT_RECORDS='
+def ansi: gsub("\u001b\\[[0-9;]*[A-Za-z]"; "");
+def first_line: (. // "") | ansi | split("\n")[0];
+def walk($file; $titles):
+  ( (.specs // [])[] as $sp
+    | ($sp.tests // [])[] as $t
+    | [ ($t.results // [])[] | select(.status == "failed" or .status == "timedOut" or .status == "interrupted") ] as $bad
+    | select(($bad | length) > 0)
+    | {kind: "test", pkg: $file,
+       test: ("> " + (($titles + [$sp.title]) | join(" > ")) + " [" + ($t.projectName // "?") + "]"),
+       seed: "",
+       detail: (($bad[0].error.message // $bad[0].errors[0].message // $bad[0].status) | first_line)} ),
+  ( (.suites // [])[] | walk($file; $titles + [.title]) );
+[ (.[0].suites // [])[] | walk(.file; []) ]
++ [ (.[0].errors // [])[] | {kind: "package", pkg: "playwright", test: "", seed: "",
+      detail: ("the run reported an error: " + ((.message // "unknown") | first_line))} ]
+'
+
 CLEAN='gsub("[\u0001-\u001f\u007f]"; " ") | .[0:300]'
 
 # One line of text per record. Fixed prefix first, so no test name can open a line.
@@ -117,7 +144,9 @@ for file in "$@"; do
   fi
 
   records=""
-  if jq -s -e '.[0] | type == "object" and has("testResults")' "${file}" >/dev/null 2>&1; then
+  if jq -s -e '.[0] | type == "object" and has("suites") and has("config")' "${file}" >/dev/null 2>&1; then
+    records="$(jq -s -c "${PLAYWRIGHT_RECORDS}" "${file}" 2>/dev/null)" || records=""
+  elif jq -s -e '.[0] | type == "object" and has("testResults")' "${file}" >/dev/null 2>&1; then
     seed=""
     if [ -r "${file%.json}.seed" ]; then
       seed="$(tr -cd '0-9' <"${file%.json}.seed" | head -c 20)"
@@ -132,7 +161,7 @@ for file in "$@"; do
     fi
   fi
   if [ -z "${records}" ]; then
-    echo "test-summary: ${file} is neither go test -json nor a Vitest JSON report" >&2
+    echo "test-summary: ${file} is neither go test -json, a Vitest JSON report nor a Playwright JSON report" >&2
     status=1
     continue
   fi
