@@ -77,6 +77,19 @@ func (f *envFix) caller(t *testing.T, e envBody, user, role string) *roleCaller 
 	return &roleCaller{f: f, t: t, e: e, cookie: cookie, csrf: csrf}
 }
 
+// revealCaller signs an Operator who also holds secrets.reveal: the permission a caller needs to add
+// a secret the service does not use (D-13 as amended, plan 06-48).
+func (f *envFix) revealCaller(t *testing.T, e envBody, user string) *roleCaller {
+	t.Helper()
+	id := f.addUser(t, user, false)
+	if rec := f.putGrant(t, f.cookie, f.csrf, "users", id, `{"scope":"env","envId":"`+e.ID+`","role":"operator","extras":["secrets.reveal"]}`); rec.Code != http.StatusCreated {
+		t.Fatalf("grant: %d %s", rec.Code, rec.Body)
+	}
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State != "" })
+	cookie, csrf := f.signIn(t, user, false)
+	return &roleCaller{f: f, t: t, e: e, cookie: cookie, csrf: csrf}
+}
+
 func (c *roleCaller) do(method, path, body string) *httptest.ResponseRecorder {
 	c.t.Helper()
 	return c.f.call(c.t, authReq{method: method, path: "/api/env/" + c.e.ID + "/" + path, body: body, cookie: c.cookie, csrf: c.csrf})
@@ -663,7 +676,7 @@ func TestApplyNameTakenMidwayRemovesWhatWasMade(t *testing.T) {
 
 func TestApplyObjectPermissionForAnOperator(t *testing.T) {
 	f, e := actionsEnv(t, nil, editableService(nil))
-	op := f.caller(t, e, "operator-1", "operator")
+	op := f.revealCaller(t, e, "operator-1")
 	_, body := op.maskedSpec("svc-api", refsStaged)
 	rec := op.apply("svc-api", withObjects(t, body, stagedObjects()))
 	if rec.Code != http.StatusForbidden || problemType(t, rec) != "object_permission" {
@@ -737,7 +750,7 @@ func TestApplyRefusesBadObjectsBeforeAnythingIsSent(t *testing.T) {
 
 func TestReviewListsMissingSecretsAndConfigs(t *testing.T) {
 	f, e := actionsEnv(t, nil, editableService(nil))
-	op := f.caller(t, e, "operator-1", "operator")
+	op := f.revealCaller(t, e, "operator-1")
 	_, body := op.maskedSpec("svc-api", refsStaged)
 	rec := op.review("svc-api", body)
 	var got struct {
@@ -799,7 +812,7 @@ func TestServiceWriteObjectsMissingNamesEveryKindOfMissingObject(t *testing.T) {
 	}
 	t.Run("an apply missing only a secret", func(t *testing.T) {
 		f, e := actionsEnv(t, nil, editableService(nil))
-		op := f.caller(t, e, "operator-1", "operator")
+		op := f.revealCaller(t, e, "operator-1")
 		_, body := op.maskedSpec("svc-api", secretOnly)
 		check(t, f, op.apply("svc-api", body),
 			"The spec names objects that don't exist: secrets db-pass. Create them first.",
