@@ -53,6 +53,11 @@ const hostNetwork = "host"
 //
 // A lookup that is nil or fails finds nothing: the engine refuses an unknown
 // network itself when it is handed the spec.
+//
+// The agent adds two rules of its own on top (D-36/D-38 as amended), which the server
+// and the compose policies do not apply and which SpecVector.AgentRefuses marks:
+// pluginVolumes, because a plugin's options cannot be judged, and namedVolumes,
+// because the server does not inspect volumes.
 func escalations(ctx context.Context, spec swarm.ServiceSpec, lookup networkLookup) []string {
 	var out []string
 	const task = "TaskTemplate."
@@ -127,6 +132,32 @@ func volumeEscalation(req volume.CreateRequest) string {
 	return ""
 }
 
+// pluginVolumes returns the spec path of each mount that names a volume plugin, in the
+// order of the spec: the DriverConfig name of a mount whose driver is neither empty nor
+// local (compared lower-cased and trimmed), and the Type of a cluster mount, which is
+// a CSI volume and so always a plugin. A plugin's options cannot be judged, so they are
+// host access until the owner opts in; the server and the compose policies pass them
+// (D-38), the agent is stricter on purpose.
+func pluginVolumes(spec swarm.ServiceSpec) []string {
+	cs := spec.TaskTemplate.ContainerSpec
+	if cs == nil {
+		return nil
+	}
+	var out []string
+	for i, m := range cs.Mounts {
+		at := fmt.Sprintf("TaskTemplate.ContainerSpec.Mounts[%d]", i)
+		if vo := m.VolumeOptions; vo != nil && vo.DriverConfig != nil {
+			if name := strings.ToLower(strings.TrimSpace(vo.DriverConfig.Name)); name != "" && name != "local" {
+				out = append(out, at+".VolumeOptions.DriverConfig.Name")
+			}
+		}
+		if m.Type == mount.TypeCluster {
+			out = append(out, at+".Type")
+		}
+	}
+	return out
+}
+
 // namedVolumes returns the spec path of the Source of each volume mount that cannot be
 // shown to be free of host access, in the order of the spec. Docker mounts a volume
 // that exists as it is, and a service spec says nothing of what backs its name, so the
@@ -183,6 +214,7 @@ func checkHostPolicy(spec swarm.ServiceSpec, env bodyEnv) error {
 		ctx = context.Background()
 	}
 	found := escalations(ctx, spec, env.lookup)
+	found = append(found, pluginVolumes(spec)...)
 	found = append(found, namedVolumes(ctx, spec, env.volumes)...)
 	if len(found) > 0 {
 		return fmt.Errorf("%w: %w: %s", errBodyRefused, errHostPolicy, strings.Join(found, ", "))

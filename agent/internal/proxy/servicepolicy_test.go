@@ -100,6 +100,35 @@ func TestServicePolicyAZeroEnvIsTheStrictestReading(t *testing.T) {
 	}
 }
 
+func TestPluginVolumesNameEachMountWithAnotherDriver(t *testing.T) {
+	spec := sampleSpec()
+	spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{
+		{Type: mount.TypeVolume, Source: "a", Target: "/a", VolumeOptions: &mount.VolumeOptions{
+			DriverConfig: &mount.Driver{Name: "local", Options: map[string]string{"type": "nfs", "o": "addr=10.0.0.5", "device": ":/x"}}}},
+		{Type: mount.TypeVolume, Source: "b", Target: "/b", VolumeOptions: &mount.VolumeOptions{
+			DriverConfig: &mount.Driver{Name: "rexray/ebs"}}},
+		{Type: mount.TypeBind, Source: "/srv/ok", Target: "/c"},
+		{Type: mount.TypeCluster, Source: "csi-vol", Target: "/d"},
+	}
+	want := []string{
+		"TaskTemplate.ContainerSpec.Mounts[1].VolumeOptions.DriverConfig.Name",
+		"TaskTemplate.ContainerSpec.Mounts[3].Type",
+	}
+	if got := pluginVolumes(spec); !slices.Equal(got, want) {
+		t.Fatalf("pluginVolumes = %v, want %v", got, want)
+	}
+
+	for _, name := range []string{"LOCAL", " local ", ""} {
+		spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{
+			{Type: mount.TypeVolume, Source: "a", Target: "/a", VolumeOptions: &mount.VolumeOptions{
+				DriverConfig: &mount.Driver{Name: name}}},
+		}
+		if got := pluginVolumes(spec); len(got) != 0 {
+			t.Errorf("driver %q: pluginVolumes = %v, want none", name, got)
+		}
+	}
+}
+
 func TestEscalationsNameTheSpecPathOfEachFinding(t *testing.T) {
 	spec := sampleSpec()
 	cs := spec.TaskTemplate.ContainerSpec

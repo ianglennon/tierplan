@@ -102,8 +102,8 @@ const (
 	// would change something.
 	DeniedReadOnly = "read_only_flag"
 	// DeniedHostPolicy means the host did not set
-	// BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES and the service spec gives tasks
-	// host access.
+	// BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES and the service spec, a volume it
+	// mounts, or a volume create gives tasks host access.
 	DeniedHostPolicy = "host_policy"
 )
 
