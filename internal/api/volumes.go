@@ -615,6 +615,15 @@ func volumeCreateProblem(log *slog.Logger, envID, name string, err error) (strin
 	if errors.Is(err, errVolumeExists) || dockerx.IsConflict(err) {
 		return problemNameTaken, httpx.Problem(http.StatusConflict, problemNameTaken, "A volume named "+name+" already exists on that node.")
 	}
+	// The agent refuses a volume that mounts the host as it refuses a service that does
+	// (D-36): the same code and the same setting that lifts it. It is not an out-of-date
+	// agent, so it is not agent_policy_denied.
+	var denied *envs.AgentPolicyDeniedError
+	if errors.As(envs.ClassifyDockerError(err), &denied) && denied.HostPolicy {
+		return codeAgentHostPolicy, httpx.Problem(http.StatusConflict, codeAgentHostPolicy,
+			"This host's agent doesn't let Bayplan create a volume that mounts a host folder outside /srv, /mnt and /media, mounts a device, or uses a volume plugin. "+
+				"Its owner can allow it by setting BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true on the agent.")
+	}
 	return networkWriteProblem(log, envID, err)
 }
 
