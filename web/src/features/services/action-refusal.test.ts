@@ -51,3 +51,37 @@ describe("refusalOf secret_reveal_required", () => {
     expect(refusalOf(t, e, ctx).message).toContain("db-pass, api-key");
   });
 });
+
+// The 422 of plan 06-52: a previous spec (or an edited one) with a secret reference whose name is
+// not the name of the secret its ID points at.
+const mismatch =
+  "TaskTemplate.ContainerSpec.Secrets[0]: the SecretName victim-secret is not the name of the secret its SecretID points at";
+const specInvalid = (detail?: string, specEntries = [{ location: "spec", message: mismatch }]) =>
+  new ServiceActionError(422, "spec_invalid", new Map(), detail, specEntries);
+
+describe("refusalOf spec_invalid", () => {
+  it("words a rollback with the server's message and who can fix it, not the generic sentence", () => {
+    const r = refusalOf(t, specInvalid(), { ...ctx, action: "rollback" });
+    expect(r.message).toBe(
+      `Can't roll back: the earlier version can't be sent as it is (${mismatch}). Ask an administrator to correct the service.`,
+    );
+    expect(r.message).not.toContain("Something went wrong");
+    expect(r.agentPolicy).toBe(false);
+  });
+
+  it("words an update with the same message", () => {
+    expect(refusalOf(t, specInvalid(), ctx).message).toBe(
+      `The change can't be sent as it is: ${mismatch}.`,
+    );
+  });
+
+  it("falls back to the detail when no entry is at spec", () => {
+    const r = refusalOf(t, specInvalid("The service spec can't be read", []), ctx);
+    expect(r.message).toBe("The change can't be sent as it is: The service spec can't be read.");
+  });
+
+  it("is the generic sentence with neither an entry nor a detail", () => {
+    const r = refusalOf(t, specInvalid(undefined, []), ctx);
+    expect(r.message).toContain("Something went wrong on the server");
+  });
+});
