@@ -158,7 +158,7 @@
       "refusal": "This service uses settings that need Admin: {{list}}. Ask an administrator to apply it.",
       "findings": {
         "bind_path": "a bind mount of {{value}}",
-        "volume_device": "a volume on the host path {{value}}",
+        "volume_device": "a local volume that mounts {{value}}",
         "npipe": "a named pipe mount of {{value}}",
         "cap_add": "the {{value}} capability",
         "selinux": "SELinux set to {{value}}",

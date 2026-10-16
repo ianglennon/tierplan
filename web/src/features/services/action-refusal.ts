@@ -57,6 +57,13 @@ export function refusalOf(t: Translate, err: unknown, ctx: RefusalContext): Refu
       const key = ctx.action === "rollback" ? "secretRevealRollback" : "secretReveal";
       return say(t(`services.refusal.${key}`, { list }));
     }
+    case "spec_invalid": {
+      // The manager's own words say which reference is wrong; the entry at spec carries them.
+      const message = e.entries.find((f) => f.location === "spec")?.message ?? e.detail;
+      if (!message) return say(t("services.refusal.generic"));
+      const key = ctx.action === "rollback" ? "specInvalidRollback" : "specInvalid";
+      return say(t(`services.refusal.${key}`, { message }));
+    }
     case "service_changed":
     case "service_not_found":
     case "no_quorum":
