@@ -66,16 +66,30 @@ test:
 # machine needs a Docker it can reach. The agent tests always start their own
 # dind (they need a network the in-process Bayplan is reachable on) and load the
 # agent image into it, so the image is built first.
+#
+# Only the packages whose tests change under the tag run (D-05 shuffles them):
+# scripts/tagged-packages.sh derives the list, so a newly tagged package is never
+# missed, and an empty list fails the target. Every other internal package is the
+# unit suite, which `make test` already ran. $(shell) expands inside the recipe
+# only, so no other target pays for `go list`.
 test-int: agent-image
-	go test -tags=integration -race -count=1 -timeout 30m ./internal/...
+	@set -e; pkgs="$(shell scripts/tagged-packages.sh integration)"; \
+	if [ -z "$$pkgs" ]; then echo "test-int: no package has integration-tagged tests" >&2; exit 1; fi; \
+	echo "test-int: $$pkgs"; \
+	go test -tags=integration -race -count=1 -shuffle=on -timeout 30m $$pkgs
 
 # The multi-node suite (D-57, D-58), build tag `swarm`: real agents in a dind swarm
 # of 3 managers and 1 worker, for the engine BAYPLAN_TEST_ENGINE names (default
-# 29). Needs Docker it can reach, with buildx for the agent image. One engine takes
-# about 17 minutes on a developer machine, so the 40 minute timeout (CI allows 45
-# for the job) is a margin, not a target.
+# 29). Needs Docker it can reach, with buildx for the agent image. Only the
+# swarm-tagged package (internal/agents) runs, derived like test-int's list. One
+# engine took about 17 minutes on a developer machine when every internal package
+# ran (RESEARCH's estimate, until 06.1-25 measures the scoped run), so
+# the 40 minute timeout (CI allows 50 for the job, D-22) is a margin, not a target.
 test-swarm: agent-image
-	go test -tags=swarm -race -count=1 -timeout 40m ./internal/...
+	@set -e; pkgs="$(shell scripts/tagged-packages.sh swarm)"; \
+	if [ -z "$$pkgs" ]; then echo "test-swarm: no package has swarm-tagged tests" >&2; exit 1; fi; \
+	echo "test-swarm: $$pkgs"; \
+	go test -tags=swarm -race -count=1 -shuffle=on -timeout 40m $$pkgs
 
 smoke:
 	scripts/smoke.sh

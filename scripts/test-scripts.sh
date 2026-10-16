@@ -165,6 +165,23 @@ fi
 expect pass "dev-web-host" mk dev-web DEV_WEB_HOST=0.0.0.0
 expect_out "dev-web-host passes --host" "--host 0.0.0.0"
 
+# --- Tagged packages (06.1-10): test-int and test-swarm run only what a tag adds ---
+expect pass "tagged-packages-integration" scripts/tagged-packages.sh integration
+expect_out "tagged-packages-integration lists dockerx" "internal/dockerx"
+expect_out "tagged-packages-integration lists registry" "internal/registry"
+expect pass "tagged-packages-swarm" scripts/tagged-packages.sh swarm
+expect_out "tagged-packages-swarm lists agents" "internal/agents"
+expect fail "tagged-packages-unused-tag" scripts/tagged-packages.sh no-such-tag
+expect_out "tagged-packages-unused-tag says why" "no package has tests under the build tag no-such-tag"
+expect fail "tagged-packages-no-argument" scripts/tagged-packages.sh
+expect pass "test-int-shuffled" mk test-int
+expect_out "test-int shuffles" "-shuffle=on"
+expect_out "test-int is scoped to the tagged packages" "internal/dockerx"
+if grep -qF -- "./internal/..." <<<"${LAST_OUT}"; then
+  echo "SCRIPT TEST FAIL: test-int-scoped (must not run ./internal/...)"
+  failures=$((failures + 1))
+fi
+
 # Vite's own host check: a Host header it does not know is answered 403 unless the
 # public URL's host name was passed in BAYPLAN_DEV_PUBLIC_URL.
 # vite_status <public-url-or-empty> <host-header>: prints the HTTP status.
