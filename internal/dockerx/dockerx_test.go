@@ -23,6 +23,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/engine"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 func dockerFacts(version string) dockerx.VersionFacts {
@@ -854,16 +855,23 @@ func TestSnapshotFailsWhenTheEngineIsDown(t *testing.T) {
 // The events stream (plan 21, ENV-07, D-57, A12, Pitfall 7). The fake daemon
 // serves /events over a real socket, so the real client code runs.
 
-// waitFor polls cond until it holds, failing after ten seconds.
-func waitFor(t *testing.T, what string, cond func() bool) {
+// awaitFake blocks until cond holds, woken by every change of the fake daemon (a request
+// served, a stream opened or closed), and fails naming what was awaited. It never polls.
+func awaitFake(t *testing.T, fake *dockertest.Fake, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(2 * time.Millisecond)
+	if err := fake.Await(testsupport.Context(t), cond); err != nil {
+		t.Fatalf("waiting for %s: %v", what, err)
 	}
+}
+
+// listRequested reports whether the fake has received a container list request.
+func listRequested(fake *dockertest.Fake) bool {
+	for _, p := range fake.Requests() {
+		if strings.HasSuffix(p, "/containers/json") {
+			return true
+		}
+	}
+	return false
 }
 
 // recvRow waits for the next row, failing when none comes.
@@ -944,7 +952,7 @@ func TestEventsDropsAttachDetachResizeAndTopToo(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rows, _ := newClient(t, fake).Events(ctx, time.Time{})
-	waitFor(t, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
+	awaitFake(t, fake, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
 
 	for _, a := range []string{"attach", "detach", "resize", "top", "exec_die", "exec_create: sh"} {
 		fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: a, ActorID: "c1"})
@@ -960,7 +968,7 @@ func TestEventsCopyOnlyTheAllowlistedAttributes(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rows, _ := newClient(t, fake).Events(ctx, time.Time{})
-	waitFor(t, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
+	awaitFake(t, fake, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
 
 	fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "die", ActorID: "c1", Attributes: map[string]string{
 		"name": "web", "image": "nginx:1.27", "exitCode": "137", "signal": "9",
@@ -1015,7 +1023,7 @@ func TestEventsTurnAHealthStatusChangeIntoAnInvalidateOnlyRowWithoutAttributes(t
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rows, _ := newClient(t, fake).Events(ctx, time.Time{})
-	waitFor(t, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
+	awaitFake(t, fake, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
 
 	fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "health_status: unhealthy", ActorID: "c1", Attributes: map[string]string{
 		"name": "web", "image": "nginx:1.27", "healthcheck": "curl -u admin:hunter2 localhost", "API_TOKEN": "hunter2",
@@ -1044,7 +1052,7 @@ func TestEventsAskForTheEightTypesAndPassSinceAsSecondsOrSecondsAndNanoseconds(t
 	_, _ = cli.Events(ctx, time.Unix(1700000000, 0))
 	_, _ = cli.Events(ctx, time.Unix(1700000000, 123456789))
 	_, _ = cli.Events(ctx, time.Time{})
-	waitFor(t, "three requests", func() bool { return len(fake.EventQueries()) == 3 })
+	awaitFake(t, fake, "three requests", func() bool { return len(fake.EventQueries()) == 3 })
 
 	qs := fake.EventQueries()
 	sinces := []string{qs[0].Get("since"), qs[1].Get("since"), qs[2].Get("since")}
@@ -1067,7 +1075,7 @@ func TestEventsEndsWithAnErrorWhenTheStreamDrops(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rows, errc := newClient(t, fake).Events(ctx, time.Time{})
-	waitFor(t, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
+	awaitFake(t, fake, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
 
 	fake.DropEventStreams()
 	select {
@@ -1087,7 +1095,7 @@ func TestEventsStopsWhenTheContextEnds(t *testing.T) {
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
 	ctx, cancel := context.WithCancel(context.Background())
 	rows, errc := newClient(t, fake).Events(ctx, time.Time{})
-	waitFor(t, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
+	awaitFake(t, fake, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
 
 	cancel()
 	select {
@@ -1101,7 +1109,7 @@ func TestEventsStopsWhenTheContextEnds(t *testing.T) {
 	if err := <-errc; !errors.Is(err, context.Canceled) {
 		t.Errorf("error = %v, want context.Canceled", err)
 	}
-	waitFor(t, "the daemon to see the stream end", func() bool { return fake.OpenEventStreams() == 0 })
+	awaitFake(t, fake, "the daemon to see the stream end", func() bool { return fake.OpenEventStreams() == 0 })
 }
 
 func TestEventsDoesNotHoldTheClientLockSoProbeStillRuns(t *testing.T) {
@@ -1113,7 +1121,7 @@ func TestEventsDoesNotHoldTheClientLockSoProbeStillRuns(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	_, _ = cli.Events(ctx, time.Time{})
-	waitFor(t, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
+	awaitFake(t, fake, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
 
 	pctx, pcancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer pcancel()
@@ -1161,7 +1169,9 @@ func TestProbeIsNotDelayedByASlowSnapshot(t *testing.T) {
 		_, err := cli.Snapshot(sctx, false)
 		done <- err
 	}()
-	time.Sleep(50 * time.Millisecond)
+	// The snapshot is in flight once the fake has received its list request, which it then
+	// holds for ListDelay.
+	awaitFake(t, fake, "the snapshot's list request to reach the daemon", func() bool { return listRequested(fake) })
 
 	pctx, pcancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer pcancel()
@@ -1190,7 +1200,7 @@ func TestASnapshotOnTheOldClientSurvivesARenegotiation(t *testing.T) {
 		snap, err := cli.Snapshot(context.Background(), false)
 		done <- result{snap, err}
 	}()
-	time.Sleep(50 * time.Millisecond)
+	awaitFake(t, fake, "the snapshot's list request to reach the daemon", func() bool { return listRequested(fake) })
 	// Probe swaps in a freshly negotiated client and closes the old one.
 	if _, err := cli.Probe(context.Background()); err != nil {
 		t.Fatalf("Probe: %v", err)
