@@ -945,3 +945,132 @@ func TestServiceApplyASecretTheServiceDoesNotUseNeedsTheRevealPermission(t *test
 		}
 	})
 }
+
+// TestServiceApplyCannotAttachASecretByGivingAUsedReferenceAnotherSecretsName is the two-step rename of
+// review finding CR-01: keep a used SecretID under another secret's name, then name that secret alone.
+// A secret reference is identified by its engine ID, so the first step is refused for everyone and the
+// second still needs secrets.reveal.
+func TestServiceApplyCannotAttachASecretByGivingAUsedReferenceAnotherSecretsName(t *testing.T) {
+	twoSecrets := func(cfg *dockertest.FakeConfig) {
+		cfg.Secrets = []dockertest.FakeSecret{{ID: "sec-db", Name: "db-pass"}, {ID: "sec-victim", Name: "victim-secret"}}
+	}
+	file := func() map[string]any {
+		return map[string]any{"Name": "/run/secrets/db-pass", "UID": "0", "GID": "0", "Mode": 0o444}
+	}
+	usesDBPass := func(fs *dockertest.FakeService) {
+		fs.Spec.TaskTemplate.ContainerSpec.Secrets = []*swarm.SecretReference{{
+			SecretID: "sec-db", SecretName: "db-pass",
+			File: &swarm.SecretReferenceFileTarget{Name: "/run/secrets/db-pass", UID: "0", GID: "0", Mode: 0o444},
+		}}
+	}
+	// storedMismatch is a service whose stored spec carries the misleading name, as one stored before
+	// this release may.
+	storedMismatch := func(fs *dockertest.FakeService) {
+		usesDBPass(fs)
+		fs.Spec.TaskTemplate.ContainerSpec.Secrets[0].SecretName = "victim-secret"
+	}
+	setRef := func(ref map[string]any) func(spec map[string]any) {
+		return func(spec map[string]any) { containerSpecOf(spec)["Secrets"] = []any{ref} }
+	}
+	setReplicas := func(spec map[string]any) {
+		mode, _ := spec["Mode"].(map[string]any)
+		rep, _ := mode["Replicated"].(map[string]any)
+		rep["Replicas"] = 3
+	}
+	specInvalid := func(t *testing.T, what string, rec *httptest.ResponseRecorder) {
+		t.Helper()
+		if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "spec_invalid" {
+			t.Fatalf("%s: %d %s, want 422 spec_invalid", what, rec.Code, rec.Body)
+		}
+		var prob actionProblem
+		if err := json.Unmarshal(rec.Body.Bytes(), &prob); err != nil {
+			t.Fatal(err)
+		}
+		msg := prob.at("spec")
+		if !strings.Contains(msg, "TaskTemplate.ContainerSpec.Secrets[0]") || !strings.Contains(msg, "victim-secret") {
+			t.Errorf("%s: the spec entry = %q (errors %+v), want the path and victim-secret named", what, msg, prob.Errors)
+		}
+	}
+
+	t.Run("step 1: a used ID under another secret's name is refused for an operator and an env admin", func(t *testing.T) {
+		for _, role := range []string{"operator", "admin"} {
+			f, e := actionsEnv(t, twoSecrets, editableService(usesDBPass))
+			c := f.caller(t, e, role+"-1", role)
+			_, body := c.maskedSpec("svc-api", setRef(map[string]any{"SecretID": "sec-db", "SecretName": "victim-secret", "File": file()}))
+			specInvalid(t, role+" review", c.review("svc-api", body))
+			specInvalid(t, role+" apply", c.apply("svc-api", body))
+			if w := f.fake.Writes(); len(w) != 0 {
+				t.Fatalf("%s: writes = %v, a refused spec is never sent", role, w)
+			}
+			rows := f.serviceAudits(t)
+			if len(rows) != 1 || rows[0].Action != audit.ActionServiceUpdated || rows[0].Result != string(audit.ResultFailure) || rows[0].Reason != "spec_invalid" {
+				t.Fatalf("%s: audit rows = %+v, want one service.updated failure with reason spec_invalid (a review is not audited)", role, rows)
+			}
+		}
+	})
+
+	t.Run("step 2: naming that secret alone, from a stored mismatch, needs secrets.reveal", func(t *testing.T) {
+		alone := setRef(map[string]any{"SecretName": "victim-secret", "File": file()})
+
+		f, e := actionsEnv(t, twoSecrets, editableService(storedMismatch))
+		op := f.caller(t, e, "operator-1", "operator")
+		_, body := op.maskedSpec("svc-api", alone)
+		for name, do := range map[string]func(service, body string) *httptest.ResponseRecorder{"review": op.review, "apply": op.apply} {
+			rec := do("svc-api", body)
+			if rec.Code != http.StatusForbidden || problemType(t, rec) != "secret_reveal_required" {
+				t.Fatalf("%s by an operator: %d %s, want 403 secret_reveal_required", name, rec.Code, rec.Body)
+			}
+			var prob actionProblem
+			if err := json.Unmarshal(rec.Body.Bytes(), &prob); err != nil {
+				t.Fatal(err)
+			}
+			if len(prob.Errors) != 1 || prob.at("TaskTemplate.ContainerSpec.Secrets[0]") != "victim-secret" {
+				t.Errorf("%s errors = %+v, want exactly Secrets[0]: victim-secret", name, prob.Errors)
+			}
+		}
+		if w := f.fake.Writes(); len(w) != 0 {
+			t.Fatalf("writes = %v, a refused spec is never sent", w)
+		}
+
+		f, e = actionsEnv(t, twoSecrets, editableService(storedMismatch))
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		_, body = admin.maskedSpec("svc-api", alone)
+		if rec := admin.apply("svc-api", body); rec.Code != http.StatusAccepted {
+			t.Fatalf("apply by an env admin: %d %s, want 202", rec.Code, rec.Body)
+		}
+		ups := f.fake.ServiceUpdates()
+		if len(ups) != 1 {
+			t.Fatalf("updates = %+v, want the admin's one", ups)
+		}
+		refs := ups[0].Spec.TaskTemplate.ContainerSpec.Secrets
+		if len(refs) != 1 || refs[0].SecretID != "sec-victim" {
+			t.Errorf("secrets sent = %+v, want one carrying victim-secret's own ID sec-victim", refs)
+		}
+	})
+
+	t.Run("a spec stored with the mismatch is sent again once its name is corrected", func(t *testing.T) {
+		f, e := actionsEnv(t, twoSecrets, editableService(storedMismatch))
+		op := f.caller(t, e, "operator-1", "operator")
+		_, body := op.maskedSpec("svc-api", setReplicas)
+		specInvalid(t, "an unchanged mismatching reference with new replicas", op.apply("svc-api", body))
+		if w := f.fake.Writes(); len(w) != 0 {
+			t.Fatalf("writes = %v, a refused spec is never sent", w)
+		}
+
+		_, body = op.maskedSpec("svc-api", func(spec map[string]any) {
+			setReplicas(spec)
+			setRef(map[string]any{"SecretID": "sec-db", "SecretName": "db-pass", "File": file()})(spec)
+		})
+		if rec := op.apply("svc-api", body); rec.Code != http.StatusAccepted {
+			t.Fatalf("apply with the name corrected: %d %s, want 202", rec.Code, rec.Body)
+		}
+		ups := f.fake.ServiceUpdates()
+		if len(ups) != 1 {
+			t.Fatalf("updates = %+v, want one", ups)
+		}
+		refs := ups[0].Spec.TaskTemplate.ContainerSpec.Secrets
+		if len(refs) != 1 || refs[0].SecretID != "sec-db" || refs[0].SecretName != "db-pass" {
+			t.Errorf("secrets sent = %+v, want sec-db named db-pass", refs)
+		}
+	})
+}
