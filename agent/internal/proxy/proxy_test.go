@@ -38,8 +38,12 @@ type fakeSocket struct {
 	// release lets the /events and /logs handlers finish.
 	release chan struct{}
 	// answers maps a request path to the JSON the daemon answers with, for the
-	// network lookups a service-spec check makes. Set before the first request.
+	// network and volume lookups a service-spec check makes. Set before the first
+	// request.
 	answers map[string]string
+	// status maps a request path in answers to the status it is answered with,
+	// where it is not 200. Set before the first request.
+	status map[string]int
 }
 
 func newFakeSocket(t *testing.T) *fakeSocket {
@@ -90,7 +94,17 @@ func (f *fakeSocket) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if answer, ok := f.answers[r.URL.Path]; ok {
 		w.Header().Set("Content-Type", "application/json")
+		if code, ok := f.status[r.URL.Path]; ok {
+			w.WriteHeader(code)
+		}
 		_, _ = w.Write([]byte(answer))
+		return
+	}
+	if name, ok := strings.CutPrefix(r.URL.Path, "/volumes/"); ok && r.Method == http.MethodGet && name != "" {
+		// An engine answers a volume it does not have with 404.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"get ` + name + `: no such volume"}`))
 		return
 	}
 	w.Header().Set("Api-Version", "1.52")
@@ -910,6 +924,55 @@ func TestHostPolicyAVolumeThatMountsTheHostIsRefusedSoAServiceCannotMountItByNam
 			t.Fatalf("status %d, want 200", resp.StatusCode)
 		}
 		if got := sock.requests(); !slices.Equal(got, []string{"POST /volumes/create"}) {
+			t.Fatalf("the engine saw %v", got)
+		}
+	})
+}
+
+// A volume that already exists (made outside Bayplan, or while the host had opted in)
+// is mounted as it is, so the agent asks its own engine what backs a name a service
+// mounts (S2-CR-01, plan 06-44).
+func TestHostPolicyAServiceCannotMountAPreExistingVolumeThatMountsTheHost(t *testing.T) {
+	const hostroot = `{"Name":"hostroot","Driver":"local","Options":{"type":"none","o":"bind","device":"/"},"Scope":"local"}`
+	spec := sampleSpec()
+	spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{{Type: mount.TypeVolume, Source: "hostroot", Target: "/host"}}
+	for _, tc := range []struct{ name, target, wantMsg string }{
+		{"a create", "/services/create", "agent_policy_denied: host_policy: POST /services/create"},
+		{"an update", "/services/web/update?version=3", "agent_policy_denied: host_policy: POST /services/web/update"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sock := newFakeSocket(t)
+			sock.answers = map[string]string{"/volumes/hostroot": hostroot}
+			var reasons []string
+			h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+			resp := do(t, h, postJSON("POST", tc.target, enc(t, spec)))
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("status %d, want 403", resp.StatusCode)
+			}
+			var msg struct{ Message string }
+			if err := json.NewDecoder(resp.Body).Decode(&msg); err != nil || msg.Message != tc.wantMsg {
+				t.Fatalf("message = %q (%v), want %q", msg.Message, err, tc.wantMsg)
+			}
+			if !slices.Equal(reasons, []string{"host_policy"}) {
+				t.Errorf("onDenied reasons = %v, want [host_policy]", reasons)
+			}
+			if got := sock.requests(); !slices.Equal(got, []string{"GET /volumes/hostroot"}) {
+				t.Fatalf("the engine saw %v, want the one volume lookup", got)
+			}
+		})
+	}
+
+	t.Run("the opt-in forwards it without a lookup", func(t *testing.T) {
+		sock := newFakeSocket(t)
+		sock.answers = map[string]string{"/volumes/hostroot": hostroot}
+		h := Handler(sock.path, Policy{AllowPrivilegedServices: true}, nil)
+		resp := do(t, h, postJSON("POST", "/services/create", enc(t, spec)))
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status %d, want 200", resp.StatusCode)
+		}
+		if got := sock.requests(); !slices.Equal(got, []string{"POST /services/create"}) {
 			t.Fatalf("the engine saw %v", got)
 		}
 	})
