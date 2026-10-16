@@ -119,15 +119,17 @@ func escalations(ctx context.Context, spec swarm.ServiceSpec, lookup networkLook
 // "" when nothing does. It is the volume-create half of the D-36 host-access
 // definition (D-36/D-38 as amended): a volume created here can be mounted by name in
 // a service whose spec carries no host path for escalations to judge. A local volume
-// (named or not) whose options mount a device that fails hostpath.Bad is
-// "DriverOpts.device"; any other driver is "Driver", because a plugin's options cannot
-// be judged and so are host access until the owner opts in.
+// (named or not) is judged by hostpath.LocalVolumeHostAccess, the way the daemon mounts
+// it: "DriverOpts.device" for a bind of a relative or disallowed path, "DriverOpts.type"
+// for a filesystem type other than tmpfs or a network share. Any other driver is
+// "Driver", because a plugin's options cannot be judged and so are host access until the
+// owner opts in.
 func volumeEscalation(req volume.CreateRequest) string {
 	if name := strings.ToLower(strings.TrimSpace(req.Driver)); name != "" && name != "local" {
 		return "Driver"
 	}
-	if dev, mounted := hostpath.LocalDeviceMounted(req.DriverOpts); mounted && hostpath.Bad(dev) {
-		return "DriverOpts.device"
+	if key := hostpath.LocalVolumeHostAccess(req.DriverOpts); key != "" {
+		return "DriverOpts." + key
 	}
 	return ""
 }

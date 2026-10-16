@@ -53,21 +53,24 @@ func Socket(p string) bool {
 	return slices.Contains(socketNames, path.Base(path.Clean(p)))
 }
 
-// Bad reports whether a bind source (or local-driver device) gives the
+// Bad reports whether a bind source (a compose or service bind mount) gives the
 // container something it should not have without env Admin. The path is
 // cleaned first, so .., repeated separators and a trailing slash do not hide
-// it.
+// it. Compose reads a relative bind source against the project directory; that
+// reading does not hold for a local-driver volume device, which dockerd passes
+// to mount(2) unchanged, so LocalVolumeHostAccess judges that and not Bad.
 //
 //   - A runtime socket name or the Docker pipe is bad wherever it is, absolute
 //     or relative.
 //   - An absolute path is bad unless it is under a data root (DataRoots) or
 //     strictly below /var/log.
 //   - A path starting with ~ is bad: compose expands it to a home directory.
-//   - A named volume or a relative path inside the project is fine. A relative
-//     path that climbs out of the project with .. cannot be placed without the
-//     project directory, so what follows the climb is read as if it started at
-//     the root: ../../../../var/run/docker.sock is bad, ../shared is not. Two
-//     or more .. with nothing after them (../..) could be the root and are bad.
+//   - A named volume or a relative path inside the project is fine, for a bind
+//     source (not for a local-driver device, see above). A relative path that
+//     climbs out of the project with .. cannot be placed without the project
+//     directory, so what follows the climb is read as if it started at the
+//     root: ../../../../var/run/docker.sock is bad, ../shared is not. Two or
+//     more .. with nothing after them (../..) could be the root and are bad.
 func Bad(p string) bool {
 	p = strings.TrimSpace(p)
 	if Socket(p) {
@@ -125,7 +128,8 @@ func ClimbingBad(p string) bool {
 // mounts its device: the local driver does so for type none with o bind (a bind
 // of a host path) and for any filesystem type other than a network one (a host
 // block device such as /dev/sda1). With no type and no bind option nothing is
-// mounted. The values are compared case-insensitively.
+// mounted. The values are compared case-insensitively. A volume judged as the
+// engine mounts it uses LocalVolumeHostAccess instead.
 func MountsDevice(o, fsType string) bool {
 	if strings.Contains(strings.ToLower(o), "bind") {
 		return true
@@ -151,5 +155,46 @@ func LocalDeviceMounted(opts map[string]string) (device string, mounted bool) {
 	return device, true
 }
 
-// LocalVolumeHostAccess is a stub so the test compiles; replaced in the next commit.
-func LocalVolumeHostAccess(opts map[string]string) string { return "" }
+// LocalVolumeHostAccess judges the options of a local-driver volume the way
+// dockerd uses them, and returns the option key that gives tasks host access
+// ("device" or "type"), or "" when none does.
+//
+// dockerd hands device, type and o to mount(2) unchanged, so a relative device
+// is read against the daemon's own working directory (usually /), not against a
+// project directory. The rule is therefore different from Bad's:
+//
+//  1. When o contains bind (compared case-insensitively) or the trimmed,
+//     lower-cased type is none, the daemon binds device as given. An empty
+//     device mounts nothing and gives "". A device that does not start with /
+//     gives "device", as does one with leading or trailing white space (Bad
+//     would trim it first, but the daemon does not). Otherwise Bad decides.
+//     This holds whatever the type is, so a bind given with a network type is
+//     judged as a bind.
+//  2. Otherwise the trimmed, lower-cased type decides. No type (nothing is
+//     mounted), tmpfs (memory; the device is only a label) and the members of
+//     NetworkFSTypes (the device is a remote share) give "". Any other type
+//     gives "type": a block-device filesystem, an overlay whose options name
+//     host directories and a host pseudo filesystem (proc, sysfs, devtmpfs,
+//     cgroup2) get host access from the type, which a path check cannot see.
+//
+// Per D-36/D-38 as amended this is what "or a device" means. The set of
+// allowed types is closed on purpose: widening it needs an agent release.
+func LocalVolumeHostAccess(opts map[string]string) string {
+	kind := strings.ToLower(strings.TrimSpace(opts["type"]))
+	if strings.Contains(strings.ToLower(opts["o"]), "bind") || kind == "none" {
+		device := opts["device"]
+		switch {
+		case device == "":
+			return ""
+		case !strings.HasPrefix(device, "/"), device != strings.TrimSpace(device):
+			return "device"
+		case Bad(device):
+			return "device"
+		}
+		return ""
+	}
+	if kind == "" || kind == "tmpfs" || slices.Contains(NetworkFSTypes, kind) {
+		return ""
+	}
+	return "type"
+}
