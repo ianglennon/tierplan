@@ -337,9 +337,10 @@ limit: the process the person left running keeps running.
   node. Bayplan checks the name on that node first, because Docker silently reuses an
   existing volume of the same name.
 - **On every agent-managed host** (a swarm node or a standalone host), the agent refuses a
-  Host folder outside `/srv`, `/mnt` and `/media`, a local volume that mounts a device, and any
-  driver other than `local`, unless the host's owner set `BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true`
-  on that host's agent. A service could otherwise mount the volume by name and reach the host.
+  Host folder that is not an absolute path under `/srv`, `/mnt` or `/media`, a local volume of any
+  filesystem type other than `tmpfs` or a network share (NFS, SMB/CIFS), and any driver other than
+  `local`, unless the host's owner set `BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true` on that
+  host's agent. A service could otherwise mount the volume by name and reach the host.
   This is a change from earlier versions, where such a Host folder was created on any host.
   Bayplan shows the refusal in the Create volume dialog, with the folders that are allowed and
   the setting that lifts it. The server's own host is reached through the local socket, has no

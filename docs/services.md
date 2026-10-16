@@ -129,9 +129,10 @@ Bayplan treats that in two places, and the second one is the host owner's:
 
 - **On the server**, a person below Admin cannot create or change a service whose spec gives tasks
   host access. The check covers the whole spec, not only the fields the form shows: bind mounts
-  outside `/srv`, `/mnt` and `/media` (and the Docker socket in particular), volumes on a host path,
-  added capabilities, SELinux, seccomp or AppArmor settings, and the host network. The review step
-  names what needs Admin and Apply stays off. A rollback is judged the same way, on the earlier
+  outside `/srv`, `/mnt` and `/media` (and the Docker socket in particular), local volumes that
+  bind a host path or mount a filesystem other than tmpfs or a network share, added capabilities,
+  SELinux, seccomp or AppArmor settings, and the host network. The review step names what needs
+  Admin and Apply stays off. A rollback is judged the same way, on the earlier
   version it would restore: rolling back to an earlier version with host access needs Admin, and an
   Operator is told which settings.
 - **On the host**, the agent of each manager refuses such a spec whatever Bayplan says, unless the
@@ -139,8 +140,9 @@ Bayplan treats that in two places, and the second one is the host owner's:
   Admin who writes such a spec gets a refusal that Bayplan words as "the manager's agent refused host
   access" (`agent_host_policy`). The same goes for a service mount whose volume has a driver other
   than `local`, for a cluster volume, and for a named volume that already exists on the manager with
-  host-path options or a plugin driver: they are refused without the opt-in. A volume made with
-  host-path options is refused at creation (see [containers.md](containers.md)).
+  options the volume rule refuses (a host path, or a filesystem other than tmpfs or a network share)
+  or a plugin driver: they are refused without the opt-in. A volume made with such options is refused
+  at creation (see [containers.md](containers.md)).
 
 **Without that opt-in, Bayplan cannot change a service that already has host access. That includes
 scale, force update and roll back.** Every one of them sends the service's whole spec back to Swarm, so
@@ -190,8 +192,11 @@ every service change before any of this is looked at.
   uses one, needs the reveal secrets permission (an Admin has it; an Operator only when granted).
   Without it the secret picker offers only the secrets the service uses, and Bayplan refuses the
   change with `secret_reveal_required`. Keeping, removing or re-targeting a secret the service
-  already uses stays Operator. Someone who can change a service can still read what that service
-  holds (see residual risk 36 in [threat-model.md](threat-model.md)).
+  already uses stays Operator. A secret is matched by its ID in the swarm, not by the name the spec
+  gives it: a reference whose name is not that of the secret its ID points at is refused
+  (`spec_invalid`), so correct the name or give only the name. Someone who can change a service can
+  still read what that service holds (see residual risk 36 in
+  [threat-model.md](threat-model.md)).
 - **Review changes.** The editor is locked while Bayplan checks the change. Shows a field-by-field
   list of the current spec against the new one, the image the tag resolves to (with its digest and
   the credential that will be used), anything that needs Admin, and the manager's own notes.
