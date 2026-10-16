@@ -29,9 +29,15 @@ func vectorLookup(v hostpath.SpecVector) networkLookup {
 	}
 }
 
-// absentVolumes answers every volume name as one the engine does not have.
-func absentVolumes(context.Context, string) (string, map[string]string, bool, error) {
-	return "", nil, false, nil
+// vectorVolumes answers for a vector: the volumes it lists exist on the engine with
+// the driver and options it gives, every other name is one the engine does not have.
+func vectorVolumes(v hostpath.SpecVector) volumeLookup {
+	return func(_ context.Context, name string) (string, map[string]string, bool, error) {
+		if vol, ok := v.Volumes[name]; ok {
+			return vol.Driver, vol.Options, true, nil
+		}
+		return "", nil, false, nil
+	}
 }
 
 func decodeVector(t *testing.T, v hostpath.SpecVector) swarm.ServiceSpec {
@@ -61,9 +67,9 @@ func TestServicePolicyVectors(t *testing.T) {
 			}
 
 			// Without the opt-in: refused with errHostPolicy, or forwarded as rebuilt bytes.
-			env := bodyEnv{policy: Policy{}, lookup: vectorLookup(v), volumes: absentVolumes, ctx: ctx}
+			env := bodyEnv{policy: Policy{}, lookup: vectorLookup(v), volumes: vectorVolumes(v), ctx: ctx}
 			out, err := validateBody(BodyServiceSpec, bytes.NewReader(v.Spec), env)
-			if v.Escalates {
+			if v.Escalates || v.AgentRefuses {
 				if !errors.Is(err, errHostPolicy) {
 					t.Fatalf("without the opt-in: err = %v, want errHostPolicy", err)
 				}

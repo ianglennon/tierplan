@@ -20,6 +20,21 @@ type SpecVector struct {
 	Spec           json.RawMessage `json:"spec"`
 	Escalates      bool            `json:"escalates"`
 	HostNetworkIDs []string        `json:"hostNetworkIDs,omitempty"`
+	// AgentRefuses is true when the agent refuses the spec on a host without the
+	// opt-in although no shared policy finds host access in it: a volume driver other
+	// than local, a cluster volume, or a named volume whose backing on the engine gives
+	// host access. Escalates stays false for these, so the server and the compose
+	// policy, which pass them (D-38), still agree with the vector.
+	AgentRefuses bool `json:"agentRefuses,omitempty"`
+	// Volumes are the named volumes the engine holds for this vector. A policy that
+	// inspects named volumes answers from it and treats every other name as absent.
+	Volumes map[string]VectorVolume `json:"volumes,omitempty"`
+}
+
+// VectorVolume is what an engine answers for a named volume that exists.
+type VectorVolume struct {
+	Driver  string            `json:"driver"`
+	Options map[string]string `json:"options,omitempty"`
 }
 
 // Vectors returns the embedded service-spec vectors. It panics if the embedded

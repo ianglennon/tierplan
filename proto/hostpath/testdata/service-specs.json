@@ -301,5 +301,102 @@
         "Networks": [{"Target": "k3v9w2x1y0z8a7b6c5d4e3f2g"}]
       }
     }
+  },
+  {
+    "name": "volume with a plugin driver",
+    "escalates": false,
+    "agentRefuses": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{
+            "Type": "volume",
+            "Source": "plug",
+            "Target": "/data",
+            "VolumeOptions": {"DriverConfig": {"Name": "rexray/ebs", "Options": {"size": "10"}}}
+          }]
+        }
+      }
+    }
+  },
+  {
+    "name": "volume with the local driver in capitals and an nfs share",
+    "escalates": false,
+    "agentRefuses": false,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{
+            "Type": "volume",
+            "Source": "share",
+            "Target": "/share",
+            "VolumeOptions": {"DriverConfig": {"Name": "LOCAL", "Options": {"type": "nfs", "o": "addr=10.0.0.5,rw", "device": ":/export"}}}
+          }]
+        }
+      }
+    }
+  },
+  {
+    "name": "cluster volume mount",
+    "escalates": false,
+    "agentRefuses": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{"Type": "cluster", "Source": "csi-vol", "Target": "/data"}]
+        }
+      }
+    }
+  },
+  {
+    "name": "named volume that exists and binds the host root",
+    "escalates": false,
+    "agentRefuses": true,
+    "volumes": {"rootvol-existing": {"driver": "local", "options": {"type": "none", "o": "bind", "device": "/"}}},
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{"Type": "volume", "Source": "rootvol-existing", "Target": "/host"}]
+        }
+      }
+    }
+  },
+  {
+    "name": "named volume that exists as an nfs share",
+    "escalates": false,
+    "agentRefuses": false,
+    "volumes": {"share-existing": {"driver": "local", "options": {"type": "nfs", "o": "addr=10.0.0.5,rw", "device": ":/export"}}},
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{"Type": "volume", "Source": "share-existing", "Target": "/share"}]
+        }
+      }
+    }
+  },
+  {
+    "name": "named volume that exists with a plugin driver",
+    "escalates": false,
+    "agentRefuses": true,
+    "volumes": {"plug-existing": {"driver": "rexray/ebs"}},
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{"Type": "volume", "Source": "plug-existing", "Target": "/data"}]
+        }
+      }
+    }
   }
 ]
