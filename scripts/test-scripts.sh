@@ -292,6 +292,32 @@ expect pass "restore-smoke-target" mk restore-smoke
 expect_out "restore-smoke-target builds the image" "bayplan:e2e"
 expect_out "restore-smoke-target runs the script" "scripts/restore-smoke.sh"
 
+# --- Timings report (D-17): package wall times and slowest tests from go test -json ---
+expect pass "timings-fixture" scripts/test-timings.sh scripts/testdata/timings/go-test.json
+expect_out "timings-fixture package seconds" "| example.test/slow | 12.5"
+expect_out "timings-fixture shuffle seed" "1792149386197574842"
+expect_out "timings-fixture slowest test" "| TestSlowThing | example.test/slow |"
+if grep -qF -- "TestSlowThing/sub" <<<"${LAST_OUT}"; then
+  echo "SCRIPT TEST FAIL: timings-fixture (a subtest must not be listed as a top-level test)"
+  failures=$((failures + 1))
+fi
+if grep -qF -- "| TestFastThing |" <<<"${LAST_OUT}"; then
+  echo "SCRIPT TEST FAIL: timings-fixture (a test under the 1 s threshold must not be listed)"
+  failures=$((failures + 1))
+fi
+expect pass "timings-threshold" scripts/test-timings.sh --threshold 0.1 --slowest 5 scripts/testdata/timings/go-test.json
+expect_out "timings-threshold lists the fast test" "| TestFastThing |"
+expect fail "timings-empty-input" scripts/test-timings.sh /dev/null
+expect_out "timings-empty-input says so" "no package-level"
+expect fail "timings-missing-file" scripts/test-timings.sh "${scratch}/no-such.json"
+expect_out "timings-missing-file names the file" "no-such.json"
+printf 'this is not json\n' >"${scratch}/timings-garbage.json"
+expect fail "timings-not-json" scripts/test-timings.sh "${scratch}/timings-garbage.json"
+expect_out "timings-not-json names the file" "timings-garbage.json"
+expect fail "timings-no-file" scripts/test-timings.sh
+expect_out "timings-no-file prints usage" "usage: scripts/test-timings.sh"
+expect fail "timings-unknown-flag" scripts/test-timings.sh --bogus scripts/testdata/timings/go-test.json
+
 if [ "${failures}" -ne 0 ]; then
   echo "${failures} script test(s) failed"
   exit 1
