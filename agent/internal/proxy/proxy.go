@@ -196,6 +196,13 @@ func Handler(socketPath string, policy Policy, onDenied func(method, path, reaso
 			// What is forwarded is the rebuilt body, never the bytes the server sent.
 			rebuilt, err := validateBody(kind, http.MaxBytesReader(w, r.Body, bodyCap(kind)), bodyEnv{policy: policy, lookup: lookup, volumes: volumes, ctx: r.Context()})
 			if err != nil {
+				if errors.Is(err, errVolumeLookup) {
+					// The engine did not answer a volume lookup. That is an engine fault,
+					// not a policy refusal, so it is not reported to onDenied and nothing
+					// is forwarded.
+					writeJSON(w, http.StatusBadGateway, "agent_engine_unreachable: the Docker engine did not answer a volume lookup", false)
+					return
+				}
 				if errors.Is(err, errHostPolicy) {
 					deny(wire.DeniedHostPolicy)
 				} else {

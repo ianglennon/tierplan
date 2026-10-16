@@ -23,7 +23,10 @@ import (
 // allowlist refusal, so the server can tell the user which setting lifts it.
 var errHostPolicy = errors.New("the service spec gives tasks host access")
 
-// errVolumeLookup is a stub for the RED commit.
+// errVolumeLookup is the engine not answering the lookup of a named volume. It is an
+// engine fault and not host access: the handler answers it 502 agent_engine_unreachable,
+// not 403 host_policy, so a transient fault does not tell the person to lower the host's
+// security setting.
 var errVolumeLookup = errors.New("the engine did not answer a volume lookup")
 
 // networkLookup answers the name and driver of a network on the agent's own
@@ -172,15 +175,19 @@ func pluginVolumes(spec swarm.ServiceSpec) []string {
 // A mount is listed when:
 //
 //   - its Source is not shaped like a volume name (no lookup is made for it);
-//   - lookup is nil, because the zero env cannot see what backs a name;
-//   - the lookup fails. Unlike the network lookup this fails closed: the engine refuses
-//     an unknown network itself, but it mounts an existing volume without asking;
+//   - lookup is nil, because the zero env cannot see what backs a name (a finding, not
+//     an error);
 //   - the volume exists and volumeEscalation finds host access in its driver or options.
 //
 // A volume the engine does not have adds nothing: Docker creates it from the mount's
 // own VolumeOptions, which escalations and pluginVolumes judge, so it is judged like an
-// anonymous volume (no Source), which is never looked up. Each distinct Source is looked
-// up once. The agent sees only its own engine, so a volume of the same name on another
+// anonymous volume (no Source), which is never looked up.
+//
+// A lookup the engine does not answer (an error, a timeout or an unexpected status) adds
+// no finding and the first such error is returned, wrapped with errVolumeLookup. Unlike
+// the network lookup this still stops the write, because the engine refuses an unknown
+// network itself but mounts an existing volume without asking; it is reported as an engine
+// fault and not as host access. Each distinct Source is looked up once. The agent sees only its own engine, so a volume of the same name on another
 // node is not judged (T-06-123).
 func namedVolumes(ctx context.Context, spec swarm.ServiceSpec, lookup volumeLookup) ([]string, error) {
 	cs := spec.TaskTemplate.ContainerSpec
@@ -188,6 +195,7 @@ func namedVolumes(ctx context.Context, spec swarm.ServiceSpec, lookup volumeLook
 		return nil, nil
 	}
 	var out []string
+	var lookupErr error
 	bad := map[string]bool{}
 	for i, m := range cs.Mounts {
 		if m.Type != mount.TypeVolume || m.Source == "" {
@@ -198,7 +206,13 @@ func namedVolumes(ctx context.Context, spec swarm.ServiceSpec, lookup volumeLook
 			refused = !volumeNameRe.MatchString(m.Source) || lookup == nil
 			if !refused {
 				driver, opts, found, err := lookup(ctx, m.Source)
-				refused = err != nil || (found && volumeEscalation(volume.CreateRequest{Driver: driver, DriverOpts: opts}) != "")
+				if err != nil {
+					if lookupErr == nil {
+						lookupErr = fmt.Errorf("%w: %w", errVolumeLookup, err)
+					}
+				} else {
+					refused = found && volumeEscalation(volume.CreateRequest{Driver: driver, DriverOpts: opts}) != ""
+				}
 			}
 			bad[m.Source] = refused
 		}
@@ -206,11 +220,13 @@ func namedVolumes(ctx context.Context, spec swarm.ServiceSpec, lookup volumeLook
 			out = append(out, fmt.Sprintf("TaskTemplate.ContainerSpec.Mounts[%d].Source", i))
 		}
 	}
-	return out, nil
+	return out, lookupErr
 }
 
 // checkHostPolicy refuses a spec that gives tasks host access unless the host
-// allows it. The paths of the findings are in the error for the log; they are
+// allows it. A named-volume lookup the engine did not answer also stops the write, but
+// as errVolumeLookup (an engine fault) and not as host access, unless a real finding
+// is present. The paths of the findings are in the error for the log; they are
 // never sent back to the server, whose answer is the typed refusal.
 func checkHostPolicy(spec swarm.ServiceSpec, env bodyEnv) error {
 	if env.policy.AllowPrivilegedServices {
@@ -222,10 +238,11 @@ func checkHostPolicy(spec swarm.ServiceSpec, env bodyEnv) error {
 	}
 	found := escalations(ctx, spec, env.lookup)
 	found = append(found, pluginVolumes(spec)...)
-	named, _ := namedVolumes(ctx, spec, env.volumes)
+	named, lookupErr := namedVolumes(ctx, spec, env.volumes)
 	found = append(found, named...)
 	if len(found) > 0 {
+		// A real finding is named as host access even when a lookup also failed.
 		return fmt.Errorf("%w: %w: %s", errBodyRefused, errHostPolicy, strings.Join(found, ", "))
 	}
-	return nil
+	return lookupErr
 }
