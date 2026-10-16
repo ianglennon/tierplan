@@ -134,6 +134,11 @@ type Server struct {
 	// restart carries a restore's request to restart the process.
 	restart *restarter
 
+	// listening is closed by Run once its address is bound, and never when the
+	// bind fails. listeningOnce keeps a second Run from closing it twice.
+	listening     chan struct{}
+	listeningOnce sync.Once
+
 	// stopBackground ends the nightly audit prune and waits for it, so Close
 	// never closes the database under a running prune.
 	stopBackground context.CancelFunc
@@ -798,6 +803,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	srv = &Server{
 		unlock:     unlock,
 		restart:    restart,
+		listening:  make(chan struct{}),
 		refusals:   refusals,
 		cfg:        cfg,
 		log:        log,
@@ -990,8 +996,15 @@ func (s *Server) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listen on %s (BAYPLAN_LISTEN): %w", s.cfg.Listen, err)
 	}
+	s.listeningOnce.Do(func() { close(s.listening) })
 	return s.run(ctx, ln)
 }
+
+// Listening returns a channel that Run closes once it has bound its address, so
+// a caller that started Run in a goroutine learns that the server is accepting
+// connections from the server itself rather than from a timer. It stays open
+// when the address cannot be bound; Run's error says why.
+func (s *Server) Listening() <-chan struct{} { return s.listening }
 
 func (s *Server) run(ctx context.Context, ln net.Listener) error {
 	err := s.serve(ctx, ln)

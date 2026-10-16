@@ -36,6 +36,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/server"
 	"github.com/ianglennon/bayplan/internal/store/sqlc"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 const adminPassword = "correct horse battery"
@@ -141,9 +142,10 @@ func Start(t testing.TB, o Options) *Server {
 	return s
 }
 
-// boot builds the server from s.env and starts serving. It reports false when the
-// server stopped at once, which is what a port that was taken in the meantime looks
-// like; any other failure ends the test.
+// boot builds the server from s.env and starts serving. It reports false when Run
+// returned before the server bound its address, which is what a port that was taken
+// in the meantime looks like; any other failure ends the test. The server says that
+// it is serving by closing Listening, so no timer decides.
 func (s *Server) boot() bool {
 	s.t.Helper()
 	fl := pflag.NewFlagSet("servertest", pflag.ContinueOnError)
@@ -159,12 +161,15 @@ func (s *Server) boot() bool {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- srv.Run(ctx) }()
-	// Run returns at once when it cannot listen; a server that is serving does not.
+	// Run returns with its error when it cannot listen; otherwise it closes Listening.
 	select {
 	case <-done:
 		cancel()
 		return false
-	case <-time.After(300 * time.Millisecond):
+	case <-srv.Listening():
+	case <-testsupport.Context(s.t).Done():
+		cancel()
+		s.t.Fatal("servertest: the server neither listened nor failed to listen")
 	}
 	s.srv, s.cancel, s.done = srv, cancel, done
 	return true
@@ -196,17 +201,14 @@ func (s *Server) Restart(version string) {
 	if version != "" {
 		buildinfo.Version = version
 	}
-	// The listening port is released as the old server stops; a short wait covers a
-	// kernel that has not finished with it.
-	for attempt := 0; ; attempt++ {
+	// The listening port is released as the old server stops; a kernel that has not
+	// finished with it makes Run fail to listen, so boot is retried until it can.
+	testsupport.Poll(s.t, 10*time.Second, "the restarted server to listen on its old address", func() (bool, string) { // testsupport: external, the kernel releasing the old listening port
 		if s.boot() {
-			break
+			return true, ""
 		}
-		if attempt >= 20 {
-			s.t.Fatal("servertest: the restarted server could not listen on its old address")
-		}
-		time.Sleep(250 * time.Millisecond)
-	}
+		return false, "the address was still taken"
+	})
 	s.waitReady()
 	s.login()
 }
@@ -285,21 +287,19 @@ func (s *Server) trustServerCertificate() *x509.CertPool {
 	return pool
 }
 
+// waitReady reads /readyz once. boot has returned only after the server closed
+// Listening, and Build had already made the data directory writable and brought the
+// store to this binary's schema, so the answer is 200 straight away.
 func (s *Server) waitReady() {
 	s.t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
-	for {
-		resp, err := s.http.Get(s.URL + "/readyz")
-		if err == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return
-			}
-		}
-		if time.Now().After(deadline) {
-			s.t.Fatalf("the server never became ready at %s: %v", s.URL, err)
-		}
-		time.Sleep(100 * time.Millisecond)
+	resp, err := s.http.Get(s.URL + "/readyz")
+	if err != nil {
+		s.t.Fatalf("the server is not ready at %s: %v", s.URL, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		s.t.Fatalf("the server is not ready at %s: status %d %s", s.URL, resp.StatusCode, body)
 	}
 }
 
@@ -648,25 +648,12 @@ func (s *Server) Agents(id string) []Agent {
 	return l.Items
 }
 
-// WaitFor polls cond every 250 ms until it is true and fails the test with the
-// last observation when timeout passes first. what names what is awaited.
+// WaitFor polls cond until it is true and fails the test with the last observation
+// when timeout passes first. what names what is awaited. It is for conditions the
+// test does not control, such as a real agent in a dind node.
 func (s *Server) WaitFor(what string, timeout time.Duration, cond func() (bool, string)) {
 	s.t.Helper()
-	deadline := time.Now().Add(timeout)
-	var seen string
-	for {
-		ok, obs := cond()
-		if ok {
-			return
-		}
-		if obs != "" {
-			seen = obs
-		}
-		if time.Now().After(deadline) {
-			s.t.Fatalf("gave up waiting for %s after %s; last seen: %s", what, timeout, seen)
-		}
-		time.Sleep(250 * time.Millisecond)
-	}
+	testsupport.Poll(s.t, timeout, what, cond)
 }
 
 // WaitOnline waits for the environment to be online with the engine version

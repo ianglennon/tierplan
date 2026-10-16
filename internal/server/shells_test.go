@@ -21,6 +21,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store/sqlc"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // The server's shutdown ends every open browser shell (plan 04-22): http.Server.Shutdown
@@ -63,11 +64,8 @@ func TestBuildShutdownEndsAnOpenShellTellsItsBrowserWhyAndAuditsTheEnd(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	for deadline := time.Now().Add(10 * time.Second); srv.monitor.Status(added.ID).State != envs.StateOnline; {
-		if time.Now().After(deadline) {
-			t.Fatal("the environment never came online")
-		}
-		time.Sleep(5 * time.Millisecond)
+	if st, err := srv.monitor.AwaitStatus(testsupport.Context(t), added.ID, func(st envs.Status) bool { return st.State == envs.StateOnline }); err != nil {
+		t.Fatalf("the environment never came online (last status %+v): %v", st, err)
 	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
