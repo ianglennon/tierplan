@@ -761,3 +761,55 @@ func TestApplyBodyOverEightMiBIsRefusedBeforeAnythingIsSent(t *testing.T) {
 		t.Errorf("writes = %v", w)
 	}
 }
+
+func TestServiceWriteObjectsMissingNamesEveryKindOfMissingObject(t *testing.T) {
+	type entry struct{ location, message string }
+	var (
+		secretOnly = func(spec map[string]any) {
+			containerSpecOf(spec)["Secrets"] = []any{map[string]any{"SecretName": "db-pass", "File": map[string]any{"Name": "db-pass", "UID": "0", "GID": "0", "Mode": 292}}}
+		}
+		oneOfEach = []entry{{"networks", "front"}, {"secrets", "db-pass"}, {"configs", "app.conf"}}
+	)
+	check := func(t *testing.T, f *envFix, rec *httptest.ResponseRecorder, wantDetail string, want []entry) {
+		t.Helper()
+		if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "objects_missing" {
+			t.Fatalf("answer = %d %s (%s), want 422 objects_missing", rec.Code, rec.Body, problemType(t, rec))
+		}
+		var p actionProblem
+		if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+			t.Fatal(err)
+		}
+		if p.Detail != wantDetail {
+			t.Errorf("detail = %q, want %q", p.Detail, wantDetail)
+		}
+		var got []entry
+		for _, e := range p.Errors {
+			got = append(got, entry{e.Location, e.Message})
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("errors = %v, want %v", got, want)
+		}
+		noSecrets(t, "the answer", rec.Body.Bytes())
+		if w := f.fake.Writes(); len(w) != 0 {
+			t.Errorf("writes = %v, nothing is sent for a spec naming objects that don't exist", w)
+		}
+		if rows := f.serviceAudits(t); len(rows) != 1 || rows[0].Result != string(audit.ResultFailure) || rows[0].Reason != "objects_missing" {
+			t.Errorf("service rows = %+v, want the one objects_missing failure", rows)
+		}
+	}
+	t.Run("an apply missing only a secret", func(t *testing.T) {
+		f, e := actionsEnv(t, nil, editableService(nil))
+		op := f.caller(t, e, "operator-1", "operator")
+		_, body := op.maskedSpec("svc-api", secretOnly)
+		check(t, f, op.apply("svc-api", body),
+			"The spec names objects that don't exist: secrets db-pass. Create them first.",
+			[]entry{{"secrets", "db-pass"}})
+	})
+	t.Run("a create missing one of each", func(t *testing.T) {
+		f, e := actionsEnv(t, nil, editableService(nil))
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		check(t, f, admin.create(chatBody(t, refsStaged, nil)),
+			"The spec names objects that don't exist: networks front; secrets db-pass; configs app.conf. Create them first.",
+			oneOfEach)
+	})
+}
