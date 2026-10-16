@@ -40,6 +40,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/vault"
 	"github.com/ianglennon/bayplan/proto/authn"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -129,20 +130,21 @@ type Recorder struct {
 	mu       sync.Mutex
 	events   []string
 	sessions []*tunnel.Session
-	changed  chan struct{}
+	// changed is closed, and replaced, on every recorded event, so every waiter
+	// wakes on every event. It is guarded by mu.
+	changed chan struct{}
 	// next is the Observer the recorder forwards to, or nil.
 	next tunnel.Observer
 }
 
 func newRecorder(next tunnel.Observer) *Recorder {
-	return &Recorder{changed: make(chan struct{}, 1), next: next}
+	return &Recorder{changed: make(chan struct{}), next: next}
 }
 
+// note wakes every waiter. The caller holds mu.
 func (r *Recorder) note() {
-	select {
-	case r.changed <- struct{}{}:
-	default:
-	}
+	close(r.changed)
+	r.changed = make(chan struct{})
 }
 
 // Connected implements tunnel.Observer.
@@ -155,8 +157,8 @@ func (r *Recorder) Connected(s *tunnel.Session) {
 	r.mu.Lock()
 	r.events = append(r.events, "connected:"+s.AgentID)
 	r.sessions = append(r.sessions, s)
-	r.mu.Unlock()
 	r.note()
+	r.mu.Unlock()
 }
 
 // Disconnected implements tunnel.Observer.
@@ -166,8 +168,8 @@ func (r *Recorder) Disconnected(s *tunnel.Session, code string) {
 	}
 	r.mu.Lock()
 	r.events = append(r.events, "disconnected:"+s.AgentID+":"+code)
-	r.mu.Unlock()
 	r.note()
+	r.mu.Unlock()
 }
 
 // Log is the lifecycle so far, as "connected:<agent>" and
@@ -185,20 +187,25 @@ func (r *Recorder) Sessions() []*tunnel.Session {
 	return append([]*tunnel.Session(nil), r.sessions...)
 }
 
-// WaitLen waits until the log has at least n entries and returns it.
+// WaitLen waits until the log has at least n entries and returns it. It wakes on
+// every lifecycle event; there is no polling.
 func (r *Recorder) WaitLen(t testing.TB, n int) []string {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	ctx := testsupport.Context(t)
 	for {
-		if l := r.Log(); len(l) >= n {
+		// The channel is read together with the log, so an event recorded after
+		// the check closes the channel this loop then waits on.
+		r.mu.Lock()
+		changed := r.changed
+		l := append([]string(nil), r.events...)
+		r.mu.Unlock()
+		if len(l) >= n {
 			return l
 		}
 		select {
-		case <-r.changed:
-		case <-time.After(10 * time.Millisecond):
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("tunneltest: timed out waiting for %d lifecycle events, have %v", n, r.Log())
+		case <-changed:
+		case <-ctx.Done():
+			t.Fatalf("tunneltest: timed out after %v waiting for %d lifecycle events, have %v", testsupport.Deadline, n, l)
 		}
 	}
 }
