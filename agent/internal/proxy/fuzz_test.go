@@ -628,13 +628,15 @@ func FuzzBody(f *testing.F) {
 		if k == BodyVolumeCreate {
 			// A volume created here can be mounted by name in a spec that carries no
 			// host path, so a volume with host access must never be forwarded without
-			// the opt-in (D-36 and D-38 as amended).
+			// the opt-in (D-36 and D-38 as amended). The judge is volumeOracle, which
+			// shares no code with the rule, so a gap in the rule is not also a gap
+			// here.
 			var req volume.CreateRequest
 			if err := json.Unmarshal(out, &req); err != nil {
 				t.Fatalf("the forwarded volume create does not decode: %v: %.200s", err, out)
 			}
-			if found := volumeEscalation(req); found != "" {
-				t.Fatalf("a volume create with host access %s was forwarded: %.200s", found, out)
+			if reason := volumeOracle(req.Driver, req.DriverOpts); reason != "" {
+				t.Fatalf("a volume create with host access (%s) was forwarded: %.200s", reason, out)
 			}
 		}
 		if k == BodyNodeSpec {

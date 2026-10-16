@@ -1,0 +1,3 @@
+go test fuzz v1
+uint8(6)
+string("{\"Name\":\"scratch\",\"Driver\":\"local\",\"DriverOpts\":{\"type\":\"tmpfs\",\"o\":\"size=64m\",\"device\":\"tmpfs\"}}")
