@@ -214,6 +214,8 @@
       "rollback_object_unnamed": "something the earlier version uses",
       "privileged_rollback": "Can't roll back: the earlier version uses settings that need Admin ({{list}}). Ask an administrator to roll it back.",
       "privileged_update": "Can't update: this service uses settings that need Admin ({{list}}). Ask an administrator to do it.",
+      "secretReveal": "Can't add {{list}}: adding a secret to a service needs the reveal secrets permission. Ask an administrator to add it.",
+      "secretRevealRollback": "Can't roll back: the earlier version uses {{list}}, which this service doesn't use now, and adding a secret needs the reveal secrets permission. Ask an administrator to roll it back.",
       "rejectedUpdate": "Docker rejected the update: {{message}}",
       "rejectedRollback": "Docker rejected the rollback: {{message}}"
     }

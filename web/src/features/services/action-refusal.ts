@@ -52,6 +52,11 @@ export function refusalOf(t: Translate, err: unknown, ctx: RefusalContext): Refu
       const key = ctx.action === "update" ? "privileged_update" : "privileged_rollback";
       return say(t(`services.refusal.${key}`, { list }));
     }
+    case "secret_reveal_required": {
+      const list = e.entries.map((f) => f.message).join(", ");
+      const key = ctx.action === "rollback" ? "secretRevealRollback" : "secretReveal";
+      return say(t(`services.refusal.${key}`, { list }));
+    }
     case "service_changed":
     case "service_not_found":
     case "no_quorum":

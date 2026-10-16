@@ -196,22 +196,23 @@ type ServiceApplyOutput struct {
 }
 
 const (
-	problemSpecInvalid         = "spec_invalid"
-	problemSpecRejected        = "spec_rejected"
-	problemNameImmutable       = "name_immutable"
-	problemModeImmutable       = "mode_immutable"
-	problemStackLabelReserved  = "stack_label_reserved"
-	problemPlaceholderNoMatch  = "placeholder_unmatched"
-	problemPlaceholderReserved = "placeholder_reserved"
-	problemObjectsMissing      = "objects_missing"
-	problemNothingToApply      = "nothing_to_apply"
-	problemPrivilegedService   = rbac.ReasonPrivilegedService
-	problemUpdateFailed        = "update_failed"
-	problemTooManyObjects      = "too_many_objects"
-	problemObjectPermission    = "object_permission"
-	problemObjectDuplicate     = "object_duplicate"
-	problemImageRequired       = "image_required"
-	problemServiceNameTaken    = "service_name_taken"
+	problemSpecInvalid          = "spec_invalid"
+	problemSpecRejected         = "spec_rejected"
+	problemNameImmutable        = "name_immutable"
+	problemModeImmutable        = "mode_immutable"
+	problemStackLabelReserved   = "stack_label_reserved"
+	problemPlaceholderNoMatch   = "placeholder_unmatched"
+	problemPlaceholderReserved  = "placeholder_reserved"
+	problemObjectsMissing       = "objects_missing"
+	problemNothingToApply       = "nothing_to_apply"
+	problemPrivilegedService    = rbac.ReasonPrivilegedService
+	problemSecretRevealRequired = "secret_reveal_required"
+	problemUpdateFailed         = "update_failed"
+	problemTooManyObjects       = "too_many_objects"
+	problemObjectPermission     = "object_permission"
+	problemObjectDuplicate      = "object_duplicate"
+	problemImageRequired        = "image_required"
+	problemServiceNameTaken     = "service_name_taken"
 )
 
 // registerServiceEdit mounts the review and apply routes.
@@ -552,6 +553,7 @@ func serviceWriteProblem(d ServicesDeps, envID, failed string, err error) (strin
 		invalid  *swarmops.SpecInvalidError
 		owned    *swarmops.StackOwnedError
 		refused  *swarmops.RefusedError
+		reveal   *swarmops.RevealRequiredError
 		missing  *swarmops.MissingError
 		unres    *swarmops.ImageUnresolvedError
 		rejected *swarmops.RejectedError
@@ -619,6 +621,16 @@ func serviceWriteProblem(d ServicesDeps, envID, failed string, err error) (strin
 		}
 		return problem(http.StatusForbidden, problemPrivilegedService,
 			"This service uses settings that need Admin: "+strings.Join(lines, "; ")+". Ask an administrator to apply it.", errs...)
+	case errors.As(err, &reveal):
+		// The names are what the spec used to reach the secret, never a value.
+		errs := make([]*huma.ErrorDetail, len(reveal.Secrets))
+		names := make([]string, len(reveal.Secrets))
+		for i, s := range reveal.Secrets {
+			errs[i] = &huma.ErrorDetail{Location: s.Path, Message: s.Name}
+			names[i] = s.Name
+		}
+		return problem(http.StatusForbidden, problemSecretRevealRequired,
+			"Adding a secret to a service needs the reveal secrets permission: "+strings.Join(names, ", ")+". Ask an administrator to add it.", errs...)
 	case errors.As(err, &unres):
 		return problemImageUnresolved, &huma.ErrorModel{
 			Type: problemImageUnresolved, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
