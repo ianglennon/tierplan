@@ -62,8 +62,9 @@ func (e *scrubbedError) Unwrap() error { return e.err }
 // not the one sent (dockerx.ErrServiceChanged), a stack's service (*StackOwnedError), a spec that
 // does not decode (*SpecInvalidError), a hidden value with nothing behind it or a placeholder from a
 // revealing caller (*redact.PlaceholderError), a changed name or mode kind and a new stack label;
-// refuses a caller without secrets.reveal a secret reference the service does not have
-// (*RevealRequiredError), before any lookup or write; refuses a spec equal to the current one
+// refuses any caller a secret reference whose SecretName is not the name of its SecretID
+// (*SpecInvalidError) and a caller without secrets.reveal a secret reference the service does not
+// have (*RevealRequiredError), both by the engine's secret IDs and before any lookup or write; refuses a spec equal to the current one
 // (ErrNothingToApply); resolves the digest of a changed tag; runs the host-escalation policy on the
 // exact spec it will send (*RefusedError); refuses a network, secret or config that does not exist and
 // was not staged (*MissingError) and a caller who may not create the kinds the staged ones are

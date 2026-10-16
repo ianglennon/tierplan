@@ -11,6 +11,7 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
+	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/redact"
 	"github.com/ianglennon/bayplan/internal/swarmops"
@@ -93,29 +94,38 @@ func TestAddedSecretsNamesOnlyTheSecretsTheServiceDoesNotUse(t *testing.T) {
 	byIDOnly := &swarm.SecretReference{SecretID: "sec-new", File: dbPassRef().File}
 	anonymous := &swarm.SecretReference{File: dbPassRef().File}
 
+	renamed := dbPassRef()
+	renamed.SecretName = "victim-secret"
+	victimAlone := &swarm.SecretReference{SecretName: "victim-secret", File: dbPassRef().File}
+	unknown := &swarm.SecretReference{SecretName: "staged-secret", File: dbPassRef().File}
+	have := []dockerx.SecretRow{{ID: "sec-db", Name: "db-pass"}, {ID: "sec-key", Name: "api-key"}, {ID: "sec-victim", Name: "victim-secret"}}
+
 	current := specWith(dbPassRef())
 	for name, c := range map[string]struct {
 		current, next swarm.ServiceSpec
 		want          []swarmops.AddedSecret
 	}{
-		"the same reference kept":                     {current, specWith(dbPassRef()), nil},
-		"its file name, UID, GID and mode changed":    {current, specWith(changed), nil},
-		"the reference dropped":                       {current, specWith(), nil},
-		"it named by name only":                       {current, specWith(byName), nil},
-		"it named by ID only":                         {current, specWith(byID), nil},
-		"a secret the service does not use added":     {current, specWith(dbPassRef(), apiKey), []swarmops.AddedSecret{{Path: "TaskTemplate.ContainerSpec.Secrets[1]", Name: "api-key"}}},
-		"the name kept with another ID":               {current, specWith(swapped), []swarmops.AddedSecret{{Path: "TaskTemplate.ContainerSpec.Secrets[0]", Name: "db-pass"}}},
-		"a new secret named by ID only":               {current, specWith(byIDOnly), []swarmops.AddedSecret{{Path: "TaskTemplate.ContainerSpec.Secrets[0]", Name: "sec-new"}}},
-		"a reference with neither name nor ID":        {current, specWith(anonymous), []swarmops.AddedSecret{{Path: "TaskTemplate.ContainerSpec.Secrets[0]"}}},
-		"the same secret mounted twice":               {current, specWith(dbPassRef(), second), nil},
-		"a create with two references":                {swarm.ServiceSpec{}, specWith(dbPassRef(), apiKey), []swarmops.AddedSecret{{Path: "TaskTemplate.ContainerSpec.Secrets[0]", Name: "db-pass"}, {Path: "TaskTemplate.ContainerSpec.Secrets[1]", Name: "api-key"}}},
-		"no container spec in the next":               {current, swarm.ServiceSpec{}, nil},
-		"no container spec in the current":            {swarm.ServiceSpec{}, specWith(apiKey), []swarmops.AddedSecret{{Path: "TaskTemplate.ContainerSpec.Secrets[0]", Name: "api-key"}}},
-		"no container spec on either side":            {swarm.ServiceSpec{}, swarm.ServiceSpec{}, nil},
-		"a nil reference in the next is no secret":    {current, specWith(nil, dbPassRef()), nil},
-		"a nil reference in the current uses nothing": {specWith(nil), specWith(apiKey), []swarmops.AddedSecret{{Path: "TaskTemplate.ContainerSpec.Secrets[0]", Name: "api-key"}}},
+		"the same reference kept":                  {current, specWith(dbPassRef()), nil},
+		"its file name, UID, GID and mode changed": {current, specWith(changed), nil},
+		"the reference dropped":                    {current, specWith(), nil},
+		"it named by name only":                    {current, specWith(byName), nil},
+		"it named by ID only":                      {current, specWith(byID), nil},
+		"a secret the service does not use added":  {current, specWith(dbPassRef(), apiKey), []swarmops.AddedSecret{{Path: "TaskTemplate.ContainerSpec.Secrets[1]", Name: "api-key"}}},
+		"the name kept with another ID":            {current, specWith(swapped), []swarmops.AddedSecret{{Path: "TaskTemplate.ContainerSpec.Secrets[0]", Name: "db-pass"}}},
+		"a new secret named by ID only":            {current, specWith(byIDOnly), []swarmops.AddedSecret{{Path: "TaskTemplate.ContainerSpec.Secrets[0]", Name: "sec-new"}}},
+		"a reference with neither name nor ID":     {current, specWith(anonymous), []swarmops.AddedSecret{{Path: "TaskTemplate.ContainerSpec.Secrets[0]"}}},
+		"the same secret mounted twice":            {current, specWith(dbPassRef(), second), nil},
+		"a create with two references":             {swarm.ServiceSpec{}, specWith(dbPassRef(), apiKey), []swarmops.AddedSecret{{Path: "TaskTemplate.ContainerSpec.Secrets[0]", Name: "db-pass"}, {Path: "TaskTemplate.ContainerSpec.Secrets[1]", Name: "api-key"}}},
+		"no container spec in the next":            {current, swarm.ServiceSpec{}, nil},
+		"no container spec in the current":         {swarm.ServiceSpec{}, specWith(apiKey), []swarmops.AddedSecret{{Path: "TaskTemplate.ContainerSpec.Secrets[0]", Name: "api-key"}}},
+		"no container spec on either side":         {swarm.ServiceSpec{}, swarm.ServiceSpec{}, nil},
+		"a nil reference in the next is no secret": {current, specWith(nil, dbPassRef()), nil},
+		"the current reference carries another secret's name and the next names that secret alone": {specWith(renamed), specWith(victimAlone), []swarmops.AddedSecret{{Path: "TaskTemplate.ContainerSpec.Secrets[0]", Name: "victim-secret"}}},
+		"the used ID kept under another name is the same secret":                                   {current, specWith(renamed), nil},
+		"a name the swarm does not have, with no ID":                                               {current, specWith(unknown), []swarmops.AddedSecret{{Path: "TaskTemplate.ContainerSpec.Secrets[0]", Name: "staged-secret"}}},
+		"a nil reference in the current uses nothing":                                              {specWith(nil), specWith(apiKey), []swarmops.AddedSecret{{Path: "TaskTemplate.ContainerSpec.Secrets[0]", Name: "api-key"}}},
 	} {
-		if got := swarmops.AddedSecrets(c.current, c.next); !slices.Equal(got, c.want) {
+		if got := swarmops.AddedSecrets(c.current, c.next, have); !slices.Equal(got, c.want) {
 			t.Errorf("%s: added = %+v, want %+v", name, got, c.want)
 		}
 	}

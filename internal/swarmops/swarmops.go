@@ -65,7 +65,8 @@ var (
 )
 
 // SpecInvalidError carries the decoder's own message, which names a field and a type and never a
-// value.
+// value. It is also the refusal of a secret reference whose SecretName is not the name the engine
+// holds for its SecretID: the message names the spec path and the name the spec used.
 type SpecInvalidError struct{ Message string }
 
 func (e *SpecInvalidError) Error() string        { return "swarmops: the spec is not valid: " + e.Message }
@@ -259,16 +260,13 @@ func prepare(ctx context.Context, deps Deps, c common) (*prepared, error) {
 // the spec names any) and works out what the spec needs done about the ones it names. The merged
 // spec is copied first, so giving a reference its ID changes nothing the current spec shares.
 //
-// A caller without secrets.reveal may not add a secret reference the service's current spec lacks
-// (D-13 as amended, review finding S1-WR-02). This is the one place review, apply, create (where
-// the current spec is the zero one) and each service update of a rotate pass through, and it comes
-// before the image lookup, the host policy and any object, so a refused spec reads and writes nothing.
+// The secret references are judged here by JudgeSecrets, once the secret list is read: for every
+// caller a reference whose name is not its secret's is refused, and a caller without secrets.reveal
+// may not add a secret the service's current spec lacks (D-13 as amended, review findings S1-WR-02
+// and CR-01). This is the one place review, apply, create (where the current spec is the zero one)
+// and each service update of a rotate pass through. It comes before the image lookup, the host policy
+// and any object, so a refused spec writes nothing and reads nothing but these lists.
 func (p *prepared) planObjects(ctx context.Context, c common) error {
-	if !c.caller.Reveal {
-		if added := AddedSecrets(p.current, p.merged); len(added) > 0 {
-			return &RevealRequiredError{Secrets: added}
-		}
-	}
 	var err error
 	if p.networks, err = c.client.Networks(ctx); err != nil {
 		return err
@@ -286,6 +284,9 @@ func (p *prepared) planObjects(ctx context.Context, c common) error {
 				return err
 			}
 		}
+	}
+	if err := JudgeSecrets(p.current, p.merged, p.have.secrets, c.caller.Reveal); err != nil {
+		return err
 	}
 	if p.merged, err = cloneSpec(p.merged); err != nil {
 		return err
