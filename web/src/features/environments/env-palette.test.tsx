@@ -13,6 +13,7 @@ import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
 import { makeMe } from "@/test-me";
+import { settled } from "@/test-settle";
 
 const ADMIN = makeMe({ instanceAdmin: true });
 let account: typeof ADMIN = ADMIN;
@@ -84,6 +85,10 @@ const MAC = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.1
 afterEach(() => {
   account = ADMIN;
   cleanup();
+  // The tests that look at focus append fields to document.body and leave one focused. cleanup()
+  // only removes what Testing Library rendered, so the next test would press Ctrl+K with focus
+  // still in a text field and the shortcut would be ignored: a test-order dependency.
+  document.body.replaceChildren();
   vi.unstubAllGlobals();
   queryClient.clear();
   setUA(originalUA);
@@ -181,7 +186,9 @@ describe("EnvPalette (D-35)", () => {
     document.body.append(editable);
     editable.focus();
     expect(press(editable, { ctrlKey: true })).toBe(true);
-    await new Promise((r) => setTimeout(r, 30));
+    // The shortcut handler is synchronous; settled() lets anything the key press could have
+    // started finish before the absence is asserted.
+    await settled(queryClient);
     expect(palette()).toBeNull();
   });
 
@@ -195,7 +202,9 @@ describe("EnvPalette (D-35)", () => {
     document.body.append(editor);
     inner.focus();
     expect(press(inner, { ctrlKey: true })).toBe(true);
-    await new Promise((r) => setTimeout(r, 30));
+    // The shortcut handler is synchronous; settled() lets anything the key press could have
+    // started finish before the absence is asserted.
+    await settled(queryClient);
     expect(palette()).toBeNull();
   });
 
@@ -213,7 +222,9 @@ describe("EnvPalette (D-35)", () => {
     expect(fireEvent.keyDown(document.body, { key: "j", ctrlKey: true })).toBe(true);
     expect(press(document.body, { ctrlKey: true, shiftKey: true })).toBe(true);
     expect(press(document.body, { ctrlKey: true, altKey: true })).toBe(true);
-    await new Promise((r) => setTimeout(r, 30));
+    // The shortcut handler is synchronous; settled() lets anything the key press could have
+    // started finish before the absence is asserted.
+    await settled(queryClient);
     expect(palette()).toBeNull();
   });
 

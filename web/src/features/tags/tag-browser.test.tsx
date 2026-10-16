@@ -3,6 +3,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -175,6 +176,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // A toast one test raised (the failed copy) would otherwise still be on screen in the next
+  // test's Toaster and be found there as its role="alert".
+  toast.dismiss();
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -641,8 +645,10 @@ describe("TagBrowser details", () => {
     scrollTo(names);
     await waitFor(() => expect(detailsSent).toHaveLength(1));
     expect(detailsSent[0]?.tags).toEqual(names.slice(0, 25));
-    // Nothing more is sent while the first is out.
-    await new Promise((r) => setTimeout(r, 50));
+    // Nothing more is sent while the first is out. The request is only sent after the hook has
+    // marked itself busy in the same effect, so once the effects of this render have flushed a
+    // second request would already be in detailsSent.
+    await act(async () => {});
     expect(detailsSent).toHaveLength(1);
     await act(async () => releases[0]?.());
     await waitFor(() => expect(detailsSent).toHaveLength(2));
@@ -669,13 +675,23 @@ describe("TagBrowser details", () => {
   });
 
   it("leaves a row on Loading… when its request failed and asks again when it is scrolled to again", async () => {
-    detailsAnswer = () => Response.json({}, { status: 503 });
+    // Only the request that includes v1.10.0 fails; the later one for "latest" is the signal
+    // that the failure has been recorded (requests go one at a time), so "no loop" is asserted
+    // after it instead of after a guessed delay.
+    detailsAnswer = (body) =>
+      body.tags.includes("v1.10.0")
+        ? Response.json({}, { status: 503 })
+        : Response.json({ items: body.tags.map((tag) => detail(tag)) });
     mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" />);
     await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
     scrollTo(["v1.10.0"]);
     await waitFor(() => expect(detailsSent).toHaveLength(1));
-    await new Promise((r) => setTimeout(r, 50));
-    expect(detailsSent).toHaveLength(1); // no loop
+    scrollTo(["v1.10.0", "latest"]);
+    await waitFor(() => expect(detailsSent).toHaveLength(2));
+    expect(detailsSent[1]?.tags).toEqual(["latest"]); // v1.10.0 was not asked for again: no loop
+    await waitFor(() =>
+      expect(cellsOf(rowOf("latest"))[2]?.textContent).toBe("sha256:a1a1a1a1a1a1"),
+    );
     expect(cellsOf(rowOf("v1.10.0"))[2]?.textContent).toBe("Loading…");
     detailsAnswer = (body) => Response.json({ items: body.tags.map((tag) => detail(tag)) });
     scrollTo(["v1.10.0"], false);
