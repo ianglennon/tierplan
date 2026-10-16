@@ -101,6 +101,10 @@ type Monitor struct {
 	entries map[string]*entry
 	wg      sync.WaitGroup
 	live    atomic.Int64
+	// changed is closed and replaced whenever a status may have changed: an
+	// environment starts, a probe result is stored, or one stops. AwaitStatus
+	// waits on it instead of polling. Guarded by mu.
+	changed chan struct{}
 	// watchers are told when an environment starts or stops being monitored
 	// (the events hub, plan 21). They are called after the monitor's lock is
 	// released, so a callback may call back into the monitor.
@@ -129,6 +133,7 @@ func NewMonitor(log *slog.Logger, now func() time.Time, sleep func(context.Conte
 		log: log, now: now, sleep: sleep,
 		interval: defaultInterval, probeTimeout: defaultProbeTimeout,
 		entries: map[string]*entry{},
+		changed: make(chan struct{}),
 	}
 }
 
@@ -199,6 +204,7 @@ func (m *Monitor) start(ctx context.Context, envID string, t engine.Transport) (
 		st:     Status{State: StateUnknown},
 	}
 	m.entries[envID] = e
+	m.notifyLocked()
 	m.live.Add(1)
 	m.wg.Add(1)
 	go func() {
@@ -219,6 +225,7 @@ func (m *Monitor) Stop(envID string) {
 	m.mu.Lock()
 	e, ok := m.entries[envID]
 	delete(m.entries, envID)
+	m.notifyLocked()
 	m.mu.Unlock()
 	if ok {
 		m.stop(e)
@@ -239,6 +246,7 @@ func (m *Monitor) StopAll() {
 		ids = append(ids, id)
 		delete(m.entries, id)
 	}
+	m.notifyLocked()
 	m.mu.Unlock()
 	for _, e := range all {
 		m.stop(e)
@@ -288,6 +296,46 @@ func (m *Monitor) AwaitProbe(ctx context.Context, envID string) {
 	case <-e.probed:
 	case <-e.done:
 	case <-ctx.Done():
+	}
+}
+
+// notify wakes every AwaitStatus waiter.
+func (m *Monitor) notify() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.notifyLocked()
+}
+
+// notifyLocked is notify with m.mu held: it closes the broadcast channel and
+// replaces it, so a waiter that took the old one is woken and a later waiter
+// gets a fresh one.
+func (m *Monitor) notifyLocked() {
+	close(m.changed)
+	m.changed = make(chan struct{})
+}
+
+// AwaitStatus returns the first status of envID for which cond is true. It
+// evaluates cond now and again after every start, probe result and stop of any
+// monitored environment, and never polls. An environment that is not monitored
+// yet reads StateUnknown and is waited for like any other (unlike AwaitProbe,
+// which returns at once). When ctx ends first it returns the last status
+// together with the context's error; the context only guards against a hang.
+func (m *Monitor) AwaitStatus(ctx context.Context, envID string, cond func(Status) bool) (Status, error) {
+	for {
+		// Take the channel before reading the status, so a change between the
+		// read and the wait is not missed.
+		m.mu.Lock()
+		ch := m.changed
+		m.mu.Unlock()
+		st := m.Status(envID)
+		if cond(st) {
+			return st, nil
+		}
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return st, ctx.Err()
+		}
 	}
 }
 
@@ -422,6 +470,7 @@ func (m *Monitor) record(envID string, e *entry, res dockerx.ProbeResult, probeE
 	e.st = st
 	e.mu.Unlock()
 	e.probedOnce.Do(func() { close(e.probed) })
+	m.notify()
 
 	if prev.State != st.State {
 		attrs := []any{"environment", envID, "from", prev.State, "to", st.State}

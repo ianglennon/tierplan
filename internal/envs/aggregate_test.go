@@ -96,9 +96,10 @@ type agentConn struct {
 	id      string
 }
 
-// connect enrols a new agent in env, serves its Docker streams from a fake
-// daemon, and sends its first heartbeat.
-func (r *tunRig) connect(t *testing.T, env tunneltest.Environment, cfg dockertest.FakeConfig, facts *wire.Facts) *agentConn {
+// dial enrols a new agent in env, serves its Docker streams from a fake daemon, and
+// sends its first heartbeat. It does not wait for the agent's target to probe; a test
+// that observes the state before the first probe, or holds a probe on purpose, uses it.
+func (r *tunRig) dial(t *testing.T, env tunneltest.Environment, cfg dockertest.FakeConfig, facts *wire.Facts) *agentConn {
 	t.Helper()
 	fake := dockertest.NewFake(t, cfg)
 	if facts == nil {
@@ -112,6 +113,31 @@ func (r *tunRig) connect(t *testing.T, env tunneltest.Environment, cfg dockertes
 	control := c.OpenControl(t)
 	tunneltest.SendHeartbeat(t, control, true, r.clk.Now().UnixMilli())
 	return &agentConn{conn: c, fake: fake, control: control, id: c.Identity.AgentID}
+}
+
+// connect is dial followed by waiting until the agent's target has finished its first
+// probe. An environment reads online as soon as one target has probed, but a cluster
+// read offers only managers whose monitor already holds an answering client, so a rig
+// is ready when every connected agent's target has probed, not when the environment
+// reads online.
+func (r *tunRig) connect(t *testing.T, env tunneltest.Environment, cfg dockertest.FakeConfig, facts *wire.Facts) *agentConn {
+	t.Helper()
+	a := r.dial(t, env, cfg, facts)
+	awaitProbed(t, r.mon, AgentTarget(a.id))
+	return a
+}
+
+// awaitProbed waits until the monitored target key has finished its first probe,
+// whatever it found. The deadline only guards against a hang.
+func awaitProbed(t *testing.T, mon *Monitor, key string) Status {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st, err := mon.AwaitStatus(ctx, key, func(s Status) bool { return s.State != StateUnknown })
+	if err != nil {
+		t.Fatalf("the first probe of %s never finished: last status %+v: %v", key, st, err)
+	}
+	return st
 }
 
 func (r *tunRig) health(t *testing.T, envID string) Environment {

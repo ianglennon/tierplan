@@ -212,6 +212,16 @@ type FakeConfig struct {
 	// PullHold holds every pull, after it is recorded and before it answers, until the
 	// channel is closed or the caller gives up, so a test can look at a pull in progress.
 	PullHold <-chan struct{}
+	// ProbeHold holds every /_ping, after it is recorded and before it answers, until the
+	// channel is closed or the request's context ends, so a test can show a target whose first
+	// probe has not finished (an environment that reads online from another target while this
+	// one is still unknown).
+	ProbeHold <-chan struct{}
+	// ProbeDelay answers every /_ping that much later (deliberate fake latency, not
+	// synchronisation). NewFake reads BAYPLAN_TEST_PROBE_DELAY, a time.ParseDuration value,
+	// and uses it as the delay of every fake whose ProbeDelay is zero, so a whole package can
+	// be swept with slow first probes to find a test that treats "online" as "ready".
+	ProbeDelay time.Duration
 }
 
 // FakePullStatus is an HTTP status and message a pull is answered with.
@@ -602,6 +612,16 @@ func NewFake(t testing.TB, cfg FakeConfig) *Fake {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
+	if cfg.ProbeDelay == 0 {
+		if v := os.Getenv("BAYPLAN_TEST_PROBE_DELAY"); v != "" {
+			d, err := time.ParseDuration(v)
+			if err != nil {
+				t.Fatalf("BAYPLAN_TEST_PROBE_DELAY=%q is not a duration: %v", v, err)
+			}
+			cfg.ProbeDelay = d
+		}
+	}
+
 	f := &Fake{path: filepath.Join(dir, "d.sock"), cfg: cfg.withDefaults(), evSubs: map[*eventSub]struct{}{}, states: map[string]fakeState{}}
 	f.evHistory = append(f.evHistory, cfg.Events...)
 	if err := f.listen(); err != nil {
@@ -707,6 +727,22 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 
 	p := r.URL.Path
 	if p == "/_ping" {
+		if cfg.ProbeHold != nil {
+			select {
+			case <-cfg.ProbeHold:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		if cfg.ProbeDelay > 0 {
+			timer := time.NewTimer(cfg.ProbeDelay)
+			select {
+			case <-timer.C:
+			case <-r.Context().Done():
+				timer.Stop()
+				return
+			}
+		}
 		h := w.Header()
 		h.Set("API-Version", cfg.APIVersion)
 		h.Set("OSType", cfg.OSType)

@@ -73,6 +73,17 @@ func newSwarmRig(t *testing.T, nodes []dockertest.FakeNode, services []dockertes
 // newSwarmRigWith is newSwarmRig with a reaper watching the node lists.
 func newSwarmRigWith(t *testing.T, nodes []dockertest.FakeNode, services []dockertest.FakeService, reaper NodeObserver) *swarmRig {
 	t.Helper()
+	s := newSwarmRigBare(t, nodes, reaper)
+	for i := 1; i <= 3; i++ {
+		s.m[i-1] = s.connect(t, s.env, managerConfig(i, nodes, services), managerFacts(i))
+	}
+	s.whenOnline(t, s.env.ID)
+	return s
+}
+
+// newSwarmRigBare is the swarm rig before any manager has connected.
+func newSwarmRigBare(t *testing.T, nodes []dockertest.FakeNode, reaper NodeObserver) *swarmRig {
+	t.Helper()
 	r := newTunRig(t, nil)
 	r.pastGrace()
 	s := &swarmRig{tunRig: r, nodes: nodes}
@@ -81,10 +92,6 @@ func newSwarmRigWith(t *testing.T, nodes []dockertest.FakeNode, services []docke
 		Now: r.clk.Now, Publisher: r.brk, Events: r.evs, Grace: 2 * time.Minute, Reaper: reaper,
 	})
 	r.svc.WithClusters(s.c)
-	for i := 1; i <= 3; i++ {
-		s.m[i-1] = r.connect(t, s.env, managerConfig(i, nodes, services), managerFacts(i))
-	}
-	r.whenOnline(t, s.env.ID)
 	return s
 }
 
@@ -108,6 +115,7 @@ func (r *tunRig) reconnect(t *testing.T, a *agentConn) {
 	c.ProxyDocker(t, a.fake.SocketPath())
 	control := c.OpenControl(t)
 	tunneltest.SendHeartbeat(t, control, true, r.clk.Now().UnixMilli())
+	awaitProbed(t, r.mon, AgentTarget(a.id))
 }
 
 func (r *tunRig) kick(t *testing.T, a *agentConn) {
@@ -146,6 +154,61 @@ func (r *tunRig) failovers(t *testing.T) []FailoverData {
 
 func (r *tunRig) failoverAudits(t *testing.T, envID string) int {
 	return rowCount(t, r, `SELECT COUNT(*) FROM audit_log WHERE action = 'environment.failover' AND env_id = ? AND actor_id = 'system:agent-hub'`, envID)
+}
+
+// TestAnEnvironmentReadsOnlineBeforeTheLeaderHasAnsweredAndReadsGoToTheLeaderOnlyOnceItHas
+// pins the readiness rule the swarm rigs follow: an environment reads online as soon as
+// one target has probed, but a cluster read offers only managers whose monitor holds an
+// answering client. The leader's first probe is held, so the race is not left to timing.
+func TestAnEnvironmentReadsOnlineBeforeTheLeaderHasAnsweredAndReadsGoToTheLeaderOnlyOnceItHas(t *testing.T) {
+	s := newSwarmRigBare(t, managerNodes(), nil)
+	ctx := context.Background()
+	// The held probe must not hit the monitor's own timeout however long the test is starved.
+	s.mon.probeTimeout = 10 * time.Minute
+	hold := make(chan struct{})
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			close(hold)
+		}
+	}
+	t.Cleanup(release)
+	nodes := managerNodes()
+	s.m[0] = s.connect(t, s.env, managerConfig(1, nodes, nil), managerFacts(1))
+	leaderCfg := managerConfig(2, nodes, nil)
+	leaderCfg.ProbeHold = hold
+	s.m[1] = s.dial(t, s.env, leaderCfg, managerFacts(2))
+	s.m[2] = s.connect(t, s.env, managerConfig(3, nodes, nil), managerFacts(3))
+
+	s.whenOnline(t, s.env.ID)
+	if st := s.mon.Status(AgentTarget(s.m[1].id)); st.State != StateUnknown {
+		t.Fatalf("the leader's target reads %s although its probe is held, want unknown", st.State)
+	}
+	if err := s.c.Refresh(ctx, s.env.ID); err != nil {
+		t.Fatalf("Refresh with the leader still unprobed: %v", err)
+	}
+	read := func() string {
+		var host string
+		if err := s.c.ClusterRead(ctx, s.env.ID, func(cli *dockerx.Client) error {
+			host = probeHost(t, cli)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return host
+	}
+	if host := read(); host != "mgr-1" && host != "mgr-3" {
+		t.Fatalf("the read went to %q while the leader's client is not ready, want mgr-1 or mgr-3", host)
+	}
+
+	release()
+	if st := awaitProbed(t, s.mon, AgentTarget(s.m[1].id)); st.State != StateOnline {
+		t.Fatalf("the leader's target reads %s after its probe was released, want online", st.State)
+	}
+	if host := read(); host != "mgr-2" {
+		t.Fatalf("the read went to %q once the leader had answered, want the leader mgr-2", host)
+	}
 }
 
 func TestARefreshLearnsTheLeaderAndLaterReadsGoToIt(t *testing.T) {
