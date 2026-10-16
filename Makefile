@@ -202,6 +202,7 @@ lint:
 	  (cd $$m && $(GOLANGCI_LINT) run ./...); \
 	done
 	scripts/insecure-tls-check.sh
+	scripts/timeouts-check.sh
 	pnpm -C web exec biome ci .
 	pnpm -C web exec tsc --noEmit
 

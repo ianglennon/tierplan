@@ -1,0 +1,9 @@
+# Fixture for scripts/timeouts-check.sh: a job that allows 45 minutes for a 40 minute go test.
+name: fixture
+on: push
+jobs:
+  slow:
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 45
+    steps:
+      - run: make slow

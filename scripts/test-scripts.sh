@@ -182,6 +182,12 @@ if grep -qF -- "./internal/..." <<<"${LAST_OUT}"; then
   failures=$((failures + 1))
 fi
 
+# --- Timeout margins (06.1-10, D-22): go test -timeout sits 10 minutes under the job ---
+expect pass "timeouts-ok" scripts/timeouts-check.sh scripts/testdata/timeouts/ci-ok.yml scripts/testdata/timeouts/Makefile
+expect fail "timeouts-thin" scripts/timeouts-check.sh scripts/testdata/timeouts/ci-thin.yml scripts/testdata/timeouts/Makefile
+expect_out "timeouts-thin names the job" "job slow runs make slow with go test -timeout 40m but the job allows 45 minutes"
+expect pass "timeouts-check-repository" scripts/timeouts-check.sh
+
 # Vite's own host check: a Host header it does not know is answered 403 unless the
 # public URL's host name was passed in BAYPLAN_DEV_PUBLIC_URL.
 # vite_status <public-url-or-empty> <host-header>: prints the HTTP status.

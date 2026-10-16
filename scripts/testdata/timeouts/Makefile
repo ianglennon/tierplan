@@ -1,0 +1,3 @@
+# Fixture for scripts/timeouts-check.sh: one target whose go test allows 40 minutes.
+slow:
+	echo go test -timeout 40m ./...
