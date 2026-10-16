@@ -37,6 +37,8 @@ const secret = (id: string, name: string) => ({
   ownerKind: "",
 });
 
+const config = (id: string, name: string) => ({ ...secret(id, name), templating: "none" });
+
 const net = (id: string, name: string, extra: Record<string, unknown> = {}) => ({
   id,
   name,
@@ -57,6 +59,7 @@ const net = (id: string, name: string, extra: Record<string, unknown> = {}) => (
 });
 
 let secrets: unknown[];
+let configs: unknown[];
 let networks: unknown[];
 let me: ReturnType<typeof makeMe>;
 let store: StagedStore;
@@ -65,6 +68,7 @@ let writes: string[];
 
 beforeEach(() => {
   secrets = [secret("sec1", "db_pw"), secret("sec2", "api_key")];
+  configs = [config("cfg1", "app_conf"), config("cfg2", "nginx.conf")];
   networks = [
     net("net1", "shop_front"),
     net("net-bridge", "bridge", { scope: "local", driver: "bridge", builtIn: true }),
@@ -92,6 +96,14 @@ beforeEach(() => {
           items: secrets,
           total: secrets.length,
           unfilteredTotal: secrets.length,
+          capped: false,
+        });
+      }
+      if (url.pathname === `/api/env/${ENV}/configs`) {
+        return Response.json({
+          items: configs,
+          total: configs.length,
+          unfilteredTotal: configs.length,
           capped: false,
         });
       }
@@ -258,6 +270,32 @@ describe("ObjectPicker", () => {
     fireEvent.click(kept);
     expect(onSelect).toHaveBeenCalledWith({ name: "db_pw", id: "sec1", staged: false });
   });
+
+  it("skips a disabled secret with the arrow keys and Enter does not choose it", async () => {
+    renderPicker("secret", null, { keep: ["sec1", "db_pw"], reason: NEEDS_REVEAL });
+    await open();
+    const search = screen.getByPlaceholderText("Find a secret…");
+    const refused = await screen.findByRole("option", { name: /api_key/ });
+    const kept = screen.getByRole("option", { name: "db_pw" });
+    await waitFor(() => expect(kept.getAttribute("aria-selected")).toBe("true"));
+    for (const key of ["ArrowDown", "ArrowDown", "ArrowDown", "ArrowUp", "ArrowUp", "ArrowUp"]) {
+      fireEvent.keyDown(search, { key });
+      expect(refused.getAttribute("aria-selected")).not.toBe("true");
+    }
+    fireEvent.keyDown(search, { key: "Enter" });
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith({ name: "db_pw", id: "sec1", staged: false });
+  });
+
+  it("returns focus to the trigger on Escape from a restricted picker", async () => {
+    renderPicker("secret", null, { keep: ["sec1", "db_pw"], reason: NEEDS_REVEAL });
+    await open();
+    await screen.findByRole("option", { name: /api_key/ });
+    fireEvent.keyDown(screen.getByPlaceholderText("Find a secret…"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+    expect(document.activeElement).toBe(trigger());
+    expect(onSelect).not.toHaveBeenCalled();
+  });
 });
 
 // The secrets card hands the picker the restriction: it knows the secrets the service uses as the
@@ -325,6 +363,67 @@ describe("the secrets card of the Form", () => {
     await openSecretRow();
     const other = await screen.findByRole("option", { name: "api_key" });
     expect(other.getAttribute("aria-disabled")).not.toBe("true");
+    expect(screen.queryByText(NEEDS_REVEAL)).toBeNull();
+  });
+
+  it("restricts nothing for configs and networks", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ServiceForm
+            spec={{
+              Name: "api",
+              TaskTemplate: {
+                ContainerSpec: {
+                  Image: "nginx:1.27",
+                  Configs: [
+                    {
+                      ConfigID: "cfg1",
+                      ConfigName: "app_conf",
+                      File: { Name: "/etc/app.conf", UID: "0", GID: "0", Mode: 292 },
+                    },
+                  ],
+                },
+                Networks: [{ Target: "net1" }],
+              },
+              Mode: { Replicated: { Replicas: 2 } },
+            }}
+            mode="edit"
+            envId={ENV}
+            staged={store}
+            attachedSecrets={[]}
+            onSpecChange={() => {}}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    for (const [label, other] of [
+      ["Config", "nginx.conf"],
+      ["Network", "shop_front"],
+    ] as const) {
+      fireEvent.click(screen.getByRole("combobox", { name: label }));
+      const option = await screen.findByRole("option", { name: other });
+      expect(option.getAttribute("aria-disabled")).not.toBe("true");
+      for (const o of screen.getAllByRole("option")) {
+        if (o.textContent?.startsWith("Create new")) continue;
+        expect(o.getAttribute("aria-disabled")).not.toBe("true");
+      }
+      expect(screen.queryByText(NEEDS_REVEAL)).toBeNull();
+      fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+    }
+  });
+
+  it("a new service's secret picker is not restricted for an env Admin", async () => {
+    me = makeMe({ envs: { [ENV]: "admin" } });
+    renderForm([], "create");
+    fireEvent.click(screen.getByRole("button", { name: "Add secret" }));
+    await openSecretRow();
+    for (const name of ["db_pw", "api_key"]) {
+      const option = await screen.findByRole("option", { name });
+      expect(option.getAttribute("aria-disabled")).not.toBe("true");
+    }
     expect(screen.queryByText(NEEDS_REVEAL)).toBeNull();
   });
 });
