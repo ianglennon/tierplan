@@ -25,6 +25,8 @@ package testsupport
 
 import (
 	"context"
+	"os"
+	"regexp"
 	"testing"
 	"time"
 )
@@ -65,6 +67,87 @@ func AwaitWithin[T any](t testing.TB, d time.Duration, what string, ch <-chan T)
 		var zero T
 		return zero
 	}
+}
+
+// WaitFor polls cond until it is true, failing the test after Deadline. It is
+// for conditions outside the test's control only: a real Docker engine, an OS
+// lock, a real process. A condition that code in the same process brings about
+// is waited on through a signal; see Await.
+func WaitFor(t testing.TB, what string, cond func() bool) {
+	t.Helper()
+	Poll(t, Deadline, what, func() (bool, string) { return cond(), "" })
+}
+
+// Poll calls cond until it reports done, failing the test after timeout. When
+// cond is not done it may return a description of what it saw, and the last
+// non-empty one is part of the failure text. Like WaitFor it is for conditions
+// outside the test's control only.
+//
+// The pace is a time.Ticker of timeout/300, kept between 10 ms and 250 ms.
+func Poll(t testing.TB, timeout time.Duration, what string, cond func() (done bool, seen string)) {
+	t.Helper()
+	var last string
+	check := func() bool {
+		done, seen := cond()
+		if seen != "" {
+			last = seen
+		}
+		return done
+	}
+	if check() {
+		return
+	}
+	ticker := time.NewTicker(pollInterval(timeout))
+	defer ticker.Stop()
+	expired := time.NewTimer(timeout)
+	defer expired.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if check() {
+				return
+			}
+		case <-expired.C:
+			// One last look: the condition may have become true while the
+			// ticker was between beats.
+			if check() {
+				return
+			}
+			t.Fatalf("%s", timeoutText(timeout, what, last))
+			return
+		}
+	}
+}
+
+// pollInterval is timeout/300 within 10 ms to 250 ms.
+func pollInterval(timeout time.Duration) time.Duration {
+	return min(max(timeout/300, 10*time.Millisecond), 250*time.Millisecond)
+}
+
+// RunQuarantinedEnv is the environment variable that makes Quarantine run the
+// tests it would otherwise skip. The nightly job sets it to 1.
+const RunQuarantinedEnv = "BAYPLAN_RUN_QUARANTINED"
+
+var quarantineReason = regexp.MustCompile(`^\d{4}-\d{2}-\d{2} \S`)
+
+// Quarantine skips the calling test unless BAYPLAN_RUN_QUARANTINED is 1, in
+// which case it logs the reason and lets the test run. It is a last resort for
+// a test that cannot yet be made deterministic (D-12, D-13): the reason must
+// start with the date the test was quarantined, a space and a tracking
+// reference, for example "2026-10-16 #123 fails on arm64 under load", and a
+// reason without them fails the test. Every call site is listed in
+// docs/testing.md and runs nightly, so a quarantined test is never forgotten.
+func Quarantine(t testing.TB, reason string) {
+	t.Helper()
+	if !quarantineReason.MatchString(reason) {
+		t.Fatalf("testsupport: quarantine reason %q must start with YYYY-MM-DD, a space and a tracking reference", reason)
+		return
+	}
+	if os.Getenv(RunQuarantinedEnv) != "1" {
+		t.Skipf("quarantined: %s", reason)
+		return
+	}
+	t.Logf("quarantined test running: %s", reason)
 }
 
 // timeoutText is the failure message every helper uses.
