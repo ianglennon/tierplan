@@ -41,8 +41,11 @@ type NetworkResolver func(target string) (name, driver string, ok bool)
 
 // Check returns the host-escalation findings in spec, in the order of the spec.
 // It is the same list of features the agent's own check refuses (06-03), the
-// bind and device rule being hostpath.Bad (D-38), plus the plugin-runtime rule
-// that only the server applies. Service is the spec's name, Key the spec path,
+// bind rule being hostpath.Bad and the local-volume rule hostpath.LocalVolumeHostAccess
+// (D-38), which read a bind source as compose does and a local volume as the daemon
+// mounts it, plus the plugin-runtime rule that only the server applies. The server
+// refuses the same inline volumes as the agent, so an Operator is refused them on the
+// server's own host too, which has no agent. Service is the spec's name, Key the spec path,
 // Value the offending value, and Line is 0 because a decoded spec has no lines.
 //
 // A nil resolver, or one that does not know a network, finds nothing for a
@@ -75,8 +78,13 @@ func Check(spec swarm.ServiceSpec, resolve NetworkResolver) []compose.Finding {
 			}
 			if vo := m.VolumeOptions; vo != nil && vo.DriverConfig != nil {
 				if name := strings.ToLower(strings.TrimSpace(vo.DriverConfig.Name)); name == "" || name == "local" {
-					if dev, mounted := hostpath.LocalDeviceMounted(vo.DriverConfig.Options); mounted && hostpath.Bad(dev) {
-						add(at+".VolumeOptions.DriverConfig.Options.device", dev, RuleVolumeDevice, "a local volume that mounts this host path or device is a bind in disguise")
+					switch key := hostpath.LocalVolumeHostAccess(vo.DriverConfig.Options); key {
+					case "device":
+						add(at+".VolumeOptions.DriverConfig.Options.device", vo.DriverConfig.Options["device"], RuleVolumeDevice,
+							"a local volume that binds this host path is a bind in disguise; the engine reads a relative path from its own working directory")
+					case "type":
+						add(at+".VolumeOptions.DriverConfig.Options.type", vo.DriverConfig.Options["type"], RuleVolumeDevice,
+							"a local volume of this filesystem type mounts a host device, a host filesystem or host paths given in its options")
 					}
 				}
 			}

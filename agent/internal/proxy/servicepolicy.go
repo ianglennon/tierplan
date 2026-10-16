@@ -43,8 +43,10 @@ const hostNetwork = "host"
 //
 //   - a bind mount whose source fails hostpath.Bad (the same rule the compose
 //     policy applies, D-38) and any named-pipe mount;
-//   - a volume with the local driver (named or not) whose options mount a device
-//     that fails hostpath.Bad;
+//   - a volume with the local driver (named or not) whose options give host access as
+//     the daemon mounts them (hostpath.LocalVolumeHostAccess): a bind of a device that
+//     is relative or fails hostpath.Bad, or a filesystem type other than tmpfs or a
+//     network share;
 //   - any added capability;
 //   - SELinux disabled or the spc_t type, seccomp unconfined or custom, AppArmor
 //     disabled;
@@ -75,8 +77,8 @@ func escalations(ctx context.Context, spec swarm.ServiceSpec, lookup networkLook
 			}
 			if vo := m.VolumeOptions; vo != nil && vo.DriverConfig != nil {
 				if name := strings.ToLower(strings.TrimSpace(vo.DriverConfig.Name)); name == "" || name == "local" {
-					if dev, mounted := hostpath.LocalDeviceMounted(vo.DriverConfig.Options); mounted && hostpath.Bad(dev) {
-						out = append(out, at+".VolumeOptions.DriverConfig.Options.device")
+					if key := hostpath.LocalVolumeHostAccess(vo.DriverConfig.Options); key != "" {
+						out = append(out, at+".VolumeOptions.DriverConfig.Options."+key)
 					}
 				}
 			}

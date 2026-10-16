@@ -58,32 +58,6 @@ func TestSocketAndClimbing(t *testing.T) {
 	}
 }
 
-func TestLocalDeviceMounted(t *testing.T) {
-	cases := []struct {
-		name    string
-		opts    map[string]string
-		device  string
-		mounted bool
-	}{
-		{"bind of the root", map[string]string{"type": "none", "o": "bind", "device": "/"}, "/", true},
-		{"nfs share", map[string]string{"type": "nfs", "device": "host:/export"}, "", false},
-		{"no mount options", map[string]string{"o": "rw"}, "", false},
-		{"block device", map[string]string{"type": "ext4", "device": "/dev/sda1"}, "/dev/sda1", true},
-		{"bind option alone", map[string]string{"o": "Bind,ro", "device": "/etc"}, "/etc", true},
-		{"upper-case type none", map[string]string{"type": "NONE", "device": "/home"}, "/home", true},
-		{"bind with no device", map[string]string{"type": "none", "o": "bind"}, "", false},
-		{"empty", nil, "", false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			dev, ok := LocalDeviceMounted(c.opts)
-			if dev != c.device || ok != c.mounted {
-				t.Fatalf("LocalDeviceMounted(%v) = (%q, %v), want (%q, %v)", c.opts, dev, ok, c.device, c.mounted)
-			}
-		})
-	}
-}
-
 func TestLocalVolumeHostAccess(t *testing.T) {
 	bind := func(device string) map[string]string {
 		return map[string]string{"type": "none", "o": "bind", "device": device}

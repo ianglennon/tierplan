@@ -144,17 +144,6 @@ func MountsDevice(o, fsType string) bool {
 	return false
 }
 
-// LocalDeviceMounted returns the device of a local-driver volume, and whether
-// the options mount it (keys o, type and device). A device that is not mounted
-// is a remote share or an unused option and is not returned.
-func LocalDeviceMounted(opts map[string]string) (device string, mounted bool) {
-	device = opts["device"]
-	if device == "" || !MountsDevice(opts["o"], opts["type"]) {
-		return "", false
-	}
-	return device, true
-}
-
 // LocalVolumeHostAccess judges the options of a local-driver volume the way
 // dockerd uses them, and returns the option key that gives tasks host access
 // ("device" or "type"), or "" when none does.
