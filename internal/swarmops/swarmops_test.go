@@ -62,6 +62,10 @@ type rig struct {
 	deps     swarmops.Deps
 	operator swarmops.Caller
 	admin    swarmops.Caller
+	// operatorReveal and adminReveal are the same principals holding secrets.reveal: an env Admin
+	// always does, an Operator when the assignment grants it. They send the spec unmasked.
+	operatorReveal swarmops.Caller
+	adminReveal    swarmops.Caller
 }
 
 type cfgFn func(*dockertest.FakeConfig)
@@ -107,10 +111,14 @@ func newRig(t *testing.T, tune ...cfgFn) *rig {
 			t.Fatal(err)
 		}
 	}
-	who := func(id string) swarmops.Caller {
-		return swarmops.Caller{Principal: &rbac.Principal{Type: rbac.PrincipalUser, ID: id, Name: id}}
+	who := func(id string, reveal bool) swarmops.Caller {
+		return swarmops.Caller{Principal: &rbac.Principal{Type: rbac.PrincipalUser, ID: id, Name: id}, Reveal: reveal}
 	}
-	return &rig{t: t, fake: fake, client: c, deps: swarmops.Deps{Checker: rbac.NewChecker(st)}, operator: who("operator"), admin: who("envadmin")}
+	return &rig{
+		t: t, fake: fake, client: c, deps: swarmops.Deps{Checker: rbac.NewChecker(st)},
+		operator: who("operator", false), admin: who("envadmin", false),
+		operatorReveal: who("operator", true), adminReveal: who("envadmin", true),
+	}
 }
 
 func clone(t *testing.T, spec swarm.ServiceSpec) swarm.ServiceSpec {
@@ -131,6 +139,24 @@ func edit(t *testing.T, mut func(*swarm.ServiceSpec)) json.RawMessage {
 	t.Helper()
 	masked, _ := redact.MaskServiceSpec(apiSpec(), false)
 	spec := clone(t, masked)
+	if mut != nil {
+		mut(&spec)
+	}
+	b, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// editFor is what who sends: the masked spec changed by mut, or, for a caller who holds
+// secrets.reveal, the unmasked one, which is what their editor holds.
+func editFor(t *testing.T, who swarmops.Caller, mut func(*swarm.ServiceSpec)) json.RawMessage {
+	t.Helper()
+	if !who.Reveal {
+		return edit(t, mut)
+	}
+	spec := clone(t, apiSpec())
 	if mut != nil {
 		mut(&spec)
 	}
