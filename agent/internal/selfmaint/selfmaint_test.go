@@ -13,10 +13,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/moby/moby/api/types/container"
 
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -311,7 +311,8 @@ func TestAServiceThatHasNoImageToPatchAnswersUpdateFailedAndPostsNothing(t *test
 func TestTwoUpdatesAtOnceAnswerBusyForTheSecond(t *testing.T) {
 	f, m := swarmFixture(t, nil)
 	gate := make(chan struct{})
-	m.beforeDocker = func() { <-gate }
+	started := make(chan struct{}, 1)
+	m.beforeDocker = func() { started <- struct{}{}; <-gate }
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -320,13 +321,9 @@ func TestTwoUpdatesAtOnceAnswerBusyForTheSecond(t *testing.T) {
 		defer wg.Done()
 		first = m.Update(context.Background(), wire.Update{T: wire.TypeUpdate, ID: "a", Image: newImage})
 	}()
-	// Wait until the first holds the lock.
-	deadline := time.Now().Add(5 * time.Second)
-	for !m.busy() {
-		if time.Now().After(deadline) {
-			t.Fatal("the first update never started")
-		}
-		time.Sleep(time.Millisecond)
+	testsupport.Await(t, "the first update to hold the lock", started)
+	if !m.busy() {
+		t.Fatal("the first update holds the lock but the Manager does not report busy")
 	}
 	second := m.Update(context.Background(), wire.Update{T: wire.TypeUpdate, ID: "b", Image: newImage})
 	if second.OK || second.Error != wire.UpdateErrBusy || second.ID != "b" {

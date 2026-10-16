@@ -337,11 +337,10 @@ func TestRecreateRollsBackWhenTheNewContainerCannotBeStarted(t *testing.T) {
 func TestRecreateRollsBackEvenWhenItsOwnContextWasCancelled(t *testing.T) {
 	f, r, _ := recreateFixture(t, false, time.Minute)
 	ctx, cancel := context.WithCancel(context.Background())
-	f.onStart = func(_ *fakeEngine, c *container.InspectResponse) {
-		if c.ID != oldLong && c.ID != helperID {
-			go func() { time.Sleep(20 * time.Millisecond); cancel() }()
-		}
-	}
+	// The helper reads the marker only once the new container is running, so the
+	// context ends after the new container started and before it connected.
+	marker := r.opts.Marker
+	r.opts.Marker = func() (time.Time, error) { cancel(); return marker() }
 	if err := r.run(ctx); !errors.Is(err, ErrRolledBack) {
 		t.Fatalf("want ErrRolledBack, got %v", err)
 	}
@@ -623,20 +622,23 @@ func removeFixture(t *testing.T, mut func(*RemoveVolumeOptions)) (*fakeEngine, R
 	return f, opts
 }
 
-// goneAfter removes the container from the fake engine after d, as swarm does when
-// it takes the task away.
-func goneAfter(f *fakeEngine, id string, d time.Duration) {
-	go func() {
-		time.Sleep(d)
-		f.mu.Lock()
-		delete(f.containers, id)
-		f.mu.Unlock()
-	}()
+// goneAfter removes the container from the fake engine once the helper has inspected
+// it n times, as swarm does when it takes the task away while the helper waits.
+func goneAfter(f *fakeEngine, id string, n int) {
+	seen := 0
+	f.onInspect = func(f *fakeEngine, c *container.InspectResponse) {
+		if c.ID != id {
+			return
+		}
+		if seen++; seen >= n {
+			delete(f.containers, id)
+		}
+	}
 }
 
 func TestRemoveVolumeWaitsForTheContainerToGoAndThenRemovesOnlyTheVolume(t *testing.T) {
 	f, opts := removeFixture(t, nil)
-	goneAfter(f, oldLong, 60*time.Millisecond)
+	goneAfter(f, oldLong, 3)
 	if err := RemoveVolumeAfter(context.Background(), opts); err != nil {
 		t.Fatalf("the helper failed: %v", err)
 	}
@@ -706,7 +708,7 @@ func TestRemoveVolumeWaitsForTheGraceBeforeRemovingTheContainer(t *testing.T) {
 func TestRemoveVolumeRetriesWhileTheVolumeIsStillInUse(t *testing.T) {
 	f, opts := removeFixture(t, nil)
 	f.volumeBusy = 3
-	goneAfter(f, oldLong, 10*time.Millisecond)
+	goneAfter(f, oldLong, 2)
 	if err := RemoveVolumeAfter(context.Background(), opts); err != nil {
 		t.Fatalf("the helper failed: %v", err)
 	}
@@ -718,7 +720,7 @@ func TestRemoveVolumeRetriesWhileTheVolumeIsStillInUse(t *testing.T) {
 func TestRemoveVolumeGivesUpOnAVolumeThatStaysInUse(t *testing.T) {
 	f, opts := removeFixture(t, func(o *RemoveVolumeOptions) { o.Timeout = 100 * time.Millisecond })
 	f.volumeBusy = 1 << 20
-	goneAfter(f, oldLong, 5*time.Millisecond)
+	goneAfter(f, oldLong, 1)
 	err := RemoveVolumeAfter(context.Background(), opts)
 	if err == nil || !strings.Contains(err.Error(), "in use") {
 		t.Fatalf("want an in-use error, got %v", err)
@@ -728,7 +730,7 @@ func TestRemoveVolumeGivesUpOnAVolumeThatStaysInUse(t *testing.T) {
 func TestRemoveVolumeReportsAVolumeThatCannotBeRemoved(t *testing.T) {
 	f, opts := removeFixture(t, nil)
 	f.volumeErr = 500
-	goneAfter(f, oldLong, 5*time.Millisecond)
+	goneAfter(f, oldLong, 1)
 	if err := RemoveVolumeAfter(context.Background(), opts); err == nil {
 		t.Fatal("a failed volume removal was reported as success")
 	}
@@ -737,7 +739,7 @@ func TestRemoveVolumeReportsAVolumeThatCannotBeRemoved(t *testing.T) {
 func TestRemoveVolumeTreatsAVolumeThatIsAlreadyGoneAsDone(t *testing.T) {
 	f, opts := removeFixture(t, nil)
 	f.volumeErr = 404
-	goneAfter(f, oldLong, 5*time.Millisecond)
+	goneAfter(f, oldLong, 1)
 	if err := RemoveVolumeAfter(context.Background(), opts); err != nil {
 		t.Fatalf("a volume that does not exist is already removed: %v", err)
 	}
@@ -785,7 +787,7 @@ func TestRemoveVolumeRefusesAVolumeTheTargetDoesNotMount(t *testing.T) {
 func TestRemoveVolumeStopsWhenItsContextEnds(t *testing.T) {
 	f, opts := removeFixture(t, func(o *RemoveVolumeOptions) { o.Timeout = time.Hour })
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() { time.Sleep(30 * time.Millisecond); cancel() }()
+	f.onInspect = func(*fakeEngine, *container.InspectResponse) { cancel() } // the helper is waiting for the container
 	if err := RemoveVolumeAfter(ctx, opts); err == nil {
 		t.Fatal("a cancelled helper reported success")
 	}

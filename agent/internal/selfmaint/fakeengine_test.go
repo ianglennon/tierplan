@@ -60,6 +60,9 @@ type fakeEngine struct {
 
 	// onStart runs, with the lock held, when a container is started.
 	onStart func(f *fakeEngine, c *container.InspectResponse)
+	// onInspect runs, with the lock held, when a container that exists is inspected,
+	// before the answer is written.
+	onInspect func(f *fakeEngine, c *container.InspectResponse)
 	// failStart makes starting the container with this ID fail.
 	failStart map[string]bool
 }
@@ -317,6 +320,9 @@ func (f *fakeEngine) containerOp(w http.ResponseWriter, r *http.Request, rest st
 		if c == nil {
 			notFound(w, "container: "+ref)
 			return
+		}
+		if f.onInspect != nil {
+			f.onInspect(f, c)
 		}
 		writeJSON(w, http.StatusOK, c)
 	case op == "" && r.Method == http.MethodDelete:
