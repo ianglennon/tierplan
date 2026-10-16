@@ -74,7 +74,12 @@ func TestStandaloneRemoveWithoutUninstallLeavesTheAgentRunning(t *testing.T) {
 	if code, body := srv.Do(http.MethodDelete, "/api/environments/"+env.ID, nil); code != http.StatusNoContent {
 		t.Fatalf("DELETE = %d %s, want 204", code, body)
 	}
-	time.Sleep(5 * time.Second)
+	// The agent is cut off when the environment goes. Its own refusal is the causally
+	// later event: an uninstall nobody asked for would have been acted on before it.
+	srv.WaitFor("the agent to say the server refused it after the removal", 120*time.Second, func() (bool, string) {
+		out, _ := host.Sh(execCtx(t, time.Minute), "docker logs bayplan-agent 2>&1")
+		return strings.Contains(out, "the server refused this agent"), out
+	})
 	if got := strings.TrimSpace(sh(t, host, "docker ps --format '{{.Names}}' --filter name=bayplan-agent")); got != "bayplan-agent" {
 		t.Errorf("running containers = %q, want the agent left alone", got)
 	}

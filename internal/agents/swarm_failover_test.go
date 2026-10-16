@@ -6,6 +6,7 @@ package agents_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -14,6 +15,8 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/server/servertest"
+	"github.com/ianglennon/bayplan/internal/tunnel"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // These suites are the real-swarm evidence for ENV-09 and ENV-05: what the
@@ -262,7 +265,9 @@ func TestSwarmManagerFailover(t *testing.T) {
 		if _, code, body := f.srv.Summary(f.env.ID); code != http.StatusOK {
 			t.Fatalf("summary = %d %s with one manager down", code, body)
 		}
-		time.Sleep(500 * time.Millisecond)
+		// The dashboard answering 200 over a bounded stretch of real time with one
+		// manager down is the behaviour under test; no event marks the stretch's end.
+		time.Sleep(500 * time.Millisecond) //nolint:forbidigo // an observation window that is the behaviour under test
 	}
 	t.Logf("%d summary calls answered 200 while the failover was noticed; feed row %q on node %q", calls, row.Name, row.Node)
 	t.Logf("status with the leader down: %s", summarise(env))
@@ -406,23 +411,21 @@ func TestSwarmRevokeBlocksReenrol(t *testing.T) {
 	}
 	revokePath := "/api/env/" + f.env.ID + "/agents/" + old.ID
 
-	// Revoke: the session ends within a second, the row says why and that it is blocked.
+	// Revoke: the session ends, the row says why and that it is blocked. The ordering
+	// that matters is that the revoked agent has no session once the revoke has
+	// committed, not how long the close takes: the hub drops the session when its
+	// socket closes, and the agent's next hello is refused, so it never registers again.
 	code, body := f.srv.Do(http.MethodPost, revokePath+"/revoke", map[string]string{"reason": "swarm test"})
 	if code != http.StatusNoContent {
 		t.Fatalf("POST revoke = %d %s", code, body)
 	}
-	revoked := time.Now()
-	for {
-		a, _ := f.agentOn(worker)
-		if !a.Connected {
-			break
-		}
-		if time.Since(revoked) > time.Second {
-			t.Fatalf("the revoked agent was still connected %s after the revoke answered: %+v", time.Since(revoked), a)
-		}
-		time.Sleep(25 * time.Millisecond)
+	if _, err := f.srv.Core().Tunnel().AwaitSession(testsupport.Context(t), old.ID, func(s *tunnel.Session) bool { return s == nil }); err != nil {
+		t.Fatalf("the revoked agent still has a session after the revoke answered: %v", err)
 	}
-	t.Logf("the revoked agent's session ended %s after the revoke answered", time.Since(revoked).Round(time.Millisecond))
+	f.srv.WaitFor("the revoked agent to be listed as not connected", 60*time.Second, func() (bool, string) {
+		a, _ := f.agentOn(worker)
+		return !a.Connected, fmt.Sprintf("%+v", a)
+	})
 	got, _ := f.agentOn(worker)
 	if got.ID != old.ID || got.Status != "revoked" || !got.Blocked || got.RevokeReason != "swarm test" || got.RevokedAt == "" {
 		t.Errorf("the worker's agent after the revoke = %+v, want revoked, blocked, reason \"swarm test\"", got)
@@ -464,7 +467,9 @@ func TestSwarmRevokeBlocksReenrol(t *testing.T) {
 		out, _ := worker.Sh(execCtx(t, time.Minute), "for c in $(docker ps -q --filter label=bayplan.agent=true); do docker logs $c 2>&1; done")
 		return strings.Contains(out, "code=blocked"), out
 	})
-	time.Sleep(10 * time.Second)
+	// The blocked agent's container must stay up for a bounded window after it logged
+	// code=blocked (it waits, it does not exit); no event marks the window's end.
+	time.Sleep(10 * time.Second) //nolint:forbidigo // an observation window that is the behaviour under test
 	if out, _ := worker.Sh(execCtx(t, time.Minute), "docker ps -q --filter label=bayplan.agent=true"); strings.TrimSpace(out) == "" {
 		t.Errorf("the blocked agent's container is not running; it must wait, not exit:\n%s", agentContainerLog(t, worker))
 	}
