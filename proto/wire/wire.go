@@ -184,7 +184,9 @@ type PolicyFacts struct {
 	SelfUpdate bool `json:"selfUpdate"`
 	// PrivilegedServices is true when the host set
 	// BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES, so a manager's agent forwards
-	// service specs that give tasks host access. Absent reads as false.
+	// service specs that give tasks host access, and every agent-managed host's
+	// agent forwards the volume creates it would refuse (volume creates). Absent
+	// reads as false.
 	PrivilegedServices bool `json:"privilegedServices,omitempty"`
 }
 

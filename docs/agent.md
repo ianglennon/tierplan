@@ -121,6 +121,8 @@ The check runs after the read-only flag and after the body has been decoded stri
 
 **An older agent refuses the newer calls.** The table ships with the agent. An agent from before this list grew refuses container actions, logs, shells, networks, volumes, image pulls, removes, inspects and distribution checks, and service, node, secret and config calls, service and task logs and container stats with `agent_policy_denied` until it updates; Bayplan then says the agent needs an update, and updates it itself unless the host set `BAYPLAN_AGENT_SELF_UPDATE=false` (see [Updates](#updates)).
 
+**An older agent forwards what this release refuses.** An agent from before plan 06-40 forwards every volume create, and one from before plan 06-50 forwards a `local` volume that binds a relative device or mounts a filesystem type other than `tmpfs` or a network share. Bayplan still lets only an environment Admin create volumes, but the agent's own check holds only once the agent updates (see [Updates](#updates)).
+
 ## Before you install
 
 1. **Bayplan must be reachable from the host.** The agent dials `<agent URL>/agent/connect` over `wss://`. The agent URL is `BAYPLAN_AGENT_URL`, or the public URL (`BAYPLAN_PUBLIC_URL`) when it is not set. The install command shows the exact address under **Connects to**. If Bayplan is behind a reverse proxy, the proxy has to pass WebSocket upgrades and Bayplan has to trust its `X-Forwarded-Proto` header: see [Running Bayplan behind a reverse proxy](reverse-proxy.md).

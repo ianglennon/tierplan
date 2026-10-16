@@ -45,8 +45,9 @@ const (
 	// envAllowPrivilegedServices lets a manager's agent forward service specs that
 	// give tasks host access: a bind of the Docker socket or of a host path outside
 	// the data roots, an added capability, a lowered sandbox, the host network
-	// (D-36). The default is false. It matters on managers only; a worker's agent
-	// forwards no service write.
+	// (D-36). The default is false. On managers it covers service writes,
+	// including the volumes they name; on every agent-managed host it also covers
+	// volume creates (a worker's agent forwards no service write).
 	envAllowPrivilegedServices = "BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES"
 	// envAllowInsecure lets the agent dial plain ws:// to a host that is not
 	// loopback. For development only: the join token, the proof and every Docker
@@ -83,7 +84,8 @@ type Config struct {
 	// whether the agent may update itself (D-28).
 	ReadOnly, SelfUpdate bool
 	// AllowPrivilegedServices is BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES: on a
-	// manager it lets the agent forward service specs that give tasks host access.
+	// manager it lets the agent forward service specs that give tasks host access,
+	// and on every agent-managed host it also covers volume creates.
 	AllowPrivilegedServices bool
 	// AllowInsecure allows a plain ws:// address for a host that is not loopback
 	// (development only).
