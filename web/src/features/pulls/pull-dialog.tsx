@@ -59,7 +59,7 @@ const MAX_REF = 512;
 
 // How long the typing must stop before the credential preview asks the server (UI-SPEC
 // "Credential preview").
-const PREVIEW_DEBOUNCE_MS = 400;
+export const PREVIEW_DEBOUNCE_MS = 400;
 
 // Messages are i18n keys, never literals (D-65).
 const schema = z.object({

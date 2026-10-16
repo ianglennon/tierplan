@@ -3,10 +3,11 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
-import type { PullSummary } from "@/api/pulls";
+import { PULLS_POLL_RUNNING_MS, type PullSummary } from "@/api/pulls";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
@@ -14,6 +15,7 @@ import { PullsIndicator } from "@/features/pulls/pulls-indicator";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
+import { settled } from "@/test-settle";
 
 const REF = "docker.io/library/nginx:1.27";
 
@@ -67,6 +69,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
+  // A toast raised by one test (the failed cancel) is in sonner's store until it is dismissed,
+  // and would be found by the next test's role="alert" query.
+  toast.dismiss();
   cleanup();
   vi.unstubAllGlobals();
   client.clear();
@@ -174,13 +180,18 @@ describe("PullsIndicator", () => {
   });
 
   it("keeps the last list when a poll fails and shows no error", async () => {
+    // The list is polled while a pull runs. The clock is a fake one that also keeps moving with
+    // real time (shouldAdvanceTime), so findBy and waitFor keep polling.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     pulls = [summary()];
     mount();
     await screen.findByRole("button", { name: "Pulls, 1 in progress" });
+    const listed = () => calls.filter((c) => c === "GET /api/pulls").length;
+    const before = listed();
     listStatus = 500;
-    await act(async () => {
-      await client.refetchQueries({ queryKey: ["pulls"] });
-    });
+    await vi.advanceTimersByTimeAsync(PULLS_POLL_RUNNING_MS);
+    await waitFor(() => expect(listed()).toBeGreaterThan(before));
+    await settled(client);
     expect(screen.getByRole("button", { name: "Pulls, 1 in progress" })).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
   });

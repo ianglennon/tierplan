@@ -11,10 +11,11 @@ import type { PullItem, PullJob } from "@/api/pulls";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
-import { PullDialog, PullImageButton } from "@/features/pulls/pull-dialog";
+import { PREVIEW_DEBOUNCE_MS, PullDialog, PullImageButton } from "@/features/pulls/pull-dialog";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
+import { settled } from "@/test-settle";
 
 const ENV = "e1";
 const REF = "docker.io/library/nginx:1.27";
@@ -181,6 +182,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   toast.dismiss();
   cleanup();
   vi.restoreAllMocks();
@@ -763,6 +765,10 @@ describe("PullDialog (the credential preview)", () => {
     return dialog;
   };
   const patiently = { timeout: 3000 };
+  // The preview is debounced by a timer of the component's own. A test about "nothing more is
+  // asked" runs it on a fake clock that also keeps moving with real time (shouldAdvanceTime),
+  // so findBy and waitFor keep polling, and moves it past the debounce when it means to.
+  const debounceClock = () => vi.useFakeTimers({ shouldAdvanceTime: true });
 
   it("shows the reference as it will be pulled and says the pull is anonymous", async () => {
     resolveAnswer = () => resolved();
@@ -805,15 +811,18 @@ describe("PullDialog (the credential preview)", () => {
   });
 
   it("asks once, for what was typed last, after the typing stops", async () => {
+    debounceClock();
     resolveAnswer = () => resolved();
     mount();
     await type("n");
     await type("ng");
     const dialog = await type("nginx:1.27");
+    await vi.advanceTimersByTimeAsync(PREVIEW_DEBOUNCE_MS);
     await waitFor(() => expect(resolves()).toHaveLength(1), patiently);
     expect(resolves()[0]?.body).toEqual({ ref: "nginx:1.27" });
-    // Nothing more comes after it.
-    await new Promise((r) => setTimeout(r, 600));
+    // Nothing more comes after it, however long the debounce runs on.
+    await vi.advanceTimersByTimeAsync(PREVIEW_DEBOUNCE_MS * 2);
+    await settled(client);
     expect(resolves()).toHaveLength(1);
     expect(dialog).toBeTruthy();
   });
@@ -829,17 +838,21 @@ describe("PullDialog (the credential preview)", () => {
   });
 
   it("shows neither line for a reference the server does not understand, nor for an empty field", async () => {
+    debounceClock();
     resolveAnswer = () =>
       Response.json({ type: "ref_invalid", title: "x", status: 422, detail: "d" }, { status: 422 });
     mount();
     const dialog = await type("Bad Ref!");
+    await vi.advanceTimersByTimeAsync(PREVIEW_DEBOUNCE_MS);
     await waitFor(() => expect(resolves()).toHaveLength(1), patiently);
-    await new Promise((r) => setTimeout(r, 50));
+    // The check has been answered (with the 422) before the lines are looked for.
+    await settled(client);
     expect(dialog.textContent).not.toContain("Credential:");
     expect(dialog.textContent).not.toContain("Pulls docker.io");
     // Clearing the field asks nothing.
     await type("");
-    await new Promise((r) => setTimeout(r, 600));
+    await vi.advanceTimersByTimeAsync(PREVIEW_DEBOUNCE_MS * 2);
+    await settled(client);
     expect(resolves()).toHaveLength(1);
   });
 
@@ -848,7 +861,8 @@ describe("PullDialog (the credential preview)", () => {
     mount();
     const dialog = await type("nginx");
     await waitFor(() => expect(resolves()).toHaveLength(1), patiently);
-    await new Promise((r) => setTimeout(r, 50));
+    // The check has been answered (with the 500) before the line is looked for.
+    await settled(client);
     expect(dialog.textContent).not.toContain("Credential:");
     fireEvent.click(within(dialog).getByRole("button", { name: "Pull image" }));
     await within(dialog).findByRole("heading", { name: /Pulling/ });
