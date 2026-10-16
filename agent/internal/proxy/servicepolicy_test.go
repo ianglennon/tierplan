@@ -147,6 +147,9 @@ func TestEscalationsNameTheSpecPathOfEachFinding(t *testing.T) {
 			DriverConfig: &mount.Driver{Name: "local", Options: map[string]string{"type": "none", "o": "bind", "device": "/etc"}},
 		}},
 	}
+	cs.Mounts = append(cs.Mounts, mount.Mount{Type: mount.TypeVolume, Source: "w", Target: "/e", VolumeOptions: &mount.VolumeOptions{
+		DriverConfig: &mount.Driver{Name: "local", Options: map[string]string{"type": "overlay", "device": "overlay", "o": "lowerdir=/"}},
+	}})
 	cs.CapabilityAdd = []string{"NET_ADMIN", "SYS_PTRACE"}
 	cs.Privileges = &swarm.Privileges{
 		SELinuxContext: &swarm.SELinuxContext{Disable: true},
@@ -159,6 +162,7 @@ func TestEscalationsNameTheSpecPathOfEachFinding(t *testing.T) {
 		"TaskTemplate.ContainerSpec.Mounts[1].Source",
 		"TaskTemplate.ContainerSpec.Mounts[2].Source",
 		"TaskTemplate.ContainerSpec.Mounts[3].VolumeOptions.DriverConfig.Options.device",
+		"TaskTemplate.ContainerSpec.Mounts[4].VolumeOptions.DriverConfig.Options.type",
 		"TaskTemplate.ContainerSpec.CapabilityAdd[0]",
 		"TaskTemplate.ContainerSpec.CapabilityAdd[1]",
 		"TaskTemplate.ContainerSpec.Privileges.SELinuxContext",
@@ -229,13 +233,16 @@ func TestNamedVolumesJudgeWhatTheEngineHolds(t *testing.T) {
 		lookup volumeLookup
 		want   []string
 	}{
-		"exists, local, binds the host root":     {exists("local", map[string]string{"type": "none", "o": "bind", "device": "/"}), []string{path}},
-		"exists, local, a device":                {exists("local", map[string]string{"type": "ext4", "device": "/dev/sda1"}), []string{path}},
-		"exists, driver in capitals, binds /etc": {exists("LOCAL", map[string]string{"type": "none", "o": "bind", "device": "/etc"}), []string{path}},
-		"exists, a plugin driver":                {exists("rexray/ebs", nil), []string{path}},
-		"exists, local, an nfs share":            {exists("local", map[string]string{"type": "nfs", "o": "addr=10.0.0.5,rw", "device": ":/export"}), nil},
-		"exists, local, binds a path under /srv": {exists("local", map[string]string{"type": "none", "o": "bind", "device": "/srv/data"}), nil},
-		"exists, local, no options":              {exists("local", nil), nil},
+		"exists, local, binds the host root":           {exists("local", map[string]string{"type": "none", "o": "bind", "device": "/"}), []string{path}},
+		"exists, local, a device":                      {exists("local", map[string]string{"type": "ext4", "device": "/dev/sda1"}), []string{path}},
+		"exists, driver in capitals, binds /etc":       {exists("LOCAL", map[string]string{"type": "none", "o": "bind", "device": "/etc"}), []string{path}},
+		"exists, a plugin driver":                      {exists("rexray/ebs", nil), []string{path}},
+		"exists, local, binds the relative device etc": {exists("local", map[string]string{"type": "none", "o": "bind", "device": "etc"}), []string{path}},
+		"exists, local, an overlay over the host root": {exists("local", map[string]string{"type": "overlay", "device": "overlay", "o": "lowerdir=/"}), []string{path}},
+		"exists, local, tmpfs":                         {exists("local", map[string]string{"type": "tmpfs", "device": "tmpfs", "o": "size=64m"}), nil},
+		"exists, local, an nfs share":                  {exists("local", map[string]string{"type": "nfs", "o": "addr=10.0.0.5,rw", "device": ":/export"}), nil},
+		"exists, local, binds a path under /srv":       {exists("local", map[string]string{"type": "none", "o": "bind", "device": "/srv/data"}), nil},
+		"exists, local, no options":                    {exists("local", nil), nil},
 		"does not exist": {func(context.Context, string) (string, map[string]string, bool, error) {
 			return "", nil, false, nil
 		}, nil},

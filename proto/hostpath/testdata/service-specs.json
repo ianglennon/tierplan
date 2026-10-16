@@ -398,5 +398,176 @@
         }
       }
     }
+  },
+  {
+    "name": "local volume that binds a relative device",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{
+            "Type": "volume",
+            "Source": "relvol",
+            "Target": "/data",
+            "VolumeOptions": {"DriverConfig": {"Name": "local", "Options": {"type": "none", "o": "bind", "device": "etc"}}}
+          }]
+        }
+      }
+    }
+  },
+  {
+    "name": "local volume that binds var/lib/docker relatively",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{
+            "Type": "volume",
+            "Source": "relvol2",
+            "Target": "/data",
+            "VolumeOptions": {"DriverConfig": {"Name": "local", "Options": {"type": "none", "o": "bind", "device": "var/lib/docker"}}}
+          }]
+        }
+      }
+    }
+  },
+  {
+    "name": "local volume that binds var/run relatively",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{
+            "Type": "volume",
+            "Source": "relvol3",
+            "Target": "/data",
+            "VolumeOptions": {"DriverConfig": {"Name": "local", "Options": {"type": "none", "o": "bind", "device": "var/run"}}}
+          }]
+        }
+      }
+    }
+  },
+  {
+    "name": "local volume that binds the docker socket relatively",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{
+            "Type": "volume",
+            "Source": "relvol4",
+            "Target": "/data",
+            "VolumeOptions": {"DriverConfig": {"Name": "local", "Options": {"type": "none", "o": "bind", "device": "var/run/docker.sock"}}}
+          }]
+        }
+      }
+    }
+  },
+  {
+    "name": "local overlay volume over the host root",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{
+            "Type": "volume",
+            "Source": "ovlvol",
+            "Target": "/data",
+            "VolumeOptions": {"DriverConfig": {"Name": "local", "Options": {"type": "overlay", "device": "overlay", "o": "lowerdir=/:/srv/empty"}}}
+          }]
+        }
+      }
+    }
+  },
+  {
+    "name": "local proc volume",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{
+            "Type": "volume",
+            "Source": "procvol",
+            "Target": "/data",
+            "VolumeOptions": {"DriverConfig": {"Name": "local", "Options": {"type": "proc", "device": "proc"}}}
+          }]
+        }
+      }
+    }
+  },
+  {
+    "name": "local tmpfs volume with a size",
+    "escalates": false,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{
+            "Type": "volume",
+            "Source": "tmpvol",
+            "Target": "/data",
+            "VolumeOptions": {"DriverConfig": {"Name": "local", "Options": {"type": "tmpfs", "device": "tmpfs", "o": "size=64m"}}}
+          }]
+        }
+      }
+    }
+  },
+  {
+    "name": "named volume that exists and binds a relative device",
+    "escalates": false,
+    "agentRefuses": true,
+    "volumes": {"relvol-existing": {"driver": "local", "options": {"type": "none", "o": "bind", "device": "etc"}}},
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{"Type": "volume", "Source": "relvol-existing", "Target": "/data"}]
+        }
+      }
+    }
+  },
+  {
+    "name": "named volume that exists as an overlay over the host root",
+    "escalates": false,
+    "agentRefuses": true,
+    "volumes": {"ovlvol-existing": {"driver": "local", "options": {"type": "overlay", "device": "overlay", "o": "lowerdir=/:/srv/empty"}}},
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{"Type": "volume", "Source": "ovlvol-existing", "Target": "/data"}]
+        }
+      }
+    }
+  },
+  {
+    "name": "named volume that exists as tmpfs",
+    "escalates": false,
+    "agentRefuses": false,
+    "volumes": {"tmpvol-existing": {"driver": "local", "options": {"type": "tmpfs", "device": "tmpfs", "o": "size=64m"}}},
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{"Type": "volume", "Source": "tmpvol-existing", "Target": "/data"}]
+        }
+      }
+    }
   }
 ]

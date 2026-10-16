@@ -164,7 +164,8 @@ func TestVectors(t *testing.T) {
 	for _, want := range []string{
 		"clean spec", "bind of the docker socket", "bind of the host root", "bind below /srv",
 		"bind below /var/log", "bind of /var/log whole", "local volume that binds the host root",
-		"local nfs volume", "named pipe mount", "added capability", "SELinux disabled", "SELinux spc_t",
+		"local nfs volume", "local volume that binds a relative device", "local overlay volume over the host root",
+		"named pipe mount", "added capability", "SELinux disabled", "SELinux spc_t",
 		"seccomp unconfined", "AppArmor disabled", "host network by name", "host network by id",
 	} {
 		if !seen[want] {

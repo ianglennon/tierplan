@@ -130,6 +130,10 @@ func TestCheckEachRuleHasItsName(t *testing.T) {
 		"apparmor": {swarm.ContainerSpec{Privileges: &swarm.Privileges{AppArmor: &swarm.AppArmorOpts{Mode: swarm.AppArmorModeDisabled}}}, "apparmor"},
 		"device": {swarm.ContainerSpec{Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: "v", Target: "/v", VolumeOptions: &mount.VolumeOptions{
 			DriverConfig: &mount.Driver{Name: "local", Options: map[string]string{"type": "none", "o": "bind", "device": "/"}}}}}}, "volume_device"},
+		"a relative device": {swarm.ContainerSpec{Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: "v", Target: "/v", VolumeOptions: &mount.VolumeOptions{
+			DriverConfig: &mount.Driver{Name: "local", Options: map[string]string{"type": "none", "o": "bind", "device": "etc"}}}}}}, "volume_device"},
+		"an overlay type": {swarm.ContainerSpec{Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: "v", Target: "/v", VolumeOptions: &mount.VolumeOptions{
+			DriverConfig: &mount.Driver{Name: "local", Options: map[string]string{"type": "overlay", "device": "overlay", "o": "lowerdir=/"}}}}}}, "volume_device"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -174,3 +178,12 @@ func TestCheckTheHostNetworkIsFoundByNameAndThroughTheResolver(t *testing.T) {
 }
 
 var _ = compose.Finding{}
+
+func TestCheckNamesTheTypeOfAVolumeThatMountsAHostFilesystem(t *testing.T) {
+	cs := swarm.ContainerSpec{Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: "v", Target: "/v", VolumeOptions: &mount.VolumeOptions{
+		DriverConfig: &mount.Driver{Options: map[string]string{"type": "proc", "device": "proc"}}}}}}
+	got := swarmspec.Check(specWith(cs), nil)
+	if len(got) != 1 || got[0].Key != "TaskTemplate.ContainerSpec.Mounts[0].VolumeOptions.DriverConfig.Options.type" || got[0].Value != "proc" {
+		t.Fatalf("findings = %+v, want one on Options.type with value proc", got)
+	}
+}
