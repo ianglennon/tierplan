@@ -205,6 +205,14 @@ func pushTagged(t testing.TB, node *Node, target string, login *Login) string {
 			t.Fatalf("sign in to %s on %s: %v\n%s", host, node.Hostname, err, out)
 		}
 	}
+	// A push to the fixture registry goes through the node's own port 5000 (the routing
+	// mesh on a swarm). Wait until that answers /v2/ from this node, so the push never
+	// starts against a mesh that is not answering yet; the push itself runs once.
+	if host, _, _ := strings.Cut(target, "/"); host == registryHost || host == swarmRegistryHost {
+		Wait(t, 2*time.Minute, "the registry to answer /v2/ from "+node.Hostname+" before the push", func() (bool, string) {
+			return registryUp(ctx, node, RegistryOptions{})
+		})
+	}
 	out, err := node.Exec(ctx, "docker", "push", target)
 	if err != nil {
 		t.Fatalf("push %s from %s: %v\n%s", target, node.Hostname, err, out)
