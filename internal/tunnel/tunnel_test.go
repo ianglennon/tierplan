@@ -26,6 +26,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/proto/authn"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -85,20 +86,31 @@ type observer struct {
 	mu     sync.Mutex
 	events []string
 	conn   chan *tunnel.Session
+	// changed is closed and replaced whenever an event is recorded, to wake awaitLen.
+	changed chan struct{}
 }
 
-func newObserver() *observer { return &observer{conn: make(chan *tunnel.Session, 4)} }
+func newObserver() *observer {
+	return &observer{conn: make(chan *tunnel.Session, 4), changed: make(chan struct{})}
+}
+
+// recordLocked appends an event and wakes every awaitLen. o.mu must be held.
+func (o *observer) recordLocked(event string) {
+	o.events = append(o.events, event)
+	close(o.changed)
+	o.changed = make(chan struct{})
+}
 
 func (o *observer) Connected(s *tunnel.Session) {
 	o.mu.Lock()
-	o.events = append(o.events, "connected:"+s.AgentID)
+	o.recordLocked("connected:" + s.AgentID)
 	o.mu.Unlock()
 	o.conn <- s
 }
 
 func (o *observer) Disconnected(s *tunnel.Session, code string) {
 	o.mu.Lock()
-	o.events = append(o.events, "disconnected:"+s.AgentID+":"+code)
+	o.recordLocked("disconnected:" + s.AgentID + ":" + code)
 	o.mu.Unlock()
 }
 
@@ -116,6 +128,26 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// awaitLen waits until the observer has heard n events and returns them. It wakes
+// on each event the observer records and never polls.
+func (o *observer) awaitLen(t *testing.T, n int) []string {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	for {
+		o.mu.Lock()
+		ch, got := o.changed, append([]string(nil), o.events...)
+		o.mu.Unlock()
+		if len(got) >= n {
+			return got
+		}
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for %d lifecycle events; heard %v", n, got)
+		}
 	}
 }
 
@@ -365,7 +397,7 @@ func TestAHandshakeWelcomesTheAgentAndTheServerOpensStreamsToIt(t *testing.T) {
 	// The agent goes away: the observer hears of it with a D-40 code, and a dial
 	// now fails at once with ErrAgentGone instead of hanging (D-42).
 	_ = ac.ws.CloseNow()
-	waitFor(t, "the disconnect", func() bool { return len(f.o.log()) == 2 })
+	f.o.awaitLen(t, 2)
 	if got := f.o.log(); got[0] != "connected:agent-1" || got[1] != "disconnected:agent-1:"+tunnel.DisconnectClosed {
 		t.Fatalf("lifecycle = %v", got)
 	}
@@ -610,15 +642,8 @@ func TestANewSessionOfTheSameAgentReplacesTheOldOne(t *testing.T) {
 	if oldSess == newSess || f.hub.Session("agent-1") != newSess {
 		t.Fatal("the new session did not replace the old one")
 	}
-	waitFor(t, "the old session to end", func() bool {
-		select {
-		case <-oldSess.Done():
-			return true
-		default:
-			return false
-		}
-	})
-	waitFor(t, "the old session's disconnect", func() bool { return len(f.o.log()) == 3 })
+	testsupport.Await(t, "the old session to end", oldSess.Done())
+	f.o.awaitLen(t, 3)
 	// The old session is reported gone, with the reason replaced, before the new
 	// one is reported connected, and the hub still has the new one.
 	if got := f.o.log(); got[0] != "connected:agent-1" || got[1] != "disconnected:agent-1:"+tunnel.DisconnectReplaced || got[2] != "connected:agent-1" {
