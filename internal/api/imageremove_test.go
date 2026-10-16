@@ -106,7 +106,7 @@ func (f *envFix) imageDeleter(t *testing.T, e envBody, user, role string) func(r
 	t.Helper()
 	f.addUser(t, user, false)
 	f.addEnvRole(t, user, e.ID, role)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	cookie, csrf := f.signIn(t, user, false)
 	return func(route, body string) *httptest.ResponseRecorder {
 		return f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/images/" + route, body: body, cookie: cookie, csrf: csrf})

@@ -15,7 +15,6 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/envs"
 )
 
 // Volume create (plan 04-16, RES-07, D-44, D-51, P2 D-42). Docker is a fake daemon
@@ -38,7 +37,7 @@ type volumeCreated struct {
 // monitor has seen online, so it waits for the first probe like act and remove do.
 func (f *envFix) createVol(t *testing.T, e envBody, body string) *envRec {
 	t.Helper()
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	return f.req(t, http.MethodPost, "/api/env/"+e.ID+"/volumes", body)
 }
 
@@ -72,7 +71,7 @@ func TestCreateVolumeAsAnEnvAdminAnswers201SendsTheFieldsOnceAndAuditsOnce(t *te
 	f, e := dashEnv(t, volumeEngine())
 	f.addUser(t, "voladmin", false)
 	f.addEnvRole(t, "voladmin", e.ID, "admin")
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	cookie, csrf := f.signIn(t, "voladmin", false)
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/volumes",
 		body:   `{"name":"data1","driver":"local","labels":{"app":"x"}}`,
@@ -119,7 +118,7 @@ func TestCreateVolumeTheAgentsHostPolicyRefusalIs409AgentHostPolicyAndAudited(t 
 	f, e := dashEnv(t, cfg)
 	f.addUser(t, "voladmin", false)
 	f.addEnvRole(t, "voladmin", e.ID, "admin")
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	cookie, csrf := f.signIn(t, "voladmin", false)
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/volumes",
 		body:   `{"name":"hostdata","driverOptions":{"type":"none","o":"bind","device":"/opt/data"}}`,
@@ -194,7 +193,7 @@ func TestCreateVolumeANameTheNodeHasIs409NameTakenWithoutTellingTheEngineToCreat
 
 func TestCreateVolumeTheSchemaRefusesBadNamesAndTooManyEntriesBeforeAnyDockerCall(t *testing.T) {
 	f, e := dashEnv(t, volumeEngine())
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	for name, body := range map[string]string{
 		"a name with a space":         `{"name":"my vol"}`,
 		"an empty name":               `{"name":""}`,
@@ -223,7 +222,7 @@ func TestCreateVolumeAnOperatorAndAViewerAreRefusedAndNothingIsSent(t *testing.T
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
 	f.addUser(t, "operator", false)
 	f.addEnvRole(t, "operator", e.ID, "operator")
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 
 	for _, who := range []string{"viewer", "operator"} {
 		cookie, csrf := f.signIn(t, who, false)
@@ -440,7 +439,7 @@ func (f *envFix) volumeDeleter(t *testing.T, e envBody, user string) func(body s
 	if _, err := f.st.Write.Exec(`INSERT INTO assignment_extras (assignment_id, permission) VALUES (?, 'volumes.delete')`, "ra-"+user+"-"+e.ID); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	cookie, csrf := f.signIn(t, user, false)
 	return func(body string) *httptest.ResponseRecorder {
 		return f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/volumes/delete", body: body, cookie: cookie, csrf: csrf})
@@ -521,7 +520,7 @@ func TestDeleteVolumeWithoutTheDeleteVolumesPermissionIs403AndNothingIsSent(t *t
 		f.addUser(t, who.user, false)
 		f.addEnvRole(t, who.user, e.ID, who.role)
 	}
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	for _, who := range []string{"viewer", "operator"} {
 		cookie, csrf := f.signIn(t, who, false)
 		rec := f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/volumes/delete",
@@ -842,16 +841,17 @@ func (s *swarmFix) volumeDeletesOn() map[string][]string {
 }
 
 func TestSwarmVolumeListsOneRowPerNodeAndCountsTheServiceSpecsThatMountIt(t *testing.T) {
+	// newSwarmFix returned with every agent connected and probed, and the cluster read behind
+	// "used by" is made by the request itself when the last one is older than its TTL.
 	s := newSwarmFix(t)
-	waitFor(t, "the cluster read", func() bool {
-		rec := s.get(t, s.env.ID, "volumes")
-		if rec.code != http.StatusOK {
-			return false
-		}
-		items := decode[listBody[volumeItem]](t, rec).Items
-		return len(items) == 2 && items[0].UsedByServices == 1
-	})
-	items := decode[listBody[volumeItem]](t, s.get(t, s.env.ID, "volumes")).Items
+	rec := s.get(t, s.env.ID, "volumes")
+	if rec.code != http.StatusOK {
+		t.Fatalf("volumes: %d %s", rec.code, rec.body)
+	}
+	items := decode[listBody[volumeItem]](t, rec).Items
+	if len(items) != 2 {
+		t.Fatalf("items = %+v, want one row per node that has the volume", items)
+	}
 	if items[0].Name != "data" || items[1].Name != "data" || items[0].NodeID == items[1].NodeID {
 		t.Fatalf("items = %+v, want the same name on two nodes as two rows", items)
 	}
@@ -884,15 +884,15 @@ func TestSwarmVolumeDeletingOneNodesCopyLeavesTheSameNameOnTheOtherNode(t *testi
 			t.Fatalf("create on %s: %d %s", node, rec.code, rec.body)
 		}
 	}
-	waitFor(t, "two rows called shared", func() bool {
-		n := 0
-		for _, v := range decode[listBody[volumeItem]](t, s.get(t, s.env.ID, "volumes")).Items {
-			if v.Name == "shared" {
-				n++
-			}
+	n := 0
+	for _, v := range decode[listBody[volumeItem]](t, s.get(t, s.env.ID, "volumes")).Items {
+		if v.Name == "shared" {
+			n++
 		}
-		return n == 2
-	})
+	}
+	if n != 2 {
+		t.Fatalf("%d rows called shared after two creates, want 2", n)
+	}
 	rec, got := s.deleteVolumes(t, deleteVolumesJSON("shared", [2]string{s.m1.id, "shared"}))
 	if rec.code != http.StatusOK || len(got.Results) != 1 || got.Results[0].Result != "done" {
 		t.Fatalf("%d %s", rec.code, rec.body)
@@ -900,15 +900,15 @@ func TestSwarmVolumeDeletingOneNodesCopyLeavesTheSameNameOnTheOtherNode(t *testi
 	if d := s.volumeDeletesOn(); len(d["m1"]) != 1 || len(d["m2"])+len(d["w"]) != 0 {
 		t.Fatalf("deletes = %v, want exactly one, on the node named", d)
 	}
-	waitFor(t, "one row called shared", func() bool {
-		var rows []volumeItem
-		for _, v := range decode[listBody[volumeItem]](t, s.get(t, s.env.ID, "volumes")).Items {
-			if v.Name == "shared" {
-				rows = append(rows, v)
-			}
+	var rows []volumeItem
+	for _, v := range decode[listBody[volumeItem]](t, s.get(t, s.env.ID, "volumes")).Items {
+		if v.Name == "shared" {
+			rows = append(rows, v)
 		}
-		return len(rows) == 1 && rows[0].NodeID == s.w.id
-	})
+	}
+	if len(rows) != 1 || rows[0].NodeID != s.w.id {
+		t.Fatalf("rows called shared = %+v, want one, on the worker", rows)
+	}
 }
 
 // Volume sizes, on request (plan 04-18 task 1, D-47, T-04-60).
@@ -1153,7 +1153,7 @@ func (f *envFix) asRole(t *testing.T, e envBody, user, role string) func(path st
 	t.Helper()
 	f.addUser(t, user, false)
 	f.addEnvRole(t, user, e.ID, role)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	cookie, csrf := f.signIn(t, user, false)
 	return func(path string) *httptest.ResponseRecorder {
 		return f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + e.ID + "/" + path, cookie: cookie, csrf: csrf})
@@ -1221,7 +1221,7 @@ func TestVolumeDetailAViewerSeesTheDetailsAndWhatUsesTheVolumeButNoOptionValue(t
 
 func TestVolumeDetailAHolderOfSecretsRevealSeesTheOptionValues(t *testing.T) {
 	f, e := dashEnv(t, volumeDetailEngine())
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	share := decode[volumeDetail](t, f.get(t, e, "volumes/share"))
 	got := map[string]string{}
 	for _, o := range share.Options {
@@ -1237,7 +1237,7 @@ func TestVolumeDetailAHolderOfSecretsRevealSeesTheOptionValues(t *testing.T) {
 
 func TestVolumeDetailAVolumeThatIsNotThereIs404VolumeNotFoundAndANodeThatIsNotTheEnvironmentsIs503(t *testing.T) {
 	f, e := dashEnv(t, volumeDetailEngine())
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	if rec := f.get(t, e, "volumes/ghost"); rec.code != http.StatusNotFound || rec.ptyp != "volume_not_found" {
 		t.Errorf("unknown volume: %d %q, want 404 volume_not_found: %s", rec.code, rec.ptyp, rec.body)
 	}
@@ -1258,7 +1258,7 @@ func TestVolumeDetailNeedsVolumesReadAndTheNameOfTheSizesRouteStillRoutesToIt(t 
 		t.Errorf("a user with no role: %d, want 403 or 404", rec.Code)
 	}
 	// /volumes/sizes is the sizes route, not a volume named sizes.
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	if rec := f.get(t, e, "volumes/sizes"); rec.code != http.StatusOK || !strings.Contains(string(rec.body), `"nodes"`) {
 		t.Errorf("sizes: %d %s", rec.code, rec.body)
 	}
@@ -1269,15 +1269,14 @@ func TestSwarmVolumeDetailNeedsTheNodeAndNamesTheServicesWhoseSpecMountsItEvenWi
 	if rec := s.get(t, s.env.ID, "volumes/data"); rec.code != http.StatusUnprocessableEntity || rec.ptyp != "node_required" {
 		t.Fatalf("no node on a swarm: %d %q, want 422 node_required: %s", rec.code, rec.ptyp, rec.body)
 	}
-	var got volumeDetail
-	waitFor(t, "the service in used by", func() bool {
-		rec := s.get(t, s.env.ID, "volumes/data?nodeId="+s.m1.id)
-		if rec.code != http.StatusOK {
-			return false
-		}
-		got = decode[volumeDetail](t, rec)
-		return got.UsedByServices == 1
-	})
+	rec := s.get(t, s.env.ID, "volumes/data?nodeId="+s.m1.id)
+	if rec.code != http.StatusOK {
+		t.Fatalf("detail: %d %s", rec.code, rec.body)
+	}
+	got := decode[volumeDetail](t, rec)
+	if got.UsedByServices != 1 {
+		t.Fatalf("detail = %+v, want the idle service counted", got)
+	}
 	if got.Node != "mgr-1" || got.NodeID != s.m1.id || len(got.UsedBy) != 1 {
 		t.Fatalf("detail = %+v", got)
 	}
@@ -1325,7 +1324,7 @@ func TestVolumeInspectAViewerGetsTheDocumentWithEveryOptionValueReplacedAndMaske
 
 func TestVolumeInspectAHolderOfSecretsRevealGetsTheDocumentAsTheEngineSentIt(t *testing.T) {
 	f, e := dashEnv(t, volumeDetailEngine())
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	got := decode[volumeInspect](t, f.get(t, e, "volumes/share/inspect"))
 	if got.Masked {
 		t.Error("masked = true for an instance admin")
@@ -1354,7 +1353,7 @@ func TestVolumeInspectAVolumeWithNoOptionsIsNotMasked(t *testing.T) {
 
 func TestVolumeInspectUsesTheDetailRoutesRulesForTheNodeAndForAVolumeThatIsNotThere(t *testing.T) {
 	f, e := dashEnv(t, volumeDetailEngine())
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	if rec := f.get(t, e, "volumes/ghost/inspect"); rec.code != http.StatusNotFound || rec.ptyp != "volume_not_found" {
 		t.Errorf("unknown volume: %d %q, want 404 volume_not_found: %s", rec.code, rec.ptyp, rec.body)
 	}

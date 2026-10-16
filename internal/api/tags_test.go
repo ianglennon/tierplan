@@ -20,7 +20,6 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/envs"
 )
 
 // Browsing a repository's tags (plan 05-18, IMG-03, D-19, D-24a, T-05-60). The router,
@@ -643,7 +642,7 @@ func TestBrowseTagDetailsSayWhichReadableEnvironmentsRunTheDigestAndNoOthers(t *
 	f.trusting(t, reg)
 	f.storeCredential(t, credentialUser{f.cookie, f.csrf}, reg.credentialBody("fake-inst"))
 	a := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(a.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, a.ID)
 	f.inst.Apply("Bayplan", "https://example.com/bayplan")
 	bEnv, rec := f.addAgent(t)
 	if rec.code != http.StatusCreated {
@@ -700,7 +699,7 @@ func TestBrowseTagDetailsMatchByDigestSoAMovedTagStillShowsWhereItsImageRuns(t *
 	f.trusting(t, reg)
 	f.storeCredential(t, credentialUser{f.cookie, f.csrf}, reg.credentialBody("fake-inst"))
 	a := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(a.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, a.ID)
 	rec := f.details(t, credentialUser{f.cookie, f.csrf}, reg, "acme/app", "", "1.0")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("details: %d %s", rec.Code, rec.Body)
@@ -759,7 +758,7 @@ func TestEnvTagDetailsRunningHereListsContainersAndServicesByDigestEvenAfterTheT
 	f.trusting(t, reg)
 	f.storeCredential(t, credentialUser{f.cookie, f.csrf}, reg.credentialBody("fake-inst"))
 	a := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(a.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, a.ID)
 	viewer := f.asRoleOn(t, "viewera", a.ID, "viewer")
 
 	rec := f.envDetails(t, viewer, reg, "acme/app", a.ID, "1.0", "other")
@@ -804,7 +803,7 @@ func TestEnvBrowseTagsRunningHereRoutesNeedImagesReadOnThatEnvironmentAndUseOnly
 	admin := credentialUser{f.cookie, f.csrf}
 	f.storeCredential(t, admin, reg.credentialBody("fake-inst"))
 	a := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(a.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, a.ID)
 	f.inst.Apply("Bayplan", "https://example.com/bayplan")
 	bEnv, rec := f.addAgent(t)
 	if rec.code != http.StatusCreated {
@@ -843,7 +842,7 @@ func TestEnvTagDetailsMissingPlatformsNameTheNodeArchitecturesTheTagLacksOnlyInA
 	admin := credentialUser{f.cookie, f.csrf}
 	f.storeCredential(t, admin, reg.credentialBody("fake-inst"))
 	a := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(a.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, a.ID)
 
 	rec := f.envDetails(t, admin, reg, "acme/app", a.ID, "1.0")
 	if rec.Code != http.StatusOK {
