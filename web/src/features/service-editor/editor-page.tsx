@@ -271,7 +271,12 @@ export function ServiceEditorPage({
   const spec = edited ?? current;
   // The secrets the service uses now, as the server holds them (not as edited): a caller without
   // secrets.reveal can choose only these. A new service has none.
-  const attachedSecrets = useMemo(() => attachedSecretsOf(current), [current]);
+  // Computed from the loaded spec itself: `current` is a new object on every render while the
+  // service loads.
+  const attachedSecrets = useMemo(
+    () => attachedSecretsOf((data?.spec ?? {}) as SpecValue),
+    [data?.spec],
+  );
   // What the service is called: its own name, or for a new service what has been typed.
   const nameOf = (value: SpecValue): string => {
     const typed = value.Name;
@@ -335,6 +340,8 @@ export function ServiceEditorPage({
       },
       onError: (err: ServiceActionError) => {
         if (mine !== turn.current) return;
+        // The refused spec no longer stands in for the one being edited (the name follows it).
+        setJudged(undefined);
         setEditError(err);
         setStage("edit");
       },
