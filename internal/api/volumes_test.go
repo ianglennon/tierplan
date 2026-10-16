@@ -113,6 +113,63 @@ func TestCreateVolumeAsAnEnvAdminAnswers201SendsTheFieldsOnceAndAuditsOnce(t *te
 	}
 }
 
+func TestCreateVolumeTheAgentsHostPolicyRefusalIs409AgentHostPolicyAndAudited(t *testing.T) {
+	cfg := volumeEngine()
+	cfg.VolumeHostPolicyDeny = true
+	f, e := dashEnv(t, cfg)
+	f.addUser(t, "voladmin", false)
+	f.addEnvRole(t, "voladmin", e.ID, "admin")
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	cookie, csrf := f.signIn(t, "voladmin", false)
+	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/volumes",
+		body:   `{"name":"hostdata","driverOptions":{"type":"none","o":"bind","device":"/opt/data"}}`,
+		cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", rec.Code, rec.Body)
+	}
+	var problem struct {
+		Type   string `json:"type"`
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &problem); err != nil {
+		t.Fatalf("body %s: %v", rec.Body, err)
+	}
+	if !strings.HasSuffix(problem.Type, "agent_host_policy") {
+		t.Errorf("problem type = %q, want agent_host_policy", problem.Type)
+	}
+	if !strings.Contains(problem.Detail, "BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES") {
+		t.Errorf("detail = %q, want it to name BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES", problem.Detail)
+	}
+	if c := f.fake.VolumeCreates(); len(c) != 0 {
+		t.Errorf("the engine created %+v, want nothing", c)
+	}
+	if w := f.fake.Writes(); !slices.Equal(w, []string{"POST /volumes/create"}) {
+		t.Fatalf("writes = %v, want the one refused create and no retry", w)
+	}
+
+	rows := f.volumeAudits(t)
+	if len(rows) != 1 {
+		t.Fatalf("audit rows = %+v, want one", rows)
+	}
+	r := rows[0]
+	if r.Action != audit.ActionVolumeCreated || r.Result != string(audit.ResultFailure) || r.Reason != "agent_host_policy" || r.TargetID != "hostdata" {
+		t.Errorf("audit row = %+v", r)
+	}
+	if r.Details["code"] != "agent_host_policy" || r.Details["options"] == "" {
+		t.Errorf("audit details = %+v, want the code and the options", r.Details)
+	}
+}
+
+func TestCreateVolumeAPlainAgentPolicyDenialIsStillAgentPolicyDenied(t *testing.T) {
+	cfg := volumeEngine()
+	cfg.PolicyDeny = true
+	f, e := dashEnv(t, cfg)
+	rec := f.createVol(t, e, `{"name":"data1"}`)
+	if rec.code != http.StatusBadGateway || rec.ptyp != "agent_policy_denied" {
+		t.Fatalf("a plain denial: %d %q, want 502 agent_policy_denied: %s", rec.code, rec.ptyp, rec.body)
+	}
+}
+
 func TestCreateVolumeANameTheNodeHasIs409NameTakenWithoutTellingTheEngineToCreateAndIsAudited(t *testing.T) {
 	f, e := dashEnv(t, volumeEngine())
 	rec := f.createVol(t, e, `{"name":"existing"}`)

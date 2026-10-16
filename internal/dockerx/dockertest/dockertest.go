@@ -153,6 +153,10 @@ type FakeConfig struct {
 	// message an agent gives for a request its policy refuses: agent_policy_denied:
 	// followed by the method and path.
 	PolicyDeny bool
+	// VolumeHostPolicyDeny makes only the volume create answer 403 with the message an
+	// agent gives for a host-policy refusal: agent_policy_denied: host_policy: followed
+	// by the method and path.
+	VolumeHostPolicyDeny bool
 	// HistoryDeny makes only the image history route answer 403 agent_policy_denied, as
 	// an agent older than the route does, while the lists and the image inspect answer.
 	HistoryDeny bool
