@@ -719,7 +719,9 @@ func TestASlowSnapshotNeitherFlapsTheEngineNorDelaysStop(t *testing.T) {
 	// still running.
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{ListDelay: 3 * time.Second})
 	m := NewMonitor(slog.New(slog.DiscardHandler), nil, func(context.Context, time.Duration) error { return nil })
-	m.probeTimeout = 300 * time.Millisecond
+	// Well under the 3s list delay, and well over a slowed ping (BAYPLAN_TEST_PROBE_DELAY
+	// sweeps), so only a probe that waits for the snapshot can time out.
+	m.probeTimeout = time.Second
 	if err := m.Start(context.Background(), "e", fake); err != nil {
 		t.Fatal(err)
 	}

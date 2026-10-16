@@ -86,6 +86,8 @@ func (f *foldRig) fold(t *testing.T) {
 	if err := f.svc.FoldLocal(context.Background(), admin, f.env.ID, "10.0.0.9", "test"); err != nil {
 		t.Fatalf("FoldLocal: %v", err)
 	}
+	// FoldLocal starts the folded host's socket target; a read through it needs its first probe.
+	awaitProbed(t, f.mon, SocketTarget(f.env.ID))
 	if err := f.c.Refresh(context.Background(), f.env.ID); err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
@@ -320,7 +322,7 @@ func TestTheSocketTargetOfAFoldedEnvironmentStartsWithTheServerAndStopsWhenTheEn
 	f.fold(t)
 	ctx := context.Background()
 	key := SocketTarget(f.env.ID)
-	f.mon.AwaitProbe(ctx, key)
+	awaitProbed(t, f.mon, key)
 	if st := f.mon.Status(key); st.State != StateOnline {
 		t.Fatalf("socket target = %v after the fold, want online", st.State)
 	}
@@ -333,7 +335,7 @@ func TestTheSocketTargetOfAFoldedEnvironmentStartsWithTheServerAndStopsWhenTheEn
 	if err := f.svc.StartAll(ctx); err != nil {
 		t.Fatal(err)
 	}
-	f.mon.AwaitProbe(ctx, key)
+	awaitProbed(t, f.mon, key)
 	if st := f.mon.Status(key); st.State != StateOnline {
 		t.Fatalf("socket target = %v after StartAll, want online", st.State)
 	}
