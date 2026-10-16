@@ -101,7 +101,8 @@ test-int: agent-image
 	@set -e; pkgs="$(shell scripts/tagged-packages.sh integration)"; \
 	if [ -z "$$pkgs" ]; then echo "test-int: no package has integration-tagged tests" >&2; exit 1; fi; \
 	echo "test-int: $$pkgs"; \
-	go test -tags=integration -race -count=1 -shuffle=on -timeout 30m $$pkgs
+	mkdir -p $(TEST_RESULTS); rm -f $(TEST_RESULTS)/integration.json; \
+	$(GOTESTSUM) --format pkgname --jsonfile $(TEST_RESULTS)/integration.json -- -tags=integration -race -count=1 -shuffle=on -timeout 30m $$pkgs
 
 # The multi-node suite (D-57, D-58), build tag `swarm`: real agents in a dind swarm
 # of 3 managers and 1 worker, for the engine BAYPLAN_TEST_ENGINE names (default
@@ -114,7 +115,8 @@ test-swarm: agent-image
 	@set -e; pkgs="$(shell scripts/tagged-packages.sh swarm)"; \
 	if [ -z "$$pkgs" ]; then echo "test-swarm: no package has swarm-tagged tests" >&2; exit 1; fi; \
 	echo "test-swarm: $$pkgs"; \
-	go test -tags=swarm -race -count=1 -shuffle=on -timeout 40m $$pkgs
+	mkdir -p $(TEST_RESULTS); rm -f $(TEST_RESULTS)/swarm.json; \
+	$(GOTESTSUM) --format pkgname --jsonfile $(TEST_RESULTS)/swarm.json -- -tags=swarm -race -count=1 -shuffle=on -timeout 40m $$pkgs
 
 smoke:
 	scripts/smoke.sh

@@ -242,6 +242,18 @@ jobs:
       - run: make test-int
         env:
           BAYPLAN_TEST_DOCKER_HOST: tcp://localhost:${{ job.services.dind.ports['2375'] }}
+      # D-21: the failing and hung tests, their packages and the shuffle seed.
+      - name: Name the failing tests
+        if: always()
+        run: make test-summary
+      - name: Upload the test results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: go-test-json-integration-${{ matrix.engine }}
+          path: .devdata/test/*.json
+          retention-days: 7
+          if-no-files-found: ignore
 
   # D-57, D-58: the multi-node suite on the oldest and newest Engines, on every
   # pull request. Unlike the integration job there is no dind service: every test
@@ -273,6 +285,18 @@ jobs:
           # over them while another job on the VM builds corrupts them.
           cache: false
       - run: make test-swarm
+      # D-21: the failing and hung tests, their packages and the shuffle seed.
+      - name: Name the failing tests
+        if: always()
+        run: make test-summary
+      - name: Upload the test results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: go-test-json-swarm-${{ matrix.engine }}
+          path: .devdata/test/*.json
+          retention-days: 7
+          if-no-files-found: ignore
 
   # D-75: the release configuration stays valid on every pull request, without a
   # tag and without Docker: goreleaser check, a snapshot build of this runner's
