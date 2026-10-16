@@ -21,7 +21,7 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check tidy-check test test-go test-web test-summary test-int test-swarm smoke dev dev-go dev-web dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke
+.PHONY: web build gen gen-check tidy-check test test-go test-web test-summary test-int test-swarm smoke dev dev-go dev-web dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-down e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke
 
 web:
 	pnpm -C web install --frozen-lockfile
@@ -89,6 +89,14 @@ test-web:
 	echo "test-web: seed $$seed (reproduce with make test-web WEB_SEED=$$seed)"; \
 	echo "$$seed" > $(TEST_RESULTS)/web.seed; \
 	pnpm -C web exec vitest run --sequence.shuffle --sequence.seed=$$seed --reporter=default --reporter=json --outputFile.json=$(CURDIR)/$(TEST_RESULTS)/web.json $(if $(CI),--reporter=github-actions)
+
+# Takes the fixed-name e2e stack (project bayplan-e2e, subnet 172.30.0.0/24, ports
+# 8443 and 8444, two privileged dind containers) down with its volumes and any
+# orphan. Idempotent: it succeeds when nothing is running. The recipe above traps
+# EXIT for this, but a make that is terminated under dash never runs the trap
+# (RESEARCH CI audit finding 4), so the e2e job also runs it in an if: always() step.
+e2e-down:
+	$(E2E_COMPOSE) down -v --remove-orphans
 
 # Turns every results file into a list of failing tests, hung tests and build
 # failures (stdout, and $GITHUB_STEP_SUMMARY when set). CI runs it with
@@ -428,7 +436,7 @@ e2e: e2e-image agent-image
 	@set -e; \
 	go run scripts/e2e-cert.go -out $(E2E_TLS); \
 	pnpm -C e2e install --frozen-lockfile; \
-	trap '$(E2E_COMPOSE) down -v' EXIT; \
+	trap '$(E2E_COMPOSE) down -v --remove-orphans' EXIT; \
 	$(E2E_COMPOSE) up -d --wait || { $(E2E_COMPOSE) logs --no-color --tail 100; exit 1; }; \
 	docker save bayplan-agent:dev | $(E2E_COMPOSE) exec -T agenthost docker load; \
 	$(E2E_COMPOSE) exec -T agenthost docker tag bayplan-agent:dev ghcr.io/ianglennon/bayplan-agent:edge; \
