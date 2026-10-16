@@ -23,6 +23,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/store/storetest"
 	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // The environment registry and monitor (plan 16, ENV-04, PLAT-06, D-19 to
@@ -49,14 +50,21 @@ func (c *clock) now() time.Time {
 }
 
 // sleeper records every requested delay and waits at most 2ms of real time.
+// Each recorded delay wakes the waiters of await, so a test waits for the
+// back-off it asserts on instead of polling for it.
 type sleeper struct {
-	mu   sync.Mutex
-	durs []time.Duration
+	mu      sync.Mutex
+	durs    []time.Duration
+	changed chan struct{} // made by the first waiter, closed on the next delay
 }
 
 func (s *sleeper) sleep(ctx context.Context, d time.Duration) error {
 	s.mu.Lock()
 	s.durs = append(s.durs, d)
+	if s.changed != nil {
+		close(s.changed)
+		s.changed = nil
+	}
 	s.mu.Unlock()
 	select {
 	case <-ctx.Done():
@@ -72,6 +80,38 @@ func (s *sleeper) delays() []time.Duration {
 	return append([]time.Duration(nil), s.durs...)
 }
 
+// reset forgets the delays recorded so far.
+func (s *sleeper) reset() {
+	s.mu.Lock()
+	s.durs = nil
+	s.mu.Unlock()
+}
+
+// await returns the recorded delays once cond holds for them. It evaluates cond
+// now and again after every delay the monitor asks to wait; the test's context
+// only guards against a hang.
+func (s *sleeper) await(t *testing.T, what string, cond func([]time.Duration) bool) []time.Duration {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	for {
+		s.mu.Lock()
+		if s.changed == nil {
+			s.changed = make(chan struct{})
+		}
+		ch := s.changed
+		got := append([]time.Duration(nil), s.durs...)
+		s.mu.Unlock()
+		if cond(got) {
+			return got
+		}
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for %s (saw %d delays)", what, len(got))
+		}
+	}
+}
+
 // blockingSleep never lets a wait elapse: the monitor probes only at start and
 // when kicked.
 func blockingSleep(ctx context.Context, _ time.Duration) error {
@@ -79,6 +119,23 @@ func blockingSleep(ctx context.Context, _ time.Duration) error {
 	return ctx.Err()
 }
 
+// awaitState returns the first status of envID for which cond holds, waking on
+// the monitor's own status signal. It fails with what and the last status seen
+// if the test's hang-guard context ends first.
+func awaitState(t *testing.T, mon *Monitor, id, what string, cond func(Status) bool) Status {
+	t.Helper()
+	st, err := mon.AwaitStatus(testsupport.Context(t), id, cond)
+	if err != nil {
+		t.Fatalf("timed out waiting for %s: %v (last status %+v)", what, err, st)
+	}
+	return st
+}
+
+func stateIs(want State) func(Status) bool {
+	return func(s Status) bool { return s.State == want }
+}
+
+// eventually is removed by the end of plan 06.1-12 task 3.
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -241,9 +298,7 @@ func TestAddLocalRefusesAnUnsupportedEngineUnlessAllowed(t *testing.T) {
 	if e.Status.State != StateUnsupported || e.Status.Reason != "api_too_old" {
 		t.Errorf("status = %+v, want unsupported/api_too_old", e.Status)
 	}
-	eventually(t, "the monitor to classify the engine as unsupported", func() bool {
-		return r.mon.Status(e.ID).State == StateUnsupported
-	})
+	awaitState(t, r.mon, e.ID, "the monitor to classify the engine as unsupported", stateIs(StateUnsupported))
 	if _, _, err := r.mon.Client(e.ID); !errors.Is(err, ErrUnsupported) {
 		t.Errorf("Client err = %v, want ErrUnsupported", err)
 	}
@@ -314,7 +369,7 @@ func TestStartAllResumesMonitoringStoredEnvironments(t *testing.T) {
 	if err := r.svc.StartAll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the restarted monitor to see the engine", func() bool { return r.mon.Status(e.ID).State == StateOnline })
+	awaitState(t, r.mon, e.ID, "the restarted monitor to see the engine", stateIs(StateOnline))
 	list, err := r.svc.List(context.Background())
 	if err != nil || len(list) != 1 || list[0].Status.State != StateOnline {
 		t.Fatalf("List = %+v, %v", list, err)
@@ -359,7 +414,7 @@ func TestRenameValidatesTheNameAndAudits(t *testing.T) {
 func TestRemoveDeletesTheRowStopsTheMonitorAndChangesNothingInDocker(t *testing.T) {
 	r := newRig(t, dockertest.FakeConfig{})
 	e := r.add(t)
-	eventually(t, "online", func() bool { return r.mon.Status(e.ID).State == StateOnline })
+	awaitState(t, r.mon, e.ID, "online", stateIs(StateOnline))
 	if err := r.svc.Remove(context.Background(), admin, e.ID, "203.0.113.9", "ua", false); err != nil {
 		t.Fatal(err)
 	}
@@ -492,20 +547,20 @@ func TestResolveDistinguishesUnknownDisabledAndEnabled(t *testing.T) {
 func TestMonitorGoesOfflineBacksOffAndRecoversWithARenegotiatedAPI(t *testing.T) {
 	r := newRig(t, dockertest.FakeConfig{APIVersion: "1.47"})
 	e := r.add(t)
-	eventually(t, "online", func() bool { return r.mon.Status(e.ID).State == StateOnline })
+	awaitState(t, r.mon, e.ID, "online", stateIs(StateOnline))
 	if got := r.mon.Status(e.ID).Probe.NegotiatedAPI; got != "1.47" {
 		t.Fatalf("NegotiatedAPI = %q, want 1.47", got)
 	}
 
 	r.fake.Stop()
 	r.fake.SetAPIVersion("1.52") // upgraded while it was down
-	eventually(t, "offline", func() bool { return r.mon.Status(e.ID).State == StateOffline })
+	awaitState(t, r.mon, e.ID, "offline", stateIs(StateOffline))
 	first := r.mon.Status(e.ID)
 	if first.Since.IsZero() || first.Reason == "" {
 		t.Fatalf("offline status = %+v, want Since and a reason", first)
 	}
 	// Keep failing: Since must stay at the first failure while LastAttempt moves on.
-	eventually(t, "more failed probes", func() bool { return r.mon.Status(e.ID).LastAttempt.After(first.Since.Add(5 * time.Second)) })
+	awaitState(t, r.mon, e.ID, "more failed probes", func(s Status) bool { return s.LastAttempt.After(first.Since.Add(5 * time.Second)) })
 	if got := r.mon.Status(e.ID).Since; !got.Equal(first.Since) {
 		t.Errorf("Since moved from %v to %v while the daemon stayed down", first.Since, got)
 	}
@@ -513,9 +568,9 @@ func TestMonitorGoesOfflineBacksOffAndRecoversWithARenegotiatedAPI(t *testing.T)
 		t.Errorf("Client err = %v, want ErrOffline", err)
 	}
 
-	eventually(t, "enough backoff delays", func() bool { return len(r.slp.delays()) >= 12 })
+	delays := r.slp.await(t, "enough backoff delays", func(d []time.Duration) bool { return len(d) >= 12 })
 	var longest time.Duration
-	for i, d := range r.slp.delays() {
+	for i, d := range delays {
 		if d <= 0 || d > 30*time.Second {
 			t.Errorf("delay %d = %v, want 0 < d <= 30s", i, d)
 		}
@@ -526,7 +581,7 @@ func TestMonitorGoesOfflineBacksOffAndRecoversWithARenegotiatedAPI(t *testing.T)
 	}
 
 	r.fake.Restart(t)
-	eventually(t, "online again", func() bool { return r.mon.Status(e.ID).State == StateOnline })
+	awaitState(t, r.mon, e.ID, "online again", stateIs(StateOnline))
 	st := r.mon.Status(e.ID)
 	if st.Probe.NegotiatedAPI != "1.52" {
 		t.Errorf("NegotiatedAPI after the upgrade = %q, want 1.52", st.Probe.NegotiatedAPI)
@@ -542,13 +597,11 @@ func TestMonitorGoesOfflineBacksOffAndRecoversWithARenegotiatedAPI(t *testing.T)
 func TestMonitorFirstRetryAfterAFailureIsAboutOneSecond(t *testing.T) {
 	r := newRig(t, dockertest.FakeConfig{})
 	e := r.add(t)
-	eventually(t, "online", func() bool { return r.mon.Status(e.ID).State == StateOnline })
-	r.slp.mu.Lock()
-	r.slp.durs = nil
-	r.slp.mu.Unlock()
+	awaitState(t, r.mon, e.ID, "online", stateIs(StateOnline))
+	r.slp.reset()
 	r.fake.Stop()
-	eventually(t, "a recorded delay after the failure", func() bool {
-		for _, d := range r.slp.delays() {
+	delays := r.slp.await(t, "a recorded delay after the failure", func(ds []time.Duration) bool {
+		for _, d := range ds {
 			if d <= time.Second {
 				return true
 			}
@@ -558,7 +611,7 @@ func TestMonitorFirstRetryAfterAFailureIsAboutOneSecond(t *testing.T) {
 	// The online interval is 30s and is the only wait allowed to be that long
 	// before the first failure; the first backoff is within [0.5s, 1s].
 	var firstBackoff time.Duration
-	for _, d := range r.slp.delays() {
+	for _, d := range delays {
 		if d != 30*time.Second {
 			firstBackoff = d
 			break
@@ -598,12 +651,14 @@ func TestKickProbesNowAndOnlyOneLoopRunsPerEnvironment(t *testing.T) {
 	if m.loopCount() != 1 {
 		t.Fatalf("loopCount = %d after 20 concurrent Starts, want 1", m.loopCount())
 	}
-	eventually(t, "the first probe", func() bool { return m.Status("env-1").State == StateOnline })
+	awaitState(t, m, "env-1", "the first probe", stateIs(StateOnline))
 	before := infoCalls()
 
 	// The wait is blocked forever, so only a kick can cause another probe.
 	m.Kick("env-1")
-	eventually(t, "a probe caused by the kick", func() bool { return infoCalls() > before })
+	if err := fake.Await(testsupport.Context(t), func() bool { return infoCalls() > before }); err != nil {
+		t.Fatalf("no probe followed the kick: %v", err)
+	}
 
 	// Kicks and reads from many goroutines at once; run with -race.
 	var reads atomic.Int64
@@ -639,7 +694,7 @@ func TestStopEndsTheLoopAndForgetsTheEnvironment(t *testing.T) {
 	if err := m.Start(context.Background(), "e", fake); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "online", func() bool { return m.Status("e").State == StateOnline })
+	awaitState(t, m, "e", "online", stateIs(StateOnline))
 	m.Stop("e")
 	if m.loopCount() != 0 || m.Status("e").State != StateUnknown {
 		t.Errorf("loopCount = %d, state = %s after Stop", m.loopCount(), m.Status("e").State)
@@ -659,7 +714,17 @@ func TestACancelledContextEndsTheLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	cancel()
-	eventually(t, "the loop to exit", func() bool { return m.loopCount() == 0 })
+	// The loop's goroutine is on the monitor's wait group and drops the live
+	// count before it leaves it, so Wait returning means the loop has exited.
+	exited := make(chan struct{})
+	go func() {
+		m.wg.Wait()
+		close(exited)
+	}()
+	testsupport.Await(t, "the loop to exit", exited)
+	if n := m.loopCount(); n != 0 {
+		t.Errorf("loopCount = %d after the loop exited, want 0", n)
+	}
 }
 
 func TestAHungDaemonIsGivenUpOnAtTheProbeTimeout(t *testing.T) {
@@ -671,7 +736,7 @@ func TestAHungDaemonIsGivenUpOnAtTheProbeTimeout(t *testing.T) {
 	if err := m.Start(context.Background(), "e", hung); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "offline after the probe timeout", func() bool { return m.Status("e").State == StateOffline })
+	awaitState(t, m, "e", "offline after the probe timeout", stateIs(StateOffline))
 }
 
 var _ engine.Transport = (*hungTransport)(nil)
@@ -726,7 +791,7 @@ func TestASlowSnapshotNeitherFlapsTheEngineNorDelaysStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(m.StopAll)
-	eventually(t, "online", func() bool { return m.Status("e").State == StateOnline })
+	awaitState(t, m, "e", "online", stateIs(StateOnline))
 
 	cli, _, err := m.Client("e")
 	if err != nil {
@@ -741,7 +806,7 @@ func TestASlowSnapshotNeitherFlapsTheEngineNorDelaysStop(t *testing.T) {
 		if st := m.Status("e").State; st != StateOnline {
 			t.Fatalf("state = %s while a slow snapshot ran, want online", st)
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond) //nolint:forbidigo // observes that the state stays online for the whole slow snapshot; the window is the behaviour under test
 	}
 
 	start := time.Now()
