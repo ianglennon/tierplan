@@ -19,6 +19,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -72,7 +73,7 @@ func (f *envFix) act(t *testing.T, e envBody, body string) *envRec {
 	t.Helper()
 	// A write goes only to a node the monitor has seen online, so wait for its
 	// first probe: without it a fast run reads the node as offline.
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	return f.req(t, http.MethodPost, "/api/env/"+e.ID+"/containers/actions", body)
 }
 
@@ -530,7 +531,7 @@ func TestBulkATargetOnANodeThatIsNotConnectedIsNodeUnreachableAndTheOthersStillR
 
 func (f *envFix) remove(t *testing.T, e envBody, body string) *envRec {
 	t.Helper()
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	return f.req(t, http.MethodPost, "/api/env/"+e.ID+"/containers/remove", body)
 }
 
@@ -722,7 +723,7 @@ func TestContainerRemoveAskingForVolumesNeedsTheDeleteVolumesExtra(t *testing.T)
 		t.Fatal(err)
 	}
 	path := "/api/env/" + e.ID + "/containers/remove"
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	as := func(user, body string) *httptest.ResponseRecorder {
 		cookie, csrf := f.signIn(t, user, false)
 		return f.call(t, authReq{method: http.MethodPost, path: path, body: body, cookie: cookie, csrf: csrf})
@@ -1086,7 +1087,7 @@ func detailEngine() dockertest.FakeConfig {
 
 func (f *envFix) detail(t *testing.T, cookie string, e envBody, id, query string) *envRec {
 	t.Helper()
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + e.ID + "/containers/" + id + query, cookie: cookie})
 	ptyp := ""
 	if rec.Code >= 400 {
@@ -1349,18 +1350,23 @@ func TestContainerActionAStopIsSeenThroughWhenTheRequestEndsWhileItRuns(t *testi
 	cfg := actionEngine()
 	cfg.WriteDelay = 300 * time.Millisecond
 	f, e := dashEnv(t, cfg)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	// The fake wakes the wait as the stop is recorded, before its write delay starts. The
+	// goroutine reports through a channel because only the test goroutine may fail the test.
+	awaited := make(chan error, 1)
 	go func() {
-		for len(f.fake.Writes()) == 0 {
-			time.Sleep(5 * time.Millisecond)
-		}
+		err := f.fake.Await(testsupport.Context(t), func() bool { return len(f.fake.Writes()) > 0 })
 		cancel() // the stop has reached the engine; the browser goes away
+		awaited <- err
 	}()
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/containers/actions",
 		body: actionJSON("stop", [2]string{e.ID, webID}), cookie: f.cookie, csrf: f.csrf, ctx: ctx})
 	cancel()
+	if err := <-awaited; err != nil {
+		t.Fatalf("waiting for the stop to reach the engine: %v", err)
+	}
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s\n%s", rec.Code, rec.Body, f.logs)
 	}

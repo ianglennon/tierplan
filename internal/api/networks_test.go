@@ -13,7 +13,6 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -39,7 +38,7 @@ type networkCreated struct {
 // monitor has seen online, so it waits for the first probe like act and remove do.
 func (f *envFix) createNet(t *testing.T, e envBody, body string) *envRec {
 	t.Helper()
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	return f.req(t, http.MethodPost, "/api/env/"+e.ID+"/networks", body)
 }
 
@@ -73,7 +72,7 @@ func TestCreateNetworkAsAnEnvAdminAnswers201SendsTheFieldsOnceAndAuditsOnce(t *t
 	f, e := dashEnv(t, networkEngine())
 	f.addUser(t, "netadmin", false)
 	f.addEnvRole(t, "netadmin", e.ID, "admin")
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	cookie, csrf := f.signIn(t, "netadmin", false)
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/networks",
 		body:   `{"name":"app-net","driver":"bridge","labels":{"team":"a"}}`,
@@ -131,7 +130,7 @@ func TestCreateNetworkTheSameNameAgainIs409NameTakenAndTheFailureIsAudited(t *te
 
 func TestCreateNetworkTheSchemaRefusesBadNamesAndDriversBeforeAnyDockerCall(t *testing.T) {
 	f, e := dashEnv(t, networkEngine())
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	for name, body := range map[string]string{
 		"a name with a space":         `{"name":"my net","driver":"bridge"}`,
 		"an empty name":               `{"name":"","driver":"bridge"}`,
@@ -174,7 +173,7 @@ func TestCreateNetworkAnOperatorAndAViewerAreRefusedAndNothingIsSent(t *testing.
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
 	f.addUser(t, "operator", false)
 	f.addEnvRole(t, "operator", e.ID, "operator")
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 
 	for _, who := range []string{"viewer", "operator"} {
 		cookie, csrf := f.signIn(t, who, false)
@@ -379,7 +378,7 @@ func TestCreateNetworkAcceptsAddressingInsideTheSubnetAndPassesOptionsAndIPv6Thr
 
 func TestCreateNetworkRefusesBadAddressingWithItsOwnProblemTypeAndSendsNothing(t *testing.T) {
 	f, e := dashEnv(t, networkEngine())
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	for name, tc := range map[string]struct{ body, ptyp string }{
 		"a subnet with no prefix length":    {`{"name":"n","driver":"bridge","subnet":"10.20.0.0"}`, "subnet_invalid"},
 		"a subnet that is not an address":   {`{"name":"n","driver":"bridge","subnet":"banana/24"}`, "subnet_invalid"},
@@ -495,7 +494,7 @@ func deleteEngine() dockertest.FakeConfig {
 // deleteNet sends a delete as the signed-in admin once the monitor has seen the node.
 func (f *envFix) deleteNet(t *testing.T, e envBody, id string) *envRec {
 	t.Helper()
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	return f.req(t, http.MethodDelete, "/api/env/"+e.ID+"/networks/"+id, "")
 }
 
@@ -503,7 +502,7 @@ func TestDeleteNetworkAnUnusedOneAsAnEnvAdminAnswers204AuditsOnceAndASecondIs404
 	f, e := dashEnv(t, deleteEngine())
 	f.addUser(t, "netadmin", false)
 	f.addEnvRole(t, "netadmin", e.ID, "admin")
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	cookie, csrf := f.signIn(t, "netadmin", false)
 	rec := f.call(t, authReq{method: http.MethodDelete, path: "/api/env/" + e.ID + "/networks/app0", cookie: cookie, csrf: csrf})
 	if rec.Code != http.StatusNoContent {
@@ -562,7 +561,7 @@ func TestDeleteNetworkAnOperatorAndAViewerAreRefusedAndNothingIsSent(t *testing.
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
 	f.addUser(t, "operator", false)
 	f.addEnvRole(t, "operator", e.ID, "operator")
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	for _, who := range []string{"viewer", "operator"} {
 		cookie, csrf := f.signIn(t, who, false)
 		rec := f.call(t, authReq{method: http.MethodDelete, path: "/api/env/" + e.ID + "/networks/app0", cookie: cookie, csrf: csrf})
@@ -1051,7 +1050,7 @@ func TestGetNetworkAnUnknownOneIs404NetworkNotFoundAndAViewerMayRead(t *testing.
 	}
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	cookie, csrf := f.signIn(t, "viewer", false)
 	ok := f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + e.ID + "/networks/app0", cookie: cookie, csrf: csrf})
 	if ok.Code != http.StatusOK {
@@ -1170,7 +1169,7 @@ func connectEngine() dockertest.FakeConfig {
 // connectNet posts a connect as the signed-in admin, after the monitor's first probe.
 func (f *envFix) connectNet(t *testing.T, e envBody, networkID, body string) *envRec {
 	t.Helper()
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	return f.req(t, http.MethodPost, "/api/env/"+e.ID+"/networks/"+networkID+"/connect", body)
 }
 
@@ -1178,7 +1177,7 @@ func TestConnectContainerAsAnOperatorSendsTheEndpointOnceToTheContainersNodeAndA
 	f, e := dashEnv(t, connectEngine())
 	f.addUser(t, "operator", false)
 	f.addEnvRole(t, "operator", e.ID, "operator")
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	cookie, csrf := f.signIn(t, "operator", false)
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/networks/app0/connect",
 		body:   `{"containerId":"c1","alias":"api","ipv4":"10.20.0.5","ipv6":"fd00:20::5"}`,
@@ -1215,7 +1214,7 @@ func TestConnectContainerAViewerIsRefusedAndNothingIsSent(t *testing.T) {
 	f, e := dashEnv(t, connectEngine())
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	cookie, csrf := f.signIn(t, "viewer", false)
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/networks/app0/connect",
 		body: `{"containerId":"c1"}`, cookie: cookie, csrf: csrf})
@@ -1262,7 +1261,7 @@ func TestConnectContainerRefusalsAreNamedAuditedAndNeverReachTheEngine(t *testin
 
 func TestConnectContainerTheSchemaRefusesABadAliasAndAnEmptyContainerBeforeAnyLookup(t *testing.T) {
 	f, e := dashEnv(t, connectEngine())
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	for name, body := range map[string]string{
 		"an alias with a space":   `{"containerId":"c1","alias":"my alias"}`,
 		"an alias past 253":       fmt.Sprintf(`{"containerId":"c1","alias":%q}`, strings.Repeat("a", 254)),
@@ -1304,7 +1303,7 @@ func TestConnectContainerTheEnginesOwnAlreadyConnectedRefusalIsAlreadyConnectedW
 	// The list does not know c1 is on app-net yet; the engine does, and says so.
 	cfg := connectEngine()
 	cfg.Containers[0].Networks = map[string]dockertest.FakeEndpoint{"app-net": {NetworkID: "app0"}}
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	_ = f.get(t, e, "networks") // the list is read and cached while c1 is on nothing
 	f.fake.Reconfigure(cfg)
 	rec := f.connectNet(t, e, "app0", `{"containerId":"c1"}`)
@@ -1382,7 +1381,7 @@ func TestConnectContainerAWorkerThatHasNotLearnedTheOverlayAnswersNetworkUnavail
 // disconnectNet posts a disconnect as the signed-in admin, after the monitor's first probe.
 func (f *envFix) disconnectNet(t *testing.T, e envBody, networkID, body string) *envRec {
 	t.Helper()
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	return f.req(t, http.MethodPost, "/api/env/"+e.ID+"/networks/"+networkID+"/disconnect", body)
 }
 
@@ -1390,7 +1389,7 @@ func TestDisconnectContainerAsAnOperatorSendsOneUnforcedDisconnectAndAuditsIt(t 
 	f, e := dashEnv(t, connectEngine())
 	f.addUser(t, "operator", false)
 	f.addEnvRole(t, "operator", e.ID, "operator")
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	cookie, csrf := f.signIn(t, "operator", false)
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/networks/app0/disconnect",
 		body: `{"containerId":"c2"}`, cookie: cookie, csrf: csrf})
@@ -1423,7 +1422,7 @@ func TestDisconnectContainerAViewerIsRefusedAndNothingIsSent(t *testing.T) {
 	f, e := dashEnv(t, connectEngine())
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	cookie, csrf := f.signIn(t, "viewer", false)
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/networks/app0/disconnect",
 		body: `{"containerId":"c2"}`, cookie: cookie, csrf: csrf})
@@ -1440,7 +1439,7 @@ func TestDisconnectContainerAViewerIsRefusedAndNothingIsSent(t *testing.T) {
 
 func TestDisconnectContainerCannotBeForcedAndTheBodyTakesNoOtherField(t *testing.T) {
 	f, e := dashEnv(t, connectEngine())
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	for name, body := range map[string]string{
 		"a force flag":    `{"containerId":"c2","force":true}`,
 		"no container":    `{}`,
