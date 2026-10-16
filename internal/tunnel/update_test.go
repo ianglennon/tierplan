@@ -155,7 +155,7 @@ func TestAnUpdateResultWithNoObserverIsIgnored(t *testing.T) {
 	if _, err := io.WriteString(control, `{"t":"update_result","id":"x","ok":true,"error":""}`+"\n"); err != nil {
 		t.Fatal(err)
 	}
-	stays(t, srv.Hub.Session(c.Identity.AgentID), "an update_result nobody asked for does not end the session")
+	staysAfterAHeartbeat(t, srv.Hub.Session(c.Identity.AgentID), control, 904, "an update_result nobody asked for does not end the session")
 }
 
 func TestSendUninstallWritesTheFrozenUninstallLineAndAlwaysSendsThatType(t *testing.T) {

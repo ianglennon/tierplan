@@ -104,6 +104,53 @@ func (s *Session) Status() SessionStatus {
 	return s.status
 }
 
+// ErrSessionEnded is what AwaitStatus returns when the session ended before its
+// status satisfied the condition.
+var ErrSessionEnded = errors.New("tunnel: the session ended")
+
+// notifyStatusLocked wakes every AwaitStatus waiter. s.hbMu must be held. The
+// channel is made by the first waiter, so a session nobody waits on allocates
+// nothing.
+func (s *Session) notifyStatusLocked() {
+	if s.changed != nil {
+		close(s.changed)
+		s.changed = nil
+	}
+}
+
+// AwaitStatus returns the first status of the session for which cond is true. It
+// evaluates cond now and again after every heartbeat and every denial, and never
+// polls. When ctx ends first it returns the last status together with the
+// context's error, and when the session ends first the last status together with
+// ErrSessionEnded (cond is evaluated once more on that last status, so a
+// condition made true by the final change still returns). The context only
+// guards against a hang.
+func (s *Session) AwaitStatus(ctx context.Context, cond func(SessionStatus) bool) (SessionStatus, error) {
+	for {
+		// Take the channel in the same critical section as the read, so a change
+		// between the read and the wait is not missed.
+		s.hbMu.Lock()
+		if s.changed == nil {
+			s.changed = make(chan struct{})
+		}
+		ch, st := s.changed, s.status
+		s.hbMu.Unlock()
+		if cond(st) {
+			return st, nil
+		}
+		select {
+		case <-ch:
+		case <-s.done:
+			if st = s.Status(); cond(st) {
+				return st, nil
+			}
+			return st, ErrSessionEnded
+		case <-ctx.Done():
+			return st, ctx.Err()
+		}
+	}
+}
+
 // lastSignOfLife is when the session last proved it was alive: its last
 // heartbeat, or when it connected if it has sent none yet, so a new session has
 // the whole window to send its first.
@@ -163,6 +210,16 @@ func (h *Hub) WithLastSeen(r LastSeenRecorder) *Hub {
 	return h
 }
 
+// WithWatchTicks replaces the watchdog's time.Ticker with ticks: every value
+// received is one look for silent sessions. A test sends on an unbuffered channel,
+// so a send that completes means the watchdog took the tick, and the next send
+// completing means it has finished evaluating the first. Nil, the default, keeps
+// the ticker. Call it before the hub serves.
+func (h *Hub) WithWatchTicks(ticks <-chan time.Time) *Hub {
+	h.watchTicks = ticks
+	return h
+}
+
 func (h *Hub) watchInterval() time.Duration {
 	if h.watchEvery > 0 {
 		return h.watchEvery
@@ -182,15 +239,19 @@ func (h *Hub) runSession(ctx context.Context, s *Session) {
 // window. The close is immediate (no close handshake): the peer has stopped
 // answering, and waiting for it would be the hang this exists to prevent.
 func (h *Hub) watch(ctx context.Context, s *Session) {
-	t := time.NewTicker(h.watchInterval())
-	defer t.Stop()
+	ticks := h.watchTicks
+	if ticks == nil {
+		t := time.NewTicker(h.watchInterval())
+		defer t.Stop()
+		ticks = t.C
+	}
 	for {
 		select {
 		case <-s.done:
 			return
 		case <-ctx.Done():
 			return
-		case <-t.C:
+		case <-ticks:
 		}
 		if silent := h.now().Sub(s.lastSignOfLife()); silent > h.offlineAfter {
 			h.log.Warn("agent session closed: no heartbeat within the offline window",
@@ -340,6 +401,7 @@ func (h *Hub) renew(s *Session) {
 func (h *Hub) beat(s *Session, hb wire.Heartbeat) {
 	s.hbMu.Lock()
 	s.status.LastHeartbeat, s.status.EngineReachable, s.status.ClockMs = h.now(), hb.EngineReachable, hb.ClockMs
+	s.notifyStatusLocked()
 	s.hbMu.Unlock()
 	h.touch(s)
 }
@@ -381,6 +443,7 @@ func (h *Hub) denied(s *Session, d wire.Denied) {
 	now := h.now()
 	s.hbMu.Lock()
 	s.status.LastDenial = &Denial{Method: method, Endpoint: endpoint, Reason: reason, At: now}
+	s.notifyStatusLocked()
 	s.hbMu.Unlock()
 
 	if s.denyLimit != nil && !s.denyLimit.AllowN(now, 1) {
