@@ -22,6 +22,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -892,8 +893,22 @@ type agentConn struct {
 }
 
 // connect enrols an agent in env, answers its Docker streams from a fake daemon
-// and sends a heartbeat.
+// and sends a heartbeat. It returns once the agent is ready for a call to one of its
+// nodes: the server has read the first heartbeat and the monitor has finished the
+// first probe of the agent's engine. A call through the monitor's client is ErrOffline
+// until that probe is over, so a test that forgot to wait for it would see
+// node_unreachable in place of what it asserts (the agent_policy_denied flake).
 func (f *agentFix) connect(t *testing.T, env tunneltest.Environment, cfg dockertest.FakeConfig, facts *wire.Facts) *agentConn {
+	t.Helper()
+	a := f.connectNoProbe(t, env, cfg, facts)
+	awaitFirstProbe(t, f.mon, envs.AgentTarget(a.id))
+	return a
+}
+
+// connectNoProbe is connect without the wait for the first probe, for a test that must see
+// a state from before the first probe or holds the probe on purpose (FakeConfig.ProbeHold).
+// It still returns only once the server has read the agent's first heartbeat.
+func (f *agentFix) connectNoProbe(t *testing.T, env tunneltest.Environment, cfg dockertest.FakeConfig, facts *wire.Facts) *agentConn {
 	t.Helper()
 	fake := dockertest.NewFake(t, cfg)
 	if facts == nil {
@@ -909,17 +924,20 @@ func (f *agentFix) connect(t *testing.T, env tunneltest.Environment, cfg dockert
 	// The server takes the control stream asynchronously. Its first heartbeat is
 	// read only after the stream is registered, so once it is seen the server can
 	// send this agent control messages (an uninstall, an update) without racing.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if s := f.srv.Hub.Session(c.Identity.AgentID); s != nil && !s.Status().LastHeartbeat.IsZero() {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the server never read the agent's first heartbeat on its control stream")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	f.awaitFirstHeartbeat(t, c)
 	return &agentConn{conn: c, fake: fake, control: control, id: c.Identity.AgentID}
+}
+
+// awaitFirstHeartbeat waits until the server has registered the session of the agent on c and
+// read its first heartbeat, and returns the session.
+func (f *agentFix) awaitFirstHeartbeat(t *testing.T, c *tunneltest.Conn) *tunnel.Session {
+	t.Helper()
+	s, err := f.srv.Hub.AwaitSession(testsupport.Context(t), c.Identity.AgentID, func(s *tunnel.Session) bool { return s != nil })
+	if err != nil {
+		t.Fatalf("the server never registered the session of agent %s: %v", c.Identity.AgentID, err)
+	}
+	awaitHeartbeat(t, s, func(st tunnel.SessionStatus) bool { return !st.LastHeartbeat.IsZero() })
+	return s
 }
 
 type agentStatus struct {
@@ -968,24 +986,16 @@ func (f *agentFix) environment(t *testing.T, id string) agentEnvBody {
 
 func (f *agentFix) whenState(t *testing.T, id, state string) agentEnvBody {
 	t.Helper()
-	var e agentEnvBody
-	waitFor(t, "the environment to be "+state, func() bool {
-		e = f.environment(t, id)
-		return e.Status.State == state
-	})
-	return e
+	return awaitEnvState(t, f, id, state)
 }
 
 // whenProbed waits until the monitor has probed the engine of every node key and
 // found it online. An environment is online as soon as its agent's session is,
 // while a call to one node goes through the monitor's client, which is ErrOffline
-// until the first probe of that engine has finished; on a loaded machine that can
-// come after the environment reads online.
+// until the first probe of that engine has finished.
 func (f *agentFix) whenProbed(t *testing.T, keys ...string) {
 	t.Helper()
-	for _, k := range keys {
-		waitFor(t, "the monitor to probe "+k, func() bool { return f.mon.Status(k).State == envs.StateOnline })
-	}
+	awaitProbed(t, f.mon, keys...)
 }
 
 func utc(t time.Time) string { return t.UTC().Format(time.RFC3339) }
