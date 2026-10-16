@@ -24,6 +24,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/registry"
 	"github.com/ianglennon/bayplan/internal/store/storetest"
 	"github.com/ianglennon/bayplan/internal/swarmops"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // Review and Apply (plan 06-18, RES-03, D-03, D-08, D-09, D-13). The daemon is the fake one with
@@ -506,9 +507,8 @@ func TestApplyRacedByAnotherWriterIsServiceChangedAndNotRetried(t *testing.T) {
 		done <- err
 	}()
 	// The update is on its way (the fake holds it); somebody else changes the service now.
-	deadline := time.Now().Add(5 * time.Second)
-	for len(r.fake.Writes()) == 0 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
+	if err := r.fake.Await(testsupport.Context(t), func() bool { return len(r.fake.Writes()) > 0 }); err != nil {
+		t.Fatalf("the held update never arrived: %v", err)
 	}
 	r.fake.BumpService("svc-api")
 	if err := <-done; !errors.Is(err, dockerx.ErrServiceChanged) {

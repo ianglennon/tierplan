@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/audit"
@@ -222,6 +223,13 @@ func TestAuditThrottleFlushFailureKeepsTheCountsForTheNextFlush(t *testing.T) {
 }
 
 func TestAuditThrottleRunFlushesOnEachTickAndOnceMoreAtShutdown(t *testing.T) {
+	// Run is a ticker, so it runs in a synctest bubble and the ticks come on the fake clock.
+	synctest.Test(t, func(t *testing.T) {
+		flushesOnTicksAndAtShutdown(t)
+	})
+}
+
+func flushesOnTicksAndAtShutdown(t *testing.T) {
 	next := &recorder{}
 	th := newThrottle(next, 1, newClock())
 	ctx, cancel := context.WithCancel(context.Background())
@@ -231,10 +239,7 @@ func TestAuditThrottleRunFlushesOnEachTickAndOnceMoreAtShutdown(t *testing.T) {
 	for range 3 {
 		_ = th.Record(context.Background(), anon(audit.ActionPermissionDenied, "unauthenticated", "GET /api/me", "198.51.100.7"))
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) && len(next.all()) < 2 {
-		time.Sleep(5 * time.Millisecond)
-	}
+	synctest.Sleep(10 * time.Millisecond) // past the first 5 ms tick
 	if got := len(next.all()); got < 2 {
 		t.Fatal("Run did not flush on a tick")
 	}

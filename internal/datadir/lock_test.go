@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ianglennon/bayplan/internal/datadir"
 )
@@ -108,19 +107,13 @@ func TestLockIsHeldAcrossProcesses(t *testing.T) {
 		t.Fatalf("Lock while another process holds it = %v, want ErrLocked", err)
 	}
 
-	// The helper exiting (its descriptor closing with it) frees the lock.
+	// The helper exiting (its descriptor closing with it) frees the lock. cmd.Wait returns once
+	// the process has exited, and the kernel dropped its locks as it exited, so one look is enough.
 	_ = stdin.Close()
 	_ = cmd.Wait()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		release, err := datadir.Lock(dir)
-		if err == nil {
-			_ = release()
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the lock was not released when the holder exited: %v", err)
-		}
-		time.Sleep(10 * time.Millisecond)
+	release, err := datadir.Lock(dir)
+	if err != nil {
+		t.Fatalf("the lock was not released when the holder exited: %v", err)
 	}
+	_ = release()
 }

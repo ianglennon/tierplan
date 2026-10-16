@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/audit"
@@ -118,162 +119,165 @@ func (f *schedFixture) run(t *testing.T) (stop func()) {
 	}
 }
 
-// runsUntil polls the run history until it holds n finished runs.
+// runsUntil waits for the scheduler to settle (it is back on its timer or its channels, which
+// is after the run it was woken for has been recorded) and checks the history holds n finished
+// runs. It must be called inside a synctest bubble.
 func (f *schedFixture) runsUntil(t *testing.T, n int) {
 	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
-	for {
-		var got int
-		if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM backup_runs WHERE finished_at IS NOT NULL`).Scan(&got); err != nil {
-			t.Fatal(err)
-		}
-		if got >= n {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("only %d scheduled runs finished, want %d", got, n)
-		}
-		time.Sleep(20 * time.Millisecond)
+	synctest.Wait()
+	var got int
+	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM backup_runs WHERE finished_at IS NOT NULL`).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got < n {
+		t.Fatalf("only %d scheduled runs finished, want %d", got, n)
 	}
 }
 
 func TestSchedulerWritesADailyBackupAtTheSetTimeThatOpensWithThePassphrase(t *testing.T) {
-	f := newSchedFixture(t, time.Date(2026, 10, 8, 1, 0, 0, 0, time.UTC))
-	if _, err := f.saveSchedule(t, dailyAt3(exportPass)); err != nil {
-		t.Fatal(err)
-	}
-	stop := f.run(t)
-	defer stop()
+	synctest.Test(t, func(t *testing.T) {
+		f := newSchedFixture(t, time.Date(2026, 10, 8, 1, 0, 0, 0, time.UTC))
+		if _, err := f.saveSchedule(t, dailyAt3(exportPass)); err != nil {
+			t.Fatal(err)
+		}
+		stop := f.run(t)
+		defer stop()
 
-	first := f.clock.next(t)
-	if first.d != 2*time.Hour {
-		t.Fatalf("the first timer is for %v, want the 2h until 03:00", first.d)
-	}
-	f.clock.set(time.Date(2026, 10, 8, 3, 0, 0, 0, time.UTC))
-	first.c <- f.clock.Now()
-	f.runsUntil(t, 1)
+		first := f.clock.next(t)
+		if first.d != 2*time.Hour {
+			t.Fatalf("the first timer is for %v, want the 2h until 03:00", first.d)
+		}
+		f.clock.set(time.Date(2026, 10, 8, 3, 0, 0, 0, time.UTC))
+		first.c <- f.clock.Now()
+		f.runsUntil(t, 1)
 
-	const name = "bayplan-backup-20261008-0300.bayplan"
-	path := filepath.Join(f.dir, name)
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("the backup is not where it should be: %v", err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Errorf("mode = %v, want 0600", info.Mode().Perm())
-	}
-	bf, err := os.Open(path) //nolint:gosec // the backup the scheduler just wrote
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = bf.Close() }()
-	r, err := backup.Open(bf, []byte(exportPass))
-	if err != nil {
-		t.Fatalf("the scheduled backup does not open with the saved passphrase: %v", err)
-	}
-	entry, body, err := r.Next()
-	if err != nil || entry != backup.EntryManifest {
-		t.Fatalf("first entry = %q, %v", entry, err)
-	}
-	var m backup.Manifest
-	if err := json.NewDecoder(body).Decode(&m); err != nil {
-		t.Fatal(err)
-	}
-	if m.AppVersion != "v9.9.9" || m.InstanceName != "Home lab" || m.Counts.Users != 1 {
-		t.Errorf("manifest = %+v", m)
-	}
-	if entries, _ := os.ReadDir(f.dir); len(entries) != 1 {
-		t.Errorf("the folder holds %d entries, want just the backup", len(entries))
-	}
+		const name = "bayplan-backup-20261008-0300.bayplan"
+		path := filepath.Join(f.dir, name)
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("the backup is not where it should be: %v", err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Errorf("mode = %v, want 0600", info.Mode().Perm())
+		}
+		bf, err := os.Open(path) //nolint:gosec // the backup the scheduler just wrote
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = bf.Close() }()
+		r, err := backup.Open(bf, []byte(exportPass))
+		if err != nil {
+			t.Fatalf("the scheduled backup does not open with the saved passphrase: %v", err)
+		}
+		entry, body, err := r.Next()
+		if err != nil || entry != backup.EntryManifest {
+			t.Fatalf("first entry = %q, %v", entry, err)
+		}
+		var m backup.Manifest
+		if err := json.NewDecoder(body).Decode(&m); err != nil {
+			t.Fatal(err)
+		}
+		if m.AppVersion != "v9.9.9" || m.InstanceName != "Home lab" || m.Counts.Users != 1 {
+			t.Errorf("manifest = %+v", m)
+		}
+		if entries, _ := os.ReadDir(f.dir); len(entries) != 1 {
+			t.Errorf("the folder holds %d entries, want just the backup", len(entries))
+		}
 
-	var source, file string
-	var ok, size int64
-	if err := f.st.Read.QueryRow(`SELECT source, ok, file_name, size_bytes FROM backup_runs`).Scan(&source, &ok, &file, &size); err != nil {
-		t.Fatal(err)
-	}
-	if source != "schedule" || ok != 1 || file != name || size != info.Size() {
-		t.Errorf("run = %s ok=%d %s %d bytes; want schedule ok=1 %s %d bytes", source, ok, file, size, name, info.Size())
-	}
-	var actor, target string
-	if err := f.st.Read.QueryRow(`SELECT actor_id, target_id FROM audit_log WHERE action = 'backup.scheduled_run'`).Scan(&actor, &target); err != nil {
-		t.Fatalf("no backup.scheduled_run entry: %v", err)
-	}
-	if actor != "system:backup" || target != name {
-		t.Errorf("audit actor %q target %q", actor, target)
-	}
+		var source, file string
+		var ok, size int64
+		if err := f.st.Read.QueryRow(`SELECT source, ok, file_name, size_bytes FROM backup_runs`).Scan(&source, &ok, &file, &size); err != nil {
+			t.Fatal(err)
+		}
+		if source != "schedule" || ok != 1 || file != name || size != info.Size() {
+			t.Errorf("run = %s ok=%d %s %d bytes; want schedule ok=1 %s %d bytes", source, ok, file, size, name, info.Size())
+		}
+		var actor, target string
+		if err := f.st.Read.QueryRow(`SELECT actor_id, target_id FROM audit_log WHERE action = 'backup.scheduled_run'`).Scan(&actor, &target); err != nil {
+			t.Fatalf("no backup.scheduled_run entry: %v", err)
+		}
+		if actor != "system:backup" || target != name {
+			t.Errorf("audit actor %q target %q", actor, target)
+		}
 
-	// Having run, it waits for tomorrow's.
-	if second := f.clock.next(t); second.d != 24*time.Hour {
-		t.Errorf("the next timer is for %v, want a day", second.d)
-	}
+		// Having run, it waits for tomorrow's.
+		if second := f.clock.next(t); second.d != 24*time.Hour {
+			t.Errorf("the next timer is for %v, want a day", second.d)
+		}
+	})
 }
 
 // A scheduled backup must work when BAYPLAN_DATA_DIR and the backups folder
 // are relative, the form make dev uses (UAT gap G-03-4, plan 03-27).
 func TestSchedulerRunsWithARelativeDataDirectory(t *testing.T) {
-	f := newSchedFixture(t, time.Date(2026, 10, 8, 1, 0, 0, 0, time.UTC))
-	abs := f.exportFixture.dir
-	t.Chdir(filepath.Dir(abs))
-	rel := "./" + filepath.Base(abs)
-	f.sch.DataDir = rel
-	f.sch.Dir = filepath.Join(rel, "backups")
-	f.dir = f.sch.Dir
-	if _, err := f.saveSchedule(t, dailyAt3(exportPass)); err != nil {
-		t.Fatal(err)
-	}
-	f.runOnce(t)
+	synctest.Test(t, func(t *testing.T) {
+		f := newSchedFixture(t, time.Date(2026, 10, 8, 1, 0, 0, 0, time.UTC))
+		abs := f.exportFixture.dir
+		t.Chdir(filepath.Dir(abs))
+		rel := "./" + filepath.Base(abs)
+		f.sch.DataDir = rel
+		f.sch.Dir = filepath.Join(rel, "backups")
+		f.dir = f.sch.Dir
+		if _, err := f.saveSchedule(t, dailyAt3(exportPass)); err != nil {
+			t.Fatal(err)
+		}
+		f.runOnce(t)
 
-	const name = "bayplan-backup-20261008-0300.bayplan"
-	var ok int64
-	var file, runErr string
-	if err := f.st.Read.QueryRow(`SELECT ok, file_name, error FROM backup_runs`).Scan(&ok, &file, &runErr); err != nil {
-		t.Fatal(err)
-	}
-	if ok != 1 || file != name {
-		t.Fatalf("run ok=%d file=%q error=%q; want ok=1 %s", ok, file, runErr, name)
-	}
-	bf, err := os.Open(filepath.Join(f.dir, name)) //nolint:gosec // the backup the scheduler just wrote
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = bf.Close() }()
-	if _, err := backup.Open(bf, []byte(exportPass)); err != nil {
-		t.Fatalf("the scheduled backup does not open with the saved passphrase: %v", err)
-	}
-	entries, err := os.ReadDir(rel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".bayplan-backup-") {
-			t.Errorf("the data directory kept the work directory %q", e.Name())
+		const name = "bayplan-backup-20261008-0300.bayplan"
+		var ok int64
+		var file, runErr string
+		if err := f.st.Read.QueryRow(`SELECT ok, file_name, error FROM backup_runs`).Scan(&ok, &file, &runErr); err != nil {
+			t.Fatal(err)
 		}
-	}
-	for _, n := range f.names(t) {
-		if strings.HasPrefix(n, ".bayplan-schedule-") {
-			t.Errorf("the backups folder kept the temporary file %q", n)
+		if ok != 1 || file != name {
+			t.Fatalf("run ok=%d file=%q error=%q; want ok=1 %s", ok, file, runErr, name)
 		}
-	}
+		bf, err := os.Open(filepath.Join(f.dir, name)) //nolint:gosec // the backup the scheduler just wrote
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = bf.Close() }()
+		if _, err := backup.Open(bf, []byte(exportPass)); err != nil {
+			t.Fatalf("the scheduled backup does not open with the saved passphrase: %v", err)
+		}
+		entries, err := os.ReadDir(rel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), ".bayplan-backup-") {
+				t.Errorf("the data directory kept the work directory %q", e.Name())
+			}
+		}
+		for _, n := range f.names(t) {
+			if strings.HasPrefix(n, ".bayplan-schedule-") {
+				t.Errorf("the backups folder kept the temporary file %q", n)
+			}
+		}
+	})
 }
 
 func TestSchedulerDoesNothingWhileTheScheduleIsOff(t *testing.T) {
-	f := newSchedFixture(t, time.Date(2026, 10, 8, 1, 0, 0, 0, time.UTC))
-	stop := f.run(t)
-	defer stop()
-	select {
-	case tm := <-f.clock.armed:
-		t.Fatalf("a timer for %v was started with the schedule off", tm.d)
-	case <-time.After(200 * time.Millisecond):
-	}
+	synctest.Test(t, func(t *testing.T) {
+		f := newSchedFixture(t, time.Date(2026, 10, 8, 1, 0, 0, 0, time.UTC))
+		stop := f.run(t)
+		defer stop()
+		synctest.Wait() // the scheduler has read the schedule and settled
+		select {
+		case tm := <-f.clock.armed:
+			t.Fatalf("a timer for %v was started with the schedule off", tm.d)
+		default:
+		}
 
-	// Saving a schedule wakes it.
-	if _, err := f.saveSchedule(t, dailyAt3(exportPass)); err != nil {
-		t.Fatal(err)
-	}
-	f.sch.Notify()
-	if tm := f.clock.next(t); tm.d != 2*time.Hour {
-		t.Fatalf("after the save the timer is for %v, want 2h", tm.d)
-	}
+		// Saving a schedule wakes it.
+		if _, err := f.saveSchedule(t, dailyAt3(exportPass)); err != nil {
+			t.Fatal(err)
+		}
+		f.sch.Notify()
+		if tm := f.clock.next(t); tm.d != 2*time.Hour {
+			t.Fatalf("after the save the timer is for %v, want 2h", tm.d)
+		}
+	})
 }
 
 // Plan 03-27 task 2: the next-run rules, retention, failures and the retry.
@@ -341,80 +345,86 @@ func (f *schedFixture) names(t *testing.T) []string {
 }
 
 func TestPruneKeepsTheNewestBackupsAndTouchesNoOtherFile(t *testing.T) {
-	f := newSchedFixture(t, utc(2026, 10, 8, 1, 0))
-	in := dailyAt3(exportPass)
-	in.Keep = 3
-	if _, err := f.saveSchedule(t, in); err != nil {
-		t.Fatal(err)
-	}
-	others := []string{
-		"bayplan-20260901T030000Z.db", "bayplan-20260902T030000Z.db", "bayplan-20260903T030000Z.db",
-		"prerestore-20260901T030000Z.db", "prerestore-20260902T030000Z.db", "notes.txt", "bayplan-backup-20261001-0300.bayplan.bak",
-	}
-	for _, n := range others {
-		writeFile(t, f.dir, n, "keep me")
-	}
-	for _, d := range []string{"20261001", "20261002", "20261003", "20261004", "20261005"} {
-		writeFile(t, f.dir, "bayplan-backup-"+d+"-0300.bayplan", "old")
-	}
-	f.runOnce(t)
+	synctest.Test(t, func(t *testing.T) {
+		f := newSchedFixture(t, utc(2026, 10, 8, 1, 0))
+		in := dailyAt3(exportPass)
+		in.Keep = 3
+		if _, err := f.saveSchedule(t, in); err != nil {
+			t.Fatal(err)
+		}
+		others := []string{
+			"bayplan-20260901T030000Z.db", "bayplan-20260902T030000Z.db", "bayplan-20260903T030000Z.db",
+			"prerestore-20260901T030000Z.db", "prerestore-20260902T030000Z.db", "notes.txt", "bayplan-backup-20261001-0300.bayplan.bak",
+		}
+		for _, n := range others {
+			writeFile(t, f.dir, n, "keep me")
+		}
+		for _, d := range []string{"20261001", "20261002", "20261003", "20261004", "20261005"} {
+			writeFile(t, f.dir, "bayplan-backup-"+d+"-0300.bayplan", "old")
+		}
+		f.runOnce(t)
 
-	got := f.names(t)
-	want := append([]string{
-		"bayplan-backup-20261004-0300.bayplan", "bayplan-backup-20261005-0300.bayplan", "bayplan-backup-20261008-0300.bayplan",
-	}, others...)
-	slices.Sort(want)
-	slices.Sort(got)
-	if !slices.Equal(got, want) {
-		t.Fatalf("the folder holds\n  %v\nwant\n  %v", got, want)
-	}
+		got := f.names(t)
+		want := append([]string{
+			"bayplan-backup-20261004-0300.bayplan", "bayplan-backup-20261005-0300.bayplan", "bayplan-backup-20261008-0300.bayplan",
+		}, others...)
+		slices.Sort(want)
+		slices.Sort(got)
+		if !slices.Equal(got, want) {
+			t.Fatalf("the folder holds\n  %v\nwant\n  %v", got, want)
+		}
+	})
 }
 
 // T-03-113: a backup made by hand with "bayplan backup" lands in the same folder under
 // a name of its own, which retention must neither count nor delete.
 func TestPruneLeavesManualBackupsAloneAndDoesNotCountThem(t *testing.T) {
-	f := newSchedFixture(t, utc(2026, 10, 8, 1, 0))
-	in := dailyAt3(exportPass)
-	in.Keep = 1
-	if _, err := f.saveSchedule(t, in); err != nil {
-		t.Fatal(err)
-	}
-	manual := []string{
-		backup.ManualName(utc(2026, 9, 1, 12, 0), 1), backup.ManualName(utc(2026, 9, 1, 12, 0), 2),
-		backup.ManualName(utc(2026, 10, 1, 3, 0), 1), backup.ManualName(utc(2026, 10, 8, 3, 0), 1),
-	}
-	for _, n := range manual {
-		if backup.IsScheduledName(n) {
-			t.Fatalf("manual name %q matches the scheduled pattern", n)
+	synctest.Test(t, func(t *testing.T) {
+		f := newSchedFixture(t, utc(2026, 10, 8, 1, 0))
+		in := dailyAt3(exportPass)
+		in.Keep = 1
+		if _, err := f.saveSchedule(t, in); err != nil {
+			t.Fatal(err)
 		}
-		writeFile(t, f.dir, n, "manual")
-	}
-	writeFile(t, f.dir, "bayplan-backup-20261001-0300.bayplan", "old scheduled")
-	f.runOnce(t)
+		manual := []string{
+			backup.ManualName(utc(2026, 9, 1, 12, 0), 1), backup.ManualName(utc(2026, 9, 1, 12, 0), 2),
+			backup.ManualName(utc(2026, 10, 1, 3, 0), 1), backup.ManualName(utc(2026, 10, 8, 3, 0), 1),
+		}
+		for _, n := range manual {
+			if backup.IsScheduledName(n) {
+				t.Fatalf("manual name %q matches the scheduled pattern", n)
+			}
+			writeFile(t, f.dir, n, "manual")
+		}
+		writeFile(t, f.dir, "bayplan-backup-20261001-0300.bayplan", "old scheduled")
+		f.runOnce(t)
 
-	got := f.names(t)
-	want := append([]string{"bayplan-backup-20261008-0300.bayplan"}, manual...)
-	slices.Sort(want)
-	slices.Sort(got)
-	if !slices.Equal(got, want) {
-		t.Fatalf("the folder holds\n  %v\nwant the newest scheduled backup and every manual one\n  %v", got, want)
-	}
+		got := f.names(t)
+		want := append([]string{"bayplan-backup-20261008-0300.bayplan"}, manual...)
+		slices.Sort(want)
+		slices.Sort(got)
+		if !slices.Equal(got, want) {
+			t.Fatalf("the folder holds\n  %v\nwant the newest scheduled backup and every manual one\n  %v", got, want)
+		}
+	})
 }
 
 func TestPruneRunsOnlyAfterABackupSucceeded(t *testing.T) {
-	f := newSchedFixture(t, utc(2026, 10, 8, 1, 0))
-	in := dailyAt3(exportPass)
-	in.Keep = 1
-	if _, err := f.saveSchedule(t, in); err != nil {
-		t.Fatal(err)
-	}
-	f.exec(t, `UPDATE backup_schedule SET passphrase_sealed = 'not a sealed value'`)
-	writeFile(t, f.dir, "bayplan-backup-20261001-0300.bayplan", "the only good one")
-	writeFile(t, f.dir, "bayplan-backup-20261002-0300.bayplan", "another")
-	f.runOnce(t)
-	if got := f.names(t); len(got) != 2 {
-		t.Fatalf("a failed run deleted backups: %v", got)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		f := newSchedFixture(t, utc(2026, 10, 8, 1, 0))
+		in := dailyAt3(exportPass)
+		in.Keep = 1
+		if _, err := f.saveSchedule(t, in); err != nil {
+			t.Fatal(err)
+		}
+		f.exec(t, `UPDATE backup_schedule SET passphrase_sealed = 'not a sealed value'`)
+		writeFile(t, f.dir, "bayplan-backup-20261001-0300.bayplan", "the only good one")
+		writeFile(t, f.dir, "bayplan-backup-20261002-0300.bayplan", "another")
+		f.runOnce(t)
+		if got := f.names(t); len(got) != 2 {
+			t.Fatalf("a failed run deleted backups: %v", got)
+		}
+	})
 }
 
 type failureCase struct {
@@ -443,50 +453,52 @@ func TestRunFailureIsRecordedAuditedAndLeavesNoPartialFile(t *testing.T) {
 		}, "name the backup file"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			f := newSchedFixture(t, utc(2026, 10, 8, 1, 0))
-			if _, err := f.saveSchedule(t, dailyAt3(exportPass)); err != nil {
-				t.Fatal(err)
-			}
-			c.break_(t, f)
-			stop := f.run(t)
-			defer stop()
-			tm := f.clock.next(t)
-			f.clock.set(utc(2026, 10, 8, 3, 0))
-			tm.c <- f.clock.Now()
-			f.runsUntil(t, 1)
-
-			var ok, size int64
-			var file, reason string
-			if err := f.st.Read.QueryRow(`SELECT ok, file_name, size_bytes, error FROM backup_runs`).Scan(&ok, &file, &size, &reason); err != nil {
-				t.Fatal(err)
-			}
-			if ok != 0 || file != "" || size != 0 || !strings.Contains(reason, c.reason) {
-				t.Errorf("run = ok %d file %q size %d error %q; want a failed run whose error has %q", ok, file, size, reason, c.reason)
-			}
-			var actor, result, details string
-			if err := f.st.Read.QueryRow(`SELECT actor_id, result, details FROM audit_log WHERE action = 'backup.failed'`).Scan(&actor, &result, &details); err != nil {
-				t.Fatalf("no backup.failed entry: %v", err)
-			}
-			var d map[string]string
-			if err := json.Unmarshal([]byte(details), &d); err != nil || d["stage"] != c.stage || d["error"] == "" {
-				t.Errorf("backup.failed details = %v, %v; want stage %q and the error", d, err, c.stage)
-			}
-			if actor != "system:backup" || result != "failure" || strings.Contains(details, exportPass) {
-				t.Errorf("actor %q result %q details %s", actor, result, details)
-			}
-			var n int
-			if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'backup.scheduled_run'`).Scan(&n); err != nil || n != 0 {
-				t.Errorf("backup.scheduled_run entries = %d, %v after a failed run", n, err)
-			}
-			for _, name := range f.names(t) {
-				if strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".tmp") {
-					t.Errorf("a partial file %q was left behind", name)
+			synctest.Test(t, func(t *testing.T) {
+				f := newSchedFixture(t, utc(2026, 10, 8, 1, 0))
+				if _, err := f.saveSchedule(t, dailyAt3(exportPass)); err != nil {
+					t.Fatal(err)
 				}
-			}
-			// A failure does not stop the scheduler: tomorrow's run is planned.
-			if next := f.clock.next(t); next.d != 24*time.Hour {
-				t.Errorf("the next timer is for %v, want a day", next.d)
-			}
+				c.break_(t, f)
+				stop := f.run(t)
+				defer stop()
+				tm := f.clock.next(t)
+				f.clock.set(utc(2026, 10, 8, 3, 0))
+				tm.c <- f.clock.Now()
+				f.runsUntil(t, 1)
+
+				var ok, size int64
+				var file, reason string
+				if err := f.st.Read.QueryRow(`SELECT ok, file_name, size_bytes, error FROM backup_runs`).Scan(&ok, &file, &size, &reason); err != nil {
+					t.Fatal(err)
+				}
+				if ok != 0 || file != "" || size != 0 || !strings.Contains(reason, c.reason) {
+					t.Errorf("run = ok %d file %q size %d error %q; want a failed run whose error has %q", ok, file, size, reason, c.reason)
+				}
+				var actor, result, details string
+				if err := f.st.Read.QueryRow(`SELECT actor_id, result, details FROM audit_log WHERE action = 'backup.failed'`).Scan(&actor, &result, &details); err != nil {
+					t.Fatalf("no backup.failed entry: %v", err)
+				}
+				var d map[string]string
+				if err := json.Unmarshal([]byte(details), &d); err != nil || d["stage"] != c.stage || d["error"] == "" {
+					t.Errorf("backup.failed details = %v, %v; want stage %q and the error", d, err, c.stage)
+				}
+				if actor != "system:backup" || result != "failure" || strings.Contains(details, exportPass) {
+					t.Errorf("actor %q result %q details %s", actor, result, details)
+				}
+				var n int
+				if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'backup.scheduled_run'`).Scan(&n); err != nil || n != 0 {
+					t.Errorf("backup.scheduled_run entries = %d, %v after a failed run", n, err)
+				}
+				for _, name := range f.names(t) {
+					if strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".tmp") {
+						t.Errorf("a partial file %q was left behind", name)
+					}
+				}
+				// A failure does not stop the scheduler: tomorrow's run is planned.
+				if next := f.clock.next(t); next.d != 24*time.Hour {
+					t.Errorf("the next timer is for %v, want a day", next.d)
+				}
+			})
 		})
 	}
 }
@@ -524,121 +536,121 @@ func (f *schedFixture) holdExport(t *testing.T) (release func()) {
 }
 
 func TestRunFailureIsNotDeclaredWhileAnotherBackupIsBeingPreparedBecauseItIsRetriedAMinuteLater(t *testing.T) {
-	f := newSchedFixture(t, utc(2026, 10, 8, 1, 0))
-	if _, err := f.saveSchedule(t, dailyAt3(exportPass)); err != nil {
-		t.Fatal(err)
-	}
-	release := f.holdExport(t)
-	stop := f.run(t)
-	defer stop()
-	tm := f.clock.next(t)
-	f.clock.set(utc(2026, 10, 8, 3, 0))
-	tm.c <- f.clock.Now()
+	synctest.Test(t, func(t *testing.T) {
+		f := newSchedFixture(t, utc(2026, 10, 8, 1, 0))
+		if _, err := f.saveSchedule(t, dailyAt3(exportPass)); err != nil {
+			t.Fatal(err)
+		}
+		release := f.holdExport(t)
+		stop := f.run(t)
+		defer stop()
+		tm := f.clock.next(t)
+		f.clock.set(utc(2026, 10, 8, 3, 0))
+		tm.c <- f.clock.Now()
 
-	retry := f.clock.next(t)
-	if retry.d != time.Minute {
-		t.Fatalf("after finding the export slot busy the timer is for %v, want a minute", retry.d)
-	}
-	var failed int
-	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'backup.failed'`).Scan(&failed); err != nil || failed != 0 {
-		t.Fatalf("backup.failed entries = %d, %v while the first attempt is only waiting", failed, err)
-	}
+		retry := f.clock.next(t)
+		if retry.d != time.Minute {
+			t.Fatalf("after finding the export slot busy the timer is for %v, want a minute", retry.d)
+		}
+		var failed int
+		if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'backup.failed'`).Scan(&failed); err != nil || failed != 0 {
+			t.Fatalf("backup.failed entries = %d, %v while the first attempt is only waiting", failed, err)
+		}
 
-	release()
-	f.clock.set(utc(2026, 10, 8, 3, 1))
-	retry.c <- f.clock.Now()
-	f.runsUntil(t, 1)
-	var runs, ok int
-	if err := f.st.Read.QueryRow(`SELECT COUNT(*), SUM(ok) FROM backup_runs`).Scan(&runs, &ok); err != nil || runs != 1 || ok != 1 {
-		t.Fatalf("runs = %d (ok %d), %v; want the one run to have succeeded on retry", runs, ok, err)
-	}
-	// It is still named for the instant it was due.
-	if got := f.names(t); len(got) != 1 || got[0] != "bayplan-backup-20261008-0300.bayplan" {
-		t.Fatalf("the folder holds %v", got)
-	}
+		release()
+		f.clock.set(utc(2026, 10, 8, 3, 1))
+		retry.c <- f.clock.Now()
+		f.runsUntil(t, 1)
+		var runs, ok int
+		if err := f.st.Read.QueryRow(`SELECT COUNT(*), SUM(ok) FROM backup_runs`).Scan(&runs, &ok); err != nil || runs != 1 || ok != 1 {
+			t.Fatalf("runs = %d (ok %d), %v; want the one run to have succeeded on retry", runs, ok, err)
+		}
+		// It is still named for the instant it was due.
+		if got := f.names(t); len(got) != 1 || got[0] != "bayplan-backup-20261008-0300.bayplan" {
+			t.Fatalf("the folder holds %v", got)
+		}
+	})
 }
 
 func TestRunFailureIsDeclaredWhenTheRetryFindsTheExportSlotBusyToo(t *testing.T) {
-	f := newSchedFixture(t, utc(2026, 10, 8, 1, 0))
-	if _, err := f.saveSchedule(t, dailyAt3(exportPass)); err != nil {
-		t.Fatal(err)
-	}
-	f.holdExport(t)
-	stop := f.run(t)
-	defer stop()
-	tm := f.clock.next(t)
-	f.clock.set(utc(2026, 10, 8, 3, 0))
-	tm.c <- f.clock.Now()
-	retry := f.clock.next(t)
-	f.clock.set(utc(2026, 10, 8, 3, 1))
-	retry.c <- f.clock.Now()
-	f.runsUntil(t, 1)
+	synctest.Test(t, func(t *testing.T) {
+		f := newSchedFixture(t, utc(2026, 10, 8, 1, 0))
+		if _, err := f.saveSchedule(t, dailyAt3(exportPass)); err != nil {
+			t.Fatal(err)
+		}
+		f.holdExport(t)
+		stop := f.run(t)
+		defer stop()
+		tm := f.clock.next(t)
+		f.clock.set(utc(2026, 10, 8, 3, 0))
+		tm.c <- f.clock.Now()
+		retry := f.clock.next(t)
+		f.clock.set(utc(2026, 10, 8, 3, 1))
+		retry.c <- f.clock.Now()
+		f.runsUntil(t, 1)
 
-	var ok int64
-	var reason string
-	if err := f.st.Read.QueryRow(`SELECT ok, error FROM backup_runs`).Scan(&ok, &reason); err != nil || ok != 0 || !strings.Contains(reason, "another backup is being prepared") {
-		t.Fatalf("run = ok %d, error %q, %v", ok, reason, err)
-	}
+		var ok int64
+		var reason string
+		if err := f.st.Read.QueryRow(`SELECT ok, error FROM backup_runs`).Scan(&ok, &reason); err != nil || ok != 0 || !strings.Contains(reason, "another backup is being prepared") {
+			t.Fatalf("run = ok %d, error %q, %v", ok, reason, err)
+		}
+	})
 }
 
 func TestTheSavedPassphraseStillOpensAfterAKeyRotation(t *testing.T) {
-	ctx := context.Background()
-	dir := t.TempDir()
-	st, err := store.Open(ctx, dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	if _, err := store.Migrate(ctx, st, store.MigrateOptions{AppVersion: "test", DataDir: dir}); err != nil {
-		t.Fatal(err)
-	}
-	old, err := vault.LoadOrCreate("", dir, slog.New(slog.DiscardHandler))
-	if err != nil {
-		t.Fatal(err)
-	}
-	aud := audit.NewWriter(st, old, slog.New(slog.DiscardHandler), time.Now)
-	if _, err := backup.SaveSchedule(ctx, st, old, aud, adminActor, dailyAt3(exportPass)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := backup.RotateKey(ctx, st, dir, old, audit.SystemCLI); err != nil {
-		t.Fatal(err)
-	}
-	key, err := vault.ReadKeyFile(dir, vault.KeyFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rotated, err := vault.New(key, "file")
-	if err != nil {
-		t.Fatal(err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		ctx := context.Background()
+		dir := t.TempDir()
+		st, err := store.Open(ctx, dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = st.Close() })
+		if _, err := store.Migrate(ctx, st, store.MigrateOptions{AppVersion: "test", DataDir: dir}); err != nil {
+			t.Fatal(err)
+		}
+		old, err := vault.LoadOrCreate("", dir, slog.New(slog.DiscardHandler))
+		if err != nil {
+			t.Fatal(err)
+		}
+		aud := audit.NewWriter(st, old, slog.New(slog.DiscardHandler), time.Now)
+		if _, err := backup.SaveSchedule(ctx, st, old, aud, adminActor, dailyAt3(exportPass)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := backup.RotateKey(ctx, st, dir, old, audit.SystemCLI); err != nil {
+			t.Fatal(err)
+		}
+		key, err := vault.ReadKeyFile(dir, vault.KeyFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rotated, err := vault.New(key, "file")
+		if err != nil {
+			t.Fatal(err)
+		}
 
-	clock := newSchedClock(utc(2026, 10, 8, 1, 0))
-	sch := &backup.Scheduler{
-		Store: st, Vault: rotated, Audit: audit.NewWriter(st, rotated, slog.New(slog.DiscardHandler), time.Now),
-		Dir: filepath.Join(t.TempDir(), "backups"), DataDir: dir, Now: clock.Now, NewTimer: clock.NewTimer, Log: slog.New(slog.DiscardHandler),
-	}
-	runCtx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	go func() { sch.Run(runCtx); close(done) }()
-	defer func() { cancel(); <-done }()
-	tm := clock.next(t)
-	clock.set(utc(2026, 10, 8, 3, 0))
-	tm.c <- clock.Now()
-	deadline := time.Now().Add(60 * time.Second)
-	for {
+		clock := newSchedClock(utc(2026, 10, 8, 1, 0))
+		sch := &backup.Scheduler{
+			Store: st, Vault: rotated, Audit: audit.NewWriter(st, rotated, slog.New(slog.DiscardHandler), time.Now),
+			Dir: filepath.Join(t.TempDir(), "backups"), DataDir: dir, Now: clock.Now, NewTimer: clock.NewTimer, Log: slog.New(slog.DiscardHandler),
+		}
+		runCtx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() { sch.Run(runCtx); close(done) }()
+		defer func() { cancel(); <-done }()
+		tm := clock.next(t)
+		clock.set(utc(2026, 10, 8, 3, 0))
+		tm.c <- clock.Now()
+		synctest.Wait()
 		var ok sql.NullInt64
 		_ = st.Read.QueryRow(`SELECT MAX(ok) FROM backup_runs WHERE finished_at IS NOT NULL`).Scan(&ok)
-		if ok.Valid {
-			if ok.Int64 != 1 {
-				t.Fatal("the run after the rotation failed")
-			}
-			return
-		}
-		if time.Now().After(deadline) {
+		if !ok.Valid {
 			t.Fatal("the run after the rotation never finished")
 		}
-		time.Sleep(20 * time.Millisecond)
-	}
+		if ok.Int64 != 1 {
+			t.Fatal("the run after the rotation failed")
+		}
+	})
 }
 
 func TestTheSavedPassphraseTravelsInABackupSealedUnderTheBackupsOwnKey(t *testing.T) {

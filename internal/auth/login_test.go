@@ -17,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unicode/utf8"
 
@@ -954,6 +955,14 @@ func TestUnlockOfAnUnknownUserIsErrUserNotFoundAndWritesNothing(t *testing.T) {
 // --- cleanup ---------------------------------------------------------------
 
 func TestRunSessionCleanupDeletesExpiredSessionsAndStopsWithItsContext(t *testing.T) {
+	// The sweep is a ticker over SQLite, so it runs in a synctest bubble: Wait returns once
+	// the first sweep is done and the loop is back to waiting on its ticker.
+	synctest.Test(t, func(t *testing.T) {
+		sweepsIdleSessions(t)
+	})
+}
+
+func sweepsIdleSessions(t *testing.T) {
 	f := newLoginFixture(t)
 	f.addUser(t, "admin")
 	stale := f.mustLogin(t, "admin", false)
@@ -966,15 +975,9 @@ func TestRunSessionCleanupDeletesExpiredSessionsAndStopsWithItsContext(t *testin
 		auth.RunSessionCleanup(ctx, f.st, testIdle, f.clk.now)
 		close(done)
 	}()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if _, ok := f.sessionRow(t, stale.IDHash); !ok {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the idle session was not cleaned up")
-		}
-		time.Sleep(10 * time.Millisecond)
+	synctest.Wait()
+	if _, ok := f.sessionRow(t, stale.IDHash); ok {
+		t.Fatal("the idle session was not cleaned up")
 	}
 	if _, ok := f.sessionRow(t, fresh.IDHash); !ok {
 		t.Fatal("cleanup deleted a live session")

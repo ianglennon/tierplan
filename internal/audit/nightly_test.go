@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"log/slog"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/store/storetest"
@@ -16,6 +17,14 @@ import (
 )
 
 func TestRunNightlyPrunesOnTheTimerAndStopsWithItsContext(t *testing.T) {
+	// The loop is a pair of timers over SQLite, so it runs in a synctest bubble: the 20 ms
+	// first delay passes on the fake clock and the effect is read once, after it settled.
+	synctest.Test(t, func(t *testing.T) {
+		runsNightlyOnItsTimer(t)
+	})
+}
+
+func runsNightlyOnItsTimer(t *testing.T) {
 	s := storetest.New(t)
 	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{5}, 32))
 	v, err := vault.LoadOrCreate(key, t.TempDir(), slog.New(slog.DiscardHandler))
@@ -39,19 +48,13 @@ func TestRunNightlyPrunesOnTheTimerAndStopsWithItsContext(t *testing.T) {
 		close(done)
 	}()
 
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		var n int
-		if err := s.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'audit.pruned'`).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		if n == 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the nightly prune did not run")
-		}
-		time.Sleep(10 * time.Millisecond)
+	synctest.Sleep(50 * time.Millisecond) // past the 20 ms first delay, well short of the hour
+	var n int
+	if err := s.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'audit.pruned'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("%d audit.pruned rows after the first delay, want 1 (the nightly prune did not run)", n)
 	}
 	cancel()
 	select {
