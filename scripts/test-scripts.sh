@@ -187,6 +187,72 @@ expect pass "timeouts-ok" scripts/timeouts-check.sh scripts/testdata/timeouts/ci
 expect fail "timeouts-thin" scripts/timeouts-check.sh scripts/testdata/timeouts/ci-thin.yml scripts/testdata/timeouts/Makefile
 expect_out "timeouts-thin names the job" "job slow runs make slow with go test -timeout 40m but the job allows 45 minutes"
 expect pass "timeouts-check-repository" scripts/timeouts-check.sh
+# gotestsum runs go test, so its -timeout (after the --) counts against the job too.
+expect fail "timeouts-thin-gotestsum" scripts/timeouts-check.sh scripts/testdata/timeouts/ci-thin.yml scripts/testdata/timeouts/Makefile.gotestsum
+expect_out "timeouts-thin-gotestsum names the job" "job slow runs make slow with go test -timeout 40m but the job allows 45 minutes"
+
+# --- Failing-test summary (06.1-15, D-21): the failing and hung tests, from the JSON ---
+summ=scripts/testdata/summary
+expect pass "summary-go-fail" scripts/test-summary.sh "${summ}/go-fail.json"
+expect_out "summary-go-fail names the failing test" "TestBFailsWithAMessage"
+expect_out "summary-go-fail names the subtest" "TestBFailsWithAMessage/sub"
+expect_out "summary-go-fail names the package" "example.test/summaryfix/b"
+expect_out "summary-go-fail names the seed" "shuffle seed 1792185972194576033"
+expect pass "summary-go-hang" scripts/test-summary.sh "${summ}/go-hang.json"
+expect_out "summary-go-hang names the hung test" "HUNG example.test/summaryfix/c TestCHangsForever"
+expect_out "summary-go-hang says it was still running" "still running after 3s"
+expect pass "summary-go-build-fail" scripts/test-summary.sh "${summ}/go-build-fail.json"
+expect_out "summary-go-build-fail names the package" "BUILD example.test/summaryfix/d"
+expect_out "summary-go-build-fail says why" "undefined: undefinedSymbol"
+step_summary="${scratch}/summary.md"
+expect pass "summary-go-pass" env GITHUB_STEP_SUMMARY="${step_summary}" scripts/test-summary.sh "${summ}/go-pass.json"
+expect_out "summary-go-pass says so" "No failing tests"
+if ! grep -qF -- "### No failing tests (go-pass.json)" "${step_summary}"; then
+  echo "SCRIPT TEST FAIL: summary-go-pass-markdown (heading missing from GITHUB_STEP_SUMMARY)"
+  failures=$((failures + 1))
+fi
+: >"${step_summary}"
+expect pass "summary-go-fail-markdown" env GITHUB_STEP_SUMMARY="${step_summary}" scripts/test-summary.sh "${summ}/go-fail.json" "${summ}/go-hang.json"
+if ! grep -qF -- "### Failing tests (go-fail.json)" "${step_summary}" ||
+  ! grep -qF -- "- **FAIL** example.test/summaryfix/b TestBFailsWithAMessage" "${step_summary}" ||
+  ! grep -qF -- "- **HUNG** example.test/summaryfix/c TestCHangsForever" "${step_summary}"; then
+  echo "SCRIPT TEST FAIL: summary-go-fail-markdown (list missing from GITHUB_STEP_SUMMARY)"
+  failures=$((failures + 1))
+fi
+# A test name is data: Markdown, HTML and a forged log line must not get through.
+hostile="${scratch}/hostile.json"
+printf '%s\n' \
+  '{"Action":"output","Package":"p/q","Output":"-test.shuffle 7\n"}' \
+  '{"Action":"fail","Package":"p/q","Test":"TestX/<b>`a`*\n::error::forged"}' \
+  '{"Action":"fail","Package":"p/q"}' >"${hostile}"
+: >"${step_summary}"
+expect pass "summary-hostile-name" env GITHUB_STEP_SUMMARY="${step_summary}" scripts/test-summary.sh "${hostile}"
+if grep -q '^::' <<<"${LAST_OUT}"; then
+  echo "SCRIPT TEST FAIL: summary-hostile-name (a test name started a workflow command line)"
+  failures=$((failures + 1))
+fi
+if grep -qE '<b>|`a`' "${step_summary}"; then
+  echo "SCRIPT TEST FAIL: summary-hostile-name-markdown (unescaped HTML or backticks in the summary)"
+  failures=$((failures + 1))
+fi
+expect fail "summary-missing-file" scripts/test-summary.sh "${scratch}/no-such-results.json"
+expect_out "summary-missing-file names the file" "no-such-results.json"
+printf 'not json at all\n' >"${scratch}/garbage.json"
+expect fail "summary-garbage-file" scripts/test-summary.sh "${scratch}/garbage.json"
+: >"${scratch}/empty.json"
+expect fail "summary-empty-file" scripts/test-summary.sh "${scratch}/empty.json"
+expect fail "summary-one-bad-file-fails-the-run" scripts/test-summary.sh "${summ}/go-pass.json" "${scratch}/no-such-results.json"
+expect_out "summary-one-bad-file-still-reads-the-rest" "No failing tests (go-pass.json)"
+
+# --- test-go (06.1-15, D-21, D-15): every Go module through the pinned gotestsum ---
+expect pass "test-go-gotestsum" mk test-go
+expect_out "test-go uses the pinned gotestsum" "gotest.tools/gotestsum@v1.13.0"
+expect_out "test-go keeps race, shuffle and the timeout" "-race -count=1 -shuffle=on -timeout 20m"
+expect_out "test-go writes the JSON" "--jsonfile"
+if grep -qF -- "rerun-fails" Makefile; then
+  echo "SCRIPT TEST FAIL: no-rerun-fails (Makefile passes a retry option to gotestsum, D-15)"
+  failures=$((failures + 1))
+fi
 
 # Vite's own host check: a Host header it does not know is answered 403 unless the
 # public URL's host name was passed in BAYPLAN_DEV_PUBLIC_URL.

@@ -62,6 +62,7 @@ jobs_targets() {
 }
 
 # Largest `go test -timeout` of a make target, in minutes (0 when it has none).
+# A gotestsum line counts too: its -timeout sits after the `--` and goes to go test.
 # A make that cannot plan the target is an error (exit 2), never a silent 0.
 target_timeout() {
   local plan
@@ -71,7 +72,7 @@ target_timeout() {
     return 2
   fi
   printf '%s\n' "${plan}" |
-    { grep -E '(^|[^[:alnum:]_])go( -C [^ ]+)? test([[:space:]]|$)' || true; } |
+    { grep -E '(^|[^[:alnum:]_])go( -C [^ ]+)? test([[:space:]]|$)|gotestsum@[^[:space:]]+[[:space:]]' || true; } |
     { grep -oE -- '-timeout[ =][0-9]+[hms]([0-9]+[hms])*' || true; } |
     awk '
       { v = $0; sub(/^-timeout[ =]/, "", v); m = 0

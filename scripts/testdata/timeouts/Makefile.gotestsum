@@ -1,0 +1,3 @@
+# Fixture for scripts/timeouts-check.sh: the same 40 minute timeout, run through gotestsum.
+slow:
+	go run gotest.tools/gotestsum@v1.13.0 --format pkgname -- ./... -race -timeout 40m

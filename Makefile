@@ -21,7 +21,7 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check tidy-check test test-int test-swarm smoke dev dev-go dev-web dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke
+.PHONY: web build gen gen-check tidy-check test test-go test-summary test-int test-swarm smoke dev dev-go dev-web dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke
 
 web:
 	pnpm -C web install --frozen-lockfile
@@ -53,12 +53,37 @@ tidy-check:
 	  go -C $$m mod tidy -diff; \
 	done
 
-test:
-	@set -e; for m in $(GO_MODULES); do \
-	  echo "test: $$m"; \
-	  go -C $$m test ./... -race -count=1 -shuffle=on -timeout 20m; \
-	done
+# D-21: every Go test target runs through gotestsum, so the end of the log lists
+# each failing and each hung test with its package, and --jsonfile leaves the
+# go test -json stream in $(TEST_RESULTS) for scripts/test-summary.sh. gotestsum
+# runs through `go run` at a pinned version, so nothing is added to go.mod (the
+# maintainer approved v1.13.0 at 06.1-01). Never add a retry option to it (D-15):
+# a test that fails once is a defect, not noise.
+GOTESTSUM_VERSION := v1.13.0
+GOTESTSUM := go run gotest.tools/gotestsum@$(GOTESTSUM_VERSION)
+TEST_RESULTS := .devdata/test
+
+# The whole unit suite. 06.1-15 Task 3 adds the web suite here.
+test: test-go
 	pnpm -C web exec vitest run
+
+# gotestsum cannot wrap `go -C dir test`, so each module runs from a subshell. A
+# failing module does not stop the next one, so one red run reports them all.
+test-go:
+	@mkdir -p $(TEST_RESULTS); rm -f $(TEST_RESULTS)/go-*.json; rc=0; \
+	for m in $(GO_MODULES); do \
+	  name=$$(basename "$$(cd $$m && pwd)"); [ "$$m" = . ] && name=root; \
+	  echo "test-go: $$m"; \
+	  (cd $$m && $(GOTESTSUM) --format pkgname --jsonfile $(CURDIR)/$(TEST_RESULTS)/go-$$name.json -- ./... -race -count=1 -shuffle=on -timeout 20m) || rc=1; \
+	done; \
+	exit $$rc
+
+# Turns every results file into a list of failing tests, hung tests and build
+# failures (stdout, and $GITHUB_STEP_SUMMARY when set). CI runs it with
+# `if: always()`; it exits 0 when it read every file, so the job's result stays
+# the test step's. A glob that matches nothing is an error from the script.
+test-summary:
+	scripts/test-summary.sh $(TEST_RESULTS)/*.json
 
 # Real-engine tests (D-28), build tag `integration`. With BAYPLAN_TEST_DOCKER_HOST
 # set (CI points it at the dind service) they use that engine; without it each

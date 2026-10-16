@@ -86,7 +86,21 @@ jobs:
       # The server tests serve the embedded SPA (TestBasePathInvariant checks the
       # index under a base path), so web/dist must be built first.
       - run: pnpm -C web build
-      - run: make test
+      - run: make test-go
+      # D-21: the failing and hung tests, their packages and the shuffle seed, in the
+      # log and in the run page's summary. The step exits 0 when it read every
+      # file, so the result stays the test step's.
+      - name: Name the failing tests
+        if: always()
+        run: make test-summary
+      - name: Upload the test results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: go-test-json-${{ github.job }}
+          path: .devdata/test/*.json
+          retention-days: 7
+          if-no-files-found: ignore
 
   gen-check:
     runs-on: [self-hosted, linux, x64]

@@ -1,0 +1,37 @@
+{"Time":"2026-10-16T21:26:12.555006625Z","Action":"start","Package":"example.test/summaryfix/c"}
+{"Time":"2026-10-16T21:26:12.567588289Z","Action":"output","Package":"example.test/summaryfix/c","Output":"-test.shuffle 1792185972567504696\n"}
+{"Time":"2026-10-16T21:26:12.567677659Z","Action":"run","Package":"example.test/summaryfix/c","Test":"TestCHangsForever"}
+{"Time":"2026-10-16T21:26:12.567680235Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"=== RUN   TestCHangsForever\n","OutputType":"frame"}
+{"Time":"2026-10-16T21:26:15.572054161Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"panic: test timed out after 3s\n"}
+{"Time":"2026-10-16T21:26:15.572093286Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"\trunning tests:\n"}
+{"Time":"2026-10-16T21:26:15.572097635Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"\t\tTestCHangsForever (3s)\n"}
+{"Time":"2026-10-16T21:26:15.572099023Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"\n"}
+{"Time":"2026-10-16T21:26:15.572100965Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"goroutine 8 [running]:\n"}
+{"Time":"2026-10-16T21:26:15.572106497Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"testing.(*M).startAlarm.func1()\n"}
+{"Time":"2026-10-16T21:26:15.572108991Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"\t/usr/local/go/src/testing/testing.go:2959 +0x605\n"}
+{"Time":"2026-10-16T21:26:15.572111383Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"created by time.goFunc\n"}
+{"Time":"2026-10-16T21:26:15.572116636Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"\t/usr/local/go/src/time/sleep.go:182 +0x45\n"}
+{"Time":"2026-10-16T21:26:15.572117804Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"\n"}
+{"Time":"2026-10-16T21:26:15.572118931Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"goroutine 1 [chan receive]:\n"}
+{"Time":"2026-10-16T21:26:15.572120155Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"testing.(*T).Run(0xc000144008, {0x63168e, 0x11}, 0x7e61f8)\n"}
+{"Time":"2026-10-16T21:26:15.5721218Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"\t/usr/local/go/src/testing/testing.go:2266 +0xb3e\n"}
+{"Time":"2026-10-16T21:26:15.572123027Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"testing.runTests.func1(0xc000144008)\n"}
+{"Time":"2026-10-16T21:26:15.57212427Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"\t/usr/local/go/src/testing/testing.go:2742 +0x85\n"}
+{"Time":"2026-10-16T21:26:15.572125441Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"testing.tRunner(0xc000144008, 0xc00013da40)\n"}
+{"Time":"2026-10-16T21:26:15.572126648Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"\t/usr/local/go/src/testing/testing.go:2193 +0x21d\n"}
+{"Time":"2026-10-16T21:26:15.57212798Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"testing.runTests({0x633579, 0x17}, {0x633ee7, 0x19}, 0xc0000160c0, {0x806d58, 0x1, 0x1}, {0xc2acc37de1d4b721, 0xb2d5778d, ...})\n"}
+{"Time":"2026-10-16T21:26:15.572131054Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"\t/usr/local/go/src/testing/testing.go:2740 +0x9ea\n"}
+{"Time":"2026-10-16T21:26:15.572132241Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"testing.(*M).Run(0xc00010c140)\n"}
+{"Time":"2026-10-16T21:26:15.572133491Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"\t/usr/local/go/src/testing/testing.go:2600 +0xf45\n"}
+{"Time":"2026-10-16T21:26:15.572134568Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"main.main()\n"}
+{"Time":"2026-10-16T21:26:15.572135786Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"\t_testmain.go:46 +0x165\n"}
+{"Time":"2026-10-16T21:26:15.572138422Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"\n"}
+{"Time":"2026-10-16T21:26:15.572139689Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"goroutine 7 [select (no cases)]:\n"}
+{"Time":"2026-10-16T21:26:15.572140958Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"example.test/summaryfix/c.TestCHangsForever(0xc000144248?)\n"}
+{"Time":"2026-10-16T21:26:15.572142299Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"\t/tmp/claude-1000/-home-glennog-projects-bayplan/a8dbcbc0-3111-4b8a-aeab-7a64b8c408c5/scratchpad/fix/c/c_test.go:5 +0x1d\n"}
+{"Time":"2026-10-16T21:26:15.572143532Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"testing.tRunner(0xc000144248, 0x7e61f8)\n"}
+{"Time":"2026-10-16T21:26:15.572144719Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"\t/usr/local/go/src/testing/testing.go:2193 +0x21d\n"}
+{"Time":"2026-10-16T21:26:15.572147053Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"created by testing.(*T).Run in goroutine 1\n"}
+{"Time":"2026-10-16T21:26:15.572148278Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"\t/usr/local/go/src/testing/testing.go:2258 +0xb13\n"}
+{"Time":"2026-10-16T21:26:15.57447571Z","Action":"output","Package":"example.test/summaryfix/c","Output":"FAIL\texample.test/summaryfix/c\t3.019s\n","OutputType":"frame"}
+{"Time":"2026-10-16T21:26:15.574495275Z","Action":"fail","Package":"example.test/summaryfix/c","Elapsed":3.019}
