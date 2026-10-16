@@ -11,6 +11,7 @@ import { queryClient } from "@/api/query-client";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
 import { makeMe } from "@/test-me";
+import { settled } from "@/test-settle";
 
 const ME = makeMe({
   instanceAdmin: true,
@@ -111,6 +112,7 @@ describe("sign out from the user menu (WR-17)", () => {
       await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
       expect(router.state.location.search).not.toHaveProperty("expired");
       await waitFor(() => expect(queryClient.getQueryData(["me"])).toBeUndefined());
+      await settled(queryClient);
       // The token is gone: a later mutating request carries none.
       sent = [];
       await api.POST("/api/environments", { body: { name: "x", kind: "local" } as never });
@@ -124,6 +126,7 @@ describe("sign out from the user menu (WR-17)", () => {
     await screen.findByText("No environments yet");
     await clickLogOut();
     expect(await screen.findByText("Something went wrong. Try again.")).toBeTruthy();
+    await settled(queryClient);
     expect(logoutCalls()).toBe(1);
     expect(router.state.location.pathname).toBe("/environments");
     // The CSRF token and the cache are untouched.
@@ -148,6 +151,7 @@ describe("sign out from the user menu (WR-17)", () => {
     expect(
       await screen.findByText("Can't reach Bayplan. Check your connection and try again."),
     ).toBeTruthy();
+    await settled(queryClient);
     expect(router.state.location.pathname).toBe("/environments");
     expect(queryClient.getQueryData(["me"])).toBeTruthy();
   });
@@ -161,6 +165,7 @@ describe("sign out from the user menu (WR-17)", () => {
       expect(
         (await screen.findAllByText("Something went wrong. Try again.")).length,
       ).toBeGreaterThan(0);
+      await settled(queryClient);
       expect(router.state.location.pathname).toBe("/environments");
       cleanup();
     }

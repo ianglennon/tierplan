@@ -11,6 +11,7 @@ import { queryClient } from "@/api/query-client";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
 import { makeMe } from "@/test-me";
+import { settled } from "@/test-settle";
 
 const ADMIN = makeMe({
   instanceAdmin: true,
@@ -129,7 +130,7 @@ describe("Log out outside the signed-in shell (W-3, AUTH-03)", () => {
     const router = renderAt("/no-such-page");
     expect(await screen.findByText("Page not found")).toBeTruthy();
     await waitFor(() => expect(calls.some((c) => c.path === "/api/me")).toBe(true));
-    await new Promise((r) => setTimeout(r, 50));
+    await settled(queryClient);
     expect(screen.queryByText(/Signed in as/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Log out" })).toBeNull();
     expect(router.state.location.pathname).toBe("/no-such-page");
@@ -140,7 +141,7 @@ describe("Log out outside the signed-in shell (W-3, AUTH-03)", () => {
     signedIn = false;
     renderAt("/login");
     await screen.findByLabelText("Username");
-    await new Promise((r) => setTimeout(r, 50));
+    await settled(queryClient);
     expect(screen.queryByText(/Signed in as/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Log out" })).toBeNull();
     // The sign-in guard's own check is the only one.

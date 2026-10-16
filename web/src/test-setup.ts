@@ -4,9 +4,10 @@
 import { configure } from "@testing-library/react";
 
 // findBy and waitFor give up after 1 s by default, which a loaded CI runner (three or
-// four times slower than a quiet one) can miss for a render that is merely slow. 4 s
-// is the wait the load-error tests already chose one by one.
-configure({ asyncUtilTimeout: 4000 });
+// four times slower than a quiet one) can miss for a render that is merely slow. This is
+// one generous deadline under the 20 s test timeout: it only catches an element that
+// never comes, and a test does not wait this long when the element is there.
+configure({ asyncUtilTimeout: 15000 });
 
 // jsdom has no ResizeObserver (Radix checkboxes and menus measure with it) and
 // no matchMedia (the sidebar and the theme switch read it). These stand-ins
