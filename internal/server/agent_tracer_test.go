@@ -217,34 +217,24 @@ func TestAgentTracerStandaloneEnrolsAndComesOnline(t *testing.T) {
 		AgentVersion    *string `json:"agentVersion"`
 		UpdateAvailable bool    `json:"updateAvailable"`
 	}
+	// The server's session and monitor say when the agent is online with its engine
+	// read; after that the list is read once.
+	awaitAgentOnline(t, srv, created.ID, exited, &agentLog, true)
 	var got environment
-	deadline := time.Now().Add(15 * time.Second)
-	for {
-		code, body := call(http.MethodGet, "/api/environments", "")
-		var list struct {
-			Items []environment `json:"items"`
+	code, body = call(http.MethodGet, "/api/environments", "")
+	var list struct {
+		Items []environment `json:"items"`
+	}
+	if code != http.StatusOK || json.Unmarshal(body, &list) != nil {
+		t.Fatalf("GET /api/environments: %d %s", code, body)
+	}
+	for _, e := range list.Items {
+		if e.ID == created.ID {
+			got = e
 		}
-		if code == http.StatusOK && json.Unmarshal(body, &list) == nil {
-			for _, e := range list.Items {
-				if e.ID == created.ID {
-					got = e
-				}
-			}
-		}
-		// The engine comes from the target's probe, which can land a moment after the
-		// rollup says online: wait for both.
-		if got.Status.State == "online" && got.Engine.Version != "" {
-			break
-		}
-		select {
-		case <-exited:
-			t.Fatalf("the agent exited before the environment came online; its output:\n%s", agentLog.String())
-		default:
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the environment never came online: %+v\nagent output:\n%s", got, agentLog.String())
-		}
-		time.Sleep(50 * time.Millisecond)
+	}
+	if got.Status.State != "online" || got.Engine.Version == "" {
+		t.Fatalf("the environment is not online with an engine version although the monitor found it so: %+v\nagent output:\n%s", got, agentLog.String())
 	}
 	if got.Kind != "agent" || got.Engine.Version != "29.1.0" {
 		t.Fatalf("environment = %+v, want kind agent and engine version 29.1.0", got)

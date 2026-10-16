@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // nonLoopbackIPv4 is an address of this machine that is up, is not loopback and
@@ -174,7 +175,7 @@ func TestTheDevelopmentInstallCommandConnectsOverPlainWS(t *testing.T) {
 		t.Fatalf("no -e pairs in the standalone command:\n%s", in.Standalone.Command)
 	}
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{Hostname: "plain-host"})
-	start := func(skip, stateDir string) (done chan error, log *lockedBuffer, stop func()) {
+	start := func(skip, stateDir string) (done chan error, exited chan struct{}, log *lockedBuffer, stop func()) {
 		t.Helper()
 		ctx, cancel := context.WithCancel(context.Background())
 		log = &lockedBuffer{}
@@ -198,7 +199,7 @@ func TestTheDevelopmentInstallCommandConnectsOverPlainWS(t *testing.T) {
 		// done carries the exit once; exited closes so a cleanup can still wait
 		// after done was read.
 		done = make(chan error, 1)
-		exited := make(chan struct{})
+		exited = make(chan struct{})
 		go func() { done <- cmd.Wait(); close(exited) }()
 		var stopped bool
 		stop = func() {
@@ -210,48 +211,17 @@ func TestTheDevelopmentInstallCommandConnectsOverPlainWS(t *testing.T) {
 			<-exited
 		}
 		t.Cleanup(stop)
-		return done, log, stop
+		return done, exited, log, stop
 	}
 
-	done, log, stop := start("", t.TempDir())
-	deadline := time.Now().Add(30 * time.Second)
-	for online := false; !online; {
-		code, body := call(http.MethodGet, "/api/environments", "")
-		var list struct {
-			Items []struct {
-				ID     string `json:"id"`
-				Status struct {
-					State string `json:"state"`
-				} `json:"status"`
-			} `json:"items"`
-		}
-		if code == http.StatusOK && json.Unmarshal(body, &list) == nil {
-			for _, e := range list.Items {
-				online = online || (e.ID == created.ID && e.Status.State == "online")
-			}
-		}
-		if online {
-			break
-		}
-		select {
-		case err := <-done:
-			t.Fatalf("the agent exited (%v) before the environment came online; its output:\n%s", err, log.String())
-		default:
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the environment was not online within 30s\nagent output:\n%s", log.String())
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	_, exited, log, stop := start("", t.TempDir())
+	awaitAgentOnline(t, srv, created.ID, exited, log, false)
 	// The server marks the session online once it has sent the welcome, and the
 	// agent logs its enrolment when the welcome arrives, so the line can trail the
 	// status by a moment on a loaded machine.
-	for !strings.Contains(log.String(), "enrolled with Bayplan") {
-		if time.Now().After(deadline) {
-			t.Fatalf("the agent's log does not say it enrolled:\n%s", log.String())
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	testsupport.Poll(t, 30*time.Second, "the agent's log to say it enrolled", func() (bool, string) { // testsupport: external, the agent process writing its log
+		return strings.Contains(log.String(), "enrolled with Bayplan"), log.String()
+	})
 	if !strings.Contains(log.String(), "allow_insecure=true") {
 		t.Errorf("the agent's start line does not show allow_insecure=true:\n%s", log.String())
 	}
@@ -261,7 +231,7 @@ func TestTheDevelopmentInstallCommandConnectsOverPlainWS(t *testing.T) {
 	stop()
 
 	// The same command without the agent's switch: the agent stops at start.
-	done2, log2, _ := start("BAYPLAN_AGENT_ALLOW_INSECURE", t.TempDir())
+	done2, _, log2, _ := start("BAYPLAN_AGENT_ALLOW_INSECURE", t.TempDir())
 	select {
 	case err := <-done2:
 		var ee *exec.ExitError
