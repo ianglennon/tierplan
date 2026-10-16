@@ -148,7 +148,7 @@ func (fi *fakeImages) handle(w http.ResponseWriter, r *http.Request) {
 		fi.mu.Unlock()
 	}()
 	if delay > 0 {
-		time.Sleep(delay)
+		time.Sleep(delay) //nolint:forbidigo // the fake registry answers slowly on purpose; the delay is the behaviour under test
 	}
 	fi.mu.Lock()
 	defer fi.mu.Unlock()
