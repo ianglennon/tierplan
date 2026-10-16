@@ -74,12 +74,6 @@ func (s *sleeper) sleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
-func (s *sleeper) delays() []time.Duration {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]time.Duration(nil), s.durs...)
-}
-
 // reset forgets the delays recorded so far.
 func (s *sleeper) reset() {
 	s.mu.Lock()
@@ -133,18 +127,6 @@ func awaitState(t *testing.T, mon *Monitor, id, what string, cond func(Status) b
 
 func stateIs(want State) func(Status) bool {
 	return func(s Status) bool { return s.State == want }
-}
-
-// eventually is removed by the end of plan 06.1-12 task 3.
-func eventually(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
 }
 
 type rig struct {

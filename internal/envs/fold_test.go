@@ -284,7 +284,7 @@ func TestAFoldedNodeReachedThroughTheSocketAndThroughAnAgentCountsOnceWithTheSoc
 	dup := f.connect(t, f.env, dockertest.FakeConfig{
 		Hostname: "local-1-agent", Containers: []dockertest.FakeContainer{fakeContainer("dup-c", "seen-through-the-agent")},
 	}, dupFacts)
-	eventually(t, "the second agent to be connected", func() bool { return connectedNow(f.srv.Hub, f.env.ID, dup.id) })
+	f.awaitSessions(t, dup.id)
 
 	in, err := f.svc.Input(ctx, f.env.ID, f.clk.Now())
 	if err != nil {

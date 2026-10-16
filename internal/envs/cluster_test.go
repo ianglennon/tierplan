@@ -23,6 +23,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/store/sqlc"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -121,9 +122,7 @@ func (r *tunRig) reconnect(t *testing.T, a *agentConn) {
 func (r *tunRig) kick(t *testing.T, a *agentConn) {
 	t.Helper()
 	r.srv.Hub.Kick(a.id, tunnel.DisconnectClosed)
-	eventually(t, "the session to be gone", func() bool {
-		return !connectedNow(r.srv.Hub, a.conn.Identity.EnvID, a.id)
-	})
+	r.awaitDisconnected(t, a.conn.Identity.EnvID, a.id)
 }
 
 func connectedNow(h *tunnel.Hub, envID, agentID string) bool {
@@ -301,8 +300,7 @@ func TestWhenTheLeaderDiesMidReadTheReadSucceedsOnAnotherManagerAndTheFailoverIs
 	}
 	// mgr-2 returns: the degradation clears, and nothing is said a second time.
 	s.reconnect(t, s.m[1])
-	eventually(t, "mgr-2 to be back and the environment online", func() bool {
-		e := s.health(t, s.env.ID)
+	s.awaitHealth(t, s.env.ID, "mgr-2 to be back and the environment online", func(e Environment) bool {
 		return e.Health.State == StateOnline
 	})
 	if err := s.c.Refresh(ctx, s.env.ID); err != nil {
@@ -535,11 +533,8 @@ func TestNoManagerConnectedIsNotAManager(t *testing.T) {
 	var e Environment
 	// Both sessions are known to the hub before the health is read, or the second
 	// worker still counts as missing.
-	eventually(t, "both workers to be connected", func() bool {
-		return connectedNow(r.srv.Hub, env.ID, workers[0].id) && connectedNow(r.srv.Hub, env.ID, workers[1].id)
-	})
-	eventually(t, "the workers to be probed", func() bool {
-		e = r.health(t, env.ID)
+	r.awaitSessions(t, workers[0].id, workers[1].id)
+	e = r.awaitHealth(t, env.ID, "the workers to be probed", func(e Environment) bool {
 		return e.Status.State == StateOnline
 	})
 	if e.Health.State != StateDegraded || e.Health.Reason != ReasonNotAManager || issueList(e.Health) != "not_a_manager@" {
@@ -768,15 +763,26 @@ func TestClusterReadRunsOnALocalSwarmManager(t *testing.T) {
 
 func TestRunRefreshesEnvironmentsOnAnIntervalAndStopsWhenItsContextEnds(t *testing.T) {
 	s := newSwarmRig(t, managerNodes(), nil)
-	c := NewClusters(s.svc, s.snaps, ClusterOptions{Now: s.clk.Now, Publisher: s.brk, Events: s.evs, Interval: 10 * time.Millisecond})
+	// The observer is shown every node list the background refresh has read, after the read has
+	// been cached, which is the signal that the refresh has done its work.
+	listed := make(chan struct{}, 1)
+	c := NewClusters(s.svc, s.snaps, ClusterOptions{
+		Now: s.clk.Now, Publisher: s.brk, Events: s.evs, Interval: 10 * time.Millisecond,
+		Reaper: nodeListSignal(func() {
+			select {
+			case listed <- struct{}{}:
+			default:
+			}
+		}),
+	})
 	s.svc.WithClusters(c)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { c.Run(ctx); close(done) }()
-	eventually(t, "the background refresh to read the cluster", func() bool {
-		st, ok := c.Cached(s.env.ID)
-		return ok && len(st.Read.Nodes) == 3
-	})
+	testsupport.Await(t, "the background refresh to read the cluster", listed)
+	if st, ok := c.Cached(s.env.ID); !ok || len(st.Read.Nodes) != 3 {
+		t.Errorf("after the background refresh the cached state is %+v (known %v), want the three nodes", st.Read.Nodes, ok)
+	}
 	cancel()
 	select {
 	case <-done:
@@ -903,7 +909,7 @@ func TestAWorkerRemovedFromTheSwarmLosesItsAgentAfterTwoReadsAndItsSessionIsClos
 		EngineID: "ENG:gone-1", Hostname: "gone-1", EngineReachable: true,
 		Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-gone-1", Control: false},
 	})
-	eventually(t, "the worker's session", func() bool { return s.srv.Hub.Session(w.id) != nil })
+	s.awaitSessions(t, w.id)
 	sess := s.srv.Hub.Session(w.id)
 	ctx := context.Background()
 
@@ -934,10 +940,15 @@ func TestAWorkerRemovedFromTheSwarmLosesItsAgentAfterTwoReadsAndItsSessionIsClos
 	if n := rowCount(t, s.tunRig, `SELECT COUNT(*) FROM agents WHERE env_id = ? AND status = 'active'`, s.env.ID); n != 3 {
 		t.Errorf("%d active agents left, want the three managers", n)
 	}
-	eventually(t, "the environment to be online without the removed worker", func() bool {
-		return s.health(t, s.env.ID).Health.State == StateOnline
+	s.awaitHealth(t, s.env.ID, "the environment to be online without the removed worker", func(e Environment) bool {
+		return e.Health.State == StateOnline
 	})
 }
+
+// nodeListSignal is a NodeObserver that only says a node list was read.
+type nodeListSignal func()
+
+func (f nodeListSignal) Observe(context.Context, string, dockerx.ClusterRead, string) { f() }
 
 // lateReaper lets a test build the reaper after the rig that needs it as an option.
 type lateReaper struct {
@@ -1215,7 +1226,9 @@ func dieIn(t *testing.T, hub *Hub, target string, now time.Time, id, name, conta
 		ID: id, Time: at, TimeNano: at.UnixNano(), Type: "container", Action: "die", ActorID: containerID, Name: name,
 		Attributes: map[string]string{"name": name, "exitCode": exit},
 	}
-	eventually(t, "the target's event feed to open", func() bool { return hub.Inject(target, ev) })
+	if err := hub.Await(testsupport.Context(t), func() bool { return hub.Inject(target, ev) }); err != nil {
+		t.Fatalf("the target's event feed never opened: %v", err)
+	}
 }
 
 // writesTo are the paths a daemon served that change a container.

@@ -107,18 +107,16 @@ func TestWriteOnNodeRefusesARevokedAndADisconnectedAgentWithoutTouchingDocker(t 
 	r.whenOnline(t, liveEnv.ID)
 
 	_ = gone.conn.WS.CloseNow()
-	eventually(t, "the first agent to be seen disconnected", func() bool {
-		in, err := r.svc.Input(ctx, goneEnv.ID, r.clk.Now())
-		if err != nil {
-			return false
+	r.awaitDisconnected(t, goneEnv.ID, gone.id)
+	in, err := r.svc.Input(ctx, goneEnv.ID, r.clk.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ag := range in.Agents {
+		if ag.ID == gone.id && ag.Connected {
+			t.Fatal("the registry still reads the first agent as connected after the hub reported it gone")
 		}
-		for _, ag := range in.Agents {
-			if ag.ID == gone.id {
-				return !ag.Connected
-			}
-		}
-		return false
-	})
+	}
 	if err := r.agg.WriteOnNode(ctx, goneEnv.ID, gone.id, stopWeb()); !errors.Is(err, ErrNodeUnavailable) {
 		t.Fatalf("disconnected agent: err = %v, want ErrNodeUnavailable", err)
 	}
@@ -456,10 +454,11 @@ func TestSwarmNodeTargetsLeavesOutAnAgentThatIsGone(t *testing.T) {
 	f := newFoldRig(t, nil)
 	ctx := context.Background()
 	_ = f.m.conn.WS.CloseNow()
-	eventually(t, "the manager's agent to be seen disconnected", func() bool {
-		got, err := f.agg.SwarmNodeTargets(ctx, f.env.ID)
-		return err == nil && len(got) == 0
-	})
+	f.awaitDisconnected(t, f.env.ID, f.m.id)
+	got, err := f.agg.SwarmNodeTargets(ctx, f.env.ID)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("SwarmNodeTargets = %v, %v after the manager's agent was seen disconnected, want none", nodeIDs(got), err)
+	}
 }
 
 func TestSwarmNodeTargetsOfAnUnknownEnvironmentIsNotFound(t *testing.T) {

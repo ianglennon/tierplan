@@ -22,6 +22,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
 	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -47,6 +48,14 @@ type tunRig struct {
 // writes. The server "started" at the clock's first reading. local is the daemon
 // the local socket environment would use; nil means none.
 func newTunRig(t *testing.T, local *dockertest.Fake) *tunRig {
+	t.Helper()
+	return newTunRigWatched(t, local, nil)
+}
+
+// newTunRigWatched is newTunRig with the hub's watchdog driven by the test: when ticks is
+// not nil it is the only thing that makes the hub look for silent sessions, and each value
+// sent on it is one look. With nil the watchdog runs on a short real ticker.
+func newTunRigWatched(t *testing.T, local *dockertest.Fake, ticks <-chan time.Time) *tunRig {
 	t.Helper()
 	log := slog.New(slog.DiscardHandler)
 	clk := tunneltest.NewClock(time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC))
@@ -77,7 +86,11 @@ func newTunRig(t *testing.T, local *dockertest.Fake) *tunRig {
 	r.srv = tunneltest.Start(t, tunneltest.Options{
 		Clock: clk, Store: st, Observer: svc, Notifier: r.brk,
 		Configure: func(h *tunnel.Hub) *tunnel.Hub {
-			return h.WithTiming(10*time.Second, 30*time.Second).WithWatchInterval(5 * time.Millisecond)
+			h = h.WithTiming(10*time.Second, 30*time.Second)
+			if ticks != nil {
+				return h.WithWatchTicks(ticks)
+			}
+			return h.WithWatchInterval(5 * time.Millisecond)
 		},
 	})
 	svc.WithAgents(r.srv.Hub).WithHealth(HealthConfig{ServerStart: r.start})
@@ -131,9 +144,7 @@ func (r *tunRig) connect(t *testing.T, env tunneltest.Environment, cfg dockertes
 // whatever it found. The deadline only guards against a hang.
 func awaitProbed(t *testing.T, mon *Monitor, key string) Status {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	st, err := mon.AwaitStatus(ctx, key, func(s Status) bool { return s.State != StateUnknown })
+	st, err := mon.AwaitStatus(testsupport.Context(t), key, func(s Status) bool { return s.State != StateUnknown })
 	if err != nil {
 		t.Fatalf("the first probe of %s never finished: last status %+v: %v", key, st, err)
 	}
@@ -149,15 +160,60 @@ func (r *tunRig) health(t *testing.T, envID string) Environment {
 	return e
 }
 
-// whenOnline waits until the environment is online and its target has probed.
+// whenOnline waits until the environment is online and a target of it has probed. It reads the
+// environment now and after every status change of the monitor, which is what an environment
+// reading online waits for (a test that holds a target's probe on purpose still gets its answer
+// from the targets that have probed).
 func (r *tunRig) whenOnline(t *testing.T, envID string) Environment {
 	t.Helper()
-	var e Environment
-	eventually(t, "the environment to be online with a probed target", func() bool {
-		e = r.health(t, envID)
+	return r.awaitHealth(t, envID, "the environment to be online with a probed target", func(e Environment) bool {
 		return e.Health.State == StateOnline && e.Status.State == StateOnline
 	})
+}
+
+// awaitHealth returns the environment as soon as cond holds for it. It reads the environment
+// now and after every start, probe result and stop the monitor reports; what an environment's
+// health is made of beyond that (the hub's sessions, the clock) is settled by the caller before
+// it asks, as whenOnline does with the first probe of each connected agent.
+func (r *tunRig) awaitHealth(t *testing.T, envID, what string, cond func(Environment) bool) Environment {
+	t.Helper()
+	var e Environment
+	if _, err := r.mon.AwaitStatus(testsupport.Context(t), envID, func(Status) bool {
+		e = r.health(t, envID)
+		return cond(e)
+	}); err != nil {
+		t.Fatalf("timed out waiting for %s: %v (health %+v, status %+v)", what, err, e.Health, e.Status)
+	}
 	return e
+}
+
+// awaitSessions waits until the hub holds a live session for each agent.
+func (r *tunRig) awaitSessions(t *testing.T, ids ...string) {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	for _, id := range ids {
+		if _, err := r.srv.Hub.AwaitSession(ctx, id, func(s *tunnel.Session) bool { return s != nil }); err != nil {
+			t.Fatalf("agent %s never registered a session: %v", id, err)
+		}
+	}
+}
+
+// awaitDisconnected waits until the hub reports the agent as not connected. The hub tells its
+// observer a session has ended after it has recorded the end in its views, so the observer's
+// log is the signal.
+func (r *tunRig) awaitDisconnected(t *testing.T, envID, agentID string) {
+	t.Helper()
+	r.srv.Events.Await(t, "agent "+agentID+" to be seen disconnected", func([]string, []*tunnel.Session) bool {
+		return !connectedNow(r.srv.Hub, envID, agentID)
+	})
+}
+
+// awaitHeartbeat waits until the server has read a heartbeat of the session.
+func awaitHeartbeat(t *testing.T, s *tunnel.Session) {
+	t.Helper()
+	if _, err := s.AwaitStatus(testsupport.Context(t), func(st tunnel.SessionStatus) bool { return !st.LastHeartbeat.IsZero() }); err != nil {
+		t.Fatalf("no heartbeat was read: %v", err)
+	}
 }
 
 func TestAStandaloneAgentEnvironmentIsPendingThenOnlineWithTheEngineFromItsTargetsProbe(t *testing.T) {
@@ -186,24 +242,31 @@ func TestAStandaloneAgentEnvironmentIsPendingThenOnlineWithTheEngineFromItsTarge
 }
 
 func TestAfterAHeartbeatTimeoutTheEnvironmentIsOnlineWhileConnectedThenOfflineWithReasonTimeoutSinceTheDisconnect(t *testing.T) {
-	r := newTunRig(t, nil)
+	// The watchdog looks only when this test says so, so "still online after 29 s of silence"
+	// is asserted after the watchdog has looked at the moved clock, not after a pause.
+	ticks := make(chan time.Time)
+	r := newTunRigWatched(t, nil, ticks)
 	r.pastGrace()
 	env := r.srv.NewEnvironment(t, "Remote")
 	a := r.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1"}, nil)
 	r.srv.Events.WaitLen(t, 1)
 	s := r.srv.Hub.Session(a.id)
-	eventually(t, "the heartbeat", func() bool { return !s.Status().LastHeartbeat.IsZero() })
+	awaitHeartbeat(t, s)
 	r.whenOnline(t, env.ID)
 
 	// Silent for 29 s: still connected, so still online.
 	r.clk.Advance(29 * time.Second)
-	time.Sleep(60 * time.Millisecond)
+	look(t, ticks, s)
+	if isDone(s) {
+		t.Fatal("the session was closed after 29 s of silence")
+	}
 	if e := r.health(t, env.ID); e.Health.State != StateOnline {
 		t.Fatalf("after 29 s of silence: %+v, want online", e.Health)
 	}
 	// Past the window the hub closes the session with the reason timeout.
 	r.clk.Advance(2 * time.Second)
 	closedAt := r.clk.Now()
+	look(t, ticks, s)
 	r.srv.Events.WaitLen(t, 2)
 	e := r.health(t, env.ID)
 	if e.Health.State != StateOffline || e.Health.Reason != ReasonTimeout || !e.Health.Since.Equal(closedAt) {
@@ -214,6 +277,34 @@ func TestAfterAHeartbeatTimeoutTheEnvironmentIsOnlineWhileConnectedThenOfflineWi
 	}
 }
 
+// isDone reports whether the session has ended.
+func isDone(s *tunnel.Session) bool {
+	select {
+	case <-s.Done():
+		return true
+	default:
+		return false
+	}
+}
+
+// look has the hub's watchdog look at the session twice. The channel is unbuffered, so a send
+// that completes means the watchdog took the tick and the second one completing means it
+// finished evaluating the first. It returns early when the session ends, which nothing takes
+// ticks for any more.
+func look(t *testing.T, ticks chan<- time.Time, s *tunnel.Session) {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	for range 2 {
+		select {
+		case ticks <- time.Time{}:
+		case <-s.Done():
+			return
+		case <-ctx.Done():
+			t.Fatal("the watchdog took no tick")
+		}
+	}
+}
+
 func TestADropShorterThanTheWindowChangesNothingAndALongerOneIsOffline(t *testing.T) {
 	r := newTunRig(t, nil)
 	r.pastGrace()
@@ -221,7 +312,7 @@ func TestADropShorterThanTheWindowChangesNothingAndALongerOneIsOffline(t *testin
 	a := r.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1"}, nil)
 	r.srv.Events.WaitLen(t, 1)
 	s := r.srv.Hub.Session(a.id)
-	eventually(t, "the heartbeat", func() bool { return !s.Status().LastHeartbeat.IsZero() })
+	awaitHeartbeat(t, s)
 	r.whenOnline(t, env.ID)
 	beat := s.Status().LastHeartbeat
 
@@ -408,14 +499,15 @@ func TestTheAggregatorServesTheEventsOfTheAgentsTarget(t *testing.T) {
 			t.Fatal("the event published on the agent's daemon never arrived")
 		}
 	}
-	eventually(t, "the event in the recent list", func() bool {
-		for _, ev := range r.agg.Recent(context.Background(), env.ID, 10) {
-			if ev.Action == "start" && ev.Name == "web" {
-				return true
-			}
-		}
-		return false
-	})
+	// The merged feed buffers a row before it hands it to a subscriber, so the row the
+	// subscription delivered is in the recent list already.
+	inRecent := false
+	for _, ev := range r.agg.Recent(context.Background(), env.ID, 10) {
+		inRecent = inRecent || (ev.Action == "start" && ev.Name == "web")
+	}
+	if !inRecent {
+		t.Error("the event the subscription delivered is not in the recent list")
+	}
 }
 
 func TestARetryNowOnAnAgentEnvironmentProbesItsTargets(t *testing.T) {
@@ -437,7 +529,9 @@ func TestARetryNowOnAnAgentEnvironmentProbesItsTargets(t *testing.T) {
 	if _, err := r.svc.Reconnect(context.Background(), env.ID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "a second probe of the agent's daemon", func() bool { return pings() > before })
+	if err := a.fake.Await(testsupport.Context(t), func() bool { return pings() > before }); err != nil {
+		t.Fatalf("the agent's daemon was not probed a second time: %v", err)
+	}
 }
 
 func TestRemovingAnAgentEnvironmentMakesTheHubForgetItsAgents(t *testing.T) {
@@ -488,13 +582,9 @@ func TestTwentyGoroutinesConnectingDisconnectingAndReadingStatusPassTheRaceDetec
 				// The hub registers a session just after it sends the welcome. Closing
 				// the connection before that would race two handshakes of one agent,
 				// which is a client behaviour this test is not about.
-				deadline := time.Now().Add(5 * time.Second)
-				for s := r.srv.Hub.Session(id); s == nil || s == prev; s = r.srv.Hub.Session(id) {
-					if time.Now().After(deadline) {
-						t.Errorf("the new session of %s was never registered", id)
-						return
-					}
-					time.Sleep(time.Millisecond)
+				if _, err := r.srv.Hub.AwaitSession(testsupport.Context(t), id, func(s *tunnel.Session) bool { return s != nil && s != prev }); err != nil {
+					t.Errorf("the new session of %s was never registered: %v", id, err)
+					return
 				}
 			}
 		})
@@ -516,22 +606,27 @@ func TestTwentyGoroutinesConnectingDisconnectingAndReadingStatusPassTheRaceDetec
 					}
 					return
 				}
-				time.Sleep(time.Millisecond)
+				time.Sleep(time.Millisecond) //nolint:forbidigo // paces the reader goroutines so they churn alongside the reconnects instead of starving them; the load is the point
 			}
 		})
 	}
 	reconnecting.Wait()
 	cancel()
 	readers.Wait()
-	eventually(t, "every agent connected again", func() bool {
-		live := 0
-		for _, v := range r.srv.Hub.Views(env.ID) {
-			if v.Connected {
-				live++
-			}
+	ids := make([]string, agents)
+	for i, c := range conns {
+		ids[i] = c.id
+	}
+	r.awaitSessions(t, ids...)
+	live := 0
+	for _, v := range r.srv.Hub.Views(env.ID) {
+		if v.Connected {
+			live++
 		}
-		return live == agents
-	})
+	}
+	if live != agents {
+		t.Fatalf("%d agents connected again, want %d", live, agents)
+	}
 
 	if e := r.health(t, env.ID); e.Health.State != StateOnline && e.Health.State != StateDegraded {
 		t.Fatalf("health = %+v after the agents came back", e.Health)

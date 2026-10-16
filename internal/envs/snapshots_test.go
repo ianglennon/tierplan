@@ -63,7 +63,7 @@ func newSnapRig(t *testing.T, cfg dockertest.FakeConfig, wantState State) *snapR
 	if err := mon.Start(context.Background(), "env1", fake); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	eventually(t, "the first probe", func() bool { return mon.Status("env1").State == wantState })
+	awaitState(t, mon, "env1", "the first probe", stateIs(wantState))
 	return &snapRig{mon: mon, fake: fake}
 }
 
@@ -200,7 +200,7 @@ func TestSnapshotsAreKeptPerEnvironment(t *testing.T) {
 	if err := r.mon.Start(context.Background(), "env2", other); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the second probe", func() bool { return r.mon.Status("env2").State == StateOnline })
+	awaitState(t, r.mon, "env2", "the second probe", stateIs(StateOnline))
 	s := NewSnapshots(r.mon, 5*time.Second, newStepClock().now)
 
 	a, _, err := s.Get(context.Background(), "env1")
@@ -221,7 +221,7 @@ func TestSnapshotsReturnTheMonitorsOfflineAndUnsupportedErrorsUntouched(t *testi
 		r := newSnapRig(t, oneContainer(), StateOnline)
 		r.fake.Stop()
 		r.mon.Kick("env1")
-		eventually(t, "offline", func() bool { return r.mon.Status("env1").State == StateOffline })
+		awaitState(t, r.mon, "env1", "offline", stateIs(StateOffline))
 		_, st, err := NewSnapshots(r.mon, time.Second, nil).Get(context.Background(), "env1")
 		if !errors.Is(err, ErrOffline) || st.State != StateOffline {
 			t.Errorf("err %v, state %q, want ErrOffline and offline", err, st.State)
@@ -275,9 +275,7 @@ func TestAFailedReadAsksTheMonitorToProbeNow(t *testing.T) {
 	if err == nil || errors.Is(err, ErrOffline) {
 		t.Fatalf("Get = %v, want a read failure that is not yet ErrOffline", err)
 	}
-	eventually(t, "the kicked probe to find the engine offline", func() bool {
-		return r.mon.Status("env1").State == StateOffline
-	})
+	awaitState(t, r.mon, "env1", "the kicked probe to find the engine offline", stateIs(StateOffline))
 }
 
 func TestGetRightAfterStartWaitsForTheFirstProbeInsteadOfReportingOffline(t *testing.T) {
