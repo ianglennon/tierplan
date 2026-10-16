@@ -550,6 +550,107 @@ func TestRollbackToASpecWithASecretTheServiceDoesNotUseNeedsTheRevealPermission(
 	}
 }
 
+// TestRollbackJudgesSecretsByTheirEngineIDs: a secret reference is the engine's secret ID, and a name
+// in a spec is only a label that must agree with it (review finding CR-01, D-13 as amended).
+func TestRollbackJudgesSecretsByTheirEngineIDs(t *testing.T) {
+	twoSecrets := func(cfg *dockertest.FakeConfig) {
+		cfg.Secrets = []dockertest.FakeSecret{{ID: "sec-db", Name: "db-pass"}, {ID: "sec-victim", Name: "victim-secret"}}
+	}
+	ref := func(id, name string) *swarm.SecretReference {
+		return &swarm.SecretReference{
+			SecretID: id, SecretName: name,
+			File: &swarm.SecretReferenceFileTarget{Name: "/run/secrets/" + name, UID: "0", GID: "0", Mode: 0o444},
+		}
+	}
+	// service is the privileged-rollback fixture whose current spec mounts cur and whose previous mounts prev.
+	service := func(cur, prev *swarm.SecretReference) dockertest.FakeService {
+		fs := privilegedRollback(func(s *swarm.ServiceSpec) { s.TaskTemplate.ContainerSpec.Secrets = []*swarm.SecretReference{prev} })
+		fs.Spec.TaskTemplate.ContainerSpec.Secrets = []*swarm.SecretReference{cur}
+		return fs
+	}
+	rollback := func(c *roleCaller) *httptest.ResponseRecorder {
+		return c.do(http.MethodPost, "services/svc-priv/rollback", `{"version":9}`)
+	}
+	problemOf := func(t *testing.T, rec *httptest.ResponseRecorder) actionProblem {
+		t.Helper()
+		var prob actionProblem
+		if err := json.Unmarshal(rec.Body.Bytes(), &prob); err != nil {
+			t.Fatal(err)
+		}
+		return prob
+	}
+
+	t.Run("a: a previous spec that mounts a used ID under another secret's name is refused for everyone", func(t *testing.T) {
+		for _, role := range []string{"operator", "admin"} {
+			f, e := actionsEnv(t, twoSecrets, service(ref("sec-db", "db-pass"), ref("sec-db", "victim-secret")))
+			c := f.caller(t, e, role+"-1", role)
+			rec := rollback(c)
+			if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "spec_invalid" {
+				t.Fatalf("rollback by %s: %d %s, want 422 spec_invalid", role, rec.Code, rec.Body)
+			}
+			msg := problemOf(t, rec).at("spec")
+			if !strings.Contains(msg, "TaskTemplate.ContainerSpec.Secrets[0]") || !strings.Contains(msg, "victim-secret") {
+				t.Errorf("%s: the spec entry = %q, want the path and victim-secret named", role, msg)
+			}
+			if ups, w := f.fake.ServiceUpdates(), f.fake.Writes(); len(ups) != 0 || len(w) != 0 {
+				t.Fatalf("%s: updates = %v, writes = %v, a refused rollback sends nothing", role, ups, w)
+			}
+			rows := f.serviceAudits(t)
+			if len(rows) != 1 || rows[0].Action != audit.ActionServiceRolledBack || rows[0].Result != string(audit.ResultFailure) ||
+				rows[0].Reason != "spec_invalid" || rows[0].Details["code"] != "spec_invalid" {
+				t.Fatalf("%s: audit rows = %+v, want one service.rolled_back failure with reason spec_invalid", role, rows)
+			}
+		}
+	})
+
+	t.Run("b: a current spec with a misleading name does not let an operator restore the secret it names", func(t *testing.T) {
+		f, e := actionsEnv(t, twoSecrets, service(ref("sec-db", "victim-secret"), ref("sec-victim", "victim-secret")))
+		op := f.caller(t, e, "operator-1", "operator")
+		rec := rollback(op)
+		if rec.Code != http.StatusForbidden || problemType(t, rec) != "secret_reveal_required" {
+			t.Fatalf("rollback by an operator: %d %s, want 403 secret_reveal_required", rec.Code, rec.Body)
+		}
+		prob := problemOf(t, rec)
+		if len(prob.Errors) != 1 || prob.at("TaskTemplate.ContainerSpec.Secrets[0]") != "victim-secret" {
+			t.Errorf("errors = %+v, want exactly Secrets[0]: victim-secret", prob.Errors)
+		}
+		if ups, w := f.fake.ServiceUpdates(), f.fake.Writes(); len(ups) != 0 || len(w) != 0 {
+			t.Fatalf("updates = %v, writes = %v, a refused rollback sends nothing", ups, w)
+		}
+
+		f, e = actionsEnv(t, twoSecrets, service(ref("sec-db", "victim-secret"), ref("sec-victim", "victim-secret")))
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		if rec := rollback(admin); rec.Code != http.StatusAccepted {
+			t.Fatalf("rollback by an env admin: %d %s, want 202", rec.Code, rec.Body)
+		}
+	})
+
+	t.Run("c: scale and force update re-send the stored spec with its references unchanged", func(t *testing.T) {
+		stored := ref("sec-db", "victim-secret")
+		f, e := actionsEnv(t, twoSecrets, service(stored, ref("sec-db", "db-pass")))
+		op := f.caller(t, e, "operator-1", "operator")
+		sent := func(what string) {
+			t.Helper()
+			ups := f.fake.ServiceUpdates()
+			if len(ups) == 0 {
+				t.Fatalf("%s: no update was sent", what)
+			}
+			refs := ups[len(ups)-1].Spec.TaskTemplate.ContainerSpec.Secrets
+			if len(refs) != 1 || refs[0].SecretID != "sec-db" || refs[0].SecretName != "victim-secret" {
+				t.Errorf("%s: references sent = %+v, want the stored {sec-db, victim-secret} unchanged", what, refs)
+			}
+		}
+		if rec := op.do(http.MethodPost, "services/svc-priv/force-update", `{}`); rec.Code != http.StatusOK {
+			t.Fatalf("force update by an operator: %d %s", rec.Code, rec.Body)
+		}
+		sent("force update")
+		if rec := op.do(http.MethodPost, "services/scale", `{"targets":[{"serviceId":"svc-priv","replicas":3}]}`); rec.Code != http.StatusOK {
+			t.Fatalf("scale by an operator: %d %s", rec.Code, rec.Body)
+		}
+		sent("scale")
+	})
+}
+
 func TestRollbackByAnOperatorToAPreviousSpecWithNoFindingIsAccepted(t *testing.T) {
 	cases := []struct {
 		name string
