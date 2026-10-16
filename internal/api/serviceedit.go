@@ -583,12 +583,30 @@ func serviceWriteProblem(d ServicesDeps, envID, failed string, err error) (strin
 	case errors.Is(err, swarmops.ErrNothingToApply):
 		return problem(http.StatusUnprocessableEntity, problemNothingToApply, "There's nothing to apply.")
 	case errors.As(err, &missing):
-		errs := make([]*huma.ErrorDetail, 0, len(missing.Missing.Networks))
-		for _, n := range missing.Missing.Networks {
-			errs = append(errs, &huma.ErrorDetail{Location: "networks", Message: n})
+		// One entry per missing object, located by its kind, and one part of the sentence per kind that
+		// has any: a kind with nothing missing is not named.
+		var (
+			errs  []*huma.ErrorDetail
+			parts []string
+		)
+		for _, k := range []struct {
+			kind  string
+			names []string
+		}{
+			{"networks", missing.Missing.Networks},
+			{"secrets", missing.Missing.Secrets},
+			{"configs", missing.Missing.Configs},
+		} {
+			if len(k.names) == 0 {
+				continue
+			}
+			for _, n := range k.names {
+				errs = append(errs, &huma.ErrorDetail{Location: k.kind, Message: n})
+			}
+			parts = append(parts, k.kind+" "+strings.Join(k.names, ", "))
 		}
 		return problem(http.StatusUnprocessableEntity, problemObjectsMissing,
-			"The spec names networks that don't exist: "+strings.Join(missing.Missing.Networks, ", ")+". Create them first.", errs...)
+			"The spec names objects that don't exist: "+strings.Join(parts, "; ")+". Create them first.", errs...)
 	case errors.As(err, &refused):
 		if refused.Reason == rbac.ReasonServiceSpecUnreadable {
 			return problem(http.StatusUnprocessableEntity, problemSpecInvalid, clipDetail(refused.Message))
