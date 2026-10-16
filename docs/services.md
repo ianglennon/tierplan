@@ -131,11 +131,16 @@ Bayplan treats that in two places, and the second one is the host owner's:
   host access. The check covers the whole spec, not only the fields the form shows: bind mounts
   outside `/srv`, `/mnt` and `/media` (and the Docker socket in particular), volumes on a host path,
   added capabilities, SELinux, seccomp or AppArmor settings, and the host network. The review step
-  names what needs Admin and Apply stays off.
+  names what needs Admin and Apply stays off. A rollback is judged the same way, on the earlier
+  version it would restore: rolling back to an earlier version with host access needs Admin, and an
+  Operator is told which settings.
 - **On the host**, the agent of each manager refuses such a spec whatever Bayplan says, unless the
   host's owner set `BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true` on the agent. Without it, an
   Admin who writes such a spec gets a refusal that Bayplan words as "the manager's agent refused host
-  access" (`agent_host_policy`).
+  access" (`agent_host_policy`). The same goes for a service mount whose volume has a driver other
+  than `local`, for a cluster volume, and for a named volume that already exists on the manager with
+  host-path options or a plugin driver: they are refused without the opt-in. A volume made with
+  host-path options is refused at creation (see [containers.md](containers.md)).
 
 **Without that opt-in, Bayplan cannot change a service that already has host access. That includes
 scale, force update and roll back.** Every one of them sends the service's whole spec back to Swarm, so
@@ -155,9 +160,10 @@ docker service update --env-add BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true bay
 Think first about what this allows. With the opt-in, a compromised Bayplan can run a privileged
 service on every node of the swarm, which is root on every node. [agent.md](agent.md#service-specs-and-host-access)
 lists exactly what the agent refuses, and [threat-model.md](threat-model.md) explains the risk.
-The variable only matters on managers: a worker's agent forwards no service write at all. A host that is
-read-only (`BAYPLAN_AGENT_READ_ONLY=true`) refuses every service change before any of this is
-looked at.
+On managers it covers service writes, including the volumes they name; on every agent-managed host it
+also covers volume creates. The server's own host is reached through the local socket and has no agent,
+so none of this is checked there. A host that is read-only (`BAYPLAN_AGENT_READ_ONLY=true`) refuses
+every service change before any of this is looked at.
 
 ## The editor
 
@@ -180,15 +186,22 @@ looked at.
   spec. Type over it to replace it, or remove the entry to delete it. `<hidden>` cannot itself be a
   value, and a hidden value that points at nothing is refused by name. The same goes for the review:
   a replaced hidden value reads "Hidden value replaced" and prints neither the old nor the new value.
-- **Review changes.** Shows a field-by-field list of the current spec against the new one, the image
-  the tag resolves to (with its digest and the credential that will be used), anything that
-  needs Admin, and the manager's own notes. **Apply changes** stays off, with the reason, when
-  there is nothing to apply, when the spec needs a permission you do not hold, or when something it
-  names does not exist yet and has no value.
-- **Apply changes.** Runs the steps in order (look up the image, create the objects the spec needs,
-  update the service) and then shows the rolling update live until **Update complete**. The edit is
-  sent with the version of the service you started from. If someone else changed the service
-  meanwhile, nothing is written and the page offers **Reload service**.
+- **Secrets.** Adding a secret the service does not already use, or rolling back to a version that
+  uses one, needs the reveal secrets permission (an Admin has it; an Operator only when granted).
+  Without it the secret picker offers only the secrets the service uses, and Bayplan refuses the
+  change with `secret_reveal_required`. Keeping, removing or re-targeting a secret the service
+  already uses stays Operator. Someone who can change a service can still read what that service
+  holds (see residual risk 36 in [threat-model.md](threat-model.md)).
+- **Review changes.** The editor is locked while Bayplan checks the change. Shows a field-by-field
+  list of the current spec against the new one, the image the tag resolves to (with its digest and
+  the credential that will be used), anything that needs Admin, and the manager's own notes.
+  **Apply changes** stays off, with the reason, when there is nothing to apply, when the spec needs
+  a permission you do not hold, or when something it names does not exist yet and has no value.
+- **Apply changes.** Sends exactly what the review showed. Runs the steps in order (look up the
+  image, create the objects the spec needs, update the service) and then shows the rolling update
+  live until **Update complete**. The edit is sent with the version of the service you started from.
+  If someone else changed the service meanwhile, nothing is written and the page offers
+  **Reload service**.
 - **Auto-rollback.** "Roll back automatically if an update fails" is a checkbox in two places that
   are one setting: the Update policy card and the Review step. It is saved on the service
   (`UpdateConfig.FailureAction`): ticked, a failed update rolls back by itself; unticked, a failed
