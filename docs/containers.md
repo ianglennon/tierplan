@@ -336,6 +336,15 @@ limit: the process the person left running keeps running.
   the options that will be sent. On a swarm you pick the node, because volumes live on one
   node. Bayplan checks the name on that node first, because Docker silently reuses an
   existing volume of the same name.
+- **On every agent-managed host** (a swarm node or a standalone host), the agent refuses a
+  Host folder outside `/srv`, `/mnt` and `/media`, a local volume that mounts a device, and any
+  driver other than `local`, unless the host's owner set `BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true`
+  on that host's agent. A service could otherwise mount the volume by name and reach the host.
+  This is a change from earlier versions, where such a Host folder was created on any host.
+  Bayplan shows the refusal in the Create volume dialog, with the folders that are allowed and
+  the setting that lifts it. The server's own host is reached through the local socket, has no
+  agent and no such check. See
+  [the agent's settings](agent.md#settings-on-the-host-read-only-self-update-and-privileged-services).
 - **The SMB password is stored in the volume's options.** Docker keeps the share's password
   among the volume's driver options, in clear. Anyone who can inspect the volume on the host
   can read it. Bayplan writes no password into its audit log, and hides the values of a
@@ -343,8 +352,8 @@ limit: the process the person left running keeps running.
   Inspect JSON. If you can, use a credentials file instead of a password.
 - **A Host folder volume points at a directory on the host**, which must already exist. It
   is a bind of that path. Only an Admin may create one, and the options are in the audit log.
-  Bayplan cannot create containers, so it cannot mount it, but anyone who starts a container
-  with that volume sees the folder. See [agent.md](agent.md#what-the-agent-forwards).
+  A service can mount it by name, and so can a container someone else starts, and either sees
+  the folder. See [agent.md](agent.md#what-the-agent-forwards).
 - **In use.** A volume is in use while any container mounts it, a **stopped container
   included**, or while a swarm service's spec mounts it, even at zero replicas. A bind mount
   that happens to be spelled like the volume is not a use. Delete is disabled, with the users

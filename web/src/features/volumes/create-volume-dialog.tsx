@@ -252,6 +252,8 @@ function CreateVolumeForm({ envId, swarm, networks, volumes, onClose }: FormProp
         return null;
       case "agent_policy_denied":
         return { message: "", agentPolicy: true };
+      case "agent_host_policy":
+        return { message: t("volumes.errors.hostPolicy"), agentPolicy: false };
       case "host_read_only":
         return { message: t("volumes.errors.hostReadOnly"), agentPolicy: false };
       case "node_unavailable":
