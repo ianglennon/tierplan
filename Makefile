@@ -56,7 +56,7 @@ tidy-check:
 test:
 	@set -e; for m in $(GO_MODULES); do \
 	  echo "test: $$m"; \
-	  go -C $$m test ./... -race -count=1 -timeout 20m; \
+	  go -C $$m test ./... -race -count=1 -shuffle=on -timeout 20m; \
 	done
 	pnpm -C web exec vitest run
 

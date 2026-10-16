@@ -318,6 +318,46 @@ expect fail "timings-no-file" scripts/test-timings.sh
 expect_out "timings-no-file prints usage" "usage: scripts/test-timings.sh"
 expect fail "timings-unknown-flag" scripts/test-timings.sh --bogus scripts/testdata/timings/go-test.json
 
+# --- Load harness (D-01): a command runs beside N busy loops that never outlive it ---
+expect fail "with-load-bad-count" scripts/with-load.sh x -- true
+expect_out "with-load-bad-count says so" "N must be a positive integer or auto"
+expect fail "with-load-zero" scripts/with-load.sh 0 -- true
+expect fail "with-load-no-separator" scripts/with-load.sh 2 true
+expect_out "with-load-no-separator says so" "N must be a positive integer or auto"
+expect fail "with-load-passes-failure-on" scripts/with-load.sh 2 -- false
+expect pass "with-load-runs-command" scripts/with-load.sh 2 -- true
+expect_out "with-load-runs-command names the loops" "with-load: 2 busy loops (pids "
+# LAST_OUT holds stdout and stderr; every loop the run started must be gone.
+load_pids="$(sed -n 's/^with-load: [0-9]* busy loops (pids \([0-9 ]*\)).*/\1/p' <<<"${LAST_OUT}")"
+if [ -z "${load_pids}" ]; then
+  echo "SCRIPT TEST FAIL: with-load-cleans-up (no loop pids found in the output)"
+  failures=$((failures + 1))
+fi
+for pid in ${load_pids}; do
+  if kill -0 "${pid}" 2>/dev/null; then
+    echo "SCRIPT TEST FAIL: with-load-cleans-up (loop ${pid} survived)"
+    failures=$((failures + 1))
+  fi
+done
+# A signal runs the same cleanup: TERM the harness while its command still runs.
+load_err="${scratch}/with-load.err"
+scripts/with-load.sh 2 -- sleep 30 2>"${load_err}" &
+load_pid=$!
+for _ in $(seq 1 50); do
+  grep -q 'busy loops' "${load_err}" 2>/dev/null && break
+  sleep 0.1
+done
+load_pids="$(sed -n 's/^with-load: [0-9]* busy loops (pids \([0-9 ]*\)).*/\1/p' "${load_err}")"
+kill -TERM "${load_pid}" 2>/dev/null
+wait "${load_pid}" 2>/dev/null
+for pid in ${load_pids}; do
+  if kill -0 "${pid}" 2>/dev/null; then
+    echo "SCRIPT TEST FAIL: with-load-cleans-up-on-signal (loop ${pid} survived)"
+    failures=$((failures + 1))
+    kill "${pid}" 2>/dev/null
+  fi
+done
+
 if [ "${failures}" -ne 0 ]; then
   echo "${failures} script test(s) failed"
   exit 1
