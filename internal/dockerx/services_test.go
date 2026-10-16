@@ -16,6 +16,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 func serviceFake(t *testing.T) (*dockerx.Client, *dockertest.Fake) {
@@ -128,9 +129,8 @@ func TestServiceScaleMapsTheOutOfSequenceAnswerAndSendsNoSecondUpdate(t *testing
 	}()
 	// The update is on its way (the fake holds it for WriteDelay); somebody else changes
 	// the service now, so the version the update carries is no longer current.
-	deadline := time.Now().Add(5 * time.Second)
-	for len(fake.Writes()) == 0 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
+	if err := fake.Await(testsupport.Context(t), func() bool { return len(fake.Writes()) > 0 }); err != nil {
+		t.Fatalf("the update never reached the daemon: %v", err)
 	}
 	fake.BumpService("web-id")
 	err := <-done

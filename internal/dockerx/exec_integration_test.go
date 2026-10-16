@@ -23,31 +23,45 @@ import (
 )
 
 // screen collects what a session prints, so a test can wait for a piece of text
-// without sleeping for a fixed time.
+// without sleeping for a fixed time. Every write wakes the waiters, and the end of
+// the stream does too, so a wait is a signal and never a poll.
 type screen struct {
-	mu   sync.Mutex
-	buf  bytes.Buffer
-	done chan struct{}
+	mu      sync.Mutex
+	buf     bytes.Buffer
+	changed chan struct{} // closed and replaced on every write and at the end
+	ended   bool
+	done    chan struct{} // closed when the stream ends
 }
 
 func watch(r io.Reader) *screen {
-	s := &screen{done: make(chan struct{})}
+	s := &screen{changed: make(chan struct{}), done: make(chan struct{})}
 	go func() {
-		defer close(s.done)
 		b := make([]byte, 4096)
 		for {
 			n, err := r.Read(b)
 			if n > 0 {
 				s.mu.Lock()
 				s.buf.Write(b[:n])
+				s.broadcastLocked()
 				s.mu.Unlock()
 			}
 			if err != nil {
+				s.mu.Lock()
+				s.ended = true
+				s.broadcastLocked()
+				s.mu.Unlock()
+				close(s.done)
 				return
 			}
 		}
 	}()
 	return s
+}
+
+// broadcastLocked wakes every waiter. The caller holds s.mu.
+func (s *screen) broadcastLocked() {
+	close(s.changed)
+	s.changed = make(chan struct{})
 }
 
 func (s *screen) text() string {
@@ -56,24 +70,28 @@ func (s *screen) text() string {
 	return s.buf.String()
 }
 
-// waitFor polls until the output contains want.
-func (s *screen) waitFor(t *testing.T, want string, within time.Duration) {
+// awaitOutput blocks until the output contains want, failing after within with what was
+// wanted and what arrived. It wakes on every write the session makes.
+func (s *screen) awaitOutput(t *testing.T, want string, within time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(within)
-	for time.Now().Before(deadline) {
-		if strings.Contains(s.text(), want) {
+	ctx, cancel := context.WithTimeout(context.Background(), within)
+	defer cancel()
+	for {
+		s.mu.Lock()
+		got, ended, changed := s.buf.String(), s.ended, s.changed
+		s.mu.Unlock()
+		if strings.Contains(got, want) {
 			return
 		}
+		if ended {
+			t.Fatalf("the stream ended before %q appeared; output: %q", want, got)
+		}
 		select {
-		case <-s.done:
-			if strings.Contains(s.text(), want) {
-				return
-			}
-			t.Fatalf("the stream ended before %q appeared; output: %q", want, s.text())
-		case <-time.After(20 * time.Millisecond):
+		case <-changed:
+		case <-ctx.Done():
+			t.Fatalf("%q did not appear within %s; output: %q", want, within, s.text())
 		}
 	}
-	t.Fatalf("%q did not appear within %s; output: %q", want, within, s.text())
 }
 
 func pullImage(t *testing.T, ctx context.Context, raw *client.Client, ref string) {
@@ -139,12 +157,12 @@ func TestIntegrationExecSession(t *testing.T) {
 		if _, err := s.Write([]byte("echo hello-$((1+2))-bayplan\n")); err != nil {
 			t.Fatalf("Write: %v", err)
 		}
-		out.waitFor(t, "hello-3-bayplan", 20*time.Second)
+		out.awaitOutput(t, "hello-3-bayplan", 20*time.Second)
 
 		if _, err := s.Write([]byte("stty size\n")); err != nil {
 			t.Fatal(err)
 		}
-		out.waitFor(t, "24 80", 20*time.Second)
+		out.awaitOutput(t, "24 80", 20*time.Second)
 
 		if err := s.Resize(ctx, 100, 30); err != nil {
 			t.Fatalf("Resize: %v", err)
@@ -152,7 +170,7 @@ func TestIntegrationExecSession(t *testing.T) {
 		if _, err := s.Write([]byte("stty size\n")); err != nil {
 			t.Fatal(err)
 		}
-		out.waitFor(t, "30 100", 20*time.Second)
+		out.awaitOutput(t, "30 100", 20*time.Second)
 
 		if st, err := s.Inspect(ctx); err != nil || !st.Running {
 			t.Fatalf("Inspect while open = %+v, %v; want running", st, err)

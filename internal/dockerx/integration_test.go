@@ -22,6 +22,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/engine"
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // Real-engine checks (D-28). CI runs this against docker:24-dind through
@@ -317,11 +318,8 @@ func TestIntegrationEventsHubSeesAContainerStart(t *testing.T) {
 	if err := mon.Start(ctx, env, dockertest.TCPTransportFor(host)); err != nil {
 		t.Fatalf("start the monitor: %v", err)
 	}
-	for deadline := time.Now().Add(30 * time.Second); mon.Status(env).State != envs.StateOnline; {
-		if time.Now().After(deadline) {
-			t.Fatalf("the environment never came online: %+v", mon.Status(env))
-		}
-		time.Sleep(50 * time.Millisecond)
+	if _, err := mon.AwaitStatus(testsupport.Context(t), env, func(st envs.Status) bool { return st.State == envs.StateOnline }); err != nil {
+		t.Fatalf("the environment never came online: %v; last status %+v", err, mon.Status(env))
 	}
 
 	backlog, ch, stop := hub.Subscribe(ctx, env)
@@ -510,22 +508,20 @@ func TestContainerHealthInList(t *testing.T) {
 		t.Fatalf("Probe: %v", err)
 	}
 
-	var last string
-	deadline := time.Now().Add(90 * time.Second)
-	for time.Now().Before(deadline) {
+	testsupport.Poll(t, 90*time.Second, "the failing container to read unhealthy in the list", func() (bool, string) {
 		snap, err := cli.Snapshot(ctx, false)
 		if err != nil {
 			t.Fatalf("Snapshot: %v", err)
 		}
+		var seen string
 		for _, c := range snap.Containers {
 			if c.Name == name {
-				last = c.Health + " (" + c.Status + ")"
+				seen = c.Health + " (" + c.Status + ")"
 				if c.Health == dockerx.HealthUnhealthy {
-					return
+					return true, seen
 				}
 			}
 		}
-		time.Sleep(time.Second)
-	}
-	t.Fatalf("the failing container never read unhealthy in the list; last seen %q", last)
+		return false, seen
+	})
 }
