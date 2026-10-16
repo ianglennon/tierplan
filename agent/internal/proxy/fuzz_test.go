@@ -695,6 +695,35 @@ func FuzzBody(f *testing.F) {
 			if found := escalations(context.Background(), spec, nil); len(found) > 0 {
 				t.Fatalf("a service spec with host access %v was forwarded: %s", found, out)
 			}
+			// A plugin or cluster mount cannot be judged, and with no lookup a named
+			// volume cannot be shown to be free of host access, so none is forwarded.
+			if found := pluginVolumes(spec); len(found) > 0 {
+				t.Fatalf("a service spec with the plugin volume mounts %v was forwarded: %.200s", found, out)
+			}
+			if found := namedVolumes(context.Background(), spec, nil); len(found) > 0 {
+				t.Fatalf("a service spec with the named volume mounts %v was forwarded: %.200s", found, out)
+			}
+		}
+		if k == BodyServiceSpec {
+			// A named volume the engine does not have is created from the mount's own
+			// options, so it is forwarded, and only on inline options that pass.
+			absent := bodyEnv{volumes: func(context.Context, string) (string, map[string]string, bool, error) {
+				return "", nil, false, nil
+			}}
+			again, err := validateBody(k, strings.NewReader(body), absent)
+			if err != nil {
+				return
+			}
+			var spec swarm.ServiceSpec
+			if err := json.Unmarshal(again, &spec); err != nil {
+				t.Fatalf("the forwarded service spec does not decode: %v: %.200s", err, again)
+			}
+			if found := escalations(context.Background(), spec, nil); len(found) > 0 {
+				t.Fatalf("a service spec with host access %v was forwarded for an absent volume: %.200s", found, again)
+			}
+			if found := pluginVolumes(spec); len(found) > 0 {
+				t.Fatalf("a service spec with the plugin volume mounts %v was forwarded for an absent volume: %.200s", found, again)
+			}
 		}
 	})
 }
