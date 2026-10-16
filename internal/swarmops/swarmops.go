@@ -258,7 +258,17 @@ func prepare(ctx context.Context, deps Deps, c common) (*prepared, error) {
 // planObjects reads the networks, secrets and configs of the environment (the last two only when
 // the spec names any) and works out what the spec needs done about the ones it names. The merged
 // spec is copied first, so giving a reference its ID changes nothing the current spec shares.
+//
+// A caller without secrets.reveal may not add a secret reference the service's current spec lacks
+// (D-13 as amended, review finding S1-WR-02). This is the one place review, apply, create (where
+// the current spec is the zero one) and each service update of a rotate pass through, and it comes
+// before the image lookup, the host policy and any object, so a refused spec reads and writes nothing.
 func (p *prepared) planObjects(ctx context.Context, c common) error {
+	if !c.caller.Reveal {
+		if added := AddedSecrets(p.current, p.merged); len(added) > 0 {
+			return &RevealRequiredError{Secrets: added}
+		}
+	}
 	var err error
 	if p.networks, err = c.client.Networks(ctx); err != nil {
 		return err

@@ -274,7 +274,7 @@ func TestReviewCreateAnswersTheNormalisedSpecAndWritesNothing(t *testing.T) {
 
 func TestReviewCreateListsTheObjectsTheSpecNamesThatDoNotExist(t *testing.T) {
 	o := newObjectRig(t)
-	rev, err := o.reviewCreate(o.admin, chatSpec(func(s *swarm.ServiceSpec) {
+	rev, err := o.reviewCreate(o.adminReveal, chatSpec(func(s *swarm.ServiceSpec) {
 		s.TaskTemplate.Networks = []swarm.NetworkAttachmentConfig{{Target: "front"}, {Target: "app_net"}}
 		s.TaskTemplate.ContainerSpec.Secrets = []*swarm.SecretReference{{SecretName: "db-pass", File: &swarm.SecretReferenceFileTarget{Name: "db-pass", Mode: 0o444}}}
 		s.TaskTemplate.ContainerSpec.Configs = []*swarm.ConfigReference{{ConfigName: "app.conf", File: &swarm.ConfigReferenceFileTarget{Name: "/app.conf", Mode: 0o444}}}
@@ -289,7 +289,7 @@ func TestReviewCreateListsTheObjectsTheSpecNamesThatDoNotExist(t *testing.T) {
 
 func TestCreateMakesTheStagedObjectsFirstInOrderAndPutsTheirIDsInTheSpec(t *testing.T) {
 	o := newObjectRig(t)
-	res, err := o.create(o.admin, chatSpec(func(s *swarm.ServiceSpec) {
+	res, err := o.create(o.adminReveal, chatSpec(func(s *swarm.ServiceSpec) {
 		withRefs(s)
 	}), staged()...)
 	if err != nil {
@@ -322,7 +322,7 @@ func TestCreateMakesTheStagedObjectsFirstInOrderAndPutsTheirIDsInTheSpec(t *test
 
 func TestCreateRemovesWhatItMadeWhenTheServiceCreateFails(t *testing.T) {
 	o := newObjectRig(t, func(c *dockertest.FakeConfig) { c.ServiceCreateError = "the manager refuses this spec" })
-	res, err := o.create(o.admin, chatSpec(withRefs), staged()...)
+	res, err := o.create(o.adminReveal, chatSpec(withRefs), staged()...)
 	var rej *swarmops.RejectedError
 	if !errors.As(err, &rej) || !errors.Is(err, swarmops.ErrRejected) {
 		t.Fatalf("err = %v, want RejectedError", err)
@@ -346,7 +346,7 @@ func TestCreateRemovesWhatItMadeWhenTheServiceCreateFails(t *testing.T) {
 
 func TestCreateWithAnObjectThatIsMissingAndNotStagedIsRefusedBeforeAnyWrite(t *testing.T) {
 	o := newObjectRig(t)
-	_, err := o.create(o.admin, chatSpec(withRefs))
+	_, err := o.create(o.adminReveal, chatSpec(withRefs))
 	var missing *swarmops.MissingError
 	if !errors.Is(err, swarmops.ErrObjectsMissing) || !errors.As(err, &missing) || !slices.Equal(missing.Missing.Secrets, []string{"db-pass"}) {
 		t.Fatalf("err = %v, want MissingError naming db-pass", err)
@@ -359,7 +359,7 @@ func TestCreateWithAnObjectThatIsMissingAndNotStagedIsRefusedBeforeAnyWrite(t *t
 func TestCreateObjectPermissionIsCheckedBeforeAnythingIsMade(t *testing.T) {
 	o := newObjectRig(t)
 	o.deps.CanCreate = func(kind string) bool { return kind == swarmops.KindNetwork }
-	_, err := o.create(o.admin, chatSpec(withRefs), staged()...)
+	_, err := o.create(o.adminReveal, chatSpec(withRefs), staged()...)
 	var perm *swarmops.ObjectPermissionError
 	if !errors.Is(err, swarmops.ErrObjectPermission) || !errors.As(err, &perm) || !slices.Equal(perm.Kinds, []string{"secret", "config"}) {
 		t.Fatalf("err = %v, want ObjectPermissionError for secret and config", err)

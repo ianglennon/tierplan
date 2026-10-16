@@ -125,7 +125,7 @@ func updateOf(t *testing.T, o *objectRig, service string) swarm.ServiceSpec {
 
 func TestRotateASecretCreatesTheNewVersionAndMovesEveryStandaloneUserKeepingItsFileTarget(t *testing.T) {
 	o := newRotateRig(t)
-	res, err := o.rotateSecret(o.admin)
+	res, err := o.rotateSecret(o.adminReveal)
 	if err != nil {
 		t.Fatalf("Rotate: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestRotateASecretCreatesTheNewVersionAndMovesEveryStandaloneUserKeepingItsF
 
 func TestRotateRemovesTheOldObjectOnceNothingUsesIt(t *testing.T) {
 	o := newRotateRig(t, noStackUsers)
-	res, err := o.rotateSecret(o.admin)
+	res, err := o.rotateSecret(o.adminReveal)
 	if err != nil {
 		t.Fatalf("Rotate: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestRotateRemovesTheOldObjectOnceNothingUsesIt(t *testing.T) {
 
 func TestRotateKeepsTheOldObjectWhenRemoveOldIsOff(t *testing.T) {
 	o := newRotateRig(t, noStackUsers)
-	res, err := o.rotateSecret(o.admin, func(in *swarmops.RotateInput) { in.RemoveOld = false })
+	res, err := o.rotateSecret(o.adminReveal, func(in *swarmops.RotateInput) { in.RemoveOld = false })
 	if err != nil {
 		t.Fatalf("Rotate: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestRotateKeepsTheOldObjectWhenRemoveOldIsOff(t *testing.T) {
 
 func TestRotateUsesTheNameItIsGivenAndOtherwiseTheNextVersion(t *testing.T) {
 	o := newRotateRig(t)
-	res, err := o.rotateSecret(o.admin, func(in *swarmops.RotateInput) { in.NewName = "db_password_2026" })
+	res, err := o.rotateSecret(o.adminReveal, func(in *swarmops.RotateInput) { in.NewName = "db_password_2026" })
 	if err != nil || res.NewName != "db_password_2026" {
 		t.Fatalf("Rotate = %+v, %v, want the name it was given", res, err)
 	}
@@ -224,7 +224,7 @@ func TestRotateUsesTheNameItIsGivenAndOtherwiseTheNextVersion(t *testing.T) {
 	o = newRotateRig(t, func(cfg *dockertest.FakeConfig) {
 		cfg.Secrets = append(cfg.Secrets, dockertest.FakeSecret{ID: "sec-taken", Name: "db_password_v2"})
 	})
-	res, err = o.rotateSecret(o.admin)
+	res, err = o.rotateSecret(o.adminReveal)
 	if err != nil || res.NewName != "db_password_v3" {
 		t.Fatalf("Rotate = %+v, %v, want db_password_v3", res, err)
 	}
@@ -261,7 +261,7 @@ func TestRotateWithNoUsersOnlyCreatesTheNewObject(t *testing.T) {
 		cs := cfg.ServiceRows[0].Spec.TaskTemplate.ContainerSpec
 		cs.Secrets = nil
 	})
-	res, err := o.rotateSecret(o.admin)
+	res, err := o.rotateSecret(o.adminReveal)
 	if err != nil {
 		t.Fatalf("Rotate: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestRotateStopsAtTheFirstFailureLeavesTheOldObjectAndSaysWhatMoved(t *testi
 			}
 		}
 	})
-	res, err := o.rotateSecret(o.operator)
+	res, err := o.rotateSecret(o.operatorReveal)
 	var stop *swarmops.RotateStopError
 	if !errors.As(err, &stop) || !errors.Is(err, swarmops.ErrRotateStopped) || stop.Service != "worker" {
 		t.Fatalf("err = %v, want a *RotateStopError at worker", err)
@@ -328,7 +328,7 @@ func (b *bumping) AuthFor(_ context.Context, _ string, _ registry.Ref) (string, 
 func TestRotateRacedByAnEditOfAServiceStopsThereWithServiceChangedAndRetriesNothing(t *testing.T) {
 	o := newRotateRig(t, noStackUsers)
 	o.deps.Resolver = &bumping{fake: o.fake, service: "svc-api"}
-	res, err := o.rotateSecret(o.admin)
+	res, err := o.rotateSecret(o.adminReveal)
 	if !errors.Is(err, dockerx.ErrServiceChanged) || !errors.Is(err, swarmops.ErrRotateStopped) {
 		t.Fatalf("err = %v, want service_changed at the first service", err)
 	}
@@ -356,7 +356,7 @@ func TestRotateWhoseNewNameIsTakenChangesNothingElse(t *testing.T) {
 	o := newRotateRig(t, func(cfg *dockertest.FakeConfig) {
 		cfg.Secrets = append(cfg.Secrets, dockertest.FakeSecret{ID: "sec-taken", Name: "db_password_v2"})
 	})
-	res, err := o.rotateSecret(o.admin, func(in *swarmops.RotateInput) { in.NewName = "db_password_v2" })
+	res, err := o.rotateSecret(o.adminReveal, func(in *swarmops.RotateInput) { in.NewName = "db_password_v2" })
 	var made *swarmops.ObjectCreateError
 	if !errors.As(err, &made) || !errors.Is(err, dockerx.ErrNameTaken) || made.Name != "db_password_v2" {
 		t.Fatalf("err = %v, want the create refused as a taken name", err)
@@ -380,7 +380,7 @@ func TestRotateRunsTheFullSpecPolicyForTheCallerOnEachServiceAndStopsAtARefusal(
 		cs := cfg.ServiceRows[0].Spec.TaskTemplate.ContainerSpec
 		cs.Mounts = append(cs.Mounts, mount.Mount{Type: mount.TypeBind, Source: "/etc", Target: "/host-etc"})
 	})
-	res, err := o.rotateSecret(o.operator)
+	res, err := o.rotateSecret(o.operatorReveal)
 	if !errors.Is(err, swarmops.ErrRefused) || !errors.Is(err, swarmops.ErrRotateStopped) {
 		t.Fatalf("err = %v, want the operator refused host access at api", err)
 	}
@@ -395,7 +395,7 @@ func TestRotateRunsTheFullSpecPolicyForTheCallerOnEachServiceAndStopsAtARefusal(
 		cs := cfg.ServiceRows[0].Spec.TaskTemplate.ContainerSpec
 		cs.Mounts = append(cs.Mounts, mount.Mount{Type: mount.TypeBind, Source: "/etc", Target: "/host-etc"})
 	})
-	if _, err := o.rotateSecret(o.admin); err != nil {
+	if _, err := o.rotateSecret(o.adminReveal); err != nil {
 		t.Errorf("an Admin is allowed host access: %v", err)
 	}
 }
@@ -404,7 +404,7 @@ func TestRotateSendsEachServiceTheRegistryCredentialOfItsImage(t *testing.T) {
 	o := newRotateRig(t, noStackUsers)
 	auth := &fixedAuth{header: "Zm9vYmFy"}
 	o.deps.Resolver = auth
-	if _, err := o.rotateSecret(o.admin); err != nil {
+	if _, err := o.rotateSecret(o.adminReveal); err != nil {
 		t.Fatalf("Rotate: %v", err)
 	}
 	ups := o.fake.ServiceUpdates()
@@ -420,7 +420,7 @@ func TestRotateSendsEachServiceTheRegistryCredentialOfItsImage(t *testing.T) {
 
 func TestRotateOfAnObjectThatIsNotThereIsNotFound(t *testing.T) {
 	o := newRotateRig(t)
-	_, err := o.rotateSecret(o.admin, func(in *swarmops.RotateInput) { in.OldID = "sec-gone" })
+	_, err := o.rotateSecret(o.adminReveal, func(in *swarmops.RotateInput) { in.OldID = "sec-gone" })
 	if !errors.Is(err, dockerx.ErrObjectNotFound) {
 		t.Errorf("err = %v, want ErrObjectNotFound", err)
 	}

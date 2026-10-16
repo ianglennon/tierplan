@@ -35,7 +35,7 @@ func mountSecret(name string) func(*swarm.ServiceSpec) {
 func TestApplyByACallerWhoCannotRevealSecretsCannotAddASecretTheServiceDoesNotUse(t *testing.T) {
 	r := newRig(t, withDBPass)
 	both := func(s *swarm.ServiceSpec) {
-		newTagAndEnv(s)
+		s.TaskTemplate.ContainerSpec.Image = "localhost:5000/app/api:2"
 		mountSecret("db-pass")(s)
 	}
 	_, err := r.apply(r.operator, 5, edit(t, both))

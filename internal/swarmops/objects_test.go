@@ -132,7 +132,7 @@ func neverHolds(t *testing.T, what string, v any) {
 
 func TestApplyCreatesObjectsInOrder(t *testing.T) {
 	o := newObjectRig(t)
-	res, err := o.applyStaged(o.admin, edit(t, withRefs), staged())
+	res, err := o.applyStaged(o.adminReveal, editFor(t, o.adminReveal, withRefs), staged())
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestApplyCreatesObjectsInOrder(t *testing.T) {
 
 func TestApplyCleansUpOnServiceFailure(t *testing.T) {
 	o := newObjectRig(t, func(c *dockertest.FakeConfig) { c.ServiceRows[0].UpdateError = "the manager refuses this spec" })
-	res, err := o.applyStaged(o.admin, edit(t, withRefs), staged())
+	res, err := o.applyStaged(o.adminReveal, editFor(t, o.adminReveal, withRefs), staged())
 	var rej *swarmops.RejectedError
 	if !errors.As(err, &rej) {
 		t.Fatalf("err = %v, want RejectedError", err)
@@ -247,7 +247,7 @@ func TestApplyReportsIncompleteCleanup(t *testing.T) {
 		c.ServiceRows[0].UpdateError = "the manager refuses this spec"
 		c.RemoveErrors = map[string]string{"db-pass": "the manager is busy"}
 	})
-	res, err := o.applyStaged(o.admin, edit(t, withRefs), staged())
+	res, err := o.applyStaged(o.adminReveal, editFor(t, o.adminReveal, withRefs), staged())
 	if !errors.Is(err, swarmops.ErrRejected) {
 		t.Fatalf("err = %v, want ErrRejected", err)
 	}
@@ -281,7 +281,7 @@ func TestApplyNameTakenMidway(t *testing.T) {
 	o := newObjectRig(t, func(c *dockertest.FakeConfig) {
 		c.Secrets = []dockertest.FakeSecret{{ID: "sec-elsewhere", Name: "db-pass"}}
 	})
-	res, err := o.applyStaged(o.admin, edit(t, withRefs), staged())
+	res, err := o.applyStaged(o.adminReveal, editFor(t, o.adminReveal, withRefs), staged())
 	var ce *swarmops.ObjectCreateError
 	if !errors.Is(err, dockerx.ErrNameTaken) || !errors.As(err, &ce) || ce.Kind != "secret" || ce.Name != "db-pass" {
 		t.Fatalf("err = %v, want a name_taken create error for secret db-pass", err)
@@ -313,7 +313,7 @@ func TestApplyNameTakenMidway(t *testing.T) {
 func TestApplyObjectPermission(t *testing.T) {
 	o := newObjectRig(t)
 	o.deps.CanCreate = func(kind string) bool { return kind == swarmops.KindNetwork }
-	_, err := o.applyStaged(o.operator, edit(t, withRefs), staged())
+	_, err := o.applyStaged(o.operatorReveal, editFor(t, o.operatorReveal, withRefs), staged())
 	var perm *swarmops.ObjectPermissionError
 	if !errors.Is(err, swarmops.ErrObjectPermission) || !errors.As(err, &perm) || !slices.Equal(perm.Kinds, []string{"secret", "config"}) {
 		t.Fatalf("err = %v, want ObjectPermissionError for secret and config", err)
@@ -329,7 +329,7 @@ func TestApplyObjectPermission(t *testing.T) {
 func TestApplyWithoutACanCreateHookCreatesNothing(t *testing.T) {
 	o := newObjectRig(t)
 	o.deps.CanCreate = nil
-	if _, err := o.applyStaged(o.admin, edit(t, withRefs), staged()); !errors.Is(err, swarmops.ErrObjectPermission) {
+	if _, err := o.applyStaged(o.adminReveal, editFor(t, o.adminReveal, withRefs), staged()); !errors.Is(err, swarmops.ErrObjectPermission) {
 		t.Fatalf("err = %v, want ErrObjectPermission: no hook means nobody may", err)
 	}
 	if got := o.fake.Writes(); len(got) != 0 {
@@ -339,7 +339,7 @@ func TestApplyWithoutACanCreateHookCreatesNothing(t *testing.T) {
 
 func TestApplyNamesWhatIsMissingAndNotStaged(t *testing.T) {
 	o := newObjectRig(t)
-	_, err := o.applyStaged(o.admin, edit(t, withRefs), []swarmops.StagedObject{{Kind: swarmops.KindNetwork, Name: "front"}})
+	_, err := o.applyStaged(o.adminReveal, editFor(t, o.adminReveal, withRefs), []swarmops.StagedObject{{Kind: swarmops.KindNetwork, Name: "front"}})
 	var missing *swarmops.MissingError
 	if !errors.Is(err, swarmops.ErrObjectsMissing) || !errors.As(err, &missing) ||
 		len(missing.Missing.Networks) != 0 || !slices.Equal(missing.Missing.Secrets, []string{"db-pass"}) || !slices.Equal(missing.Missing.Configs, []string{"app.conf"}) {
@@ -352,7 +352,7 @@ func TestApplyNamesWhatIsMissingAndNotStaged(t *testing.T) {
 
 func TestReviewListsMissingSecretsAndConfigsAsWellAsNetworks(t *testing.T) {
 	o := newObjectRig(t)
-	res, err := o.review(o.admin, 5, edit(t, withRefs))
+	res, err := o.review(o.adminReveal, 5, editFor(t, o.adminReveal, withRefs))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +369,7 @@ func TestApplyBindsNameOnlyReferencesToObjectsThatExist(t *testing.T) {
 		c.Secrets = []dockertest.FakeSecret{{ID: "sec-api-key", Name: "api-key"}}
 		c.Configs = []dockertest.FakeConfigObject{{ID: "cfg-nginx", Name: "nginx.conf", Data: []byte("x")}}
 	})
-	if _, err := o.applyStaged(o.admin, edit(t, func(s *swarm.ServiceSpec) {
+	if _, err := o.applyStaged(o.adminReveal, editFor(t, o.adminReveal, func(s *swarm.ServiceSpec) {
 		cs := s.TaskTemplate.ContainerSpec
 		cs.Secrets = append(cs.Secrets, &swarm.SecretReference{SecretName: "api-key", File: &swarm.SecretReferenceFileTarget{Name: "api-key", UID: "0", GID: "0", Mode: 0o444}})
 		cs.Configs = append(cs.Configs, &swarm.ConfigReference{ConfigID: "cfg-nginx", ConfigName: "nginx.conf", File: &swarm.ConfigReferenceFileTarget{Name: "/nginx.conf", UID: "0", GID: "0", Mode: 0o444}})
@@ -388,7 +388,7 @@ func TestApplyBindsNameOnlyReferencesToObjectsThatExist(t *testing.T) {
 func TestApplyIgnoresStagedObjectsTheSpecDoesNotName(t *testing.T) {
 	o := newObjectRig(t)
 	objects := append(staged(), swarmops.StagedObject{Kind: swarmops.KindSecret, Name: "unused", Data: []byte("v")})
-	if _, err := o.applyStaged(o.admin, edit(t, withRefs), objects); err != nil {
+	if _, err := o.applyStaged(o.adminReveal, editFor(t, o.adminReveal, withRefs), objects); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if _, ok := o.secretNamed("unused"); ok {
@@ -400,7 +400,7 @@ func TestApplyOfAnExistingNameThatWasStagedIsNameTakenNotABinding(t *testing.T) 
 	o := newObjectRig(t, func(c *dockertest.FakeConfig) {
 		c.Networks = append(c.Networks, dockertest.FakeNetwork{ID: "front-id-0123456789", Name: "front", Driver: "overlay", Scope: "swarm"})
 	})
-	_, err := o.applyStaged(o.admin, edit(t, withRefs), staged())
+	_, err := o.applyStaged(o.adminReveal, editFor(t, o.adminReveal, withRefs), staged())
 	if !errors.Is(err, dockerx.ErrNameTaken) {
 		t.Fatalf("err = %v, want name_taken: the editor staged front, so it must not silently use somebody else's", err)
 	}

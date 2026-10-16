@@ -61,11 +61,13 @@ func (e *scrubbedError) Unwrap() error { return e.err }
 // Apply sends the spec once. In order it: inspects the service fresh and refuses a version that is
 // not the one sent (dockerx.ErrServiceChanged), a stack's service (*StackOwnedError), a spec that
 // does not decode (*SpecInvalidError), a hidden value with nothing behind it or a placeholder from a
-// revealing caller (*redact.PlaceholderError), a changed name or mode kind, a new stack label and a
-// spec equal to the current one (ErrNothingToApply); resolves the digest of a changed tag; runs the
-// host-escalation policy on the exact spec it will send (*RefusedError); refuses a network, secret
-// or config that does not exist and was not staged (*MissingError) and a caller who may not create
-// the kinds the staged ones are (*ObjectPermissionError), all before anything is written; creates the
+// revealing caller (*redact.PlaceholderError), a changed name or mode kind and a new stack label;
+// refuses a caller without secrets.reveal a secret reference the service does not have
+// (*RevealRequiredError), before any lookup or write; refuses a spec equal to the current one
+// (ErrNothingToApply); resolves the digest of a changed tag; runs the host-escalation policy on the
+// exact spec it will send (*RefusedError); refuses a network, secret or config that does not exist and
+// was not staged (*MissingError) and a caller who may not create the kinds the staged ones are
+// (*ObjectPermissionError), all before anything is written; creates the
 // staged objects in dependency order (networks, secrets, configs), fills their IDs into the spec and
 // judges it again; and sends one ServiceUpdate with the version and the credential, never retried.
 // When anything after the first creation fails, every object this apply made is removed again in

@@ -129,7 +129,8 @@ func ReviewCreate(ctx context.Context, deps Deps, in CreateInput) (ReviewResult,
 
 // Create makes a new service once. In order it refuses a spec that does not decode (*SpecInvalidError),
 // a hidden placeholder (*redact.PlaceholderError), a bad name (ErrNameInvalid), a missing image
-// (ErrImageRequired), a stack label (ErrStackLabel) and a name the swarm has (dockerx.ErrServiceNameTaken);
+// (ErrImageRequired), a stack label (ErrStackLabel), a name the swarm has (dockerx.ErrServiceNameTaken)
+// and, for a caller without secrets.reveal, any secret at all (*RevealRequiredError);
 // then it does what an apply does from the image on (see commit): the image is resolved to a digest and a
 // failed lookup is an *ImageUnresolvedError and nothing is made; the host-escalation policy runs on the
 // whole spec (*RefusedError); objects that are neither there nor staged are a *MissingError and a kind the
