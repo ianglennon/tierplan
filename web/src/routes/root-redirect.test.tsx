@@ -12,6 +12,7 @@ import { recordRecentTiming } from "@/routes/_app/env/$envId";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
 import { makeMe } from "@/test-me";
+import { settled } from "@/test-settle";
 
 const ME = makeMe({
   instanceAdmin: true,
@@ -278,7 +279,13 @@ describe("recording the environment that was opened (D-31)", () => {
   });
   afterEach(() => {
     recordRecentTiming.delayMs = 2_000;
+    vi.useRealTimers();
   });
+
+  // The record waits on a timer, so the tests that look for a record that must not
+  // come run the clock themselves. The clock also follows real time, so findBy and
+  // waitFor still poll while it is faked.
+  const fakeClock = () => vi.useFakeTimers({ shouldAdvanceTime: true });
 
   const puts = () =>
     sent
@@ -286,6 +293,7 @@ describe("recording the environment that was opened (D-31)", () => {
       .map((s) => s.path.replace("/api/me/recent-environments/", ""));
 
   it("records an environment once, however often the layout renders", async () => {
+    fakeClock();
     stubInstance(false);
     list = () => Response.json({ items: [env("a", "alpha")] });
     render(
@@ -304,7 +312,11 @@ describe("recording the environment that was opened (D-31)", () => {
       await queryClient.invalidateQueries({ queryKey: ["environments"] });
     });
     await waitFor(() => expect(puts()).toEqual(["a"]));
-    await new Promise((r) => setTimeout(r, 100));
+    await settled(queryClient);
+    // Far past the delay: a second timer would have fired by now.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
     expect(puts()).toEqual(["a"]);
   });
 
@@ -330,12 +342,16 @@ describe("recording the environment that was opened (D-31)", () => {
   });
 
   it("does not mind that recording fails", async () => {
+    fakeClock();
     stubInstance(false);
     list = () => Response.json({ items: [env("a", "alpha")] });
     const original = globalThis.fetch;
-    vi.stubGlobal("fetch", async (req: Request) =>
-      req.method === "PUT" ? new Response("boom", { status: 500 }) : original(req),
-    );
+    let refused = 0;
+    vi.stubGlobal("fetch", async (req: Request) => {
+      if (req.method !== "PUT") return original(req);
+      refused++;
+      return new Response("boom", { status: 500 });
+    });
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider
@@ -347,7 +363,12 @@ describe("recording the environment that was opened (D-31)", () => {
       </QueryClientProvider>,
     );
     await screen.findByRole("heading", { name: "env a" });
-    await new Promise((r) => setTimeout(r, 100));
+    // The record is attempted and refused, and only then is the page looked at.
+    await waitFor(() => expect(refused).toBe(1));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await settled(queryClient);
     expect(screen.getByRole("heading", { name: "env a" })).toBeTruthy();
   });
 });

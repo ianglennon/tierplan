@@ -19,6 +19,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 import { splitPermissions } from "@/test-permissions";
+import { settled } from "@/test-settle";
 
 // The switcher and the version footer have their own tests and their own endpoints.
 vi.mock("@/components/env-switcher", () => ({ EnvSwitcher: () => null }));
@@ -56,9 +57,11 @@ afterEach(() => {
 });
 
 // A phone is what useIsMobile reads: a window narrower than 768px.
+let client: QueryClient;
+
 function mount(width: number, path = "/") {
   window.innerWidth = width;
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const root = createRootRoute({
     component: () => (
       <TooltipProvider>
@@ -214,8 +217,8 @@ describe("the Swarm group", () => {
     envType = "standalone";
     mount(1280, "/env/e1");
     expect(await screen.findByRole("link", { name: "Containers" })).toBeTruthy();
-    // Give the environment list time to answer: the group must stay away once it has.
-    await new Promise((r) => setTimeout(r, 50));
+    // Let the environment list answer: the group must stay away once it has.
+    await settled(client);
     expect(screen.queryByText("Swarm")).toBeNull();
     expect(screen.queryByRole("link", { name: "Services" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Placement" })).toBeNull();
@@ -228,7 +231,7 @@ describe("the Swarm group", () => {
     });
     mount(1280, "/env/e1");
     expect(await screen.findByRole("link", { name: "Containers" })).toBeTruthy();
-    await new Promise((r) => setTimeout(r, 50));
+    await settled(client);
     expect(screen.queryByRole("link", { name: "Services" })).toBeNull();
     expect(screen.queryByText("Swarm")).toBeNull();
   });

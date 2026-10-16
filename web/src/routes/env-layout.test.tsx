@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
+import { isAccessRefetching } from "@/hooks/use-access-refetch";
 import { retryTiming } from "@/routes/_app/env/$envId";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
@@ -755,13 +756,23 @@ describe("access changes under a user (D-08, D-10)", () => {
   // before the refused request does. The handler must not need the refusal to
   // come first.
   it.each([
-    { order: "/api/me answers before the refused request", meDelay: 0, refusalDelay: 30 },
-    { order: "the refused request answers first", meDelay: 30, refusalDelay: 0 },
+    { order: "/api/me answers before the refused request", first: "me" },
+    { order: "the refused request answers first", first: "refusal" },
   ])(
     "moves a Viewer whose grant was removed to the no-access state with the toast when $order",
-    async ({ meDelay, refusalDelay }) => {
+    async ({ first }) => {
       me = makeMe({ envs: { e1: "viewer" } });
-      const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+      // Each answer waits for its gate, so the test sets the order they arrive in
+      // instead of guessing it with delays.
+      const gate = () => {
+        let open: () => void = () => {};
+        const opened = new Promise<void>((resolve) => {
+          open = resolve;
+        });
+        return { opened, open };
+      };
+      const meGate = gate();
+      const refusalGate = gate();
       let flipped = false;
       const inner = globalThis.fetch;
       vi.stubGlobal(
@@ -772,10 +783,10 @@ describe("access changes under a user (D-08, D-10)", () => {
             return Response.json({ items: [], nodes: [] });
           }
           if (flipped && (path === "/api/env/e1/summary" || path === "/api/env/e1/containers")) {
-            await sleep(refusalDelay);
+            await refusalGate.opened;
             return problem(404, "environment_not_found");
           }
-          if (flipped && path === "/api/me") await sleep(meDelay);
+          if (flipped && path === "/api/me") await meGate.opened;
           if (flipped && path === "/api/environments") return Response.json({ items: [] });
           return inner(req);
         }),
@@ -789,6 +800,23 @@ describe("access changes under a user (D-08, D-10)", () => {
       // The dashboard's summary is older than its stale time, so the next page reads it.
       queryClient.setQueryData(["env", "e1", "summary"], SUMMARY, { updatedAt: 0 });
       fireEvent.click(await screen.findByRole("link", { name: "Containers" }));
+
+      if (first === "me") {
+        meGate.open();
+        // /api/me has answered and the cache holds the new access; only then is the
+        // refusal let through.
+        await waitFor(() => {
+          const now = queryClient.getQueryData<typeof ME>(["me"]);
+          expect(now && now.access.e1 === undefined).toBe(true);
+        });
+        refusalGate.open();
+      } else {
+        refusalGate.open();
+        // The refusal has reached the handler, which raises the skeleton, and only then
+        // is /api/me let through.
+        await waitFor(() => expect(isAccessRefetching()).toBe(true));
+        meGate.open();
+      }
 
       expect(
         await screen.findByRole("heading", {

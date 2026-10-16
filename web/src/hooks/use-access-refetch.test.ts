@@ -98,6 +98,13 @@ function setup(envId: string | undefined, before: Me) {
 
 const meReads = () => calls.filter((c) => c === "/api/me").length;
 
+// quiet gives everything that is able to run its turns, so that a test can then assert
+// that nothing more happened while a read is held. The handler's own timers are the
+// test's schedule() and never fire by themselves; the clock here is only the one that
+// runs the promise chains. Call useQuietClock() first.
+const useQuietClock = () => vi.useFakeTimers();
+const quiet = () => vi.advanceTimersByTimeAsync(20);
+
 beforeEach(() => {
   clock = 1_000_000;
   calls = [];
@@ -111,6 +118,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const h of handlers) h.dispose();
   vi.unstubAllGlobals();
   qc.clear();
@@ -164,6 +172,7 @@ describe("the throttle (T-03-100)", () => {
   });
 
   it("never has two reads of /api/me outstanding", async () => {
+    useQuietClock();
     meAnswer = makeMe({ envs: { a: "viewer" } });
     const { handle } = setup("a", meAnswer);
     const release = holdMe();
@@ -175,7 +184,7 @@ describe("the throttle (T-03-100)", () => {
     clock += ACCESS_REFETCH_THROTTLE_MS;
     fire();
     // The window is over but the first read has not answered.
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await quiet();
     expect(meReads()).toBe(1);
 
     release();
@@ -185,6 +194,7 @@ describe("the throttle (T-03-100)", () => {
   });
 
   it("folds a refusal that arrives after the window into the run still outstanding (WR-G-01)", async () => {
+    useQuietClock();
     const before = makeMe({ envs: { a: "viewer", b: "viewer" } });
     meAnswer = makeMe({ envs: { b: "viewer" } });
     items = ["b"];
@@ -196,14 +206,14 @@ describe("the throttle (T-03-100)", () => {
     // The window is over but the first read has not answered: a slow /api/me.
     clock += ACCESS_REFETCH_THROTTLE_MS + 1_000;
     await handle("unseen", "/api/env/a/containers");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await quiet();
     // No second read beside the first, and the first was not cancelled.
     expect(meReads()).toBe(1);
     expect(liveTimers()).toHaveLength(1);
     expect(moveTo).not.toHaveBeenCalled();
 
     fire();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await quiet();
     expect(meReads()).toBe(1);
 
     release();
@@ -534,6 +544,7 @@ describe("the baseline (G-03-2)", () => {
 
 describe("dispose", () => {
   it("cancels the trailing run, releases the skeleton and silences a run still in flight", async () => {
+    useQuietClock();
     meAnswer = makeMe({ envs: { a: "viewer", b: "viewer" } });
     const { handle, dispose, moveTo, notifyChanged } = setup("a", meAnswer);
     const release = holdMe();
@@ -554,7 +565,7 @@ describe("dispose", () => {
     items = ["b"];
     release();
     await first;
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await quiet();
     expect(moveTo).not.toHaveBeenCalled();
     expect(notifyChanged).not.toHaveBeenCalled();
     expect(isAccessRefetching()).toBe(false);
