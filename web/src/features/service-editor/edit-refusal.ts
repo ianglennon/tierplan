@@ -140,8 +140,14 @@ function refuse(t: Translate, e: ServiceActionError, ctx: EditRefusalContext): E
       return say(
         t("specEditor.refusal.placeholder_unmatched", { path: e.entries[0]?.location ?? "" }),
       );
-    case "objects_missing":
-      return say(t("specEditor.refusal.objects_missing", { names: listed("networks").join(", ") }));
+    case "objects_missing": {
+      const list = (["networks", "secrets", "configs"] as const)
+        .map((kind) => ({ kind, names: listed(kind) }))
+        .filter((k) => k.names.length > 0)
+        .map((k) => t(`specEditor.refusal.missingKinds.${k.kind}`, { names: k.names.join(", ") }))
+        .join("; ");
+      return say(t("specEditor.refusal.objects_missing", { list }));
+    }
     case "privileged_service":
       return say(
         t("specEditor.review.refusal", {

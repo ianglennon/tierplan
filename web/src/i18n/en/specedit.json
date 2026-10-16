@@ -231,7 +231,12 @@
       "stack_label_reserved": "Labels starting with com.docker.stack. are reserved.",
       "placeholder_unmatched": "A hidden value in the spec has nothing behind it: {{path}} isn't in the service. Type its value or remove it.",
       "placeholder_reserved": "<hidden> is what Bayplan shows for a value it withholds, so it can't be a value. Type the real value or remove it.",
-      "objects_missing": "The spec names networks that don't exist: {{names}}. Create them first, then review again.",
+      "objects_missing": "The spec names objects that don't exist: {{list}}. Create them first, then review again.",
+      "missingKinds": {
+        "networks": "networks {{names}}",
+        "secrets": "secrets {{names}}",
+        "configs": "configs {{names}}"
+      },
       "nothing_to_apply": "There's nothing to apply.",
       "object_permission": "{{message}}",
       "too_many_objects": "One change can create at most 16 objects.",
