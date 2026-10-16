@@ -21,6 +21,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/redact"
 	"github.com/ianglennon/bayplan/internal/registry"
 	"github.com/ianglennon/bayplan/internal/swarmops"
 )
@@ -286,13 +287,17 @@ func unresolved(image string, err error) error {
 // rollbackService sends the current spec back to the manager with rollback=previous. In one
 // write call it reads the service, compares the version the caller saw (so the rollback is
 // of the spec that was shown), judges the previous spec by the host-access policy for the caller
-// before anything is read or sent, and resolves the credential for the previous spec's image.
+// before anything is read or sent, and resolves the credential for the previous spec's image. The
+// previous spec is also judged for secrets the caller may not add: a rollback can bring back a
+// secret an Admin removed, and for a caller without secrets.reveal that is adding one (D-13 as
+// amended after review finding S1-WR-02).
 func rollbackService(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID string, in *ServiceRollbackInput) (ServiceRollbackBody, error) {
 	if err := requireSwarm(ctx, d, envID); err != nil {
 		return ServiceRollbackBody{}, err
 	}
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), writeTimeout)
 	defer cancel()
+	reveal := redact.CanReveal(ctx, d.Checker, p, envID)
 	var out ServiceRollbackBody
 	var wo serviceWriteOutcome
 	err := d.Aggregator.WriteOnManager(writeCtx, envID, func(c *dockerx.Client) error {
@@ -324,6 +329,15 @@ func rollbackService(ctx context.Context, d ServicesDeps, p *rbac.Principal, env
 		var prev swarm.ServiceSpec
 		if err := json.Unmarshal(detail.PreviousSpec, &prev); err != nil {
 			return fmt.Errorf("read the previous spec: %w", err)
+		}
+		if !reveal {
+			var current swarm.ServiceSpec
+			if err := json.Unmarshal(detail.Spec, &current); err != nil {
+				return fmt.Errorf("read the current spec: %w", err)
+			}
+			if added := swarmops.AddedSecrets(current, prev); len(added) > 0 {
+				return &swarmops.RevealRequiredError{Secrets: added}
+			}
 		}
 		if cs := prev.TaskTemplate.ContainerSpec; cs != nil {
 			out.Image = cs.Image
