@@ -813,3 +813,57 @@ func TestServiceWriteObjectsMissingNamesEveryKindOfMissingObject(t *testing.T) {
 			oneOfEach)
 	})
 }
+
+// addSecretRef appends a reference to the secret db-pass, by name, to the container spec of a spec
+// as the Spec tab holds it.
+func addSecretRef(spec map[string]any) {
+	cs := containerSpecOf(spec)
+	refs, _ := cs["Secrets"].([]any)
+	cs["Secrets"] = append(refs, map[string]any{
+		"SecretName": "db-pass",
+		"File":       map[string]any{"Name": "/run/secrets/db-pass", "UID": "0", "GID": "0", "Mode": 0o444},
+	})
+}
+
+func TestServiceApplyASecretTheServiceDoesNotUseNeedsTheRevealPermission(t *testing.T) {
+	withDBPass := func(cfg *dockertest.FakeConfig) {
+		cfg.Secrets = []dockertest.FakeSecret{{ID: "sec-db", Name: "db-pass"}}
+	}
+
+	t.Run("an operator adds a secret", func(t *testing.T) {
+		f, e := actionsEnv(t, withDBPass, editableService(nil))
+		op := f.caller(t, e, "operator-1", "operator")
+		_, body := op.maskedSpec("svc-api", addSecretRef)
+
+		for _, route := range []struct {
+			name string
+			do   func(service, body string) *httptest.ResponseRecorder
+		}{{"review", op.review}, {"apply", op.apply}} {
+			rec := route.do("svc-api", body)
+			if rec.Code != http.StatusForbidden || problemType(t, rec) != "secret_reveal_required" {
+				t.Fatalf("%s by an operator: %d %s, want 403 secret_reveal_required", route.name, rec.Code, rec.Body)
+			}
+			var prob actionProblem
+			if err := json.Unmarshal(rec.Body.Bytes(), &prob); err != nil {
+				t.Fatal(err)
+			}
+			if len(prob.Errors) != 1 || prob.at("TaskTemplate.ContainerSpec.Secrets[0]") != "db-pass" {
+				t.Errorf("%s errors = %+v, want exactly Secrets[0]: db-pass", route.name, prob.Errors)
+			}
+			if !strings.Contains(prob.Detail, "db-pass") || !strings.Contains(prob.Detail, "needs the reveal secrets permission") {
+				t.Errorf("%s detail = %q, want the secret named and the permission said", route.name, prob.Detail)
+			}
+			noSecrets(t, route.name+" answer", rec.Body.Bytes())
+		}
+		if w := f.fake.Writes(); len(w) != 0 {
+			t.Fatalf("writes = %v, a refused spec is never sent", w)
+		}
+		rows := f.serviceAudits(t)
+		if len(rows) != 1 || rows[0].Action != audit.ActionServiceUpdated || rows[0].Result != string(audit.ResultFailure) ||
+			rows[0].Reason != "secret_reveal_required" || rows[0].Details["code"] != "secret_reveal_required" {
+			t.Fatalf("audit rows = %+v, want one service.updated failure with reason secret_reveal_required (a review is not audited)", rows)
+		}
+		b, _ := json.Marshal(rows)
+		noSecrets(t, "the audit rows", b)
+	})
+}
