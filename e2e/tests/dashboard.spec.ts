@@ -32,13 +32,25 @@ function countText(n: number, noun: string): string {
 
 const envIdOf = openFirstEnvironment;
 
+// The network this spec creates behind Bayplan's back carries a name of its own
+// per run and this label, so a run finds and removes what an earlier one left and
+// the feed row asserted below is this run's, not an older run's.
+const NETWORK_LABEL = "bayplan.e2e=dashboard";
+
 test("the tiles equal the engine's counts and a new network appears live", async ({ page }) => {
   // Something in every list, with no registry to reach: an image imported from
   // an empty archive, a container created from it, a named volume.
-  // A retry runs against the same engine, so first clear what an earlier attempt
-  // left behind; the counts below are taken after this.
+  // The spec must be safe to run twice on one engine (D-15, D-23), so first clear
+  // what an earlier run left: its container, every network it labelled, the image
+  // it imported (a second import would leave the first untagged, and the Images
+  // tile would count it) and any untagged image. Only the test engine is touched.
+  // The counts below are taken after this.
   dind("docker rm -f e2e-box >/dev/null 2>&1 || true");
-  dind("docker network rm e2e-net >/dev/null 2>&1 || true");
+  dind(
+    `docker network ls -q --filter label=${NETWORK_LABEL} | xargs -r docker network rm >/dev/null 2>&1 || true`,
+  );
+  dind("docker rmi -f e2e/empty:1 >/dev/null 2>&1 || true");
+  dind("docker image prune -f >/dev/null 2>&1 || true");
   dind("tar -cf - -T /dev/null 2>/dev/null | docker import - e2e/empty:1");
   dind("docker create --name e2e-box e2e/empty:1 /nothing");
   dind("docker volume create e2e-vol");
@@ -67,12 +79,27 @@ test("the tiles equal the engine's counts and a new network appears live", async
   });
 
   await expect(page.getByText("Recent events")).toBeVisible();
-  dind("docker network create e2e-net");
+  const network = `e2e-dash-${Date.now().toString(36)}`;
+  try {
+    await liveNetworkAppears(page, envId, network, counts);
+  } finally {
+    // containers.spec.ts starts from the engine as it was before this one.
+    dind(`docker network rm ${network} >/dev/null 2>&1 || true`);
+  }
+});
+
+async function liveNetworkAppears(
+  page: Page,
+  envId: string,
+  network: string,
+  counts: { containers: number; images: number; volumes: number; networks: number },
+): Promise<void> {
+  dind(`docker network create --label ${NETWORK_LABEL} ${network}`);
 
   const row = page
     .getByRole("listitem")
     .filter({ hasText: "Network create" })
-    .filter({ hasText: "e2e-net" });
+    .filter({ hasText: network });
   await expect(row).toBeVisible({ timeout: 10_000 });
   await expect(tileValue(page, "Networks")).toHaveText(String(counts.networks + 1), {
     timeout: 10_000,
@@ -98,7 +125,7 @@ test("the tiles equal the engine's counts and a new network appears live", async
       page.getByText(countText(list.n, list.noun), { exact: true }).first(),
     ).toBeVisible();
   }
-});
+}
 
 test("Bayplan reads its own container ID from inside the container", async ({ page }) => {
   const envId = await envIdOf(page);

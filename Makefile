@@ -341,6 +341,10 @@ E2E_COMPOSE := docker compose -f e2e/compose.yaml
 # (E2E_BROWSER_ARGS=chromium) on a machine that already has them.
 E2E_BROWSER_ARGS ?= --with-deps chromium
 
+# Extra arguments for `playwright test` in `make e2e`, empty by default. A single
+# project can be repeated on one stack: make e2e E2E_ARGS='--project=dashboard --repeat-each=2'
+E2E_ARGS ?=
+
 # The image under test: a linux/amd64 binary with the SPA embedded, wrapped by
 # the release Dockerfile the way goreleaser does it ($TARGETPLATFORM/bayplan in
 # the build context), tagged bayplan:e2e and loaded into the local engine.
@@ -430,7 +434,7 @@ e2e: e2e-image agent-image
 	$(E2E_COMPOSE) exec -T agenthost docker tag bayplan-agent:dev ghcr.io/ianglennon/bayplan-agent:edge; \
 	pnpm -C e2e exec playwright install $(E2E_BROWSER_ARGS); \
 	status=0; \
-	BAYPLAN_E2E_BROWSER_WS=$(E2E_BROWSER_WS) pnpm -C e2e exec playwright test || status=$$?; \
+	BAYPLAN_E2E_BROWSER_WS=$(E2E_BROWSER_WS) pnpm -C e2e exec playwright test $(E2E_ARGS) || status=$$?; \
 	if [ "$$status" -ne 0 ]; then \
 		$(E2E_COMPOSE) logs --no-color --tail 100 bayplan || true; \
 		$(E2E_COMPOSE) logs --no-color --tail 50 caddy || true; \
