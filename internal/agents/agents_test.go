@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
 	"github.com/ianglennon/bayplan/internal/vault"
 	"github.com/ianglennon/bayplan/proto/authn"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -41,6 +43,64 @@ type rig struct {
 	ctx context.Context
 	// clock is the service's clock; a test moves it to expire a certificate.
 	clock time.Time
+	// logged is the audit writer's own line for each entry it has stored, which a
+	// test waits on instead of polling the table.
+	logged *auditSignal
+}
+
+// auditSignal is the slog.Handler the rig's audit writer logs to. The writer logs an
+// entry after its transaction commits, so once awaitAudit returns the row can be read.
+// Each entry wakes every waiter by closing and replacing a channel under mu.
+type auditSignal struct {
+	mu      sync.Mutex
+	counts  map[string]int
+	changed chan struct{}
+}
+
+func newAuditSignal() *auditSignal {
+	return &auditSignal{counts: map[string]int{}, changed: make(chan struct{})}
+}
+
+func (a *auditSignal) Enabled(context.Context, slog.Level) bool { return true }
+
+func (a *auditSignal) Handle(_ context.Context, rec slog.Record) error {
+	if rec.Message != "audit entry" {
+		return nil
+	}
+	rec.Attrs(func(at slog.Attr) bool {
+		if at.Key != "action" {
+			return true
+		}
+		a.mu.Lock()
+		a.counts[at.Value.String()]++
+		close(a.changed)
+		a.changed = make(chan struct{})
+		a.mu.Unlock()
+		return false
+	})
+	return nil
+}
+
+func (a *auditSignal) WithAttrs([]slog.Attr) slog.Handler { return a }
+func (a *auditSignal) WithGroup(string) slog.Handler      { return a }
+
+// awaitAudit waits until the writer has stored at least n entries of action.
+func (r *rig) awaitAudit(t *testing.T, action string, n int) {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	for {
+		r.logged.mu.Lock()
+		got, changed := r.logged.counts[action], r.logged.changed
+		r.logged.mu.Unlock()
+		if got >= n {
+			return
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for %d %q audit entries, saw %d", n, action, got)
+		}
+	}
 }
 
 func newRig(t *testing.T) *rig {
@@ -50,9 +110,9 @@ func newRig(t *testing.T) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &rig{st: st, vlt: vlt, ctx: context.Background(), clock: fixedNow}
+	r := &rig{st: st, vlt: vlt, ctx: context.Background(), clock: fixedNow, logged: newAuditSignal()}
 	now := func() time.Time { return r.clock }
-	r.svc = agents.NewService(st, vlt, audit.NewWriter(st, vlt, slog.New(slog.DiscardHandler), now), now)
+	r.svc = agents.NewService(st, vlt, audit.NewWriter(st, vlt, slog.New(r.logged), now), now)
 	return r
 }
 
