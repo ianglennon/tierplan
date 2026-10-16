@@ -303,7 +303,7 @@ describe("the Spec tab", () => {
     ).toBeNull();
   });
 
-  it("shows in the review the change that was judged, not one made while the review was out", async () => {
+  it("shows in the review the spec that was judged even when the editor's text changes while the review is out (jsdom does not enforce inert, so whether edits are blocked is left to the browser check)", async () => {
     let answer: (r: Response) => void = () => {};
     state.review = () => new Promise<Response>((r) => (answer = r));
     renderAt();
@@ -1140,6 +1140,38 @@ describe("creating a service", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back to editing" }));
     expect((await field("Name")).value).toBe("chat");
     expect(posts("/services")).toHaveLength(1);
+  });
+
+  it("names the service by what is typed after a review is refused", async () => {
+    let calls = 0;
+    state.createReview = () => {
+      calls += 1;
+      if (calls > 1) {
+        return Response.json(
+          reviewBody({ spec: { ...chatSpec(), Name: "chat2" }, version: 0, image: pinnedImage }),
+        );
+      }
+      return Response.json(
+        {
+          type: "service_name_taken",
+          title: "x",
+          status: 409,
+          detail: "A service named chat already exists.",
+        },
+        { status: 409 },
+      );
+    };
+    renderAt(NEW);
+    await fillIn();
+    fireEvent.click(reviewButton());
+    expect(await screen.findByText("A service named chat already exists.")).toBeTruthy();
+    // The refused spec no longer stands in for the one being edited.
+    fireEvent.change(await field("Name"), { target: { value: "chat2" } });
+    fireEvent.click(reviewButton());
+    expect(await screen.findByRole("heading", { name: "Review chat2", level: 2 })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Review chat", level: 2 })).toBeNull();
+    expect(posts("/services/review")).toHaveLength(2);
+    expect(posts("/services/review")[1]?.body).toEqual({ spec: { ...chatSpec(), Name: "chat2" } });
   });
 
   it("words a missing image from the review in the editor", async () => {
