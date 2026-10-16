@@ -177,6 +177,9 @@ jobs:
   # 24 to 29 on every pull request. Each matrix leg gets its own docker:N-dind
   # service, and the tests dial it over TCP through the same dockerx code path
   # (a socket shared out of dind is root-only, so the runner user cannot open it).
+  # A leg runs the integration-tagged packages only (internal/agents,
+  # internal/dockerx and internal/registry, shuffled); the unit suite runs once,
+  # in the test job.
   integration:
     runs-on: [self-hosted, linux, x64]
     # Two legs can share a 4-core runner VM under -race, which roughly doubles the
@@ -418,12 +421,15 @@ jobs:
   # for a pull request, so fork code never gets the package or id-token
   # permissions. It waits for every gate that runs on a push: the licence and
   # SPDX gates, the integration matrix and e2e must block a public image
-  # (D-70, D-74), and so must the upgrade proof (D-34). dco runs only for pull requests, so it cannot be needed here.
+  # (D-70, D-74), and so must the upgrade proof (D-34) and the swarm legs: the
+  # multi-node suite is deterministic now (Phase 6.1), so a red swarm leg is a
+  # real defect and must not publish :edge (D-23). dco runs only for pull
+  # requests, so it cannot be needed here.
   # Push and sign are one step in a non-cancelling group, so nothing can leave
   # :edge pushed but unsigned (WR-11).
   edge:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [lint, test, gen-check, licences, spdx, build, integration, release-check, e2e, proxy-smoke, upgrade]
+    needs: [lint, test, gen-check, licences, spdx, build, integration, swarm, release-check, e2e, proxy-smoke, upgrade]
     concurrency:
       group: edge-publish
       cancel-in-progress: false
