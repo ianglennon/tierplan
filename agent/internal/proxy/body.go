@@ -21,12 +21,14 @@ import (
 )
 
 // bodyEnv is what a validator needs besides the bytes: the host's policy and a way
-// to ask the agent's own engine about a network. The zero value is the strictest
-// reading: nothing allowed, no lookup.
+// to ask the agent's own engine about a network and about a named volume. The zero
+// value is the strictest reading: nothing allowed, no lookups, so every named volume
+// mount of a service is refused.
 type bodyEnv struct {
-	policy Policy
-	lookup networkLookup
-	ctx    context.Context
+	policy  Policy
+	lookup  networkLookup
+	volumes volumeLookup
+	ctx     context.Context
 }
 
 // maxBody caps a request body of every kind but a service spec. Every such body is

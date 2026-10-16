@@ -655,6 +655,8 @@ func TestLogsRefuseWhatTheyDoNotTake(t *testing.T) {
 
 func TestRouteNetworkVolumeAndExecReadsAndDeletes(t *testing.T) {
 	sock := newFakeSocket(t)
+	// The fake answers a volume it was not told of with 404, as an engine does.
+	sock.answers = map[string]string{"/volumes/v1": `{"Name":"v1"}`}
 	h := Handler(sock.path, Policy{}, nil)
 	allowed := []struct{ method, target string }{
 		{"DELETE", "/volumes/v1"},

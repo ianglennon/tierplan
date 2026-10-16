@@ -28,6 +28,11 @@ var errHostPolicy = errors.New("the service spec gives tasks host access")
 // host network, so the agent asks the engine that holds it.
 type networkLookup func(ctx context.Context, target string) (name, driver string, err error)
 
+// volumeLookup answers the driver and options of a named volume on the agent's own
+// engine. found false with a nil error means the engine answered that it has no such
+// volume.
+type volumeLookup func(ctx context.Context, name string) (driver string, opts map[string]string, found bool, err error)
+
 // hostNetwork is the name of the engine's host network, which Docker creates on
 // every node and which a service names to share the node's network stack.
 const hostNetwork = "host"
@@ -122,6 +127,50 @@ func volumeEscalation(req volume.CreateRequest) string {
 	return ""
 }
 
+// namedVolumes returns the spec path of the Source of each volume mount that cannot be
+// shown to be free of host access, in the order of the spec. Docker mounts a volume
+// that exists as it is, and a service spec says nothing of what backs its name, so the
+// agent asks its own engine and judges the answer as a volume create (volumeEscalation).
+// A mount is listed when:
+//
+//   - its Source is not shaped like a volume name (no lookup is made for it);
+//   - lookup is nil, because the zero env cannot see what backs a name;
+//   - the lookup fails. Unlike the network lookup this fails closed: the engine refuses
+//     an unknown network itself, but it mounts an existing volume without asking;
+//   - the volume exists and volumeEscalation finds host access in its driver or options.
+//
+// A volume the engine does not have adds nothing: Docker creates it from the mount's
+// own VolumeOptions, which escalations and pluginVolumes judge, so it is judged like an
+// anonymous volume (no Source), which is never looked up. Each distinct Source is looked
+// up once. The agent sees only its own engine, so a volume of the same name on another
+// node is not judged (T-06-123).
+func namedVolumes(ctx context.Context, spec swarm.ServiceSpec, lookup volumeLookup) []string {
+	cs := spec.TaskTemplate.ContainerSpec
+	if cs == nil {
+		return nil
+	}
+	var out []string
+	bad := map[string]bool{}
+	for i, m := range cs.Mounts {
+		if m.Type != mount.TypeVolume || m.Source == "" {
+			continue
+		}
+		refused, seen := bad[m.Source]
+		if !seen {
+			refused = !volumeNameRe.MatchString(m.Source) || lookup == nil
+			if !refused {
+				driver, opts, found, err := lookup(ctx, m.Source)
+				refused = err != nil || (found && volumeEscalation(volume.CreateRequest{Driver: driver, DriverOpts: opts}) != "")
+			}
+			bad[m.Source] = refused
+		}
+		if refused {
+			out = append(out, fmt.Sprintf("TaskTemplate.ContainerSpec.Mounts[%d].Source", i))
+		}
+	}
+	return out
+}
+
 // checkHostPolicy refuses a spec that gives tasks host access unless the host
 // allows it. The paths of the findings are in the error for the log; they are
 // never sent back to the server, whose answer is the typed refusal.
@@ -133,7 +182,9 @@ func checkHostPolicy(spec swarm.ServiceSpec, env bodyEnv) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if found := escalations(ctx, spec, env.lookup); len(found) > 0 {
+	found := escalations(ctx, spec, env.lookup)
+	found = append(found, namedVolumes(ctx, spec, env.volumes)...)
+	if len(found) > 0 {
 		return fmt.Errorf("%w: %w: %s", errBodyRefused, errHostPolicy, strings.Join(found, ", "))
 	}
 	return nil

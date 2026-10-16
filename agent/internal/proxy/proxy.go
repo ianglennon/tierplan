@@ -59,7 +59,8 @@ type Policy struct {
 	// AllowPrivilegedServices lets a service spec that gives tasks host access
 	// through, and a volume create that mounts a host path or a device or names a
 	// volume plugin, on every agent-managed host: a swarm node or a standalone host
-	// (BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES).
+	// (BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES). On a manager it also lets a service
+	// mount a named volume whose backing gives host access.
 	AllowPrivilegedServices bool
 }
 
@@ -134,6 +135,7 @@ func Handler(socketPath string, policy Policy, onDenied func(method, path, reaso
 		DisableCompression: true,
 	}
 	lookup := networkLookupOver(transport)
+	volumes := volumeLookupOver(transport)
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			// Rewrite, unlike Director, drops any X-Forwarded-* the server
@@ -192,7 +194,7 @@ func Handler(socketPath string, policy Policy, onDenied func(method, path, reaso
 		}
 		if kind != BodyNone {
 			// What is forwarded is the rebuilt body, never the bytes the server sent.
-			rebuilt, err := validateBody(kind, http.MaxBytesReader(w, r.Body, bodyCap(kind)), bodyEnv{policy: policy, lookup: lookup, ctx: r.Context()})
+			rebuilt, err := validateBody(kind, http.MaxBytesReader(w, r.Body, bodyCap(kind)), bodyEnv{policy: policy, lookup: lookup, volumes: volumes, ctx: r.Context()})
 			if err != nil {
 				if errors.Is(err, errHostPolicy) {
 					deny(wire.DeniedHostPolicy)
@@ -252,6 +254,49 @@ func networkLookupOver(transport http.RoundTripper) networkLookup {
 // maxLookupAnswer caps what is read of a network inspect. Only the name and the
 // driver are used, but a network with many containers has a long answer.
 const maxLookupAnswer = 8 << 20
+
+// maxVolumeAnswer caps what is read of a volume inspect. Only the driver and the
+// options are used.
+const maxVolumeAnswer = 1 << 20
+
+// volumeLookupOver asks the engine behind transport about a named volume: one GET
+// /volumes/{name}. A 404 is a volume the engine does not have, found false with no
+// error. A name not shaped like a volume name, any other status, a timeout or an
+// answer that cannot be read is an error, which the check reads as host access.
+func volumeLookupOver(transport http.RoundTripper) volumeLookup {
+	client := &http.Client{Transport: transport}
+	return func(ctx context.Context, name string) (string, map[string]string, bool, error) {
+		if !volumeNameRe.MatchString(name) {
+			return "", nil, false, errors.New("not a volume name")
+		}
+		ctx, cancel := context.WithTimeout(ctx, lookupTimeout)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker/volumes/"+name, nil)
+		if err != nil {
+			return "", nil, false, err
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return "", nil, false, err
+		}
+		defer func() { _ = resp.Body.Close() }()
+		switch resp.StatusCode {
+		case http.StatusNotFound:
+			return "", nil, false, nil
+		case http.StatusOK:
+		default:
+			return "", nil, false, fmt.Errorf("volume lookup answered %d", resp.StatusCode)
+		}
+		var v struct {
+			Driver  string
+			Options map[string]string
+		}
+		if err := json.NewDecoder(io.LimitReader(resp.Body, maxVolumeAnswer)).Decode(&v); err != nil {
+			return "", nil, false, err
+		}
+		return v.Driver, v.Options, true, nil
+	}
+}
 
 // registryHeaderOK reports whether the values of an X-Registry-Auth header may be
 // forwarded: none at all, or exactly one that is empty or at most maxRegistryAuth
