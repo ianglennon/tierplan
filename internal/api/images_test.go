@@ -97,7 +97,7 @@ func TestImageDetailAViewerSeesTheNamesDetailsLabelsAndTheNodeThatHasIt(t *testi
 
 func TestImageDetailAnImageWithNoTagIsDanglingWithNoNames(t *testing.T) {
 	f, e := dashEnv(t, imageDetailEngine())
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	rec := f.get(t, e, "images/"+imgDangle)
 	if rec.code != http.StatusOK {
 		t.Fatalf("detail: %d %s", rec.code, rec.body)
@@ -110,7 +110,7 @@ func TestImageDetailAnImageWithNoTagIsDanglingWithNoNames(t *testing.T) {
 
 func TestImageDetailAnIDOfTheWrongShapeIs422AnUnknownImageIs404AndANodeThatIsNotTheEnvironmentsIs503(t *testing.T) {
 	f, e := dashEnv(t, imageDetailEngine())
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	for _, bad := range []string{"nginx", "sha256:abc", strings.ToUpper(imgID), imgID + "0", "sha256:" + strings.Repeat("g", 64)} {
 		if rec := f.get(t, e, "images/"+bad); rec.code != http.StatusUnprocessableEntity {
 			t.Errorf("%q: %d, want 422: %s", bad, rec.code, rec.body)
@@ -144,15 +144,15 @@ func TestImageDetailNeedsImagesRead(t *testing.T) {
 func TestSwarmImageDetailNamesEveryNodeAndSaysWhichDoNotHaveIt(t *testing.T) {
 	s := newSwarmFix(t)
 	id := "sha256:" + strings.Repeat("a", 64)
-	var got imageDetail
-	waitFor(t, "the image on both managers", func() bool {
-		rec := s.get(t, s.env.ID, "images/"+id)
-		if rec.code != http.StatusOK {
-			return false
-		}
-		got = decode[imageDetail](t, rec)
-		return len(got.Nodes) == 3
-	})
+	s.awaitNodesProbed(t)
+	rec := s.get(t, s.env.ID, "images/"+id)
+	if rec.code != http.StatusOK {
+		t.Fatalf("detail: %d %s", rec.code, rec.body)
+	}
+	got := decode[imageDetail](t, rec)
+	if len(got.Nodes) != 3 {
+		t.Fatalf("nodes = %+v, want the three nodes", got.Nodes)
+	}
 	var present, absent []string
 	for _, n := range got.Nodes {
 		if n.Present {
@@ -187,7 +187,7 @@ func TestSwarmImageDetailNamesEveryNodeAndSaysWhichDoNotHaveIt(t *testing.T) {
 
 func TestImageDetailAnEncodedColonInThePathIsTheSameImage(t *testing.T) {
 	f, e := dashEnv(t, imageDetailEngine())
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	rec := f.get(t, e, "images/"+strings.Replace(imgID, ":", "%3A", 1))
 	if rec.code != http.StatusOK {
 		t.Fatalf("encoded colon: %d %s", rec.code, rec.body)
@@ -296,7 +296,7 @@ func TestImageInspectAnImageWithNoEnvIsNotMasked(t *testing.T) {
 
 func TestImageInspectAndHistoryUseTheDetailRoutesRulesForTheIDAndTheNode(t *testing.T) {
 	f, e := dashEnv(t, imageInspectEngine())
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	for _, what := range []string{"inspect", "history"} {
 		if rec := f.get(t, e, "images/nginx/"+what); rec.code != http.StatusNotFound && rec.code != http.StatusUnprocessableEntity {
 			t.Errorf("%s of a bad path: %d", what, rec.code)
@@ -315,7 +315,7 @@ func TestImageInspectAndHistoryUseTheDetailRoutesRulesForTheIDAndTheNode(t *test
 
 func TestImageHistoryAnswersTheLayersInTheOrderTheEngineGaveThem(t *testing.T) {
 	f, e := dashEnv(t, imageInspectEngine())
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	rec := f.get(t, e, "images/"+imgEnv+"/history")
 	if rec.code != http.StatusOK {
 		t.Fatalf("history: %d %s", rec.code, rec.body)
@@ -336,7 +336,7 @@ func TestImageHistoryFromAnAgentThatRefusesTheRouteIsAgentPolicyDenied(t *testin
 	cfg := imageInspectEngine()
 	cfg.HistoryDeny = true
 	f, e := dashEnv(t, cfg)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	rec := f.get(t, e, "images/"+imgEnv+"/history")
 	if rec.code != http.StatusBadGateway || rec.ptyp != "agent_policy_denied" {
 		t.Errorf("history: %d %q, want 502 agent_policy_denied: %s", rec.code, rec.ptyp, rec.body)
@@ -350,7 +350,10 @@ func TestImageHistoryFromAnAgentThatRefusesTheRouteIsAgentPolicyDenied(t *testin
 func TestSwarmImageInspectAndHistoryReadTheFirstNodeThatHasItOrTheNodeNamed(t *testing.T) {
 	s := newSwarmFix(t)
 	id := "sha256:" + strings.Repeat("a", 64)
-	waitFor(t, "the image on both managers", func() bool { return s.get(t, s.env.ID, "images/"+id+"/history").code == http.StatusOK })
+	s.awaitNodesProbed(t)
+	if rec := s.get(t, s.env.ID, "images/"+id+"/history"); rec.code != http.StatusOK {
+		t.Fatalf("history: %d %s", rec.code, rec.body)
+	}
 	if rec := s.get(t, s.env.ID, "images/"+id+"/inspect"); rec.code != http.StatusOK {
 		t.Errorf("inspect: %d %s", rec.code, rec.body)
 	}
@@ -423,6 +426,14 @@ func listSwarm(t *testing.T) *swarmFix {
 	})
 }
 
+// awaitNodesProbed waits until the monitor has probed the engine of every node and found it
+// online. A read of the images of the cluster calls each node through the monitor's client,
+// which is ErrOffline until that node's first probe has finished.
+func (s *swarmFix) awaitNodesProbed(t *testing.T) {
+	t.Helper()
+	awaitProbed(t, s.mon, envs.AgentTarget(s.m1.id), envs.AgentTarget(s.m2.id), envs.AgentTarget(s.w.id))
+}
+
 func (s *swarmFix) imageList(t *testing.T, query string) imageList {
 	t.Helper()
 	rec := s.get(t, s.env.ID, "images"+query)
@@ -434,11 +445,11 @@ func (s *swarmFix) imageList(t *testing.T, query string) imageList {
 
 func TestImageListMergesNodeCopiesByIDAndKeepsTheSameTagWithAnotherIDAsASecondRow(t *testing.T) {
 	s := listSwarm(t)
-	var got imageList
-	waitFor(t, "every node's images", func() bool {
-		got = s.imageList(t, "")
-		return got.Total == 3
-	})
+	s.awaitNodesProbed(t)
+	got := s.imageList(t, "")
+	if got.Total != 3 {
+		t.Fatalf("total = %d, want 3: %+v", got.Total, got.Items)
+	}
 	// Newest first: the drifted copy (50), the managers' nginx (40), the untagged image (10).
 	if len(got.Items) != 3 || got.Items[0].ID != listDrift || got.Items[1].ID != listWeb || got.Items[2].ID != listAlt {
 		t.Fatalf("items = %+v, want drift, web, alt", got.Items)
@@ -475,11 +486,11 @@ func TestImageListMergesNodeCopiesByIDAndKeepsTheSameTagWithAnotherIDAsASecondRo
 
 func TestImageListPerNodeViewHasOneRowPerNodeCopyAndTheNodeFilterNarrowsIt(t *testing.T) {
 	s := listSwarm(t)
-	var got imageList
-	waitFor(t, "every node's images", func() bool {
-		got = s.imageList(t, "?view=node")
-		return got.Total == 6
-	})
+	s.awaitNodesProbed(t)
+	got := s.imageList(t, "?view=node")
+	if got.Total != 6 {
+		t.Fatalf("total = %d, want 6: %+v", got.Total, got.Items)
+	}
 	for _, it := range got.Items {
 		if it.NodeID == "" || it.Node == "" || len(it.Nodes) != 1 || it.Nodes[0].NodeID != it.NodeID {
 			t.Errorf("row %+v, want exactly the node it is on", it)
@@ -501,7 +512,7 @@ func TestImageListPerNodeViewHasOneRowPerNodeCopyAndTheNodeFilterNarrowsIt(t *te
 
 func TestImageListSearchMatchesTagRepositoryOrIDPrefixAndDanglingKeepsUntaggedRows(t *testing.T) {
 	s := listSwarm(t)
-	waitFor(t, "every node's images", func() bool { return s.imageList(t, "").Total == 3 })
+	s.awaitNodesProbed(t)
 	for q, want := range map[string]int{
 		"nginx":                            2,
 		"NGINX:LATEST":                     1,
@@ -536,7 +547,7 @@ func TestImageListFiltersRunBeforeTheCapAndRowsSortNewestFirstThenByID(t *testin
 	}
 	imgs = append(imgs, dockertest.FakeImage{ID: hexID("f"), RepoTags: []string{"needle:1"}, Created: 1})
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", Images: imgs})
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 
 	all := decode[imageList](t, f.get(t, e, "images"))
 	if all.Total != 502 || !all.Truncated || len(all.Items) != 500 || all.UnfilteredTotal != 502 || all.DanglingCount != 501 {
@@ -558,7 +569,7 @@ func TestImageListFiltersRunBeforeTheCapAndRowsSortNewestFirstThenByID(t *testin
 
 func TestImageListWithNoImagesIsEmptyNotNull(t *testing.T) {
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	got := decode[imageList](t, f.get(t, e, "images"))
 	if got.Items == nil || len(got.Items) != 0 || got.Total != 0 || got.UnfilteredTotal != 0 || got.NodeCount != 1 {
 		t.Errorf("empty = %+v", got)

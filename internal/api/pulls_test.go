@@ -20,9 +20,11 @@ import (
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/internal/registry"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -72,7 +74,7 @@ type pullJob struct {
 // startPull posts a pull as the signed-in admin once the monitor has seen the node online.
 func (f *envFix) startPull(t *testing.T, e envBody, body string) *envRec {
 	t.Helper()
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	return f.req(t, http.MethodPost, "/api/env/"+e.ID+"/images/pull", body)
 }
 
@@ -81,19 +83,67 @@ func (f *envFix) getPull(t *testing.T, id string) *envRec {
 	return f.req(t, http.MethodGet, "/api/pulls/"+id, "")
 }
 
-// pullDone waits for the job to end and returns it.
+// pullDone waits for the job to end and returns it. It reads the job's events from the jobs hub
+// until the channel closes after the done event, then reads the job once through the route.
 func (f *envFix) pullDone(t *testing.T, id string) pullJob {
 	t.Helper()
-	var job pullJob
-	waitFor(t, "the pull to end", func() bool {
-		rec := f.getPull(t, id)
-		if rec.code != http.StatusOK {
-			t.Fatalf("GET pull: %d %s", rec.code, rec.body)
+	ctx := testsupport.Context(t)
+	for {
+		snap, events, cancel, err := f.jobHub.Subscribe(ctx, id, 0)
+		if err != nil {
+			t.Fatalf("subscribing to pull %s: %v", id, err)
 		}
-		job = decode[pullJob](t, rec)
-		return job.State != "running"
-	})
-	return job
+		if !snap.Finished() {
+			for range events {
+			}
+		}
+		cancel()
+		// The channel also closes for a reader that fell behind, and when the test's context
+		// ends; only a finished job ends the wait.
+		if job, ok := f.jobHub.Get(id); ok && job.Finished() {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("waiting for pull %s to end: %v", id, ctx.Err())
+		}
+	}
+	rec := f.getPull(t, id)
+	if rec.code != http.StatusOK {
+		t.Fatalf("GET pull: %d %s", rec.code, rec.body)
+	}
+	return decode[pullJob](t, rec)
+}
+
+// awaitPullJob waits until cond is true of the job in the jobs hub. It reads the job again after
+// each event the job publishes, so a change falls between no two reads, and it fails if the job
+// ends without cond ever holding.
+func awaitPullJob(t *testing.T, hub *jobs.Hub, id, what string, cond func(jobs.Job) bool) jobs.Job {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	for {
+		job, events, cancel, err := hub.Subscribe(ctx, id, 0)
+		if err != nil {
+			t.Fatalf("subscribing to pull %s: %v", id, err)
+		}
+		for open := true; open && !cond(job); {
+			select {
+			case _, ok := <-events:
+				open = ok
+				job, _ = hub.Get(id)
+			case <-ctx.Done():
+				cancel()
+				t.Fatalf("waiting for %s: %v; the job was %+v", what, ctx.Err(), job)
+			}
+		}
+		cancel()
+		if cond(job) {
+			return job
+		}
+		if job.Finished() {
+			t.Fatalf("pull %s ended before %s: %+v", id, what, job)
+		}
+		// The reader fell behind and was dropped: look again.
+	}
 }
 
 func (f *envFix) pullAudits(t *testing.T) []auditRowFull {
@@ -238,7 +288,7 @@ func TestPullRefusals(t *testing.T) {
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", PullHold: gate})
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 
 	t.Run("a Viewer is refused", func(t *testing.T) {
 		cookie, csrf := f.signIn(t, "viewer", false)
@@ -287,7 +337,7 @@ func TestPullJobIsOnlyVisibleToItsOwner(t *testing.T) {
 		f.addUser(t, name, false)
 		f.addEnvRole(t, name, e.ID, "operator")
 	}
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	c1, x1 := f.signIn(t, "op1", false)
 	c2, x2 := f.signIn(t, "op2", false)
 
@@ -322,7 +372,7 @@ func TestPullJobIsOnlyVisibleToItsOwner(t *testing.T) {
 
 func TestPullStateHoldsNoRegistryHeader(t *testing.T) {
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	secret := "c2VjcmV0LXJlZ2lzdHJ5LXRva2Vu" //nolint:gosec // a made-up value the test looks for, not a credential
 	rec := f.call(t, authReq{
 		method: http.MethodPost, path: "/api/env/" + e.ID + "/images/pull", body: `{"ref":"busybox:1.36.1"}`,
@@ -399,7 +449,7 @@ func TestPullStreamResumesFromLastEventIDAndPingsAndEndsWhenSignedOut(t *testing
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
 	f.pullsHeartbeat = 20 * time.Millisecond
 	f.h = f.build(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	rec := f.startPull(t, e, `{"ref":"busybox:1.36.1"}`)
 	started := decode[pullStarted](t, rec)
 	f.pullDone(t, started.JobID)
@@ -508,16 +558,24 @@ func (s *swarmFix) pullOnSwarm(t *testing.T, body string) *envRec {
 
 func (s *swarmFix) pullsDone(t *testing.T, id string) pullJob {
 	t.Helper()
-	var job pullJob
-	waitFor(t, "the pull to end", func() bool {
-		rec := s.getPull(t, id)
-		if rec.code != http.StatusOK {
-			t.Fatalf("GET pull: %d %s", rec.code, rec.body)
-		}
-		job = decode[pullJob](t, rec)
-		return job.State != "running"
-	})
-	return job
+	if _, err := s.jobHub.Wait(testsupport.Context(t), id); err != nil {
+		t.Fatalf("waiting for pull %s to end: %v", id, err)
+	}
+	rec := s.getPull(t, id)
+	if rec.code != http.StatusOK {
+		t.Fatalf("GET pull: %d %s", rec.code, rec.body)
+	}
+	return decode[pullJob](t, rec)
+}
+
+// kickWorker ends the worker's agent session and waits until the hub has dropped it, which is
+// when the node is listed unreachable.
+func (s *swarmFix) kickWorker(t *testing.T) {
+	t.Helper()
+	s.srv.Hub.Kick(s.w.id, tunnel.DisconnectClosed)
+	if _, err := s.srv.Hub.AwaitSession(testsupport.Context(t), s.w.id, func(sess *tunnel.Session) bool { return sess == nil }); err != nil {
+		t.Fatalf("the worker's session never went: %v", err)
+	}
 }
 
 func creates(a *agentConn) int {
@@ -551,11 +609,11 @@ func TestPullTargetsListsEveryNodeWithRoleArchitectureAndReachability(t *testing
 	}
 
 	// A worker whose agent is gone is still listed, and unreachable.
-	s.srv.Hub.Kick(s.w.id, tunnel.DisconnectClosed)
-	waitFor(t, "the worker to be listed unreachable", func() bool {
-		got = decode[pullTargets](t, s.req(t, http.MethodGet, "/api/env/"+s.env.ID+"/images/pull-targets", ""))
-		return len(got.Nodes) == 3 && !got.Nodes[2].Reachable
-	})
+	s.kickWorker(t)
+	got = decode[pullTargets](t, s.req(t, http.MethodGet, "/api/env/"+s.env.ID+"/images/pull-targets", ""))
+	if len(got.Nodes) != 3 {
+		t.Fatalf("targets = %+v, want the worker still listed", got.Nodes)
+	}
 	if w := got.Nodes[2]; w.NodeID != s.w.id || w.Name != "wrk-1" || w.Role != "worker" || got.Nodes[0].Reachable != true {
 		t.Errorf("targets = %+v, want wrk-1 unreachable by its agent ID and the managers still reachable", got.Nodes)
 	}
@@ -563,7 +621,7 @@ func TestPullTargetsListsEveryNodeWithRoleArchitectureAndReachability(t *testing
 
 func TestPullTargetsOfAStandaloneHostIsOneNodeAndNotASwarm(t *testing.T) {
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	rec := f.get(t, e, "images/pull-targets")
 	if rec.code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.code, rec.body)
@@ -648,7 +706,7 @@ func TestPullNodeChoiceIsCheckedAgainstTheEnvironmentsOwnNodes(t *testing.T) {
 		})
 	}
 	// Only the duplicate case started a pull: nothing else reached an engine.
-	waitFor(t, "the one pull to reach the worker", func() bool { return creates(s.w) == 1 })
+	awaitFake(t, s.w.fake, "the one pull to reach the worker", func() bool { return creates(s.w) == 1 })
 	if creates(s.m1) != 0 || creates(s.m2) != 0 {
 		t.Errorf("managers served %d/%d pulls, want none", creates(s.m1), creates(s.m2))
 	}
@@ -746,11 +804,7 @@ func TestOneNodeFailingLeavesTheOthersDoneAndEveryAuditRowCarriesTheSameBulkID(t
 func TestPullOnAnUnreachableNodeFailsItAloneWithNodeUnreachable(t *testing.T) {
 	s := newSwarmFix(t)
 	s.whenProbed(t, envs.AgentTarget(s.m1.id), envs.AgentTarget(s.m2.id), envs.AgentTarget(s.w.id))
-	s.srv.Hub.Kick(s.w.id, tunnel.DisconnectClosed)
-	waitFor(t, "the worker to be listed unreachable", func() bool {
-		got := decode[pullTargets](t, s.req(t, http.MethodGet, "/api/env/"+s.env.ID+"/images/pull-targets", ""))
-		return len(got.Nodes) == 3 && !got.Nodes[2].Reachable
-	})
+	s.kickWorker(t)
 	rec := s.req(t, http.MethodPost, "/api/env/"+s.env.ID+"/images/pull", `{"ref":"busybox:1.36.1"}`)
 	if rec.code != http.StatusAccepted {
 		t.Fatalf("status = %d: %s", rec.code, rec.body)
@@ -807,7 +861,7 @@ func TestListPullsShowsTheStartersAndTheAdministratorsOfTheEnvironmentOnly(t *te
 		f.addUser(t, u.name, false)
 		f.addEnvRole(t, u.name, e.ID, u.role)
 	}
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	op1, x1 := f.signIn(t, "op1", false)
 	op2, _ := f.signIn(t, "op2", false)
 	envAdmin, _ := f.signIn(t, "envadmin", false)
@@ -870,7 +924,7 @@ func TestCancelPullByTheStarterStopsTheNodeAuditsItAndASecondCancelIs409(t *test
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", PullHold: gate})
 	f.addUser(t, "op1", false)
 	f.addEnvRole(t, "op1", e.ID, "operator")
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	op1, x1 := f.signIn(t, "op1", false)
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/images/pull", body: `{"ref":"busybox:1"}`, cookie: op1, csrf: x1})
 	if rec.Code != http.StatusAccepted {
@@ -921,10 +975,10 @@ func TestCancelPullKeepsTheNodesThatFinishedDoneAndTheJobIsPartial(t *testing.T)
 	// A node's item turns running when its pull is dispatched, before the request reaches
 	// the node's engine, so "running" alone does not mean the node was asked. Wait for the
 	// held node to have recorded its request too; only then is it known to be held on the gate.
-	waitFor(t, "alpha to finish and bravo to be asked and held", func() bool {
-		job := decode[pullJob](t, f.getPull(t, started.JobID))
-		return len(job.Items) == 2 && job.Items[0].State == "done" && job.Items[1].State == "running" && creates(held) >= 1
+	awaitPullJob(t, f.jobHub, started.JobID, "alpha to finish and bravo to run", func(j jobs.Job) bool {
+		return len(j.Items) == 2 && j.Items[0].State == jobs.ItemDone && j.Items[1].State == jobs.ItemRunning
 	})
+	awaitFake(t, held.fake, "bravo to be asked and held", func() bool { return creates(held) >= 1 })
 	if creates(held) != 1 {
 		t.Fatalf("the held node was asked %d times", creates(held))
 	}
@@ -953,7 +1007,7 @@ func TestCancelPullIsAllowedToAnEnvAdminAndAnInstanceAdminAndNeverToAnyoneWhoCan
 		f.addUser(t, u.name, false)
 		f.addEnvRole(t, u.name, e.ID, u.role)
 	}
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	op1, x1 := f.signIn(t, "op1", false)
 	op2, x2 := f.signIn(t, "op2", false)
 	envAdmin, xa := f.signIn(t, "envadmin", false)
