@@ -3,6 +3,7 @@
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -49,6 +50,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // The success toast is raised when the answer arrives, after the dialog has closed. A toast
+  // still up when a test ends would be found by the next test's alert query.
+  toast.dismiss();
   cleanup();
   vi.unstubAllGlobals();
   queryClient.clear();
@@ -227,5 +231,7 @@ describe("ChangePasswordDialog", () => {
     await act(async () => release(Response.json({ csrfToken: "csrf-new" })));
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
     expect(posts()).toHaveLength(1);
+    // The toast comes after the dialog closes; the test ends once it is up.
+    await screen.findByText("Password changed. Your other sessions were signed out.");
   });
 });

@@ -6,7 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { SpecEditor } from "@/features/spec-editor/spec-editor";
+import { SpecEditor, specEditorTiming } from "@/features/spec-editor/spec-editor";
 import { renderSpec, SPEC_FORMAT_KEY } from "@/features/spec-editor/spec-format";
 import "@/i18n";
 
@@ -39,6 +39,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   localStorage.clear();
 });
@@ -159,12 +160,16 @@ describe("SpecEditor", () => {
   });
 
   it("announces one distinct error once: the same error typed on is the same alert", async () => {
+    // The error shows after a timer of the component's own. The clock is a fake one that also
+    // keeps moving with real time (shouldAdvanceTime), so findBy and waitFor keep polling.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     renderEditor();
     await screen.findByRole("textbox", { name: "Service spec, YAML" });
     typeSpec("Name: [oops\n");
     const first = await screen.findByRole("alert");
     typeSpec("Name: [oops!\n");
-    await new Promise((r) => setTimeout(r, 500));
+    // Past the debounce of the second edit, whose error would have replaced the first.
+    await vi.advanceTimersByTimeAsync(specEditorTiming.errorMs * 2);
     expect(screen.getAllByRole("alert")).toHaveLength(1);
     expect(screen.getByRole("alert")).toBe(first);
   });

@@ -14,6 +14,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { YourShellsPopover } from "@/features/terminal/your-shells-popover";
 import "@/i18n";
 import { makeMe } from "@/test-me";
+import { settled } from "@/test-settle";
 
 // "Your shells ({n})" on the Shell tab (plan 04-25, OBS-03, D-31, D-37).
 
@@ -38,6 +39,8 @@ let listStatus: number;
 let endStatus: number;
 let asked: string[];
 let ended: string[];
+// How many times /api/me was answered: the shells list is only asked for once it says who may.
+let meServed: number;
 
 const defaultQueryOptions = queryClient.getDefaultOptions();
 
@@ -49,12 +52,16 @@ beforeEach(() => {
   endStatus = 204;
   asked = [];
   ended = [];
+  meServed = 0;
   setCsrfToken(null);
   vi.stubGlobal(
     "fetch",
     vi.fn(async (req: Request) => {
       const url = new URL(req.url);
-      if (url.pathname === "/api/me") return Response.json(me);
+      if (url.pathname === "/api/me") {
+        meServed++;
+        return Response.json(me);
+      }
       if (url.pathname === `/api/env/${ENV}/shells` && req.method === "GET") {
         asked.push(url.search);
         return listStatus === 200
@@ -152,7 +159,9 @@ describe("the Your shells popover", () => {
   it("does not ask for the list of someone who may not open shells", async () => {
     me = makeMe({ username: "vera", id: "u-vera", envs: { e1: "viewer" } });
     renderPopover();
-    await new Promise((r) => setTimeout(r, 100));
+    // Who the person is has been answered, and nothing is still running, before "nothing asked".
+    await waitFor(() => expect(meServed).toBeGreaterThan(0));
+    await settled(queryClient);
     expect(asked).toEqual([]);
     expect(screen.queryByRole("button", { name: /^Your shells/ })).toBeNull();
   });

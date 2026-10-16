@@ -25,6 +25,7 @@ import {
 import "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
+import { settled } from "@/test-settle";
 
 // The switcher and the version footer have their own tests and their own endpoints; the
 // sidebar tests below are about which links it draws.
@@ -617,8 +618,8 @@ describe("the sidebar item", () => {
     me = makeMe({});
     mountSidebar();
     await waitFor(() => expect(client.getQueryData(["me"])).toBeDefined());
-    // Let the sidebar draw with what it has read.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Let the sidebar draw with what it has read: nothing is fetching once /api/me is in.
+    await settled(client);
     expect(screen.queryByRole("link", { name: "Registries" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Environments" })).toBeNull();
   });
