@@ -120,17 +120,6 @@ func (o *observer) log() []string {
 	return append([]string(nil), o.events...)
 }
 
-func waitFor(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}
-
 // awaitLen waits until the observer has heard n events and returns them. It wakes
 // on each event the observer records and never polls.
 func (o *observer) awaitLen(t *testing.T, n int) []string {

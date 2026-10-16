@@ -50,31 +50,35 @@ func TestViewsFollowHeartbeatsAndTheEngineFlag(t *testing.T) {
 	env := srv.NewEnvironment(t, "Production")
 	c := srv.Enrol(t, env)
 	srv.Events.WaitLen(t, 1)
+	s := srv.Hub.Session(c.Identity.AgentID)
 	control := c.OpenControl(t)
 	srv.Clock.Advance(7 * time.Second)
 	at := srv.Clock.Now()
 	tunneltest.SendHeartbeat(t, control, false, 1)
-	waitFor(t, "the heartbeat to show in the view", func() bool {
-		v := viewOf(t, srv, env.ID, c.Identity.AgentID)
-		return v.LastSeen.Equal(at)
-	})
+	// The view of a live session is read from the session's status, so the status
+	// showing the heartbeat is the view showing it.
+	awaitStatus(t, s, "the heartbeat to show in the status", func(st tunnel.SessionStatus) bool { return st.LastHeartbeat.Equal(at) })
+	if v := viewOf(t, srv, env.ID, c.Identity.AgentID); !v.LastSeen.Equal(at) {
+		t.Fatalf("view = %+v, want it last heard at %v", v, at)
+	}
 	if v := viewOf(t, srv, env.ID, c.Identity.AgentID); v.EngineReachable {
 		t.Fatalf("view = %+v, want the engine reported unreachable", v)
 	}
 }
 
 func TestViewsRememberATimeoutWithItsTimeAndTheLastHeartbeat(t *testing.T) {
-	srv := timed(t, nil)
+	k := newTicks()
+	srv := timed(t, k.option)
 	env := srv.NewEnvironment(t, "Production")
 	c := srv.Enrol(t, env)
 	srv.Events.WaitLen(t, 1)
 	s := srv.Hub.Session(c.Identity.AgentID)
 	control := c.OpenControl(t)
 	tunneltest.SendHeartbeat(t, control, true, 1)
-	waitFor(t, "the heartbeat", func() bool { return !s.Status().LastHeartbeat.IsZero() })
-	beat := s.Status().LastHeartbeat
+	beat := awaitStatus(t, s, "the heartbeat", func(st tunnel.SessionStatus) bool { return !st.LastHeartbeat.IsZero() }).LastHeartbeat
 
 	srv.Clock.Advance(31 * time.Second)
+	k.look(t, s)
 	srv.Events.WaitLen(t, 2)
 	v := viewOf(t, srv, env.ID, c.Identity.AgentID)
 	if v.Connected || v.LastCode != tunnel.DisconnectTimeout || !v.Ended.Equal(srv.Clock.Now()) || !v.LastSeen.Equal(beat) {

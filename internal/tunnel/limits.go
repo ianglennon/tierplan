@@ -234,9 +234,20 @@ func (h *Hub) preflight(r *http.Request, ip string) (aud string, ref *preflightR
 type addrInflight struct {
 	mu sync.Mutex
 	n  map[string]int
+	// changed is closed and cleared whenever a count changes, to wake
+	// Hub.AwaitHandshakes waiters; a waiter makes it.
+	changed chan struct{}
 }
 
 func newAddrInflight() *addrInflight { return &addrInflight{n: map[string]int{}} }
+
+// notifyLocked wakes every waiter. a.mu must be held.
+func (a *addrInflight) notifyLocked() {
+	if a.changed != nil {
+		close(a.changed)
+		a.changed = nil
+	}
+}
 
 // take counts one more handshake for key, or reports false when key already has
 // max in flight.
@@ -247,6 +258,7 @@ func (a *addrInflight) take(key string, max int) bool {
 		return false
 	}
 	a.n[key]++
+	a.notifyLocked()
 	return true
 }
 
@@ -254,11 +266,43 @@ func (a *addrInflight) take(key string, max int) bool {
 func (a *addrInflight) give(key string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	defer a.notifyLocked()
 	if a.n[key] <= 1 {
 		delete(a.n, key)
 		return
 	}
 	a.n[key]--
+}
+
+// AwaitHandshakes returns the first count of handshakes in flight, over all
+// addresses, for which cond is true. It evaluates cond now and again whenever a
+// handshake starts or ends, and never polls. A handshake that has ended has given
+// back its place in the global cap before this count drops, so a caller that
+// sees the drop can start another. When ctx ends first it returns the last count
+// together with the context's error.
+func (h *Hub) AwaitHandshakes(ctx context.Context, cond func(inFlight int) bool) (int, error) {
+	a := h.perAddr
+	for {
+		// Take the channel in the same critical section as the read, so a change
+		// between the read and the wait is not missed.
+		a.mu.Lock()
+		if a.changed == nil {
+			a.changed = make(chan struct{})
+		}
+		ch, total := a.changed, 0
+		for _, n := range a.n {
+			total += n
+		}
+		a.mu.Unlock()
+		if cond(total) {
+			return total, nil
+		}
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return total, ctx.Err()
+		}
+	}
 }
 
 // admit decides whether one more handshake may start. Three bounds apply, in this

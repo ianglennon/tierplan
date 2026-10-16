@@ -210,6 +210,30 @@ func (r *Recorder) WaitLen(t testing.TB, n int) []string {
 	}
 }
 
+// Await waits until cond is true of the lifecycle log and of the sessions
+// reported connected, and returns the log it was true of. It evaluates cond now
+// and after every lifecycle event, and never polls; what names the condition in
+// the failure text.
+func (r *Recorder) Await(t testing.TB, what string, cond func(log []string, sessions []*tunnel.Session) bool) []string {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	for {
+		r.mu.Lock()
+		changed := r.changed
+		l := append([]string(nil), r.events...)
+		ss := append([]*tunnel.Session(nil), r.sessions...)
+		r.mu.Unlock()
+		if cond(l, ss) {
+			return l
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			t.Fatalf("tunneltest: timed out after %v waiting for %s, have %v", testsupport.Deadline, what, l)
+		}
+	}
+}
+
 // Start serves a hub over TLS with a real store and agents service. Everything is
 // shut down when the test ends.
 func Start(t *testing.T, opts Options) *Server {
@@ -420,6 +444,25 @@ func (s *Server) Begin(t testing.TB, a Agent) *Pending {
 		t.Fatalf("tunneltest: challenge = %s, %v", data, err)
 	}
 	return &Pending{s: s, t: t, a: a, ws: ws, resp: resp, ch: ch, ctx: ctx}
+}
+
+// AwaitServerClose blocks until the server has closed the connection, as it does
+// when the challenge is not answered in time, and returns the error the close
+// reads as. It fails the test if the server has not closed by the shared
+// deadline. The agent has said nothing, so the only thing the server can send is
+// its close. The close is consumed: Finish cannot follow, because the connection
+// is gone.
+func (p *Pending) AwaitServerClose() error {
+	p.t.Helper()
+	ctx := testsupport.Context(p.t)
+	for {
+		if _, _, err := p.ws.Read(ctx); err != nil {
+			if ctx.Err() != nil {
+				p.t.Fatalf("tunneltest: the server did not close the connection within %v", testsupport.Deadline)
+			}
+			return err
+		}
+	}
 }
 
 // Finish sends the agent's side of the handshake and returns after the welcome or
