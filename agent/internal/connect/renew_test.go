@@ -12,6 +12,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/big"
 	"net"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/ianglennon/bayplan/agent/internal/state"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -117,17 +119,22 @@ type controlRig struct {
 	t0     time.Time
 	server net.Conn
 	lines  chan string
-	saved  chan []byte
-	saveFn func([]byte) error
-	rn     *renewer
-	done   chan error
+	// beatClocks carries the clock each heartbeat reported, and results the
+	// update_result lines (answers to fences), apart from lines so that waitFor and
+	// count never discard them.
+	beatClocks chan int64
+	results    chan struct{}
+	saved      chan []byte
+	saveFn     func([]byte) error
+	rn         *renewer
+	done       chan error
 }
 
 func newControlRig(t *testing.T, tweak func(*controlRig)) *controlRig {
 	t.Helper()
 	_, key, _ := ed25519.GenerateKey(rand.Reader)
 	t0 := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
-	r := &controlRig{t: t, clk: newClock(t0), key: key, t0: t0, lines: make(chan string, 1024), saved: make(chan []byte, 8), done: make(chan error, 1)}
+	r := &controlRig{t: t, clk: newClock(t0), key: key, t0: t0, lines: make(chan string, 1024), beatClocks: make(chan int64, 1<<16), results: make(chan struct{}, 64), saved: make(chan []byte, 8), done: make(chan error, 1)}
 	r.saveFn = func(c []byte) error { r.saved <- c; return nil }
 	if tweak != nil {
 		tweak(r)
@@ -145,7 +152,7 @@ func newControlRig(t *testing.T, tweak func(*controlRig)) *controlRig {
 		_ = serverEnd.Close()
 		select {
 		case <-r.done:
-		case <-time.After(5 * time.Second):
+		case <-time.After(testsupport.Deadline):
 			t.Error("runControl did not stop")
 		}
 	})
@@ -161,9 +168,19 @@ func newControlRig(t *testing.T, tweak func(*controlRig)) *controlRig {
 		sc := bufio.NewScanner(br)
 		for sc.Scan() {
 			var h struct {
-				T string `json:"t"`
+				T       string `json:"t"`
+				ClockMs int64  `json:"clockMs"`
 			}
-			if json.Unmarshal(sc.Bytes(), &h) == nil {
+			if json.Unmarshal(sc.Bytes(), &h) != nil {
+				continue
+			}
+			switch h.T {
+			case wire.TypeUpdateResult:
+				r.results <- struct{}{}
+			case wire.TypeHeartbeat:
+				r.lines <- h.T
+				r.beatClocks <- h.ClockMs
+			default:
 				r.lines <- h.T
 			}
 		}
@@ -189,31 +206,40 @@ func (r *controlRig) count(typ string) int {
 // waitFor waits for a line of type typ.
 func (r *controlRig) waitFor(typ string) {
 	r.t.Helper()
-	deadline := time.After(3 * time.Second)
 	for {
-		select {
-		case l := <-r.lines:
-			if l == typ {
-				return
-			}
-		case <-deadline:
-			r.t.Fatalf("no %q line arrived", typ)
+		if l := testsupport.Await(r.t, fmt.Sprintf("a %q line", typ), r.lines); l == typ {
+			return
 		}
 	}
 }
 
-// settle gives the control loop time for several ticks.
+// settle returns once the control loop has gone through a whole round with the clock
+// as it is now. A heartbeat carries the clock the loop read at the start of its round,
+// so one that reports the current clock began after the test set it; the loop writes
+// the next heartbeat only when that round, renewal check and renew line included, is
+// over, so the one after it proves the round ended. A line the round wrote has by
+// then reached lines, ahead of that heartbeat.
 func (r *controlRig) settle() {
-	time.Sleep(60 * time.Millisecond)
+	r.t.Helper()
+	want := r.clk.now().UnixMilli()
+	for testsupport.Await(r.t, "a heartbeat that reports the clock as it is now", r.beatClocks) < want {
+	}
+	testsupport.Await(r.t, "the heartbeat after it", r.beatClocks)
 }
 
 func (r *controlRig) reply(v any) {
 	r.t.Helper()
 	b, _ := json.Marshal(v)
-	_ = r.server.SetWriteDeadline(time.Now().Add(3 * time.Second))
+	_ = r.server.SetWriteDeadline(time.Now().Add(testsupport.Deadline))
 	if _, err := r.server.Write(append(b, '\n')); err != nil {
 		r.t.Fatalf("write to the agent: %v", err)
 	}
+	// The agent reads its control lines one at a time, so its answer to a fence sent
+	// after v says that v has been handled.
+	if _, err := r.server.Write([]byte(fenceLine + "\n")); err != nil {
+		r.t.Fatalf("write the fence to the agent: %v", err)
+	}
+	testsupport.Await(r.t, "the agent's answer to the fence", r.results)
 }
 
 func TestAnAgentAsksToRenewAtDay20AndNotBefore(t *testing.T) {
@@ -239,13 +265,8 @@ func TestARenewedCertificateIsSavedAndTheNextRenewalIsScheduledFromIt(t *testing
 	now := r.clk.now()
 	renewed := testCert(t, r.key, "agent-7", now.Add(-5*time.Minute), now.Add(30*day))
 	r.reply(wire.Renewed{T: wire.TypeRenewed, Cert: renewed})
-	select {
-	case got := <-r.saved:
-		if string(got) != string(renewed) {
-			t.Fatal("the agent saved a certificate other than the one it was sent")
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("the renewed certificate was not saved")
+	if got := testsupport.Await(t, "the renewed certificate to be saved", r.saved); string(got) != string(renewed) {
+		t.Fatal("the agent saved a certificate other than the one it was sent")
 	}
 
 	// Its own two thirds is day 40, not another request now or on day 21.
@@ -389,16 +410,16 @@ func TestTheAgentRenewsItsCertificateOverTheLiveTunnelAndSavesItAtomically(t *te
 	fresh := testCert(t, key, "agent-7", now.Add(-5*time.Minute), now.Add(30*day))
 	var asked atomic.Int32
 	srv := newFakeServer(t, func(int, wire.Auth) reply {
-		return reply{heartbeatMs: 30, onRenew: func() any {
+		return reply{heartbeatMs: 30, fenceAfterRenew: true, onRenew: func() any {
 			asked.Add(1)
 			return wire.Renewed{T: wire.TypeRenewed, Cert: fresh}
 		}}
 	})
 	startAgent(t, Config{URL: srv.url(), StateDir: dir}, fastEnv())
-	waitUntil(t, "the renewed certificate on the volume", func() bool {
-		s, ok, err := state.Load(dir)
-		return err == nil && ok && string(s.Cert) == string(fresh)
-	})
+	srv.awaitFence(t) // the agent handled the renewed certificate and saved it
+	if s, ok, err := state.Load(dir); err != nil || !ok || string(s.Cert) != string(fresh) {
+		t.Fatalf("the renewed certificate is not on the volume: %v %v", ok, err)
+	}
 	if n := asked.Load(); n != 1 {
 		t.Fatalf("the agent asked %d times, want once", n)
 	}

@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -25,6 +27,15 @@ type stubMaint struct {
 	uninstall []wire.Uninstall
 	block     chan struct{}
 	answer    func(id string) wire.UpdateResult
+	// entered gets a value each time Update or Uninstall is called, before it waits on
+	// block.
+	entered chan struct{}
+}
+
+func (s *stubMaint) enter() {
+	if s.entered != nil {
+		s.entered <- struct{}{}
+	}
 }
 
 func (s *stubMaint) reply(id string) wire.UpdateResult {
@@ -35,6 +46,7 @@ func (s *stubMaint) reply(id string) wire.UpdateResult {
 }
 
 func (s *stubMaint) Update(_ context.Context, m wire.Update) wire.UpdateResult {
+	s.enter()
 	if s.block != nil {
 		<-s.block
 	}
@@ -45,6 +57,7 @@ func (s *stubMaint) Update(_ context.Context, m wire.Update) wire.UpdateResult {
 }
 
 func (s *stubMaint) Uninstall(_ context.Context, m wire.Uninstall) wire.UpdateResult {
+	s.enter()
 	if s.block != nil {
 		<-s.block
 	}
@@ -83,7 +96,7 @@ func newMaintRig(t *testing.T, svc *stubMaint) *maintRig {
 		_ = serverEnd.Close()
 		select {
 		case <-done:
-		case <-time.After(5 * time.Second):
+		case <-time.After(testsupport.Deadline):
 			t.Error("runControl did not stop")
 		}
 	})
@@ -106,7 +119,7 @@ func newMaintRig(t *testing.T, svc *stubMaint) *maintRig {
 
 func (r *maintRig) send(line string) {
 	r.t.Helper()
-	_ = r.server.SetWriteDeadline(time.Now().Add(3 * time.Second))
+	_ = r.server.SetWriteDeadline(time.Now().Add(testsupport.Deadline))
 	if _, err := r.server.Write([]byte(line + "\n")); err != nil {
 		r.t.Fatalf("write to the agent: %v", err)
 	}
@@ -115,41 +128,39 @@ func (r *maintRig) send(line string) {
 // result waits for the next update_result line.
 func (r *maintRig) result() wire.UpdateResult {
 	r.t.Helper()
-	deadline := time.After(3 * time.Second)
 	for {
-		select {
-		case l := <-r.lines:
-			var h struct {
-				T string `json:"t"`
+		l := testsupport.Await(r.t, "an update_result line", r.lines)
+		var h struct {
+			T string `json:"t"`
+		}
+		if json.Unmarshal(l, &h) == nil && h.T == wire.TypeUpdateResult {
+			var res wire.UpdateResult
+			if err := json.Unmarshal(l, &res); err != nil {
+				r.t.Fatalf("bad update_result %s: %v", l, err)
 			}
-			if json.Unmarshal(l, &h) == nil && h.T == wire.TypeUpdateResult {
-				var res wire.UpdateResult
-				if err := json.Unmarshal(l, &res); err != nil {
-					r.t.Fatalf("bad update_result %s: %v", l, err)
-				}
-				return res
-			}
-		case <-deadline:
-			r.t.Fatal("no update_result arrived")
-			return wire.UpdateResult{}
+			return res
 		}
 	}
 }
 
-// heartbeats drains the lines and counts the heartbeats among them.
-func (r *maintRig) heartbeats() int {
-	n := 0
-	for {
+// heartbeats waits for n more heartbeats. Lines already queued are dropped first, so
+// every heartbeat counted was written after the call.
+func (r *maintRig) heartbeats(n int) {
+	r.t.Helper()
+	for drained := false; !drained; {
 		select {
-		case l := <-r.lines:
-			var h struct {
-				T string `json:"t"`
-			}
-			if json.Unmarshal(l, &h) == nil && h.T == wire.TypeHeartbeat {
-				n++
-			}
+		case <-r.lines:
 		default:
-			return n
+			drained = true
+		}
+	}
+	for got := 0; got < n; {
+		l := testsupport.Await(r.t, fmt.Sprintf("heartbeat %d of %d", got+1, n), r.lines)
+		var h struct {
+			T string `json:"t"`
+		}
+		if json.Unmarshal(l, &h) == nil && h.T == wire.TypeHeartbeat {
+			got++
 		}
 	}
 }
@@ -186,13 +197,13 @@ func TestAnUninstallMessageReachesSelfMaintenanceAndItsResultGoesBack(t *testing
 }
 
 func TestASlowUpdateDoesNotStopHeartbeatsAndItsResultComesAfterwards(t *testing.T) {
-	svc := &stubMaint{block: make(chan struct{})}
+	svc := &stubMaint{block: make(chan struct{}), entered: make(chan struct{}, 1)}
 	r := newMaintRig(t, svc)
 	r.send(`{"t":"update","id":"slow","image":"x/y:1"}`)
-	time.Sleep(60 * time.Millisecond)
-	if n := r.heartbeats(); n < 3 {
-		t.Fatalf("only %d heartbeats while an update was running, want the stream to stay alive", n)
-	}
+	testsupport.Await(t, "the update to start", svc.entered)
+	// The update holds until released; three heartbeats written after it started show
+	// that the stream stays alive meanwhile.
+	r.heartbeats(3)
 	close(svc.block)
 	if res := r.result(); res.ID != "slow" || !res.OK {
 		t.Fatalf("result = %+v", res)
@@ -234,13 +245,7 @@ func (s *stubMaint) uninstalls() []wire.Uninstall {
 // nextResult waits for the next update_result the agent sent the fake server.
 func nextResult(t *testing.T, f *fakeServer) wire.UpdateResult {
 	t.Helper()
-	select {
-	case res := <-f.results:
-		return res
-	case <-time.After(3 * time.Second):
-		t.Fatal("the server got no update_result")
-		return wire.UpdateResult{}
-	}
+	return testsupport.Await(t, "an update_result at the server", f.results)
 }
 
 // maintScript sends an update and then an uninstall as soon as the control stream is
@@ -271,7 +276,9 @@ func TestOnASessionThatWasNotVerifiedAnUpdateAndAnUninstallAreRefusedAndNothingI
 			t.Errorf("result for %s = %+v (present %v), want ok:false and insecure_session", id, res, ok)
 		}
 	}
-	time.Sleep(50 * time.Millisecond)
+	// Both requests were answered, and the agent heartbeats on after them; anything it
+	// was going to run would have run by now.
+	a.heartbeatsAfterWelcome(t, 1)
 	if u, x := svc.gotUpdates(), svc.uninstalls(); len(u) != 0 || len(x) != 0 {
 		t.Fatalf("self-maintenance ran on an unverified session: updates %+v uninstalls %+v", u, x)
 	}
@@ -305,11 +312,7 @@ func TestAnUnverifiedSessionRefusesEvenWithoutSelfMaintenanceAndKeepsHeartbeatin
 			t.Fatalf("result = %+v, want insecure_session", res)
 		}
 	}
-	select {
-	case <-a.beats:
-	case <-time.After(3 * time.Second):
-		t.Fatal("no heartbeat after the refusals")
-	}
+	a.heartbeatsAfterWelcome(t, 1) // the agent heartbeats on after the refusals
 }
 
 // insecureSessionCode is the machine code of the refusal, spelt out so that the

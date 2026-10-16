@@ -12,6 +12,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"log/slog"
@@ -26,12 +27,12 @@ import (
 	"reflect"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ianglennon/bayplan/agent/internal/state"
 	"github.com/ianglennon/bayplan/proto/authn"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -326,7 +327,7 @@ func (l *lockedBuffer) String() string {
 
 func newFakeServerTLS(t *testing.T, script func(n int, a wire.Auth) reply) *fakeServer {
 	t.Helper()
-	f := &fakeServer{script: script, beats: make(chan wire.Heartbeat, 256), denied: make(chan wire.Denied, 256), results: make(chan wire.UpdateResult, 64), started: make(chan int, 64)}
+	f := newFakeCore(script)
 	f.ts = httptest.NewUnstartedServer(http.HandlerFunc(f.handle))
 	f.ts.Config.ErrorLog = log.New(io.Discard, "", 0) // refused handshakes are what these tests are about
 	f.ts.StartTLS()
@@ -341,14 +342,13 @@ func serverPin(f *fakeServer) string { return authn.SPKIPin(f.ts.Certificate()) 
 
 func TestTheAgentRefusesAnUnpinnedSelfSignedServerSaysSoOnceAndKeepsBackingOff(t *testing.T) {
 	f := newFakeServerTLS(t, func(int, wire.Auth) reply { return reply{} })
-	var sleeps atomic.Int32
-	env := fastEnv()
-	inner := env.sleep
-	env.sleep = func(ctx context.Context, d time.Duration) error { sleeps.Add(1); return inner(ctx, d) }
+	env, rounds := countingEnv()
 	logs := &lockedBuffer{}
 
 	startAgent(t, Config{URL: f.url(), JoinToken: "bpjt_x", Log: slog.New(slog.NewTextHandler(logs, nil))}, env)
-	waitUntil(t, "three refused attempts", func() bool { return sleeps.Load() >= 3 })
+	for i := range 3 {
+		testsupport.Await(t, fmt.Sprintf("refused attempt %d", i+1), rounds)
+	}
 
 	if n := f.attempts(); n != 0 {
 		t.Fatalf("the server saw %d handshakes: the agent sent its token over a connection it could not verify", n)
@@ -367,15 +367,14 @@ func TestTheAgentRefusesAnUnpinnedSelfSignedServerSaysSoOnceAndKeepsBackingOff(t
 
 func TestTheAgentRefusesAServerWhosePinIsWrong(t *testing.T) {
 	f := newFakeServerTLS(t, func(int, wire.Auth) reply { return reply{} })
-	var sleeps atomic.Int32
-	env := fastEnv()
-	inner := env.sleep
-	env.sleep = func(ctx context.Context, d time.Duration) error { sleeps.Add(1); return inner(ctx, d) }
+	env, rounds := countingEnv()
 	logs := &lockedBuffer{}
 
 	wrong := "sha256/" + strings.Repeat("A", 43) + "="
 	startAgent(t, Config{URL: f.url(), JoinToken: "bpjt_x", InstallPins: []string{wrong}, Log: slog.New(slog.NewTextHandler(logs, nil))}, env)
-	waitUntil(t, "two refused attempts", func() bool { return sleeps.Load() >= 2 })
+	for i := range 2 {
+		testsupport.Await(t, fmt.Sprintf("refused attempt %d", i+1), rounds)
+	}
 	if n := f.attempts(); n != 0 {
 		t.Fatalf("the server saw %d handshakes through a wrong pin", n)
 	}
@@ -392,11 +391,11 @@ func TestTheAgentWithTheInstallPinConnectsAndKeepsTheWelcomePins(t *testing.T) {
 
 	startAgent(t, Config{URL: f.url(), JoinToken: "bpjt_x", InstallPins: []string{serverPin(f)}, StateDir: dir}, fastEnv())
 	f.authN(t, 1)
-	waitUntil(t, "the welcome pins to be stored", func() bool {
-		ps, err := state.LoadPins(dir)
-		return err == nil && len(ps) == 2
-	})
-	ps, _ := state.LoadPins(dir)
+	f.heartbeatsAfterWelcome(t, 1) // the welcome's pins are stored before the first heartbeat
+	ps, err := state.LoadPins(dir)
+	if err != nil || len(ps) != 2 {
+		t.Fatalf("stored pins = %v, %v; want the welcome's two", ps, err)
+	}
 	got := state.ActivePins(ps, time.Now())
 	if len(got) != 2 || got[0] != serverPin(f) || got[1] != other {
 		t.Fatalf("stored pins = %v, want the server's pin and the other", got)
@@ -410,11 +409,13 @@ func TestStoredPinsLetARestartedAgentConnectWithoutTheInstallPin(t *testing.T) {
 
 	cancel, _ := startAgent(t, Config{URL: f.url(), JoinToken: "bpjt_x", InstallPins: []string{serverPin(f)}, StateDir: dir}, fastEnv())
 	f.authN(t, 1)
-	waitUntil(t, "the identity and the pins to be stored", func() bool {
-		ps, err := state.LoadPins(dir)
-		_, ok, lerr := state.Load(dir)
-		return err == nil && len(ps) == 1 && ok && lerr == nil
-	})
+	f.heartbeatsAfterWelcome(t, 1) // the identity and the pins are stored before the first heartbeat
+	if ps, err := state.LoadPins(dir); err != nil || len(ps) != 1 {
+		t.Fatalf("stored pins = %v, %v; want one", ps, err)
+	}
+	if _, ok, err := state.Load(dir); err != nil || !ok {
+		t.Fatalf("the identity was not stored: %v, %v", ok, err)
+	}
 	cancel() // startAgent's cleanup waits for it to stop
 
 	// The restart has no token and no install pin: only what it stored.
@@ -432,15 +433,7 @@ func TestPinsFromAPlainSessionAreNeverStored(t *testing.T) {
 	dir := t.TempDir()
 	startAgent(t, Config{URL: f.url(), JoinToken: "bpjt_x", StateDir: dir}, fastEnv())
 	f.authN(t, 1)
-	waitUntil(t, "the agent to be connected", func() bool {
-		select {
-		case <-f.started:
-			return true
-		default:
-			return false
-		}
-	})
-	time.Sleep(50 * time.Millisecond)
+	f.heartbeatsAfterWelcome(t, 2) // the welcome was handled, and its pins ignored, before the first heartbeat
 	if _, err := os.Stat(filepath.Join(dir, state.PinsFile)); err == nil {
 		t.Fatal("pins from an unverified plain ws:// session were stored")
 	}
