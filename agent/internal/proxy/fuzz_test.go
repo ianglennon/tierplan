@@ -625,6 +625,18 @@ func FuzzBody(f *testing.F) {
 				t.Fatalf("kind %d forwarded %s set: %s", k, z, out)
 			}
 		}
+		if k == BodyVolumeCreate {
+			// A volume created here can be mounted by name in a spec that carries no
+			// host path, so a volume with host access must never be forwarded without
+			// the opt-in (D-36 and D-38 as amended).
+			var req volume.CreateRequest
+			if err := json.Unmarshal(out, &req); err != nil {
+				t.Fatalf("the forwarded volume create does not decode: %v: %.200s", err, out)
+			}
+			if found := volumeEscalation(req); found != "" {
+				t.Fatalf("a volume create with host access %s was forwarded: %.200s", found, out)
+			}
+		}
 		if k == BodyNodeSpec {
 			var spec swarm.NodeSpec
 			if err := json.Unmarshal(out, &spec); err != nil {
