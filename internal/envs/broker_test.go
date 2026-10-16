@@ -287,7 +287,7 @@ func TestASubscriberThatFallsBehindIsDroppedAndTheOthersAreNotSlowed(t *testing.
 	}()
 	for range 500 {
 		b.Publish(HealthEvent{Type: EventAgentRefused, EnvID: "e"})
-		time.Sleep(20 * time.Microsecond) // the fast reader keeps up
+		time.Sleep(20 * time.Microsecond) //nolint:forbidigo // paces the publisher so the fast reader is never behind; the pace is the input of the slow-subscriber test
 	}
 	select {
 	case <-done:

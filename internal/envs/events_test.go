@@ -15,6 +15,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // The per-environment events hub (plan 21, ENV-07, D-57, Pattern 8, Pitfall 7).
@@ -54,7 +55,7 @@ func newHubRig(t *testing.T, cfg dockertest.FakeConfig) *hubRig {
 	if err := mon.Start(context.Background(), hubEnv, fake); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	eventually(t, "the environment to be online", func() bool { return mon.Status(hubEnv).State == StateOnline })
+	awaitState(t, mon, hubEnv, "the environment to be online", stateIs(StateOnline))
 	return &hubRig{mon: mon, fake: fake, hub: hub, snaps: snaps}
 }
 
@@ -68,14 +69,38 @@ func (r *hubRig) eventRequests() int {
 	return n
 }
 
+// awaitFake waits for a condition on the fake daemon, which wakes the waiter on every request
+// it serves and every stream it opens or ends.
+func (r *hubRig) awaitFake(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	if err := r.fake.Await(testsupport.Context(t), cond); err != nil {
+		t.Fatalf("timed out waiting for %s: %v", what, err)
+	}
+}
+
+// awaitHub waits for a condition on the hub, which wakes the waiter whenever a feed opens or
+// closes and whenever an event is buffered.
+func (r *hubRig) awaitHub(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	if err := r.hub.Await(testsupport.Context(t), cond); err != nil {
+		t.Fatalf("timed out waiting for %s: %v", what, err)
+	}
+}
+
 func (r *hubRig) waitStreamOpen(t *testing.T) {
 	t.Helper()
-	eventually(t, "the daemon stream to open", func() bool { return r.fake.OpenEventStreams() == 1 })
+	r.awaitFake(t, "the daemon stream to open", func() bool { return r.fake.OpenEventStreams() == 1 })
 }
 
 func (r *hubRig) waitRecent(t *testing.T, n int) {
 	t.Helper()
-	eventually(t, fmt.Sprintf("%d buffered events", n), func() bool { return len(r.hub.Recent(hubEnv, 1000)) >= n })
+	r.awaitHub(t, fmt.Sprintf("%d buffered events", n), func() bool { return len(r.hub.Recent(hubEnv, 1000)) >= n })
+}
+
+// waitReopened waits for the hub to have asked the daemon for a second stream and to hold it.
+func (r *hubRig) waitReopened(t *testing.T) {
+	t.Helper()
+	r.awaitFake(t, "the stream to reopen", func() bool { return len(r.fake.EventQueries()) == 2 && r.fake.OpenEventStreams() == 1 })
 }
 
 func (r *hubRig) subscribe(t *testing.T) ([]dockerx.EventRow, <-chan dockerx.EventRow, func()) {
@@ -163,7 +188,11 @@ func TestHubSecondSubscriberGetsTheSameBacklogWithoutASecondDaemonRequest(t *tes
 	for range 3 {
 		r.hub.Start(hubEnv)
 	}
-	time.Sleep(100 * time.Millisecond)
+	// An event published after the Starts and seen in the buffer proves the hub has
+	// carried on past them; a second stream they had opened would have asked the daemon
+	// by now and been counted below.
+	r.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: "c-after-starts"})
+	r.waitRecent(t, 2)
 	if got := r.eventRequests(); got != 1 {
 		t.Errorf("%d /events requests, want 1 whatever the number of viewers", got)
 	}
@@ -187,7 +216,7 @@ func TestHubRingKeepsTheNewest1000EventsAndRemembersMoreIDsThanThat(t *testing.T
 			r.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: fmt.Sprintf("c%04d", i), TimeNano: base + int64(i)})
 		}
 		last := fmt.Sprintf("c%04d", start+99)
-		eventually(t, "a batch to arrive", func() bool {
+		r.awaitHub(t, "a batch to arrive", func() bool {
 			recent := r.hub.Recent(hubEnv, 1)
 			return len(recent) == 1 && recent[0].ActorID == last
 		})
@@ -233,7 +262,7 @@ func TestHubAfterADropResumesFromTheLastEventAndShowsItOnce(t *testing.T) {
 	}
 
 	r.fake.DropEventStreams()
-	eventually(t, "the stream to reopen", func() bool { return len(r.fake.EventQueries()) == 2 && r.fake.OpenEventStreams() == 1 })
+	r.waitReopened(t)
 	// The fake replays everything at or after since, so the event the hub already
 	// has is sent again. A subscriber must not see it twice.
 	r.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "die", ActorID: "c-n1", TimeNano: n + 1})
@@ -354,7 +383,7 @@ func TestHubInvalidateOnlyRowDropsTheSnapshotAndReachesSubscribersButNeverTheBuf
 	// After a drop the daemon replays the row; it is remembered, so it is not
 	// delivered, and does not invalidate, a second time.
 	r.fake.DropEventStreams()
-	eventually(t, "the stream to reopen", func() bool { return len(r.fake.EventQueries()) == 2 && r.fake.OpenEventStreams() == 1 })
+	r.waitReopened(t)
 	r.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "die", ActorID: "c-next", TimeNano: n + 1})
 	if ev := recvEvent(t, ch); ev.ActorID != "c-next" {
 		t.Errorf("after the drop the next event is %+v, want c-next (the health row must not repeat)", ev)
@@ -394,7 +423,7 @@ func TestHubEveryKeptEventInvalidatesTheSnapshotCache(t *testing.T) {
 	}
 
 	r.fake.PublishEvent(dockertest.FakeEvent{Type: "image", Action: "pull", ActorID: "nginx"})
-	eventually(t, "the second event", func() bool { return len(r.hub.Recent(hubEnv, 10)) == 2 })
+	r.waitRecent(t, 2)
 	if _, _, err := r.snaps.Get(ctx, hubEnv); err != nil {
 		t.Fatal(err)
 	}
@@ -414,17 +443,22 @@ func TestHubStopsItsStreamWhileTheEnvironmentIsNotOnlineAndBackfillsWhenItReturn
 	// The engine still answers /events but its info does not, so the monitor
 	// says the environment is no longer online: the stream must stop.
 	r.fake.Reconfigure(dockertest.FakeConfig{FailInfo: true})
-	eventually(t, "the monitor to leave online", func() bool { return r.mon.Status(hubEnv).State != StateOnline })
-	eventually(t, "the daemon stream to be closed", func() bool { return r.fake.OpenEventStreams() == 0 })
+	left := awaitState(t, r.mon, hubEnv, "the monitor to leave online", func(s Status) bool { return s.State != StateOnline })
+	r.awaitFake(t, "the daemon stream to be closed", func() bool { return r.fake.OpenEventStreams() == 0 })
 	before := len(r.fake.EventQueries())
-	time.Sleep(100 * time.Millisecond)
+	// A later failed probe is a causally later event: the monitor has looked again and still
+	// does not offer the hub an engine, so a stream the hub meant to reopen would have been
+	// asked for by now.
+	awaitState(t, r.mon, hubEnv, "another failed probe", func(s Status) bool {
+		return s.State != StateOnline && s.LastAttempt.After(left.LastAttempt)
+	})
 	if got := len(r.fake.EventQueries()); got != before {
 		t.Errorf("%d more /events requests while the environment is not online, want none", got-before)
 	}
 
 	r.fake.Reconfigure(dockertest.FakeConfig{})
-	eventually(t, "the environment to be online again", func() bool { return r.mon.Status(hubEnv).State == StateOnline })
-	eventually(t, "the stream to reopen", func() bool { return r.fake.OpenEventStreams() == 1 })
+	awaitState(t, r.mon, hubEnv, "the environment to be online again", stateIs(StateOnline))
+	r.awaitFake(t, "the stream to reopen", func() bool { return r.fake.OpenEventStreams() == 1 })
 	qs := r.fake.EventQueries()
 	want := fmt.Sprintf("%d.%09d", n/int64(time.Second), n%int64(time.Second))
 	if got := qs[len(qs)-1].Get("since"); got != want {
@@ -445,12 +479,12 @@ func TestHubSurvivesTheDaemonGoingDownAndComingBack(t *testing.T) {
 	recvEvent(t, ch)
 
 	r.fake.Stop()
-	eventually(t, "the monitor to see it offline", func() bool { return r.mon.Status(hubEnv).State == StateOffline })
+	awaitState(t, r.mon, hubEnv, "the monitor to see it offline", stateIs(StateOffline))
 	// A restarted daemon has an empty buffer (Pitfall 7).
 	r.fake.ClearEvents()
 	r.fake.Restart(t)
-	eventually(t, "the environment to be online again", func() bool { return r.mon.Status(hubEnv).State == StateOnline })
-	eventually(t, "the stream to reopen", func() bool { return r.fake.OpenEventStreams() == 1 })
+	awaitState(t, r.mon, hubEnv, "the environment to be online again", stateIs(StateOnline))
+	r.awaitFake(t, "the stream to reopen", func() bool { return r.fake.OpenEventStreams() == 1 })
 
 	r.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "die", ActorID: "c-after", TimeNano: n + 5})
 	if ev := recvEvent(t, ch); ev.ActorID != "c-after" {
@@ -550,7 +584,7 @@ func TestHubStopEndsTheStreamAndClosesSubscribers(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the subscriber was not closed when the environment was removed")
 	}
-	eventually(t, "the daemon stream to end", func() bool { return r.fake.OpenEventStreams() == 0 })
+	r.awaitFake(t, "the daemon stream to end", func() bool { return r.fake.OpenEventStreams() == 0 })
 	if got := r.hub.Recent(hubEnv, 10); len(got) != 0 {
 		t.Errorf("Recent after removal = %v, want nothing kept", got)
 	}
@@ -576,7 +610,7 @@ func TestHubCloseEndsEverythingAndLaterSubscribersGetAClosedChannel(t *testing.T
 	case <-time.After(5 * time.Second):
 		t.Fatal("Close did not end the subscriber")
 	}
-	eventually(t, "the daemon stream to end", func() bool { return r.fake.OpenEventStreams() == 0 })
+	r.awaitFake(t, "the daemon stream to end", func() bool { return r.fake.OpenEventStreams() == 0 })
 
 	_, late, cancel := r.hub.Subscribe(context.Background(), hubEnv)
 	defer cancel()
@@ -584,7 +618,14 @@ func TestHubCloseEndsEverythingAndLaterSubscribersGetAClosedChannel(t *testing.T
 		t.Error("a subscriber after Close received an event instead of a closed channel")
 	}
 	r.hub.Start(hubEnv)
-	time.Sleep(50 * time.Millisecond)
+	// Start creates a feed under the hub's lock or not at all, so once it has returned the
+	// feed is there or it never will be; a stream follows only from a feed.
+	r.hub.mu.Lock()
+	feeds := len(r.hub.feeds)
+	r.hub.mu.Unlock()
+	if feeds != 0 {
+		t.Errorf("Start after Close created %d feeds", feeds)
+	}
 	if r.fake.OpenEventStreams() != 0 {
 		t.Error("Start after Close opened a stream")
 	}
@@ -664,6 +705,8 @@ func TestInjectingIntoATargetWithNoFeedIsRefusedAndAnInjectedRowDoesNotMoveTheRe
 type nodeSink struct {
 	mu   sync.Mutex
 	rows []NodeEvent
+	// changed is made by the first waiter and closed when the next row arrives.
+	changed chan struct{}
 }
 
 func collect(backlog []NodeEvent, ch <-chan NodeEvent) *nodeSink {
@@ -672,6 +715,10 @@ func collect(backlog []NodeEvent, ch <-chan NodeEvent) *nodeSink {
 		for r := range ch {
 			s.mu.Lock()
 			s.rows = append(s.rows, r)
+			if s.changed != nil {
+				close(s.changed)
+				s.changed = nil
+			}
 			s.mu.Unlock()
 		}
 	}()
@@ -690,9 +737,26 @@ func (s *nodeSink) where(pred func(NodeEvent) bool) []NodeEvent {
 	return out
 }
 
+// await waits until n rows satisfy pred, waking on each row the sink receives.
 func (s *nodeSink) await(t *testing.T, what string, pred func(NodeEvent) bool, n int) {
 	t.Helper()
-	eventually(t, what, func() bool { return len(s.where(pred)) >= n })
+	ctx := testsupport.Context(t)
+	for {
+		s.mu.Lock()
+		if s.changed == nil {
+			s.changed = make(chan struct{})
+		}
+		ch := s.changed
+		s.mu.Unlock()
+		if len(s.where(pred)) >= n {
+			return
+		}
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for %s", what)
+		}
+	}
 }
 
 func actor(id string) func(NodeEvent) bool { return func(e NodeEvent) bool { return e.ActorID == id } }
@@ -891,7 +955,9 @@ func TestMergedFeedRecentMergesTheNodesNewestFirstAndBacklogIsOldestFirst(t *tes
 		a.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "stop", ActorID: fmt.Sprintf("e%d", i+4), TimeNano: base + int64(i+4)*ms})
 	}
 	for _, a := range s.m {
-		eventually(t, "the hub to hold both events of a node", func() bool { return len(s.evs.Recent(AgentTarget(a.id), 10)) >= 2 })
+		if err := s.evs.Await(testsupport.Context(t), func() bool { return len(s.evs.Recent(AgentTarget(a.id), 10)) >= 2 }); err != nil {
+			t.Fatalf("the hub never held both events of a node: %v", err)
+		}
 	}
 	ids := func(rows []NodeEvent) string {
 		var out []string
