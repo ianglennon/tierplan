@@ -33,6 +33,7 @@ import {
   serviceFetch,
   specBody,
 } from "@/test-service";
+import { settled } from "@/test-settle";
 
 // The edit page (plan 06-19, D-01, D-03, D-05, RES-03; UI-SPEC "Service editor", "Review and
 // apply"): the Spec tab, the review, the apply with its progress, and the states around them.
@@ -521,7 +522,7 @@ describe("apply", () => {
       ),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Reload service" })).toBeTruthy();
-    await new Promise((r) => setTimeout(r, 100));
+    await settled(queryClient);
     expect(posts("/apply")).toHaveLength(1);
     state.spec = () => Response.json(specBody({ version: 8, spec: withReplicas(4) }));
     fireEvent.click(screen.getByRole("button", { name: "Reload service" }));

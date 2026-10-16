@@ -3,6 +3,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -72,6 +73,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // A toast one test raised (with its Details action) must not still be on screen in the next
+  // test's Toaster, where a click on "Details" could reach the earlier test's callback.
+  toast.dismiss();
   cleanup();
   vi.unstubAllGlobals();
 });

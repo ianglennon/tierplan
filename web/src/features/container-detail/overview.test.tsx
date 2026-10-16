@@ -14,6 +14,7 @@ import { Overview } from "@/features/container-detail/overview";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
+import { settled } from "@/test-settle";
 
 // The Overview tab of a container (plan 04-10, RES-01, D-04, P3 D-15a).
 
@@ -118,10 +119,11 @@ function mount() {
 
 const card = (title: string) => screen.getByRole("region", { name: title });
 
-// The page holds its actions back until it knows who the user is: wait for that answer.
+// The page holds its actions back until it knows who the user is: wait for that answer, and
+// for the cache to have taken it in (nothing fetching), so the buttons below have their final state.
 async function signedIn() {
   await waitFor(() => expect(meServed).toBeGreaterThan(0));
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await settled(client);
 }
 
 describe("Overview: the tracer cards", () => {

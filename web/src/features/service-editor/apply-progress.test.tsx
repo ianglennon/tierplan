@@ -21,6 +21,7 @@ import {
   serviceDetail,
   serviceFetch,
 } from "@/test-service";
+import { settled } from "@/test-settle";
 
 // The apply step (plan 06-19, D-03, P2 D-42; UI-SPEC "Review and apply"): the ordered steps of an
 // update with their state, then the rolling update, and the refusal when it did not happen.
@@ -159,7 +160,11 @@ describe("ApplyProgress", () => {
       Response.json(rollout({ state: "paused", message: "task failed", updated: 1, total: 3 }));
     renderProgress({ status: "success" });
     expect(await screen.findByText("Update paused")).toBeTruthy();
-    await new Promise((r) => setTimeout(r, 100));
+    // The component reads the rollout once more after applyTiming.settleMs before it would call a
+    // settled update complete: wait for that second read, and for it to be taken in.
+    const rolloutReads = () => state.sent.filter((s) => s.path.endsWith("/rollout")).length;
+    await waitFor(() => expect(rolloutReads()).toBeGreaterThanOrEqual(2));
+    await settled(queryClient);
     expect(screen.queryByRole("heading", { name: "Update complete" })).toBeNull();
     expect(screen.getByRole("link", { name: "View service" })).toBeTruthy();
   });
@@ -261,8 +266,8 @@ describe("ApplyProgress", () => {
 
   it("asks nothing again after a failure", async () => {
     renderProgress({ status: "error", error: new ServiceActionError(409, "service_changed") });
-    await new Promise((r) => setTimeout(r, 50));
-    await waitFor(() => expect(state.sent.filter((s) => s.method === "POST")).toHaveLength(0));
+    await settled(queryClient);
+    expect(state.sent.filter((s) => s.method === "POST")).toHaveLength(0);
   });
 });
 

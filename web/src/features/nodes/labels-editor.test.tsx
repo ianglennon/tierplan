@@ -10,7 +10,7 @@ import type { NodeLabelImpact } from "@/api/nodes";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { NODE_ENV, NODE_ID, nodeDetail } from "@/features/nodes/fixtures";
-import { NodeLabelsEditor } from "@/features/nodes/labels-editor";
+import { LABEL_CHECK_DEBOUNCE_MS, NodeLabelsEditor } from "@/features/nodes/labels-editor";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 
@@ -80,9 +80,15 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   vi.unstubAllGlobals();
 });
+
+// The impact check is debounced by a timer of the component's own. A test about that timing
+// runs it on a fake clock that also keeps moving with real time (shouldAdvanceTime), so that
+// findBy and waitFor keep polling, and moves it by exactly the debounce when it means to.
+const debounceClock = () => vi.useFakeTimers({ shouldAdvanceTime: true });
 
 function problem(status: number, type: string, detail?: string) {
   return Response.json({ status, type, title: "x", ...(detail ? { detail } : {}) }, { status });
@@ -111,7 +117,6 @@ const names = () =>
   (screen.getAllByLabelText("Label name") as HTMLInputElement[]).map((i) => i.value);
 const values = () =>
   (screen.getAllByLabelText("Label value") as HTMLInputElement[]).map((i) => i.value);
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Types a new value into the second row (zone).
 function editZone(value: string) {
@@ -152,15 +157,17 @@ describe("NodeLabelsEditor", () => {
       open = resolve;
     });
     await mount();
+    debounceClock();
     editZone("b");
     editZone("bb");
     editZone("bbb");
     // The check is pending from the first edit, and has not been asked yet.
     expect(isOff(save())).toBe(true);
     expect(screen.getByText("Checking services…")).toBeTruthy();
-    await sleep(200);
+    await vi.advanceTimersByTimeAsync(LABEL_CHECK_DEBOUNCE_MS - 1);
     expect(impactCalls).toHaveLength(0);
-    await waitFor(() => expect(impactCalls).toHaveLength(1), { timeout: 2000 });
+    await vi.advanceTimersByTimeAsync(1);
+    await waitFor(() => expect(impactCalls).toHaveLength(1));
     expect(impactCalls[0]?.body).toEqual({ labels: { disk: "ssd", zone: "bbb" } });
     // Asked but not answered: still held.
     expect(isOff(save())).toBe(true);
@@ -184,18 +191,21 @@ describe("NodeLabelsEditor", () => {
 
   it("refuses a reserved name on its row, holds Save labels and asks nothing of the server", async () => {
     await mount();
+    debounceClock();
     fireEvent.click(screen.getByRole("button", { name: "Add label" }));
     const fields = screen.getAllByLabelText("Label name");
     fireEvent.change(fields[2] as HTMLElement, { target: { value: "COM.Docker.swarm.x" } });
     expect(screen.getByText("Labels starting with com.docker. are reserved.")).toBeTruthy();
     expect((fields[2] as HTMLElement).getAttribute("aria-invalid")).toBe("true");
-    await sleep(600);
+    // Past the debounce the check would have been asked; it is not.
+    await vi.advanceTimersByTimeAsync(LABEL_CHECK_DEBOUNCE_MS * 2);
     expect(isOff(save())).toBe(true);
     expect(impactCalls).toHaveLength(0);
     // Fixing it releases the hold.
     fireEvent.change(fields[2] as HTMLElement, { target: { value: "com.dockerish" } });
     expect(screen.queryByText(/are reserved/)).toBeNull();
-    await waitFor(() => expect(isOff(save())).toBe(false), { timeout: 2000 });
+    await vi.advanceTimersByTimeAsync(LABEL_CHECK_DEBOUNCE_MS);
+    await waitFor(() => expect(isOff(save())).toBe(false));
   });
 
   it("refuses a name used twice and more than 64 labels", async () => {

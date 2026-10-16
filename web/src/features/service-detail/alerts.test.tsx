@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -22,6 +22,7 @@ import {
   type ServiceDetailBody,
   type ServiceRolloutBody,
 } from "@/test-service";
+import { settled } from "@/test-settle";
 
 // The alerts under the header of a service page, below the rollout region (plan 06-09, RES-02,
 // D-12, UI-SPEC "Service detail").
@@ -78,9 +79,7 @@ async function mount(detail: ServiceDetailBody) {
   );
   // The rollout is read once before the alerts decide.
   await waitFor(() => expect(reads).toBe(1));
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  });
+  await settled(client);
 }
 
 const short = (extra: Partial<ServiceDetailBody> = {}) =>

@@ -17,6 +17,7 @@ import "@/i18n";
 import { DropdownMenu, DropdownMenuContent } from "@/components/ui/dropdown-menu";
 import { type Needs, useNeeds } from "@/hooks/use-needs";
 import { makeMe } from "@/test-me";
+import { settled } from "@/test-settle";
 
 const ENV = "e1";
 
@@ -239,6 +240,7 @@ function reasonOf(item: HTMLElement): string {
 }
 
 const onSelect = vi.fn();
+let menuClient: QueryClient;
 
 function mountMenu(stack: string, role: "operator" | "admin") {
   onSelect.mockReset();
@@ -251,6 +253,7 @@ function mountMenu(stack: string, role: "operator" | "admin") {
     }),
   );
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  menuClient = client;
   render(
     <QueryClientProvider client={client}>
       <TooltipProvider>
@@ -262,10 +265,10 @@ function mountMenu(stack: string, role: "operator" | "admin") {
 }
 
 // The item as it is once /api/me has answered: what it is before that is not what a person sees.
-async function settled(): Promise<HTMLElement> {
+async function itemOnceSignedIn(): Promise<HTMLElement> {
   await waitFor(() => expect(screen.getByRole("menuitem", { name: "Remove…" })).toBeTruthy());
-  // /api/me answers asynchronously; the item changes with it.
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  // /api/me answers asynchronously; the item changes with it. Nothing is fetching once it has.
+  await settled(menuClient);
   return screen.getByRole("menuitem", { name: "Remove…" });
 }
 
@@ -277,7 +280,7 @@ describe("RemoveServiceMenuItem", () => {
         screen.getByRole("menuitem", { name: "Remove…" }).getAttribute("aria-disabled"),
       ).not.toBe("true"),
     );
-    const item = await settled();
+    const item = await itemOnceSignedIn();
     expect(item.getAttribute("data-variant")).toBe("destructive");
     expect(item.getAttribute("aria-disabled")).not.toBe("true");
     fireEvent.click(item);
@@ -289,7 +292,7 @@ describe("RemoveServiceMenuItem", () => {
     await waitFor(() =>
       expect(reasonOf(screen.getByRole("menuitem", { name: "Remove…" }))).toBe("Needs Admin"),
     );
-    const item = await settled();
+    const item = await itemOnceSignedIn();
     expect(item.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(item);
     expect(onSelect).not.toHaveBeenCalled();
@@ -302,7 +305,7 @@ describe("RemoveServiceMenuItem", () => {
         "Managed by stack shop. Change it through the stack.",
       ),
     );
-    const item = await settled();
+    const item = await itemOnceSignedIn();
     expect(item.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(item);
     expect(onSelect).not.toHaveBeenCalled();
