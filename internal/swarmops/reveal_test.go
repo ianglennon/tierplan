@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/moby/moby/api/types/swarm"
@@ -265,4 +266,230 @@ func TestApplyByACallerWhoCannotRevealKeepingItsSecretsAndChangingReplicasGoesTh
 			c.check(t, ups[0].Spec)
 		})
 	}
+}
+
+func TestMismatchedSecretsNamesEachReferenceWhoseNameIsNotItsSecrets(t *testing.T) {
+	have := []dockerx.SecretRow{{ID: "sec-db", Name: "db-pass"}, {ID: "sec-victim", Name: "victim-secret"}}
+	ref := func(id, name string) *swarm.SecretReference {
+		return &swarm.SecretReference{SecretID: id, SecretName: name}
+	}
+	for name, c := range map[string]struct {
+		spec swarm.ServiceSpec
+		want []swarmops.AddedSecret
+	}{
+		"the ID with its own name":           {specWith(ref("sec-db", "db-pass")), nil},
+		"the ID with another secret's name":  {specWith(ref("sec-db", "victim-secret")), []swarmops.AddedSecret{{Path: "TaskTemplate.ContainerSpec.Secrets[0]", Name: "victim-secret"}}},
+		"an ID with no name":                 {specWith(ref("sec-db", "")), nil},
+		"a name with no ID":                  {specWith(ref("", "victim-secret")), nil},
+		"an ID the swarm does not hold":      {specWith(ref("sec-gone", "db-pass")), nil},
+		"a second reference that mismatches": {specWith(ref("sec-db", "db-pass"), ref("sec-victim", "db-pass")), []swarmops.AddedSecret{{Path: "TaskTemplate.ContainerSpec.Secrets[1]", Name: "db-pass"}}},
+		"a nil reference":                    {specWith(nil), nil},
+		"no container spec":                  {swarm.ServiceSpec{}, nil},
+	} {
+		if got := swarmops.MismatchedSecrets(c.spec, have); !slices.Equal(got, c.want) {
+			t.Errorf("%s: mismatched = %+v, want %+v", name, got, c.want)
+		}
+	}
+}
+
+// mismatchedRef is a used ID (db-pass) under another secret's name.
+func mismatchedRef() *swarm.SecretReference {
+	ref := dbPassRef()
+	ref.SecretName = "victim-secret"
+	return ref
+}
+
+func withDBPassAndVictim(cfg *dockertest.FakeConfig) {
+	withDBPass(cfg)
+	cfg.Secrets = append(cfg.Secrets, dockertest.FakeSecret{ID: "sec-victim", Name: "victim-secret"})
+}
+
+// storedMismatch makes the api service's stored spec carry the mismatch, as one stored before this
+// release may.
+func storedMismatch(cfg *dockertest.FakeConfig) {
+	withDBPassAndVictim(cfg)
+	cs := cfg.ServiceRows[0].Spec.TaskTemplate.ContainerSpec
+	cs.Secrets = []*swarm.SecretReference{mismatchedRef()}
+}
+
+func setSecrets(refs ...*swarm.SecretReference) func(*swarm.ServiceSpec) {
+	return func(s *swarm.ServiceSpec) { s.TaskTemplate.ContainerSpec.Secrets = refs }
+}
+
+func TestEveryWritePathRefusesAReferenceWhoseNameIsAnotherSecretsWhoeverSendsIt(t *testing.T) {
+	refused := func(t *testing.T, what string, err error) {
+		t.Helper()
+		var bad *swarmops.SpecInvalidError
+		if !errors.Is(err, swarmops.ErrSpecInvalid) || !errors.As(err, &bad) {
+			t.Fatalf("%s: err = %v, want a SpecInvalidError", what, err)
+		}
+		if !strings.Contains(bad.Message, "TaskTemplate.ContainerSpec.Secrets[0]") || !strings.Contains(bad.Message, "victim-secret") {
+			t.Errorf("%s: message = %q, want the spec path and victim-secret", what, bad.Message)
+		}
+	}
+	quiet := func(t *testing.T, what string, fake *dockertest.Fake) {
+		t.Helper()
+		if w := fake.Writes(); len(w) != 0 {
+			t.Errorf("%s: writes = %v, a refused spec writes nothing", what, w)
+		}
+		if refs := fake.DistributionRefs(); len(refs) != 0 {
+			t.Errorf("%s: registry lookups = %v, a refused spec reads nothing from a registry", what, refs)
+		}
+	}
+	mis := setSecrets(mismatchedRef())
+
+	for _, who := range []string{"operator", "adminReveal"} {
+		t.Run("review and apply by "+who, func(t *testing.T) {
+			r := newRig(t, withDBPassAndVictim)
+			caller := map[string]swarmops.Caller{"operator": r.operator, "adminReveal": r.adminReveal}[who]
+			_, err := r.review(caller, 5, editFor(t, caller, mis))
+			refused(t, "Review", err)
+			_, err = r.apply(caller, 5, editFor(t, caller, mis))
+			refused(t, "Apply", err)
+			quiet(t, who, r.fake)
+		})
+		t.Run("create and its review by "+who, func(t *testing.T) {
+			o := newObjectRig(t, withDBPassAndVictim)
+			caller := map[string]swarmops.Caller{"operator": o.operator, "adminReveal": o.adminReveal}[who]
+			_, err := o.reviewCreate(caller, chatSpec(mis))
+			refused(t, "ReviewCreate", err)
+			_, err = o.create(caller, chatSpec(mis))
+			refused(t, "Create", err)
+			quiet(t, who, o.fake)
+		})
+		t.Run("apply with a secret staged by "+who, func(t *testing.T) {
+			o := newObjectRig(t, withDBPassAndVictim)
+			caller := map[string]swarmops.Caller{"operator": o.operator, "adminReveal": o.adminReveal}[who]
+			staged := []swarmops.StagedObject{{Kind: swarmops.KindSecret, Name: "api-key", Data: []byte(secretValue)}}
+			stagedRef := &swarm.SecretReference{SecretName: "api-key", File: &swarm.SecretReferenceFileTarget{Name: "api-key", Mode: 0o444}}
+			_, err := o.applyStaged(caller, editFor(t, caller, setSecrets(mismatchedRef(), stagedRef)), staged)
+			refused(t, "Apply", err)
+			quiet(t, who, o.fake)
+			neverHolds(t, "the error", err)
+		})
+	}
+}
+
+func TestTheTwoStepRenameCannotAttachASecretOnAnyWritePath(t *testing.T) {
+	victimAlone := func() *swarm.SecretReference {
+		return &swarm.SecretReference{SecretName: "victim-secret", File: dbPassRef().File}
+	}
+	needsReveal := func(t *testing.T, what string, err error) {
+		t.Helper()
+		var need *swarmops.RevealRequiredError
+		if !errors.Is(err, swarmops.ErrRevealRequired) || !errors.As(err, &need) {
+			t.Fatalf("%s: err = %v, want a RevealRequiredError", what, err)
+		}
+		if len(need.Secrets) != 1 || need.Secrets[0].Name != "victim-secret" || need.Secrets[0].Path != "TaskTemplate.ContainerSpec.Secrets[0]" {
+			t.Errorf("%s: secrets = %+v, want Secrets[0] victim-secret", what, need.Secrets)
+		}
+	}
+
+	t.Run("an operator is refused on review and apply", func(t *testing.T) {
+		o := newObjectRig(t, storedMismatch)
+		_, err := o.review(o.operator, 5, edit(t, setSecrets(victimAlone())))
+		needsReveal(t, "Review", err)
+		_, err = o.applyStaged(o.operator, edit(t, setSecrets(victimAlone())), nil)
+		needsReveal(t, "Apply", err)
+		if w := o.fake.Writes(); len(w) != 0 {
+			t.Errorf("writes = %v, a refused apply writes nothing", w)
+		}
+	})
+
+	t.Run("an operator is refused before a staged object is created", func(t *testing.T) {
+		o := newObjectRig(t, storedMismatch)
+		staged := []swarmops.StagedObject{{Kind: swarmops.KindSecret, Name: "victim-secret", Data: []byte(secretValue)}}
+		_, err := o.applyStaged(o.operator, edit(t, setSecrets(victimAlone())), staged)
+		needsReveal(t, "Apply with a staged secret", err)
+		if w := o.fake.Writes(); len(w) != 0 {
+			t.Errorf("writes = %v, nothing is created before the refusal", w)
+		}
+		if got := o.fake.SecretCreates(); len(got) != 0 {
+			t.Errorf("secret creates = %+v, want none", got)
+		}
+	})
+
+	t.Run("an env admin's apply goes through with victim-secret's own ID", func(t *testing.T) {
+		o := newObjectRig(t, storedMismatch)
+		if _, err := o.applyStaged(o.adminReveal, editFor(t, o.adminReveal, setSecrets(victimAlone())), nil); err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		ups := o.fake.ServiceUpdates()
+		if len(ups) != 1 {
+			t.Fatalf("updates = %d, want one", len(ups))
+		}
+		refs := ups[0].Spec.TaskTemplate.ContainerSpec.Secrets
+		if len(refs) != 1 || refs[0].SecretID != "sec-victim" {
+			t.Errorf("secrets = %+v, want one carrying sec-victim", refs)
+		}
+	})
+}
+
+func TestRotateMovesAReferenceByItsIDAndNeverByItsName(t *testing.T) {
+	// api holds the old db_password version under the name of another secret, victim-secret.
+	renamed := func(cfg *dockertest.FakeConfig) {
+		cfg.Secrets = append(cfg.Secrets, dockertest.FakeSecret{ID: "sec-victim", Name: "victim-secret"})
+		for _, ref := range cfg.ServiceRows[0].Spec.TaskTemplate.ContainerSpec.Secrets {
+			if ref.SecretID == oldSecretID {
+				ref.SecretName = "victim-secret"
+			}
+		}
+	}
+
+	t.Run("rotating the secret the reference claims leaves it where it is", func(t *testing.T) {
+		o := newRotateRig(t, renamed)
+		if _, err := o.rotateSecret(o.adminReveal, func(in *swarmops.RotateInput) { in.OldID, in.RemoveOld = "sec-victim", false }); err != nil {
+			t.Fatalf("Rotate: %v", err)
+		}
+		for _, u := range o.fake.ServiceUpdates() {
+			if u.ServiceID == "svc-api" {
+				t.Errorf("api was updated: %+v, a reference that only claims a name is not moved", u.Spec.TaskTemplate.ContainerSpec.Secrets)
+			}
+		}
+	})
+
+	t.Run("rotating the secret it points at moves it, and the name agrees", func(t *testing.T) {
+		o := newRotateRig(t, renamed)
+		res, err := o.rotateSecret(o.adminReveal)
+		if err != nil {
+			t.Fatalf("Rotate: %v", err)
+		}
+		var found bool
+		for _, ref := range updateOf(t, o, "svc-api").TaskTemplate.ContainerSpec.Secrets {
+			if ref.SecretID == res.NewID {
+				found = true
+				if ref.SecretName != res.NewName {
+					t.Errorf("reference = %+v, want the new version's name %s", ref, res.NewName)
+				}
+			}
+			if ref.SecretID == oldSecretID {
+				t.Errorf("reference %+v still points at the old version", ref)
+			}
+		}
+		if !found {
+			t.Errorf("no reference moved to %s", res.NewID)
+		}
+	})
+
+	t.Run("a service with a second mismatched reference stops with spec_invalid and keeps its spec", func(t *testing.T) {
+		second := func(cfg *dockertest.FakeConfig) {
+			cfg.Secrets = append(cfg.Secrets, dockertest.FakeSecret{ID: "sec-key", Name: "api-key"})
+			cs := cfg.ServiceRows[0].Spec.TaskTemplate.ContainerSpec
+			cs.Secrets = append(cs.Secrets, &swarm.SecretReference{
+				SecretID: "sec-key", SecretName: "victim-secret", File: &swarm.SecretReferenceFileTarget{Name: "api-key", UID: "0", GID: "0", Mode: 0o444},
+			})
+		}
+		o := newRotateRig(t, renamed, second)
+		res, err := o.rotateSecret(o.adminReveal)
+		var stop *swarmops.RotateStopError
+		if !errors.As(err, &stop) || !errors.Is(err, swarmops.ErrSpecInvalid) || stop.Service != "api" {
+			t.Fatalf("err = %v, want the rotate stopped at api by a spec_invalid reference", err)
+		}
+		if res.FailedAt != "api" || res.Services[0].Code != "spec_invalid" {
+			t.Errorf("result = %+v, want it stopped at api with code spec_invalid", res)
+		}
+		if ups := o.fake.ServiceUpdates(); len(ups) != 0 {
+			t.Errorf("updates = %+v, api keeps its spec", ups)
+		}
+	})
 }
