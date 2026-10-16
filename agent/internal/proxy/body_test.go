@@ -297,6 +297,18 @@ func TestBodyVolumeCreateHostPolicy(t *testing.T) {
 		"the docker socket":                    local("local", bind("/var/run/docker.sock")),
 		"the driver in upper case":             local("LOCAL", bind("/")),
 		"a volume plugin":                      local("rexray/ebs", map[string]string{"size": "10"}),
+
+		"a relative bind of etc":                       local("local", bind("etc")),
+		"a relative bind of var/lib/docker":            local("local", bind("var/lib/docker")),
+		"a relative bind of var/run":                   local("local", bind("var/run")),
+		"a relative bind of var/run/docker.sock":       local("local", bind("var/run/docker.sock")),
+		"a device with a leading space":                local("local", bind(" /srv/data")),
+		"a device with a trailing space":               local("local", bind("/srv ")),
+		"an overlay with the host root as a lower dir": local("local", map[string]string{"type": "overlay", "device": "overlay", "o": "lowerdir=/:/srv/empty"}),
+		"a proc filesystem":                            local("local", map[string]string{"type": "proc", "device": "proc"}),
+		"a sysfs filesystem":                           local("local", map[string]string{"type": "sysfs", "device": "sysfs"}),
+		"devtmpfs":                                     local("local", map[string]string{"type": "devtmpfs", "device": "devtmpfs"}),
+		"a bind with a network type":                   local("local", map[string]string{"type": "nfs", "o": "bind", "device": "etc"}),
 	}
 	for name, req := range refused {
 		t.Run("refused: "+name, func(t *testing.T) {
@@ -315,13 +327,17 @@ func TestBodyVolumeCreateHostPolicy(t *testing.T) {
 	}
 
 	forwarded := map[string]volume.CreateRequest{
-		"an nfs share":            local("local", map[string]string{"type": "nfs", "o": "addr=10.0.0.2,rw", "device": ":/export"}),
-		"a cifs share":            local("local", map[string]string{"type": "cifs", "device": "//server/share"}),
-		"a bind under /srv":       local("local", bind("/srv/data")),
-		"a bind under /mnt":       local("local", bind("/mnt/backups")),
-		"tmpfs":                   local("local", map[string]string{"type": "tmpfs", "device": "tmpfs"}),
-		"an anonymous volume":     {},
-		"a local volume, no opts": local("local", nil),
+		"an nfs share":                   local("local", map[string]string{"type": "nfs", "o": "addr=10.0.0.2,rw", "device": ":/export"}),
+		"a cifs share":                   local("local", map[string]string{"type": "cifs", "device": "//server/share"}),
+		"a bind under /srv":              local("local", bind("/srv/data")),
+		"a bind under /mnt":              local("local", bind("/mnt/backups")),
+		"tmpfs":                          local("local", map[string]string{"type": "tmpfs", "device": "tmpfs"}),
+		"tmpfs with a size":              local("local", map[string]string{"type": "tmpfs", "device": "tmpfs", "o": "size=64m,uid=1000"}),
+		"an nfs4 share":                  local("local", map[string]string{"type": "nfs4", "o": "addr=10.0.0.2", "device": ":/export"}),
+		"a bind under /media":            local("local", bind("/media/disk")),
+		"a bind strictly below /var/log": local("local", bind("/var/log/app")),
+		"an anonymous volume":            {},
+		"a local volume, no opts":        local("local", nil),
 	}
 	for name, req := range forwarded {
 		t.Run("forwarded: "+name, func(t *testing.T) {

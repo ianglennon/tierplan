@@ -84,6 +84,58 @@ func TestLocalDeviceMounted(t *testing.T) {
 	}
 }
 
+func TestLocalVolumeHostAccess(t *testing.T) {
+	bind := func(device string) map[string]string {
+		return map[string]string{"type": "none", "o": "bind", "device": device}
+	}
+	cases := []struct {
+		name string
+		opts map[string]string
+		want string
+	}{
+		{"no options", nil, ""},
+		{"a bind with no device", map[string]string{"type": "none", "o": "bind"}, ""},
+		{"a bind of the root", bind("/"), "device"},
+		{"a bind of /etc", bind("/etc"), "device"},
+		{"a bind under /srv", bind("/srv/data"), ""},
+		{"a bind under /media", bind("/media/disk"), ""},
+		{"a bind strictly below /var/log", bind("/var/log/app"), ""},
+		{"a bind of /var/log whole", bind("/var/log"), "device"},
+		{"a relative bind of etc", bind("etc"), "device"},
+		{"a relative bind of var/lib/docker", bind("var/lib/docker"), "device"},
+		{"a relative bind of var/run", bind("var/run"), "device"},
+		{"a relative bind of the docker socket", bind("var/run/docker.sock"), "device"},
+		{"a relative bind of srv, which the daemon reads from its own directory", bind("srv/data"), "device"},
+		{"a dot-relative bind", bind("./data"), "device"},
+		{"a device with a leading space", bind(" /srv/data"), "device"},
+		{"a device with a trailing space", bind("/srv "), "device"},
+		{"type NONE in capitals", map[string]string{"type": "NONE", "device": "/home"}, "device"},
+		{"o Bind,ro with no type", map[string]string{"o": "Bind,ro", "device": "/etc"}, "device"},
+		{"a bind with a network type is judged as a bind", map[string]string{"type": "nfs", "o": "bind", "device": "etc"}, "device"},
+		{"tmpfs with bind is judged as a bind", map[string]string{"type": "tmpfs", "o": "bind", "device": "etc"}, "device"},
+		{"tmpfs", map[string]string{"type": "tmpfs", "device": "tmpfs"}, ""},
+		{"tmpfs with a size", map[string]string{"type": "tmpfs", "device": "tmpfs", "o": "size=64m,uid=1000"}, ""},
+		{"an nfs share", map[string]string{"type": "nfs", "o": "addr=10.0.0.2,rw", "device": ":/export"}, ""},
+		{"an nfs4 share", map[string]string{"type": "nfs4", "device": "host:/export"}, ""},
+		{"a cifs share", map[string]string{"type": "cifs", "device": "//server/share"}, ""},
+		{"a relative device with a network type and no bind is a remote share", map[string]string{"type": "nfs", "device": "host:export"}, ""},
+		{"options that mount nothing", map[string]string{"o": "rw"}, ""},
+		{"a block device", map[string]string{"type": "ext4", "device": "/dev/sda1"}, "type"},
+		{"an overlay with the host root as a lower dir", map[string]string{"type": "overlay", "device": "overlay", "o": "lowerdir=/:/srv/empty"}, "type"},
+		{"a proc filesystem", map[string]string{"type": "proc", "device": "proc"}, "type"},
+		{"a sysfs filesystem", map[string]string{"type": "sysfs", "device": "sysfs"}, "type"},
+		{"devtmpfs", map[string]string{"type": "devtmpfs", "device": "devtmpfs"}, "type"},
+		{"a type in capitals with spaces", map[string]string{"type": " EXT4 ", "device": "/dev/sda1"}, "type"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := LocalVolumeHostAccess(c.opts); got != c.want {
+				t.Fatalf("LocalVolumeHostAccess(%v) = %q, want %q", c.opts, got, c.want)
+			}
+		})
+	}
+}
+
 func TestVectors(t *testing.T) {
 	vs := Vectors()
 	if len(vs) < 14 {

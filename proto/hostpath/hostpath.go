@@ -150,3 +150,6 @@ func LocalDeviceMounted(opts map[string]string) (device string, mounted bool) {
 	}
 	return device, true
 }
+
+// LocalVolumeHostAccess is a stub so the test compiles; replaced in the next commit.
+func LocalVolumeHostAccess(opts map[string]string) string { return "" }
