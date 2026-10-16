@@ -48,6 +48,7 @@ import { editRefusalOf } from "@/features/service-editor/edit-refusal";
 import { EditorFooter } from "@/features/service-editor/editor-footer";
 import { ReviewStep } from "@/features/service-editor/review-step";
 import { ServiceForm } from "@/features/service-editor/service-form";
+import { getPath } from "@/features/service-editor/spec-patch";
 import { imageOf } from "@/features/service-editor/spec-paths";
 import { StackOwnedState } from "@/features/service-editor/stack-owned-state";
 import {
@@ -174,6 +175,21 @@ function EditFooter({
   );
 }
 
+// attachedSecretsOf lists the secrets a spec mounts, by ID and by name, so a reference held either
+// way is recognised.
+function attachedSecretsOf(spec: SpecValue): string[] {
+  const refs = getPath(spec, "TaskTemplate.ContainerSpec.Secrets");
+  if (!Array.isArray(refs)) return [];
+  const keys: string[] = [];
+  for (const ref of refs) {
+    if (typeof ref !== "object" || ref === null) continue;
+    const { SecretID: id, SecretName: name } = ref as Record<string, unknown>;
+    if (typeof id === "string" && id !== "") keys.push(id);
+    if (typeof name === "string" && name !== "") keys.push(name);
+  }
+  return keys;
+}
+
 // ServiceEditorPage is the page that replaces a service's page while its settings are changed
 // (D-01, D-03): a header, the editor, and a footer, in one of three states that live in memory. In
 // the first the Spec tab holds the whole service spec as Docker states it. Review changes sends
@@ -253,6 +269,9 @@ export function ServiceEditorPage({
 
   const current = (data?.spec ?? {}) as SpecValue;
   const spec = edited ?? current;
+  // The secrets the service uses now, as the server holds them (not as edited): a caller without
+  // secrets.reveal can choose only these. A new service has none.
+  const attachedSecrets = useMemo(() => attachedSecretsOf(current), [current]);
   // What the service is called: its own name, or for a new service what has been typed.
   const nameOf = (value: SpecValue): string => {
     const typed = value.Name;
@@ -577,6 +596,7 @@ export function ServiceEditorPage({
                 spec={spec}
                 mode={mode}
                 envId={envId}
+                attachedSecrets={attachedSecrets}
                 staged={staged}
                 onSpecChange={onChange}
                 onValidityChange={setFormValid}

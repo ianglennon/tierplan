@@ -920,6 +920,62 @@ describe("the Form tab", () => {
     expect((screen.getByLabelText("Tasks at a time") as HTMLInputElement).value).toBe("1");
     expect((screen.getByLabelText("Monitor") as HTMLInputElement).value).toBe("5s");
   });
+
+  it("offers an Operator without the reveal permission only the secrets the service holds on the server, whatever has been edited", async () => {
+    state.spec = () =>
+      Response.json(
+        specBody({
+          spec: editSpec({
+            TaskTemplate: {
+              ContainerSpec: {
+                Image: `registry.example.com/shop/api:1.4@${DIGEST}`,
+                Secrets: [
+                  {
+                    SecretID: "sec1",
+                    SecretName: "db_pw",
+                    File: { Name: "db_pw", UID: "0", GID: "0", Mode: 292 },
+                  },
+                ],
+              },
+            },
+          }),
+        }),
+      );
+    const secret = (id: string, name: string) => ({
+      id,
+      name,
+      labels: {},
+      createdAt: "2026-10-01T10:00:00Z",
+      updatedAt: "2026-10-01T10:00:00Z",
+      usedBy: 0,
+      owner: "",
+      ownerKind: "",
+    });
+    const served = serviceFetch(state);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (req: Request) => {
+        if (new URL(req.url, "http://localhost").pathname === `/api/env/${SERVICE_ENV}/secrets`) {
+          const items = [secret("sec1", "db_pw"), secret("sec2", "api_key")];
+          return Response.json({ items, total: 2, unfilteredTotal: 2, capped: false });
+        }
+        return served(req);
+      }),
+    );
+    renderAt(EDIT_PATH);
+    await formImage();
+    // Take db_pw out of the edited spec and add a row: the server still holds it, so it may be
+    // chosen again, and api_key may not.
+    fireEvent.click(screen.getByRole("button", { name: "Remove secret 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add secret" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Secret" }));
+    const refused = await screen.findByRole("option", { name: /api_key/ });
+    expect(refused.getAttribute("aria-disabled")).toBe("true");
+    expect(refused.textContent).toContain("Needs the reveal secrets permission to add a secret");
+    expect(screen.getByRole("option", { name: "db_pw" }).getAttribute("aria-disabled")).not.toBe(
+      "true",
+    );
+  });
 });
 
 // Create a service (plan 06-27, D-04, RES-03; UI-SPEC "Service editor", "Review and apply"): the

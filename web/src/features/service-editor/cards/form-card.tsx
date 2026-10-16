@@ -19,6 +19,9 @@ export interface CardProps {
   change: (fn: (spec: SpecValue) => SpecValue) => void;
   mode: "edit" | "create";
   envId: string;
+  // The secrets the service uses, by ID and by name, as the server holds it: the ones a caller
+  // without secrets.reveal may keep choosing. Empty for a new service.
+  attachedSecrets: readonly string[];
   // Tells the form whether this card holds a field that can't be written. A card keeps its own
   // id for it.
   report: (card: string, invalid: boolean) => void;

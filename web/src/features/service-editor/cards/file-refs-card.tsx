@@ -15,6 +15,7 @@ import {
 } from "@/features/service-editor/cards/form-card";
 import { ObjectPicker, type PickedObject } from "@/features/service-editor/object-picker";
 import { getPath } from "@/features/service-editor/spec-patch";
+import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
@@ -159,8 +160,16 @@ export function FileRefsCard({
   unset,
   report,
   envId,
+  attachedSecrets,
 }: CardProps & { cfg: FileRefsKind }) {
   const t = useT();
+  // Without secrets.reveal a caller can't add a secret the service doesn't use (D-13 as amended);
+  // the server refuses it, so the picker doesn't offer it.
+  const reveal = useNeeds("secrets.reveal", envId);
+  const restrict =
+    cfg.kind === "secret" && !reveal.allowed
+      ? { keep: attachedSecrets, reason: t("serviceForm.secrets.needsReveal") }
+      : undefined;
   const ids = useId();
   const [touched, setTouched] = useState<ReadonlySet<string>>(new Set());
   const [rows, setRows] = useState<Row[]>(() => {
@@ -262,6 +271,7 @@ export function FileRefsCard({
                   aria-describedby={pickError ? `${rid}-pick-error` : undefined}
                   onSelect={(picked) => onPick(r, picked)}
                   onBlur={() => touch(r.id)}
+                  restrict={restrict}
                 />
                 {pickError ? <FieldError id={`${rid}-pick-error`}>{pickError}</FieldError> : null}
               </Field>

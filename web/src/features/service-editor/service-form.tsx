@@ -23,6 +23,8 @@ import {
 } from "@/features/service-editor/staged";
 import type { SpecValue } from "@/features/spec-editor/spec-format";
 
+const NO_SECRETS: readonly string[] = [];
+
 export interface ServiceFormProps {
   // The spec being edited: the one the page holds, which the Spec tab edits too.
   spec: SpecValue;
@@ -31,6 +33,9 @@ export interface ServiceFormProps {
   onSpecChange: (spec: SpecValue) => void;
   mode: "edit" | "create";
   envId: string;
+  // The secrets the service uses now, by ID and by name, as the server holds it (not as edited).
+  // A caller without secrets.reveal can choose only these. A new service has none.
+  attachedSecrets?: readonly string[];
   // The objects staged from the pickers. The page holds them, so the review and the apply see the
   // same ones; a form without a page of its own keeps its own.
   staged?: StagedStore;
@@ -51,6 +56,7 @@ export function ServiceForm({
   onSpecChange,
   mode,
   envId,
+  attachedSecrets = NO_SECRETS,
   staged,
   onOpenSpec,
   onValidityChange,
@@ -91,7 +97,7 @@ export function ServiceForm({
   }, [valid]);
   useEffect(() => () => tell.current?.(true), []);
 
-  const card = { spec, set, unset, change, mode, envId, report };
+  const card = { spec, set, unset, change, mode, envId, attachedSecrets, report };
   return (
     <StagedContext.Provider value={staged ?? ownStore}>
       <div className="mx-auto flex w-full max-w-240 flex-col gap-8">

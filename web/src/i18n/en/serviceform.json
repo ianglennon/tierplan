@@ -244,6 +244,7 @@
       "secret": "Secret",
       "file": "File name",
       "mounted": "Mounted at /run/secrets/{{file}}",
+      "needsReveal": "Needs the reveal secrets permission to add a secret",
       "uid": "UID",
       "gid": "GID",
       "mode": "Mode",

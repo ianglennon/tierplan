@@ -59,6 +59,10 @@ interface ObjectPickerProps {
   invalid?: boolean;
   "aria-describedby"?: string;
   onBlur?: () => void;
+  // The existing choices the caller may not add, with why: one whose ID and name are both missing
+  // from keep is listed disabled and says reason, and choosing it does nothing. A staged choice and
+  // Create new are not affected (Create new has its own rule).
+  restrict?: { keep: readonly string[]; reason: string };
 }
 
 interface Choice {
@@ -82,6 +86,7 @@ export function ObjectPicker({
   invalid,
   "aria-describedby": describedBy,
   onBlur,
+  restrict,
 }: ObjectPickerProps) {
   const t = useT();
   const store = useStagedStore();
@@ -184,15 +189,30 @@ export function ObjectPicker({
               )}
               {existing.length > 0 || staged.length > 0 ? (
                 <CommandGroup>
-                  {existing.map((o) => (
-                    <CommandItem
-                      key={`existing-${o.id}`}
-                      value={o.name}
-                      onSelect={() => choose({ name: o.name, id: o.id, staged: false })}
-                    >
-                      <span className="min-w-0 truncate font-mono text-xs">{o.name}</span>
-                    </CommandItem>
-                  ))}
+                  {existing.map((o) => {
+                    const barred =
+                      restrict !== undefined &&
+                      !restrict.keep.includes(o.name) &&
+                      !(o.id !== undefined && restrict.keep.includes(o.id));
+                    return (
+                      <CommandItem
+                        key={`existing-${o.id}`}
+                        value={o.name}
+                        disabled={barred}
+                        onSelect={() => {
+                          if (barred) return;
+                          choose({ name: o.name, id: o.id, staged: false });
+                        }}
+                      >
+                        <span className="min-w-0 truncate font-mono text-xs">{o.name}</span>
+                        {barred ? (
+                          <span className="ms-auto text-xs text-muted-foreground">
+                            {restrict.reason}
+                          </span>
+                        ) : null}
+                      </CommandItem>
+                    );
+                  })}
                   {staged.map((o) => (
                     <CommandItem
                       key={`staged-${o.name}`}
