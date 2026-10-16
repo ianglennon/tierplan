@@ -700,7 +700,11 @@ func FuzzBody(f *testing.F) {
 			if found := pluginVolumes(spec); len(found) > 0 {
 				t.Fatalf("a service spec with the plugin volume mounts %v was forwarded: %.200s", found, out)
 			}
-			if found := namedVolumes(context.Background(), spec, nil); len(found) > 0 {
+			found, err := namedVolumes(context.Background(), spec, nil)
+			if err != nil {
+				t.Fatalf("with no lookup, namedVolumes returned the error %v: %.200s", err, out)
+			}
+			if len(found) > 0 {
 				t.Fatalf("a service spec with the named volume mounts %v was forwarded: %.200s", found, out)
 			}
 		}

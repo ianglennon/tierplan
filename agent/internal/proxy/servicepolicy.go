@@ -23,6 +23,9 @@ import (
 // allowlist refusal, so the server can tell the user which setting lifts it.
 var errHostPolicy = errors.New("the service spec gives tasks host access")
 
+// errVolumeLookup is a stub for the RED commit.
+var errVolumeLookup = errors.New("the engine did not answer a volume lookup")
+
 // networkLookup answers the name and driver of a network on the agent's own
 // engine. A target may be an ID, and an ID cannot be told from its text to be the
 // host network, so the agent asks the engine that holds it.
@@ -179,10 +182,10 @@ func pluginVolumes(spec swarm.ServiceSpec) []string {
 // anonymous volume (no Source), which is never looked up. Each distinct Source is looked
 // up once. The agent sees only its own engine, so a volume of the same name on another
 // node is not judged (T-06-123).
-func namedVolumes(ctx context.Context, spec swarm.ServiceSpec, lookup volumeLookup) []string {
+func namedVolumes(ctx context.Context, spec swarm.ServiceSpec, lookup volumeLookup) ([]string, error) {
 	cs := spec.TaskTemplate.ContainerSpec
 	if cs == nil {
-		return nil
+		return nil, nil
 	}
 	var out []string
 	bad := map[string]bool{}
@@ -203,7 +206,7 @@ func namedVolumes(ctx context.Context, spec swarm.ServiceSpec, lookup volumeLook
 			out = append(out, fmt.Sprintf("TaskTemplate.ContainerSpec.Mounts[%d].Source", i))
 		}
 	}
-	return out
+	return out, nil
 }
 
 // checkHostPolicy refuses a spec that gives tasks host access unless the host
@@ -219,7 +222,8 @@ func checkHostPolicy(spec swarm.ServiceSpec, env bodyEnv) error {
 	}
 	found := escalations(ctx, spec, env.lookup)
 	found = append(found, pluginVolumes(spec)...)
-	found = append(found, namedVolumes(ctx, spec, env.volumes)...)
+	named, _ := namedVolumes(ctx, spec, env.volumes)
+	found = append(found, named...)
 	if len(found) > 0 {
 		return fmt.Errorf("%w: %w: %s", errBodyRefused, errHostPolicy, strings.Join(found, ", "))
 	}

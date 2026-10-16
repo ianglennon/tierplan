@@ -246,17 +246,24 @@ func TestNamedVolumesJudgeWhatTheEngineHolds(t *testing.T) {
 		"does not exist": {func(context.Context, string) (string, map[string]string, bool, error) {
 			return "", nil, false, nil
 		}, nil},
-		"the lookup fails": {func(context.Context, string) (string, map[string]string, bool, error) {
-			return "", nil, false, errors.New("engine unreachable")
-		}, []string{path}},
 		"no lookup at all": {nil, []string{path}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := namedVolumes(context.Background(), spec, tc.lookup); !slices.Equal(got, tc.want) {
-				t.Fatalf("namedVolumes = %v, want %v", got, tc.want)
+			got, err := namedVolumes(context.Background(), spec, tc.lookup)
+			if err != nil || !slices.Equal(got, tc.want) {
+				t.Fatalf("namedVolumes = %v, %v, want %v and no error", got, err, tc.want)
 			}
 		})
 	}
+
+	t.Run("the lookup fails", func(t *testing.T) {
+		got, err := namedVolumes(context.Background(), spec, func(context.Context, string) (string, map[string]string, bool, error) {
+			return "", nil, false, errors.New("engine unreachable")
+		})
+		if len(got) != 0 || !errors.Is(err, errVolumeLookup) {
+			t.Fatalf("namedVolumes = %v, %v, want no finding and errVolumeLookup", got, err)
+		}
+	})
 
 	never := func(t *testing.T) volumeLookup {
 		return func(_ context.Context, name string) (string, map[string]string, bool, error) {
@@ -267,18 +274,18 @@ func TestNamedVolumesJudgeWhatTheEngineHolds(t *testing.T) {
 	t.Run("a Source that is not a volume name is refused without a lookup", func(t *testing.T) {
 		spec := sampleSpec()
 		spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{{Type: mount.TypeVolume, Source: "../etc", Target: "/data"}}
-		if got := namedVolumes(context.Background(), spec, never(t)); !slices.Equal(got, []string{path}) {
-			t.Fatalf("namedVolumes = %v, want %v", got, []string{path})
+		if got, err := namedVolumes(context.Background(), spec, never(t)); err != nil || !slices.Equal(got, []string{path}) {
+			t.Fatalf("namedVolumes = %v, %v, want %v", got, err, []string{path})
 		}
 	})
 	t.Run("an anonymous volume is never looked up", func(t *testing.T) {
 		spec := sampleSpec()
 		spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{{Type: mount.TypeVolume, Target: "/data"}}
-		if got := namedVolumes(context.Background(), spec, never(t)); len(got) != 0 {
-			t.Fatalf("namedVolumes = %v, want none", got)
+		if got, err := namedVolumes(context.Background(), spec, never(t)); err != nil || len(got) != 0 {
+			t.Fatalf("namedVolumes = %v, %v, want none", got, err)
 		}
-		if got := namedVolumes(context.Background(), spec, nil); len(got) != 0 {
-			t.Fatalf("with no lookup, namedVolumes = %v, want none", got)
+		if got, err := namedVolumes(context.Background(), spec, nil); err != nil || len(got) != 0 {
+			t.Fatalf("with no lookup, namedVolumes = %v, %v, want none", got, err)
 		}
 	})
 	t.Run("one lookup per distinct Source", func(t *testing.T) {
@@ -288,10 +295,13 @@ func TestNamedVolumesJudgeWhatTheEngineHolds(t *testing.T) {
 			{Type: mount.TypeVolume, Source: "data", Target: "/b"},
 		}
 		calls := 0
-		got := namedVolumes(context.Background(), spec, func(context.Context, string) (string, map[string]string, bool, error) {
+		got, err := namedVolumes(context.Background(), spec, func(context.Context, string) (string, map[string]string, bool, error) {
 			calls++
 			return "rexray/ebs", nil, true, nil
 		})
+		if err != nil {
+			t.Fatalf("namedVolumes: %v", err)
+		}
 		if calls != 1 {
 			t.Fatalf("lookups = %d, want 1", calls)
 		}

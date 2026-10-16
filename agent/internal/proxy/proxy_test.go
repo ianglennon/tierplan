@@ -979,8 +979,10 @@ func TestHostPolicyAServiceCannotMountAPreExistingVolumeThatMountsTheHost(t *tes
 }
 
 // Docker mounts an existing volume as it is, so unlike the network lookup a volume
-// lookup that cannot answer refuses the spec.
-func TestHostPolicyAVolumeLookupThatFailsRefusesTheSpec(t *testing.T) {
+// lookup that cannot answer still stops the write. It is an engine fault and not host
+// access, so it is answered like any request the engine does not answer, and a person
+// is not told to lower the host's security setting for it (review WR-02).
+func TestHostPolicyAVolumeLookupThatFailsIsAnEngineFaultNotHostAccess(t *testing.T) {
 	sock := newFakeSocket(t)
 	sock.answers = map[string]string{"/volumes/data": `{"message":"boom"}`}
 	sock.status = map[string]int{"/volumes/data": http.StatusInternalServerError}
@@ -989,13 +991,35 @@ func TestHostPolicyAVolumeLookupThatFailsRefusesTheSpec(t *testing.T) {
 	spec := sampleSpec()
 	spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{{Type: mount.TypeVolume, Source: "data", Target: "/data"}}
 	resp := do(t, h, postJSON("POST", "/services/create", enc(t, spec)))
+	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden || !slices.Equal(reasons, []string{"host_policy"}) {
-		t.Fatalf("status %d reasons %v, want 403 host_policy", resp.StatusCode, reasons)
+	if resp.StatusCode != http.StatusBadGateway || len(reasons) != 0 {
+		t.Fatalf("status %d reasons %v, want 502 and no denial reported", resp.StatusCode, reasons)
+	}
+	if !strings.Contains(string(body), "agent_engine_unreachable: the Docker engine did not answer a volume lookup") {
+		t.Fatalf("body %s does not name the engine fault", body)
 	}
 	if got := sock.requests(); !slices.Equal(got, []string{"GET /volumes/data"}) {
 		t.Fatalf("the engine saw %v, want the one volume lookup", got)
 	}
+
+	t.Run("a real host-access finding is still named as such", func(t *testing.T) {
+		sock := newFakeSocket(t)
+		sock.answers = map[string]string{"/volumes/data": `{"message":"boom"}`}
+		sock.status = map[string]int{"/volumes/data": http.StatusInternalServerError}
+		var reasons []string
+		h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+		spec := sampleSpec()
+		spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{
+			{Type: mount.TypeVolume, Source: "data", Target: "/data"},
+			{Type: mount.TypeBind, Source: "/", Target: "/host"},
+		}
+		resp := do(t, h, postJSON("POST", "/services/create", enc(t, spec)))
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden || !slices.Equal(reasons, []string{"host_policy"}) {
+			t.Fatalf("status %d reasons %v, want 403 host_policy", resp.StatusCode, reasons)
+		}
+	})
 }
 
 // A volume the manager's engine does not have is created by Docker from the mount's
