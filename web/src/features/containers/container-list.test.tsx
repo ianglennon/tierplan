@@ -268,7 +268,7 @@ describe("container list: search", () => {
     expect((box as HTMLInputElement).value).toBe("shop");
     // Not yet: the box waits for the typing to stop.
     expect(changes).toEqual([]);
-    await waitFor(() => expect(changes).toEqual([{ q: "shop" }]), { timeout: 1500 });
+    await waitFor(() => expect(changes).toEqual([{ q: "shop" }]));
     await waitFor(() => expect(urls).toContain(`/api/env/${ENV}/containers?q=shop`));
     await waitFor(() => expect(screen.queryByText("loose")).toBeNull());
     expect(screen.getByText("shop-web")).toBeTruthy();
@@ -281,7 +281,7 @@ describe("container list: search", () => {
     fireEvent.change(box, { target: { value: "s" } });
     fireEvent.change(box, { target: { value: "sh" } });
     fireEvent.change(box, { target: { value: "sho" } });
-    await waitFor(() => expect(changes).toEqual([{ q: "sho" }]), { timeout: 1500 });
+    await waitFor(() => expect(changes).toEqual([{ q: "sho" }]));
   });
 
   it("clears the search at once with Clear search", async () => {
@@ -535,7 +535,7 @@ describe("container list: empty states", () => {
   it("shows an inline error with Retry", async () => {
     answer = () => Response.json({ title: "boom" }, { status: 500 });
     mount();
-    await screen.findByText("Couldn't load containers.", {}, { timeout: 4000 });
+    await screen.findByText("Couldn't load containers.");
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 });
@@ -732,9 +732,7 @@ describe("container list: live updates in place", () => {
     await waitFor(() => expect(within(rowOf("shop-web")).getByText("Paused")).toBeTruthy());
     expect(rowOf("shop-web").hasAttribute("data-changed")).toBe(true);
     expect(rowOf("blog").hasAttribute("data-changed")).toBe(false);
-    await waitFor(() => expect(rowOf("shop-web").hasAttribute("data-changed")).toBe(false), {
-      timeout: 3000,
-    });
+    await waitFor(() => expect(rowOf("shop-web").hasAttribute("data-changed")).toBe(false));
   });
 
   it("slides a new row in without a reload", async () => {
@@ -752,7 +750,7 @@ describe("container list: live updates in place", () => {
     await screen.findByText("shop-web");
     answer = () => Response.json(body(ROWS.filter((r) => r.name !== "loose")));
     await refetch();
-    await waitFor(() => expect(screen.queryByText("loose")).toBeNull(), { timeout: 2000 });
+    await waitFor(() => expect(screen.queryByText("loose")).toBeNull());
   });
 
   it("holds everything still while a row menu is open, and says so", async () => {
@@ -828,7 +826,7 @@ describe("container list: live updates in place", () => {
     fireEvent.change(screen.getByRole("searchbox", { name: "Search containers" }), {
       target: { value: "shop" },
     });
-    await waitFor(() => expect(screen.queryByText("loose")).toBeNull(), { timeout: 2000 });
+    await waitFor(() => expect(screen.queryByText("loose")).toBeNull());
     for (const name of ["shop-web", "shop-db"]) {
       expect(rowOf(name).hasAttribute("data-added")).toBe(false);
       expect(rowOf(name).hasAttribute("data-removed")).toBe(false);
