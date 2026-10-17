@@ -36,7 +36,11 @@ No tool is added to `go.mod` for development: golangci-lint, sqlc, goreleaser, a
 |--------|--------------|
 | `make dev` | The development loop: Go with live reload plus Vite with hot reload (see below). |
 | `make build` | Builds the SPA, then `bin/bayplan` (static, CGO off, SPA embedded). Pass `VERSION=v0.1.0` to stamp a version. |
-| `make test` | `go test ./... -race` and the web unit tests (Vitest). |
+| `make test` | The Go modules (`make test-go`: race, shuffled, through gotestsum) and then the web unit tests (`make test-web`). |
+| `make test-go` | Every Go module with `-race -count=1 -shuffle=on`; the failing tests are listed at the end and the shuffle seed is printed. |
+| `make test-web` | The Vitest suite in shuffled order. It prints its seed; `make test-web WEB_SEED=<seed>` reproduces a run. |
+| `make test-summary` | Lists the failing and hung tests from the result files in `.devdata/test`. CI runs it after every test job. |
+| `make test-stress` | The stability bar (20 shuffled race runs, then `-cpu=1` and `-cpu=4`) for one share of the suite: `STRESS_SHARD=api`, `core`, `rest` or `agent-web`. Takes hours; the nightly workflow runs all four. |
 | `make test-int` | Real-engine Go tests (build tag `integration`) against a Docker daemon. Set `BAYPLAN_TEST_DOCKER_HOST` to use one, otherwise each run starts a `docker:<N>-dind` container (`BAYPLAN_TEST_ENGINE`, default 29). Needs Docker. |
 | `make test-swarm` | The multi-node suite (build tag `swarm`): real agents in dind swarms of 3 managers and a worker (`BAYPLAN_TEST_ENGINE`, default 29; CI runs 24 and 29). Builds the agent image first. Needs Docker with buildx. |
 | `make dev-swarm`, `make dev-swarm-down` | A local swarm for the development loop, and its removal (see "Local swarm" below). Need Docker with buildx. |
@@ -52,9 +56,15 @@ No tool is added to `go.mod` for development: golangci-lint, sqlc, goreleaser, a
 | `make release-check` | Validates `.goreleaser.yaml` and builds this machine's binary the way a release does. |
 | `make smoke` | Starts `bin/bayplan` and checks its basic contract. |
 | `make image`, `make image-smoke` | Build the release image locally (not pushed) and run checks against it. Need Docker with buildx. |
+| `make e2e-down` | Takes the e2e stack down with its volumes. Safe to run when nothing is running. |
+| `make ci-clean`, `make ci-preflight` | CI hygiene: `ci-clean` removes the Docker resources labelled `bayplan.ci.owner=$BAYPLAN_CI_OWNER` (required) and nothing else; `ci-preflight` fails when disk space is below `BAYPLAN_CI_MIN_FREE_GB` (default 20). |
 | `make hooks`, `make test-scripts` | Install the sign-off hook; prove each policy script fails on a seeded violation. |
 
 CI runs thin wrappers over these same targets, so you can reproduce a CI failure locally with the same command.
+
+### Testing
+
+Tests must be stable, not just green: they run shuffled, tests wait for a signal rather than sleep, polling is limited to conditions outside the test, and a flaky test is fixed or quarantined with a dated entry, never retried. [docs/testing.md](docs/testing.md) has the stability bar, the rules for waiting in tests, the quarantine rules and how to reproduce a failure from its seed. `make lint` enforces the mechanical parts.
 
 ### End-to-end tests
 
