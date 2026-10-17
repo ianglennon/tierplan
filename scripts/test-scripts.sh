@@ -306,6 +306,26 @@ sed 's/timeout-minutes: 360/timeout-minutes: 275/' .github/workflows/nightly.yml
 expect fail "nightly-timeout-too-short" scripts/timeouts-check.sh "${scratch}/nightly-short.yml"
 expect_out "nightly-timeout-too-short names the target" "make test-stress with go test -timeout 270m"
 
+# --- ci-gate.sh (06.1-23, D-18, D-20): five green attempts of one commit, judged from a file ---
+gate=scripts/testdata/gate
+expect pass "ci-gate-five-green" scripts/ci-gate.sh --from-file "${gate}/five-green.json"
+expect_out "ci-gate-five-green prints the table header" "attempt  job  conclusion  minutes"
+expect_out "ci-gate-five-green says it holds" "OK: the last 5 attempt(s)"
+expect fail "ci-gate-one-red" scripts/ci-gate.sh --from-file "${gate}/one-red.json"
+expect_out "ci-gate-one-red names the attempt" "attempt 3 concluded failure"
+expect_out "ci-gate-one-red names the job" "attempt 3: job test concluded failure"
+expect fail "ci-gate-too-few-attempts" scripts/ci-gate.sh --from-file "${gate}/five-green.json" 6
+expect_out "ci-gate-too-few-attempts says why" "the run has 5 attempt(s) but 6 are needed"
+expect pass "ci-gate-last-two-skip-the-red-one" scripts/ci-gate.sh --from-file "${gate}/one-red.json" 2
+jq '.[3].head_sha = "ffffffffffffffffffffffffffffffffffffffff"' "${gate}/five-green.json" >"${scratch}/gate-two-shas.json"
+expect fail "ci-gate-two-commits" scripts/ci-gate.sh --from-file "${scratch}/gate-two-shas.json"
+expect_out "ci-gate-two-commits says why" "not of one head commit"
+jq '(.[1].jobs[] | select(.name == "test") | .completed_at) = "2026-10-16T21:40:00Z"' "${gate}/five-green.json" >"${scratch}/gate-slow-unit.json"
+expect pass "ci-gate-d18-is-a-warning" scripts/ci-gate.sh --from-file "${scratch}/gate-slow-unit.json"
+expect_out "ci-gate-d18 names the attempt" "D-18 not met in attempt 2"
+expect fail "ci-gate-bad-run-id" scripts/ci-gate.sh 'abc;rm'
+expect fail "ci-gate-no-arguments" scripts/ci-gate.sh
+
 # --- test-web (06.1-15, D-03, D-18): shuffled, with a seed that reproduces the run ---
 expect pass "test-web-seeded" mk test-web WEB_SEED=42
 expect_out "test-web takes the seed from WEB_SEED" "seed=42"
