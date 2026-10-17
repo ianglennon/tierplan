@@ -191,6 +191,21 @@ expect pass "timeouts-check-repository" scripts/timeouts-check.sh
 expect fail "timeouts-thin-gotestsum" scripts/timeouts-check.sh scripts/testdata/timeouts/ci-thin.yml scripts/testdata/timeouts/Makefile.gotestsum
 expect_out "timeouts-thin-gotestsum names the job" "job slow runs make slow with go test -timeout 40m but the job allows 45 minutes"
 
+# --- No retries (06.1-22, D-15): CI never reruns a test, a check or a job ---
+retr=scripts/testdata/retries
+expect fail "retries-workflow" scripts/no-retries-check.sh "${retr}/workflow-rerun.yml"
+expect_out "retries-workflow names the rerun line" "workflow-rerun.yml:8: gh run rerun"
+expect_out "retries-workflow names the retry action" "workflow-rerun.yml:9: a retry action"
+expect fail "retries-playwright" scripts/no-retries-check.sh "${retr}/playwright-retries.config.ts"
+expect_out "retries-playwright names the line" "playwright-retries.config.ts:6: a retries/retry value other than 0"
+expect fail "retries-rerun-fails" scripts/no-retries-check.sh "${retr}/Makefile-rerun-fails"
+expect_out "retries-rerun-fails names the line" "Makefile-rerun-fails:3: gotestsum --rerun-fails"
+printf 'x:\n\tcurl --retry 3 http://example\n' >"${scratch}/curl-retry.mk"
+expect fail "retries-curl" scripts/no-retries-check.sh "${scratch}/curl-retry.mk"
+expect_out "retries-curl names the line" "curl-retry.mk:2: curl --retry"
+expect pass "retries-clean-healthcheck" scripts/no-retries-check.sh "${retr}/clean.yml"
+expect pass "no-retries-repository" scripts/no-retries-check.sh
+
 # --- Failing-test summary (06.1-15, D-21): the failing and hung tests, from the JSON ---
 summ=scripts/testdata/summary
 expect pass "summary-go-fail" scripts/test-summary.sh "${summ}/go-fail.json"

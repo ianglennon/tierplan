@@ -1,0 +1,3 @@
+# Fixture for scripts/no-retries-check.sh: gotestsum told to rerun failed tests.
+test:
+	go run gotest.tools/gotestsum@v1.13.0 --rerun-fails=2 -- ./...
