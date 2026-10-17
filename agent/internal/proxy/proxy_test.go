@@ -21,6 +21,8 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/api/types/volume"
+
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // fakeSocket is a Docker daemon stand-in on a unix socket. It records every
@@ -104,7 +106,8 @@ func (f *fakeSocket) serve(w http.ResponseWriter, r *http.Request) {
 		// An engine answers a volume it does not have with 404.
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte(`{"message":"get ` + name + `: no such volume"}`))
+		// Encoded, not concatenated: the name comes from the request path.
+		_ = json.NewEncoder(w).Encode(map[string]string{"message": "get " + name + ": no such volume"})
 		return
 	}
 	w.Header().Set("Api-Version", "1.52")
@@ -144,7 +147,7 @@ func do(t *testing.T, h http.Handler, raw string) *http.Response {
 	client, server := net.Pipe()
 	go ServeConn(server, h)
 	t.Cleanup(func() { _ = client.Close() })
-	_ = client.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = client.SetDeadline(time.Now().Add(testsupport.Deadline))
 	// The request is written on its own goroutine: a net.Pipe has no buffer, so a
 	// handler that refuses a large body and answers before reading it all would
 	// otherwise leave this write blocked.
@@ -314,11 +317,7 @@ func TestServeConnReturnsWhenTheStreamCloses(t *testing.T) {
 		close(done)
 	}()
 	_ = client.Close()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("ServeConn did not return after the stream closed")
-	}
+	testsupport.Await(t, "ServeConn to return after the stream closed", done)
 }
 
 func TestAKeepAliveStreamServesSeveralRequests(t *testing.T) {
@@ -326,7 +325,7 @@ func TestAKeepAliveStreamServesSeveralRequests(t *testing.T) {
 	client, server := net.Pipe()
 	go ServeConn(server, Handler(sock.path, Policy{}, nil))
 	defer func() { _ = client.Close() }()
-	_ = client.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = client.SetDeadline(time.Now().Add(testsupport.Deadline))
 	br := bufio.NewReader(client)
 	for i := 0; i < 3; i++ {
 		if _, err := io.WriteString(client, get("/_ping")); err != nil {
