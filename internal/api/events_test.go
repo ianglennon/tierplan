@@ -260,7 +260,7 @@ func openSSE(t *testing.T, f *authFixture, path, cookie, lastEventID string) *ss
 	case <-c.started:
 	case <-c.done:
 		// a refusal that wrote nothing
-	case <-time.After(5 * time.Second):
+	case <-testsupport.Context(t).Done():
 		t.Fatal("the stream route never answered")
 	}
 	return c
@@ -309,12 +309,13 @@ func (c *sseConn) close() {
 	c.cancel()
 	select {
 	case <-c.done:
-	case <-time.After(5 * time.Second):
+	case <-testsupport.Context(c.t).Done():
 		c.t.Error("the stream handler did not return after its request ended")
 	}
 }
 
-// next returns the next data frame, skipping heartbeat comments.
+// next returns the next data frame, skipping heartbeat comments. Prefer nextData: next is kept
+// only for the stream tests of other files, which plan 06.1-35 converts before it deletes this.
 func (c *sseConn) next(timeout time.Duration) (frame, bool) {
 	deadline := time.After(timeout)
 	for {
@@ -333,12 +334,91 @@ func (c *sseConn) next(timeout time.Duration) (frame, bool) {
 	}
 }
 
+// nextData returns the next data frame, skipping comments. It fails, naming what was awaited and
+// the body written so far, when the stream ends first or testsupport.Deadline passes.
+func (c *sseConn) nextData(t *testing.T, what string) frame {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	for {
+		select {
+		case fr, ok := <-c.frames:
+			if !ok {
+				t.Fatalf("the stream ended before %s; it had written %q", what, c.bodyString())
+			}
+			if fr.comment != "" {
+				continue
+			}
+			return fr
+		case <-ctx.Done():
+			t.Fatalf("waiting for %s: %v; the stream had written %q", what, ctx.Err(), c.bodyString())
+		}
+	}
+}
+
+// dataBeforeComment reads raw frames, comments included, until the first comment frame (a ping or
+// a heartbeat) and returns the data frames before it. The handlers write the whole backlog before
+// their ticker starts, so the first comment ends everything that was replayed; a stretch of
+// silence never ends a scan.
+func (c *sseConn) dataBeforeComment(t *testing.T, what string) []frame {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	var got []frame
+	for {
+		select {
+		case fr, ok := <-c.frames:
+			if !ok {
+				t.Fatalf("the stream ended before %s; it had written %q", what, c.bodyString())
+			}
+			if fr.comment != "" {
+				return got
+			}
+			got = append(got, fr)
+		case <-ctx.Done():
+			t.Fatalf("waiting for %s: %v; the stream had written %q", what, ctx.Err(), c.bodyString())
+		}
+	}
+}
+
+// awaitEnd waits for the stream's handler to return and fails, naming why it should have, when
+// it is still open after testsupport.Deadline.
+func (c *sseConn) awaitEnd(t *testing.T, why string) {
+	t.Helper()
+	select {
+	case <-c.done:
+	case <-testsupport.Context(t).Done():
+		t.Fatalf("the stream was still open %v after %s; it had written %q", testsupport.Deadline, why, c.bodyString())
+	}
+}
+
+// commentLines counts the comment lines (heartbeats and pings) of a stream body.
+func commentLines(body string) int {
+	n := 0
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, ": ") {
+			n++
+		}
+	}
+	return n
+}
+
+// endsWithinBeats proves "the stream ends within a heartbeat" by counting, not by timing: it
+// marks the comments written so far, waits for the stream to end, and fails when more than n
+// comments were written after the mark. Call it after the change that must end the stream.
+// Every tick re-checks the caller (httpx.StillAuthorized, which reads the store on each call and
+// caches nothing) before it writes its comment, so once the change is committed only a tick
+// whose check began before it can still write one: n is 1.
+func (c *sseConn) endsWithinBeats(t *testing.T, n int, why string) {
+	t.Helper()
+	before := commentLines(c.bodyString())
+	c.awaitEnd(t, why)
+	if after := commentLines(c.bodyString()); after-before > n {
+		t.Fatalf("the stream wrote %d comments after %s and before it ended, want at most %d", after-before, why, n)
+	}
+}
+
 func (c *sseConn) mustNext(t *testing.T) (frame, eventDTO) {
 	t.Helper()
-	fr, ok := c.next(5 * time.Second)
-	if !ok {
-		t.Fatal("no frame arrived")
-	}
+	fr := c.nextData(t, "the next frame")
 	var dto eventDTO
 	if err := json.Unmarshal([]byte(fr.data), &dto); err != nil {
 		t.Fatalf("frame data %q: %v", fr.data, err)
@@ -437,10 +517,7 @@ func TestEventStreamSendsAHealthChangeAsAnIdlessInvalidateFrameAndTheListNeverHo
 		Attributes: map[string]string{"name": "web", "image": "img", "check": "curl -u admin:hunter2 localhost"}})
 	publish(f, "after")
 
-	fr, ok := c.next(5 * time.Second)
-	if !ok {
-		t.Fatal("no frame arrived")
-	}
+	fr := c.nextData(t, "the invalidate frame")
 	if fr.event != "invalidate" || fr.id != "" {
 		t.Fatalf("frame = %+v, want event invalidate with no id (Last-Event-ID resume must be unaffected)", fr)
 	}
@@ -486,12 +563,15 @@ func TestEventStreamResumesAfterLastEventID(t *testing.T) {
 	if _, e := c.mustNext(t); e.ActorID != "c-3" {
 		t.Errorf("first frame after Last-Event-ID = %s, want c-3 only", e.ActorID)
 	}
-	if fr, ok := c.next(150 * time.Millisecond); ok {
-		t.Errorf("an extra frame arrived: %+v", fr)
+	// "No extra frame" is proved by order: an event published after the resume must be the very
+	// next frame, so nothing was queued between c-3 and it.
+	publish(f, "c-4")
+	if _, e := c.mustNext(t); e.ActorID != "c-4" {
+		t.Errorf("the frame after c-3 = %s, want the event published next, c-4, and nothing between", e.ActorID)
 	}
 
 	// An id the buffer no longer holds (the event fell out of the ring, or the
-	// server restarted) gets the whole backlog: a repeat is harmless, a gap is not.
+	// server restarted) gets the whole backlog (c-4 may follow it): a repeat is harmless, a gap is not.
 	c2 := f.openStream(t, f.cookie, "ffffffffffffffffffffffff")
 	for _, want := range []string{"c-1", "c-2", "c-3"} {
 		if _, e := c2.mustNext(t); e.ActorID != want {
@@ -506,7 +586,7 @@ func TestEventStreamSendsAHeartbeatCommentAtTheConfiguredInterval(t *testing.T) 
 	c := f.openStream(t, f.cookie, "")
 
 	beats := 0
-	deadline := time.After(5 * time.Second)
+	ctx := testsupport.Context(t)
 	for beats < 3 {
 		select {
 		case fr, ok := <-c.frames:
@@ -518,7 +598,7 @@ func TestEventStreamSendsAHeartbeatCommentAtTheConfiguredInterval(t *testing.T) 
 			} else {
 				t.Errorf("unexpected frame %+v", fr)
 			}
-		case <-deadline:
+		case <-ctx.Done():
 			t.Fatalf("only %d heartbeats arrived", beats)
 		}
 	}
@@ -540,17 +620,13 @@ func TestEventStreamAllowsEightPerUserAndRefusesTheNinthWith429(t *testing.T) {
 	if ninth.status0() != http.StatusTooManyRequests {
 		t.Fatalf("the 9th stream = %d, want 429", ninth.status0())
 	}
-	select {
-	case <-ninth.done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("a refused stream stayed open")
-	}
+	ninth.awaitEnd(t, "the 429 was answered")
 	if got := ninth.header.Get("Content-Type"); got != "application/problem+json" {
 		t.Errorf("429 Content-Type = %q", got)
 	}
 	// The status is set before the problem body is written, so let the refused request
 	// finish before reading its body: a loaded run can look in between.
-	ninth.waitEnded(t, 5*time.Second, "the 429 was answered")
+	ninth.awaitEnd(t, "the 429 was answered")
 	if body := ninth.bodyString(); !strings.Contains(body, `"type":"rate_limited"`) {
 		t.Errorf("429 body = %s, want the rate_limited problem type", body)
 	}
@@ -621,19 +697,11 @@ func TestEventStreamEndsWhenTheHubClosesAndWhenTheClientLeaves(t *testing.T) {
 
 	gone := f.openStream(t, f.cookie, "")
 	gone.cancel()
-	select {
-	case <-gone.done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the handler kept running after the client left")
-	}
+	gone.awaitEnd(t, "the client left")
 
 	open := f.openStream(t, f.cookie, "")
 	f.hub.Close() // server shutdown: open streams must not hold it up
-	select {
-	case <-open.done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the handler kept running after the hub closed")
-	}
+	open.awaitEnd(t, "the hub closed")
 }
 
 func TestEventRecentReturnsTheNewest50NewestFirstWithTheStreamFields(t *testing.T) {
@@ -758,7 +826,8 @@ func TestEventOpenAPIDocumentsTheRecentEndpointButNotTheStream(t *testing.T) {
 
 // --- The stream ends when what it was authorised by goes away (WR-02) -------
 
-// waitEnded fails unless the stream's handler returns within d.
+// waitEnded fails unless the stream's handler returns within d. Prefer awaitEnd and
+// endsWithinBeats; plan 06.1-35 converts the remaining callers and deletes this.
 func (c *sseConn) waitEnded(t *testing.T, d time.Duration, why string) {
 	t.Helper()
 	select {
@@ -778,7 +847,7 @@ func TestEventStreamEndsWithinAHeartbeatOfSignOut(t *testing.T) {
 	if _, err := f.st.Write.Exec(`DELETE FROM sessions`); err != nil {
 		t.Fatal(err)
 	}
-	c.waitEnded(t, time.Second, "the session was deleted")
+	c.endsWithinBeats(t, 1, "the session was deleted")
 
 	// A reconnect goes through the whole policy and is a denied read, which the
 	// SPA already treats as a signed-out session.
@@ -805,7 +874,7 @@ func TestEventStreamEndsWhenTheUserIsDisabledOrTheEnvironmentRemoved(t *testing.
 		if _, err := f.st.Write.Exec(`UPDATE users SET disabled = 1`); err != nil {
 			t.Fatal(err)
 		}
-		c.waitEnded(t, time.Second, "the user was disabled")
+		c.endsWithinBeats(t, 1, "the user was disabled")
 	})
 	t.Run("environment removed", func(t *testing.T) {
 		f := newEventsFix(t, dockertest.FakeConfig{}, 20*time.Millisecond, 0)
@@ -814,7 +883,7 @@ func TestEventStreamEndsWhenTheUserIsDisabledOrTheEnvironmentRemoved(t *testing.
 		if err := f.svc.Remove(context.Background(), actor, f.env.ID, authIP, authUA, false); err != nil {
 			t.Fatal(err)
 		}
-		c.waitEnded(t, time.Second, "the environment was removed")
+		c.endsWithinBeats(t, 1, "the environment was removed")
 	})
 	t.Run("environment disabled", func(t *testing.T) {
 		f := newEventsFix(t, dockertest.FakeConfig{}, 20*time.Millisecond, 0)
@@ -822,7 +891,7 @@ func TestEventStreamEndsWhenTheUserIsDisabledOrTheEnvironmentRemoved(t *testing.
 		if _, err := f.st.Write.Exec(`UPDATE environments SET enabled = 0`); err != nil {
 			t.Fatal(err)
 		}
-		c.waitEnded(t, time.Second, "the environment was disabled")
+		c.endsWithinBeats(t, 1, "the environment was disabled")
 	})
 	t.Run("permission withdrawn", func(t *testing.T) {
 		f := newEventsFix(t, dockertest.FakeConfig{}, 20*time.Millisecond, 0)
@@ -830,7 +899,7 @@ func TestEventStreamEndsWhenTheUserIsDisabledOrTheEnvironmentRemoved(t *testing.
 		if _, err := f.st.Write.Exec(`UPDATE users SET instance_admin = 0 WHERE id = 'id-admin'`); err != nil {
 			t.Fatal(err)
 		}
-		c.waitEnded(t, time.Second, "the instance admin flag was withdrawn")
+		c.endsWithinBeats(t, 1, "the instance admin flag was withdrawn")
 	})
 }
 
@@ -839,8 +908,7 @@ func TestEventStreamEndsWhenTheUserIsDisabledOrTheEnvironmentRemoved(t *testing.
 // session, so the rest of the app keeps working.
 func TestEventsStreamEndsWithinOneHeartbeatWhenTheViewerLosesTheEnvironment(t *testing.T) {
 	t.Parallel()
-	const heartbeat = 50 * time.Millisecond
-	f := newEventsFix(t, dockertest.FakeConfig{}, heartbeat, 0)
+	f := newEventsFix(t, dockertest.FakeConfig{}, 50*time.Millisecond, 0)
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", f.env.ID, "viewer")
 	cookie, _ := f.signIn(t, "viewer", false)
@@ -852,8 +920,7 @@ func TestEventsStreamEndsWithinOneHeartbeatWhenTheViewerLosesTheEnvironment(t *t
 	if _, err := f.st.Write.Exec(`DELETE FROM role_assignments WHERE principal_id = 'id-viewer'`); err != nil {
 		t.Fatal(err)
 	}
-	// Two heartbeats, plus slack for a loaded machine under the race detector.
-	c.waitEnded(t, 2*heartbeat+400*time.Millisecond, "the viewer's grant on the environment was removed")
+	c.endsWithinBeats(t, 1, "the viewer's grant on the environment was removed")
 
 	// The session is untouched: the user is still signed in.
 	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/me", cookie: cookie})
@@ -881,7 +948,7 @@ func TestEventStreamEndsWhenTheSessionIdlesOutWithoutBeingTouched(t *testing.T) 
 		t.Fatal(err)
 	}
 	seen0 -= int64(authIdle + time.Second)
-	c.waitEnded(t, time.Second, "the session idled out")
+	c.endsWithinBeats(t, 1, "the session idled out")
 	var seen1 int64
 	var n int
 	if err := f.st.Read.QueryRow(`SELECT COUNT(*), COALESCE(MAX(last_seen_at), 0) FROM sessions`).Scan(&n, &seen1); err != nil {
@@ -898,7 +965,7 @@ func TestEventStreamEndsAtItsMaximumLifetime(t *testing.T) {
 	f.eventsMaxLifetime = 100 * time.Millisecond
 	f.h = f.build(t)
 	c := f.openStream(t, f.cookie, "")
-	c.waitEnded(t, time.Second, "its maximum lifetime passed")
+	c.awaitEnd(t, "its maximum lifetime passed")
 }
 
 func TestEventStreamKeepsRunningWhileTheSessionStaysValid(t *testing.T) {
@@ -906,7 +973,7 @@ func TestEventStreamKeepsRunningWhileTheSessionStaysValid(t *testing.T) {
 	f := newEventsFix(t, dockertest.FakeConfig{}, 20*time.Millisecond, 0)
 	c := f.openStream(t, f.cookie, "")
 	beats := 0
-	deadline := time.After(5 * time.Second)
+	ctx := testsupport.Context(t)
 	for beats < 6 {
 		select {
 		case fr, ok := <-c.frames:
@@ -916,7 +983,7 @@ func TestEventStreamKeepsRunningWhileTheSessionStaysValid(t *testing.T) {
 			if fr.comment == "heartbeat" {
 				beats++
 			}
-		case <-deadline:
+		case <-ctx.Done():
 			t.Fatalf("only %d heartbeats arrived", beats)
 		}
 	}
@@ -978,9 +1045,7 @@ func (l *sseLines) next(t *testing.T) (string, eventDTO) {
 
 func (f *swarmFix) openEvents(t *testing.T, ts *httptest.Server, lastID string) *sseLines {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	t.Cleanup(cancel)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/env/"+f.env.ID+"/events/stream", nil)
+	req, err := http.NewRequestWithContext(testsupport.Context(t), http.MethodGet, ts.URL+"/api/env/"+f.env.ID+"/events/stream", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
