@@ -3,6 +3,7 @@
 
 import type { QueryClient } from "@tanstack/react-query";
 import { waitFor } from "@testing-library/react";
+import { vi } from "vitest";
 
 // Resolves once no query is fetching and no mutation is pending, and checks nothing else. A
 // request that has not started yet (one behind a debounce or a timer) is not fetching, so
@@ -16,4 +17,15 @@ export async function settled(client: QueryClient): Promise<void> {
       throw new Error("queries or mutations are still running");
     }
   });
+}
+
+// Waits for a condition in a test whose clock is fully fake. Testing Library's waitFor and findBy
+// poll on the faked timers, so under vi.useFakeTimers() they never poll; vitest's waitFor polls on
+// the real timers it captured, and moves the fake clock on by the interval at every poll, which
+// also lets the timers behind a query's notifications run. Its own deadline is 1 s, which a
+// loaded runner misses for a render that is merely slow, so this gives it the same failure
+// deadline as every other wait (asyncUtilTimeout in test-setup.ts): a condition that never comes
+// still fails, just later. Returns what the callback returns.
+export function waitUnderFakeClock<T>(callback: () => T | Promise<T>): Promise<T> {
+  return vi.waitFor(callback, { timeout: 30000, interval: 50 });
 }

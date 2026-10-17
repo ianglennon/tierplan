@@ -15,6 +15,7 @@ import { PullsIndicator } from "@/features/pulls/pulls-indicator";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
+import { waitUnderFakeClock } from "@/test-settle";
 
 const REF = "docker.io/library/nginx:1.27";
 
@@ -185,13 +186,13 @@ describe("PullsIndicator", () => {
     vi.useFakeTimers();
     pulls = [summary()];
     mount();
-    await vi.waitFor(() => screen.getByRole("button", { name: "Pulls, 1 in progress" }));
+    await waitUnderFakeClock(() => screen.getByRole("button", { name: "Pulls, 1 in progress" }));
     const listed = () => calls.filter((c) => c === "GET /api/pulls").length;
     const before = listed();
     listStatus = 500;
     await vi.advanceTimersByTimeAsync(PULLS_POLL_RUNNING_MS);
-    await vi.waitFor(() => expect(listed()).toBeGreaterThan(before));
-    await vi.waitFor(() => expect(client.isFetching() + client.isMutating()).toBe(0));
+    await waitUnderFakeClock(() => expect(listed()).toBeGreaterThan(before));
+    await waitUnderFakeClock(() => expect(client.isFetching() + client.isMutating()).toBe(0));
     expect(screen.getByRole("button", { name: "Pulls, 1 in progress" })).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
   });

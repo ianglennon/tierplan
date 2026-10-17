@@ -9,6 +9,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { SpecEditor, specEditorTiming } from "@/features/spec-editor/spec-editor";
 import { renderSpec, SPEC_FORMAT_KEY } from "@/features/spec-editor/spec-format";
 import "@/i18n";
+import { waitUnderFakeClock } from "@/test-settle";
 
 const copyText = vi.fn(async (_text: string, _host?: Element | null) => true);
 vi.mock("@/components/copyable-code", async (importOriginal) => ({
@@ -169,7 +170,7 @@ describe("SpecEditor", () => {
     vi.useFakeTimers();
     typeSpec("Name: [oops\n");
     await vi.advanceTimersByTimeAsync(specEditorTiming.errorMs);
-    const first = await vi.waitFor(() => screen.getByRole("alert"));
+    const first = await waitUnderFakeClock(() => screen.getByRole("alert"));
     typeSpec("Name: [oops!\n");
     // Past the debounce of the second edit, whose error would have replaced the first.
     await vi.advanceTimersByTimeAsync(specEditorTiming.errorMs * 2);

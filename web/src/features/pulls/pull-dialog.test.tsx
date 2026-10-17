@@ -15,7 +15,7 @@ import { PREVIEW_DEBOUNCE_MS, PullDialog, PullImageButton } from "@/features/pul
 import "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
-import { settled } from "@/test-settle";
+import { settled, waitUnderFakeClock } from "@/test-settle";
 
 const ENV = "e1";
 const REF = "docker.io/library/nginx:1.27";
@@ -777,7 +777,7 @@ describe("PullDialog (the credential preview)", () => {
   const debounceClock = () => vi.useFakeTimers();
   // settled(client) for a fake clock: no query is fetching and no mutation is running.
   const noneRunning = () =>
-    vi.waitFor(() => expect(client.isFetching() + client.isMutating()).toBe(0));
+    waitUnderFakeClock(() => expect(client.isFetching() + client.isMutating()).toBe(0));
 
   it("shows the reference as it will be pulled and says the pull is anonymous", async () => {
     resolveAnswer = () => resolved();
@@ -821,7 +821,7 @@ describe("PullDialog (the credential preview)", () => {
     typeInto(dialog, "ng");
     typeInto(dialog, "nginx:1.27");
     await vi.advanceTimersByTimeAsync(PREVIEW_DEBOUNCE_MS);
-    await vi.waitFor(() => expect(resolves()).toHaveLength(1));
+    await waitUnderFakeClock(() => expect(resolves()).toHaveLength(1));
     expect(resolves()[0]?.body).toEqual({ ref: "nginx:1.27" });
     // Nothing more comes after it, however long the debounce runs on.
     await vi.advanceTimersByTimeAsync(PREVIEW_DEBOUNCE_MS * 2);
@@ -845,7 +845,7 @@ describe("PullDialog (the credential preview)", () => {
     debounceClock();
     typeInto(dialog, "Bad Ref!");
     await vi.advanceTimersByTimeAsync(PREVIEW_DEBOUNCE_MS);
-    await vi.waitFor(() => expect(resolves()).toHaveLength(1));
+    await waitUnderFakeClock(() => expect(resolves()).toHaveLength(1));
     // The check has been answered (with the 422) before the lines are looked for.
     await noneRunning();
     expect(dialog.textContent).not.toContain("Credential:");

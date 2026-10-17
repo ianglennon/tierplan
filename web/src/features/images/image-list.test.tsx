@@ -389,10 +389,12 @@ describe("ImageList Dangling chip and search", () => {
     changes = [];
     search = {};
     mount();
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const box = await screen.findByRole("searchbox", { name: "Search images" });
+    expect(box.getAttribute("placeholder")).toBe("Search by name, tag or ID");
+    // The debounce is a timer of the component's own, set by the keystroke below. The clock is
+    // fully fake from here, so real time cannot fire it before the test moves the clock.
+    vi.useFakeTimers();
     try {
-      const box = await screen.findByRole("searchbox", { name: "Search images" });
-      expect(box.getAttribute("placeholder")).toBe("Search by name, tag or ID");
       fireEvent.change(box, { target: { value: "redis" } });
       expect(changes).toEqual([]);
       await vi.advanceTimersByTimeAsync(300);

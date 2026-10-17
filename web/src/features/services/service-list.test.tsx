@@ -16,6 +16,7 @@ import { ServiceList } from "@/features/services/service-list";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
+import { waitUnderFakeClock } from "@/test-settle";
 
 const ENV = "e1";
 
@@ -674,7 +675,7 @@ describe("the services list: search and status chips", () => {
       );
     fireEvent.change(box, { target: { value: "web" } });
     expect(changes).toEqual([]);
-    await waitFor(() => expect(changes).toEqual([{ q: "web" }]), { timeout: 1500 });
+    await waitFor(() => expect(changes).toEqual([{ q: "web" }]));
   });
 
   it("sends the search and the statuses of the URL to the server, and shows the rows it answers", async () => {
@@ -1237,7 +1238,10 @@ describe("the services list: selection and bulk scale", () => {
   });
 
   it("releases a Scaling… row after 30 seconds if the list never shows the count", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // The 30 seconds are a timer of the component's own, set when the scale is answered. The clock
+    // is fully fake from the click on, so only the explicit advance below can reach them; under it
+    // the test waits with vi.waitFor, because Testing Library's waitFor and findBy poll on the
+    // faked timers and so never poll.
     try {
       await mountReady();
       fireEvent.click(box("shop_web"));
@@ -1268,12 +1272,13 @@ describe("the services list: selection and bulk scale", () => {
       fireEvent.change(within(dialog).getByRole("textbox", { name: "Set all to" }), {
         target: { value: "9" },
       });
+      vi.useFakeTimers();
       fireEvent.click(within(dialog).getByRole("button", { name: "Scale 2 services" }));
-      await waitFor(() => expect(screen.getAllByText("Scaling…").length).toBe(2));
+      await waitUnderFakeClock(() => expect(screen.getAllByText("Scaling…").length).toBe(2));
       await act(async () => {
         vi.advanceTimersByTime(30_001);
       });
-      await waitFor(() => expect(screen.queryByText("Scaling…")).toBeNull());
+      await waitUnderFakeClock(() => expect(screen.queryByText("Scaling…")).toBeNull());
     } finally {
       vi.useRealTimers();
     }

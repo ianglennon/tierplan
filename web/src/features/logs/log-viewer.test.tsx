@@ -214,7 +214,7 @@ describe("the end of the stream", () => {
   });
 
   it("shows Reconnecting while it retries a dropped stream, keeps the lines, and shows Live again once it is back", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.useFakeTimers();
     try {
       renderViewer();
       await connect();
@@ -246,7 +246,7 @@ describe("the end of the stream", () => {
   });
 
   it("adds one row, Logs were interrupted, when the stream cannot be resumed because the container is gone", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.useFakeTimers();
     vi.stubGlobal(
       "fetch",
       vi.fn(
@@ -561,7 +561,7 @@ describe("search", () => {
     fireEvent.change(screen.getByRole("searchbox"), { target: { value } });
 
   async function typed(value: string) {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.useFakeTimers();
     try {
       type(value);
       await act(async () => {
@@ -672,7 +672,7 @@ describe("search", () => {
     const onParamsChange = vi.fn();
     const { rerender } = renderViewer({ params: {}, onParamsChange });
     await connect();
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.useFakeTimers();
     try {
       type("er");
       await act(async () => {
@@ -915,7 +915,7 @@ describe("the buffer cap", () => {
     expect(surface().textContent).not.toContain("line 0 ");
     // Sixty thousand lines in, only the ones in view are drawn.
     expect(surface().querySelectorAll("[data-stream]").length).toBeLessThan(200);
-  }, 20_000);
+  });
 });
 
 describe("colour", () => {
@@ -1117,7 +1117,7 @@ describe("a hidden pop-out", () => {
   });
 
   it("closes its stream after a minute hidden and reopens it from the last line when seen again", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.useFakeTimers();
     try {
       renderViewer({ popout: true });
       await connect();
@@ -1145,7 +1145,7 @@ describe("a hidden pop-out", () => {
   });
 
   it("keeps its stream when it is seen again within the minute", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.useFakeTimers();
     try {
       renderViewer({ popout: true });
       await connect();
@@ -1163,7 +1163,7 @@ describe("a hidden pop-out", () => {
   });
 
   it("leaves the Logs tab alone: it keeps its stream hidden or not", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.useFakeTimers();
     try {
       renderViewer();
       await connect();
@@ -1448,7 +1448,7 @@ describe("a service's log", () => {
   });
 
   it("lets go of the stream of a pop-out hidden for a minute and picks it up from the last line", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.useFakeTimers();
     const hide = (hidden: boolean) => {
       Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
       document.dispatchEvent(new Event("visibilitychange"));
@@ -1644,7 +1644,7 @@ describe("a service's markers and filters", () => {
     await ready();
     await lines([row(1, "t1", 1, "alpha", "one")]);
     await frame("marker", replaced);
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.useFakeTimers();
     try {
       fireEvent.change(screen.getByRole("searchbox", { name: "Search logs" }), {
         target: { value: "replaced" },

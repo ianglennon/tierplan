@@ -12,6 +12,7 @@ import { recordRecentTiming } from "@/routes/_app/env/$envId";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
 import { makeMe } from "@/test-me";
+import { waitUnderFakeClock } from "@/test-settle";
 
 const ME = makeMe({
   instanceAdmin: true,
@@ -286,10 +287,10 @@ describe("recording the environment that was opened (D-31)", () => {
   // 50 ms a poll, because Testing Library's waitFor and findBy poll on the faked timers and so
   // never poll, and a query's notifications are timers too.
   const fakeClock = () => vi.useFakeTimers();
-  const heading = (name: string) => vi.waitFor(() => screen.getByRole("heading", { name }));
+  const heading = (name: string) => waitUnderFakeClock(() => screen.getByRole("heading", { name }));
   // settled(queryClient) for a fake clock: no query is fetching and no mutation is running.
   const noneRunning = () =>
-    vi.waitFor(() => expect(queryClient.isFetching() + queryClient.isMutating()).toBe(0));
+    waitUnderFakeClock(() => expect(queryClient.isFetching() + queryClient.isMutating()).toBe(0));
 
   const puts = () =>
     sent
@@ -315,7 +316,7 @@ describe("recording the environment that was opened (D-31)", () => {
     await act(async () => {
       await queryClient.invalidateQueries({ queryKey: ["environments"] });
     });
-    await vi.waitFor(() => expect(puts()).toEqual(["a"]));
+    await waitUnderFakeClock(() => expect(puts()).toEqual(["a"]));
     await noneRunning();
     // Far past the delay: a second timer would have fired by now.
     await act(async () => {
@@ -351,7 +352,7 @@ describe("recording the environment that was opened (D-31)", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(600_000);
     });
-    await vi.waitFor(() => expect(puts()).toEqual(["b"]));
+    await waitUnderFakeClock(() => expect(puts()).toEqual(["b"]));
     await noneRunning();
     expect(puts()).toEqual(["b"]);
   });
@@ -379,7 +380,7 @@ describe("recording the environment that was opened (D-31)", () => {
     );
     await heading("env a");
     // The record is attempted and refused, and only then is the page looked at.
-    await vi.waitFor(() => expect(refused).toBe(1));
+    await waitUnderFakeClock(() => expect(refused).toBe(1));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });

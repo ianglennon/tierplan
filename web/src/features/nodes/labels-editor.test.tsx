@@ -13,6 +13,7 @@ import { NODE_ENV, NODE_ID, nodeDetail } from "@/features/nodes/fixtures";
 import { LABEL_CHECK_DEBOUNCE_MS, NodeLabelsEditor } from "@/features/nodes/labels-editor";
 import "@/i18n";
 import { makeMe } from "@/test-me";
+import { waitUnderFakeClock } from "@/test-settle";
 
 // The Labels tab (plan 06-16, RES-05, D-21, E11, E15): a key and value table whose edits are
 // checked 400 ms after the last one, an Effect on services panel, and a save that asks first only
@@ -170,13 +171,13 @@ describe("NodeLabelsEditor", () => {
     await vi.advanceTimersByTimeAsync(LABEL_CHECK_DEBOUNCE_MS - 1);
     expect(impactCalls).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1);
-    await vi.waitFor(() => expect(impactCalls).toHaveLength(1));
+    await waitUnderFakeClock(() => expect(impactCalls).toHaveLength(1));
     expect(impactCalls[0]?.body).toEqual({ labels: { disk: "ssd", zone: "bbb" } });
     // Asked but not answered: still held.
     expect(isOff(save())).toBe(true);
     expect(screen.getByText("Checking services…")).toBeTruthy();
     open();
-    await vi.waitFor(() => expect(isOff(save())).toBe(false));
+    await waitUnderFakeClock(() => expect(isOff(save())).toBe(false));
     expect(screen.queryByText("Checking services…")).toBeNull();
     expect(impactCalls).toHaveLength(1);
   });
@@ -208,7 +209,7 @@ describe("NodeLabelsEditor", () => {
     fireEvent.change(fields[2] as HTMLElement, { target: { value: "com.dockerish" } });
     expect(screen.queryByText(/are reserved/)).toBeNull();
     await vi.advanceTimersByTimeAsync(LABEL_CHECK_DEBOUNCE_MS);
-    await vi.waitFor(() => expect(isOff(save())).toBe(false));
+    await waitUnderFakeClock(() => expect(isOff(save())).toBe(false));
   });
 
   it("refuses a name used twice and more than 64 labels", async () => {
