@@ -24,6 +24,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/tunnel"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // The container log stream (plan 04-19, OBS-01, D-15, D-23, D-24, P3 D-10). Docker is
@@ -77,7 +78,7 @@ func newLogsFix(t *testing.T, cfg dockertest.FakeConfig, tune func(*envFix)) *lo
 	f.h = f.build(t)
 	e := f.add(t)
 	// A read goes only to a node the monitor has seen online.
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	return &logsFix{envFix: f, env: e}
 }
 
@@ -470,13 +471,7 @@ func TestLogStreamEndsWithClosedAccessLostWithinAHeartbeatOfLosingTheGrant(t *te
 	}
 	c.waitEnded(t, time.Second, "it told the viewer the access was lost")
 	// The engine's request is cancelled with the stream.
-	deadline := time.Now().Add(5 * time.Second)
-	for f.fake.LogFollows() != 0 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if n := f.fake.LogFollows(); n != 0 {
-		t.Errorf("%d engine follows stayed open", n)
-	}
+	awaitFake(t, f.fake, "the engine follow to be released", func() bool { return f.fake.LogFollows() == 0 })
 }
 
 func TestLogStreamEndsCleanlyAtItsMaximumLifetimeAndFreesTheEngineFollow(t *testing.T) {
@@ -484,30 +479,16 @@ func TestLogStreamEndsCleanlyAtItsMaximumLifetimeAndFreesTheEngineFollow(t *test
 	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
 	nextEvent(t, c, "ready", 5*time.Second)
 	c.waitEnded(t, 3*time.Second, "its lifetime of 50 ms")
-	deadline := time.Now().Add(5 * time.Second)
-	for f.fake.LogFollows() != 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("the engine follow stayed open after the stream ended")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	awaitFake(t, f.fake, "the engine follow to be released after the stream ended", func() bool { return f.fake.LogFollows() == 0 })
 }
 
 func TestLogStreamReleasesTheEngineFollowWhenTheBrowserLeaves(t *testing.T) {
 	f := newLogsFix(t, logsEngine(), nil)
 	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
 	nextEvent(t, c, "ready", 5*time.Second)
-	if n := f.fake.LogFollows(); n != 1 {
-		t.Fatalf("%d follows open, want 1", n)
-	}
+	awaitFake(t, f.fake, "the engine follow to open", func() bool { return f.fake.LogFollows() == 1 })
 	c.close()
-	deadline := time.Now().Add(5 * time.Second)
-	for f.fake.LogFollows() != 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("the engine follow stayed open after the browser left")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	awaitFake(t, f.fake, "the engine follow to be released after the browser left", func() bool { return f.fake.LogFollows() == 0 })
 }
 
 // busyAgg refuses every node call as an agent with no interactive slot left does.
@@ -663,10 +644,27 @@ func TestLogRestartIgnoresTheEventsOfOtherContainers(t *testing.T) {
 	}
 }
 
-// spyEvents counts the event subscriptions that are open.
+// spyEvents counts the event subscriptions that are open and signals each one that is cancelled.
 type spyEvents struct {
 	api.LogsSource
 	open atomic.Int32
+	// cancelled gets one value after each subscription is cancelled; see awaitNone.
+	cancelled chan struct{}
+}
+
+func newSpyEvents() *spyEvents { return &spyEvents{cancelled: make(chan struct{}, 16)} }
+
+// awaitNone waits until no subscription is open, woken by each cancel rather than by polling.
+func (s *spyEvents) awaitNone(t *testing.T, what string) {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	for s.open.Load() != 0 {
+		select {
+		case <-s.cancelled:
+		case <-ctx.Done():
+			t.Fatalf("waiting for %s: %d subscriptions still open", what, s.open.Load())
+		}
+	}
 }
 
 func (s *spyEvents) Events(ctx context.Context, envID string) ([]envs.NodeEvent, <-chan envs.NodeEvent, func()) {
@@ -675,6 +673,10 @@ func (s *spyEvents) Events(ctx context.Context, envID string) ([]envs.NodeEvent,
 	return backlog, ch, func() {
 		s.open.Add(-1)
 		cancel()
+		select {
+		case s.cancelled <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -709,7 +711,7 @@ func TestLogStreamEndsWhenItsEventSubscriptionIsDropped(t *testing.T) {
 }
 
 func TestLogRestartCancelsItsEventSubscriptionWhenTheStreamEnds(t *testing.T) {
-	spy := &spyEvents{}
+	spy := newSpyEvents()
 	f := newLogsFix(t, logsEngine(), func(f *envFix) {
 		f.logsWrap = func(src api.LogsSource) api.LogsSource { spy.LogsSource = src; return spy }
 	})
@@ -719,7 +721,7 @@ func TestLogRestartCancelsItsEventSubscriptionWhenTheStreamEnds(t *testing.T) {
 		t.Fatalf("%d event subscriptions while the stream is open, want 1", n)
 	}
 	c.close()
-	waitFor(t, "the subscription to be cancelled", func() bool { return spy.open.Load() == 0 })
+	spy.awaitNone(t, "the subscription to be cancelled")
 }
 
 // The page of earlier lines behind "Load earlier lines" (plan 04-20, D-15, Pitfall 12).

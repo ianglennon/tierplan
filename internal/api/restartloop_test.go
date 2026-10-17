@@ -17,6 +17,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // Muting a restart loop and the per-environment threshold (plan 06-35, RES-13, D-14, D-16).
@@ -385,7 +386,7 @@ func containerLoopEnv(t *testing.T) (*envFix, envBody) {
 	f.svc.WithClusters(f.clusters)
 	f.h = f.build(t)
 	e := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	now := f.clk.now()
 	die := func(id, name, containerID, exit string, ago time.Duration) {
 		at := now.Add(-ago)
@@ -393,7 +394,9 @@ func containerLoopEnv(t *testing.T) (*envFix, envBody) {
 			ID: id, Time: at, TimeNano: at.UnixNano(), Type: "container", Action: "die", ActorID: containerID, Name: name,
 			Attributes: map[string]string{"name": name, "exitCode": exit},
 		}
-		waitFor(t, "the event feed to open", func() bool { return f.hub.Inject(e.ID, ev) })
+		if err := f.hub.Await(testsupport.Context(t), func() bool { return f.hub.Inject(e.ID, ev) }); err != nil {
+			t.Fatalf("waiting for the event feed to open: %v", err)
+		}
 	}
 	for i := range 3 {
 		ago := time.Duration(i+1) * time.Minute

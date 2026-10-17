@@ -538,17 +538,6 @@ func TestListRoutesAreReadOnly(t *testing.T) {
 	}
 }
 
-func waitFor(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-}
-
 // Each list documents its own 200 body in the OpenAPI contract. The generated
 // TypeScript types come from it, so a list that borrowed another operation's
 // schema would give the web app the wrong row type.

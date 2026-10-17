@@ -58,7 +58,7 @@ func serviceEnvOf(t *testing.T, cfg dockertest.FakeConfig) (*envFix, envBody) {
 	f.svc.WithClusters(f.clusters)
 	f.h = f.build(t)
 	e := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	return f, e
 }
 
@@ -191,7 +191,7 @@ func TestListServicesOfAStandaloneHostIsNotASwarm(t *testing.T) {
 	f.svc.WithClusters(f.clusters)
 	f.h = f.build(t)
 	e := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	rec := f.get(t, e, "services")
 	if rec.code != http.StatusConflict || rec.ptyp != "not_a_swarm" {
 		t.Fatalf("list = %d %s (%s), want 409 not_a_swarm", rec.code, rec.body, rec.ptyp)
@@ -399,7 +399,7 @@ func TestAServiceChangedBetweenReadAndWriteIsServiceChangedAndNeverRetried(t *te
 		defer wg.Done()
 		rec = f.scale(t, e, `{"targets":[{"serviceId":"svc-web","replicas":4}]}`)
 	}()
-	waitFor(t, "the update to reach the manager", func() bool { return len(f.fake.Writes()) == 1 })
+	awaitFake(t, f.fake, "the update to reach the manager", func() bool { return len(f.fake.Writes()) == 1 })
 	f.fake.BumpService("svc-web")
 	wg.Wait()
 	if rec.code != http.StatusOK {

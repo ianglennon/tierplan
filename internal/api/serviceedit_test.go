@@ -72,7 +72,7 @@ func (f *envFix) caller(t *testing.T, e envBody, user, role string) *roleCaller 
 	t.Helper()
 	f.addUser(t, user, false)
 	f.addEnvRole(t, user, e.ID, role)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State != "" })
+	awaitFirstProbe(t, f.mon, e.ID)
 	cookie, csrf := f.signIn(t, user, false)
 	return &roleCaller{f: f, t: t, e: e, cookie: cookie, csrf: csrf}
 }
@@ -85,7 +85,7 @@ func (f *envFix) revealCaller(t *testing.T, e envBody, user string) *roleCaller 
 	if rec := f.putGrant(t, f.cookie, f.csrf, "users", id, `{"scope":"env","envId":"`+e.ID+`","role":"operator","extras":["secrets.reveal"]}`); rec.Code != http.StatusCreated {
 		t.Fatalf("grant: %d %s", rec.Code, rec.Body)
 	}
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State != "" })
+	awaitFirstProbe(t, f.mon, e.ID)
 	cookie, csrf := f.signIn(t, user, false)
 	return &roleCaller{f: f, t: t, e: e, cookie: cookie, csrf: csrf}
 }
@@ -422,7 +422,7 @@ func TestServiceEditOfAStandaloneHostIsNotASwarm(t *testing.T) {
 	f.svc.WithClusters(f.clusters)
 	f.h = f.build(t)
 	e := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	body := `{"version":1,"spec":{"Name":"api"}}`
 	for _, route := range []string{"review", "apply"} {
 		rec := f.req(t, http.MethodPost, "/api/env/"+e.ID+"/services/api/"+route, body)
@@ -913,7 +913,11 @@ func TestServiceApplyASecretTheServiceDoesNotUseNeedsTheRevealPermission(t *test
 		f, e := actionsEnv(t, withDBPass, editableService(usesDBPass))
 		op := f.caller(t, e, "operator-1", "operator")
 		_, body := op.maskedSpec("svc-api", func(spec map[string]any) {
-			secretRefOf(spec)["File"].(map[string]any)["Mode"] = 0o400
+			file, ok := secretRefOf(spec)["File"].(map[string]any)
+			if !ok {
+				t.Fatalf("the secret reference has no File object: %+v", secretRefOf(spec))
+			}
+			file["Mode"] = 0o400
 		})
 		if rec := op.apply("svc-api", body); rec.Code != http.StatusAccepted {
 			t.Fatalf("apply by an operator: %d %s, want 202", rec.Code, rec.Body)

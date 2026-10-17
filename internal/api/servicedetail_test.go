@@ -92,7 +92,7 @@ func sdEnv(t *testing.T) (*envFix, envBody) {
 	f.svc.WithClusters(f.clusters)
 	f.h = f.build(t)
 	e := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	return f, e
 }
 
@@ -365,7 +365,7 @@ func TestServiceDetailOfAStandaloneHostIsNotASwarm(t *testing.T) {
 	f.svc.WithClusters(f.clusters)
 	f.h = f.build(t)
 	e := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	for _, path := range []string{"services/web", "services/web/inspect"} {
 		rec := f.get(t, e, path)
 		if rec.code != http.StatusConflict || rec.ptyp != "not_a_swarm" {

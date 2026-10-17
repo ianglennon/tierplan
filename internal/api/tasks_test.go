@@ -99,7 +99,7 @@ func tkEnv(t *testing.T, limit int, services []dockertest.FakeService, tasks ...
 	f.svc.WithClusters(f.clusters)
 	f.h = f.build(t)
 	e := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	return f, e
 }
 
@@ -291,7 +291,7 @@ func TestServiceTasksOfAStandaloneHostIsNotASwarm(t *testing.T) {
 	f.svc.WithClusters(f.clusters)
 	f.h = f.build(t)
 	e := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	rec := f.get(t, e, "services/web/tasks")
 	if rec.code != http.StatusConflict || rec.ptyp != "not_a_swarm" {
 		t.Fatalf("answer = %d %s (%s), want 409 not_a_swarm", rec.code, rec.body, rec.ptyp)

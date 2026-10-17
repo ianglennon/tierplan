@@ -67,7 +67,7 @@ func actionsEnv(t *testing.T, tune func(*dockertest.FakeConfig), services ...doc
 	f.svc.WithClusters(f.clusters)
 	f.h = f.build(t)
 	e := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	return f, e
 }
 
@@ -269,7 +269,7 @@ func TestForceUpdateAndRollbackOfAStandaloneHostAreNotASwarm(t *testing.T) {
 	f.svc.WithClusters(f.clusters)
 	f.h = f.build(t)
 	e := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	for name, rec := range map[string]*envRec{
 		"force update": f.forceUpdate(t, e, "web", `{}`),
 		"rollback":     f.rollback(t, e, "web", `{"version":1}`),
@@ -919,7 +919,7 @@ func TestRemoveServiceOfAStandaloneHostIsNotASwarm(t *testing.T) {
 	f.svc.WithClusters(f.clusters)
 	f.h = f.build(t)
 	e := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	if rec := f.removeService(t, e, "web", ""); rec.code != http.StatusConflict || rec.ptyp != "not_a_swarm" {
 		t.Errorf("remove = %d %s (%s), want 409 not_a_swarm", rec.code, rec.body, rec.ptyp)
 	}
