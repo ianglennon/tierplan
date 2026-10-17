@@ -74,6 +74,7 @@ func decodeRec[T any](t *testing.T, rec *httptest.ResponseRecorder) T {
 }
 
 func TestAnInstanceAdminGrantsAUserViewerOnEnvironmentAWhoThenReadsAAndGetsNotFoundOnB(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, richEngine())
 	a, b := f.twoEnvironments(t)
 	alice := f.addUser(t, "alice", false)
@@ -110,6 +111,7 @@ func TestAnInstanceAdminGrantsAUserViewerOnEnvironmentAWhoThenReadsAAndGetsNotFo
 }
 
 func TestTheUserAccessViewListsTheEffectiveRoleTheSourcesAndTheDirectGrants(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, richEngine())
 	a, _ := f.twoEnvironments(t)
 	alice := f.addUser(t, "alice", false)
@@ -140,6 +142,7 @@ func TestTheUserAccessViewListsTheEffectiveRoleTheSourcesAndTheDirectGrants(t *t
 }
 
 func TestOnlyAnInstanceAdminMayReadOrChangeGrantsAndNothingIsWritten(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, richEngine())
 	a, _ := f.twoEnvironments(t)
 	alice := f.addUser(t, "alice", false)
@@ -168,6 +171,7 @@ func TestOnlyAnInstanceAdminMayReadOrChangeGrantsAndNothingIsWritten(t *testing.
 }
 
 func TestAGrantRouteAnswers404ForAnUnknownUserTeamOrEnvironmentAnd422ForABadRole(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, richEngine())
 	a, _ := f.twoEnvironments(t)
 	alice := f.addUser(t, "alice", false)
@@ -201,6 +205,7 @@ func TestAGrantRouteAnswers404ForAnUnknownUserTeamOrEnvironmentAnd422ForABadRole
 }
 
 func TestATeamGrantReachesEveryMemberAndTheAllEnvironmentsScopeReachesEveryEnvironment(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, richEngine())
 	a, b := f.twoEnvironments(t)
 	alice := f.addUser(t, "alice", false)
@@ -247,6 +252,7 @@ func (f *authFixture) grantCall(t *testing.T, cookie, csrf, method, path, body s
 }
 
 func TestAnExtraIsAcceptedOnlyOnOperatorAndTheServerRefusesTheOthersWithTheirOwnProblem(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, richEngine())
 	a, _ := f.twoEnvironments(t)
 	alice := f.addUser(t, "alice", false)
@@ -279,6 +285,7 @@ func TestAnExtraIsAcceptedOnlyOnOperatorAndTheServerRefusesTheOthersWithTheirOwn
 }
 
 func TestAnOperatorWithTheContainerShellShowsItInMeAndOnlyThat(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, richEngine())
 	a, _ := f.twoEnvironments(t)
 	alice := f.addUser(t, "alice", false)
@@ -298,6 +305,7 @@ func TestAnOperatorWithTheContainerShellShowsItInMeAndOnlyThat(t *testing.T) {
 }
 
 func TestSavingTheSameSubjectAndScopeAgainEditsOneRowAndAllEnvironmentsAddsAnother(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, richEngine())
 	a, b := f.twoEnvironments(t)
 	alice := f.addUser(t, "alice", false)
@@ -336,6 +344,7 @@ func TestSavingTheSameSubjectAndScopeAgainEditsOneRowAndAllEnvironmentsAddsAnoth
 }
 
 func TestAStaleEditAnswers409AndNoGrantFieldIsAnExpiry(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, richEngine())
 	a, _ := f.twoEnvironments(t)
 	alice := f.addUser(t, "alice", false)
@@ -364,6 +373,7 @@ func TestAStaleEditAnswers409AndNoGrantFieldIsAnExpiry(t *testing.T) {
 }
 
 func TestThePreviewOfRemovingOrLoweringAGrantEqualsWhatTheChangeProducesAndTheRemovalIsAuditedOnce(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, richEngine())
 	a, _ := f.twoEnvironments(t)
 	alice := f.addUser(t, "alice", false)
@@ -407,6 +417,7 @@ func TestThePreviewOfRemovingOrLoweringAGrantEqualsWhatTheChangeProducesAndTheRe
 }
 
 func TestTeamGrantPreviewAndRemovalReachEveryMemberAndAGrantOfAnotherSubjectIsNotFound(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, richEngine())
 	a, _ := f.twoEnvironments(t)
 	alice := f.addUser(t, "alice", false)
@@ -440,6 +451,7 @@ func TestTeamGrantPreviewAndRemovalReachEveryMemberAndAGrantOfAnotherSubjectIsNo
 }
 
 func TestOnlyAnInstanceAdminMayPreviewOrRemoveAGrant(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, richEngine())
 	a, _ := f.twoEnvironments(t)
 	alice := f.addUser(t, "alice", false)

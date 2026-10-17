@@ -69,6 +69,7 @@ func (f *authFixture) invite(t *testing.T, cookie, csrf, username string) string
 }
 
 func TestCreateUserAnswers201WithTheUserAndAnInviteLinkInTheFragment(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 
@@ -97,6 +98,7 @@ func TestCreateUserAnswers201WithTheUserAndAnInviteLinkInTheFragment(t *testing.
 }
 
 func TestCreateUserLinkStartsWithThePublicURLWhenOneIsSet(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{PublicURL: "https://bayplan.example/sub/"})
 	cookie, csrf := f.signIn(t, "admin", false)
 
@@ -114,6 +116,7 @@ func TestCreateUserLinkStartsWithThePublicURLWhenOneIsSet(t *testing.T) {
 }
 
 func TestCreateUserKeepsTheDisplayNameAndEmailAndTrimsThem(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 
@@ -131,6 +134,7 @@ func TestCreateUserKeepsTheDisplayNameAndEmailAndTrimsThem(t *testing.T) {
 }
 
 func TestCreateUserNeedsUsersManage(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addUser(t, "bob", false)
 	bobCookie, bobCSRF := f.signIn(t, "bob", false)
@@ -150,6 +154,7 @@ func TestCreateUserNeedsUsersManage(t *testing.T) {
 // The tracer: an admin invites alice, alice opens the link, chooses a password
 // and signs in with it.
 func TestCreateUserThenAcceptTheInviteThenSignIn(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	adminCookie, adminCSRF := f.signIn(t, "admin", false)
 	token := f.invite(t, adminCookie, adminCSRF, "alice")
@@ -196,6 +201,7 @@ func TestCreateUserThenAcceptTheInviteThenSignIn(t *testing.T) {
 }
 
 func TestCreateUserAnswers409ForATakenOrReservedUsernameAndNothingIsCreated(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	f.invite(t, cookie, csrf, "alice")
@@ -222,6 +228,7 @@ func TestCreateUserAnswers409ForATakenOrReservedUsernameAndNothingIsCreated(t *t
 }
 
 func TestCreateUserAnswers422ForEveryBadFieldAtOnce(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 
@@ -265,6 +272,7 @@ func TestCreateUserAnswers422ForEveryBadFieldAtOnce(t *testing.T) {
 }
 
 func TestAnInvitedUserCannotSignInAndTheAnswerIsByteIdenticalToAWrongPassword(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	f.invite(t, cookie, csrf, "alice")
@@ -289,6 +297,7 @@ func TestAnInvitedUserCannotSignInAndTheAnswerIsByteIdenticalToAWrongPassword(t 
 }
 
 func TestSigningInSetsTheLastSignInTimeShownForTheUser(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	token := f.invite(t, cookie, csrf, "alice")
@@ -316,6 +325,7 @@ func (f *authFixture) listUsers(t *testing.T, cookie string) *httptest.ResponseR
 }
 
 func TestListUsersShowsEveryLiveUserSortedWithStatusAndTeamCount(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	f.invite(t, cookie, csrf, "carol")
@@ -362,6 +372,7 @@ func TestListUsersShowsEveryLiveUserSortedWithStatusAndTeamCount(t *testing.T) {
 }
 
 func TestListUsersStatusPrecedenceIsLockedDisabledInviteExpiredInvitePendingActive(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	f.invite(t, cookie, csrf, "pending")
@@ -416,6 +427,7 @@ func TestListUsersStatusPrecedenceIsLockedDisabledInviteExpiredInvitePendingActi
 }
 
 func TestListUsersNeedsUsersManage(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addUser(t, "bob", false)
 	bobCookie, _ := f.signIn(t, "bob", false)
@@ -443,6 +455,7 @@ func (f *authFixture) lookup(t *testing.T, token string) *httptest.ResponseRecor
 }
 
 func TestRegenerateInviteAnswersANewLinkAndTheOldTokenIsInvalidLink(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	old := f.invite(t, cookie, csrf, "alice")
@@ -490,6 +503,7 @@ func TestRegenerateInviteAnswersANewLinkAndTheOldTokenIsInvalidLink(t *testing.T
 }
 
 func TestRegenerateInviteAnswers409NotInvitedForAUserWhoSetAPassword(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	id := f.addUser(t, "bob", false)
@@ -504,6 +518,7 @@ func TestRegenerateInviteAnswers409NotInvitedForAUserWhoSetAPassword(t *testing.
 }
 
 func TestRegenerateInviteAnswers404UserNotFoundForAnUnknownOrDeletedID(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 
@@ -524,6 +539,7 @@ func TestRegenerateInviteAnswers404UserNotFoundForAnUnknownOrDeletedID(t *testin
 }
 
 func TestRegenerateInviteNeedsUsersManage(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	old := f.invite(t, cookie, csrf, "alice")
@@ -553,6 +569,7 @@ func (f *authFixture) resetPassword(t *testing.T, cookie, csrf, id string) *http
 }
 
 func TestResetPasswordEndsEverySessionIssuesAResetLinkAndTheLinkChoosesANewPassword(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	id := f.addUser(t, "alice", false)
@@ -615,6 +632,7 @@ func TestResetPasswordEndsEverySessionIssuesAResetLinkAndTheLinkChoosesANewPassw
 }
 
 func TestResetPasswordBuildsTheLinkOnThePublicURLAndBasePath(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{PublicURL: "https://bayplan.example.test/base"})
 	cookie, csrf := f.signIn(t, "admin", false)
 	id := f.addUser(t, "alice", false)
@@ -629,6 +647,7 @@ func TestResetPasswordBuildsTheLinkOnThePublicURLAndBasePath(t *testing.T) {
 }
 
 func TestResetPasswordRefusesNonAdminsUnknownDeletedAndDisabledUsersWithoutEndingAnything(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	alice := f.addUser(t, "alice", false)
@@ -702,6 +721,7 @@ func (f *ownedFix) userIsDeleted(t *testing.T, id string) bool {
 }
 
 func TestDeleteUserWithReassignHandsOneAutomationToAnEligibleUserAndPausesTheRest(t *testing.T) {
+	t.Parallel()
 	f := newOwnedFix(t)
 	f.addOwnedBy(t, "r2", "id-alice")
 
@@ -726,6 +746,7 @@ func TestDeleteUserWithReassignHandsOneAutomationToAnEligibleUserAndPausesTheRes
 }
 
 func TestDeleteUserWithAnIneligibleReassignmentAnswers422OwnerNotEligibleAndDeletesNothing(t *testing.T) {
+	t.Parallel()
 	f := newOwnedFix(t)
 
 	rec := f.deleteWith(t, "id-alice", `{"reassign":[{"kind":"test.sync","resourceId":"r1","ownerId":"id-carol"}]}`)
@@ -741,6 +762,7 @@ func TestDeleteUserWithAnIneligibleReassignmentAnswers422OwnerNotEligibleAndDele
 }
 
 func TestDeleteUserWithAReassignmentOfSomeoneElsesAutomationAnswers404AndDeletesNothing(t *testing.T) {
+	t.Parallel()
 	f := newOwnedFix(t)
 	f.addOwnedBy(t, "r9", "id-bob")
 
@@ -754,6 +776,7 @@ func TestDeleteUserWithAReassignmentOfSomeoneElsesAutomationAnswers404AndDeletes
 }
 
 func TestDeleteUserWithoutABodyPausesEverythingTheUserOwned(t *testing.T) {
+	t.Parallel()
 	f := newOwnedFix(t)
 
 	if rec := f.deleteWith(t, "id-alice", ""); rec.Code != http.StatusNoContent {
@@ -772,6 +795,7 @@ func TestDeleteUserWithoutABodyPausesEverythingTheUserOwned(t *testing.T) {
 }
 
 func TestDeleteUserWithMoreThan200ReassignmentsOrAMalformedOneAnswers422AndDeletesNothing(t *testing.T) {
+	t.Parallel()
 	f := newOwnedFix(t)
 
 	item := `{"kind":"test.sync","resourceId":"r1","ownerId":"id-bob"}`

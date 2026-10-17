@@ -72,6 +72,7 @@ func (f *authFixture) addMembersAPI(t *testing.T, cookie, csrf, teamID string, u
 }
 
 func TestAnInstanceAdminCreatesATeamAddsAUserAndBothPagesShowIt(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	alice := f.addUser(t, "alice", false)
@@ -120,6 +121,7 @@ func TestAnInstanceAdminCreatesATeamAddsAUserAndBothPagesShowIt(t *testing.T) {
 }
 
 func TestOnlyAnInstanceAdminMayManageTeams(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	adminCookie, adminCSRF := f.signIn(t, "admin", false)
 	team := f.createTeamAPI(t, adminCookie, adminCSRF, "ops")
@@ -150,6 +152,7 @@ func TestOnlyAnInstanceAdminMayManageTeams(t *testing.T) {
 }
 
 func TestCreatingATeamValidatesTheNameAndRefusesADuplicateIgnoringCase(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	f.createTeamAPI(t, cookie, csrf, "Ops")
@@ -168,6 +171,7 @@ func TestCreatingATeamValidatesTheNameAndRefusesADuplicateIgnoringCase(t *testin
 }
 
 func TestAddingMembersAnswers404ForAnUnknownTeamOrUserAndAddsNothing(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	alice := f.addUser(t, "alice", false)
@@ -222,6 +226,7 @@ func (f *authFixture) preview(t *testing.T, cookie, csrf, teamID, op, userID str
 }
 
 func TestThePreviewEqualsWhatTheRemovalProducesAndTheUsersAccessMatchesItsAfterValue(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	f.addUser(t, "alice", false)
@@ -273,6 +278,7 @@ func TestThePreviewEqualsWhatTheRemovalProducesAndTheUsersAccessMatchesItsAfterV
 }
 
 func TestDeletingATeamRemovesItsAccessAtOnceAndAuditsOnce(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	f.addUser(t, "alice", false)
@@ -310,6 +316,7 @@ func TestDeletingATeamRemovesItsAccessAtOnceAndAuditsOnce(t *testing.T) {
 }
 
 func TestRemovingANonMemberAnswers404MemberNotFoundAndTheEmptyPreviewIsAnEmptyList(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	f.addUser(t, "alice", false)
@@ -345,6 +352,7 @@ func TestRemovingANonMemberAnswers404MemberNotFoundAndTheEmptyPreviewIsAnEmptyLi
 }
 
 func TestRenamingATeamIsCheckedForStaleVersionsAndClashesAndAuditsTheOldName(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	team := f.createTeamAPI(t, cookie, csrf, "ops")
@@ -386,6 +394,7 @@ func TestRenamingATeamIsCheckedForStaleVersionsAndClashesAndAuditsTheOldName(t *
 }
 
 func TestEnvAdminsCannotRenameDeleteOrPreviewTeams(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addAllEnvAdmin(t, "envadmin")
 	team := f.addTeam(t, "ops", "envadmin")

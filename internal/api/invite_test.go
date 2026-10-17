@@ -34,6 +34,7 @@ func (f *authFixture) acceptInvite(t *testing.T, token, password string) *httpte
 const unknownToken = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 func TestLookupInviteNamesTheUserAndTheInstance(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	token := f.invite(t, cookie, csrf, "alice")
@@ -55,6 +56,7 @@ func TestLookupInviteNamesTheUserAndTheInstance(t *testing.T) {
 }
 
 func TestAnUnknownTokenAnswersTheOneInvalidLinkProblem(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	for name, rec := range map[string]*httptest.ResponseRecorder{
 		"lookup": f.lookupInvite(t, unknownToken),
@@ -67,6 +69,7 @@ func TestAnUnknownTokenAnswersTheOneInvalidLinkProblem(t *testing.T) {
 }
 
 func TestAcceptRefusesAPasswordThePolicyRefusesAndKeepsTheLink(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	token := f.invite(t, cookie, csrf, "alice")
@@ -86,6 +89,7 @@ func TestAcceptRefusesAPasswordThePolicyRefusesAndKeepsTheLink(t *testing.T) {
 }
 
 func TestEveryUnusableLinkAnswersTheSameBytes(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	expired := f.invite(t, cookie, csrf, "expired")
@@ -136,6 +140,7 @@ func TestEveryUnusableLinkAnswersTheSameBytes(t *testing.T) {
 }
 
 func TestInviteRoutesAreRateLimitedPerAddressAndTheRefusalIsRecordedOnce(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	// 5 attempts at once, then one every 12 seconds, as in the server.
 	f.inviteLimiter = auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, f.clk.now)
