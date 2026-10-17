@@ -94,6 +94,7 @@ func decodeJSON[T any](t *testing.T, rec *httptest.ResponseRecorder) T {
 }
 
 func TestOwnedListOfAUserShowsTheAutomationPausedBecauseTheirOwnerWasDisabled(t *testing.T) {
+	t.Parallel()
 	f := newOwnedFix(t)
 	f.disableAlice(t)
 
@@ -112,6 +113,7 @@ func TestOwnedListOfAUserShowsTheAutomationPausedBecauseTheirOwnerWasDisabled(t 
 }
 
 func TestOwnedListOfAUserWhoOwnsNothingIsAnEmptyListAndOfAnUnknownUserIs404(t *testing.T) {
+	t.Parallel()
 	f := newOwnedFix(t)
 	rec := f.get(t, "/api/users/id-carol/owned")
 	if rec.Code != http.StatusOK || rec.Body.String() != "[]\n" && rec.Body.String() != "[]" {
@@ -123,6 +125,7 @@ func TestOwnedListOfAUserWhoOwnsNothingIsAnEmptyListAndOfAnUnknownUserIs404(t *t
 }
 
 func TestOwnedEligibleOwnersAreTheUsersWhoCouldRunItNow(t *testing.T) {
+	t.Parallel()
 	f := newOwnedFix(t)
 	f.disableAlice(t)
 
@@ -146,6 +149,7 @@ func TestOwnedEligibleOwnersAreTheUsersWhoCouldRunItNow(t *testing.T) {
 }
 
 func TestOwnedTransferToAnEligibleUserMakesTheAutomationActiveUnderThemAndIsAudited(t *testing.T) {
+	t.Parallel()
 	f := newOwnedFix(t)
 	f.disableAlice(t)
 
@@ -175,6 +179,7 @@ func TestOwnedTransferToAnEligibleUserMakesTheAutomationActiveUnderThemAndIsAudi
 }
 
 func TestOwnedTransferToSomeoneWhoCouldNotRunItAnswers422OwnerNotEligibleAndChangesNothing(t *testing.T) {
+	t.Parallel()
 	f := newOwnedFix(t)
 	for _, to := range []string{"id-carol", "id-alice", "no-such-user"} {
 		rec := f.transfer(t, ownedTestKind, "r1", `{"ownerId":"`+to+`"}`)
@@ -198,6 +203,7 @@ func TestOwnedTransferToSomeoneWhoCouldNotRunItAnswers422OwnerNotEligibleAndChan
 }
 
 func TestOwnedRoutesNeedUsersManage(t *testing.T) {
+	t.Parallel()
 	f := newOwnedFix(t)
 	bob, bobCSRF := f.signIn(t, "bob", false)
 

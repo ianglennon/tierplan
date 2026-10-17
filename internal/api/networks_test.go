@@ -69,6 +69,7 @@ func (f *envFix) networkAudits(t *testing.T) []auditRowFull {
 }
 
 func TestCreateNetworkAsAnEnvAdminAnswers201SendsTheFieldsOnceAndAuditsOnce(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, networkEngine())
 	f.addUser(t, "netadmin", false)
 	f.addEnvRole(t, "netadmin", e.ID, "admin")
@@ -114,6 +115,7 @@ func TestCreateNetworkAsAnEnvAdminAnswers201SendsTheFieldsOnceAndAuditsOnce(t *t
 }
 
 func TestCreateNetworkTheSameNameAgainIs409NameTakenAndTheFailureIsAudited(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, networkEngine())
 	if rec := f.createNet(t, e, `{"name":"app-net","driver":"bridge"}`); rec.code != http.StatusCreated {
 		t.Fatalf("first create: %d %s", rec.code, rec.body)
@@ -129,6 +131,7 @@ func TestCreateNetworkTheSameNameAgainIs409NameTakenAndTheFailureIsAudited(t *te
 }
 
 func TestCreateNetworkTheSchemaRefusesBadNamesAndDriversBeforeAnyDockerCall(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, networkEngine())
 	awaitOnline(t, f.mon, e.ID)
 	for name, body := range map[string]string{
@@ -168,6 +171,7 @@ func manyEntries(n int) string {
 }
 
 func TestCreateNetworkAnOperatorAndAViewerAreRefusedAndNothingIsSent(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, networkEngine())
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
@@ -196,6 +200,7 @@ func TestCreateNetworkAnOperatorAndAViewerAreRefusedAndNothingIsSent(t *testing.
 }
 
 func TestCreateNetworkAnUnknownEnvironmentIs404(t *testing.T) {
+	t.Parallel()
 	f, _ := dashEnv(t, networkEngine())
 	rec := f.req(t, http.MethodPost, "/api/env/nope/networks", `{"name":"n","driver":"bridge"}`)
 	if rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
@@ -244,6 +249,7 @@ func (s *swarmFix) post(t *testing.T, body string) *envRec {
 }
 
 func TestCreateNetworkOverlayOnASwarmGoesThroughOneManagerOnceAndIsListedOnceAsCluster(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	rec := s.post(t, `{"name":"new-ovl","driver":"overlay","attachable":true}`)
 	if rec.code != http.StatusCreated {
@@ -283,6 +289,7 @@ func TestCreateNetworkOverlayOnASwarmGoesThroughOneManagerOnceAndIsListedOnceAsC
 }
 
 func TestCreateNetworkALocalDriverOnASwarmNeedsANodeAndGoesToThatNodeOnly(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	rec := s.post(t, `{"name":"br-a","driver":"bridge"}`)
 	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "node_required" {
@@ -306,6 +313,7 @@ func TestCreateNetworkALocalDriverOnASwarmNeedsANodeAndGoesToThatNodeOnly(t *tes
 }
 
 func TestCreateNetworkANodeThatIsNotOneOfTheEnvironmentsIs503AndNothingIsSent(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	rec := s.post(t, `{"name":"br-a","driver":"bridge","nodeId":"not-a-node"}`)
 	if rec.code != http.StatusServiceUnavailable || rec.ptyp != "node_unavailable" {
@@ -317,6 +325,7 @@ func TestCreateNetworkANodeThatIsNotOneOfTheEnvironmentsIs503AndNothingIsSent(t 
 }
 
 func TestCreateNetworkAttachableIsForAnOverlayOnASwarmOnly(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	rec := s.post(t, fmt.Sprintf(`{"name":"br-a","driver":"bridge","nodeId":%q,"attachable":true}`, s.w.id))
 	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "attachable_overlay_only" {
@@ -337,6 +346,7 @@ func TestCreateNetworkAttachableIsForAnOverlayOnASwarmOnly(t *testing.T) {
 }
 
 func TestCreateNetworkAnOverlayOffASwarmIsRefusedBeforeAnyCall(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, networkEngine())
 	rec := f.createNet(t, e, `{"name":"n","driver":"overlay"}`)
 	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "overlay_needs_swarm" {
@@ -348,6 +358,7 @@ func TestCreateNetworkAnOverlayOffASwarmIsRefusedBeforeAnyCall(t *testing.T) {
 }
 
 func TestCreateNetworkAcceptsAddressingInsideTheSubnetAndPassesOptionsAndIPv6Through(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, networkEngine())
 	rec := f.createNet(t, e, `{"name":"addr","driver":"bridge","subnet":"10.20.0.0/24","gateway":"10.20.0.1","ipRange":"10.20.0.128/25","ipv6":true,"options":{"com.docker.network.bridge.name":"br-addr"}}`)
 	if rec.code != http.StatusCreated {
@@ -377,6 +388,7 @@ func TestCreateNetworkAcceptsAddressingInsideTheSubnetAndPassesOptionsAndIPv6Thr
 }
 
 func TestCreateNetworkRefusesBadAddressingWithItsOwnProblemTypeAndSendsNothing(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, networkEngine())
 	awaitOnline(t, f.mon, e.ID)
 	for name, tc := range map[string]struct{ body, ptyp string }{
@@ -406,6 +418,7 @@ func TestCreateNetworkRefusesBadAddressingWithItsOwnProblemTypeAndSendsNothing(t
 }
 
 func TestCreateNetworkTheGatewayMayBeTheFirstAndLastAddressOfTheSubnetButNotTheNextOne(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, networkEngine())
 	for i, tc := range []struct {
 		gateway string
@@ -424,6 +437,7 @@ func TestCreateNetworkTheGatewayMayBeTheFirstAndLastAddressOfTheSubnetButNotTheN
 }
 
 func TestCreateNetworkOnAReadOnlyManagerIsHostReadOnlyAuditedAndNothingIsSent(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Locked swarm")
 	cfg := networkEngine()
@@ -447,6 +461,7 @@ func TestCreateNetworkOnAReadOnlyManagerIsHostReadOnlyAuditedAndNothingIsSent(t 
 }
 
 func TestCreateNetworkIsNeverRetriedOnAnotherManagerWhenTheAnswerIsLost(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Flaky swarm")
 	var conns []*agentConn
@@ -499,6 +514,7 @@ func (f *envFix) deleteNet(t *testing.T, e envBody, id string) *envRec {
 }
 
 func TestDeleteNetworkAnUnusedOneAsAnEnvAdminAnswers204AuditsOnceAndASecondIs404(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, deleteEngine())
 	f.addUser(t, "netadmin", false)
 	f.addEnvRole(t, "netadmin", e.ID, "admin")
@@ -539,6 +555,7 @@ func TestDeleteNetworkAnUnusedOneAsAnEnvAdminAnswers204AuditsOnceAndASecondIs404
 }
 
 func TestDeleteNetworkABuiltInOneIs409NetworkBuiltinSendsNothingAndIsAudited(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, deleteEngine())
 	for _, id := range []string{"br0", "ho0", "mesh0"} {
 		rec := f.deleteNet(t, e, id)
@@ -556,6 +573,7 @@ func TestDeleteNetworkABuiltInOneIs409NetworkBuiltinSendsNothingAndIsAudited(t *
 }
 
 func TestDeleteNetworkAnOperatorAndAViewerAreRefusedAndNothingIsSent(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, deleteEngine())
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
@@ -582,6 +600,7 @@ func TestDeleteNetworkAnOperatorAndAViewerAreRefusedAndNothingIsSent(t *testing.
 }
 
 func TestDeleteNetworkAnUnknownEnvironmentIs404(t *testing.T) {
+	t.Parallel()
 	f, _ := dashEnv(t, deleteEngine())
 	rec := f.req(t, http.MethodDelete, "/api/env/nope/networks/app0", "")
 	if rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
@@ -650,6 +669,7 @@ func netByName(t *testing.T, items []networkListItem, name string) networkListIt
 }
 
 func TestNetworkListCountsContainersOnAnyStateNamesTheOwnerAndFlagsTheBuiltIns(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, listEngine())
 	list := listNets(t, f, e, "")
 	if list.Total != 4 {
@@ -679,6 +699,7 @@ func TestNetworkListCountsContainersOnAnyStateNamesTheOwnerAndFlagsTheBuiltIns(t
 }
 
 func TestNetworkListSearchMatchesNameDriverSubnetAndOwnerBeforeTheTotal(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, listEngine())
 	for q, want := range map[string][]string{
 		"app":         {"app-net"},
@@ -705,6 +726,7 @@ func TestNetworkListSearchMatchesNameDriverSubnetAndOwnerBeforeTheTotal(t *testi
 }
 
 func TestNetworkListOnASwarmCountsTheServicesThatMentionAnOverlayEvenWithNoTasks(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	list := decode[listBody[networkListItem]](t, s.get(t, s.env.ID, "networks"))
 	ovl := netByName(t, list.Items, "ovl")
@@ -759,6 +781,7 @@ func (s *swarmFix) del(t *testing.T, id, nodeID string) *envRec {
 }
 
 func TestDeleteNetworkWithAStoppedContainerAttachedIs409InUseNamingItAndNothingIsSent(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, listEngine())
 	rec := f.deleteNet(t, e, "app0")
 	if rec.code != http.StatusConflict || rec.ptyp != "network_in_use" {
@@ -779,6 +802,7 @@ func TestDeleteNetworkWithAStoppedContainerAttachedIs409InUseNamingItAndNothingI
 }
 
 func TestDeleteNetworkReadsTheContainersLiveAndNotTheCachedList(t *testing.T) {
+	t.Parallel()
 	cfg := listEngine()
 	cfg.Containers = nil
 	f, e := dashEnv(t, cfg)
@@ -799,6 +823,7 @@ func TestDeleteNetworkReadsTheContainersLiveAndNotTheCachedList(t *testing.T) {
 }
 
 func TestDeleteNetworkNamesAtMostFiveUsers(t *testing.T) {
+	t.Parallel()
 	cfg := listEngine()
 	cfg.Containers = nil
 	for i := range 8 {
@@ -824,6 +849,7 @@ func TestDeleteNetworkNamesAtMostFiveUsers(t *testing.T) {
 }
 
 func TestDeleteNetworkADaemonRefusalForAnAttachmentTheListMissedIsInUseNeverAGenericFailure(t *testing.T) {
+	t.Parallel()
 	cfg := listEngine()
 	// This endpoint is not tied to the network by ID in the list, as when a container
 	// joins between the check and the call; the daemon still sees it.
@@ -844,6 +870,7 @@ func TestDeleteNetworkADaemonRefusalForAnAttachmentTheListMissedIsInUseNeverAGen
 }
 
 func TestDeleteNetworkAnOverlayThatOnlyAScaledToZeroServiceMentionsIs409InUseWithoutAnyCachedRead(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	if _, ok := s.clusters.Cached(s.env.ID); ok {
 		t.Fatal("the cluster was read before the test began")
@@ -861,6 +888,7 @@ func TestDeleteNetworkAnOverlayThatOnlyAScaledToZeroServiceMentionsIs409InUseWit
 }
 
 func TestDeleteNetworkAnOverlayNothingMentionsIsRemovedOnceThroughAManager(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	rec := s.post(t, `{"name":"spare","driver":"overlay"}`)
 	if rec.code != http.StatusCreated {
@@ -886,6 +914,7 @@ func TestDeleteNetworkAnOverlayNothingMentionsIsRemovedOnceThroughAManager(t *te
 }
 
 func TestDeleteNetworkWhenANodeThatCouldHoldAnAttachmentDidNotAnswerIs409NodeUnreachable(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	list := decode[listBody[networkListItem]](t, s.get(t, s.env.ID, "networks"))
 	var brw networkListItem
@@ -912,6 +941,7 @@ func TestDeleteNetworkWhenANodeThatCouldHoldAnAttachmentDidNotAnswerIs409NodeUnr
 }
 
 func TestDeleteNetworkALocalBridgeOnASwarmNodeGoesToThatNodeOnly(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	rec := s.post(t, fmt.Sprintf(`{"name":"br-w","driver":"bridge","nodeId":%q}`, s.w.id))
 	if rec.code != http.StatusCreated {
@@ -1006,6 +1036,7 @@ func getNet(t *testing.T, f *envFix, e envBody, id string) networkDetailItem {
 }
 
 func TestGetNetworkAnswersTheOverviewAndTheAttachmentsSortedByNameWithAddressesAndAliases(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, netDetailEngine())
 	n := getNet(t, f, e, "app0")
 	if n.ID != "app0" || n.Name != "app-net" || n.Driver != "bridge" || n.Scope != "local" || !n.Internal || !n.IPv6 || n.Attachable || n.BuiltIn {
@@ -1031,6 +1062,7 @@ func TestGetNetworkAnswersTheOverviewAndTheAttachmentsSortedByNameWithAddressesA
 }
 
 func TestGetNetworkWithNothingAttachedHasAnEmptyListAndABridgeIsBuiltIn(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, netDetailEngine())
 	lone := getNet(t, f, e, "lone0")
 	if lone.Attachments == nil || len(lone.Attachments) != 0 || lone.AttachedContainers != 0 || lone.BuiltIn || lone.IPAM == nil {
@@ -1043,6 +1075,7 @@ func TestGetNetworkWithNothingAttachedHasAnEmptyListAndABridgeIsBuiltIn(t *testi
 }
 
 func TestGetNetworkAnUnknownOneIs404NetworkNotFoundAndAViewerMayRead(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, netDetailEngine())
 	rec := f.get(t, e, "networks/nope")
 	if rec.code != http.StatusNotFound || rec.ptyp != "network_not_found" {
@@ -1062,6 +1095,7 @@ func TestGetNetworkAnUnknownOneIs404NetworkNotFoundAndAViewerMayRead(t *testing.
 }
 
 func TestGetNetworkInspectsAtMost50ContainersForAliasesAndSaysTheRestWereLeftOut(t *testing.T) {
+	t.Parallel()
 	cfg := netDetailEngine()
 	cfg.Containers = nil
 	for i := range 53 {
@@ -1105,6 +1139,7 @@ func TestGetNetworkInspectsAtMost50ContainersForAliasesAndSaysTheRestWereLeftOut
 }
 
 func TestInspectNetworkAnswersTheEnginesDocumentAndAnUnknownOneIs404(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, netDetailEngine())
 	rec := f.get(t, e, "networks/app0/inspect")
 	if rec.code != http.StatusOK {
@@ -1122,6 +1157,7 @@ func TestInspectNetworkAnswersTheEnginesDocumentAndAnUnknownOneIs404(t *testing.
 }
 
 func TestGetNetworkOnASwarmListsEveryServiceThatMentionsAnOverlayEvenAtZeroReplicasAndReadsItOnAManager(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	rec := s.get(t, s.env.ID, "networks/ovl")
 	if rec.code != http.StatusOK {
@@ -1174,6 +1210,7 @@ func (f *envFix) connectNet(t *testing.T, e envBody, networkID, body string) *en
 }
 
 func TestConnectContainerAsAnOperatorSendsTheEndpointOnceToTheContainersNodeAndAuditsIt(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, connectEngine())
 	f.addUser(t, "operator", false)
 	f.addEnvRole(t, "operator", e.ID, "operator")
@@ -1211,6 +1248,7 @@ func TestConnectContainerAsAnOperatorSendsTheEndpointOnceToTheContainersNodeAndA
 }
 
 func TestConnectContainerAViewerIsRefusedAndNothingIsSent(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, connectEngine())
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
@@ -1230,6 +1268,7 @@ func TestConnectContainerAViewerIsRefusedAndNothingIsSent(t *testing.T) {
 }
 
 func TestConnectContainerRefusalsAreNamedAuditedAndNeverReachTheEngine(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, connectEngine())
 	for _, c := range []struct {
 		name, network, body, status string
@@ -1260,6 +1299,7 @@ func TestConnectContainerRefusalsAreNamedAuditedAndNeverReachTheEngine(t *testin
 }
 
 func TestConnectContainerTheSchemaRefusesABadAliasAndAnEmptyContainerBeforeAnyLookup(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, connectEngine())
 	awaitOnline(t, f.mon, e.ID)
 	for name, body := range map[string]string{
@@ -1280,6 +1320,7 @@ func TestConnectContainerTheSchemaRefusesABadAliasAndAnEmptyContainerBeforeAnyLo
 }
 
 func TestConnectContainerAnUnknownNetworkContainerOrEnvironmentIs404(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, connectEngine())
 	rec := f.connectNet(t, e, "nope", `{"containerId":"c1"}`)
 	if rec.code != http.StatusNotFound || rec.ptyp != "network_not_found" {
@@ -1299,6 +1340,7 @@ func TestConnectContainerAnUnknownNetworkContainerOrEnvironmentIs404(t *testing.
 }
 
 func TestConnectContainerTheEnginesOwnAlreadyConnectedRefusalIsAlreadyConnectedWhenTheListIsStale(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, connectEngine())
 	// The list does not know c1 is on app-net yet; the engine does, and says so.
 	cfg := connectEngine()
@@ -1320,6 +1362,7 @@ func TestConnectContainerTheEnginesOwnAlreadyConnectedRefusalIsAlreadyConnectedW
 }
 
 func TestConnectContainerOnASwarmAnOverlayMustBeAttachableAndALocalNetworkTakesOnlyItsOwnNodesContainers(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	connect := func(network, container, node string) *envRec {
 		return s.req(t, http.MethodPost, "/api/env/"+s.env.ID+"/networks/"+network+"/connect",
@@ -1351,6 +1394,7 @@ func TestConnectContainerOnASwarmAnOverlayMustBeAttachableAndALocalNetworkTakesO
 }
 
 func TestConnectContainerAWorkerThatHasNotLearnedTheOverlayAnswersNetworkUnavailableOnNodeWithTheEnginesWords(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	made := s.post(t, `{"name":"new-ovl","driver":"overlay","attachable":true}`)
 	if made.code != http.StatusCreated {
@@ -1386,6 +1430,7 @@ func (f *envFix) disconnectNet(t *testing.T, e envBody, networkID, body string) 
 }
 
 func TestDisconnectContainerAsAnOperatorSendsOneUnforcedDisconnectAndAuditsIt(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, connectEngine())
 	f.addUser(t, "operator", false)
 	f.addEnvRole(t, "operator", e.ID, "operator")
@@ -1419,6 +1464,7 @@ func TestDisconnectContainerAsAnOperatorSendsOneUnforcedDisconnectAndAuditsIt(t 
 }
 
 func TestDisconnectContainerAViewerIsRefusedAndNothingIsSent(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, connectEngine())
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
@@ -1438,6 +1484,7 @@ func TestDisconnectContainerAViewerIsRefusedAndNothingIsSent(t *testing.T) {
 }
 
 func TestDisconnectContainerCannotBeForcedAndTheBodyTakesNoOtherField(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, connectEngine())
 	awaitOnline(t, f.mon, e.ID)
 	for name, body := range map[string]string{
@@ -1456,6 +1503,7 @@ func TestDisconnectContainerCannotBeForcedAndTheBodyTakesNoOtherField(t *testing
 }
 
 func TestDisconnectContainerAnUnknownNetworkContainerOrEnvironmentIs404(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, connectEngine())
 	rec := f.disconnectNet(t, e, "nope", `{"containerId":"c2"}`)
 	if rec.code != http.StatusNotFound || rec.ptyp != "network_not_found" {
@@ -1475,6 +1523,7 @@ func TestDisconnectContainerAnUnknownNetworkContainerOrEnvironmentIs404(t *testi
 }
 
 func TestDisconnectContainerThatIsNotOnTheNetworkAnyMoreIs409NotConnectedFromTheEnginesAnswerAndAudited(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, connectEngine())
 	// c1 is on nothing: the engine refuses, and the list is not trusted to say so first.
 	rec := f.disconnectNet(t, e, "app0", `{"containerId":"c1"}`)
@@ -1491,6 +1540,7 @@ func TestDisconnectContainerThatIsNotOnTheNetworkAnyMoreIs409NotConnectedFromThe
 }
 
 func TestDisconnectContainerThenConnectItAgainRoundTripsThroughTheEngine(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, connectEngine())
 	if rec := f.disconnectNet(t, e, "app0", `{"containerId":"c2"}`); rec.code != http.StatusNoContent {
 		t.Fatalf("disconnect: %d %s", rec.code, rec.body)
@@ -1504,6 +1554,7 @@ func TestDisconnectContainerThenConnectItAgainRoundTripsThroughTheEngine(t *test
 }
 
 func TestDisconnectContainerOnASwarmGoesToTheContainersNodeOnly(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	rec := s.req(t, http.MethodPost, "/api/env/"+s.env.ID+"/networks/brw/connect",
 		fmt.Sprintf(`{"containerId":"w002","nodeId":%q}`, s.w.id))
@@ -1549,6 +1600,7 @@ func ownNetworkEngine() dockertest.FakeConfig {
 }
 
 func TestDisconnectOfAnOwnContainerNeedsItsNameTypedAndSendsNothingWithout(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ name, id, own, confirm string }{
 		{"the server, no name", selfCtr, "server", ""},
 		{"the server, another name", selfCtr, "server", "web"},
@@ -1573,6 +1625,7 @@ func TestDisconnectOfAnOwnContainerNeedsItsNameTypedAndSendsNothingWithout(t *te
 }
 
 func TestDisconnectOfAnOwnContainerWithItsNameIsAuditedBeforeAndAfterTheCall(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ id, name, own string }{
 		{selfCtr, "bayplan", "server"},
 		{agentID, "bayplan-agent", "agent"},
@@ -1603,6 +1656,7 @@ func TestDisconnectOfAnOwnContainerWithItsNameIsAuditedBeforeAndAfterTheCall(t *
 }
 
 func TestConnectOfAnOwnContainerNeedsItsNameTypedAndIsAuditedBeforeAndAfter(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, ownNetworkEngine())
 	rec := f.connectNet(t, e, "br0", fmt.Sprintf(`{"containerId":%q}`, agentID))
 	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "confirmation_required" {
@@ -1627,6 +1681,7 @@ func TestConnectOfAnOwnContainerNeedsItsNameTypedAndIsAuditedBeforeAndAfter(t *t
 }
 
 func TestNetworkChangesOfAnOrdinaryContainerNeedNoNameAndCarryNoStage(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, ownNetworkEngine())
 	if rec := f.connectNet(t, e, "app0", `{"containerId":"c1"}`); rec.code != http.StatusNoContent {
 		t.Fatalf("connect: %d: %s", rec.code, rec.body)
@@ -1646,6 +1701,7 @@ func TestNetworkChangesOfAnOrdinaryContainerNeedNoNameAndCarryNoStage(t *testing
 }
 
 func TestDisconnectOfAnOwnContainerThatDropsTheConnectionIsAcceptedAndAuditedAsConnectionLost(t *testing.T) {
+	t.Parallel()
 	cfg := ownNetworkEngine()
 	cfg.DropWrites = true
 	f, e := dashEnv(t, cfg)
