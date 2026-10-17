@@ -307,12 +307,14 @@ test("the Containers, Volumes and Images lists keep every filter chip on a 375px
     /^Unhealthy [\d,]+$/,
   );
   await expectChipsInsideScreen(page, status, "Containers list");
+  await expectNoSidewaysScroll(page, "Containers list");
 
   await page.goto(at(`/env/${env.id}/volumes`));
   await expect(page.getByRole("table").first()).toBeVisible();
   const usage = page.getByRole("group", { name: "Filter by usage" });
   await expect(usage.locator('[data-slot="toggle-group-item"]').last()).toHaveText("Unused");
   await expectChipsInsideScreen(page, usage, "Volumes list");
+  await expectNoSidewaysScroll(page, "Volumes list");
 
   await page.goto(at(`/env/${env.id}/images`));
   const images = page.getByRole("group", { name: "Filter images" });
@@ -320,4 +322,5 @@ test("the Containers, Volumes and Images lists keep every filter chip on a 375px
     /^Dangling [\d,]+$/,
   );
   await expectChipsInsideScreen(page, images, "Images list");
+  await expectNoSidewaysScroll(page, "Images list");
 });

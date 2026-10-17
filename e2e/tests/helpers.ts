@@ -245,52 +245,82 @@ export async function expectVersionFooter(page: Page): Promise<void> {
 export const CHIP_HEIGHT = 44;
 export const CHIP_GAP = 8;
 
-// expectChipsInsideScreen asserts that every chip of a filter-chip row is on a screen `width`
-// px wide (G-06-2). It is for screens under 768px, where the chips are 44px high and wrap onto
-// further rows. It compares each chip with its own row as well as with the screen, because the
-// Nodes list's last chip was measured cut off 8px inside its row while still inside the screen.
-// A chip that is cut off has its full box as its boundingBox, so only the comparison with the row
-// catches it. It waits for the fonts and the row's animations, never for a fixed time, because a
-// box measured before the fonts load or while something animates is not the box people see.
+// The width from which the chips stop being 44px high (the md breakpoint), in px.
+const CHIP_MAX_VIEWPORT = 768;
+
+type Box = { x: number; y: number; width: number; height: number };
+
+// expectChipsInsideScreen asserts that every chip of a filter-chip row is on the screen (G-06-2).
+// It is for screens under 768px, where the chips are 44px high and wrap onto further rows, and it
+// reads the screen's width from the page's viewport. It compares each chip with its own row as
+// well as with the screen, because the Nodes list's last chip was measured cut off 8px inside its
+// row while still inside the screen. A chip that is cut off has its full box as its bounding box,
+// so only the comparison with the row catches it. It also asserts the row's computed style: the
+// row wraps and does not scroll, so a return to a scrolling strip fails even where the chips
+// happen to fit on one line (the Volumes and Images rows).
+//
+// It waits for the fonts and the document's finite animations, never for a fixed time, because a
+// box measured before the fonts load or while something animates is not the box people see. It
+// then reads the row and every chip in one evaluate, so all the boxes come from one layout even
+// though the lists are live, and runs every assertion on that snapshot. It does not assert the
+// page's own width: expectNoSidewaysScroll and expectPhoneWidth in responsive.spec.ts do.
 export async function expectChipsInsideScreen(
   page: Page,
   group: Locator,
   what: string,
-  width = 375,
 ): Promise<void> {
   await expect(group).toBeVisible();
+  const viewport = page.viewportSize();
+  expect(viewport, `${what}: the page has a viewport`).not.toBeNull();
+  if (!viewport) return;
+  const width = viewport.width;
+  expect(
+    width,
+    `${what}: the chips are 44px high only under ${CHIP_MAX_VIEWPORT}px, the viewport is ${width}px`,
+  ).toBeLessThan(CHIP_MAX_VIEWPORT);
+
   await page.evaluate(async () => {
     await document.fonts.ready;
-  });
-  await group.evaluate(async (el) => {
-    await Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished));
+    // A finite animation ends; an infinite one (a spinner or pulse) never does, and a cancelled
+    // one rejects, so neither may hold the wait.
+    const finite = document
+      .getAnimations()
+      .filter((a) => Number.isFinite(a.effect?.getComputedTiming().endTime as number));
+    await Promise.allSettled(finite.map((a) => a.finished));
   });
 
-  const { scrollWidth, clientWidth } = await group.evaluate((el) => ({
-    scrollWidth: el.scrollWidth,
-    clientWidth: el.clientWidth,
-  }));
+  const snap = await group.evaluate((el) => {
+    const toBox = (r: DOMRect) => ({ x: r.x, y: r.y, width: r.width, height: r.height });
+    const style = getComputedStyle(el);
+    return {
+      overflowX: style.overflowX,
+      flexWrap: style.flexWrap,
+      scrollWidth: el.scrollWidth,
+      clientWidth: el.clientWidth,
+      row: toBox(el.getBoundingClientRect()),
+      chips: [...el.querySelectorAll('[data-slot="toggle-group-item"]')].map((chip) => ({
+        text: (chip.textContent ?? "").trim(),
+        box: toBox(chip.getBoundingClientRect()),
+      })),
+    };
+  });
+
+  expect(snap.overflowX, `${what}: the chip row does not scroll sideways`).toBe("visible");
+  expect(snap.flexWrap, `${what}: the chip row wraps`).toBe("wrap");
   expect(
-    scrollWidth,
-    `${what}: the chip row holds content wider than itself (scrollWidth ${scrollWidth}, clientWidth ${clientWidth})`,
-  ).toBeLessThanOrEqual(clientWidth + 1);
+    snap.scrollWidth,
+    `${what}: the chip row holds content wider than itself (scrollWidth ${snap.scrollWidth}, clientWidth ${snap.clientWidth})`,
+  ).toBeLessThanOrEqual(snap.clientWidth + 1);
 
-  const row = await group.boundingBox();
-  expect(row, `${what}: the chip row has a box`).not.toBeNull();
-  if (!row) return;
+  const row = snap.row;
   expect(row.x, `${what}: the chip row starts inside the screen`).toBeGreaterThanOrEqual(0);
   expect(row.x + row.width, `${what}: the chip row ends inside the screen`).toBeLessThanOrEqual(
     width + 0.5,
   );
 
-  const chips = group.locator('[data-slot="toggle-group-item"]');
-  expect(await chips.count(), `${what}: the chip row has chips`).toBeGreaterThan(0);
-  let previous: { x: number; y: number; width: number; height: number } | null = null;
-  for (const chip of await chips.all()) {
-    const box = await chip.boundingBox();
-    const text = (await chip.innerText()).trim();
-    expect(box, `${what}: chip "${text}" has a box`).not.toBeNull();
-    if (!box) continue;
+  expect(snap.chips.length, `${what}: the chip row has chips`).toBeGreaterThan(0);
+  let previous: Box | null = null;
+  for (const { text, box } of snap.chips) {
     expect(
       box.x,
       `${what}: chip "${text}" starts inside its row (x ${box.x}, row x ${row.x})`,
@@ -319,11 +349,6 @@ export async function expectChipsInsideScreen(
     }
     previous = box;
   }
-
-  const documentWidth = await page.evaluate(() => document.scrollingElement?.scrollWidth ?? 0);
-  expect(documentWidth, `${what}: the document is wider than the screen`).toBeLessThanOrEqual(
-    width,
-  );
 }
 
 // screenshotOnFailure attaches the page as it was when a spec that drives its
