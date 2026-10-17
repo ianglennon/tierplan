@@ -309,8 +309,12 @@ test("the Containers, Volumes and Images lists keep every filter chip on a 375px
   await expectChipsInsideScreen(page, status, "Containers list");
   await expectNoSidewaysScroll(page, "Containers list");
 
+  // The Volumes chips carry no counts, so the row is measured once the list has loaded: its table,
+  // or its empty state when no earlier test left a volume on the host.
   await page.goto(at(`/env/${env.id}/volumes`));
-  await expect(page.getByRole("table").first()).toBeVisible();
+  await expect(
+    page.getByRole("table").or(page.getByRole("heading", { name: "No volumes" })).first(),
+  ).toBeVisible();
   const usage = page.getByRole("group", { name: "Filter by usage" });
   await expect(usage.locator('[data-slot="toggle-group-item"]').last()).toHaveText("Unused");
   await expectChipsInsideScreen(page, usage, "Volumes list");
