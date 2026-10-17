@@ -33,6 +33,7 @@ func (f *authFixture) exportBackup(t *testing.T, cookie, csrf, passphrase string
 }
 
 func TestBackupDownloadByAnInstanceAdminOpensWithThePassphrase(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 
@@ -81,6 +82,8 @@ func TestBackupDownloadByAnInstanceAdminOpensWithThePassphrase(t *testing.T) {
 // A data directory given in the relative form make dev uses (./.devdata) must
 // not break the download: SQLite refuses file://.devdata/... as a URI whose
 // authority is ".devdata" (UAT gap G-03-4).
+//
+//nolint:paralleltest // t.Chdir changes the process's working directory, which a parallel test must not do
 func TestBackupDownloadWithARelativeDataDirectoryOpensWithThePassphrase(t *testing.T) {
 	f := newAuthFixture(t, config.Config{})
 	t.Chdir(filepath.Dir(f.dataInfo.Path))
@@ -123,6 +126,7 @@ func TestBackupDownloadWithARelativeDataDirectoryOpensWithThePassphrase(t *testi
 }
 
 func TestBackupDownloadIsRefusedWithoutBackupManage(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addUser(t, "viewer", false)
 	cookie, csrf := f.signIn(t, "viewer", false)
@@ -146,6 +150,7 @@ func TestBackupDownloadIsRefusedWithoutBackupManage(t *testing.T) {
 }
 
 func TestBackupInfoReportsThePassphraseRuleAndTheExtension(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, _ := f.signIn(t, "admin", false)
 
@@ -169,6 +174,7 @@ func TestBackupInfoReportsThePassphraseRuleAndTheExtension(t *testing.T) {
 }
 
 func TestBackupDownloadIsAuditedWithoutThePassphrase(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 
@@ -222,6 +228,7 @@ func (f *authFixture) leftovers(t *testing.T) []string {
 }
 
 func TestBackupDownloadWithAShortPassphraseIsRefusedAndLeavesNoFile(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 
@@ -238,6 +245,7 @@ func TestBackupDownloadWithAShortPassphraseIsRefusedAndLeavesNoFile(t *testing.T
 }
 
 func TestBackupDownloadWithABrokenAuditChainIsRefused(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	if _, err := f.st.Write.Exec(`UPDATE audit_log SET action = 'x' || substr(action, 2) WHERE seq = 1`); err != nil {
@@ -270,6 +278,7 @@ func (s *slowSink) Write(p []byte) (int, error) {
 }
 
 func TestBackupDownloadWhileAnotherIsBeingPreparedAnswersBusyAndLeavesNoFile(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 
