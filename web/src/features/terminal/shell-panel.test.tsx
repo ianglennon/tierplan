@@ -320,8 +320,6 @@ describe("opening a shell", () => {
     expect(
       await screen.findByText(
         "This host's agent is serving as many logs and shells as it can. Close one and try again.",
-        {},
-        { timeout: 4000 },
       ),
     ).toBeTruthy();
     expect(FakeWebSocket.instances).toHaveLength(0);
@@ -680,11 +678,7 @@ describe("a stopped container (D-34)", () => {
     const view = renderPanel({ row: rowFixture() });
     await clickOpen();
     expect(
-      await screen.findByRole(
-        "heading",
-        { name: "Start the container to open a shell" },
-        { timeout: 4000 },
-      ),
+      await screen.findByRole("heading", { name: "Start the container to open a shell" }),
     ).toBeTruthy();
     expect(FakeWebSocket.instances).toHaveLength(0);
     // The page's reading was stale: it said running. It now says stopped, then running.
@@ -717,9 +711,7 @@ describe("an image with no shell (D-34)", () => {
     openAnswer = refusal("no_shell", 409);
     renderPanel({ row: rowFixture() });
     await clickOpen();
-    expect(
-      await screen.findByRole("heading", { name: "No shell in this image" }, { timeout: 4000 }),
-    ).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "No shell in this image" })).toBeTruthy();
     expect(
       screen.getByText(
         "Bayplan couldn't find bash or sh in this container. If the image has one somewhere else, enter its path.",
@@ -780,11 +772,7 @@ describe("a read-only host (D-35)", () => {
     renderPanel({ row: rowFixture() });
     await clickOpen();
     expect(
-      await screen.findByRole(
-        "heading",
-        { name: "Shells are off on this host" },
-        { timeout: 4000 },
-      ),
+      await screen.findByRole("heading", { name: "Shells are off on this host" }),
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Open shell" })).toBeNull();
   });
@@ -808,11 +796,7 @@ describe("Bayplan's own containers (D-36)", () => {
     renderPanel({ row: rowFixture() });
     await clickOpen();
     expect(
-      await screen.findByText(
-        "Bayplan doesn't open shells in its own containers.",
-        {},
-        { timeout: 4000 },
-      ),
+      await screen.findByText("Bayplan doesn't open shells in its own containers."),
     ).toBeTruthy();
   });
 });
@@ -825,8 +809,6 @@ describe("the per-person cap (D-31)", () => {
     expect(
       await screen.findByText(
         "You already have 3 shells open, which is the most allowed. Close one to open another.",
-        {},
-        { timeout: 4000 },
       ),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Open shell" }).hasAttribute("disabled")).toBe(false);
@@ -840,8 +822,6 @@ describe("the per-person cap (D-31)", () => {
     expect(
       await screen.findByText(
         "You already have 1 shell open, which is the most allowed. Close one to open another.",
-        {},
-        { timeout: 4000 },
       ),
     ).toBeTruthy();
   });
@@ -852,9 +832,7 @@ describe("an agent that is too old (Pitfall 13)", () => {
     openAnswer = refusal("agent_policy_denied", 502);
     renderPanel({ row: rowFixture() });
     await clickOpen();
-    expect(
-      await screen.findByText("The agent on e1 needs an update", {}, { timeout: 4000 }),
-    ).toBeTruthy();
+    expect(await screen.findByText("The agent on e1 needs an update")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Open shell" })).toBeNull();
   });
 });
