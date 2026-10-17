@@ -27,6 +27,7 @@ linters:
     - unused
     - forbidigo
     - depguard
+    - paralleltest
 
   settings:
     errcheck:
@@ -48,6 +49,12 @@ linters:
         - pattern: '^time\.Sleep$'
           msg: tests wait on a channel, a fake clock, testing/synctest or a seam's Await; polling only for external conditions through proto/testsupport (docs/testing.md, D-07 to D-11)
 
+    # internal/api tests run in parallel (Phase 6.1): a top-level test there that
+    # does not call t.Parallel() fails lint. The exclusion below limits the
+    # linter to that package; elsewhere parallelism is a per-test decision.
+    paralleltest:
+      ignore-missing-subtests: true
+
     depguard:
       rules:
         docker-client-seam:
@@ -68,6 +75,22 @@ linters:
           deny:
             - pkg: github.com/moby/moby/client
               desc: the agent reaches the engine only through its allowlisting proxy (D-27); only agent/internal/selfmaint (self-maintenance, plan 27) may hold a Docker client
+        # The shared test helpers (waits, quarantine) must not be linked into a
+        # shipped binary: only test files, the test helper packages and the
+        # package itself may import them.
+        testsupport-tests-only:
+          list-mode: lax
+          files:
+            - $all
+            - "!$test"
+            - "!**/internal/dockerx/dockertest/**"
+            - "!**/internal/tunnel/tunneltest/**"
+            - "!**/internal/server/servertest/**"
+            - "!**/internal/store/storetest/**"
+            - "!**/proto/testsupport/**"
+          deny:
+            - pkg: github.com/ianglennon/bayplan/proto/testsupport
+              desc: test helpers are for _test.go files and the test helper packages (dockertest, tunneltest, servertest, storetest) only, so they never reach a shipped binary (docs/testing.md)
         forbidden-libraries:
           list-mode: lax
           files:
@@ -98,6 +121,10 @@ linters:
         linters:
           - forbidigo
         text: time\.Sleep
+      # paralleltest applies to internal/api only.
+      - path-except: ^internal/api/.*_test\.go$
+        linters:
+          - paralleltest
 
 issues:
   # Show every finding, not the first three identical ones (Phase 6.1 Pitfall 3).

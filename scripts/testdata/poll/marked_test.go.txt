@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+// Fixture for scripts/test-scripts.sh (poll-check): stored as .txt so the tree's
+// Go tools never compile it. Both calls carry the marker, one on the line above.
+package zzpollprobe
+
+import (
+	"testing"
+
+	"github.com/ianglennon/bayplan/proto/testsupport"
+)
+
+func TestPollsForAnExternalCondition(t *testing.T) {
+	done := false
+	testsupport.WaitFor(t, "the engine to answer", func() bool { return done }) // testsupport: external, a real engine
+	// testsupport: external, the child process writing its file
+	testsupport.Poll(t, 0, "the file to exist", func() (bool, string) { return done, "" })
+}

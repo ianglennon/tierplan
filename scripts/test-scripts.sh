@@ -15,6 +15,9 @@ scratch="$(mktemp -d)"
 ui_probe="web/src/components/ui/zz-spdx-probe.tsx"
 # Probe packages the lint and gate sections copy fixtures into; removed on exit.
 sleep_probe_dir="internal/zzforbidigoprobe"
+quarantine_probe_dir="internal/zzquarantineprobe"
+depguard_probe_dir="internal/zzdepguardprobe"
+api_probe_file="internal/api/zzserial_probe_test.go"
 vite_pid=""
 stop_vite() {
   if [ -n "${vite_pid}" ]; then
@@ -23,7 +26,7 @@ stop_vite() {
     vite_pid=""
   fi
 }
-trap 'stop_vite; rm -rf "${scratch}" "${ui_probe}" "${sleep_probe_dir}"' EXIT
+trap 'stop_vite; rm -rf "${scratch}" "${ui_probe}" "${sleep_probe_dir}" "${quarantine_probe_dir}" "${depguard_probe_dir}" "${api_probe_file}"' EXIT
 
 # expect <fail|pass> <name> <command...>
 expect() {
@@ -360,6 +363,67 @@ expect_out "sleep-guard-flags-a-test-sleep names the file" "sleep_test.go"
 sed -i 's|time.Sleep(time.Millisecond)|time.Sleep(time.Millisecond) //nolint:forbidigo // the probe sleeps on purpose|' "${sleep_probe_dir}/sleep_test.go"
 expect pass "sleep-guard-allows-a-reasoned-sleep" go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run "./${sleep_probe_dir}/"
 rm -rf "${sleep_probe_dir}"
+
+# --- Poll guard (06.1-24, D-09): testsupport.WaitFor/Poll needs a tag or the external marker ---
+poll=scripts/testdata/poll
+expect fail "poll-unmarked" scripts/poll-check.sh "${poll}/unmarked_test.go.txt"
+expect_out "poll-unmarked names the file and line" "${poll}/unmarked_test.go.txt:16"
+expect pass "poll-marked" scripts/poll-check.sh "${poll}/marked_test.go.txt"
+{ printf '//go:build integration\n\n'; cat "${poll}/unmarked_test.go.txt"; } >"${scratch}/tagged_test.go"
+expect pass "poll-integration-tagged" scripts/poll-check.sh "${scratch}/tagged_test.go"
+{ printf '//go:build !integration\n\n'; cat "${poll}/unmarked_test.go.txt"; } >"${scratch}/negated_test.go"
+expect fail "poll-negated-tag-is-not-a-tag" scripts/poll-check.sh "${scratch}/negated_test.go"
+expect fail "poll-missing-file" scripts/poll-check.sh "${scratch}/no-such_test.go"
+expect pass "poll-check-repository" scripts/poll-check.sh
+
+# --- Quarantine guard (06.1-24, D-12, D-13): call sites and the docs/testing.md table agree ---
+qdir=scripts/testdata/quarantine
+mkdir -p "${quarantine_probe_dir}"
+cat >"${quarantine_probe_dir}/probe_test.go" <<'GO'
+package zzquarantineprobe
+
+import (
+	"testing"
+
+	"github.com/ianglennon/bayplan/proto/testsupport"
+)
+
+func TestProbeQuarantined(t *testing.T) {
+	testsupport.Quarantine(t, "2026-01-02 tracking: #1 the probe is quarantined on purpose")
+}
+GO
+expect pass "quarantine-listed-call" scripts/quarantine-check.sh "${qdir}/listed.md"
+expect fail "quarantine-unlisted-call" scripts/quarantine-check.sh "${qdir}/unlisted.md"
+expect_out "quarantine-unlisted-call names the file" "${quarantine_probe_dir}/probe_test.go:10"
+expect_out "quarantine-unlisted-call names the test" "TestProbeQuarantined"
+sed 's/2026-01-02 |/2026-01-03 |/' "${qdir}/listed.md" >"${scratch}/wrong-date.md"
+expect fail "quarantine-date-disagrees" scripts/quarantine-check.sh "${scratch}/wrong-date.md"
+expect_out "quarantine-date-disagrees says so" "they must agree"
+expect fail "quarantine-none-with-a-call" scripts/quarantine-check.sh --none "${qdir}/listed.md"
+expect_out "quarantine-none-with-a-call names the file" "${quarantine_probe_dir}/probe_test.go:10"
+rm -rf "${quarantine_probe_dir}"
+expect fail "quarantine-row-without-a-call" scripts/quarantine-check.sh "${qdir}/listed.md"
+expect_out "quarantine-row-without-a-call names the row" "listed but no testsupport.Quarantine call backs it"
+expect pass "quarantine-empty-table" scripts/quarantine-check.sh "${qdir}/unlisted.md"
+expect pass "quarantine-check-repository" scripts/quarantine-check.sh
+expect pass "quarantine-none-repository" scripts/quarantine-check.sh --none
+expect fail "quarantine-missing-doc" scripts/quarantine-check.sh "${scratch}/no-such.md"
+
+# --- Parallel and import guards (06.1-24, D-18): lint flags a serial api test, and a testsupport import from product code ---
+lint_run() { go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run "$@"; }
+printf 'package api_test\n\nimport "testing"\n\nfunc TestSerialProbe(t *testing.T) {}\n' >"${api_probe_file}"
+expect fail "paralleltest-flags-a-serial-api-test" lint_run ./internal/api/
+expect_out "paralleltest-flags-a-serial-api-test names the linter" "paralleltest"
+expect_out "paralleltest-flags-a-serial-api-test names the test" "TestSerialProbe"
+rm -f "${api_probe_file}"
+mkdir -p "${depguard_probe_dir}"
+printf 'package zzdepguardprobe\n\nimport "testing"\n\nfunc TestSerialOutsideAPI(t *testing.T) {}\n' >"${depguard_probe_dir}/serial_test.go"
+printf 'package zzdepguardprobe\n\nimport (\n\t"testing"\n\n\t_ "github.com/ianglennon/bayplan/proto/testsupport"\n)\n\nfunc TestProbe(t *testing.T) { t.Parallel() }\n' >"${depguard_probe_dir}/probe_test.go"
+expect pass "testsupport-import-allowed-in-tests-and-serial-outside-api" lint_run "./${depguard_probe_dir}/"
+printf 'package zzdepguardprobe\n\nimport _ "github.com/ianglennon/bayplan/proto/testsupport"\n' >"${depguard_probe_dir}/probe.go"
+expect fail "testsupport-import-denied-in-product-code" lint_run "./${depguard_probe_dir}/"
+expect_out "testsupport-import-denied-in-product-code names the rule" "testsupport-tests-only"
+rm -rf "${depguard_probe_dir}"
 
 # Vite's own host check: a Host header it does not know is answered 403 unless the
 # public URL's host name was passed in BAYPLAN_DEV_PUBLIC_URL.
