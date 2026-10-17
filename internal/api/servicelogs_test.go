@@ -204,6 +204,7 @@ func (f *svcLogsFix) viewedRows(t *testing.T) []struct {
 }
 
 func TestServiceLogStreamSendsReadyWithTheTasksThenTheBurstMergedInTimeOrderWithATaskOnEveryLine(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
 	if c.status0() != http.StatusOK {
@@ -242,6 +243,7 @@ func TestServiceLogStreamSendsReadyWithTheTasksThenTheBurstMergedInTimeOrderWith
 }
 
 func TestServiceLogStreamKeepsTheNewestTailLinesOfTheMergedBurst(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 	c := f.open(t, f.cookie, "web", "sid="+sidA+"&tail=3", "")
 	lines, _ := readSvcLines(t, c, 3)
@@ -260,6 +262,7 @@ func TestServiceLogStreamKeepsTheNewestTailLinesOfTheMergedBurst(t *testing.T) {
 }
 
 func TestServiceLogStreamOrdersLinesAtTheSameTimeByLowerSlot(t *testing.T) {
+	t.Parallel()
 	lines := []dockertest.FakeServiceLogLine{
 		svcLine("tk-3", "node-1", 10, "slot3"), svcLine("tk-2", "node-3", 10, "slot2"), svcLine("tk-1", "node-1", 10, "slot1"),
 	}
@@ -272,6 +275,7 @@ func TestServiceLogStreamOrdersLinesAtTheSameTimeByLowerSlot(t *testing.T) {
 }
 
 func TestServiceLogStreamShowsTheFailedTasksToo(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 	c := f.open(t, f.cookie, "web", "sid="+sidA+"&stopped=1", "")
 	ready := nextEvent(t, c, "ready", 5*time.Second)
@@ -289,6 +293,7 @@ func TestServiceLogStreamShowsTheFailedTasksToo(t *testing.T) {
 }
 
 func TestServiceLogStreamHoldsLiveLinesInAWindowAndSendsThemInTimeOrder(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), nil, nil)
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
 	nextEvent(t, c, "ready", 5*time.Second)
@@ -307,6 +312,7 @@ func TestServiceLogStreamHoldsLiveLinesInAWindowAndSendsThemInTimeOrder(t *testi
 }
 
 func TestServiceLogStreamKeepsATaskFirstSeenAfterTheStreamOpenedAndAnnouncesIt(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), nil, nil)
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
 	nextEvent(t, c, "ready", 5*time.Second)
@@ -348,6 +354,7 @@ func TestServiceLogStreamKeepsATaskFirstSeenAfterTheStreamOpenedAndAnnouncesIt(t
 }
 
 func TestServiceLogStreamNarrowsToTasksAndNodesAndUsesTheTaskRouteForOne(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 
 	one := f.open(t, f.cookie, "web", "sid="+sidA+"&task=tk-2", "")
@@ -378,6 +385,7 @@ func TestServiceLogStreamNarrowsToTasksAndNodesAndUsesTheTaskRouteForOne(t *test
 }
 
 func TestServiceLogStreamWithNoOutputOrNoTasksIsReadyAndQuiet(t *testing.T) {
+	t.Parallel()
 	for name, tasks := range map[string][]swarm.Task{"no output": svcTasks(), "no tasks": nil} {
 		t.Run(name, func(t *testing.T) {
 			f := newSvcLogsFix(t, tasks, nil, nil)
@@ -408,6 +416,7 @@ func boolInt(b bool) int {
 }
 
 func TestServiceLogStreamResumesAfterTheLastEventIDWithoutRepeatingALine(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 	c := f.open(t, f.cookie, "web", "sid="+sidA, svcStamp(40))
 	lines, _ := readSvcLines(t, c, 2)
@@ -427,6 +436,7 @@ func TestServiceLogStreamResumesAfterTheLastEventIDWithoutRepeatingALine(t *test
 }
 
 func TestServiceLogStreamRefusesWhatIsNotAStreamBeforeAnythingIsSent(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 	for _, query := range []string{"", "sid=short", "sid=" + sidA + "&tail=-1", "sid=" + sidA + "&tail=lots", "sid=" + sidA + "&since=yesterday",
 		"sid=" + sidA + "&after=nope", "sid=" + sidA + "&stopped=maybe", "sid=" + sidA + "&task=" + strings.Repeat("x", 129)} {
@@ -448,6 +458,7 @@ func TestServiceLogStreamRefusesWhatIsNotAStreamBeforeAnythingIsSent(t *testing.
 }
 
 func TestServiceLogStreamOfAStandaloneHostIs409NotASwarm(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, logsEngine())
 	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
 	f.svc.WithClusters(f.clusters)
@@ -461,6 +472,7 @@ func TestServiceLogStreamOfAStandaloneHostIs409NotASwarm(t *testing.T) {
 }
 
 func TestServiceLogsAuditWritesOneRowPerViewerWithTargetTypeServiceAndNeverALine(t *testing.T) {
+	t.Parallel()
 	const secret = "SERVICE-LOG-LINE-THAT-MUST-NOT-BE-KEPT-77c1" //nolint:gosec // a marker, not a credential
 	lines := append(svcBurstLines(), svcLine("tk-2", "node-3", 80, secret))
 	f := newSvcLogsFix(t, svcTasks(), lines, nil)
@@ -504,6 +516,7 @@ func TestServiceLogsAuditWritesOneRowPerViewerWithTargetTypeServiceAndNeverALine
 }
 
 func TestServiceLogStreamAllowsTheConfiguredNumberPerUserAndRefusesTheNextWith429(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), func(f *envFix) { f.serviceLogsMaxStreams = 2 })
 	var conns []*sseConn
 	for i := range 2 {
@@ -528,6 +541,7 @@ func TestServiceLogStreamAllowsTheConfiguredNumberPerUserAndRefusesTheNextWith42
 }
 
 func TestServiceLogStreamEndsWithClosedAccessLostWithinAHeartbeatOfLosingTheGrant(t *testing.T) {
+	t.Parallel()
 	const heartbeat = 40 * time.Millisecond
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), func(f *envFix) { f.serviceLogsHeartbeat = heartbeat })
 	f.addUser(t, "viewer", false)
@@ -548,6 +562,7 @@ func TestServiceLogStreamEndsWithClosedAccessLostWithinAHeartbeatOfLosingTheGran
 }
 
 func TestServiceLogStreamEndsAtItsMaximumLifetimeAndFreesTheEngineFollow(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), func(f *envFix) { f.serviceLogsMaxLifetime = 80 * time.Millisecond })
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
 	nextEvent(t, c, "ready", 5*time.Second)
@@ -556,6 +571,7 @@ func TestServiceLogStreamEndsAtItsMaximumLifetimeAndFreesTheEngineFollow(t *test
 }
 
 func TestServiceLogStreamReleasesTheEngineFollowWhenTheBrowserLeaves(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
 	nextEvent(t, c, "ready", 5*time.Second)
@@ -565,6 +581,7 @@ func TestServiceLogStreamReleasesTheEngineFollowWhenTheBrowserLeaves(t *testing.
 }
 
 func TestServiceLogStreamNeedsServicesRead(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 	f.addUser(t, "nobody", false)
 	cookie, _ := f.signIn(t, "nobody", false)
@@ -657,6 +674,7 @@ func at(tk swarm.Task, created, since time.Time) swarm.Task {
 }
 
 func TestServiceLogStreamMarkersTellOfATaskThatWasReplacedAndAnnounceTheNewOne(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), nil, fastRefresh)
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
 	nextEvent(t, c, "ready", 5*time.Second)
@@ -706,6 +724,7 @@ func TestServiceLogStreamMarkersTellOfATaskThatWasReplacedAndAnnounceTheNewOne(t
 }
 
 func TestServiceLogStreamSaysASlotStoppedWhenNoNewTaskHasStartedAndThenThatItWasReplaced(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), nil, fastRefresh)
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
 	nextEvent(t, c, "ready", 5*time.Second)
@@ -727,6 +746,7 @@ func TestServiceLogStreamSaysASlotStoppedWhenNoNewTaskHasStartedAndThenThatItWas
 }
 
 func TestServiceLogStreamOnlySendsMarkersForTheTasksAndNodesItWasNarrowedTo(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), nil, fastRefresh)
 	c := f.open(t, f.cookie, "web", "sid="+sidA+"&node=mgr-1", "")
 	nextEvent(t, c, "ready", 5*time.Second)
@@ -755,6 +775,7 @@ func TestServiceLogStreamOnlySendsMarkersForTheTasksAndNodesItWasNarrowedTo(t *t
 }
 
 func TestServiceLogStreamTellsOfANodeThatStopsReportingAndOfItsReturn(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), nil, fastRefresh)
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
 	nextEvent(t, c, "ready", 5*time.Second)
@@ -785,6 +806,7 @@ func TestServiceLogStreamTellsOfANodeThatStopsReportingAndOfItsReturn(t *testing
 }
 
 func TestServiceLogStreamTellsOnceAfterTheBurstOfANodeThatIsAlreadyDown(t *testing.T) {
+	t.Parallel()
 	tasks := append(svcTasks(), tkRunning("tk-dn", "svc-web", "node-2", 4, "c4", time.Minute))
 	f := newSvcLogsFix(t, tasks, svcBurstLines(), fastRefresh)
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
@@ -814,6 +836,7 @@ func TestServiceLogStreamTellsOnceAfterTheBurstOfANodeThatIsAlreadyDown(t *testi
 }
 
 func TestServiceLogStreamWithStoppedTasksShowsTheMarkersOfTheHistoryThatFallInTheBurst(t *testing.T) {
+	t.Parallel()
 	// tk-a (slot 1) failed at +20 ms and tk-b took over at +10 ms; tk-c (slot 2) failed an hour
 	// before the first line and tk-d replaced it: that marker is older than anything shown.
 	tasks := []swarm.Task{
@@ -842,6 +865,7 @@ func TestServiceLogStreamWithStoppedTasksShowsTheMarkersOfTheHistoryThatFallInTh
 }
 
 func TestServiceLogStreamWithoutStoppedTasksSendsNoHistoryMarkers(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), fastRefresh)
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
 	readSvcLines(t, c, 6)

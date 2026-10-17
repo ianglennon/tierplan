@@ -156,6 +156,7 @@ func (f *envFix) serviceAudits(t *testing.T) []auditRowFull {
 }
 
 func TestListServicesOfALocalSwarmManagerAnswersItsRows(t *testing.T) {
+	t.Parallel()
 	f, e := serviceEnv(t, webService(),
 		dockertest.FakeService{ID: "svc-agent", Name: "bayplan-agent", Mode: "global", Running: 3, Desired: 3, Image: "bayplan/agent:1"},
 		dockertest.FakeService{ID: "svc-job", Name: "backup", Mode: "replicated-job", UpdateState: "completed"})
@@ -186,6 +187,7 @@ func TestListServicesOfALocalSwarmManagerAnswersItsRows(t *testing.T) {
 }
 
 func TestListServicesOfAStandaloneHostIsNotASwarm(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1", Version: "29.1.0"})
 	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
 	f.svc.WithClusters(f.clusters)
@@ -206,6 +208,7 @@ func TestListServicesOfAStandaloneHostIsNotASwarm(t *testing.T) {
 }
 
 func TestScaleAServiceOfALocalSwarmManagerEndToEnd(t *testing.T) {
+	t.Parallel()
 	f, e := serviceEnv(t, webService())
 	cred := f.addPullCredential(t, "local-bot", "")
 	_ = cred
@@ -274,6 +277,7 @@ func TestScaleAServiceOfALocalSwarmManagerEndToEnd(t *testing.T) {
 }
 
 func TestScaleWithNoMatchingCredentialSendsNoHeader(t *testing.T) {
+	t.Parallel()
 	f, e := serviceEnv(t, webService())
 	if rec := f.scale(t, e, `{"targets":[{"serviceId":"web","replicas":1}]}`); rec.code != http.StatusOK {
 		t.Fatalf("scale: %d %s", rec.code, rec.body)
@@ -285,6 +289,7 @@ func TestScaleWithNoMatchingCredentialSendsNoHeader(t *testing.T) {
 }
 
 func TestScaleRefusals(t *testing.T) {
+	t.Parallel()
 	f, e := serviceEnv(t, webService(),
 		dockertest.FakeService{ID: "svc-agent", Name: "bayplan-agent", Mode: "global", Running: 1, Desired: 1},
 		dockertest.FakeService{ID: "svc-job", Name: "backup", Mode: "replicated-job"})
@@ -365,6 +370,7 @@ func TestScaleRefusals(t *testing.T) {
 }
 
 func TestScaleToTheCountTheServiceHasSendsNothingAndSaysSo(t *testing.T) {
+	t.Parallel()
 	f, e := serviceEnv(t, webService())
 	rec := f.scale(t, e, `{"targets":[{"serviceId":"svc-web","replicas":2}]}`)
 	if rec.code != http.StatusOK {
@@ -384,6 +390,7 @@ func TestScaleToTheCountTheServiceHasSendsNothingAndSaysSo(t *testing.T) {
 }
 
 func TestAServiceChangedBetweenReadAndWriteIsServiceChangedAndNeverRetried(t *testing.T) {
+	t.Parallel()
 	svc := webService()
 	f, e := serviceEnv(t, svc)
 	f.fake.Reconfigure(func() dockertest.FakeConfig {
@@ -422,6 +429,7 @@ func TestAServiceChangedBetweenReadAndWriteIsServiceChangedAndNeverRetried(t *te
 }
 
 func TestAnAgentThatRefusesTheServiceUpdateByItsPolicyIsAgentPolicyDenied(t *testing.T) {
+	t.Parallel()
 	f, e := serviceEnv(t, webService())
 	f.fake.Reconfigure(func() dockertest.FakeConfig {
 		c := swarmManagerEngine(webService())
@@ -443,6 +451,7 @@ func TestAnAgentThatRefusesTheServiceUpdateByItsPolicyIsAgentPolicyDenied(t *tes
 // opted in. The fake answers the update in the words an agent uses for that refusal, and the
 // scale says which setting lifts it.
 func TestAScaleTheManagersAgentRefusesByHostPolicyIsAgentHostPolicyAndAuditedWithThatReason(t *testing.T) {
+	t.Parallel()
 	f, e := serviceEnv(t, webService())
 	f.fake.Reconfigure(func() dockertest.FakeConfig {
 		c := swarmManagerEngine(webService())
@@ -468,6 +477,7 @@ func TestAScaleTheManagersAgentRefusesByHostPolicyIsAgentHostPolicyAndAuditedWit
 
 // A refusal by the agent's plain policy keeps its own code, so the two are never confused.
 func TestAScaleTheAgentRefusesByPlainPolicyIsStillAgentPolicyDenied(t *testing.T) {
+	t.Parallel()
 	f, e := serviceEnv(t, webService())
 	f.fake.Reconfigure(func() dockertest.FakeConfig {
 		c := swarmManagerEngine(webService())
@@ -502,6 +512,7 @@ func listServicesQuery(t *testing.T, f *envFix, e envBody, query string) (*envRe
 // Search and status filters run on the server before the 500-row cap, and the chip counts
 // are counted before them (plan 06-04, RES-02, P4 D-02).
 func TestServicesListFiltersAndCounts(t *testing.T) {
+	t.Parallel()
 	stackLabel := func(stack string) map[string]string { return map[string]string{"com.docker.stack.namespace": stack} }
 	f, e := serviceEnv(t,
 		dockertest.FakeService{ID: "s1", Name: "web-1", Mode: "replicated", Running: 2, Desired: 2, Image: "nginx:1"},
@@ -609,6 +620,7 @@ func TestServicesListFiltersAndCounts(t *testing.T) {
 }
 
 func TestServicesListRowsCarryPortsUpdateMessagePreviousSpecAndCreatedAt(t *testing.T) {
+	t.Parallel()
 	created := time.Date(2026, 9, 1, 8, 30, 0, 0, time.UTC)
 	f, e := serviceEnv(t,
 		dockertest.FakeService{
@@ -641,6 +653,7 @@ func TestServicesListRowsCarryPortsUpdateMessagePreviousSpecAndCreatedAt(t *test
 }
 
 func TestServicesListCapsAt500(t *testing.T) {
+	t.Parallel()
 	rows := make([]dockertest.FakeService, 600)
 	for i := range rows {
 		rows[i] = dockertest.FakeService{ID: fmt.Sprintf("s%03d", i), Name: fmt.Sprintf("svc-%03d", i), Mode: "replicated", Running: 1, Desired: 1}
@@ -694,6 +707,7 @@ const bulkScaleBody = `{"targets":[` +
 	`{"serviceId":"svc-g","replicas":2},{"serviceId":"svc-j","replicas":2}]}`
 
 func TestBulkScaleSharesOneBulkID(t *testing.T) {
+	t.Parallel()
 	f, e := serviceEnv(t, bulkScaleServices()...)
 	rec := f.scale(t, e, bulkScaleBody)
 	if rec.code != http.StatusOK {
@@ -762,6 +776,7 @@ func TestBulkScaleSharesOneBulkID(t *testing.T) {
 }
 
 func TestBulkScaleIsANoOpTheSecondTime(t *testing.T) {
+	t.Parallel()
 	f, e := serviceEnv(t, bulkScaleServices()...)
 	const body = `{"targets":[{"serviceId":"svc-a","replicas":4},{"serviceId":"svc-b","replicas":0},{"serviceId":"svc-c","replicas":7}]}`
 	if rec := f.scale(t, e, body); rec.code != http.StatusOK {
@@ -798,6 +813,7 @@ func TestBulkScaleIsANoOpTheSecondTime(t *testing.T) {
 }
 
 func TestBulkScaleRefusesDuplicatesAndTooMany(t *testing.T) {
+	t.Parallel()
 	f, e := serviceEnv(t, bulkScaleServices()...)
 	before := len(f.fake.Writes())
 
@@ -890,6 +906,7 @@ func loopEnv(t *testing.T) (*envFix, envBody) {
 }
 
 func TestServicesListFlagsAServiceInARestartLoopAndNoOther(t *testing.T) {
+	t.Parallel()
 	f, e := loopEnv(t)
 	rec, got := listServicesQuery(t, f, e, "")
 	if rec.code != http.StatusOK {
@@ -928,6 +945,7 @@ func TestServicesListFlagsAServiceInARestartLoopAndNoOther(t *testing.T) {
 }
 
 func TestServicesListFiltersByTheLoopStatusBeforeTheCapAndCountsItBeforeTheSearch(t *testing.T) {
+	t.Parallel()
 	f, e := loopEnv(t)
 	rec, got := listServicesQuery(t, f, e, "?status=loop")
 	if rec.code != http.StatusOK || !slices.Equal(namesOf(got.Items), []string{"web"}) || got.Total != 1 || got.UnfilteredTotal != 4 {
@@ -951,6 +969,7 @@ func TestServicesListFiltersByTheLoopStatusBeforeTheCapAndCountsItBeforeTheSearc
 }
 
 func TestTheServiceDetailCarriesTheRestartLoopOnlyWhileItHolds(t *testing.T) {
+	t.Parallel()
 	f, e := loopEnv(t)
 	web := decode[struct {
 		RestartLoop *restartLoopBody `json:"restartLoop"`
@@ -968,6 +987,7 @@ func TestTheServiceDetailCarriesTheRestartLoopOnlyWhileItHolds(t *testing.T) {
 // only flags. Listing and reading a flagged service sends the manager no request that
 // could restart, stop, scale or update anything.
 func TestDetectingARestartLoopChangesNothingInDocker(t *testing.T) {
+	t.Parallel()
 	f, e := loopEnv(t)
 	listServicesQuery(t, f, e, "")
 	f.get(t, e, "services/svc-web")
