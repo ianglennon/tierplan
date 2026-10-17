@@ -40,6 +40,7 @@ func slotsOf(slots map[string]int) map[string]taskInfo {
 }
 
 func TestMergeBurstSortsTheWholeBurstByTimeAcrossTasks(t *testing.T) {
+	t.Parallel()
 	// The engine's answer: task by task, each in time order, tasks not interleaved.
 	burst := []svcRec{
 		rec("t1", 10, "a1"), rec("t1", 40, "a2"), rec("t1", 70, "a3"),
@@ -53,6 +54,7 @@ func TestMergeBurstSortsTheWholeBurstByTimeAcrossTasks(t *testing.T) {
 }
 
 func TestMergeBurstKeepsTheNewestN(t *testing.T) {
+	t.Parallel()
 	burst := []svcRec{rec("t1", 10, "a1"), rec("t1", 40, "a2"), rec("t2", 20, "b1"), rec("t2", 50, "b2"), rec("t2", 60, "b3")}
 	got := texts(mergeBurst(burst, slotsOf(map[string]int{"t1": 1, "t2": 2}), 3))
 	if want := []string{"a2", "b2", "b3"}; !slices.Equal(got, want) {
@@ -67,6 +69,7 @@ func TestMergeBurstKeepsTheNewestN(t *testing.T) {
 }
 
 func TestMergeBurstOrdersTheSameTimestampByLowerSlotThenByArrival(t *testing.T) {
+	t.Parallel()
 	// Three tasks write at the same instant; the slot decides, and two lines of one task keep
 	// the order they arrived in.
 	burst := []svcRec{
@@ -81,6 +84,7 @@ func TestMergeBurstOrdersTheSameTimestampByLowerSlotThenByArrival(t *testing.T) 
 }
 
 func TestMergeBurstPutsATaskTheListDoesNotKnowAfterTheKnownOnesAtTheSameTime(t *testing.T) {
+	t.Parallel()
 	burst := []svcRec{rec("gone", 10, "unknown"), rec("t1", 10, "known")}
 	got := texts(mergeBurst(burst, slotsOf(map[string]int{"t1": 1}), 500))
 	if want := []string{"known", "unknown"}; !slices.Equal(got, want) {
@@ -93,6 +97,7 @@ type fakeClock struct{ t time.Time }
 func (c *fakeClock) now() time.Time { return c.t }
 
 func TestReorderWindowReleasesALineOnlyAfterTheWindowAndInTimeOrder(t *testing.T) {
+	t.Parallel()
 	clk := &fakeClock{t: mergeT0}
 	w := newReorderWindow(500*time.Millisecond, clk.now, func(string) int { return 0 })
 
@@ -122,6 +127,7 @@ func TestReorderWindowReleasesALineOnlyAfterTheWindowAndInTimeOrder(t *testing.T
 }
 
 func TestReorderWindowReleasesALineOlderThanTheLastReleasedNextWithItsOwnTime(t *testing.T) {
+	t.Parallel()
 	clk := &fakeClock{t: mergeT0}
 	w := newReorderWindow(500*time.Millisecond, clk.now, func(string) int { return 0 })
 	w.add(rec("t1", 300, "newer"))
@@ -139,6 +145,7 @@ func TestReorderWindowReleasesALineOlderThanTheLastReleasedNextWithItsOwnTime(t 
 }
 
 func TestReorderWindowBreaksTiesByLowerSlotThenArrivalAndDrainsEverything(t *testing.T) {
+	t.Parallel()
 	clk := &fakeClock{t: mergeT0}
 	slots := map[string]int{"t1": 1, "t2": 2}
 	w := newReorderWindow(500*time.Millisecond, clk.now, func(id string) int { return slots[id] })
@@ -156,6 +163,7 @@ func TestReorderWindowBreaksTiesByLowerSlotThenArrivalAndDrainsEverything(t *tes
 }
 
 func TestTaskMetaRefreshesWhenStaleAndOnAnUnknownTaskButNotInABurst(t *testing.T) {
+	t.Parallel()
 	clk := &fakeClock{t: mergeT0}
 	calls := 0
 	tasks := []taskInfo{{ID: "t1", Slot: 1, Node: "alpha", State: "running"}}
@@ -202,6 +210,7 @@ func TestTaskMetaRefreshesWhenStaleAndOnAnUnknownTaskButNotInABurst(t *testing.T
 }
 
 func TestTaskMetaKeepsWhatItKnewWhenARefreshFails(t *testing.T) {
+	t.Parallel()
 	clk := &fakeClock{t: mergeT0}
 	fail := false
 	m := newTaskMeta(func(context.Context) ([]taskInfo, error) {
@@ -232,6 +241,7 @@ func mergedTexts(lists []taskLines) []string {
 }
 
 func TestKWayMergeInterleavesOrderedTaskListsInTimeOrder(t *testing.T) {
+	t.Parallel()
 	lists := []taskLines{
 		{Slot: 1, Lines: []svcRec{rec("t1", 10, "a1"), rec("t1", 40, "a2"), rec("t1", 70, "a3")}},
 		{Slot: 2, Lines: []svcRec{rec("t2", 20, "b1"), rec("t2", 50, "b2")}},
@@ -243,6 +253,7 @@ func TestKWayMergeInterleavesOrderedTaskListsInTimeOrder(t *testing.T) {
 }
 
 func TestKWayMergeBreaksTiesByTheLowerSlotWhateverTheOrderOfTheLists(t *testing.T) {
+	t.Parallel()
 	lists := []taskLines{
 		{Slot: 3, Lines: []svcRec{rec("t3", 10, "c1")}},
 		{Slot: 1, Lines: []svcRec{rec("t1", 10, "a1"), rec("t1", 10, "a2")}},
@@ -254,6 +265,7 @@ func TestKWayMergeBreaksTiesByTheLowerSlotWhateverTheOrderOfTheLists(t *testing.
 }
 
 func TestKWayMergeOfNothingOrOneListIsTheListAsItIs(t *testing.T) {
+	t.Parallel()
 	if got := mergedTexts(nil); len(got) != 0 {
 		t.Errorf("merged nothing = %v", got)
 	}
@@ -267,6 +279,7 @@ func TestKWayMergeOfNothingOrOneListIsTheListAsItIs(t *testing.T) {
 }
 
 func TestKWayMergeStopsWhenTheConsumerDoes(t *testing.T) {
+	t.Parallel()
 	lists := []taskLines{{Slot: 1, Lines: []svcRec{rec("t1", 1, "a"), rec("t1", 3, "c")}}, {Slot: 2, Lines: []svcRec{rec("t2", 2, "b")}}}
 	var got []string
 	for r := range kWayMerge(lists) {
@@ -281,6 +294,7 @@ func TestKWayMergeStopsWhenTheConsumerDoes(t *testing.T) {
 }
 
 func TestLineHolderKeepsEverythingUnderItsSizeGroupedByTaskInTheOrderGiven(t *testing.T) {
+	t.Parallel()
 	h := newLineHolder(1 << 20)
 	h.add(rec("t1", 10, "a1"), 1)
 	h.add(rec("t1", 40, "a2"), 1)
@@ -294,6 +308,7 @@ func TestLineHolderKeepsEverythingUnderItsSizeGroupedByTaskInTheOrderGiven(t *te
 }
 
 func TestLineHolderDropsTheOldestLineOfAnyTaskWhenOverItsSizeAndSaysSo(t *testing.T) {
+	t.Parallel()
 	limit := 3 * recSize(rec("t1", 10, "a1"))
 	h := newLineHolder(limit)
 	// The engine gives a service's log task by task, so the oldest line is not the first.
@@ -314,6 +329,7 @@ func TestLineHolderDropsTheOldestLineOfAnyTaskWhenOverItsSizeAndSaysSo(t *testin
 }
 
 func TestLineHolderNeverHoldsMoreThanItsSize(t *testing.T) {
+	t.Parallel()
 	limit := 5 * recSize(rec("t1", 10, "aa"))
 	h := newLineHolder(limit)
 	for i := range 200 {

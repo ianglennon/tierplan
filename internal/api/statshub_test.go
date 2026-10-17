@@ -232,6 +232,7 @@ func waitEntered(t *testing.T, ch <-chan struct{}, n int) {
 }
 
 func TestStatsHubTakesTheFirstSampleAtOnceAndThenOneOnEveryTick(t *testing.T) {
+	t.Parallel()
 	src, _ := newStatsSrc(t, oneContainer())
 	ticks := newManualTicks()
 	h := hubWith(t, src, ticks, 0)
@@ -263,6 +264,7 @@ func TestStatsHubTakesTheFirstSampleAtOnceAndThenOneOnEveryTick(t *testing.T) {
 }
 
 func TestStatsHubTwoViewersOfOneContainerShareOneSamplerAndItStopsWithTheLast(t *testing.T) {
+	t.Parallel()
 	src, _ := newStatsSrc(t, oneContainer())
 	ticks := newManualTicks()
 	h := hubWith(t, src, ticks, 0)
@@ -311,6 +313,7 @@ func TestStatsHubTwoViewersOfOneContainerShareOneSamplerAndItStopsWithTheLast(t 
 }
 
 func TestStatsHubNeverHasTwoRequestsForOneContainerInFlight(t *testing.T) {
+	t.Parallel()
 	src, _ := newStatsSrc(t, oneContainer())
 	src.gate = make(chan struct{})
 	src.entered = make(chan struct{}, 64)
@@ -345,6 +348,7 @@ func watchedContainers(n int, prefix string) dockertest.FakeConfig {
 }
 
 func TestStatsHubHasAtMostEightRequestsInFlightOnOneNode(t *testing.T) {
+	t.Parallel()
 	src, _ := newStatsSrc(t, watchedContainers(20, "c"))
 	src.gate = make(chan struct{})
 	src.entered = make(chan struct{}, 64)
@@ -369,6 +373,7 @@ func TestStatsHubHasAtMostEightRequestsInFlightOnOneNode(t *testing.T) {
 }
 
 func TestStatsHubCapsEachNodeOnItsOwn(t *testing.T) {
+	t.Parallel()
 	src, _ := newStatsSrc(t, watchedContainers(20, "c"))
 	src.gate = make(chan struct{})
 	src.entered = make(chan struct{}, 64)
@@ -393,6 +398,7 @@ func TestStatsHubCapsEachNodeOnItsOwn(t *testing.T) {
 }
 
 func TestStatsHubSaysSoOnceWhenANodeStopsReportingAndWhenItDoesAgain(t *testing.T) {
+	t.Parallel()
 	src, _ := newStatsSrc(t, oneContainer())
 	src.down.Store(true)
 	ticks := newManualTicks()
@@ -423,6 +429,7 @@ func TestStatsHubSaysSoOnceWhenANodeStopsReportingAndWhenItDoesAgain(t *testing.
 }
 
 func TestStatsHubReportsAContainerThatIsGoneOrNotRunningAsStopped(t *testing.T) {
+	t.Parallel()
 	cfg := dockertest.FakeConfig{
 		Containers: []dockertest.FakeContainer{{ID: "off-id", Names: []string{"/off"}, Image: "nginx", State: "exited"}},
 		Stats:      map[string]dockertest.FakeStats{"off-id": oneBusy},
@@ -439,6 +446,7 @@ func TestStatsHubReportsAContainerThatIsGoneOrNotRunningAsStopped(t *testing.T) 
 }
 
 func TestStatsHubCloseEndsEverySubscriptionAndRefusesNewOnes(t *testing.T) {
+	t.Parallel()
 	src, _ := newStatsSrc(t, oneContainer())
 	ticks := newManualTicks()
 	h := api.NewStatsHub(src, api.StatsHubOptions{NewTicker: ticks.newTicker, Log: slog.New(slog.DiscardHandler)})
@@ -464,6 +472,7 @@ func TestStatsHubCloseEndsEverySubscriptionAndRefusesNewOnes(t *testing.T) {
 // else (D-30): this file and the stream's must not reach a database, an audit writer or
 // the disk. The stream test beside it proves a sample reaches no audit row and no log.
 func TestStatsFilesImportNothingThatCouldStoreASample(t *testing.T) {
+	t.Parallel()
 	for _, file := range []string{"statshub.go", "stats.go"} {
 		f, err := parser.ParseFile(token.NewFileSet(), file, nil, parser.ImportsOnly)
 		if err != nil {

@@ -117,6 +117,7 @@ func sampleOf(t *testing.T, c *sseConn) statsSampleEvent {
 }
 
 func TestContainerStatsStreamSendsReadyWithTheContainersOwnLimitsThenSamplesWithRates(t *testing.T) {
+	t.Parallel()
 	f := newStatsFix(t, statsEngine(dockertest.FakeInspect{MemoryBytes: 512 << 20, NanoCPUs: 1_500_000_000}, "running"), nil)
 	c := f.open(t, f.cookie, "web", "")
 	if c.status0() != http.StatusOK {
@@ -149,6 +150,7 @@ func TestContainerStatsStreamSendsReadyWithTheContainersOwnLimitsThenSamplesWith
 }
 
 func TestContainerStatsStreamOfAContainerWithNoLimitSendsNullNotTheHostsRAM(t *testing.T) {
+	t.Parallel()
 	f := newStatsFix(t, statsEngine(dockertest.FakeInspect{}, "running"), nil)
 	r := readyOf(t, f.open(t, f.cookie, "web", ""))
 	// The engine reports the host's 64 GiB as memory_stats.limit for this container.
@@ -158,6 +160,7 @@ func TestContainerStatsStreamOfAContainerWithNoLimitSendsNullNotTheHostsRAM(t *t
 }
 
 func TestContainerStatsStreamOfAContainerThatIsNotRunningIsReadyWithNoSamplesThenClosed(t *testing.T) {
+	t.Parallel()
 	f := newStatsFix(t, statsEngine(dockertest.FakeInspect{}, "exited"), nil)
 	c := f.open(t, f.cookie, "web", "")
 	if r := readyOf(t, c); r.Running {
@@ -177,6 +180,7 @@ func TestContainerStatsStreamOfAContainerThatIsNotRunningIsReadyWithNoSamplesThe
 }
 
 func TestContainerStatsStreamOfAnUnknownContainerIs404(t *testing.T) {
+	t.Parallel()
 	f := newStatsFix(t, statsEngine(dockertest.FakeInspect{}, "running"), nil)
 	c := f.open(t, f.cookie, "nope", "")
 	c.waitEnded(t, 5*time.Second, "the 404 was answered")
@@ -186,6 +190,7 @@ func TestContainerStatsStreamOfAnUnknownContainerIs404(t *testing.T) {
 }
 
 func TestContainerStatsStreamTellsWhenTheNodeIsNotReportingAndWhenItIs(t *testing.T) {
+	t.Parallel()
 	var src *downable
 	f := newStatsFix(t, statsEngine(dockertest.FakeInspect{}, "running"), func(_ *envFix, d *downable) { src = d })
 	src.down.Store(true)
@@ -203,6 +208,7 @@ func TestContainerStatsStreamTellsWhenTheNodeIsNotReportingAndWhenItIs(t *testin
 }
 
 func TestContainerStatsStreamTellsWhenTheContainerStops(t *testing.T) {
+	t.Parallel()
 	f := newStatsFix(t, statsEngine(dockertest.FakeInspect{}, "running"), nil)
 	c := f.open(t, f.cookie, "web", "")
 	readyOf(t, c)
@@ -216,6 +222,7 @@ func TestContainerStatsStreamTellsWhenTheContainerStops(t *testing.T) {
 }
 
 func TestContainerStatsStreamOfTwoViewersCostsOneSamplerAndOneRequestPerTick(t *testing.T) {
+	t.Parallel()
 	f := newStatsFix(t, statsEngine(dockertest.FakeInspect{}, "running"), nil)
 	a := f.open(t, f.cookie, "web", "")
 	readyOf(t, a)
@@ -245,6 +252,7 @@ func TestContainerStatsStreamOfTwoViewersCostsOneSamplerAndOneRequestPerTick(t *
 }
 
 func TestContainerStatsStreamRefusesAStreamOverThePerUserLimitWith429(t *testing.T) {
+	t.Parallel()
 	f := newStatsFix(t, statsEngine(dockertest.FakeInspect{}, "running"), func(f *envFix, _ *downable) { f.statsMaxStreams = 2 })
 	first := f.open(t, f.cookie, "web", "")
 	second := f.open(t, f.cookie, "web", "")
@@ -265,6 +273,7 @@ func TestContainerStatsStreamRefusesAStreamOverThePerUserLimitWith429(t *testing
 }
 
 func TestContainerStatsStreamEndsCleanlyAtItsMaximumLifetime(t *testing.T) {
+	t.Parallel()
 	f := newStatsFix(t, statsEngine(dockertest.FakeInspect{}, "running"), func(f *envFix, _ *downable) { f.statsMaxLifetime = 50 * time.Millisecond })
 	c := f.open(t, f.cookie, "web", "")
 	readyOf(t, c)
@@ -273,6 +282,7 @@ func TestContainerStatsStreamEndsCleanlyAtItsMaximumLifetime(t *testing.T) {
 }
 
 func TestContainerStatsStreamEndsWithClosedAccessLostWithinAHeartbeatOfLosingTheGrant(t *testing.T) {
+	t.Parallel()
 	const heartbeat = 40 * time.Millisecond
 	f := newStatsFix(t, statsEngine(dockertest.FakeInspect{}, "running"), func(f *envFix, _ *downable) { f.statsHeartbeat = heartbeat })
 	f.addUser(t, "viewer", false)
@@ -295,6 +305,7 @@ func TestContainerStatsStreamEndsWithClosedAccessLostWithinAHeartbeatOfLosingThe
 // RES-11 prohibition (T-06-95): Bayplan does not persist stats samples on the server. A
 // sample of a container reaches the browser and nothing else: no audit row, no log line.
 func TestContainerStatsStreamStoresNothingAndLogsNothingOfASample(t *testing.T) {
+	t.Parallel()
 	f := newStatsFix(t, statsEngine(dockertest.FakeInspect{}, "running"), nil)
 	count := func() int {
 		var n int

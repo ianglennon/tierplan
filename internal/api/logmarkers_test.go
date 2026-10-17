@@ -35,6 +35,7 @@ func stampOf(sec int) string {
 }
 
 func TestSlotMarkersAFailedTaskWithANewOneInItsSlotIsReplacedWithItsExitCode(t *testing.T) {
+	t.Parallel()
 	before := []taskInfo{mtask("old", 2, "node1", "running", 0), mtask("other", 1, "node1", "running", 0)}
 	after := []taskInfo{
 		withExit(mtask("old", 2, "node1", "failed", 0), 137),
@@ -58,6 +59,7 @@ func TestSlotMarkersAFailedTaskWithANewOneInItsSlotIsReplacedWithItsExitCode(t *
 }
 
 func TestSlotMarkersCoverShutdownAndRejectedAndNothingElse(t *testing.T) {
+	t.Parallel()
 	for _, state := range []string{"shutdown", "rejected", "failed"} {
 		got := slotMarkers(
 			[]taskInfo{mtask("old", 1, "n1", "running", 0)},
@@ -80,6 +82,7 @@ func TestSlotMarkersCoverShutdownAndRejectedAndNothingElse(t *testing.T) {
 }
 
 func TestSlotMarkersWithNoNewTaskYetSaysTheSlotStoppedAndLaterBecomesAReplacement(t *testing.T) {
+	t.Parallel()
 	running := []taskInfo{mtask("old", 3, "n1", "running", 0)}
 	stopped := []taskInfo{mtask("old", 3, "n1", "failed", 0)}
 	got := slotMarkers(running, stopped)
@@ -99,6 +102,7 @@ func TestSlotMarkersWithNoNewTaskYetSaysTheSlotStoppedAndLaterBecomesAReplacemen
 }
 
 func TestSlotMarkersPairAGlobalServicesTasksByNode(t *testing.T) {
+	t.Parallel()
 	before := []taskInfo{mtask("a1", 0, "n1", "running", 0), mtask("b1", 0, "n2", "running", 0)}
 	after := []taskInfo{
 		mtask("a1", 0, "n1", "shutdown", 0), mtask("b1", 0, "n2", "running", 0),
@@ -111,6 +115,7 @@ func TestSlotMarkersPairAGlobalServicesTasksByNode(t *testing.T) {
 }
 
 func TestSlotMarkersWithoutPreviousGiveTheWholeHistoryInTimeOrder(t *testing.T) {
+	t.Parallel()
 	current := []taskInfo{
 		mtask("s1-b", 1, "n1", "failed", 100),
 		mtask("s1-a", 1, "n1", "failed", 0),
@@ -132,6 +137,7 @@ func TestSlotMarkersWithoutPreviousGiveTheWholeHistoryInTimeOrder(t *testing.T) 
 }
 
 func TestSlotMarkersWithNoTimeFromTheSwarmHaveNoAt(t *testing.T) {
+	t.Parallel()
 	old := mtask("old", 1, "n1", "failed", 0)
 	old.Created, old.Since = time.Time{}, time.Time{}
 	got := slotMarkers(nil, []taskInfo{old})
@@ -141,6 +147,7 @@ func TestSlotMarkersWithNoTimeFromTheSwarmHaveNoAt(t *testing.T) {
 }
 
 func TestNodeNoticesTellOfANodeGoingDownDisconnectedAndComingBack(t *testing.T) {
+	t.Parallel()
 	ready := []nodeInfo{{ID: "1", Name: "alpha", State: "ready"}, {ID: "2", Name: "beta", State: "ready"}}
 	down := []nodeInfo{{ID: "1", Name: "alpha", State: "down"}, {ID: "2", Name: "beta", State: "ready"}}
 	got := nodeNotices(ready, down, "T1")
@@ -162,6 +169,7 @@ func TestNodeNoticesTellOfANodeGoingDownDisconnectedAndComingBack(t *testing.T) 
 }
 
 func TestNodeNoticesTellOfANodeThatIsAlreadyDownWhenThereIsNothingBeforeAndSayNothingForUnknown(t *testing.T) {
+	t.Parallel()
 	got := nodeNotices(nil, []nodeInfo{{ID: "1", Name: "zeta", State: "down"}, {ID: "2", Name: "beta", State: "ready"}, {ID: "3", Name: "gamma", State: "unknown"}, {ID: "4", Name: "delta", State: ""}}, "T")
 	if len(got) != 1 || got[0].Kind != noticeDown || got[0].Node != "zeta" {
 		t.Fatalf("notices = %+v, want only zeta down", got)
@@ -169,6 +177,7 @@ func TestNodeNoticesTellOfANodeThatIsAlreadyDownWhenThereIsNothingBeforeAndSayNo
 }
 
 func TestNodeNoticesAreInNodeNameOrder(t *testing.T) {
+	t.Parallel()
 	cur := []nodeInfo{{ID: "1", Name: "zeta", State: "down"}, {ID: "2", Name: "alpha", State: "disconnected"}}
 	got := nodeNotices(nil, cur, "T")
 	if len(got) != 2 || got[0].Node != "alpha" || got[1].Node != "zeta" {
