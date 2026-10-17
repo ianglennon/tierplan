@@ -706,6 +706,9 @@ describe("the services list: search and status chips", () => {
         .getAllByRole("button")
         .map((b) => b.textContent),
     ).toEqual(["Degraded 3", "Updating 1", "Update problem 0", "Restart loop 2"]);
+    // The chips wrap onto further rows at every width, so none is cut off at 375px (G-06-2).
+    expect(group.classList.contains("flex-wrap")).toBe(true);
+    expect(group.className).not.toMatch(/overflow-x-auto|flex-nowrap/);
   });
 
   it("toggles the Restart loop chip through the search as status=loop", async () => {

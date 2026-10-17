@@ -7,6 +7,7 @@ import {
   type BrowserContext,
   test as base,
   expect,
+  type Locator,
   type Page,
   type TestInfo,
 } from "@playwright/test";
@@ -237,6 +238,92 @@ export async function expectVersionFooter(page: Page): Promise<void> {
   const source = footers.getByRole("link", { name: /^Source code/ });
   await expect(source).toBeVisible();
   await expect(source).toHaveAttribute("target", "_blank");
+}
+
+// The height of a filter chip under 768px, the 44px touch target of P1 D-64, and the space
+// between chips and between rows of chips (the ToggleGroup's spacing={2}), in px.
+export const CHIP_HEIGHT = 44;
+export const CHIP_GAP = 8;
+
+// expectChipsInsideScreen asserts that every chip of a filter-chip row is on a screen `width`
+// px wide (G-06-2). It is for screens under 768px, where the chips are 44px high and wrap onto
+// further rows. It compares each chip with its own row as well as with the screen, because the
+// Nodes list's last chip was measured cut off 8px inside its row while still inside the screen.
+// A chip that is cut off has its full box as its boundingBox, so only the comparison with the row
+// catches it. It waits for the fonts and the row's animations, never for a fixed time, because a
+// box measured before the fonts load or while something animates is not the box people see.
+export async function expectChipsInsideScreen(
+  page: Page,
+  group: Locator,
+  what: string,
+  width = 375,
+): Promise<void> {
+  await expect(group).toBeVisible();
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+  });
+  await group.evaluate(async (el) => {
+    await Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished));
+  });
+
+  const { scrollWidth, clientWidth } = await group.evaluate((el) => ({
+    scrollWidth: el.scrollWidth,
+    clientWidth: el.clientWidth,
+  }));
+  expect(
+    scrollWidth,
+    `${what}: the chip row holds content wider than itself (scrollWidth ${scrollWidth}, clientWidth ${clientWidth})`,
+  ).toBeLessThanOrEqual(clientWidth + 1);
+
+  const row = await group.boundingBox();
+  expect(row, `${what}: the chip row has a box`).not.toBeNull();
+  if (!row) return;
+  expect(row.x, `${what}: the chip row starts inside the screen`).toBeGreaterThanOrEqual(0);
+  expect(row.x + row.width, `${what}: the chip row ends inside the screen`).toBeLessThanOrEqual(
+    width + 0.5,
+  );
+
+  const chips = group.locator('[data-slot="toggle-group-item"]');
+  expect(await chips.count(), `${what}: the chip row has chips`).toBeGreaterThan(0);
+  let previous: { x: number; y: number; width: number; height: number } | null = null;
+  for (const chip of await chips.all()) {
+    const box = await chip.boundingBox();
+    const text = (await chip.innerText()).trim();
+    expect(box, `${what}: chip "${text}" has a box`).not.toBeNull();
+    if (!box) continue;
+    expect(
+      box.x,
+      `${what}: chip "${text}" starts inside its row (x ${box.x}, row x ${row.x})`,
+    ).toBeGreaterThanOrEqual(row.x - 0.5);
+    expect(
+      box.x + box.width,
+      `${what}: chip "${text}" ends inside its row (right ${box.x + box.width}, row right ${row.x + row.width})`,
+    ).toBeLessThanOrEqual(row.x + row.width + 0.5);
+    expect(
+      box.x + box.width,
+      `${what}: chip "${text}" ends inside the screen (right ${box.x + box.width}, screen ${width})`,
+    ).toBeLessThanOrEqual(width + 0.5);
+    expect(
+      Math.abs(box.height - CHIP_HEIGHT),
+      `${what}: chip "${text}" is ${box.height}px high, not ${CHIP_HEIGHT}px`,
+    ).toBeLessThanOrEqual(0.5);
+    if (previous) {
+      const sameRow = Math.abs(box.y - previous.y) <= 0.5;
+      const gap = sameRow
+        ? box.x - (previous.x + previous.width)
+        : box.y - (previous.y + previous.height);
+      expect(
+        Math.abs(gap - CHIP_GAP),
+        `${what}: chip "${text}" is ${gap}px from the chip before it ${sameRow ? "on its row" : "above it"}, not ${CHIP_GAP}px`,
+      ).toBeLessThanOrEqual(0.5);
+    }
+    previous = box;
+  }
+
+  const documentWidth = await page.evaluate(() => document.scrollingElement?.scrollWidth ?? 0);
+  expect(documentWidth, `${what}: the document is wider than the screen`).toBeLessThanOrEqual(
+    width,
+  );
 }
 
 // screenshotOnFailure attaches the page as it was when a spec that drives its

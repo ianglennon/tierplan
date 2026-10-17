@@ -17,6 +17,7 @@ import {
   dind,
   environmentsOf,
   expect,
+  expectChipsInsideScreen,
   importShellImage,
   SHELL_IMAGE,
   swarmInit,
@@ -231,4 +232,22 @@ test("the node page lists the service's tasks, and the service's Logs tab shows 
   await expect(
     log.locator('[data-stream="stdout"]').filter({ hasText: "svc-line-" }).first(),
   ).toBeVisible({ timeout: 30_000 });
+});
+
+test("at 375px every status chip of the Services list is on the screen, wrapping instead of scrolling", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto(at(`/env/${envId}/services`));
+  // The list can lag the engine, as in openService.
+  await expect(page.getByRole("link", { name: SERVICE, exact: true })).toBeVisible({
+    timeout: 90_000,
+  });
+  const group = page.getByRole("group", { name: "Filter by status" });
+  // The counts arrive with the list's data and widen the chips, so the row is measured only once
+  // they are there.
+  await expect(group.locator('[data-slot="toggle-group-item"]').last()).toHaveText(
+    /^Restart loop [\d,]+$/,
+  );
+  await expectChipsInsideScreen(page, group, "Services list");
 });

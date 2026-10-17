@@ -48,6 +48,7 @@ import {
   TruncatedText,
 } from "@/features/resources/resource-table";
 import { useChosenKeys, useSelection } from "@/features/resources/selection";
+import { STATUS_CHIP_ROW } from "@/features/resources/status-chips";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { MuteMenuItem } from "@/features/restart-loop/mute-menu-item";
 import { RestartLoopBadge } from "@/features/restart-loop/restart-loop-badge";
@@ -788,7 +789,7 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
         onValueChange={(v) =>
           onSearchChange({ status: serviceStatusParam(v as ServiceStatusValue[]) })
         }
-        className="max-w-full max-md:w-full max-md:flex-nowrap max-md:overflow-x-auto md:flex-wrap"
+        className={STATUS_CHIP_ROW}
       >
         {SERVICE_STATUS_VALUES.map((v) => {
           const label = t(`services.list.status.${v}`);
