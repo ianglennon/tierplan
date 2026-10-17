@@ -79,6 +79,7 @@ func assertEnvironmentGoneAndAgentRefused(t *testing.T, f *agentFix, env tunnelt
 }
 
 func TestRemoveEnvironmentWithUninstallOnASwarmTellsTheWorkerFirstThenTheManagerToRemoveTheServiceAndAuditsBothBeforeRevokingAndDeleting(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Production")
 	mgr := f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha"}, swarmFacts("alpha", true, true))
@@ -129,6 +130,7 @@ func TestRemoveEnvironmentWithUninstallOnASwarmTellsTheWorkerFirstThenTheManager
 }
 
 func TestRemoveEnvironmentWithUninstallOnAStandaloneHostTellsItToRemoveItsOwnContainerAndVolume(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Production")
 	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha"}, selfUpdating("alpha"))
@@ -150,6 +152,7 @@ func TestRemoveEnvironmentWithUninstallOnAStandaloneHostTellsItToRemoveItsOwnCon
 }
 
 func TestRemoveEnvironmentWithoutUninstallOnlyRevokesAndDeletesAndSendsNoUninstall(t *testing.T) {
+	t.Parallel()
 	for name, q := range map[string]string{"false": "?uninstallAgents=false", "absent": ""} {
 		t.Run(name, func(t *testing.T) {
 			f := newAgentFix(t)
@@ -172,6 +175,7 @@ func TestRemoveEnvironmentWithoutUninstallOnlyRevokesAndDeletesAndSendsNoUninsta
 }
 
 func TestRemoveEnvironmentWithUninstallAnAgentThatNeverAnswersDoesNotStopTheRemovalAndIsNotRecorded(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	f.envSvc.WithUninstallWait(900 * time.Millisecond)
 	env := f.srv.NewEnvironment(t, "Production")
@@ -195,6 +199,7 @@ func TestRemoveEnvironmentWithUninstallAnAgentThatNeverAnswersDoesNotStopTheRemo
 }
 
 func TestRemoveEnvironmentWithUninstallAnAgentThatRefusesIsNotRecordedAsUninstalled(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Production")
 	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha"}, selfUpdating("alpha"))
@@ -213,6 +218,7 @@ func TestRemoveEnvironmentWithUninstallAnAgentThatRefusesIsNotRecordedAsUninstal
 }
 
 func TestRemoveEnvironmentWithUninstallIsForInstanceAdminsAndTellsNoAgentWithout(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Production")
 	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha"}, selfUpdating("alpha"))
@@ -240,6 +246,7 @@ func TestRemoveEnvironmentWithUninstallIsForInstanceAdminsAndTellsNoAgentWithout
 }
 
 func TestRemoveEnvironmentRejectsAQueryValueThatIsNotABoolean(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Production")
 	rec := f.req(t, http.MethodDelete, "/api/environments/"+env.ID+"?uninstallAgents=maybe", "")
@@ -252,6 +259,7 @@ func TestRemoveEnvironmentRejectsAQueryValueThatIsNotABoolean(t *testing.T) {
 }
 
 func TestTheAgentListGivesTheManualCleanupCommandsWithTheCurrentSecretName(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Production")
 	read := func() (swarm, standalone string) {
@@ -293,6 +301,7 @@ func TestTheAgentListGivesTheManualCleanupCommandsWithTheCurrentSecretName(t *te
 // Removing an environment frees what it held: the host that was enrolled in it can be
 // enrolled in another environment at once (plan 02-19's engine, cluster and host bindings).
 func TestRemoveEnvironmentFreesTheHostToEnrolInAnotherEnvironmentAtOnce(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	first := f.srv.NewEnvironment(t, "First")
 	facts := selfUpdating("alpha")

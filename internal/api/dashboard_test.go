@@ -173,6 +173,7 @@ func richEngine() dockertest.FakeConfig {
 }
 
 func TestSummaryReturnsTheEngineCardAndCountsForAnOnlineEnvironment(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, richEngine())
 	rec := f.get(t, e, "summary")
 	if rec.code != http.StatusOK {
@@ -203,6 +204,7 @@ func TestSummaryReturnsTheEngineCardAndCountsForAnOnlineEnvironment(t *testing.T
 }
 
 func TestSummaryCountsEqualTheLengthOfTheListsTheirTilesLinkTo(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, richEngine())
 	s := decode[summaryBody](t, f.get(t, e, "summary"))
 	if got := decode[listBody[containerItem]](t, f.get(t, e, "containers")).Total; got != s.Counts.Containers {
@@ -230,6 +232,7 @@ func TestSummaryCountsEqualTheLengthOfTheListsTheirTilesLinkTo(t *testing.T) {
 }
 
 func TestSummaryOnASwarmManagerIncludesNodesAndServices(t *testing.T) {
+	t.Parallel()
 	cfg := richEngine()
 	cfg.SwarmState, cfg.SwarmControl, cfg.Nodes, cfg.Services = "active", true, 3, 7
 	f, e := dashEnv(t, cfg)
@@ -240,6 +243,7 @@ func TestSummaryOnASwarmManagerIncludesNodesAndServices(t *testing.T) {
 }
 
 func TestSummaryOnASwarmWorkerIsWorkerAndOmitsNodeAndServiceCounts(t *testing.T) {
+	t.Parallel()
 	cfg := richEngine()
 	cfg.SwarmState, cfg.SwarmControl = "active", false
 	f, e := dashEnv(t, cfg)
@@ -259,6 +263,7 @@ func TestSummaryOnASwarmWorkerIsWorkerAndOmitsNodeAndServiceCounts(t *testing.T)
 }
 
 func TestListContainersCapsAtFiveHundredAndReportsTheTotal(t *testing.T) {
+	t.Parallel()
 	var cs []dockertest.FakeContainer
 	for i := range 600 {
 		cs = append(cs, dockertest.FakeContainer{ID: fmt.Sprintf("c%04d", i), Names: []string{fmt.Sprintf("/c%04d", i)}, State: "running"})
@@ -277,6 +282,7 @@ func TestListContainersCapsAtFiveHundredAndReportsTheTotal(t *testing.T) {
 }
 
 func TestListContainersWithinTheCapIsNotTruncated(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, richEngine())
 	l := decode[listBody[containerItem]](t, f.get(t, e, "containers"))
 	if len(l.Items) != 3 || l.Total != 3 || l.Truncated {
@@ -285,6 +291,7 @@ func TestListContainersWithinTheCapIsNotTruncated(t *testing.T) {
 }
 
 func TestListContainersBadgesOnlyBayplansOwnContainer(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, richEngine())
 	l := decode[listBody[containerItem]](t, f.get(t, e, "containers"))
 	var selfNames []string
@@ -299,6 +306,7 @@ func TestListContainersBadgesOnlyBayplansOwnContainer(t *testing.T) {
 }
 
 func TestListsCarryTheDocumentedColumns(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, richEngine())
 
 	cs := decode[listBody[containerItem]](t, f.get(t, e, "containers")).Items
@@ -339,6 +347,7 @@ var containerKeys = []string{
 }
 
 func TestListsNeverCarryLabelsMountsOrVariables(t *testing.T) {
+	t.Parallel()
 	cfg := richEngine()
 	cfg.Containers[1].Labels = map[string]string{
 		"app.note": "label-zq7", "com.docker.compose.project": "shop",
@@ -388,6 +397,7 @@ func TestListsNeverCarryLabelsMountsOrVariables(t *testing.T) {
 }
 
 func TestListsOfAnEmptyEngineAreEmptyArraysAndZeroCountsNeverNull(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, dockertest.FakeConfig{})
 	for _, what := range []string{"containers", "images", "volumes", "networks"} {
 		rec := f.get(t, e, what)
@@ -403,6 +413,7 @@ func TestListsOfAnEmptyEngineAreEmptyArraysAndZeroCountsNeverNull(t *testing.T) 
 }
 
 func TestListsReturnEqualSortKeysInAStableOrder(t *testing.T) {
+	t.Parallel()
 	cfg := dockertest.FakeConfig{
 		Containers: []dockertest.FakeContainer{
 			{ID: "cz", Names: []string{"/web"}, State: "running"},
@@ -436,10 +447,11 @@ func TestListsReturnEqualSortKeysInAStableOrder(t *testing.T) {
 }
 
 func TestListOfAnOfflineEnvironmentIs503WithSinceAndReason(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, richEngine())
 	f.fake.Stop()
 	f.mon.Kick(e.ID)
-	awaitOffline(t, f.mon, e.ID)
+	awaitUnreachable(t, f.mon, e.ID)
 	for _, what := range dataPaths {
 		rec := f.get(t, e, what)
 		if rec.code != http.StatusServiceUnavailable || rec.ptyp != "environment_offline" {
@@ -457,6 +469,7 @@ func TestListOfAnOfflineEnvironmentIs503WithSinceAndReason(t *testing.T) {
 }
 
 func TestListOfAnUnsupportedEnvironmentIs409WithTheEngine(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{APIVersion: "1.41", Version: "20.10.24", Hostname: "old"})
 	rec := f.req(t, http.MethodPost, "/api/environments", `{"kind":"local","allowUnsupported":true}`)
 	if rec.code != http.StatusCreated {
@@ -482,6 +495,7 @@ func TestListOfAnUnsupportedEnvironmentIs409WithTheEngine(t *testing.T) {
 }
 
 func TestListOfAnUnknownEnvironmentIs404(t *testing.T) {
+	t.Parallel()
 	f, _ := dashEnv(t, richEngine())
 	for _, what := range dataPaths {
 		rec := f.req(t, http.MethodGet, "/api/env/nope/"+what, "")
@@ -492,6 +506,7 @@ func TestListOfAnUnknownEnvironmentIs404(t *testing.T) {
 }
 
 func TestAViewerReadsTheSummaryAndEveryListAndAUserWithoutAGrantGetsNotFound(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, richEngine())
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
@@ -524,6 +539,7 @@ func TestAViewerReadsTheSummaryAndEveryListAndAUserWithoutAGrantGetsNotFound(t *
 }
 
 func TestListRoutesAreReadOnly(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, richEngine())
 	for _, what := range dataPaths {
 		if what == "networks" || what == "volumes" {
@@ -542,6 +558,7 @@ func TestListRoutesAreReadOnly(t *testing.T) {
 // TypeScript types come from it, so a list that borrowed another operation's
 // schema would give the web app the wrong row type.
 func TestEachListDocumentsItsOwn200Schema(t *testing.T) {
+	t.Parallel()
 	r := httpx.New(httpx.Options{})
 	api.RegisterDashboard(r, api.DashboardDeps{})
 	// The images list lives with the image routes (plan 05-15) and keeps its path.
@@ -576,6 +593,7 @@ func TestEachListDocumentsItsOwn200Schema(t *testing.T) {
 // An agent that refuses a read is not an offline environment: the page says what
 // was refused (plan 02-07, D-29).
 func TestAnAgentThatRefusesARequestIs502AgentPolicyDeniedNamingTheEndpoint(t *testing.T) {
+	t.Parallel()
 	cfg := richEngine()
 	cfg.PolicyDeny = true
 	f, e := dashEnv(t, cfg)
@@ -619,6 +637,7 @@ func (f *agentFix) get(t *testing.T, envID, what string) *envRec {
 }
 
 func TestAgentEnvironmentSummaryAndListsAreReadThroughTheTunnel(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Remote")
 	f.connect(t, env, dockertest.FakeConfig{
@@ -665,6 +684,7 @@ func TestAgentEnvironmentSummaryAndListsAreReadThroughTheTunnel(t *testing.T) {
 }
 
 func TestPendingAgentEnvironmentDataRoutesAnswer503EnvironmentOfflineWithStatePending(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Waiting")
 	for _, what := range dataPaths {
@@ -680,6 +700,7 @@ func TestPendingAgentEnvironmentDataRoutesAnswer503EnvironmentOfflineWithStatePe
 }
 
 func TestRevokedAgentEnvironmentDataRoutesAnswer503WithStateRevokedItsReasonAndSince(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Remote")
 	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1"}, nil)
@@ -704,6 +725,7 @@ func TestRevokedAgentEnvironmentDataRoutesAnswer503WithStateRevokedItsReasonAndS
 }
 
 func TestOfflineAgentEnvironmentDataRoutesCarryTheReasonAndTheTimeTheContactWasLost(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Remote")
 	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1"}, nil)
@@ -724,6 +746,7 @@ func TestOfflineAgentEnvironmentDataRoutesCarryTheReasonAndTheTimeTheContactWasL
 }
 
 func TestUnsupportedAgentEngineAnswers409EnvironmentUnsupportedWithTheEngineAndTheD40Reason(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Old")
 	f.connect(t, env, dockertest.FakeConfig{APIVersion: "1.41", Version: "20.10.24", Hostname: "old"}, nil)
@@ -742,6 +765,7 @@ func TestUnsupportedAgentEngineAnswers409EnvironmentUnsupportedWithTheEngineAndT
 }
 
 func TestAgentEnvironmentEventsStreamDeliversAnEventPublishedOnTheAgentsDaemon(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Remote")
 	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1"}, nil)
@@ -898,6 +922,7 @@ func newSwarmFixWith(t *testing.T, tune func(host string, cfg *dockertest.FakeCo
 }
 
 func TestSwarmSummaryHasClusterTotalsAPerNodeBreakdownAndNobodyMissing(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	// newSwarmFix returned with every agent connected and probed, so the summary is read once.
 	rec := s.get(t, s.env.ID, "summary")
@@ -931,6 +956,7 @@ func TestSwarmSummaryHasClusterTotalsAPerNodeBreakdownAndNobodyMissing(t *testin
 }
 
 func TestSwarmSummaryNamesTheNodeThatDidNotAnswer(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	s.srv.Hub.Kick(s.w.id, tunnel.DisconnectClosed)
 	if _, err := s.srv.Hub.AwaitSession(testsupport.Context(t), s.w.id, func(sess *tunnel.Session) bool { return sess == nil }); err != nil {
@@ -950,6 +976,7 @@ func TestSwarmSummaryNamesTheNodeThatDidNotAnswer(t *testing.T) {
 }
 
 func TestSwarmListsCarryEachRowsNodeAndTheNodeNamesAvailableForTheFilter(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	nets := decode[nodeListBody[nodeNetwork]](t, s.get(t, s.env.ID, "networks"))
 	var rows []string
@@ -979,6 +1006,7 @@ func TestSwarmListsCarryEachRowsNodeAndTheNodeNamesAvailableForTheFilter(t *test
 }
 
 func TestSwarmContainerListFiltersByNodeBeforeTheCapAndKeepsEveryNodeNameForTheFilter(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	all := decode[nodeListBody[nodeContainer]](t, s.get(t, s.env.ID, "containers"))
 	if all.Total != 503 || !all.Truncated || len(all.Items) != 500 {
@@ -1005,6 +1033,7 @@ func TestSwarmContainerListFiltersByNodeBeforeTheCapAndKeepsEveryNodeNameForTheF
 }
 
 func TestStandaloneListsAndSummaryAreUnchangedApartFromTheOneNode(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Remote")
 	f.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1", Containers: []dockertest.FakeContainer{{ID: "a1", Names: []string{"/web"}, State: "running"}}}, nil)
@@ -1024,6 +1053,7 @@ func TestStandaloneListsAndSummaryAreUnchangedApartFromTheOneNode(t *testing.T) 
 }
 
 func TestLocalSocketListsNameTheEngineAsTheOnlyNode(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, richEngine())
 	awaitOnline(t, f.mon, e.ID)
 	sum := decode[swarmSummary](t, f.get(t, e, "summary"))
@@ -1047,6 +1077,7 @@ type loopCounts struct {
 }
 
 func TestDashboardRestartLoopsCountsTheFlaggedServicesAndTheMutedOnesApart(t *testing.T) {
+	t.Parallel()
 	f, e := loopEnv(t)
 	listServicesQuery(t, f, e, "")
 	got := decode[loopCounts](t, f.get(t, e, "summary"))
@@ -1064,6 +1095,7 @@ func TestDashboardRestartLoopsCountsTheFlaggedServicesAndTheMutedOnesApart(t *te
 }
 
 func TestDashboardRestartLoopsIsLeftOutOfAStandaloneHostAndOfASwarmNothingWasReadFor(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, richEngine())
 	if rec := f.get(t, e, "summary"); rec.code != http.StatusOK || strings.Contains(string(rec.body), "restartLoops") {
 		t.Errorf("standalone summary = %d %s, want no restartLoops", rec.code, rec.body)

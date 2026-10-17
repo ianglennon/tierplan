@@ -7,6 +7,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/tunnel"
@@ -39,11 +40,14 @@ func awaitOnline(t testing.TB, mon *envs.Monitor, id string) envs.Status {
 	})
 }
 
-// awaitOffline waits until the monitor has found id offline.
-func awaitOffline(t testing.TB, mon *envs.Monitor, id string) envs.Status {
+// awaitUnreachable waits until the monitor has found id offline because its engine does not
+// answer a ping. A probe that was already past its ping when the engine stopped ends offline
+// with the reason probe_failed, and the monitor probes again after its backoff, so offline alone
+// is not yet the settled state.
+func awaitUnreachable(t testing.TB, mon *envs.Monitor, id string) envs.Status {
 	t.Helper()
-	return awaitMonitor(t, mon, id, "the monitor to find it offline", func(s envs.Status) bool {
-		return s.State == envs.StateOffline
+	return awaitMonitor(t, mon, id, "the monitor to find its engine unreachable", func(s envs.Status) bool {
+		return s.State == envs.StateOffline && s.Reason == dockerx.ReasonUnreachable
 	})
 }
 

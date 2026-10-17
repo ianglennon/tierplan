@@ -85,6 +85,35 @@ func (f *eventsFix) waitBuffered(t *testing.T, n int) {
 	}
 }
 
+// waitMerged waits until the environment's merged feed, the one the events list reads, holds the
+// event of actorID. A merged feed that is already running is fed from the hub's ring by a
+// goroutine of its own, so waitBuffered returning does not yet mean the list shows the event;
+// this waits on the feed's own subscription, which delivers every row it ingests.
+func (f *eventsFix) waitMerged(t *testing.T, actorID string) {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	backlog, ch, cancel := f.agg.Events(ctx, f.env.ID)
+	defer cancel()
+	for _, ev := range backlog {
+		if ev.ActorID == actorID {
+			return
+		}
+	}
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				t.Fatalf("the merged feed ended before it held the event of %s", actorID)
+			}
+			if ev.ActorID == actorID {
+				return
+			}
+		case <-ctx.Done():
+			t.Fatalf("waiting for the merged feed to hold the event of %s: %v", actorID, ctx.Err())
+		}
+	}
+}
+
 func (f *eventsFix) waitStream(t *testing.T) {
 	t.Helper()
 	awaitFake(t, f.fake, "exactly one open event stream", func() bool { return f.fake.OpenEventStreams() == 1 })
@@ -334,6 +363,7 @@ func publish(f *eventsFix, ids ...string) {
 }
 
 func TestEventStreamSendsTheHeadersTheBacklogAndThenLiveFrames(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	f := newEventsFix(t, dockertest.FakeConfig{Events: []dockertest.FakeEvent{
 		{Type: "container", Action: "create", ActorID: "c-a", TimeNano: now.Add(-2 * time.Minute).UnixNano(), Attributes: map[string]string{"name": "web", "image": "nginx"}},
@@ -396,6 +426,7 @@ func TestEventStreamSendsTheHeadersTheBacklogAndThenLiveFrames(t *testing.T) {
 }
 
 func TestEventStreamSendsAHealthChangeAsAnIdlessInvalidateFrameAndTheListNeverHoldsIt(t *testing.T) {
+	t.Parallel()
 	// RES-14: the browser must learn that a list is stale, but the feed people read
 	// has no row for it, and nothing about the health check leaves the server.
 	f := newEventsFix(t, dockertest.FakeConfig{}, time.Hour, 0)
@@ -440,6 +471,7 @@ func TestEventStreamSendsAHealthChangeAsAnIdlessInvalidateFrameAndTheListNeverHo
 }
 
 func TestEventStreamResumesAfterLastEventID(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	f := newEventsFix(t, dockertest.FakeConfig{Events: []dockertest.FakeEvent{
 		{Type: "container", Action: "start", ActorID: "c-1", TimeNano: now.Add(-3 * time.Minute).UnixNano()},
@@ -469,6 +501,7 @@ func TestEventStreamResumesAfterLastEventID(t *testing.T) {
 }
 
 func TestEventStreamSendsAHeartbeatCommentAtTheConfiguredInterval(t *testing.T) {
+	t.Parallel()
 	f := newEventsFix(t, dockertest.FakeConfig{}, 30*time.Millisecond, 0)
 	c := f.openStream(t, f.cookie, "")
 
@@ -492,6 +525,7 @@ func TestEventStreamSendsAHeartbeatCommentAtTheConfiguredInterval(t *testing.T) 
 }
 
 func TestEventStreamAllowsEightPerUserAndRefusesTheNinthWith429(t *testing.T) {
+	t.Parallel()
 	f := newEventsFix(t, dockertest.FakeConfig{}, time.Hour, 0)
 	conns := make([]*sseConn, 0, 8)
 	for range 8 {
@@ -536,6 +570,7 @@ func TestEventStreamAllowsEightPerUserAndRefusesTheNinthWith429(t *testing.T) {
 }
 
 func TestEventStreamWithoutASessionIs401AndAuditedAsADeniedRead(t *testing.T) {
+	t.Parallel()
 	f := newEventsFix(t, dockertest.FakeConfig{}, time.Hour, 0)
 	c := f.openStream(t, "", "")
 	if c.status0() != http.StatusUnauthorized {
@@ -552,6 +587,7 @@ func TestEventStreamWithoutASessionIs401AndAuditedAsADeniedRead(t *testing.T) {
 }
 
 func TestEventRoutesNeedEnvironmentsReadAndAKnownEnvironment(t *testing.T) {
+	t.Parallel()
 	f := newEventsFix(t, dockertest.FakeConfig{}, time.Hour, 0)
 	f.addUser(t, "nobody", false)
 	cookie, _ := f.signIn(t, "nobody", false)
@@ -579,6 +615,7 @@ func TestEventRoutesNeedEnvironmentsReadAndAKnownEnvironment(t *testing.T) {
 }
 
 func TestEventStreamEndsWhenTheHubClosesAndWhenTheClientLeaves(t *testing.T) {
+	t.Parallel()
 	f := newEventsFix(t, dockertest.FakeConfig{}, time.Hour, 0)
 	f.waitStream(t)
 
@@ -600,6 +637,7 @@ func TestEventStreamEndsWhenTheHubClosesAndWhenTheClientLeaves(t *testing.T) {
 }
 
 func TestEventRecentReturnsTheNewest50NewestFirstWithTheStreamFields(t *testing.T) {
+	t.Parallel()
 	f := newEventsFix(t, dockertest.FakeConfig{}, time.Hour, 0)
 	f.waitStream(t)
 
@@ -617,6 +655,7 @@ func TestEventRecentReturnsTheNewest50NewestFirstWithTheStreamFields(t *testing.
 	}
 	publish(f, ids...)
 	f.waitBuffered(t, 60)
+	f.waitMerged(t, "c59")
 
 	rec = f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + f.env.ID + "/events", cookie: f.cookie})
 	if rec.Code != http.StatusOK {
@@ -642,6 +681,7 @@ func TestEventRecentReturnsTheNewest50NewestFirstWithTheStreamFields(t *testing.
 }
 
 func TestEventRecentTakesSinceAndLimitAndRefusesBadValues(t *testing.T) {
+	t.Parallel()
 	f := newEventsFix(t, dockertest.FakeConfig{}, time.Hour, 0)
 	f.waitStream(t)
 	now := time.Now()
@@ -694,6 +734,7 @@ func TestEventRecentTakesSinceAndLimitAndRefusesBadValues(t *testing.T) {
 }
 
 func TestEventOpenAPIDocumentsTheRecentEndpointButNotTheStream(t *testing.T) {
+	t.Parallel()
 	r := httpx.New(httpx.Options{})
 	api.RegisterEvents(r, api.EventsDeps{})
 	doc, err := json.Marshal(r.API().OpenAPI())
@@ -728,6 +769,7 @@ func (c *sseConn) waitEnded(t *testing.T, d time.Duration, why string) {
 }
 
 func TestEventStreamEndsWithinAHeartbeatOfSignOut(t *testing.T) {
+	t.Parallel()
 	f := newEventsFix(t, dockertest.FakeConfig{}, 20*time.Millisecond, 0)
 	c := f.openStream(t, f.cookie, "")
 	if c.status0() != http.StatusOK {
@@ -756,6 +798,7 @@ func TestEventStreamEndsWithinAHeartbeatOfSignOut(t *testing.T) {
 }
 
 func TestEventStreamEndsWhenTheUserIsDisabledOrTheEnvironmentRemoved(t *testing.T) {
+	t.Parallel()
 	t.Run("user disabled", func(t *testing.T) {
 		f := newEventsFix(t, dockertest.FakeConfig{}, 20*time.Millisecond, 0)
 		c := f.openStream(t, f.cookie, "")
@@ -795,6 +838,7 @@ func TestEventStreamEndsWhenTheUserIsDisabledOrTheEnvironmentRemoved(t *testing.
 // a stream authorised by a grant ends when the grant goes, without touching the
 // session, so the rest of the app keeps working.
 func TestEventsStreamEndsWithinOneHeartbeatWhenTheViewerLosesTheEnvironment(t *testing.T) {
+	t.Parallel()
 	const heartbeat = 50 * time.Millisecond
 	f := newEventsFix(t, dockertest.FakeConfig{}, heartbeat, 0)
 	f.addUser(t, "viewer", false)
@@ -824,6 +868,7 @@ func TestEventsStreamEndsWithinOneHeartbeatWhenTheViewerLosesTheEnvironment(t *t
 }
 
 func TestEventStreamEndsWhenTheSessionIdlesOutWithoutBeingTouched(t *testing.T) {
+	t.Parallel()
 	f := newEventsFix(t, dockertest.FakeConfig{}, 20*time.Millisecond, 0)
 	c := f.openStream(t, f.cookie, "")
 	var seen0 int64
@@ -848,6 +893,7 @@ func TestEventStreamEndsWhenTheSessionIdlesOutWithoutBeingTouched(t *testing.T) 
 }
 
 func TestEventStreamEndsAtItsMaximumLifetime(t *testing.T) {
+	t.Parallel()
 	f := newEventsFix(t, dockertest.FakeConfig{}, time.Hour, 0)
 	f.eventsMaxLifetime = 100 * time.Millisecond
 	f.h = f.build(t)
@@ -856,6 +902,7 @@ func TestEventStreamEndsAtItsMaximumLifetime(t *testing.T) {
 }
 
 func TestEventStreamKeepsRunningWhileTheSessionStaysValid(t *testing.T) {
+	t.Parallel()
 	f := newEventsFix(t, dockertest.FakeConfig{}, 20*time.Millisecond, 0)
 	c := f.openStream(t, f.cookie, "")
 	beats := 0
@@ -887,6 +934,7 @@ func TestEventStreamKeepsRunningWhileTheSessionStaysValid(t *testing.T) {
 // The merged feed of a swarm and the node on every event (plan 02-21, ENV-06, D-46).
 
 func TestEventsOfALocalEnvironmentCarryTheEnginesNameAsTheirNode(t *testing.T) {
+	t.Parallel()
 	f := newEventsFix(t, dockertest.FakeConfig{Hostname: "node-1"}, time.Hour, 0)
 	f.waitStream(t)
 	publish(f, "c1")
@@ -952,6 +1000,7 @@ func (f *swarmFix) openEvents(t *testing.T, ts *httptest.Server, lastID string) 
 }
 
 func TestSwarmEventStreamMergesEveryNodesEventsWithTheirNodeAndReplaysFromLastEventID(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	ts := httptest.NewServer(s.h)
 	defer ts.Close()

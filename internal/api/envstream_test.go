@@ -98,6 +98,7 @@ func refused(envID, ip string) envs.HealthEvent {
 }
 
 func TestEnvStreamSendsTheSnapshotFirstThenEnvStatusAndAgentConnected(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Remote")
 	c := f.openEnvStream(t, f.cookie, "")
@@ -136,6 +137,7 @@ func TestEnvStreamSendsTheSnapshotFirstThenEnvStatusAndAgentConnected(t *testing
 }
 
 func TestEnvStreamReplaysOnlyEventsAfterLastEventIDAndAnUnknownIDReplaysTheBuffer(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Remote")
 	var ids []string
@@ -173,6 +175,7 @@ func TestEnvStreamReplaysOnlyEventsAfterLastEventIDAndAnUnknownIDReplaysTheBuffe
 }
 
 func TestEnvStreamShowsACallerOnlyWhatTheyMayReadAndStopsAtThePingAfterAGrantIsWithdrawn(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	f.envStreamHeartbeat = 20 * time.Millisecond
 	f.h = f.build(t)
@@ -207,6 +210,7 @@ func TestEnvStreamShowsACallerOnlyWhatTheyMayReadAndStopsAtThePingAfterAGrantIsW
 }
 
 func TestEnvStreamSendsANoGrantUserAnEmptySnapshotAndNothingElse(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Secret")
 	f.addUser(t, "nobody", false)
@@ -223,6 +227,7 @@ func TestEnvStreamSendsANoGrantUserAnEmptySnapshotAndNothingElse(t *testing.T) {
 }
 
 func TestEnvStreamPingsAtTheConfiguredIntervalAndEndsWithinAPingOfSignOut(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	f.envStreamHeartbeat = 20 * time.Millisecond
 	f.h = f.build(t)
@@ -235,6 +240,7 @@ func TestEnvStreamPingsAtTheConfiguredIntervalAndEndsWithinAPingOfSignOut(t *tes
 }
 
 func TestEnvStreamEndsAtItsMaximumLifetime(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	f.envStreamMaxLifetime = 100 * time.Millisecond
 	f.h = f.build(t)
@@ -243,6 +249,7 @@ func TestEnvStreamEndsAtItsMaximumLifetime(t *testing.T) {
 }
 
 func TestEnvStreamAllowsFourPerUserAndRefusesTheFifthWith429(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	var conns []*sseConn
 	for range 4 {
@@ -276,6 +283,7 @@ func TestEnvStreamAllowsFourPerUserAndRefusesTheFifthWith429(t *testing.T) {
 }
 
 func TestEnvStreamWithoutASessionIs401(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	if c := f.openEnvStream(t, "", ""); c.status0() != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", c.status0())
@@ -283,6 +291,7 @@ func TestEnvStreamWithoutASessionIs401(t *testing.T) {
 }
 
 func TestEnvStreamDeliversARefusedEnrolmentToAnAdminWatching(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Remote")
 	c := f.openEnvStream(t, f.cookie, "")
@@ -305,6 +314,7 @@ func TestEnvStreamDeliversARefusedEnrolmentToAnAdminWatching(t *testing.T) {
 }
 
 func TestEnvStreamDeliversAManagerFailoverToAnAdminWatching(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Swarm")
 	c := f.openEnvStream(t, f.cookie, "")
@@ -320,6 +330,7 @@ func TestEnvStreamDeliversAManagerFailoverToAnAdminWatching(t *testing.T) {
 }
 
 func TestEnvStreamDeliversAProxyWarningToWhoeverHoldsSettingsReadAndToNobodyElse(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	f.envStreamHeartbeat = 20 * time.Millisecond
 	f.h = f.build(t)

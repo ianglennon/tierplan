@@ -51,6 +51,7 @@ func (f *agentFix) warnings(t *testing.T, cookie, csrf string) (int, []envWarnin
 }
 
 func TestTheEnvironmentWarningsListAnOfflineEnvironmentWithSinceAndReasonAndNothingForOnesThatAreFine(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	down := f.srv.NewEnvironment(t, "Edge")
 	fine := f.srv.NewEnvironment(t, "Fine")
@@ -84,6 +85,7 @@ func TestTheEnvironmentWarningsListAnOfflineEnvironmentWithSinceAndReasonAndNoth
 }
 
 func TestTheEnvironmentWarningsOfAUserWhoReadsOnlyOneEnvironmentAreThatEnvironmentsAlone(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	a := f.srv.NewEnvironment(t, "Alpha")
 	b := f.srv.NewEnvironment(t, "Beta")
@@ -120,6 +122,7 @@ func TestTheEnvironmentWarningsOfAUserWhoReadsOnlyOneEnvironmentAreThatEnvironme
 }
 
 func TestTheEnvironmentWarningsCountAgentsThatNeedAManualUpdateInOneItem(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Production")
 	f.connect(t, env, dockertest.FakeConfig{Hostname: "refusing", SwarmState: "active"}, swarmFacts("refusing", true, false))
@@ -136,6 +139,7 @@ func TestTheEnvironmentWarningsCountAgentsThatNeedAManualUpdateInOneItem(t *test
 }
 
 func TestAPendingEnvironmentIsALongWaitOnlyAfterSevenDays(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Waiting")
 	if _, got := f.warnings(t, f.cookie, f.csrf); len(got) != 0 {
@@ -149,6 +153,7 @@ func TestAPendingEnvironmentIsALongWaitOnlyAfterSevenDays(t *testing.T) {
 }
 
 func TestAFoldOfferIsAnItemOnlyForAnInstanceAdmin(t *testing.T) {
+	t.Parallel()
 	f := newFoldFix(t, nil)
 
 	_, got := f.warnings(t, f.cookie, f.csrf)
@@ -212,6 +217,7 @@ func (f *envFix) loopWarnings(t *testing.T, cookie, csrf string) []loopWarning {
 }
 
 func TestEnvWarningsRestartLoopNamesTheServiceItsFailuresAndTheLatestError(t *testing.T) {
+	t.Parallel()
 	f, e := loopEnv(t)
 	listServicesQuery(t, f, e, "")
 	got := f.loopWarnings(t, f.cookie, f.csrf)
@@ -229,6 +235,7 @@ func TestEnvWarningsRestartLoopNamesTheServiceItsFailuresAndTheLatestError(t *te
 }
 
 func TestEnvWarningsRestartLoopLeavesOutAMutedServiceAndComesBackWhenItIsUnmuted(t *testing.T) {
+	t.Parallel()
 	f, e := loopEnv(t)
 	listServicesQuery(t, f, e, "")
 	op := loopAs(t, f, e, "bell-operator", "operator")
@@ -247,6 +254,7 @@ func TestEnvWarningsRestartLoopLeavesOutAMutedServiceAndComesBackWhenItIsUnmuted
 }
 
 func TestEnvWarningsRestartLoopIsShownToAViewerOfTheEnvironmentAndToNobodyElse(t *testing.T) {
+	t.Parallel()
 	f, e := loopEnv(t)
 	listServicesQuery(t, f, e, "")
 	f.addUser(t, "bell-viewer", false)
@@ -300,6 +308,7 @@ func (f *envFix) containerLoopWarnings(t *testing.T, cookie, csrf string) []cont
 }
 
 func TestEnvWarningsRestartLoopContainerNamesTheContainerItsNodeAndTheLastExitCode(t *testing.T) {
+	t.Parallel()
 	f, e := containerLoopEnv(t)
 	got := f.containerLoopWarnings(t, f.cookie, f.csrf)
 	if len(got) != 1 {
@@ -316,6 +325,7 @@ func TestEnvWarningsRestartLoopContainerNamesTheContainerItsNodeAndTheLastExitCo
 }
 
 func TestEnvWarningsRestartLoopContainerLeavesOutAMutedContainerAndComesBackWhenItIsUnmuted(t *testing.T) {
+	t.Parallel()
 	f, e := containerLoopEnv(t)
 	op := loopAs(t, f, e, "bell-operator", "operator")
 	if rec := op(http.MethodPut, containerMutePath(e, "crashy"), ""); rec.code != http.StatusOK {
@@ -333,6 +343,7 @@ func TestEnvWarningsRestartLoopContainerLeavesOutAMutedContainerAndComesBackWhen
 }
 
 func TestEnvWarningsRestartLoopContainerIsShownToAViewerOfTheEnvironmentAndToNobodyElse(t *testing.T) {
+	t.Parallel()
 	f, e := containerLoopEnv(t)
 	f.addUser(t, "bell-viewer", false)
 	f.addEnvRole(t, "bell-viewer", e.ID, "viewer")
