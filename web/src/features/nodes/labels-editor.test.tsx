@@ -86,9 +86,12 @@ afterEach(() => {
 });
 
 // The impact check is debounced by a timer of the component's own. A test about that timing
-// runs it on a fake clock that also keeps moving with real time (shouldAdvanceTime), so that
-// findBy and waitFor keep polling, and moves it by exactly the debounce when it means to.
-const debounceClock = () => vi.useFakeTimers({ shouldAdvanceTime: true });
+// runs it on a fully fake clock: real time passing between two statements must not be able to
+// fire the debounce, or "not yet, one millisecond short" would be true only on a quiet machine.
+// The test moves the clock by exactly the debounce when it means to, and under it waits with
+// vi.waitFor, because Testing Library's waitFor and findBy schedule their polling on the faked
+// timers and so never poll.
+const debounceClock = () => vi.useFakeTimers();
 
 function problem(status: number, type: string, detail?: string) {
   return Response.json({ status, type, title: "x", ...(detail ? { detail } : {}) }, { status });
@@ -167,13 +170,13 @@ describe("NodeLabelsEditor", () => {
     await vi.advanceTimersByTimeAsync(LABEL_CHECK_DEBOUNCE_MS - 1);
     expect(impactCalls).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1);
-    await waitFor(() => expect(impactCalls).toHaveLength(1));
+    await vi.waitFor(() => expect(impactCalls).toHaveLength(1));
     expect(impactCalls[0]?.body).toEqual({ labels: { disk: "ssd", zone: "bbb" } });
     // Asked but not answered: still held.
     expect(isOff(save())).toBe(true);
     expect(screen.getByText("Checking services…")).toBeTruthy();
     open();
-    await waitFor(() => expect(isOff(save())).toBe(false));
+    await vi.waitFor(() => expect(isOff(save())).toBe(false));
     expect(screen.queryByText("Checking services…")).toBeNull();
     expect(impactCalls).toHaveLength(1);
   });
@@ -205,7 +208,7 @@ describe("NodeLabelsEditor", () => {
     fireEvent.change(fields[2] as HTMLElement, { target: { value: "com.dockerish" } });
     expect(screen.queryByText(/are reserved/)).toBeNull();
     await vi.advanceTimersByTimeAsync(LABEL_CHECK_DEBOUNCE_MS);
-    await waitFor(() => expect(isOff(save())).toBe(false));
+    await vi.waitFor(() => expect(isOff(save())).toBe(false));
   });
 
   it("refuses a name used twice and more than 64 labels", async () => {
@@ -222,7 +225,7 @@ describe("NodeLabelsEditor", () => {
     answerImpact = () => Response.json(impact({ version: 13, rows: [], changed: 1 }));
     await mount();
     editZone("b");
-    await waitFor(() => expect(isOff(save())).toBe(false), { timeout: 2000 });
+    await waitFor(() => expect(isOff(save())).toBe(false));
     fireEvent.click(save());
     await waitFor(() => expect(puts).toHaveLength(1));
     expect(puts[0]?.body).toEqual({ labels: { disk: "ssd", zone: "b" }, version: 13 });
@@ -239,7 +242,7 @@ describe("NodeLabelsEditor", () => {
       );
     await mount();
     fireEvent.click(screen.getByRole("button", { name: "Remove label disk" }));
-    await waitFor(() => expect(isOff(save())).toBe(false), { timeout: 2000 });
+    await waitFor(() => expect(isOff(save())).toBe(false));
     fireEvent.click(save());
     const dialog = await screen.findByRole("alertdialog", { name: "Apply label changes?" });
     expect(
@@ -263,7 +266,7 @@ describe("NodeLabelsEditor", () => {
   it("words a stale node, keeps what was typed and checks again for the node as it is now", async () => {
     await mount();
     editZone("b");
-    await waitFor(() => expect(isOff(save())).toBe(false), { timeout: 2000 });
+    await waitFor(() => expect(isOff(save())).toBe(false));
     answerPut = () => problem(409, "node_changed");
     fireEvent.click(save());
     const alert = await screen.findByRole("alert");
@@ -273,13 +276,13 @@ describe("NodeLabelsEditor", () => {
     expect(values()).toEqual(["ssd", "b"]);
     expect(puts).toHaveLength(1);
     // The check is asked again, so that the next save carries the version now.
-    await waitFor(() => expect(impactCalls).toHaveLength(2), { timeout: 2000 });
+    await waitFor(() => expect(impactCalls).toHaveLength(2));
   });
 
   it("shows Docker's own words for a refusal the swarm gave", async () => {
     await mount();
     editZone("b");
-    await waitFor(() => expect(isOff(save())).toBe(false), { timeout: 2000 });
+    await waitFor(() => expect(isOff(save())).toBe(false));
     answerPut = () => problem(502, "node_update_failed", "no leader elected");
     fireEvent.click(save());
     expect((await screen.findByRole("alert")).textContent).toContain(
@@ -292,15 +295,11 @@ describe("NodeLabelsEditor", () => {
     answerImpact = () => problem(503, "no_manager_connected");
     await mount();
     editZone("b");
-    const retry = await screen.findByRole(
-      "button",
-      { name: "Retry checking services" },
-      { timeout: 2000 },
-    );
+    const retry = await screen.findByRole("button", { name: "Retry checking services" });
     expect(isOff(save())).toBe(true);
     answerImpact = () => Response.json(impact());
     fireEvent.click(retry);
-    await waitFor(() => expect(isOff(save())).toBe(false), { timeout: 2000 });
+    await waitFor(() => expect(isOff(save())).toBe(false));
     expect(impactCalls).toHaveLength(2);
   });
 
