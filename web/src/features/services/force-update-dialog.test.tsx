@@ -3,6 +3,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -66,6 +67,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // sonner replays the toasts still active to the next Toaster that mounts, so a toast raised
+  // by one test (the started one, the lost-answer one) would be on the page of the next.
+  toast.dismiss();
   cleanup();
   gate = null;
   vi.unstubAllGlobals();

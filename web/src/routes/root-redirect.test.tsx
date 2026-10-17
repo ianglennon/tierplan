@@ -321,9 +321,12 @@ describe("recording the environment that was opened (D-31)", () => {
   });
 
   it("records only the environment the user stayed on", async () => {
+    fakeClock();
     stubInstance(false);
     list = () => Response.json({ items: [env("a", "alpha"), env("b", "bravo")] });
-    recordRecentTiming.delayMs = 400;
+    // Longer than the test may run, so the clock that follows real time cannot reach it on a
+    // slow machine: only the explicit advance below fires a timer.
+    recordRecentTiming.delayMs = 60_000;
     const router = createRouter({
       routeTree,
       history: createMemoryHistory({ initialEntries: ["/env/a"] }),
@@ -338,7 +341,14 @@ describe("recording the environment that was opened (D-31)", () => {
       await router.navigate({ to: "/env/$envId", params: { envId: "b" } });
     });
     await screen.findByRole("heading", { name: "env b" });
-    await waitFor(() => expect(puts()).toEqual(["b"]), { timeout: 3000 });
+    // Nothing is recorded while the delay has not passed, a's timer was cancelled by leaving it.
+    expect(puts()).toEqual([]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await waitFor(() => expect(puts()).toEqual(["b"]));
+    await settled(queryClient);
+    expect(puts()).toEqual(["b"]);
   });
 
   it("does not mind that recording fails", async () => {
