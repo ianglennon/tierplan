@@ -202,10 +202,14 @@ func TestEnvStreamShowsACallerOnlyWhatTheyMayReadAndStopsAtThePingAfterAGrantIsW
 		t.Fatal(err)
 	}
 	waitPings(t, c, 2) // at least one ping began after the grant went
+	// An env.status for A published before the grant went may still sit unread in c.frames, so
+	// c.frames cannot show a leak. The body is the one record ordered with the pings: assert on
+	// what was written after the second ping, and fence it with the next one.
+	mark := len(c.bodyString())
 	f.brk.Publish(refused(a.ID, "198.51.100.3"))
 	waitPings(t, c, 3)
-	if fr, ok := c.next(50 * time.Millisecond); ok {
-		t.Fatalf("a frame %+v reached the viewer after their grant was withdrawn and a ping had passed", fr)
+	if tail := c.bodyString()[mark:]; strings.Contains(tail, "event:") {
+		t.Fatalf("a frame reached the viewer after their grant was withdrawn and a ping had passed:\n%s", tail)
 	}
 }
 
