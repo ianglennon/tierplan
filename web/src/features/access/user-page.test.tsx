@@ -243,7 +243,7 @@ describe("the user page", () => {
     getUser = () => Response.json({ status: 500, title: "x", detail: "x" }, { status: 500 });
     renderAt(PAGE);
     // One automatic retry a second later comes first.
-    expect(await screen.findByText("Couldn't load users.", {}, { timeout: 3000 })).toBeTruthy();
+    expect(await screen.findByText("Couldn't load users.")).toBeTruthy();
     getUser = () => Response.json(user);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByRole("heading", { level: 2, name: "alice" })).toBeTruthy();
@@ -480,16 +480,14 @@ describe("the Profile card", () => {
     const save = screen.getByRole<HTMLButtonElement>("button", { name: "Save changes" });
     await waitFor(() => expect(save.disabled).toBe(false));
     fireEvent.click(save);
-    await waitFor(
-      () =>
-        expect(sent["PATCH /api/users/u1"]).toEqual({
-          displayName: "Mine",
-          email: "theirs@example.test",
-          updatedAt: "2026-10-08T09:00:00Z",
-        }),
-      { timeout: 5000 },
+    await waitFor(() =>
+      expect(sent["PATCH /api/users/u1"]).toEqual({
+        displayName: "Mine",
+        email: "theirs@example.test",
+        updatedAt: "2026-10-08T09:00:00Z",
+      }),
     );
-    expect(await screen.findByText("Profile saved.", undefined, { timeout: 5000 })).toBeTruthy();
+    expect(await screen.findByText("Profile saved.")).toBeTruthy();
   });
 
   it("shows the field message under the email when the server refuses it", async () => {

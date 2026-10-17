@@ -247,9 +247,7 @@ describe("the Sessions dialog (D-23)", () => {
     listStatus = 500;
     renderDialog();
     const d = await dialog();
-    expect(
-      await within(d).findByText("Couldn't load the sessions.", {}, { timeout: 4000 }),
-    ).toBeTruthy();
+    expect(await within(d).findByText("Couldn't load the sessions.")).toBeTruthy();
     listStatus = 200;
     fireEvent.click(within(d).getByRole("button", { name: "Retry" }));
     expect(await within(d).findByText("Firefox on Linux")).toBeTruthy();

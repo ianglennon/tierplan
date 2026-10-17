@@ -183,9 +183,7 @@ describe("the Profile dialog (D-24)", () => {
     const d = await dialog();
     // The shared query client retries once after a one-second delay, so the
     // error appears just past findByText's default one-second timeout.
-    expect(
-      await within(d).findByText("Couldn't load your profile.", undefined, { timeout: 5000 }),
-    ).toBeTruthy();
+    expect(await within(d).findByText("Couldn't load your profile.")).toBeTruthy();
     getStatus = 200;
     fireEvent.click(within(d).getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(field("Display name").value).toBe("Alice"));

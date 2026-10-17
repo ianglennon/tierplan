@@ -291,7 +291,7 @@ describe("ConfigList search", () => {
     );
     fireEvent.change(box, { target: { value: "nginx" } });
     expect(onSearch).not.toHaveBeenCalled();
-    await waitFor(() => expect(onSearch).toHaveBeenCalledWith("nginx"), { timeout: 2000 });
+    await waitFor(() => expect(onSearch).toHaveBeenCalledWith("nginx"));
   });
 });
 

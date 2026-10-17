@@ -330,9 +330,7 @@ describe("Saved backups: empty, loading and long names", () => {
     filesStatus = 500;
     renderPanel();
     // The query retries once, a second later, before it gives up.
-    expect(
-      await card().findByText("Couldn't load the saved backups.", {}, { timeout: 5000 }),
-    ).toBeTruthy();
+    expect(await card().findByText("Couldn't load the saved backups.")).toBeTruthy();
     expect(card().queryByText("No scheduled backups yet.")).toBeNull();
   });
 });

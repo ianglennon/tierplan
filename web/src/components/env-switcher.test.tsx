@@ -312,13 +312,13 @@ describe("EnvSwitcher (D-35)", () => {
     list = () => new Response("boom", { status: 500 });
     void queryClient.invalidateQueries({ queryKey: ["environments"] });
     fireEvent.click(button);
-    const item = await screen.findByText("Couldn't load environments", {}, { timeout: 4000 });
+    const item = await screen.findByText("Couldn't load environments");
     expect(item.closest("[aria-disabled=true]")).toBeTruthy();
     expect(within(button).getByText("alpha")).toBeTruthy();
     // The last list is still there to choose from.
     const group = screen.getByRole("group", { name: "Environments" });
     expect(within(group).getByRole("option", { name: /Zulu/ })).toBeTruthy();
-  }, 8000);
+  });
 
   it("shows only the Local socket badge, in the trigger and the list, so the name keeps its room", async () => {
     list = () =>

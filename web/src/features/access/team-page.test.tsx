@@ -313,7 +313,7 @@ describe("the team page states", () => {
     getTeam = () => Response.json({ status: 500, title: "x", detail: "x" }, { status: 500 });
     renderAt(PAGE);
     // One automatic retry a second later comes first.
-    expect(await screen.findByText("Couldn't load teams.", {}, { timeout: 3000 })).toBeTruthy();
+    expect(await screen.findByText("Couldn't load teams.")).toBeTruthy();
     getTeam = () => Response.json(team);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByRole("heading", { level: 2, name: "ops" })).toBeTruthy();
@@ -369,7 +369,7 @@ describe("the Members card states", () => {
     expect(within(table).getByRole("link", { name: "member-03" })).toBeTruthy();
     fireEvent.change(search, { target: { value: "nobody-like-this" } });
     expect(screen.getByText("No members match “nobody-like-this”.")).toBeTruthy();
-  }, 15_000);
+  });
 
   it("scrolls the Add members list inside 320px", async () => {
     users = Array.from({ length: 200 }, (_, i) =>
