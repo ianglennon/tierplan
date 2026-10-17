@@ -92,6 +92,7 @@ func (r *authRecorder) list(t *testing.T) auditListResp {
 }
 
 func TestAuditListPagesNewestFirstWithACursorAndTheRetentionSetting(t *testing.T) {
+	t.Parallel()
 	f := newAuditFix(t)
 	base := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	for range 120 {
@@ -126,6 +127,7 @@ func TestAuditListPagesNewestFirstWithACursorAndTheRetentionSetting(t *testing.T
 }
 
 func TestAuditListEntriesCarryWhoWhatWhereWhenAndNothingSecret(t *testing.T) {
+	t.Parallel()
 	f := newAuditFix(t)
 	f.log(t, time.Date(2026, 3, 1, 8, 30, 0, 0, time.UTC), "alice", "settings.updated", "Mozilla/5.0")
 	rec := f.get(t, "/api/audit?user=alice", f.cookie)
@@ -156,6 +158,7 @@ func TestAuditListEntriesCarryWhoWhatWhereWhenAndNothingSecret(t *testing.T) {
 }
 
 func TestAuditListFiltersByUserActionsAndInclusiveTimeRange(t *testing.T) {
+	t.Parallel()
 	f := newAuditFix(t)
 	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	for i, s := range []struct{ actor, action string }{
@@ -182,6 +185,7 @@ func TestAuditListFiltersByUserActionsAndInclusiveTimeRange(t *testing.T) {
 }
 
 func TestAuditListClampsTheLimitAndRejectsAMalformedTimeWith422(t *testing.T) {
+	t.Parallel()
 	f := newAuditFix(t)
 	base := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	for range 130 {
@@ -204,6 +208,7 @@ func TestAuditListClampsTheLimitAndRejectsAMalformedTimeWith422(t *testing.T) {
 }
 
 func TestAuditActorsListsTheDistinctNamesSeen(t *testing.T) {
+	t.Parallel()
 	f := newAuditFix(t)
 	base := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	for _, a := range []string{"zed", "bob", "zed", "bob"} {
@@ -216,6 +221,7 @@ func TestAuditActorsListsTheDistinctNamesSeen(t *testing.T) {
 }
 
 func TestAuditExportCSVIsADownloadThatCannotInjectFormulas(t *testing.T) {
+	t.Parallel()
 	f := newAuditFix(t)
 	// Eight hours after sign-in: inside the 12 hour idle limit.
 	at := time.Date(2026, 1, 1, 8, 4, 5, 0, time.UTC)
@@ -246,6 +252,7 @@ func TestAuditExportCSVIsADownloadThatCannotInjectFormulas(t *testing.T) {
 }
 
 func TestAuditExportJSONStreamsTheFilteredEntriesAndRefusesOtherFormats(t *testing.T) {
+	t.Parallel()
 	f := newAuditFix(t)
 	// Eight hours after sign-in: inside the 12 hour idle limit.
 	at := time.Date(2026, 1, 1, 8, 4, 5, 0, time.UTC)
@@ -273,6 +280,7 @@ func TestAuditExportJSONStreamsTheFilteredEntriesAndRefusesOtherFormats(t *testi
 }
 
 func TestAuditEndpointsRefuseAUserWithoutAuditReadAndAuditTheDenial(t *testing.T) {
+	t.Parallel()
 	f := newAuditFix(t)
 	f.addUser(t, "viewer", false)
 	cookie, _ := f.signIn(t, "viewer", false)
@@ -298,6 +306,7 @@ func TestAuditEndpointsRefuseAUserWithoutAuditReadAndAuditTheDenial(t *testing.T
 }
 
 func TestAuditEndpointsRefuseAnAnonymousCaller(t *testing.T) {
+	t.Parallel()
 	f := newAuditFix(t)
 	for _, path := range []string{"/api/audit", "/api/audit/actors", "/api/audit/export"} {
 		if rec := f.get(t, path, ""); rec.code != http.StatusUnauthorized {
@@ -307,6 +316,7 @@ func TestAuditEndpointsRefuseAnAnonymousCaller(t *testing.T) {
 }
 
 func TestAuditReadingAndExportingAreNotAudited(t *testing.T) {
+	t.Parallel()
 	f := newAuditFix(t)
 	before := len(f.audits(t, audit.ActionPermissionDenied)) + len(f.audits(t, "audit.read")) + len(f.audits(t, "audit.exported"))
 	f.get(t, "/api/audit", f.cookie)
@@ -392,6 +402,7 @@ func (r auditListResp) actions(skip string) []string {
 }
 
 func TestAuditScopeAnEnvAdminSeesTheirEnvironmentsEntriesAndNoInstanceLevelEvents(t *testing.T) {
+	t.Parallel()
 	f := newScopeFix(t)
 
 	carol := f.as(t, "carol", "/api/audit").list(t)
@@ -417,6 +428,7 @@ func TestAuditScopeAnEnvAdminSeesTheirEnvironmentsEntriesAndNoInstanceLevelEvent
 }
 
 func TestAuditScopeActorsAndBothExportsHoldOnlyTheScopedEntries(t *testing.T) {
+	t.Parallel()
 	f := newScopeFix(t)
 
 	rec := f.as(t, "carol", "/api/audit/actors")
@@ -448,6 +460,7 @@ func TestAuditScopeActorsAndBothExportsHoldOnlyTheScopedEntries(t *testing.T) {
 }
 
 func TestAuditScopeAnOperatorAndAViewerAreRefusedAndTheRefusalIsAudited(t *testing.T) {
+	t.Parallel()
 	f := newScopeFix(t)
 	for _, tc := range []struct{ user, path string }{
 		{"oscar", "/api/audit"}, {"vince", "/api/audit/actors"}, {"oscar", "/api/audit/export?format=csv"},
@@ -475,6 +488,7 @@ func TestAuditScopeAnOperatorAndAViewerAreRefusedAndTheRefusalIsAudited(t *testi
 }
 
 func TestAuditScopeCursorsPageExactlyTheScopedEntriesOnceEachNewestFirst(t *testing.T) {
+	t.Parallel()
 	f := newAuditFix(t)
 	f.addEnvUser(t, "carol", scopeEnvA, "admin")
 	at := time.Date(2026, 3, 1, 8, 0, 0, 0, time.UTC)
@@ -512,6 +526,7 @@ func TestAuditScopeCursorsPageExactlyTheScopedEntriesOnceEachNewestFirst(t *test
 }
 
 func TestAuditScopeAnAdminOfEveryEnvironmentSeesEveryEntryWithAnEnvironmentAndNoOther(t *testing.T) {
+	t.Parallel()
 	f := newScopeFix(t)
 	f.addAllEnvAdmin(t, "gail")
 	got := f.as(t, "gail", "/api/audit").list(t)
@@ -526,6 +541,7 @@ func TestAuditScopeAnAdminOfEveryEnvironmentSeesEveryEntryWithAnEnvironmentAndNo
 }
 
 func TestAuditEntriesOfADeletedUserReadAsDeletedAndTheSignedRowsAreUntouched(t *testing.T) {
+	t.Parallel()
 	f := newAuditFix(t)
 	f.addUser(t, "alice", false)
 	at := time.Date(2026, 3, 1, 8, 0, 0, 0, time.UTC)
@@ -621,6 +637,7 @@ func targetsOf(r auditListResp) []string {
 }
 
 func TestAuditBulkListReturnsOnlyThatOperationsRowsNewestFirst(t *testing.T) {
+	t.Parallel()
 	f := newBulkFix(t)
 	got := f.get(t, "/api/audit?bulk="+bulkOne, f.cookie).list(t)
 	if fmt.Sprint(targetsOf(got)) != "[one-b one-a2 one-a1]" {
@@ -646,6 +663,7 @@ func TestAuditBulkListReturnsOnlyThatOperationsRowsNewestFirst(t *testing.T) {
 }
 
 func TestAuditBulkExportCSVAndJSONHoldOnlyThatOperationsRows(t *testing.T) {
+	t.Parallel()
 	f := newBulkFix(t)
 	rec := f.get(t, "/api/audit/export?format=csv&bulk="+bulkOne, f.cookie)
 	if rec.code != http.StatusOK {
@@ -682,6 +700,7 @@ func TestAuditBulkExportCSVAndJSONHoldOnlyThatOperationsRows(t *testing.T) {
 }
 
 func TestAuditBulkIsAndedWithTheEnvAdminScope(t *testing.T) {
+	t.Parallel()
 	f := newBulkFix(t)
 	const bulkOnB = "018f0000-0000-7000-8000-0000000000b3"
 	at := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
@@ -710,6 +729,7 @@ func TestAuditBulkIsAndedWithTheEnvAdminScope(t *testing.T) {
 }
 
 func TestAuditBulkThatIsNotAUUIDIsRefused422OnTheListAndTheExport(t *testing.T) {
+	t.Parallel()
 	f := newBulkFix(t)
 	for _, bad := range []string{"not-a-uuid", "018f0000", "x' OR '1'='1", "018f0000-0000-7000-8000-00000000000g"} {
 		for _, path := range []string{"/api/audit?bulk=", "/api/audit/export?format=csv&bulk=", "/api/audit/export?format=json&bulk="} {

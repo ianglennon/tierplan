@@ -538,6 +538,7 @@ func (f *authFixture) sessionCount(t *testing.T) int {
 // --- POST /api/auth/login --------------------------------------------------
 
 func TestLoginSignsInWithABrowserSessionCookieAndReturnsTheUserAndCSRFToken(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody("Admin", goodPassword, false)})
 	if rec.Code != http.StatusOK {
@@ -572,6 +573,7 @@ func TestLoginSignsInWithABrowserSessionCookieAndReturnsTheUserAndCSRFToken(t *t
 }
 
 func TestLoginRememberMeSetsAThirtyDayCookieAndSession(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody("admin", goodPassword, true)})
 	if rec.Code != http.StatusOK {
@@ -588,6 +590,7 @@ func TestLoginRememberMeSetsAThirtyDayCookieAndSession(t *testing.T) {
 }
 
 func TestLoginOverHTTPSUsesTheHostPrefixedSecureCookie(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{PublicURL: "https://bayplan.example"})
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody("admin", goodPassword, false)})
 	if rec.Code != http.StatusOK {
@@ -600,6 +603,7 @@ func TestLoginOverHTTPSUsesTheHostPrefixedSecureCookie(t *testing.T) {
 }
 
 func TestLoginUnknownUserWrongPasswordLockedAndDisabledAreByteIdentical(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addUser(t, "locked", false)
 	f.addUser(t, "off", false)
@@ -650,6 +654,7 @@ func TestLoginUnknownUserWrongPasswordLockedAndDisabledAreByteIdentical(t *testi
 }
 
 func TestLoginWithAnExistingSessionRotatesIt(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	oldCookie, oldCSRF := f.signIn(t, "admin", false)
 
@@ -676,6 +681,7 @@ func TestLoginWithAnExistingSessionRotatesIt(t *testing.T) {
 }
 
 func TestLoginWhileHoldingASessionStillNeedsItsCSRFToken(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, _ := f.signIn(t, "admin", false)
 	rec := f.call(t, authReq{
@@ -690,6 +696,7 @@ func TestLoginWhileHoldingASessionStillNeedsItsCSRFToken(t *testing.T) {
 }
 
 func TestLoginIsRateLimitedPerAddressWithTheSameError(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.limiter = auth.NewIPLimiter(time.Hour, 2, time.Hour, f.clk.now)
 	h := f.build(t)
@@ -711,6 +718,7 @@ func TestLoginIsRateLimitedPerAddressWithTheSameError(t *testing.T) {
 }
 
 func TestLoginAndFailedLoginAreAuditedWithIPAndUserAgent(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody("admin", "wrong wrong wrong", false)})
 	f.signIn(t, "admin", false)
@@ -726,6 +734,7 @@ func TestLoginAndFailedLoginAreAuditedWithIPAndUserAgent(t *testing.T) {
 }
 
 func TestLoginFiveWrongPasswordsLockTheAccountAndAuditIt(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	for range 5 {
 		f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody("admin", "wrong wrong wrong", false)})
@@ -741,6 +750,7 @@ func TestLoginFiveWrongPasswordsLockTheAccountAndAuditIt(t *testing.T) {
 }
 
 func TestLoginNeverEchoesOrLogsThePassword(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	const secret = "an-attempted-secret-9876"
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody("admin", secret, false)})
@@ -758,6 +768,7 @@ func TestLoginNeverEchoesOrLogsThePassword(t *testing.T) {
 // third string is a valid-looking name, so only "no account matched" can keep it
 // out.
 func TestLoginWithAPasswordTypedAsTheUsernameLeavesNoTraceInTheAuditLogItsExportsOrTheLog(t *testing.T) {
+	t.Parallel()
 	f := newAuditFix(t)
 	typed := []string{"Tr0ub4dor&3 hunter", "correct horse battery staple!", "hunter2hunter2"}
 	for _, name := range typed {
@@ -809,6 +820,7 @@ func TestLoginWithAPasswordTypedAsTheUsernameLeavesNoTraceInTheAuditLogItsExport
 }
 
 func TestLoginRejectsAnOversizedBodyFieldsWithoutTouchingTheAccount(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody(strings.Repeat("x", 65), goodPassword, false)})
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -893,6 +905,7 @@ func (f *authFixture) addTeamRole(t *testing.T, teamID, envID, role string) {
 }
 
 func TestMeReturnsTheUserCSRFTokenAndEffectivePermissions(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/me", cookie: cookie})
@@ -929,6 +942,7 @@ func TestMeReturnsTheUserCSRFTokenAndEffectivePermissions(t *testing.T) {
 }
 
 func TestMeForAUserWithNoRoleHasEmptyPermissionListsNotNull(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addUser(t, "plain", false)
 	cookie, _ := f.signIn(t, "plain", false)
@@ -950,6 +964,7 @@ func TestMeForAUserWithNoRoleHasEmptyPermissionListsNotNull(t *testing.T) {
 }
 
 func TestMeForTheFirstAdminIsAnInstanceAdminWithOneAllEnvironmentsEntry(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	got, raw := f.getMe(t, "admin")
 	if !got.User.InstanceAdmin || got.User.DisplayName != "" {
@@ -997,6 +1012,7 @@ func TestMeForTheFirstAdminIsAnInstanceAdminWithOneAllEnvironmentsEntry(t *testi
 }
 
 func TestMeShowsATeamAndADirectGrantAsSourcesOfTheHigherRole(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addUser(t, "dev", false)
 	f.addEnvRole(t, "dev", "env-a", "viewer")
@@ -1023,6 +1039,7 @@ func TestMeShowsATeamAndADirectGrantAsSourcesOfTheHigherRole(t *testing.T) {
 }
 
 func TestMeListsTheActiveInstanceAdminsOnlyForAUserWithNoEnvironmentAccess(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addInstanceAdmin(t, "zed")
 	f.addInstanceAdmin(t, "gone")
@@ -1053,6 +1070,7 @@ func TestMeListsTheActiveInstanceAdminsOnlyForAUserWithNoEnvironmentAccess(t *te
 }
 
 func TestMeWithoutASessionIs401AndAuditedAsADeniedRead(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/me"})
 	if rec.Code != http.StatusUnauthorized {
@@ -1065,6 +1083,7 @@ func TestMeWithoutASessionIs401AndAuditedAsADeniedRead(t *testing.T) {
 }
 
 func TestMeWithAGarbageOrForeignCookieIs401(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	for _, v := range []string{"garbage", strings.Repeat("A", 43), strings.Repeat("A", 5000)} {
 		if rec := f.call(t, authReq{method: http.MethodGet, path: "/api/me", cookie: v}); rec.Code != http.StatusUnauthorized {
@@ -1074,6 +1093,7 @@ func TestMeWithAGarbageOrForeignCookieIs401(t *testing.T) {
 }
 
 func TestAnHTTPSInstanceIgnoresABareSessionCookie(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{PublicURL: "https://bayplan.example"})
 	raw, _ := f.signIn(t, "admin", false)
 	me := func(name string) int {
@@ -1093,6 +1113,7 @@ func TestAnHTTPSInstanceIgnoresABareSessionCookie(t *testing.T) {
 }
 
 func TestAPlainHTTPInstanceIgnoresAHostPrefixedCookie(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	raw, _ := f.signIn(t, "admin", false)
 	me := func(name string) int {
@@ -1112,6 +1133,7 @@ func TestAPlainHTTPInstanceIgnoresAHostPrefixedCookie(t *testing.T) {
 }
 
 func TestMeSessionSurvivesAServerRestart(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	restarted := f.build(t) // new Authenticator and Login, same database
@@ -1127,6 +1149,7 @@ func TestMeSessionSurvivesAServerRestart(t *testing.T) {
 }
 
 func TestMeSessionEndsAfterTwelveHoursIdleButARememberedOneDoesNot(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	plain, _ := f.signIn(t, "admin", false)
 	kept, _ := f.signIn(t, "admin", true)
@@ -1147,6 +1170,7 @@ func TestMeSessionEndsAfterTwelveHoursIdleButARememberedOneDoesNot(t *testing.T)
 // --- POST /api/auth/logout -------------------------------------------------
 
 func TestLogoutEndsOnlyThisDevicesSessionClearsTheCookieAndIsAudited(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	phone, _ := f.signIn(t, "admin", false)
 	laptop, laptopCSRF := f.signIn(t, "admin", true)
@@ -1172,6 +1196,7 @@ func TestLogoutEndsOnlyThisDevicesSessionClearsTheCookieAndIsAudited(t *testing.
 }
 
 func TestLogoutWithoutAValidCSRFTokenIs403AndKeepsTheSession(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	for name, token := range map[string]string{"missing": "", "wrong": "not-the-token", "truncated": csrf[:8]} {
@@ -1193,6 +1218,7 @@ func TestLogoutWithoutAValidCSRFTokenIs403AndKeepsTheSession(t *testing.T) {
 }
 
 func TestLogoutAnotherSessionsTokenIsRefused(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	a, _ := f.signIn(t, "admin", false)
 	_, bCSRF := f.signIn(t, "admin", false)
@@ -1203,6 +1229,7 @@ func TestLogoutAnotherSessionsTokenIsRefused(t *testing.T) {
 }
 
 func TestLogoutWithoutASessionOrWithAnExpiredOneIs401(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	if rec := f.call(t, authReq{method: http.MethodPost, path: "/api/auth/logout"}); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("no session: %d, want 401", rec.Code)
@@ -1215,6 +1242,7 @@ func TestLogoutWithoutASessionOrWithAnExpiredOneIs401(t *testing.T) {
 }
 
 func TestMutationFromAnotherOriginIsRefusedBeforeLogin(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{PublicURL: "https://bayplan.example"})
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(loginBody("admin", goodPassword, false)))
 	req.Header.Set("Content-Type", "application/json")
