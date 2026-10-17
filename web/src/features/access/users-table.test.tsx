@@ -326,10 +326,15 @@ describe("Regenerate invite link", () => {
 const searchField = () =>
   screen.getByRole("searchbox", { name: "Search users" }) as HTMLInputElement;
 const typeSearch = (value: string) => fireEvent.change(searchField(), { target: { value } });
-const bodyRows = () =>
-  within(screen.getByRole("table", { name: "Users" }))
-    .getAllByRole("row")
-    .slice(1);
+// The table and its rows are found by DOM structure, not by role: a role query works out the
+// accessible role and name of every element it visits, which is slow over 500 rows, and what
+// these tests count is the rows, not how they are exposed.
+const usersTable = (): HTMLTableElement => {
+  const table = document.querySelector<HTMLTableElement>('table[aria-label="Users"]');
+  if (!table) throw new Error("the Users table is not on screen");
+  return table;
+};
+const bodyRows = () => Array.from(usersTable().querySelectorAll("tbody tr"));
 
 describe("UsersTable search", () => {
   beforeEach(() => {
@@ -493,18 +498,31 @@ describe("UsersTable with many users", () => {
     renderTable();
     expect(await screen.findByText("500 users")).toBeTruthy();
     expect(bodyRows()).toHaveLength(500);
-    for (const th of screen.getAllByRole("columnheader")) {
+    const headers = Array.from(usersTable().querySelectorAll("thead th"));
+    expect(headers.length).toBeGreaterThan(0);
+    for (const th of headers) {
       expect(th.className).toContain("sticky");
       expect(th.className).toContain("top-0");
       expect(th.className).toContain("h-12");
     }
-    expect(screen.queryByRole("button", { name: /next|previous/i })).toBeNull();
-    expect(screen.queryByRole("navigation", { name: /pagination/i })).toBeNull();
+    // A pager would sit in the toolbar or after the table, never inside a row, so only what
+    // is outside the table body is looked at.
+    const outsideBody = Array.from(
+      document.body.querySelectorAll("button, nav, [role='navigation']"),
+    ).filter((el) => !el.closest("tbody"));
+    const nameOf = (el: Element) =>
+      `${el.getAttribute("aria-label") ?? ""} ${el.textContent ?? ""}`;
+    expect(
+      outsideBody.filter((el) => el.matches("button") && /next|previous/i.test(nameOf(el))),
+    ).toEqual([]);
+    expect(
+      outsideBody.filter((el) => !el.matches("button") && /pagination/i.test(nameOf(el))),
+    ).toEqual([]);
 
     typeSearch("user042");
     expect(bodyRows()).toHaveLength(1);
     expect(screen.getByText("500 users")).toBeTruthy();
-  }, 20_000);
+  });
 });
 
 describe("UsersTable on a phone", () => {
