@@ -148,6 +148,7 @@ func (f *Fake) resizeExec(w http.ResponseWriter, r *http.Request, id string) {
 	f.execs.mu.Lock()
 	f.execs.resizes = append(f.execs.resizes, fmt.Sprintf("h=%d&w=%d", h, wd))
 	f.execs.mu.Unlock()
+	f.await.notify()
 	w.WriteHeader(http.StatusOK)
 }
 

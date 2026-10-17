@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -18,8 +19,8 @@ import (
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/shells"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -61,7 +62,7 @@ func newShellFixOn(t *testing.T, cfg dockertest.FakeConfig, tune func(*envFix)) 
 	f.h = f.build(t)
 	e := f.add(t)
 	// A write goes only to a node the monitor has seen online.
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	srv := httptest.NewServer(f.h)
 	t.Cleanup(srv.Close)
 	return &shellFix{envFix: f, env: e, srv: srv}
@@ -247,15 +248,49 @@ func (f *shellFix) shellAudits(t *testing.T) []shellAuditRow {
 	return out
 }
 
-// waitShellRows waits until n shell.* rows are written and returns them.
+// waitShellRows waits until n shell.* rows are written and returns them. It reads the rows
+// when the registry changes, and the registry also changes when an end has finished (the
+// audit of the end has been written by then), so it needs no poll. The shell.opened row is
+// written before the open answers, which is before any test calls this.
 func (f *shellFix) waitShellRows(t *testing.T, n int) []shellAuditRow {
 	t.Helper()
 	var rows []shellAuditRow
-	waitFor(t, "the shell audit rows", func() bool {
+	if err := f.shellsReg.Await(testsupport.Context(t), func() bool {
 		rows = f.shellAudits(t)
 		return len(rows) >= n
-	})
+	}); err != nil {
+		t.Fatalf("waiting for %d shell audit rows: %v; there are %d: %+v", n, err, len(rows), rows)
+	}
 	return rows
+}
+
+// awaitNoShells waits until no session is left in the shells registry, naming what it waits
+// for if the test's context ends first.
+func (f *shellFix) awaitNoShells(t *testing.T, what string) {
+	t.Helper()
+	if err := f.shellsReg.Await(testsupport.Context(t), func() bool { return len(f.shellsReg.List(shells.Filter{})) == 0 }); err != nil {
+		t.Fatalf("waiting for %s: %v; %d sessions are still open", what, err, len(f.shellsReg.List(shells.Filter{})))
+	}
+}
+
+// shellTicks is the clock of the bridge's checks, which the test turns by hand: each send is
+// one tick of the idle and access checks, and returns once the bridge has taken it.
+type shellTicks struct{ ch chan time.Time }
+
+func newShellTicks() *shellTicks { return &shellTicks{ch: make(chan time.Time)} }
+
+func (h *shellTicks) controls() shells.Controls { return shells.Controls{Ticks: h.ch} }
+
+// tick sends one tick and waits for the bridge to take it. The check it starts runs to its
+// end before the bridge takes another tick, so the next send completing proves this one's
+// check is done.
+func (h *shellTicks) tick(t testing.TB) {
+	t.Helper()
+	select {
+	case h.ch <- time.Now():
+	case <-testsupport.Context(t).Done():
+		t.Fatal("the shell bridge did not take a tick; no session is watching")
+	}
 }
 
 func TestShellOpenCreatesTheExecWithATTYAndAPendingSession(t *testing.T) {
@@ -320,13 +355,8 @@ func TestShellWebSocketCarriesTheTerminalBytesBothWaysAndReportsTheExitCode(t *t
 	if err := c.Write(ctx, websocket.MessageText, []byte(`{"type":"resize","cols":100,"rows":30}`)); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the resize to reach the engine", func() bool {
-		for _, r := range f.fake.Resizes() {
-			if r == "h=30&w=100" {
-				return true
-			}
-		}
-		return false
+	awaitFake(t, f.fake, "the resize to reach the engine", func() bool {
+		return slices.Contains(f.fake.Resizes(), "h=30&w=100")
 	})
 
 	sendBinary(t, c, "exit 2\n")
@@ -402,7 +432,7 @@ func TestShellClosingTheSocketEndsTheSessionAndCannotBeReattached(t *testing.T) 
 	if err := c.Close(websocket.StatusNormalClosure, ""); err != nil {
 		t.Logf("close: %v", err)
 	}
-	waitFor(t, "the session to leave the registry", func() bool { return len(f.shellsReg.List(shells.Filter{})) == 0 })
+	f.awaitNoShells(t, "the session to leave the registry")
 	rows := f.waitShellRows(t, 2)
 	closed := rows[1]
 	if closed.Action != audit.ActionShellClosed || closed.Details["reason"] != "disconnected" || closed.Details["still_running"] != "true" {
@@ -568,7 +598,7 @@ func TestShellASessionThatIsNotAttachedInTimeIsEndedItsExecClosedAndTheEndAudite
 	f := newShellFix(t, func(f *envFix) { f.shellsPending = 150 * time.Millisecond })
 	s := f.session(t)
 
-	waitFor(t, "the session to expire", func() bool { return len(f.shellsReg.List(shells.Filter{})) == 0 })
+	f.awaitNoShells(t, "the session to expire")
 	rows := f.waitShellRows(t, 2)
 	closed := rows[1]
 	if closed.Action != audit.ActionShellClosed || closed.Details["sid"] != s.SessionID || closed.Details["reason"] != "expired" || closed.Details["still_running"] != "true" {
@@ -602,9 +632,10 @@ func (c *handClock) AfterFunc(d time.Duration, f func()) func() bool {
 
 func TestShellIdleAShellForgottenForTheInstancesLimitIsWarnedAndClosedAndTheEndAudited(t *testing.T) {
 	clk := &handClock{now: time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)}
+	ticks := newShellTicks()
 	f := newShellFix(t, func(f *envFix) {
 		f.shellsReg = shells.NewRegistry(clk)
-		f.shellsControls = shells.Controls{TickInterval: 5 * time.Millisecond}
+		f.shellsControls = ticks.controls()
 		f.inst.ApplyShellLimits(5, 10) // the instance's limit, not the bridge's, decides
 	})
 	s := f.session(t)
@@ -613,10 +644,12 @@ func TestShellIdleAShellForgottenForTheInstancesLimitIsWarnedAndClosedAndTheEndA
 	readUntilBinary(t, c, "up")
 
 	clk.Advance(4 * time.Minute)
+	ticks.tick(t)
 	if w := readControl(t, c, "idle_warning"); w.Seconds != 60 {
 		t.Errorf("warning = %+v, want 60 seconds", w)
 	}
 	clk.Advance(time.Minute)
+	ticks.tick(t)
 	if ctl := readControl(t, c, "closed"); ctl.Reason != "idle" {
 		t.Errorf("closed frame = %+v, want reason idle", ctl)
 	}
@@ -625,7 +658,7 @@ func TestShellIdleAShellForgottenForTheInstancesLimitIsWarnedAndClosedAndTheEndA
 	if rows[1].Action != audit.ActionShellClosed || rows[1].Details["reason"] != "idle" {
 		t.Errorf("closed row = %+v, want reason idle", rows[1])
 	}
-	waitFor(t, "the session to leave the registry", func() bool { return len(f.shellsReg.List(shells.Filter{})) == 0 })
+	f.awaitNoShells(t, "the session to leave the registry")
 }
 
 // The refusals (plan 04-23, D-31, D-34, D-35, D-36, P3 D-10): each one answers before any
@@ -814,26 +847,17 @@ func (f *shellFix) openAs(t *testing.T, cookie, csrf string) *websocket.Conn {
 	return c
 }
 
-// closedWithin reads until the closed frame, which must come within a second of start.
-func closedWithin(t *testing.T, c *websocket.Conn, start time.Time) shells.Control {
-	t.Helper()
-	ctl := readControl(t, c, "closed")
-	if took := time.Since(start); took > 2*time.Second {
-		t.Errorf("the session took %v to close after the access went", took)
-	}
-	return ctl
-}
-
 func TestShellAccessLostWhenTheShellPermissionIsRemovedEndsTheSessionAndAuditsTheReason(t *testing.T) {
-	f := newShellFix(t, func(f *envFix) { f.shellsControls = shells.Controls{TickInterval: 20 * time.Millisecond} })
+	ticks := newShellTicks()
+	f := newShellFix(t, func(f *envFix) { f.shellsControls = ticks.controls() })
 	cookie, csrf := f.operatorWithShell(t, "olive")
 	c := f.openAs(t, cookie, csrf)
 
-	start := time.Now()
 	if _, err := f.st.Write.Exec(`DELETE FROM assignment_extras WHERE assignment_id = ?`, "ra-olive-"+f.env.ID); err != nil {
 		t.Fatal(err)
 	}
-	if ctl := closedWithin(t, c, start); ctl.Reason != "access_lost" {
+	ticks.tick(t) // the next check finds the access gone
+	if ctl := readControl(t, c, "closed"); ctl.Reason != "access_lost" {
 		t.Errorf("closed frame = %+v, want reason access_lost", ctl)
 	}
 	drain(t, c)
@@ -841,19 +865,20 @@ func TestShellAccessLostWhenTheShellPermissionIsRemovedEndsTheSessionAndAuditsTh
 	if rows[1].Action != audit.ActionShellClosed || rows[1].Details["reason"] != "access_lost" || rows[1].Actor != "id-olive" {
 		t.Errorf("closed row = %+v, want olive's shell closed with reason access_lost", rows[1])
 	}
-	waitFor(t, "the session to leave the registry", func() bool { return len(f.shellsReg.List(shells.Filter{})) == 0 })
+	f.awaitNoShells(t, "the session to leave the registry")
 }
 
 func TestShellAccessLostWhenTheEnvironmentGrantGoesEndsTheSession(t *testing.T) {
-	f := newShellFix(t, func(f *envFix) { f.shellsControls = shells.Controls{TickInterval: 20 * time.Millisecond} })
+	ticks := newShellTicks()
+	f := newShellFix(t, func(f *envFix) { f.shellsControls = ticks.controls() })
 	cookie, csrf := f.operatorWithShell(t, "olive")
 	c := f.openAs(t, cookie, csrf)
 
-	start := time.Now()
 	if _, err := f.st.Write.Exec(`DELETE FROM role_assignments WHERE id = ?`, "ra-olive-"+f.env.ID); err != nil {
 		t.Fatal(err)
 	}
-	if ctl := closedWithin(t, c, start); ctl.Reason != "access_lost" {
+	ticks.tick(t) // the next check finds the access gone
+	if ctl := readControl(t, c, "closed"); ctl.Reason != "access_lost" {
 		t.Errorf("closed frame = %+v, want reason access_lost", ctl)
 	}
 	drain(t, c)
@@ -863,15 +888,16 @@ func TestShellAccessLostWhenTheEnvironmentGrantGoesEndsTheSession(t *testing.T) 
 }
 
 func TestShellAccessLostWhenTheUserSignsOutEndsTheSession(t *testing.T) {
-	f := newShellFix(t, func(f *envFix) { f.shellsControls = shells.Controls{TickInterval: 20 * time.Millisecond} })
+	ticks := newShellTicks()
+	f := newShellFix(t, func(f *envFix) { f.shellsControls = ticks.controls() })
 	cookie, csrf := f.operatorWithShell(t, "olive")
 	c := f.openAs(t, cookie, csrf)
 
-	start := time.Now()
 	if _, err := f.st.Write.Exec(`DELETE FROM sessions WHERE user_id = ?`, "id-olive"); err != nil {
 		t.Fatal(err)
 	}
-	if ctl := closedWithin(t, c, start); ctl.Reason != "access_lost" {
+	ticks.tick(t) // the next check finds the access gone
+	if ctl := readControl(t, c, "closed"); ctl.Reason != "access_lost" {
 		t.Errorf("closed frame = %+v, want reason access_lost", ctl)
 	}
 	drain(t, c)
@@ -897,10 +923,14 @@ func TestShellAccessAnAdministratorEndingASessionTellsItsBrowserAndAuditsIt(t *t
 }
 
 func TestShellAccessAShellOfSomeoneWhoKeepsTheirAccessIsLeftAlone(t *testing.T) {
-	f := newShellFix(t, func(f *envFix) { f.shellsControls = shells.Controls{TickInterval: 10 * time.Millisecond} })
+	ticks := newShellTicks()
+	f := newShellFix(t, func(f *envFix) { f.shellsControls = ticks.controls() })
 	cookie, csrf := f.operatorWithShell(t, "olive")
 	c := f.openAs(t, cookie, csrf)
-	time.Sleep(300 * time.Millisecond) // thirty checks
+	// Thirty checks, and a thirty-first whose being taken proves the thirtieth is over.
+	for range 31 {
+		ticks.tick(t)
+	}
 	sendBinary(t, c, "echo still\n")
 	readUntilBinary(t, c, "still")
 	if got := f.shellsReg.List(shells.Filter{}); len(got) != 1 {
