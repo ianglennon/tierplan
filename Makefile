@@ -21,7 +21,7 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check tidy-check test test-go test-web test-summary test-int test-swarm smoke dev dev-go dev-web dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-down e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke
+.PHONY: web build gen gen-check tidy-check test test-go test-web test-summary test-int test-swarm smoke dev dev-go dev-web dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-down e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke ci-clean
 
 web:
 	pnpm -C web install --frozen-lockfile
@@ -369,6 +369,12 @@ e2e-image: web
 # line per check; any FAIL fails the target.
 proxy-smoke: e2e-image
 	scripts/proxy-smoke.sh
+
+# D-23: removes the containers, networks and volumes labelled bayplan.ci.owner=
+# $BAYPLAN_CI_OWNER (the smokes label what they create) and nothing else. ci.yml runs
+# it in an if: always() step of every job that uses Docker. Needs BAYPLAN_CI_OWNER.
+ci-clean:
+	scripts/ci-clean.sh
 
 # The upgrade proof (D-34, PLAT-02): run the previous build, put state into it (setup, an
 # agent environment with a real agent connected, and a user, a team and a grant when

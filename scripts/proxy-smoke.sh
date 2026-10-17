@@ -50,8 +50,11 @@
 #
 # Environment: IMAGE (default bayplan:e2e), CADDY_IMAGE (caddy:2), NGINX_IMAGE
 # (nginx:stable-alpine), TRAEFIK_IMAGE (traefik:v3). Needs Docker, curl and jq.
-# Removes every container and the network it creates, by name. Prints one PASS or
-# FAIL line per check and exits 1 if any check failed.
+# Removes every container and the network it creates, by name, and labels them with
+# bayplan.ci.owner=$BAYPLAN_CI_OWNER (local-<pid> when unset) so that `make ci-clean`
+# in CI removes what a cancelled run left (D-23). The proxy's host port is assigned by
+# Docker and read back. Prints one PASS or FAIL line per check and exits 1 if any
+# check failed.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -67,6 +70,7 @@ done
 docker image inspect "${IMAGE}" >/dev/null 2>&1 || { echo "FAIL: the image ${IMAGE} is not built; run make e2e-image" >&2; exit 1; }
 
 RUN_ID="$$"
+OWNER_LABEL="bayplan.ci.owner=${BAYPLAN_CI_OWNER:-local-$$}"
 NET="bayplan-proxy-smoke-${RUN_ID}"
 WORK="$(mktemp -d)"
 JSON_H='Content-Type: application/json'
@@ -87,7 +91,7 @@ trap cleanup EXIT
 pass() { echo "PASS: $*"; }
 fail() { echo "FAIL: $*"; FAILS=$((FAILS + 1)); }
 
-docker network create "${NET}" >/dev/null
+docker network create --label "${OWNER_LABEL}" "${NET}" >/dev/null
 SUBNET="$(docker network inspect -f '{{(index .IPAM.Config 0).Subnet}}' "${NET}")"
 
 # start_container NAME ARGS... runs a detached container on the smoke network and
@@ -96,7 +100,7 @@ start_container() {
   local name="$1"
   shift
   CONTAINERS+=("${name}")
-  docker run -d --name "${name}" --network "${NET}" "$@" >/dev/null
+  docker run -d --name "${name}" --network "${NET}" --label "${OWNER_LABEL}" "$@" >/dev/null
 }
 
 stop_container() {

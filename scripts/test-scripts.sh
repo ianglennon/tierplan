@@ -472,6 +472,47 @@ for pid in ${load_pids}; do
   fi
 done
 
+# --- CI cleanup (D-23): ci-clean removes what carries this owner's label and nothing else ---
+expect fail "ci-clean-no-owner" env -u BAYPLAN_CI_OWNER scripts/ci-clean.sh
+expect_out "ci-clean-no-owner names the variable" "BAYPLAN_CI_OWNER"
+if docker info >/dev/null 2>&1 && docker image inspect busybox >/dev/null 2>&1 || docker pull -q busybox >/dev/null 2>&1; then
+  own="t-own-$$"
+  mine="bayplan-tclean-mine-$$"
+  other="bayplan-tclean-other-$$"
+  docker rm -f "${mine}" "${other}" >/dev/null 2>&1
+  docker network rm "${mine}" "${other}" >/dev/null 2>&1
+  docker volume rm "${mine}" "${other}" >/dev/null 2>&1
+  docker network create --label "bayplan.ci.owner=${own}" "${mine}" >/dev/null
+  docker network create "${other}" >/dev/null
+  docker volume create --label "bayplan.ci.owner=${own}" "${mine}" >/dev/null
+  docker volume create "${other}" >/dev/null
+  docker run -d --name "${mine}" --label "bayplan.ci.owner=${own}" busybox sleep 300 >/dev/null
+  docker run -d --name "${other}" --label "bayplan.ci.owner=t-other-$$" busybox sleep 300 >/dev/null
+  expect pass "ci-clean-removes-own" env BAYPLAN_CI_OWNER="${own}" scripts/ci-clean.sh
+  expect_out "ci-clean-removes-own names the container" "removed container ${mine}"
+  gone=1
+  docker container inspect "${mine}" >/dev/null 2>&1 && gone=0
+  docker network inspect "${mine}" >/dev/null 2>&1 && gone=0
+  docker volume inspect "${mine}" >/dev/null 2>&1 && gone=0
+  if [ "${gone}" -ne 1 ]; then
+    echo "SCRIPT TEST FAIL: ci-clean-removes-own (a labelled resource survived)"
+    failures=$((failures + 1))
+  fi
+  kept=1
+  docker container inspect "${other}" >/dev/null 2>&1 || kept=0
+  docker network inspect "${other}" >/dev/null 2>&1 || kept=0
+  docker volume inspect "${other}" >/dev/null 2>&1 || kept=0
+  if [ "${kept}" -ne 1 ]; then
+    echo "SCRIPT TEST FAIL: ci-clean-keeps-others (a resource of another owner or without a label was removed)"
+    failures=$((failures + 1))
+  fi
+  docker rm -f "${other}" >/dev/null 2>&1
+  docker network rm "${other}" >/dev/null 2>&1
+  docker volume rm "${other}" >/dev/null 2>&1
+else
+  echo "test-scripts: Docker or the busybox image is not available; skipping the ci-clean cases that need it"
+fi
+
 if [ "${failures}" -ne 0 ]; then
   echo "${failures} script test(s) failed"
   exit 1
