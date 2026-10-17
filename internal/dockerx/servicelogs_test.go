@@ -18,6 +18,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // The service log read (plan 06-29, OBS-02, D-37): the engine's ServiceLogs stream with
@@ -225,7 +226,7 @@ func TestAFollowedServiceLogShowsLinesPushedAfterItOpened(t *testing.T) {
 		if r.Message != "live line" || r.TaskID != "t2" {
 			t.Fatalf("record = %+v, want the pushed line of t2", r)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testsupport.Deadline):
 		t.Fatal("a followed service log did not show a pushed line")
 	}
 }

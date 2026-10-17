@@ -362,7 +362,7 @@ func TestIntegrationEventsHubSeesAContainerStart(t *testing.T) {
 	// a fresh subscriber more than 64 events behind, and the hub then closes its channel
 	// so it reconnects, as a browser does with Last-Event-ID. The test does the same:
 	// subscribe again and look in the backlog as well as the live channel.
-	timeout := time.After(15 * time.Second)
+	timeout := time.After(testsupport.Deadline)
 	for {
 		for _, ev := range backlog {
 			if isStart(ev) {
@@ -381,7 +381,7 @@ func TestIntegrationEventsHubSeesAContainerStart(t *testing.T) {
 				return
 			}
 		case <-timeout:
-			t.Fatal("no container start event within 15 seconds")
+			t.Fatalf("no container start event within %s", testsupport.Deadline)
 		}
 	}
 }
@@ -438,7 +438,7 @@ func TestEventsSwarmTypesOnStandalone(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 
-	timeout := time.After(10 * time.Second)
+	timeout := time.After(testsupport.Deadline)
 	for {
 		select {
 		case row, ok := <-rows:
@@ -457,7 +457,7 @@ func TestEventsSwarmTypesOnStandalone(t *testing.T) {
 			}
 			return
 		case <-timeout:
-			t.Fatal("no container start event within 10 seconds")
+			t.Fatalf("no container start event within %s", testsupport.Deadline)
 		}
 	}
 }

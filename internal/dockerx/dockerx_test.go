@@ -407,9 +407,7 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 			if i%3 == 0 {
 				fake.Reconfigure(dockertest.FakeConfig{APIVersion: "1.45", Version: "26.0.0"})
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			if _, err := c.Probe(ctx); err != nil {
+			if _, err := c.Probe(testsupport.Context(t)); err != nil {
 				errs <- err
 			}
 		})
@@ -883,7 +881,7 @@ func recvRow(t *testing.T, rows <-chan dockerx.EventRow) dockerx.EventRow {
 			t.Fatal("the events channel closed while a row was expected")
 		}
 		return r
-	case <-time.After(5 * time.Second):
+	case <-time.After(testsupport.Deadline):
 		t.Fatal("timed out waiting for an event row")
 	}
 	return dockerx.EventRow{}
@@ -923,10 +921,11 @@ func TestEventsKeepsContainerImageNetworkAndVolumeEventsAndDropsExecNoise(t *tes
 	if got[3].Name != "data" {
 		t.Errorf("a volume's name is its actor ID, got %q", got[3].Name)
 	}
-	select {
-	case r := <-rows:
-		t.Errorf("a fifth row arrived: %+v (exec events must be dropped)", r)
-	case <-time.After(150 * time.Millisecond):
+	// Fence: a later event must be the very next row, so nothing (the dropped exec event
+	// included) was delivered between the fourth row and it.
+	fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: "fence"})
+	if r := recvRow(t, rows); r.Action != "start" || r.ActorID != "fence" {
+		t.Errorf("the row after the fourth is %+v, want the fence event (exec events must be dropped)", r)
 	}
 }
 
@@ -1009,10 +1008,10 @@ func TestEventsDeliverSwarmServiceNodeSecretAndConfigEvents(t *testing.T) {
 			t.Errorf("row %d leaks an attribute outside the allowlist: %v", i, r.Attributes)
 		}
 	}
-	select {
-	case r := <-rows:
-		t.Errorf("a plugin event arrived: %+v", r)
-	case <-time.After(150 * time.Millisecond):
+	// Fence: a later event must be the very next row, so the plugin event was not delivered.
+	fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: "fence"})
+	if r := recvRow(t, rows); r.Action != "start" || r.ActorID != "fence" {
+		t.Errorf("the row after the fourth is %+v, want the fence event (a plugin event must not arrive)", r)
 	}
 }
 
@@ -1083,7 +1082,7 @@ func TestEventsEndsWithAnErrorWhenTheStreamDrops(t *testing.T) {
 		if ok {
 			t.Fatal("a row arrived on a dropped stream")
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testsupport.Deadline):
 		t.Fatal("the rows channel did not close after the drop")
 	}
 	if err := <-errc; err == nil {
@@ -1103,7 +1102,7 @@ func TestEventsStopsWhenTheContextEnds(t *testing.T) {
 		if ok {
 			t.Fatal("a row arrived after cancel")
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testsupport.Deadline):
 		t.Fatal("the rows channel did not close after the context ended")
 	}
 	if err := <-errc; !errors.Is(err, context.Canceled) {
@@ -1123,9 +1122,7 @@ func TestEventsDoesNotHoldTheClientLockSoProbeStillRuns(t *testing.T) {
 	_, _ = cli.Events(ctx, time.Time{})
 	awaitFake(t, fake, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
 
-	pctx, pcancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer pcancel()
-	if res, err := cli.Probe(pctx); err != nil || !res.Reachable {
+	if res, err := cli.Probe(testsupport.Context(t)); err != nil || !res.Reachable {
 		t.Fatalf("Probe while a stream is open: %+v, %v", res, err)
 	}
 }
@@ -1191,11 +1188,14 @@ func TestProbeIsNotDelayedByASlowSnapshot(t *testing.T) {
 	}
 	close(hold)
 	scancel()
-	testsupport.Await(t, "the snapshot to end", done)
+	_ = testsupport.Await(t, "the snapshot to end", done)
 }
 
 func TestASnapshotOnTheOldClientSurvivesARenegotiation(t *testing.T) {
-	fake := dockertest.NewFake(t, dockertest.FakeConfig{ListDelay: 500 * time.Millisecond})
+	// The list is held while Probe swaps in a new client and closes the old one, so the
+	// snapshot is on the old client for exactly as long as the test says.
+	hold := make(chan struct{})
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{ListHold: hold})
 	cli := newClient(t, fake)
 
 	type result struct {
@@ -1204,34 +1204,56 @@ func TestASnapshotOnTheOldClientSurvivesARenegotiation(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		snap, err := cli.Snapshot(context.Background(), false)
+		snap, err := cli.Snapshot(testsupport.Context(t), false)
 		done <- result{snap, err}
 	}()
 	awaitFake(t, fake, "the snapshot's list request to reach the daemon", func() bool { return listRequested(fake) })
 	// Probe swaps in a freshly negotiated client and closes the old one.
-	if _, err := cli.Probe(context.Background()); err != nil {
+	if _, err := cli.Probe(testsupport.Context(t)); err != nil {
 		t.Fatalf("Probe: %v", err)
 	}
-	r := <-done
+	close(hold)
+	r := testsupport.Await(t, "the snapshot that began before the renegotiation", done)
 	if r.err != nil {
 		t.Fatalf("the snapshot that began before the renegotiation failed: %v", r.err)
 	}
 }
 
 func TestAProbeWaitingForAnotherGivesUpWhenItsContextEnds(t *testing.T) {
-	// Probes are serialised, and a queued one must be abandonable.
-	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
+	// Probes are serialised, and a queued one must be abandonable. A first probe is held at
+	// the daemon, so the others queue behind it for as long as the test says; they are
+	// cancelled and must all return while it is still held.
+	hold := make(chan struct{})
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{ProbeHold: hold})
 	cli := newClient(t, fake)
-	var wg sync.WaitGroup
-	for range 4 {
-		wg.Go(func() {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
-			defer cancel()
-			_, _ = cli.Probe(ctx)
-		})
+	first := make(chan error, 1)
+	go func() {
+		_, err := cli.Probe(testsupport.Context(t))
+		first <- err
+	}()
+	awaitFake(t, fake, "the first probe to reach the daemon", func() bool {
+		return slices.ContainsFunc(fake.Requests(), func(p string) bool { return strings.HasSuffix(p, "/_ping") })
+	})
+
+	ctx, cancel := context.WithCancel(testsupport.Context(t))
+	defer cancel()
+	const queued = 3
+	abandoned := make(chan error, queued)
+	for range queued {
+		go func() {
+			_, err := cli.Probe(ctx)
+			abandoned <- err
+		}()
 	}
-	wg.Wait()
-	if res, err := cli.Probe(context.Background()); err != nil || !res.Reachable {
+	cancel()
+	for range queued {
+		_ = testsupport.Await(t, "a probe whose context ended to return while the first is held", abandoned)
+	}
+	close(hold)
+	if err := testsupport.Await(t, "the held probe", first); err != nil {
+		t.Fatalf("the held probe failed: %v", err)
+	}
+	if res, err := cli.Probe(testsupport.Context(t)); err != nil || !res.Reachable {
 		t.Fatalf("Probe after abandoned probes: %+v, %v", res, err)
 	}
 }

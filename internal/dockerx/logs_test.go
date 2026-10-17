@@ -134,7 +134,7 @@ func TestContainerLogsFollowDeliversNewLinesAndCloseEndsTheFollow(t *testing.T) 
 		select {
 		case s := <-done:
 			return s
-		case <-time.After(5 * time.Second):
+		case <-time.After(testsupport.Deadline):
 			t.Fatal("no line arrived")
 			return ""
 		}

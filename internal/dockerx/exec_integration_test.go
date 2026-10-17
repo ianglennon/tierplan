@@ -20,6 +20,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // screen collects what a session prints, so a test can wait for a piece of text
@@ -70,12 +71,11 @@ func (s *screen) text() string {
 	return s.buf.String()
 }
 
-// awaitOutput blocks until the output contains want, failing after within with what was
-// wanted and what arrived. It wakes on every write the session makes.
-func (s *screen) awaitOutput(t *testing.T, want string, within time.Duration) {
+// awaitOutput blocks until the output contains want, failing after testsupport.Deadline with
+// what was wanted and what arrived. It wakes on every write the session makes.
+func (s *screen) awaitOutput(t *testing.T, want string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), within)
-	defer cancel()
+	ctx := testsupport.Context(t)
 	for {
 		s.mu.Lock()
 		got, ended, changed := s.buf.String(), s.ended, s.changed
@@ -89,7 +89,7 @@ func (s *screen) awaitOutput(t *testing.T, want string, within time.Duration) {
 		select {
 		case <-changed:
 		case <-ctx.Done():
-			t.Fatalf("%q did not appear within %s; output: %q", want, within, s.text())
+			t.Fatalf("%q did not appear within %s; output: %q", want, testsupport.Deadline, s.text())
 		}
 	}
 }
@@ -157,12 +157,12 @@ func TestIntegrationExecSession(t *testing.T) {
 		if _, err := s.Write([]byte("echo hello-$((1+2))-bayplan\n")); err != nil {
 			t.Fatalf("Write: %v", err)
 		}
-		out.awaitOutput(t, "hello-3-bayplan", 20*time.Second)
+		out.awaitOutput(t, "hello-3-bayplan")
 
 		if _, err := s.Write([]byte("stty size\n")); err != nil {
 			t.Fatal(err)
 		}
-		out.awaitOutput(t, "24 80", 20*time.Second)
+		out.awaitOutput(t, "24 80")
 
 		if err := s.Resize(ctx, 100, 30); err != nil {
 			t.Fatalf("Resize: %v", err)
@@ -170,7 +170,7 @@ func TestIntegrationExecSession(t *testing.T) {
 		if _, err := s.Write([]byte("stty size\n")); err != nil {
 			t.Fatal(err)
 		}
-		out.awaitOutput(t, "30 100", 20*time.Second)
+		out.awaitOutput(t, "30 100")
 
 		if st, err := s.Inspect(ctx); err != nil || !st.Running {
 			t.Fatalf("Inspect while open = %+v, %v; want running", st, err)
@@ -181,12 +181,10 @@ func TestIntegrationExecSession(t *testing.T) {
 		}
 		select {
 		case <-out.done:
-		case <-time.After(20 * time.Second):
+		case <-time.After(testsupport.Deadline):
 			t.Fatal("the stream did not end after exit 3")
 		}
-		wctx, wcancel := context.WithTimeout(ctx, 20*time.Second)
-		defer wcancel()
-		st, err := s.Wait(wctx)
+		st, err := s.Wait(testsupport.Context(t))
 		if err != nil || st.Running || st.ExitCode != 3 {
 			t.Fatalf("Wait = %+v, %v; want not running with exit code 3", st, err)
 		}
@@ -214,18 +212,16 @@ func TestIntegrationExecSession(t *testing.T) {
 		out := watch(s)
 		select {
 		case <-out.done:
-		case <-time.After(5 * time.Second):
+		case <-time.After(testsupport.Deadline):
 			t.Fatalf("the stream did not end; output %q", out.text())
 		}
-		wctx, wcancel := context.WithTimeout(ctx, 10*time.Second)
-		defer wcancel()
-		st, err := s.Wait(wctx)
+		// Wait polls until the process ends or its context does, so a missing shell that is
+		// not recognised ends as a deadline error here, not as ErrNoShell. No elapsed-time
+		// bound is asserted: how fast it is recognised depends on the machine, not on the code.
+		st, err := s.Wait(testsupport.Context(t))
 		t.Logf("after %s: state %+v, err %v, output %q", time.Since(start), st, err, out.text())
 		if !errors.Is(err, dockerx.ErrNoShell) {
 			t.Fatalf("Wait = %+v, %v; want ErrNoShell", st, err)
-		}
-		if d := time.Since(start); d > 2*time.Second {
-			t.Errorf("recognising a missing shell took %s, want under 2 s", d)
 		}
 	})
 }
