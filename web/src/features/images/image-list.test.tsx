@@ -356,6 +356,16 @@ describe("ImageList Dangling chip and search", () => {
     expect(changes).toEqual([{ dangling: 1 }]);
   });
 
+  it("wraps the filter chips onto further rows instead of scrolling sideways (G-06-2)", async () => {
+    body = list([image("a")], { danglingCount: 6 });
+    mount();
+    const group = await screen.findByRole("group", { name: "Filter images" });
+    await within(group).findByRole("button", { name: "Dangling 6" });
+    // The chips wrap onto further rows at every width, so none is cut off at 375px (G-06-2).
+    expect(group.classList.contains("flex-wrap")).toBe(true);
+    expect(group.className).not.toMatch(/overflow-x-auto|flex-nowrap/);
+  });
+
   it("shows the chip pressed when dangling is in the URL, sends it, and clears it when pressed again", async () => {
     search = { dangling: 1 };
     body = list([image("b", { repoTags: ["<none>"], dangling: true })], {
