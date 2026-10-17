@@ -222,6 +222,11 @@ type FakeConfig struct {
 	// and uses it as the delay of every fake whose ProbeDelay is zero, so a whole package can
 	// be swept with slow first probes to find a test that treats "online" as "ready".
 	ProbeDelay time.Duration
+	// ListHold holds every container list (/containers/json), after it is recorded and before
+	// it answers, until the channel is closed or the request's context ends, so a test can
+	// show what must keep working while a list is outstanding (a probe, a stop, a caller that
+	// gave up) by ordering instead of by comparing elapsed time with a bound.
+	ListHold <-chan struct{}
 }
 
 // FakePullStatus is an HTTP status and message a pull is answered with.
@@ -663,14 +668,9 @@ func NewFake(t testing.TB, cfg FakeConfig) *Fake {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
-	if cfg.ProbeDelay == 0 {
-		if v := os.Getenv("BAYPLAN_TEST_PROBE_DELAY"); v != "" {
-			d, err := time.ParseDuration(v)
-			if err != nil {
-				t.Fatalf("BAYPLAN_TEST_PROBE_DELAY=%q is not a duration: %v", v, err)
-			}
-			cfg.ProbeDelay = d
-		}
+	cfg, err = withEnvProbeDelay(cfg)
+	if err != nil {
+		t.Fatalf("%v", err)
 	}
 
 	f := &Fake{path: filepath.Join(dir, "d.sock"), cfg: cfg.withDefaults(), evSubs: map[*eventSub]struct{}{}, states: map[string]fakeState{}}
@@ -762,8 +762,29 @@ func (f *Fake) Requests() []string {
 func (f *Fake) Reconfigure(cfg FakeConfig) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// The environment was validated by NewFake, so the error cannot occur here.
+	cfg, _ = withEnvProbeDelay(cfg)
 	f.cfg = cfg.withDefaults()
 	f.await.notify()
+}
+
+// withEnvProbeDelay gives cfg the BAYPLAN_TEST_PROBE_DELAY delay (a time.ParseDuration value)
+// when its own ProbeDelay is zero. NewFake and Reconfigure both apply it, so a sweep with slow
+// first probes keeps applying after a test reconfigures the fake.
+func withEnvProbeDelay(cfg FakeConfig) (FakeConfig, error) {
+	if cfg.ProbeDelay != 0 {
+		return cfg, nil
+	}
+	v := os.Getenv("BAYPLAN_TEST_PROBE_DELAY")
+	if v == "" {
+		return cfg, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return cfg, fmt.Errorf("BAYPLAN_TEST_PROBE_DELAY=%q is not a duration: %w", v, err)
+	}
+	cfg.ProbeDelay = d
+	return cfg, nil
 }
 
 func (f *Fake) config() FakeConfig {
@@ -890,6 +911,13 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 	case "/events":
 		f.serveEvents(w, r)
 	case "/containers/json":
+		if cfg.ListHold != nil {
+			select {
+			case <-cfg.ListHold:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		if cfg.ListDelay > 0 {
 			select {
 			case <-time.After(cfg.ListDelay):

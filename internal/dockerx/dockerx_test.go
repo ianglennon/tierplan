@@ -1158,11 +1158,14 @@ func TestEventRowIDIsStableAndTellsEventsApart(t *testing.T) {
 func TestProbeIsNotDelayedByASlowSnapshot(t *testing.T) {
 	// WR-06: a snapshot used to hold the client lock for its whole run, so a
 	// probe that started meanwhile waited for it, timed out and reported a
-	// healthy engine offline.
-	fake := dockertest.NewFake(t, dockertest.FakeConfig{ListDelay: 2 * time.Second})
+	// healthy engine offline. WR-12: proved by ordering, not by elapsed time. The
+	// list is held until the probe has answered, so a Probe that waited for the
+	// snapshot would block until the hold closes and fail at the test deadline.
+	hold := make(chan struct{})
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{ListHold: hold})
 	cli := newClient(t, fake)
 
-	sctx, scancel := context.WithCancel(context.Background())
+	sctx, scancel := context.WithCancel(testsupport.Context(t))
 	defer scancel()
 	done := make(chan error, 1)
 	go func() {
@@ -1170,21 +1173,25 @@ func TestProbeIsNotDelayedByASlowSnapshot(t *testing.T) {
 		done <- err
 	}()
 	// The snapshot is in flight once the fake has received its list request, which it then
-	// holds for ListDelay.
+	// holds.
 	awaitFake(t, fake, "the snapshot's list request to reach the daemon", func() bool { return listRequested(fake) })
 
-	pctx, pcancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer pcancel()
-	start := time.Now()
-	res, err := cli.Probe(pctx)
-	if err != nil || !res.Supported {
-		t.Fatalf("Probe during a slow snapshot: Supported=%v err=%v", res.Supported, err)
+	type probed struct {
+		res dockerx.ProbeResult
+		err error
 	}
-	if d := time.Since(start); d > time.Second {
-		t.Errorf("Probe took %s while a snapshot ran, want well under 1s", d)
+	probeDone := make(chan probed, 1)
+	go func() {
+		res, err := cli.Probe(testsupport.Context(t))
+		probeDone <- probed{res, err}
+	}()
+	p := testsupport.Await(t, "the Probe to answer while the snapshot's list is still held", probeDone)
+	if p.err != nil || !p.res.Supported {
+		t.Fatalf("Probe during a slow snapshot: Supported=%v err=%v", p.res.Supported, p.err)
 	}
+	close(hold)
 	scancel()
-	<-done
+	testsupport.Await(t, "the snapshot to end", done)
 }
 
 func TestASnapshotOnTheOldClientSurvivesARenegotiation(t *testing.T) {

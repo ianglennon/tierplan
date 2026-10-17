@@ -8,9 +8,9 @@ import (
 	"errors"
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 func fakeClient(f *dockertest.Fake) *http.Client {
@@ -19,9 +19,7 @@ func fakeClient(f *dockertest.Fake) *http.Client {
 
 func awaitCtx(t *testing.T) context.Context {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	t.Cleanup(cancel)
-	return ctx
+	return testsupport.Context(t)
 }
 
 func TestFakeAwaitReturnsOnceARequestHasMadeTheConditionTrue(t *testing.T) {
@@ -76,5 +74,86 @@ func TestFakeAwaitSeesALongLivedFollowStreamOpenAndThenClosed(t *testing.T) {
 	leave()
 	if err := f.Await(ctx, func() bool { return f.LogFollows() == 0 }); err != nil {
 		t.Fatalf("the follow was never seen closed (LogFollows = %d): %v", f.LogFollows(), err)
+	}
+}
+
+func listRequests(f *dockertest.Fake) int {
+	n := 0
+	for _, p := range f.Requests() {
+		if p == "/containers/json" {
+			n++
+		}
+	}
+	return n
+}
+
+func getList(ctx context.Context, f *dockertest.Fake) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://fake/containers/json", http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+	return fakeClient(f).Do(req)
+}
+
+func TestFakeListHoldRecordsAListAndAnswersOnlyOnceTheHoldIsClosed(t *testing.T) {
+	hold := make(chan struct{})
+	f := dockertest.NewFake(t, dockertest.FakeConfig{
+		Containers: []dockertest.FakeContainer{{ID: "c1", Names: []string{"/c1"}, State: "running"}},
+		ListHold:   hold,
+	})
+	ctx := testsupport.Context(t)
+	answered := make(chan error, 1)
+	go func() {
+		resp, err := getList(ctx, f)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		answered <- err
+	}()
+	if err := f.Await(ctx, func() bool { return listRequests(f) == 1 }); err != nil {
+		t.Fatalf("the held list was never recorded: %v", err)
+	}
+	// Fence: a request the fake serves after the list was recorded and held. When it has
+	// answered, a list that was not held would have answered long since.
+	ping, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://fake/_ping", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := fakeClient(f).Do(ping)
+	if err != nil {
+		t.Fatalf("a probe while a list is held: %v", err)
+	}
+	_ = resp.Body.Close()
+	select {
+	case err := <-answered:
+		t.Fatalf("the list answered (%v) while the hold was open", err)
+	default:
+	}
+	close(hold)
+	if err := testsupport.Await(t, "the held list to answer once the hold closed", answered); err != nil {
+		t.Fatalf("the list after the hold closed: %v", err)
+	}
+}
+
+func TestFakeListHoldFreesTheHandlerOfACallerThatGaveUp(t *testing.T) {
+	// The hold is never closed. The fake's server closes at cleanup and waits for its
+	// handlers, so a handler that ignored the request's context would hang this test.
+	f := dockertest.NewFake(t, dockertest.FakeConfig{ListHold: make(chan struct{})})
+	ctx, cancel := context.WithCancel(testsupport.Context(t))
+	defer cancel()
+	answered := make(chan error, 1)
+	go func() {
+		resp, err := getList(ctx, f)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		answered <- err
+	}()
+	if err := f.Await(ctx, func() bool { return listRequests(f) == 1 }); err != nil {
+		t.Fatalf("the held list was never recorded: %v", err)
+	}
+	cancel()
+	if err := testsupport.Await(t, "the caller that gave up to return", answered); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a cancelled held list = %v, want context.Canceled", err)
 	}
 }
