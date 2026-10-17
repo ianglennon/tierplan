@@ -28,6 +28,10 @@ env:
   GOCACHE: ${{ github.workspace }}/../../_cache/go-build
   GOMODCACHE: ${{ github.workspace }}/../../_cache/go-mod
 
+# No concurrency group, on purpose (D-23 audit). In ci.yml's shared group a newer run
+# replaces a run that is still waiting, and a waiting tag release must never be replaced
+# by a later CI run. A tag push is rare enough to share the VMs with CI for one run, and
+# the release job has no fixed names or ports of its own.
 jobs:
   release:
     runs-on: [self-hosted, linux, x64]

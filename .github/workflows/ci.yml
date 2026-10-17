@@ -16,6 +16,24 @@
 # Plan 06.1-15 splits the web unit suite into its own job (web), so the Vitest minutes
 # are off the Go unit job's (test) critical path, and adds a failing-test summary
 # (make test-summary) to every test job.
+#
+# Plan 06.1-20 closes the D-23 audit of what a job can leave behind or run out of. Its
+# results, so the next reader does not repeat it:
+#   - Fixed names and ports: only the e2e stack has them, by design (the nested agent
+#     needs a fixed address), and it is torn down in an always step. The smokes publish
+#     on ports Docker or the kernel assigns, so a leftover process cannot block a run.
+#   - Leftovers: every container, network and volume a smoke creates carries
+#     bayplan.ci.owner=<run>-<attempt>-<job>, and each job that uses Docker directly
+#     (build, proxy-smoke, upgrade) ends with make ci-clean in an if: always() step, which
+#     removes exactly that owner's resources and never another runner's on the shared
+#     daemon. The integration job's dind service is removed by the runner; the Go suites'
+#     containers are removed by testcontainers' reaper (TESTCONTAINERS_RYUK_DISABLED is
+#     set nowhere).
+#   - Disk: build, integration, swarm, e2e, proxy-smoke and upgrade start with
+#     make ci-preflight, so a full disk is reported as one.
+#   - Readiness: dind is polled with a deadline (the integration wait step), as are the
+#     swarm suites' wait.ForHTTP and the compose healthchecks; no job sleeps a fixed time.
+#   - Ordering: only edge has needs; every other job is independent.
 name: CI
 
 on:
@@ -195,6 +213,11 @@ jobs:
       BAYPLAN_CI_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # D-23: prints the free disk and docker system df, and fails naming the
+      # filesystem when the workspace or Docker has less than BAYPLAN_CI_MIN_FREE_GB
+      # (default 20) free.
+      - name: Check the free disk
+        run: make ci-preflight
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -258,6 +281,11 @@ jobs:
       BAYPLAN_TEST_ENGINE: ${{ matrix.engine }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # D-23: prints the free disk and docker system df, and fails naming the
+      # filesystem when the workspace or Docker has less than BAYPLAN_CI_MIN_FREE_GB
+      # (default 20) free.
+      - name: Check the free disk
+        run: make ci-preflight
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -319,6 +347,11 @@ jobs:
       BAYPLAN_TEST_ENGINE: ${{ matrix.engine }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # D-23: prints the free disk and docker system df, and fails naming the
+      # filesystem when the workspace or Docker has less than BAYPLAN_CI_MIN_FREE_GB
+      # (default 20) free.
+      - name: Check the free disk
+        run: make ci-preflight
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -376,6 +409,11 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # D-23: prints the free disk and docker system df, and fails naming the
+      # filesystem when the workspace or Docker has less than BAYPLAN_CI_MIN_FREE_GB
+      # (default 20) free.
+      - name: Check the free disk
+        run: make ci-preflight
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -426,6 +464,11 @@ jobs:
       BAYPLAN_CI_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # D-23: prints the free disk and docker system df, and fails naming the
+      # filesystem when the workspace or Docker has less than BAYPLAN_CI_MIN_FREE_GB
+      # (default 20) free.
+      - name: Check the free disk
+        run: make ci-preflight
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -465,6 +508,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      # D-23: prints the free disk and docker system df, and fails naming the
+      # filesystem when the workspace or Docker has less than BAYPLAN_CI_MIN_FREE_GB
+      # (default 20) free.
+      - name: Check the free disk
+        run: make ci-preflight
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod

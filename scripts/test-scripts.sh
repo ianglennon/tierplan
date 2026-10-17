@@ -513,6 +513,19 @@ else
   echo "test-scripts: Docker or the busybox image is not available; skipping the ci-clean cases that need it"
 fi
 
+# --- CI preflight (D-23): a disk below the threshold fails and names the variable ---
+expect fail "ci-preflight-bad-number" env BAYPLAN_CI_MIN_FREE_GB=lots scripts/ci-preflight.sh
+expect_out "ci-preflight-bad-number names the variable" "BAYPLAN_CI_MIN_FREE_GB"
+if docker info >/dev/null 2>&1; then
+  expect fail "ci-preflight-low-disk" env BAYPLAN_CI_MIN_FREE_GB=100000 scripts/ci-preflight.sh
+  expect_out "ci-preflight-low-disk names the variable" "below BAYPLAN_CI_MIN_FREE_GB=100000"
+  expect_out "ci-preflight-low-disk names the path" "GB free on "
+  expect pass "ci-preflight-zero-threshold" env BAYPLAN_CI_MIN_FREE_GB=0 scripts/ci-preflight.sh
+  expect_out "ci-preflight prints docker system df" "docker system df"
+else
+  echo "test-scripts: Docker is not reachable; skipping the ci-preflight cases that need it"
+fi
+
 if [ "${failures}" -ne 0 ]; then
   echo "${failures} script test(s) failed"
   exit 1
