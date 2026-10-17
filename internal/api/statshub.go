@@ -107,6 +107,45 @@ type StatsHub struct {
 	closed   bool
 	samplers map[statsKey]*statsSampler
 	slots    map[statsNode]chan struct{}
+
+	// changed is closed and replaced whenever a sampler starts or stops. Its own mutex is a
+	// leaf, so notify may be called with or without mu held.
+	changeMu sync.Mutex
+	changed  chan struct{}
+}
+
+// notify wakes every Await.
+func (h *StatsHub) notify() {
+	h.changeMu.Lock()
+	defer h.changeMu.Unlock()
+	if h.changed != nil {
+		close(h.changed)
+		h.changed = nil
+	}
+}
+
+// Await returns nil once cond is true, and the context's error if ctx ends first. cond is
+// evaluated now and again after every change to the set of samplers (one started, one
+// stopped). It never polls, so the deadline in ctx only guards against a hang. cond may call
+// Samplers but not Await.
+func (h *StatsHub) Await(ctx context.Context, cond func() bool) error {
+	for {
+		// Taken before cond is evaluated, so a change in between is not missed.
+		h.changeMu.Lock()
+		if h.changed == nil {
+			h.changed = make(chan struct{})
+		}
+		ch := h.changed
+		h.changeMu.Unlock()
+		if cond() {
+			return nil
+		}
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 // NewStatsHub builds a hub that samples through src.
@@ -156,6 +195,7 @@ func (h *StatsHub) Subscribe(envID, nodeID, containerID string) (<-chan StatsUpd
 		h.samplers[key] = s
 		h.wg.Add(1)
 		go h.run(ctx, key, s)
+		defer h.notify()
 	}
 	s.subs[sub] = struct{}{}
 	if s.state == StatsKindNotReporting || s.state == StatsKindStopped {
@@ -179,6 +219,7 @@ func (h *StatsHub) Subscribe(envID, nodeID, containerID string) (<-chan StatsUpd
 				if h.samplers[key] == s {
 					delete(h.samplers, key)
 				}
+				h.notify()
 			}
 		})
 	}
@@ -216,6 +257,7 @@ func (h *StatsHub) Close() {
 			}
 			delete(h.samplers, key)
 		}
+		h.notify()
 	}
 	h.mu.Unlock()
 	h.wg.Wait()

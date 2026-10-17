@@ -116,7 +116,7 @@ func newSwFix(t *testing.T, tasks []swarm.Task) *swFix {
 	t.Cleanup(f.statsHub.Close)
 	f.h = f.build(t)
 	e := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	return &swFix{envFix: f, env: e, ticks: ticks}
 }
 

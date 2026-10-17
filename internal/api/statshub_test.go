@@ -21,6 +21,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // The shared, ref-counted stats sampler (plan 06-32, RES-11, D-29 to D-31, RESEARCH
@@ -83,12 +84,55 @@ type statsSrc struct {
 	calls, inflight, maxInfly atomic.Int32
 	mu                        sync.Mutex
 	maxPerNode, nowPerNode    map[string]int
+
+	// changed is closed and replaced each time a call is counted or finishes, so a test
+	// waits on the source's own signal instead of polling its counters.
+	changeMu sync.Mutex
+	changed  chan struct{}
+}
+
+// notify wakes every await.
+func (s *statsSrc) notify() {
+	s.changeMu.Lock()
+	defer s.changeMu.Unlock()
+	if s.changed != nil {
+		close(s.changed)
+		s.changed = nil
+	}
+}
+
+// await returns once cond is true, evaluated now and after each call counted or finished,
+// and fails the test, naming what, if the test's context ends first.
+func (s *statsSrc) await(t testing.TB, what string, cond func() bool) {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	for {
+		// Taken before cond is evaluated, so a change in between is not missed.
+		s.changeMu.Lock()
+		if s.changed == nil {
+			s.changed = make(chan struct{})
+		}
+		ch := s.changed
+		s.changeMu.Unlock()
+		if cond() {
+			return
+		}
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			t.Fatalf("waiting for %s: %v; %d calls counted, %d in flight", what, ctx.Err(), s.calls.Load(), s.inflight.Load())
+		}
+	}
 }
 
 func (s *statsSrc) OnNode(ctx context.Context, envID, nodeID string, fn func(*dockerx.Client) error) error {
 	s.calls.Add(1)
 	cur := s.inflight.Add(1)
-	defer s.inflight.Add(-1)
+	defer func() {
+		s.inflight.Add(-1)
+		s.notify()
+	}()
+	s.notify()
 	for {
 		m := s.maxInfly.Load()
 		if cur <= m || s.maxInfly.CompareAndSwap(m, cur) {
@@ -318,7 +362,7 @@ func TestStatsHubHasAtMostEightRequestsInFlightOnOneNode(t *testing.T) {
 	for range 8 {
 		src.gate <- struct{}{}
 	}
-	waitFor(t, "every container's first sample", func() bool { return src.calls.Load() == 20 && src.inflight.Load() == 0 })
+	src.await(t, "every container's first sample", func() bool { return src.calls.Load() == 20 && src.inflight.Load() == 0 })
 	if m := src.maxOn("n1"); m != 8 {
 		t.Errorf("up to %d requests in flight on one node, want exactly 8", m)
 	}
@@ -342,7 +386,7 @@ func TestStatsHubCapsEachNodeOnItsOwn(t *testing.T) {
 	for range 20 {
 		src.gate <- struct{}{}
 	}
-	waitFor(t, "every container's first sample", func() bool { return src.calls.Load() == 20 && src.inflight.Load() == 0 })
+	src.await(t, "every container's first sample", func() bool { return src.calls.Load() == 20 && src.inflight.Load() == 0 })
 	if a, b := src.maxOn("n1"), src.maxOn("n2"); a != 8 || b != 8 {
 		t.Errorf("most in flight on n1 = %d and on n2 = %d, want 8 on each", a, b)
 	}
@@ -362,7 +406,7 @@ func TestStatsHubSaysSoOnceWhenANodeStopsReportingAndWhenItDoesAgain(t *testing.
 	for i := range 3 {
 		ticks.fire()
 		want := int32(i + 2)
-		waitFor(t, "the failed request", func() bool { return src.calls.Load() >= want })
+		src.await(t, "the failed request", func() bool { return src.calls.Load() >= want })
 	}
 	// A viewer who joins while the node is silent is told at once.
 	ch2, stop2 := h.Subscribe("env1", "n1", "web-id")

@@ -19,6 +19,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // The container stats stream (plan 06-32, RES-11, D-29 to D-31). Docker is a FakeDaemon
@@ -56,7 +57,7 @@ func newStatsFix(t *testing.T, cfg dockertest.FakeConfig, tune func(*envFix, *do
 	}
 	f.h = f.build(t)
 	e := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	return &statsFix{envFix: f, env: e, ticks: ticks}
 }
 
@@ -239,7 +240,7 @@ func TestContainerStatsStreamOfTwoViewersCostsOneSamplerAndOneRequestPerTick(t *
 		t.Errorf("%d samplers after one viewer left, want 1", n)
 	}
 	b.close()
-	waitFor(t, "the sampler to stop", func() bool { return f.statsHub.Samplers() == 0 })
+	awaitSamplersStopped(t, f.statsHub, "the sampler to stop")
 	f.ticks.waitStopped(t, "the last viewer left")
 }
 
@@ -268,7 +269,7 @@ func TestContainerStatsStreamEndsCleanlyAtItsMaximumLifetime(t *testing.T) {
 	c := f.open(t, f.cookie, "web", "")
 	readyOf(t, c)
 	c.waitEnded(t, 5*time.Second, "its lifetime of 50 ms")
-	waitFor(t, "the sampler to stop with its only viewer", func() bool { return f.statsHub.Samplers() == 0 })
+	awaitSamplersStopped(t, f.statsHub, "the sampler to stop with its only viewer")
 }
 
 func TestContainerStatsStreamEndsWithClosedAccessLostWithinAHeartbeatOfLosingTheGrant(t *testing.T) {
@@ -288,7 +289,7 @@ func TestContainerStatsStreamEndsWithClosedAccessLostWithinAHeartbeatOfLosingThe
 		t.Errorf("closed = %s", closed.data)
 	}
 	c.waitEnded(t, 5*time.Second, "it told the viewer the access was lost")
-	waitFor(t, "the sampler to stop", func() bool { return f.statsHub.Samplers() == 0 })
+	awaitSamplersStopped(t, f.statsHub, "the sampler to stop")
 }
 
 // RES-11 prohibition (T-06-95): Bayplan does not persist stats samples on the server. A
@@ -309,7 +310,7 @@ func TestContainerStatsStreamStoresNothingAndLogsNothingOfASample(t *testing.T) 
 	f.ticks.fire()
 	sampleOf(t, c)
 	c.close()
-	waitFor(t, "the sampler to stop", func() bool { return f.statsHub.Samplers() == 0 })
+	awaitSamplersStopped(t, f.statsHub, "the sampler to stop")
 	if after := count(); after != before {
 		t.Errorf("%d audit rows after watching stats, was %d: a sample or a viewing was recorded", after, before)
 	}
@@ -317,5 +318,14 @@ func TestContainerStatsStreamStoresNothingAndLogsNothingOfASample(t *testing.T) 
 		if strings.Contains(f.logs.String(), v) {
 			t.Errorf("the server log mentions %q after watching stats", v)
 		}
+	}
+}
+
+// awaitSamplersStopped waits until the hub has no sampler left, on the hub's own signal, and
+// fails the test naming what.
+func awaitSamplersStopped(t testing.TB, hub *api.StatsHub, what string) {
+	t.Helper()
+	if err := hub.Await(testsupport.Context(t), func() bool { return hub.Samplers() == 0 }); err != nil {
+		t.Fatalf("waiting for %s: %v; %d samplers are still running", what, err, hub.Samplers())
 	}
 }
