@@ -4,13 +4,13 @@
 package server
 
 import (
-	"context"
 	"io"
 	"net/http"
 	"testing"
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // An agent tunnel is a hijacked connection that sits idle between Docker calls.
@@ -18,13 +18,11 @@ import (
 // ReadTimeout does not reach a hijacked connection, so a tunnel that is idle for
 // longer than it stays connected and still serves a request afterwards.
 func TestTunnelIdleLongerThanTheReadTimeoutStaysConnected(t *testing.T) {
-	prev := readTimeout
-	readTimeout = time.Second
-	t.Cleanup(func() { readTimeout = prev })
+	const readTimeout = time.Second
 
 	srv := tunneltest.Start(t, tunneltest.Options{
 		// The hub is served by the http.Server Bayplan itself builds.
-		Server: func(h http.Handler) *http.Server { return newHTTPServer(h, nil) },
+		Server: func(h http.Handler) *http.Server { return newHTTPServer(h, nil, readTimeout) },
 	})
 	c := srv.Enrol(t, srv.NewEnvironment(t, "Production"))
 	c.AnswerDocker(t, http.StatusOK, "still here")
@@ -37,6 +35,7 @@ func TestTunnelIdleLongerThanTheReadTimeoutStaysConnected(t *testing.T) {
 	// This asserts an absence, so time has to pass: the session must stay open for
 	// three read timeouts. It returns as soon as the session ends, which is the
 	// failure, instead of waiting out the whole period.
+	// wall-clock: absence under test; a ReadTimeout regression closes the tunnel within one read timeout, so three can only miss a late close, never fail a correct run
 	select {
 	case <-s.Done():
 		t.Fatalf("the tunnel was closed within %v idle with a ReadTimeout of %v", 3*readTimeout, readTimeout)
@@ -44,8 +43,7 @@ func TestTunnelIdleLongerThanTheReadTimeoutStaysConnected(t *testing.T) {
 	}
 
 	client := &http.Client{Transport: &http.Transport{DialContext: s.Transport().DialContext}}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := testsupport.Context(t)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker/_ping", nil)
 	if err != nil {
 		t.Fatal(err)
