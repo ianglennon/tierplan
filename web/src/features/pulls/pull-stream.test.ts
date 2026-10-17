@@ -2,7 +2,6 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import type { PullItem, PullJob } from "@/api/pulls";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import {
@@ -12,6 +11,7 @@ import {
   pullStreamUrl,
   reducePullStream,
 } from "@/features/pulls/pull-stream";
+import { waitUnderFakeClock } from "@/test-settle";
 
 // The connection to a pull job's stream (plan 05-01, RES-09, D-26).
 
@@ -196,8 +196,8 @@ describe("the connection", () => {
     vi.advanceTimersByTime(1000);
     const second = FakeEventSource.instances[1] as FakeEventSource;
     second.fail(true);
-    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() =>
+    await waitUnderFakeClock(() => expect(probe).toHaveBeenCalledTimes(1));
+    await waitUnderFakeClock(() =>
       expect(frames.at(-1)).toEqual({ type: "status", status: "closed", gone: true }),
     );
   });
@@ -208,7 +208,7 @@ describe("the connection", () => {
     const { source, frames } = open(probe);
     source.sendFrame("snapshot", job());
     source.fail(true);
-    await vi.waitFor(() =>
+    await waitUnderFakeClock(() =>
       expect(frames.at(-1)).toEqual({ type: "status", status: "closed", accessLost: true }),
     );
   });
@@ -219,7 +219,7 @@ describe("the connection", () => {
     const { source } = open(probe);
     source.sendFrame("snapshot", job());
     source.fail(true);
-    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+    await waitUnderFakeClock(() => expect(probe).toHaveBeenCalledTimes(1));
     await vi.advanceTimersByTimeAsync(1000);
     expect(FakeEventSource.instances).toHaveLength(2);
   });

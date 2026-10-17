@@ -2,7 +2,6 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import {
   createLogStream,
@@ -13,6 +12,7 @@ import {
   makeViewerId,
   plusNanosecond,
 } from "@/features/logs/log-stream";
+import { waitUnderFakeClock } from "@/test-settle";
 
 // The connection to a container's log stream (plan 04-19, OBS-01, D-24, P3 D-10).
 
@@ -660,7 +660,7 @@ describe("a service's log", () => {
     const { source, states } = openService({ onInterrupted, probe });
     source.sendFrame("ready", { tty: false, tasks: [] });
     source.fail(true);
-    return vi.waitFor(() => {
+    return waitUnderFakeClock(() => {
       expect(probe).toHaveBeenCalled();
       expect(onInterrupted).toHaveBeenCalled();
       expect(states.at(-1)).toEqual({ status: "closed", reason: "failed" });

@@ -9,7 +9,7 @@ import {
   createRouter,
   RouterProvider,
 } from "@tanstack/react-router";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -84,14 +84,14 @@ describe("BulkResultDialog audit link", () => {
     me = makeMe({ envs: { [ENV]: "operator" } });
     await mount(report(BULK));
     // The user is known once /api/me has answered; give it that, then look.
-    await vi.waitFor(() => expect(client.getQueryState(["me"])?.status).not.toBe("pending"));
+    await waitFor(() => expect(client.getQueryState(["me"])?.status).not.toBe("pending"));
     expect(screen.queryByRole("link", { name: "View in audit log" })).toBeNull();
   });
 
   it("has no link when the operation has no bulk ID", async () => {
     me = makeMe({ instanceAdmin: true });
     await mount(report(undefined));
-    await vi.waitFor(() => expect(client.getQueryState(["me"])?.status).not.toBe("pending"));
+    await waitFor(() => expect(client.getQueryState(["me"])?.status).not.toBe("pending"));
     expect(screen.queryByRole("link", { name: "View in audit log" })).toBeNull();
   });
 });
