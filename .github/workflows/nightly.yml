@@ -1,0 +1,102 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+#
+# The standing guard of phase 6.1 (D-16): every night the unit suites run at the
+# stability bars (D-01, D-02, D-03), so a flake that slips into a later phase is
+# caught the next morning, by name, without blocking anyone's pull request. A
+# failure is a red scheduled run; its summary lists each failing test with
+# "failed k/20" and the shuffle seed.
+#
+# The suite is cut in four shards (make test-stress STRESS_SHARD=..., see
+# scripts/stress.sh), because 20 race runs of everything take hours. The shards are
+# paired per VM: bp-a carries api and rest, bp-b carries core and agent-web, so the
+# two longest are on different VMs and each VM runs two suites at once, which is the
+# load the bars ask for.
+#
+# One run at a time across CI and this workflow: the group string below is the same
+# literal as in ci.yml, because a group name only matches within one workflow unless
+# the string is identical. The runners' Docker daemons are shared, so the two must
+# not overlap. Known consequence: GitHub keeps one running and one pending run per
+# group, so a nightly that arrives while a PR run is running and another is pending
+# replaces the pending PR run (docs/testing.md).
+#
+# Scheduled runs use the default branch only. A push to ci-stress/** runs the same
+# workflow from that branch, which is how the phase's exit gate runs it before merge.
+# The cron time keeps the worst case (six hours) clear of the runner VMs' Docker
+# prune timer, Sunday 04:00 UTC.
+#
+# Supply chain as in ci.yml: actions pinned to a full commit SHA, a read-only token,
+# no secrets, and nothing from an event payload in a run: script (the shard and the
+# VM label come from the matrix below).
+name: Nightly stress
+
+on:
+  schedule:
+    - cron: "30 21 * * *"
+  workflow_dispatch:
+  push:
+    branches: ["ci-stress/**"]
+
+permissions:
+  contents: read
+
+env:
+  GOCACHE: ${{ github.workspace }}/../../_cache/go-build
+  GOMODCACHE: ${{ github.workspace }}/../../_cache/go-mod
+
+concurrency:
+  group: bayplan-self-hosted-runners
+  cancel-in-progress: false
+
+jobs:
+  stress:
+    runs-on: [self-hosted, linux, x64, "${{ matrix.vm }}"]
+    # D-22: above the 270 minute go test -timeout of the 20-run pass
+    # (scripts/timeouts-check.sh checks it in make lint).
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: api
+            vm: bp-a
+          - shard: rest
+            vm: bp-a
+          - shard: core
+            vm: bp-b
+          - shard: agent-web
+            vm: bp-b
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          # The runner VMs keep Go caches between runs; restoring the action cache
+          # over them while another job on the VM builds corrupts them.
+          cache: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          # Per runner, not ~/setup-pnpm: two runners share each VM and its home directory.
+          dest: ${{ runner.temp }}/setup-pnpm
+          package_json_file: web/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - run: pnpm -C web install --frozen-lockfile
+      # The server tests serve the embedded SPA, so web/dist must be built first.
+      - run: pnpm -C web build
+      - run: make test-stress STRESS_SHARD=${{ matrix.shard }}
+      # D-16, D-21: each failing test with "failed k/20" and its seed, in the log and
+      # in the run page's summary. Exits 0 when it read every file, so the job's
+      # result stays the stress step's.
+      - name: Name the failing tests
+        if: always()
+        run: make test-summary
+      - name: Upload the test results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: stress-json-${{ matrix.shard }}
+          path: .devdata/test/*.json
+          retention-days: 7
+          if-no-files-found: ignore

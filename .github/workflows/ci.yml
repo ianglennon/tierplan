@@ -57,8 +57,11 @@ env:
 # upgrade and restore smokes). So one run at a time, across every branch: a newer
 # run waits, and replaces any run already waiting. Nothing running is cancelled,
 # so an edge publish is never cut off between push and sign (WR-11, D-75).
+# The group is a literal shared with nightly.yml (06.1-23, D-16): the nightly stress run
+# uses the same daemons, and a group name only matches across workflows when the string
+# is identical. The release workflow stays outside it on purpose.
 concurrency:
-  group: ci-${{ github.workflow }}
+  group: bayplan-self-hosted-runners
   cancel-in-progress: false
 
 jobs:

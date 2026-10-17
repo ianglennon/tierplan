@@ -300,6 +300,12 @@ expect_out "test-stress passes the shard" "scripts/stress.sh rest"
 expect_out "test-stress passes the 20-run timeout" "-timeout 270m"
 expect_out "test-stress hands over gotestsum" "gotestsum@"
 
+# The nightly workflow's timeout stays above the 270 minute stress pass (D-22, 06.1-23).
+expect pass "nightly-timeout-ok" scripts/timeouts-check.sh .github/workflows/nightly.yml
+sed 's/timeout-minutes: 360/timeout-minutes: 275/' .github/workflows/nightly.yml >"${scratch}/nightly-short.yml"
+expect fail "nightly-timeout-too-short" scripts/timeouts-check.sh "${scratch}/nightly-short.yml"
+expect_out "nightly-timeout-too-short names the target" "make test-stress with go test -timeout 270m"
+
 # --- test-web (06.1-15, D-03, D-18): shuffled, with a seed that reproduces the run ---
 expect pass "test-web-seeded" mk test-web WEB_SEED=42
 expect_out "test-web takes the seed from WEB_SEED" "seed=42"
