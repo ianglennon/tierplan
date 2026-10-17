@@ -6,7 +6,7 @@
 // screen at 375px. Phase 6 UAT gap G-06-2: the user rejected the earlier rule that turned the row
 // into a strip that scrolls sideways under 768px, where the last chip could only be reached by
 // swiping. The ToggleGroup's spacing keeps chips, and rows once they wrap, 8px apart, and each
-// chip keeps its own 44px height under 768px (P1 D-64). Under 768px the row is now as wide as its
-// chips rather than the full toolbar width, which changes nothing visible because the row has no
-// background or border of its own.
+// chip keeps its own 44px height under 768px (P1 D-64). The row is as wide as its chips when they
+// fit on one line and as wide as the toolbar when they wrap, which changes nothing visible because
+// the row has no background or border of its own.
 export const STATUS_CHIP_ROW = "max-w-full flex-wrap";
