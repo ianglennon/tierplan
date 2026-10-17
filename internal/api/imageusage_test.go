@@ -64,6 +64,7 @@ func imageUsageEngine() dockertest.FakeConfig {
 }
 
 func TestImageUsageTheListCountsContainersByImageIDWhetherTheyRunOrNot(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, imageUsageEngine())
 	awaitOnline(t, f.mon, e.ID)
 	rec := f.get(t, e, "images")
@@ -89,6 +90,7 @@ func TestImageUsageTheListCountsContainersByImageIDWhetherTheyRunOrNot(t *testin
 }
 
 func TestImageUsedByListsEachContainerOfTheImageByNameAndNothingForAnUnusedImage(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, imageUsageEngine())
 	awaitOnline(t, f.mon, e.ID)
 	rec := f.get(t, e, "images/"+hexID("a")+"/used-by")
@@ -117,6 +119,7 @@ func TestImageUsedByListsEachContainerOfTheImageByNameAndNothingForAnUnusedImage
 }
 
 func TestImageUsedByAnIDOfTheWrongShapeIs422AnUnknownImageIs404AndAForeignNodeIs503(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, imageUsageEngine())
 	awaitOnline(t, f.mon, e.ID)
 	if rec := f.get(t, e, "images/nginx/used-by"); rec.code != http.StatusUnprocessableEntity {
@@ -134,6 +137,7 @@ func TestImageUsedByAnIDOfTheWrongShapeIs422AnUnknownImageIs404AndAForeignNodeIs
 }
 
 func TestImageUsedByNeedsImagesRead(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, imageUsageEngine())
 	f.addUser(t, "stranger", false)
 	cookie, csrf := f.signIn(t, "stranger", false)
@@ -179,6 +183,7 @@ func usageSwarm(t *testing.T) *swarmFix {
 }
 
 func TestImageUsageAServiceCountsFromItsSpecEvenWithNoTasksByDigestElseByTag(t *testing.T) {
+	t.Parallel()
 	s := usageSwarm(t)
 	// usageSwarm returned with every agent connected and probed; the request makes the cluster
 	// read behind "used by" itself, so the list is read once.

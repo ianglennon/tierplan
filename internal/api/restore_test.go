@@ -50,17 +50,22 @@ type restoreHook struct {
 
 // restoreLimiterBurst is how many Settings checks and restores one user may make
 // at once in these tests. It is wide so the tests that repeat a step are not
-// throttled; the rate-limit test narrows it before it builds its fixture.
-var restoreLimiterBurst = 100
+// throttled; the rate-limit test narrows it for its own fixture through
+// authFixture.restoreBurst, so no parallel test sees the narrow value.
+const restoreLimiterBurst = 100
 
 func (f *authFixture) restoreDeps(log *slog.Logger) api.RestoreDeps {
+	burst := restoreLimiterBurst
+	if f.restoreBurst > 0 {
+		burst = f.restoreBurst
+	}
 	if f.restore == nil {
 		f.restore = &restoreHook{uploads: backup.NewUploads(f.dataInfo.Path, 0)}
 	}
 	h := f.restore
 	return api.RestoreDeps{
 		Uploads: h.uploads, Vault: f.v, Audit: f.aud, Instance: f.inst,
-		Limiter: auth.NewIPLimiter(12*time.Second, restoreLimiterBurst, 10*time.Minute, f.clk.now),
+		Limiter: auth.NewIPLimiter(12*time.Second, burst, 10*time.Minute, f.clk.now),
 		DataDir: f.dataInfo.Path, AppVersion: "v9.9.9", Now: f.clk.now, Log: log,
 		Restart: func(swap func(context.Context) error) bool {
 			if h.refuse {
@@ -986,10 +991,9 @@ func TestRestoreApplyThatIsRefusedIsAuditedAsABackupFailure(t *testing.T) {
 
 func TestRestoreSettingsStepsAreRateLimitedPerUserAndTheRefusalIsAudited(t *testing.T) {
 	t.Parallel()
-	old := restoreLimiterBurst
-	restoreLimiterBurst = 3
-	t.Cleanup(func() { restoreLimiterBurst = old })
 	f := newAuthFixture(t, config.Config{})
+	f.restoreBurst = 3
+	f.h = f.build(t)
 	cookie, csrf := f.signIn(t, "admin", false)
 	id := uploadedID(t, f.upload(t, cookie, csrf, makeBackup(t, "Old lab", "oldadmin", "")))
 

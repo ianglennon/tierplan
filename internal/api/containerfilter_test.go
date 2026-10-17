@@ -74,6 +74,7 @@ func manyContainers(n int) dockertest.FakeConfig {
 }
 
 func TestContainerFilterSearchesTheComposeProjectBeforeTheCap(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, manyContainers(600))
 	got := listContainersFor(t, f, e, "?q=shop")
 	if len(got.Items) != 3 || got.Total != 3 || got.Truncated || got.UnfilteredTotal != 600 {
@@ -93,6 +94,7 @@ func TestContainerFilterSearchesTheComposeProjectBeforeTheCap(t *testing.T) {
 }
 
 func TestContainerFilterWithNoSearchKeepsTheFirst500ByName(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, manyContainers(600))
 	got := listContainersFor(t, f, e, "")
 	if len(got.Items) != 500 || got.Total != 600 || !got.Truncated || got.UnfilteredTotal != 600 {
@@ -104,6 +106,7 @@ func TestContainerFilterWithNoSearchKeepsTheFirst500ByName(t *testing.T) {
 }
 
 func TestContainerFilterRefusesAQueryOver128Characters(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, manyContainers(3))
 	rec := f.get(t, e, "containers?q="+url.QueryEscape(strings.Repeat("a", 129)))
 	if rec.code != http.StatusUnprocessableEntity {
@@ -115,6 +118,7 @@ func TestContainerFilterRefusesAQueryOver128Characters(t *testing.T) {
 }
 
 func TestContainerFilterFindsALabelValueButNeverSendsItBack(t *testing.T) {
+	t.Parallel()
 	cfg := manyContainers(2)
 	cfg.Containers[1].Labels = map[string]string{"secret.token": "abc-9f3", "com.docker.stack.namespace": "blog", "com.docker.swarm.service.name": "blog_web"}
 	cfg.Containers[1].Mounts = []string{"/srv/mount-9f3"}
@@ -162,6 +166,7 @@ func names(items []filterItem) []string {
 }
 
 func TestContainerFilterStatusKeepsTheRowsOfAnyListedStatus(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, statusEngine())
 	for query, want := range map[string]string{
 		"?status=exited":               "db",
@@ -186,6 +191,7 @@ func TestContainerFilterStatusKeepsTheRowsOfAnyListedStatus(t *testing.T) {
 }
 
 func TestContainerFilterStatusCountsIgnoreTheSearchAndTheStatus(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, statusEngine())
 	want := statusCounts{Running: 6, Exited: 1, Paused: 1, Restarting: 1, Unhealthy: 2}
 	for _, query := range []string{"", "?q=shop", "?status=exited", "?q=nomatch&status=paused,restarting"} {
@@ -196,6 +202,7 @@ func TestContainerFilterStatusCountsIgnoreTheSearchAndTheStatus(t *testing.T) {
 }
 
 func TestContainerFilterRefusesAnUnknownStatus(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, statusEngine())
 	for _, query := range []string{"?status=bogus", "?status=running,bogus", "?status=created", "?status=" + strings.Repeat("a", 65)} {
 		if rec := f.get(t, e, "containers"+query); rec.code != http.StatusUnprocessableEntity {
@@ -208,6 +215,7 @@ func TestContainerFilterRefusesAnUnknownStatus(t *testing.T) {
 }
 
 func TestContainerFilterHealthShowsUnhealthyOnEveryEngine(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, statusEngine())
 	health := map[string]string{}
 	for _, it := range listContainersFor(t, f, e, "").Items {
@@ -223,6 +231,7 @@ func TestContainerFilterHealthShowsUnhealthyOnEveryEngine(t *testing.T) {
 }
 
 func TestContainerFilterSelfKindNamesTheServerAndTheAgent(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, statusEngine())
 	kinds := map[string]filterItem{}
 	for _, it := range listContainersFor(t, f, e, "").Items {
@@ -242,6 +251,7 @@ func TestContainerFilterSelfKindNamesTheServerAndTheAgent(t *testing.T) {
 }
 
 func TestContainerFilterStackAndServiceComeFromTheirLabels(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, statusEngine())
 	got := listContainersFor(t, f, e, "?q=blog_api")
 	if got.Total != 1 || got.Items[0].Stack != "blog" || got.Items[0].Service != "blog_api" || got.Items[0].Project != "" {
@@ -250,6 +260,7 @@ func TestContainerFilterStackAndServiceComeFromTheirLabels(t *testing.T) {
 }
 
 func TestContainerFilterReadOnlyIsTrueOnlyOnTheRowsOfAReadOnlyHost(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Locked")
 	f.connect(t, env, dockertest.FakeConfig{

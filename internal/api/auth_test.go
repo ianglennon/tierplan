@@ -213,6 +213,9 @@ type authFixture struct {
 	// restore is what the restore routes (plan 03-25) restart through and keep
 	// their upload in; build creates it on first use and keeps it across builds.
 	restore *restoreHook
+	// restoreBurst narrows the restore routes' per-user limiter for this fixture
+	// when set before a build; 0 keeps restoreLimiterBurst.
+	restoreBurst int
 	// unknown is the registry of agents refused unknown_agent that the unknown-agents
 	// route and the warnings read (plan 03-28); newAuthFixture makes one.
 	unknown *agents.UnknownAgents

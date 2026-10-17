@@ -114,6 +114,7 @@ func decodeCreds(t *testing.T, rec *httptest.ResponseRecorder) []credentialResp 
 }
 
 func TestAnInstanceAdminStoresAGHCRCredentialAndOnlyItsLastCharactersComeBack(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	admin := f.asAdmin(t)
 
@@ -161,6 +162,7 @@ func TestAnInstanceAdminStoresAGHCRCredentialAndOnlyItsLastCharactersComeBack(t 
 }
 
 func TestTheSecretIsSealedAtRestUnderTheCredentialsOwnContext(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	c := decodeCred(t, f.credCall(t, f.asAdmin(t), http.MethodPost, "/api/registries", ghcrAcme))
 
@@ -181,6 +183,7 @@ func TestTheSecretIsSealedAtRestUnderTheCredentialsOwnContext(t *testing.T) {
 }
 
 func TestAShortSecretLeavesNoLastCharactersToShow(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	rec := f.credCall(t, f.asAdmin(t), http.MethodPost, "/api/registries",
 		`{"name":"harbor","type":"generic","host":"Harbor.Example.org:5000","username":"ci","secret":"hunter2"}`)
@@ -196,6 +199,7 @@ func TestAShortSecretLeavesNoLastCharactersToShow(t *testing.T) {
 }
 
 func TestOnlyAnInstanceAdminMayAddAnInstanceCredential(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addEnvironmentRow(t, "env-a")
 	f.addUser(t, "nobody", false)
@@ -219,6 +223,7 @@ func TestOnlyAnInstanceAdminMayAddAnInstanceCredential(t *testing.T) {
 }
 
 func TestEveryoneWhoReadsImagesSeesTheInstanceCredentialsReadOnly(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addEnvironmentRow(t, "env-a")
 	c := decodeCred(t, f.credCall(t, f.asAdmin(t), http.MethodPost, "/api/registries", ghcrAcme))
@@ -247,6 +252,7 @@ func TestEveryoneWhoReadsImagesSeesTheInstanceCredentialsReadOnly(t *testing.T) 
 }
 
 func TestAUserWhoReadsNoImagesSeesNoCredentialsAndTheyAreNotFoundToThem(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	c := decodeCred(t, f.credCall(t, f.asAdmin(t), http.MethodPost, "/api/registries", ghcrAcme))
 	f.addUser(t, "nobody", false)
@@ -266,6 +272,7 @@ func TestAUserWhoReadsNoImagesSeesNoCredentialsAndTheyAreNotFoundToThem(t *testi
 }
 
 func TestAnUnknownCredentialIsNotFoundToAnInstanceAdmin(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	rec := f.credCall(t, f.asAdmin(t), http.MethodGet, "/api/registries/no-such-credential", "")
 	if rec.Code != http.StatusNotFound || problemType(t, rec) != "credential_not_found" {
@@ -274,6 +281,7 @@ func TestAnUnknownCredentialIsNotFoundToAnInstanceAdmin(t *testing.T) {
 }
 
 func TestACredentialIsRefusedWithACodePerFieldAtFault(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	admin := f.asAdmin(t)
 	for _, c := range []struct {
@@ -303,6 +311,7 @@ func TestACredentialIsRefusedWithACodePerFieldAtFault(t *testing.T) {
 }
 
 func TestADockerHubCredentialNeedsANamespaceOrTheFallbackOrBoth(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	admin := f.asAdmin(t)
 	for i, body := range []string{
@@ -320,6 +329,7 @@ func TestADockerHubCredentialNeedsANamespaceOrTheFallbackOrBoth(t *testing.T) {
 }
 
 func TestACredentialClashingWithAnotherOfTheLayerIsAConflict(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	admin := f.asAdmin(t)
 	if rec := f.credCall(t, admin, http.MethodPost, "/api/registries", ghcrAcme); rec.Code != http.StatusCreated {
@@ -342,6 +352,7 @@ func TestACredentialClashingWithAnotherOfTheLayerIsAConflict(t *testing.T) {
 }
 
 func TestACreateIsAuditedWithoutTheSecretOrItsLastCharacters(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	c := decodeCred(t, f.credCall(t, f.asAdmin(t), http.MethodPost, "/api/registries",
 		`{"name":"ghcr-acme","type":"ghcr","prefix":"acme","username":"bot","expires":"2199-12-31","secret":"`+credToken+`"}`))
@@ -424,6 +435,7 @@ func (f *authFixture) registryAudit(t *testing.T) (actions []string, details []m
 }
 
 func TestAnAdminEditsANamespaceAndTheSecretStaysWhereItWas(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	admin := f.asAdmin(t)
 	c := f.storeCredential(t, admin, ghcrAcme)
@@ -450,6 +462,7 @@ func TestAnAdminEditsANamespaceAndTheSecretStaysWhereItWas(t *testing.T) {
 }
 
 func TestANewSecretReplacesTheStoredOneAndNothingComesBack(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	admin := f.asAdmin(t)
 	c := f.storeCredential(t, admin, ghcrAcme)
@@ -475,6 +488,7 @@ func TestANewSecretReplacesTheStoredOneAndNothingComesBack(t *testing.T) {
 }
 
 func TestAPatchCanClearTheNamespaceAndTheExpiry(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	admin := f.asAdmin(t)
 	c := f.storeCredential(t, admin,
@@ -490,6 +504,7 @@ func TestAPatchCanClearTheNamespaceAndTheExpiry(t *testing.T) {
 }
 
 func TestAnUpdateWritesAuditRowsNamingTheChangedFieldsNeverTheirValues(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	admin := f.asAdmin(t)
 	c := f.storeCredential(t, admin, ghcrAcme)
@@ -522,6 +537,7 @@ func TestAnUpdateWritesAuditRowsNamingTheChangedFieldsNeverTheirValues(t *testin
 }
 
 func TestOnlyAnInstanceAdminMayEditAnInstanceCredential(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addEnvironmentRow(t, "env-a")
 	c := f.storeCredential(t, f.asAdmin(t), ghcrAcme)
@@ -542,6 +558,7 @@ func TestOnlyAnInstanceAdminMayEditAnInstanceCredential(t *testing.T) {
 }
 
 func TestAnEnvironmentLayerCredentialCannotBeReachedThroughTheInstanceFamily(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addEnvironmentRow(t, "env-a")
 	if _, err := f.st.Write.Exec(`INSERT INTO registry_credentials (id, env_id, name, type, host, prefix, username, secret_sealed, created_at, updated_at, created_by)
@@ -563,6 +580,7 @@ func TestAnEnvironmentLayerCredentialCannotBeReachedThroughTheInstanceFamily(t *
 }
 
 func TestAnEditIsRefusedWithACodePerFieldAtFault(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	admin := f.asAdmin(t)
 	c := f.storeCredential(t, admin, ghcrAcme)
@@ -589,6 +607,7 @@ func TestAnEditIsRefusedWithACodePerFieldAtFault(t *testing.T) {
 }
 
 func TestEditingOntoAnotherCredentialIsAConflictNamingIt(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	admin := f.asAdmin(t)
 	f.storeCredential(t, admin, ghcrAcme)
@@ -614,6 +633,7 @@ func TestEditingOntoAnotherCredentialIsAConflictNamingIt(t *testing.T) {
 // Deleting a credential (plan 05-07, D-08, D-31).
 
 func TestAnAdminDeletesACredentialAndASecondDeleteIsNotFoundAndWritesNothing(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	admin := f.asAdmin(t)
 	c := f.storeCredential(t, admin, ghcrAcme)
@@ -654,6 +674,7 @@ func TestAnAdminDeletesACredentialAndASecondDeleteIsNotFoundAndWritesNothing(t *
 }
 
 func TestOnlyAnInstanceAdminMayDeleteAnInstanceCredential(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addEnvironmentRow(t, "env-a")
 	c := f.storeCredential(t, f.asAdmin(t), ghcrAcme)
@@ -673,6 +694,7 @@ func TestOnlyAnInstanceAdminMayDeleteAnInstanceCredential(t *testing.T) {
 }
 
 func TestAnEnvironmentLayerCredentialCannotBeDeletedThroughTheInstanceFamily(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addEnvironmentRow(t, "env-a")
 	if _, err := f.st.Write.Exec(`INSERT INTO registry_credentials (id, env_id, name, type, host, prefix, username, secret_sealed, created_at, updated_at, created_by)
@@ -690,6 +712,7 @@ func TestAnEnvironmentLayerCredentialCannotBeDeletedThroughTheInstanceFamily(t *
 }
 
 func TestACreateThatClashesNamesTheOtherCredential(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	admin := f.asAdmin(t)
 	f.storeCredential(t, admin, `{"name":"hub-all","type":"dockerhub","hubFallback":true,"username":"u","secret":"s3cret-token-value"}`)
@@ -744,6 +767,7 @@ func addEnvCredential(t *testing.T, f *envFix, envID string, in registry.CreateI
 }
 
 func TestAViewerLearnsWhichCredentialAPullWouldUseAndWhy(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	e, other := f.twoEnvironments(t)
 	admin := credentialUser{f.cookie, f.csrf}
@@ -780,6 +804,7 @@ func TestAViewerLearnsWhichCredentialAPullWouldUseAndWhy(t *testing.T) {
 }
 
 func TestAnImageNoStoredCredentialMatchesIsAnonymousWithTheReferenceNormalised(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
 	viewer := f.asRoleOn(t, "viewer", e.ID, "viewer")
 	rec := f.credCall(t, viewer, http.MethodPost, "/api/env/"+e.ID+"/registries/resolve", `{"ref":"nginx"}`)
@@ -796,6 +821,7 @@ func TestAnImageNoStoredCredentialMatchesIsAnonymousWithTheReferenceNormalised(t
 }
 
 func TestAHubFallbackAnswersAnOfficialImageAndAGhcrCredentialNeverAnswersAnotherHost(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
 	admin := credentialUser{f.cookie, f.csrf}
 	for _, body := range []string{
@@ -830,6 +856,7 @@ func TestAHubFallbackAnswersAnOfficialImageAndAGhcrCredentialNeverAnswersAnother
 }
 
 func TestResolvingRefusesAnUnreadableReferenceAndACallerWhoCannotReadTheEnvironment(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	e, other := f.twoEnvironments(t)
 	path := "/api/env/" + e.ID + "/registries/resolve"
@@ -863,6 +890,7 @@ func TestResolvingRefusesAnUnreadableReferenceAndACallerWhoCannotReadTheEnvironm
 const envCredBody = `{"name":"ghcr-team","type":"generic","host":"localhost:5000","prefix":"private","username":"bot","secret":"` + pullCredSecret + `"}`
 
 func TestAnEnvAdminAddsAnEnvCredentialForTheirEnvironmentAndItIsAuditedWithThatEnvironment(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	a, _ := f.twoEnvironments(t)
 	admin := f.asRoleOn(t, "envadmin", a.ID, "admin")
@@ -895,6 +923,7 @@ func TestAnEnvAdminAddsAnEnvCredentialForTheirEnvironmentAndItIsAuditedWithThatE
 }
 
 func TestEnvCredentialRoutesRefuseWhoHoldNoAdminRoleOnTheEnvironmentAndHideOthers(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	a, b := f.twoEnvironments(t)
 	f.addUser(t, "nobody", false)
@@ -928,6 +957,7 @@ func TestEnvCredentialRoutesRefuseWhoHoldNoAdminRoleOnTheEnvironmentAndHideOther
 }
 
 func TestEnvCredentialMayShareAnInstanceCredentialsHostAndPrefixButNotTwiceInOneEnvironment(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	a, _ := f.twoEnvironments(t)
 	admin := credentialUser{f.cookie, f.csrf}
@@ -954,6 +984,7 @@ func TestEnvCredentialMayShareAnInstanceCredentialsHostAndPrefixButNotTwiceInOne
 }
 
 func TestAnEnvCredentialAnAdminAddedIsUsedByThatEnvironmentsPullsAndNoOthers(t *testing.T) {
+	t.Parallel()
 	cfg := dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true}
 	f, env, node, _ := twoNodes(t, cfg, dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
 		pairFacts("alpha", false), pairFacts("bravo", false))
@@ -1016,6 +1047,7 @@ func (f *agentFix) startPullOn(t *testing.T, envID string) pullStarted {
 
 // A credential of one environment is managed through that environment's routes only.
 func TestEnvCredentialEditAndDeleteStayInTheirEnvironmentAndLayer(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	a, b := f.twoEnvironments(t)
 	instance, inA, inB := f.layeredCredentials(t, a, b)
@@ -1097,6 +1129,7 @@ func TestEnvCredentialEditAndDeleteStayInTheirEnvironmentAndLayer(t *testing.T) 
 }
 
 func TestEnvCredentialItemRoutesAreForTheAdminOfTheEnvironmentOnly(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	a, b := f.twoEnvironments(t)
 	_, inA, _ := f.layeredCredentials(t, a, b)
@@ -1127,6 +1160,7 @@ func TestEnvCredentialItemRoutesAreForTheAdminOfTheEnvironmentOnly(t *testing.T)
 }
 
 func TestEditingAnEnvCredentialOntoAnotherOfTheEnvironmentIsAConflictNamingItButNotOntoTheInstances(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	a, _ := f.twoEnvironments(t)
 	admin := credentialUser{f.cookie, f.csrf}
@@ -1269,6 +1303,7 @@ func decodeTest(t *testing.T, rec *httptest.ResponseRecorder) testResult {
 }
 
 func TestAnInstanceAdminTestsUnsavedValuesAndSeesEachStepPass(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)
 	f.trusting(t, reg)
@@ -1306,6 +1341,7 @@ func TestAnInstanceAdminTestsUnsavedValuesAndSeesEachStepPass(t *testing.T) {
 }
 
 func TestATestWithBadCredentialsNamesTheFailedStepWhetherTheRegistrySays401Or403(t *testing.T) {
+	t.Parallel()
 	for name, status := range map[string]int{"401": http.StatusUnauthorized, "403": http.StatusForbidden} {
 		t.Run(name, func(t *testing.T) {
 			f := newAuthFixture(t, config.Config{})
@@ -1333,6 +1369,7 @@ func TestATestWithBadCredentialsNamesTheFailedStepWhetherTheRegistrySays401Or403
 }
 
 func TestATestOfTheMetadataAddressNeverConnectsAndSaysUnreachable(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	rec := f.credCall(t, f.asAdmin(t), http.MethodPost, "/api/registries/test", `{"type":"generic","host":"169.254.169.254","username":"bot","secret":"does-not-matter-1234"}`)
 	if rec.Code != http.StatusOK {
@@ -1345,6 +1382,7 @@ func TestATestOfTheMetadataAddressNeverConnectsAndSaysUnreachable(t *testing.T) 
 }
 
 func TestATestNeedsTheCredentialsPermissionOfItsLayer(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addEnvironmentRow(t, "e1")
 	envAdmin := f.asRoleOn(t, "envadmin", "e1", "admin")
@@ -1358,6 +1396,7 @@ func TestATestNeedsTheCredentialsPermissionOfItsLayer(t *testing.T) {
 }
 
 func TestATestRefusesWhatAddingWouldRefuseAndWhatCannotBeTried(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	admin := f.asAdmin(t)
 	for _, tc := range []struct{ name, body, location, code string }{
@@ -1381,6 +1420,7 @@ func TestATestRefusesWhatAddingWouldRefuseAndWhatCannotBeTried(t *testing.T) {
 }
 
 func TestTheEleventhTestInAMinuteIsRateLimited(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	admin := f.asAdmin(t)
 	body := `{"type":"generic","host":"169.254.169.254","username":"bot","secret":"does-not-matter-1234"}`
@@ -1427,6 +1467,7 @@ func (f *fakeRegistry) credential(name, secret string) string {
 }
 
 func TestTestingAStoredCredentialUsesItsStoredSecretAndRemembersTheResult(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)
 	f.trusting(t, reg)
@@ -1457,6 +1498,7 @@ func TestTestingAStoredCredentialUsesItsStoredSecretAndRemembersTheResult(t *tes
 }
 
 func TestAFailedTestOfTheStoredValuesIsRememberedWithItsCode(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)
 	f.trusting(t, reg)
@@ -1481,6 +1523,7 @@ func TestAFailedTestOfTheStoredValuesIsRememberedWithItsCode(t *testing.T) {
 }
 
 func TestATestOfChangedValuesIsAnsweredAndNotRemembered(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)
 	f.trusting(t, reg)
@@ -1502,6 +1545,7 @@ func TestATestOfChangedValuesIsAnsweredAndNotRemembered(t *testing.T) {
 }
 
 func TestATestNamesACredentialOfItsOwnLayerAndEnvironmentOnly(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	a, b := f.twoEnvironments(t)
 	reg := newFakeRegistry(t)
@@ -1549,6 +1593,7 @@ func TestATestNamesACredentialOfItsOwnLayerAndEnvironmentOnly(t *testing.T) {
 }
 
 func TestAnEnvAdminTestsTheirEnvironmentAndAnOperatorCannot(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	a, b := f.twoEnvironments(t)
 	reg := newFakeRegistry(t)
@@ -1569,6 +1614,7 @@ func TestAnEnvAdminTestsTheirEnvironmentAndAnOperatorCannot(t *testing.T) {
 }
 
 func TestBothFamiliesShareOneLimitOfTenTestsAMinutePerUser(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	a, _ := f.twoEnvironments(t)
 	admin := credentialUser{f.cookie, f.csrf}
@@ -1613,6 +1659,7 @@ func (f *fakeRegistry) withOptions(name, secret string, extra map[string]any) st
 }
 
 func TestACredentialKeepsItsCAAndSwitchAndOnlyManagersReadTheCA(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)
 	admin := f.asAdmin(t)
@@ -1671,6 +1718,7 @@ func jsonString(s string) string {
 }
 
 func TestACAThatIsTooLargeOrHoldsNoCertificateIsRefusedWithCaInvalid(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)
 	admin := f.asAdmin(t)
@@ -1708,6 +1756,7 @@ func (f *fakeRegistry) withOptionsTest(extra map[string]any) string {
 // The server's own default trust does not include the fixture's certificate; the credential's
 // CA, or the switch, is what lets the test through.
 func TestATestTrustsTheCredentialsCAOrTheSwitchAndNothingElse(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)
 	admin := f.asAdmin(t)
@@ -1739,6 +1788,7 @@ func TestATestTrustsTheCredentialsCAOrTheSwitchAndNothingElse(t *testing.T) {
 }
 
 func TestATestOfAStoredCredentialLendsItsCAAndSwitchUnlessTheTestSendsOthers(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)
 	admin := f.asAdmin(t)
@@ -1804,6 +1854,7 @@ func decodeFromEnv(t *testing.T, rec *httptest.ResponseRecorder) fromEnvResult {
 }
 
 func TestATestFromAnEnvironmentRunsOnOneManagerNamesItAndSendsTheCredentialOnlyThere(t *testing.T) {
+	t.Parallel()
 	f, env, alpha, bravo := twoNodes(t,
 		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
 		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
@@ -1868,6 +1919,7 @@ func fromEnvBodyFor(reg *fakeRegistry, envID, repo, tag string) string {
 }
 
 func TestATestFromAnEnvironmentReadsATagTheRepositoryHasWhenNoneIsAsked(t *testing.T) {
+	t.Parallel()
 	f, env, alpha, _ := twoNodes(t,
 		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
 		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
@@ -1909,6 +1961,7 @@ func TestATestFromAnEnvironmentReadsATagTheRepositoryHasWhenNoneIsAsked(t *testi
 }
 
 func TestATestFromAnEnvironmentWithATagListsNothingAndAHostThePolicyRefusesIsNeverListed(t *testing.T) {
+	t.Parallel()
 	f, env, alpha, _ := twoNodes(t,
 		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
 		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
@@ -1945,6 +1998,7 @@ func TestATestFromAnEnvironmentWithATagListsNothingAndAHostThePolicyRefusesIsNev
 }
 
 func TestATestFromAnEnvironmentKeepsLatestWhenTheServerCannotListTheTags(t *testing.T) {
+	t.Parallel()
 	f, env, alpha, _ := twoNodes(t,
 		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
 		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
@@ -1963,6 +2017,7 @@ func TestATestFromAnEnvironmentKeepsLatestWhenTheServerCannotListTheTags(t *test
 }
 
 func TestATestFromAnEnvironmentOfASwarmPrefersAManagerOverAnEarlierWorker(t *testing.T) {
+	t.Parallel()
 	worker := &wire.Facts{EngineID: "ENG:alpha", Hostname: "alpha", EngineReachable: true,
 		Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-alpha", ClusterID: "cluster-1"}}
 	f, env, w, m := twoNodes(t,
@@ -1983,6 +2038,7 @@ func TestATestFromAnEnvironmentOfASwarmPrefersAManagerOverAnEarlierWorker(t *tes
 }
 
 func TestATestFromAnEnvironmentNamesTheNodeAndTheCodeWhenItCannotPull(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		status dockertest.FakePullStatus
@@ -2026,6 +2082,7 @@ func TestATestFromAnEnvironmentNamesTheNodeAndTheCodeWhenItCannotPull(t *testing
 }
 
 func TestATestFromAnEnvironmentNeedsARepositoryAndAUsableTag(t *testing.T) {
+	t.Parallel()
 	f, env, node, _ := twoNodes(t,
 		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
 		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
@@ -2052,6 +2109,7 @@ func TestATestFromAnEnvironmentNeedsARepositoryAndAUsableTag(t *testing.T) {
 }
 
 func TestATestFromAnEnvironmentOfAStoredCredentialUsesItsSecretAndOnlyThatLayers(t *testing.T) {
+	t.Parallel()
 	f, env, node, _ := twoNodes(t,
 		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
 		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
@@ -2100,6 +2158,7 @@ func TestATestFromAnEnvironmentOfAStoredCredentialUsesItsSecretAndOnlyThatLayers
 }
 
 func TestATestFromAnEnvironmentNeedsTheCredentialsPermissionOfItsFamily(t *testing.T) {
+	t.Parallel()
 	f, env, node, _ := twoNodes(t,
 		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
 		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
@@ -2128,6 +2187,7 @@ func TestATestFromAnEnvironmentNeedsTheCredentialsPermissionOfItsFamily(t *testi
 }
 
 func TestATestFromAnEnvironmentSharesTheTestLimitAndAnEnvironmentWithNoNodeIs503(t *testing.T) {
+	t.Parallel()
 	f, env, _, _ := twoNodes(t,
 		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
 		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
@@ -2206,6 +2266,7 @@ func credWithExpiry(name, host, expires string) string {
 }
 
 func TestACredentialExpiringInThreeDaysIsInTheInstanceAdminsAlerts(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	admin := f.asAdmin(t)
 	// The fixture clock stands at 2026-01-01 00:00 UTC, so the end of the 3rd is 2 days 23:59:59 away.
@@ -2224,6 +2285,7 @@ func TestACredentialExpiringInThreeDaysIsInTheInstanceAdminsAlerts(t *testing.T)
 }
 
 func TestExpiredAndRefusedCredentialsAreAlertsToo(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	admin := f.asAdmin(t)
 	old := f.storeCredential(t, admin, credWithExpiry("old", "old.example.org", "2026-01-03"))
@@ -2260,6 +2322,7 @@ func TestExpiredAndRefusedCredentialsAreAlertsToo(t *testing.T) {
 }
 
 func TestAnEnvAdminHearsOnlyAboutTheCredentialsOfTheirEnvironments(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	a, b := f.twoEnvironments(t)
 	admin := f.asAdmin(t)
@@ -2295,6 +2358,7 @@ func TestAnEnvAdminHearsOnlyAboutTheCredentialsOfTheirEnvironments(t *testing.T)
 }
 
 func TestCredentialAlertsNeedSignIn(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/registries/alerts"})
 	if rec.Code != http.StatusUnauthorized {

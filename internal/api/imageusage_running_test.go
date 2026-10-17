@@ -22,6 +22,7 @@ func aggOf(images []envs.ImageRow, containers []envs.ContainerRow) envs.Aggregat
 }
 
 func TestRunningDigestsTakesTheRepoDigestsOfTheImageAContainerWasCreatedFromInTheShortForm(t *testing.T) {
+	t.Parallel()
 	d := digestOf("a")
 	agg := aggOf(
 		[]envs.ImageRow{{NodeID: "n1", ImageRow: dockerx.ImageRow{ID: digestOf("1"), RepoDigests: []string{"docker@sha256:" + strings.Repeat("a", 64)}}}},
@@ -38,6 +39,7 @@ func TestRunningDigestsTakesTheRepoDigestsOfTheImageAContainerWasCreatedFromInTh
 }
 
 func TestRunningDigestsTakesTheDigestOfASwarmTaskContainerFromItsImageName(t *testing.T) {
+	t.Parallel()
 	p := digestOf("b")
 	agg := aggOf(nil, []envs.ContainerRow{
 		{NodeID: "n2", Node: "node-2", ContainerRow: dockerx.ContainerRow{ID: "t1", Name: "web.1.abc", State: "running", Image: "ghcr.io/acme/app:2.0@" + p, ImageID: digestOf("2")}},
@@ -49,6 +51,7 @@ func TestRunningDigestsTakesTheDigestOfASwarmTaskContainerFromItsImageName(t *te
 }
 
 func TestRunningDigestsLeavesOutContainersThatAreNotRunningAndKeepsRepositoriesApart(t *testing.T) {
+	t.Parallel()
 	p := digestOf("c")
 	agg := aggOf(nil, []envs.ContainerRow{
 		{NodeID: "n1", ContainerRow: dockerx.ContainerRow{ID: "up", Name: "up", State: "running", Image: "ghcr.io/acme/app@" + p}},
@@ -71,6 +74,7 @@ func TestRunningDigestsLeavesOutContainersThatAreNotRunningAndKeepsRepositoriesA
 }
 
 func TestRunningDigestsListsTheSameDigestOnTwoNodesAsTwoContainers(t *testing.T) {
+	t.Parallel()
 	p := digestOf("d")
 	agg := aggOf(nil, []envs.ContainerRow{
 		{NodeID: "n2", Node: "b", ContainerRow: dockerx.ContainerRow{ID: "x2", Name: "web.2", State: "running", Image: "nginx:1@" + p}},
@@ -83,6 +87,7 @@ func TestRunningDigestsListsTheSameDigestOnTwoNodesAsTwoContainers(t *testing.T)
 }
 
 func TestRunningTagsMatchByTheIndexDigestOrAnyPlatformDigest(t *testing.T) {
+	t.Parallel()
 	idx, plat := digestOf("e"), digestOf("f")
 	running := map[string][]RunningRef{"docker.io/library/nginx@" + plat: {{ID: "c"}}}
 	if !isRunning(running, "docker.io/library/nginx", idx, []string{plat}) {

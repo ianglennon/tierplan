@@ -61,6 +61,7 @@ type imageDetail struct {
 }
 
 func TestImageDetailAViewerSeesTheNamesDetailsLabelsAndTheNodeThatHasIt(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, imageDetailEngine())
 	get := f.asRole(t, e, "img-viewer", "viewer")
 
@@ -96,6 +97,7 @@ func TestImageDetailAViewerSeesTheNamesDetailsLabelsAndTheNodeThatHasIt(t *testi
 }
 
 func TestImageDetailAnImageWithNoTagIsDanglingWithNoNames(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, imageDetailEngine())
 	awaitOnline(t, f.mon, e.ID)
 	rec := f.get(t, e, "images/"+imgDangle)
@@ -109,6 +111,7 @@ func TestImageDetailAnImageWithNoTagIsDanglingWithNoNames(t *testing.T) {
 }
 
 func TestImageDetailAnIDOfTheWrongShapeIs422AnUnknownImageIs404AndANodeThatIsNotTheEnvironmentsIs503(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, imageDetailEngine())
 	awaitOnline(t, f.mon, e.ID)
 	for _, bad := range []string{"nginx", "sha256:abc", strings.ToUpper(imgID), imgID + "0", "sha256:" + strings.Repeat("g", 64)} {
@@ -132,6 +135,7 @@ func TestImageDetailAnIDOfTheWrongShapeIs422AnUnknownImageIs404AndANodeThatIsNot
 }
 
 func TestImageDetailNeedsImagesRead(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, imageDetailEngine())
 	f.addUser(t, "stranger", false)
 	cookie, csrf := f.signIn(t, "stranger", false)
@@ -142,6 +146,7 @@ func TestImageDetailNeedsImagesRead(t *testing.T) {
 }
 
 func TestSwarmImageDetailNamesEveryNodeAndSaysWhichDoNotHaveIt(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	id := "sha256:" + strings.Repeat("a", 64)
 	s.awaitNodesProbed(t)
@@ -186,6 +191,7 @@ func TestSwarmImageDetailNamesEveryNodeAndSaysWhichDoNotHaveIt(t *testing.T) {
 }
 
 func TestImageDetailAnEncodedColonInThePathIsTheSameImage(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, imageDetailEngine())
 	awaitOnline(t, f.mon, e.ID)
 	rec := f.get(t, e, "images/"+strings.Replace(imgID, ":", "%3A", 1))
@@ -241,6 +247,7 @@ func envOf(t *testing.T, doc map[string]any, section string) []any {
 }
 
 func TestImageInspectAViewerGetsTheDocumentWithEveryEnvValueReplacedAndMaskedSaysSo(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, imageInspectEngine())
 	get := f.asRole(t, e, "img-viewer", "viewer")
 	rec := get("images/" + imgEnv + "/inspect")
@@ -266,6 +273,7 @@ func TestImageInspectAViewerGetsTheDocumentWithEveryEnvValueReplacedAndMaskedSay
 }
 
 func TestImageInspectAHolderOfSecretsRevealGetsTheDocumentAsTheEngineSentIt(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, imageInspectEngine())
 	get := f.asRole(t, e, "img-admin", "admin")
 	rec := get("images/" + imgEnv + "/inspect")
@@ -283,6 +291,7 @@ func TestImageInspectAHolderOfSecretsRevealGetsTheDocumentAsTheEngineSentIt(t *t
 }
 
 func TestImageInspectAnImageWithNoEnvIsNotMasked(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, imageInspectEngine())
 	get := f.asRole(t, e, "img-viewer2", "viewer")
 	rec := get("images/" + imgDangle + "/inspect")
@@ -295,6 +304,7 @@ func TestImageInspectAnImageWithNoEnvIsNotMasked(t *testing.T) {
 }
 
 func TestImageInspectAndHistoryUseTheDetailRoutesRulesForTheIDAndTheNode(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, imageInspectEngine())
 	awaitOnline(t, f.mon, e.ID)
 	for _, what := range []string{"inspect", "history"} {
@@ -314,6 +324,7 @@ func TestImageInspectAndHistoryUseTheDetailRoutesRulesForTheIDAndTheNode(t *test
 }
 
 func TestImageHistoryAnswersTheLayersInTheOrderTheEngineGaveThem(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, imageInspectEngine())
 	awaitOnline(t, f.mon, e.ID)
 	rec := f.get(t, e, "images/"+imgEnv+"/history")
@@ -333,6 +344,7 @@ func TestImageHistoryAnswersTheLayersInTheOrderTheEngineGaveThem(t *testing.T) {
 }
 
 func TestImageHistoryFromAnAgentThatRefusesTheRouteIsAgentPolicyDenied(t *testing.T) {
+	t.Parallel()
 	cfg := imageInspectEngine()
 	cfg.HistoryDeny = true
 	f, e := dashEnv(t, cfg)
@@ -348,6 +360,7 @@ func TestImageHistoryFromAnAgentThatRefusesTheRouteIsAgentPolicyDenied(t *testin
 }
 
 func TestSwarmImageInspectAndHistoryReadTheFirstNodeThatHasItOrTheNodeNamed(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	id := "sha256:" + strings.Repeat("a", 64)
 	s.awaitNodesProbed(t)
@@ -444,6 +457,7 @@ func (s *swarmFix) imageList(t *testing.T, query string) imageList {
 }
 
 func TestImageListMergesNodeCopiesByIDAndKeepsTheSameTagWithAnotherIDAsASecondRow(t *testing.T) {
+	t.Parallel()
 	s := listSwarm(t)
 	s.awaitNodesProbed(t)
 	got := s.imageList(t, "")
@@ -485,6 +499,7 @@ func TestImageListMergesNodeCopiesByIDAndKeepsTheSameTagWithAnotherIDAsASecondRo
 }
 
 func TestImageListPerNodeViewHasOneRowPerNodeCopyAndTheNodeFilterNarrowsIt(t *testing.T) {
+	t.Parallel()
 	s := listSwarm(t)
 	s.awaitNodesProbed(t)
 	got := s.imageList(t, "?view=node")
@@ -511,6 +526,7 @@ func TestImageListPerNodeViewHasOneRowPerNodeCopyAndTheNodeFilterNarrowsIt(t *te
 }
 
 func TestImageListSearchMatchesTagRepositoryOrIDPrefixAndDanglingKeepsUntaggedRows(t *testing.T) {
+	t.Parallel()
 	s := listSwarm(t)
 	s.awaitNodesProbed(t)
 	for q, want := range map[string]int{
@@ -540,6 +556,7 @@ func TestImageListSearchMatchesTagRepositoryOrIDPrefixAndDanglingKeepsUntaggedRo
 }
 
 func TestImageListFiltersRunBeforeTheCapAndRowsSortNewestFirstThenByID(t *testing.T) {
+	t.Parallel()
 	var imgs []dockertest.FakeImage
 	// 501 untagged images made later than the one tag, so the cap alone would hide it.
 	for i := range 501 {
@@ -568,6 +585,7 @@ func TestImageListFiltersRunBeforeTheCapAndRowsSortNewestFirstThenByID(t *testin
 }
 
 func TestImageListWithNoImagesIsEmptyNotNull(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
 	awaitOnline(t, f.mon, e.ID)
 	got := decode[imageList](t, f.get(t, e, "images"))
@@ -592,6 +610,7 @@ func imageSecretsEngine() dockertest.FakeConfig {
 }
 
 func TestImageHistoryAViewerSeesTheKindOfEachInstructionAndNotItsText(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, imageSecretsEngine())
 	get := f.asRole(t, e, "img-viewer", "viewer")
 	rec := get("images/" + imgEnv + "/history")
@@ -617,6 +636,7 @@ func TestImageHistoryAViewerSeesTheKindOfEachInstructionAndNotItsText(t *testing
 }
 
 func TestImageHistoryAHolderOfSecretsRevealSeesTheCommandsAsTheEngineGaveThem(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, imageSecretsEngine())
 	get := f.asRole(t, e, "img-admin", "admin")
 	rec := get("images/" + imgEnv + "/history")
@@ -626,6 +646,7 @@ func TestImageHistoryAHolderOfSecretsRevealSeesTheCommandsAsTheEngineGaveThem(t 
 }
 
 func TestImageInspectAViewerDoesNotGetTheCommandOrASecretNamedLabel(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, imageSecretsEngine())
 	viewer := f.asRole(t, e, "img-viewer", "viewer")
 	rec := viewer("images/" + imgEnv + "/inspect")

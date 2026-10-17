@@ -38,6 +38,7 @@ func (f *envFix) layeredCredentials(t *testing.T, a, b envBody) (instance, inA, 
 }
 
 func TestCredentialVisibility(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	a, b := f.twoEnvironments(t)
 	instance, inA, inB := f.layeredCredentials(t, a, b)
@@ -119,6 +120,7 @@ func TestCredentialVisibility(t *testing.T) {
 }
 
 func TestRemovingAnEnvironmentDeletesItsCredentials(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	a, b := f.twoEnvironments(t)
 	instance, inA, inB := f.layeredCredentials(t, a, b)
