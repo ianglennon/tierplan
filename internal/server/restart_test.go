@@ -27,6 +27,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/store/sqlc"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // Restoring over a running server (plan 03-25, D-30): the process stops serving,
@@ -105,7 +106,7 @@ type served struct {
 	exited bool
 }
 
-// wait returns what Run returned, waiting up to 20 seconds for it.
+// wait returns what Run returned, waiting up to testsupport.Deadline for it.
 func (s *served) wait() error {
 	s.t.Helper()
 	if s.exited {
@@ -114,7 +115,7 @@ func (s *served) wait() error {
 	select {
 	case s.result = <-s.done:
 		s.exited = true
-	case <-time.After(20 * time.Second):
+	case <-time.After(testsupport.Deadline):
 		s.t.Fatal("Run did not return")
 	}
 	return s.result

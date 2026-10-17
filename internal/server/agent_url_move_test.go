@@ -18,7 +18,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/tunnel"
@@ -185,7 +184,7 @@ func TestAnAgentOfflineDuringASecondAddressChange(t *testing.T) {
 	agentID := func() string {
 		t.Helper()
 		var got string
-		testsupport.Poll(t, 10*time.Second, "identity.json to hold an agent ID", func() (bool, string) { // testsupport: external, the agent process writing its state file
+		testsupport.Poll(t, testsupport.Deadline, "identity.json to hold an agent ID", func() (bool, string) { // testsupport: external, the agent process writing its state file
 			raw, err := os.ReadFile(filepath.Join(stateDir, "identity.json")) //nolint:gosec // the test's own temporary directory
 			var id struct {
 				AgentID string `json:"agentId"`
@@ -207,7 +206,7 @@ func TestAnAgentOfflineDuringASecondAddressChange(t *testing.T) {
 	// The first change: B. The connected agent is told and keeps it first.
 	wssB := "wss://" + tsB.Listener.Addr().String() + "/agent/connect"
 	setAgentURL("https://" + tsB.Listener.Addr().String())
-	testsupport.Poll(t, 10*time.Second, "urls.json to list "+wssB+" first", func() (bool, string) { // testsupport: external, the agent process writing its state file
+	testsupport.Poll(t, testsupport.Deadline, "urls.json to list "+wssB+" first", func() (bool, string) { // testsupport: external, the agent process writing its state file
 		raw, _ := os.ReadFile(filepath.Join(stateDir, "urls.json")) //nolint:gosec // the test's own temporary directory
 		var entries []struct {
 			URL string `json:"url"`

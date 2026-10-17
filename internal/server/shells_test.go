@@ -115,7 +115,7 @@ func TestBuildShutdownEndsAnOpenShellTellsItsBrowserWhyAndAuditsTheEnd(t *testin
 		t.Fatalf("open shell = %d, %v", openResp.StatusCode, err)
 	}
 
-	dctx, dcancel := context.WithTimeout(ctx, 10*time.Second)
+	dctx, dcancel := context.WithTimeout(ctx, testsupport.Deadline)
 	defer dcancel()
 	conn, _, err := websocket.Dial(dctx, "ws"+strings.TrimPrefix(base, "http")+opened.WSPath, &websocket.DialOptions{ //nolint:bodyclose // a WebSocket upgrade response has no body to close
 		HTTPHeader: http.Header{"Cookie": {cookie.String()}, "Origin": {base}},
@@ -169,7 +169,7 @@ func TestBuildShutdownEndsAnOpenShellTellsItsBrowserWhyAndAuditsTheEnd(t *testin
 		if err != nil {
 			t.Fatalf("serve returned %v", err)
 		}
-	case <-time.After(15 * time.Second):
+	case <-time.After(testsupport.Deadline):
 		t.Fatal("serve did not return")
 	}
 

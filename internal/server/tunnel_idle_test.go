@@ -35,11 +35,10 @@ func TestTunnelIdleLongerThanTheReadTimeoutStaysConnected(t *testing.T) {
 	// This asserts an absence, so time has to pass: the session must stay open for
 	// three read timeouts. It returns as soon as the session ends, which is the
 	// failure, instead of waiting out the whole period.
-	// wall-clock: absence under test; a ReadTimeout regression closes the tunnel within one read timeout, so three can only miss a late close, never fail a correct run
 	select {
 	case <-s.Done():
 		t.Fatalf("the tunnel was closed within %v idle with a ReadTimeout of %v", 3*readTimeout, readTimeout)
-	case <-time.After(3 * readTimeout):
+	case <-time.After(3 * readTimeout): // wall-clock: absence under test; a ReadTimeout regression closes the tunnel within one read timeout, so three can only miss a late close, never fail a correct run
 	}
 
 	client := &http.Client{Transport: &http.Transport{DialContext: s.Transport().DialContext}}

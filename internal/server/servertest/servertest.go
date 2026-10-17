@@ -183,8 +183,8 @@ func (s *Server) stop() {
 	s.cancel()
 	select {
 	case <-s.done:
-	case <-time.After(20 * time.Second):
-		s.t.Error("servertest: the server did not shut down within 20s")
+	case <-time.After(testsupport.Deadline):
+		s.t.Errorf("servertest: the server did not shut down within %v", testsupport.Deadline)
 	}
 	s.cancel = nil
 }
@@ -203,7 +203,7 @@ func (s *Server) Restart(version string) {
 	}
 	// The listening port is released as the old server stops; a kernel that has not
 	// finished with it makes Run fail to listen, so boot is retried until it can.
-	testsupport.Poll(s.t, 10*time.Second, "the restarted server to listen on its old address", func() (bool, string) { // testsupport: external, the kernel releasing the old listening port
+	testsupport.Poll(s.t, testsupport.Deadline, "the restarted server to listen on its old address", func() (bool, string) { // testsupport: external, the kernel releasing the old listening port
 		if s.boot() {
 			return true, ""
 		}

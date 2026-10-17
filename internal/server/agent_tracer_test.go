@@ -29,6 +29,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store/sqlc"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -253,7 +254,7 @@ func TestAgentTracerStandaloneEnrolsAndComesOnline(t *testing.T) {
 	}
 	// The tab hears it: the snapshot, the agent connecting, and the environment changing state.
 	seen := map[string]bool{}
-	for timeout := time.After(10 * time.Second); !seen["snapshot"] || !seen["agent.connected"] || !seen["env.status"]; {
+	for timeout := time.After(testsupport.Deadline); !seen["snapshot"] || !seen["agent.connected"] || !seen["env.status"]; {
 		select {
 		case name, ok := <-streamed:
 			if !ok {
@@ -415,7 +416,7 @@ func TestAgentTracerWrongTokenIsRefused(t *testing.T) {
 		if err == nil {
 			t.Fatal("the agent exited cleanly after being refused")
 		}
-	case <-time.After(15 * time.Second):
+	case <-time.After(testsupport.Deadline):
 		_ = agent.Process.Kill()
 		t.Fatalf("the agent did not exit after being refused; output:\n%s", out.String())
 	}

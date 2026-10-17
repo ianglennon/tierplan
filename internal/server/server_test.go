@@ -122,7 +122,7 @@ func TestReadyzTurns503WhenTheDataDirDisappears(t *testing.T) {
 	// Background work started by Build (the work-file sweep, SQLite's WAL) can
 	// write into the directory while it is being removed; keep removing until it
 	// is gone.
-	testsupport.Poll(t, 5*time.Second, "the data directory to be removed", func() (bool, string) { // testsupport: external, the store's WAL and the sweep writing into the directory while it is removed
+	testsupport.Poll(t, testsupport.Deadline, "the data directory to be removed", func() (bool, string) { // testsupport: external, the store's WAL and the sweep writing into the directory while it is removed
 		err := os.RemoveAll(dir)
 		if err != nil {
 			return false, err.Error()
@@ -166,7 +166,7 @@ func TestRunServesThenShutsDownOnCancelAndHealthcheckFollows(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Run returned %v after cancel, want nil", err)
 		}
-	case <-time.After(15 * time.Second):
+	case <-time.After(testsupport.Deadline):
 		t.Fatal("server did not shut down")
 	}
 
@@ -700,17 +700,16 @@ func TestBuildFeedsEventsPerEnvironmentAndShutdownDoesNotWaitForAnOpenStream(t *
 		t.Fatalf("first read = %q, %v, want the backlog frame", buf[:n], err)
 	}
 
-	start := time.Now()
 	stop()
 	select {
 	case err := <-done:
+		// Not waiting for the stream is proved by the result, not by a stopwatch:
+		// a shutdown that had to wait out shutdownTimeout for the open stream
+		// returns "graceful shutdown: context deadline exceeded".
 		if err != nil {
-			t.Fatalf("serve returned %v with a stream open, want a clean shutdown", err)
+			t.Fatalf("serve returned %v with a stream open, want a clean shutdown that did not wait for the stream", err)
 		}
-		if took := time.Since(start); took > 5*time.Second {
-			t.Errorf("shutdown took %v with a stream open, want it not to wait for the stream", took)
-		}
-	case <-time.After(15 * time.Second):
+	case <-time.After(testsupport.Deadline):
 		t.Fatal("serve did not return with a stream open")
 	}
 
@@ -1010,7 +1009,7 @@ func TestServerRefusesAnOversizedRequestLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(testsupport.Deadline))
 	_, _ = fmt.Fprintf(conn, "GET /api/env/%s/summary HTTP/1.1\r\nHost: x\r\n\r\n", strings.Repeat("a", 200_000))
 	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
 	if err != nil {

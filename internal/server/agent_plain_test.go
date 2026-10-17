@@ -238,7 +238,7 @@ func TestTheDevelopmentInstallCommandConnectsOverPlainWS(t *testing.T) {
 		if !errors.As(err, &ee) || ee.ExitCode() != 2 {
 			t.Errorf("the agent without the switch exited with %v, want exit code 2\n%s", err, log2.String())
 		}
-	case <-time.After(15 * time.Second):
+	case <-time.After(testsupport.Deadline):
 		t.Fatalf("the agent without the switch did not exit; output:\n%s", log2.String())
 	}
 	if !strings.Contains(log2.String(), "BAYPLAN_AGENT_ALLOW_INSECURE") {

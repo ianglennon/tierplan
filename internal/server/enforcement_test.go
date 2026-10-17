@@ -15,7 +15,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/spf13/pflag"
 
@@ -25,6 +24,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/server"
 	"github.com/ianglennon/bayplan/internal/server/servertest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // The two environments every archetype is measured against. Real UUIDs, so a
@@ -75,17 +75,14 @@ func newEnforcement(t *testing.T) *enforcement {
 // send calls the handler as the archetype. Every call opens a session of its own
 // and puts environments A and B back as they were, so what one call does cannot
 // change what the next is expected to see. A request that is expected to be
-// allowed may hold a connection open (the event streams), so it gets a short
-// deadline; a refusal is immediate.
-func (e *enforcement) send(a servertest.Archetype, method, path string, allowed bool) *httptest.ResponseRecorder {
+// allowed may hold a connection open (the environments stream): the request is
+// ended by its first flush, which is the handler having answered, so no timer
+// decides how long a stream is given. A refusal is immediate.
+func (e *enforcement) send(a servertest.Archetype, method, path string) *httptest.ResponseRecorder {
 	e.t.Helper()
 	servertest.EnsureEnvironments(e.t, e.srv.Store(), envA, envB)
 	servertest.EnsureGrants(e.t, e.srv.Store(), envA, envB)
-	timeout := 10 * time.Second
-	if allowed {
-		timeout = 400 * time.Millisecond
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithCancel(testsupport.Context(e.t))
 	defer cancel()
 
 	body := ""
@@ -105,9 +102,22 @@ func (e *enforcement) send(a servertest.Archetype, method, path string, allowed 
 		req.AddCookie(cookie)
 		req.Header.Set("X-CSRF-Token", csrf)
 	}
-	rec := httptest.NewRecorder()
+	rec := &flushEnds{ResponseRecorder: httptest.NewRecorder(), end: cancel}
 	e.h.ServeHTTP(rec, req)
-	return rec
+	return rec.ResponseRecorder
+}
+
+// flushEnds ends the request it answers at the first flush. A stream handler
+// flushes once it has written its opening frame, and then waits for its request
+// to end; every other handler returns without flushing.
+type flushEnds struct {
+	*httptest.ResponseRecorder
+	end context.CancelFunc
+}
+
+func (f *flushEnds) Flush() {
+	f.ResponseRecorder.Flush()
+	f.end()
 }
 
 type denial struct {
@@ -297,7 +307,7 @@ func TestEveryRouteRefusesEveryArchetypeThatLacksItsRequirement(t *testing.T) {
 				for _, a := range servertest.Archetypes() {
 					want := expect(a, k, reg, envID)
 					before := e.denials()
-					rr := e.send(a, rec.Method, path, want == allowed)
+					rr := e.send(a, rec.Method, path)
 					after := e.denials()
 					who := string(a) + " on " + envID + " " + rec.Method + " " + path
 
@@ -366,8 +376,8 @@ func TestAnUnseenEnvironmentAnswersExactlyLikeAMissingOne(t *testing.T) {
 		if a == servertest.ArchetypeEnvAdminA {
 			unseen = envB
 		}
-		got := e.send(a, http.MethodGet, "/api/env/"+unseen+"/summary", false)
-		missing := e.send(a, http.MethodGet, "/api/env/"+envMissing+"/summary", false)
+		got := e.send(a, http.MethodGet, "/api/env/"+unseen+"/summary")
+		missing := e.send(a, http.MethodGet, "/api/env/"+envMissing+"/summary")
 		if got.Code != http.StatusNotFound || got.Code != missing.Code || got.Body.String() != missing.Body.String() {
 			t.Errorf("%s: an environment with no grant answers %d %s, a missing one %d %s; they must be identical",
 				a, got.Code, got.Body, missing.Code, missing.Body)
@@ -427,7 +437,7 @@ func TestEnvironmentListsShowOnlyWhatEachArchetypeCanSee(t *testing.T) {
 	}
 	for a, ids := range want {
 		t.Run(string(a), func(t *testing.T) {
-			rr := e.send(a, http.MethodGet, "/api/environments", false)
+			rr := e.send(a, http.MethodGet, "/api/environments")
 			if rr.Code != http.StatusOK {
 				t.Fatalf("GET /api/environments = %d %s", rr.Code, rr.Body)
 			}
@@ -448,7 +458,7 @@ func TestEnvironmentListsShowOnlyWhatEachArchetypeCanSee(t *testing.T) {
 				t.Errorf("environments = %v, want %v", got, ids)
 			}
 
-			rr = e.send(a, http.MethodGet, "/api/me/recent-environments", false)
+			rr = e.send(a, http.MethodGet, "/api/me/recent-environments")
 			if rr.Code != http.StatusOK {
 				t.Fatalf("GET /api/me/recent-environments = %d %s", rr.Code, rr.Body)
 			}
