@@ -294,6 +294,7 @@ func (h *shellTicks) tick(t testing.TB) {
 }
 
 func TestShellOpenCreatesTheExecWithATTYAndAPendingSession(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	s := f.session(t)
 	if s.SessionID == "" || s.WSPath != "/api/env/"+f.env.ID+"/shell-sessions/"+s.SessionID+"/ws" {
@@ -325,6 +326,7 @@ func TestShellOpenCreatesTheExecWithATTYAndAPendingSession(t *testing.T) {
 }
 
 func TestShellOpenIsRefusedForAViewerAndForAnOperatorWithoutTheGrant(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	f.addEnvUser(t, "vic", f.env.ID, "viewer")
 	f.addEnvUser(t, "olive", f.env.ID, "operator")
@@ -343,6 +345,7 @@ func TestShellOpenIsRefusedForAViewerAndForAnOperatorWithoutTheGrant(t *testing.
 }
 
 func TestShellWebSocketCarriesTheTerminalBytesBothWaysAndReportsTheExitCode(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	s := f.session(t)
 	c := f.attach(t, s)
@@ -378,6 +381,7 @@ func TestShellWebSocketCarriesTheTerminalBytesBothWaysAndReportsTheExitCode(t *t
 }
 
 func TestShellWebSocketRefusesAnotherOriginAnotherUserAnotherSignInAndASecondAttach(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	f.addEnvUser(t, "bob", f.env.ID, "admin")
 	bobCookie, _ := f.signIn(t, "bob", false)
@@ -407,6 +411,7 @@ func TestShellWebSocketRefusesAnotherOriginAnotherUserAnotherSignInAndASecondAtt
 }
 
 func TestShellWebSocketAcceptsTheInstancesPublicOriginAndNoOther(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	// Behind a proxy the Host is the proxy's own, so the public origin is what counts.
 	f.inst.Apply("", "http://bayplan.example")
@@ -423,6 +428,7 @@ func TestShellWebSocketAcceptsTheInstancesPublicOriginAndNoOther(t *testing.T) {
 }
 
 func TestShellClosingTheSocketEndsTheSessionAndCannotBeReattached(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	s := f.session(t)
 	c := f.attach(t, s)
@@ -443,6 +449,7 @@ func TestShellClosingTheSocketEndsTheSessionAndCannotBeReattached(t *testing.T) 
 }
 
 func TestShellAuditsTheStartAndTheEndOfASessionAndNeverWhatWasTyped(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	s := f.session(t)
 	c := f.attach(t, s)
@@ -490,6 +497,7 @@ func TestShellAuditsTheStartAndTheEndOfASessionAndNeverWhatWasTyped(t *testing.T
 }
 
 func TestShellServerShutdownTellsAnAttachedBrowserWhy(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	s := f.session(t)
 	c := f.attach(t, s)
@@ -510,6 +518,7 @@ func TestShellServerShutdownTellsAnAttachedBrowserWhy(t *testing.T) {
 }
 
 func TestShellOpenOnANodeThatIsNotConnectedAnswersNodeUnavailableBeforeAnyExec(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	rec := f.open(t, "web", `{"nodeId":"nobody","shell":"auto","cols":80,"rows":24}`)
 	if rec.code != http.StatusServiceUnavailable || rec.ptyp != "node_unavailable" {
@@ -524,6 +533,7 @@ func TestShellOpenOnANodeThatIsNotConnectedAnswersNodeUnavailableBeforeAnyExec(t
 }
 
 func TestShellOpenWhenTheEngineRefusesTheExecAnswersTheMappedProblemAndWritesNoRow(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	// The exited container: the engine answers the exec create with 409.
 	rec := f.open(t, "db", `{"shell":"auto","cols":80,"rows":24}`)
@@ -543,6 +553,7 @@ func TestShellOpenWhenTheEngineRefusesTheExecAnswersTheMappedProblemAndWritesNoR
 }
 
 func TestShellOpenRefusesACustomCommandThatCannotBeReadBeforeAnyExec(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	for _, body := range []string{
 		`{"shell":"custom","command":"/bin/sh -c 'unbalanced","cols":80,"rows":24}`,
@@ -567,6 +578,7 @@ func TestShellOpenRefusesACustomCommandThatCannotBeReadBeforeAnyExec(t *testing.
 }
 
 func TestShellOpenPassesTheChosenUserDirectoryAndSizeAndRecordsACustomCommand(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	rec := f.open(t, "web", `{"shell":"custom","command":"/bin/zsh -l","user":"www-data","workingDir":"/srv","cols":120,"rows":40}`)
 	if rec.code != http.StatusCreated {
@@ -595,6 +607,7 @@ func TestShellOpenPassesTheChosenUserDirectoryAndSizeAndRecordsACustomCommand(t 
 }
 
 func TestShellASessionThatIsNotAttachedInTimeIsEndedItsExecClosedAndTheEndAudited(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, func(f *envFix) { f.shellsPending = 150 * time.Millisecond })
 	s := f.session(t)
 
@@ -631,6 +644,7 @@ func (c *handClock) AfterFunc(d time.Duration, f func()) func() bool {
 }
 
 func TestShellIdleAShellForgottenForTheInstancesLimitIsWarnedAndClosedAndTheEndAudited(t *testing.T) {
+	t.Parallel()
 	clk := &handClock{now: time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)}
 	ticks := newShellTicks()
 	f := newShellFix(t, func(f *envFix) {
@@ -682,6 +696,7 @@ func (f *shellFix) refusedNothingStarted(t *testing.T) {
 }
 
 func TestShellRefusesAStoppedContainerWithContainerNotRunningAndMakesNoExec(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	rec := f.open(t, "db", openBody)
 	if rec.code != http.StatusConflict || rec.ptyp != "container_not_running" {
@@ -691,6 +706,7 @@ func TestShellRefusesAStoppedContainerWithContainerNotRunningAndMakesNoExec(t *t
 }
 
 func TestShellRefusesBayplansOwnServerAndAnAgentContainerWithOwnContainerFromAFreshInspect(t *testing.T) {
+	t.Parallel()
 	f := newShellFixOn(t, actionEngine(), nil)
 	// By name, by full ID and by the short ID the server knows itself by: the rule reads
 	// the container from the engine, so how it was named does not matter.
@@ -708,6 +724,7 @@ func TestShellRefusesBayplansOwnServerAndAnAgentContainerWithOwnContainerFromAFr
 }
 
 func TestShellRefusesTheNextOpenOverThePerUserCapWith429AndTheLimit(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, func(f *envFix) { f.inst.ApplyShellLimits(30, 2) })
 	f.session(t)
 	f.session(t)
@@ -754,6 +771,7 @@ func TestShellRefusesTheNextOpenOverThePerUserCapWith429AndTheLimit(t *testing.T
 }
 
 func TestShellRefusesAReadOnlyHostWithHostReadOnlyAndSendsNothing(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Locked")
 	a := f.connect(t, env, shellEngine(), &wire.Facts{
@@ -777,6 +795,7 @@ func TestShellRefusesAReadOnlyHostWithHostReadOnlyAndSendsNothing(t *testing.T) 
 }
 
 func TestShellRefusesAnAgentThatRefusesByPolicyWithAgentPolicyDenied(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Old agent")
 	cfg := shellEngine()
@@ -797,6 +816,7 @@ func TestShellRefusesAnAgentThatRefusesByPolicyWithAgentPolicyDenied(t *testing.
 }
 
 func TestShellRefusesAnImageWithNoShellByClosingWithNoShell(t *testing.T) {
+	t.Parallel()
 	cfg := shellEngine()
 	cfg.MissingExecutables = []string{"/bin/sh"}
 	f := newShellFixOn(t, cfg, nil)
@@ -848,6 +868,7 @@ func (f *shellFix) openAs(t *testing.T, cookie, csrf string) *websocket.Conn {
 }
 
 func TestShellAccessLostWhenTheShellPermissionIsRemovedEndsTheSessionAndAuditsTheReason(t *testing.T) {
+	t.Parallel()
 	ticks := newShellTicks()
 	f := newShellFix(t, func(f *envFix) { f.shellsControls = ticks.controls() })
 	cookie, csrf := f.operatorWithShell(t, "olive")
@@ -869,6 +890,7 @@ func TestShellAccessLostWhenTheShellPermissionIsRemovedEndsTheSessionAndAuditsTh
 }
 
 func TestShellAccessLostWhenTheEnvironmentGrantGoesEndsTheSession(t *testing.T) {
+	t.Parallel()
 	ticks := newShellTicks()
 	f := newShellFix(t, func(f *envFix) { f.shellsControls = ticks.controls() })
 	cookie, csrf := f.operatorWithShell(t, "olive")
@@ -888,6 +910,7 @@ func TestShellAccessLostWhenTheEnvironmentGrantGoesEndsTheSession(t *testing.T) 
 }
 
 func TestShellAccessLostWhenTheUserSignsOutEndsTheSession(t *testing.T) {
+	t.Parallel()
 	ticks := newShellTicks()
 	f := newShellFix(t, func(f *envFix) { f.shellsControls = ticks.controls() })
 	cookie, csrf := f.operatorWithShell(t, "olive")
@@ -904,6 +927,7 @@ func TestShellAccessLostWhenTheUserSignsOutEndsTheSession(t *testing.T) {
 }
 
 func TestShellAccessAnAdministratorEndingASessionTellsItsBrowserAndAuditsIt(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	s := f.session(t)
 	c := f.attach(t, s)
@@ -923,6 +947,7 @@ func TestShellAccessAnAdministratorEndingASessionTellsItsBrowserAndAuditsIt(t *t
 }
 
 func TestShellAccessAShellOfSomeoneWhoKeepsTheirAccessIsLeftAlone(t *testing.T) {
+	t.Parallel()
 	ticks := newShellTicks()
 	f := newShellFix(t, func(f *envFix) { f.shellsControls = ticks.controls() })
 	cookie, csrf := f.operatorWithShell(t, "olive")
@@ -979,6 +1004,7 @@ func (f *shellFix) onlyShellID(t *testing.T) string {
 }
 
 func TestActiveShellsAnEnvAdminSeesATeammatesOpenShellAndAnOperatorIsRefused(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	cookie, csrf := f.operatorWithShell(t, "olive")
 	c := f.openAs(t, cookie, csrf)
@@ -1017,6 +1043,7 @@ func TestActiveShellsAnEnvAdminSeesATeammatesOpenShellAndAnOperatorIsRefused(t *
 }
 
 func TestActiveShellsAnAdminEndingAShellClosesItTellsItsBrowserAndAuditsBothSides(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	cookie, csrf := f.operatorWithShell(t, "olive")
 	c := f.openAs(t, cookie, csrf)
@@ -1069,6 +1096,7 @@ func TestActiveShellsAnAdminEndingAShellClosesItTellsItsBrowserAndAuditsBothSide
 }
 
 func TestActiveShellsAnAdminOfAnotherEnvironmentCannotSeeOrEndThisOnesShells(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	f.inst.Apply("Bayplan", "https://example.com/bayplan")
 	other, rec := f.addAgent(t)
@@ -1110,6 +1138,7 @@ func (f *shellFix) minePath(id, query string) string {
 }
 
 func TestMyShellsListOnlyTheCallersOwnSessionsNarrowedByContainerAndHoldsSeveral(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	oliveCookie, oliveCSRF := f.operatorWithShell(t, "olive")
 	f.openAs(t, oliveCookie, oliveCSRF)
@@ -1153,6 +1182,7 @@ func TestMyShellsListOnlyTheCallersOwnSessionsNarrowedByContainerAndHoldsSeveral
 }
 
 func TestMyShellsAreRefusedToAnOperatorWithoutTheShellPermissionAndToAViewer(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	f.addEnvUser(t, "plain", f.env.ID, "operator")
 	plainCookie, plainCSRF := f.signIn(t, "plain", false)
@@ -1169,6 +1199,7 @@ func TestMyShellsAreRefusedToAnOperatorWithoutTheShellPermissionAndToAViewer(t *
 }
 
 func TestMyShellsEndingYourOwnTellsItsBrowserAndRecordsEndedByUserAndASecondEndFindsItGone(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	cookie, csrf := f.operatorWithShell(t, "olive")
 	c := f.openAs(t, cookie, csrf)
@@ -1195,6 +1226,7 @@ func TestMyShellsEndingYourOwnTellsItsBrowserAndRecordsEndedByUserAndASecondEndF
 }
 
 func TestMyShellsAnotherUsersIdAnswersShellNotFoundAndLeavesTheirSessionRunning(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	oliveCookie, oliveCSRF := f.operatorWithShell(t, "olive")
 	c := f.openAs(t, oliveCookie, oliveCSRF)

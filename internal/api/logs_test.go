@@ -164,6 +164,7 @@ func (f *logsFix) logAudits(t *testing.T) []logAuditRow {
 }
 
 func TestLogStreamSendsReadyThenBatchedLinesWithTheStreamAndTheLastTimestampAsEventID(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	at := time.Date(2026, 10, 9, 12, 58, 0, 123456789, time.UTC)
 	f.fake.AppendLogs("web",
@@ -205,6 +206,7 @@ func TestLogStreamSendsReadyThenBatchedLinesWithTheStreamAndTheLastTimestampAsEv
 }
 
 func TestLogStreamOfATTYContainerIsRawAndReadySaysSo(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	f.fake.AppendLogs("db", dockertest.FakeLogLine{Text: "tty line"})
 	c := f.open(t, f.cookie, dbID, "sid="+sidA, "")
@@ -219,6 +221,7 @@ func TestLogStreamOfATTYContainerIsRawAndReadySaysSo(t *testing.T) {
 }
 
 func TestLogStreamTailDefaultsTo500AndIsCappedAt50000(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	for query, want := range map[string]string{
 		"sid=" + sidA:                  "500",
@@ -240,6 +243,7 @@ func TestLogStreamTailDefaultsTo500AndIsCappedAt50000(t *testing.T) {
 }
 
 func TestLogStreamNeedsAWellFormedViewerID(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	for _, query := range []string{"", "sid=short", "sid=" + strings.Repeat("a", 65), "sid=has%20spaces%20in%20it%20here", "sid=" + sidA + "&tail=-1", "sid=" + sidA + "&tail=lots", "sid=" + sidA + "&since=yesterday", "sid=" + sidA + "&after=nope"} {
 		rec := f.req(t, http.MethodGet, f.path(webID, query), "")
@@ -253,6 +257,7 @@ func TestLogStreamNeedsAWellFormedViewerID(t *testing.T) {
 }
 
 func TestLogStreamOfAContainerTheEngineDoesNotHaveIs404BeforeAnyStream(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	rec := f.req(t, http.MethodGet, f.path("nope", "sid="+sidA), "")
 	if rec.code != http.StatusNotFound || rec.ptyp != "container_not_found" {
@@ -264,6 +269,7 @@ func TestLogStreamOfAContainerTheEngineDoesNotHaveIs404BeforeAnyStream(t *testin
 }
 
 func TestLogStreamSendsAHeartbeatAndStateStoppedWhenTheContainerEnds(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), func(f *envFix) { f.logsHeartbeat = 30 * time.Millisecond })
 	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: "last words"})
 	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
@@ -296,6 +302,7 @@ func TestLogStreamSendsAHeartbeatAndStateStoppedWhenTheContainerEnds(t *testing.
 }
 
 func TestLogStreamResumesAfterTheLastEventIDWithoutRepeatingALine(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	at := time.Date(2026, 10, 9, 12, 0, 0, 5, time.UTC)
 	for i := range 4 {
@@ -325,6 +332,7 @@ func TestLogStreamResumesAfterTheLastEventIDWithoutRepeatingALine(t *testing.T) 
 }
 
 func TestLogStreamBatchesAChattyContainerIntoEventsOfAtMostAHundredLines(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	for i := range 250 {
 		f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: fmt.Sprintf("n%d", i)})
@@ -349,6 +357,7 @@ func TestLogStreamBatchesAChattyContainerIntoEventsOfAtMostAHundredLines(t *test
 }
 
 func TestLogsAuditWritesOneRowPerViewerAndNeverALineOfTheLog(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	const secret = "LOG-LINE-THAT-MUST-NOT-BE-KEPT-1f9e" //nolint:gosec // a marker, not a credential
 	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: secret})
@@ -394,6 +403,7 @@ func TestLogsAuditWritesOneRowPerViewerAndNeverALineOfTheLog(t *testing.T) {
 }
 
 func TestLogStreamTwoUsersEachGetTheirOwnStreamAndTheirOwnAuditRow(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", f.env.ID, "viewer")
@@ -425,6 +435,7 @@ func TestLogStreamTwoUsersEachGetTheirOwnStreamAndTheirOwnAuditRow(t *testing.T)
 }
 
 func TestLogStreamAllowsEightPerUserAndRefusesTheNinthWith429(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	conns := make([]*sseConn, 0, 8)
 	for i := range 8 {
@@ -454,6 +465,7 @@ func TestLogStreamAllowsEightPerUserAndRefusesTheNinthWith429(t *testing.T) {
 }
 
 func TestLogStreamEndsWithClosedAccessLostWithinAHeartbeatOfLosingTheGrant(t *testing.T) {
+	t.Parallel()
 	const heartbeat = 40 * time.Millisecond
 	f := newLogsFix(t, logsEngine(), func(f *envFix) { f.logsHeartbeat = heartbeat })
 	f.addUser(t, "viewer", false)
@@ -475,6 +487,7 @@ func TestLogStreamEndsWithClosedAccessLostWithinAHeartbeatOfLosingTheGrant(t *te
 }
 
 func TestLogStreamEndsCleanlyAtItsMaximumLifetimeAndFreesTheEngineFollow(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), func(f *envFix) { f.logsMaxLifetime = 50 * time.Millisecond })
 	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
 	nextEvent(t, c, "ready", 5*time.Second)
@@ -483,6 +496,7 @@ func TestLogStreamEndsCleanlyAtItsMaximumLifetimeAndFreesTheEngineFollow(t *test
 }
 
 func TestLogStreamReleasesTheEngineFollowWhenTheBrowserLeaves(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
 	nextEvent(t, c, "ready", 5*time.Second)
@@ -499,6 +513,7 @@ func (busyAgg) OnNode(_ context.Context, _, _ string, _ func(*dockerx.Client) er
 }
 
 func TestLogStreamOfABusyAgentIs503StreamBusyAndIsNotAudited(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), func(f *envFix) {
 		f.logsWrap = func(src api.LogsSource) api.LogsSource { return busyAgg{src} }
 	})
@@ -528,6 +543,7 @@ func logStateOf(t *testing.T, fr frame) (state, at string) {
 }
 
 func TestLogStopSendsStateStoppedAndTheStreamWaitsForTheContainerToStart(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), func(f *envFix) { f.logsHeartbeat = 30 * time.Millisecond })
 	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: "last words"})
 	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
@@ -555,6 +571,7 @@ func TestLogStopSendsStateStoppedAndTheStreamWaitsForTheContainerToStart(t *test
 }
 
 func TestLogRestartReopensTheLogFromTheLastLineAndNeverRepeatsOrLosesOne(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	at := time.Date(2026, 10, 9, 12, 0, 0, 7, time.UTC)
 	f.fake.AppendLogs("web",
@@ -599,6 +616,7 @@ func TestLogRestartReopensTheLogFromTheLastLineAndNeverRepeatsOrLosesOne(t *test
 }
 
 func TestLogRestartKeepsTwoIdenticalLinesWrittenAtTheSameNanosecond(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	at := time.Date(2026, 10, 9, 12, 0, 0, 7, time.UTC)
 	f.fake.AppendLogs("web",
@@ -623,6 +641,7 @@ func TestLogRestartKeepsTwoIdenticalLinesWrittenAtTheSameNanosecond(t *testing.T
 }
 
 func TestLogRestartIgnoresTheEventsOfOtherContainers(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: "a"})
 	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
@@ -695,6 +714,7 @@ func (d *dropEvents) Events(ctx context.Context, envID string) ([]envs.NodeEvent
 // WR-03: a stream whose event subscription was dropped ends, so the browser's reconnect
 // subscribes again, rather than carrying on deaf to the container's next start.
 func TestLogStreamEndsWhenItsEventSubscriptionIsDropped(t *testing.T) {
+	t.Parallel()
 	drop := &dropEvents{ch: make(chan envs.NodeEvent)}
 	f := newLogsFix(t, logsEngine(), func(f *envFix) {
 		f.logsWrap = func(src api.LogsSource) api.LogsSource { drop.LogsSource = src; return drop }
@@ -711,6 +731,7 @@ func TestLogStreamEndsWhenItsEventSubscriptionIsDropped(t *testing.T) {
 }
 
 func TestLogRestartCancelsItsEventSubscriptionWhenTheStreamEnds(t *testing.T) {
+	t.Parallel()
 	spy := newSpyEvents()
 	f := newLogsFix(t, logsEngine(), func(f *envFix) {
 		f.logsWrap = func(src api.LogsSource) api.LogsSource { spy.LogsSource = src; return spy }
@@ -755,6 +776,7 @@ func numberedLines(f *logsFix, n int, at time.Time) {
 }
 
 func TestLogPageAnswersTheLinesBeforeUntilOldestFirstAndSaysWhenThereAreMore(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	numberedLines(f, 10, at)
@@ -788,6 +810,7 @@ func TestLogPageAnswersTheLinesBeforeUntilOldestFirstAndSaysWhenThereAreMore(t *
 }
 
 func TestLogPageFindsEarlierLinesFarBackWithoutReadingTheWholeLogFirst(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	old := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	f.fake.AppendLogs("web",
@@ -814,6 +837,7 @@ func TestLogPageFindsEarlierLinesFarBackWithoutReadingTheWholeLogFirst(t *testin
 }
 
 func TestLogPageIsEmptyAndTheStartWhenNothingIsEarlier(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	numberedLines(f, 3, at)
@@ -824,6 +848,7 @@ func TestLogPageIsEmptyAndTheStartWhenNothingIsEarlier(t *testing.T) {
 }
 
 func TestLogPageKeepsTwoLinesThatShareAStampOnEitherSideOfThePageBoundary(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	at := time.Date(2026, 10, 9, 12, 0, 0, 5, time.UTC)
 	// Three lines written at one nanosecond, then one a second later.
@@ -851,6 +876,7 @@ func TestLogPageKeepsTwoLinesThatShareAStampOnEitherSideOfThePageBoundary(t *tes
 const logTimeLayoutTest = "2006-01-02T15:04:05.000000000Z"
 
 func TestLogPageSharesTheViewersAuditMemoryAndWritesNoRowForTheSameViewer(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	numberedLines(f, 3, time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC))
 	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
@@ -871,6 +897,7 @@ func TestLogPageSharesTheViewersAuditMemoryAndWritesNoRowForTheSameViewer(t *tes
 }
 
 func TestLogPageRefusesWhatIsNotAPage(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	for _, query := range []string{
 		"", "sid=short&tail=5", "sid=" + sidA + "&tail=0", "sid=" + sidA + "&tail=2001",
@@ -891,6 +918,7 @@ func TestLogPageRefusesWhatIsNotAPage(t *testing.T) {
 }
 
 func TestLogPageNeedsContainersRead(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	f.addUser(t, "nobody", false)
 	cookie, _ := f.signIn(t, "nobody", false)
@@ -901,6 +929,7 @@ func TestLogPageNeedsContainersRead(t *testing.T) {
 }
 
 func TestLogPageKeepsTheNewestLinesWhenThePageIsOverItsByteBudget(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), func(f *envFix) { f.logsMaxPageBytes = 100 })
 	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	for i := range 10 {
@@ -951,6 +980,7 @@ type unreadableBody struct {
 }
 
 func TestLogStreamOfAContainerTheEngineCannotReadSendsUnreadableWithTheDriverAndEndsWithoutAnAuditRow(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, unreadableEngine(), nil)
 	c := f.open(t, f.cookie, quietID, "sid="+sidA, "")
 	if c.status0() != http.StatusOK {
@@ -977,6 +1007,7 @@ func TestLogStreamOfAContainerTheEngineCannotReadSendsUnreadableWithTheDriverAnd
 }
 
 func TestLogStreamUnreadableMasksTheOptionValuesForAViewerAndShowsThemToAHolderOfSecretsReveal(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, unreadableEngine(), nil)
 	admin := f.open(t, f.cookie, quietID, "sid="+sidA, "")
 	var shown unreadableBody
@@ -1007,6 +1038,7 @@ func TestLogStreamUnreadableMasksTheOptionValuesForAViewerAndShowsThemToAHolderO
 }
 
 func TestLogStreamOfASyslogContainerWhoseLogsReadStreamsNormally(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, unreadableEngine(), nil)
 	f.fake.AppendLogs("sys", dockertest.FakeLogLine{Text: "dual logging keeps a copy"})
 	c := f.open(t, f.cookie, sysID, "sid="+sidA, "")
@@ -1021,6 +1053,7 @@ func TestLogStreamOfASyslogContainerWhoseLogsReadStreamsNormally(t *testing.T) {
 }
 
 func TestLogPageOfAContainerTheEngineCannotReadIs409LogsUnreadable(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, unreadableEngine(), nil)
 	rec := f.req(t, http.MethodGet, f.pagePath(quietID, "sid="+sidA+"&tail=5"), "")
 	if rec.code != http.StatusConflict || rec.ptyp != "logs_unreadable" {
@@ -1152,6 +1185,7 @@ func (f *logsFix) downloadAudits(t *testing.T) []logAuditRow {
 }
 
 func TestLogDownloadAnswersATextFileNamedByContainerAndUTCMinuteWithBothStreamsInOrder(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	at := time.Date(2026, 10, 9, 12, 58, 0, 123456789, time.UTC)
 	f.fake.AppendLogs("web",
@@ -1188,6 +1222,7 @@ func TestLogDownloadAnswersATextFileNamedByContainerAndUTCMinuteWithBothStreamsI
 }
 
 func TestLogDownloadPrefixesDockersRawUTCTimestampWhenAskedAndReadsTheRangeFromTheEngine(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	at := time.Date(2026, 10, 9, 12, 58, 0, 123456789, time.UTC)
 	for i := range 5 {
@@ -1211,6 +1246,7 @@ func TestLogDownloadPrefixesDockersRawUTCTimestampWhenAskedAndReadsTheRangeFromT
 }
 
 func TestLogDownloadOfSeventyMiBStreamsInBoundedWritesWithoutHoldingItInMemory(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	const lineLen, count = 200 << 10, 360 // 70.3 MiB
 	text := strings.Repeat("x", lineLen)
@@ -1243,6 +1279,7 @@ func TestLogDownloadOfSeventyMiBStreamsInBoundedWritesWithoutHoldingItInMemory(t
 }
 
 func TestLogDownloadAllowsTwoAtOnceAndRefusesTheThirdWith429(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	text := strings.Repeat("y", 60<<10)
 	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: text}, dockertest.FakeLogLine{Text: text})
@@ -1281,6 +1318,7 @@ func TestLogDownloadAllowsTwoAtOnceAndRefusesTheThirdWith429(t *testing.T) {
 }
 
 func TestLogDownloadIsAuditedOncePerDownloadWithItsRangeAndNeverALineOfTheLog(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	const secret = "DOWNLOADED-LINE-THAT-MUST-NOT-BE-KEPT-77c1" //nolint:gosec // a marker, not a credential
 	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: secret})
@@ -1313,6 +1351,7 @@ func TestLogDownloadIsAuditedOncePerDownloadWithItsRangeAndNeverALineOfTheLog(t 
 }
 
 func TestLogDownloadNameKeepsOnlySafeCharacters(t *testing.T) {
+	t.Parallel()
 	cfg := logsEngine()
 	cfg.Containers = append(cfg.Containers, dockertest.FakeContainer{
 		ID: "eeeeeeeeeeee55555555555555555555555555555555555555555555555555", Names: []string{`/we"b;../x y`}, Image: "alpine", State: "running", Status: "Up 1 hour"})
@@ -1328,6 +1367,7 @@ func TestLogDownloadNameKeepsOnlySafeCharacters(t *testing.T) {
 }
 
 func TestLogDownloadRefusalsAreAnsweredBeforeAnythingIsSentAndAreNotAudited(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, unreadableEngine(), nil)
 	for name, tc := range map[string]struct {
 		container, query string
@@ -1355,6 +1395,7 @@ func TestLogDownloadRefusalsAreAnsweredBeforeAnythingIsSentAndAreNotAudited(t *t
 }
 
 func TestLogDownloadNeedsContainersRead(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	f.addUser(t, "nobody", false)
 	cookie, _ := f.signIn(t, "nobody", false)
@@ -1366,6 +1407,7 @@ func TestLogDownloadNeedsContainersRead(t *testing.T) {
 }
 
 func TestLogDownloadStopsReadingTheEngineWhenTheBrowserLeaves(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	text := strings.Repeat("z", 60<<10)
 	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: text}, dockertest.FakeLogLine{Text: text})
@@ -1414,6 +1456,7 @@ func resumeFix(t *testing.T) (*logsFix, []logLine) {
 }
 
 func TestLogStreamResumeTakesTheLaterOfAfterAndLastEventID(t *testing.T) {
+	t.Parallel()
 	f, lines := resumeFix(t)
 
 	// after is the later one: the stream resumes after line 3.
@@ -1436,6 +1479,7 @@ func TestLogStreamResumeTakesTheLaterOfAfterAndLastEventID(t *testing.T) {
 }
 
 func TestLogStreamResumeWithTheSameViewerIDWritesNoSecondAuditRow(t *testing.T) {
+	t.Parallel()
 	f, lines := resumeFix(t)
 	for i := range 3 {
 		c := f.open(t, f.cookie, webID, "sid="+sidA, lines[i].T)
@@ -1448,6 +1492,7 @@ func TestLogStreamResumeWithTheSameViewerIDWritesNoSecondAuditRow(t *testing.T) 
 }
 
 func TestLogStreamIgnoresALastEventIDThatIsNotATime(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: "a"}, dockertest.FakeLogLine{Text: "b"})
 	c := f.open(t, f.cookie, webID, "sid="+sidA, "not a time")
