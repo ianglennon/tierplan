@@ -16,9 +16,11 @@
 #
 # The agent has no server to talk to, so a listener on the host accepts its
 # connection and never answers; the agent waits in the dial and stays up while
-# its process is inspected. Environment: IMAGE (default bayplan-agent:dev).
-# Needs Docker, python3 and tar. Removes every container, volume and process it
-# creates.
+# its process is inspected. The listener binds a kernel-assigned port and the agent
+# uses the host network, so no fixed port is involved. Environment: IMAGE (default
+# bayplan-agent:dev). Needs Docker, python3 and tar. Removes every container, volume
+# and process it creates; they carry the label bayplan.ci.owner=$BAYPLAN_CI_OWNER
+# (local-<pid> when unset) so `make ci-clean` removes what a cancelled CI job left (D-23).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -32,6 +34,7 @@ SOCKET=/var/run/docker.sock
 SOCKET_GID="$(stat -c %g "${SOCKET}")"
 
 NAME="bayplan-agent-smoke-$$"
+OWNER_LABEL="bayplan.ci.owner=${BAYPLAN_CI_OWNER:-local-$$}"
 WORK="$(mktemp -d)"
 HOLDER_PID=""
 VOLUMES=()
@@ -91,8 +94,8 @@ run_case() {
   VOLUMES+=("${vol}")
   : >"${WORK}/accepted"
 
-  docker volume create "${vol}" >/dev/null
-  docker run -d --name "${cname}" \
+  docker volume create --label "${OWNER_LABEL}" "${vol}" >/dev/null
+  docker run -d --name "${cname}" --label "${OWNER_LABEL}" \
     --network host \
     --read-only --cap-drop ALL --cap-add SETUID --cap-add SETGID \
     -v "${SOCKET}:${SOCKET}" \
@@ -163,8 +166,8 @@ SECVOL="${NAME}-secret"
 SECBOX="${NAME}-secretbox"
 VOLUMES+=("${SECVOL}")
 CONTAINERS+=("${SECBOX}")
-docker volume create "${SECVOL}" >/dev/null
-docker create --name "${SECBOX}" -v "${SECVOL}:/run/secrets" "${IMAGE}" >/dev/null
+docker volume create --label "${OWNER_LABEL}" "${SECVOL}" >/dev/null
+docker create --name "${SECBOX}" --label "${OWNER_LABEL}" -v "${SECVOL}:/run/secrets" "${IMAGE}" >/dev/null
 printf '%s\n' "${TOKEN_FILE}" >"${WORK}/bayplan-agent-token"
 tar -C "${WORK}" --owner=0 --group=0 --mode=0400 -cf - bayplan-agent-token | docker cp - "${SECBOX}:/run/secrets/" \
   || fail "could not place the secret file"

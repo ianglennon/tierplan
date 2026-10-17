@@ -33,8 +33,11 @@
 # created here is removed on exit, whatever happens.
 #
 # Environment: BASE_IMAGE (default bayplan:base), HEAD_IMAGE (bayplan:e2e),
-# AGENT_IMAGE (bayplan-agent:dev), SMOKE_PORT (17491, published on 127.0.0.1) and
-# RECONNECT_WAIT (120). Needs Docker, curl and jq.
+# AGENT_IMAGE (bayplan-agent:dev), SMOKE_PORT (published on 127.0.0.1; by default Docker
+# assigns it and it is read back after every server start) and RECONNECT_WAIT (120).
+# Every container, network and volume carries the label
+# bayplan.ci.owner=$BAYPLAN_CI_OWNER (local-<pid> when unset) so `make ci-clean`
+# removes what a cancelled CI job left (D-23). Needs Docker, curl and jq.
 #
 # The throwaway containers talk plain HTTP on a private network, so both the
 # server and the agent get BAYPLAN_AGENT_ALLOW_INSECURE=true, the development
@@ -47,7 +50,7 @@ cd "$(dirname "$0")/.."
 BASE_IMAGE="${BASE_IMAGE:-bayplan:base}"
 HEAD_IMAGE="${HEAD_IMAGE:-bayplan:e2e}"
 AGENT_IMAGE="${AGENT_IMAGE:-bayplan-agent:dev}"
-PORT="${SMOKE_PORT:-17491}"
+OWNER_LABEL="bayplan.ci.owner=${BAYPLAN_CI_OWNER:-local-$$}"
 RECONNECT_WAIT="${RECONNECT_WAIT:-120}"
 
 for tool in docker curl jq; do
@@ -66,7 +69,7 @@ SERVER="bayplan-upgrade-server-${RUN_ID}"
 AGENT="bayplan-upgrade-agent-${RUN_ID}"
 ALIAS="bayplan"
 PUBLIC="http://${ALIAS}:7480"
-HOST_URL="http://127.0.0.1:${PORT}"
+HOST_URL="" # set by start_server from the port Docker assigned
 WORK="$(mktemp -d)"
 JSON_H='Content-Type: application/json'
 ADMIN_PW='correct horse battery'
@@ -96,23 +99,26 @@ fail() {
   exit 1
 }
 
-docker network create "${NET}" >/dev/null
-docker volume create "${VOLUME}" >/dev/null
-docker volume create "${AGENT_VOLUME}" >/dev/null
+docker network create --label "${OWNER_LABEL}" "${NET}" >/dev/null
+docker volume create --label "${OWNER_LABEL}" "${VOLUME}" >/dev/null
+docker volume create --label "${OWNER_LABEL}" "${AGENT_VOLUME}" >/dev/null
 
 # start_server IMAGE runs the server from IMAGE on the shared volume and alias.
 # The 3 second health interval only speeds up the wait; the probe is the one
 # baked into the image.
 start_server() {
-  docker run -d --name "${SERVER}" \
+  docker run -d --name "${SERVER}" --label "${OWNER_LABEL}" \
     --network "${NET}" --network-alias "${ALIAS}" \
-    -p "127.0.0.1:${PORT}:7480" \
+    -p "127.0.0.1:${SMOKE_PORT:-}:7480" \
     -v "${VOLUME}:/data" \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -e "BAYPLAN_PUBLIC_URL=${PUBLIC}" \
     -e BAYPLAN_AGENT_ALLOW_INSECURE=true \
     --health-interval 3s --health-start-period 0s --health-retries 5 \
-    "$1" >/dev/null
+    "$1" >/dev/null || return 1
+  # Docker assigned the host port (unless SMOKE_PORT is set); read it back, because
+  # every swap of the server gets a new one.
+  HOST_URL="http://127.0.0.1:$(docker port "${SERVER}" 7480/tcp | head -n 1 | sed 's/.*://')"
 }
 
 wait_healthy() {
@@ -194,7 +200,7 @@ AGENT_URL="$(printf '%s' "${API_BODY}" | jq -r .install.agentUrl)"
 
 # The agent runs the way the standalone install command runs it, on the same
 # network so that it reaches Bayplan by its alias.
-docker run -d --name "${AGENT}" --network "${NET}" \
+docker run -d --name "${AGENT}" --network "${NET}" --label "${OWNER_LABEL}" \
   --read-only --cap-drop ALL --cap-add SETUID --cap-add SETGID --security-opt no-new-privileges \
   -v /var/run/docker.sock:/var/run/docker.sock -v "${AGENT_VOLUME}:/var/lib/bayplan-agent" \
   --label bayplan.agent=true \

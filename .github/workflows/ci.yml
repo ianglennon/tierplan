@@ -191,6 +191,8 @@ jobs:
   build:
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 20
+    env:
+      BAYPLAN_CI_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -211,6 +213,10 @@ jobs:
       # The agent image under the install commands' hardening flags: UID 1000,
       # no-new-privileges, a writable state volume, the Docker socket.
       - run: make agent-image agent-image-smoke
+      # D-23: what the smokes labelled with this job's owner, whatever the outcome.
+      - name: Remove what this job left on the VM's Docker
+        if: always()
+        run: make ci-clean
 
   dco:
     runs-on: [self-hosted, linux, x64]
@@ -453,6 +459,8 @@ jobs:
   upgrade:
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 30
+    env:
+      BAYPLAN_CI_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -503,6 +511,10 @@ jobs:
         env:
           RESTART_MODE: exit
         run: scripts/restore-smoke.sh
+      # D-23: what the smokes labelled with this job's owner, whatever the outcome.
+      - name: Remove what this job left on the VM's Docker
+        if: always()
+        run: make ci-clean
 
   # D-75: every push to main publishes ghcr.io/ianglennon/bayplan:edge for amd64
   # and arm64, signed with keyless cosign. It is the only tag a push can move;

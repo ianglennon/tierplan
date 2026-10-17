@@ -4,11 +4,22 @@
 #
 # Real-binary smoke check: starts bin/bayplan on a scratch port and working
 # directory and asserts the walking-skeleton contract. Later plans extend it.
+#
+# The port is assigned by the kernel (a free loopback port, and a second one for the
+# deliberately bad start); SMOKE_PORT overrides the first (D-23). It starts no
+# container. Needs python3.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-PORT="${SMOKE_PORT:-17480}"
+# free_port prints a TCP port the kernel has just handed out on loopback, so no fixed
+# port is ever in the way (D-23). SMOKE_PORT still overrides it.
+free_port() {
+  python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
+}
+
+PORT="${SMOKE_PORT:-$(free_port)}"
+BAD_PORT="$(free_port)"
 BASE="http://127.0.0.1:${PORT}"
 WORK="$(mktemp -d)"
 LOG="${WORK}/server.log"
@@ -243,7 +254,7 @@ BAYPLAN_LISTEN="127.0.0.1:${PORT}" "${BIN}" healthcheck \
   || fail "bayplan healthcheck exited non-zero while the server is up"
 
 # A bad setting stops startup and names the env var (D-11).
-if BAYPLAN_PUBLIC_URL=nope BAYPLAN_DATA_DIR="${WORK}/bad" "${BIN}" serve --listen "127.0.0.1:$((PORT + 1))" >"${WORK}/bad.log" 2>&1; then
+if BAYPLAN_PUBLIC_URL=nope BAYPLAN_DATA_DIR="${WORK}/bad" "${BIN}" serve --listen "127.0.0.1:${BAD_PORT}" >"${WORK}/bad.log" 2>&1; then
   fail "serve accepted BAYPLAN_PUBLIC_URL=nope"
 fi
 grep -q 'BAYPLAN_PUBLIC_URL' "${WORK}/bad.log" || fail "startup error does not name BAYPLAN_PUBLIC_URL"

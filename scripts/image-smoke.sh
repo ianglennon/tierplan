@@ -9,9 +9,12 @@
 # `docker rm -f` on the same volume, and Bayplan finds its own container.
 #
 # Environment: IMAGE (default: the local ghcr.io/ianglennon/bayplan snapshot
-# image for this engine's architecture), SMOKE_PORT (default 17490) and
-# EXTRA_RUN_ARGS (extra `docker run` flags, for example --hostname). Needs
-# Docker and jq. Removes every container and volume it creates.
+# image for this engine's architecture), SMOKE_PORT (default: a free loopback port
+# the kernel assigns, which Bayplan's public URL then names) and EXTRA_RUN_ARGS
+# (extra `docker run` flags, for example --hostname). Needs Docker, jq and python3.
+# Removes every container and volume it creates, and labels them
+# bayplan.ci.owner=$BAYPLAN_CI_OWNER (local-<pid> when unset) so `make ci-clean`
+# can remove what a cancelled CI job left (D-23).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -26,7 +29,14 @@ if [ -z "${IMAGE}" ]; then
 fi
 [ -n "${IMAGE}" ] || { echo "IMAGE SMOKE FAIL: no local snapshot image for this engine; run make image first" >&2; exit 1; }
 
-PORT="${SMOKE_PORT:-17490}"
+# free_port prints a TCP port the kernel has just handed out on loopback, so no fixed
+# port is ever in the way (D-23). SMOKE_PORT still overrides it.
+free_port() {
+  python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
+}
+
+PORT="${SMOKE_PORT:-$(free_port)}"
+OWNER_LABEL="bayplan.ci.owner=${BAYPLAN_CI_OWNER:-local-$$}"
 BASE="http://127.0.0.1:${PORT}"
 NAME="bayplan-image-smoke-$$"
 VOLUME="${NAME}"
@@ -50,7 +60,7 @@ fail() {
 start() {
   # The 3 second health interval only speeds up the wait; the probe command is
   # the one baked into the image.
-  docker run -d --name "${NAME}" \
+  docker run -d --name "${NAME}" --label "${OWNER_LABEL}" \
     -p "127.0.0.1:${PORT}:7480" \
     -v "${VOLUME}:/data" \
     -v /var/run/docker.sock:/var/run/docker.sock \
@@ -71,7 +81,7 @@ wait_healthy() {
   fail "the container did not become healthy within 60 seconds (last state: ${state})"
 }
 
-docker volume create "${VOLUME}" >/dev/null
+docker volume create --label "${OWNER_LABEL}" "${VOLUME}" >/dev/null
 start
 wait_healthy
 

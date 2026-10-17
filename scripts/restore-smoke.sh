@@ -36,8 +36,11 @@
 # "RESTORE SMOKE PASS". The container and volume are removed on exit.
 #
 # Environment: IMAGE (default bayplan:e2e, built by `make e2e-image`),
-# SMOKE_PORT (17492, published on 127.0.0.1), RESTORE_WAIT (90) and RESTART_MODE
-# (exec or exit; default exec). Needs Docker, curl, jq and tar. The passwords
+# SMOKE_PORT (default: a free loopback port the kernel assigns, published on
+# 127.0.0.1), RESTORE_WAIT (90) and RESTART_MODE (exec or exit; default exec). The
+# container and volume carry the label bayplan.ci.owner=$BAYPLAN_CI_OWNER
+# (local-<pid> when unset) so `make ci-clean` removes them after a cancelled CI job
+# (D-23). Needs Docker, curl, jq, tar and python3. The passwords
 # belong to a container that is destroyed at the end; no repository secret is
 # involved.
 set -euo pipefail
@@ -45,7 +48,14 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 IMAGE="${IMAGE:-bayplan:e2e}"
-PORT="${SMOKE_PORT:-17492}"
+# free_port prints a TCP port the kernel has just handed out on loopback, so no fixed
+# port is ever in the way (D-23). SMOKE_PORT still overrides it.
+free_port() {
+  python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
+}
+
+PORT="${SMOKE_PORT:-$(free_port)}"
+OWNER_LABEL="bayplan.ci.owner=${BAYPLAN_CI_OWNER:-local-$$}"
 RESTORE_WAIT="${RESTORE_WAIT:-90}"
 RESTART_MODE="${RESTART_MODE:-exec}"
 case "${RESTART_MODE}" in
@@ -53,7 +63,7 @@ case "${RESTART_MODE}" in
   *) echo "RESTORE SMOKE FAIL: RESTART_MODE must be exec or exit, not ${RESTART_MODE}" >&2; exit 1 ;;
 esac
 
-for tool in docker curl jq tar; do
+for tool in docker curl jq tar python3; do
   command -v "${tool}" >/dev/null || { echo "RESTORE SMOKE FAIL: ${tool} is required" >&2; exit 1; }
 done
 docker image inspect "${IMAGE}" >/dev/null 2>&1 \
@@ -136,7 +146,7 @@ wait_healthy() {
   return 1
 }
 
-docker volume create "${VOLUME}" >/dev/null
+docker volume create --label "${OWNER_LABEL}" "${VOLUME}" >/dev/null
 
 RUN_ARGS=()
 if [ "${RESTART_MODE}" = "exit" ]; then
@@ -144,7 +154,7 @@ if [ "${RESTART_MODE}" = "exit" ]; then
 fi
 # The 3 second health interval only speeds up the wait; the probe is the one
 # baked into the image. There is deliberately no restart policy in exec mode.
-docker run -d --name "${NAME}" \
+docker run -d --name "${NAME}" --label "${OWNER_LABEL}" \
   -p "127.0.0.1:${PORT}:7480" \
   -v "${VOLUME}:/data" \
   -v /var/run/docker.sock:/var/run/docker.sock \
