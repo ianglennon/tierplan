@@ -42,6 +42,11 @@ linters:
           msg: client.FromEnv honours DOCKER_API_VERSION and tcp:// hosts; build the client in internal/dockerx (Pitfall 1, D-52)
         - pattern: '^middleware\.RealIP$'
           msg: chi RealIP trusts forwarded headers and lets a client forge the audit IP; use the trusted-proxy logic (Pitfall 6)
+        # Phase 6.1: a test waits for the thing its assertion depends on. The
+        # exclusion below limits this to _test.go files; helper packages (the
+        # servertest, the fake's WriteDelay) legitimately sleep.
+        - pattern: '^time\.Sleep$'
+          msg: tests wait on a channel, a fake clock, testing/synctest or a seam's Await; polling only for external conditions through proto/testsupport (docs/testing.md, D-07 to D-11)
 
     depguard:
       rules:
@@ -87,3 +92,13 @@ linters:
         linters:
           - forbidigo
         text: httpx.Register
+      # The time.Sleep rule is for tests only; production and helper packages
+      # are outside it.
+      - path-except: _test\.go
+        linters:
+          - forbidigo
+        text: time\.Sleep
+
+issues:
+  # Show every finding, not the first three identical ones (Phase 6.1 Pitfall 3).
+  max-same-issues: 0

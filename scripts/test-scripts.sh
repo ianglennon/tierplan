@@ -13,6 +13,8 @@ cd "$ROOT"
 failures=0
 scratch="$(mktemp -d)"
 ui_probe="web/src/components/ui/zz-spdx-probe.tsx"
+# Probe packages the lint and gate sections copy fixtures into; removed on exit.
+sleep_probe_dir="internal/zzforbidigoprobe"
 vite_pid=""
 stop_vite() {
   if [ -n "${vite_pid}" ]; then
@@ -21,7 +23,7 @@ stop_vite() {
     vite_pid=""
   fi
 }
-trap 'stop_vite; rm -rf "${scratch}" "${ui_probe}"' EXIT
+trap 'stop_vite; rm -rf "${scratch}" "${ui_probe}" "${sleep_probe_dir}"' EXIT
 
 # expect <fail|pass> <name> <command...>
 expect() {
@@ -345,6 +347,19 @@ if grep -qF -- "rerun-fails" Makefile; then
   echo "SCRIPT TEST FAIL: no-rerun-fails (Makefile passes a retry option to gotestsum, D-15)"
   failures=$((failures + 1))
 fi
+
+# --- Sleep guard (06.1-24, D-11): a time.Sleep in a test file fails golangci-lint ---
+# The fixture is copied into a throwaway package inside the module (removed by the
+# EXIT trap), because the rule needs a real, type-checked _test.go file.
+mkdir -p "${sleep_probe_dir}"
+cp scripts/testdata/forbidigo/sleep_test.go.txt "${sleep_probe_dir}/sleep_test.go"
+expect fail "sleep-guard-flags-a-test-sleep" go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run "./${sleep_probe_dir}/"
+expect_out "sleep-guard-flags-a-test-sleep names time.Sleep" "time.Sleep"
+expect_out "sleep-guard-flags-a-test-sleep names the file" "sleep_test.go"
+# The same sleep with a reason passes: a sleep that is behaviour under test is allowed.
+sed -i 's|time.Sleep(time.Millisecond)|time.Sleep(time.Millisecond) //nolint:forbidigo // the probe sleeps on purpose|' "${sleep_probe_dir}/sleep_test.go"
+expect pass "sleep-guard-allows-a-reasoned-sleep" go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run "./${sleep_probe_dir}/"
+rm -rf "${sleep_probe_dir}"
 
 # Vite's own host check: a Host header it does not know is answered 403 unless the
 # public URL's host name was passed in BAYPLAN_DEV_PUBLIC_URL.

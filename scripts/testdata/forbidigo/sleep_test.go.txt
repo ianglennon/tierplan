@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+// Fixture for scripts/test-scripts.sh: stored as .txt so the tree's Go tools
+// never compile it. The script copies it to internal/zzforbidigoprobe/ and lint
+// must flag the sleep.
+package zzforbidigoprobe
+
+import (
+	"testing"
+	"time"
+)
+
+func TestProbeSleeps(t *testing.T) {
+	time.Sleep(time.Millisecond)
+}
