@@ -13,6 +13,7 @@ import (
 )
 
 func TestStackOwner(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		labels map[string]string
 		stack  string
@@ -34,6 +35,7 @@ func TestStackOwner(t *testing.T) {
 }
 
 func TestStackOwnedProblemIsA409NamingTheStack(t *testing.T) {
+	t.Parallel()
 	var se huma.StatusError
 	if !errors.As(stackOwnedProblem("shop"), &se) {
 		t.Fatal("stackOwnedProblem is not a status error")

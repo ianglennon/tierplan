@@ -16,6 +16,7 @@ import (
 // values without regard to case, as the swarm does.
 
 func TestReservedLabel(t *testing.T) {
+	t.Parallel()
 	for key, want := range map[string]bool{
 		"com.docker.x":             true,
 		"COM.Docker.x":             true,
@@ -40,6 +41,7 @@ func TestReservedLabel(t *testing.T) {
 }
 
 func TestLabelChanges(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		before, after           map[string]string
 		added, changed, removed int
@@ -90,6 +92,7 @@ func nlKeys(b NodeLabelImpactBody) []nlRowKey {
 }
 
 func TestNodeLabelImpact(t *testing.T) {
+	t.Parallel()
 	svcs := []dockerx.ServiceRow{
 		{ID: "s-db", Name: "db", Mode: "replicated", Constraints: []string{"node.labels.role==db"}},
 		{ID: "s-cache", Name: "cache", Mode: "replicated", Constraints: []string{"node.labels.disk==ssd", "node.role==worker"}},

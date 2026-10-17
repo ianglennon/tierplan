@@ -127,6 +127,7 @@ func (f *envFix) configAudits(t *testing.T) []auditRowFull {
 }
 
 func TestCreateConfigSendsItOnceAndAnswersTheIDAndNameOnly(t *testing.T) {
+	t.Parallel()
 	f, e := configsEnv(t, []dockertest.FakeConfigObject{nginxConfig()})
 	rec := f.createConfig(t, e, configBody("app.env", []byte("A=1\n"), `,"labels":{"team":"core","tier":"1"},"templating":"golang","source":"file"`))
 	if rec.code != http.StatusCreated {
@@ -179,6 +180,7 @@ func TestCreateConfigSendsItOnceAndAnswersTheIDAndNameOnly(t *testing.T) {
 }
 
 func TestCreateConfigContentBoundsAreCheckedBeforeAnythingIsForwarded(t *testing.T) {
+	t.Parallel()
 	f, e := configsEnv(t, nil)
 	if rec := f.createConfig(t, e, configBody("big", bytes.Repeat([]byte("x"), 1023999), "")); rec.code != http.StatusCreated {
 		t.Fatalf("1,023,999 bytes = %d %.200s, want 201", rec.code, rec.body)
@@ -229,6 +231,7 @@ func TestCreateConfigContentBoundsAreCheckedBeforeAnythingIsForwarded(t *testing
 }
 
 func TestCreateConfigOfATakenNameIsConflictAndAuditedAsAFailure(t *testing.T) {
+	t.Parallel()
 	f, e := configsEnv(t, []dockertest.FakeConfigObject{nginxConfig()})
 	rec := f.createConfig(t, e, configBody("nginx_conf", []byte("v"), ""))
 	if rec.code != http.StatusConflict || rec.ptyp != "name_taken" || !strings.Contains(string(rec.body), "A config named nginx_conf already exists.") {
@@ -241,6 +244,7 @@ func TestCreateConfigOfATakenNameIsConflictAndAuditedAsAFailure(t *testing.T) {
 }
 
 func TestListConfigsCarriesNoContentCountsUsersFromServiceSpecsAndNamesTheOwner(t *testing.T) {
+	t.Parallel()
 	zeta := dockertest.FakeConfigObject{ID: "cfg-z", Name: "zeta", Data: []byte("ZETA-CONTENT-MARKER")}
 	alpha := dockertest.FakeConfigObject{ID: "cfg-a", Name: "alpha", Data: []byte("ALPHA-CONTENT-MARKER")}
 	f, e := configsEnv(t, []dockertest.FakeConfigObject{nginxConfig(), zeta, alpha}, configUsers()...)
@@ -299,6 +303,7 @@ func TestListConfigsCarriesNoContentCountsUsersFromServiceSpecsAndNamesTheOwner(
 }
 
 func TestGetConfigAnswersMetadataTemplatingSizeContentAndWhoUsesIt(t *testing.T) {
+	t.Parallel()
 	f, e := configsEnv(t, []dockertest.FakeConfigObject{nginxConfig()}, configUsers()...)
 	rec := f.get(t, e, "configs/cfg-nginx")
 	if rec.code != http.StatusOK {
@@ -338,6 +343,7 @@ func TestGetConfigAnswersMetadataTemplatingSizeContentAndWhoUsesIt(t *testing.T)
 }
 
 func TestGetConfigOfContentThatIsNotTextHasNoText(t *testing.T) {
+	t.Parallel()
 	binary := []byte{0xff, 0xfe, 0x00, 0x01, 0x80}
 	f, e := configsEnv(t, []dockertest.FakeConfigObject{{ID: "cfg-bin", Name: "keystore", Data: binary}})
 	rec := f.get(t, e, "configs/cfg-bin")
@@ -354,6 +360,7 @@ func TestGetConfigOfContentThatIsNotTextHasNoText(t *testing.T) {
 }
 
 func TestDeleteConfigNeedsNoTypedNameAndRefusesOneAServiceStillUses(t *testing.T) {
+	t.Parallel()
 	free := dockertest.FakeConfigObject{ID: "cfg-free", Name: "free", Data: []byte("x")}
 	f, e := configsEnv(t, []dockertest.FakeConfigObject{nginxConfig(), free}, configUsers()...)
 
@@ -395,6 +402,7 @@ func TestDeleteConfigNeedsNoTypedNameAndRefusesOneAServiceStillUses(t *testing.T
 }
 
 func TestConfigsNeedTheirPermissionsAndAStandaloneHostHasNone(t *testing.T) {
+	t.Parallel()
 	f, e := configsEnv(t, []dockertest.FakeConfigObject{nginxConfig()})
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
@@ -431,6 +439,7 @@ func TestConfigsNeedTheirPermissionsAndAStandaloneHostHasNone(t *testing.T) {
 }
 
 func TestConfigsOfAStandaloneHostAreNotASwarm(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, func(c *dockertest.FakeConfig) { c.SwarmState, c.SwarmControl = "inactive", false })
 	for _, rec := range []*envRec{
 		f.get(t, e, "configs"),

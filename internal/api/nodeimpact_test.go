@@ -16,6 +16,7 @@ import (
 // managers that can still be reached would not make a majority of those left.
 
 func TestQuorumAtRisk(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		total, reachable int
 		want             bool
@@ -86,6 +87,7 @@ func niOutcomes(b NodeImpactBody) map[string]string {
 }
 
 func TestNodeImpactDrainClassifiesEachTask(t *testing.T) {
+	t.Parallel()
 	w1 := niNode("w1", "worker")
 	other := niNode("w2", "worker")
 	ssd := niNode("w3", "worker")
@@ -152,6 +154,7 @@ func TestNodeImpactDrainClassifiesEachTask(t *testing.T) {
 }
 
 func TestNodeImpactDrainOfANodeWithNoTasksHasAnEmptyListAndNoWarnings(t *testing.T) {
+	t.Parallel()
 	w1 := niNode("w1", "worker")
 	b := nodeImpact(nodeImpactInput{Action: "drain", Node: w1, Nodes: []dockerx.NodeRow{w1}})
 	if b.Tasks == nil || len(b.Tasks) != 0 || b.Warnings == nil || len(b.Warnings) != 0 || b.NeedsConfirm {
@@ -160,6 +163,7 @@ func TestNodeImpactDrainOfANodeWithNoTasksHasAnEmptyListAndNoWarnings(t *testing
 }
 
 func TestNodeImpactDrainNeedsTheNameForBayplansNodeAndTheOnlyManagerAgent(t *testing.T) {
+	t.Parallel()
 	m := niNode("m1", "manager")
 	for _, tc := range []struct {
 		name          string
@@ -185,6 +189,7 @@ func TestNodeImpactDrainNeedsTheNameForBayplansNodeAndTheOnlyManagerAgent(t *tes
 }
 
 func TestNodeImpactPauseKeepsTheTasksAndNeverNeedsTheName(t *testing.T) {
+	t.Parallel()
 	w := niNode("w1", "worker")
 	b := nodeImpact(nodeImpactInput{
 		Action: "pause", Node: w, Nodes: []dockerx.NodeRow{w},
@@ -204,6 +209,7 @@ func TestNodeImpactPauseKeepsTheTasksAndNeverNeedsTheName(t *testing.T) {
 }
 
 func TestNodeImpactDemoteCountsManagersAndWarns(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name      string
 		reach     []string // the reachability of m1.. ; the node demoted is m1
@@ -242,6 +248,7 @@ func TestNodeImpactDemoteCountsManagersAndWarns(t *testing.T) {
 }
 
 func TestNodeImpactDemoteOfBayplansNodeOrTheOnlyManagerAgentNeedsTheName(t *testing.T) {
+	t.Parallel()
 	nodes := niManagers("reachable", "reachable", "reachable", "reachable")
 	for name, in := range map[string]nodeImpactInput{
 		"Bayplan's node":         {RunsBayplan: true},
@@ -256,6 +263,7 @@ func TestNodeImpactDemoteOfBayplansNodeOrTheOnlyManagerAgentNeedsTheName(t *test
 }
 
 func TestNodeImpactDemoteWithManagersWhoseStateIsUnknownCannotTellAndNeedsTheName(t *testing.T) {
+	t.Parallel()
 	nodes := niManagers("reachable", "unknown", "reachable", "reachable")
 	b := nodeImpact(nodeImpactInput{Action: "demote", Node: nodes[0], Nodes: nodes})
 	if !slices.Contains(b.Warnings, warnFactsUnreadable) || !b.NeedsConfirm {
@@ -269,6 +277,7 @@ func TestNodeImpactDemoteWithManagersWhoseStateIsUnknownCannotTellAndNeedsTheNam
 }
 
 func TestNodeImpactPromoteAddsAManagerAndWarnsOfNothing(t *testing.T) {
+	t.Parallel()
 	nodes := append(niManagers("reachable", "reachable", "unreachable"), niNode("w1", "worker"))
 	b := nodeImpact(nodeImpactInput{Action: "promote", Node: nodes[3], Nodes: nodes})
 	if b.Managers != (NodeImpactManagers{Total: 3, Reachable: 2, After: 4}) {
@@ -280,6 +289,7 @@ func TestNodeImpactPromoteAddsAManagerAndWarnsOfNothing(t *testing.T) {
 }
 
 func TestNodeImpactDemotingAWorkerDoesNotChangeTheManagers(t *testing.T) {
+	t.Parallel()
 	nodes := append(niManagers("reachable", "reachable", "reachable"), niNode("w1", "worker"))
 	b := nodeImpact(nodeImpactInput{Action: "demote", Node: nodes[3], Nodes: nodes})
 	if b.Managers.After != 3 || len(b.Warnings) != 0 || b.NeedsConfirm {

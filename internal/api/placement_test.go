@@ -96,6 +96,7 @@ func plServices() []dockertest.FakeService {
 }
 
 func TestPlacementListsTasksByNode(t *testing.T) {
+	t.Parallel()
 	f, e := tkEnv(t, 5, plServices(),
 		tkRunning("web-1", "svc-web", "node-3", 1, "c1", time.Minute),
 		tkRunning("web-2", "svc-web", "node-2", 2, "c2", time.Minute),
@@ -158,6 +159,7 @@ func TestPlacementListsTasksByNode(t *testing.T) {
 }
 
 func TestPlacementNotPlacedAndRemovedNode(t *testing.T) {
+	t.Parallel()
 	pending := tkTask("web-pending", "svc-web", "", 3, "pending", "running", time.Minute)
 	pending.Status.Err = "no suitable node (scheduling constraints not satisfied on 4 nodes)\x1b"
 	f, e := tkEnv(t, 5, plServices(),
@@ -185,6 +187,7 @@ func TestPlacementNotPlacedAndRemovedNode(t *testing.T) {
 }
 
 func TestPlacementForOneService(t *testing.T) {
+	t.Parallel()
 	f, e := tkEnv(t, 5, plServices(),
 		tkRunning("web-1", "svc-web", "node-3", 1, "c1", time.Minute),
 		tkRunning("api-1", "svc-api", "node-1", 1, "c2", time.Minute),
@@ -210,6 +213,7 @@ func TestPlacementForOneService(t *testing.T) {
 }
 
 func TestPlacementCarriesConstraintFacts(t *testing.T) {
+	t.Parallel()
 	web := webService()
 	web.Constraints = []string{"node.role==worker", "node.labels.zone!=a"}
 	web.Preferences = []string{"node.labels.zone", "engine.labels.rack"}
@@ -241,6 +245,7 @@ func TestPlacementCarriesConstraintFacts(t *testing.T) {
 }
 
 func TestPlacementWithNothingRunningListsNodesAndNoNull(t *testing.T) {
+	t.Parallel()
 	f, e := tkEnv(t, 5, nil)
 	rec := f.get(t, e, "placement")
 	if rec.code != http.StatusOK || !strings.Contains(string(rec.body), `"tasks":[]`) || !strings.Contains(string(rec.body), `"services":[]`) {
@@ -249,6 +254,7 @@ func TestPlacementWithNothingRunningListsNodesAndNoNull(t *testing.T) {
 }
 
 func TestPlacementIsForASwarmAndForAViewer(t *testing.T) {
+	t.Parallel()
 	f, e := tkEnv(t, 5, plServices(), tkRunning("t", "svc-web", "node-1", 1, "c", time.Minute))
 	get := f.asRole(t, e, "pl-viewer", "viewer")
 	rec := get("placement")

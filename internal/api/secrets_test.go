@@ -153,6 +153,7 @@ func (f *envFix) dumpAudit(t *testing.T) string {
 }
 
 func TestCreateSecretSendsItOnceAndAnswersTheIDAndNameOnly(t *testing.T) {
+	t.Parallel()
 	f, e := secretsEnv(t, []dockertest.FakeSecret{dbpwSecret()})
 	rec := f.createSecret(t, e, secretBody("apikey", []byte("s3cr3t"), `,"labels":{"team":"core","tier":"1"},"source":"typed"`))
 	if rec.code != http.StatusCreated {
@@ -196,6 +197,7 @@ func TestCreateSecretSendsItOnceAndAnswersTheIDAndNameOnly(t *testing.T) {
 }
 
 func TestCreateSecretValueBoundsAreCheckedBeforeAnythingIsForwarded(t *testing.T) {
+	t.Parallel()
 	f, e := secretsEnv(t, nil)
 	if rec := f.createSecret(t, e, secretBody("big", bytes.Repeat([]byte("x"), 511999), "")); rec.code != http.StatusCreated {
 		t.Fatalf("511,999 bytes = %d %.200s, want 201", rec.code, rec.body)
@@ -237,6 +239,7 @@ func TestCreateSecretValueBoundsAreCheckedBeforeAnythingIsForwarded(t *testing.T
 }
 
 func TestCreateSecretOfATakenNameIsConflictAndAuditedAsAFailure(t *testing.T) {
+	t.Parallel()
 	f, e := secretsEnv(t, []dockertest.FakeSecret{dbpwSecret()})
 	rec := f.createSecret(t, e, secretBody("dbpw", []byte("v"), ""))
 	if rec.code != http.StatusConflict || rec.ptyp != "name_taken" || !strings.Contains(string(rec.body), "A secret named dbpw already exists.") {
@@ -249,6 +252,7 @@ func TestCreateSecretOfATakenNameIsConflictAndAuditedAsAFailure(t *testing.T) {
 }
 
 func TestListSecretsCountsUsersFromServiceSpecsAndNamesTheOwner(t *testing.T) {
+	t.Parallel()
 	f, e := secretsEnv(t, []dockertest.FakeSecret{dbpwSecret(), {ID: "sec-z", Name: "zeta"}, {ID: "sec-a", Name: "alpha"}}, secretUsers()...)
 	rec := f.get(t, e, "secrets")
 	if rec.code != http.StatusOK {
@@ -286,6 +290,7 @@ func TestListSecretsCountsUsersFromServiceSpecsAndNamesTheOwner(t *testing.T) {
 }
 
 func TestGetSecretAnswersMetadataAndWhoUsesItAndInspectHasNoData(t *testing.T) {
+	t.Parallel()
 	f, e := secretsEnv(t, []dockertest.FakeSecret{dbpwSecret()}, secretUsers()...)
 	rec := f.get(t, e, "secrets/sec-db")
 	if rec.code != http.StatusOK {
@@ -322,6 +327,7 @@ func TestGetSecretAnswersMetadataAndWhoUsesItAndInspectHasNoData(t *testing.T) {
 }
 
 func TestDeleteSecretNeedsItsNameAndRefusesOneAServiceStillUses(t *testing.T) {
+	t.Parallel()
 	more := dockertest.FakeSecret{ID: "sec-free", Name: "free"}
 	f, e := secretsEnv(t, []dockertest.FakeSecret{dbpwSecret(), more}, secretUsers()...)
 
@@ -373,6 +379,7 @@ func TestDeleteSecretNeedsItsNameAndRefusesOneAServiceStillUses(t *testing.T) {
 }
 
 func TestSecretsNeedTheirPermissionsAndAStandaloneHostHasNone(t *testing.T) {
+	t.Parallel()
 	f, e := secretsEnv(t, []dockertest.FakeSecret{dbpwSecret()})
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
@@ -405,6 +412,7 @@ func TestSecretsNeedTheirPermissionsAndAStandaloneHostHasNone(t *testing.T) {
 }
 
 func TestSecretsOfAStandaloneHostAreNotASwarm(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, func(c *dockertest.FakeConfig) { c.SwarmState, c.SwarmControl = "inactive", false })
 	for _, rec := range []*envRec{
 		f.get(t, e, "secrets"),
@@ -418,6 +426,7 @@ func TestSecretsOfAStandaloneHostAreNotASwarm(t *testing.T) {
 }
 
 func TestSecretValueNeverLeaves(t *testing.T) {
+	t.Parallel()
 	const planted = "PLANTED-0xDEADBEEF-value"
 	b64 := base64.StdEncoding.EncodeToString([]byte(planted))
 	f, e := secretsEnv(t, nil, secretUsers()...)

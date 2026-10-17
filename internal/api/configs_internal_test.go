@@ -29,6 +29,7 @@ func problemOf(t *testing.T, err error) (status int, ptype string) {
 // A config list carries every config's content from the manager (RESEARCH E17), so a swarm of
 // large configs can pass the tunnel's response cap; that is a 502 that says so (T-06-71).
 func TestConfigReadProblemMapsAListTooLargeForTheTunnelToABadGateway(t *testing.T) {
+	t.Parallel()
 	d := ConfigsDeps{Log: slog.New(slog.DiscardHandler)}
 	err := fmt.Errorf("list swarm configs on agent a1: %w", fmt.Errorf("agent a1: %w (more than 67108864 bytes)", tunnel.ErrTooLarge))
 	status, ptype := problemOf(t, configReadProblem(d, "env1", err))

@@ -142,6 +142,7 @@ func niOf(t *testing.T, rec *envRec) niBody {
 }
 
 func TestNodeImpactOfADrainClassifiesTheNodesTasks(t *testing.T) {
+	t.Parallel()
 	f, e := naEnv(t, nil)
 	b := niOf(t, f.nodeImpact(t, e, "node-4", "drain"))
 	if b.Action != "drain" || b.Hostname != "wrk-1" || b.NeedsConfirm || len(b.Warnings) != 0 {
@@ -178,6 +179,7 @@ func TestNodeImpactOfADrainClassifiesTheNodesTasks(t *testing.T) {
 }
 
 func TestNodeImpactOfADemoteOfBayplansNodeNeedsTheNameAndWarnsOfAnEvenCount(t *testing.T) {
+	t.Parallel()
 	f, e := naEnv(t, nil)
 	b := niOf(t, f.nodeImpact(t, e, "node-1", "demote"))
 	if !b.NeedsConfirm || !slices.Contains(b.Warnings, "runs_bayplan") || !slices.Contains(b.Warnings, "even_count") || slices.Contains(b.Warnings, "quorum_at_risk") {
@@ -194,6 +196,7 @@ func TestNodeImpactOfADemoteOfBayplansNodeNeedsTheNameAndWarnsOfAnEvenCount(t *t
 }
 
 func TestNodeImpactRefusals(t *testing.T) {
+	t.Parallel()
 	f, e := naEnv(t, nil)
 	for _, action := range []string{"", "remove", "activate", "Drain"} {
 		if rec := f.nodeImpact(t, e, "node-4", action); rec.code != http.StatusUnprocessableEntity {
@@ -220,6 +223,7 @@ func TestNodeImpactRefusals(t *testing.T) {
 }
 
 func TestSetNodeAvailabilityDrainsWithTheFullSpecAndTheVersionJustRead(t *testing.T) {
+	t.Parallel()
 	f, e := naEnv(t, nil)
 	rec := f.setAvailability(t, e, "node-4", `{"availability":"drain","version":3}`)
 	if rec.code != http.StatusNoContent {
@@ -263,6 +267,7 @@ func TestSetNodeAvailabilityDrainsWithTheFullSpecAndTheVersionJustRead(t *testin
 }
 
 func TestSetNodeAvailabilityPauseAndActivateNeedNoName(t *testing.T) {
+	t.Parallel()
 	f, e := naEnv(t, nil)
 	// Pausing the node Bayplan runs on sends nothing away, so it needs no name.
 	if rec := f.setAvailability(t, e, "node-1", `{"availability":"pause","version":7}`); rec.code != http.StatusNoContent {
@@ -282,6 +287,7 @@ func TestSetNodeAvailabilityPauseAndActivateNeedNoName(t *testing.T) {
 }
 
 func TestSetNodeAvailabilityOfBayplansNodeNeedsItsNameAndThenIsNotBlocked(t *testing.T) {
+	t.Parallel()
 	f, e := naEnv(t, nil)
 	for _, confirm := range []string{"", "mgr-2", "MGR-1", "mgr-1 "} {
 		body := fmt.Sprintf(`{"availability":"drain","version":7,"confirm":%q}`, confirm)
@@ -322,6 +328,7 @@ func TestSetNodeAvailabilityOfBayplansNodeNeedsItsNameAndThenIsNotBlocked(t *tes
 }
 
 func TestSetNodeAvailabilityRefusals(t *testing.T) {
+	t.Parallel()
 	f, e := naEnv(t, nil)
 	for name, tc := range map[string]struct {
 		node, body, ptyp string
@@ -349,6 +356,7 @@ func TestSetNodeAvailabilityRefusals(t *testing.T) {
 }
 
 func TestSetNodeRolePromotesAndDemotes(t *testing.T) {
+	t.Parallel()
 	f, e := naEnv(t, nil)
 	if rec := f.setRole(t, e, "node-4", `{"role":"manager","version":3}`); rec.code != http.StatusNoContent {
 		t.Fatalf("promote = %d: %s", rec.code, rec.body)
@@ -369,6 +377,7 @@ func TestSetNodeRolePromotesAndDemotes(t *testing.T) {
 }
 
 func TestSetNodeRoleDemoteThatPutsQuorumAtRiskNeedsTheName(t *testing.T) {
+	t.Parallel()
 	f, e := naEnv(t, func(c *dockertest.FakeConfig) {
 		c.NodeRows[2].Reachability = "unreachable" // mgr-3 cannot be reached
 	})
@@ -395,6 +404,7 @@ func TestSetNodeRoleDemoteThatPutsQuorumAtRiskNeedsTheName(t *testing.T) {
 }
 
 func TestSetNodeRoleMapsDockersOwnRefusals(t *testing.T) {
+	t.Parallel()
 	f, e := naEnv(t, func(c *dockertest.FakeConfig) {
 		c.NodeUpdateError = "rpc error: code = FailedPrecondition desc = attempting to demote the last manager of the swarm"
 	})
@@ -416,6 +426,7 @@ func TestSetNodeRoleMapsDockersOwnRefusals(t *testing.T) {
 }
 
 func TestSetNodeRoleKeepsAnyOtherRefusalsWords(t *testing.T) {
+	t.Parallel()
 	f, e := naEnv(t, func(c *dockertest.FakeConfig) {
 		c.NodeUpdateError = "rpc error: code = Unavailable desc = no leader elected"
 	})
@@ -426,6 +437,7 @@ func TestSetNodeRoleKeepsAnyOtherRefusalsWords(t *testing.T) {
 }
 
 func TestNodeActionsNeedAdmin(t *testing.T) {
+	t.Parallel()
 	f, e := naEnv(t, nil)
 	f.addUser(t, "na-operator", false)
 	f.addEnvRole(t, "na-operator", e.ID, "operator")
@@ -453,6 +465,7 @@ func TestNodeActionsNeedAdmin(t *testing.T) {
 }
 
 func TestNodeActionsOnAStandaloneHostAreNotASwarm(t *testing.T) {
+	t.Parallel()
 	sf := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1", Version: "29.1.0"})
 	sf.clusters = envs.NewClusters(sf.svc, sf.snaps, envs.ClusterOptions{Now: sf.clk.now})
 	sf.svc.WithClusters(sf.clusters)
@@ -502,6 +515,7 @@ func naAgentSwarm(t *testing.T, both bool) (*agentFix, tunneltest.Environment, *
 }
 
 func TestNodeImpactWarnsWhenTheNodeHasTheOnlyConnectedManagerAgent(t *testing.T) {
+	t.Parallel()
 	f, env, m1 := naAgentSwarm(t, false)
 	// naAgentSwarm returned with the manager agent probed, so the impact is read once.
 	rec := f.get(t, env.ID, "nodes/node-mgr-1/impact?action=drain")
@@ -535,6 +549,7 @@ func TestNodeImpactWarnsWhenTheNodeHasTheOnlyConnectedManagerAgent(t *testing.T)
 }
 
 func TestNodeImpactDoesNotWarnWhenAnotherManagerAgentIsConnected(t *testing.T) {
+	t.Parallel()
 	f, env, _ := naAgentSwarm(t, true)
 	// naAgentSwarm returned with both manager agents probed, so the node list is read once.
 	rec := f.get(t, env.ID, "nodes")
@@ -584,6 +599,7 @@ func (f *envFix) removeNode(t *testing.T, e envBody, node, confirm string) *envR
 }
 
 func TestRemoveNode(t *testing.T) {
+	t.Parallel()
 	f, e := nrEnv(t, nil)
 	rec := f.removeNode(t, e, "node-7", "wrk-dead")
 	if rec.code != http.StatusNoContent {
@@ -607,6 +623,7 @@ func TestRemoveNode(t *testing.T) {
 }
 
 func TestRemoveNodeNeedsTheNodesNameTyped(t *testing.T) {
+	t.Parallel()
 	f, e := nrEnv(t, nil)
 	for _, confirm := range []string{"", "wrk-dea", "WRK-DEAD", "node-7"} {
 		rec := f.removeNode(t, e, "node-7", confirm)
@@ -624,6 +641,7 @@ func TestRemoveNodeNeedsTheNodesNameTyped(t *testing.T) {
 }
 
 func TestRemoveNodeRefusals(t *testing.T) {
+	t.Parallel()
 	f, e := nrEnv(t, nil)
 	for _, tc := range []struct {
 		name, node string
@@ -665,6 +683,7 @@ func TestRemoveNodeRefusals(t *testing.T) {
 }
 
 func TestRemoveNodeMapsDockersOwnRefusals(t *testing.T) {
+	t.Parallel()
 	// The node came back between the read and the write.
 	f, e := nrEnv(t, func(c *dockertest.FakeConfig) {
 		c.WriteError = "rpc error: code = FailedPrecondition desc = node node-7 is not down and can't be removed"
@@ -688,6 +707,7 @@ func TestRemoveNodeMapsDockersOwnRefusals(t *testing.T) {
 }
 
 func TestRemoveNodeNeedsAdmin(t *testing.T) {
+	t.Parallel()
 	f, e := nrEnv(t, nil)
 	f.addUser(t, "nr-operator", false)
 	f.addEnvRole(t, "nr-operator", e.ID, "operator")
@@ -713,6 +733,7 @@ func TestRemoveNodeNeedsAdmin(t *testing.T) {
 }
 
 func TestRemoveNodeOnAStandaloneHostIsNotASwarm(t *testing.T) {
+	t.Parallel()
 	sf := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1", Version: "29.1.0"})
 	sf.clusters = envs.NewClusters(sf.svc, sf.snaps, envs.ClusterOptions{Now: sf.clk.now})
 	sf.svc.WithClusters(sf.clusters)
@@ -749,6 +770,7 @@ func nrAgentSwarm(t *testing.T) (*agentFix, tunneltest.Environment, *agentConn, 
 }
 
 func TestRemoveNodeRevokesTheAgentOfThatNodeWithoutBlockingTheHost(t *testing.T) {
+	t.Parallel()
 	f, env, mgr, wrk := nrAgentSwarm(t)
 	rec := f.req(t, http.MethodDelete, "/api/env/"+env.ID+"/nodes/node-wrk-1?confirm=wrk-1", "")
 	if rec.code != http.StatusNoContent {

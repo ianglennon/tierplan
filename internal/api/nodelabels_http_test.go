@@ -49,6 +49,7 @@ func (f *envFix) setLabels(t *testing.T, e envBody, node, body string) *envRec {
 }
 
 func TestNodeLabelImpactEndpoint(t *testing.T) {
+	t.Parallel()
 	f, e := naEnv(t, nil)
 
 	rec := f.labelImpact(t, e, "node-4", `{"labels":{"zone":"a"}}`)
@@ -89,6 +90,7 @@ func TestNodeLabelImpactEndpoint(t *testing.T) {
 }
 
 func TestNodeLabelImpactRefusals(t *testing.T) {
+	t.Parallel()
 	f, e := naEnv(t, nil)
 	if rec := f.labelImpact(t, e, "node-4", `{"labels":{"com.docker.x":"1"}}`); rec.code != http.StatusUnprocessableEntity || rec.ptyp != "label_reserved" {
 		t.Errorf("a reserved label = %d %s (%s), want 422 label_reserved", rec.code, rec.body, rec.ptyp)
@@ -119,6 +121,7 @@ func TestNodeLabelImpactRefusals(t *testing.T) {
 }
 
 func TestSetNodeLabelsRefusals(t *testing.T) {
+	t.Parallel()
 	f, e := naEnv(t, nil)
 	labelsOf := func(n int) string {
 		var parts []string
@@ -187,6 +190,7 @@ func TestSetNodeLabelsRefusals(t *testing.T) {
 }
 
 func TestSetNodeLabels(t *testing.T) {
+	t.Parallel()
 	f, e := naEnv(t, nil)
 	rec := f.setLabels(t, e, "node-4", `{"labels":{"zone":"b","owner":"me"},"version":3}`)
 	if rec.code != http.StatusNoContent {
@@ -230,6 +234,7 @@ func TestSetNodeLabels(t *testing.T) {
 }
 
 func TestSetNodeLabelsNeedsAdminAndMapsDockersRefusals(t *testing.T) {
+	t.Parallel()
 	f, e := naEnv(t, func(c *dockertest.FakeConfig) {
 		c.NodeUpdateError = "rpc error: code = Unavailable desc = no leader elected"
 	})
@@ -255,6 +260,7 @@ func TestSetNodeLabelsNeedsAdminAndMapsDockersRefusals(t *testing.T) {
 }
 
 func TestNodeLabelsOnAStandaloneHostAreNotASwarm(t *testing.T) {
+	t.Parallel()
 	sf := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1", Version: "29.1.0"})
 	sf.clusters = envs.NewClusters(sf.svc, sf.snaps, envs.ClusterOptions{Now: sf.clk.now})
 	sf.svc.WithClusters(sf.clusters)

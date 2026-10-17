@@ -68,6 +68,7 @@ func (f *envFix) volumeAudits(t *testing.T) []auditRowFull {
 }
 
 func TestCreateVolumeAsAnEnvAdminAnswers201SendsTheFieldsOnceAndAuditsOnce(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, volumeEngine())
 	f.addUser(t, "voladmin", false)
 	f.addEnvRole(t, "voladmin", e.ID, "admin")
@@ -113,6 +114,7 @@ func TestCreateVolumeAsAnEnvAdminAnswers201SendsTheFieldsOnceAndAuditsOnce(t *te
 }
 
 func TestCreateVolumeTheAgentsHostPolicyRefusalIs409AgentHostPolicyAndAudited(t *testing.T) {
+	t.Parallel()
 	cfg := volumeEngine()
 	cfg.VolumeHostPolicyDeny = true
 	f, e := dashEnv(t, cfg)
@@ -160,6 +162,7 @@ func TestCreateVolumeTheAgentsHostPolicyRefusalIs409AgentHostPolicyAndAudited(t 
 }
 
 func TestCreateVolumeAPlainAgentPolicyDenialIsStillAgentPolicyDenied(t *testing.T) {
+	t.Parallel()
 	cfg := volumeEngine()
 	cfg.PolicyDeny = true
 	f, e := dashEnv(t, cfg)
@@ -170,6 +173,7 @@ func TestCreateVolumeAPlainAgentPolicyDenialIsStillAgentPolicyDenied(t *testing.
 }
 
 func TestCreateVolumeANameTheNodeHasIs409NameTakenWithoutTellingTheEngineToCreateAndIsAudited(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, volumeEngine())
 	rec := f.createVol(t, e, `{"name":"existing"}`)
 	if rec.code != http.StatusConflict || rec.ptyp != "name_taken" {
@@ -192,6 +196,7 @@ func TestCreateVolumeANameTheNodeHasIs409NameTakenWithoutTellingTheEngineToCreat
 }
 
 func TestCreateVolumeTheSchemaRefusesBadNamesAndTooManyEntriesBeforeAnyDockerCall(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, volumeEngine())
 	awaitOnline(t, f.mon, e.ID)
 	for name, body := range map[string]string{
@@ -217,6 +222,7 @@ func TestCreateVolumeTheSchemaRefusesBadNamesAndTooManyEntriesBeforeAnyDockerCal
 }
 
 func TestCreateVolumeAnOperatorAndAViewerAreRefusedAndNothingIsSent(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, volumeEngine())
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
@@ -245,6 +251,7 @@ func TestCreateVolumeAnOperatorAndAViewerAreRefusedAndNothingIsSent(t *testing.T
 }
 
 func TestCreateVolumeAnUnknownEnvironmentIs404(t *testing.T) {
+	t.Parallel()
 	f, _ := dashEnv(t, volumeEngine())
 	rec := f.req(t, http.MethodPost, "/api/env/nope/volumes", `{"name":"v"}`)
 	if rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
@@ -302,6 +309,7 @@ func (s *swarmFix) volumeAudits(t *testing.T) []auditRowFull {
 }
 
 func TestCreateVolumeOnASwarmNeedsANodeAndGoesToThatNodeOnly(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	rec := s.postVolume(t, `{"name":"vol-a"}`)
 	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "node_required" {
@@ -329,6 +337,7 @@ func TestCreateVolumeOnASwarmNeedsANodeAndGoesToThatNodeOnly(t *testing.T) {
 }
 
 func TestCreateVolumeANameIsTakenPerNodeNotAcrossTheSwarm(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	// Both managers hold a volume called data (the fixture); the worker does not.
 	rec := s.postVolume(t, fmt.Sprintf(`{"name":"data","nodeId":%q}`, s.m1.id))
@@ -345,6 +354,7 @@ func TestCreateVolumeANameIsTakenPerNodeNotAcrossTheSwarm(t *testing.T) {
 }
 
 func TestCreateVolumeANodeThatIsNotOneOfTheEnvironmentsIs503AndNothingIsSent(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	rec := s.postVolume(t, `{"name":"vol-a","nodeId":"not-a-node"}`)
 	if rec.code != http.StatusServiceUnavailable || rec.ptyp != "node_unavailable" {
@@ -356,6 +366,7 @@ func TestCreateVolumeANodeThatIsNotOneOfTheEnvironmentsIs503AndNothingIsSent(t *
 }
 
 func TestCreateVolumeAuditsTheOptionsButNeverAPasswordAndTheEngineGetsThemWhole(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, volumeEngine())
 	rec := f.createVol(t, e, `{"name":"media","driverOptions":{"type":"cifs","o":"addr=nas.lan,username=bob,password=hunter2,vers=3.0","device":"//nas.lan/media"},"labels":{"app":"x"}}`)
 	if rec.code != http.StatusCreated {
@@ -391,6 +402,7 @@ func TestCreateVolumeAuditsTheOptionsButNeverAPasswordAndTheEngineGetsThemWhole(
 }
 
 func TestCreateVolumeAFailedAttemptIsAuditedWithMaskedOptionsToo(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, volumeEngine())
 	rec := f.createVol(t, e, `{"name":"existing","driverOptions":{"type":"cifs","o":"password=hunter2"}}`)
 	if rec.code != http.StatusConflict {
@@ -406,6 +418,7 @@ func TestCreateVolumeAFailedAttemptIsAuditedWithMaskedOptionsToo(t *testing.T) {
 }
 
 func TestCreateVolumeWithNoOptionsRecordsNoOptionsDetail(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, volumeEngine())
 	if rec := f.createVol(t, e, `{"name":"plain"}`); rec.code != http.StatusCreated {
 		t.Fatalf("status = %d: %s", rec.code, rec.body)
@@ -455,6 +468,7 @@ func deleteVolumesJSON(confirm string, targets ...[2]string) string {
 }
 
 func TestDeleteVolumeAHolderOfVolumesDeleteDeletesAnUnusedVolumeWithItsNameTypedAndItIsAudited(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, volumeEngine())
 	post := f.volumeDeleter(t, e, "trusted")
 	rec := post(deleteVolumesJSON("existing", [2]string{e.ID, "existing"}))
@@ -491,6 +505,7 @@ func TestDeleteVolumeAHolderOfVolumesDeleteDeletesAnUnusedVolumeWithItsNameTyped
 }
 
 func TestDeleteVolumeAWrongConfirmationIs422ConfirmationRequiredAndNothingIsSent(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, volumeEngine())
 	post := f.volumeDeleter(t, e, "trusted")
 	for name, body := range map[string]string{
@@ -515,6 +530,7 @@ func TestDeleteVolumeAWrongConfirmationIs422ConfirmationRequiredAndNothingIsSent
 }
 
 func TestDeleteVolumeWithoutTheDeleteVolumesPermissionIs403AndNothingIsSent(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, volumeEngine())
 	for _, who := range []struct{ user, role string }{{"viewer", "viewer"}, {"operator", "operator"}} {
 		f.addUser(t, who.user, false)
@@ -542,6 +558,7 @@ func TestDeleteVolumeWithoutTheDeleteVolumesPermissionIs403AndNothingIsSent(t *t
 }
 
 func TestDeleteVolumeASecondDeleteOfTheSameVolumeAnswersNotFoundAndIsNotAudited(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, volumeEngine())
 	post := f.volumeDeleter(t, e, "trusted")
 	body := deleteVolumesJSON("existing", [2]string{e.ID, "existing"})
@@ -565,6 +582,7 @@ func TestDeleteVolumeASecondDeleteOfTheSameVolumeAnswersNotFoundAndIsNotAudited(
 }
 
 func TestDeleteVolumeAnEmptyTargetListIs422(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, volumeEngine())
 	post := f.volumeDeleter(t, e, "trusted")
 	rec := post(`{"confirm":"delete 0 volumes","targets":[]}`)
@@ -621,6 +639,7 @@ func volumeNames(items []volumeItem) []string {
 }
 
 func TestVolumeListCarriesWhatUsesEachVolumeThatIsAnonymousAndWhatItGroupsBy(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, usageEngine())
 	got := map[string]volumeItem{}
 	for _, v := range listVolumes(t, f, e, "").Items {
@@ -647,6 +666,7 @@ func TestVolumeListCarriesWhatUsesEachVolumeThatIsAnonymousAndWhatItGroupsBy(t *
 }
 
 func TestVolumeListUsageFilterRunsBeforeTheCapAndSearchMatchesNameDriverLabelAndStack(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, usageEngine())
 	used := volumeNames(listVolumes(t, f, e, "usage=used").Items)
 	if !slices.Equal(used, []string{"appdata", "cache"}) {
@@ -683,6 +703,7 @@ func TestVolumeListUsageFilterRunsBeforeTheCapAndSearchMatchesNameDriverLabelAnd
 }
 
 func TestDeleteVolumeAVolumeAStoppedContainerMountsIsVolumeInUseAndNothingIsSent(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, usageEngine())
 	post := f.volumeDeleter(t, e, "trusted")
 	rec := post(deleteVolumesJSON("cache", [2]string{e.ID, "cache"}))
@@ -707,6 +728,7 @@ func TestDeleteVolumeAVolumeAStoppedContainerMountsIsVolumeInUseAndNothingIsSent
 }
 
 func TestDeleteVolumeAContainerThatStartsBetweenTheCheckAndTheCallMakesTheEngineRefuseAsVolumeInUse(t *testing.T) {
+	t.Parallel()
 	cfg := usageEngine()
 	cfg.BusyVolumes = []string{"scratch"}
 	f, e := dashEnv(t, cfg)
@@ -728,6 +750,7 @@ func TestDeleteVolumeAContainerThatStartsBetweenTheCheckAndTheCallMakesTheEngine
 }
 
 func TestDeleteVolumeABulkContinuesPastAFailureAndEveryAuditRowCarriesTheSameBulkID(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, usageEngine())
 	post := f.volumeDeleter(t, e, "trusted")
 	rec := post(deleteVolumesJSON("delete 4 volumes",
@@ -762,6 +785,7 @@ func TestDeleteVolumeABulkContinuesPastAFailureAndEveryAuditRowCarriesTheSameBul
 }
 
 func TestDeleteVolumeAChunkOfOneThatBelongsToABulkIsConfirmedByThePhraseOfTheWholeSelection(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, usageEngine())
 	post := f.volumeDeleter(t, e, "trusted")
 	id := "0198f0a0-0000-7000-8000-000000000001"
@@ -781,6 +805,7 @@ func TestDeleteVolumeAChunkOfOneThatBelongsToABulkIsConfirmedByThePhraseOfTheWho
 }
 
 func TestDeleteVolumeMoreThan25TargetsIs422AndNothingIsSent(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, usageEngine())
 	post := f.volumeDeleter(t, e, "trusted")
 	var targets [][2]string
@@ -797,6 +822,7 @@ func TestDeleteVolumeMoreThan25TargetsIs422AndNothingIsSent(t *testing.T) {
 }
 
 func TestDeleteVolumeANodeThatIsNotOneOfTheEnvironmentsIsNodeUnreachableAndNothingIsSent(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, usageEngine())
 	post := f.volumeDeleter(t, e, "trusted")
 	rec := post(deleteVolumesJSON("cache", [2]string{"not-a-node", "cache"}))
@@ -841,6 +867,7 @@ func (s *swarmFix) volumeDeletesOn() map[string][]string {
 }
 
 func TestSwarmVolumeListsOneRowPerNodeAndCountsTheServiceSpecsThatMountIt(t *testing.T) {
+	t.Parallel()
 	// newSwarmFix returned with every agent connected and probed, and the cluster read behind
 	// "used by" is made by the request itself when the last one is older than its TTL.
 	s := newSwarmFix(t)
@@ -864,6 +891,7 @@ func TestSwarmVolumeListsOneRowPerNodeAndCountsTheServiceSpecsThatMountIt(t *tes
 }
 
 func TestSwarmVolumeAServiceSpecThatMountsTheVolumeKeepsItEvenWithNoTaskAndNothingIsSent(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	rec, got := s.deleteVolumes(t, deleteVolumesJSON("data", [2]string{s.m1.id, "data"}))
 	if rec.code != http.StatusOK || len(got.Results) != 1 {
@@ -878,6 +906,7 @@ func TestSwarmVolumeAServiceSpecThatMountsTheVolumeKeepsItEvenWithNoTaskAndNothi
 }
 
 func TestSwarmVolumeDeletingOneNodesCopyLeavesTheSameNameOnTheOtherNode(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	for _, node := range []string{s.m1.id, s.w.id} {
 		if rec := s.postVolume(t, fmt.Sprintf(`{"name":"shared","nodeId":%q}`, node)); rec.code != http.StatusCreated {
@@ -942,6 +971,7 @@ func sizesEngine() dockertest.FakeConfig {
 }
 
 func TestVolumeSizesAnswerOneEntryForTheNodeWithEveryVolumesSizeAndTheListNeverAsksTheEngine(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, sizesEngine())
 	// Listing and summarising never make the engine walk its volumes.
 	listVolumes(t, f, e, "")
@@ -981,6 +1011,7 @@ func TestVolumeSizesAnswerOneEntryForTheNodeWithEveryVolumesSizeAndTheListNeverA
 }
 
 func TestVolumeSizesAreTheSameFromAnEngineThatAnswersTheLegacyShape(t *testing.T) {
+	t.Parallel()
 	cfg := sizesEngine()
 	cfg.APIVersion = "1.51"
 	f, e := dashEnv(t, cfg)
@@ -995,6 +1026,7 @@ func TestVolumeSizesAreTheSameFromAnEngineThatAnswersTheLegacyShape(t *testing.T
 }
 
 func TestVolumeSizesANodeThatFailsOrRunsOutOfTimeIsAnEntryOfItsOwnWithAnError(t *testing.T) {
+	t.Parallel()
 	cfg := sizesEngine()
 	cfg.DiskUsageFail = true
 	f, e := dashEnv(t, cfg)
@@ -1028,6 +1060,7 @@ func TestVolumeSizesANodeThatFailsOrRunsOutOfTimeIsAnEntryOfItsOwnWithAnError(t 
 }
 
 func TestVolumeSizesOnASwarmAnswerEveryNodeAndANodeIdLimitsItToOne(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	rec := s.get(t, s.env.ID, "volumes/sizes")
 	if rec.code != http.StatusOK {
@@ -1064,6 +1097,7 @@ func TestVolumeSizesOnASwarmAnswerEveryNodeAndANodeIdLimitsItToOne(t *testing.T)
 }
 
 func TestVolumeSizesOnASwarmWithOneNodeFailingTheOthersStillAnswer(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	s.w.fake.Reconfigure(dockertest.FakeConfig{Hostname: "wrk-1", SwarmState: "active", DiskUsageFail: true})
 	got := decode[volumeSizesBody](t, s.get(t, s.env.ID, "volumes/sizes"))
@@ -1078,6 +1112,7 @@ func TestVolumeSizesOnASwarmWithOneNodeFailingTheOthersStillAnswer(t *testing.T)
 }
 
 func TestVolumeSizesNeedVolumesReadAndAnUnknownEnvironmentIs404(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, sizesEngine())
 	if rec := f.req(t, http.MethodGet, "/api/env/no-such-env/volumes/sizes", ""); rec.code != http.StatusNotFound {
 		t.Errorf("unknown environment: %d, want 404", rec.code)
@@ -1161,6 +1196,7 @@ func (f *envFix) asRole(t *testing.T, e envBody, user, role string) func(path st
 }
 
 func TestVolumeDetailAViewerSeesTheDetailsAndWhatUsesTheVolumeButNoOptionValue(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, volumeDetailEngine())
 	get := f.asRole(t, e, "vol-viewer", "viewer")
 
@@ -1220,6 +1256,7 @@ func TestVolumeDetailAViewerSeesTheDetailsAndWhatUsesTheVolumeButNoOptionValue(t
 }
 
 func TestVolumeDetailAHolderOfSecretsRevealSeesTheOptionValues(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, volumeDetailEngine())
 	awaitOnline(t, f.mon, e.ID)
 	share := decode[volumeDetail](t, f.get(t, e, "volumes/share"))
@@ -1236,6 +1273,7 @@ func TestVolumeDetailAHolderOfSecretsRevealSeesTheOptionValues(t *testing.T) {
 }
 
 func TestVolumeDetailAVolumeThatIsNotThereIs404VolumeNotFoundAndANodeThatIsNotTheEnvironmentsIs503(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, volumeDetailEngine())
 	awaitOnline(t, f.mon, e.ID)
 	if rec := f.get(t, e, "volumes/ghost"); rec.code != http.StatusNotFound || rec.ptyp != "volume_not_found" {
@@ -1250,6 +1288,7 @@ func TestVolumeDetailAVolumeThatIsNotThereIs404VolumeNotFoundAndANodeThatIsNotTh
 }
 
 func TestVolumeDetailNeedsVolumesReadAndTheNameOfTheSizesRouteStillRoutesToIt(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, volumeDetailEngine())
 	f.addUser(t, "stranger", false)
 	cookie, csrf := f.signIn(t, "stranger", false)
@@ -1265,6 +1304,7 @@ func TestVolumeDetailNeedsVolumesReadAndTheNameOfTheSizesRouteStillRoutesToIt(t 
 }
 
 func TestSwarmVolumeDetailNeedsTheNodeAndNamesTheServicesWhoseSpecMountsItEvenWithNoTask(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	if rec := s.get(t, s.env.ID, "volumes/data"); rec.code != http.StatusUnprocessableEntity || rec.ptyp != "node_required" {
 		t.Fatalf("no node on a swarm: %d %q, want 422 node_required: %s", rec.code, rec.ptyp, rec.body)
@@ -1298,6 +1338,7 @@ type volumeInspect struct {
 }
 
 func TestVolumeInspectAViewerGetsTheDocumentWithEveryOptionValueReplacedAndMaskedSaysSo(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, volumeDetailEngine())
 	get := f.asRole(t, e, "inspect-viewer", "viewer")
 	rec := get("volumes/share/inspect")
@@ -1323,6 +1364,7 @@ func TestVolumeInspectAViewerGetsTheDocumentWithEveryOptionValueReplacedAndMaske
 }
 
 func TestVolumeInspectAHolderOfSecretsRevealGetsTheDocumentAsTheEngineSentIt(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, volumeDetailEngine())
 	awaitOnline(t, f.mon, e.ID)
 	got := decode[volumeInspect](t, f.get(t, e, "volumes/share/inspect"))
@@ -1336,6 +1378,7 @@ func TestVolumeInspectAHolderOfSecretsRevealGetsTheDocumentAsTheEngineSentIt(t *
 }
 
 func TestVolumeInspectAVolumeWithNoOptionsIsNotMasked(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, volumeDetailEngine())
 	get := f.asRole(t, e, "inspect-viewer2", "viewer")
 	rec := get("volumes/appdata/inspect")
@@ -1352,6 +1395,7 @@ func TestVolumeInspectAVolumeWithNoOptionsIsNotMasked(t *testing.T) {
 }
 
 func TestVolumeInspectUsesTheDetailRoutesRulesForTheNodeAndForAVolumeThatIsNotThere(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, volumeDetailEngine())
 	awaitOnline(t, f.mon, e.ID)
 	if rec := f.get(t, e, "volumes/ghost/inspect"); rec.code != http.StatusNotFound || rec.ptyp != "volume_not_found" {

@@ -175,6 +175,7 @@ func ndHosts(items []ndItem) []string {
 }
 
 func TestListNodes(t *testing.T) {
+	t.Parallel()
 	f, e := ndEnv(t, plServices(), ndFixtureTasks()...)
 	b := ndList1(t, f, e, "")
 
@@ -215,6 +216,7 @@ func TestListNodes(t *testing.T) {
 }
 
 func TestListNodesFilters(t *testing.T) {
+	t.Parallel()
 	f, e := ndEnv(t, plServices(), ndFixtureTasks()...)
 	all := ndCounts{Managers: 1, Workers: 3, Drained: 1, Down: 2}
 	for _, tc := range []struct {
@@ -252,6 +254,7 @@ func TestListNodesFilters(t *testing.T) {
 }
 
 func TestGetNodeAndInspect(t *testing.T) {
+	t.Parallel()
 	f, e := ndEnv(t, plServices(), ndFixtureTasks()...)
 	rec := f.get(t, e, "nodes/node-1")
 	if rec.code != http.StatusOK {
@@ -305,6 +308,7 @@ func TestGetNodeAndInspect(t *testing.T) {
 }
 
 func TestNodeTasks(t *testing.T) {
+	t.Parallel()
 	tasks := []swarm.Task{
 		tkRunning("web-1", "svc-web", "node-3", 1, "c1", time.Minute),
 		tkRunning("api-1", "svc-api", "node-3", 1, "c2", 2*time.Minute),
@@ -350,6 +354,7 @@ func TestNodeTasks(t *testing.T) {
 }
 
 func TestNodesAreForASwarmAndForAViewer(t *testing.T) {
+	t.Parallel()
 	f, e := ndEnv(t, plServices(), ndFixtureTasks()...)
 	get := f.asRole(t, e, "nd-viewer", "viewer")
 	for _, path := range []string{"nodes", "nodes/node-1", "nodes/node-1/inspect", "nodes/node-1/tasks"} {
@@ -416,6 +421,7 @@ func newNodesSwarm(t *testing.T) *ndSwarm {
 }
 
 func TestRunsBayplanNode(t *testing.T) {
+	t.Parallel()
 	// On the local socket's own swarm node.
 	f, e := ndEnv(t, nil)
 	b := ndList1(t, f, e, "")
