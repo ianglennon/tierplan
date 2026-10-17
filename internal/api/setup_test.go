@@ -174,6 +174,7 @@ func problemType(t *testing.T, rec *httptest.ResponseRecorder) string {
 }
 
 func TestSetupInstanceIsPublicAndReportsNeedsSetupOnAFreshStore(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{SessionRememberLifetime: 720 * time.Hour})
 	rec := f.get(t, "/api/instance")
 	if rec.Code != http.StatusOK {
@@ -193,6 +194,7 @@ func TestSetupInstanceIsPublicAndReportsNeedsSetupOnAFreshStore(t *testing.T) {
 }
 
 func TestSetupInstanceReportsTheStoredNameAfterSetup(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{SessionRememberLifetime: 24 * time.Hour})
 	f.addUser(t)
 	f.inst.Apply("Home lab", "")
@@ -211,6 +213,7 @@ func TestSetupInstanceReportsTheStoredNameAfterSetup(t *testing.T) {
 }
 
 func TestSetupTokenRightTokenReturnsTheStepThreeDefaults(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		url    string
 		locked bool
@@ -243,6 +246,7 @@ func TestSetupTokenRightTokenReturnsTheStepThreeDefaults(t *testing.T) {
 }
 
 func TestSetupTokenAcceptsTheTokenWithoutDashes(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{})
 	if rec := f.postToken(t, strings.ToUpper(strings.ReplaceAll(f.token, "-", ""))); rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
@@ -250,6 +254,7 @@ func TestSetupTokenAcceptsTheTokenWithoutDashes(t *testing.T) {
 }
 
 func TestSetupTokenWrongTokenIs401AndAuditedWithoutTheValue(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{})
 	const attempt = "deadbeef-deadbeef-deadbeef-deadbeef"
 	rec := f.postToken(t, attempt)
@@ -281,6 +286,7 @@ func TestSetupTokenWrongTokenIs401AndAuditedWithoutTheValue(t *testing.T) {
 }
 
 func TestSetupTokenSixthAttemptInAMinuteIsRateLimitedAndAudited(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{})
 	for i := 1; i <= 5; i++ {
 		if rec := f.postToken(t, "wrong"); rec.Code != http.StatusUnauthorized {
@@ -321,6 +327,7 @@ func TestSetupTokenSixthAttemptInAMinuteIsRateLimitedAndAudited(t *testing.T) {
 // the proxy serves at the root (found by the plan 02-32 end-to-end run behind
 // Caddy at /bayplan, where it showed a blank page).
 func TestSetupPageRedirectsToTheLoginPageUnderTheBasePath(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct{ url, want string }{
 		"no public url":   {url: "", want: "/login"},
 		"root":            {url: "https://bayplan.example.com", want: "/login"},
@@ -338,6 +345,7 @@ func TestSetupPageRedirectsToTheLoginPageUnderTheBasePath(t *testing.T) {
 }
 
 func TestSetupTokenAfterAUserExistsIs409AndAudited(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{})
 	f.addUser(t)
 
@@ -373,6 +381,7 @@ func TestSetupTokenAfterAUserExistsIs409AndAudited(t *testing.T) {
 }
 
 func TestSetupTokenFloodAfterSetupIsAnsweredButAuditedOnceWithACount(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixtureThrottled(t, config.Config{}, func(w *audit.Writer) api.SetupAuditor { return w }, 3)
 	f.addUser(t)
 
@@ -411,6 +420,7 @@ func TestSetupTokenFloodAfterSetupIsAnsweredButAuditedOnceWithACount(t *testing.
 }
 
 func TestSetupPageServesTheSPAWhileSetupIsNeeded(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{})
 	rec := f.get(t, "/setup")
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `id="root"`) {
@@ -419,6 +429,7 @@ func TestSetupPageServesTheSPAWhileSetupIsNeeded(t *testing.T) {
 }
 
 func TestSetupTokenBodyIsCappedAndValidated(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{})
 	if rec := f.postToken(t, strings.Repeat("a", 129)); rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("a 129 character token = %d, want 422", rec.Code)
@@ -432,6 +443,7 @@ func TestSetupTokenBodyIsCappedAndValidated(t *testing.T) {
 }
 
 func TestSetupTokenCannotBeBypassedWithHeadersOrQueryParameters(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{})
 	req := httptest.NewRequest(http.MethodPost, "/api/setup/token?token="+f.token, strings.NewReader(`{"token":"nope"}`))
 	req.Header.Set("Content-Type", "application/json")

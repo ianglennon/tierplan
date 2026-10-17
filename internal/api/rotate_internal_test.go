@@ -21,6 +21,7 @@ import (
 // (plan 06-28, T-06-81). An Admin always holds both, so the second check is a guard against a role
 // matrix that one day lets them part.
 func TestRotateNeedsServicesControlBesideTheObjectsPermissionAndAuditsARefusal(t *testing.T) {
+	t.Parallel()
 	st := storetest.New(t)
 	v, err := vault.New(bytes.Repeat([]byte{7}, 32), "test")
 	if err != nil {

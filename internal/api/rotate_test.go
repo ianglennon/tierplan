@@ -150,6 +150,7 @@ func serviceUpdatedRows(rows []auditRowFull) []auditRowFull {
 }
 
 func TestRotatePreviewListsEveryUserInNameOrderAndMarksTheStacksAsSkipped(t *testing.T) {
+	t.Parallel()
 	f, e := rotateEnv(t, rotateServices()...)
 	rec := f.rotateCall(t, e, "secrets", "sec-db", "rotate/preview", `{}`)
 	if rec.code != http.StatusOK {
@@ -185,6 +186,7 @@ func TestRotatePreviewListsEveryUserInNameOrderAndMarksTheStacksAsSkipped(t *tes
 }
 
 func TestRotatePreviewUsesTheNameItIsGivenAndFlagsATakenOne(t *testing.T) {
+	t.Parallel()
 	f, e := rotateEnv(t, rotateServices()...)
 	got := decode[rotatePreviewAnswer](t, f.rotateCall(t, e, "secrets", "sec-db", "rotate/preview", `{"newName":"dbpw_next"}`))
 	if got.NewName != "dbpw_next" || got.NameTaken || got.Users[0].Next == nil || !strings.Contains(string(mustJSON(t, got.Users[0].Next)), "dbpw_next") {
@@ -210,6 +212,7 @@ func mustJSON(t *testing.T, v any) []byte {
 }
 
 func TestRotateNeedsTheObjectsManagePermissionAndAnOperatorIsForbiddenOnAllFourRoutes(t *testing.T) {
+	t.Parallel()
 	f, e := rotateEnv(t, rotateServices()...)
 	for _, role := range []string{"viewer", "operator"} {
 		who := f.caller(t, e, role+"-1", role)
@@ -233,6 +236,7 @@ func TestRotateNeedsTheObjectsManagePermissionAndAnOperatorIsForbiddenOnAllFourR
 }
 
 func TestRotateASecretMovesTheStandaloneUsersAndAuditsTheRotateAndEachServiceNeverTheValue(t *testing.T) {
+	t.Parallel()
 	f, e := rotateEnv(t, rotateServices()...)
 	rec := f.rotateCall(t, e, "secrets", "sec-db", "rotate", rotateBody(rotateValue, `,"removeOld":true`))
 	if rec.code != http.StatusOK {
@@ -295,6 +299,7 @@ func TestRotateASecretMovesTheStandaloneUsersAndAuditsTheRotateAndEachServiceNev
 }
 
 func TestRotateRemovesTheOldSecretWhenNothingIsLeftUsingIt(t *testing.T) {
+	t.Parallel()
 	f, e := rotateEnv(t, rotateServices(func(fs *dockertest.FakeService) {
 		if fs.Name == "shop_web" {
 			fs.Secrets = nil
@@ -326,6 +331,7 @@ func TestRotateRemovesTheOldSecretWhenNothingIsLeftUsingIt(t *testing.T) {
 }
 
 func TestRotateWithoutRemoveOldKeepsTheOldSecret(t *testing.T) {
+	t.Parallel()
 	f, e := rotateEnv(t, rotateServices(func(fs *dockertest.FakeService) {
 		if fs.Name == "shop_web" {
 			fs.Secrets = nil
@@ -341,6 +347,7 @@ func TestRotateWithoutRemoveOldKeepsTheOldSecret(t *testing.T) {
 }
 
 func TestRotateWithNoUsersSaysSoAndOnlyCreatesTheNewSecret(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, func(c *dockertest.FakeConfig) {
 		c.Secrets = []dockertest.FakeSecret{{ID: "sec-spare", Name: "spare"}}
 	}, editableService(nil))
@@ -355,6 +362,7 @@ func TestRotateWithNoUsersSaysSoAndOnlyCreatesTheNewSecret(t *testing.T) {
 }
 
 func TestRotateRefusesBadInputBeforeAnythingIsSent(t *testing.T) {
+	t.Parallel()
 	f, e := rotateEnv(t, rotateServices()...)
 	huge := b64(strings.Repeat("x", 512000))
 	for name, tc := range map[string]struct {
@@ -381,6 +389,7 @@ func TestRotateRefusesBadInputBeforeAnythingIsSent(t *testing.T) {
 }
 
 func TestRotateWhoseNewNameIsTakenSaysNothingElseChangedAndAuditsTheFailure(t *testing.T) {
+	t.Parallel()
 	f, e := rotateEnv(t, rotateServices()...)
 	rec := f.rotateCall(t, e, "secrets", "sec-db", "rotate", rotateBody(rotateValue, `,"name":"dbpw"`))
 	if rec.code != http.StatusConflict || rec.ptyp != "name_taken" {
@@ -408,6 +417,7 @@ func TestRotateWhoseNewNameIsTakenSaysNothingElseChangedAndAuditsTheFailure(t *t
 }
 
 func TestRotateThatStopsPartWayKeepsTheOldSecretNamesWhatMovedAndAuditsBothSides(t *testing.T) {
+	t.Parallel()
 	f, e := rotateEnv(t, rotateServices(func(fs *dockertest.FakeService) {
 		if fs.Name == "worker" {
 			fs.UpdateError = "rpc error: code = InvalidArgument desc = bad secret reference"
@@ -447,6 +457,7 @@ func TestRotateThatStopsPartWayKeepsTheOldSecretNamesWhatMovedAndAuditsBothSides
 }
 
 func TestRotateAConfigCopiesLabelsAndTemplatingAndAuditsConfigRotated(t *testing.T) {
+	t.Parallel()
 	f, e := rotateEnv(t, rotateServices(func(fs *dockertest.FakeService) {
 		if fs.Name == "shop_web" {
 			fs.Configs = nil
@@ -483,6 +494,7 @@ func TestRotateAConfigCopiesLabelsAndTemplatingAndAuditsConfigRotated(t *testing
 }
 
 func TestRotateOfASecretThatIsGoneIsNotFoundAndOfAStandaloneHostIsNotASwarm(t *testing.T) {
+	t.Parallel()
 	f, e := rotateEnv(t, rotateServices()...)
 	for tail, body := range map[string]string{"rotate/preview": `{}`, "rotate": rotateBody("v", "")} {
 		rec := f.rotateCall(t, e, "secrets", "sec-gone", tail, body)

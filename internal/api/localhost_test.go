@@ -62,6 +62,7 @@ func localHostFixture(t *testing.T, dockerHost string) (f *authFixture, cookie s
 }
 
 func TestLocalHostReportsNoSocketWhenNoneExistsAtThePath(t *testing.T) {
+	t.Parallel()
 	missing := filepath.Join(t.TempDir(), "docker.sock")
 	f, cookie := localHostFixture(t, "unix://"+missing)
 	got, code := f.localHostCall(t, cookie)
@@ -71,6 +72,7 @@ func TestLocalHostReportsNoSocketWhenNoneExistsAtThePath(t *testing.T) {
 }
 
 func TestLocalHostIgnoresAPlainFileAtThePath(t *testing.T) {
+	t.Parallel()
 	file := filepath.Join(t.TempDir(), "docker.sock")
 	if err := os.WriteFile(file, []byte("not a socket"), 0o600); err != nil {
 		t.Fatal(err)
@@ -83,6 +85,7 @@ func TestLocalHostIgnoresAPlainFileAtThePath(t *testing.T) {
 }
 
 func TestLocalHostProbesTheEngineBehindTheSocket(t *testing.T) {
+	t.Parallel()
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{APIVersion: "1.52", Version: "29.1.0", Hostname: "node-1",
 		SwarmState: "active", SwarmControl: true})
 	f, cookie := localHostFixture(t, "unix://"+fake.SocketPath())
@@ -98,6 +101,7 @@ func TestLocalHostProbesTheEngineBehindTheSocket(t *testing.T) {
 }
 
 func TestLocalHostNamesAnUnsupportedEngine(t *testing.T) {
+	t.Parallel()
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{APIVersion: "1.41", Version: "20.10.24"})
 	f, cookie := localHostFixture(t, "unix://"+fake.SocketPath())
 	got, code := f.localHostCall(t, cookie)
@@ -111,6 +115,7 @@ func TestLocalHostNamesAnUnsupportedEngine(t *testing.T) {
 }
 
 func TestLocalHostReportsASocketNobodyAnswersOnAsUnreachable(t *testing.T) {
+	t.Parallel()
 	// A socket that accepts and hangs up: it exists, but nothing speaks Docker.
 	dir, err := os.MkdirTemp("", "bplh")
 	if err != nil {
@@ -144,6 +149,7 @@ func TestLocalHostReportsASocketNobodyAnswersOnAsUnreachable(t *testing.T) {
 }
 
 func TestLocalHostGivesUpOnAnEngineThatAcceptsAndNeverAnswers(t *testing.T) {
+	t.Parallel()
 	dir, err := os.MkdirTemp("", "bplh")
 	if err != nil {
 		t.Fatal(err)
@@ -179,6 +185,7 @@ func TestLocalHostGivesUpOnAnEngineThatAcceptsAndNeverAnswers(t *testing.T) {
 }
 
 func TestLocalHostDefaultsToTheStandardSocketPath(t *testing.T) {
+	t.Parallel()
 	// An empty DOCKER_HOST is the default path. Whether that socket exists on
 	// the machine running the tests is not this test's business.
 	f, cookie := localHostFixture(t, "")
@@ -189,6 +196,7 @@ func TestLocalHostDefaultsToTheStandardSocketPath(t *testing.T) {
 }
 
 func TestLocalHostIsForInstanceAdminsOnly(t *testing.T) {
+	t.Parallel()
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
 	f, _ := localHostFixture(t, "unix://"+fake.SocketPath())
 	f.addUser(t, "viewer", false) // no assignment at all
@@ -211,6 +219,7 @@ func TestLocalHostIsForInstanceAdminsOnly(t *testing.T) {
 }
 
 func TestLocalHostHasNoWritePath(t *testing.T) {
+	t.Parallel()
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
 	f, cookie := localHostFixture(t, "unix://"+fake.SocketPath())
 	_, csrf := f.signIn(t, "admin", false)
