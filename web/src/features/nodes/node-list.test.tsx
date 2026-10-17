@@ -404,6 +404,9 @@ describe("the nodes list: search and chips", () => {
     expect(within(group).getByRole("button", { name: "Workers 2" })).toBeTruthy();
     expect(within(group).getByRole("button", { name: "Drained 1" })).toBeTruthy();
     expect(within(group).getByRole("button", { name: "Down 1" })).toBeTruthy();
+    // The chips wrap onto further rows at every width, so none is cut off at 375px (G-06-2).
+    expect(group.classList.contains("flex-wrap")).toBe(true);
+    expect(group.className).not.toMatch(/overflow-x-auto|flex-nowrap/);
   });
 
   it("toggles a chip through the search, in chip order, and shows it pressed", async () => {

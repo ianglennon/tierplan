@@ -251,3 +251,20 @@ test("at 375px every status chip of the Services list is on the screen, wrapping
   );
   await expectChipsInsideScreen(page, group, "Services list");
 });
+
+test("at 375px every status chip of the Nodes list is on the screen, wrapping instead of scrolling", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto(at(`/env/${envId}/nodes`));
+  await expect(page.getByRole("heading", { name: "Nodes", level: 1 })).toBeVisible();
+  // One node: the engine itself. Its link shows once the list's data is there.
+  await expect(page.getByRole("main").getByRole("table").getByRole("link").first()).toBeVisible();
+  const group = page.getByRole("group", { name: "Filter nodes" });
+  // The counts arrive with the list's data and widen the chips, so the row is measured only once
+  // they are there.
+  await expect(group.locator('[data-slot="toggle-group-item"]').last()).toHaveText(
+    /^Down [\d,]+$/,
+  );
+  await expectChipsInsideScreen(page, group, "Nodes list");
+});

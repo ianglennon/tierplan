@@ -40,6 +40,7 @@ import {
   ResourceTable,
   TruncatedText,
 } from "@/features/resources/resource-table";
+import { STATUS_CHIP_ROW } from "@/features/resources/status-chips";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { NotASwarm } from "@/features/services/not-a-swarm";
 import { usePermission } from "@/hooks/use-me";
@@ -330,7 +331,7 @@ export function NodeList({ envId, search, onSearchChange }: NodeListProps) {
         aria-label={t("nodes.list.status.label")}
         value={statuses}
         onValueChange={(v) => onSearchChange({ status: nodeStatusParam(v as NodeStatusValue[]) })}
-        className="max-w-full max-md:w-full max-md:flex-nowrap max-md:overflow-x-auto md:flex-wrap"
+        className={STATUS_CHIP_ROW}
       >
         {NODE_STATUS_VALUES.map((v) => {
           const label = t(`nodes.list.status.${v}`);
