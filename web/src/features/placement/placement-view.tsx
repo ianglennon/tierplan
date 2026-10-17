@@ -275,11 +275,11 @@ export function PlacementView({ envId, search, onSearchChange, serviceId }: Plac
       {serviceId ? (
         <>
           {data || failed ? (
-            <h3 className="text-lg font-semibold break-all">
+            <h3 className="text-base font-semibold break-all">
               {t("placement.serviceTab.title", { name: serviceName })}
             </h3>
           ) : (
-            <Skeleton className="h-7 w-48" />
+            <Skeleton className="h-5 w-48" />
           )}
           {service && data ? (
             <PlacementRulesCard service={service} nodes={data.nodes ?? []} />

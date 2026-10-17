@@ -740,7 +740,7 @@ export function HealthBell() {
             {count > 0 ? (
               <Badge
                 aria-hidden="true"
-                className="absolute -top-0.5 -right-0.5 h-4 min-w-4 justify-center rounded-full bg-status-warning px-1 text-[10px] text-neutral-950"
+                className="absolute -top-0.5 -right-0.5 h-4 min-w-4 justify-center rounded-full bg-status-warning px-1 leading-none text-neutral-950"
               >
                 {count > BADGE_CAP ? `${BADGE_CAP}+` : count}
               </Badge>
