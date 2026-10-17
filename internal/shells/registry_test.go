@@ -434,23 +434,23 @@ func TestCloseAllWaitsForAnEndStartedElsewhereToFinishItsAudit(t *testing.T) {
 	})
 
 	go r.End(s.ID, "server_shutdown")
-	<-entered
+	testsupport.Await(t, "the end to start auditing", entered)
 	returned := make(chan struct{})
 	go func() {
 		r.CloseAll("server_shutdown")
 		close(returned)
 	}()
+	// The registry has no signal for "CloseAll is now waiting": it blocks on a
+	// condition variable with nothing observable around it, so there is nothing to
+	// fence this absence on. The window can only miss a CloseAll that returns late; a
+	// correct one cannot return before release, so it never fails a correct run.
 	select {
 	case <-returned:
 		t.Fatal("CloseAll returned while another end was still auditing")
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(100 * time.Millisecond): // wall-clock: CloseAll cannot return before release on a correct registry, so this window can only false-pass, never fail a correct run
 	}
 	close(release)
-	select {
-	case <-returned:
-	case <-time.After(5 * time.Second):
-		t.Fatal("CloseAll did not return after the end finished")
-	}
+	testsupport.Await(t, "CloseAll to return after the end finished", returned)
 }
 
 // A bridge whose read fails the moment the process closes must already be able to see
