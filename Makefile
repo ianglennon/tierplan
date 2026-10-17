@@ -21,7 +21,7 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check tidy-check test test-go test-web test-summary test-int test-swarm smoke dev dev-go dev-web dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-down e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke ci-clean ci-preflight
+.PHONY: web build gen gen-check tidy-check test test-go test-web test-stress test-summary test-int test-swarm smoke dev dev-go dev-web dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-down e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke ci-clean ci-preflight
 
 web:
 	pnpm -C web install --frozen-lockfile
@@ -89,6 +89,18 @@ test-web:
 	echo "test-web: seed $$seed (reproduce with make test-web WEB_SEED=$$seed)"; \
 	echo "$$seed" > $(TEST_RESULTS)/web.seed; \
 	pnpm -C web exec vitest run --sequence.shuffle --sequence.seed=$$seed --reporter=default --reporter=json --outputFile.json=$(CURDIR)/$(TEST_RESULTS)/web.json $(if $(CI),--reporter=github-actions)
+
+# The standing stability bars (D-01, D-02, D-03, D-16) for one share of the suite:
+# STRESS_SHARD is api, core, rest or agent-web (scripts/stress.sh documents them).
+# Each Go package set runs 20 shuffled -race runs, then once each at -cpu=1 and
+# -cpu=4, with quarantined tests included (D-12); agent-web also runs ten shuffled
+# Vitest runs. The nightly workflow runs the four shards. STRESS_TIMEOUT is the
+# go test -timeout of the 20-run pass; the nightly job's timeout-minutes stays
+# above it (D-22, scripts/timeouts-check.sh).
+STRESS_SHARD ?= api
+STRESS_TIMEOUT := 270m
+test-stress:
+	@GOTESTSUM='$(GOTESTSUM)' TEST_RESULTS=$(TEST_RESULTS) scripts/stress.sh $(STRESS_SHARD) -timeout $(STRESS_TIMEOUT)
 
 # Takes the fixed-name e2e stack (project bayplan-e2e, subnet 172.30.0.0/24, ports
 # 8443 and 8444, two privileged dind containers) down with its volumes and any

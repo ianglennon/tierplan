@@ -23,6 +23,9 @@
 # (and so cannot forge a workflow command), and Markdown is escaped before it
 # reaches the summary. Nothing here is passed to a shell or an expression.
 #
+# A test that ran more than once in a file (go test -count=N, the stress shards of
+# make test-stress) is named with how often it failed: "failed 2/20" (D-16).
+#
 # Usage: scripts/test-summary.sh FILE...
 # Exit: 0 when every file was read, with or without failures (the job's own
 # pass or fail comes from the test step); 1 when a file is missing, empty or
@@ -55,7 +58,10 @@ def txt: [.[] | select(.Action == "output") | (.Output // "")] | join("");
     | ($e | any(.Action == "fail" and ((.Test // "") == ""))) as $pkgfail
     | ([$e[] | select(.Action == "fail" and ((.Test // "") == "")) | .FailedBuild // empty] | .[0]) as $fb
     | (($fb != null) or ($text | test("\\[(build|setup) failed\\]"))) as $build
-    | ( [ $failed[] | {kind: "test", pkg: $p, test: ., seed: $seed, detail: ""} ]
+    | ( [ $failed[] | . as $t
+          | {kind: "test", pkg: $p, test: $t, seed: $seed, detail: "",
+             k: ([$e[] | select(.Action == "fail" and (.Test // "") == $t)] | length),
+             n: ([$e[] | select((.Action == "fail" or .Action == "pass") and (.Test // "") == $t)] | length)} ]
       + [ $hung[] | {kind: "hung", pkg: $p, test: .[0], seed: $seed, detail: ("still running after " + .[1] + " when go test timed out")} ]
       + (if $pkgfail and $build then
            [ {kind: "build", pkg: $p, test: "", seed: "",
@@ -115,7 +121,8 @@ def clean: tostring | '"${CLEAN}"';
 .[]
 | (if .seed != "" then " (shuffle seed " + .seed + ")" else "" end) as $s
 | (if .detail != "" then ": " + (.detail | clean) else "" end) as $d
-| if .kind == "test" then "FAIL " + (.pkg | clean) + (if .test != "" then " " + (.test | clean) else "" end) + $s + $d
+| (if (.n // 0) > 1 then " failed " + (.k | tostring) + "/" + (.n | tostring) else "" end) as $r
+| if .kind == "test" then "FAIL " + (.pkg | clean) + (if .test != "" then " " + (.test | clean) else "" end) + $s + $r + $d
   elif .kind == "hung" then "HUNG " + (.pkg | clean) + " " + (.test | clean) + $s + $d
   elif .kind == "build" then "BUILD " + (.pkg | clean) + " [build failed]" + $d
   else "PACKAGE " + (.pkg | clean) + $s + $d end
@@ -128,7 +135,8 @@ def md: tostring | '"${CLEAN}"'
 .[]
 | (if .seed != "" then " (shuffle seed " + (.seed | md) + ")" else "" end) as $s
 | (if .detail != "" then ": " + (.detail | md) else "" end) as $d
-| if .kind == "test" then "- **FAIL** " + (.pkg | md) + (if .test != "" then " " + (.test | md) else "" end) + $s + $d
+| (if (.n // 0) > 1 then " failed " + (.k | tostring) + "/" + (.n | tostring) else "" end) as $r
+| if .kind == "test" then "- **FAIL** " + (.pkg | md) + (if .test != "" then " " + (.test | md) else "" end) + $s + $r + $d
   elif .kind == "hung" then "- **HUNG** " + (.pkg | md) + " " + (.test | md) + $s + $d
   elif .kind == "build" then "- **BUILD** " + (.pkg | md) + " (build failed)" + $d
   else "- **PACKAGE** " + (.pkg | md) + $s + $d end

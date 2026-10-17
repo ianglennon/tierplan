@@ -274,6 +274,32 @@ printf '%s' '{"config":{},"suites":[{"title":"a.spec.ts","file":"a.spec.ts","spe
 expect pass "summary-playwright-pass" scripts/test-summary.sh "${scratch}/playwright-pass.json"
 expect_out "summary-playwright-pass says so" "No failing tests (playwright-pass.json)"
 
+# A test that ran N times and failed K of them is named with "failed K/N" (06.1-23, D-16).
+expect pass "summary-go-stress" scripts/test-summary.sh "${summ}/go-stress.json"
+expect_out "summary-go-stress names the test" "example.test/stressfix TestFailsOnEvenRuns"
+expect_out "summary-go-stress says how often" "failed 2/5"
+expect pass "summary-go-fail-has-no-count" scripts/test-summary.sh "${summ}/go-fail.json"
+if grep -qF -- " failed 1/1" <<<"${LAST_OUT}"; then
+  echo "SCRIPT TEST FAIL: summary-go-fail-has-no-count (a single run got a k/N)"
+  failures=$((failures + 1))
+fi
+: >"${step_summary}"
+expect pass "summary-go-stress-markdown" env GITHUB_STEP_SUMMARY="${step_summary}" scripts/test-summary.sh "${summ}/go-stress.json"
+if ! grep -qF -- "failed 2/5" "${step_summary}"; then
+  echo "SCRIPT TEST FAIL: summary-go-stress-markdown (failed 2/5 missing from GITHUB_STEP_SUMMARY)"
+  failures=$((failures + 1))
+fi
+
+# --- stress.sh and make test-stress (06.1-23, D-01, D-02, D-03, D-16) ---
+expect fail "stress-unknown-shard" scripts/stress.sh nope
+expect_out "stress-unknown-shard lists the shards" "agent-web"
+expect fail "stress-no-shard" scripts/stress.sh
+expect fail "stress-bad-count" env STRESS_COUNT=lots scripts/stress.sh api
+expect pass "test-stress-plan" mk test-stress STRESS_SHARD=rest
+expect_out "test-stress passes the shard" "scripts/stress.sh rest"
+expect_out "test-stress passes the 20-run timeout" "-timeout 270m"
+expect_out "test-stress hands over gotestsum" "gotestsum@"
+
 # --- test-web (06.1-15, D-03, D-18): shuffled, with a seed that reproduces the run ---
 expect pass "test-web-seeded" mk test-web WEB_SEED=42
 expect_out "test-web takes the seed from WEB_SEED" "seed=42"
