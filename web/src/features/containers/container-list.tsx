@@ -76,6 +76,7 @@ import {
   TruncatedText,
 } from "@/features/resources/resource-table";
 import { useChosenKeys, useSelection } from "@/features/resources/selection";
+import { STATUS_CHIP_ROW } from "@/features/resources/status-chips";
 import { nodeRowKey, useEnvIsSwarm, useNodeColumn } from "@/features/resources/swarm-lists";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { RestartLoopBadge } from "@/features/restart-loop/restart-loop-badge";
@@ -723,7 +724,7 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
         aria-label={t("containers.list.status.label")}
         value={statuses}
         onValueChange={(v) => onSearchChange({ status: statusParam(v as StatusValue[]) })}
-        className="max-w-full max-md:w-full max-md:flex-nowrap max-md:overflow-x-auto md:flex-wrap"
+        className={STATUS_CHIP_ROW}
       >
         {STATUS_VALUES.map((v) => {
           const label = t(`containers.list.status.${v}`);

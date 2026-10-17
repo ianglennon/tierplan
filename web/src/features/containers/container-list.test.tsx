@@ -349,6 +349,9 @@ describe("container list: status chips", () => {
         .getAllByRole("button")
         .map((b) => b.textContent),
     ).toEqual(["Running 24", "Exited 3", "Paused 0", "Restarting 1", "Unhealthy 2"]);
+    // The chips wrap onto further rows at every width, so none is cut off at 375px (G-06-2).
+    expect(group.classList.contains("flex-wrap")).toBe(true);
+    expect(group.className).not.toMatch(/overflow-x-auto|flex-nowrap/);
   });
 
   it("filters on the server with the chosen statuses and keeps the counts as they were", async () => {
