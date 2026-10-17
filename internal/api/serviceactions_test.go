@@ -85,6 +85,7 @@ func (f *envFix) rollback(t *testing.T, e envBody, service, body string) *envRec
 const webImageRef = "localhost:5000/private/web:1"
 
 func TestForceUpdateRepinsTheTag(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, webService())
 	f.addPullCredential(t, "local-bot", "")
 
@@ -150,6 +151,7 @@ func TestForceUpdateRepinsTheTag(t *testing.T) {
 }
 
 func TestForceUpdateRepeatedPicksUpAMovedTagAndIsItsOwnRollout(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, webService())
 	first := decode[forceUpdateAnswer](t, f.forceUpdate(t, e, "web", `{}`))
 
@@ -175,6 +177,7 @@ func TestForceUpdateRepeatedPicksUpAMovedTagAndIsItsOwnRollout(t *testing.T) {
 }
 
 func TestForceUpdateFailsWhenTheDigestCannotBeResolved(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, func(c *dockertest.FakeConfig) {
 		c.PullStatus = dockertest.FakePullStatus{Code: http.StatusUnauthorized, Message: "unauthorized: authentication required"}
 	}, webService())
@@ -207,6 +210,7 @@ func TestForceUpdateFailsWhenTheDigestCannotBeResolved(t *testing.T) {
 }
 
 func TestForceUpdateDigestOnly(t *testing.T) {
+	t.Parallel()
 	pinned := "localhost:5000/private/web@sha256:" + strings.Repeat("7", 64)
 	svc := webService()
 	svc.Image = pinned
@@ -234,6 +238,7 @@ func TestForceUpdateDigestOnly(t *testing.T) {
 }
 
 func TestForceUpdateWithAStaleVersionChangesNothing(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, webService())
 	rec := f.forceUpdate(t, e, "svc-web", `{"version":3}`)
 	if rec.code != http.StatusConflict || rec.ptyp != "service_changed" {
@@ -253,6 +258,7 @@ func TestForceUpdateWithAStaleVersionChangesNothing(t *testing.T) {
 }
 
 func TestForceUpdateOfAnUnknownServiceIsNotFoundAndNotAudited(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, webService())
 	rec := f.forceUpdate(t, e, "ghost", `{}`)
 	if rec.code != http.StatusNotFound || rec.ptyp != "service_not_found" {
@@ -264,6 +270,7 @@ func TestForceUpdateOfAnUnknownServiceIsNotFoundAndNotAudited(t *testing.T) {
 }
 
 func TestForceUpdateAndRollbackOfAStandaloneHostAreNotASwarm(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1", Version: "29.1.0"})
 	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
 	f.svc.WithClusters(f.clusters)
@@ -282,6 +289,7 @@ func TestForceUpdateAndRollbackOfAStandaloneHostAreNotASwarm(t *testing.T) {
 }
 
 func TestForceUpdateAndRollbackNeedServicesControl(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, rollbackService())
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
@@ -319,6 +327,7 @@ func rollbackService() dockertest.FakeService {
 }
 
 func TestRollbackSendsTheCurrentSpecAndSwapsThemAndRepeatingTogglesBack(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, rollbackService())
 	f.addPullCredential(t, "local-bot", "")
 
@@ -371,6 +380,7 @@ func TestRollbackSendsTheCurrentSpecAndSwapsThemAndRepeatingTogglesBack(t *testi
 }
 
 func TestRollbackWithoutPreviousSpec(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, webService())
 	rec := f.rollback(t, e, "svc-web", `{"version":4}`)
 	if rec.code != http.StatusConflict || rec.ptyp != "no_previous_spec" {
@@ -386,6 +396,7 @@ func TestRollbackWithoutPreviousSpec(t *testing.T) {
 }
 
 func TestRollbackObjectMissing(t *testing.T) {
+	t.Parallel()
 	svc := rollbackService()
 	svc.RollbackError = "secret not found: db_password"
 	f, e := actionsEnv(t, nil, svc)
@@ -413,6 +424,7 @@ func TestRollbackObjectMissing(t *testing.T) {
 }
 
 func TestRollbackNamesANetworkThatIsGone(t *testing.T) {
+	t.Parallel()
 	svc := rollbackService()
 	svc.RollbackError = "network front_net not found"
 	svc.PreviousSpec.TaskTemplate.Networks = []swarm.NetworkAttachmentConfig{{Target: "front_net"}}
@@ -462,6 +474,7 @@ func privilegedRollback(prev func(*swarm.ServiceSpec)) dockertest.FakeService {
 }
 
 func TestRollbackToAPrivilegedPreviousSpecIsRefusedForAnOperatorAndAppliedForAnEnvAdmin(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, privilegedRollback(func(s *swarm.ServiceSpec) {
 		s.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{{Type: mount.TypeBind, Source: "/var/run/docker.sock", Target: "/sock"}}
 	}))
@@ -499,6 +512,7 @@ func TestRollbackToAPrivilegedPreviousSpecIsRefusedForAnOperatorAndAppliedForAnE
 }
 
 func TestRollbackToASpecWithASecretTheServiceDoesNotUseNeedsTheRevealPermission(t *testing.T) {
+	t.Parallel()
 	withDBPass := func(cfg *dockertest.FakeConfig) {
 		cfg.Secrets = []dockertest.FakeSecret{{ID: "sec-db", Name: "db-pass"}}
 	}
@@ -553,6 +567,7 @@ func TestRollbackToASpecWithASecretTheServiceDoesNotUseNeedsTheRevealPermission(
 // TestRollbackJudgesSecretsByTheirEngineIDs: a secret reference is the engine's secret ID, and a name
 // in a spec is only a label that must agree with it (review finding CR-01, D-13 as amended).
 func TestRollbackJudgesSecretsByTheirEngineIDs(t *testing.T) {
+	t.Parallel()
 	twoSecrets := func(cfg *dockertest.FakeConfig) {
 		cfg.Secrets = []dockertest.FakeSecret{{ID: "sec-db", Name: "db-pass"}, {ID: "sec-victim", Name: "victim-secret"}}
 	}
@@ -652,6 +667,7 @@ func TestRollbackJudgesSecretsByTheirEngineIDs(t *testing.T) {
 }
 
 func TestRollbackByAnOperatorToAPreviousSpecWithNoFindingIsAccepted(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		svc  dockertest.FakeService
@@ -677,6 +693,7 @@ func TestRollbackByAnOperatorToAPreviousSpecWithNoFindingIsAccepted(t *testing.T
 }
 
 func TestRollbackToEachHostEscalationFormIsRefusedForAnOperator(t *testing.T) {
+	t.Parallel()
 	const hostNetID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	cases := []struct {
 		name     string
@@ -747,6 +764,7 @@ func TestRollbackToEachHostEscalationFormIsRefusedForAnOperator(t *testing.T) {
 }
 
 func TestRollbackWithAStaleVersionChangesNothing(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, rollbackService())
 	rec := f.rollback(t, e, "svc-web", `{"version":8}`)
 	if rec.code != http.StatusConflict || rec.ptyp != "service_changed" {
@@ -758,6 +776,7 @@ func TestRollbackWithAStaleVersionChangesNothing(t *testing.T) {
 }
 
 func TestRollbackNeedsAVersion(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, rollbackService())
 	for _, body := range []string{`{}`, `{"version":0}`} {
 		if rec := f.rollback(t, e, "svc-web", body); rec.code != http.StatusUnprocessableEntity {
@@ -790,6 +809,7 @@ func (sdSpecAnswer) imageOf(spec map[string]any) string {
 }
 
 func TestServiceSpecIsMasked(t *testing.T) {
+	t.Parallel()
 	f, e := sdEnv(t)
 	get := f.asRole(t, e, "sd-spec-viewer", "viewer")
 	rec := get("services/svc-api/spec")
@@ -839,6 +859,7 @@ func TestServiceSpecIsMasked(t *testing.T) {
 }
 
 func TestServiceSpecOfAnUnknownServiceIsNotFound(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, webService())
 	rec := f.get(t, e, "services/ghost/spec")
 	if rec.code != http.StatusNotFound || rec.ptyp != "service_not_found" {
@@ -868,6 +889,7 @@ func agentService() dockertest.FakeService {
 }
 
 func TestRemoveService(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, loneService(), webService())
 	rec := f.removeService(t, e, "svc-lone", "")
 	if rec.code != http.StatusNoContent {
@@ -903,6 +925,7 @@ func TestRemoveService(t *testing.T) {
 }
 
 func TestRemoveServiceOfAnUnknownServiceIsNotFoundAndNotAudited(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, loneService())
 	rec := f.removeService(t, e, "ghost", "")
 	if rec.code != http.StatusNotFound || rec.ptyp != "service_not_found" {
@@ -914,6 +937,7 @@ func TestRemoveServiceOfAnUnknownServiceIsNotFoundAndNotAudited(t *testing.T) {
 }
 
 func TestRemoveServiceOfAStandaloneHostIsNotASwarm(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1", Version: "29.1.0"})
 	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
 	f.svc.WithClusters(f.clusters)
@@ -926,6 +950,7 @@ func TestRemoveServiceOfAStandaloneHostIsNotASwarm(t *testing.T) {
 }
 
 func TestRemoveAgentServiceNeedsItsName(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, agentService())
 	for _, query := range []string{"", "confirm=lone", "confirm=Bayplan-Agent"} {
 		rec := f.removeService(t, e, "svc-agent", query)
@@ -962,6 +987,7 @@ func TestRemoveAgentServiceNeedsItsName(t *testing.T) {
 }
 
 func TestRemoveStackOwnedServiceIsRefused(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, webService())
 	rec := f.removeService(t, e, "svc-web", "")
 	if rec.code != http.StatusConflict || rec.ptyp != "stack_owned" {
@@ -988,6 +1014,7 @@ func TestRemoveStackOwnedServiceIsRefused(t *testing.T) {
 }
 
 func TestRemoveServiceNeedsAdmin(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, loneService())
 	f.addUser(t, "operator", false)
 	f.addEnvRole(t, "operator", e.ID, "operator")

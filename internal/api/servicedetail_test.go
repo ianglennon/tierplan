@@ -186,6 +186,7 @@ func sdNoSecrets(t *testing.T, who string, rec *httptest.ResponseRecorder) {
 }
 
 func TestServiceDetailMasksForAViewer(t *testing.T) {
+	t.Parallel()
 	f, e := sdEnv(t)
 	get := f.asRole(t, e, "sd-viewer", "viewer")
 	rec := get("services/svc-api")
@@ -220,6 +221,7 @@ func TestServiceDetailMasksForAViewer(t *testing.T) {
 }
 
 func TestServiceDetailRevealsForAnAdmin(t *testing.T) {
+	t.Parallel()
 	f, e := sdEnv(t)
 	rec := f.get(t, e, "services/svc-api")
 	if rec.code != http.StatusOK {
@@ -232,6 +234,7 @@ func TestServiceDetailRevealsForAnAdmin(t *testing.T) {
 }
 
 func TestServiceDetailFillsTheCardsFromTheSpec(t *testing.T) {
+	t.Parallel()
 	f, e := sdEnv(t)
 	d := decode[sdDetail](t, f.get(t, e, "services/svc-api"))
 
@@ -273,6 +276,7 @@ func TestServiceDetailFillsTheCardsFromTheSpec(t *testing.T) {
 }
 
 func TestServiceDetailOfAServiceWithoutADigestIsNotPinned(t *testing.T) {
+	t.Parallel()
 	f, e := sdEnv(t)
 	d := decode[sdDetail](t, f.get(t, e, "services/svc-web"))
 	if d.Image.Tag != "1" || d.Image.Digest != "" || d.Image.Pinned || d.Image.Ref != scaleImage {
@@ -305,6 +309,7 @@ type sdInspectSpec struct {
 }
 
 func TestServiceInspectMasksSpecAndPreviousSpec(t *testing.T) {
+	t.Parallel()
 	f, e := sdEnv(t)
 	get := f.asRole(t, e, "sd-inspect-viewer", "viewer")
 	rec := get("services/svc-api/inspect")
@@ -337,6 +342,7 @@ func TestServiceInspectMasksSpecAndPreviousSpec(t *testing.T) {
 }
 
 func TestServiceInspectRevealsForAnAdmin(t *testing.T) {
+	t.Parallel()
 	f, e := sdEnv(t)
 	rec := f.get(t, e, "services/svc-api/inspect")
 	if rec.code != http.StatusOK {
@@ -350,6 +356,7 @@ func TestServiceInspectRevealsForAnAdmin(t *testing.T) {
 }
 
 func TestServiceDetailNotFound(t *testing.T) {
+	t.Parallel()
 	f, e := sdEnv(t)
 	for _, path := range []string{"services/ghost", "services/ghost/inspect"} {
 		rec := f.get(t, e, path)
@@ -360,6 +367,7 @@ func TestServiceDetailNotFound(t *testing.T) {
 }
 
 func TestServiceDetailOfAStandaloneHostIsNotASwarm(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1", Version: "29.1.0"})
 	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
 	f.svc.WithClusters(f.clusters)
@@ -375,6 +383,7 @@ func TestServiceDetailOfAStandaloneHostIsNotASwarm(t *testing.T) {
 }
 
 func TestServiceDetailNeedsAGrantOnTheEnvironment(t *testing.T) {
+	t.Parallel()
 	f, e := sdEnv(t)
 	f.addUser(t, "sd-nobody", false)
 	nobody, _ := f.signIn(t, "sd-nobody", false)

@@ -105,6 +105,7 @@ func (f *svcLogsFix) downloadRows(t *testing.T) []svcDownloadRow {
 }
 
 func TestServiceLogPageAnswersTheNewestMergedLinesBeforeUntilWithTheirTasksAndSaysWhenThereAreMore(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 	// Before 60 ms there are a1 10, b1 20, c1 30, a2 40 and b2 50 (the ended task's line at 5 is
 	// left out unless asked for).
@@ -139,6 +140,7 @@ func TestServiceLogPageAnswersTheNewestMergedLinesBeforeUntilWithTheirTasksAndSa
 }
 
 func TestServiceLogPageWithStoppedTasksIncludesTheLinesOfTasksThatHaveEnded(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 	until := svcT0.Add(60 * time.Millisecond).Format(time.RFC3339Nano)
 	got := f.page(t, "web", "sid="+sidA+"&tail=50&stopped=1&until="+until)
@@ -148,6 +150,7 @@ func TestServiceLogPageWithStoppedTasksIncludesTheLinesOfTasksThatHaveEnded(t *t
 }
 
 func TestServiceLogPageNarrowsToTheTasksAndNodesAsked(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 	until := svcT0.Add(time.Second).Format(time.RFC3339Nano)
 	byTask := f.page(t, "web", "sid="+sidA+"&tail=50&task=tk-2&until="+until)
@@ -161,6 +164,7 @@ func TestServiceLogPageNarrowsToTheTasksAndNodesAsked(t *testing.T) {
 }
 
 func TestServiceLogPageFindsEarlierLinesFarBackWithoutReadingTheWholeLogFirst(t *testing.T) {
+	t.Parallel()
 	old := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	lines := []dockertest.FakeServiceLogLine{
 		{TaskID: "tk-1", NodeID: "node-1", Time: old, Text: "ancient 1"},
@@ -187,6 +191,7 @@ func TestServiceLogPageFindsEarlierLinesFarBackWithoutReadingTheWholeLogFirst(t 
 }
 
 func TestServiceLogPageIsEmptyAndTheStartWhenNothingIsEarlier(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 	got := f.page(t, "web", "sid="+sidA+"&tail=10&stopped=1&until="+svcT0.Format(time.RFC3339Nano))
 	if len(got.Lines) != 0 || !got.StartOfLogs {
@@ -195,6 +200,7 @@ func TestServiceLogPageIsEmptyAndTheStartWhenNothingIsEarlier(t *testing.T) {
 }
 
 func TestServiceLogPageKeepsLinesThatShareAStampOnEitherSideOfThePageBoundary(t *testing.T) {
+	t.Parallel()
 	at := svcT0.Add(5 * time.Nanosecond)
 	lines := []dockertest.FakeServiceLogLine{
 		{TaskID: "tk-1", NodeID: "node-1", Time: at, Text: "x1"},
@@ -215,6 +221,7 @@ func TestServiceLogPageKeepsLinesThatShareAStampOnEitherSideOfThePageBoundary(t 
 }
 
 func TestServiceLogPageKeepsTheNewestLinesWhenThePageIsOverItsByteBudget(t *testing.T) {
+	t.Parallel()
 	var lines []dockertest.FakeServiceLogLine
 	for i := range 10 {
 		lines = append(lines, svcLine("tk-1", "node-1", i*10, strings.Repeat("z", 100)+string(rune('a'+i))))
@@ -230,6 +237,7 @@ func TestServiceLogPageKeepsTheNewestLinesWhenThePageIsOverItsByteBudget(t *test
 }
 
 func TestServiceLogPageSharesTheViewersAuditMemoryAndWritesNoRowForTheSameViewer(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
 	if fr, ok := c.next(5 * time.Second); !ok || fr.event != "ready" {
@@ -256,6 +264,7 @@ func TestServiceLogPageSharesTheViewersAuditMemoryAndWritesNoRowForTheSameViewer
 }
 
 func TestServiceLogPageRefusesWhatIsNotAPageAndAuditsNothing(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 	for _, query := range []string{
 		"", "sid=short&tail=5", "sid=" + sidA + "&tail=0", "sid=" + sidA + "&tail=2001",
@@ -276,6 +285,7 @@ func TestServiceLogPageRefusesWhatIsNotAPageAndAuditsNothing(t *testing.T) {
 }
 
 func TestServiceLogPageNeedsServicesRead(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 	f.addUser(t, "nobody", false)
 	cookie, _ := f.signIn(t, "nobody", false)
@@ -291,6 +301,7 @@ func dlLine(prefix string, ms int, text string) string {
 }
 
 func TestServiceLogDownloadMergesAllTasksInTimeOrderEachStartingWithTheTaskNameAndUTCTime(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 	w := f.download(t, "web", "")
 	if w.code() != http.StatusOK {
@@ -322,6 +333,7 @@ func TestServiceLogDownloadMergesAllTasksInTimeOrderEachStartingWithTheTaskNameA
 }
 
 func TestServiceLogDownloadReadsTheRangeFromTheEngineAndCutsAtUntil(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 	since, until := svcT0.Add(20*time.Millisecond), svcT0.Add(50*time.Millisecond)
 	w := f.download(t, "web", "since="+since.Format(time.RFC3339Nano)+"&until="+until.Format(time.RFC3339Nano))
@@ -345,6 +357,7 @@ func TestServiceLogDownloadReadsTheRangeFromTheEngineAndCutsAtUntil(t *testing.T
 }
 
 func TestServiceLogDownloadPastItsSizeLeavesOutTheOldestLinesAndSaysSoFirst(t *testing.T) {
+	t.Parallel()
 	// A line is held as its 30-character stamp and its text; three of them fit.
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), func(f *envFix) { f.serviceLogsMaxDownloadBytes = 3 * 32 })
 	w := f.download(t, "web", "")
@@ -362,6 +375,7 @@ func TestServiceLogDownloadPastItsSizeLeavesOutTheOldestLinesAndSaysSoFirst(t *t
 }
 
 func TestServiceLogDownloadUnderItsSizeHasNoNotice(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 	if body := f.download(t, "web", "").body.String(); strings.Contains(body, "oldest lines") {
 		t.Errorf("a download that fits has a notice:\n%s", body)
@@ -369,6 +383,7 @@ func TestServiceLogDownloadUnderItsSizeHasNoNotice(t *testing.T) {
 }
 
 func TestServiceLogDownloadAllowsTwoAtOnceForAUserAndRefusesTheThirdWith429(t *testing.T) {
+	t.Parallel()
 	text := strings.Repeat("y", 60<<10)
 	lines := []dockertest.FakeServiceLogLine{svcLine("tk-1", "node-1", 1, text), svcLine("tk-1", "node-1", 2, text)}
 	f := newSvcLogsFix(t, svcTasks(), lines, nil)
@@ -407,6 +422,7 @@ func TestServiceLogDownloadAllowsTwoAtOnceForAUserAndRefusesTheThirdWith429(t *t
 }
 
 func TestServiceLogDownloadAllowsOnlyTheServersShareAtOnceWhoeverAsks(t *testing.T) {
+	t.Parallel()
 	text := strings.Repeat("y", 60<<10)
 	lines := []dockertest.FakeServiceLogLine{svcLine("tk-1", "node-1", 1, text), svcLine("tk-1", "node-1", 2, text)}
 	f := newSvcLogsFix(t, svcTasks(), lines, func(f *envFix) { f.serviceLogsMaxDownloads = 1 })
@@ -438,6 +454,7 @@ func TestServiceLogDownloadAllowsOnlyTheServersShareAtOnceWhoeverAsks(t *testing
 }
 
 func TestServiceLogDownloadIsAuditedOncePerDownloadWithItsRangeAndNeverALineOfTheLog(t *testing.T) {
+	t.Parallel()
 	const secret = "DOWNLOADED-LINE-THAT-MUST-NOT-BE-KEPT-77c1" //nolint:gosec // a marker, not a credential
 	lines := append(svcBurstLines(), svcLine("tk-1", "node-1", 80, secret))
 	f := newSvcLogsFix(t, svcTasks(), lines, nil)
@@ -470,6 +487,7 @@ func TestServiceLogDownloadIsAuditedOncePerDownloadWithItsRangeAndNeverALineOfTh
 }
 
 func TestServiceLogDownloadRefusalsAreAnsweredBeforeAnythingIsSentAndAreNotAudited(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 	for _, query := range []string{"since=yesterday", "until=nope", "since=2026-10-14T10:00:01Z&until=2026-10-14T10:00:00Z"} {
 		w := f.download(t, "web", query)
@@ -487,6 +505,7 @@ func TestServiceLogDownloadRefusalsAreAnsweredBeforeAnythingIsSentAndAreNotAudit
 }
 
 func TestServiceLogDownloadNeedsServicesRead(t *testing.T) {
+	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 	f.addUser(t, "nobody", false)
 	cookie, _ := f.signIn(t, "nobody", false)

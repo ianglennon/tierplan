@@ -124,6 +124,7 @@ func tkSlotOf(t *testing.T, b tkBody, slot int) tkSlot {
 }
 
 func TestServiceTasksGroupBySlotWithHistory(t *testing.T) {
+	t.Parallel()
 	web := webService()
 	f, e := tkEnv(t, 7, []dockertest.FakeService{web},
 		tkRunning("s1-now", "svc-web", "node-1", 1, "cont-1", time.Minute),
@@ -171,6 +172,7 @@ func TestServiceTasksGroupBySlotWithHistory(t *testing.T) {
 }
 
 func TestServiceTasksWithNoHistoryHaveAnEmptyHistoryList(t *testing.T) {
+	t.Parallel()
 	f, e := tkEnv(t, 0, []dockertest.FakeService{webService()},
 		tkRunning("only", "svc-web", "node-1", 1, "cont-1", time.Minute))
 	rec := f.get(t, e, "services/svc-web/tasks")
@@ -183,6 +185,7 @@ func TestServiceTasksWithNoHistoryHaveAnEmptyHistoryList(t *testing.T) {
 }
 
 func TestServiceTasksOfAServiceScaledToZeroHaveNoSlots(t *testing.T) {
+	t.Parallel()
 	f, e := tkEnv(t, 5, []dockertest.FakeService{webService()})
 	rec := f.get(t, e, "services/svc-web/tasks")
 	if rec.code != http.StatusOK || !strings.Contains(string(rec.body), `"slots":[]`) {
@@ -194,6 +197,7 @@ func TestServiceTasksOfAServiceScaledToZeroHaveNoSlots(t *testing.T) {
 }
 
 func TestServiceTasksOnADownNodeAreUnknown(t *testing.T) {
+	t.Parallel()
 	f, e := tkEnv(t, 5, []dockertest.FakeService{webService()},
 		tkRunning("on-down", "svc-web", "node-2", 1, "cont-1", time.Minute),
 		tkTask("on-away", "svc-web", "node-4", 2, "assigned", "running", time.Minute),
@@ -213,6 +217,7 @@ func TestServiceTasksOnADownNodeAreUnknown(t *testing.T) {
 }
 
 func TestServiceTasksOfARemovedNode(t *testing.T) {
+	t.Parallel()
 	f, e := tkEnv(t, 5, []dockertest.FakeService{webService()},
 		tkRunning("on-gone", "svc-web", "node-gone", 1, "cont-1", time.Minute),
 		tkTask("unplaced", "svc-web", "", 2, "pending", "running", time.Minute),
@@ -232,6 +237,7 @@ func TestServiceTasksOfARemovedNode(t *testing.T) {
 }
 
 func TestServiceTasksOfAGlobalServiceAreOneRowPerNodeSortedByNodeName(t *testing.T) {
+	t.Parallel()
 	agentish := dockertest.FakeService{ID: "svc-glob", Name: "node-exporter", Mode: "global", Running: 2, Desired: 2}
 	f, e := tkEnv(t, 5, []dockertest.FakeService{agentish},
 		tkRunning("g-ready", "svc-glob", "node-3", 0, "c3", time.Minute),
@@ -251,6 +257,7 @@ func TestServiceTasksOfAGlobalServiceAreOneRowPerNodeSortedByNodeName(t *testing
 }
 
 func TestServiceTasksCleanText(t *testing.T) {
+	t.Parallel()
 	bad := tkExited("bad", "svc-web", "node-1", 1, "failed", "shutdown", 1, "\x1b[31mboom\x00", 5*time.Minute)
 	bad.Status.Message = "started\tok\nthen \xff\xfe died"
 	long := tkExited("long", "svc-web", "node-1", 2, "failed", "shutdown", 1, strings.Repeat("é", 3000), 5*time.Minute)
@@ -278,6 +285,7 @@ func TestServiceTasksCleanText(t *testing.T) {
 }
 
 func TestServiceTasksOfAnUnknownServiceAreNotFound(t *testing.T) {
+	t.Parallel()
 	f, e := tkEnv(t, 5, []dockertest.FakeService{webService()})
 	rec := f.get(t, e, "services/nope/tasks")
 	if rec.code != http.StatusNotFound || rec.ptyp != "service_not_found" {
@@ -286,6 +294,7 @@ func TestServiceTasksOfAnUnknownServiceAreNotFound(t *testing.T) {
 }
 
 func TestServiceTasksOfAStandaloneHostIsNotASwarm(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "solo", Version: "29.1.0"})
 	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
 	f.svc.WithClusters(f.clusters)
@@ -299,6 +308,7 @@ func TestServiceTasksOfAStandaloneHostIsNotASwarm(t *testing.T) {
 }
 
 func TestServiceTasksNeedAGrantAndAreServedToAViewer(t *testing.T) {
+	t.Parallel()
 	f, e := tkEnv(t, 5, []dockertest.FakeService{webService()},
 		tkRunning("t", "svc-web", "node-1", 1, "cont-1", time.Minute))
 	get := f.asRole(t, e, "tk-viewer", "viewer")

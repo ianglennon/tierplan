@@ -93,6 +93,7 @@ func (f *envFix) mutes(t *testing.T, e envBody) []muteRows {
 }
 
 func TestRestartLoopMuteMutesAFlaggedServiceAuditsItAndTheListAndDetailShowIt(t *testing.T) {
+	t.Parallel()
 	f, e := loopEnv(t)
 	op := loopAs(t, f, e, "loop-operator", "operator")
 
@@ -131,6 +132,7 @@ func TestRestartLoopMuteMutesAFlaggedServiceAuditsItAndTheListAndDetailShowIt(t 
 }
 
 func TestRestartLoopMuteTwiceChangesNothingAndWritesNoSecondRowOrAudit(t *testing.T) {
+	t.Parallel()
 	f, e := loopEnv(t)
 	op := loopAs(t, f, e, "loop-operator", "operator")
 	for i := range 2 {
@@ -147,6 +149,7 @@ func TestRestartLoopMuteTwiceChangesNothingAndWritesNoSecondRowOrAudit(t *testin
 }
 
 func TestRestartLoopMuteTakesTheServiceByNameToo(t *testing.T) {
+	t.Parallel()
 	f, e := loopEnv(t)
 	op := loopAs(t, f, e, "loop-operator", "operator")
 	if rec := op(http.MethodPut, "services/web/restart-loop-mute", ""); rec.code != http.StatusOK {
@@ -158,6 +161,7 @@ func TestRestartLoopMuteTakesTheServiceByNameToo(t *testing.T) {
 }
 
 func TestRestartLoopMuteOfAnUnknownServiceIs404AndWritesNothing(t *testing.T) {
+	t.Parallel()
 	f, e := loopEnv(t)
 	op := loopAs(t, f, e, "loop-operator", "operator")
 	rec := op(http.MethodPut, "services/svc-nope/restart-loop-mute", "")
@@ -176,6 +180,7 @@ func TestRestartLoopMuteOfAnUnknownServiceIs404AndWritesNothing(t *testing.T) {
 }
 
 func TestRestartLoopUnmuteRemovesTheMuteAuditsItAndRepeatingItChangesNothing(t *testing.T) {
+	t.Parallel()
 	f, e := loopEnv(t)
 	op := loopAs(t, f, e, "loop-operator", "operator")
 	if rec := op(http.MethodPut, "services/svc-web/restart-loop-mute", ""); rec.code != http.StatusOK {
@@ -206,6 +211,7 @@ func TestRestartLoopUnmuteRemovesTheMuteAuditsItAndRepeatingItChangesNothing(t *
 }
 
 func TestRestartLoopMuteNeedsServicesControlAndTheMuteIsPerEnvironment(t *testing.T) {
+	t.Parallel()
 	f, e := loopEnv(t)
 	viewer := loopAs(t, f, e, "loop-viewer", "viewer")
 	if rec := viewer(http.MethodPut, "services/svc-web/restart-loop-mute", ""); rec.code != http.StatusForbidden {
@@ -239,6 +245,7 @@ type loopSettings struct {
 }
 
 func TestRestartLoopSettingsAnswerTheDefaultsAndTheHistoryLimitOfTheLastRead(t *testing.T) {
+	t.Parallel()
 	f, e := loopEnv(t)
 	admin := loopAs(t, f, e, "loop-admin", "admin")
 	listServicesQuery(t, f, e, "") // the first cluster read, which learns Docker's history limit
@@ -253,6 +260,7 @@ func TestRestartLoopSettingsAnswerTheDefaultsAndTheHistoryLimitOfTheLastRead(t *
 }
 
 func TestRestartLoopSettingsChangeIsStoredUsedAndAuditedWithOldAndNewValues(t *testing.T) {
+	t.Parallel()
 	f, e := loopEnv(t)
 	admin := loopAs(t, f, e, "loop-admin", "admin")
 	rec := admin(http.MethodPut, "restart-loop-settings", `{"failures":2,"windowMinutes":20}`)
@@ -281,6 +289,7 @@ func TestRestartLoopSettingsChangeIsStoredUsedAndAuditedWithOldAndNewValues(t *t
 }
 
 func TestRestartLoopSettingsSavedWithNothingChangedIs200AndNotAudited(t *testing.T) {
+	t.Parallel()
 	f, e := loopEnv(t)
 	admin := loopAs(t, f, e, "loop-admin", "admin")
 	rec := admin(http.MethodPut, "restart-loop-settings", `{"failures":3,"windowMinutes":10}`)
@@ -293,6 +302,7 @@ func TestRestartLoopSettingsSavedWithNothingChangedIs200AndNotAudited(t *testing
 }
 
 func TestRestartLoopSettingsRefuseValuesOutsideTheBounds(t *testing.T) {
+	t.Parallel()
 	f, e := loopEnv(t)
 	admin := loopAs(t, f, e, "loop-admin", "admin")
 	for _, tc := range []struct{ body, code string }{
@@ -317,6 +327,7 @@ func TestRestartLoopSettingsRefuseValuesOutsideTheBounds(t *testing.T) {
 }
 
 func TestRestartLoopSettingsNeedEnvironmentsConfigure(t *testing.T) {
+	t.Parallel()
 	f, e := loopEnv(t)
 	op := loopAs(t, f, e, "loop-operator", "operator")
 	if rec := op(http.MethodPut, "restart-loop-settings", `{"failures":2,"windowMinutes":5}`); rec.code != http.StatusForbidden {
@@ -333,6 +344,7 @@ func TestRestartLoopSettingsNeedEnvironmentsConfigure(t *testing.T) {
 
 // A new threshold is what the next cluster read uses, for the service already flagged too.
 func TestRestartLoopSettingsChangeWhatTheNextReadFlags(t *testing.T) {
+	t.Parallel()
 	f, e := loopEnv(t)
 	admin := loopAs(t, f, e, "loop-admin", "admin")
 	// api has two failures; with a threshold of 2 it is a loop, and web stays one.
@@ -462,6 +474,7 @@ func loopOfContainer(t *testing.T, f *envFix, e envBody, name string) (list *con
 }
 
 func TestContainerRestartLoopMuteMutesAFlaggedContainerAuditsItAndTheListAndDetailShowIt(t *testing.T) {
+	t.Parallel()
 	f, e := containerLoopEnv(t)
 	op := loopAs(t, f, e, "loop-operator", "operator")
 
@@ -500,6 +513,7 @@ func TestContainerRestartLoopMuteMutesAFlaggedContainerAuditsItAndTheListAndDeta
 }
 
 func TestContainerRestartLoopMuteTwiceChangesNothingAndTheContainerCanBeNamedByIDOrName(t *testing.T) {
+	t.Parallel()
 	f, e := containerLoopEnv(t)
 	op := loopAs(t, f, e, "loop-operator", "operator")
 	for i, id := range []string{"crashy", loopCrashyID} {
@@ -520,6 +534,7 @@ func TestContainerRestartLoopMuteTwiceChangesNothingAndTheContainerCanBeNamedByI
 }
 
 func TestContainerRestartLoopUnmuteRemovesTheMuteAuditsItAndRepeatingItChangesNothing(t *testing.T) {
+	t.Parallel()
 	f, e := containerLoopEnv(t)
 	op := loopAs(t, f, e, "loop-operator", "operator")
 	if rec := op(http.MethodPut, containerMutePath(e, "crashy"), ""); rec.code != http.StatusOK {
@@ -549,6 +564,7 @@ func TestContainerRestartLoopUnmuteRemovesTheMuteAuditsItAndRepeatingItChangesNo
 }
 
 func TestContainerRestartLoopMuteOfAnUnknownContainerOrNodeIsRefusedAndWritesNothing(t *testing.T) {
+	t.Parallel()
 	f, e := containerLoopEnv(t)
 	op := loopAs(t, f, e, "loop-operator", "operator")
 	rec := op(http.MethodPut, containerMutePath(e, "nope"), "")
@@ -571,6 +587,7 @@ func TestContainerRestartLoopMuteOfAnUnknownContainerOrNodeIsRefusedAndWritesNot
 }
 
 func TestContainerRestartLoopMuteNeedsContainersControlAndTheMuteIsPerEnvironment(t *testing.T) {
+	t.Parallel()
 	f, e := containerLoopEnv(t)
 	viewer := loopAs(t, f, e, "loop-viewer", "viewer")
 	if rec := viewer(http.MethodPut, containerMutePath(e, "crashy"), ""); rec.code != http.StatusForbidden {

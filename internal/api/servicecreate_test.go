@@ -66,6 +66,7 @@ type createAnswer struct {
 }
 
 func TestCreateServiceNeedsServicesManageAnOperatorIsForbiddenOnBothRoutes(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, editableService(nil))
 	body := chatBody(t, nil, nil)
 	for _, role := range []string{"viewer", "operator"} {
@@ -85,6 +86,7 @@ func TestCreateServiceNeedsServicesManageAnOperatorIsForbiddenOnBothRoutes(t *te
 }
 
 func TestCreateServiceMakesAPinnedServiceAndAuditsIt(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, editableService(nil))
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	rec := admin.create(chatBody(t, nil, nil))
@@ -121,6 +123,7 @@ func TestCreateServiceMakesAPinnedServiceAndAuditsIt(t *testing.T) {
 }
 
 func TestCreateServiceWithStagedObjectsMakesThemFirstAndNeverEchoesTheirValues(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, editableService(nil))
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	rec := admin.create(chatBody(t, func(spec map[string]any) {
@@ -158,6 +161,7 @@ func TestCreateServiceWithStagedObjectsMakesThemFirstAndNeverEchoesTheirValues(t
 }
 
 func TestCreateServiceRefusals(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, editableService(nil))
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	for name, c := range map[string]struct {
@@ -206,6 +210,7 @@ func TestCreateServiceRefusals(t *testing.T) {
 }
 
 func TestCreateServiceOfAnUnresolvableImageIs422AndWritesNothing(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, func(c *dockertest.FakeConfig) {
 		c.PullStatus = dockertest.FakePullStatus{Code: http.StatusUnauthorized, Message: "unauthorized: authentication required"}
 	}, editableService(nil))
@@ -220,6 +225,7 @@ func TestCreateServiceOfAnUnresolvableImageIs422AndWritesNothing(t *testing.T) {
 }
 
 func TestCreateServiceThatFailsRemovesTheObjectsItMade(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, func(c *dockertest.FakeConfig) { c.ServiceCreateError = "the manager refuses this spec" }, editableService(nil))
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	rec := admin.create(chatBody(t, refsStaged, stagedObjects()))
@@ -243,6 +249,7 @@ func TestCreateServiceThatFailsRemovesTheObjectsItMade(t *testing.T) {
 }
 
 func TestCreateServiceReviewAnswersWhatACreateWouldDoAndChangesNothing(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, editableService(nil))
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	rec := admin.createReview(chatBody(t, refsStaged, nil))
@@ -279,6 +286,7 @@ func TestCreateServiceReviewAnswersWhatACreateWouldDoAndChangesNothing(t *testin
 }
 
 func TestCreateServiceRefusesTooLargeABodyAndTooManyObjects(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, editableService(nil))
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	big := `{"spec":{"Name":"chat"},"objects":[{"kind":"config","name":"big","data":"` + strings.Repeat("A", 9<<20) + `"}]}`

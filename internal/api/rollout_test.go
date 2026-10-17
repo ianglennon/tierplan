@@ -56,6 +56,7 @@ func rolloutGet(t *testing.T, f *envFix, e envBody) rolloutBody {
 }
 
 func TestRolloutCountsTasksOnTheNewSpec(t *testing.T) {
+	t.Parallel()
 	f, e := tkEnv(t, 5, []dockertest.FakeService{rolloutService("updating", "update in progress")},
 		rolloutTask("a-new", 1, rolloutNew, "running", "running", time.Minute),
 		rolloutTask("b-old", 2, rolloutOld, "running", "running", time.Hour),
@@ -73,6 +74,7 @@ func TestRolloutCountsTasksOnTheNewSpec(t *testing.T) {
 }
 
 func TestRolloutAfterAScaleIsNone(t *testing.T) {
+	t.Parallel()
 	f, e := tkEnv(t, 5, []dockertest.FakeService{rolloutService("", "")},
 		rolloutTask("a", 1, rolloutNew, "running", "running", time.Minute),
 		rolloutTask("b", 2, rolloutNew, "running", "running", time.Minute),
@@ -87,6 +89,7 @@ func TestRolloutAfterAScaleIsNone(t *testing.T) {
 }
 
 func TestRolloutLatestTaskError(t *testing.T) {
+	t.Parallel()
 	failed := rolloutTask("f-new", 1, rolloutNew, "failed", "shutdown", time.Minute)
 	failed.Status.Err = "task: non-zero exit (1)\x00\nsecond line"
 	rejected := rolloutTask("r-old", 2, rolloutNew, "rejected", "shutdown", time.Hour)
@@ -105,6 +108,7 @@ func TestRolloutLatestTaskError(t *testing.T) {
 }
 
 func TestRolloutOfAnUnknownServiceIsNotFound(t *testing.T) {
+	t.Parallel()
 	f, e := tkEnv(t, 5, []dockertest.FakeService{rolloutService("", "")})
 	rec := f.get(t, e, "services/nope/rollout")
 	if rec.code != http.StatusNotFound {

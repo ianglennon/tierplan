@@ -165,6 +165,7 @@ type reviewAnswer struct {
 }
 
 func TestServiceEditReviewAndApplyNeedServicesControlAViewerIsForbidden(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, editableService(nil))
 	viewer := f.caller(t, e, "viewer-1", "viewer")
 	body := `{"version":5,"spec":{"Name":"api"}}`
@@ -179,6 +180,7 @@ func TestServiceEditReviewAndApplyNeedServicesControlAViewerIsForbidden(t *testi
 }
 
 func TestServiceEditReviewMasksEverySecretAndChangesNothing(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, editableService(nil))
 	op := f.caller(t, e, "operator-1", "operator")
 	_, body := op.maskedSpec("svc-api", func(spec map[string]any) {
@@ -221,6 +223,7 @@ func toStrings(v any) []string {
 }
 
 func TestServiceEditApplyRoundTripsASecretFixtureForAnOperatorWhoCannotRevealIt(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, editableService(nil))
 	op := f.caller(t, e, "operator-1", "operator")
 	_, body := op.maskedSpec("svc-api", func(spec map[string]any) {
@@ -260,6 +263,7 @@ func TestServiceEditApplyRoundTripsASecretFixtureForAnOperatorWhoCannotRevealIt(
 }
 
 func TestServiceEditAnOperatorIsRefusedHostAccessAndAnEnvAdminMayHaveIt(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, editableService(nil))
 	op := f.caller(t, e, "operator-1", "operator")
 	_, body := op.maskedSpec("svc-api", func(spec map[string]any) {
@@ -306,6 +310,7 @@ func TestServiceEditAnOperatorIsRefusedHostAccessAndAnEnvAdminMayHaveIt(t *testi
 }
 
 func TestServiceEditEachRefusalIsItsOwnProblemAndNoneSendsAnythingOrLeaksAValue(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, editableService(nil), webService())
 	op := f.caller(t, e, "operator-1", "operator")
 	type tc struct {
@@ -375,6 +380,7 @@ func TestServiceEditEachRefusalIsItsOwnProblemAndNoneSendsAnythingOrLeaksAValue(
 }
 
 func TestServiceEditDockersRefusalIsSpecRejectedWithItsWordsAndNoValue(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, editableService(func(fs *dockertest.FakeService) {
 		fs.UpdateError = "secret not found: db_password (env " + editDB + ", --admin-token=" + editToken + ")"
 	}))
@@ -397,6 +403,7 @@ func TestServiceEditDockersRefusalIsSpecRejectedWithItsWordsAndNoValue(t *testin
 }
 
 func TestServiceEditTheSameVersionAppliedTwiceMakesTheSecondServiceChanged(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, editableService(nil))
 	op := f.caller(t, e, "operator-1", "operator")
 	_, body := op.maskedSpec("svc-api", func(spec map[string]any) { containerSpecOf(spec)["Env"] = []any{"DB=<hidden>", "LEVEL=debug"} })
@@ -417,6 +424,7 @@ func TestServiceEditTheSameVersionAppliedTwiceMakesTheSecondServiceChanged(t *te
 }
 
 func TestServiceEditOfAStandaloneHostIsNotASwarm(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1", Version: "29.1.0"})
 	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
 	f.svc.WithClusters(f.clusters)
@@ -529,6 +537,7 @@ func writeVerbs(writes []string) []string {
 }
 
 func TestApplyWithStagedObjects(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, editableService(nil))
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	_, body := admin.maskedSpec("svc-api", refsStaged)
@@ -584,6 +593,7 @@ func TestApplyWithStagedObjects(t *testing.T) {
 }
 
 func TestApplyCleanupIsReported(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, editableService(func(fs *dockertest.FakeService) { fs.UpdateError = "the manager refuses this spec" }))
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	_, body := admin.maskedSpec("svc-api", refsStaged)
@@ -627,6 +637,7 @@ func TestApplyCleanupIsReported(t *testing.T) {
 }
 
 func TestApplyCleanupThatCouldNotFinishNamesWhatIsLeft(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, func(c *dockertest.FakeConfig) { c.RemoveErrors = map[string]string{"db-pass": "the manager is busy"} },
 		editableService(func(fs *dockertest.FakeService) { fs.UpdateError = "the manager refuses this spec" }))
 	admin := f.caller(t, e, "envadmin-1", "admin")
@@ -653,6 +664,7 @@ func TestApplyCleanupThatCouldNotFinishNamesWhatIsLeft(t *testing.T) {
 }
 
 func TestApplyNameTakenMidwayRemovesWhatWasMade(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, func(c *dockertest.FakeConfig) {
 		c.Secrets = []dockertest.FakeSecret{{ID: "sec-elsewhere", Name: "db-pass"}}
 	}, editableService(nil))
@@ -675,6 +687,7 @@ func TestApplyNameTakenMidwayRemovesWhatWasMade(t *testing.T) {
 }
 
 func TestApplyObjectPermissionForAnOperator(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, editableService(nil))
 	op := f.revealCaller(t, e, "operator-1")
 	_, body := op.maskedSpec("svc-api", refsStaged)
@@ -700,6 +713,7 @@ func TestApplyObjectPermissionForAnOperator(t *testing.T) {
 }
 
 func TestApplyOnlyAsksForThePermissionsTheNewObjectsNeed(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, editableService(nil))
 	op := f.caller(t, e, "operator-1", "operator")
 	// The secret and config exist already; only the network is new, and creating it needs Admin.
@@ -715,6 +729,7 @@ func TestApplyOnlyAsksForThePermissionsTheNewObjectsNeed(t *testing.T) {
 }
 
 func TestApplyRefusesBadObjectsBeforeAnythingIsSent(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, editableService(nil))
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	_, body := admin.maskedSpec("svc-api", refsStaged)
@@ -749,6 +764,7 @@ func TestApplyRefusesBadObjectsBeforeAnythingIsSent(t *testing.T) {
 }
 
 func TestReviewListsMissingSecretsAndConfigs(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, editableService(nil))
 	op := f.revealCaller(t, e, "operator-1")
 	_, body := op.maskedSpec("svc-api", refsStaged)
@@ -763,6 +779,7 @@ func TestReviewListsMissingSecretsAndConfigs(t *testing.T) {
 }
 
 func TestApplyBodyOverEightMiBIsRefusedBeforeAnythingIsSent(t *testing.T) {
+	t.Parallel()
 	f, e := actionsEnv(t, nil, editableService(nil))
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	body := `{"version":5,"spec":{"Name":"api"},"objects":[{"kind":"config","name":"big","data":"` + strings.Repeat("A", 9<<20) + `"}]}`
@@ -776,6 +793,7 @@ func TestApplyBodyOverEightMiBIsRefusedBeforeAnythingIsSent(t *testing.T) {
 }
 
 func TestServiceWriteObjectsMissingNamesEveryKindOfMissingObject(t *testing.T) {
+	t.Parallel()
 	type entry struct{ location, message string }
 	var (
 		secretOnly = func(spec map[string]any) {
@@ -839,6 +857,7 @@ func addSecretRef(spec map[string]any) {
 }
 
 func TestServiceApplyASecretTheServiceDoesNotUseNeedsTheRevealPermission(t *testing.T) {
+	t.Parallel()
 	withDBPass := func(cfg *dockertest.FakeConfig) {
 		cfg.Secrets = []dockertest.FakeSecret{{ID: "sec-db", Name: "db-pass"}}
 	}
@@ -955,6 +974,7 @@ func TestServiceApplyASecretTheServiceDoesNotUseNeedsTheRevealPermission(t *test
 // A secret reference is identified by its engine ID, so the first step is refused for everyone and the
 // second still needs secrets.reveal.
 func TestServiceApplyCannotAttachASecretByGivingAUsedReferenceAnotherSecretsName(t *testing.T) {
+	t.Parallel()
 	twoSecrets := func(cfg *dockertest.FakeConfig) {
 		cfg.Secrets = []dockertest.FakeSecret{{ID: "sec-db", Name: "db-pass"}, {ID: "sec-victim", Name: "victim-secret"}}
 	}

@@ -185,6 +185,7 @@ func idsOf(tasks []swTaskRef) []string {
 }
 
 func TestServiceStatsStreamSumsTheRunningTasksAndLeavesOutASilentNode(t *testing.T) {
+	t.Parallel()
 	f := newSwFix(t, swTasks(0))
 	c := f.open(t, "services/svc-web/stats/stream")
 	if c.status0() != http.StatusOK {
@@ -232,6 +233,7 @@ func TestServiceStatsStreamSumsTheRunningTasksAndLeavesOutASilentNode(t *testing
 }
 
 func TestServiceStatsStreamSendsALimitOnlyWhenEveryRunningTaskSharesIt(t *testing.T) {
+	t.Parallel()
 	same := newSwFix(t, swTasks(256<<20))
 	ready := decodeEvent[swTasksEvent](t, same.open(t, "services/svc-web/stats/stream"), "ready")
 	if ready.LimitBytes == nil || *ready.LimitBytes != 256<<20 {
@@ -254,6 +256,7 @@ func TestServiceStatsStreamSendsALimitOnlyWhenEveryRunningTaskSharesIt(t *testin
 }
 
 func TestServiceStatsStreamPicksUpNewTasksAndDropsStoppedOnes(t *testing.T) {
+	t.Parallel()
 	f := newSwFix(t, swTasks(0))
 	c := f.open(t, "services/svc-web/stats/stream")
 	decodeEvent[swTasksEvent](t, c, "ready")
@@ -292,6 +295,7 @@ func TestServiceStatsStreamPicksUpNewTasksAndDropsStoppedOnes(t *testing.T) {
 }
 
 func TestServiceStatsStreamOfAnUnknownServiceIs404AndOfANonsenseIDIs422(t *testing.T) {
+	t.Parallel()
 	f := newSwFix(t, swTasks(0))
 	c := f.open(t, "services/nope/stats/stream")
 	c.waitEnded(t, 5*time.Second, "the 404 was answered")
@@ -308,6 +312,7 @@ func TestServiceStatsStreamOfAnUnknownServiceIs404AndOfANonsenseIDIs422(t *testi
 func url2(s string) string { return strings.NewReplacer(" ", "%20", ";", "%3B").Replace(s) }
 
 func TestServiceStatsStreamSharesItsSamplersWithTheContainerStream(t *testing.T) {
+	t.Parallel()
 	f := newSwFix(t, swTasks(0))
 	one := f.open(t, "containers/"+swWeb1+"/stats/stream?nodeId="+f.env.ID)
 	decodeEvent[statsReady](t, one, "ready")
@@ -362,6 +367,7 @@ type swContainersEvent struct {
 }
 
 func TestListStatsStreamsServicesSendOneTotalPerServicePerTick(t *testing.T) {
+	t.Parallel()
 	f := newSwFix(t, swTasks(256<<20))
 	c := f.open(t, "services/stats/stream?ids=svc-web,svc-db")
 	if c.status0() != http.StatusOK {
@@ -388,6 +394,7 @@ func TestListStatsStreamsServicesSendOneTotalPerServicePerTick(t *testing.T) {
 }
 
 func TestListStatsStreamsContainersSendOneSamplePerContainerAndMarkUnreachableOnes(t *testing.T) {
+	t.Parallel()
 	f := newSwFix(t, swTasks(0))
 	ids := f.env.ID + "|" + swWeb1 + "," + f.env.ID + "|" + swWeb2 + ",node-elsewhere|" + swWeb1
 	c := f.open(t, "containers/stats/stream?ids="+strings.ReplaceAll(ids, "|", "%7C"))
@@ -417,6 +424,7 @@ func TestListStatsStreamsContainersSendOneSamplePerContainerAndMarkUnreachableOn
 }
 
 func TestListStatsStreamsRefuseMoreThanAHundredIDsAndNoneAtAll(t *testing.T) {
+	t.Parallel()
 	f := newSwFix(t, swTasks(0))
 	var services, containers []string
 	for i := range 101 {
@@ -471,6 +479,7 @@ type swNodesEvent struct {
 }
 
 func TestNodeStatsStreamSumsTheTasksOfEachNodeAndNamesTheOnesThatAreNotReporting(t *testing.T) {
+	t.Parallel()
 	f := newSwFix(t, swTasks(0))
 	c := f.open(t, "nodes/stats/stream")
 	if c.status0() != http.StatusOK {
@@ -497,6 +506,7 @@ func TestNodeStatsStreamSumsTheTasksOfEachNodeAndNamesTheOnesThatAreNotReporting
 }
 
 func TestStatsAggregateStreamsNeedASignedInUser(t *testing.T) {
+	t.Parallel()
 	f := newSwFix(t, swTasks(0))
 	for _, path := range []string{
 		"services/svc-web/stats/stream", "services/stats/stream?ids=svc-web", "containers/stats/stream?ids=a%7Cb", "nodes/stats/stream",
