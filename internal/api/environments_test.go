@@ -112,6 +112,7 @@ func (f *envFix) add(t *testing.T) envBody {
 }
 
 func TestEnvironmentAddLocalAsAdminReturns201AndAudits(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1", Version: "29.1.0", APIVersion: "1.52"})
 	rec := f.req(t, http.MethodPost, "/api/environments", `{"kind":"local"}`)
 	if rec.code != http.StatusCreated {
@@ -136,6 +137,7 @@ func TestEnvironmentAddLocalAsAdminReturns201AndAudits(t *testing.T) {
 }
 
 func TestEnvironmentAddLocalWithAnExplicitNameKeepsIt(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	rec := f.req(t, http.MethodPost, "/api/environments", `{"kind":"local","name":"Home lab"}`)
 	if rec.code != http.StatusCreated || rec.env(t).Name != "Home lab" {
@@ -144,6 +146,7 @@ func TestEnvironmentAddLocalWithAnExplicitNameKeepsIt(t *testing.T) {
 }
 
 func TestEnvironmentAddLocalASecondTimeIs409LocalEnvironmentExists(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	f.add(t)
 	rec := f.req(t, http.MethodPost, "/api/environments", `{"kind":"local"}`)
@@ -153,6 +156,7 @@ func TestEnvironmentAddLocalASecondTimeIs409LocalEnvironmentExists(t *testing.T)
 }
 
 func TestEnvironmentAddLocalWithoutASocketIs409SocketNotFound(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	svc := envs.NewService(f.st, f.aud, f.mon, "unix://"+filepath.Join(t.TempDir(), "none.sock"), "", f.clk.now)
 	f.envSvc = svc
@@ -164,6 +168,7 @@ func TestEnvironmentAddLocalWithoutASocketIs409SocketNotFound(t *testing.T) {
 }
 
 func TestEnvironmentAddLocalRefusesAnUnsupportedEngineUnlessAllowed(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{APIVersion: "1.41", Version: "20.10.24", Hostname: "old"})
 	rec := f.req(t, http.MethodPost, "/api/environments", `{"kind":"local"}`)
 	if rec.code != http.StatusConflict || rec.ptyp != "unsupported_engine" {
@@ -183,6 +188,7 @@ func TestEnvironmentAddLocalRefusesAnUnsupportedEngineUnlessAllowed(t *testing.T
 }
 
 func TestEnvironmentAddLocalRejectsAnInvalidNameAndAnUnknownKind(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	rec := f.req(t, http.MethodPost, "/api/environments", `{"kind":"local","name":"`+strings.Repeat("x", 65)+`"}`)
 	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "invalid_name" {
@@ -195,6 +201,7 @@ func TestEnvironmentAddLocalRejectsAnInvalidNameAndAnUnknownKind(t *testing.T) {
 }
 
 func TestEnvironmentListShowsEachEnvironmentWithItsStatus(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1", SwarmState: "active", SwarmControl: true})
 	if got := f.req(t, http.MethodGet, "/api/environments", ""); got.code != http.StatusOK || !strings.Contains(string(got.body), `"items":[]`) {
 		t.Fatalf("empty list = %d %s", got.code, got.body)
@@ -217,6 +224,7 @@ func TestEnvironmentListShowsEachEnvironmentWithItsStatus(t *testing.T) {
 }
 
 func TestEnvironmentListHidesEnvironmentsTheCallerCannotRead(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	e := f.add(t)
 	f.addUser(t, "nobody", false)
@@ -240,6 +248,7 @@ func TestEnvironmentListHidesEnvironmentsTheCallerCannotRead(t *testing.T) {
 }
 
 func TestEnvironmentRenameAndRemoveAuditAndAnswer404ForAnUnknownID(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	e := f.add(t)
 
@@ -272,6 +281,7 @@ func TestEnvironmentRenameAndRemoveAuditAndAnswer404ForAnUnknownID(t *testing.T)
 }
 
 func TestEnvironmentReconnectReturns202AndProbesNow(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	e := f.add(t)
 	infoCalls := func() int {
@@ -299,6 +309,7 @@ func TestEnvironmentReconnectReturns202AndProbesNow(t *testing.T) {
 }
 
 func TestEnvironmentScopedRoutesResolveAgainstTheDatabase(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	e := f.add(t)
 	rec := f.req(t, http.MethodPost, "/api/env/no-such-env/reconnect", "")
@@ -315,6 +326,7 @@ func TestEnvironmentScopedRoutesResolveAgainstTheDatabase(t *testing.T) {
 }
 
 func TestEnvironmentMutationsRequireTheCSRFHeader(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	e := f.add(t)
 	for _, c := range []struct{ method, path, body string }{
@@ -334,6 +346,7 @@ func TestEnvironmentMutationsRequireTheCSRFHeader(t *testing.T) {
 }
 
 func TestEnvironmentMutationsNeedAPermissionAndASession(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	e := f.add(t)
 	f.addUser(t, "viewer", false)
@@ -363,6 +376,7 @@ func TestEnvironmentMutationsNeedAPermissionAndASession(t *testing.T) {
 }
 
 func TestEnvironmentLocalHostReportsManagedAndTheOwnContainerID(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	read := func() (managed bool, own string) {
 		rec := f.call(t, authReq{method: http.MethodGet, path: "/api/local-host", cookie: f.cookie})
@@ -400,6 +414,7 @@ type installBody struct {
 }
 
 func TestEnvironmentAddAgentAnswers201WithTheJoinTokenAndTheAgentURL(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	f.inst.Apply("Bayplan", "https://example.com/bayplan")
 	rec := f.req(t, http.MethodPost, "/api/environments", `{"kind":"agent","name":"Production"}`)
@@ -440,6 +455,7 @@ func TestEnvironmentAddAgentAnswers201WithTheJoinTokenAndTheAgentURL(t *testing.
 }
 
 func TestEnvironmentAddAgentWithoutAPublicURLIs409(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	rec := f.req(t, http.MethodPost, "/api/environments", `{"kind":"agent"}`)
 	if rec.code != http.StatusConflict || rec.ptyp != "public_url_required" {
@@ -451,6 +467,7 @@ func TestEnvironmentAddAgentWithoutAPublicURLIs409(t *testing.T) {
 }
 
 func TestEnvironmentAddAgentRejectsAnInvalidName(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	f.inst.Apply("Bayplan", "https://example.com")
 	rec := f.req(t, http.MethodPost, "/api/environments", `{"kind":"agent","name":"`+strings.Repeat("x", 65)+`"}`)
@@ -460,6 +477,7 @@ func TestEnvironmentAddAgentRejectsAnInvalidName(t *testing.T) {
 }
 
 func TestEnvironmentAddAgentNeedsTheCreatePermission(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	f.inst.Apply("Bayplan", "https://example.com")
 	f.addUser(t, "viewer", false)
@@ -501,6 +519,7 @@ func (f *authFixture) addAllEnvAdmin(t *testing.T, name string) {
 }
 
 func TestEnvironmentAddIsForInstanceAdminsNotForAnAdminOfEveryEnvironment(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	f.addAllEnvAdmin(t, "envadmin")
 
@@ -544,6 +563,7 @@ func (f *authFixture) addEnvUser(t *testing.T, name, envID, role string) {
 // An env Admin renames the environment they administer through the environment-scoped
 // route (D-07), sees no other environment, and cannot go through the old path.
 func TestAnEnvAdminRenamesTheirOwnEnvironmentAndNoOtherThroughTheEnvironmentScopedRoute(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	a := f.srv.NewEnvironment(t, "Alpha")
 	b := f.srv.NewEnvironment(t, "Beta")
@@ -592,6 +612,7 @@ func TestAnEnvAdminRenamesTheirOwnEnvironmentAndNoOtherThroughTheEnvironmentScop
 }
 
 func TestEnvironmentRemoveIsForInstanceAdminsNotForAnAdminOfEveryEnvironment(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	e := f.add(t)
 	f.addAllEnvAdmin(t, "envadmin")
@@ -651,6 +672,7 @@ func (f *envFix) addAgent(t *testing.T) (fullInstall, *envRec) {
 }
 
 func TestEnvironmentAddAgentAnswersTheFullInstallObject(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	f.inst.Apply("Bayplan", "https://example.com/bayplan")
 	f.tlsPin = "sha256/PINPINPIN"
@@ -692,6 +714,7 @@ func TestEnvironmentAddAgentAnswersTheFullInstallObject(t *testing.T) {
 }
 
 func TestEnvironmentAddAgentLeavesThePinOutWhenBayplanServesNoSelfSignedCertificate(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	f.inst.Apply("Bayplan", "https://example.com")
 	f.tlsPin = ""
@@ -710,6 +733,7 @@ func TestEnvironmentAddAgentLeavesThePinOutWhenBayplanServesNoSelfSignedCertific
 }
 
 func TestEnvironmentAddAgentUsesTheAgentURLWhenOneIsSet(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	f.inst.Apply("Bayplan", "https://example.com/bayplan")
 	f.inst.ApplyAgentURL("https://bayplan.lan:7480")
@@ -723,6 +747,7 @@ func TestEnvironmentAddAgentUsesTheAgentURLWhenOneIsSet(t *testing.T) {
 }
 
 func TestEnvironmentAddAgentWithOnlyAnAgentURLIsAllowed(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	f.inst.ApplyAgentURL("https://10.0.0.5:7480")
 	got, rec := f.addAgent(t)
@@ -737,6 +762,7 @@ func TestEnvironmentAddAgentWithOnlyAnAgentURLIsAllowed(t *testing.T) {
 // (G-02-R4-3, T-02-144, T-02-145). The agent URL and the public URL are both
 // judged, whichever supplies the address.
 func TestEnvironmentAddAgentRefusesAPlainAddressForAnotherHostWithoutTheSwitch(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		label string
 		apply func(f *envFix)
@@ -769,6 +795,7 @@ func TestEnvironmentAddAgentRefusesAPlainAddressForAnotherHostWithoutTheSwitch(t
 }
 
 func TestEnvironmentAddAgentNeedsAUsableURLAndCreatesNothingWithoutOne(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	_, rec := f.addAgent(t)
 	if rec.code != http.StatusConflict || rec.ptyp != "public_url_required" {
@@ -786,6 +813,7 @@ func TestEnvironmentAddAgentNeedsAUsableURLAndCreatesNothingWithoutOne(t *testin
 }
 
 func TestEnvironmentAddAgentNeverPutsTheJoinTokenInTheAudit(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	f.inst.Apply("Bayplan", "https://example.com")
 	got, rec := f.addAgent(t)
@@ -990,6 +1018,7 @@ func (f *agentFix) whenProbed(t *testing.T, keys ...string) {
 func utc(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
 func TestAgentEnvironmentIsPendingThenOnlineThenOfflineWithReasonTimeoutAndSince(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Remote")
 	if e := f.environment(t, env.ID); e.Status.State != "pending" || e.Status.Reason != "" || e.Status.Since != "" || e.Kind != "agent" {
@@ -1019,6 +1048,7 @@ func TestAgentEnvironmentIsPendingThenOnlineThenOfflineWithReasonTimeoutAndSince
 }
 
 func TestAgentEnvironmentWithAMissingNodeIsDegradedAndListsItsIssues(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Swarm")
 	manager := &wire.Facts{
@@ -1052,6 +1082,7 @@ func TestAgentEnvironmentWithAMissingNodeIsDegradedAndListsItsIssues(t *testing.
 }
 
 func TestAnEnvironmentTheCallerMayNotReadIsNotListedWhateverItsAgentsDo(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Secret")
 	f.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1"}, nil)
@@ -1140,6 +1171,7 @@ func counts(t *testing.T, what string, got *countsBody, ready, total int) {
 }
 
 func TestOverviewOfAStandaloneAgentEnvironmentFollowsItsAgentAndTheServerVersion(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	f.svc.WithHealth(envs.HealthConfig{ServerVersion: "v0.2.0"})
 	env := f.srv.NewEnvironment(t, "Remote")
@@ -1191,6 +1223,7 @@ func TestOverviewOfAStandaloneAgentEnvironmentFollowsItsAgentAndTheServerVersion
 }
 
 func TestUpdateAvailableIsTrueWhenTheAgentIsOlderThanTheServerByAMinorOrAPatch(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		server, agent string
 		want          bool
@@ -1222,6 +1255,7 @@ func TestUpdateAvailableIsTrueWhenTheAgentIsOlderThanTheServerByAMinorOrAPatch(t
 }
 
 func TestOverviewOfAPendingEnvironmentIsNullWhereNothingIsKnown(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Waiting")
 	o := overviewOf(t, f.envFix, env.ID)
@@ -1240,6 +1274,7 @@ func TestOverviewOfAPendingEnvironmentIsNullWhereNothingIsKnown(t *testing.T) {
 }
 
 func TestOverviewOfASwarmCountsNodesAndAgentsSeparatelyAndTakesTheOldestAgentVersion(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	f.svc.WithHealth(envs.HealthConfig{ServerVersion: "v0.3.0"})
 	env := f.srv.NewEnvironment(t, "Swarm")
@@ -1320,6 +1355,7 @@ func (f *envFix) awaitFirstProbe(t *testing.T, id string) {
 }
 
 func TestOverviewOfTheLocalEnvironmentIsTheLocalSocketWithOneNodeAndNoAgent(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1", Version: "29.1.0"})
 	e := f.add(t)
 	f.awaitFirstProbe(t, e.ID)
@@ -1337,6 +1373,7 @@ func TestOverviewOfTheLocalEnvironmentIsTheLocalSocketWithOneNodeAndNoAgent(t *t
 }
 
 func TestOverviewOfALocalSwarmManagerDoesNotGuessItsNodeCount(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1", SwarmState: "active", SwarmControl: true})
 	e := f.add(t)
 	f.awaitFirstProbe(t, e.ID)
@@ -1353,6 +1390,7 @@ func TestOverviewOfALocalSwarmManagerDoesNotGuessItsNodeCount(t *testing.T) {
 // the server's switch is on and the address is plain ws:// (T-02-31). A production
 // install, wss:// or a server without the switch, never carries it.
 func TestEnvironmentAddAgentCarriesTheAgentSwitchOnlyWhileTheServerSwitchIsOn(t *testing.T) {
+	t.Parallel()
 	const name = "BAYPLAN_AGENT_ALLOW_INSECURE"
 	cases := []struct {
 		label string

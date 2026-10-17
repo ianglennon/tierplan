@@ -84,6 +84,7 @@ func (f *foldFix) list(t *testing.T) map[string]foldEnv {
 func (f *foldFix) foldPath() string { return "/api/environments/" + f.env.ID + "/fold-local" }
 
 func TestBothEnvironmentsReportFoldOfferedWhenTheLocalHostManagesTheEnrolledSwarm(t *testing.T) {
+	t.Parallel()
 	f := newFoldFix(t, nil)
 	got := f.list(t)
 	if !got[f.local.ID].FoldOffered || !got[f.env.ID].FoldOffered {
@@ -92,6 +93,7 @@ func TestBothEnvironmentsReportFoldOfferedWhenTheLocalHostManagesTheEnrolledSwar
 }
 
 func TestFoldOfferedIsFalseForAnotherClusterAndFoldingItAnswers409FoldNotOffered(t *testing.T) {
+	t.Parallel()
 	f := newFoldFix(t, func(c *dockertest.FakeConfig) { c.SwarmClusterID = "cluster-elsewhere" })
 	got := f.list(t)
 	if got[f.local.ID].FoldOffered || got[f.env.ID].FoldOffered {
@@ -110,6 +112,7 @@ func TestFoldOfferedIsFalseForAnotherClusterAndFoldingItAnswers409FoldNotOffered
 }
 
 func TestFoldLocalIsForInstanceAdminsThenRetiresTheLocalEnvironmentAndAuditsIt(t *testing.T) {
+	t.Parallel()
 	f := newFoldFix(t, nil)
 
 	f.addAllEnvAdmin(t, "ops")
@@ -153,6 +156,7 @@ func TestFoldLocalIsForInstanceAdminsThenRetiresTheLocalEnvironmentAndAuditsIt(t
 }
 
 func TestTheNodeListOfAFoldedEnvironmentHasALocalSocketRowWithNoCertificateAndNoClock(t *testing.T) {
+	t.Parallel()
 	f := newFoldFix(t, nil)
 	if rec := f.req(t, http.MethodPost, f.foldPath(), ""); rec.code != http.StatusOK {
 		t.Fatalf("fold: %d %s", rec.code, rec.body)
