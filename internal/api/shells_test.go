@@ -4,7 +4,6 @@
 package api_test
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -108,8 +107,7 @@ func (f *shellFix) dial(t *testing.T, cookie, wsPath, origin string) (conn *webs
 	if origin != "" {
 		h.Set("Origin", origin)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := testsupport.Context(t)
 	conn, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(f.srv.URL, "http")+wsPath, &websocket.DialOptions{HTTPHeader: h})
 	if conn != nil {
 		t.Cleanup(func() { _ = conn.CloseNow() })
@@ -145,8 +143,7 @@ func (f *shellFix) attach(t *testing.T, s shellSession) *websocket.Conn {
 // returns what was read.
 func readUntilBinary(t *testing.T, c *websocket.Conn, want string) string {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := testsupport.Context(t)
 	var got strings.Builder
 	for !strings.Contains(got.String(), want) {
 		typ, data, err := c.Read(ctx)
@@ -164,8 +161,7 @@ func readUntilBinary(t *testing.T, c *websocket.Conn, want string) string {
 // it decoded.
 func readControl(t *testing.T, c *websocket.Conn, typ string) shells.Control {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := testsupport.Context(t)
 	for {
 		mt, data, err := c.Read(ctx)
 		if err != nil {
@@ -188,8 +184,7 @@ func readControl(t *testing.T, c *websocket.Conn, typ string) shells.Control {
 // as a browser does; a client that does not holds the server's close for five seconds.
 func drain(t *testing.T, c *websocket.Conn) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := testsupport.Context(t)
 	for {
 		if _, _, err := c.Read(ctx); err != nil {
 			return
@@ -209,8 +204,7 @@ func dialRefused(t *testing.T, what string, status int, ptype string, err error,
 
 func sendBinary(t *testing.T, c *websocket.Conn, s string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := testsupport.Context(t)
 	if err := c.Write(ctx, websocket.MessageBinary, []byte(s)); err != nil {
 		t.Fatalf("send %q: %v", s, err)
 	}
@@ -353,8 +347,7 @@ func TestShellWebSocketCarriesTheTerminalBytesBothWaysAndReportsTheExitCode(t *t
 	sendBinary(t, c, "echo hi\n")
 	readUntilBinary(t, c, "echo hi")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := testsupport.Context(t)
 	if err := c.Write(ctx, websocket.MessageText, []byte(`{"type":"resize","cols":100,"rows":30}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -368,8 +361,7 @@ func TestShellWebSocketCarriesTheTerminalBytesBothWaysAndReportsTheExitCode(t *t
 		t.Fatalf("exit frame = %+v, want code 2", ctl)
 	}
 	// The server then closes the socket normally.
-	rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer rcancel()
+	rctx := testsupport.Context(t)
 	for {
 		if _, _, err := c.Read(rctx); err != nil {
 			if websocket.CloseStatus(err) != websocket.StatusNormalClosure {

@@ -482,7 +482,6 @@ func TestRestoreRefusalsAnswerTheirOwnProblemAndLeaveEverythingAsItWas(t *testin
 			cookie, csrf := f.signIn(t, "admin", false)
 			id := uploadedID(t, f.upload(t, cookie, csrf, tc.file))
 
-			started := time.Now()
 			body := map[string]string{"uploadId": id, "passphrase": tc.passphrase}
 			if tc.step == "apply" {
 				body["confirm"] = "Home lab"
@@ -494,9 +493,8 @@ func TestRestoreRefusalsAnswerTheirOwnProblemAndLeaveEverythingAsItWas(t *testin
 			if tc.detail != "" && !strings.Contains(rec.Body.String(), tc.detail) {
 				t.Errorf("the answer does not name %s: %s", tc.detail, rec.Body)
 			}
-			if time.Since(started) > 5*time.Second {
-				t.Errorf("the refusal took %v: the file must be refused before a key is derived from it", time.Since(started))
-			}
+			// That the hostile header is refused before a key is derived is proved in
+			// internal/backup (the kdfRuns counter), not by how long this answer took.
 			if sum() != before {
 				t.Error("bayplan.db changed")
 			}

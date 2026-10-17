@@ -11,7 +11,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // The framing of a container's log stream (plan 04-19, OBS-01, D-15, Pitfall 12).
@@ -180,7 +181,7 @@ func TestLogFramePumpStopsWhenTheReaderIsClosed(t *testing.T) {
 		if err == nil {
 			t.Fatal("a read that was cut short returned no error")
 		}
-	case <-time.After(5 * time.Second):
+	case <-testsupport.Context(t).Done():
 		t.Fatal("pumpLogs did not return after its reader was closed")
 	}
 }

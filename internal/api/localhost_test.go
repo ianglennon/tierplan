@@ -174,11 +174,10 @@ func TestLocalHostGivesUpOnAnEngineThatAcceptsAndNeverAnswers(t *testing.T) {
 	}()
 
 	f, cookie := localHostFixture(t, "unix://"+path)
-	start := time.Now()
+	// The engine never answers until the test ends, so only the probe timeout (500 ms here) can
+	// return this request: that it returns is the proof, and a regression hangs until go test's
+	// own -timeout prints the goroutines. No elapsed-time bound is kept.
 	got, code := f.localHostCall(t, cookie)
-	if elapsed := time.Since(start); elapsed > 3*time.Second {
-		t.Errorf("a hung engine held the request for %s; the probe timeout is 500ms in this test", elapsed)
-	}
 	if code != http.StatusOK || got.Probe == nil || got.Probe.Reachable || got.Probe.Reason != "unreachable" {
 		t.Fatalf("got %d probe=%+v, want 200 and an unreachable probe", code, got.Probe)
 	}

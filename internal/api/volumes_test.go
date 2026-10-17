@@ -15,6 +15,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // Volume create (plan 04-16, RES-07, D-44, D-51, P2 D-42). Docker is a fake daemon
@@ -1041,11 +1042,12 @@ func TestVolumeSizesANodeThatFailsOrRunsOutOfTimeIsAnEntryOfItsOwnWithAnError(t 
 
 	// A node that takes longer than its limit is the same.
 	cfg = sizesEngine()
-	cfg.DiskUsageDelay = 30 * time.Second
+	// The engine answers long after any test would wait, so only the node's own limit can end
+	// the call: a limit that did not work shows as a missing "too long" entry, not as slow timing.
+	cfg.DiskUsageDelay = 2 * testsupport.Deadline
 	f, e = dashEnv(t, cfg)
 	f.volumeSizesTimeout = 200 * time.Millisecond
 	f.h = f.build(t)
-	start := time.Now()
 	rec = f.get(t, e, "volumes/sizes")
 	if rec.code != http.StatusOK {
 		t.Fatalf("a slow node must not fail the request: %d %s", rec.code, rec.body)
@@ -1053,9 +1055,6 @@ func TestVolumeSizesANodeThatFailsOrRunsOutOfTimeIsAnEntryOfItsOwnWithAnError(t 
 	got = decode[volumeSizesBody](t, rec)
 	if len(got.Nodes) != 1 || got.Nodes[0].OK || !strings.Contains(got.Nodes[0].Error, "too long") {
 		t.Fatalf("nodes = %+v, want a timed-out entry", got.Nodes)
-	}
-	if took := time.Since(start); took > 10*time.Second {
-		t.Errorf("the request took %v, want it cut at the node's limit", took)
 	}
 }
 

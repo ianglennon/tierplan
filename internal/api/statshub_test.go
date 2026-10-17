@@ -64,11 +64,7 @@ func (m *manualTicks) fire() {
 
 func (m *manualTicks) waitStopped(t *testing.T, why string) {
 	t.Helper()
-	select {
-	case <-m.stopped:
-	case <-time.After(5 * time.Second):
-		t.Fatalf("no sampler stopped: %s", why)
-	}
+	testsupport.Await(t, "a sampler to stop: "+why, m.stopped)
 }
 
 // statsSrc runs a node call against one fake engine, and can hold calls, refuse them as a
@@ -214,7 +210,7 @@ func recvUpdate(t *testing.T, ch <-chan api.StatsUpdate) api.StatsUpdate {
 			t.Fatal("the subscription was closed")
 		}
 		return u
-	case <-time.After(5 * time.Second):
+	case <-testsupport.Context(t).Done():
 		t.Fatal("no update arrived")
 	}
 	return api.StatsUpdate{}
@@ -223,11 +219,7 @@ func recvUpdate(t *testing.T, ch <-chan api.StatsUpdate) api.StatsUpdate {
 func waitEntered(t *testing.T, ch <-chan struct{}, n int) {
 	t.Helper()
 	for range n {
-		select {
-		case <-ch:
-		case <-time.After(5 * time.Second):
-			t.Fatal("a sample request did not start")
-		}
+		testsupport.Await(t, "a sample request to start", ch)
 	}
 }
 

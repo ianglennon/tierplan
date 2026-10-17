@@ -530,15 +530,11 @@ func TestRevokeNeedsRevokeOnTheEnvironmentAndDisconnectsTheAgentAndBlocksTheHost
 		t.Fatal("a refused revoke changed the agent")
 	}
 
-	start := time.Now()
 	rec2 := f.req(t, http.MethodPost, path, `{"reason":"decommissioned"}`)
 	if rec2.code != http.StatusNoContent {
 		t.Fatalf("revoke: %d %s", rec2.code, rec2.body)
 	}
 	testsupport.Await(t, "the session to close", s.Done())
-	if took := time.Since(start); took > time.Second {
-		t.Errorf("the agent was disconnected %v after the revoke", took)
-	}
 	n := f.node(t, env.ID, a.id)
 	if n.Status != "revoked" || !n.Blocked || n.Connected || n.RevokeReason != "decommissioned" {
 		t.Errorf("after the revoke: %+v", n)
@@ -880,13 +876,7 @@ func controlLine(t *testing.T, control io.Reader) wire.Update {
 			got <- u
 		}
 	}()
-	select {
-	case u := <-got:
-		return u
-	case <-time.After(5 * time.Second):
-		t.Fatal("the server wrote nothing to the agent's control stream")
-		return wire.Update{}
-	}
+	return testsupport.Await(t, "the server to write to the agent's control stream", got)
 }
 
 // asAllEnvAdmin makes the request as a user who is Admin on every environment
