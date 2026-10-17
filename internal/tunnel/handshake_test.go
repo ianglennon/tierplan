@@ -234,21 +234,17 @@ func TestTwoHellosForTheSameAgentReplaceTheOldSessionWithTheNewOne(t *testing.T)
 	if newSess == nil || newSess == oldSess {
 		t.Fatal("the hub still holds the old session")
 	}
-	select {
-	case <-oldSess.Done():
-	case <-time.After(5 * time.Second):
-		t.Fatal("the old session was not closed")
-	}
+	testsupport.Await(t, "the old session to be closed", oldSess.Done())
 	select {
 	case <-newSess.Done():
 		t.Fatal("the new session ended with the old one")
 	default:
 	}
 	// The old connection really is dead: the agent end can read nothing more.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if _, _, err := first.WS.Read(ctx); err == nil {
-		t.Error("the replaced session's WebSocket is still open")
+	ctx := testsupport.Context(t)
+	// A read that ends because the deadline passed says the server never closed.
+	if _, _, err := first.WS.Read(ctx); err == nil || ctx.Err() != nil {
+		t.Errorf("the replaced session's WebSocket is still open (err %v)", err)
 	}
 	if n := len(srv.Events.Log()); n != 3 {
 		t.Errorf("the replaced session was reported again: %v", srv.Events.Log())
@@ -281,11 +277,7 @@ func TestAnOlderHandshakeThatFinishesLastDoesNotReplaceTheNewerSession(t *testin
 		t.Fatalf("the older hello was refused: %+v", late.Refuse)
 	}
 	// The server turns the older connection away after its welcome.
-	select {
-	case <-late.Mux.CloseChan():
-	case <-time.After(5 * time.Second):
-		t.Fatal("the older connection was not closed")
-	}
+	testsupport.Await(t, "the older connection to be closed", late.Mux.CloseChan())
 	if got := srv.Hub.Session(id.AgentID); got != live {
 		t.Fatalf("the hub holds %p after the older hello finished, want the newer session %p", got, live)
 	}

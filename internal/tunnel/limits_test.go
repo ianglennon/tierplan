@@ -194,7 +194,7 @@ func upgradeRequest(t *testing.T, url string, headers map[string]string) (status
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{Timeout: testsupport.Deadline}
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)

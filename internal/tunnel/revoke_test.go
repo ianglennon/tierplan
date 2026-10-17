@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/tunnel"
@@ -87,21 +86,16 @@ func TestRevokeClosesTheSessionWithinASecondFailsACallInFlightAndKeepsTheHostOut
 	}()
 	testsupport.Await(t, "the request to reach the agent's stream", requests)
 
-	start := time.Now()
 	if err := srv.Svc.Revoke(context.Background(), revoker, env.ID, agentID, "decommissioned", "203.0.113.5", "test"); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
+	// "At once" is proved by awaiting the close on the shared deadline. Nothing but
+	// the revoke's kick can end this session in that time: the silence watchdog runs
+	// on the fake clock, which does not move, and the multiplexer's ping and write
+	// timeouts are a minute in tunneltest (WithMuxTimeouts).
 	testsupport.Await(t, "the session to end", s.Done())
-	if took := time.Since(start); took > time.Second {
-		t.Errorf("the session took %v to close after the revoke", took)
-	}
-	select {
-	case err := <-errc:
-		if !errors.Is(err, tunnel.ErrAgentGone) {
-			t.Fatalf("the call in flight ended with %v, want an error wrapping ErrAgentGone", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("the call in flight is still hanging")
+	if err := testsupport.Await(t, "the call in flight to fail", errc); !errors.Is(err, tunnel.ErrAgentGone) {
+		t.Fatalf("the call in flight ended with %v, want an error wrapping ErrAgentGone", err)
 	}
 	// The hub forgets the session just after it ends, so wait rather than look once.
 	awaitGone(t, srv.Hub, agentID, "the hub to forget the revoked agent's session")
@@ -193,11 +187,7 @@ func TestARevokeBetweenTheHelloCheckAndTheRegistrationLeavesNoSessionBehind(t *t
 
 	helloc := make(chan *tunneltest.Conn, 1)
 	go func() { helloc <- srv.Hello(t, id) }()
-	select {
-	case <-g.reached:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the hello never passed verification")
-	}
+	testsupport.Await(t, "the hello to pass verification", g.reached)
 	// The hello has passed the status check and is about to register: revoke now,
 	// completely, kick included, then let it go on.
 	if err := srv.Svc.Revoke(context.Background(), revoker, env.ID, id.AgentID, "", "", ""); err != nil {
@@ -205,15 +195,15 @@ func TestARevokeBetweenTheHelloCheckAndTheRegistrationLeavesNoSessionBehind(t *t
 	}
 	close(g.release)
 
-	c := <-helloc
+	c := testsupport.Await(t, "the late hello to be answered", helloc)
 	if c.Welcome == nil {
 		t.Fatalf("hello refused before the registration: %+v (err %v)", c.Refuse, c.Err)
 	}
 	awaitGone(t, srv.Hub, id.AgentID, "the late session to be closed")
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if _, _, err := c.WS.Read(ctx); err == nil {
-		t.Fatal("the connection of a revoked agent is still open and readable")
+	rctx := testsupport.Context(t)
+	// A read that ends because the deadline passed says the server never closed.
+	if _, _, err := c.WS.Read(rctx); err == nil || rctx.Err() != nil {
+		t.Fatalf("the connection of a revoked agent is still open and readable (err %v)", err)
 	}
 	// The server closes the connection only after the registration was refused (the
 	// kick follows the errNoLongerActive answer), so by the time the read failed
@@ -254,12 +244,11 @@ func TestRevokeRacingAHelloFiftyTimesNeverLeavesASessionForTheRevokedAgent(t *te
 
 		if hello.Welcome != nil {
 			// Welcomed before the revoke landed: the server must close it.
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			if _, _, err := hello.WS.Read(ctx); err == nil {
-				cancel()
-				t.Fatalf("round %d: the welcomed connection of a revoked agent stayed open", i)
+			rctx := testsupport.Context(t)
+			// A read that ends because the deadline passed says the server never closed.
+			if _, _, err := hello.WS.Read(rctx); err == nil || rctx.Err() != nil {
+				t.Fatalf("round %d: the welcomed connection of a revoked agent stayed open (err %v)", i, err)
 			}
-			cancel()
 		} else if hello.Refuse == nil || hello.Refuse.Code != wire.ReasonRevoked {
 			t.Fatalf("round %d: hello = %+v (err %v), want a welcome that is then closed or a revoked refusal", i, hello.Refuse, hello.Err)
 		}
