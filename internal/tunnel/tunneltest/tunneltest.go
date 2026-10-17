@@ -545,7 +545,11 @@ func (p *Pending) Finish() *Conn {
 	auth.Sig = authn.Sign(signer, authn.Transcript(mode, proto, ch.Nonce, nonce, signedAud, signed, ekm))
 	b, _ := json.Marshal(auth)
 	if err := ws.Write(ctx, websocket.MessageText, b); err != nil {
-		t.Fatalf("tunneltest: send auth: %v", err)
+		// An agent that answers after the server has given up on it finds the
+		// connection gone; that is an outcome (Err set, no welcome), not a fault of
+		// the test.
+		c.Err = err
+		return c
 	}
 
 	_, data, err = ws.Read(ctx)

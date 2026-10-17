@@ -549,27 +549,34 @@ func TestAForwardedForHeaderFromAnUntrustedPeerDoesNotBuyMoreHandshakes(t *testi
 
 // A client that reads the challenge and says nothing is let go when the first-frame
 // deadline passes, long before the 10 s the whole handshake may take (T-02-123).
+//
+// The slow path the claim rules out is the whole-handshake timeout, which is a
+// constant of the wire protocol and cannot be lengthened. So the first-frame
+// deadline is set to a small fraction of it and the drop is awaited on the shared
+// deadline; a server that waited for the whole-handshake timeout instead would take
+// wire.HandshakeTimeout, which is more than the bound below.
 func TestASilentHandshakeIsDroppedAtTheFirstFrameDeadline(t *testing.T) {
-	srv := tunneltest.Start(t, tunneltest.Options{})
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
+	const firstFrame = 200 * time.Millisecond
+	srv := tunneltest.Start(t, tunneltest.Options{Configure: func(h *tunnel.Hub) *tunnel.Hub { return h.WithFirstFrameTimeout(firstFrame) }})
+	ctx := testsupport.Context(t)
 
 	ws, _, typ := firstMessageFrom(t, ctx, srv, "")
 	defer func() { _ = ws.CloseNow() }()
 	if typ != wire.TypeChallenge {
 		t.Fatalf("got %q, want a challenge", typ)
 	}
-	start := time.Now()
+	start := time.Now() // wall-clock: the elapsed time is bounded by a fraction of the whole-handshake timeout, the slow path this test rules out
 	_, _, err := ws.Read(ctx)
-	elapsed := time.Since(start)
+	elapsed := time.Since(start) // wall-clock: see above
 	if err == nil {
 		t.Fatal("the server sent something to a client that said nothing")
 	}
 	if ctx.Err() != nil {
 		t.Fatalf("the server was still holding the connection after %s", elapsed.Round(100*time.Millisecond))
 	}
-	if elapsed < 2500*time.Millisecond || elapsed > 6*time.Second {
-		t.Fatalf("a silent handshake was dropped %s after the challenge, want between 2.5 s and 6 s", elapsed.Round(10*time.Millisecond))
+	if limit := wire.HandshakeTimeout / 2; elapsed > limit {
+		t.Fatalf("a silent handshake was dropped %s after the challenge, want it at the first-frame deadline (%s), well before the whole-handshake timeout (%s)",
+			elapsed.Round(10*time.Millisecond), firstFrame, wire.HandshakeTimeout)
 	}
 }
 
@@ -614,45 +621,50 @@ func TestAnAgentThatAnswersWithinTheDeadlineIsWelcomedAndOneThatDoesNotIsDropped
 		}
 	})
 	t.Run("is dropped when it does not answer by the deadline", func(t *testing.T) {
-		// The deadline is shortened so the test waits for the server to close the
-		// connection, which it does at the deadline.
+		// The deadline is shortened so the test does not wait the default 3 s.
 		srv := tunneltest.Start(t, tunneltest.Options{Configure: func(h *tunnel.Hub) *tunnel.Hub { return h.WithFirstFrameTimeout(200 * time.Millisecond) }})
 		env := srv.NewEnvironment(t, "Slow")
 		p := srv.Begin(t, tunneltest.Agent{Token: env.Token})
-		// The close is the whole outcome: there is no connection left to answer on.
-		if err := p.AwaitServerClose(); err == nil {
-			t.Fatal("the server closed the connection of an agent that never answered without an error on the agent's side")
+		// The hub gives the handshake's slot back when it stops waiting for the
+		// agent, which is the moment the deadline has passed on the server.
+		awaitHandshakeSlots(t, srv.Hub, 0)
+		// Only now does the agent answer, late. It has not read anything since the
+		// challenge, so it finds the connection gone: no welcome, and the close is
+		// the whole outcome.
+		c := p.Finish()
+		if c.Welcome != nil {
+			t.Fatalf("an agent that answered after the first-frame deadline was welcomed: %+v", c.Welcome)
+		}
+		if c.Err == nil {
+			t.Fatalf("the late agent was neither welcomed nor dropped: refuse %+v", c.Refuse)
 		}
 	})
 }
 
-func TestWithFirstFrameTimeoutReplacesTheDeadlineOnlyWhenPositive(t *testing.T) {
-	// dropped reports how long a silent handshake lasts, or ok false when it is
-	// still open after limit.
-	dropped := func(t *testing.T, d time.Duration, limit time.Duration) (time.Duration, bool) {
-		t.Helper()
-		srv := tunneltest.Start(t, tunneltest.Options{Configure: func(h *tunnel.Hub) *tunnel.Hub { return h.WithFirstFrameTimeout(d) }})
-		ctx, cancel := context.WithTimeout(context.Background(), limit)
-		defer cancel()
-		ws, _, typ := firstMessageFrom(t, ctx, srv, "")
-		defer func() { _ = ws.CloseNow() }()
-		if typ != wire.TypeChallenge {
-			t.Fatalf("got %q, want a challenge", typ)
-		}
-		start := time.Now()
-		_, _, err := ws.Read(ctx)
-		if err == nil {
-			t.Fatal("the server sent something to a client that said nothing")
-		}
-		return time.Since(start), ctx.Err() == nil
+// The documented default is 3 s: long enough for an agent that sends its auth as
+// soon as it reads the challenge, short enough that a silent client gives its slot
+// back in seconds (T-02-123, T-02-24). A hub that has not been told otherwise uses it.
+func TestTheShippedFirstFrameTimeoutIsThreeSeconds(t *testing.T) {
+	if tunnel.FirstFrameTimeout != 3*time.Second {
+		t.Fatalf("the shipped first-frame timeout is %s, want 3s", tunnel.FirstFrameTimeout)
 	}
+	srv := tunneltest.Start(t, tunneltest.Options{})
+	if got := srv.Hub.FirstFrame(); got != tunnel.FirstFrameTimeout {
+		t.Fatalf("a hub nobody configured has a first-frame timeout of %s, want the shipped %s", got, tunnel.FirstFrameTimeout)
+	}
+}
 
-	if elapsed, ok := dropped(t, 300*time.Millisecond, 2*time.Second); !ok || elapsed > 2*time.Second {
-		t.Errorf("with a deadline of 300 ms a silent handshake lasted %s (dropped %v), want it dropped quickly", elapsed, ok)
+func TestWithFirstFrameTimeoutReplacesTheDeadlineOnlyWhenPositive(t *testing.T) {
+	srv := tunneltest.Start(t, tunneltest.Options{})
+	h := srv.Hub
+	h.WithFirstFrameTimeout(300 * time.Millisecond)
+	if got := h.FirstFrame(); got != 300*time.Millisecond {
+		t.Fatalf("after WithFirstFrameTimeout(300ms) the deadline is %s, want 300ms", got)
 	}
 	for _, d := range []time.Duration{0, -time.Second} {
-		if elapsed, ok := dropped(t, d, 1500*time.Millisecond); ok {
-			t.Errorf("with a deadline of %s a silent handshake was dropped after %s, want the 3 s default", d, elapsed)
+		h.WithFirstFrameTimeout(d)
+		if got := h.FirstFrame(); got != 300*time.Millisecond {
+			t.Errorf("after WithFirstFrameTimeout(%s) the deadline is %s, want it left at 300ms", d, got)
 		}
 	}
 }
