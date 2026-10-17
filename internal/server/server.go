@@ -1062,6 +1062,9 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 	} else {
 		go func() { errc <- srv.Serve(ln) }()
 	}
+	// The message and the "addr" key are a contract: scripts/smoke.sh binds port 0
+	// and reads the port the kernel assigned from this line (WR-07). ln.Addr is the
+	// bound address, so ":0" shows as the real port.
 	s.log.Info("bayplan listening", "addr", ln.Addr().String(), "scheme", scheme)
 
 	select {
