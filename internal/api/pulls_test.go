@@ -184,6 +184,7 @@ func holdPulls(t *testing.T) (gate <-chan struct{}, open func()) {
 }
 
 func TestPullJobOnTheLocalHostStreamsToDone(t *testing.T) {
+	t.Parallel()
 	// The pull is held until the stream is open, so the item frames are always seen.
 	gate, release := holdPulls(t)
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", PullHold: gate})
@@ -264,6 +265,7 @@ func TestPullJobOnTheLocalHostStreamsToDone(t *testing.T) {
 }
 
 func TestPullOfAnImageTheNodeHasIsUpToDateAndStillAudited(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
 	for range 2 {
 		rec := f.startPull(t, e, `{"ref":"busybox:1.36.1"}`)
@@ -284,6 +286,7 @@ func TestPullOfAnImageTheNodeHasIsUpToDateAndStillAudited(t *testing.T) {
 }
 
 func TestPullRefusals(t *testing.T) {
+	t.Parallel()
 	gate, _ := holdPulls(t)
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", PullHold: gate})
 	f.addUser(t, "viewer", false)
@@ -332,6 +335,7 @@ func TestPullRefusals(t *testing.T) {
 }
 
 func TestPullJobIsOnlyVisibleToItsOwner(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
 	for _, name := range []string{"op1", "op2"} {
 		f.addUser(t, name, false)
@@ -371,6 +375,7 @@ func TestPullJobIsOnlyVisibleToItsOwner(t *testing.T) {
 }
 
 func TestPullStateHoldsNoRegistryHeader(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
 	awaitOnline(t, f.mon, e.ID)
 	secret := "c2VjcmV0LXJlZ2lzdHJ5LXRva2Vu" //nolint:gosec // a made-up value the test looks for, not a credential
@@ -406,6 +411,7 @@ func TestPullStateHoldsNoRegistryHeader(t *testing.T) {
 }
 
 func TestAFailedPullIsMappedToACodeAuditedAndNeverRetried(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		cfg  dockertest.FakeConfig
@@ -446,6 +452,7 @@ func TestAFailedPullIsMappedToACodeAuditedAndNeverRetried(t *testing.T) {
 }
 
 func TestPullStreamResumesFromLastEventIDAndPingsAndEndsWhenSignedOut(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
 	f.pullsHeartbeat = 20 * time.Millisecond
 	f.h = f.build(t)
@@ -493,6 +500,7 @@ func TestPullStreamResumesFromLastEventIDAndPingsAndEndsWhenSignedOut(t *testing
 }
 
 func TestPullStreamHeartbeatReauthorises(t *testing.T) {
+	t.Parallel()
 	gate, _ := holdPulls(t)
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", PullHold: gate})
 	f.pullsHeartbeat = 20 * time.Millisecond
@@ -516,6 +524,7 @@ func TestPullStreamHeartbeatReauthorises(t *testing.T) {
 }
 
 func TestPullStreamsPerUserAreCapped(t *testing.T) {
+	t.Parallel()
 	gate, _ := holdPulls(t)
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", PullHold: gate})
 	f.pullsMaxStreams = 2
@@ -589,6 +598,7 @@ func creates(a *agentConn) int {
 }
 
 func TestPullTargetsListsEveryNodeWithRoleArchitectureAndReachability(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	s.whenProbed(t, envs.AgentTarget(s.m1.id), envs.AgentTarget(s.m2.id), envs.AgentTarget(s.w.id))
 	rec := s.req(t, http.MethodGet, "/api/env/"+s.env.ID+"/images/pull-targets", "")
@@ -620,6 +630,7 @@ func TestPullTargetsListsEveryNodeWithRoleArchitectureAndReachability(t *testing
 }
 
 func TestPullTargetsOfAStandaloneHostIsOneNodeAndNotASwarm(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
 	awaitOnline(t, f.mon, e.ID)
 	rec := f.get(t, e, "images/pull-targets")
@@ -633,6 +644,7 @@ func TestPullTargetsOfAStandaloneHostIsOneNodeAndNotASwarm(t *testing.T) {
 }
 
 func TestPullTargetsAreForViewersAndNotForAnotherEnvironmentsUsers(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
@@ -648,6 +660,7 @@ func TestPullTargetsAreForViewersAndNotForAnotherEnvironmentsUsers(t *testing.T)
 }
 
 func TestPullWithoutNodeIDsRunsOnEveryNodeAndNodeIDsChooseThem(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	rec := s.pullOnSwarm(t, `{"ref":"busybox:1.36.1"}`)
 	if rec.code != http.StatusAccepted {
@@ -684,6 +697,7 @@ func TestPullWithoutNodeIDsRunsOnEveryNodeAndNodeIDsChooseThem(t *testing.T) {
 }
 
 func TestPullNodeChoiceIsCheckedAgainstTheEnvironmentsOwnNodes(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	for name, tc := range map[string]struct{ body, ptyp string }{
 		"a node of nowhere":                {`{"ref":"busybox","nodeIds":["not-a-node"]}`, "nodes_unknown"},
@@ -743,6 +757,7 @@ func pairFacts(name string, readOnly bool) *wire.Facts {
 }
 
 func TestPullOnAReadOnlyNodeIsHostReadOnlyAuditedAndNeverCallsItsEngine(t *testing.T) {
+	t.Parallel()
 	f, env, ro, rw := twoNodes(t,
 		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
 		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
@@ -774,6 +789,7 @@ func TestPullOnAReadOnlyNodeIsHostReadOnlyAuditedAndNeverCallsItsEngine(t *testi
 }
 
 func TestOneNodeFailingLeavesTheOthersDoneAndEveryAuditRowCarriesTheSameBulkID(t *testing.T) {
+	t.Parallel()
 	f, env, _, _ := twoNodes(t,
 		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true, PullStatus: dockertest.FakePullStatus{Code: http.StatusInternalServerError, Message: "boom"}},
 		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
@@ -802,6 +818,7 @@ func TestOneNodeFailingLeavesTheOthersDoneAndEveryAuditRowCarriesTheSameBulkID(t
 }
 
 func TestPullOnAnUnreachableNodeFailsItAloneWithNodeUnreachable(t *testing.T) {
+	t.Parallel()
 	s := newSwarmFix(t)
 	s.whenProbed(t, envs.AgentTarget(s.m1.id), envs.AgentTarget(s.m2.id), envs.AgentTarget(s.w.id))
 	s.kickWorker(t)
@@ -855,6 +872,7 @@ func (f *authFixture) listedPulls(t *testing.T, cookie string) []pullListed {
 }
 
 func TestListPullsShowsTheStartersAndTheAdministratorsOfTheEnvironmentOnly(t *testing.T) {
+	t.Parallel()
 	gate, _ := holdPulls(t)
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", PullHold: gate})
 	for _, u := range []struct{ name, role string }{{"op1", "operator"}, {"op2", "operator"}, {"envadmin", "admin"}, {"viewer", "viewer"}} {
@@ -920,6 +938,7 @@ func (f *authFixture) cancelPull(t *testing.T, id, cookie, csrf string) *httptes
 }
 
 func TestCancelPullByTheStarterStopsTheNodeAuditsItAndASecondCancelIs409(t *testing.T) {
+	t.Parallel()
 	gate, _ := holdPulls(t)
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", PullHold: gate})
 	f.addUser(t, "op1", false)
@@ -962,6 +981,7 @@ func TestCancelPullByTheStarterStopsTheNodeAuditsItAndASecondCancelIs409(t *test
 }
 
 func TestCancelPullKeepsTheNodesThatFinishedDoneAndTheJobIsPartial(t *testing.T) {
+	t.Parallel()
 	gate, _ := holdPulls(t)
 	f, env, _, held := twoNodes(t,
 		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
@@ -1001,6 +1021,7 @@ func TestCancelPullKeepsTheNodesThatFinishedDoneAndTheJobIsPartial(t *testing.T)
 }
 
 func TestCancelPullIsAllowedToAnEnvAdminAndAnInstanceAdminAndNeverToAnyoneWhoCannotSeeIt(t *testing.T) {
+	t.Parallel()
 	gate, _ := holdPulls(t)
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", PullHold: gate})
 	for _, u := range []struct{ name, role string }{{"op1", "operator"}, {"op2", "operator"}, {"envadmin", "admin"}, {"viewer", "viewer"}} {
@@ -1122,6 +1143,7 @@ func decodedPullAuth(t *testing.T, header string) (user, password, server string
 }
 
 func TestAPullWithAMatchingCredentialSendsItOnEveryNodeAndNamesItEverywhereButTheHeader(t *testing.T) {
+	t.Parallel()
 	f, env, x, y := twoNodes(t,
 		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
 		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
@@ -1200,6 +1222,7 @@ func TestAPullWithAMatchingCredentialSendsItOnEveryNodeAndNamesItEverywhereButTh
 }
 
 func TestARefusedPullRecordsTheCredentialsFailureOnceAndALaterSuccessClearsItWithNoRetryAndNoFallback(t *testing.T) {
+	t.Parallel()
 	f, env, x, y := twoNodes(t,
 		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true, PullStatus: dockertest.FakePullStatus{Code: http.StatusUnauthorized, Message: "unauthorized: bad token"}},
 		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true, PullStatus: dockertest.FakePullStatus{Code: http.StatusUnauthorized, Message: "unauthorized: bad token"}},
@@ -1240,6 +1263,7 @@ func TestARefusedPullRecordsTheCredentialsFailureOnceAndALaterSuccessClearsItWit
 // "denied" is what a registry says of a repository that does not exist or that the account may not
 // read, so it is not the credential failing and must not alert the people who manage it (WR-B03).
 func TestADeniedPullDoesNotFlagTheCredentialItWasMadeWith(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", PullStatus: dockertest.FakePullStatus{Code: http.StatusForbidden, Message: "denied: requested access to the resource is denied"}})
 	cred := f.addPullCredential(t, "local-bot", "")
 	rec := f.startPull(t, e, `{"ref":"`+privateRef+`"}`)
@@ -1256,6 +1280,7 @@ func TestADeniedPullDoesNotFlagTheCredentialItWasMadeWith(t *testing.T) {
 }
 
 func TestAPullThatWorksAfterAFailureClearsIt(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
 	cred := f.addPullCredential(t, "local-bot", "")
 	if err := registry.NewStore(f.st, f.v, f.clk.now).RecordFailure(context.Background(), cred.ID, "pull_denied"); err != nil {
