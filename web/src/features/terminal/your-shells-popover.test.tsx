@@ -20,6 +20,10 @@ import { settled } from "@/test-settle";
 
 const ENV = "e1";
 
+// Fixture dates count from one fixed instant, and beforeEach freezes Date at it, so a
+// minute-granularity "N min ago" is exact however late the run starts. Only Date is faked:
+// findBy and waitFor and the app's timers keep running in real time.
+const NOW = new Date("2026-10-03T12:00:00Z");
 function mine(over: Record<string, unknown> = {}) {
   return {
     id: "s1",
@@ -27,7 +31,7 @@ function mine(over: Record<string, unknown> = {}) {
     containerId: "w".repeat(64),
     container: "web",
     node: "node-1",
-    startedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+    startedAt: new Date(NOW.getTime() - 5 * 60_000).toISOString(),
     idleSeconds: 10,
     ...over,
   };
@@ -45,8 +49,13 @@ let meServed: number;
 const defaultQueryOptions = queryClient.getDefaultOptions();
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(NOW);
   queryClient.setDefaultOptions({ queries: { retry: false, refetchOnWindowFocus: false } });
-  items = [mine(), mine({ id: "s2", startedAt: new Date(Date.now() - 90 * 60_000).toISOString() })];
+  items = [
+    mine(),
+    mine({ id: "s2", startedAt: new Date(NOW.getTime() - 90 * 60_000).toISOString() }),
+  ];
   me = makeMe({ username: "olive", id: "u-olive", envs: { e1: "admin" } });
   listStatus = 200;
   endStatus = 204;
@@ -89,6 +98,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   toast.dismiss();
   queryClient.setDefaultOptions(defaultQueryOptions);
   cleanup();

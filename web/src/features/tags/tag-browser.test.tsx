@@ -72,9 +72,14 @@ function platform(arch: string, digest: string, over: Record<string, unknown> = 
   return { os: "linux", arch, variant: "", digest, size: 5_242_880, ...over };
 }
 
+// Fixture dates count from one fixed instant, and beforeEach freezes Date at it, so the
+// "1 h ago" and "3 d ago" texts are exact however late the run starts. Only Date is faked:
+// findBy and waitFor and the app's timers keep running in real time.
+const NOW = new Date("2026-10-03T12:00:00Z");
+
 // One date for every default detail: the browser puts a batch newest first, and equal dates
 // keep the order the list gave.
-const AN_HOUR_AGO = new Date(Date.now() - 3_600_000).toISOString();
+const AN_HOUR_AGO = new Date(NOW.getTime() - 3_600_000).toISOString();
 
 function detail(tag: string, over: Record<string, unknown> = {}) {
   return {
@@ -132,6 +137,8 @@ const where = [
 ];
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(NOW);
   sent = [];
   detailsSent = [];
   FakeObserver.all = [];
@@ -180,6 +187,7 @@ afterEach(() => {
   // test's Toaster and be found there as its role="alert".
   toast.dismiss();
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   client.clear();
@@ -636,28 +644,36 @@ describe("TagBrowser details", () => {
     const names = Array.from({ length: 60 }, (_, i) => `v${i}`);
     answer = () => Response.json(list({ tags: names.map((name) => ({ name })), total: 60 }));
     const releases: (() => void)[] = [];
-    detailsAnswer = (body) =>
-      new Promise<Response>((resolve) =>
-        releases.push(() => resolve(Response.json({ items: body.tags.map((tag) => detail(tag)) }))),
+    // Requests out at once: up when the stub is called, down when its release runs. The claim
+    // is about the whole test, so the highest the count ever reached is what is asserted.
+    let inFlight = 0;
+    let mostInFlight = 0;
+    detailsAnswer = (body) => {
+      inFlight++;
+      mostInFlight = Math.max(mostInFlight, inFlight);
+      return new Promise<Response>((resolve) =>
+        releases.push(() => {
+          inFlight--;
+          resolve(Response.json({ items: body.tags.map((tag) => detail(tag)) }));
+        }),
       );
+    };
     mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" />);
     await waitFor(() => expect(screen.getByText("v0")).toBeTruthy());
     scrollTo(names);
     await waitFor(() => expect(detailsSent).toHaveLength(1));
-    expect(detailsSent[0]?.tags).toEqual(names.slice(0, 25));
-    // Nothing more is sent while the first is out. The request is only sent after the hook has
-    // marked itself busy in the same effect, so once the effects of this render have flushed a
-    // second request would already be in detailsSent.
-    await act(async () => {});
-    expect(detailsSent).toHaveLength(1);
     await act(async () => releases[0]?.());
     await waitFor(() => expect(detailsSent).toHaveLength(2));
-    expect(detailsSent[1]?.tags).toEqual(names.slice(25, 50));
     await act(async () => releases[1]?.());
     await waitFor(() => expect(detailsSent).toHaveLength(3));
-    expect(detailsSent[2]?.tags).toEqual(names.slice(50));
     await act(async () => releases[2]?.());
     await waitFor(() => expect(cellsOf(rowOf("v59"))[2]?.textContent).toBe("sha256:a1a1a1a1a1a1"));
+    expect(mostInFlight).toBe(1);
+    expect(detailsSent.map((d) => d.tags)).toEqual([
+      names.slice(0, 25),
+      names.slice(25, 50),
+      names.slice(50),
+    ]);
   });
 
   it("keeps what rows resolved when they leave the screen, and asks again only for rows still waiting", async () => {
@@ -703,7 +719,7 @@ describe("TagBrowser details", () => {
 
   it("reorders the batch that arrived by date, newest first, once, in the places it occupied", async () => {
     const ago = (days: number) =>
-      new Date(Date.now() - days * 86_400_000 - 3_600_000).toISOString();
+      new Date(NOW.getTime() - days * 86_400_000 - 3_600_000).toISOString();
     detailsAnswer = (body) =>
       Response.json({
         items: body.tags.map((tag) =>
@@ -729,7 +745,7 @@ describe("TagBrowser details", () => {
 
   it("does not reorder rows whose dates the list already carried", async () => {
     const ago = (days: number) =>
-      new Date(Date.now() - days * 86_400_000 - 3_600_000).toISOString();
+      new Date(NOW.getTime() - days * 86_400_000 - 3_600_000).toISOString();
     answer = () =>
       Response.json(
         list({
@@ -794,7 +810,7 @@ describe("TagBrowser details", () => {
             {
               name: "1.0",
               digest: D2,
-              created: new Date(Date.now() - 7_200_000).toISOString(),
+              created: new Date(NOW.getTime() - 7_200_000).toISOString(),
               platforms: [platform("arm64", ARM)],
             },
           ],

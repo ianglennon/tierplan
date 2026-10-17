@@ -37,6 +37,10 @@ const ENV = {
   updateAvailable: false,
 };
 
+// Fixture dates count from one fixed instant, and beforeEach freezes Date at it, so a
+// minute-granularity "N min ago" is exact however late the run starts. Only Date is faked:
+// findBy and waitFor and the app's timers keep running in real time.
+const NOW = new Date("2026-10-03T12:00:00Z");
 function shell(over: Record<string, unknown> = {}) {
   return {
     id: "s-olive",
@@ -44,7 +48,7 @@ function shell(over: Record<string, unknown> = {}) {
     containerId: "c1".padEnd(64, "0"),
     container: "web",
     node: "worker-1",
-    startedAt: new Date(Date.now() - 12 * 60_000).toISOString(),
+    startedAt: new Date(NOW.getTime() - 12 * 60_000).toISOString(),
     idleSeconds: 400,
     ...over,
   };
@@ -61,6 +65,8 @@ let ended: string[];
 const defaultQueryOptions = queryClient.getDefaultOptions();
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(NOW);
   queryClient.setDefaultOptions({ queries: { retry: false, refetchOnWindowFocus: false } });
   items = [
     shell(),
@@ -120,6 +126,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   toast.dismiss();
   queryClient.setDefaultOptions(defaultQueryOptions);
   cleanup();
@@ -254,9 +261,7 @@ describe("the open shells table", () => {
     listStatus = 500;
     renderAt(SHELLS);
     const c = await tab();
-    expect(
-      await within(c).findByText(/Couldn't load shells\./, {}, { timeout: 4000 }),
-    ).toBeTruthy();
+    expect(await within(c).findByText(/Couldn't load shells\./)).toBeTruthy();
     listStatus = 200;
     fireEvent.click(within(c).getByRole("button", { name: "Retry" }));
     expect(await within(c).findByText("olive")).toBeTruthy();
@@ -339,9 +344,7 @@ describe("ending someone's shell", () => {
     fireEvent.click(await openMenu(table, "olive"));
     const dialog = await screen.findByRole("alertdialog", { name: "End olive's shell?" });
     fireEvent.click(within(dialog).getByRole("button", { name: "End session" }));
-    expect(
-      await within(dialog).findByText("Couldn't end the shell. Try again.", {}, { timeout: 4000 }),
-    ).toBeTruthy();
+    expect(await within(dialog).findByText("Couldn't end the shell. Try again.")).toBeTruthy();
     expect(screen.getByRole("alertdialog")).toBeTruthy();
   });
 });
