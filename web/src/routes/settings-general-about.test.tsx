@@ -417,9 +417,7 @@ describe("General tab", () => {
     );
     renderAt("/settings/general");
     // The query client retries once after a second.
-    expect(
-      await screen.findByText("Couldn't load the settings.", {}, { timeout: 4000 }),
-    ).toBeTruthy();
+    expect(await screen.findByText("Couldn't load the settings.")).toBeTruthy();
     fail = false;
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(nameField().value).toBe("Lab"));
@@ -784,9 +782,7 @@ describe("About tab", () => {
   it("says so, and offers a retry, when the notices file is missing or is not a list", async () => {
     noticesAnswer = () => new Response("<!doctype html><html></html>", { status: 200 });
     renderAt("/settings/about");
-    expect(
-      await screen.findByText("Couldn't load the third-party notices.", {}, { timeout: 4000 }),
-    ).toBeTruthy();
+    expect(await screen.findByText("Couldn't load the third-party notices.")).toBeTruthy();
     noticesAnswer = () => Response.json(NOTICES);
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByRole("region", { name: "Third-party notices list" })).toBeTruthy();

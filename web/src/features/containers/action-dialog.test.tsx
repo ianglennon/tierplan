@@ -355,7 +355,7 @@ describe("ActionDialog stop options", () => {
     await waitFor(() => expect(posts()).toHaveLength(1));
     expect(body()).toEqual({
       action: "stop",
-      timeout: 30,
+      timeout: 30, // wall-clock: request body field, not a wait
       signal: "SIGINT",
       targets: [{ nodeId: "n1", id: "id-web" }],
     });

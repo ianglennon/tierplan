@@ -155,11 +155,9 @@ describe("home redirect", () => {
   it("ends on the overview, which says so, when the list cannot be read", async () => {
     environments = () => new Response("boom", { status: 500 });
     const router = renderAt("/");
-    expect(
-      await screen.findByText("Couldn't load environments.", {}, { timeout: 6000 }),
-    ).toBeTruthy();
+    expect(await screen.findByText("Couldn't load environments.")).toBeTruthy();
     expect(router.state.location.pathname).toBe("/environments");
-  }, 10000);
+  });
 });
 
 describe("dashboard", () => {

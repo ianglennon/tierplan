@@ -273,7 +273,7 @@ describe("SecretList search", () => {
     );
     fireEvent.change(box, { target: { value: "api" } });
     expect(onSearch).not.toHaveBeenCalled();
-    await waitFor(() => expect(onSearch).toHaveBeenCalledWith("api"), { timeout: 2000 });
+    await waitFor(() => expect(onSearch).toHaveBeenCalledWith("api"));
   });
 });
 

@@ -188,7 +188,7 @@ describe("EventsPage", () => {
 
     recent = async () => Response.json({}, { status: 500 });
     mount();
-    expect(await screen.findByText("Couldn't load events.", {}, { timeout: 4000 })).toBeTruthy();
+    expect(await screen.findByText("Couldn't load events.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
@@ -523,7 +523,7 @@ describe("EventsPage rows", () => {
     expect(screen.getByText("web")).toBeTruthy();
   });
 
-  it("notes the 1000-event buffer when it is full", { timeout: 30_000 }, async () => {
+  it("notes the 1000-event buffer when it is full", async () => {
     recent = async () =>
       Response.json({
         items: Array.from({ length: 1000 }, (_, i) =>

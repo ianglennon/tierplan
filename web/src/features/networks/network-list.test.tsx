@@ -295,7 +295,7 @@ describe("NetworkList search", () => {
     );
     fireEvent.change(box, { target: { value: "blog" } });
     expect(onSearch).not.toHaveBeenCalled();
-    await waitFor(() => expect(onSearch).toHaveBeenCalledWith("blog"), { timeout: 2000 });
+    await waitFor(() => expect(onSearch).toHaveBeenCalledWith("blog"));
   });
 
   it("says nothing matches with Clear search, and plain 'No networks' when there is nothing and no search", async () => {

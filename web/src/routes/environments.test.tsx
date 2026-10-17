@@ -202,15 +202,11 @@ describe("/environments", () => {
     expect(screen.queryByRole("button", { name: "Add environment" })).toBeNull();
   });
 
-  it("shows Couldn't load environments with Retry, and Retry reads the list again", {
-    timeout: 8000,
-  }, async () => {
+  it("shows Couldn't load environments with Retry, and Retry reads the list again", async () => {
     list = () => new Response("boom", { status: 500 });
     renderAt("/environments");
     // The client retries a failed read once before it gives up.
-    expect(
-      await screen.findByText("Couldn't load environments.", {}, { timeout: 4000 }),
-    ).toBeTruthy();
+    expect(await screen.findByText("Couldn't load environments.")).toBeTruthy();
     expect(screen.getByText("Check the connection and try again.")).toBeTruthy();
     list = () => Response.json({ items: [ONLINE] });
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));

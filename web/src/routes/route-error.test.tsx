@@ -18,9 +18,6 @@ const ME = makeMe({
 });
 
 const UNREACHABLE = "Can't reach Bayplan. Check your connection and try again.";
-// The query client retries a failed guard fetch once after a second, so the
-// page takes a little over a second to appear.
-const SLOW = { timeout: 5000 };
 const SOURCE_LINK = { name: "Source code (opens in a new tab)" };
 
 let instanceStatus = 500;
@@ -76,7 +73,7 @@ function renderAt(path: string) {
 describe("route error page (WR-18)", () => {
   it("shows the translated page with Retry and one footer when the signed-in guard fails", async () => {
     renderAt("/");
-    expect(await screen.findByText(UNREACHABLE, undefined, SLOW)).toBeTruthy();
+    expect(await screen.findByText(UNREACHABLE)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     await waitFor(() => expect(screen.queryAllByRole("link", SOURCE_LINK)).toHaveLength(1));
     // Never TanStack's default error screen.
@@ -86,16 +83,16 @@ describe("route error page (WR-18)", () => {
 
   it("Retry re-runs the route and renders the page once the API answers", async () => {
     renderAt("/");
-    const retry = await screen.findByRole("button", { name: "Retry" }, SLOW);
+    const retry = await screen.findByRole("button", { name: "Retry" });
     instanceStatus = 200;
     fireEvent.click(retry);
-    expect(await screen.findByText("No environments yet", undefined, SLOW)).toBeTruthy();
+    expect(await screen.findByText("No environments yet")).toBeTruthy();
     expect(screen.queryByText(UNREACHABLE)).toBeNull();
   });
 
   it("shows the same page, with one footer, when the sign-in guard fails", async () => {
     renderAt("/login");
-    expect(await screen.findByText(UNREACHABLE, undefined, SLOW)).toBeTruthy();
+    expect(await screen.findByText(UNREACHABLE)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     await waitFor(() => expect(screen.queryAllByRole("link", SOURCE_LINK)).toHaveLength(1));
   });
