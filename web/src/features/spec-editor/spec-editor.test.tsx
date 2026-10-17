@@ -160,13 +160,16 @@ describe("SpecEditor", () => {
   });
 
   it("announces one distinct error once: the same error typed on is the same alert", async () => {
-    // The error shows after a timer of the component's own. The clock is a fake one that also
-    // keeps moving with real time (shouldAdvanceTime), so findBy and waitFor keep polling.
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // The error shows after a timer of the component's own. The clock is fully fake, so the
+    // second edit lands before the first error's debounce ends however slow the machine is; under
+    // it the test waits with vi.waitFor, because Testing Library's waitFor and findBy poll on the
+    // faked timers and so never poll.
     renderEditor();
     await screen.findByRole("textbox", { name: "Service spec, YAML" });
+    vi.useFakeTimers();
     typeSpec("Name: [oops\n");
-    const first = await screen.findByRole("alert");
+    await vi.advanceTimersByTimeAsync(specEditorTiming.errorMs);
+    const first = await vi.waitFor(() => screen.getByRole("alert"));
     typeSpec("Name: [oops!\n");
     // Past the debounce of the second edit, whose error would have replaced the first.
     await vi.advanceTimersByTimeAsync(specEditorTiming.errorMs * 2);

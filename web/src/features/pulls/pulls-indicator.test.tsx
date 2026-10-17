@@ -15,7 +15,6 @@ import { PullsIndicator } from "@/features/pulls/pulls-indicator";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
-import { settled } from "@/test-settle";
 
 const REF = "docker.io/library/nginx:1.27";
 
@@ -180,18 +179,19 @@ describe("PullsIndicator", () => {
   });
 
   it("keeps the last list when a poll fails and shows no error", async () => {
-    // The list is polled while a pull runs. The clock is a fake one that also keeps moving with
-    // real time (shouldAdvanceTime), so findBy and waitFor keep polling.
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // The list is polled while a pull runs. The clock is fully fake, so the poll comes when the
+    // test says so and not when real time happens to pass; under it the test waits with vi.waitFor,
+    // because Testing Library's waitFor and findBy poll on the faked timers and so never poll.
+    vi.useFakeTimers();
     pulls = [summary()];
     mount();
-    await screen.findByRole("button", { name: "Pulls, 1 in progress" });
+    await vi.waitFor(() => screen.getByRole("button", { name: "Pulls, 1 in progress" }));
     const listed = () => calls.filter((c) => c === "GET /api/pulls").length;
     const before = listed();
     listStatus = 500;
     await vi.advanceTimersByTimeAsync(PULLS_POLL_RUNNING_MS);
-    await waitFor(() => expect(listed()).toBeGreaterThan(before));
-    await settled(client);
+    await vi.waitFor(() => expect(listed()).toBeGreaterThan(before));
+    await vi.waitFor(() => expect(client.isFetching() + client.isMutating()).toBe(0));
     expect(screen.getByRole("button", { name: "Pulls, 1 in progress" })).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
   });
