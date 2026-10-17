@@ -17,6 +17,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // The merged service log stream (plan 06-29, OBS-02, D-35, D-37, RESEARCH E1 to E6). Docker is
@@ -81,6 +82,20 @@ type svcLogsFix struct {
 	*envFix
 	env envBody
 	cfg dockertest.FakeConfig
+	// burstEnded gets one value each time a stream takes its opening burst as complete.
+	burstEnded chan struct{}
+}
+
+// awaitBurstEnd waits until a stream has taken the burst the engine opened with as complete, so
+// what the engine sends after that is live. It waits on the stream's own signal, not on the
+// quiet period having passed.
+func (f *svcLogsFix) awaitBurstEnd(t *testing.T) {
+	t.Helper()
+	select {
+	case <-f.burstEnded:
+	case <-testsupport.Context(t).Done():
+		t.Fatal("the service log stream never took its opening burst as complete")
+	}
 }
 
 // newSvcLogsFix builds a local swarm manager of four nodes with the web service, its tasks and
@@ -93,6 +108,13 @@ func newSvcLogsFix(t *testing.T, tasks []swarm.Task, lines []dockertest.FakeServ
 	cfg.Tasks = tasks
 	cfg.ServiceLogs = map[string][]dockertest.FakeServiceLogLine{"svc-web": lines}
 	f := newEnvFix(t, cfg)
+	burstEnded := make(chan struct{}, 16)
+	f.serviceLogsBurstEnded = func() {
+		select {
+		case burstEnded <- struct{}{}:
+		default:
+		}
+	}
 	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
 	f.svc.WithClusters(f.clusters)
 	if tune != nil {
@@ -100,8 +122,8 @@ func newSvcLogsFix(t *testing.T, tasks []swarm.Task, lines []dockertest.FakeServ
 	}
 	f.h = f.build(t)
 	e := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
-	return &svcLogsFix{envFix: f, env: e, cfg: cfg}
+	awaitOnline(t, f.mon, e.ID)
+	return &svcLogsFix{envFix: f, env: e, cfg: cfg, burstEnded: burstEnded}
 }
 
 func (f *svcLogsFix) path(service, query string) string {
@@ -271,7 +293,7 @@ func TestServiceLogStreamHoldsLiveLinesInAWindowAndSendsThemInTimeOrder(t *testi
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
 	nextEvent(t, c, "ready", 5*time.Second)
 	// Let the (empty) burst end, so what follows is live.
-	time.Sleep(600 * time.Millisecond)
+	f.awaitBurstEnd(t)
 	// The later line is written first; both are within the window.
 	f.fake.PushServiceLog("web", svcLine("tk-2", "node-3", 200, "later"))
 	f.fake.PushServiceLog("web", svcLine("tk-1", "node-1", 100, "earlier"))
@@ -288,7 +310,7 @@ func TestServiceLogStreamKeepsATaskFirstSeenAfterTheStreamOpenedAndAnnouncesIt(t
 	f := newSvcLogsFix(t, svcTasks(), nil, nil)
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
 	nextEvent(t, c, "ready", 5*time.Second)
-	time.Sleep(600 * time.Millisecond)
+	f.awaitBurstEnd(t)
 
 	cfg := f.cfg
 	cfg.Tasks = append(slices.Clone(svcTasks()), tkRunning("tk-new", "svc-web", "node-3", 4, "c4", time.Second))
@@ -431,7 +453,7 @@ func TestServiceLogStreamOfAStandaloneHostIs409NotASwarm(t *testing.T) {
 	f.svc.WithClusters(f.clusters)
 	f.h = f.build(t)
 	e := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	rec := f.req(t, http.MethodGet, "/api/env/"+e.ID+"/services/web/logs/stream?sid="+sidA, "")
 	if rec.code != http.StatusConflict || rec.ptyp != "not_a_swarm" {
 		t.Fatalf("status = %d, type %q: %s", rec.code, rec.ptyp, rec.body)
@@ -522,7 +544,7 @@ func TestServiceLogStreamEndsWithClosedAccessLostWithinAHeartbeatOfLosingTheGran
 		t.Errorf("closed = %s", closed.data)
 	}
 	c.waitEnded(t, time.Second, "it told the viewer the access was lost")
-	waitFor(t, "the engine follow to be released", func() bool { return f.fake.ServiceLogFollows() == 0 })
+	awaitFake(t, f.fake, "the engine follow to be released", func() bool { return f.fake.ServiceLogFollows() == 0 })
 }
 
 func TestServiceLogStreamEndsAtItsMaximumLifetimeAndFreesTheEngineFollow(t *testing.T) {
@@ -530,16 +552,16 @@ func TestServiceLogStreamEndsAtItsMaximumLifetimeAndFreesTheEngineFollow(t *test
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
 	nextEvent(t, c, "ready", 5*time.Second)
 	c.waitEnded(t, 5*time.Second, "its lifetime of 80 ms")
-	waitFor(t, "the engine follow to be released", func() bool { return f.fake.ServiceLogFollows() == 0 })
+	awaitFake(t, f.fake, "the engine follow to be released", func() bool { return f.fake.ServiceLogFollows() == 0 })
 }
 
 func TestServiceLogStreamReleasesTheEngineFollowWhenTheBrowserLeaves(t *testing.T) {
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
 	nextEvent(t, c, "ready", 5*time.Second)
-	waitFor(t, "the engine follow to open", func() bool { return f.fake.ServiceLogFollows() == 1 })
+	awaitFake(t, f.fake, "the engine follow to open", func() bool { return f.fake.ServiceLogFollows() == 1 })
 	c.close()
-	waitFor(t, "the engine follow to be released", func() bool { return f.fake.ServiceLogFollows() == 0 })
+	awaitFake(t, f.fake, "the engine follow to be released", func() bool { return f.fake.ServiceLogFollows() == 0 })
 }
 
 func TestServiceLogStreamNeedsServicesRead(t *testing.T) {

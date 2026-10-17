@@ -143,6 +143,9 @@ type authFixture struct {
 	serviceLogsRefresh     time.Duration
 	serviceLogsMaxStreams  int
 	serviceLogsMaxLifetime time.Duration
+	// serviceLogsBurstEnded is called when a service log stream has taken its opening burst as
+	// complete (newSvcLogsFix sets it, and tests await it through svcLogsFix.awaitBurstEnd).
+	serviceLogsBurstEnded func()
 	// serviceLogsMaxPageBytes, serviceLogsMaxDownloadBytes and serviceLogsMaxDownloads tune the
 	// page and the download of a service's log (plan 06-31).
 	serviceLogsMaxPageBytes     int
@@ -349,7 +352,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 				Clusters: f.clusters, Audit: f.aud, Checker: checker, Heartbeat: f.serviceLogsHeartbeat,
 				TaskRefresh: f.serviceLogsRefresh, MaxStreamsPerUser: f.serviceLogsMaxStreams, MaxLifetime: f.serviceLogsMaxLifetime,
 				MaxPageBytes: f.serviceLogsMaxPageBytes, MaxDownloadBytes: f.serviceLogsMaxDownloadBytes, MaxServerDownloads: f.serviceLogsMaxDownloads,
-				Now: f.clk.now, Log: log,
+				Now: f.clk.now, BurstEnded: f.serviceLogsBurstEnded, Log: log,
 			})
 		}
 		if f.shellsReg == nil {

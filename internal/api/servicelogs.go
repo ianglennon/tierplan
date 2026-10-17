@@ -83,6 +83,11 @@ type ServiceLogsDeps struct {
 	// Now is the clock of the audit memory and of a download's file name. Nil means the wall
 	// clock. The reorder window and the task cache measure real time and do not use it.
 	Now func() time.Time
+	// BurstEnded, when set, is called each time a stream takes the burst the engine opened with
+	// as complete, from the stream's own goroutine, once the live window has taken over. It
+	// exists so a test can tell that what follows is live without waiting out the quiet period;
+	// production leaves it nil.
+	BurstEnded func()
 	// Log receives server-side failures. Nil means slog.Default(). It is never given a line of
 	// a service's log.
 	Log *slog.Logger
@@ -604,6 +609,9 @@ func serveServiceLogStream(w http.ResponseWriter, req *http.Request, d ServiceLo
 	}
 	endBurst := func() bool {
 		bursting = false
+		if d.BurstEnded != nil {
+			defer d.BurstEnded()
+		}
 		sorted := mergeBurst(burst, meta.byIDMap(), keepN)
 		burst = nil
 		for _, r := range sorted {
