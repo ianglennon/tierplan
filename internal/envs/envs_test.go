@@ -69,7 +69,7 @@ func (s *sleeper) sleep(ctx context.Context, d time.Duration) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-time.After(min(d, 2*time.Millisecond)):
+	case <-time.After(min(d, 2*time.Millisecond)): // wall-clock: paces a fake sleeper so the monitor loop yields; no assertion depends on it
 		return nil
 	}
 }
@@ -762,12 +762,14 @@ func TestASlowSnapshotNeitherFlapsTheEngineNorDelaysStop(t *testing.T) {
 	// WR-06 (D-26): a snapshot holding the client lock made the next probe wait
 	// past its timeout, so a healthy engine with a slow container list went
 	// offline, and Stop waited for the snapshot to finish.
-	// The delay outlasts the sampling window, so Stop meets a snapshot that is
-	// still running.
-	fake := dockertest.NewFake(t, dockertest.FakeConfig{ListDelay: 3 * time.Second})
+	// The list is held until the end of the test, so Stop meets a snapshot that is
+	// still running however slow the machine is (WR-12).
+	hold := make(chan struct{})
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{ListHold: hold})
 	m := NewMonitor(slog.New(slog.DiscardHandler), nil, func(context.Context, time.Duration) error { return nil })
-	// Well under the 3s list delay, and well over a slowed ping (BAYPLAN_TEST_PROBE_DELAY
-	// sweeps), so only a probe that waits for the snapshot can time out.
+	// Well under the observation window below, and well over a slowed ping
+	// (BAYPLAN_TEST_PROBE_DELAY sweeps), so only a probe that waits for the snapshot can
+	// time out.
 	m.probeTimeout = time.Second
 	if err := m.Start(context.Background(), "e", fake); err != nil {
 		t.Fatal(err)
@@ -779,11 +781,23 @@ func TestASlowSnapshotNeitherFlapsTheEngineNorDelaysStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sctx, scancel := context.WithCancel(context.Background())
+	ctx := testsupport.Context(t)
+	sctx, scancel := context.WithCancel(ctx)
 	defer scancel()
-	go func() { _, _ = cli.Snapshot(sctx, false) }()
+	snapDone := make(chan struct{})
+	go func() { defer close(snapDone); _, _ = cli.Snapshot(sctx, false) }()
+	if err := fake.Await(ctx, func() bool {
+		for _, p := range fake.Requests() {
+			if strings.HasSuffix(p, "/containers/json") {
+				return true
+			}
+		}
+		return false
+	}); err != nil {
+		t.Fatalf("the snapshot's list request never reached the daemon: %v", err)
+	}
 
-	deadline := time.Now().Add(1500 * time.Millisecond)
+	deadline := time.Now().Add(1500 * time.Millisecond) // wall-clock: the observation window is the behaviour under test (the state must stay online past the 1 s probe timeout)
 	for time.Now().Before(deadline) {
 		if st := m.Status("e").State; st != StateOnline {
 			t.Fatalf("state = %s while a slow snapshot ran, want online", st)
@@ -791,11 +805,14 @@ func TestASlowSnapshotNeitherFlapsTheEngineNorDelaysStop(t *testing.T) {
 		time.Sleep(50 * time.Millisecond) //nolint:forbidigo // observes that the state stays online for the whole slow snapshot; the window is the behaviour under test
 	}
 
-	start := time.Now()
-	m.Stop("e")
-	if d := time.Since(start); d > 500*time.Millisecond {
-		t.Errorf("Stop took %s with a snapshot in flight, want under 500ms", d)
-	}
+	// Stop must return while the list is still held: a Stop that waited for the snapshot
+	// would block until the hold closes and fail at the test deadline.
+	stopped := make(chan struct{})
+	go func() { defer close(stopped); m.Stop("e") }()
+	testsupport.Await(t, "Stop to return while the snapshot's list is still held", stopped)
+	close(hold)
+	scancel()
+	testsupport.Await(t, "the snapshot to end", snapDone)
 }
 
 func TestCheckNameAppliesTheRenameRuleWithoutWriting(t *testing.T) {

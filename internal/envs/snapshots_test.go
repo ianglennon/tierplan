@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // The per-environment snapshot cache (plan 18, Pitfall 22, T-01-79). Docker is
@@ -174,23 +175,47 @@ func TestConcurrentGetsForOneEnvironmentTriggerASingleFetch(t *testing.T) {
 }
 
 func TestACallerThatGivesUpDoesNotCancelTheSharedFetch(t *testing.T) {
+	// The list is held, so the fetch is in flight for exactly as long as the test says: the
+	// caller gives up while it is outstanding, and the patient caller gets its result once the
+	// test closes the hold. No delay, deadline or elapsed time decides the outcome (WR-12).
+	hold := make(chan struct{})
 	cfg := oneContainer()
-	cfg.ListDelay = 150 * time.Millisecond
+	cfg.ListHold = hold
 	r := newSnapRig(t, cfg, StateOnline)
 	s := NewSnapshots(r.mon, 5*time.Second, newStepClock().now)
+	ctx := testsupport.Context(t)
 
-	short, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	if _, _, err := s.Get(short, "env1"); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("a caller whose context ended got %v, want its deadline error", err)
+	impatient, giveUp := context.WithCancel(ctx)
+	defer giveUp()
+	gaveUp := make(chan error, 1)
+	go func() {
+		_, _, err := s.Get(impatient, "env1")
+		gaveUp <- err
+	}()
+	if err := r.fake.Await(ctx, func() bool { return r.listRequests() == 1 }); err != nil {
+		t.Fatalf("the snapshot's list request never reached the daemon: %v", err)
 	}
+	giveUp()
+	if err := testsupport.Await(t, "the caller that gave up to return", gaveUp); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a caller whose context ended got %v, want its own context error", err)
+	}
+
 	// The fetch carries on; a patient caller gets its result without a second one.
-	snap, _, err := s.Get(context.Background(), "env1")
-	if err != nil || snap.Counts.Containers != 1 {
-		t.Fatalf("patient Get = %+v, %v", snap.Counts, err)
+	type got struct {
+		containers int
+		err        error
 	}
-	if got := r.listRequests(); got != 1 {
-		t.Errorf("%d fetches, want 1", got)
+	patient := make(chan got, 1)
+	go func() {
+		snap, _, err := s.Get(ctx, "env1")
+		patient <- got{snap.Counts.Containers, err}
+	}()
+	close(hold)
+	if g := testsupport.Await(t, "the patient caller's snapshot", patient); g.err != nil || g.containers != 1 {
+		t.Fatalf("patient Get = %d containers, %v, want 1 and no error", g.containers, g.err)
+	}
+	if n := r.listRequests(); n != 1 {
+		t.Errorf("%d fetches, want 1", n)
 	}
 }
 
@@ -303,7 +328,7 @@ func TestAwaitProbeGivesUpWhenTheCallerDoes(t *testing.T) {
 	go func() { mon.AwaitProbe(ctx, "not-monitored"); mon.AwaitProbe(ctx, "env1"); close(done) }()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testsupport.Deadline):
 		t.Fatal("AwaitProbe did not return for a cancelled context or an unmonitored environment")
 	}
 }
