@@ -69,7 +69,7 @@ func newEventsFix(t *testing.T, cfg dockertest.FakeConfig, heartbeat time.Durati
 	f.agg = envs.NewAggregator(svc, f.snaps, f.hub, f.clk.now)
 	f.eventsHeartbeat, f.eventsMaxStreams = heartbeat, maxStreams
 	f.localHost.DockerHost = "unix://" + fake.SocketPath()
-	f.localHost.ProbeTimeout = 500 * time.Millisecond
+	f.localHost.ProbeTimeout = testsupport.Deadline // a probe cut short under load would read as an unreachable engine
 	f.localHost.Envs = svc
 	f.h = f.build(t)
 	cookie, csrf := f.signIn(t, "admin", false)
@@ -311,26 +311,6 @@ func (c *sseConn) close() {
 	case <-c.done:
 	case <-testsupport.Context(c.t).Done():
 		c.t.Error("the stream handler did not return after its request ended")
-	}
-}
-
-// next returns the next data frame, skipping heartbeat comments. Prefer nextData: next is kept
-// only for the stream tests of other files, which plan 06.1-35 converts before it deletes this.
-func (c *sseConn) next(timeout time.Duration) (frame, bool) {
-	deadline := time.After(timeout)
-	for {
-		select {
-		case fr, ok := <-c.frames:
-			if !ok {
-				return frame{}, false
-			}
-			if fr.comment != "" {
-				continue
-			}
-			return fr, true
-		case <-deadline:
-			return frame{}, false
-		}
 	}
 }
 
@@ -825,17 +805,6 @@ func TestEventOpenAPIDocumentsTheRecentEndpointButNotTheStream(t *testing.T) {
 }
 
 // --- The stream ends when what it was authorised by goes away (WR-02) -------
-
-// waitEnded fails unless the stream's handler returns within d. Prefer awaitEnd and
-// endsWithinBeats; plan 06.1-35 converts the remaining callers and deletes this.
-func (c *sseConn) waitEnded(t *testing.T, d time.Duration, why string) {
-	t.Helper()
-	select {
-	case <-c.done:
-	case <-time.After(d):
-		t.Fatalf("the stream was still open %v after %s", d, why)
-	}
-}
 
 func TestEventStreamEndsWithinAHeartbeatOfSignOut(t *testing.T) {
 	t.Parallel()

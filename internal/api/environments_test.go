@@ -70,7 +70,7 @@ func newEnvFix(t *testing.T, cfg dockertest.FakeConfig) *envFix {
 	f.snaps = envs.NewSnapshots(mon, 5*time.Second, f.clk.now)
 	f.agg = envs.NewAggregator(svc, f.snaps, nil, f.clk.now)
 	f.localHost.DockerHost = "unix://" + fake.SocketPath()
-	f.localHost.ProbeTimeout = 500 * time.Millisecond
+	f.localHost.ProbeTimeout = testsupport.Deadline // a probe cut short under load would read as an unreachable engine
 	f.localHost.Envs = svc
 	f.h = f.build(t)
 	cookie, csrf := f.signIn(t, "admin", false)

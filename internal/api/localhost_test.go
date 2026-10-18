@@ -15,6 +15,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // GET /api/local-host (plan 15, D-19). The fake daemon is a real unix socket,
@@ -51,11 +52,20 @@ func (f *authFixture) localHostCall(t *testing.T, cookie string) (*localHostResp
 	return &out, rec.Code
 }
 
+// localHostFixture probes with testsupport.Deadline, so a slow machine never cuts a good probe
+// short and reads it as an unreachable engine.
 func localHostFixture(t *testing.T, dockerHost string) (f *authFixture, cookie string) {
+	t.Helper()
+	return localHostFixtureWithin(t, dockerHost, testsupport.Deadline)
+}
+
+// localHostFixtureWithin is localHostFixture with the probe timeout, for the test whose subject
+// is that timeout.
+func localHostFixtureWithin(t *testing.T, dockerHost string, probeTimeout time.Duration) (f *authFixture, cookie string) {
 	t.Helper()
 	f = newAuthFixture(t, config.Config{})
 	f.localHost.DockerHost = dockerHost
-	f.localHost.ProbeTimeout = 500 * time.Millisecond
+	f.localHost.ProbeTimeout = probeTimeout
 	f.h = f.build(t)
 	cookie, _ = f.signIn(t, "admin", false)
 	return f, cookie
@@ -173,10 +183,11 @@ func TestLocalHostGivesUpOnAnEngineThatAcceptsAndNeverAnswers(t *testing.T) {
 		}
 	}()
 
-	f, cookie := localHostFixture(t, "unix://"+path)
-	// The engine never answers until the test ends, so only the probe timeout (500 ms here) can
-	// return this request: that it returns is the proof, and a regression hangs until go test's
-	// own -timeout prints the goroutines. No elapsed-time bound is kept.
+	f, cookie := localHostFixtureWithin(t, "unix://"+path, 500*time.Millisecond)
+	// The engine never answers until the test ends, so only the probe timeout can return this
+	// request (500 ms here: it is the behaviour under test, not a failure deadline). That it
+	// returns is the proof, and a regression hangs until go test's own -timeout prints the
+	// goroutines. No elapsed-time bound is kept.
 	got, code := f.localHostCall(t, cookie)
 	if code != http.StatusOK || got.Probe == nil || got.Probe.Reachable || got.Probe.Reason != "unreachable" {
 		t.Fatalf("got %d probe=%+v, want 200 and an unreachable probe", code, got.Probe)
