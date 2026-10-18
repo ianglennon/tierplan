@@ -16,15 +16,14 @@ import (
 	"github.com/ianglennon/bayplan/internal/registry"
 )
 
-// TestSwarmImagePullFanOut pulls an image on every node of a real swarm of three
+// sharedImagePullFanOut pulls an image on every node of a real swarm of three
 // managers and a worker with an agent on each (plan 05-03, RES-09, IMG-02, D-25, P4
 // D-13): the default targets are all four nodes, each pulls from a registry inside the
 // test network and ends Done with the same digest, and every node has the image. Then
 // the worker's agent is revoked, which leaves the node in the swarm and out of
 // Bayplan's reach: a second pull fails that node alone with node_unreachable while the
 // other three are Done, and every audit row of the job carries the job ID as its bulk.
-func TestSwarmImagePullFanOut(t *testing.T) {
-	f := startSwarmFix(t, 3, 1)
+func sharedImagePullFanOut(t *testing.T, f *swarmFix) {
 	registry := dockertest.StartSwarmRegistry(t, f.sw, dockertest.RegistryOptions{})
 	first, second := registry+"/public/busybox:1", registry+"/public/busybox:2"
 	pushed := dockertest.PushImage(t, f.sw.Managers[0], "busybox:1.36.1", first, nil)
@@ -141,7 +140,7 @@ func TestSwarmImagePullFanOut(t *testing.T) {
 	}
 }
 
-// TestSwarmPrivatePullEveryNode pulls an image from a registry that requires a sign-in on
+// sharedPrivatePullEveryNode pulls an image from a registry that requires a sign-in on
 // every node of a real swarm of three managers and a worker, with one stored credential and
 // no docker login anywhere (plan 05-09, IMG-02, D-25, D-27): the job ends Done on all four
 // nodes and none holds a Docker client configuration. Then the header the resolver makes
@@ -149,9 +148,8 @@ func TestSwarmImagePullFanOut(t *testing.T) {
 // its task reaches running there, which only works if the engine carried the credential from
 // the create to a node that never signed in. The raw service inspect holds neither the
 // password nor the encoded header.
-func TestSwarmPrivatePullEveryNode(t *testing.T) {
+func sharedPrivatePullEveryNode(t *testing.T, f *swarmFix) {
 	const user, password = "bot", "registry-pass-0123456789"
-	f := startSwarmFix(t, 3, 1)
 	addr := dockertest.StartSwarmRegistry(t, f.sw, dockertest.RegistryOptions{Htpasswd: dockertest.HtpasswdFor(user, password)})
 	ref := addr + "/private/busybox:1"
 	mgr := f.sw.Managers[0]

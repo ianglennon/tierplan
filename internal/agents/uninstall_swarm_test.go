@@ -12,14 +12,13 @@ import (
 	"time"
 )
 
-// TestSwarmUninstallOnRemove removes an environment with uninstallAgents on a real
+// sharedUninstallOnRemove removes an environment with uninstallAgents on a real
 // swarm of three managers and a worker (D-30): every node's agent starts a helper that
 // removes its own bayplan-agent volume once the agent's container is gone, and one
 // manager agent removes its own bayplan-agent service and the token secret that service
 // names. A secret and volumes that are somebody else's are still there afterwards. The
 // removal is audited per agent. Everything happens inside the dind nodes.
-func TestSwarmUninstallOnRemove(t *testing.T) {
-	f := startSwarmFix(t, 3, 1)
+func sharedUninstallOnRemove(t *testing.T, f *swarmFix) {
 	f.install(t)
 	f.waitSwarmOnline(t, 4)
 	mgr := f.sw.Managers[0]

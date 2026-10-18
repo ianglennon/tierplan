@@ -48,14 +48,13 @@ func secretInContainer(t *testing.T, f *swarmFix, service, file string) string {
 	return strings.TrimSpace(sh(t, n, "docker exec $(docker ps -q --filter name="+service+".) cat /run/secrets/"+file))
 }
 
-// TestSwarmSecretRotate rotates a secret that a standalone service and a stack's service use, on a real swarm (plan
+// sharedSecretRotate rotates a secret that a standalone service and a stack's service use, on a real swarm (plan
 // 06-37, RES-08, D-28, RESEARCH E16, E18): the standalone service ends on the new version of the secret with the same
 // file and the new value inside its container, the stack's service is skipped and keeps the old one, so the old secret
 // stays (object_in_use). Then the stack's service is moved onto the new version by hand and a second rotate, with
 // another standalone user of the old secret, removes the old. The limits of the swarm hold on the real engine: a secret
 // of 511,999 bytes and a config of 1,023,999 bytes are made through the routes and one byte more is refused.
-func TestSwarmSecretRotate(t *testing.T) {
-	f := startSwarmFix(t, 3, 1)
+func sharedSecretRotate(t *testing.T, f *swarmFix) {
 	mgr := f.sw.Managers[0]
 	dockertest.LoadImage(t, dockertest.ServiceTestImage, f.sw.Nodes()...)
 	f.install(t)

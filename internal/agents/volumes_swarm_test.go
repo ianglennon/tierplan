@@ -30,13 +30,12 @@ func volumeNames(t *testing.T, n *dockertest.Node, name string) []string {
 	return out
 }
 
-// TestSwarmVolumes creates and deletes volumes through the API on a real swarm of three
+// sharedVolumes creates and deletes volumes through the API on a real swarm of three
 // managers and a worker with an agent on every node (plan 04-17, RES-07, D-45, D-46, P2
 // D-42): the same name made on two nodes is two rows with different nodes, deleting one
 // node's copy leaves the other, and a service scaled to zero that mounts a volume blocks
 // its delete until the service is gone.
-func TestSwarmVolumes(t *testing.T) {
-	f := startSwarmFix(t, 3, 1)
+func sharedVolumes(t *testing.T, f *swarmFix) {
 	dockertest.LoadImage(t, "busybox", f.sw.Nodes()...)
 	f.install(t)
 	f.waitSwarmOnline(t, 4)

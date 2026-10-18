@@ -346,10 +346,10 @@ jobs:
   swarm:
     # Each leg runs four dind nodes (6-8 GB), so the two legs go to different VMs.
     runs-on: [self-hosted, linux, x64, "${{ matrix.vm }}"]
-    # 60 and 70 since CI run 39125458463: the suite (every test starts its own swarm, one
-    # after another) took 2321 s on Engine 24 on bp-a and reached the old 40-minute go test
-    # limit with no test hung. Reusing one swarm across read-only tests is the follow-up
-    # that shortens the leg itself.
+    # 60 and 70 since CI run 39125458463: the suite (then every test with a swarm of its
+    # own) took 2321 s on Engine 24 on bp-a and reached the old 40-minute go test limit with
+    # no test hung. Twenty tests now share one swarm (TestSwarmShared, docs/testing.md), which
+    # took the suite from 2201 s to 1670 s on the dev host; lower these once CI shows the leg.
     timeout-minutes: 70
     strategy:
       fail-fast: false

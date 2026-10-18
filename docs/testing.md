@@ -85,6 +85,14 @@ What the gate cannot see is a short duration held somewhere else and used as a d
 
 When a flake turns out to be a real race or ordering bug in the product, fix the product code and add a regression test that fails every time without the fix. A test-only workaround that hides a product race is not acceptable.
 
+## The swarm suite
+
+Each swarm test needs a real swarm of dind nodes, and starting one costs about half of a test's time. The tests that leave the swarm itself as they found it (they make and remove their own services, secrets, configs, networks and volumes, and install and remove agents) take turns on one swarm of three managers and a worker: they are cases in `sharedSwarmCases`, run as subtests of `TestSwarmShared` (`internal/agents/swarm_shared_test.go`). Each case still gets its own Bayplan and agent environment. After each case `dockertest.Swarm.Reset` removes everything a test can leave (services, secrets, configs, networks, volumes, containers, images, node labels, the test registry's files and sign-in) and checks the swarm against the baseline recorded when it started; a swarm that fails the check is removed and a new one started, and the log says so.
+
+- A test that stops, removes, demotes or promotes a node, makes a node leave, or needs another shape stays a `TestSwarm…` function with a swarm of its own. Two swarms never exist at once.
+- The cases run in a shuffled order that follows `-shuffle`; the log names the seed, and `BAYPLAN_SWARM_SHARED_SEED=<seed>` replays it. Run one case with `-run 'TestSwarmShared/Networks$'`.
+- A case that leaves something `Reset` does not know about makes the next case start a fresh swarm: that is safe but slow, so teach `Reset` about it.
+
 ## Quarantine
 
 Quarantine is a last resort, not a parking lot. Use it only when a failing test cannot be fixed in the change that found it.

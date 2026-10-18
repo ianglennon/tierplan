@@ -260,15 +260,14 @@ func inspectService(t *testing.T, n *dockertest.Node, name string) serviceSpec {
 	return spec
 }
 
-// TestSwarmEnrol runs the generated swarm command on one manager of a swarm of
+// sharedEnrol runs the generated swarm command on one manager of a swarm of
 // three managers and a worker: the global service starts one agent per node, all
 // four enrol, and the environment is one swarm with its cluster ID bound, four
 // of four nodes and agents, and container rows that name the node they run on
 // (D-57, D-58, ENV-02, ENV-03). The same run is the first real-swarm use of the
 // install flags (--constraint, --update-delay, --container-label, the secret
 // mount) and of the hardening options on a service.
-func TestSwarmEnrol(t *testing.T) {
-	f := startSwarmFix(t, 3, 1)
+func sharedEnrol(t *testing.T, f *swarmFix) {
 	mgr := f.sw.Managers[0]
 	f.install(t)
 	got := f.waitSwarmOnline(t, 4)
@@ -417,12 +416,11 @@ func stripCap(in []string) []string {
 	return out
 }
 
-// TestSwarmRoutesNodeLocalCalls starts a container on the worker only. Reading
+// sharedRoutesNodeLocalCalls starts a container on the worker only. Reading
 // the environment goes through a manager's agent for cluster questions and
 // through every node's own agent for what runs on it: the container shows once,
 // under the worker's hostname, whichever way it is asked for (D-11, D-46).
-func TestSwarmRoutesNodeLocalCalls(t *testing.T) {
-	f := startSwarmFix(t, 3, 1)
+func sharedRoutesNodeLocalCalls(t *testing.T, f *swarmFix) {
 	worker, manager := f.sw.Workers[0], f.sw.Managers[0]
 	dockertest.LoadImage(t, "busybox", worker)
 	f.install(t)

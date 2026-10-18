@@ -402,13 +402,12 @@ func TestSwarmNodeRemove(t *testing.T) {
 	})
 }
 
-// TestSwarmConstraintsMatchPlacement gives nodes labels with mixed case and a CIDR address, makes global services
+// sharedConstraintsMatchPlacement gives nodes labels with mixed case and a CIDR address, makes global services
 // with placement constraints and compares the nodes the swarm really puts tasks on with the evaluator Bayplan shows
 // placement by (plan 06-37, RES-12, RESEARCH A10): a label's value matches without regard to case, its name does not,
 // a node without the label meets !=, node.ip takes a CIDR and its negation, and constraints are all required. A
 // constraint that matches nothing leaves a task with no suitable node, as the evaluator says.
-func TestSwarmConstraintsMatchPlacement(t *testing.T) {
-	f := startSwarmFix(t, 3, 1)
+func sharedConstraintsMatchPlacement(t *testing.T, f *swarmFix) {
 	mgr := f.sw.Managers[0]
 	dockertest.LoadImage(t, dockertest.ServiceTestImage, f.sw.Nodes()...)
 	f.install(t)

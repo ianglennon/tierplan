@@ -30,13 +30,12 @@ func networkIDs(t *testing.T, n *dockertest.Node, name string) []string {
 	return out
 }
 
-// TestSwarmNetworks creates and deletes networks through the API on a real swarm of three
+// sharedNetworks creates and deletes networks through the API on a real swarm of three
 // managers and a worker with an agent on every node (plan 04-13, RES-06, D-39, D-41, P2
 // D-42): an overlay made through the API exists on the managers; a bridge made with the
 // worker's node ID exists only on the worker; a service scaled to zero that mentions the
 // overlay blocks its delete, and once the service is gone the delete goes through.
-func TestSwarmNetworks(t *testing.T) {
-	f := startSwarmFix(t, 3, 1)
+func sharedNetworks(t *testing.T, f *swarmFix) {
 	dockertest.LoadImage(t, "busybox", f.sw.Nodes()...)
 	f.install(t)
 	f.waitSwarmOnline(t, 4)
@@ -153,7 +152,7 @@ func TestSwarmNetworks(t *testing.T) {
 	}
 }
 
-// TestSwarmNetworkConnect connects a standalone container on a worker to an attachable
+// sharedNetworkConnect connects a standalone container on a worker to an attachable
 // overlay through the API on a real swarm of three managers and a worker with an agent on
 // every node (plan 04-15, RES-06, D-43, Pitfall 11, RESEARCH A5). A worker only learns an
 // overlay when a task of a service on it runs there, so the first connect may answer
@@ -161,8 +160,7 @@ func TestSwarmNetworks(t *testing.T) {
 // engine goes: if the worker refuses, it starts a task of a service on the overlay on the
 // worker and connects again, which must work; if it accepts, it says so. Either way the
 // alias is in the container's inspect on the worker and a disconnect removes the endpoint.
-func TestSwarmNetworkConnect(t *testing.T) {
-	f := startSwarmFix(t, 3, 1)
+func sharedNetworkConnect(t *testing.T, f *swarmFix) {
 	dockertest.LoadImage(t, "busybox", f.sw.Nodes()...)
 	f.install(t)
 	f.waitSwarmOnline(t, 4)

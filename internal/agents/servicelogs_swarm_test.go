@@ -17,14 +17,13 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 )
 
-// TestSwarmServiceLogsMerged follows the log of a service of three tasks on a real swarm through the agents
+// sharedServiceLogsMerged follows the log of a service of three tasks on a real swarm through the agents
 // (plan 06-37, OBS-02, D-34, D-35, D-37, RESEARCH E1, E4, E5): the lines of all three tasks come on one stream
 // in time order, the interleaving being real. A container killed on its node ends its task; the stream marks the
 // slot as replaced and, on the same connection and with no reopen, carries the replacement's lines (E4), the
 // first of which are later than the last of the task that died. The page of earlier lines and the download are
 // in time order too, and the download holds the lines of the replaced task as well as the new one's (E5).
-func TestSwarmServiceLogsMerged(t *testing.T) {
-	f := startSwarmFix(t, 3, 1)
+func sharedServiceLogsMerged(t *testing.T, f *swarmFix) {
 	mgr := f.sw.Managers[0]
 	dockertest.LoadImage(t, dockertest.ServiceTestImage, f.sw.Nodes()...)
 	f.install(t)

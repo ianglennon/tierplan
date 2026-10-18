@@ -15,14 +15,13 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 )
 
-// TestSwarmRestartLoop runs a service whose task exits 1 a second after it starts, for ever, on a real swarm
+// sharedRestartLoop runs a service whose task exits 1 a second after it starts, for ever, on a real swarm
 // (plan 06-37, RES-13, D-14, D-15, D-16): with the threshold set through the settings route to 3 failures in one
 // minute, the service is flagged within two cluster reads of the third failed task being there, the services list
 // and the bell both say so, a mute takes the bell item away and leaves the flag, an unmute brings it back, and
 // once the service is scaled to 0 and a whole quiet minute has passed the flag clears. Nothing is slept for: every
 // wait is a poll of what the swarm and the server say.
-func TestSwarmRestartLoop(t *testing.T) {
-	f := startSwarmFix(t, 3, 1)
+func sharedRestartLoop(t *testing.T, f *swarmFix) {
 	mgr := f.sw.Managers[0]
 	dockertest.LoadImage(t, dockertest.ServiceTestImage, f.sw.Nodes()...)
 	f.install(t)

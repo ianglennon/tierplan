@@ -142,15 +142,14 @@ func (f *swarmFix) auditOne(t *testing.T, action, serviceID string) map[string]s
 	return rows[0].Details
 }
 
-// TestSwarmServiceLifecycle runs a service through the whole of its life by the API, on a real swarm of three
+// sharedServiceLifecycle runs a service through the whole of its life by the API, on a real swarm of three
 // managers and a worker with an agent on each (plan 06-37, RES-02, RES-03, RES-04, RES-05, D-27, P5 D-27): it is
 // created from an image in a registry that wants a sign-in, with the one stored credential and no docker login
 // anywhere, and comes out pinned to tag@sha256 with the digest the push answered; scaled to three tasks, which
 // land on nodes that never had the image; edited; force-updated after the tag was pushed again, which moves it
 // to the new digest; rolled back to the spec before; and removed. Each action leaves one audit row.
-func TestSwarmServiceLifecycle(t *testing.T) {
+func sharedServiceLifecycle(t *testing.T, f *swarmFix) {
 	const user, password = "bot", "lifecycle-pass-0123456789"
-	f := startSwarmFix(t, 3, 1)
 	mgr := f.sw.Managers[0]
 	addr := dockertest.StartSwarmRegistry(t, f.sw, dockertest.RegistryOptions{Htpasswd: dockertest.HtpasswdFor(user, password)})
 	ref := addr + "/private/web:1"
@@ -308,12 +307,11 @@ func TestSwarmServiceLifecycle(t *testing.T) {
 	}
 }
 
-// TestSwarmServiceAutoRollback updates a service whose failure action is rollback onto a command that fails at once
+// sharedServiceAutoRollback updates a service whose failure action is rollback onto a command that fails at once
 // (plan 06-37, RES-03, D-23): the first replaced task fails inside the monitor window, the swarm rolls the update
 // back and the rollout route reports rollback_completed, with the error of the task that failed. The service
 // ends on its first spec with its tasks running, and the list counts it among the services with a problem.
-func TestSwarmServiceAutoRollback(t *testing.T) {
-	f := startSwarmFix(t, 3, 1)
+func sharedServiceAutoRollback(t *testing.T, f *swarmFix) {
 	mgr := f.sw.Managers[0]
 	addr := dockertest.StartSwarmRegistry(t, f.sw, dockertest.RegistryOptions{})
 	ref := addr + "/public/web:1"
@@ -411,11 +409,10 @@ func (f *swarmFix) readSSE(t *testing.T, ctx context.Context, path string, handl
 	t.Fatalf("the stream %s ended before the awaited event (%v)", path, sc.Err())
 }
 
-// TestSwarmStatsFromWorker streams the stats of a service whose only task can run on the worker (plan 06-37,
+// sharedStatsFromWorker streams the stats of a service whose only task can run on the worker (plan 06-37,
 // RES-11, D-29): the worker is reachable only through its own agent, and the stream names the task on the worker's
 // host and sums a sample of its memory, counted and not silent.
-func TestSwarmStatsFromWorker(t *testing.T) {
-	f := startSwarmFix(t, 3, 1)
+func sharedStatsFromWorker(t *testing.T, f *swarmFix) {
 	mgr, worker := f.sw.Managers[0], f.sw.Workers[0]
 	addr := dockertest.StartSwarmRegistry(t, f.sw, dockertest.RegistryOptions{})
 	ref := addr + "/public/load:1"

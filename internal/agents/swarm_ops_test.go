@@ -43,12 +43,11 @@ func (f *swarmFix) requireRefusalReason(t *testing.T, reason string) {
 	})
 }
 
-// TestSwarmRotateToken rotates the join token of a live swarm and runs the generated
+// sharedRotateToken rotates the join token of a live swarm and runs the generated
 // rotate command on a manager, then disables the token and removes everything with
 // the manual cleanup text: the commands an admin is shown, run for real (02-09,
 // 02-10, 02-14, 02-16).
-func TestSwarmRotateToken(t *testing.T) {
-	f := startSwarmFix(t, 3, 1)
+func sharedRotateToken(t *testing.T, f *swarmFix) {
 	mgr, worker := f.sw.Managers[0], f.sw.Workers[0]
 	f.install(t)
 	f.waitSwarmOnline(t, 4)

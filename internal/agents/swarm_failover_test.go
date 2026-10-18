@@ -396,12 +396,11 @@ func TestSwarmQuorumLoss(t *testing.T) {
 	}
 }
 
-// TestSwarmRevokeBlocksReenrol revokes the worker's agent. The session closes at
+// sharedRevokeBlocksReenrol revokes the worker's agent. The session closes at
 // once; the agent is refused revoked, drops its identity and enrols again with the
 // token, which is still valid, and is refused blocked and waits; after the unblock
 // the host enrols again by itself as a new agent (ENV-05, D-08, D-09, D-10).
-func TestSwarmRevokeBlocksReenrol(t *testing.T) {
-	f := startSwarmFix(t, 3, 1)
+func sharedRevokeBlocksReenrol(t *testing.T, f *swarmFix) {
 	worker := f.sw.Workers[0]
 	f.install(t)
 	f.waitSwarmOnline(t, 4)
