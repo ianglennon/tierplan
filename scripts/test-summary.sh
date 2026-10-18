@@ -152,22 +152,33 @@ for file in "$@"; do
   fi
 
   records=""
-  if jq -s -e '.[0] | type == "object" and has("suites") and has("config")' "${file}" >/dev/null 2>&1; then
-    records="$(jq -s -c "${PLAYWRIGHT_RECORDS}" "${file}" 2>/dev/null)" || records=""
-  elif jq -s -e '.[0] | type == "object" and has("testResults")' "${file}" >/dev/null 2>&1; then
-    seed=""
-    if [ -r "${file%.json}.seed" ]; then
-      seed="$(tr -cd '0-9' <"${file%.json}.seed" | head -c 20)"
-    fi
-    records="$(jq -s -c --arg seed "${seed}" "${VITEST_RECORDS}" "${file}" 2>/dev/null)" || records=""
-  else
-    # go test -json: one object per line. A line that is not JSON is skipped, as
-    # go test itself can print one; a file with no event at all is not a result.
-    events="$(jq -R -c 'fromjson? | select(type == "object")' "${file}" 2>/dev/null || true)"
-    if jq -s -e 'any(.[]; has("Action"))' <<<"${events}" >/dev/null 2>&1; then
-      records="$(jq -s -c "${GO_RECORDS}" <<<"${events}" 2>/dev/null)" || records=""
-    fi
-  fi
+  # The format comes from the first JSON value only: a Playwright or Vitest report is
+  # one object, go test -json is one event per line. jq stops reading after it.
+  kind="$(jq -n -r 'first(inputs | if type == "object" then
+      (if has("suites") and has("config") then "playwright"
+       elif has("testResults") then "vitest"
+       else "gotest" end)
+    else "gotest" end) // "gotest"' "${file}" 2>/dev/null || true)"
+  case "${kind}" in
+    playwright)
+      records="$(jq -s -c "${PLAYWRIGHT_RECORDS}" "${file}" 2>/dev/null)" || records=""
+      ;;
+    vitest)
+      seed=""
+      if [ -r "${file%.json}.seed" ]; then
+        seed="$(tr -cd '0-9' <"${file%.json}.seed" | head -c 20)"
+      fi
+      records="$(jq -s -c --arg seed "${seed}" "${VITEST_RECORDS}" "${file}" 2>/dev/null)" || records=""
+      ;;
+    *)
+      # go test -json: one object per line. A line that is not JSON is skipped, as
+      # go test itself can print one; a file with no event at all is not a result
+      # (nothing is printed for it, so records stays empty). jq reads the file
+      # itself, so no shell variable ever holds the events (IN-02).
+      records="$(jq -n -R -c '[inputs | fromjson? | select(type == "object" and has("Action"))]
+        | if length == 0 then empty else '"${GO_RECORDS}"' end' "${file}" 2>/dev/null)" || records=""
+      ;;
+  esac
   if [ -z "${records}" ]; then
     echo "test-summary: ${file} is neither go test -json, a Vitest JSON report nor a Playwright JSON report" >&2
     status=1

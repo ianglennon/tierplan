@@ -324,6 +324,21 @@ expect_out "summary-playwright-pass says so" "No failing tests (playwright-pass.
 expect pass "summary-go-stress" scripts/test-summary.sh "${summ}/go-stress.json"
 expect_out "summary-go-stress names the test" "example.test/stressfix TestFailsOnEvenRuns"
 expect_out "summary-go-stress says how often" "failed 2/5"
+# IN-02: a go test -json file is reduced straight from the file by jq, never held in a
+# shell variable, and a long stress stream reads as the short one does.
+expect fail "summary-keeps-no-events-in-a-variable" grep -nE '^[[:space:]]*events="\$\(' scripts/test-summary.sh
+big_stress="${scratch}/go-stress-big.json"
+{
+  cat "${summ}/go-stress.json"
+  awk 'BEGIN { for (i = 0; i < 100000; i++) printf "{\"Time\":\"2026-10-17T10:01:17Z\",\"Action\":\"output\",\"Package\":\"example.test/stressfix\",\"Test\":\"TestStable\",\"Output\":\"filler line %d\\n\"}\n", i }'
+} >"${big_stress}"
+expect pass "summary-go-stress-100k-events" scripts/test-summary.sh "${big_stress}"
+expect_out "summary-go-stress-100k-events says how often" "failed 2/5"
+expect_out "summary-go-stress-100k-events names the test" "example.test/stressfix TestFailsOnEvenRuns"
+if [ "$(grep -c '^  FAIL ' <<<"${LAST_OUT}")" -ne 1 ]; then
+  echo "SCRIPT TEST FAIL: summary-go-stress-100k-events (the long stream did not list exactly the one failing test)"
+  failures=$((failures + 1))
+fi
 expect pass "summary-go-fail-has-no-count" scripts/test-summary.sh "${summ}/go-fail.json"
 if grep -qF -- " failed 1/1" <<<"${LAST_OUT}"; then
   echo "SCRIPT TEST FAIL: summary-go-fail-has-no-count (a single run got a k/N)"
@@ -627,6 +642,22 @@ expect fail "upgrade-smoke-missing-image" env BASE_IMAGE=bayplan-no-such-image:n
 expect pass "upgrade-smoke-target" mk upgrade-smoke UPGRADE_BASE_REF=0123abc
 expect_out "upgrade-smoke-target builds the base from a worktree" "git worktree add --detach .devdata/upgrade-base '0123abc'"
 expect_out "upgrade-smoke-target runs the script" "scripts/upgrade-smoke.sh"
+
+# --- CI guards (WR-03, IN-07): every upload runs on a cancel too, and the e2e job's timeout
+# leaves room for its setup beside Playwright's globalTimeout (20 minutes).
+upload_on_cancel() { ! grep -nE '^[[:space:]]*if: failure\(\)[[:space:]]*$' "$1"; }
+e2e_room() { # <workflow> <playwright config>: the e2e job's minutes above globalTimeout, at least 15
+  local job global
+  job="$(awk '/^  e2e:/ { in_e2e = 1; next } in_e2e && /^  [A-Za-z0-9_-]+:/ { exit } in_e2e && /^    timeout-minutes:/ { print $2; exit }' "$1")"
+  global="$(sed -n 's/^[[:space:]]*globalTimeout:[[:space:]]*\([0-9]*\) \* 60_000.*/\1/p' "$2")"
+  [ -n "${job}" ] && [ -n "${global}" ] && [ $((job - global)) -ge 15 ]
+}
+printf 'jobs:\n  t:\n    steps:\n      - name: Upload\n        if: failure()\n        uses: actions/upload-artifact@x\n' >"${scratch}/upload-failure-only.yml"
+expect fail "ci-upload-on-failure-only-is-caught" upload_on_cancel "${scratch}/upload-failure-only.yml"
+expect pass "ci-uploads-run-on-cancel" upload_on_cancel .github/workflows/ci.yml
+sed 's/^    timeout-minutes: 45$/    timeout-minutes: 30/' .github/workflows/ci.yml >"${scratch}/ci-e2e-30.yml"
+expect fail "ci-e2e-timeout-without-room-is-caught" e2e_room "${scratch}/ci-e2e-30.yml" e2e/playwright.config.ts
+expect pass "ci-e2e-timeout-leaves-room" e2e_room .github/workflows/ci.yml e2e/playwright.config.ts
 
 # --- Smoke ports (WR-07): no smoke picks a port by binding and releasing it first. Two
 # runners share each VM, so a port found free can be taken before the server binds it.

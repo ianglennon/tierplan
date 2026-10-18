@@ -30,7 +30,7 @@ scripts/with-load.sh auto -- go test ./internal/<pkg> -race -count=20 -shuffle=o
 make test-stress STRESS_SHARD=api
 ```
 
-`scripts/with-load.sh N -- command` starts N CPU busy loops (`auto` is one per CPU) and stops them when the command ends. `make test-stress` is what the nightly run uses (see "Nightly stress"); a shard takes hours, so run it on a machine you can leave alone.
+`scripts/with-load.sh N -- command` starts N CPU busy loops (`auto` is one per CPU) and stops them when the command ends. The command runs in its own session and a signal reaches its whole process group, so the test binaries `go test` compiled and anything they started end with it. `make test-stress` is what the nightly run uses (see "Nightly stress"); a shard takes hours, so run it on a machine you can leave alone.
 
 Two more sweeps find tests that rely on timing:
 
@@ -115,10 +115,22 @@ A shard runs inside one time budget, `STRESS_BUDGET` in the Makefile (330 minute
 
 The runners share their Docker daemons, so the nightly and the main CI workflow use one concurrency group and never run at the same time. GitHub keeps one running and one pending run per group. A nightly that arrives while a pull request run is running and another is pending replaces the pending pull request run, which then never runs and has to be started again once the nightly has finished. A run that has already started is never cancelled.
 
+A pending push-to-main run can be displaced the same way, by a later pull request run or by the nightly. This is accepted: it is the price of one run at a time on the shared Docker daemons. After merging, check that main's head commit has a run that was not cancelled:
+
+```bash
+gh run list --workflow CI --branch main --limit 1 --json headSha,conclusion
+```
+
+The `headSha` must be main's head commit and the `conclusion` must not be `cancelled`. If it is, start that run again with `gh run rerun <id>`. (This is a rerun that measures a commit that never ran, not a rerun of a failure; see "No retries".)
+
+## Who may run code on the runners
+
+`pull_request` workflows run on the self-hosted runners, which have Docker access, and Docker access is equivalent to root on the runner VM. That is acceptable while the repository is private and every contributor is trusted. Before the repository is made public, workflows from outside contributors must need a maintainer's approval before they run, or pull request workflows must be restricted to branches of the same repository (and run on GitHub-hosted runners otherwise). Make this change before the visibility change, not after.
+
 ## What CI tells you
 
 - **The summary.** Every test job ends with the failing tests, the hung tests and the packages that did not build, by name, in the log and in the job summary. A test that ran several times and failed some shows "failed k/N". `make test-summary` produces the same list from the result files in `.devdata/test`.
 - **Hangs.** The go test time of a job is always at least ten minutes below its `timeout-minutes`, so a hang ends in Go's goroutine dump naming the test instead of a silent kill. A make target that runs several go test passes in a row has one time budget, written as the literal `TEST_BUDGET=<N>m` in its recipe (`TEST_GO_BUDGET`, 30 minutes, for `make test-go`; `STRESS_BUDGET`, 330 minutes, for `make test-stress`), and each pass gets `-timeout <the time left in the budget>`, so the passes cannot add up past the job. `scripts/timeouts-check.sh` (part of `make lint`) reads the budget from `make -n`, adds up the budgets (or, without one, all the `-timeout` values) of the targets a job runs, and fails when the total is within ten minutes of the job's `timeout-minutes`. It also fails on a go test run in a shell loop with no budget, on a job that runs make targets but has no `timeout-minutes`, on a workflow in which it finds no job, and on `-timeout 0`. One limit: go test applies `-timeout` to each package's test binary, so in a pass over many packages a hang in a package that starts late can run past the budget by up to that package's own run. The ten minute margin and the job summary, which names a test that started and never ended as hung, cover that case.
-- **Artifacts.** A failing test job keeps its result JSON, and a failing end-to-end run keeps its Playwright report, as job artifacts for seven days. (The nightly stress job also keeps them when its timeout cancels it.)
+- **Artifacts.** A failing test job keeps its result JSON, and a failing end-to-end run keeps its Playwright report, as job artifacts for seven days. Every upload runs when the job fails or is cancelled, so a job ended by its timeout still leaves them.
 - **No leftovers.** The Docker-backed smokes label everything they create with `bayplan.ci.owner`. `make ci-clean BAYPLAN_CI_OWNER=<owner>` removes the containers, networks and volumes with that label and nothing else, and every Docker job runs it at the end whether it passed or not. `make e2e-down` takes the fixed-name e2e stack down and succeeds when nothing is running. `make ci-preflight` prints Docker's disk use and fails naming the filesystem when less than `BAYPLAN_CI_MIN_FREE_GB` (default 20) gigabytes are free, so a full disk shows as itself instead of as a test failure.
 - **The same commands.** CI runs thin wrappers over the make targets, so any failure reproduces locally with the same command.

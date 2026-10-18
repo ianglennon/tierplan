@@ -57,8 +57,10 @@ export default defineConfig({
   // theirs with "retain-on-failure" below.
   retries: 0,
   // D-22: a hang ends in Playwright's own report, not in the job's silent kill.
-  // The e2e job's timeout-minutes is 30; the image and agent builds and the stack
-  // start take part of it, so the suite itself gets 20.
+  // The e2e job's timeout-minutes (45, in .github/workflows/ci.yml) covers the setup
+  // that runs before this timer starts (preflight, e2e-copy, the image and agent
+  // builds, compose up) plus these 20 minutes plus a margin, so the job is never
+  // killed before Playwright has written its report. Keep the two in step.
   globalTimeout: 20 * 60_000,
   reporter: [
     ["list"],
