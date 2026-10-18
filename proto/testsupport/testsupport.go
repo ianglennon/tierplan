@@ -125,7 +125,7 @@ func pollInterval(timeout time.Duration) time.Duration {
 }
 
 // RunQuarantinedEnv is the environment variable that makes Quarantine run the
-// tests it would otherwise skip. The nightly job sets it to 1.
+// tests it would otherwise skip. make test-stress (scripts/stress.sh) sets it to 1.
 const RunQuarantinedEnv = "BAYPLAN_RUN_QUARANTINED"
 
 var quarantineReason = regexp.MustCompile(`^\d{4}-\d{2}-\d{2} \S`)
@@ -136,7 +136,7 @@ var quarantineReason = regexp.MustCompile(`^\d{4}-\d{2}-\d{2} \S`)
 // start with the date the test was quarantined, a space and a tracking
 // reference, for example "2026-10-16 #123 fails on arm64 under load", and a
 // reason without them fails the test. Every call site is listed in
-// docs/testing.md and runs nightly, so a quarantined test is never forgotten.
+// docs/testing.md and runs in make test-stress, so a quarantined test is never forgotten.
 func Quarantine(t testing.TB, reason string) {
 	t.Helper()
 	if !quarantineReason.MatchString(reason) {

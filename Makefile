@@ -109,11 +109,11 @@ test-web:
 # STRESS_SHARD is api, core, rest or agent-web (scripts/stress.sh documents them).
 # Each Go package set runs 20 shuffled -race runs, then once each at -cpu=1 and
 # -cpu=4, with quarantined tests included (D-12); agent-web also runs ten shuffled
-# Vitest runs. The nightly workflow runs the four shards. STRESS_BUDGET is the one
-# time budget of a shard (D-22, see TEST_GO_BUDGET): every go test pass and every
-# web run gets the time left in it, and the nightly job's timeout-minutes stays
-# 10 minutes or more above it (scripts/timeouts-check.sh). It leaves the job's
-# setup, build and summary steps room inside the rest of the 360 minutes.
+# Vitest runs. It is run by hand (no workflow runs it since the nightly was removed
+# on 2026-10-18). STRESS_BUDGET is the one time budget of a shard (D-22, see
+# TEST_GO_BUDGET): every go test pass and every web run gets the time left in it.
+# A workflow job that runs a shard must allow 10 minutes or more above it
+# (scripts/timeouts-check.sh checks any workflow it is given).
 STRESS_SHARD ?= api
 STRESS_BUDGET := 330m
 test-stress:
@@ -279,7 +279,6 @@ lint:
 	done
 	scripts/insecure-tls-check.sh
 	scripts/timeouts-check.sh
-	scripts/timeouts-check.sh .github/workflows/nightly.yml
 	scripts/no-retries-check.sh
 	scripts/poll-check.sh
 	scripts/quarantine-check.sh

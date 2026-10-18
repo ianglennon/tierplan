@@ -402,15 +402,11 @@ expect_out "stress-go-list-fails names the module" "stress: go list failed for .
 expect fail "stress-go-list-empty" env GO=true TEST_BUDGET=60m GOTESTSUM=echo TEST_RESULTS="${stress_res}" scripts/stress.sh api
 expect_out "stress-go-list-empty names the module" "stress: go list found no package in . (./internal/api)"
 
-# The nightly workflow's timeout stays above the shard's budget (D-22, 06.1-23, 06.1-46).
-expect pass "nightly-timeout-ok" scripts/timeouts-check.sh .github/workflows/nightly.yml
-sed 's/timeout-minutes: 360/timeout-minutes: 335/' .github/workflows/nightly.yml >"${scratch}/nightly-short.yml"
-expect fail "nightly-timeout-too-short" scripts/timeouts-check.sh "${scratch}/nightly-short.yml"
-expect_out "nightly-timeout-too-short names the budget" "make test-stress with a TEST_BUDGET of 330m but the job allows 335 minutes"
-if ! grep -qF -- "failure() || cancelled()" .github/workflows/nightly.yml; then
-  echo "SCRIPT TEST FAIL: nightly-upload-on-cancel (the upload step must run on failure or cancel)"
-  failures=$((failures + 1))
-fi
+# A job that runs a stress shard allows more than the shard's budget (D-22, 06.1-23, 06.1-46).
+expect pass "stress-timeout-ok" scripts/timeouts-check.sh scripts/testdata/timeouts/stress-job.yml
+sed 's/timeout-minutes: 360/timeout-minutes: 335/' scripts/testdata/timeouts/stress-job.yml >"${scratch}/stress-short.yml"
+expect fail "stress-timeout-too-short" scripts/timeouts-check.sh "${scratch}/stress-short.yml"
+expect_out "stress-timeout-too-short names the budget" "make test-stress with a TEST_BUDGET of 330m but the job allows 335 minutes"
 
 # --- ci-gate.sh (06.1-23, D-18, D-20): five green attempts of one commit, judged from a file ---
 gate=scripts/testdata/gate

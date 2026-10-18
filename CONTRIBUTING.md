@@ -40,7 +40,7 @@ No tool is added to `go.mod` for development: golangci-lint, sqlc, goreleaser, a
 | `make test-go` | Every Go module with `-race -count=1 -shuffle=on`; the failing tests are listed at the end and the shuffle seed is printed. |
 | `make test-web` | The Vitest suite in shuffled order. It prints its seed; `make test-web WEB_SEED=<seed>` reproduces a run. |
 | `make test-summary` | Lists the failing and hung tests from the result files in `.devdata/test`. CI runs it after every test job. |
-| `make test-stress` | The stability bar (20 shuffled race runs, then `-cpu=1` and `-cpu=4`) for one share of the suite: `STRESS_SHARD=api`, `core`, `rest` or `agent-web`. Takes hours; the nightly workflow runs all four. |
+| `make test-stress` | The stability bar (20 shuffled race runs, then `-cpu=1` and `-cpu=4`) for one share of the suite: `STRESS_SHARD=api`, `core`, `rest` or `agent-web`. Takes hours; run by hand, for example before a release or when chasing a flake. |
 | `make test-int` | Real-engine Go tests (build tag `integration`) against a Docker daemon. Set `BAYPLAN_TEST_DOCKER_HOST` to use one, otherwise each run starts a `docker:<N>-dind` container (`BAYPLAN_TEST_ENGINE`, default 29). Needs Docker. |
 | `make test-swarm` | The multi-node suite (build tag `swarm`): real agents in dind swarms of 3 managers and a worker (`BAYPLAN_TEST_ENGINE`, default 29; CI runs 24 and 29). Builds the agent image first. Needs Docker with buildx. |
 | `make dev-swarm`, `make dev-swarm-down` | A local swarm for the development loop, and its removal (see "Local swarm" below). Need Docker with buildx. |

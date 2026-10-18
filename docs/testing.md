@@ -30,7 +30,7 @@ scripts/with-load.sh auto -- go test ./internal/<pkg> -race -count=20 -shuffle=o
 make test-stress STRESS_SHARD=api
 ```
 
-`scripts/with-load.sh N -- command` starts N CPU busy loops (`auto` is one per CPU) and stops them when the command ends. The command runs in its own session and a signal reaches its whole process group, so the test binaries `go test` compiled and anything they started end with it. `make test-stress` is what the nightly run uses (see "Nightly stress"); a shard takes hours, so run it on a machine you can leave alone.
+`scripts/with-load.sh N -- command` starts N CPU busy loops (`auto` is one per CPU) and stops them when the command ends. The command runs in its own session and a signal reaches its whole process group, so the test binaries `go test` compiled and anything they started end with it. `make test-stress` runs the stability bar for one shard (see "Stress runs"); a shard takes hours, so run it on a machine you can leave alone.
 
 Two more sweeps find tests that rely on timing:
 
@@ -100,7 +100,7 @@ Quarantine is a last resort, not a parking lot. Use it only when a failing test 
 A quarantined test calls `testsupport.Quarantine(t, "<date> <tracking reference and reason>")` as its first line. The reason must start with the date in `YYYY-MM-DD` form and a space, and the helper rejects anything else. A quarantined test:
 
 - is skipped in pull request CI;
-- runs in the nightly stress job (`BAYPLAN_RUN_QUARANTINED=1` turns the skip off), so you learn whether it has become stable;
+- runs in `make test-stress` (`BAYPLAN_RUN_QUARANTINED=1` turns the skip off), so a stress run by hand tells you whether it has become stable;
 - is listed in the table below, with the same date and a reason. `scripts/quarantine-check.sh` (part of `make lint`) fails when a call site and a table row disagree, in either direction;
 - must be fixed or deleted before the next phase of the project ships. A phase does not exit with a quarantined test, and `scripts/quarantine-check.sh --none` is the check for that.
 
@@ -137,15 +137,15 @@ There are none, anywhere. No test, job or step reruns itself, `gotestsum` is nev
 
 Do not rerun a failed CI job to get a green tick. A test that fails once is a defect to find, and a rerun that passes hides it until it fails again on someone else's change. The only reruns are the ones that measure: running a green commit in full again to see whether it stays green.
 
-## Nightly stress
+## Stress runs
 
-A scheduled workflow (`.github/workflows/nightly.yml`, every night at 21:30 UTC, also runnable by hand) runs the stability bar over the whole Go suite and the web suite, cut into four shards so each job fits a runner. It includes quarantined tests. It never blocks a pull request. A failure is a red scheduled run, and its summary lists each failing test with how often it failed ("failed 2/20") and the seed.
+`make test-stress STRESS_SHARD=<shard>` runs the stability bar over one of four shards of the Go suite and the web suite (`api`, `core`, `rest`, `agent-web`), including quarantined tests. No workflow runs it: the scheduled nightly stress workflow was removed on 2026-10-18, because five green CI runs of one commit cover the Docker-backed jobs and the per-package load runs cover the rest, and the runners' time is better spent elsewhere. Run a shard by hand before a release, or when chasing a flake; `make test-summary` then lists each failing test with how often it failed ("failed 2/20") and the seed.
 
-A shard runs inside one time budget, `STRESS_BUDGET` in the Makefile (330 minutes, in a 360 minute job): every go test pass and every web run gets the time left in it as its `-timeout`, and a pass that finds no time left fails the shard instead of being skipped. `scripts/stress.sh` refuses a `-timeout` of its own, because the budget governs. A shard also fails, naming the module, when `go list` fails or lists nothing, and it removes the previous run's `stress-web-*` results before the web runs, so a green shard means every package ran this time. The shard's result JSON is uploaded when the job fails or is cancelled by its timeout, kept for seven days.
+A shard runs inside one time budget, `STRESS_BUDGET` in the Makefile (330 minutes): every go test pass and every web run gets the time left in it as its `-timeout`, and a pass that finds no time left fails the shard instead of being skipped. `scripts/stress.sh` refuses a `-timeout` of its own, because the budget governs. A shard also fails, naming the module, when `go list` fails or lists nothing, and it removes the previous run's `stress-web-*` results before the web runs, so a green shard means every package ran this time. If a workflow ever runs a shard again, its job must allow 10 minutes or more above the budget, which `scripts/timeouts-check.sh` checks.
 
-The runners share their Docker daemons, so the nightly and the main CI workflow use one concurrency group and never run at the same time. GitHub keeps one running and one pending run per group. A nightly that arrives while a pull request run is running and another is pending replaces the pending pull request run, which then never runs and has to be started again once the nightly has finished. A run that has already started is never cancelled.
+The runners share their Docker daemons, so CI runs one at a time across every branch (one concurrency group). GitHub keeps one running and one pending run per group, and a newer pending run replaces an older one. A run that has already started is never cancelled.
 
-A pending push-to-main run can be displaced the same way, by a later pull request run or by the nightly. This is accepted: it is the price of one run at a time on the shared Docker daemons. After merging, check that main's head commit has a run that was not cancelled:
+A pending push-to-main run can be displaced the same way, by a later pull request run. This is accepted: it is the price of one run at a time on the shared Docker daemons. After merging, check that main's head commit has a run that was not cancelled:
 
 ```bash
 gh run list --workflow CI --branch main --limit 1 --json headSha,conclusion

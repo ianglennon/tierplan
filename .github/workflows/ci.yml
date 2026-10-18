@@ -57,12 +57,10 @@ env:
 # upgrade and restore smokes). So one run at a time, across every branch: a newer
 # run waits, and replaces any run already waiting. Nothing running is cancelled,
 # so an edge publish is never cut off between push and sign (WR-11, D-75).
-# The group is a literal shared with nightly.yml (06.1-23, D-16): the nightly stress run
-# uses the same daemons, and a group name only matches across workflows when the string
-# is identical. The release workflow stays outside it on purpose.
+# The release workflow stays outside the group on purpose.
 #
 # Accepted trade-off (WR-04): GitHub keeps one running and one pending run per group, so a
-# pending push-to-main run is also displaced by a later pull request run or the nightly.
+# pending push-to-main run is also displaced by a later pull request run.
 # That is the price of one run at a time on the shared Docker daemons. After merging,
 # check that main's head commit has a run that was not cancelled:
 #   gh run list --workflow CI --branch main --limit 1 --json headSha,conclusion
