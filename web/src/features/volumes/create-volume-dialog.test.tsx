@@ -233,19 +233,26 @@ describe("CreateVolumeDialog (common fields)", () => {
     expect(onOpenChange).not.toHaveBeenCalled();
   });
 
-  it("shows a read-only host, an unreachable node and a generic failure inside the dialog", async () => {
+  it("shows a read-only host, a host-policy refusal, an unreachable node and a generic failure inside the dialog", async () => {
     for (const [status, type, text] of [
       [409, "host_read_only", "This host is read-only."],
+      [409, "agent_host_policy", "/srv, /mnt or /media"],
+      [409, "agent_host_policy", "BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES"],
       [503, "node_unavailable", "isn't reachable right now"],
       [500, "", "Something went wrong on the server."],
     ] as const) {
       cleanup();
       answer = () => problem(status, type);
-      mount();
+      const { onOpenChange } = mount();
       const dialog = await screen.findByRole("dialog");
       typeName(dialog, "data1");
       fireEvent.click(within(dialog).getByRole("button", { name: "Create volume" }));
       expect((await within(dialog).findByRole("alert")).textContent).toContain(text);
+      if (type === "agent_host_policy") {
+        // A refusal the host's owner chose is not an out-of-date agent.
+        expect(screen.queryByText(/agent needs an update/i)).toBeNull();
+        expect(onOpenChange).not.toHaveBeenCalled();
+      }
     }
   });
 

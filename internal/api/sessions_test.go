@@ -57,6 +57,7 @@ func (f *authFixture) revokeMine(t *testing.T, cookie, csrf, id string) *httptes
 }
 
 func TestMySessionsListsTheCallersSessionsWithTheCurrentOneMarkedAndNoHash(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, _ := f.signIn(t, "admin", false)
 	f.signIn(t, "admin", true)
@@ -93,6 +94,7 @@ func TestMySessionsListsTheCallersSessionsWithTheCurrentOneMarkedAndNoHash(t *te
 }
 
 func TestMySessionRevokeSignsTheOtherBrowserOutAtItsNextRequestAndAudits(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	other, _ := f.signIn(t, "admin", false)
@@ -125,6 +127,7 @@ func TestMySessionRevokeSignsTheOtherBrowserOutAtItsNextRequestAndAudits(t *test
 }
 
 func TestMySessionRevokeOfTheCurrentSessionIs409CurrentSessionAndOfAnotherUsersIs404(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	f.signIn(t, "admin", false)
@@ -159,6 +162,7 @@ func TestMySessionRevokeOfTheCurrentSessionIs409CurrentSessionAndOfAnotherUsersI
 }
 
 func TestMySessionRevokeNeedsAValidCSRFToken(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, _ := f.signIn(t, "admin", false)
 	f.signIn(t, "admin", false)
@@ -172,6 +176,7 @@ func TestMySessionRevokeNeedsAValidCSRFToken(t *testing.T) {
 }
 
 func TestMySessionRevokeOthersKeepsOnlyTheCurrentSessionAndAudits(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	o1, _ := f.signIn(t, "admin", false)
@@ -203,6 +208,7 @@ func TestMySessionRevokeOthersKeepsOnlyTheCurrentSessionAndAudits(t *testing.T) 
 }
 
 func TestUserSessionsListedAndEndedByAnInstanceAdminButNotByAnotherUser(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	f.addUser(t, "alice", false)
@@ -260,6 +266,7 @@ func TestUserSessionsListedAndEndedByAnInstanceAdminButNotByAnotherUser(t *testi
 }
 
 func TestMySessionSchemaCarriesNoSessionHashField(t *testing.T) {
+	t.Parallel()
 	spec, err := os.ReadFile("../../openapi.json")
 	if err != nil {
 		t.Fatal(err)

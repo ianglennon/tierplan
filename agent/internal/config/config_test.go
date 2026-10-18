@@ -400,8 +400,8 @@ func TestLoadDefaultsToReadWriteAllowedAndSelfUpdateOn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ReadOnly || !cfg.SelfUpdate {
-		t.Fatalf("ReadOnly %v SelfUpdate %v, want false and true", cfg.ReadOnly, cfg.SelfUpdate)
+	if cfg.ReadOnly || !cfg.SelfUpdate || cfg.AllowPrivilegedServices {
+		t.Fatalf("ReadOnly %v SelfUpdate %v AllowPrivilegedServices %v, want false, true and false", cfg.ReadOnly, cfg.SelfUpdate, cfg.AllowPrivilegedServices)
 	}
 }
 
@@ -409,24 +409,27 @@ func TestLoadReadsTheHostPolicyFlags(t *testing.T) {
 	cfg, err := Load(env(map[string]string{
 		"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_JOIN_TOKEN": "tok",
 		"BAYPLAN_AGENT_READ_ONLY": "true", "BAYPLAN_AGENT_SELF_UPDATE": "false",
+		"BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES": "true",
 	}), files(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.ReadOnly || cfg.SelfUpdate {
-		t.Fatalf("ReadOnly %v SelfUpdate %v, want true and false", cfg.ReadOnly, cfg.SelfUpdate)
+	if !cfg.ReadOnly || cfg.SelfUpdate || !cfg.AllowPrivilegedServices {
+		t.Fatalf("ReadOnly %v SelfUpdate %v AllowPrivilegedServices %v, want true, false and true", cfg.ReadOnly, cfg.SelfUpdate, cfg.AllowPrivilegedServices)
 	}
 }
 
 // A flag that is meant to restrict must not be silently ignored because it was
 // misspelled: the agent refuses to start and names the variable.
 func TestLoadRefusesAPolicyFlagItCannotRead(t *testing.T) {
-	for _, name := range []string{"BAYPLAN_AGENT_READ_ONLY", "BAYPLAN_AGENT_SELF_UPDATE"} {
-		_, err := Load(env(map[string]string{
-			"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_JOIN_TOKEN": "tok", name: "sure",
-		}), files(nil))
-		if err == nil || !strings.Contains(err.Error(), name) {
-			t.Errorf("%s=sure: error = %v, want one naming the variable", name, err)
+	for _, name := range []string{"BAYPLAN_AGENT_READ_ONLY", "BAYPLAN_AGENT_SELF_UPDATE", "BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES"} {
+		for _, value := range []string{"sure", "yes", "on", "TRUE-ish"} {
+			_, err := Load(env(map[string]string{
+				"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_JOIN_TOKEN": "tok", name: value,
+			}), files(nil))
+			if err == nil || !strings.Contains(err.Error(), name) {
+				t.Errorf("%s=%s: error = %v, want one naming the variable", name, value, err)
+			}
 		}
 	}
 }

@@ -1,0 +1,18 @@
+# Fixture for scripts/no-retries-check.sh: readiness probes are not test retries.
+services:
+  docker:
+    image: docker:dind
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 2s
+      retries: 10
+  other:
+    image: example
+    healthcheck:
+      retries: 5
+      test: ["CMD", "true"]
+jobs:
+  smoke:
+    steps:
+      - run: docker run --health-interval 2s --health-retries 5 example
+      - run: echo "retries: 0 is fine; so is retries: 0,"

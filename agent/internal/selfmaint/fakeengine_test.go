@@ -23,6 +23,8 @@ import (
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/api/types/system"
+
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // fakeEngine is a small Docker Engine API on a Unix socket: enough of the
@@ -60,6 +62,10 @@ type fakeEngine struct {
 
 	// onStart runs, with the lock held, when a container is started.
 	onStart func(f *fakeEngine, c *container.InspectResponse)
+	// onInspect runs, with the lock held, when a container that exists is inspected,
+	// before the answer is written. A test sets it before the code under test starts,
+	// since it is read under the lock only once requests arrive.
+	onInspect func(f *fakeEngine, c *container.InspectResponse)
 	// failStart makes starting the container with this ID fail.
 	failStart map[string]bool
 }
@@ -102,7 +108,7 @@ func newFakeEngine(t *testing.T) *fakeEngine {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := &http.Server{Handler: http.HandlerFunc(f.serve), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Handler: http.HandlerFunc(f.serve), ReadHeaderTimeout: testsupport.Deadline}
 	go func() { _ = srv.Serve(l) }()
 	t.Cleanup(func() { _ = srv.Close() })
 	return f
@@ -317,6 +323,10 @@ func (f *fakeEngine) containerOp(w http.ResponseWriter, r *http.Request, rest st
 		if c == nil {
 			notFound(w, "container: "+ref)
 			return
+		}
+		// onInspect is set before the code under test starts; it is read here under f.mu.
+		if f.onInspect != nil {
+			f.onInspect(f, c)
 		}
 		writeJSON(w, http.StatusOK, c)
 	case op == "" && r.Method == http.MethodDelete:

@@ -60,6 +60,7 @@ function Dashboard() {
   const canImages = usePermission("images.read", envId);
   const canVolumes = usePermission("volumes.read", envId);
   const canNetworks = usePermission("networks.read", envId);
+  const canServices = usePermission("services.read", envId);
   const swarm = useEnvIsSwarm(envId);
   const params = { envId };
 
@@ -83,6 +84,17 @@ function Dashboard() {
   const statusIssues = data?.environment.status.issues ?? listed?.status.issues ?? [];
   const noQuorum = statusIssues.some((i) => i.code === "no_quorum");
   const noManagerLine = noQuorum ? t("aggregate.tiles.noQuorum") : t("aggregate.tiles.noManager");
+  // The restart-loop tile: the flagged services nobody muted, and how many are muted. The server
+  // leaves the counts out until the swarm has been read, and that reads as a dash.
+  const loops = data?.restartLoops;
+  const loopsLine = loops
+    ? [
+        loops.flagged > 0 ? t("restartLoop.tile.subline") : t("restartLoop.tile.none"),
+        loops.muted > 0 ? t("restartLoop.tile.muted", { count: loops.muted }) : undefined,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : undefined;
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-8">
@@ -190,6 +202,16 @@ function Dashboard() {
               label={t("dashboard.tiles.services")}
               value={counts?.services}
               subline={counts?.services === undefined && data ? noManagerLine : undefined}
+              loading={loading}
+            />
+            <CountTile
+              label={t("restartLoop.tile.label")}
+              value={loops?.flagged}
+              subline={loopsLine}
+              dot="offline"
+              to={canServices ? "/env/$envId/services" : undefined}
+              params={params}
+              search={{ status: "loop" }}
               loading={loading}
             />
           </>

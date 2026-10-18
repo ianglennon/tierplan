@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 import { type AnsiSpan, ansiToSpans, type Theme } from "@/features/logs/ansi";
 import { type BufferedLine, stampTime } from "@/features/logs/log-buffer";
+import { ReplacementMarker } from "@/features/logs/replacement-marker";
 import { cn } from "@/lib/utils";
 
 // The height of a row. The virtualiser sizes every row by it, so the line height of
@@ -91,6 +92,9 @@ export interface LogLineRowProps {
   highlight?: LogLineHighlight;
   // Which palette the colour in the line is checked against.
   theme?: Theme;
+  // The task that wrote the line, for a service's log: drawn between the stream gutter and
+  // the time. It cannot be selected, so copied lines carry none (plan 06-29, D-32).
+  prefix?: ReactNode;
 }
 
 // One line of a log: a stream gutter that is always as wide as the word "stderr" so
@@ -110,7 +114,12 @@ export function LogLineRow({
   wrap = false,
   highlight,
   theme = "light",
+  prefix,
 }: LogLineRowProps) {
+  if (line.marker === "swarm") {
+    // A task of the service was replaced, or a node dropped out: a separator of its own.
+    return <ReplacementMarker text={markerLabel(line)} kind={line.swarm?.kind} />;
+  }
   if (line.marker) {
     // The container started again or stopped: not a line of the log, so it is set
     // apart by hairlines and drawn in the muted colour.
@@ -145,6 +154,9 @@ export function LogLineRow({
       <span className="w-[6ch] shrink-0 select-none text-muted-foreground">
         {stderr ? stderrLabel : ""}
       </span>
+      {prefix ? (
+        <span className="flex shrink-0 select-none items-center ps-2">{prefix}</span>
+      ) : null}
       {time ? (
         <time
           dateTime={line.t}

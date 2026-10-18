@@ -1,0 +1,13 @@
+{"Time":"2026-10-16T10:00:00.000000000Z","Action":"start","Package":"example.test/slow"}
+{"Time":"2026-10-16T10:00:00.010000000Z","Action":"run","Package":"example.test/slow","Test":"TestSlowThing"}
+{"Time":"2026-10-16T10:00:12.010000000Z","Action":"pass","Package":"example.test/slow","Test":"TestSlowThing","Elapsed":12}
+{"Time":"2026-10-16T10:00:12.011000000Z","Action":"run","Package":"example.test/slow","Test":"TestSlowThing/sub"}
+{"Time":"2026-10-16T10:00:12.012000000Z","Action":"pass","Package":"example.test/slow","Test":"TestSlowThing/sub","Elapsed":5}
+{"Time":"2026-10-16T10:00:12.500000000Z","Action":"output","Package":"example.test/slow","Output":"PASS\n"}
+{"Time":"2026-10-16T10:00:12.510000000Z","Action":"pass","Package":"example.test/slow","Elapsed":12.5}
+{"Time":"2026-10-16T10:00:00.000000000Z","Action":"start","Package":"example.test/fast"}
+{"Time":"2026-10-16T10:00:00.001000000Z","Action":"output","Package":"example.test/fast","Output":"-test.shuffle 1792149386197574842\n"}
+{"Time":"2026-10-16T10:00:00.002000000Z","Action":"run","Package":"example.test/fast","Test":"TestFastThing"}
+{"Time":"2026-10-16T10:00:00.302000000Z","Action":"pass","Package":"example.test/fast","Test":"TestFastThing","Elapsed":0.3}
+{"Time":"2026-10-16T10:00:00.400000000Z","Action":"output","Package":"example.test/fast","Output":"PASS\n"}
+{"Time":"2026-10-16T10:00:00.410000000Z","Action":"pass","Package":"example.test/fast","Elapsed":0.4}

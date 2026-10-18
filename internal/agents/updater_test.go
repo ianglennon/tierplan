@@ -203,14 +203,13 @@ func (r *updRig) state(id string) string {
 	return s.State
 }
 
-func (r *updRig) waitState(t *testing.T, id, want string) {
+// awaitFailed waits for the nth agent.update_failed audit entry, which the updater writes
+// after it has set the failed state, and then asserts the state of the agent.
+func (r *updRig) awaitFailed(t *testing.T, id, want string, n int) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for r.state(id) != want {
-		if time.Now().After(deadline) {
-			t.Fatalf("update state of %s = %q, want %q", id, r.state(id), want)
-		}
-		time.Sleep(5 * time.Millisecond)
+	r.awaitAudit(t, audit.ActionAgentUpdateFailed, n)
+	if got := r.state(id); got != want {
+		t.Fatalf("update state of %s = %q, want %q", id, got, want)
 	}
 }
 
@@ -443,12 +442,9 @@ func TestUpdaterAResultWithAnotherIDOrFromAnotherAgentIsIgnored(t *testing.T) {
 func TestUpdaterAnAgentThatNeverAnswersIsCannotSelfUpdate(t *testing.T) {
 	r := newUpdRig(t, "v0.2.1")
 	r.connect(r.standalone("a1", "0.2.0", true))
-	r.waitState(t, "a1", "failed:no_answer")
-	// The state changes before the audit row is written, so wait for the row.
-	var rows []map[string]string
-	for deadline := time.Now().Add(3 * time.Second); len(rows) == 0 && time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
-		rows = r.auditRows(t, audit.ActionAgentUpdateFailed)
-	}
+	// The state changes before the audit row is written, and awaitFailed waits for the row.
+	r.awaitFailed(t, "a1", "failed:no_answer", 1)
+	rows := r.auditRows(t, audit.ActionAgentUpdateFailed)
 	if len(rows) != 1 || rows[0]["reason"] != "no_answer" {
 		t.Fatalf("agent.update_failed rows = %v, want one with reason no_answer", rows)
 	}
@@ -458,7 +454,7 @@ func TestUpdaterAnAcceptedUpdateWhoseAgentNeverComesBackWithTheNewVersionFails(t
 	r := newUpdRig(t, "v0.2.1")
 	r.connect(r.standalone("a1", "0.2.0", true))
 	r.upd.HandleResult("a1", wire.UpdateResult{T: wire.TypeUpdateResult, ID: r.hub.last(t).Msg.ID, OK: true})
-	r.waitState(t, "a1", "failed:no_new_version")
+	r.awaitFailed(t, "a1", "failed:no_new_version", 1)
 }
 
 func TestUpdaterARolledBackStandaloneUpdateIsAFailureAndAReconnectWithTheNewVersionLaterHealsIt(t *testing.T) {

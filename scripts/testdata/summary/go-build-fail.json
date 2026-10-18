@@ -1,0 +1,6 @@
+{"ImportPath":"example.test/summaryfix/d [example.test/summaryfix/d.test]","Action":"build-output","Output":"# example.test/summaryfix/d [example.test/summaryfix/d.test]\n"}
+{"ImportPath":"example.test/summaryfix/d [example.test/summaryfix/d.test]","Action":"build-output","Output":"d/d_test.go:5:41: undefined: undefinedSymbol\n"}
+{"ImportPath":"example.test/summaryfix/d [example.test/summaryfix/d.test]","Action":"build-fail"}
+{"Time":"2026-10-16T21:26:15.777928651Z","Action":"start","Package":"example.test/summaryfix/d"}
+{"Time":"2026-10-16T21:26:15.778002624Z","Action":"output","Package":"example.test/summaryfix/d","Output":"FAIL\texample.test/summaryfix/d [build failed]\n","OutputType":"frame"}
+{"Time":"2026-10-16T21:26:15.778022749Z","Action":"fail","Package":"example.test/summaryfix/d","Elapsed":0,"FailedBuild":"example.test/summaryfix/d [example.test/summaryfix/d.test]"}

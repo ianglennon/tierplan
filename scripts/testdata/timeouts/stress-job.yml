@@ -1,0 +1,11 @@
+# A workflow job that runs one stress shard, for scripts/test-scripts.sh: the
+# job's timeout-minutes must stay 10 or more above the shard's STRESS_BUDGET
+# (330m), which timeouts-check.sh reads from the Makefile.
+name: stress fixture
+on: workflow_dispatch
+jobs:
+  stress:
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 360
+    steps:
+      - run: make test-stress STRESS_SHARD=api

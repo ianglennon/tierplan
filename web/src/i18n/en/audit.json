@@ -90,7 +90,8 @@
         "failover": "Manager failover",
         "cluster_adopted": "Adopted a new cluster",
         "local_folded": "Folded the local host",
-        "auto_update_changed": "Changed agent auto-update"
+        "auto_update_changed": "Changed agent auto-update",
+        "restart_loop_settings_changed": "Changed restart-loop settings"
       },
       "agent": {
         "enrolled": "Agent enrolled",
@@ -203,6 +204,34 @@
         "opened": "Container shell opened",
         "closed": "Container shell closed",
         "ended": "Container shell ended by an administrator"
+      },
+      "service": {
+        "scaled": "Service scaled",
+        "force_updated": "Service force-updated",
+        "rolled_back": "Service rolled back",
+        "removed": "Service removed",
+        "updated": "Service updated",
+        "created": "Service created"
+      },
+      "restart_loop": {
+        "muted": "Restart-loop alerts muted",
+        "unmuted": "Restart-loop alerts unmuted"
+      },
+      "node": {
+        "availability_changed": "Node availability changed",
+        "role_changed": "Node role changed",
+        "labels_changed": "Node labels changed",
+        "removed": "Node removed"
+      },
+      "secret": {
+        "created": "Secret created",
+        "removed": "Secret deleted",
+        "rotated": "Secret rotated"
+      },
+      "config": {
+        "created": "Config created",
+        "removed": "Config deleted",
+        "rotated": "Config rotated"
       }
     },
     "coalesced": {

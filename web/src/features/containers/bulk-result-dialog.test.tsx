@@ -9,11 +9,15 @@ import {
   createRouter,
   RouterProvider,
 } from "@tanstack/react-router";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
-import { type BulkReport, BulkResultDialog } from "@/features/containers/bulk-result-dialog";
+import {
+  type BulkReport,
+  BulkResultDialog,
+  type BulkResultLabels,
+} from "@/features/containers/bulk-result-dialog";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 
@@ -49,9 +53,9 @@ function report(bulkId: string | undefined): BulkReport {
   };
 }
 
-async function mount(r: BulkReport) {
+async function mount(r: BulkReport, labels?: BulkResultLabels) {
   const root = createRootRoute({
-    component: () => <BulkResultDialog envId={ENV} report={r} onClose={() => {}} />,
+    component: () => <BulkResultDialog envId={ENV} report={r} labels={labels} onClose={() => {}} />,
   });
   const audit = createRoute({ getParentRoute: () => root, path: "/audit", component: () => null });
   const router = createRouter({
@@ -63,7 +67,7 @@ async function mount(r: BulkReport) {
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
-  await screen.findByRole("dialog", { name: "Stop results" });
+  await screen.findByRole("dialog");
 }
 
 describe("BulkResultDialog audit link", () => {
@@ -80,14 +84,45 @@ describe("BulkResultDialog audit link", () => {
     me = makeMe({ envs: { [ENV]: "operator" } });
     await mount(report(BULK));
     // The user is known once /api/me has answered; give it that, then look.
-    await vi.waitFor(() => expect(client.getQueryState(["me"])?.status).not.toBe("pending"));
+    await waitFor(() => expect(client.getQueryState(["me"])?.status).not.toBe("pending"));
     expect(screen.queryByRole("link", { name: "View in audit log" })).toBeNull();
   });
 
   it("has no link when the operation has no bulk ID", async () => {
     me = makeMe({ instanceAdmin: true });
     await mount(report(undefined));
-    await vi.waitFor(() => expect(client.getQueryState(["me"])?.status).not.toBe("pending"));
+    await waitFor(() => expect(client.getQueryState(["me"])?.status).not.toBe("pending"));
     expect(screen.queryByRole("link", { name: "View in audit log" })).toBeNull();
+  });
+});
+
+describe("BulkResultDialog column labels", () => {
+  const headers = () => screen.getAllByRole("columnheader").map((h) => h.textContent);
+
+  it("reads Container, Node, Result and Reason by default", async () => {
+    me = makeMe({ instanceAdmin: true });
+    await mount(report(BULK));
+    expect(headers()).toEqual(["Container", "Node", "Result", "Reason"]);
+  });
+
+  it("names the first column from labels.target", async () => {
+    me = makeMe({ instanceAdmin: true });
+    await mount(report(BULK), { target: "Service" });
+    expect(headers()).toEqual(["Service", "Node", "Result", "Reason"]);
+  });
+
+  it("drops the Node column for a bulk that has no nodes, as the services' does", async () => {
+    me = makeMe({ instanceAdmin: true });
+    const r: BulkReport = {
+      verb: "scale",
+      title: "Scale results",
+      bulkId: BULK,
+      rows: [{ name: "web", node: "", result: "failed", reason: "Not enough room" }],
+    };
+    await mount(r, { target: "Service", node: null });
+    expect(headers()).toEqual(["Service", "Result", "Reason"]);
+    expect(screen.getByRole("dialog", { name: "Scale results" })).toBeTruthy();
+    expect(screen.getByText("Not enough room")).toBeTruthy();
+    expect(screen.getByText("web")).toBeTruthy();
   });
 });

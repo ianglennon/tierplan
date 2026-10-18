@@ -14,6 +14,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/auth"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // Plan 03-10, D-20: the first refusal of a kind is written in full, repeats
@@ -121,11 +122,7 @@ func TestCoalescerCancellingRunWritesEveryPendingCount(t *testing.T) {
 	done := make(chan struct{})
 	go func() { co.Run(ctx, time.Hour); close(done) }()
 	cancel()
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("Run did not return after its context was cancelled")
-	}
+	testsupport.Await(t, "Run to return after its context was cancelled", done)
 	rows := next.all()
 	if len(rows) != 2 || rows[1].Details["count"] != "3" || rows[1].Details["coalesced"] != "true" {
 		t.Fatalf("rows = %+v, want the first refusal and a flushed summary of 3 repeats", rows)

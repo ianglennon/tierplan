@@ -52,6 +52,7 @@ func decodeDetail(t *testing.T, rec *httptest.ResponseRecorder) userDetailResp {
 }
 
 func TestGetUserAnswersTheDetailAndAnUnknownIDIs404UserNotFound(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, _ := f.signIn(t, "admin", false)
 	id := f.addUser(t, "alice", false)
@@ -70,6 +71,7 @@ func TestGetUserAnswersTheDetailAndAnUnknownIDIs404UserNotFound(t *testing.T) {
 }
 
 func TestDisableUserEndsEverySessionRefusesSignInAndEnableRestoresIt(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	id := f.addUser(t, "alice", false)
@@ -125,6 +127,7 @@ func TestDisableUserEndsEverySessionRefusesSignInAndEnableRestoresIt(t *testing.
 }
 
 func TestDisableAndEnableAreNoOpsWhenAlreadyInTheState(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	id := f.addUser(t, "alice", false)
@@ -145,6 +148,7 @@ func TestDisableAndEnableAreNoOpsWhenAlreadyInTheState(t *testing.T) {
 }
 
 func TestDisablingTheOnlyActiveInstanceAdminAnswers409LastInstanceAdmin(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 
@@ -169,6 +173,7 @@ func TestDisablingTheOnlyActiveInstanceAdminAnswers409LastInstanceAdmin(t *testi
 }
 
 func TestDisableAndEnableAnUnknownUserAnswer404(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	if rec := f.disable(t, cookie, csrf, "no-such-user"); rec.Code != http.StatusNotFound || problemType(t, rec) != "user_not_found" {
@@ -180,6 +185,7 @@ func TestDisableAndEnableAnUnknownUserAnswer404(t *testing.T) {
 }
 
 func TestUserLifecycleRoutesNeedUsersManage(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	id := f.addUser(t, "alice", false)
 	f.addUser(t, "bob", false)
@@ -226,6 +232,7 @@ func (f *authFixture) patchUser(t *testing.T, cookie, csrf, id, body string) *ht
 }
 
 func TestDeleteUserAnswers204AndLeavesATombstoneWithNothingThatLetsThemIn(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	id := f.addUser(t, "alice", false)
@@ -275,6 +282,7 @@ func TestDeleteUserAnswers204AndLeavesATombstoneWithNothingThatLetsThemIn(t *tes
 }
 
 func TestDeletingTheOnlyActiveInstanceAdminAnswers409AndChangesNothing(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 
@@ -291,6 +299,7 @@ func TestDeletingTheOnlyActiveInstanceAdminAnswers409AndChangesNothing(t *testin
 }
 
 func TestSetInstanceAdminGrantsAndRevokesAndRefusesTheLastOne(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	id := f.addUser(t, "alice", false)
@@ -335,6 +344,7 @@ func TestSetInstanceAdminGrantsAndRevokesAndRefusesTheLastOne(t *testing.T) {
 }
 
 func TestUnlockClearsALockAuditedAsTheAdminAndIsANoOpOnAnUnlockedUser(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	id := f.addUser(t, "alice", false)
@@ -370,6 +380,7 @@ func TestUnlockClearsALockAuditedAsTheAdminAndIsANoOpOnAnUnlockedUser(t *testing
 }
 
 func TestPatchUserSavesTheProfileAndRefusesAStaleVersionABadEmailAndAUsername(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	id := f.addUser(t, "alice", false)
@@ -416,6 +427,7 @@ func TestPatchUserSavesTheProfileAndRefusesAStaleVersionABadEmailAndAUsername(t 
 }
 
 func TestTheUserWriteRoutesNeedUsersManage(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	id := f.addUser(t, "alice", false)
 	f.addUser(t, "bob", false)
@@ -436,6 +448,7 @@ func TestTheUserWriteRoutesNeedUsersManage(t *testing.T) {
 }
 
 func TestTheDetailAndTheListSayWhoIsTheLastActiveInstanceAdmin(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, _ := f.signIn(t, "admin", false)
 

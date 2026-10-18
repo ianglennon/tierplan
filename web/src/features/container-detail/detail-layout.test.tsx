@@ -55,6 +55,7 @@ function detail(extra: Partial<ContainerDetail> = {}): ContainerDetail {
     project: "",
     stack: "",
     service: "",
+    muted: false,
     ...extra,
   };
 }
@@ -157,6 +158,12 @@ beforeEach(() => {
           return answer();
         case `/api/env/${ENV}/containers/web-id/inspect`:
           return inspectAnswer();
+        case `/api/env/${ENV}/containers/web-id/restart-loop-mute`:
+          return Response.json({
+            containerId: "web-id",
+            muted: req.method === "PUT",
+            changed: true,
+          });
         case `/api/env/${ENV}/containers/actions`:
         case `/api/env/${ENV}/containers/remove`:
           return actionAnswer();
@@ -417,7 +424,7 @@ describe("the Logs tab", () => {
     renderAt();
     await screen.findByRole("heading", { name: "web" });
     const tabs = screen.getAllByRole("tab").map((tab) => tab.textContent);
-    expect(tabs).toEqual(["Overview", "Logs", "Shell", "Inspect"]);
+    expect(tabs).toEqual(["Overview", "Logs", "Stats", "Shell", "Inspect"]);
     expect(screen.getByRole("tab", { name: "Logs" }).getAttribute("href")).toBe(
       "/env/e1/containers/web-id/logs?node=n1",
     );
@@ -512,12 +519,24 @@ describe("the Shell tab on Bayplan's own containers (plan 04-23, D-36)", () => {
   });
 });
 
+describe("the Stats tab", () => {
+  it("follows Logs and keeps the node in its address (plan 06-32)", async () => {
+    renderAt();
+    await screen.findByRole("heading", { name: "web" });
+    const tabs = screen.getAllByRole("tab").map((tab) => tab.textContent);
+    expect(tabs.indexOf("Stats")).toBe(tabs.indexOf("Logs") + 1);
+    expect(screen.getByRole("tab", { name: "Stats" }).getAttribute("href")).toBe(
+      "/env/e1/containers/web-id/stats?node=n1",
+    );
+  });
+});
+
 describe("the Inspect tab", () => {
   it("is the last tab and keeps the node in its address", async () => {
     renderAt();
     await screen.findByRole("heading", { name: "web" });
     const tabs = screen.getAllByRole("tab").map((tab) => tab.textContent);
-    expect(tabs).toEqual(["Overview", "Logs", "Shell", "Inspect"]);
+    expect(tabs).toEqual(["Overview", "Logs", "Stats", "Shell", "Inspect"]);
     expect(screen.getByRole("tab", { name: "Inspect" }).getAttribute("href")).toBe(
       "/env/e1/containers/web-id/inspect?node=n1",
     );
@@ -547,5 +566,74 @@ describe("the Inspect tab", () => {
     inspectAnswer = () => Response.json({ masked: false, inspect: { Id: "web-id" } });
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByLabelText("Inspect output for web")).toBeTruthy();
+  });
+});
+
+// Restart loops of a standalone container (plan 06-36, RES-13, D-15, D-16): the badge beside the
+// state in the header, and the mute in the More menu.
+describe("the restart loop", () => {
+  const loop = (state: "flagged" | "muted" = "flagged") => ({
+    state,
+    count: 3,
+    windowMinutes: 10,
+    lastExitCode: "3",
+  });
+
+  it("flags the container beside its state while it keeps restarting", async () => {
+    answer = () => Response.json(detail({ restartLoop: loop(), muted: false }));
+    renderAt();
+    await screen.findByRole("heading", { name: "web" });
+    expect(await screen.findByText("Restart loop")).toBeTruthy();
+  });
+
+  it("shows Muted, and no Restart loop, while the alerts are muted", async () => {
+    answer = () => Response.json(detail({ restartLoop: loop("muted"), muted: true }));
+    renderAt();
+    await screen.findByRole("heading", { name: "web" });
+    expect(await screen.findByText("Muted")).toBeTruthy();
+    expect(screen.queryByText("Restart loop")).toBeNull();
+  });
+
+  it("keeps the Muted badge on a muted container that is not looping now", async () => {
+    answer = () => Response.json(detail({ muted: true }));
+    renderAt();
+    await screen.findByRole("heading", { name: "web" });
+    expect(await screen.findByText("Muted")).toBeTruthy();
+  });
+
+  it("shows no badge for a container that is neither", async () => {
+    renderAt();
+    await screen.findByRole("heading", { name: "web" });
+    expect(screen.queryByText("Restart loop")).toBeNull();
+    expect(screen.queryByText("Muted")).toBeNull();
+  });
+
+  it("offers Mute restart-loop alerts in More and mutes on the container's node", async () => {
+    answer = () => Response.json(detail({ restartLoop: loop(), muted: false }));
+    renderAt();
+    await screen.findByRole("heading", { name: "web" });
+    const items = await openMore();
+    expect(labels(items)).toEqual(["Mute restart-loop alerts", "Pause", "Kill…", "Remove…"]);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Mute restart-loop alerts" }));
+    await waitFor(() =>
+      expect(sent.some((s) => s.method === "PUT" && s.path.endsWith("/restart-loop-mute"))).toBe(
+        true,
+      ),
+    );
+    expect(await screen.findByText("Muted restart-loop alerts for web.")).toBeTruthy();
+  });
+
+  it("offers Unmute in More while muted", async () => {
+    answer = () => Response.json(detail({ muted: true }));
+    renderAt();
+    await screen.findByRole("heading", { name: "web" });
+    const items = await openMore();
+    expect(labels(items)[0]).toBe("Unmute restart-loop alerts");
+  });
+
+  it("leaves More as it was for a container that is neither", async () => {
+    renderAt();
+    await screen.findByRole("heading", { name: "web" });
+    expect(labels(await openMore())).toEqual(["Pause", "Kill…", "Remove…"]);
   });
 });

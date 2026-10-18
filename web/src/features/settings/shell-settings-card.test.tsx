@@ -131,9 +131,7 @@ describe("the Container shells card", () => {
   it("says so, with Try again, when the limits cannot be loaded", async () => {
     getAnswer = () => Response.json({}, { status: 500 });
     renderCard();
-    expect(
-      await screen.findByText("Couldn't load the shell limits.", {}, { timeout: 4000 }),
-    ).toBeTruthy();
+    expect(await screen.findByText("Couldn't load the shell limits.")).toBeTruthy();
     getAnswer = () => Response.json(held);
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByLabelText("Close idle shells after (minutes)")).toBeTruthy();
@@ -219,9 +217,7 @@ describe("the Container shells card", () => {
     type(idle, "45");
     await waitFor(() => expect(save().hasAttribute("disabled")).toBe(false));
     fireEvent.click(save());
-    expect(
-      await screen.findByText("Something went wrong. Try again.", {}, { timeout: 4000 }),
-    ).toBeTruthy();
+    expect(await screen.findByText("Something went wrong. Try again.")).toBeTruthy();
     expect(idle.value).toBe("45");
     expect(toastSuccess).not.toHaveBeenCalled();
   });
@@ -242,9 +238,7 @@ describe("the Container shells card", () => {
     type(idle, "45");
     await waitFor(() => expect(save().hasAttribute("disabled")).toBe(false));
     fireEvent.click(save());
-    expect(
-      await screen.findByText("Enter a whole number from 5 to 240.", {}, { timeout: 4000 }),
-    ).toBeTruthy();
+    expect(await screen.findByText("Enter a whole number from 5 to 240.")).toBeTruthy();
   });
 
   it("is read only for someone who may read the settings but not change them", async () => {

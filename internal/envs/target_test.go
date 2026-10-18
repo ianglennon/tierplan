@@ -6,6 +6,8 @@ package envs
 import (
 	"context"
 	"errors"
+	"fmt"
+	"maps"
 	"slices"
 	"testing"
 
@@ -105,18 +107,16 @@ func TestWriteOnNodeRefusesARevokedAndADisconnectedAgentWithoutTouchingDocker(t 
 	r.whenOnline(t, liveEnv.ID)
 
 	_ = gone.conn.WS.CloseNow()
-	eventually(t, "the first agent to be seen disconnected", func() bool {
-		in, err := r.svc.Input(ctx, goneEnv.ID, r.clk.Now())
-		if err != nil {
-			return false
+	r.awaitDisconnected(t, goneEnv.ID, gone.id)
+	in, err := r.svc.Input(ctx, goneEnv.ID, r.clk.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ag := range in.Agents {
+		if ag.ID == gone.id && ag.Connected {
+			t.Fatal("the registry still reads the first agent as connected after the hub reported it gone")
 		}
-		for _, ag := range in.Agents {
-			if ag.ID == gone.id {
-				return !ag.Connected
-			}
-		}
-		return false
-	})
+	}
 	if err := r.agg.WriteOnNode(ctx, goneEnv.ID, gone.id, stopWeb()); !errors.Is(err, ErrNodeUnavailable) {
 		t.Fatalf("disconnected agent: err = %v, want ErrNodeUnavailable", err)
 	}
@@ -233,6 +233,43 @@ func TestWriteOnNodeRefusesAReadOnlyHostBeforeAnyCallButReadsStillRun(t *testing
 		return e
 	}); err != nil || !read {
 		t.Fatalf("OnNode on a read-only host: err = %v, ran = %v; reads must still work", err, read)
+	}
+}
+
+func TestInputCarriesTheAgentsPrivilegedServicesFactAndAMissingFieldReadsFalse(t *testing.T) {
+	r := newTunRig(t, nil)
+	r.pastGrace()
+	i := 0
+	for name, tc := range map[string]struct {
+		policy wire.PolicyFacts
+		want   bool
+	}{
+		"opted in":                        {wire.PolicyFacts{PrivilegedServices: true}, true},
+		"not opted in":                    {wire.PolicyFacts{}, false},
+		"read-only and no field at all":   {wire.PolicyFacts{ReadOnly: true}, false},
+		"opted in beside the self-update": {wire.PolicyFacts{PrivilegedServices: true, SelfUpdate: true}, true},
+	} {
+		i++
+		env := r.srv.NewEnvironment(t, "Env "+name)
+		facts := &wire.Facts{EngineID: fmt.Sprintf("ENG:priv%d", i), Hostname: "host-1", EngineReachable: true, Policy: tc.policy}
+		a := r.connect(t, env, dockertest.FakeConfig{Hostname: "host-1", Containers: webContainers()}, facts)
+		r.whenOnline(t, env.ID)
+		in, err := r.svc.Input(context.Background(), env.ID, r.clk.Now())
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var found bool
+		for _, v := range in.Agents {
+			if v.ID == a.id {
+				found = true
+				if v.PrivilegedServices != tc.want {
+					t.Errorf("%s: PrivilegedServices = %v, want %v", name, v.PrivilegedServices, tc.want)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s: agent %s is not in the rollup input %+v", name, a.id, in.Agents)
+		}
 	}
 }
 
@@ -355,5 +392,78 @@ func TestWriteOnManagerOnASwarmGoesToTheManagerTheClusterReaderChoosesOnceEvenWh
 	})
 	if !errors.Is(err, errBoom) || !slices.Equal(hosts, []string{"mgr-2"}) {
 		t.Fatalf("err = %v, hosts = %v; want one attempt on the leader mgr-2 and no failover for a write", err, hosts)
+	}
+}
+
+// A swarm node is a swarm ID to the cluster and an agent ID (or the environment's own, or
+// socket:<envId>) to the routes that reach it. SwarmNodeTargets is the map between them
+// (plan 06-07, RES-04), so a task can link to its container and later plans can route a
+// node-local read to the node a task ran on.
+
+func nodeIDs(m map[string]NodeRef) map[string]string {
+	out := map[string]string{}
+	for swarmID, ref := range m {
+		out[swarmID] = ref.ID
+	}
+	return out
+}
+
+func TestSwarmNodeTargetsMapsAConnectedAgentsSwarmNodeToTheAgentID(t *testing.T) {
+	f := newFoldRig(t, nil)
+	got, err := f.agg.SwarmNodeTargets(context.Background(), f.env.ID)
+	if err != nil {
+		t.Fatalf("SwarmNodeTargets: %v", err)
+	}
+	if want := map[string]string{"node-m1": f.m.id}; !maps.Equal(nodeIDs(got), want) {
+		t.Fatalf("targets = %v, want %v", nodeIDs(got), want)
+	}
+	if ref := got["node-m1"]; ref.Name != "mgr-1" {
+		t.Errorf("the node is named %q, want the agent's host name mgr-1", ref.Name)
+	}
+}
+
+func TestSwarmNodeTargetsMapsTheFoldedHostToItsSocketTarget(t *testing.T) {
+	f := newFoldRig(t, nil)
+	f.fold(t)
+	got, err := f.agg.SwarmNodeTargets(context.Background(), f.env.ID)
+	if err != nil {
+		t.Fatalf("SwarmNodeTargets: %v", err)
+	}
+	want := map[string]string{"node-m1": f.m.id, "node-local": SocketTarget(f.env.ID)}
+	if !maps.Equal(nodeIDs(got), want) {
+		t.Fatalf("targets = %v, want %v", nodeIDs(got), want)
+	}
+	// The ID is one that the node routes accept.
+	if err := f.agg.OnNode(context.Background(), f.env.ID, got["node-local"].ID, func(*dockerx.Client) error { return nil }); err != nil {
+		t.Errorf("OnNode with the folded host's target: %v", err)
+	}
+}
+
+func TestSwarmNodeTargetsMapsTheLocalSocketsOwnSwarmNodeToTheEnvironmentID(t *testing.T) {
+	f := newFoldRig(t, nil)
+	got, err := f.agg.SwarmNodeTargets(context.Background(), f.localEnv.ID)
+	if err != nil {
+		t.Fatalf("SwarmNodeTargets: %v", err)
+	}
+	if want := map[string]string{"node-local": f.localEnv.ID}; !maps.Equal(nodeIDs(got), want) {
+		t.Fatalf("targets = %v, want %v", nodeIDs(got), want)
+	}
+}
+
+func TestSwarmNodeTargetsLeavesOutAnAgentThatIsGone(t *testing.T) {
+	f := newFoldRig(t, nil)
+	ctx := context.Background()
+	_ = f.m.conn.WS.CloseNow()
+	f.awaitDisconnected(t, f.env.ID, f.m.id)
+	got, err := f.agg.SwarmNodeTargets(ctx, f.env.ID)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("SwarmNodeTargets = %v, %v after the manager's agent was seen disconnected, want none", nodeIDs(got), err)
+	}
+}
+
+func TestSwarmNodeTargetsOfAnUnknownEnvironmentIsNotFound(t *testing.T) {
+	f := newFoldRig(t, nil)
+	if _, err := f.agg.SwarmNodeTargets(context.Background(), "no-such-environment"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }

@@ -33,7 +33,38 @@ export function loadLogPrefs(): LogPrefs {
 
 export function saveLogPrefs(prefs: LogPrefs): void {
   try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+    // The Task names choice (below) lives in the same place; saving the three choices
+    // keeps it.
+    const kept = readStored();
+    localStorage.setItem(
+      PREFS_KEY,
+      JSON.stringify(
+        typeof kept.taskNames === "boolean" ? { ...prefs, taskNames: kept.taskNames } : prefs,
+      ),
+    );
+  } catch {
+    // Storage is full or off; the choice then lasts as long as the page.
+  }
+}
+
+function readStored(): Partial<LogPrefs> & { taskNames?: unknown } {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "null") as unknown;
+    return raw !== null && typeof raw === "object" ? (raw as Partial<LogPrefs>) : {};
+  } catch {
+    return {};
+  }
+}
+
+// Whether a service's log shows the task of each line (plan 06-29, D-32). On until it is
+// turned off, and kept per browser with the other choices.
+export function loadTaskNames(): boolean {
+  return readStored().taskNames !== false;
+}
+
+export function saveTaskNames(on: boolean): void {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ ...readStored(), taskNames: on }));
   } catch {
     // Storage is full or off; the choice then lasts as long as the page.
   }
@@ -48,6 +79,13 @@ export interface LogViewParams {
   ts?: boolean;
   utc?: boolean;
   wrap?: boolean;
+  // A service's log adds these (plan 06-29, D-33): false hides the task prefixes, task and
+  // node are comma lists the server narrows the stream to, and stopped takes in the tasks
+  // that had already ended.
+  prefix?: boolean;
+  task?: string;
+  node?: string;
+  stopped?: boolean;
 }
 
 // The router turns a value like 404 into a number before the schema sees it.
@@ -63,6 +101,23 @@ export const logSearchSchema = z.object({
   ts: z.boolean().optional().catch(undefined),
   utc: z.boolean().optional().catch(undefined),
   wrap: z.boolean().optional().catch(undefined),
+});
+
+// A switch in the address: a boolean, or what the router makes of 0 and 1 (it reads every
+// value as JSON first, so ?prefix=0 arrives as a number).
+const flag = z.preprocess((v) => {
+  if (v === 0 || v === "0") return false;
+  if (v === 1 || v === "1") return true;
+  return v;
+}, z.boolean().optional().catch(undefined));
+
+// The address of a service's Logs tab: the container log's, and the prefix switch, the task
+// and node lists and the stopped switch.
+export const serviceLogSearchSchema = logSearchSchema.extend({
+  prefix: flag,
+  task: text(2000),
+  node: text(2000),
+  stopped: flag,
 });
 
 // ---- the Show range ----

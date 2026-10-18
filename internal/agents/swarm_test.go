@@ -49,6 +49,136 @@ func (f *swarmFix) install(t *testing.T) {
 	t.Logf("swarm install on %s:\n%s", f.sw.Managers[0].Hostname, quiet(sh(t, f.sw.Managers[0], f.env.Install.Swarm.Command)))
 }
 
+// installPrivileged runs the generated swarm command with the one setting a host owner adds to let the manager's
+// agent forward services that give tasks host access (BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES, D-36). The
+// setting is put in the text the server generated, before the first update flag of the service, so everything
+// else in the command runs exactly as an admin would paste it.
+func (f *swarmFix) installPrivileged(t *testing.T) {
+	t.Helper()
+	const anchor = "--update-parallelism 1"
+	cmd := f.env.Install.Swarm.Command
+	if !strings.Contains(cmd, anchor) {
+		t.Fatalf("the generated swarm command has no %q to put the setting before:\n%s", anchor, cmd)
+	}
+	cmd = strings.Replace(cmd, anchor, "--env BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true "+anchor, 1)
+	t.Logf("swarm install with the privileged-services opt-in on %s:\n%s", f.sw.Managers[0].Hostname, quiet(sh(t, f.sw.Managers[0], cmd)))
+}
+
+// svcItem is the part of a row of the services list these tests read.
+type svcItem struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Mode            string `json:"mode"`
+	Running         uint64 `json:"running"`
+	Desired         uint64 `json:"desired"`
+	UpdateState     string `json:"updateState"`
+	Image           string `json:"image"`
+	HasPreviousSpec bool   `json:"hasPreviousSpec"`
+	RestartLoop     *struct {
+		State string `json:"state"`
+		Count int    `json:"count"`
+	} `json:"restartLoop"`
+}
+
+// services is the services list of the environment as the API answers it now.
+func (f *swarmFix) services(t *testing.T) []svcItem {
+	t.Helper()
+	code, body := f.srv.Do(http.MethodGet, "/api/env/"+f.env.ID+"/services", nil)
+	var list struct {
+		Items []svcItem `json:"items"`
+	}
+	if code != http.StatusOK || json.Unmarshal(body, &list) != nil {
+		t.Fatalf("GET services = %d %s", code, body)
+	}
+	return list.Items
+}
+
+// service is the row of one service of the list, by name.
+func (f *swarmFix) service(t *testing.T, name string) (svcItem, bool) {
+	t.Helper()
+	for _, it := range f.services(t) {
+		if it.Name == name {
+			return it, true
+		}
+	}
+	return svcItem{}, false
+}
+
+// waitService polls the services list, never sleeping a fixed time, until cond is true of the service's row,
+// and fails with the row (or its absence) as last seen. The cluster is read again each time round, so the
+// answer is the swarm's now and not the server's last periodic read.
+func (f *swarmFix) waitService(t *testing.T, name, what string, d time.Duration, cond func(svcItem) bool) svcItem {
+	t.Helper()
+	var got svcItem
+	f.srv.WaitFor("service "+name+" "+what, d, func() (bool, string) {
+		f.srv.RefreshCluster(f.env.ID)
+		it, ok := f.service(t, name)
+		got = it
+		if !ok {
+			return false, "no such service in the list"
+		}
+		b, _ := json.Marshal(it)
+		return cond(it), string(b)
+	})
+	return got
+}
+
+// rolloutBody is the answer of the rollout route.
+type rolloutBody struct {
+	State           string `json:"state"`
+	Message         string `json:"message"`
+	Updated         int    `json:"updated"`
+	Total           int    `json:"total"`
+	LatestTaskError string `json:"latestTaskError"`
+}
+
+// serviceRollout reads how far the service's last rolling update or rollback has got.
+func (f *swarmFix) serviceRollout(t *testing.T, id string) rolloutBody {
+	t.Helper()
+	code, body := f.srv.Do(http.MethodGet, "/api/env/"+f.env.ID+"/services/"+id+"/rollout", nil)
+	var out rolloutBody
+	if code != http.StatusOK || json.Unmarshal(body, &out) != nil {
+		t.Fatalf("GET rollout of %s = %d %s", id, code, body)
+	}
+	return out
+}
+
+// waitRollout polls the rollout route until the update is in state.
+func (f *swarmFix) waitRollout(t *testing.T, id, state string, d time.Duration) rolloutBody {
+	t.Helper()
+	var got rolloutBody
+	f.srv.WaitFor("the rollout of "+id+" to be "+state, d, func() (bool, string) {
+		got = f.serviceRollout(t, id)
+		b, _ := json.Marshal(got)
+		return got.State == state, string(b)
+	})
+	return got
+}
+
+// createdService is the answer of the create route.
+type createdService struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Image  string `json:"image"`
+	Digest string `json:"digest"`
+	Pinned bool   `json:"pinned"`
+}
+
+// createService posts the spec to the create route and answers the status and the body.
+func (f *swarmFix) createService(t *testing.T, spec any) (int, []byte) {
+	t.Helper()
+	return f.srv.Do(http.MethodPost, "/api/env/"+f.env.ID+"/services", map[string]any{"spec": spec})
+}
+
+// problemType is the machine-readable type of an error body.
+func problemType(body []byte) string {
+	var p struct {
+		Type string `json:"type"`
+	}
+	_ = json.Unmarshal(body, &p)
+	return p.Type
+}
+
 // quiet drops the progress lines `docker service create` prints while it waits
 // for the tasks to converge, which repeat a hundred times in a log.
 func quiet(out string) string {
@@ -130,15 +260,14 @@ func inspectService(t *testing.T, n *dockertest.Node, name string) serviceSpec {
 	return spec
 }
 
-// TestSwarmEnrol runs the generated swarm command on one manager of a swarm of
+// sharedEnrol runs the generated swarm command on one manager of a swarm of
 // three managers and a worker: the global service starts one agent per node, all
 // four enrol, and the environment is one swarm with its cluster ID bound, four
 // of four nodes and agents, and container rows that name the node they run on
 // (D-57, D-58, ENV-02, ENV-03). The same run is the first real-swarm use of the
 // install flags (--constraint, --update-delay, --container-label, the secret
 // mount) and of the hardening options on a service.
-func TestSwarmEnrol(t *testing.T) {
-	f := startSwarmFix(t, 3, 1)
+func sharedEnrol(t *testing.T, f *swarmFix) {
 	mgr := f.sw.Managers[0]
 	f.install(t)
 	got := f.waitSwarmOnline(t, 4)
@@ -287,12 +416,11 @@ func stripCap(in []string) []string {
 	return out
 }
 
-// TestSwarmRoutesNodeLocalCalls starts a container on the worker only. Reading
+// sharedRoutesNodeLocalCalls starts a container on the worker only. Reading
 // the environment goes through a manager's agent for cluster questions and
 // through every node's own agent for what runs on it: the container shows once,
 // under the worker's hostname, whichever way it is asked for (D-11, D-46).
-func TestSwarmRoutesNodeLocalCalls(t *testing.T) {
-	f := startSwarmFix(t, 3, 1)
+func sharedRoutesNodeLocalCalls(t *testing.T, f *swarmFix) {
 	worker, manager := f.sw.Workers[0], f.sw.Managers[0]
 	dockertest.LoadImage(t, "busybox", worker)
 	f.install(t)

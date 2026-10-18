@@ -10,12 +10,12 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/api/types/mount"
 
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -230,17 +230,15 @@ func TestAnUninstallWhoseOwnImageIsInAnotherRepositoryIsRefused(t *testing.T) {
 func TestTwoUninstallsAtOnceAnswerBusyForTheSecond(t *testing.T) {
 	f, m := swarmUninstallFixture(t, true, nil)
 	gate := make(chan struct{})
-	m.beforeDocker = func() { <-gate }
+	started := make(chan struct{}, 1)
+	m.beforeDocker = func() { started <- struct{}{}; <-gate }
 	done := make(chan wire.UpdateResult, 1)
 	go func() {
 		done <- m.Uninstall(context.Background(), wire.Uninstall{T: wire.TypeUninstall, ID: "a", RemoveData: true, Service: true})
 	}()
-	deadline := time.Now().Add(5 * time.Second)
-	for !m.busy() {
-		if time.Now().After(deadline) {
-			t.Fatal("the first uninstall never started")
-		}
-		time.Sleep(time.Millisecond)
+	testsupport.Await(t, "the first uninstall to hold the lock", started)
+	if !m.busy() {
+		t.Fatal("the first uninstall holds the lock but the Manager does not report busy")
 	}
 	if second := m.Uninstall(context.Background(), wire.Uninstall{T: wire.TypeUninstall, ID: "b", RemoveData: true, Service: true}); second.OK || second.Error != wire.UpdateErrBusy || second.ID != "b" {
 		t.Fatalf("the second uninstall must answer %s: %+v", wire.UpdateErrBusy, second)

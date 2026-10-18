@@ -29,6 +29,14 @@ const (
 	BodyNetworkDisconnect
 	// BodyVolumeCreate is POST /volumes/create.
 	BodyVolumeCreate
+	// BodyServiceSpec is POST /services/create and POST /services/{id}/update.
+	BodyServiceSpec
+	// BodyNodeSpec is POST /nodes/{id}/update.
+	BodyNodeSpec
+	// BodySecretCreate is POST /secrets/create.
+	BodySecretCreate
+	// BodyConfigCreate is POST /configs/create.
+	BodyConfigCreate
 )
 
 // route is one thing the agent forwards: a method, an anchored path, the query
@@ -72,6 +80,9 @@ var (
 	// boolValue is every spelling of a boolean the engine accepts and the
 	// server's client sends.
 	boolValue = regexp.MustCompile(`^(0|1|true|false)$`)
+	// streamOff is the one value the stream key of a stats read may have: the agent
+	// answers one sample and never holds a stats stream open.
+	streamOff = regexp.MustCompile(`^(0|false)$`)
 	// secondsValue is a timeout in seconds, -1 to 86400.
 	secondsValue = regexp.MustCompile(`^(-1|[0-9]{1,4}|[0-7][0-9]{4}|8[0-5][0-9]{3}|86[0-3][0-9]{2}|86400)$`)
 	// logTime is a log bound: a Unix time or an RFC 3339 time.
@@ -91,6 +102,13 @@ var (
 	fromImageValue = regexp.MustCompile(`^` + imageNameShape + `$`)
 	// pullTag is a tag or a digest, which the engine takes in the same key.
 	pullTag = regexp.MustCompile(`^([A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|sha256:[a-f0-9]{64}|sha512:[a-f0-9]{128})$`)
+	// versionValue is the object version a service update carries, a swarm index.
+	versionValue = regexp.MustCompile(`^[0-9]{1,20}$`)
+	// authFromValue is where a service update takes the registry credential's
+	// registry from.
+	authFromValue = regexp.MustCompile(`^(spec|previous-spec)$`)
+	// rollbackValue is the rollback a service update may ask for.
+	rollbackValue = regexp.MustCompile(`^(previous|none)$`)
 	// platformValue is os/arch or os/arch/variant.
 	platformValue = regexp.MustCompile(`^[a-z0-9]{1,16}(/[A-Za-z0-9_.-]{1,32}){1,2}$`)
 )
@@ -106,14 +124,22 @@ func read(name, tail string) route {
 	return route{name: name, method: http.MethodGet, path: pathOf(tail), anyQuery: true}
 }
 
+// serviceLogKeys are the query keys of a service's and a task's logs: the seven the server
+// sends, with the same value shapes as a container's logs, and no until.
+var serviceLogKeys = map[string]*regexp.Regexp{
+	"stdout": boolValue, "stderr": boolValue, "timestamps": boolValue, "follow": boolValue,
+	"details": boolValue, "since": logTime, "tail": tailValue,
+}
+
 // routes is the whole surface the agent forwards, and the first place to look
 // when asking whether the agent may do something. It is consulted after the
 // read-only flag, so no entry can reach a write on a read-only host (D-35).
 //
 // GET /swarm is deliberately absent: its answer carries the swarm join tokens,
 // which are credentials to add nodes. The cluster ID is read from /info on a
-// manager instead. Container create, attach, archive, export and stats are
-// absent too.
+// manager instead. Container create, attach, archive and export are absent too. The stats
+// of a container are forwarded for one sample at a time only (RES-11): the two keys a
+// one-shot read sends, and never a stream the agent would have to hold open.
 var routes = []route{
 	// The read surface of Phase 2: ping, version, info, the lists the dashboard
 	// reads, events, the swarm lists and the inspect of one container.
@@ -129,6 +155,61 @@ var routes = []route{
 	read("services", `services`),
 	read("tasks", `tasks`),
 	read("container inspect", `containers/`+idShape+`/json`),
+
+	// One node: the inspect, which takes no key. It sits after the list so GET /nodes is
+	// never read as an inspect. The update changes one node's availability, role or labels:
+	// it takes the version just read and a node spec body that carries a name, labels, a
+	// role and an availability and nothing else. The remove takes no key at all: with no force
+	// key a compromised server cannot remove a node that is still up (RES-05, D-22), and the
+	// daemon itself refuses a node that is not down.
+	{name: "node inspect", method: http.MethodGet, path: pathOf(`nodes/` + idShape)},
+	{name: "node remove", method: http.MethodDelete, path: pathOf(`nodes/` + idShape)},
+	{
+		name: "node update", method: http.MethodPost, path: pathOf(`nodes/` + idShape + `/update`),
+		query: map[string]*regexp.Regexp{"version": versionValue}, body: BodyNodeSpec,
+	},
+
+	// One service: the inspect (matched after the list, so GET /services is never
+	// read as an inspect), the create and the update, which take the service's whole
+	// spec as their body and the registry credential its image needs, and the
+	// remove, which takes no key. A spec that gives tasks host access is refused by
+	// the body validator unless the host allows it (D-36). The logs of a service and of a
+	// task are further down, beside the container logs.
+	{
+		name: "service inspect", method: http.MethodGet, path: pathOf(`services/` + idShape),
+		query: map[string]*regexp.Regexp{"insertDefaults": boolValue},
+	},
+	{
+		name: "service create", method: http.MethodPost, path: pathOf(`services/create`),
+		body: BodyServiceSpec, registryAuth: true,
+	},
+	{name: "service remove", method: http.MethodDelete, path: pathOf(`services/` + idShape)},
+	{
+		name: "service update", method: http.MethodPost, path: pathOf(`services/` + idShape + `/update`),
+		query:        map[string]*regexp.Regexp{"version": versionValue, "registryAuthFrom": authFromValue, "rollback": rollbackValue},
+		body:         BodyServiceSpec,
+		registryAuth: true,
+	},
+
+	// Secrets. The list sits ahead of the inspect so GET /secrets is never read as an
+	// inspect (Pitfall 19), and none of the four takes a query key: the list takes no filter,
+	// and a secret's value is never an answer, because the engine does not return one (E17).
+	// The create takes a name, labels and the value, and refuses a driver and templating in
+	// its body validator. An update is absent on purpose: a secret is replaced, not edited.
+	{name: "secrets list", method: http.MethodGet, path: pathOf(`secrets`)},
+	{name: "secret inspect", method: http.MethodGet, path: pathOf(`secrets/` + idShape)},
+	{name: "secret create", method: http.MethodPost, path: pathOf(`secrets/create`), body: BodySecretCreate},
+	{name: "secret remove", method: http.MethodDelete, path: pathOf(`secrets/` + idShape)},
+
+	// Configs. The same four routes, in the same order and for the same reason: the list sits
+	// ahead of the inspect, none takes a query key, and an update is absent on purpose (a config
+	// is replaced, not edited). The list and the inspect answer with the content, which a config
+	// has and a secret does not; the server drops it from the list. The create takes a name,
+	// labels, the content and the golang templating driver, and nothing else.
+	{name: "configs list", method: http.MethodGet, path: pathOf(`configs`)},
+	{name: "config inspect", method: http.MethodGet, path: pathOf(`configs/` + idShape)},
+	{name: "config create", method: http.MethodPost, path: pathOf(`configs/create`), body: BodyConfigCreate},
+	{name: "config remove", method: http.MethodDelete, path: pathOf(`configs/` + idShape)},
 
 	// Container lifecycle.
 	{name: "container start", method: http.MethodPost, path: pathOf(`containers/` + idShape + `/start`)},
@@ -159,6 +240,28 @@ var routes = []route{
 			"stdout": boolValue, "stderr": boolValue, "timestamps": boolValue, "follow": boolValue,
 			"details": boolValue, "since": logTime, "until": logTime, "tail": tailValue,
 		},
+	},
+
+	// The stats of one container, read one sample at a time: the engine's stream and
+	// one-shot switches are the only keys, so a request that follows the stats of a
+	// container without end is as refused as any other key. Block I/O and the network are
+	// in the sample; nothing in it names a secret.
+	{
+		name: "container stats", method: http.MethodGet, path: pathOf(`containers/` + idShape + `/stats`),
+		query: map[string]*regexp.Regexp{"stream": streamOff, "one-shot": boolValue},
+	},
+
+	// The logs of a service (all its tasks, on one stream a manager answers) and of one
+	// task, followed or not. The keys are the container log keys without until, which the
+	// engine ignores on both routes (RESEARCH E2); the server cuts by time itself. They sit
+	// after "service inspect" and "tasks", which cannot match a path ending in /logs.
+	{
+		name: "service logs", method: http.MethodGet, path: pathOf(`services/` + idShape + `/logs`),
+		query: serviceLogKeys,
+	},
+	{
+		name: "task logs", method: http.MethodGet, path: pathOf(`tasks/` + idShape + `/logs`),
+		query: serviceLogKeys,
 	},
 
 	// A shell: create the exec, start it (the one HTTP upgrade the agent

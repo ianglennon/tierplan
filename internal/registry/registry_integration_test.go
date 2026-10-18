@@ -37,6 +37,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/registry"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // The credential test against a real registry (plan 05-12, D-12, D-14): registry:2 with an
@@ -226,19 +227,14 @@ func (c checker) check(user, pass, repo string) registry.CheckResult {
 		registry.CheckInput{HostOptions: signed, Type: registry.TypeGeneric, TestRepository: repo})
 }
 
-// waitUp waits until the registry answers a test at all.
+// waitUp waits until the registry answers a test at all. The registry runs in a real
+// container, so this is the one wait that polls; a failure names the last step it saw.
 func waitUp(t *testing.T, c checker) {
 	t.Helper()
-	deadline := time.Now().Add(time.Minute)
-	for {
-		if r := c.check(itUser, itPass, ""); r.Reachable.State == registry.StepPassed {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the registry at %s never answered", c.host)
-		}
-		time.Sleep(time.Second)
-	}
+	testsupport.Poll(t, time.Minute, "the registry at "+c.host+" to answer (never answered)", func() (bool, string) {
+		r := c.check(itUser, itPass, "")
+		return r.Reachable.State == registry.StepPassed, fmt.Sprintf("reachable step %q, code %q", r.Reachable.State, r.Reachable.Code)
+	})
 }
 
 func expect(t *testing.T, what string, got registry.CheckResult, want registry.CheckResult) {

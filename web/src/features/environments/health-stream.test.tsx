@@ -4,7 +4,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import { type EnvironmentItem, environmentsQuery } from "@/api/environments";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import {
@@ -13,6 +12,7 @@ import {
   useEnvHealthEvents,
   useHealthLive,
 } from "@/features/environments/health-stream";
+import { waitUnderFakeClock } from "@/test-settle";
 
 function env(id: string, state: EnvironmentItem["status"]["state"], name = id): EnvironmentItem {
   return {
@@ -132,7 +132,7 @@ describe("EnvHealthStreamProvider", () => {
     ]);
     expect(client.getQueryState(["agents", "a"])?.isInvalidated).toBe(true);
     expect(client.getQueryState(["environment-warnings"])?.isInvalidated).toBe(true);
-    await vi.waitFor(() => expect(fetched).toContain("/api/environments"));
+    await waitUnderFakeClock(() => expect(fetched).toContain("/api/environments"));
   });
 
   it("reads the environment problems again on a status change, an agent coming or going, but not on a refused enrolment", async () => {
@@ -236,7 +236,7 @@ describe("EnvHealthStreamProvider", () => {
         "9",
       );
     });
-    await vi.waitFor(() => expect(fetched).toContain("/api/environments"));
+    await waitUnderFakeClock(() => expect(fetched).toContain("/api/environments"));
   });
 
   it("reads Live once the stream opens, Reconnecting… while it retries, and polling after it gives up", async () => {
@@ -353,7 +353,7 @@ describe("EnvHealthStreamProvider", () => {
         "12",
       );
     });
-    await vi.waitFor(() => expect(fetched).toContain("/api/environments"));
+    await waitUnderFakeClock(() => expect(fetched).toContain("/api/environments"));
   });
 
   it("stops listening when a subscriber unmounts", async () => {

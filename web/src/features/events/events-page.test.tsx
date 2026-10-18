@@ -127,12 +127,17 @@ describe("EventsPage", () => {
   });
 
   it("reads the last hour, up to 1000 events", async () => {
+    // The request's since is bounded by the clock read before mounting and after the request,
+    // so the check holds however slowly the page renders.
+    const before = Date.now();
     mount();
     await screen.findByText("No events in this range");
+    const after = Date.now();
     const url = eventUrls[0] as URL;
     expect(url.searchParams.get("limit")).toBe("1000");
     const since = Date.parse(url.searchParams.get("since") ?? "");
-    expect(Math.abs(Date.now() - 60 * 60_000 - since)).toBeLessThan(5_000);
+    expect(since).toBeGreaterThanOrEqual(before - 60 * 60_000);
+    expect(since).toBeLessThanOrEqual(after - 60 * 60_000);
   });
 
   it("lists the events newest first, then puts a new one at the top, with a Live chip", async () => {
@@ -188,7 +193,7 @@ describe("EventsPage", () => {
 
     recent = async () => Response.json({}, { status: 500 });
     mount();
-    expect(await screen.findByText("Couldn't load events.", {}, { timeout: 4000 })).toBeTruthy();
+    expect(await screen.findByText("Couldn't load events.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
@@ -241,11 +246,14 @@ describe("EventsPage range", () => {
       "Last hour",
       "Last 24 hours",
     ]);
+    const before = Date.now();
     fireEvent.click(screen.getByRole("option", { name: "Last 24 hours" }));
     expect(spy).toHaveBeenCalledWith({ since: "24h" });
     await waitFor(() => expect(eventUrls).toHaveLength(2));
+    const after = Date.now();
     const since = Date.parse((eventUrls[1] as URL).searchParams.get("since") ?? "");
-    expect(Math.abs(Date.now() - 24 * 60 * 60_000 - since)).toBeLessThan(5_000);
+    expect(since).toBeGreaterThanOrEqual(before - 24 * 60 * 60_000);
+    expect(since).toBeLessThanOrEqual(after - 24 * 60 * 60_000);
     // The old stream is closed and a new one opened.
     expect(FakeEventSource.instances).toHaveLength(2);
     expect((FakeEventSource.instances[0] as FakeEventSource).closed).toBe(true);
@@ -523,7 +531,7 @@ describe("EventsPage rows", () => {
     expect(screen.getByText("web")).toBeTruthy();
   });
 
-  it("notes the 1000-event buffer when it is full", { timeout: 30_000 }, async () => {
+  it("notes the 1000-event buffer when it is full", async () => {
     recent = async () =>
       Response.json({
         items: Array.from({ length: 1000 }, (_, i) =>
@@ -531,9 +539,7 @@ describe("EventsPage rows", () => {
         ),
       });
     mount();
-    expect(
-      await screen.findByText("Showing the newest 1000 events.", {}, { timeout: 15_000 }),
-    ).toBeTruthy();
+    expect(await screen.findByText("Showing the newest 1000 events.")).toBeTruthy();
     cleanup();
     recent = async () => Response.json({ items: [ev("1")] });
     mount();

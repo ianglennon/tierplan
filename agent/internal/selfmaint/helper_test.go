@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/moby/moby/api/types/network"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -151,7 +153,7 @@ func recreateFixture(t *testing.T, connect bool, timeout time.Duration) (*fakeEn
 }
 
 func TestRecreateReplacesTheAgentWithTheSameConfigurationAndTheNewImage(t *testing.T) {
-	f, r, _ := recreateFixture(t, true, 5*time.Second)
+	f, r, _ := recreateFixture(t, true, testsupport.Deadline)
 	wantHC := normalisedHostConfig(t, f.containers[oldLong].HostConfig)
 	if err := r.run(context.Background()); err != nil {
 		t.Fatalf("recreate failed: %v", err)
@@ -243,7 +245,7 @@ func (f *fakeEngine) writeWithPrefix(prefix string) string {
 }
 
 func TestRecreateConnectsTheOtherNetworksWhenThereIsMoreThanOne(t *testing.T) {
-	f, r, _ := recreateFixture(t, true, 5*time.Second)
+	f, r, _ := recreateFixture(t, true, testsupport.Deadline)
 	f.containers[oldLong].NetworkSettings.Networks["backend"] = &network.EndpointSettings{
 		Aliases: []string{"agent", oldShort}, NetworkID: "net2", IPAddress: netip.MustParseAddr("10.0.0.5"),
 		IPAMConfig: &network.EndpointIPAMConfig{IPv4Address: netip.MustParseAddr("10.0.0.5")},
@@ -301,13 +303,15 @@ func TestRecreateRollsBackAtOnceWhenTheNewContainerStopsRunning(t *testing.T) {
 			c.State = &container.State{Status: "exited", Running: false, ExitCode: 1}
 		}
 	}
-	start := time.Now()
-	err := r.run(context.Background())
+	// The helper would wait a whole minute (the fixture's connect timeout, twice
+	// testsupport.Deadline) for a container that is still running. It must see that this
+	// one has exited and roll back at once, so the call is awaited on the shared deadline:
+	// waiting for the timeout would fail here every time, however fast the machine is.
+	done := make(chan error, 1)
+	go func() { done <- r.run(context.Background()) }()
+	err := testsupport.Await(t, "the rollback of a new container that exited, not the connect timeout", done)
 	if !errors.Is(err, ErrRolledBack) {
 		t.Fatalf("want ErrRolledBack, got %v", err)
-	}
-	if d := time.Since(start); d > 10*time.Second {
-		t.Fatalf("took %v: a container that exited must not be waited for", d)
 	}
 	assertRolledBack(t, f)
 }
@@ -337,11 +341,10 @@ func TestRecreateRollsBackWhenTheNewContainerCannotBeStarted(t *testing.T) {
 func TestRecreateRollsBackEvenWhenItsOwnContextWasCancelled(t *testing.T) {
 	f, r, _ := recreateFixture(t, false, time.Minute)
 	ctx, cancel := context.WithCancel(context.Background())
-	f.onStart = func(_ *fakeEngine, c *container.InspectResponse) {
-		if c.ID != oldLong && c.ID != helperID {
-			go func() { time.Sleep(20 * time.Millisecond); cancel() }()
-		}
-	}
+	// The helper reads the marker only once the new container is running, so the
+	// context ends after the new container started and before it connected.
+	marker := r.opts.Marker
+	r.opts.Marker = func() (time.Time, error) { cancel(); return marker() }
 	if err := r.run(ctx); !errors.Is(err, ErrRolledBack) {
 		t.Fatalf("want ErrRolledBack, got %v", err)
 	}
@@ -358,7 +361,7 @@ func TestAMarkerFromBeforeTheStartIsNotASuccess(t *testing.T) {
 }
 
 func TestRecreateTouchesNothingWhenTheOldNameIsTaken(t *testing.T) {
-	f, r, _ := recreateFixture(t, true, time.Second)
+	f, r, _ := recreateFixture(t, true, testsupport.Deadline)
 	f.addContainer(container.InspectResponse{ID: "e" + strings.Repeat("0", 63), Name: "/bayplan-agent-old", State: &container.State{}, Config: &container.Config{}})
 	if err := r.run(context.Background()); err == nil || errors.Is(err, ErrRolledBack) {
 		t.Fatalf("want a plain error, got %v", err)
@@ -383,7 +386,7 @@ func TestRecreateRefusesATargetThatIsNotAnAgentOrNotOfTheHelpersRepository(t *te
 		"helper foreign repo": func(f *fakeEngine) { f.containers[helperID].Config.Image = "ghcr.io/evil/agent:1" },
 	} {
 		t.Run(name, func(t *testing.T) {
-			f, r, _ := recreateFixture(t, true, time.Second)
+			f, r, _ := recreateFixture(t, true, testsupport.Deadline)
 			mutate(f)
 			if err := r.run(context.Background()); err == nil {
 				t.Fatal("a target that is not an agent was recreated")
@@ -396,7 +399,7 @@ func TestRecreateRefusesATargetThatIsNotAnAgentOrNotOfTheHelpersRepository(t *te
 }
 
 func TestRecreateFailsWithoutChangingAnythingWhenTheTargetDoesNotExist(t *testing.T) {
-	f, r, _ := recreateFixture(t, true, time.Second)
+	f, r, _ := recreateFixture(t, true, testsupport.Deadline)
 	r.opts.TargetID = "ffffffffffff"
 	if err := r.run(context.Background()); err == nil {
 		t.Fatal("want an error")
@@ -407,7 +410,7 @@ func TestRecreateFailsWithoutChangingAnythingWhenTheTargetDoesNotExist(t *testin
 }
 
 func TestRecreateKeepsEveryLabelWhenTheOldImageIsGone(t *testing.T) {
-	f, r, _ := recreateFixture(t, true, 5*time.Second)
+	f, r, _ := recreateFixture(t, true, testsupport.Deadline)
 	delete(f.images, "sha256:old")
 	if err := r.run(context.Background()); err != nil {
 		t.Fatalf("recreate failed: %v", err)
@@ -615,7 +618,7 @@ func removeFixture(t *testing.T, mut func(*RemoveVolumeOptions)) (*fakeEngine, R
 	helperSelf(f)
 	opts := RemoveVolumeOptions{
 		SocketPath: f.sock, ContainerID: oldLong, Volume: "bayplan-agent",
-		Timeout: 5 * time.Second, Poll: 2 * time.Millisecond, Log: quietLog(),
+		Timeout: testsupport.Deadline, Poll: 2 * time.Millisecond, Log: quietLog(),
 	}
 	if mut != nil {
 		mut(&opts)
@@ -623,20 +626,25 @@ func removeFixture(t *testing.T, mut func(*RemoveVolumeOptions)) (*fakeEngine, R
 	return f, opts
 }
 
-// goneAfter removes the container from the fake engine after d, as swarm does when
-// it takes the task away.
-func goneAfter(f *fakeEngine, id string, d time.Duration) {
-	go func() {
-		time.Sleep(d)
-		f.mu.Lock()
-		delete(f.containers, id)
-		f.mu.Unlock()
-	}()
+// goneAfter removes the container from the fake engine once the helper has inspected
+// it n times, as swarm does when it takes the task away while the helper waits. Set
+// the hook before RemoveVolumeAfter starts: the fake runs it under f.mu once requests
+// arrive, so installing or changing it later is a data race.
+func goneAfter(f *fakeEngine, id string, n int) {
+	seen := 0
+	f.onInspect = func(f *fakeEngine, c *container.InspectResponse) {
+		if c.ID != id {
+			return
+		}
+		if seen++; seen >= n {
+			delete(f.containers, id)
+		}
+	}
 }
 
 func TestRemoveVolumeWaitsForTheContainerToGoAndThenRemovesOnlyTheVolume(t *testing.T) {
 	f, opts := removeFixture(t, nil)
-	goneAfter(f, oldLong, 60*time.Millisecond)
+	goneAfter(f, oldLong, 3)
 	if err := RemoveVolumeAfter(context.Background(), opts); err != nil {
 		t.Fatalf("the helper failed: %v", err)
 	}
@@ -697,6 +705,7 @@ func TestRemoveVolumeWaitsForTheGraceBeforeRemovingTheContainer(t *testing.T) {
 	if err := RemoveVolumeAfter(context.Background(), opts); err != nil {
 		t.Fatalf("the helper failed: %v", err)
 	}
+	// wall-clock: lower bound; load can only make the removal later than the grace, never earlier
 	if took := time.Since(start); took < 150*time.Millisecond {
 		t.Fatalf("the container was removed after %v, before the grace the agent needs to answer", took)
 	}
@@ -706,7 +715,7 @@ func TestRemoveVolumeWaitsForTheGraceBeforeRemovingTheContainer(t *testing.T) {
 func TestRemoveVolumeRetriesWhileTheVolumeIsStillInUse(t *testing.T) {
 	f, opts := removeFixture(t, nil)
 	f.volumeBusy = 3
-	goneAfter(f, oldLong, 10*time.Millisecond)
+	goneAfter(f, oldLong, 2)
 	if err := RemoveVolumeAfter(context.Background(), opts); err != nil {
 		t.Fatalf("the helper failed: %v", err)
 	}
@@ -718,7 +727,7 @@ func TestRemoveVolumeRetriesWhileTheVolumeIsStillInUse(t *testing.T) {
 func TestRemoveVolumeGivesUpOnAVolumeThatStaysInUse(t *testing.T) {
 	f, opts := removeFixture(t, func(o *RemoveVolumeOptions) { o.Timeout = 100 * time.Millisecond })
 	f.volumeBusy = 1 << 20
-	goneAfter(f, oldLong, 5*time.Millisecond)
+	goneAfter(f, oldLong, 1)
 	err := RemoveVolumeAfter(context.Background(), opts)
 	if err == nil || !strings.Contains(err.Error(), "in use") {
 		t.Fatalf("want an in-use error, got %v", err)
@@ -728,7 +737,7 @@ func TestRemoveVolumeGivesUpOnAVolumeThatStaysInUse(t *testing.T) {
 func TestRemoveVolumeReportsAVolumeThatCannotBeRemoved(t *testing.T) {
 	f, opts := removeFixture(t, nil)
 	f.volumeErr = 500
-	goneAfter(f, oldLong, 5*time.Millisecond)
+	goneAfter(f, oldLong, 1)
 	if err := RemoveVolumeAfter(context.Background(), opts); err == nil {
 		t.Fatal("a failed volume removal was reported as success")
 	}
@@ -737,7 +746,7 @@ func TestRemoveVolumeReportsAVolumeThatCannotBeRemoved(t *testing.T) {
 func TestRemoveVolumeTreatsAVolumeThatIsAlreadyGoneAsDone(t *testing.T) {
 	f, opts := removeFixture(t, nil)
 	f.volumeErr = 404
-	goneAfter(f, oldLong, 5*time.Millisecond)
+	goneAfter(f, oldLong, 1)
 	if err := RemoveVolumeAfter(context.Background(), opts); err != nil {
 		t.Fatalf("a volume that does not exist is already removed: %v", err)
 	}
@@ -785,9 +794,25 @@ func TestRemoveVolumeRefusesAVolumeTheTargetDoesNotMount(t *testing.T) {
 func TestRemoveVolumeStopsWhenItsContextEnds(t *testing.T) {
 	f, opts := removeFixture(t, func(o *RemoveVolumeOptions) { o.Timeout = time.Hour })
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() { time.Sleep(30 * time.Millisecond); cancel() }()
-	if err := RemoveVolumeAfter(ctx, opts); err == nil {
+	// The first inspect of the agent's container is the pre-check, which the context
+	// reaches through a different path (checkRemoveTarget's error). The wait loop's
+	// inspect is the second, so the context ends there: that is what shows the loop
+	// itself stops when its context ends. The hook is set before the helper starts.
+	var inspects atomic.Int32
+	f.onInspect = func(_ *fakeEngine, c *container.InspectResponse) {
+		if c.ID == oldLong && inspects.Add(1) == 2 {
+			cancel()
+		}
+	}
+	err := RemoveVolumeAfter(ctx, opts)
+	if err == nil {
 		t.Fatal("a cancelled helper reported success")
+	}
+	if !strings.Contains(err.Error(), "did not go away") {
+		t.Fatalf("the helper stopped for another reason than the wait loop seeing its context end: %v", err)
+	}
+	if n := inspects.Load(); n != 2 {
+		t.Fatalf("the agent's container was inspected %d times, want 2 (the pre-check, then the wait loop's)", n)
 	}
 	if len(f.volumeDeletes) != 0 {
 		t.Fatalf("volumes removed: %v", f.volumeDeletes)

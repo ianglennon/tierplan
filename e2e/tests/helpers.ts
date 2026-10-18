@@ -7,6 +7,7 @@ import {
   type BrowserContext,
   test as base,
   expect,
+  type Locator,
   type Page,
   type TestInfo,
 } from "@playwright/test";
@@ -79,6 +80,24 @@ export function runLogger(name: string): void {
     `docker run -d --stop-timeout 2 --name ${name} ${SHELL_IMAGE} sh -c ` +
       `'i=0; while true; do echo line-$i; echo err-$i >&2; i=$((i+1)); sleep 1; done'`,
   );
+}
+
+// swarmInit makes the dind engine Bayplan manages a one-node swarm, the way a person
+// would on a fresh host: `docker swarm init --advertise-addr 127.0.0.1`. It leaves any
+// swarm a failed earlier attempt left behind first, so it can run twice. The dind has no
+// route to a registry, so a swarm service has to use an image that is already there.
+export function swarmInit(): void {
+  swarmLeave();
+  dind("docker swarm init --advertise-addr 127.0.0.1 >/dev/null");
+}
+
+// swarmLeave takes the dind engine out of its swarm, which removes the services, secrets
+// and configs the swarm held, and the bridge it made. It is safe when the engine is in no swarm.
+export function swarmLeave(): void {
+  dind("docker swarm leave --force >/dev/null 2>&1 || true");
+  // The bridge the swarm made for its containers outlives it on some engines; a swarm made
+  // again creates it afresh.
+  dind("docker network rm docker_gwbridge >/dev/null 2>&1 || true");
 }
 
 // dockerExec runs a shell script inside one service of the stack with
@@ -219,6 +238,117 @@ export async function expectVersionFooter(page: Page): Promise<void> {
   const source = footers.getByRole("link", { name: /^Source code/ });
   await expect(source).toBeVisible();
   await expect(source).toHaveAttribute("target", "_blank");
+}
+
+// The height of a filter chip under 768px, the 44px touch target of P1 D-64, and the space
+// between chips and between rows of chips (the ToggleGroup's spacing={2}), in px.
+export const CHIP_HEIGHT = 44;
+export const CHIP_GAP = 8;
+
+// The width from which the chips stop being 44px high (the md breakpoint), in px.
+const CHIP_MAX_VIEWPORT = 768;
+
+type Box = { x: number; y: number; width: number; height: number };
+
+// expectChipsInsideScreen asserts that every chip of a filter-chip row is on the screen (G-06-2).
+// It is for screens under 768px, where the chips are 44px high and wrap onto further rows, and it
+// reads the screen's width from the page's viewport. It compares each chip with its own row as
+// well as with the screen, because the Nodes list's last chip was measured cut off 8px inside its
+// row while still inside the screen. A chip that is cut off has its full box as its bounding box,
+// so only the comparison with the row catches it. It also asserts the row's computed style: the
+// row wraps and does not scroll, so a return to a scrolling strip fails even where the chips
+// happen to fit on one line (the Volumes and Images rows).
+//
+// It waits for the fonts and the document's finite animations, never for a fixed time, because a
+// box measured before the fonts load or while something animates is not the box people see. It
+// then reads the row and every chip in one evaluate, so all the boxes come from one layout even
+// though the lists are live, and runs every assertion on that snapshot. It does not assert the
+// page's own width: expectNoSidewaysScroll and expectPhoneWidth in responsive.spec.ts do.
+export async function expectChipsInsideScreen(
+  page: Page,
+  group: Locator,
+  what: string,
+): Promise<void> {
+  await expect(group).toBeVisible();
+  const viewport = page.viewportSize();
+  expect(viewport, `${what}: the page has a viewport`).not.toBeNull();
+  if (!viewport) return;
+  const width = viewport.width;
+  expect(
+    width,
+    `${what}: the chips are 44px high only under ${CHIP_MAX_VIEWPORT}px, the viewport is ${width}px`,
+  ).toBeLessThan(CHIP_MAX_VIEWPORT);
+
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    // A finite animation ends; an infinite one (a spinner or pulse) never does, and a cancelled
+    // one rejects, so neither may hold the wait.
+    const finite = document
+      .getAnimations()
+      .filter((a) => Number.isFinite(a.effect?.getComputedTiming().endTime as number));
+    await Promise.allSettled(finite.map((a) => a.finished));
+  });
+
+  const snap = await group.evaluate((el) => {
+    const toBox = (r: DOMRect) => ({ x: r.x, y: r.y, width: r.width, height: r.height });
+    const style = getComputedStyle(el);
+    return {
+      overflowX: style.overflowX,
+      flexWrap: style.flexWrap,
+      scrollWidth: el.scrollWidth,
+      clientWidth: el.clientWidth,
+      row: toBox(el.getBoundingClientRect()),
+      chips: [...el.querySelectorAll('[data-slot="toggle-group-item"]')].map((chip) => ({
+        text: (chip.textContent ?? "").trim(),
+        box: toBox(chip.getBoundingClientRect()),
+      })),
+    };
+  });
+
+  expect(snap.overflowX, `${what}: the chip row does not scroll sideways`).toBe("visible");
+  expect(snap.flexWrap, `${what}: the chip row wraps`).toBe("wrap");
+  expect(
+    snap.scrollWidth,
+    `${what}: the chip row holds content wider than itself (scrollWidth ${snap.scrollWidth}, clientWidth ${snap.clientWidth})`,
+  ).toBeLessThanOrEqual(snap.clientWidth + 1);
+
+  const row = snap.row;
+  expect(row.x, `${what}: the chip row starts inside the screen`).toBeGreaterThanOrEqual(0);
+  expect(row.x + row.width, `${what}: the chip row ends inside the screen`).toBeLessThanOrEqual(
+    width + 0.5,
+  );
+
+  expect(snap.chips.length, `${what}: the chip row has chips`).toBeGreaterThan(0);
+  let previous: Box | null = null;
+  for (const { text, box } of snap.chips) {
+    expect(
+      box.x,
+      `${what}: chip "${text}" starts inside its row (x ${box.x}, row x ${row.x})`,
+    ).toBeGreaterThanOrEqual(row.x - 0.5);
+    expect(
+      box.x + box.width,
+      `${what}: chip "${text}" ends inside its row (right ${box.x + box.width}, row right ${row.x + row.width})`,
+    ).toBeLessThanOrEqual(row.x + row.width + 0.5);
+    expect(
+      box.x + box.width,
+      `${what}: chip "${text}" ends inside the screen (right ${box.x + box.width}, screen ${width})`,
+    ).toBeLessThanOrEqual(width + 0.5);
+    expect(
+      Math.abs(box.height - CHIP_HEIGHT),
+      `${what}: chip "${text}" is ${box.height}px high, not ${CHIP_HEIGHT}px`,
+    ).toBeLessThanOrEqual(0.5);
+    if (previous) {
+      const sameRow = Math.abs(box.y - previous.y) <= 0.5;
+      const gap = sameRow
+        ? box.x - (previous.x + previous.width)
+        : box.y - (previous.y + previous.height);
+      expect(
+        Math.abs(gap - CHIP_GAP),
+        `${what}: chip "${text}" is ${gap}px from the chip before it ${sameRow ? "on its row" : "above it"}, not ${CHIP_GAP}px`,
+      ).toBeLessThanOrEqual(0.5);
+    }
+    previous = box;
+  }
 }
 
 // screenshotOnFailure attaches the page as it was when a spec that drives its

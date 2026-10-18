@@ -1,0 +1,57 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+import { describe, expect, it } from "vitest";
+
+import { ServiceActionError } from "@/api/services";
+import { editRefusalOf } from "@/features/service-editor/edit-refusal";
+import i18n from "@/i18n";
+
+// The sentence of a refused review or apply (UI-SPEC "Shared refusals and failures"). The
+// translate function is the real one, so a key that is missing fails here.
+const t = (key: string, options?: Record<string, unknown>) =>
+  String(i18n.t(key, { ...options, ns: key.split(".")[0] }));
+
+const missing = (...entries: [string, string][]) =>
+  new ServiceActionError(
+    422,
+    "objects_missing",
+    new Map(entries),
+    undefined,
+    entries.map(([location, message]) => ({ location, message })),
+  );
+
+const ctx = { environment: "Home", image: "nginx:1" } as const;
+
+describe("editRefusalOf objects_missing", () => {
+  it("names a missing secret and no network", () => {
+    const r = editRefusalOf(t, missing(["secrets", "db-pass"]), ctx);
+    expect(r.message).toBe(
+      "The spec names objects that don't exist: secrets db-pass. Create them first, then review again.",
+    );
+    expect(r.message).not.toContain("networks");
+  });
+
+  it("names every missing kind with its names, in the order networks, secrets, configs", () => {
+    const r = editRefusalOf(
+      t,
+      missing(
+        ["networks", "front"],
+        ["secrets", "db-pass"],
+        ["secrets", "api-key"],
+        ["configs", "app.conf"],
+      ),
+      ctx,
+    );
+    expect(r.message).toBe(
+      "The spec names objects that don't exist: networks front; secrets db-pass, api-key; configs app.conf. Create them first, then review again.",
+    );
+  });
+
+  it("words a create the same way", () => {
+    const r = editRefusalOf(t, missing(["configs", "app.conf"]), { ...ctx, action: "create" });
+    expect(r.message).toBe(
+      "The spec names objects that don't exist: configs app.conf. Create them first, then review again.",
+    );
+  });
+});

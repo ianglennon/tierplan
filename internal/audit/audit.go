@@ -93,6 +93,9 @@ const (
 	ActionEnvironmentClusterAdopted    = "environment.cluster_adopted"
 	ActionEnvironmentLocalFolded       = "environment.local_folded"
 	ActionEnvironmentAutoUpdateChanged = "environment.auto_update_changed"
+	// ActionEnvironmentRestartLoopSettingsChanged is a change of the failures and the window
+	// that make a restart loop in one environment (plan 06-35, RES-13).
+	ActionEnvironmentRestartLoopSettingsChanged = "environment.restart_loop_settings_changed"
 
 	ActionWarningAcknowledged = "warning.acknowledged"
 	ActionAuditPruned         = "audit.pruned"
@@ -158,6 +161,24 @@ const (
 	ActionShellOpened                = "shell.opened"
 	ActionShellClosed                = "shell.closed"
 	ActionShellEnded                 = "shell.ended"
+	ActionServiceScaled              = "service.scaled"
+	ActionServiceForceUpdated        = "service.force_updated"
+	ActionServiceRolledBack          = "service.rolled_back"
+	ActionServiceRemoved             = "service.removed"
+	ActionServiceUpdated             = "service.updated"
+	ActionServiceCreated             = "service.created"
+	ActionRestartLoopMuted           = "restart_loop.muted"
+	ActionRestartLoopUnmuted         = "restart_loop.unmuted"
+	ActionNodeAvailabilityChanged    = "node.availability_changed"
+	ActionNodeRoleChanged            = "node.role_changed"
+	ActionNodeLabelsChanged          = "node.labels_changed"
+	ActionNodeRemoved                = "node.removed"
+	ActionSecretCreated              = "secret.created"
+	ActionSecretRemoved              = "secret.removed"
+	ActionConfigCreated              = "config.created"
+	ActionConfigRemoved              = "config.removed"
+	ActionSecretRotated              = "secret.rotated"
+	ActionConfigRotated              = "config.rotated"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

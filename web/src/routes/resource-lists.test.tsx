@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
 import { containersQuery, LIST_REFETCH_MS, listKey } from "@/api/resources";
+import { LEAVE_MS } from "@/features/resources/frozen-rows";
 import { nodeRowKey } from "@/features/resources/swarm-lists";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
@@ -57,7 +58,10 @@ const SUMMARY = {
   fetchedAt: "2026-10-01T10:00:00Z",
 };
 
-const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+// Every fixture date is counted back from one fixed instant, and beforeEach freezes Date at
+// it, so "1 min ago" is exact however long the run is delayed after this module loads.
+const NOW = new Date("2026-10-03T12:00:00Z");
+const ago = (ms: number) => new Date(NOW.getTime() - ms).toISOString();
 
 const CONTAINERS = {
   items: [
@@ -248,6 +252,9 @@ function sameKeyWarningsOf(spy: ReturnType<typeof sameKeyWarnings>): string[] {
 }
 
 beforeEach(() => {
+  // Only Date is faked, so findBy and waitFor and the app's own timers keep running in real time.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(NOW);
   sent = [];
   sentUrls = [];
   envItem = LAB;
@@ -267,6 +274,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   queryClient.clear();
   window.localStorage.clear();
@@ -373,7 +381,7 @@ describe("containers list", () => {
     answers["/api/env/e1/containers"] = () =>
       ok ? Response.json(CONTAINERS) : Response.json({ title: "boom" }, { status: 500 });
     renderAt("/env/e1/containers");
-    await screen.findByText("Couldn't load containers.", {}, { timeout: 4000 });
+    await screen.findByText("Couldn't load containers.");
     expect(screen.getByText("Docker may be unreachable. Try again.")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Dashboard" })).toBeTruthy();
     ok = true;
@@ -395,9 +403,7 @@ describe("containers list", () => {
       target: { value: "old" },
     });
     expect(router.state.location.search).toEqual({ group: "none" });
-    await waitFor(() => expect(router.state.location.search).toEqual({ group: "none", q: "old" }), {
-      timeout: 2000,
-    });
+    await waitFor(() => expect(router.state.location.search).toEqual({ group: "none", q: "old" }));
     await waitFor(() => expect(sentUrls).toContain("/api/env/e1/containers?q=old"));
     expect(window.history.length).toBe(length);
     await waitFor(() => expect(screen.queryByText("bayplan")).toBeNull());
@@ -923,6 +929,9 @@ describe("swarm lists", () => {
       answers["/api/env/e1/images"] = imagesOn(["n2", "n3"]);
       await queryClient.invalidateQueries({ queryKey: listKey("e1", "images") });
       await waitFor(() => {
+        // The row for n1 fades out for LEAVE_MS by the clock, which is frozen here, so each
+        // poll moves the clock on by that much until the fade-out is over.
+        vi.advanceTimersByTime(LEAVE_MS);
         rows = screen.getAllByRole("row").slice(1);
         expect(rows.map((r) => cellsOf(r as HTMLElement)[3])).toEqual(["n2", "n3"]);
       });
@@ -1047,7 +1056,7 @@ describe("swarm lists", () => {
   it("sends a hostile node parameter as a plain query value and shows it as text", async () => {
     const evil = "<img src=x onerror=alert(1)>";
     renderAt(`/env/e1/containers?node=${encodeURIComponent(evil)}`);
-    await screen.findByText(`Nothing to show on ${evil} right now.`, {}, { timeout: 3000 });
+    await screen.findByText(`Nothing to show on ${evil} right now.`);
     expect(document.querySelector("img[src='x']")).toBeNull();
     expect(sentUrls.some((u) => u.includes(`node=${encodeURIComponent(evil)}`))).toBe(true);
   });

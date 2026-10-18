@@ -60,6 +60,7 @@ func (f *authFixture) meStatus(t *testing.T, cookie string) int {
 }
 
 func TestChangePasswordRotatesTheSessionEndsTheOthersAndAudits(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookieA, csrfA := f.signIn(t, "admin", false)
 	cookieB, _ := f.signIn(t, "admin", false)
@@ -118,6 +119,7 @@ func TestChangePasswordRotatesTheSessionEndsTheOthersAndAudits(t *testing.T) {
 }
 
 func TestChangePasswordKeepsTheRememberChoiceOfTheSession(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", true)
 	rec := f.changePassword(t, cookie, csrf, goodPassword, newGoodPassword)
@@ -135,6 +137,7 @@ func TestChangePasswordKeepsTheRememberChoiceOfTheSession(t *testing.T) {
 }
 
 func TestChangePasswordWithAWrongCurrentPasswordChangesNothing(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	other, _ := f.signIn(t, "admin", false)
@@ -161,6 +164,7 @@ func TestChangePasswordWithAWrongCurrentPasswordChangesNothing(t *testing.T) {
 }
 
 func TestChangePasswordIsThrottledPerUserEvenForTheRightPassword(t *testing.T) {
+	t.Parallel()
 	// A stolen session must not be able to guess the current password at the
 	// speed of the hash alone (01-14 hand-off, T-01-60). The budget is per user,
 	// so it is spent by right and wrong attempts alike, and it refills with time.
@@ -209,6 +213,7 @@ func TestChangePasswordIsThrottledPerUserEvenForTheRightPassword(t *testing.T) {
 }
 
 func TestChangePasswordRejectsAShortOrCommonNewPassword(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	cases := map[string]struct{ next, code string }{
@@ -235,6 +240,7 @@ func TestChangePasswordRejectsAShortOrCommonNewPassword(t *testing.T) {
 }
 
 func TestChangePasswordNeedsASessionAndACSRFToken(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 
@@ -253,6 +259,7 @@ func TestChangePasswordNeedsASessionAndACSRFToken(t *testing.T) {
 }
 
 func TestChangePasswordCapsTheLengthOfBothFields(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	long := make([]byte, 1025)
@@ -299,6 +306,7 @@ func (f *authFixture) warnings(t *testing.T, cookie string) (int, warningsResp) 
 }
 
 func TestWarningsAreEmptyForAPersistedDirectoryAndAnEnvironmentKey(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, _ := f.signIn(t, "admin", false)
 	code, w := f.warnings(t, cookie)
@@ -308,6 +316,7 @@ func TestWarningsAreEmptyForAPersistedDirectoryAndAnEnvironmentKey(t *testing.T)
 }
 
 func TestWarningsReportADataDirectoryThatIsNotPersisted(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.dataInfo = datadir.Info{Path: "/data", Persisted: false, Reason: "not a mount point"}
 	f.h = f.build(t)
@@ -332,6 +341,7 @@ func fileKeyVault(t *testing.T) (*vault.Vault, string) {
 }
 
 func TestWarningsRemindToBackUpAGeneratedKeyUntilItIsAcknowledged(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	v, keyPath := fileKeyVault(t)
 	f.acctVault = v
@@ -372,6 +382,7 @@ func TestWarningsRemindToBackUpAGeneratedKeyUntilItIsAcknowledged(t *testing.T) 
 }
 
 func TestWarningsAndTheirAcknowledgementNeedSettingsPermissions(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	v, keyPath := fileKeyVault(t)
 	f.acctVault = v
@@ -409,6 +420,7 @@ func (f *authFixture) withProxyObserver(t *testing.T) {
 }
 
 func TestWarningsListEachProxyProblemWithItsParametersWhileItIsFresh(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.withProxyObserver(t)
 	cookie, _ := f.signIn(t, "admin", false)
@@ -453,6 +465,7 @@ func TestWarningsListEachProxyProblemWithItsParametersWhileItIsFresh(t *testing.
 }
 
 func TestWarningsShowTheNewestSignalOfAKindOnly(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.withProxyObserver(t)
 	cookie, _ := f.signIn(t, "admin", false)
@@ -466,6 +479,7 @@ func TestWarningsShowTheNewestSignalOfAKindOnly(t *testing.T) {
 }
 
 func TestProxyWarningsNeedSettingsRead(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.withProxyObserver(t)
 	f.proxy.RecordUpgradeFailure("203.0.113.1")
@@ -501,6 +515,7 @@ func burstedCoalescer(t *testing.T, f *authFixture, n int) *auth.RefusalCoalesce
 }
 
 func TestAnInstanceAdminSeesARefusalBurstForOneHour(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.refusals = burstedCoalescer(t, f, 12)
 	f.h = f.build(t)
@@ -524,6 +539,7 @@ func TestAnInstanceAdminSeesARefusalBurstForOneHour(t *testing.T) {
 }
 
 func TestAWarningListedOnceForAUserWhoBurstsTwice(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	c := burstedCoalescer(t, f, 12)
 	e := audit.Entry{
@@ -549,6 +565,7 @@ func TestAWarningListedOnceForAUserWhoBurstsTwice(t *testing.T) {
 }
 
 func TestARefusalBurstIsNotShownWithoutSettingsRead(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.refusals = burstedCoalescer(t, f, 12)
 	f.h = f.build(t)
@@ -562,6 +579,7 @@ func TestARefusalBurstIsNotShownWithoutSettingsRead(t *testing.T) {
 // Agents Bayplan does not know after a restore (D-31): one warning, with how many,
 // for an instance admin while the registry holds any.
 func TestUnknownAgentsRaisesAWarningWithTheCountForAnInstanceAdminWhileTheRegistryHoldsAny(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, _ := f.signIn(t, "admin", false)
 	f.addAgentEnv(t, "env-a", "Production")
@@ -585,6 +603,7 @@ func TestUnknownAgentsRaisesAWarningWithTheCountForAnInstanceAdminWhileTheRegist
 }
 
 func TestTheUnknownAgentsWarningEmptiesWhenTheAgentsStopTryingAndIsNeverShownToAnyoneButAnInstanceAdmin(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addAgentEnv(t, "env-a", "Production")
 	f.unknown.Record(agents.UnknownAgent{EnvID: "env-a", Node: "agent-1", Key: "k1", LastAttempt: f.clk.now()})

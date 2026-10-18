@@ -3,10 +3,12 @@
 
 import { configure } from "@testing-library/react";
 
-// findBy and waitFor give up after 1 s by default, which a loaded CI runner (three or
-// four times slower than a quiet one) can miss for a render that is merely slow. 4 s
-// is the wait the load-error tests already chose one by one.
-configure({ asyncUtilTimeout: 4000 });
+// findBy and waitFor give up after 1 s by default, which a loaded CI runner (three or four
+// times slower than a quiet one) can miss for a render that is merely slow. A deadline only
+// decides how long a broken test takes to fail (docs/testing.md), so this one is generous: a
+// test does not wait this long when the element is there, and it sits under the 60 s test
+// timeout so an element that never comes fails with its own message.
+configure({ asyncUtilTimeout: 30000 });
 
 // jsdom has no ResizeObserver (Radix checkboxes and menus measure with it) and
 // no matchMedia (the sidebar and the theme switch read it). These stand-ins
@@ -39,4 +41,29 @@ if (typeof window.matchMedia === "undefined") {
 // calls it to keep the highlighted item in view.
 if (typeof Element.prototype.scrollIntoView === "undefined") {
   Element.prototype.scrollIntoView = () => {};
+}
+
+// jsdom has no layout, so a Range cannot measure itself, which CodeMirror does after every
+// change. These report an empty box, which is all it needs to run.
+if (typeof Range !== "undefined" && typeof Range.prototype.getClientRects === "undefined") {
+  Range.prototype.getClientRects = () =>
+    ({
+      length: 0,
+      item: () => null,
+      [Symbol.iterator]: [][Symbol.iterator],
+    }) as unknown as DOMRectList;
+}
+if (typeof Range !== "undefined" && typeof Range.prototype.getBoundingClientRect === "undefined") {
+  Range.prototype.getBoundingClientRect = () =>
+    ({
+      x: 0,
+      y: 0,
+      width: 0,
+      height: 0,
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      toJSON: () => ({}),
+    }) as DOMRect;
 }

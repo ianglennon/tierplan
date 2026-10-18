@@ -96,6 +96,9 @@ type ContainersDeps struct {
 	Checker *rbac.Checker
 	// SelfContainerID is Bayplan's own container ID; empty when it cannot tell.
 	SelfContainerID string
+	// Clusters is the cluster reader whose last read says which containers are in a restart
+	// loop and which are muted (RES-13). Nil says none are.
+	Clusters *envs.Clusters
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
@@ -254,6 +257,9 @@ type ContainerDetailBody struct {
 	Project  string `json:"project" doc:"The compose project (com.docker.compose.project); empty when the container has none"`
 	Stack    string `json:"stack" doc:"The swarm stack namespace (com.docker.stack.namespace); empty when the container has none"`
 	Service  string `json:"service" doc:"The swarm service name (com.docker.swarm.service.name); empty when the container has none"`
+
+	RestartLoop *ContainerRestartLoopBody `json:"restartLoop,omitempty" doc:"Present while the container is in a restart loop: it died with a non-zero exit code the environment's threshold of times inside its window. Absent otherwise"`
+	Muted       bool                      `json:"muted" doc:"True when a user muted the container's restart-loop alerts, whether or not it is in a loop now. The mute is keyed by node and name"`
 }
 
 // ContainerDetailOutput wraps ContainerDetailBody for huma.
@@ -318,6 +324,12 @@ func RegisterContainers(r *httpx.Router, d ContainersDeps) {
 			}
 			reveal := redact.CanReveal(ctx, d.Checker, p, env.ID)
 			body := containerDetailBody(detail, nodeID, node, isSelf(detail.ID), reveal)
+			loops, muted := containerLoopsOf(d.Clusters, env.ID)
+			key := envs.ContainerLoopKey(nodeID, detail.Name)
+			if l, flagged := loops[key]; flagged {
+				body.RestartLoop = containerRestartLoopBody(l)
+			}
+			body.Muted = muted[key]
 			return &ContainerDetailOutput{CacheControl: "no-store", Body: body}, nil
 		})
 
@@ -501,14 +513,27 @@ func resolveContainerNode(ctx context.Context, src snapshotReader, log *slog.Log
 // that is not a swarm has an answer (422 node_required). The errors are already
 // problems: 404 container_not_found, 503 node_unavailable, or the environment's own.
 func inspectOnNode(ctx context.Context, d ContainersDeps, envID, wantNode, containerID string) (detail dockerx.ContainerDetail, raw []byte, nodeID string, node envs.NodeRef, err error) {
-	_, nodeID, node, err = resolveContainerNode(ctx, d.Aggregator, d.Log, envID, wantNode)
+	return inspectOn(ctx, d.Aggregator, d.Log, envID, wantNode, containerID)
+}
+
+// nodeInspector is what reading one container's inspect needs: the aggregate, to find
+// the node, and that node's engine. *envs.Aggregator implements it.
+type nodeInspector interface {
+	snapshotReader
+	OnNode(ctx context.Context, envID, nodeID string, fn func(*dockerx.Client) error) error
+}
+
+// inspectOn is inspectOnNode for any source that can reach a node: the container routes
+// and the stats stream read a container the same way and map the same problems.
+func inspectOn(ctx context.Context, src nodeInspector, log *slog.Logger, envID, wantNode, containerID string) (detail dockerx.ContainerDetail, raw []byte, nodeID string, node envs.NodeRef, err error) {
+	_, nodeID, node, err = resolveContainerNode(ctx, src, log, envID, wantNode)
 	if err != nil {
 		return detail, nil, "", node, err
 	}
 
 	inspectCtx, cancel := context.WithTimeout(ctx, inspectTimeout)
 	defer cancel()
-	err = d.Aggregator.OnNode(inspectCtx, envID, nodeID, func(c *dockerx.Client) error {
+	err = src.OnNode(inspectCtx, envID, nodeID, func(c *dockerx.Client) error {
 		var e error
 		detail, raw, e = c.ContainerDetail(inspectCtx, containerID)
 		return e
@@ -521,7 +546,7 @@ func inspectOnNode(ctx context.Context, d ContainersDeps, envID, wantNode, conta
 	case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound):
 		return detail, nil, nodeID, node, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Bayplan.")
 	default:
-		return detail, nil, nodeID, node, snapshotProblem(d.Log, envID, err)
+		return detail, nil, nodeID, node, snapshotProblem(log, envID, err)
 	}
 }
 

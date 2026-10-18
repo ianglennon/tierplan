@@ -14,6 +14,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -52,14 +53,18 @@ func (f *agentFix) openEnvStream(t *testing.T, cookie, lastEventID string) *sseC
 	return openSSE(t, f.authFixture, envStreamPath, cookie, lastEventID)
 }
 
-// nextFrame returns the next data frame or fails.
+// nextFrame returns the next data frame or fails after testsupport.Deadline.
 func nextFrame(t *testing.T, c *sseConn) frame {
 	t.Helper()
-	fr, ok := c.next(5 * time.Second)
-	if !ok {
-		t.Fatal("no frame arrived")
+	return c.nextData(t, "the next frame")
+}
+
+// assertNoEventAfter fails when the body holds an event: line after mark, naming who was shown it.
+func assertNoEventAfter(t *testing.T, c *sseConn, mark int, who string) {
+	t.Helper()
+	if tail := c.bodyString()[mark:]; strings.Contains(tail, "event:") {
+		t.Fatalf("%s received a frame it may not see:\n%s", who, tail)
 	}
-	return fr
 }
 
 // nextOf returns the next frame of the given event name, skipping the others.
@@ -84,7 +89,7 @@ func pings(c *sseConn) int { return strings.Count(c.bodyString(), ": ping") }
 func waitPings(t *testing.T, c *sseConn, n int) {
 	t.Helper()
 	want := pings(c) + n
-	waitFor(t, "pings", func() bool { return pings(c) >= want })
+	c.awaitBody(t, "pings", func(body string) bool { return strings.Count(body, ": ping") >= want })
 }
 
 // grantRead gives user the Viewer role on one environment only.
@@ -98,6 +103,7 @@ func refused(envID, ip string) envs.HealthEvent {
 }
 
 func TestEnvStreamSendsTheSnapshotFirstThenEnvStatusAndAgentConnected(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Remote")
 	c := f.openEnvStream(t, f.cookie, "")
@@ -136,7 +142,12 @@ func TestEnvStreamSendsTheSnapshotFirstThenEnvStatusAndAgentConnected(t *testing
 }
 
 func TestEnvStreamReplaysOnlyEventsAfterLastEventIDAndAnUnknownIDReplaysTheBuffer(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
+	// The handler writes the snapshot and the whole replay before its ticker starts, so the first
+	// ping ends a scan: a short heartbeat only makes it come soon.
+	f.envStreamHeartbeat = 20 * time.Millisecond
+	f.h = f.build(t)
 	env := f.srv.NewEnvironment(t, "Remote")
 	var ids []string
 	for range 5 {
@@ -148,15 +159,12 @@ func TestEnvStreamReplaysOnlyEventsAfterLastEventIDAndAnUnknownIDReplaysTheBuffe
 			t.Fatalf("first frame = %+v, want the snapshot even on a resume", fr)
 		}
 		var got []string
-		for {
-			fr, ok := c.next(150 * time.Millisecond)
-			if !ok {
-				return got
-			}
+		for _, fr := range c.dataBeforeComment(t, "the first ping, which follows the replay") {
 			if fr.event == "agent.refused" {
 				got = append(got, fr.id)
 			}
 		}
+		return got
 	}
 	if got := replayed(ids[2]); strings.Join(got, ",") != strings.Join(ids[3:], ",") {
 		t.Errorf("resuming after %s replayed %v, want %v", ids[2], got, ids[3:])
@@ -173,6 +181,7 @@ func TestEnvStreamReplaysOnlyEventsAfterLastEventIDAndAnUnknownIDReplaysTheBuffe
 }
 
 func TestEnvStreamShowsACallerOnlyWhatTheyMayReadAndStopsAtThePingAfterAGrantIsWithdrawn(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	f.envStreamHeartbeat = 20 * time.Millisecond
 	f.h = f.build(t)
@@ -199,15 +208,22 @@ func TestEnvStreamShowsACallerOnlyWhatTheyMayReadAndStopsAtThePingAfterAGrantIsW
 		t.Fatal(err)
 	}
 	waitPings(t, c, 2) // at least one ping began after the grant went
+	// An env.status for A published before the grant went may still sit unread in c.frames, so
+	// c.frames cannot show a leak. The body is the one record ordered with the pings: assert on
+	// what was written after the second ping, and fence it with the next one.
+	mark := len(c.bodyString())
 	f.brk.Publish(refused(a.ID, "198.51.100.3"))
 	waitPings(t, c, 3)
-	if fr, ok := c.next(50 * time.Millisecond); ok {
-		t.Fatalf("a frame %+v reached the viewer after their grant was withdrawn and a ping had passed", fr)
+	if tail := c.bodyString()[mark:]; strings.Contains(tail, "event:") {
+		t.Fatalf("a frame reached the viewer after their grant was withdrawn and a ping had passed:\n%s", tail)
 	}
 }
 
 func TestEnvStreamSendsANoGrantUserAnEmptySnapshotAndNothingElse(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
+	f.envStreamHeartbeat = 20 * time.Millisecond
+	f.h = f.build(t)
 	env := f.srv.NewEnvironment(t, "Secret")
 	f.addUser(t, "nobody", false)
 	cookie, _ := f.signIn(t, "nobody", false)
@@ -216,13 +232,15 @@ func TestEnvStreamSendsANoGrantUserAnEmptySnapshotAndNothingElse(t *testing.T) {
 	if fr.event != "snapshot" || strings.Contains(fr.data, env.ID) || !strings.Contains(fr.data, `"items":[]`) {
 		t.Fatalf("snapshot = %+v, want an empty list", fr)
 	}
+	mark := len(c.bodyString())
 	f.brk.Publish(refused(env.ID, "198.51.100.9"))
-	if fr, ok := c.next(100 * time.Millisecond); ok {
-		t.Fatalf("a user with no grant received %+v", fr)
-	}
+	// Two pings after the publish: the event, if it were going to be sent, is ahead of the second.
+	waitPings(t, c, 2)
+	assertNoEventAfter(t, c, mark, "a user with no grant")
 }
 
 func TestEnvStreamPingsAtTheConfiguredIntervalAndEndsWithinAPingOfSignOut(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	f.envStreamHeartbeat = 20 * time.Millisecond
 	f.h = f.build(t)
@@ -231,18 +249,20 @@ func TestEnvStreamPingsAtTheConfiguredIntervalAndEndsWithinAPingOfSignOut(t *tes
 	if _, err := f.st.Write.Exec(`DELETE FROM sessions`); err != nil {
 		t.Fatal(err)
 	}
-	c.waitEnded(t, time.Second, "the session was deleted")
+	c.endsWithinBeats(t, 1, "the session was deleted")
 }
 
 func TestEnvStreamEndsAtItsMaximumLifetime(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	f.envStreamMaxLifetime = 100 * time.Millisecond
 	f.h = f.build(t)
 	c := f.openEnvStream(t, f.cookie, "")
-	c.waitEnded(t, time.Second, "its maximum lifetime passed")
+	c.awaitEnd(t, "its maximum lifetime passed")
 }
 
 func TestEnvStreamAllowsFourPerUserAndRefusesTheFifthWith429(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	var conns []*sseConn
 	for range 4 {
@@ -255,17 +275,13 @@ func TestEnvStreamAllowsFourPerUserAndRefusesTheFifthWith429(t *testing.T) {
 	fifth := f.openEnvStream(t, f.cookie, "")
 	// openSSE returns once the status is written; the problem body follows, so
 	// wait for the refused handler to return before reading it.
-	select {
-	case <-fifth.done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("a refused stream stayed open")
-	}
+	testsupport.Await(t, "the refused stream to finish", fifth.done)
 	if fifth.status0() != http.StatusTooManyRequests {
 		t.Fatalf("the 5th stream = %d, want 429", fifth.status0())
 	}
 	// The status is set before the problem body is written, so let the refused request
 	// finish before reading its body: a loaded run can look in between.
-	fifth.waitEnded(t, 5*time.Second, "the 429 was answered")
+	fifth.awaitEnd(t, "the 429 was answered")
 	if !strings.Contains(fifth.bodyString(), `"type":"rate_limited"`) {
 		t.Fatalf("the 5th stream = %d %s, want 429 rate_limited", fifth.status0(), fifth.bodyString())
 	}
@@ -276,6 +292,7 @@ func TestEnvStreamAllowsFourPerUserAndRefusesTheFifthWith429(t *testing.T) {
 }
 
 func TestEnvStreamWithoutASessionIs401(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	if c := f.openEnvStream(t, "", ""); c.status0() != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", c.status0())
@@ -283,6 +300,7 @@ func TestEnvStreamWithoutASessionIs401(t *testing.T) {
 }
 
 func TestEnvStreamDeliversARefusedEnrolmentToAnAdminWatching(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Remote")
 	c := f.openEnvStream(t, f.cookie, "")
@@ -305,6 +323,7 @@ func TestEnvStreamDeliversARefusedEnrolmentToAnAdminWatching(t *testing.T) {
 }
 
 func TestEnvStreamDeliversAManagerFailoverToAnAdminWatching(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Swarm")
 	c := f.openEnvStream(t, f.cookie, "")
@@ -320,6 +339,7 @@ func TestEnvStreamDeliversAManagerFailoverToAnAdminWatching(t *testing.T) {
 }
 
 func TestEnvStreamDeliversAProxyWarningToWhoeverHoldsSettingsReadAndToNobodyElse(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	f.envStreamHeartbeat = 20 * time.Millisecond
 	f.h = f.build(t)
@@ -336,6 +356,7 @@ func TestEnvStreamDeliversAProxyWarningToWhoeverHoldsSettingsReadAndToNobodyElse
 	for _, c := range []*sseConn{admin, reader, none} {
 		nextFrame(t, c) // the snapshot
 	}
+	noneMark := len(none.bodyString())
 
 	f.brk.PublishProxyWarning("url_mismatch")
 	// An event the viewer may see, after the warning, shows where the warning would have been.
@@ -345,15 +366,19 @@ func TestEnvStreamDeliversAProxyWarningToWhoeverHoldsSettingsReadAndToNobodyElse
 	if fr.id == "" || ev.EnvID != "" || ev.Kind != "url_mismatch" || ev.At == "" {
 		t.Fatalf("proxy.warning = %+v (id %q), want kind url_mismatch, no environment and a time", ev, fr.id)
 	}
-	for name, c := range map[string]*sseConn{"an environments.read viewer": reader, "a user with no grant": none} {
-		for {
-			got, ok := c.next(150 * time.Millisecond)
-			if !ok {
-				break
-			}
-			if got.event == "proxy.warning" {
-				t.Fatalf("%s received a proxy.warning: %+v", name, got)
-			}
+	// The viewer is fenced by the refusal published after the warning, which it may see: the
+	// stream sends events in publish order, so a warning for it would be ahead of that frame.
+	for {
+		got := nextFrame(t, reader)
+		if got.event == "proxy.warning" {
+			t.Fatalf("an environments.read viewer received a proxy.warning: %+v", got)
+		}
+		if got.event == "agent.refused" {
+			break
 		}
 	}
+	// A user with no grant sees neither event. Pings are the fence: the second one began after
+	// both events were published.
+	waitPings(t, none, 2)
+	assertNoEventAfter(t, none, noneMark, "a user with no grant")
 }

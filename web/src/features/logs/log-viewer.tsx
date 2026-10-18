@@ -19,17 +19,31 @@ import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Theme } from "@/features/logs/ansi";
 import { DownloadDialog, DownloadPopover } from "@/features/logs/download-popover";
-import { type BufferedLine, clockTime, LogBuffer, stampDay } from "@/features/logs/log-buffer";
+import {
+  type BufferedLine,
+  clockTime,
+  LogBuffer,
+  type LogLineData,
+  stampDay,
+} from "@/features/logs/log-buffer";
 import { DayDividerRow, LINE_HEIGHT_PX, LogLineRow } from "@/features/logs/log-line";
 import {
   formatShow,
   type LogViewParams,
   loadLogPrefs,
+  loadTaskNames,
   parseShow,
   type ShowRange,
   saveLogPrefs,
+  saveTaskNames,
   streamRange,
 } from "@/features/logs/log-prefs";
+import {
+  isEndedTaskState,
+  isSlotMark,
+  type LogSource,
+  type ServiceLogTask,
+} from "@/features/logs/log-source";
 import {
   createLogStream,
   fetchLogPage,
@@ -37,10 +51,24 @@ import {
   type LogStreamState,
   makeViewerId,
   plusNanosecond,
+  type StreamTarget,
+  sourceOf,
   type UnreadableInfo,
 } from "@/features/logs/log-stream";
 import { counterText, LogToolbar } from "@/features/logs/log-toolbar";
+import { swarmMarkerText } from "@/features/logs/replacement-marker";
 import { searchLines } from "@/features/logs/search";
+import {
+  type FilterOptions,
+  NO_FILTER_OPTIONS,
+  TaskFilterBar,
+} from "@/features/logs/task-filter-bar";
+import {
+  formatTaskPrefix,
+  prefixColour,
+  prefixWidthCh,
+  TaskPrefix,
+} from "@/features/logs/task-prefix";
 import { UnreadableNotice } from "@/features/logs/unreadable-notice";
 import { useT } from "@/i18n/use-t";
 import { withBase } from "@/lib/base-path";
@@ -60,16 +88,65 @@ const EARLIER_PAGE = 500;
 // The widths of the skeleton lines shown until the stream connects.
 const SKELETON_WIDTHS = ["w-3/5", "w-4/5", "w-2/5", "w-3/4", "w-1/2", "w-2/3", "w-4/5", "w-1/3"];
 
-export interface LogViewerProps {
+// A list from the address: comma separated, empty parts dropped.
+const listOf = (v: string | undefined): string[] =>
+  v
+    ? v
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean)
+    : [];
+
+// A task named in the address is its ID, or the start of one of at least eight characters.
+const idMatches = (chosen: string, id: string): boolean =>
+  chosen === id || (chosen.length >= 8 && id.startsWith(chosen));
+
+// shownUnderFilters says whether a row of the buffer belongs to the tasks and nodes a log is
+// narrowed to. It narrows the lines already loaded while the stream for the new set opens; the
+// server narrows what follows. A row that names no task (a container's marker, the interrupted
+// notice) stays. A replacement marker belongs to the old task and the new one, a node notice to
+// its node, and says nothing about a task that is chosen.
+function shownUnderFilters(
+  line: BufferedLine,
+  tasks: readonly string[],
+  nodes: readonly string[],
+): boolean {
+  if (tasks.length === 0 && nodes.length === 0) return true;
+  const mark = line.swarm;
+  if (mark) {
+    if (!isSlotMark(mark)) return tasks.length === 0 && nodes.includes(mark.node);
+    const newId = mark.new;
+    const taskOk =
+      tasks.length === 0 ||
+      tasks.some((c) => idMatches(c, mark.old) || (newId !== undefined && idMatches(c, newId)));
+    const nodeOk =
+      nodes.length === 0 ||
+      nodes.includes(mark.oldNode) ||
+      (mark.node !== undefined && nodes.includes(mark.node));
+    return taskOk && nodeOk;
+  }
+  if (line.task === undefined) return true;
+  const id = line.task;
+  return (
+    (tasks.length === 0 || tasks.some((c) => idMatches(c, id))) &&
+    (nodes.length === 0 || nodes.includes(line.node ?? ""))
+  );
+}
+
+export interface LogViewerProps extends StreamTarget {
   envId: string;
-  containerId: string;
-  nodeId?: string;
-  // The container's name, for the accessible name of the surface.
+  // The container's or service's name, for the accessible name of the surface. For a
+  // service it is also the name its task prefixes carry.
   name: string;
+  // True where the service's own header is not on screen (the pop-out), so each prefix
+  // names the service as well as the slot.
+  showServiceName?: boolean;
   // The range, search and toggles from the address (D-22). With onParamsChange the
   // address owns them; without it the viewer keeps them itself.
   params?: LogViewParams;
   onParamsChange?: (params: LogViewParams) => void;
+  // What the Tasks and Nodes filters of a service's log offer (plan 06-30, D-33).
+  filterOptions?: FilterOptions;
   // Controls after Download… at the right of the toolbar's second row, and the items of
   // the More menu that stand in for them on a narrow screen.
   actions?: ReactNode;
@@ -86,12 +163,7 @@ export const HIDDEN_POPOUT_MS = 60_000;
 // toggles carried in the query the way the route reads them. A text that would read as
 // a number, a boolean or JSON is quoted, since the router parses every value as JSON
 // first; the address is under the base path.
-export function popoutLogsUrl(
-  envId: string,
-  containerId: string,
-  nodeId: string | undefined,
-  view: LogViewParams,
-): string {
+export function popoutLogsUrl(envId: string, source: LogSource, view: LogViewParams): string {
   const text = (v: string): string => {
     try {
       JSON.parse(v);
@@ -101,15 +173,24 @@ export function popoutLogsUrl(
     }
   };
   const q = new URLSearchParams();
-  if (nodeId) q.set("node", text(nodeId));
+  // A container's pop-out names the node it is on; a service's names the task prefixes, the
+  // tasks and the nodes the log is narrowed to, and the stopped switch.
+  if (source.kind === "container" && source.nodeId) q.set("node", text(source.nodeId));
   if (view.since) q.set("since", text(view.since));
   if (view.q) q.set("q", text(view.q));
   if (view.ts !== undefined) q.set("ts", String(view.ts));
   if (view.utc !== undefined) q.set("utc", String(view.utc));
   if (view.wrap !== undefined) q.set("wrap", String(view.wrap));
+  if (source.kind === "service") {
+    if (view.prefix !== undefined) q.set("prefix", String(view.prefix));
+    if (view.task) q.set("task", text(view.task));
+    if (view.node) q.set("node", text(view.node));
+    if (view.stopped !== undefined) q.set("stopped", String(view.stopped));
+  }
   const query = q.toString();
+  const what = source.kind === "service" ? "services" : "containers";
   return withBase(
-    `/popout/${encodeURIComponent(envId)}/containers/${encodeURIComponent(containerId)}/logs${query ? `?${query}` : ""}`,
+    `/popout/${encodeURIComponent(envId)}/${what}/${encodeURIComponent(source.id)}/logs${query ? `?${query}` : ""}`,
   );
 }
 
@@ -143,17 +224,25 @@ function useDebounced<T>(value: T, ms: number): T {
 // the end stops the following until the end is reached again, and the lines that come
 // meanwhile are counted on a pill. The lines live in a buffer of at most 50 000. Search
 // works on what is loaded and never asks the server.
-export function LogViewer({
-  envId,
-  containerId,
-  nodeId,
-  name,
-  params,
-  onParamsChange,
-  actions,
-  moreItems,
-  popout = false,
-}: LogViewerProps) {
+export function LogViewer(props: LogViewerProps) {
+  const {
+    envId,
+    name,
+    showServiceName = false,
+    params,
+    onParamsChange,
+    filterOptions = NO_FILTER_OPTIONS,
+    actions,
+    moreItems,
+    popout = false,
+  } = props;
+  const src = sourceOf(props);
+  // A service's log shares everything with a container's but what it adds: the task of every
+  // line, the filters on tasks and nodes and the markers (plans 06-29 to 06-31, D-35).
+  const kind = src.kind;
+  const isService = kind === "service";
+  const sourceId = src.id;
+  const containerNode = src.kind === "container" ? src.nodeId : undefined;
   const t = useT();
   // The viewer's own ID: made once, sent on every stream and page of this viewer, so
   // the server audits it once however often the stream reconnects (D-24).
@@ -168,6 +257,15 @@ export function LogViewer({
   const streamRef = useRef<LogStream | null>(null);
   // Set when the engine cannot read this container's log back (D-25).
   const [unreadable, setUnreadable] = useState<UnreadableInfo | null>(null);
+  // A service's tasks as the stream last listed them, null before it has, and the longest
+  // task prefix loaded, which sets the width of the prefix gutter.
+  const [tasks, setTasks] = useState<ServiceLogTask[] | null>(null);
+  // The slot and node pairs seen so far: few however many lines, and what the width of the
+  // prefix gutter is worked out from. prefixSeen counts them, to draw again when one is new.
+  const prefixPairs = useRef(new Map<string, { slot: number; node: string }>());
+  const [prefixSeen, setPrefixSeen] = useState(0);
+  // The order nodes were first seen in, which colours the prefixes of a global service.
+  const nodeOrder = useRef(new Map<string, number>());
   const theme = useTheme();
   const version = useSyncExternalStore(buffer.subscribe, buffer.getVersion);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -191,6 +289,12 @@ export function LogViewer({
     if (onParamsChange) onParamsChange(next);
     else setOwn(next);
   };
+  const savedTaskNames = useMemo(loadTaskNames, []);
+  const taskNamesOn = isService && (view.prefix ?? savedTaskNames);
+  const setTaskNames = (on: boolean) => {
+    saveTaskNames(on);
+    change({ prefix: on });
+  };
   const wrap = view.wrap ?? prefs.wrap;
   const timestamps = view.ts ?? prefs.timestamps;
   const utc = (view.utc ?? prefs.utc) && timestamps;
@@ -200,28 +304,97 @@ export function LogViewer({
     change({ wrap: now.wrap, ts: now.timestamps, utc: now.utc });
   };
   const sinceKey = view.since ?? "";
+  const taskFilter = view.task ?? "";
+  const nodeFilter = view.node ?? "";
+  const stoppedOn = view.stopped === true;
+  const filtersKey = `${taskFilter}|${nodeFilter}|${stoppedOn}`;
+  // The filters of the stream whose lines the buffer holds. When the address changes them, the
+  // lines already loaded are narrowed at once while the stream for the new set opens, and the
+  // buffer is replaced by that stream's last 500 lines when it answers (D-33).
+  const [loadedFilters, setLoadedFilters] = useState(filtersKey);
+  const reloading = isService && loadedFilters !== filtersKey;
+  const taskIds = useMemo(() => listOf(taskFilter), [taskFilter]);
+  const nodeNames = useMemo(() => listOf(nodeFilter), [nodeFilter]);
+  // The effect below tells a change of filters from every other change by what else is the same.
+  const streamBase = useRef("");
   const show = useMemo(() => parseShow(sinceKey || undefined), [sinceKey]);
 
   // ---- the stream ----
   const [startReached, setStartReached] = useState(false);
   const [earlier, setEarlier] = useState<"idle" | "loading" | "error">("idle");
-  // biome-ignore lint/correctness/useExhaustiveDependencies: openCount is the Retry trigger
   useEffect(() => {
-    buffer.clear();
+    // Only the filters changed: keep the lines (narrowed) until the new stream answers.
+    const base = `${envId}|${kind}|${sourceId}|${containerNode ?? ""}|${sinceKey}|${openCount}`;
+    const reload = kind === "service" && streamBase.current === base && buffer.length > 0;
+    streamBase.current = base;
     following.current = true;
     setPaused(false);
-    setStartReached(false);
-    setEarlier("idle");
-    setUnreadable(null);
+    if (!reload) {
+      buffer.clear();
+      setStartReached(false);
+      setEarlier("idle");
+      setUnreadable(null);
+      setTasks(null);
+      prefixPairs.current = new Map();
+      setPrefixSeen(0);
+      nodeOrder.current = new Map();
+      setLoadedFilters(filtersKey);
+    }
     everLive.current = false;
+    let firstReady = true;
     const range = streamRange(parseShow(sinceKey || undefined), new Date());
+    // Notes the slot and node pairs the lines name, and the order nodes first appear in.
+    const noteTasks = (lines: readonly LogLineData[]) => {
+      let added = false;
+      for (const l of lines) {
+        if (l.task === undefined) continue;
+        const slot = l.slot ?? 0;
+        const node = l.node ?? "";
+        const key = `${slot}@${node}`;
+        if (!prefixPairs.current.has(key)) {
+          prefixPairs.current.set(key, { slot, node });
+          added = true;
+        }
+        if (slot === 0 && !nodeOrder.current.has(node)) {
+          nodeOrder.current.set(node, nodeOrder.current.size);
+        }
+      }
+      if (added) setPrefixSeen(prefixPairs.current.size);
+    };
+    const target: StreamTarget =
+      kind === "service"
+        ? { source: { kind: "service", id: sourceId } }
+        : { containerId: sourceId, nodeId: containerNode };
     const stream = createLogStream({
       envId,
-      containerId,
-      nodeId,
+      ...target,
       sid,
       ...range,
-      onLines: (lines) => buffer.push(lines),
+      service:
+        kind === "service"
+          ? { tasks: listOf(taskFilter), nodes: listOf(nodeFilter), stopped: stoppedOn }
+          : undefined,
+      onReady: (info) => {
+        if (firstReady) {
+          firstReady = false;
+          if (reload) {
+            buffer.clear();
+            // What the earlier lines reached was for the old set of tasks.
+            setStartReached(false);
+            setEarlier("idle");
+          }
+          setLoadedFilters(filtersKey);
+        }
+        setTasks(info.tasks ?? null);
+      },
+      onTasks: setTasks,
+      onMarker: ({ at, ...mark }) => buffer.insertSwarmMarker(mark, at ?? new Date().toISOString()),
+      onNode: ({ at, ...notice }) =>
+        buffer.insertSwarmMarker(notice, at ?? new Date().toISOString()),
+      onLines: (lines) => {
+        if (kind === "service") noteTasks(lines);
+        buffer.push(lines);
+      },
       onState: (next) => {
         if (next.status === "live") everLive.current = true;
         setState(next);
@@ -232,19 +405,36 @@ export function LogViewer({
         if (buffer.last?.marker !== "interrupted")
           buffer.pushMarker("interrupted", new Date().toISOString());
       },
-      onContainerState: ({ state: what, at }) => {
-        // A reconnect to a stopped container is told again; the row is shown once.
-        if (what === "stopped" && buffer.last?.marker !== "stopped")
-          buffer.pushMarker("stopped", at);
-        else if (what === "restarted") buffer.pushMarker("restarted", at);
-      },
+      // The end of a service's stream is not a container that stopped; there is no row for it.
+      onContainerState:
+        kind === "service"
+          ? undefined
+          : ({ state: what, at }) => {
+              // A reconnect to a stopped container is told again; the row is shown once.
+              if (what === "stopped" && buffer.last?.marker !== "stopped")
+                buffer.pushMarker("stopped", at);
+              else if (what === "restarted") buffer.pushMarker("restarted", at);
+            },
     });
     streamRef.current = stream;
     return () => {
       streamRef.current = null;
       stream.close();
     };
-  }, [buffer, envId, containerId, nodeId, sid, sinceKey, openCount]);
+  }, [
+    buffer,
+    envId,
+    kind,
+    sourceId,
+    containerNode,
+    sid,
+    sinceKey,
+    taskFilter,
+    nodeFilter,
+    stoppedOn,
+    filtersKey,
+    openCount,
+  ]);
 
   // A pop-out nobody can see lets its stream go after a minute and takes it up again
   // from the last line when it is seen (D-22). The Logs tab keeps its stream.
@@ -310,6 +500,7 @@ export function LogViewer({
     let day = "";
     const add = (i: number) => {
       const line = buffer.at(i);
+      if (reloading && !shownUnderFilters(line, taskIds, nodeNames)) return;
       if (timestamps && !line.marker) {
         const d = stampDay(line.t, utc);
         if (d !== day) {
@@ -322,7 +513,7 @@ export function LogViewer({
     if (filtering) for (const m of matches) add(m.index);
     else for (let i = 0; i < buffer.length; i++) add(i);
     return out;
-  }, [buffer, version, filtering, matches, timestamps, utc]);
+  }, [buffer, version, filtering, matches, timestamps, utc, reloading, taskIds, nodeNames]);
 
   const capped = buffer.droppedCount > 0;
   const allLoaded = show.kind === "all" && buffer.length < 50_000;
@@ -449,11 +640,11 @@ export function LogViewer({
     try {
       const page = await fetchLogPage({
         envId,
-        containerId,
-        nodeId,
+        source: src,
         sid,
         until: plusNanosecond(oldest.t),
         tail: EARLIER_PAGE,
+        service: isService ? { tasks: taskIds, nodes: nodeNames, stopped: stoppedOn } : undefined,
       });
       anchor.current = {
         total: virtualizer.getTotalSize(),
@@ -475,11 +666,13 @@ export function LogViewer({
   );
   const announcement = useDebounced(counter, ANNOUNCE_DEBOUNCE_MS);
   const markerLabel = (line: BufferedLine) =>
-    line.marker === "interrupted"
-      ? t("logs.interrupted")
-      : t(line.marker === "stopped" ? "logs.stopped" : "logs.restarted", {
-          time: clockTime(line.t),
-        });
+    line.marker === "swarm" && line.swarm
+      ? swarmMarkerText(t, line.swarm, name)
+      : line.marker === "interrupted"
+        ? t("logs.interrupted")
+        : t(line.marker === "stopped" ? "logs.stopped" : "logs.restarted", {
+            time: clockTime(line.t),
+          });
   const timeLabel = utc ? t("logs.timeUtc") : t("logs.time");
   const dayLabel = (iso: string) =>
     new Date(iso).toLocaleDateString(undefined, {
@@ -488,21 +681,63 @@ export function LogViewer({
     });
 
   const connected = state.status === "live" || state.status === "reconnecting";
+  // Filters that leave no task to follow: said in place of "No log output yet".
+  const noTaskMatches =
+    isService && (taskFilter !== "" || nodeFilter !== "") && tasks !== null && tasks.length === 0;
   const loadFailed = state.status === "closed" && state.reason === "failed" && !everLive.current;
   const [downloadOpen, setDownloadOpen] = useState(false);
-  const downloadTarget = { envId, containerId, nodeId };
+  const downloadTarget = { envId, source: src };
   const onShowChange = (next: ShowRange) => change({ since: formatShow(next) });
   // The window opens with what is on screen, so it reads the same: the range, the search
   // and the toggles, as they are now (not only the ones the address holds).
   const openPopout = () => {
-    const url = popoutLogsUrl(envId, containerId, nodeId, {
+    const url = popoutLogsUrl(envId, src, {
       since: sinceKey || undefined,
       q: queryInput || undefined,
       ts: timestamps,
       utc: view.utc ?? prefs.utc,
       wrap,
+      ...(isService
+        ? {
+            prefix: taskNamesOn,
+            task: taskFilter || undefined,
+            node: nodeFilter || undefined,
+            stopped: stoppedOn || undefined,
+          }
+        : {}),
     });
     window.open(url, "_blank", "popup,noopener,width=1100,height=760");
+  };
+
+  // ---- the task prefix of a service's lines ----
+  const taskStates = useMemo(() => new Map((tasks ?? []).map((x) => [x.id, x.state])), [tasks]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: prefixSeen is the trigger, not an input
+  const prefixCh = useMemo(() => {
+    let longest = 0;
+    for (const { slot, node } of prefixPairs.current.values()) {
+      longest = Math.max(
+        longest,
+        formatTaskPrefix({ service: name, slot, node, showService: showServiceName }).length,
+      );
+    }
+    return prefixWidthCh(longest);
+  }, [prefixSeen, name, showServiceName]);
+  const prefixOf = (line: BufferedLine) => {
+    if (!taskNamesOn || line.task === undefined) return undefined;
+    const slot = line.slot ?? 0;
+    const node = line.node ?? "";
+    // A replicated service's tasks are coloured by slot, a global service's by node, so a
+    // replacement task keeps its slot's colour.
+    const colour = prefixColour(slot === 0 ? (nodeOrder.current.get(node) ?? 0) : slot - 1);
+    return (
+      <TaskPrefix
+        text={formatTaskPrefix({ service: name, slot, node, showService: showServiceName })}
+        colour={colour}
+        widthCh={prefixCh}
+        taskId={line.task}
+        state={taskStates.get(line.task)}
+      />
+    );
   };
 
   const renderRow = (index: number) => {
@@ -554,6 +789,7 @@ export function LogViewer({
         time={timestamps ? { utc, label: timeLabel } : undefined}
         wrap={wrap}
         theme={theme}
+        prefix={prefixOf(line)}
         highlight={hit ? { ranges: hit.ranges, current: code >> 1 === currentLine } : undefined}
       />
     );
@@ -587,6 +823,24 @@ export function LogViewer({
         onTimestampsChange={(on) => setView({ timestamps: on })}
         utc={utc}
         onUtcChange={(on) => setView({ utc: on })}
+        taskNames={isService ? { on: taskNamesOn, onChange: setTaskNames } : undefined}
+        following={
+          isService && tasks ? tasks.filter((x) => !isEndedTaskState(x.state)).length : undefined
+        }
+        filterBar={
+          isService ? (
+            <TaskFilterBar
+              service={name}
+              options={filterOptions}
+              tasks={taskIds}
+              nodes={nodeNames}
+              stopped={stoppedOn}
+              onTasksChange={(ids) => change({ task: ids.join(",") || undefined })}
+              onNodesChange={(names) => change({ node: names.join(",") || undefined })}
+              onStoppedChange={(on) => change({ stopped: on || undefined })}
+            />
+          ) : undefined
+        }
         live={connected ? (state.status === "live" ? "live" : "reconnecting") : undefined}
         actions={
           <>
@@ -640,7 +894,7 @@ export function LogViewer({
                 {t("logs.loadError.retry")}
               </Button>
             </div>
-          ) : state.status === "connecting" ? (
+          ) : state.status === "connecting" && !(reloading && buffer.length > 0) ? (
             <div className="flex flex-col gap-1.5 p-3">
               <span role="status" className="sr-only">
                 {t("logs.loading")}
@@ -671,9 +925,22 @@ export function LogViewer({
           )}
         </div>
         {connected && buffer.length === 0 ? (
-          <p className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
-            {t("logs.empty")}
-          </p>
+          isService ? (
+            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-1 p-6 text-center text-sm text-muted-foreground">
+              {noTaskMatches ? (
+                <p>{t("logs.service.noTasksMatch")}</p>
+              ) : (
+                <>
+                  <p>{t("logs.empty")}</p>
+                  <p className="text-xs">{t("logs.service.emptyBody")}</p>
+                </>
+              )}
+            </div>
+          ) : (
+            <p className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
+              {t("logs.empty")}
+            </p>
+          )
         ) : null}
         {paused ? (
           <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center">

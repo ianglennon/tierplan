@@ -11,10 +11,11 @@ import type { PullItem, PullJob } from "@/api/pulls";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
-import { PullDialog, PullImageButton } from "@/features/pulls/pull-dialog";
+import { PREVIEW_DEBOUNCE_MS, PullDialog, PullImageButton } from "@/features/pulls/pull-dialog";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
+import { settled, waitUnderFakeClock } from "@/test-settle";
 
 const ENV = "e1";
 const REF = "docker.io/library/nginx:1.27";
@@ -181,6 +182,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   toast.dismiss();
   cleanup();
   vi.restoreAllMocks();
@@ -757,21 +759,33 @@ describe("PullDialog (the credential preview)", () => {
     host: "docker.io",
     prefix: "",
   };
-  const type = async (ref: string) => {
-    const dialog = await screen.findByRole("dialog", { name: "Pull an image" });
+  const openDialog = () => screen.findByRole("dialog", { name: "Pull an image" });
+  const typeInto = (dialog: HTMLElement, ref: string) =>
     fireEvent.change(within(dialog).getByLabelText("Image"), { target: { value: ref } });
+  const type = async (ref: string) => {
+    const dialog = await openDialog();
+    typeInto(dialog, ref);
     return dialog;
   };
-  const patiently = { timeout: 3000 };
+  // The preview is debounced by a timer of the component's own. A test about "nothing more is
+  // asked" runs it on a fully fake clock: real time passing between two keystrokes must not be
+  // able to fire the debounce, or "asked once, for what was typed last" would hold only on a
+  // quiet machine. The dialog is found before the clock is faked, the keystrokes are synchronous,
+  // and the test moves the clock past the debounce when it means to. Under it the test waits with
+  // vi.waitFor, because Testing Library's waitFor and findBy poll on the faked timers and so never
+  // poll.
+  const debounceClock = () => vi.useFakeTimers();
+  // settled(client) for a fake clock: no query is fetching and no mutation is running.
+  const noneRunning = () =>
+    waitUnderFakeClock(() => expect(client.isFetching() + client.isMutating()).toBe(0));
 
   it("shows the reference as it will be pulled and says the pull is anonymous", async () => {
     resolveAnswer = () => resolved();
     mount();
     const dialog = await type("nginx");
     expect(resolves()).toHaveLength(0); // not before the 400 ms are up
-    await waitFor(
-      () => expect(dialog.textContent).toContain("Pulls docker.io/library/nginx:latest"),
-      patiently,
+    await waitFor(() =>
+      expect(dialog.textContent).toContain("Pulls docker.io/library/nginx:latest"),
     );
     expect(dialog.textContent).toContain("Credential: anonymous. No stored credential matches.");
     expect(resolves()).toEqual([
@@ -784,10 +798,7 @@ describe("PullDialog (the credential preview)", () => {
     resolveAnswer = () => resolved({ credential: hub, matchedOn: "hub_fallback" });
     mount();
     const dialog = await type("nginx");
-    await waitFor(
-      () => expect(dialog.textContent).toContain("Credential: “hub-all” (Instance)"),
-      patiently,
-    );
+    await waitFor(() => expect(dialog.textContent).toContain("Credential: “hub-all” (Instance)"));
     resolveAnswer = () =>
       resolved({
         credential: {
@@ -798,22 +809,23 @@ describe("PullDialog (the credential preview)", () => {
         matchedOn: "prefix",
       });
     await type("nginx2");
-    await waitFor(
-      () => expect(dialog.textContent).toContain("Credential: “team” (Lab)"),
-      patiently,
-    );
+    await waitFor(() => expect(dialog.textContent).toContain("Credential: “team” (Lab)"));
   });
 
   it("asks once, for what was typed last, after the typing stops", async () => {
     resolveAnswer = () => resolved();
     mount();
-    await type("n");
-    await type("ng");
-    const dialog = await type("nginx:1.27");
-    await waitFor(() => expect(resolves()).toHaveLength(1), patiently);
+    const dialog = await openDialog();
+    debounceClock();
+    typeInto(dialog, "n");
+    typeInto(dialog, "ng");
+    typeInto(dialog, "nginx:1.27");
+    await vi.advanceTimersByTimeAsync(PREVIEW_DEBOUNCE_MS);
+    await waitUnderFakeClock(() => expect(resolves()).toHaveLength(1));
     expect(resolves()[0]?.body).toEqual({ ref: "nginx:1.27" });
-    // Nothing more comes after it.
-    await new Promise((r) => setTimeout(r, 600));
+    // Nothing more comes after it, however long the debounce runs on.
+    await vi.advanceTimersByTimeAsync(PREVIEW_DEBOUNCE_MS * 2);
+    await noneRunning();
     expect(resolves()).toHaveLength(1);
     expect(dialog).toBeTruthy();
   });
@@ -822,24 +834,26 @@ describe("PullDialog (the credential preview)", () => {
     resolveAnswer = () => resolved({ input: "redis:8", normalized: "docker.io/library/redis:8" });
     mount({ initialRef: "redis:8" });
     const dialog = await screen.findByRole("dialog");
-    await waitFor(
-      () => expect(dialog.textContent).toContain("Pulls docker.io/library/redis:8"),
-      patiently,
-    );
+    await waitFor(() => expect(dialog.textContent).toContain("Pulls docker.io/library/redis:8"));
   });
 
   it("shows neither line for a reference the server does not understand, nor for an empty field", async () => {
     resolveAnswer = () =>
       Response.json({ type: "ref_invalid", title: "x", status: 422, detail: "d" }, { status: 422 });
     mount();
-    const dialog = await type("Bad Ref!");
-    await waitFor(() => expect(resolves()).toHaveLength(1), patiently);
-    await new Promise((r) => setTimeout(r, 50));
+    const dialog = await openDialog();
+    debounceClock();
+    typeInto(dialog, "Bad Ref!");
+    await vi.advanceTimersByTimeAsync(PREVIEW_DEBOUNCE_MS);
+    await waitUnderFakeClock(() => expect(resolves()).toHaveLength(1));
+    // The check has been answered (with the 422) before the lines are looked for.
+    await noneRunning();
     expect(dialog.textContent).not.toContain("Credential:");
     expect(dialog.textContent).not.toContain("Pulls docker.io");
     // Clearing the field asks nothing.
-    await type("");
-    await new Promise((r) => setTimeout(r, 600));
+    typeInto(dialog, "");
+    await vi.advanceTimersByTimeAsync(PREVIEW_DEBOUNCE_MS * 2);
+    await noneRunning();
     expect(resolves()).toHaveLength(1);
   });
 
@@ -847,8 +861,9 @@ describe("PullDialog (the credential preview)", () => {
     resolveAnswer = () => Response.json({ title: "boom", status: 500 }, { status: 500 });
     mount();
     const dialog = await type("nginx");
-    await waitFor(() => expect(resolves()).toHaveLength(1), patiently);
-    await new Promise((r) => setTimeout(r, 50));
+    await waitFor(() => expect(resolves()).toHaveLength(1));
+    // The check has been answered (with the 500) before the line is looked for.
+    await settled(client);
     expect(dialog.textContent).not.toContain("Credential:");
     fireEvent.click(within(dialog).getByRole("button", { name: "Pull image" }));
     await within(dialog).findByRole("heading", { name: /Pulling/ });
@@ -903,10 +918,7 @@ describe("PullDialog (Browse tags)", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Browse tags" }));
     fireEvent.click(await within(dialog).findByText("1.26"));
     expect(input.value).toBe("nginx:1.26");
-    await waitFor(
-      () => expect(dialog.textContent).toContain("Pulls docker.io/library/nginx:1.26"),
-      { timeout: 3000 },
-    );
+    await waitFor(() => expect(dialog.textContent).toContain("Pulls docker.io/library/nginx:1.26"));
     expect(resolves().at(-1)?.body?.ref).toBe("nginx:1.26");
   });
 
@@ -956,7 +968,7 @@ describe("PullDialog (Browse tags)", () => {
 
     fireEvent.change(input, { target: { value: "redis" } });
     // The picker follows the field once the typing stops; the new list is then in flight.
-    await waitFor(() => expect(tagRefs).toContain("redis"), { timeout: 3000 });
+    await waitFor(() => expect(tagRefs).toContain("redis"));
     expect(within(dialog).queryByText("old-a")).toBeNull();
     expect(detailsFor("redis")).toEqual([]);
 

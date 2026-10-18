@@ -356,9 +356,7 @@ describe("the effective access table", () => {
     renderAt(PAGE);
     const c = await card();
     // The read is retried once after a second before it is called failed.
-    expect(
-      await within(c).findByText(/Couldn't load access\./, {}, { timeout: 4000 }),
-    ).toBeTruthy();
+    expect(await within(c).findByText(/Couldn't load access\./)).toBeTruthy();
     accessStatus = 200;
     access = { instanceAdmin: false, environments: [effectiveRow()], grants: [] };
     fireEvent.click(within(c).getByRole("button", { name: "Retry" }));

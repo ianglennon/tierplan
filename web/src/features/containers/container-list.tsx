@@ -76,8 +76,13 @@ import {
   TruncatedText,
 } from "@/features/resources/resource-table";
 import { useChosenKeys, useSelection } from "@/features/resources/selection";
+import { STATUS_CHIP_ROW } from "@/features/resources/status-chips";
 import { nodeRowKey, useEnvIsSwarm, useNodeColumn } from "@/features/resources/swarm-lists";
 import { useEnvName } from "@/features/resources/use-env-name";
+import { RestartLoopBadge } from "@/features/restart-loop/restart-loop-badge";
+import { MAX_LIST_STATS, useListStats } from "@/features/stats/list-stats";
+import { CpuCell, MemoryCell, NetworkCell } from "@/features/stats/stats-cells";
+import { StatsToggle } from "@/features/stats/stats-toggle";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { toastError, toastInfo } from "@/lib/toast";
@@ -173,6 +178,9 @@ export function SearchBox({ value, onCommit, label, placeholder, clearLabel }: S
 
 const rowKeyOf = (c: ContainerRow) => nodeRowKey(c.node, c.id);
 
+// How the stats stream names a container: the node it runs on, then its ID.
+const statId = (c: ContainerRow) => `${c.nodeId}|${c.id}`;
+
 // What a row shows that can change under the user: its state and status text,
 // the health check, the image and the ports. A change in any of them marks the
 // row (D-05).
@@ -180,8 +188,8 @@ const fingerprintOf = (c: ContainerRow) =>
   [c.state, c.status, c.health, c.image, (c.ports ?? []).join(",")].join("|");
 
 // PortsCell shows the first two published ports and "+n" for the rest, whose
-// tooltip lists them all. A container with none shows a dash.
-function PortsCell({ ports, missing }: { ports: string[] | null; missing: string }) {
+// tooltip lists them all. A container with none shows a dash. The services list uses it too.
+export function PortsCell({ ports, missing }: { ports: string[] | null; missing: string }) {
   const list = ports ?? [];
   if (list.length === 0) return missing;
   const rest = list.length - SHOWN_PORTS;
@@ -348,6 +356,23 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
     chosen,
   );
 
+  // Live stats (D-31): one stream for the running rows on screen and in a group that is open,
+  // no more than the server takes. A container is named by its node and its ID.
+  const statsOn = search.stats === 1;
+  const statsIds = useMemo(() => {
+    if (!statsOn) return [];
+    const out: string[] = [];
+    for (const key of orderedKeys) {
+      const r = byKey.get(key);
+      if (r && r.state === "running" && r.nodeId && !rowStates.get(key)?.removed) {
+        out.push(statId(r));
+        if (out.length >= MAX_LIST_STATS) break;
+      }
+    }
+    return out;
+  }, [statsOn, orderedKeys, byKey, rowStates]);
+  const liveStats = useListStats(envId, "containers", statsIds);
+
   const groups: TableGroup<ContainerRow>[] = baseGroups.map((g) =>
     g.header
       ? {
@@ -407,6 +432,29 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
     </Empty>
   );
 
+  const statsColumns: Column<ContainerRow>[] = statsOn
+    ? [
+        {
+          id: "cpu",
+          header: t("stats.tiles.cpu"),
+          className: "w-24 min-w-24 text-end",
+          cell: (c) => <CpuCell stat={liveStats.get(statId(c))} />,
+        },
+        {
+          id: "memory",
+          header: t("stats.tiles.memory"),
+          className: "w-36 min-w-36 text-end",
+          cell: (c) => <MemoryCell stat={liveStats.get(statId(c))} />,
+        },
+        {
+          id: "network",
+          header: t("stats.tiles.network"),
+          className: "w-48 min-w-48 text-end",
+          cell: (c) => <NetworkCell stat={liveStats.get(statId(c))} />,
+        },
+      ]
+    : [];
+
   const columns: Column<ContainerRow>[] = [
     {
       id: "name",
@@ -426,6 +474,7 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
               <TruncatedText>{c.name}</TruncatedText>
             </Link>
             {kind === "server" || kind === "agent" ? <SelfContainerBadge kind={kind} /> : null}
+            {c.restartLoop ? <RestartLoopBadge loop={c.restartLoop} kind="container" /> : null}
           </span>
         );
       },
@@ -464,6 +513,7 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
       sortKey: "created",
       cell: (c) => <RelativeTime value={c.created} />,
     },
+    ...statsColumns,
     {
       id: "actions",
       header: <span className="sr-only">{t("actions.column")}</span>,
@@ -636,6 +686,10 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
             nodes={data?.nodes ?? []}
           />
         ) : null}
+        <StatsToggle
+          checked={statsOn}
+          onCheckedChange={(on) => onSearchChange({ stats: on ? 1 : undefined })}
+        />
         {headed.length > 0 ? (
           <Button
             type="button"
@@ -670,7 +724,7 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
         aria-label={t("containers.list.status.label")}
         value={statuses}
         onValueChange={(v) => onSearchChange({ status: statusParam(v as StatusValue[]) })}
-        className="max-w-full max-md:w-full max-md:flex-nowrap max-md:overflow-x-auto md:flex-wrap"
+        className={STATUS_CHIP_ROW}
       >
         {STATUS_VALUES.map((v) => {
           const label = t(`containers.list.status.${v}`);

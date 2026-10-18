@@ -9,9 +9,13 @@
 # `docker rm -f` on the same volume, and Bayplan finds its own container.
 #
 # Environment: IMAGE (default: the local ghcr.io/ianglennon/bayplan snapshot
-# image for this engine's architecture), SMOKE_PORT (default 17490) and
-# EXTRA_RUN_ARGS (extra `docker run` flags, for example --hostname). Needs
-# Docker and jq. Removes every container and volume it creates.
+# image for this engine's architecture), SMOKE_PORT (default: unset, so Docker
+# assigns the loopback host port, which the script reads back after every start;
+# Bayplan's public URL is a fixed one that does not name it) and EXTRA_RUN_ARGS
+# (extra `docker run` flags, for example --hostname). Needs Docker, curl and jq.
+# Removes every container and volume it creates, and labels them
+# bayplan.ci.owner=$BAYPLAN_CI_OWNER (local-<pid> when unset) so `make ci-clean`
+# can remove what a cancelled CI job left (D-23).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -26,8 +30,13 @@ if [ -z "${IMAGE}" ]; then
 fi
 [ -n "${IMAGE}" ] || { echo "IMAGE SMOKE FAIL: no local snapshot image for this engine; run make image first" >&2; exit 1; }
 
-PORT="${SMOKE_PORT:-17490}"
-BASE="http://127.0.0.1:${PORT}"
+OWNER_LABEL="bayplan.ci.owner=${BAYPLAN_CI_OWNER:-local-$$}"
+# The public URL the server is told is fixed; the host port Docker assigns is read
+# back by start (never probed for beforehand, because two runners share each VM and
+# a port found free can be taken before docker run), and requests go to BASE (the
+# host URL) with the public URL as their Origin.
+PUBLIC="http://127.0.0.1:7480"
+BASE="" # set by start from the port Docker assigned
 NAME="bayplan-image-smoke-$$"
 VOLUME="${NAME}"
 WORK="$(mktemp -d)"
@@ -50,14 +59,16 @@ fail() {
 start() {
   # The 3 second health interval only speeds up the wait; the probe command is
   # the one baked into the image.
-  docker run -d --name "${NAME}" \
-    -p "127.0.0.1:${PORT}:7480" \
+  docker run -d --name "${NAME}" --label "${OWNER_LABEL}" \
+    -p "127.0.0.1:${SMOKE_PORT:-}:7480" \
     -v "${VOLUME}:/data" \
     -v /var/run/docker.sock:/var/run/docker.sock \
-    -e "BAYPLAN_PUBLIC_URL=${BASE}" \
+    -e "BAYPLAN_PUBLIC_URL=${PUBLIC}" \
     --health-interval 3s --health-start-period 0s --health-retries 5 \
     ${EXTRA_RUN_ARGS:-} \
     "${IMAGE}" >/dev/null || fail "docker run failed"
+  # Docker assigned the host port (unless SMOKE_PORT is set); every start gets a new one.
+  BASE="http://127.0.0.1:$(docker port "${NAME}" 7480/tcp | head -n 1 | sed 's/.*://')"
 }
 
 wait_healthy() {
@@ -71,7 +82,7 @@ wait_healthy() {
   fail "the container did not become healthy within 60 seconds (last state: ${state})"
 }
 
-docker volume create "${VOLUME}" >/dev/null
+docker volume create --label "${OWNER_LABEL}" "${VOLUME}" >/dev/null
 start
 wait_healthy
 
@@ -96,7 +107,7 @@ owners="$(docker cp "${NAME}:/data" - | tar -tvf - | awk '{ print $2 }' | sort -
 
 # 4. Setup, sign in and add this host.
 code="$(curl -sS -o "${WORK}/complete.json" -D "${WORK}/complete.hdr" -w '%{http_code}' -H "${JSON_H}" \
-  -d "{\"token\":\"${TOKEN}\",\"username\":\"admin\",\"password\":\"${PW}\",\"instanceName\":\"Image smoke\",\"publicUrl\":\"${BASE}\"}" \
+  -d "{\"token\":\"${TOKEN}\",\"username\":\"admin\",\"password\":\"${PW}\",\"instanceName\":\"Image smoke\",\"publicUrl\":\"${PUBLIC}\"}" \
   "${BASE}/api/setup/complete")"
 [ "${code}" = "200" ] || fail "setup completion returned ${code}: $(cat "${WORK}/complete.json")"
 SESSION="$(grep -i '^set-cookie:' "${WORK}/complete.hdr" | tr -d '\r' | sed 's/^[^=]*=//; s/;.*//')"
@@ -105,7 +116,7 @@ CSRF="$(jq -r .csrfToken "${WORK}/complete.json")"
 # api METHOD PATH [BODY] sets HTTP_CODE and API_BODY. It is not run in a
 # subshell, so the variables are visible to the caller.
 api() {
-  HTTP_CODE="$(curl -sS -o "${WORK}/api.out" -w '%{http_code}' -X "$1" -H "Origin: ${BASE}" -H "X-CSRF-Token: ${CSRF}" \
+  HTTP_CODE="$(curl -sS -o "${WORK}/api.out" -w '%{http_code}' -X "$1" -H "Origin: ${PUBLIC}" -H "X-CSRF-Token: ${CSRF}" \
     -H "Cookie: bayplan_session=${SESSION}" ${3:+-H "${JSON_H}" -d "$3"} "${BASE}$2")"
   API_BODY="$(cat "${WORK}/api.out")"
 }
@@ -134,7 +145,7 @@ wait_healthy
 instance="$(curl -fsS "${BASE}/api/instance")" || fail "/api/instance did not answer after the re-run"
 printf '%s' "${instance}" | jq -e '.needsSetup == false and .instanceName == "Image smoke"' >/dev/null \
   || fail "state did not survive docker rm -f: ${instance}"
-code="$(curl -sS -o /dev/null -w '%{http_code}' -H "${JSON_H}" -H "Origin: ${BASE}" \
+code="$(curl -sS -o /dev/null -w '%{http_code}' -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
   -d "{\"username\":\"admin\",\"password\":\"${PW}\"}" "${BASE}/api/auth/login")"
 [ "${code}" = "200" ] || fail "signing in after the re-run returned ${code}, want 200"
 if docker exec "${NAME}" /usr/local/bin/bayplan setup-token >/dev/null 2>&1; then

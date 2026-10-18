@@ -15,6 +15,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // fakeClock is a clock the test advances by hand; timers fire inside Advance.
@@ -87,11 +88,14 @@ type fakeExec struct {
 	waitErr error
 	// onClose, when set, runs inside Close, before it returns.
 	onClose func()
+	// changed is signalled (without blocking) after each write, resize, print and end, so a
+	// test waits on what the process saw instead of polling for it.
+	changed chan struct{}
 }
 
 func newFakeExec() *fakeExec {
 	r, w := io.Pipe()
-	return &fakeExec{outR: r, outW: w, state: dockerx.ExecState{Running: true}}
+	return &fakeExec{outR: r, outW: w, state: dockerx.ExecState{Running: true}, changed: make(chan struct{}, 1)}
 }
 
 func (f *fakeExec) Read(p []byte) (int, error) { return f.outR.Read(p) }
@@ -99,7 +103,30 @@ func (f *fakeExec) Read(p []byte) (int, error) { return f.outR.Read(p) }
 func (f *fakeExec) Write(p []byte) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	defer f.notify()
 	return f.got.Write(p)
+}
+
+// notify wakes a test that is waiting in await.
+func (f *fakeExec) notify() {
+	select {
+	case f.changed <- struct{}{}:
+	default: // a wake-up is already waiting
+	}
+}
+
+// await waits until cond holds, re-checking it after each write, resize, print or end of
+// the process; the test's deadline (testsupport.Context) only guards against a hang.
+func (f *fakeExec) await(t testing.TB, what string, cond func() bool) {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	for !cond() {
+		select {
+		case <-f.changed:
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for %s", what)
+		}
+	}
 }
 
 func (f *fakeExec) Close() error {
@@ -118,6 +145,7 @@ func (f *fakeExec) Resize(_ context.Context, cols, rows uint) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.resizes = append(f.resizes, [2]uint{cols, rows})
+	f.notify()
 	return nil
 }
 
@@ -134,7 +162,10 @@ func (f *fakeExec) Inspect(context.Context) (dockerx.ExecState, error) {
 }
 
 // Print makes the process print p; it blocks until the reader has taken it.
-func (f *fakeExec) Print(p []byte) { _, _ = f.outW.Write(p) }
+func (f *fakeExec) Print(p []byte) {
+	_, _ = f.outW.Write(p)
+	f.notify()
+}
 
 // End makes the process exit with code and its output end.
 func (f *fakeExec) End(code int) {
@@ -142,6 +173,7 @@ func (f *fakeExec) End(code int) {
 	f.state = dockerx.ExecState{ExitCode: code}
 	f.mu.Unlock()
 	_ = f.outW.Close()
+	f.notify()
 }
 
 func (f *fakeExec) closeCount() int {
@@ -402,23 +434,23 @@ func TestCloseAllWaitsForAnEndStartedElsewhereToFinishItsAudit(t *testing.T) {
 	})
 
 	go r.End(s.ID, "server_shutdown")
-	<-entered
+	testsupport.Await(t, "the end to start auditing", entered)
 	returned := make(chan struct{})
 	go func() {
 		r.CloseAll("server_shutdown")
 		close(returned)
 	}()
+	// The registry has no signal for "CloseAll is now waiting": it blocks on a
+	// condition variable with nothing observable around it, so there is nothing to
+	// fence this absence on. The window can only miss a CloseAll that returns late; a
+	// correct one cannot return before release, so it never fails a correct run.
 	select {
 	case <-returned:
 		t.Fatal("CloseAll returned while another end was still auditing")
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(100 * time.Millisecond): // wall-clock: CloseAll cannot return before release on a correct registry, so this window can only false-pass, never fail a correct run
 	}
 	close(release)
-	select {
-	case <-returned:
-	case <-time.After(5 * time.Second):
-		t.Fatal("CloseAll did not return after the end finished")
-	}
+	testsupport.Await(t, "CloseAll to return after the end finished", returned)
 }
 
 // A bridge whose read fails the moment the process closes must already be able to see

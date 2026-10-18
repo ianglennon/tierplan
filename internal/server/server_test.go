@@ -37,6 +37,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/store/sqlc"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 func testConfig(t *testing.T, env map[string]string) config.Config {
@@ -121,17 +122,13 @@ func TestReadyzTurns503WhenTheDataDirDisappears(t *testing.T) {
 	// Background work started by Build (the work-file sweep, SQLite's WAL) can
 	// write into the directory while it is being removed; keep removing until it
 	// is gone.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
+	testsupport.Poll(t, testsupport.Deadline, "the data directory to be removed", func() (bool, string) { // testsupport: external, the store's WAL and the sweep writing into the directory while it is removed
 		err := os.RemoveAll(dir)
-		if err == nil {
-			break
+		if err != nil {
+			return false, err.Error()
 		}
-		if time.Now().After(deadline) {
-			t.Fatal(err)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+		return true, ""
+	})
 	if code, body := httpGet(t, ts.URL+"/readyz"); code != 503 || body != "not ready" {
 		t.Fatalf("/readyz after removing the data dir = %d %q, want 503 not ready", code, body)
 	}
@@ -169,7 +166,7 @@ func TestRunServesThenShutsDownOnCancelAndHealthcheckFollows(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Run returned %v after cancel, want nil", err)
 		}
-	case <-time.After(15 * time.Second):
+	case <-time.After(testsupport.Deadline):
 		t.Fatal("server did not shut down")
 	}
 
@@ -594,19 +591,15 @@ func TestBuildAddsNoEnvironmentAndNeverContactsDockerUntilAnAdminOptsIn(t *testi
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = srv.Close() })
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		got, err := srv.Environments().Get(context.Background(), added.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got.Status.State == envs.StateOnline {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the restarted server never monitored the environment: %+v", got.Status)
-		}
-		time.Sleep(5 * time.Millisecond)
+	if st, err := srv.monitor.AwaitStatus(testsupport.Context(t), added.ID, func(st envs.Status) bool { return st.State == envs.StateOnline }); err != nil {
+		t.Fatalf("the restarted server never monitored the environment: %+v: %v", st, err)
+	}
+	got, err := srv.Environments().Get(context.Background(), added.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.State != envs.StateOnline {
+		t.Fatalf("the restarted server lists the environment as %+v after the monitor saw it online", got.Status)
 	}
 	env, err := srv.Environments().Resolve(context.Background(), added.ID)
 	if err != nil || env.Name != "node-1" {
@@ -660,11 +653,8 @@ func TestBuildFeedsEventsPerEnvironmentAndShutdownDoesNotWaitForAnOpenStream(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	for deadline := time.Now().Add(10 * time.Second); len(srv.Hub().Recent(added.ID, 10)) == 0; {
-		if time.Now().After(deadline) {
-			t.Fatal("the hub never received the daemon's buffered event")
-		}
-		time.Sleep(5 * time.Millisecond)
+	if err := srv.Hub().Await(testsupport.Context(t), func() bool { return len(srv.Hub().Recent(added.ID, 10)) > 0 }); err != nil {
+		t.Fatalf("the hub never received the daemon's buffered event: %v", err)
 	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -710,17 +700,16 @@ func TestBuildFeedsEventsPerEnvironmentAndShutdownDoesNotWaitForAnOpenStream(t *
 		t.Fatalf("first read = %q, %v, want the backlog frame", buf[:n], err)
 	}
 
-	start := time.Now()
 	stop()
 	select {
 	case err := <-done:
+		// Not waiting for the stream is proved by the result, not by a stopwatch:
+		// a shutdown that had to wait out shutdownTimeout for the open stream
+		// returns "graceful shutdown: context deadline exceeded".
 		if err != nil {
-			t.Fatalf("serve returned %v with a stream open, want a clean shutdown", err)
+			t.Fatalf("serve returned %v with a stream open, want a clean shutdown that did not wait for the stream", err)
 		}
-		if took := time.Since(start); took > 5*time.Second {
-			t.Errorf("shutdown took %v with a stream open, want it not to wait for the stream", took)
-		}
-	case <-time.After(15 * time.Second):
+	case <-time.After(testsupport.Deadline):
 		t.Fatal("serve did not return with a stream open")
 	}
 
@@ -926,33 +915,45 @@ func TestHealthcheckDialsTheConfiguredAddress(t *testing.T) {
 	})
 }
 
-func shortReadTimeout(t *testing.T, d time.Duration) {
-	t.Helper()
-	old := readTimeout
-	readTimeout = d
-	t.Cleanup(func() { readTimeout = old })
-}
-
-func serveForTest(t *testing.T, h http.Handler) string {
+// serveForTest serves h on a loopback port with an http.Server built by
+// newHTTPServer, so a test that needs a short read timeout passes its own.
+func serveForTest(t *testing.T, h http.Handler, readTimeout time.Duration) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := newHTTPServer(h, nil)
+	srv := newHTTPServer(h, nil, readTimeout)
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
 	return ln.Addr().String()
 }
 
+// WR-16, T-06.1-75: the read timeout is a parameter of newHTTPServer, so the
+// production value must be pinned here or the slow-body protection could drop
+// to zero (no timeout) without a test failing.
+func TestTheHTTPServerThatServeBuildsReadsRequestsForThirtySeconds(t *testing.T) {
+	built, err := Build(context.Background(), testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": t.TempDir() + "/data"}), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = built.Close() })
+	srv := built.httpServer()
+	if srv.ReadTimeout != 30*time.Second {
+		t.Fatalf("ReadTimeout = %v, want 30s", srv.ReadTimeout)
+	}
+	if srv.ReadHeaderTimeout != readHeaderTimeout || srv.IdleTimeout != idleTimeout || srv.MaxHeaderBytes != maxHeaderBytes {
+		t.Fatalf("slow-client bounds changed: %v %v %d", srv.ReadHeaderTimeout, srv.IdleTimeout, srv.MaxHeaderBytes)
+	}
+}
+
 func TestServerCutsOffARequestBodyThatNeverArrives(t *testing.T) {
 	// WR-14, T-01-17: headers arrived in time, the promised body never does.
 	// ReadHeaderTimeout no longer applies, so only ReadTimeout ends this.
-	shortReadTimeout(t, 200*time.Millisecond)
 	addr := serveForTest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		w.WriteHeader(http.StatusRequestTimeout)
-	}))
+	}), 200*time.Millisecond)
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatal(err)
@@ -961,12 +962,12 @@ func TestServerCutsOffARequestBodyThatNeverArrives(t *testing.T) {
 	if _, err := conn.Write([]byte("POST /x HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n")); err != nil {
 		t.Fatal(err)
 	}
-	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(testsupport.Deadline))
 	buf := make([]byte, 512)
 	if _, err := conn.Read(buf); err != nil {
 		var ne net.Error
 		if errors.As(err, &ne) && ne.Timeout() {
-			t.Fatal("the server was still waiting for the body after 2s; there is no read timeout")
+			t.Fatal("the server was still waiting for the body after the shared deadline; there is no read timeout")
 		}
 		// The connection being closed is also a cut-off.
 	}
@@ -976,16 +977,15 @@ func TestAStreamingResponseOutlivesTheReadTimeout(t *testing.T) {
 	// The events feed is a bodyless GET that stays open for hours. Go clears
 	// the read deadline once such a request is being served, so ReadTimeout
 	// must not end it.
-	shortReadTimeout(t, 200*time.Millisecond)
 	const chunks = 10
 	addr := serveForTest(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fl, _ := w.(http.Flusher)
 		for range chunks {
 			_, _ = w.Write([]byte("x"))
 			fl.Flush()
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(100 * time.Millisecond) //nolint:forbidigo // the handler streams one byte every 100 ms; the pace is what the read-timeout check measures
 		}
-	}))
+	}), 200*time.Millisecond)
 	resp, err := http.Get("http://" + addr + "/stream") //nolint:noctx // test against a loopback listener
 	if err != nil {
 		t.Fatal(err)
@@ -1003,13 +1003,13 @@ func TestServerRefusesAnOversizedRequestLine(t *testing.T) {
 	called := false
 	addr := serveForTest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
-	}))
+	}), defaultReadTimeout)
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(testsupport.Deadline))
 	_, _ = fmt.Fprintf(conn, "GET /api/env/%s/summary HTTP/1.1\r\nHost: x\r\n\r\n", strings.Repeat("a", 200_000))
 	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
 	if err != nil {

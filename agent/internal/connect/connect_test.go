@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -28,6 +29,7 @@ import (
 
 	"github.com/ianglennon/bayplan/agent/internal/state"
 	"github.com/ianglennon/bayplan/proto/authn"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -83,8 +85,7 @@ func (rt *recordingTransport) seen() []string {
 // unless the agent itself carries BAYPLAN_AGENT_ALLOW_INSECURE (T-02-31).
 func TestRunRefusesPlainWSToAnotherHostWithoutTheSwitchAndNeverDials(t *testing.T) {
 	rt := &recordingTransport{}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := testsupport.Context(t)
 	err := Run(ctx, Config{
 		URL: "ws://bayplan.example/agent/connect", JoinToken: "bpjt_tok",
 		HTTPClient: &http.Client{Transport: rt}, SocketPath: filepath.Join(t.TempDir(), "none.sock"),
@@ -129,7 +130,21 @@ type reply struct {
 	// dockerRequests are raw HTTP requests the server sends on streams it opens
 	// after the welcome, the way its Docker client would.
 	dockerRequests []string
+	// fenceAfterRenew makes the server send a fence (see fenceLine) right after it
+	// answers a renew, so a test can wait for the agent to have handled the answer.
+	fenceAfterRenew bool
 }
+
+// fenceID is the id of the update the fake server sends as a fence.
+const fenceID = "fence"
+
+// fenceLine is an update request that follows other control lines. The agent reads
+// control lines one at a time and handles the pushes, renewals and pins among them
+// before it reads the next, so the update_result it answers a fence with proves that
+// every line sent before the fence was handled. With no self-maintenance on the agent
+// the answer is an error and nothing runs; a session that was not verified refuses
+// it. Either way the result reaches fakeServer.results.
+var fenceLine = `{"t":"update","id":"` + fenceID + `","image":"fence/fence:0"}`
 
 // fakeServer is the server end of the agent's connection: it runs the real
 // handshake messages and the control stream, and records what the agent sent.
@@ -137,19 +152,29 @@ type fakeServer struct {
 	ts     *httptest.Server
 	script func(n int, a wire.Auth) reply
 
-	mu      sync.Mutex
-	auths   []wire.Auth
-	nonces  [][]byte
-	kinds   []byte
-	beats   chan wire.Heartbeat
-	denied  chan wire.Denied
-	results chan wire.UpdateResult // every update_result the agent wrote
-	started chan int               // connection number, after the welcome
+	mu       sync.Mutex
+	auths    []wire.Auth
+	nonces   [][]byte
+	scripted int           // handshakes whose script has run
+	changed  chan struct{} // closed and replaced, under mu, each time scripted grows
+	kinds    []byte
+	beats    chan wire.Heartbeat
+	denied   chan wire.Denied
+	results  chan wire.UpdateResult // every update_result the agent wrote
+	started  chan int               // connection number, after the welcome
+	// answered gets one value each time the agent answers a Docker request the
+	// server sent (see reply.dockerRequests).
+	answered chan struct{}
+}
+
+// newFakeCore is a fake server that is not started.
+func newFakeCore(script func(n int, a wire.Auth) reply) *fakeServer {
+	return &fakeServer{script: script, changed: make(chan struct{}), beats: make(chan wire.Heartbeat, 256), denied: make(chan wire.Denied, 256), results: make(chan wire.UpdateResult, 64), started: make(chan int, 64), answered: make(chan struct{}, 64)}
 }
 
 func newFakeServer(t *testing.T, script func(n int, a wire.Auth) reply) *fakeServer {
 	t.Helper()
-	f := &fakeServer{script: script, beats: make(chan wire.Heartbeat, 256), denied: make(chan wire.Denied, 256), results: make(chan wire.UpdateResult, 64), started: make(chan int, 64)}
+	f := newFakeCore(script)
 	f.ts = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(func() {
 		f.ts.CloseClientConnections()
@@ -190,6 +215,12 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 	f.mu.Unlock()
 
 	rep := f.script(n, a)
+	// Only now is the handshake seen to a test: whatever the script recorded is there.
+	f.mu.Lock()
+	f.scripted++
+	close(f.changed)
+	f.changed = make(chan struct{})
+	f.mu.Unlock()
 	if rep.refuse != "" {
 		b, _ := json.Marshal(wire.Refuse{T: wire.TypeRefuse, Code: rep.refuse, Detail: "refused by the test"})
 		_ = c.Write(ctx, websocket.MessageText, b)
@@ -235,7 +266,15 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 		_, _ = st.Write([]byte(line + "\n"))
 	}
 	if rep.hangup {
-		time.Sleep(150 * time.Millisecond)
+		// Hang up once the agent has handled everything sent so far: its answer to a
+		// fence says so.
+		_, _ = st.Write([]byte(fenceLine + "\n"))
+		for sc := bufio.NewScanner(br); sc.Scan(); {
+			var ur wire.UpdateResult
+			if json.Unmarshal(sc.Bytes(), &ur) == nil && ur.T == wire.TypeUpdateResult && ur.ID == fenceID {
+				break
+			}
+		}
 		return
 	}
 	for _, raw := range rep.dockerRequests {
@@ -246,6 +285,13 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 			}
 			defer func() { _ = ds.Close() }()
 			_, _ = ds.Write(append([]byte{wire.StreamKindDockerHTTP}, raw...))
+			var first [1]byte
+			if n, _ := ds.Read(first[:]); n > 0 {
+				select {
+				case f.answered <- struct{}{}:
+				default:
+				}
+			}
 			_, _ = io.Copy(io.Discard, ds)
 		}()
 	}
@@ -263,6 +309,9 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 			if v := rep.onRenew(); v != nil {
 				b, _ := json.Marshal(v)
 				_, _ = st.Write(append(b, '\n'))
+				if rep.fenceAfterRenew {
+					_, _ = st.Write([]byte(fenceLine + "\n"))
+				}
 			}
 		}
 		var ur wire.UpdateResult
@@ -282,21 +331,47 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// authN returns the nth handshake the server recorded, waiting for it to arrive and
+// for the script that decides its answer to have run.
 func (f *fakeServer) authN(t *testing.T, n int) (wire.Auth, []byte) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	ctx := testsupport.Context(t)
 	for {
 		f.mu.Lock()
-		if len(f.auths) >= n {
+		if f.scripted >= n {
 			a, nonce := f.auths[n-1], f.nonces[n-1]
 			f.mu.Unlock()
 			return a, nonce
 		}
+		changed := f.changed
 		f.mu.Unlock()
-		if time.Now().After(deadline) {
-			t.Fatalf("the server never saw handshake %d", n)
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			t.Fatalf("testsupport: timed out waiting for the server to see handshake %d", n)
 		}
-		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// heartbeatsAfterWelcome reads n heartbeats the agent sent. The agent heartbeats
+// only once it has handled the welcome (saved its identity, its pins and its
+// addresses, and marked itself connected), so a state change a welcome causes has
+// happened by the first heartbeat, and its absence is settled by the second.
+func (f *fakeServer) heartbeatsAfterWelcome(t *testing.T, n int) {
+	t.Helper()
+	for i := range n {
+		testsupport.Await(t, fmt.Sprintf("heartbeat %d of the agent", i+1), f.beats)
+	}
+}
+
+// awaitFence waits for the agent's answer to a fence, which proves that it handled
+// every control line the server sent before the fence.
+func (f *fakeServer) awaitFence(t *testing.T) {
+	t.Helper()
+	for {
+		if res := testsupport.Await(t, "the agent's answer to the fence", f.results); res.ID == fenceID {
+			return
+		}
 	}
 }
 
@@ -323,7 +398,7 @@ func startAgent(t *testing.T, cfg Config, env runEnv) (cancel context.CancelFunc
 		cancel()
 		select {
 		case <-ch:
-		case <-time.After(5 * time.Second):
+		case <-time.After(testsupport.Deadline):
 			t.Error("the agent did not stop when its context ended")
 		}
 	})
@@ -334,7 +409,7 @@ func fastEnv() runEnv {
 	return runEnv{
 		sleep: func(ctx context.Context, d time.Duration) error {
 			select {
-			case <-time.After(min(d, 5*time.Millisecond)):
+			case <-time.After(min(d, 5*time.Millisecond)): // wall-clock: paces a fake sleeper; no assertion depends on it
 				return nil
 			case <-ctx.Done():
 				return ctx.Err()
@@ -343,15 +418,21 @@ func fastEnv() runEnv {
 	}
 }
 
-func waitUntil(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
+// countingEnv is fastEnv with a signal: the channel gets a value each time the agent
+// waits before another round of attempts, which is how a test knows that a round of
+// dials has ended.
+func countingEnv() (runEnv, <-chan struct{}) {
+	env := fastEnv()
+	inner := env.sleep
+	rounds := make(chan struct{}, 1024)
+	env.sleep = func(ctx context.Context, d time.Duration) error {
+		select {
+		case rounds <- struct{}{}:
+		default:
 		}
-		time.Sleep(5 * time.Millisecond)
+		return inner(ctx, d)
 	}
+	return env, rounds
 }
 
 func enrolledState(t *testing.T, dir string) state.State {
@@ -373,7 +454,7 @@ func TestFirstStartEnrolsWithTheTokenAndKeepsItsIdentityOnTheVolume(t *testing.T
 	if a.Mode != wire.ModeEnrol || a.Token != "bpjt_tok" || len(a.Pub) != ed25519.PublicKeySize || len(a.Cert) != 0 {
 		t.Fatalf("first handshake = mode %q token %q pub %d cert %d; want enrol with the token and a key", a.Mode, a.Token, len(a.Pub), len(a.Cert))
 	}
-	waitUntil(t, "the identity to be saved", func() bool { _, ok, _ := state.Load(dir); return ok })
+	srv.heartbeatsAfterWelcome(t, 1) // the identity and the connected marker are written before the first heartbeat
 	got, _, err := state.Load(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -381,11 +462,10 @@ func TestFirstStartEnrolsWithTheTokenAndKeepsItsIdentityOnTheVolume(t *testing.T
 	if got.AgentID != "agent-7" || got.EnvID != "env-7" || string(got.Cert) != "issued-cert-der" || !bytes.Equal(publicOf(got.Key), a.Pub) {
 		t.Fatalf("saved state = %+v; want the welcome's IDs and certificate and the key the handshake proved", got)
 	}
-	// The marker is written after the identity is saved, so wait for it too.
-	waitUntil(t, "the connected marker after the handshake", func() bool {
-		_, err := os.Stat(filepath.Join(dir, state.ConnectedFile))
-		return err == nil
-	})
+	// The marker is written after the identity is saved, and before the first heartbeat.
+	if _, err := os.Stat(filepath.Join(dir, state.ConnectedFile)); err != nil {
+		t.Errorf("the connected marker is missing after the first heartbeat: %v", err)
+	}
 }
 
 func TestARestartReconnectsInHelloModeWithItsCertificateAndNoToken(t *testing.T) {
@@ -455,12 +535,7 @@ func TestAfterTheWelcomeTheAgentOpensOneControlStreamAndHeartbeats(t *testing.T)
 	})
 	var got []wire.Heartbeat
 	for len(got) < 3 {
-		select {
-		case h := <-srv.beats:
-			got = append(got, h)
-		case <-time.After(3 * time.Second):
-			t.Fatalf("only %d heartbeats arrived", len(got))
-		}
+		got = append(got, testsupport.Await(t, fmt.Sprintf("heartbeat %d", len(got)+1), srv.beats))
 	}
 	for _, h := range got {
 		if h.T != wire.TypeHeartbeat || !h.EngineReachable || h.ClockMs != 1_700_000_000_123 {
@@ -481,13 +556,8 @@ func TestAHeartbeatSaysTheEngineIsUnreachableWhenPingFails(t *testing.T) {
 	for name, sock := range map[string]string{"no socket": filepath.Join(dir, "none.sock"), "ping answers 500": broken} {
 		srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{heartbeatMs: 30} })
 		startAgent(t, Config{URL: srv.url(), JoinToken: "bpjt_tok", SocketPath: sock}, runEnv{})
-		select {
-		case h := <-srv.beats:
-			if h.EngineReachable {
-				t.Errorf("%s: heartbeat says the engine is reachable", name)
-			}
-		case <-time.After(3 * time.Second):
-			t.Fatalf("%s: no heartbeat", name)
+		if h := testsupport.Await(t, name+": a heartbeat", srv.beats); h.EngineReachable {
+			t.Errorf("%s: heartbeat says the engine is reachable", name)
 		}
 	}
 }
@@ -497,13 +567,7 @@ func TestTheAgentIgnoresControlMessagesItDoesNotKnow(t *testing.T) {
 		return reply{heartbeatMs: 30, toAgent: []string{`{"t":"from-the-future","x":1}`, `not json at all`, `{"t":"heartbeat"}`}}
 	})
 	startAgent(t, Config{URL: srv.url(), JoinToken: "bpjt_tok"}, runEnv{})
-	for range 3 {
-		select {
-		case <-srv.beats:
-		case <-time.After(3 * time.Second):
-			t.Fatal("the agent stopped heartbeating after an unknown control message")
-		}
-	}
+	srv.heartbeatsAfterWelcome(t, 3) // the agent goes on heartbeating after the unknown messages
 	if srv.attempts() != 1 {
 		t.Errorf("the agent reconnected %d times; an unknown control message is not an error", srv.attempts())
 	}
@@ -538,7 +602,7 @@ func (s *sleeps) all() []time.Duration {
 
 func runUntilSleeps(t *testing.T, cfg Config, stopAt int) (*sleeps, error) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testsupport.Deadline)
 	defer cancel()
 	sl := &sleeps{stopAt: stopAt}
 	ctx, sl.cancel = context.WithCancel(ctx)
@@ -598,10 +662,10 @@ func TestARevokedAgentWithAJoinTokenDiscardsItsIdentityAndEnrolsAgain(t *testing
 		t.Errorf("identity files still on disk when the agent enrolled again (%v); the revoked identity must be gone first", onDiskAtEnrol)
 	}
 	mu.Unlock()
-	waitUntil(t, "the new identity to be saved", func() bool {
-		s, ok, _ := state.Load(dir)
-		return ok && string(s.Cert) == "rejoined-cert-der"
-	})
+	srv.heartbeatsAfterWelcome(t, 1)
+	if s, ok, _ := state.Load(dir); !ok || string(s.Cert) != "rejoined-cert-der" {
+		t.Fatalf("the new identity was not saved: %+v %v", s, ok)
+	}
 	got, _, _ := state.Load(dir)
 	if got.Key.Equal(saved.Key) {
 		t.Error("the saved identity still has the revoked agent's key")
@@ -690,10 +754,10 @@ func TestAnUnknownAgentRefusalWithAJoinTokenDiscardsTheIdentityAndEnrolsAgain(t 
 		t.Errorf("identity files still on disk when the agent enrolled again (%v)", onDiskAtEnrol)
 	}
 	mu.Unlock()
-	waitUntil(t, "the new identity to be saved", func() bool {
-		s, ok, _ := state.Load(dir)
-		return ok && string(s.Cert) == "reinstalled-cert-der"
-	})
+	srv.heartbeatsAfterWelcome(t, 1)
+	if s, ok, _ := state.Load(dir); !ok || string(s.Cert) != "reinstalled-cert-der" {
+		t.Fatalf("the new identity was not saved: %+v %v", s, ok)
+	}
 	if !strings.Contains(logs.String(), "code=unknown_agent") {
 		t.Errorf("the refusal was not logged:\n%s", logs.String())
 	}
@@ -908,10 +972,10 @@ func TestAnExpiredCertificateEnrolsAgainWhenAJoinTokenIsAvailable(t *testing.T) 
 	if first.Mode != wire.ModeHello || second.Mode != wire.ModeEnrol || second.Token != "bpjt_tok" {
 		t.Fatalf("modes = %q then %q (token %q); want hello, then enrol with the token", first.Mode, second.Mode, second.Token)
 	}
-	waitUntil(t, "the new certificate to be saved", func() bool {
-		s, ok, _ := state.Load(dir)
-		return ok && string(s.Cert) == "renewed-cert-der"
-	})
+	srv.heartbeatsAfterWelcome(t, 1)
+	if s, ok, _ := state.Load(dir); !ok || string(s.Cert) != "renewed-cert-der" {
+		t.Fatalf("the new certificate was not saved: %+v %v", s, ok)
+	}
 	got, _, _ := state.Load(dir)
 	if got.Key.Equal(old.Key) {
 		t.Error("re-enrolment reused the old key; the join token enrols a fresh one")
@@ -1030,8 +1094,7 @@ func TestBackoffUsesRealRandomnessByDefault(t *testing.T) {
 
 func TestARefusalOfTheVeryFirstEnrolmentEndsTheAgentSoAWrongTokenIsVisible(t *testing.T) {
 	srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{refuse: wire.ReasonAuthRejected} })
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := testsupport.Context(t)
 	err := runWith(ctx, Config{
 		URL: srv.url(), JoinToken: "bpjt_wrong", SocketPath: filepath.Join(t.TempDir(), "none.sock"), Log: slog.New(slog.DiscardHandler),
 	}, fastEnv())
@@ -1127,6 +1190,17 @@ func TestTheHandshakeReportsTheHostPolicyInTheFacts(t *testing.T) {
 	}
 }
 
+func TestTheHandshakeReportsThePrivilegedServicesOptIn(t *testing.T) {
+	for name, allow := range map[string]bool{"opted in": true, "not opted in": false} {
+		srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{} })
+		startAgent(t, Config{URL: srv.url(), JoinToken: "bpjt_tok", AllowPrivilegedServices: allow}, fastEnv())
+		a, _ := srv.authN(t, 1)
+		if a.Facts.Policy.PrivilegedServices != allow {
+			t.Errorf("%s: facts.policy = %+v", name, a.Facts.Policy)
+		}
+	}
+}
+
 func TestARefusedDockerRequestIsReportedOnTheControlStream(t *testing.T) {
 	sock := fakeEngine(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("OK")) })
 	for name, tc := range map[string]struct {
@@ -1146,18 +1220,16 @@ func TestARefusedDockerRequestIsReportedOnTheControlStream(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{dockerRequests: []string{tc.raw}} })
 			startAgent(t, Config{URL: srv.url(), JoinToken: "bpjt_tok", SocketPath: sock, ReadOnly: tc.readOnly}, fastEnv())
-			select {
-			case got := <-srv.denied:
-				if got != tc.want {
-					t.Fatalf("denied = %+v, want %+v", got, tc.want)
-				}
-			case <-time.After(3 * time.Second):
-				t.Fatal("no denied message reached the server")
+			if got := testsupport.Await(t, "a denied message", srv.denied); got != tc.want {
+				t.Fatalf("denied = %+v, want %+v", got, tc.want)
 			}
+			// Two heartbeats later the control loop has had every chance to write a
+			// second report of the same refusal.
+			srv.heartbeatsAfterWelcome(t, 2)
 			select {
 			case extra := <-srv.denied:
 				t.Fatalf("a second denied message for one refusal: %+v", extra)
-			case <-time.After(150 * time.Millisecond):
+			default:
 			}
 		})
 	}
@@ -1169,10 +1241,12 @@ func TestAnAllowedRequestSendsNoDeniedMessage(t *testing.T) {
 		return reply{dockerRequests: []string{"GET /_ping HTTP/1.1\r\nHost: docker\r\n\r\n"}}
 	})
 	startAgent(t, Config{URL: srv.url(), JoinToken: "bpjt_tok", SocketPath: sock, ReadOnly: true}, fastEnv())
+	testsupport.Await(t, "the agent's answer to the Docker request", srv.answered)
+	srv.heartbeatsAfterWelcome(t, 2)
 	select {
 	case d := <-srv.denied:
 		t.Fatalf("a read on a read-only agent was reported as denied: %+v", d)
-	case <-time.After(300 * time.Millisecond):
+	default:
 	}
 }
 

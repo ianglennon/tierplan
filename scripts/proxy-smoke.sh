@@ -50,8 +50,11 @@
 #
 # Environment: IMAGE (default bayplan:e2e), CADDY_IMAGE (caddy:2), NGINX_IMAGE
 # (nginx:stable-alpine), TRAEFIK_IMAGE (traefik:v3). Needs Docker, curl and jq.
-# Removes every container and the network it creates, by name. Prints one PASS or
-# FAIL line per check and exits 1 if any check failed.
+# Removes every container and the network it creates, by name, and labels them with
+# bayplan.ci.owner=$BAYPLAN_CI_OWNER (local-<pid> when unset) so that `make ci-clean`
+# in CI removes what a cancelled run left (D-23). The proxy's host port is assigned by
+# Docker and read back. Prints one PASS or FAIL line per check and exits 1 if any
+# check failed.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -67,6 +70,7 @@ done
 docker image inspect "${IMAGE}" >/dev/null 2>&1 || { echo "FAIL: the image ${IMAGE} is not built; run make e2e-image" >&2; exit 1; }
 
 RUN_ID="$$"
+OWNER_LABEL="bayplan.ci.owner=${BAYPLAN_CI_OWNER:-local-$$}"
 NET="bayplan-proxy-smoke-${RUN_ID}"
 WORK="$(mktemp -d)"
 JSON_H='Content-Type: application/json'
@@ -87,7 +91,7 @@ trap cleanup EXIT
 pass() { echo "PASS: $*"; }
 fail() { echo "FAIL: $*"; FAILS=$((FAILS + 1)); }
 
-docker network create "${NET}" >/dev/null
+docker network create --label "${OWNER_LABEL}" "${NET}" >/dev/null
 SUBNET="$(docker network inspect -f '{{(index .IPAM.Config 0).Subnet}}' "${NET}")"
 
 # start_container NAME ARGS... runs a detached container on the smoke network and
@@ -96,7 +100,7 @@ start_container() {
   local name="$1"
   shift
   CONTAINERS+=("${name}")
-  docker run -d --name "${name}" --network "${NET}" "$@" >/dev/null
+  docker run -d --name "${name}" --network "${NET}" --label "${OWNER_LABEL}" "$@" >/dev/null
 }
 
 stop_container() {
@@ -116,6 +120,24 @@ curl_proxy() {
   local path="$1"
   shift
   curl -sS -H "Host: ${HOST}" "$@" "http://127.0.0.1:${PORT}${BASE}${path}"
+}
+
+# await_index waits until the proxy serves an index page that carries the bayplan-base
+# meta for ${BASE}, or 60 s pass (a deadline, not a count of tries). It sets index_last
+# (declared by the caller) to the status and first line of the last response it saw.
+await_index() {
+  local deadline=$((SECONDS + 60)) body status
+  while :; do
+    body="$(curl_proxy / --max-time 10 -w $'\n%{http_code}' 2>&1 || true)"
+    status="${body##*$'\n'}"
+    body="${body%$'\n'*}"
+    index_last="${status} $(printf '%s' "${body}" | head -n 1 | cut -c1-200)"
+    if grep -qF "<meta name=\"bayplan-base\" content=\"${BASE}\">" <<<"${body}"; then
+      return 0
+    fi
+    [ "${SECONDS}" -ge "${deadline}" ] && return 1
+    sleep 1
+  done
 }
 
 wait_bayplan() {
@@ -265,20 +287,15 @@ run_scenario() {
   local ok_signed=1
   sign_in || { fail "${LABEL}: setup through the proxy failed"; ok_signed=0; }
 
-  # The index, with the base path the public URL decides. A busy runner can take longer
-  # than one short attempt to serve the first full page after setup, so it gets three.
-  local index_ok=0 _attempt
-  for _attempt in 1 2 3; do
-    if curl_proxy / --max-time 10 | grep -qF "<meta name=\"bayplan-base\" content=\"${BASE}\">"; then
-      index_ok=1
-      break
-    fi
-    sleep 1
-  done
-  if [ "${index_ok}" = 1 ]; then
+  # The index, with the base path the public URL decides. The proxy and the server are
+  # external processes: the wait is for the proxy to serve the first full page after
+  # setup, bounded by a deadline. A wrong answer is not tried again; the failure says
+  # what the last response was.
+  local index_last=""
+  if await_index; then
     pass "${LABEL}: the index carries the bayplan-base meta \"${BASE}\""
   else
-    fail "${LABEL}: the index has no bayplan-base meta \"${BASE}\""
+    fail "${LABEL}: the index has no bayplan-base meta \"${BASE}\" after 60s; last response: ${index_last}"
   fi
   local code
   code="$(curl_proxy /api/version -o /dev/null -w '%{http_code}' --max-time 5 || true)"

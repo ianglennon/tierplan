@@ -18,6 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Spinner } from "@/components/ui/spinner";
 import { fromLocalInput, type ShowRange, toLocalInput } from "@/features/logs/log-prefs";
+import { type StreamTarget, sourceOf } from "@/features/logs/log-stream";
 import { useT } from "@/i18n/use-t";
 import { apiUrl } from "@/lib/base-path";
 import { toastError } from "@/lib/toast";
@@ -27,10 +28,10 @@ export const DOWNLOAD_SPINNER_MS = 1000;
 
 const PRESET_MS = { "5m": 5 * 60_000, "1h": 3_600_000, "24h": 86_400_000 } as const;
 
-export interface DownloadTarget {
+// What a download reads: a container on its node, given as containerId (and nodeId), or any
+// source, a service among them (plan 06-31, D-35). A container caller keeps using containerId.
+export interface DownloadTarget extends StreamTarget {
   envId: string;
-  containerId: string;
-  nodeId?: string;
 }
 
 // downloadUrl is the address of the server's download of a range (D-18). It is a plain
@@ -40,14 +41,17 @@ export function downloadUrl(
   range: { since?: string; until?: string },
   timestamps: boolean,
 ): string {
+  const src = sourceOf(target);
   const q = new URLSearchParams();
-  if (target.nodeId) q.set("nodeId", target.nodeId);
+  if (src.kind === "container" && src.nodeId) q.set("nodeId", src.nodeId);
   if (range.since) q.set("since", range.since);
   if (range.until) q.set("until", range.until);
-  if (timestamps) q.set("timestamps", "1");
+  // A service's file always starts each line with its task and the UTC time.
+  if (src.kind === "container" && timestamps) q.set("timestamps", "1");
   const query = q.toString();
+  const what = src.kind === "service" ? "services" : "containers";
   return apiUrl(
-    `/api/env/${encodeURIComponent(target.envId)}/containers/${encodeURIComponent(target.containerId)}/logs/download${query ? `?${query}` : ""}`,
+    `/api/env/${encodeURIComponent(target.envId)}/${what}/${encodeURIComponent(src.id)}/logs/download${query ? `?${query}` : ""}`,
   );
 }
 
@@ -98,6 +102,7 @@ export interface DownloadFormProps {
 function DownloadForm({ target, show, timestamps, onCancel }: DownloadFormProps) {
   const t = useT();
   const id = useId();
+  const isService = sourceOf(target).kind === "service";
   const initial = useMemo(() => defaultRange(show, new Date()), [show]);
   const [from, setFrom] = useState(initial.from);
   const [to, setTo] = useState(initial.to);
@@ -158,17 +163,21 @@ function DownloadForm({ target, show, timestamps, onCancel }: DownloadFormProps)
         ) : null}
       </div>
       <p className="text-xs text-muted-foreground">{t("logs.download.empty")}</p>
-      <div className="flex items-center gap-2">
-        <Checkbox
-          id={`${id}-ts`}
-          checked={withStamps}
-          onCheckedChange={(v) => setWithStamps(v === true)}
-        />
-        <Label htmlFor={`${id}-ts`} className="font-normal">
-          {t("logs.download.timestamps")}
-        </Label>
-      </div>
-      <p className="text-xs text-muted-foreground">{t("logs.download.note")}</p>
+      {isService ? null : (
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id={`${id}-ts`}
+            checked={withStamps}
+            onCheckedChange={(v) => setWithStamps(v === true)}
+          />
+          <Label htmlFor={`${id}-ts`} className="font-normal">
+            {t("logs.download.timestamps")}
+          </Label>
+        </div>
+      )}
+      <p className="text-xs text-muted-foreground">
+        {t(isService ? "logs.download.serviceNote" : "logs.download.note")}
+      </p>
       <div className="flex justify-end gap-2">
         <Button type="button" variant="outline" size="sm" onClick={onCancel}>
           {t("logs.download.cancel")}
@@ -218,7 +227,13 @@ export function DownloadDialog({
       <DialogContent className="sm:max-w-160">
         <DialogHeader>
           <DialogTitle>{t("logs.download.title")}</DialogTitle>
-          <DialogDescription className="sr-only">{t("logs.download.note")}</DialogDescription>
+          <DialogDescription className="sr-only">
+            {t(
+              sourceOf(props.target).kind === "service"
+                ? "logs.download.serviceNote"
+                : "logs.download.note",
+            )}
+          </DialogDescription>
         </DialogHeader>
         <DownloadForm {...props} onCancel={() => onOpenChange(false)} />
       </DialogContent>

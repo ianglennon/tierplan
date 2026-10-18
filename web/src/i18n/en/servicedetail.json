@@ -1,0 +1,227 @@
+{
+  "servicedetail": {
+    "breadcrumb": {
+      "label": "Breadcrumb",
+      "services": "Services"
+    },
+    "tabs": {
+      "label": "Service sections",
+      "overview": "Overview",
+      "tasks": "Tasks",
+      "placement": "Placement",
+      "logs": "Logs",
+      "inspect": "Inspect"
+    },
+    "loading": "Loading the service",
+    "missing": "—",
+    "header": {
+      "stack": "Stack {{stack}}",
+      "updated": "Updated",
+      "copyDigest": "Copy digest",
+      "digestCopied": "Copied",
+      "digestTooltip": "Copy {{digest}}"
+    },
+    "stackOwned": {
+      "title": "Managed by stack {{stack}}",
+      "body": "Change its settings through the stack so the next deploy doesn't overwrite them. You can still scale, force update and roll back here, but a stack deploy sets those again."
+    },
+    "agentService": "This is Bayplan's agent service. Removing or changing it can cut Bayplan off from every node it runs on.",
+    "rollout": {
+      "progressLabel": "Update progress",
+      "updating": {
+        "title": "Updating {{name}}",
+        "count_one": "{{updated}} of {{count}} task is on the new version.",
+        "count_other": "{{updated}} of {{count}} tasks are on the new version."
+      },
+      "rollingBack": {
+        "title": "Rolling back {{name}}",
+        "count_one": "{{updated}} of {{count}} task is back on the earlier version.",
+        "count_other": "{{updated}} of {{count}} tasks are back on the earlier version."
+      },
+      "complete": "Update complete",
+      "paused": {
+        "title": "Update paused",
+        "body": "Docker paused the update: {{message}}",
+        "bodyBare": "Docker paused the update."
+      },
+      "rollbackPaused": {
+        "title": "Rollback paused",
+        "body": "Docker paused the rollback: {{message}}",
+        "bodyBare": "Docker paused the rollback."
+      },
+      "rolledBack": {
+        "title": "Update rolled back",
+        "body": "Docker returned the service to its earlier settings: {{message}}",
+        "bodyBare": "Docker returned the service to its earlier settings."
+      },
+      "rollBack": "Roll back",
+      "retry": "Retry update",
+      "announce": {
+        "complete": "Update complete",
+        "paused": "Update paused",
+        "rollbackPaused": "Rollback paused",
+        "rolledBack": "Update rolled back"
+      }
+    },
+    "alerts": {
+      "replicasShort": {
+        "title": "{{count}} of {{desired}} tasks aren't running",
+        "error": "Latest task error: {{error}}",
+        "starting": "Swarm is still starting them."
+      }
+    },
+    "actions": {
+      "edit": "Edit…",
+      "scale": "Scale…",
+      "forceUpdate": "Force update…",
+      "more": "More actions",
+      "moreText": "More",
+      "copyId": "Copy service ID",
+      "copied": "Copied the service ID.",
+      "copyFailed": "Couldn't copy. Select the ID and copy it by hand."
+    },
+    "gone": {
+      "heading": "This service is gone",
+      "body": "It was removed, so there is nothing left to show here.",
+      "back": "Back to services"
+    },
+    "error": {
+      "loadFailed": "Couldn't load {{name}}.",
+      "retry": "Retry loading {{name}}"
+    },
+    "inspect": {
+      "masked": "Environment variable values are hidden. Needs the reveal secrets permission to show them.",
+      "loading": "Loading the inspect output",
+      "loadFailed": "Couldn't load the inspect output of {{name}}.",
+      "retry": "Retry"
+    },
+    "overview": {
+      "service": {
+        "title": "Service",
+        "id": "ID",
+        "idLabel": "Service ID",
+        "mode": "Mode",
+        "replicas": "Replicas",
+        "replicasValue_one": "{{running}} of {{count}} task running",
+        "replicasValue_other": "{{running}} of {{count}} tasks running",
+        "created": "Created",
+        "updated": "Updated",
+        "stack": "Stack",
+        "restartAlerts": "Restart-loop alerts",
+        "alertsOn": "On",
+        "alertsMuted": "Muted"
+      },
+      "scaledToZero": {
+        "text": "Scaled to 0 replicas",
+        "action": "Scale service"
+      },
+      "image": {
+        "title": "Image",
+        "image": "Image",
+        "digest": "Digest",
+        "digestLabel": "Image digest",
+        "pinned": "Pinned",
+        "pinnedYes": "Yes, to the digest above",
+        "pinnedNo": "No, the tag can move"
+      },
+      "ports": {
+        "title": "Ports",
+        "empty": "No published ports.",
+        "published": "Published",
+        "target": "Target",
+        "protocol": "Protocol",
+        "mode": "Mode",
+        "ingress": "Ingress",
+        "host": "Host"
+      },
+      "mounts": {
+        "title": "Mounts",
+        "empty": "No mounts.",
+        "type": "Type",
+        "source": "Source",
+        "destination": "Destination",
+        "mode": "Mode",
+        "readWrite": "Read-write",
+        "readOnly": "Read-only"
+      },
+      "files": {
+        "title": "Secrets and configs",
+        "empty": "No secrets or configs.",
+        "kind": "Kind",
+        "secret": "Secret",
+        "config": "Config",
+        "name": "Name",
+        "file": "File",
+        "owner": "UID / GID",
+        "mode": "Mode"
+      },
+      "networks": {
+        "title": "Networks",
+        "empty": "Not attached to any network.",
+        "network": "Network",
+        "aliases": "Aliases"
+      },
+      "env": {
+        "title": "Environment variables",
+        "label": "Environment variables",
+        "empty": "No environment variables.",
+        "masked": "Values are hidden. Needs the reveal secrets permission to show them."
+      },
+      "resources": {
+        "title": "Resources",
+        "cpuLimit": "CPU limit",
+        "cpuReservation": "CPU reservation",
+        "memoryLimit": "Memory limit",
+        "memoryReservation": "Memory reservation",
+        "cpus_one": "{{count}} CPU",
+        "cpus_other": "{{count}} CPUs",
+        "noLimit": "No limit",
+        "noReservation": "None reserved"
+      },
+      "placement": {
+        "title": "Placement rules",
+        "empty": "No placement rules. Tasks can run on any node.",
+        "constraints": "Constraints",
+        "preferences": "Preferences",
+        "spread": "Spread over {{label}}",
+        "maxReplicas": "Max replicas per node"
+      },
+      "restart": {
+        "title": "Restart policy",
+        "when": "Restart when",
+        "delay": "Delay",
+        "maxAttempts": "Max attempts",
+        "window": "Window",
+        "unlimited": "Unlimited",
+        "condition": {
+          "any": "Any exit",
+          "on-failure": "Failure only",
+          "none": "Never"
+        }
+      },
+      "update": {
+        "title": "Update policy",
+        "parallelism": "Tasks at a time",
+        "delay": "Delay between batches",
+        "order": "Order",
+        "failureAction": "On failure",
+        "monitor": "Monitor",
+        "maxFailureRatio": "Max failure ratio",
+        "orders": {
+          "stop-first": "Stop first",
+          "start-first": "Start first"
+        },
+        "actions": {
+          "pause": "Pause",
+          "continue": "Continue",
+          "rollback": "Roll back"
+        }
+      },
+      "labels": {
+        "title": "Labels",
+        "label": "Labels",
+        "empty": "No labels."
+      }
+    }
+  }
+}

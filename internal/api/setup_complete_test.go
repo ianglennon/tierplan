@@ -120,6 +120,7 @@ func sessionCookie(rec *httptest.ResponseRecorder) *http.Cookie {
 }
 
 func TestSetupCompleteCreatesTheAdminSignsInAndStoresTheSettings(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{SessionRememberLifetime: 720 * time.Hour})
 	rec := f.complete(t, nil)
 	if rec.Code != http.StatusOK {
@@ -196,6 +197,7 @@ func TestSetupCompleteCreatesTheAdminSignsInAndStoresTheSettings(t *testing.T) {
 }
 
 func TestSetupCompleteNeverEchoesOrLogsThePasswordAndIsNotCacheable(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{})
 	rec := f.complete(t, nil)
 	if rec.Code != http.StatusOK {
@@ -218,6 +220,7 @@ func TestSetupCompleteNeverEchoesOrLogsThePasswordAndIsNotCacheable(t *testing.T
 }
 
 func TestSetupCompleteMakesTheInstanceAndTheOriginGuardUseTheNewSettingsAtOnce(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{SessionRememberLifetime: 24 * time.Hour})
 	if rec := f.complete(t, nil); rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
@@ -245,6 +248,7 @@ func TestSetupCompleteMakesTheInstanceAndTheOriginGuardUseTheNewSettingsAtOnce(t
 }
 
 func TestSetupCompleteUsesAnUnprefixedCookieWhenThePublicURLIsHTTP(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{})
 	rec := f.complete(t, map[string]any{"publicUrl": "http://10.0.0.5:7480"})
 	if rec.Code != http.StatusOK {
@@ -257,6 +261,7 @@ func TestSetupCompleteUsesAnUnprefixedCookieWhenThePublicURLIsHTTP(t *testing.T)
 }
 
 func TestSetupCompleteStoresTheNormalisedPublicURL(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{})
 	if rec := f.complete(t, map[string]any{"publicUrl": "HTTPS://Bayplan.Example/ui/"}); rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
@@ -267,6 +272,7 @@ func TestSetupCompleteStoresTheNormalisedPublicURL(t *testing.T) {
 }
 
 func TestSetupCompleteIgnoresASubmittedPublicURLWhenTheEnvironmentFixesIt(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{PublicURL: "https://env.example"})
 	rec := f.complete(t, map[string]any{"publicUrl": "https://attacker.example"})
 	if rec.Code != http.StatusOK {
@@ -288,6 +294,7 @@ func TestSetupCompleteIgnoresASubmittedPublicURLWhenTheEnvironmentFixesIt(t *tes
 }
 
 func TestSetupCompleteIgnoresAnInvalidSubmittedURLWhenTheEnvironmentFixesIt(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{PublicURL: "https://env.example"})
 	if rec := f.complete(t, map[string]any{"publicUrl": "not a url"}); rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: the submitted URL is irrelevant when locked: %s", rec.Code, rec.Body)
@@ -303,6 +310,7 @@ type fieldProblem struct {
 }
 
 func TestSetupCompleteRejectsEachInvalidInputWithAFieldCodeAndCreatesNothing(t *testing.T) {
+	t.Parallel()
 	tooLong := strings.Repeat("x", 65)
 	for name, tc := range map[string]struct {
 		over     map[string]any
@@ -372,6 +380,7 @@ func TestSetupCompleteRejectsEachInvalidInputWithAFieldCodeAndCreatesNothing(t *
 }
 
 func TestSetupCompleteReportsEveryInvalidFieldAtOnce(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{})
 	rec := f.complete(t, map[string]any{"username": "x", "password": "short", "instanceName": "", "publicUrl": "nope"})
 	var p fieldProblem
@@ -391,6 +400,7 @@ func TestSetupCompleteReportsEveryInvalidFieldAtOnce(t *testing.T) {
 }
 
 func TestSetupCompleteAcceptsA64CharacterInstanceNameCountedInCharacters(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{})
 	name := strings.Repeat("é", 64) // 128 bytes, 64 characters
 	if rec := f.complete(t, map[string]any{"instanceName": name}); rec.Code != http.StatusOK {
@@ -402,6 +412,7 @@ func TestSetupCompleteAcceptsA64CharacterInstanceNameCountedInCharacters(t *test
 }
 
 func TestSetupCompleteTrimsTheInstanceName(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{})
 	if rec := f.complete(t, map[string]any{"instanceName": "  Home lab \t"}); rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
@@ -412,6 +423,7 @@ func TestSetupCompleteTrimsTheInstanceName(t *testing.T) {
 }
 
 func TestSetupCompleteCapsTheBodyFields(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{})
 	if rec := f.complete(t, map[string]any{"password": strings.Repeat("a", 1025)}); rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("a 1025 character password = %d, want 422", rec.Code)
@@ -428,6 +440,7 @@ func TestSetupCompleteCapsTheBodyFields(t *testing.T) {
 }
 
 func TestSetupCompleteWrongTokenIs401AuditedAndCreatesNothing(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{})
 	const attempt = "deadbeef-deadbeef-deadbeef-deadbeef"
 	// Garbage fields too: the token is checked first, so a stranger learns nothing about validation.
@@ -451,6 +464,7 @@ func TestSetupCompleteWrongTokenIs401AuditedAndCreatesNothing(t *testing.T) {
 }
 
 func TestSetupCompleteSharesTheRateLimitWithTheTokenCheck(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{})
 	for i := 1; i <= 5; i++ {
 		if rec := f.completeFrom(t, testClientAddr, completeJSON(t, "wrong", nil), nil); rec.Code != http.StatusUnauthorized {
@@ -471,6 +485,7 @@ func TestSetupCompleteSharesTheRateLimitWithTheTokenCheck(t *testing.T) {
 }
 
 func TestSetupCompleteReplayAfterCompletionIs409AuditedAndChangesNothing(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{})
 	first := f.complete(t, nil)
 	if first.Code != http.StatusOK {
@@ -505,6 +520,7 @@ func TestSetupCompleteReplayAfterCompletionIs409AuditedAndChangesNothing(t *test
 }
 
 func TestSetupCompleteConcurrentCompletionsHaveExactlyOneWinner(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixture(t, config.Config{})
 	const n = 6
 	codes := make([]int, n)
@@ -576,6 +592,7 @@ func (a failingTxAudit) RecordTx(ctx context.Context, tx *sql.Tx, e audit.Entry)
 }
 
 func TestSetupCompleteRollsEverythingBackWhenTheAuditWriteFails(t *testing.T) {
+	t.Parallel()
 	f := newSetupFixtureWith(t, config.Config{}, func(w *audit.Writer) api.SetupAuditor { return failingTxAudit{w} })
 	rec := f.complete(t, nil)
 	if rec.Code != http.StatusInternalServerError {

@@ -12,6 +12,7 @@ import { recordRecentTiming } from "@/routes/_app/env/$envId";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
 import { makeMe } from "@/test-me";
+import { waitUnderFakeClock } from "@/test-settle";
 
 const ME = makeMe({
   instanceAdmin: true,
@@ -106,9 +107,7 @@ async function land(path: string) {
     </QueryClientProvider>,
   );
   // Past the path itself and past "/", which /setup passes through on its way.
-  await waitFor(() => expect(["/", path]).not.toContain(router.state.location.pathname), {
-    timeout: 3000,
-  });
+  await waitFor(() => expect(["/", path]).not.toContain(router.state.location.pathname));
   return router.state.location.pathname;
 }
 
@@ -278,7 +277,20 @@ describe("recording the environment that was opened (D-31)", () => {
   });
   afterEach(() => {
     recordRecentTiming.delayMs = 2_000;
+    vi.useRealTimers();
   });
+
+  // The record waits on a timer, so the tests that look for a record that must not come run the
+  // clock themselves. The clock is fully fake: real time passing between two statements must not
+  // be able to fire the record, or "nothing is recorded yet" would hold only on a quiet machine.
+  // Under it the tests wait with vi.waitFor, which polls on real timers and moves the fake clock
+  // 50 ms a poll, because Testing Library's waitFor and findBy poll on the faked timers and so
+  // never poll, and a query's notifications are timers too.
+  const fakeClock = () => vi.useFakeTimers();
+  const heading = (name: string) => waitUnderFakeClock(() => screen.getByRole("heading", { name }));
+  // settled(queryClient) for a fake clock: no query is fetching and no mutation is running.
+  const noneRunning = () =>
+    waitUnderFakeClock(() => expect(queryClient.isFetching() + queryClient.isMutating()).toBe(0));
 
   const puts = () =>
     sent
@@ -286,6 +298,7 @@ describe("recording the environment that was opened (D-31)", () => {
       .map((s) => s.path.replace("/api/me/recent-environments/", ""));
 
   it("records an environment once, however often the layout renders", async () => {
+    fakeClock();
     stubInstance(false);
     list = () => Response.json({ items: [env("a", "alpha")] });
     render(
@@ -298,20 +311,28 @@ describe("recording the environment that was opened (D-31)", () => {
         />
       </QueryClientProvider>,
     );
-    await screen.findByRole("heading", { name: "env a" });
+    await heading("env a");
     // The layout renders again as its queries refresh; none of it records again.
     await act(async () => {
       await queryClient.invalidateQueries({ queryKey: ["environments"] });
     });
-    await waitFor(() => expect(puts()).toEqual(["a"]));
-    await new Promise((r) => setTimeout(r, 100));
+    await waitUnderFakeClock(() => expect(puts()).toEqual(["a"]));
+    await noneRunning();
+    // Far past the delay: a second timer would have fired by now.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
     expect(puts()).toEqual(["a"]);
   });
 
   it("records only the environment the user stayed on", async () => {
+    fakeClock();
     stubInstance(false);
     list = () => Response.json({ items: [env("a", "alpha"), env("b", "bravo")] });
-    recordRecentTiming.delayMs = 400;
+    // Ten minutes of fake time. The clock moves only when the test moves it, and vi.waitFor moves
+    // it 50 ms a poll, so ten minutes is out of reach of any wait that ends before the test
+    // timeout: only the explicit advance below fires the timer.
+    recordRecentTiming.delayMs = 600_000;
     const router = createRouter({
       routeTree,
       history: createMemoryHistory({ initialEntries: ["/env/a"] }),
@@ -321,21 +342,32 @@ describe("recording the environment that was opened (D-31)", () => {
         <RouterProvider router={router} />
       </QueryClientProvider>,
     );
-    await screen.findByRole("heading", { name: "env a" });
+    await heading("env a");
     await act(async () => {
       await router.navigate({ to: "/env/$envId", params: { envId: "b" } });
     });
-    await screen.findByRole("heading", { name: "env b" });
-    await waitFor(() => expect(puts()).toEqual(["b"]), { timeout: 3000 });
+    await heading("env b");
+    // Nothing is recorded while the delay has not passed, a's timer was cancelled by leaving it.
+    expect(puts()).toEqual([]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600_000);
+    });
+    await waitUnderFakeClock(() => expect(puts()).toEqual(["b"]));
+    await noneRunning();
+    expect(puts()).toEqual(["b"]);
   });
 
   it("does not mind that recording fails", async () => {
+    fakeClock();
     stubInstance(false);
     list = () => Response.json({ items: [env("a", "alpha")] });
     const original = globalThis.fetch;
-    vi.stubGlobal("fetch", async (req: Request) =>
-      req.method === "PUT" ? new Response("boom", { status: 500 }) : original(req),
-    );
+    let refused = 0;
+    vi.stubGlobal("fetch", async (req: Request) => {
+      if (req.method !== "PUT") return original(req);
+      refused++;
+      return new Response("boom", { status: 500 });
+    });
     render(
       <QueryClientProvider client={queryClient}>
         <RouterProvider
@@ -346,8 +378,13 @@ describe("recording the environment that was opened (D-31)", () => {
         />
       </QueryClientProvider>,
     );
-    await screen.findByRole("heading", { name: "env a" });
-    await new Promise((r) => setTimeout(r, 100));
+    await heading("env a");
+    // The record is attempted and refused, and only then is the page looked at.
+    await waitUnderFakeClock(() => expect(refused).toBe(1));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await noneRunning();
     expect(screen.getByRole("heading", { name: "env a" })).toBeTruthy();
   });
 });

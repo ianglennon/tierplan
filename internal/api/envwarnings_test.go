@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
 )
 
@@ -50,6 +51,7 @@ func (f *agentFix) warnings(t *testing.T, cookie, csrf string) (int, []envWarnin
 }
 
 func TestTheEnvironmentWarningsListAnOfflineEnvironmentWithSinceAndReasonAndNothingForOnesThatAreFine(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	down := f.srv.NewEnvironment(t, "Edge")
 	fine := f.srv.NewEnvironment(t, "Fine")
@@ -66,9 +68,7 @@ func TestTheEnvironmentWarningsListAnOfflineEnvironmentWithSinceAndReasonAndNoth
 	// Only the first environment hears nothing: its heartbeat lapses, the other's goes on.
 	f.tclk.Advance(20 * time.Second)
 	tunneltest.SendHeartbeat(t, steady.control, true, f.tclk.Now().UnixMilli())
-	waitFor(t, "the steady agent's heartbeat", func() bool {
-		return f.srv.Hub.Session(steady.id).Status().LastHeartbeat.Equal(f.tclk.Now())
-	})
+	awaitHeartbeat(t, f.srv.Hub.Session(steady.id), func(st tunnel.SessionStatus) bool { return st.LastHeartbeat.Equal(f.tclk.Now()) })
 	f.tclk.Advance(11 * time.Second)
 	f.srv.Events.WaitLen(t, 3)
 	droppedAt := f.tclk.Now()
@@ -85,6 +85,7 @@ func TestTheEnvironmentWarningsListAnOfflineEnvironmentWithSinceAndReasonAndNoth
 }
 
 func TestTheEnvironmentWarningsOfAUserWhoReadsOnlyOneEnvironmentAreThatEnvironmentsAlone(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	a := f.srv.NewEnvironment(t, "Alpha")
 	b := f.srv.NewEnvironment(t, "Beta")
@@ -121,6 +122,7 @@ func TestTheEnvironmentWarningsOfAUserWhoReadsOnlyOneEnvironmentAreThatEnvironme
 }
 
 func TestTheEnvironmentWarningsCountAgentsThatNeedAManualUpdateInOneItem(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Production")
 	f.connect(t, env, dockertest.FakeConfig{Hostname: "refusing", SwarmState: "active"}, swarmFacts("refusing", true, false))
@@ -137,6 +139,7 @@ func TestTheEnvironmentWarningsCountAgentsThatNeedAManualUpdateInOneItem(t *test
 }
 
 func TestAPendingEnvironmentIsALongWaitOnlyAfterSevenDays(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Waiting")
 	if _, got := f.warnings(t, f.cookie, f.csrf); len(got) != 0 {
@@ -150,6 +153,7 @@ func TestAPendingEnvironmentIsALongWaitOnlyAfterSevenDays(t *testing.T) {
 }
 
 func TestAFoldOfferIsAnItemOnlyForAnInstanceAdmin(t *testing.T) {
+	t.Parallel()
 	f := newFoldFix(t, nil)
 
 	_, got := f.warnings(t, f.cookie, f.csrf)
@@ -171,5 +175,185 @@ func TestAFoldOfferIsAnItemOnlyForAnInstanceAdmin(t *testing.T) {
 		if w.ID == "fold_offered" {
 			t.Fatalf("someone who is not an instance admin was told of the fold: %+v", got)
 		}
+	}
+}
+
+// Restart-loop items (plan 06-35, RES-13, D-15). loopEnv is a swarm manager whose history
+// holds web in a loop; the bell reads the cluster reader's last read, which the first list of
+// services (or the background loop, in production) has made.
+
+type loopWarning struct {
+	ID            string `json:"id"`
+	Severity      string `json:"severity"`
+	EnvID         string `json:"envId"`
+	EnvName       string `json:"envName"`
+	Service       string `json:"service"`
+	ServiceID     string `json:"serviceId"`
+	Count         int    `json:"count"`
+	WindowMinutes int    `json:"windowMinutes"`
+	LatestError   string `json:"latestError"`
+	Since         string `json:"since"`
+}
+
+func (f *envFix) loopWarnings(t *testing.T, cookie, csrf string) []loopWarning {
+	t.Helper()
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/environments/warnings", cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("warnings = %d %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Items []loopWarning `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	var out []loopWarning
+	for _, w := range body.Items {
+		if w.ID == "restart_loop" {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+func TestEnvWarningsRestartLoopNamesTheServiceItsFailuresAndTheLatestError(t *testing.T) {
+	t.Parallel()
+	f, e := loopEnv(t)
+	listServicesQuery(t, f, e, "")
+	got := f.loopWarnings(t, f.cookie, f.csrf)
+	if len(got) != 1 {
+		t.Fatalf("restart_loop items = %+v, want one, for web", got)
+	}
+	w := got[0]
+	if w.Severity != "error" || w.EnvID != e.ID || w.EnvName != e.Name || w.Service != "web" || w.ServiceID != "svc-web" ||
+		w.Count != 3 || w.WindowMinutes != 10 || w.LatestError != "task: non-zero exit (1)" {
+		t.Errorf("item = %+v", w)
+	}
+	if _, err := time.Parse(time.RFC3339, w.Since); err != nil {
+		t.Errorf("since = %q: %v", w.Since, err)
+	}
+}
+
+func TestEnvWarningsRestartLoopLeavesOutAMutedServiceAndComesBackWhenItIsUnmuted(t *testing.T) {
+	t.Parallel()
+	f, e := loopEnv(t)
+	listServicesQuery(t, f, e, "")
+	op := loopAs(t, f, e, "bell-operator", "operator")
+	if rec := op(http.MethodPut, "services/svc-web/restart-loop-mute", ""); rec.code != http.StatusOK {
+		t.Fatalf("mute = %d %s", rec.code, rec.body)
+	}
+	if got := f.loopWarnings(t, f.cookie, f.csrf); len(got) != 0 {
+		t.Fatalf("items after the mute = %+v, want none", got)
+	}
+	if rec := op(http.MethodDelete, "services/svc-web/restart-loop-mute", ""); rec.code != http.StatusOK {
+		t.Fatalf("unmute = %d %s", rec.code, rec.body)
+	}
+	if got := f.loopWarnings(t, f.cookie, f.csrf); len(got) != 1 {
+		t.Fatalf("items after the unmute = %+v, want web again", got)
+	}
+}
+
+func TestEnvWarningsRestartLoopIsShownToAViewerOfTheEnvironmentAndToNobodyElse(t *testing.T) {
+	t.Parallel()
+	f, e := loopEnv(t)
+	listServicesQuery(t, f, e, "")
+	f.addUser(t, "bell-viewer", false)
+	f.addEnvRole(t, "bell-viewer", e.ID, "viewer")
+	cookie, csrf := f.signIn(t, "bell-viewer", false)
+	if got := f.loopWarnings(t, cookie, csrf); len(got) != 1 || got[0].Service != "web" {
+		t.Errorf("a Viewer's items = %+v, want web's", got)
+	}
+	f.addUser(t, "bell-nobody", false)
+	cookie, csrf = f.signIn(t, "bell-nobody", false)
+	if got := f.loopWarnings(t, cookie, csrf); len(got) != 0 {
+		t.Errorf("a user with no grant got %+v, want nothing: the bell must not reveal what the caller cannot open", got)
+	}
+}
+
+// Restart loops of standalone containers in the bell (plan 06-36, RES-13, D-15).
+
+type containerLoopWarning struct {
+	ID            string `json:"id"`
+	Severity      string `json:"severity"`
+	EnvID         string `json:"envId"`
+	EnvName       string `json:"envName"`
+	Container     string `json:"container"`
+	ContainerID   string `json:"containerId"`
+	NodeID        string `json:"nodeId"`
+	Count         int    `json:"count"`
+	WindowMinutes int    `json:"windowMinutes"`
+	LastExitCode  string `json:"lastExitCode"`
+	Since         string `json:"since"`
+}
+
+func (f *envFix) containerLoopWarnings(t *testing.T, cookie, csrf string) []containerLoopWarning {
+	t.Helper()
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/environments/warnings", cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("warnings = %d %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Items []containerLoopWarning `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	var out []containerLoopWarning
+	for _, w := range body.Items {
+		if w.ID == "restart_loop_container" {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+func TestEnvWarningsRestartLoopContainerNamesTheContainerItsNodeAndTheLastExitCode(t *testing.T) {
+	t.Parallel()
+	f, e := containerLoopEnv(t)
+	got := f.containerLoopWarnings(t, f.cookie, f.csrf)
+	if len(got) != 1 {
+		t.Fatalf("restart_loop_container items = %+v, want one, for crashy", got)
+	}
+	w := got[0]
+	if w.Severity != "error" || w.EnvID != e.ID || w.EnvName != e.Name || w.Container != "crashy" || w.ContainerID != loopCrashyID || w.NodeID != e.ID ||
+		w.Count != 3 || w.WindowMinutes != 10 || w.LastExitCode != "3" {
+		t.Errorf("item = %+v", w)
+	}
+	if _, err := time.Parse(time.RFC3339, w.Since); err != nil {
+		t.Errorf("since = %q: %v", w.Since, err)
+	}
+}
+
+func TestEnvWarningsRestartLoopContainerLeavesOutAMutedContainerAndComesBackWhenItIsUnmuted(t *testing.T) {
+	t.Parallel()
+	f, e := containerLoopEnv(t)
+	op := loopAs(t, f, e, "bell-operator", "operator")
+	if rec := op(http.MethodPut, containerMutePath(e, "crashy"), ""); rec.code != http.StatusOK {
+		t.Fatalf("mute = %d %s", rec.code, rec.body)
+	}
+	if got := f.containerLoopWarnings(t, f.cookie, f.csrf); len(got) != 0 {
+		t.Fatalf("items after the mute = %+v, want none", got)
+	}
+	if rec := op(http.MethodDelete, containerMutePath(e, "crashy"), ""); rec.code != http.StatusOK {
+		t.Fatalf("unmute = %d %s", rec.code, rec.body)
+	}
+	if got := f.containerLoopWarnings(t, f.cookie, f.csrf); len(got) != 1 {
+		t.Fatalf("items after the unmute = %+v, want crashy again", got)
+	}
+}
+
+func TestEnvWarningsRestartLoopContainerIsShownToAViewerOfTheEnvironmentAndToNobodyElse(t *testing.T) {
+	t.Parallel()
+	f, e := containerLoopEnv(t)
+	f.addUser(t, "bell-viewer", false)
+	f.addEnvRole(t, "bell-viewer", e.ID, "viewer")
+	cookie, csrf := f.signIn(t, "bell-viewer", false)
+	if got := f.containerLoopWarnings(t, cookie, csrf); len(got) != 1 || got[0].Container != "crashy" {
+		t.Errorf("a Viewer's items = %+v, want crashy's", got)
+	}
+	f.addUser(t, "bell-nobody", false)
+	cookie, csrf = f.signIn(t, "bell-nobody", false)
+	if got := f.containerLoopWarnings(t, cookie, csrf); len(got) != 0 {
+		t.Errorf("a user with no grant got %+v, want nothing: the bell must not reveal what the caller cannot open", got)
 	}
 }

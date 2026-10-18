@@ -21,6 +21,12 @@
       "volumes": "Volumes",
       "networks": "Networks",
       "events": "Events",
+      "swarm": "Swarm",
+      "services": "Services",
+      "nodes": "Nodes",
+      "placement": "Placement",
+      "secrets": "Secrets",
+      "configs": "Configs",
       "audit": "Audit",
       "settings": "Settings"
     },

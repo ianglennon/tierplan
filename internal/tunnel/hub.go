@@ -226,6 +226,9 @@ type Session struct {
 	renewing atomic.Bool
 	hbMu     sync.Mutex
 	status   SessionStatus
+	// changed is closed and cleared when status changes, to wake AwaitStatus
+	// waiters; a waiter makes it. Guarded by hbMu.
+	changed chan struct{}
 
 	// order is the place of this connection among those the hub accepted: a later
 	// accept has a higher number. Of two handshakes of one agent that overlap, the
@@ -330,6 +333,7 @@ type Hub struct {
 	heartbeat    time.Duration
 	offlineAfter time.Duration
 	watchEvery   time.Duration
+	watchTicks   <-chan time.Time
 	lastSeen     LastSeenRecorder
 
 	// muxKeepAlive and muxWriteTimeout replace muxConfig's keepalive interval and
@@ -381,6 +385,9 @@ type Hub struct {
 	// rollup (Views).
 	memory map[string]*agentMemory
 	closed bool
+	// regChanged is closed and cleared whenever a session is registered or
+	// removed, to wake AwaitSession waiters; a waiter makes it. Guarded by mu.
+	regChanged chan struct{}
 	// accepted numbers the connections in the order they were accepted.
 	accepted atomic.Uint64
 }
@@ -502,6 +509,41 @@ func (h *Hub) Session(agentID string) *Session {
 	return h.sessions[agentID]
 }
 
+// notifyRegistryLocked wakes every AwaitSession waiter. h.mu must be held.
+func (h *Hub) notifyRegistryLocked() {
+	if h.regChanged != nil {
+		close(h.regChanged)
+		h.regChanged = nil
+	}
+}
+
+// AwaitSession returns the first registered session of agentID for which cond is
+// true. cond receives nil while the agent has no live session, so a test can wait
+// for a registration (cond: s != nil) and for a removal (cond: s == nil). It
+// evaluates cond now and again after every registration and removal of any
+// session, and never polls. When ctx ends first it returns the session it last
+// saw together with the context's error; the context only guards against a hang.
+func (h *Hub) AwaitSession(ctx context.Context, agentID string, cond func(*Session) bool) (*Session, error) {
+	for {
+		// Take the channel in the same critical section as the read, so a change
+		// between the read and the wait is not missed.
+		h.mu.Lock()
+		if h.regChanged == nil {
+			h.regChanged = make(chan struct{})
+		}
+		ch, s := h.regChanged, h.sessions[agentID]
+		h.mu.Unlock()
+		if cond(s) {
+			return s, nil
+		}
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return s, ctx.Err()
+		}
+	}
+}
+
 // Sessions returns the live sessions, ordered by agent ID.
 func (h *Hub) Sessions() []*Session {
 	h.mu.Lock()
@@ -545,6 +587,7 @@ func (h *Hub) Views(envID string) []AgentLive {
 			v.EngineReachable = st.LastHeartbeat.IsZero() || st.EngineReachable
 			v.ClockOffset, v.ClockWarning = st.ClockOffset, st.ClockWarning
 			v.ReadOnly = s.Facts.Policy.ReadOnly
+			v.PrivilegedServices = s.Facts.Policy.PrivilegedServices
 		}
 		out = append(out, v)
 	}
@@ -621,6 +664,7 @@ func (h *Hub) register(s *Session) error {
 	old := h.sessions[s.AgentID]
 	h.sessions[s.AgentID] = s
 	h.noteConnected(s)
+	h.notifyRegistryLocked()
 	h.mu.Unlock()
 
 	if old != nil {
@@ -683,6 +727,7 @@ func (h *Hub) finish(s *Session) {
 	h.mu.Lock()
 	if h.sessions[s.AgentID] == s {
 		delete(h.sessions, s.AgentID)
+		h.notifyRegistryLocked()
 	}
 	h.mu.Unlock()
 	h.report(s)

@@ -10,9 +10,21 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# The golangci-lint version the lint probes run is the one make lint runs (06.1-48, IN-06).
+golangci_version="$(sed -n 's/^GOLANGCI_LINT_VERSION[[:space:]]*:=[[:space:]]*//p' Makefile | head -n 1)"
+if [ -z "${golangci_version}" ]; then
+  echo "SCRIPT TEST FAIL: GOLANGCI_LINT_VERSION is not set in the Makefile" >&2
+  exit 1
+fi
+
 failures=0
 scratch="$(mktemp -d)"
 ui_probe="web/src/components/ui/zz-spdx-probe.tsx"
+# Probe packages the lint and gate sections copy fixtures into; removed on exit.
+sleep_probe_dir="internal/zzforbidigoprobe"
+quarantine_probe_dir="internal/zzquarantineprobe"
+depguard_probe_dir="internal/zzdepguardprobe"
+api_probe_file="internal/api/zzserial_probe_test.go"
 vite_pid=""
 stop_vite() {
   if [ -n "${vite_pid}" ]; then
@@ -21,7 +33,7 @@ stop_vite() {
     vite_pid=""
   fi
 }
-trap 'stop_vite; rm -rf "${scratch}" "${ui_probe}"' EXIT
+trap 'stop_vite; rm -rf "${scratch}" "${ui_probe}" "${sleep_probe_dir}" "${quarantine_probe_dir}" "${depguard_probe_dir}" "${api_probe_file}"' EXIT
 
 # expect <fail|pass> <name> <command...>
 expect() {
@@ -165,6 +177,429 @@ fi
 expect pass "dev-web-host" mk dev-web DEV_WEB_HOST=0.0.0.0
 expect_out "dev-web-host passes --host" "--host 0.0.0.0"
 
+# --- Tagged packages (06.1-10): test-int and test-swarm run only what a tag adds ---
+expect pass "tagged-packages-integration" scripts/tagged-packages.sh integration
+expect_out "tagged-packages-integration lists dockerx" "internal/dockerx"
+expect_out "tagged-packages-integration lists registry" "internal/registry"
+expect pass "tagged-packages-swarm" scripts/tagged-packages.sh swarm
+expect_out "tagged-packages-swarm lists agents" "internal/agents"
+expect fail "tagged-packages-unused-tag" scripts/tagged-packages.sh no-such-tag
+expect_out "tagged-packages-unused-tag says why" "no package has tests under the build tag no-such-tag"
+expect fail "tagged-packages-no-argument" scripts/tagged-packages.sh
+expect pass "test-int-shuffled" mk test-int
+expect_out "test-int shuffles" "-shuffle=on"
+expect_out "test-int is scoped to the tagged packages" "internal/dockerx"
+if grep -qF -- "./internal/..." <<<"${LAST_OUT}"; then
+  echo "SCRIPT TEST FAIL: test-int-scoped (must not run ./internal/...)"
+  failures=$((failures + 1))
+fi
+
+# --- Timeout margins (06.1-10, D-22): go test -timeout sits 10 minutes under the job ---
+expect pass "timeouts-ok" scripts/timeouts-check.sh scripts/testdata/timeouts/ci-ok.yml scripts/testdata/timeouts/Makefile
+expect fail "timeouts-thin" scripts/timeouts-check.sh scripts/testdata/timeouts/ci-thin.yml scripts/testdata/timeouts/Makefile
+expect_out "timeouts-thin names the job" "job slow runs make slow with go test -timeout 40m but the job allows 45 minutes"
+expect pass "timeouts-check-repository" scripts/timeouts-check.sh
+# gotestsum runs go test, so its -timeout (after the --) counts against the job too.
+expect fail "timeouts-thin-gotestsum" scripts/timeouts-check.sh scripts/testdata/timeouts/ci-thin.yml scripts/testdata/timeouts/Makefile.gotestsum
+expect_out "timeouts-thin-gotestsum names the job" "job slow runs make slow with go test -timeout 40m but the job allows 45 minutes"
+
+# One budget per multi-pass target (06.1-46, WR-01): a TEST_BUDGET is the target's time,
+# several targets of one job add up, and go test in a loop with no budget is refused.
+tmo=scripts/testdata/timeouts
+timeouts_job() { # NAME LIMIT TARGET...: a one-job workflow in ${scratch}
+  local name="$1" limit="$2"
+  shift 2
+  printf 'name: fixture\non: push\njobs:\n  slow:\n    runs-on: [self-hosted, linux, x64]\n    timeout-minutes: %s\n    steps:\n' "${limit}" >"${scratch}/${name}.yml"
+  local t
+  for t in "$@"; do printf '      - run: make %s\n' "${t}" >>"${scratch}/${name}.yml"; done
+}
+timeouts_job budget-over 45 over
+expect fail "timeouts-budget-over" scripts/timeouts-check.sh "${scratch}/budget-over.yml" "${tmo}/Makefile.budget"
+expect_out "timeouts-budget-over names the budget" "job slow runs make over with a TEST_BUDGET of 40m but the job allows 45 minutes"
+timeouts_job budget-within 45 within
+expect pass "timeouts-budget-within" scripts/timeouts-check.sh "${scratch}/budget-within.yml" "${tmo}/Makefile.budget"
+timeouts_job budget-sum 45 first second
+expect fail "timeouts-budget-sum-of-targets" scripts/timeouts-check.sh "${scratch}/budget-sum.yml" "${tmo}/Makefile.budget"
+expect_out "timeouts-budget-sum-of-targets adds the targets" "job slow runs make first second with 40m of go test time but the job allows 45 minutes"
+timeouts_job budget-sum-ok 60 first second
+expect pass "timeouts-budget-sum-of-targets-fits" scripts/timeouts-check.sh "${scratch}/budget-sum-ok.yml" "${tmo}/Makefile.budget"
+timeouts_job timeouts-sum 45 twice
+expect fail "timeouts-sum-not-max" scripts/timeouts-check.sh "${scratch}/timeouts-sum.yml" "${tmo}/Makefile.budget"
+expect_out "timeouts-sum-not-max adds the timeouts" "job slow runs make twice with 40m of go test time but the job allows 45 minutes"
+timeouts_job loop 90 looped
+expect fail "timeouts-loop-without-budget" scripts/timeouts-check.sh "${scratch}/loop.yml" "${tmo}/Makefile.loop"
+expect_out "timeouts-loop-without-budget says why" "make looped runs go test in a loop; give it a TEST_BUDGET so the passes can be counted"
+
+# IN-05 (06.1-46): the shapes in which the gate used to pass vacuously.
+printf 'name: fixture\non: push\njobs:\n  slow:\n    runs-on: [self-hosted, linux, x64]\n    steps:\n      - run: make slow\n' >"${scratch}/no-limit.yml"
+expect fail "timeouts-job-without-limit" scripts/timeouts-check.sh "${scratch}/no-limit.yml" "${tmo}/Makefile"
+expect_out "timeouts-job-without-limit names the job" "job slow runs make slow but has no timeout-minutes"
+printf 'name: fixture\non: push\n' >"${scratch}/no-job.yml"
+expect fail "timeouts-workflow-without-job" scripts/timeouts-check.sh "${scratch}/no-job.yml" "${tmo}/Makefile"
+expect_out "timeouts-workflow-without-job says so" "found no job in"
+printf 'zero:\n\tgo test -timeout 0 ./...\nzero-s:\n\tgo test -timeout=0s ./...\n' >"${scratch}/Makefile.zero"
+timeouts_job zero 50 zero
+expect fail "timeouts-zero-timeout" scripts/timeouts-check.sh "${scratch}/zero.yml" "${scratch}/Makefile.zero"
+expect_out "timeouts-zero-timeout says why" "job slow runs make zero with go test -timeout 0, which is no timeout"
+timeouts_job zero-s 50 zero-s
+expect fail "timeouts-zero-seconds-timeout" scripts/timeouts-check.sh "${scratch}/zero-s.yml" "${scratch}/Makefile.zero"
+
+# --- No retries (06.1-22, D-15): CI never reruns a test, a check or a job ---
+retr=scripts/testdata/retries
+expect fail "retries-workflow" scripts/no-retries-check.sh "${retr}/workflow-rerun.yml"
+expect_out "retries-workflow names the rerun line" "workflow-rerun.yml:8: gh run rerun"
+expect_out "retries-workflow names the retry action" "workflow-rerun.yml:9: a retry action"
+expect fail "retries-playwright" scripts/no-retries-check.sh "${retr}/playwright-retries.config.ts"
+expect_out "retries-playwright names the line" "playwright-retries.config.ts:6: a retries/retry value other than 0"
+expect fail "retries-rerun-fails" scripts/no-retries-check.sh "${retr}/Makefile-rerun-fails"
+expect_out "retries-rerun-fails names the line" "Makefile-rerun-fails:3: gotestsum --rerun-fails"
+printf 'x:\n\tcurl --retry 3 http://example\n' >"${scratch}/curl-retry.mk"
+expect fail "retries-curl" scripts/no-retries-check.sh "${scratch}/curl-retry.mk"
+expect_out "retries-curl names the line" "curl-retry.mk:2: curl --retry"
+expect pass "retries-clean-healthcheck" scripts/no-retries-check.sh "${retr}/clean.yml"
+expect pass "no-retries-repository" scripts/no-retries-check.sh
+
+# --- Failing-test summary (06.1-15, D-21): the failing and hung tests, from the JSON ---
+summ=scripts/testdata/summary
+expect pass "summary-go-fail" scripts/test-summary.sh "${summ}/go-fail.json"
+expect_out "summary-go-fail names the failing test" "TestBFailsWithAMessage"
+expect_out "summary-go-fail names the subtest" "TestBFailsWithAMessage/sub"
+expect_out "summary-go-fail names the package" "example.test/summaryfix/b"
+expect_out "summary-go-fail names the seed" "shuffle seed 1792185972194576033"
+expect pass "summary-go-hang" scripts/test-summary.sh "${summ}/go-hang.json"
+expect_out "summary-go-hang names the hung test" "HUNG example.test/summaryfix/c TestCHangsForever"
+expect_out "summary-go-hang says it was still running" "still running after 3s"
+expect pass "summary-go-build-fail" scripts/test-summary.sh "${summ}/go-build-fail.json"
+expect_out "summary-go-build-fail names the package" "BUILD example.test/summaryfix/d"
+expect_out "summary-go-build-fail says why" "undefined: undefinedSymbol"
+step_summary="${scratch}/summary.md"
+expect pass "summary-go-pass" env GITHUB_STEP_SUMMARY="${step_summary}" scripts/test-summary.sh "${summ}/go-pass.json"
+expect_out "summary-go-pass says so" "No failing tests"
+if ! grep -qF -- "### No failing tests (go-pass.json)" "${step_summary}"; then
+  echo "SCRIPT TEST FAIL: summary-go-pass-markdown (heading missing from GITHUB_STEP_SUMMARY)"
+  failures=$((failures + 1))
+fi
+: >"${step_summary}"
+expect pass "summary-go-fail-markdown" env GITHUB_STEP_SUMMARY="${step_summary}" scripts/test-summary.sh "${summ}/go-fail.json" "${summ}/go-hang.json"
+if ! grep -qF -- "### Failing tests (go-fail.json)" "${step_summary}" ||
+  ! grep -qF -- "- **FAIL** example.test/summaryfix/b TestBFailsWithAMessage" "${step_summary}" ||
+  ! grep -qF -- "- **HUNG** example.test/summaryfix/c TestCHangsForever" "${step_summary}"; then
+  echo "SCRIPT TEST FAIL: summary-go-fail-markdown (list missing from GITHUB_STEP_SUMMARY)"
+  failures=$((failures + 1))
+fi
+# A test name is data: Markdown, HTML and a forged log line must not get through.
+hostile="${scratch}/hostile.json"
+printf '%s\n' \
+  '{"Action":"output","Package":"p/q","Output":"-test.shuffle 7\n"}' \
+  '{"Action":"fail","Package":"p/q","Test":"TestX/<b>`a`*\n::error::forged"}' \
+  '{"Action":"fail","Package":"p/q"}' >"${hostile}"
+: >"${step_summary}"
+expect pass "summary-hostile-name" env GITHUB_STEP_SUMMARY="${step_summary}" scripts/test-summary.sh "${hostile}"
+if grep -q '^::' <<<"${LAST_OUT}"; then
+  echo "SCRIPT TEST FAIL: summary-hostile-name (a test name started a workflow command line)"
+  failures=$((failures + 1))
+fi
+if grep -qE '<b>|`a`' "${step_summary}"; then
+  echo "SCRIPT TEST FAIL: summary-hostile-name-markdown (unescaped HTML or backticks in the summary)"
+  failures=$((failures + 1))
+fi
+expect fail "summary-missing-file" scripts/test-summary.sh "${scratch}/no-such-results.json"
+expect_out "summary-missing-file names the file" "no-such-results.json"
+printf 'not json at all\n' >"${scratch}/garbage.json"
+expect fail "summary-garbage-file" scripts/test-summary.sh "${scratch}/garbage.json"
+: >"${scratch}/empty.json"
+expect fail "summary-empty-file" scripts/test-summary.sh "${scratch}/empty.json"
+expect fail "summary-one-bad-file-fails-the-run" scripts/test-summary.sh "${summ}/go-pass.json" "${scratch}/no-such-results.json"
+expect_out "summary-one-bad-file-still-reads-the-rest" "No failing tests (go-pass.json)"
+
+expect pass "summary-vitest-fail" scripts/test-summary.sh "${summ}/vitest-fail.json"
+expect_out "summary-vitest-fail names the file and test" "web/src/zz-summary-fixture.test.ts > summary fixture fails with a message"
+expect_out "summary-vitest-fail names the seed" "shuffle seed 1234"
+
+expect pass "summary-playwright-fail" scripts/test-summary.sh "${summ}/playwright-fail.json"
+expect_out "summary-playwright-fail names the file, spec and project" "FAIL zz-fixture.spec.ts > fails at top level [zzfixture]: Error: boom"
+expect_out "summary-playwright-fail names a spec inside a describe" "zz-fixture.spec.ts > fixture group > fails with a message [zzfixture]"
+expect_out "summary-playwright-fail names a timed-out spec" "times out waiting [zzfixture]: Test timeout of 200ms exceeded."
+printf '%s' '{"config":{},"suites":[{"title":"a.spec.ts","file":"a.spec.ts","specs":[{"title":"ok","ok":true,"tests":[{"projectName":"p","results":[{"status":"passed"}]}]}]}],"errors":[{"message":"Timed out waiting 1200s for the entire test run"}],"stats":{}}' >"${scratch}/playwright-global-timeout.json"
+expect pass "summary-playwright-global-timeout" scripts/test-summary.sh "${scratch}/playwright-global-timeout.json"
+expect_out "summary-playwright-global-timeout names the run error" "the run reported an error: Timed out waiting 1200s for the entire test run"
+printf '%s' '{"config":{},"suites":[{"title":"a.spec.ts","file":"a.spec.ts","specs":[{"title":"ok","ok":true,"tests":[{"projectName":"p","results":[{"status":"passed"}]}]}]}],"stats":{}}' >"${scratch}/playwright-pass.json"
+expect pass "summary-playwright-pass" scripts/test-summary.sh "${scratch}/playwright-pass.json"
+expect_out "summary-playwright-pass says so" "No failing tests (playwright-pass.json)"
+
+# A test that ran N times and failed K of them is named with "failed K/N" (06.1-23, D-16).
+expect pass "summary-go-stress" scripts/test-summary.sh "${summ}/go-stress.json"
+expect_out "summary-go-stress names the test" "example.test/stressfix TestFailsOnEvenRuns"
+expect_out "summary-go-stress says how often" "failed 2/5"
+# IN-02: a go test -json file is reduced straight from the file by jq, never held in a
+# shell variable, and a long stress stream reads as the short one does.
+expect fail "summary-keeps-no-events-in-a-variable" grep -nE '^[[:space:]]*events="\$\(' scripts/test-summary.sh
+big_stress="${scratch}/go-stress-big.json"
+{
+  cat "${summ}/go-stress.json"
+  awk 'BEGIN { for (i = 0; i < 100000; i++) printf "{\"Time\":\"2026-10-17T10:01:17Z\",\"Action\":\"output\",\"Package\":\"example.test/stressfix\",\"Test\":\"TestStable\",\"Output\":\"filler line %d\\n\"}\n", i }'
+} >"${big_stress}"
+expect pass "summary-go-stress-100k-events" scripts/test-summary.sh "${big_stress}"
+expect_out "summary-go-stress-100k-events says how often" "failed 2/5"
+expect_out "summary-go-stress-100k-events names the test" "example.test/stressfix TestFailsOnEvenRuns"
+if [ "$(grep -c '^  FAIL ' <<<"${LAST_OUT}")" -ne 1 ]; then
+  echo "SCRIPT TEST FAIL: summary-go-stress-100k-events (the long stream did not list exactly the one failing test)"
+  failures=$((failures + 1))
+fi
+expect pass "summary-go-fail-has-no-count" scripts/test-summary.sh "${summ}/go-fail.json"
+if grep -qF -- " failed 1/1" <<<"${LAST_OUT}"; then
+  echo "SCRIPT TEST FAIL: summary-go-fail-has-no-count (a single run got a k/N)"
+  failures=$((failures + 1))
+fi
+: >"${step_summary}"
+expect pass "summary-go-stress-markdown" env GITHUB_STEP_SUMMARY="${step_summary}" scripts/test-summary.sh "${summ}/go-stress.json"
+if ! grep -qF -- "failed 2/5" "${step_summary}"; then
+  echo "SCRIPT TEST FAIL: summary-go-stress-markdown (failed 2/5 missing from GITHUB_STEP_SUMMARY)"
+  failures=$((failures + 1))
+fi
+
+# --- stress.sh and make test-stress (06.1-23, D-01, D-02, D-03, D-16) ---
+expect fail "stress-unknown-shard" scripts/stress.sh nope
+expect_out "stress-unknown-shard lists the shards" "agent-web"
+expect fail "stress-no-shard" scripts/stress.sh
+expect fail "stress-bad-count" env STRESS_COUNT=lots scripts/stress.sh api
+expect pass "test-stress-plan" mk test-stress STRESS_SHARD=rest
+expect_out "test-stress passes the shard" "scripts/stress.sh rest"
+expect_out "test-stress shows the one budget" "TEST_BUDGET=330m"
+expect_out "test-stress hands over gotestsum" "gotestsum@"
+if grep -qF -- "-timeout" <<<"${LAST_OUT}"; then
+  echo "SCRIPT TEST FAIL: test-stress-no-timeout-flag (the budget governs every pass, no -timeout is passed)"
+  failures=$((failures + 1))
+fi
+
+# One time budget per shard (06.1-46, WR-01): each pass gets the time left, a pass with
+# none left fails the shard, and a caller's own -timeout is refused.
+expect fail "stress-no-budget" env -u TEST_BUDGET scripts/stress.sh api
+expect_out "stress-no-budget says what is needed" "TEST_BUDGET must be whole minutes as <N>m"
+expect fail "stress-bad-budget" env TEST_BUDGET=300 scripts/stress.sh api
+expect fail "stress-timeout-flag-refused" env TEST_BUDGET=60m scripts/stress.sh api -timeout 20m
+expect_out "stress-timeout-flag-refused says why" "TEST_BUDGET governs the -timeout of every pass"
+stress_res="${scratch}/stress-results"
+expect fail "stress-budget-used-up" env TEST_BUDGET=0m GOTESTSUM=echo TEST_RESULTS="${stress_res}" scripts/stress.sh api
+expect_out "stress-budget-used-up names the pass" "stress: api budget of 0 minutes used up before pass count"
+expect pass "stress-budget-passes-time-left" env TEST_BUDGET=60m GOTESTSUM=echo STRESS_COUNT=1 TEST_RESULTS="${stress_res}" scripts/stress.sh api
+if ! grep -qE -- "-count=1 -shuffle=on -timeout=[0-9]+s" <<<"${LAST_OUT}"; then
+  echo "SCRIPT TEST FAIL: stress-budget-passes-time-left (the count pass got no -timeout=<seconds>s)"
+  failures=$((failures + 1))
+fi
+# WR-05: the agent-web shard clears the previous run's stress-web files.
+mkdir -p "${stress_res}"
+: >"${stress_res}/stress-web-3.json"
+: >"${stress_res}/stress-web-3.seed"
+expect pass "stress-agent-web-runs" env TEST_BUDGET=60m GOTESTSUM=echo WEB_RUNS=0 STRESS_COUNT=1 TEST_RESULTS="${stress_res}" scripts/stress.sh agent-web
+if [ -e "${stress_res}/stress-web-3.json" ] || [ -e "${stress_res}/stress-web-3.seed" ]; then
+  echo "SCRIPT TEST FAIL: stress-stale-web-results (an earlier run's stress-web file survived)"
+  failures=$((failures + 1))
+fi
+# WR-06: a go list that fails stops the shard, naming the module.
+expect fail "stress-go-list-fails" env GO=false TEST_BUDGET=60m GOTESTSUM=echo TEST_RESULTS="${stress_res}" scripts/stress.sh api
+expect_out "stress-go-list-fails names the module" "stress: go list failed for . ./internal/api"
+expect fail "stress-go-list-empty" env GO=true TEST_BUDGET=60m GOTESTSUM=echo TEST_RESULTS="${stress_res}" scripts/stress.sh api
+expect_out "stress-go-list-empty names the module" "stress: go list found no package in . (./internal/api)"
+
+# A job that runs a stress shard allows more than the shard's budget (D-22, 06.1-23, 06.1-46).
+expect pass "stress-timeout-ok" scripts/timeouts-check.sh scripts/testdata/timeouts/stress-job.yml
+sed 's/timeout-minutes: 360/timeout-minutes: 335/' scripts/testdata/timeouts/stress-job.yml >"${scratch}/stress-short.yml"
+expect fail "stress-timeout-too-short" scripts/timeouts-check.sh "${scratch}/stress-short.yml"
+expect_out "stress-timeout-too-short names the budget" "make test-stress with a TEST_BUDGET of 330m but the job allows 335 minutes"
+
+# --- ci-gate.sh (06.1-23, D-18, D-20): five green attempts of one commit, judged from a file ---
+gate=scripts/testdata/gate
+expect pass "ci-gate-five-green" scripts/ci-gate.sh --from-file "${gate}/five-green.json"
+expect_out "ci-gate-five-green prints the table header" "attempt  job  conclusion  minutes"
+expect_out "ci-gate-five-green says it holds" "OK: the last 5 attempt(s)"
+expect fail "ci-gate-one-red" scripts/ci-gate.sh --from-file "${gate}/one-red.json"
+expect_out "ci-gate-one-red names the attempt" "attempt 3 concluded failure"
+expect_out "ci-gate-one-red names the job" "attempt 3: job test concluded failure"
+expect fail "ci-gate-too-few-attempts" scripts/ci-gate.sh --from-file "${gate}/five-green.json" 6
+expect_out "ci-gate-too-few-attempts says why" "the run has 5 attempt(s) but 6 are needed"
+expect pass "ci-gate-last-two-skip-the-red-one" scripts/ci-gate.sh --from-file "${gate}/one-red.json" 2
+jq '.[3].head_sha = "ffffffffffffffffffffffffffffffffffffffff"' "${gate}/five-green.json" >"${scratch}/gate-two-shas.json"
+expect fail "ci-gate-two-commits" scripts/ci-gate.sh --from-file "${scratch}/gate-two-shas.json"
+expect_out "ci-gate-two-commits says why" "not of one head commit"
+jq '(.[1].jobs[] | select(.name == "test") | .completed_at) = "2026-10-16T21:40:00Z"' "${gate}/five-green.json" >"${scratch}/gate-slow-unit.json"
+expect pass "ci-gate-d18-is-a-warning" scripts/ci-gate.sh --from-file "${scratch}/gate-slow-unit.json"
+expect_out "ci-gate-d18 names the attempt" "D-18 not met in attempt 2"
+expect fail "ci-gate-bad-run-id" scripts/ci-gate.sh 'abc;rm'
+expect fail "ci-gate-no-arguments" scripts/ci-gate.sh
+
+# --- test-web (06.1-15, D-03, D-18): shuffled, with a seed that reproduces the run ---
+expect pass "test-web-seeded" mk test-web WEB_SEED=42
+expect_out "test-web takes the seed from WEB_SEED" "seed=42"
+expect_out "test-web shuffles with it" '--sequence.shuffle --sequence.seed=$seed'
+expect_out "test-web writes the JSON" "--outputFile.json="
+expect fail "test-web-bad-seed" env -u MAKEFLAGS -u MAKELEVEL make test-web WEB_SEED=4x2
+expect pass "test-is-go-and-web" mk test
+expect_out "test runs the Go modules" "gotest.tools/gotestsum@v1.13.0"
+expect_out "test runs the web suite" "vitest run"
+
+# --- test-go (06.1-15, D-21, D-15): every Go module through the pinned gotestsum ---
+expect pass "test-go-gotestsum" mk test-go
+expect_out "test-go uses the pinned gotestsum" "gotest.tools/gotestsum@v1.13.0"
+expect_out "test-go keeps race, shuffle and a timeout from the budget" "-race -count=1 -shuffle=on -timeout \${left}s"
+expect_out "test-go shows its one budget" "TEST_BUDGET=30m"
+# 06.1-46: the modules share one budget; a module with no time left fails, it is not skipped.
+expect fail "test-go-budget-used-up" env -u MAKEFLAGS -u MAKELEVEL make test-go GOTESTSUM=echo TEST_GO_BUDGET=0m TEST_RESULTS="${scratch}/go-results"
+expect_out "test-go-budget-used-up names the budget" "test-go: the 0m budget (TEST_GO_BUDGET) was used up before ."
+expect pass "test-go-budget-left" env -u MAKEFLAGS -u MAKELEVEL make test-go GOTESTSUM=echo TEST_GO_BUDGET=5m TEST_RESULTS="${scratch}/go-results"
+if ! grep -qE -- "-shuffle=on -timeout [0-9]+s" <<<"${LAST_OUT}"; then
+  echo "SCRIPT TEST FAIL: test-go-budget-left (a module got no -timeout from the time left)"
+  failures=$((failures + 1))
+fi
+expect_out "test-go writes the JSON" "--jsonfile"
+if grep -qF -- "rerun-fails" Makefile; then
+  echo "SCRIPT TEST FAIL: no-rerun-fails (Makefile passes a retry option to gotestsum, D-15)"
+  failures=$((failures + 1))
+fi
+
+# --- Sleep guard (06.1-24, D-11): a time.Sleep in a test file fails golangci-lint ---
+# The fixture is copied into a throwaway package inside the module (removed by the
+# EXIT trap), because the rule needs a real, type-checked _test.go file.
+mkdir -p "${sleep_probe_dir}"
+cp scripts/testdata/forbidigo/sleep_test.go.txt "${sleep_probe_dir}/sleep_test.go"
+expect fail "sleep-guard-flags-a-test-sleep" go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${golangci_version} run "./${sleep_probe_dir}/"
+expect_out "sleep-guard-flags-a-test-sleep names time.Sleep" "time.Sleep"
+expect_out "sleep-guard-flags-a-test-sleep names the file" "sleep_test.go"
+# The same sleep with a reason passes: a sleep that is behaviour under test is allowed.
+sed -i 's|time.Sleep(time.Millisecond)|time.Sleep(time.Millisecond) //nolint:forbidigo // the probe sleeps on purpose|' "${sleep_probe_dir}/sleep_test.go"
+expect pass "sleep-guard-allows-a-reasoned-sleep" go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${golangci_version} run "./${sleep_probe_dir}/"
+rm -rf "${sleep_probe_dir}"
+
+# --- Poll guard (06.1-24, D-09): testsupport.WaitFor/Poll needs a tag or the external marker ---
+poll=scripts/testdata/poll
+expect fail "poll-unmarked" scripts/poll-check.sh "${poll}/unmarked_test.go.txt"
+expect_out "poll-unmarked names the file and line" "${poll}/unmarked_test.go.txt:16"
+expect pass "poll-marked" scripts/poll-check.sh "${poll}/marked_test.go.txt"
+{ printf '//go:build integration\n\n'; cat "${poll}/unmarked_test.go.txt"; } >"${scratch}/tagged_test.go"
+expect pass "poll-integration-tagged" scripts/poll-check.sh "${scratch}/tagged_test.go"
+{ printf '//go:build !integration\n\n'; cat "${poll}/unmarked_test.go.txt"; } >"${scratch}/negated_test.go"
+expect fail "poll-negated-tag-is-not-a-tag" scripts/poll-check.sh "${scratch}/negated_test.go"
+expect fail "poll-missing-file" scripts/poll-check.sh "${scratch}/no-such_test.go"
+expect pass "poll-check-repository" scripts/poll-check.sh
+
+# --- Wall-clock guard (06.1-48, WR-08..WR-16): a short real-time wait needs testsupport or a reason ---
+wc=scripts/testdata/wallclock
+expect fail "wallclock-go-unmarked" scripts/wallclock-check.sh "${wc}/unmarked_test.go.txt"
+for n in 20 23 25 27 30 34 35 36 37; do
+  expect_out "wallclock-go-unmarked names the file and line ${n}" "${wc}/unmarked_test.go.txt:${n}: "
+done
+# Lines 33-34: a marker with no reason does not excuse the call under it.
+if grep -qF -- "unmarked_test.go.txt:33:" <<<"${LAST_OUT}"; then
+  echo "SCRIPT TEST FAIL: wallclock-go-unmarked (the empty marker line itself is not a finding)"
+  failures=$((failures + 1))
+fi
+expect_out "wallclock-go-timeout-field is a finding" "a Timeout field set to a short duration"
+expect pass "wallclock-go-marked" scripts/wallclock-check.sh "${wc}/marked_test.go.txt"
+expect fail "wallclock-web-unmarked" scripts/wallclock-check.sh "${wc}/unmarked.test.tsx.txt"
+for n in 11 12 13 18 21 24 29; do
+  expect_out "wallclock-web-unmarked names the file and line ${n}" "${wc}/unmarked.test.tsx.txt:${n}: "
+done
+expect_out "wallclock-web-vi-waitFor with no options is a finding" "vi.waitFor( with no timeout"
+expect pass "wallclock-web-marked" scripts/wallclock-check.sh "${wc}/marked.test.tsx.txt"
+expect fail "wallclock-missing-file" scripts/wallclock-check.sh "${scratch}/no-such_test.go"
+# A web threshold that cannot be read is exit 2, never a silent pass.
+printf 'export default {};\n' >"${scratch}/no-thresholds.ts"
+wallclock_rc() { "$@" >"${scratch}/wallclock.out" 2>&1; echo "$?"; }
+rc="$(wallclock_rc env WALLCLOCK_VITEST_CONFIG="${scratch}/no-thresholds.ts" scripts/wallclock-check.sh "${wc}/marked.test.tsx.txt")"
+if [ "${rc}" != "2" ]; then
+  echo "SCRIPT TEST FAIL: wallclock-no-testTimeout (expected exit 2, got ${rc})"
+  failures=$((failures + 1))
+fi
+if ! grep -qF -- "no testTimeout value found" "${scratch}/wallclock.out"; then
+  echo "SCRIPT TEST FAIL: wallclock-no-testTimeout (output does not name testTimeout)"
+  failures=$((failures + 1))
+fi
+rc="$(wallclock_rc env WALLCLOCK_TEST_SETUP="${scratch}/no-thresholds.ts" scripts/wallclock-check.sh "${wc}/marked.test.tsx.txt")"
+if [ "${rc}" != "2" ]; then
+  echo "SCRIPT TEST FAIL: wallclock-no-asyncUtilTimeout (expected exit 2, got ${rc})"
+  failures=$((failures + 1))
+fi
+rc="$(wallclock_rc env WALLCLOCK_TEST_SETUP="${scratch}/gone.ts" scripts/wallclock-check.sh "${wc}/marked.test.tsx.txt")"
+if [ "${rc}" != "2" ]; then
+  echo "SCRIPT TEST FAIL: wallclock-no-setup-file (expected exit 2, got ${rc})"
+  failures=$((failures + 1))
+fi
+# The Go rule needs no web threshold.
+expect pass "wallclock-go-needs-no-web-thresholds" env WALLCLOCK_VITEST_CONFIG="${scratch}/no-thresholds.ts" scripts/wallclock-check.sh "${wc}/marked_test.go.txt"
+expect pass "wallclock-check-repository" scripts/wallclock-check.sh
+
+# IN-01 (06.1-48): in default mode a tracked test file deleted from the working tree is skipped
+# by poll-check, quarantine-check and wallclock-check, and an explicit missing file still fails.
+del="${scratch}/deleted-repo"
+mkdir -p "${del}/scripts" "${del}/docs" "${del}/web/src"
+cp scripts/poll-check.sh scripts/quarantine-check.sh scripts/wallclock-check.sh "${del}/scripts/"
+cp docs/testing.md "${del}/docs/"
+cp web/vitest.config.ts "${del}/web/"
+cp web/src/test-setup.ts "${del}/web/src/"
+printf 'package probe\n' >"${del}/probe_test.go"
+printf 'export {};\n' >"${del}/web/src/probe.test.ts"
+git -C "${del}" init -q
+git -C "${del}" add -A
+rm "${del}/probe_test.go" "${del}/web/src/probe.test.ts"
+for gate in poll-check quarantine-check wallclock-check; do
+  expect pass "${gate}-skips-a-deleted-tracked-file" "${del}/scripts/${gate}.sh"
+  if grep -qiE -- "no such file|awk:" <<<"${LAST_OUT}"; then
+    echo "SCRIPT TEST FAIL: ${gate}-skips-a-deleted-tracked-file (it complained about the deleted file)"
+    failures=$((failures + 1))
+  fi
+done
+expect fail "wallclock-explicit-deleted-file-still-fails" "${del}/scripts/wallclock-check.sh" probe_test.go
+expect fail "poll-explicit-deleted-file-still-fails" "${del}/scripts/poll-check.sh" probe_test.go
+
+# --- Quarantine guard (06.1-24, D-12, D-13): call sites and the docs/testing.md table agree ---
+qdir=scripts/testdata/quarantine
+mkdir -p "${quarantine_probe_dir}"
+cat >"${quarantine_probe_dir}/probe_test.go" <<'GO'
+package zzquarantineprobe
+
+import (
+	"testing"
+
+	"github.com/ianglennon/bayplan/proto/testsupport"
+)
+
+func TestProbeQuarantined(t *testing.T) {
+	testsupport.Quarantine(t, "2026-01-02 tracking: #1 the probe is quarantined on purpose")
+}
+GO
+expect pass "quarantine-listed-call" scripts/quarantine-check.sh "${qdir}/listed.md"
+expect fail "quarantine-unlisted-call" scripts/quarantine-check.sh "${qdir}/unlisted.md"
+expect_out "quarantine-unlisted-call names the file" "${quarantine_probe_dir}/probe_test.go:10"
+expect_out "quarantine-unlisted-call names the test" "TestProbeQuarantined"
+sed 's/2026-01-02 |/2026-01-03 |/' "${qdir}/listed.md" >"${scratch}/wrong-date.md"
+expect fail "quarantine-date-disagrees" scripts/quarantine-check.sh "${scratch}/wrong-date.md"
+expect_out "quarantine-date-disagrees says so" "they must agree"
+expect fail "quarantine-none-with-a-call" scripts/quarantine-check.sh --none "${qdir}/listed.md"
+expect_out "quarantine-none-with-a-call names the file" "${quarantine_probe_dir}/probe_test.go:10"
+rm -rf "${quarantine_probe_dir}"
+expect fail "quarantine-row-without-a-call" scripts/quarantine-check.sh "${qdir}/listed.md"
+expect_out "quarantine-row-without-a-call names the row" "listed but no testsupport.Quarantine call backs it"
+expect pass "quarantine-empty-table" scripts/quarantine-check.sh "${qdir}/unlisted.md"
+expect pass "quarantine-check-repository" scripts/quarantine-check.sh
+expect pass "quarantine-none-repository" scripts/quarantine-check.sh --none
+expect fail "quarantine-missing-doc" scripts/quarantine-check.sh "${scratch}/no-such.md"
+
+# --- Parallel and import guards (06.1-24, D-18): lint flags a serial api test, and a testsupport import from product code ---
+lint_run() { go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${golangci_version} run "$@"; }
+printf 'package api_test\n\nimport "testing"\n\nfunc TestSerialProbe(t *testing.T) {}\n' >"${api_probe_file}"
+expect fail "paralleltest-flags-a-serial-api-test" lint_run ./internal/api/
+expect_out "paralleltest-flags-a-serial-api-test names the linter" "paralleltest"
+expect_out "paralleltest-flags-a-serial-api-test names the test" "TestSerialProbe"
+rm -f "${api_probe_file}"
+mkdir -p "${depguard_probe_dir}"
+printf 'package zzdepguardprobe\n\nimport "testing"\n\nfunc TestSerialOutsideAPI(t *testing.T) {}\n' >"${depguard_probe_dir}/serial_test.go"
+printf 'package zzdepguardprobe\n\nimport (\n\t"testing"\n\n\t_ "github.com/ianglennon/bayplan/proto/testsupport"\n)\n\nfunc TestProbe(t *testing.T) { t.Parallel() }\n' >"${depguard_probe_dir}/probe_test.go"
+expect pass "testsupport-import-allowed-in-tests-and-serial-outside-api" lint_run "./${depguard_probe_dir}/"
+printf 'package zzdepguardprobe\n\nimport _ "github.com/ianglennon/bayplan/proto/testsupport"\n' >"${depguard_probe_dir}/probe.go"
+expect fail "testsupport-import-denied-in-product-code" lint_run "./${depguard_probe_dir}/"
+expect_out "testsupport-import-denied-in-product-code names the rule" "testsupport-tests-only"
+rm -rf "${depguard_probe_dir}"
+
 # Vite's own host check: a Host header it does not know is answered 403 unless the
 # public URL's host name was passed in BAYPLAN_DEV_PUBLIC_URL.
 # vite_status <public-url-or-empty> <host-header>: prints the HTTP status.
@@ -280,6 +715,34 @@ expect pass "upgrade-smoke-target" mk upgrade-smoke UPGRADE_BASE_REF=0123abc
 expect_out "upgrade-smoke-target builds the base from a worktree" "git worktree add --detach .devdata/upgrade-base '0123abc'"
 expect_out "upgrade-smoke-target runs the script" "scripts/upgrade-smoke.sh"
 
+# --- CI guards (WR-03, IN-07): every upload runs on a cancel too, and the e2e job's timeout
+# leaves room for its setup beside Playwright's globalTimeout (20 minutes).
+upload_on_cancel() { ! grep -nE '^[[:space:]]*if: failure\(\)[[:space:]]*$' "$1"; }
+e2e_room() { # <workflow> <playwright config>: the e2e job's minutes above globalTimeout, at least 15
+  local job global
+  job="$(awk '/^  e2e:/ { in_e2e = 1; next } in_e2e && /^  [A-Za-z0-9_-]+:/ { exit } in_e2e && /^    timeout-minutes:/ { print $2; exit }' "$1")"
+  global="$(sed -n 's/^[[:space:]]*globalTimeout:[[:space:]]*\([0-9]*\) \* 60_000.*/\1/p' "$2")"
+  [ -n "${job}" ] && [ -n "${global}" ] && [ $((job - global)) -ge 15 ]
+}
+printf 'jobs:\n  t:\n    steps:\n      - name: Upload\n        if: failure()\n        uses: actions/upload-artifact@x\n' >"${scratch}/upload-failure-only.yml"
+expect fail "ci-upload-on-failure-only-is-caught" upload_on_cancel "${scratch}/upload-failure-only.yml"
+expect pass "ci-uploads-run-on-cancel" upload_on_cancel .github/workflows/ci.yml
+sed 's/^    timeout-minutes: 45$/    timeout-minutes: 30/' .github/workflows/ci.yml >"${scratch}/ci-e2e-30.yml"
+expect fail "ci-e2e-timeout-without-room-is-caught" e2e_room "${scratch}/ci-e2e-30.yml" e2e/playwright.config.ts
+expect pass "ci-e2e-timeout-leaves-room" e2e_room .github/workflows/ci.yml e2e/playwright.config.ts
+
+# --- Smoke ports (WR-07): no smoke picks a port by binding and releasing it first. Two
+# runners share each VM, so a port found free can be taken before the server binds it.
+# The container smokes publish 127.0.0.1::7480 and read the port back; the binary smoke
+# listens on 127.0.0.1:0 and reads the "bayplan listening" line.
+no_port_probe() { ! grep -nE 'free_port|\.bind\(\("127\.0\.0\.1", 0\)\)' "$@"; }
+printf 'free_port() {\n  python3 -c "s.bind((\\"127.0.0.1\\", 0))"\n}\n' >"${scratch}/probe-then-bind.sh"
+expect fail "smoke-port-probe-is-caught" no_port_probe "${scratch}/probe-then-bind.sh"
+expect pass "smoke-no-port-probe" no_port_probe scripts/smoke.sh scripts/image-smoke.sh scripts/restore-smoke.sh scripts/upgrade-smoke.sh
+expect pass "smoke-reads-the-listening-line" grep -q '"msg":"bayplan listening"' scripts/smoke.sh
+expect pass "image-smoke-reads-the-assigned-port" grep -q 'docker port' scripts/image-smoke.sh
+expect pass "restore-smoke-reads-the-assigned-port" grep -q 'docker port' scripts/restore-smoke.sh
+
 # --- Restore smoke (D-30, RESEARCH A3/A5): the script parses, refuses to run without
 # its image or with an unknown restart mode, and the make target builds the image first.
 # The Docker run itself is proved by `make restore-smoke`, not here.
@@ -291,6 +754,139 @@ expect_out "restore-smoke-bad-mode names the setting" "RESTART_MODE must be exec
 expect pass "restore-smoke-target" mk restore-smoke
 expect_out "restore-smoke-target builds the image" "bayplan:e2e"
 expect_out "restore-smoke-target runs the script" "scripts/restore-smoke.sh"
+
+# --- Timings report (D-17): package wall times and slowest tests from go test -json ---
+expect pass "timings-fixture" scripts/test-timings.sh scripts/testdata/timings/go-test.json
+expect_out "timings-fixture package seconds" "| example.test/slow | 12.5"
+expect_out "timings-fixture shuffle seed" "1792149386197574842"
+expect_out "timings-fixture slowest test" "| TestSlowThing | example.test/slow |"
+if grep -qF -- "TestSlowThing/sub" <<<"${LAST_OUT}"; then
+  echo "SCRIPT TEST FAIL: timings-fixture (a subtest must not be listed as a top-level test)"
+  failures=$((failures + 1))
+fi
+if grep -qF -- "| TestFastThing |" <<<"${LAST_OUT}"; then
+  echo "SCRIPT TEST FAIL: timings-fixture (a test under the 1 s threshold must not be listed)"
+  failures=$((failures + 1))
+fi
+expect pass "timings-threshold" scripts/test-timings.sh --threshold 0.1 --slowest 5 scripts/testdata/timings/go-test.json
+expect_out "timings-threshold lists the fast test" "| TestFastThing |"
+expect fail "timings-empty-input" scripts/test-timings.sh /dev/null
+expect_out "timings-empty-input says so" "no package-level"
+expect fail "timings-missing-file" scripts/test-timings.sh "${scratch}/no-such.json"
+expect_out "timings-missing-file names the file" "no-such.json"
+printf 'this is not json\n' >"${scratch}/timings-garbage.json"
+expect fail "timings-not-json" scripts/test-timings.sh "${scratch}/timings-garbage.json"
+expect_out "timings-not-json names the file" "timings-garbage.json"
+expect fail "timings-no-file" scripts/test-timings.sh
+expect_out "timings-no-file prints usage" "usage: scripts/test-timings.sh"
+expect fail "timings-unknown-flag" scripts/test-timings.sh --bogus scripts/testdata/timings/go-test.json
+
+# --- Load harness (D-01): a command runs beside N busy loops that never outlive it ---
+expect fail "with-load-bad-count" scripts/with-load.sh x -- true
+expect_out "with-load-bad-count says so" "N must be a positive integer or auto"
+expect fail "with-load-zero" scripts/with-load.sh 0 -- true
+expect fail "with-load-no-separator" scripts/with-load.sh 2 true
+expect_out "with-load-no-separator says so" "N must be a positive integer or auto"
+expect fail "with-load-passes-failure-on" scripts/with-load.sh 2 -- false
+expect pass "with-load-runs-command" scripts/with-load.sh 2 -- true
+expect_out "with-load-runs-command names the loops" "with-load: 2 busy loops (pids "
+# LAST_OUT holds stdout and stderr; every loop the run started must be gone.
+load_pids="$(sed -n 's/^with-load: [0-9]* busy loops (pids \([0-9 ]*\)).*/\1/p' <<<"${LAST_OUT}")"
+if [ -z "${load_pids}" ]; then
+  echo "SCRIPT TEST FAIL: with-load-cleans-up (no loop pids found in the output)"
+  failures=$((failures + 1))
+fi
+for pid in ${load_pids}; do
+  if kill -0 "${pid}" 2>/dev/null; then
+    echo "SCRIPT TEST FAIL: with-load-cleans-up (loop ${pid} survived)"
+    failures=$((failures + 1))
+  fi
+done
+# A signal runs the same cleanup: TERM the harness while its command still runs.
+# The command starts a grandchild (as go test's compiled test binaries are), whose
+# PID it records; the group signal must take it down with the command (WR-02).
+load_err="${scratch}/with-load.err"
+load_grandchild="${scratch}/with-load.grandchild"
+rm -f "${load_grandchild}"
+scripts/with-load.sh 2 -- bash -c 'sleep 31 & echo $! >"$1"; wait' _ "${load_grandchild}" 2>"${load_err}" &
+load_pid=$!
+for _ in $(seq 1 100); do
+  grep -q 'busy loops' "${load_err}" 2>/dev/null && [ -s "${load_grandchild}" ] && break
+  sleep 0.1
+done
+load_pids="$(sed -n 's/^with-load: [0-9]* busy loops (pids \([0-9 ]*\)).*/\1/p' "${load_err}")"
+kill -TERM "${load_pid}" 2>/dev/null
+wait "${load_pid}" 2>/dev/null
+for pid in ${load_pids}; do
+  if kill -0 "${pid}" 2>/dev/null; then
+    echo "SCRIPT TEST FAIL: with-load-cleans-up-on-signal (loop ${pid} survived)"
+    failures=$((failures + 1))
+    kill "${pid}" 2>/dev/null
+  fi
+done
+grandchild_pid="$(cat "${load_grandchild}" 2>/dev/null)"
+if [ -z "${grandchild_pid}" ]; then
+  echo "SCRIPT TEST FAIL: with-load-kills-grandchild (the command never recorded its grandchild)"
+  failures=$((failures + 1))
+elif kill -0 "${grandchild_pid}" 2>/dev/null; then
+  echo "SCRIPT TEST FAIL: with-load-kills-grandchild (grandchild ${grandchild_pid} of the command survived the TERM)"
+  failures=$((failures + 1))
+  kill "${grandchild_pid}" 2>/dev/null
+fi
+
+# --- CI cleanup (D-23): ci-clean removes what carries this owner's label and nothing else ---
+expect fail "ci-clean-no-owner" env -u BAYPLAN_CI_OWNER scripts/ci-clean.sh
+expect_out "ci-clean-no-owner names the variable" "BAYPLAN_CI_OWNER"
+if docker info >/dev/null 2>&1 && docker image inspect busybox >/dev/null 2>&1 || docker pull -q busybox >/dev/null 2>&1; then
+  own="t-own-$$"
+  mine="bayplan-tclean-mine-$$"
+  other="bayplan-tclean-other-$$"
+  docker rm -f "${mine}" "${other}" >/dev/null 2>&1
+  docker network rm "${mine}" "${other}" >/dev/null 2>&1
+  docker volume rm "${mine}" "${other}" >/dev/null 2>&1
+  docker network create --label "bayplan.ci.owner=${own}" "${mine}" >/dev/null
+  docker network create "${other}" >/dev/null
+  docker volume create --label "bayplan.ci.owner=${own}" "${mine}" >/dev/null
+  docker volume create "${other}" >/dev/null
+  docker run -d --name "${mine}" --label "bayplan.ci.owner=${own}" busybox sleep 300 >/dev/null
+  docker run -d --name "${other}" --label "bayplan.ci.owner=t-other-$$" busybox sleep 300 >/dev/null
+  expect pass "ci-clean-removes-own" env BAYPLAN_CI_OWNER="${own}" scripts/ci-clean.sh
+  expect_out "ci-clean-removes-own names the container" "removed container ${mine}"
+  gone=1
+  docker container inspect "${mine}" >/dev/null 2>&1 && gone=0
+  docker network inspect "${mine}" >/dev/null 2>&1 && gone=0
+  docker volume inspect "${mine}" >/dev/null 2>&1 && gone=0
+  if [ "${gone}" -ne 1 ]; then
+    echo "SCRIPT TEST FAIL: ci-clean-removes-own (a labelled resource survived)"
+    failures=$((failures + 1))
+  fi
+  kept=1
+  docker container inspect "${other}" >/dev/null 2>&1 || kept=0
+  docker network inspect "${other}" >/dev/null 2>&1 || kept=0
+  docker volume inspect "${other}" >/dev/null 2>&1 || kept=0
+  if [ "${kept}" -ne 1 ]; then
+    echo "SCRIPT TEST FAIL: ci-clean-keeps-others (a resource of another owner or without a label was removed)"
+    failures=$((failures + 1))
+  fi
+  docker rm -f "${other}" >/dev/null 2>&1
+  docker network rm "${other}" >/dev/null 2>&1
+  docker volume rm "${other}" >/dev/null 2>&1
+else
+  echo "test-scripts: Docker or the busybox image is not available; skipping the ci-clean cases that need it"
+fi
+
+# --- CI preflight (D-23): a disk below the threshold fails and names the variable ---
+expect fail "ci-preflight-bad-number" env BAYPLAN_CI_MIN_FREE_GB=lots scripts/ci-preflight.sh
+expect_out "ci-preflight-bad-number names the variable" "BAYPLAN_CI_MIN_FREE_GB"
+if docker info >/dev/null 2>&1; then
+  expect fail "ci-preflight-low-disk" env BAYPLAN_CI_MIN_FREE_GB=100000 scripts/ci-preflight.sh
+  expect_out "ci-preflight-low-disk names the variable" "below BAYPLAN_CI_MIN_FREE_GB=100000"
+  expect_out "ci-preflight-low-disk names the path" "GB free on "
+  expect pass "ci-preflight-zero-threshold" env BAYPLAN_CI_MIN_FREE_GB=0 scripts/ci-preflight.sh
+  expect_out "ci-preflight prints docker system df" "docker system df"
+else
+  echo "test-scripts: Docker is not reachable; skipping the ci-preflight cases that need it"
+fi
 
 if [ "${failures}" -ne 0 ]; then
   echo "${failures} script test(s) failed"

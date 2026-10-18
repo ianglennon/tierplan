@@ -108,6 +108,102 @@ func TestVersion12DatabaseUpgradesToHeadWithTheShellPreferenceTable(t *testing.T
 	assertShellPrefsTableWorks(t, s, "u-1")
 }
 
+// TestVersion14DatabaseUpgradesToHeadWithRestartLoopDefaults stages a database as the
+// release before restart-loop detection leaves it (schema version 14) with environments
+// and data in it, upgrades it, and checks that every environment carries the default
+// threshold and window, that the CHECKs refuse values outside the ranges, and that the
+// mutes table is unique per target and goes with its environment (plan 06-34, RES-13, Q5).
+func TestVersion14DatabaseUpgradesToHeadWithRestartLoopDefaults(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	s := open(t, dir)
+	res, err := store.Migrate(ctx, s, store.MigrateOptions{
+		AppVersion: "v14-fixture", DataDir: dir, SkipBackup: true, Migrations: migrationsUpTo(t, 14),
+	})
+	if err != nil || res.To != 14 {
+		t.Fatalf("migrate to version 14: %v (at %d)", err, res.To)
+	}
+	var n int
+	if err := s.Read.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name = 'restart_loop_mutes'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("restart_loop_mutes exists at version 14 (%d, %v)", n, err)
+	}
+	for _, id := range []string{"env-a", "env-b"} {
+		if _, err := s.Write.ExecContext(ctx, `INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at)
+		      VALUES (?, 'agent', ?, '', 1, 30, 30)`, id, id); err != nil {
+			t.Fatalf("seed environment %s: %v", id, err)
+		}
+	}
+	up, err := store.Migrate(ctx, s, store.MigrateOptions{DataDir: dir, AppVersion: "v14-fixture"})
+	if err != nil {
+		t.Fatalf("upgrade to head: %v", err)
+	}
+	if up.From != 14 || up.To < 15 {
+		t.Fatalf("upgrade went %d -> %d, want from 14 to at least 15", up.From, up.To)
+	}
+	for _, id := range []string{"env-a", "env-b"} {
+		var failures, window int
+		if err := s.Read.QueryRowContext(ctx, `SELECT restart_loop_failures, restart_loop_window_minutes FROM environments WHERE id = ?`, id).Scan(&failures, &window); err != nil || failures != 3 || window != 10 {
+			t.Errorf("%s restart-loop settings = %d failures in %d minutes (%v), want 3 in 10", id, failures, window, err)
+		}
+	}
+	assertRestartLoopChecks(t, s)
+	assertRestartLoopMutesTableWorks(t, s)
+}
+
+// assertRestartLoopChecks checks that the two thresholds refuse values outside 2 to 50
+// failures and 1 to 120 minutes, and accept the edges.
+func assertRestartLoopChecks(t *testing.T, s *store.Store) {
+	t.Helper()
+	ctx := context.Background()
+	const failures = `UPDATE environments SET restart_loop_failures = ? WHERE id = 'env-a'`
+	const window = `UPDATE environments SET restart_loop_window_minutes = ? WHERE id = 'env-a'`
+	for _, c := range []struct {
+		name, query string
+		val         int
+		want        bool
+	}{
+		{"restart_loop_failures", failures, 1, false}, {"restart_loop_failures", failures, 2, true},
+		{"restart_loop_failures", failures, 50, true}, {"restart_loop_failures", failures, 51, false},
+		{"restart_loop_window_minutes", window, 0, false}, {"restart_loop_window_minutes", window, 1, true},
+		{"restart_loop_window_minutes", window, 120, true}, {"restart_loop_window_minutes", window, 121, false},
+	} {
+		_, err := s.Write.ExecContext(ctx, c.query, c.val)
+		if (err == nil) != c.want {
+			t.Errorf("%s = %d: accepted = %v, want %v (%v)", c.name, c.val, err == nil, c.want, err)
+		}
+	}
+	if _, err := s.Write.ExecContext(ctx, `UPDATE environments SET restart_loop_failures = 3, restart_loop_window_minutes = 10 WHERE id = 'env-a'`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// assertRestartLoopMutesTableWorks checks the mutes' uniqueness per environment, kind and
+// target, the kinds the table accepts, and that a removed environment takes its mutes.
+func assertRestartLoopMutesTableWorks(t *testing.T, s *store.Store) {
+	t.Helper()
+	ctx := context.Background()
+	const ins = `INSERT INTO restart_loop_mutes (env_id, kind, target_id, name, muted_by, muted_at) VALUES (?, ?, ?, 'web', 'u-1', 5)`
+	if _, err := s.Write.ExecContext(ctx, ins, "env-b", "service", "svc-1"); err != nil {
+		t.Fatalf("insert a mute: %v", err)
+	}
+	if _, err := s.Write.ExecContext(ctx, ins, "env-b", "service", "svc-1"); err == nil {
+		t.Errorf("a second mute of the same target was accepted")
+	}
+	if _, err := s.Write.ExecContext(ctx, ins, "env-b", "container", "svc-1"); err != nil {
+		t.Errorf("the same id as a container is its own target: %v", err)
+	}
+	if _, err := s.Write.ExecContext(ctx, ins, "env-b", "stack", "svc-2"); err == nil {
+		t.Errorf("a kind outside service and container was accepted")
+	}
+	if _, err := s.Write.ExecContext(ctx, `DELETE FROM environments WHERE id = 'env-b'`); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := s.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM restart_loop_mutes WHERE env_id = 'env-b'`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("%d mutes outlived their environment (%v)", n, err)
+	}
+}
+
 // assertShellPrefsTableWorks writes and reads a remembered choice for the user, and checks
 // that the table refuses a shell it does not know and goes with its user.
 func assertShellPrefsTableWorks(t *testing.T, s *store.Store, userID string) {

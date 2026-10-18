@@ -55,6 +55,7 @@ func (f *agentFix) rows(t *testing.T, userID string) int {
 }
 
 func TestRecentUsingTheSameEnvironmentTwiceKeepsOneRowWithTheNewerTime(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	a := f.srv.NewEnvironment(t, "A")
 	if rec := f.use(t, a.ID); rec.code != http.StatusNoContent {
@@ -86,6 +87,7 @@ func TestRecentUsingTheSameEnvironmentTwiceKeepsOneRowWithTheNewerTime(t *testin
 }
 
 func TestRecentOnlyTheNewestThreeAreKeptAndRemovingAnEnvironmentDropsItFromTheList(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	ids := map[string]string{}
 	for _, n := range []string{"A", "B", "C", "D"} {
@@ -110,6 +112,7 @@ func TestRecentOnlyTheNewestThreeAreKeptAndRemovingAnEnvironmentDropsItFromTheLi
 }
 
 func TestRecentUsesAtTheSameInstantAreOrderedByEnvironmentID(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	var ids []string
 	for _, n := range []string{"A", "B", "C"} {
@@ -132,6 +135,7 @@ func TestRecentUsesAtTheSameInstantAreOrderedByEnvironmentID(t *testing.T) {
 }
 
 func TestRecentUsingAnEnvironmentTheCallerCannotReadOrThatDoesNotExistIsTheSame404(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	secret := f.srv.NewEnvironment(t, "Secret").ID
 	f.addUser(t, "nobody", false)
@@ -160,6 +164,7 @@ func TestRecentUsingAnEnvironmentTheCallerCannotReadOrThatDoesNotExistIsTheSame4
 }
 
 func TestRecentEachUserHasTheirOwnListAndOnlyReadableEnvironmentsAreReturned(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	a, b := f.srv.NewEnvironment(t, "A").ID, f.srv.NewEnvironment(t, "B").ID
 	f.addUser(t, "viewer", false)
@@ -189,6 +194,7 @@ func TestRecentEachUserHasTheirOwnListAndOnlyReadableEnvironmentsAreReturned(t *
 }
 
 func TestRecentEnvironmentsNeedASession(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	a := f.srv.NewEnvironment(t, "A").ID
 	for _, c := range []authReq{
@@ -229,6 +235,7 @@ func (f *agentFix) deniedRows(t *testing.T) []struct{ Actor, Target, Reason, Env
 }
 
 func TestRecentUsingAnEnvironmentTheCallerCannotSeeIsAuditedAsPermissionDeniedLikeThePolicyGate(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	secret := f.srv.NewEnvironment(t, "Secret").ID
 	f.addUser(t, "nobody", false)
@@ -258,6 +265,7 @@ func TestRecentUsingAnEnvironmentTheCallerCannotSeeIsAuditedAsPermissionDeniedLi
 }
 
 func TestRecentAnEnvironmentTheCallerMayReadButIsGoneIsNotAuditedAsARefusal(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	// The administrator may read every environment, so an unknown ID is a plain
 	// 404, which the policy gate does not audit either.

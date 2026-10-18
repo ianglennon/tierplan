@@ -14,11 +14,16 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { YourShellsPopover } from "@/features/terminal/your-shells-popover";
 import "@/i18n";
 import { makeMe } from "@/test-me";
+import { settled } from "@/test-settle";
 
 // "Your shells ({n})" on the Shell tab (plan 04-25, OBS-03, D-31, D-37).
 
 const ENV = "e1";
 
+// Fixture dates count from one fixed instant, and beforeEach freezes Date at it, so a
+// minute-granularity "N min ago" is exact however late the run starts. Only Date is faked:
+// findBy and waitFor and the app's timers keep running in real time.
+const NOW = new Date("2026-10-03T12:00:00Z");
 function mine(over: Record<string, unknown> = {}) {
   return {
     id: "s1",
@@ -26,7 +31,7 @@ function mine(over: Record<string, unknown> = {}) {
     containerId: "w".repeat(64),
     container: "web",
     node: "node-1",
-    startedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+    startedAt: new Date(NOW.getTime() - 5 * 60_000).toISOString(),
     idleSeconds: 10,
     ...over,
   };
@@ -38,23 +43,34 @@ let listStatus: number;
 let endStatus: number;
 let asked: string[];
 let ended: string[];
+// How many times /api/me was answered: the shells list is only asked for once it says who may.
+let meServed: number;
 
 const defaultQueryOptions = queryClient.getDefaultOptions();
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(NOW);
   queryClient.setDefaultOptions({ queries: { retry: false, refetchOnWindowFocus: false } });
-  items = [mine(), mine({ id: "s2", startedAt: new Date(Date.now() - 90 * 60_000).toISOString() })];
+  items = [
+    mine(),
+    mine({ id: "s2", startedAt: new Date(NOW.getTime() - 90 * 60_000).toISOString() }),
+  ];
   me = makeMe({ username: "olive", id: "u-olive", envs: { e1: "admin" } });
   listStatus = 200;
   endStatus = 204;
   asked = [];
   ended = [];
+  meServed = 0;
   setCsrfToken(null);
   vi.stubGlobal(
     "fetch",
     vi.fn(async (req: Request) => {
       const url = new URL(req.url);
-      if (url.pathname === "/api/me") return Response.json(me);
+      if (url.pathname === "/api/me") {
+        meServed++;
+        return Response.json(me);
+      }
       if (url.pathname === `/api/env/${ENV}/shells` && req.method === "GET") {
         asked.push(url.search);
         return listStatus === 200
@@ -82,6 +98,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   toast.dismiss();
   queryClient.setDefaultOptions(defaultQueryOptions);
   cleanup();
@@ -152,7 +169,9 @@ describe("the Your shells popover", () => {
   it("does not ask for the list of someone who may not open shells", async () => {
     me = makeMe({ username: "vera", id: "u-vera", envs: { e1: "viewer" } });
     renderPopover();
-    await new Promise((r) => setTimeout(r, 100));
+    // Who the person is has been answered, and nothing is still running, before "nothing asked".
+    await waitFor(() => expect(meServed).toBeGreaterThan(0));
+    await settled(queryClient);
     expect(asked).toEqual([]);
     expect(screen.queryByRole("button", { name: /^Your shells/ })).toBeNull();
   });

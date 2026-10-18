@@ -1,0 +1,30 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+// Fixture for scripts/test-scripts.sh (wallclock-check): stored as .txt so the tree's
+// tools never compile it. Every case below is a finding, and the line numbers are
+// asserted by the script, so add new cases at the end.
+import { screen, waitFor } from "@testing-library/react";
+import { expect, it, vi } from "vitest";
+
+it("follows real time", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  await screen.findByText("x", {}, { timeout: 500 });
+  await waitFor(() => expect(1).toBe(1), { timeout: 1_000 });
+});
+
+it("sets its own deadline", async () => {
+  await screen.findByText("y");
+}, 5000);
+
+it("uses the one second default", async () => {
+  await vi.waitFor(() => {
+    expect(1).toBe(1);
+  });
+  await vi.waitFor(() => expect(2).toBe(2));
+});
+
+it("has a marker with no reason", async () => {
+  // wall-clock:
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+});

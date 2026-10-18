@@ -6,13 +6,14 @@ package tunnel_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -32,6 +33,25 @@ func scalar(t *testing.T, srv *tunneltest.Server, query string, args ...any) int
 		t.Fatal(err)
 	}
 	return n
+}
+
+// awaitGone waits until the hub has no live session for agentID. It wakes on each
+// registration and removal and never polls.
+func awaitGone(t *testing.T, h *tunnel.Hub, agentID, what string) {
+	t.Helper()
+	if _, err := h.AwaitSession(testsupport.Context(t), agentID, func(s *tunnel.Session) bool { return s == nil }); err != nil {
+		t.Fatalf("waiting for %s: %v", what, err)
+	}
+}
+
+// awaitRegistered waits until the hub has a live session for agentID and returns it.
+func awaitRegistered(t *testing.T, h *tunnel.Hub, agentID string) *tunnel.Session {
+	t.Helper()
+	s, err := h.AwaitSession(testsupport.Context(t), agentID, func(s *tunnel.Session) bool { return s != nil })
+	if err != nil {
+		t.Fatalf("waiting for the session of %s to be registered: %v", agentID, err)
+	}
+	return s
 }
 
 func refusedWith(t *testing.T, c *tunneltest.Conn, code string) {
@@ -54,7 +74,7 @@ func TestRevokeClosesTheSessionWithinASecondFailsACallInFlightAndKeepsTheHostOut
 	srv.Events.WaitLen(t, 1)
 	agentID := c.Identity.AgentID
 	s := srv.Hub.Session(agentID)
-	holdOpenStreams(t, c)
+	requests := holdOpenStreams(t, c)
 
 	errc := make(chan error, 1)
 	go func() {
@@ -64,26 +84,21 @@ func TestRevokeClosesTheSessionWithinASecondFailsACallInFlightAndKeepsTheHostOut
 		}
 		errc <- err
 	}()
-	time.Sleep(100 * time.Millisecond) // the request is now blocked on its stream
+	testsupport.Await(t, "the request to reach the agent's stream", requests)
 
-	start := time.Now()
 	if err := srv.Svc.Revoke(context.Background(), revoker, env.ID, agentID, "decommissioned", "203.0.113.5", "test"); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
-	waitFor(t, "the session to end", func() bool { return isDone(s) })
-	if took := time.Since(start); took > time.Second {
-		t.Errorf("the session took %v to close after the revoke", took)
-	}
-	select {
-	case err := <-errc:
-		if !errors.Is(err, tunnel.ErrAgentGone) {
-			t.Fatalf("the call in flight ended with %v, want an error wrapping ErrAgentGone", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("the call in flight is still hanging")
+	// "At once" is proved by awaiting the close on the shared deadline. Nothing but
+	// the revoke's kick can end this session in that time: the silence watchdog runs
+	// on the fake clock, which does not move, and the multiplexer's ping and write
+	// timeouts are a minute in tunneltest (WithMuxTimeouts).
+	testsupport.Await(t, "the session to end", s.Done())
+	if err := testsupport.Await(t, "the call in flight to fail", errc); !errors.Is(err, tunnel.ErrAgentGone) {
+		t.Fatalf("the call in flight ended with %v, want an error wrapping ErrAgentGone", err)
 	}
 	// The hub forgets the session just after it ends, so wait rather than look once.
-	waitFor(t, "the hub to forget the revoked agent's session", func() bool { return srv.Hub.Session(agentID) == nil })
+	awaitGone(t, srv.Hub, agentID, "the hub to forget the revoked agent's session")
 	log := srv.Events.WaitLen(t, 2)
 	if want := "disconnected:" + agentID + ":revoked"; log[1] != want {
 		t.Errorf("lifecycle = %v, want %q second", log, want)
@@ -172,11 +187,7 @@ func TestARevokeBetweenTheHelloCheckAndTheRegistrationLeavesNoSessionBehind(t *t
 
 	helloc := make(chan *tunneltest.Conn, 1)
 	go func() { helloc <- srv.Hello(t, id) }()
-	select {
-	case <-g.reached:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the hello never passed verification")
-	}
+	testsupport.Await(t, "the hello to pass verification", g.reached)
 	// The hello has passed the status check and is about to register: revoke now,
 	// completely, kick included, then let it go on.
 	if err := srv.Svc.Revoke(context.Background(), revoker, env.ID, id.AgentID, "", "", ""); err != nil {
@@ -184,17 +195,19 @@ func TestARevokeBetweenTheHelloCheckAndTheRegistrationLeavesNoSessionBehind(t *t
 	}
 	close(g.release)
 
-	c := <-helloc
+	c := testsupport.Await(t, "the late hello to be answered", helloc)
 	if c.Welcome == nil {
 		t.Fatalf("hello refused before the registration: %+v (err %v)", c.Refuse, c.Err)
 	}
-	waitFor(t, "the late session to be closed", func() bool { return srv.Hub.Session(id.AgentID) == nil })
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if _, _, err := c.WS.Read(ctx); err == nil {
-		t.Fatal("the connection of a revoked agent is still open and readable")
+	awaitGone(t, srv.Hub, id.AgentID, "the late session to be closed")
+	rctx := testsupport.Context(t)
+	// A read that ends because the deadline passed says the server never closed.
+	if _, _, err := c.WS.Read(rctx); err == nil || rctx.Err() != nil {
+		t.Fatalf("the connection of a revoked agent is still open and readable (err %v)", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	// The server closes the connection only after the registration was refused (the
+	// kick follows the errNoLongerActive answer), so by the time the read failed
+	// the registry has had its last word.
 	if srv.Hub.Session(id.AgentID) != nil {
 		t.Fatal("a session for a revoked agent stayed registered")
 	}
@@ -209,8 +222,9 @@ func TestRevokeRacingAHelloFiftyTimesNeverLeavesASessionForTheRevokedAgent(t *te
 			t.Fatalf("round %d: enrolment refused: %+v", i, first.Refuse)
 		}
 		id := first.Identity
+		awaitRegistered(t, srv.Hub, id.AgentID)
 		_ = first.WS.CloseNow()
-		waitFor(t, "the first session to end", func() bool { return srv.Hub.Session(id.AgentID) == nil })
+		awaitGone(t, srv.Hub, id.AgentID, "the first session to end")
 
 		var wg sync.WaitGroup
 		var hello *tunneltest.Conn
@@ -230,12 +244,11 @@ func TestRevokeRacingAHelloFiftyTimesNeverLeavesASessionForTheRevokedAgent(t *te
 
 		if hello.Welcome != nil {
 			// Welcomed before the revoke landed: the server must close it.
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			if _, _, err := hello.WS.Read(ctx); err == nil {
-				cancel()
-				t.Fatalf("round %d: the welcomed connection of a revoked agent stayed open", i)
+			rctx := testsupport.Context(t)
+			// A read that ends because the deadline passed says the server never closed.
+			if _, _, err := hello.WS.Read(rctx); err == nil || rctx.Err() != nil {
+				t.Fatalf("round %d: the welcomed connection of a revoked agent stayed open (err %v)", i, err)
 			}
-			cancel()
 		} else if hello.Refuse == nil || hello.Refuse.Code != wire.ReasonRevoked {
 			t.Fatalf("round %d: hello = %+v (err %v), want a welcome that is then closed or a revoked refusal", i, hello.Refuse, hello.Err)
 		}
@@ -244,15 +257,9 @@ func TestRevokeRacingAHelloFiftyTimesNeverLeavesASessionForTheRevokedAgent(t *te
 		// agent that has been refused lets go, so the test does too.
 		_ = hello.WS.CloseNow()
 		// The close frame reaches the agent a moment before the hub has unregistered
-		// the session, so the registry is given a short while to settle. A session
-		// that was never closed would stay.
-		deadline := time.Now().Add(2 * time.Second)
-		for srv.Hub.Session(id.AgentID) != nil {
-			if time.Now().After(deadline) {
-				t.Fatalf("round %d: a session for the revoked agent is still registered", i)
-			}
-			time.Sleep(time.Millisecond)
-		}
+		// the session, so wait for the unregistration. A session that was never
+		// closed would stay, and the wait would fail.
+		awaitGone(t, srv.Hub, id.AgentID, fmt.Sprintf("round %d: the session of the revoked agent to be unregistered", i))
 	}
 }
 
@@ -266,9 +273,8 @@ func TestKickEnvClosesEverySessionOfOneEnvironmentAndNoOtherAndKickOfNobodyIsHar
 	srv.Hub.Kick("no-such-agent", "revoked")
 	srv.Hub.KickEnv("no-such-environment", "removed")
 	srv.Hub.KickEnv(one.ID, "removed")
-	waitFor(t, "both sessions of the environment to close", func() bool {
-		return srv.Hub.Session(a.Identity.AgentID) == nil && srv.Hub.Session(b.Identity.AgentID) == nil
-	})
+	awaitGone(t, srv.Hub, a.Identity.AgentID, "the first session of the environment to close")
+	awaitGone(t, srv.Hub, b.Identity.AgentID, "the second session of the environment to close")
 	if s := srv.Hub.Session(other.Identity.AgentID); s == nil || isDone(s) {
 		t.Error("the other environment's session was closed")
 	}

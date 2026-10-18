@@ -21,7 +21,7 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check tidy-check test test-int test-swarm smoke dev dev-go dev-web dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke
+.PHONY: web build gen gen-check tidy-check test test-go test-web test-stress test-summary test-int test-swarm smoke dev dev-go dev-web dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-down e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke ci-clean ci-preflight
 
 web:
 	pnpm -C web install --frozen-lockfile
@@ -53,12 +53,86 @@ tidy-check:
 	  go -C $$m mod tidy -diff; \
 	done
 
-test:
-	@set -e; for m in $(GO_MODULES); do \
-	  echo "test: $$m"; \
-	  go -C $$m test ./... -race -count=1 -timeout 20m; \
-	done
-	pnpm -C web exec vitest run
+# D-21: every Go test target runs through gotestsum, so the end of the log lists
+# each failing and each hung test with its package, and --jsonfile leaves the
+# go test -json stream in $(TEST_RESULTS) for scripts/test-summary.sh. gotestsum
+# runs through `go run` at a pinned version, so nothing is added to go.mod (the
+# maintainer approved v1.13.0 at 06.1-01). Never add a retry option to it (D-15):
+# a test that fails once is a defect, not noise.
+GOTESTSUM_VERSION := v1.13.0
+GOTESTSUM := go run gotest.tools/gotestsum@$(GOTESTSUM_VERSION)
+TEST_RESULTS := .devdata/test
+
+# The whole unit suite, as it always meant: the Go modules, then the web suite.
+# CI runs the two as separate jobs (test and web), so the web minutes are off the
+# Go unit job's critical path.
+test: test-go test-web
+
+# D-22: a hang must end in Go's goroutine dump, not in the job being killed. A target
+# that runs several go test passes in a row therefore has ONE time budget, written
+# as the literal TEST_BUDGET=<N>m in its recipe (so `make -n` shows it), and each
+# pass gets -timeout <the time left in the budget>, so the passes cannot add up past
+# the job's timeout-minutes. scripts/timeouts-check.sh reads the budget from
+# `make -n` and keeps it 10 minutes below the job; it refuses a looped go test with
+# no budget. TEST_GO_BUDGET is the budget of the test job (40 minutes). go test
+# applies -timeout to each package's test binary, so see docs/testing.md for the
+# per-binary caveat.
+TEST_GO_BUDGET := 30m
+
+# gotestsum cannot wrap `go -C dir test`, so each module runs from a subshell. A
+# failing module does not stop the next one, so one red run reports them all. A
+# module that finds no time left in the budget fails, it is never skipped quietly.
+test-go:
+	@TEST_BUDGET=$(TEST_GO_BUDGET); mkdir -p $(TEST_RESULTS); rm -f $(TEST_RESULTS)/go-*.json; rc=0; \
+	end=$$(( $$(date +%s) + $${TEST_BUDGET%m} * 60 )); \
+	for m in $(GO_MODULES); do \
+	  name=$$(basename "$$(cd $$m && pwd)"); [ "$$m" = . ] && name=root; \
+	  left=$$(( end - $$(date +%s) )); \
+	  if [ "$$left" -le 0 ]; then echo "test-go: the $$TEST_BUDGET budget (TEST_GO_BUDGET) was used up before $$m" >&2; rc=1; continue; fi; \
+	  echo "test-go: $$m ($${left}s left of the $$TEST_BUDGET budget)"; \
+	  (cd $$m && $(GOTESTSUM) --format pkgname --jsonfile $(CURDIR)/$(TEST_RESULTS)/go-$$name.json -- ./... -race -count=1 -shuffle=on -timeout $${left}s) || rc=1; \
+	done; \
+	exit $$rc
+
+# The web unit suite, shuffled with a printed seed: WEB_SEED=<n> reproduces a run
+# (D-03, D-18). The seed is also left next to the JSON so test-summary can name
+# it. In CI the github-actions reporter adds the failures as annotations.
+test-web:
+	@set -e; seed=$(if $(WEB_SEED),$(WEB_SEED),$$(date +%s)); \
+	case "$$seed" in *[!0-9]*) echo "test-web: WEB_SEED must be a number, got $$seed" >&2; exit 1;; esac; \
+	mkdir -p $(TEST_RESULTS); rm -f $(TEST_RESULTS)/web.json $(TEST_RESULTS)/web.seed; \
+	echo "test-web: seed $$seed (reproduce with make test-web WEB_SEED=$$seed)"; \
+	echo "$$seed" > $(TEST_RESULTS)/web.seed; \
+	pnpm -C web exec vitest run --sequence.shuffle --sequence.seed=$$seed --reporter=default --reporter=json --outputFile.json=$(CURDIR)/$(TEST_RESULTS)/web.json $(if $(CI),--reporter=github-actions)
+
+# The standing stability bars (D-01, D-02, D-03, D-16) for one share of the suite:
+# STRESS_SHARD is api, core, rest or agent-web (scripts/stress.sh documents them).
+# Each Go package set runs 20 shuffled -race runs, then once each at -cpu=1 and
+# -cpu=4, with quarantined tests included (D-12); agent-web also runs ten shuffled
+# Vitest runs. It is run by hand (no workflow runs it since the nightly was removed
+# on 2026-10-18). STRESS_BUDGET is the one time budget of a shard (D-22, see
+# TEST_GO_BUDGET): every go test pass and every web run gets the time left in it.
+# A workflow job that runs a shard must allow 10 minutes or more above it
+# (scripts/timeouts-check.sh checks any workflow it is given).
+STRESS_SHARD ?= api
+STRESS_BUDGET := 330m
+test-stress:
+	@GOTESTSUM='$(GOTESTSUM)' TEST_RESULTS=$(TEST_RESULTS) TEST_BUDGET=$(STRESS_BUDGET) scripts/stress.sh $(STRESS_SHARD)
+
+# Takes the fixed-name e2e stack (project bayplan-e2e, subnet 172.30.0.0/24, ports
+# 8443 and 8444, two privileged dind containers) down with its volumes and any
+# orphan. Idempotent: it succeeds when nothing is running. The recipe above traps
+# EXIT for this, but a make that is terminated under dash never runs the trap
+# (RESEARCH CI audit finding 4), so the e2e job also runs it in an if: always() step.
+e2e-down:
+	$(E2E_COMPOSE) down -v --remove-orphans
+
+# Turns every results file into a list of failing tests, hung tests and build
+# failures (stdout, and $GITHUB_STEP_SUMMARY when set). CI runs it with
+# `if: always()`; it exits 0 when it read every file, so the job's result stays
+# the test step's. A glob that matches nothing is an error from the script.
+test-summary:
+	scripts/test-summary.sh $(TEST_RESULTS)/*.json
 
 # Real-engine tests (D-28), build tag `integration`. With BAYPLAN_TEST_DOCKER_HOST
 # set (CI points it at the dind service) they use that engine; without it each
@@ -66,16 +140,32 @@ test:
 # machine needs a Docker it can reach. The agent tests always start their own
 # dind (they need a network the in-process Bayplan is reachable on) and load the
 # agent image into it, so the image is built first.
+#
+# Only the packages whose tests change under the tag run (D-05 shuffles them):
+# scripts/tagged-packages.sh derives the list, so a newly tagged package is never
+# missed, and an empty list fails the target. Every other internal package is the
+# unit suite, which `make test` already ran. $(shell) expands inside the recipe
+# only, so no other target pays for `go list`.
 test-int: agent-image
-	go test -tags=integration -race -count=1 -timeout 30m ./internal/...
+	@set -e; pkgs="$(shell scripts/tagged-packages.sh integration)"; \
+	if [ -z "$$pkgs" ]; then echo "test-int: no package has integration-tagged tests" >&2; exit 1; fi; \
+	echo "test-int: $$pkgs"; \
+	mkdir -p $(TEST_RESULTS); rm -f $(TEST_RESULTS)/integration.json; \
+	$(GOTESTSUM) --format pkgname --jsonfile $(TEST_RESULTS)/integration.json -- -tags=integration -race -count=1 -shuffle=on -timeout 30m $$pkgs
 
 # The multi-node suite (D-57, D-58), build tag `swarm`: real agents in a dind swarm
 # of 3 managers and 1 worker, for the engine BAYPLAN_TEST_ENGINE names (default
-# 29). Needs Docker it can reach, with buildx for the agent image. One engine takes
-# about 17 minutes on a developer machine, so the 40 minute timeout (CI allows 45
-# for the job) is a margin, not a target.
+# 29). Needs Docker it can reach, with buildx for the agent image. Only the
+# swarm-tagged package (internal/agents) runs, derived like test-int's list. One
+# engine took about 17 minutes on a developer machine when every internal package
+# ran (RESEARCH's estimate, until 06.1-25 measures the scoped run), so
+# the 40 minute timeout (CI allows 50 for the job, D-22) is a margin, not a target.
 test-swarm: agent-image
-	go test -tags=swarm -race -count=1 -timeout 40m ./internal/...
+	@set -e; pkgs="$(shell scripts/tagged-packages.sh swarm)"; \
+	if [ -z "$$pkgs" ]; then echo "test-swarm: no package has swarm-tagged tests" >&2; exit 1; fi; \
+	echo "test-swarm: $$pkgs"; \
+	mkdir -p $(TEST_RESULTS); rm -f $(TEST_RESULTS)/swarm.json; \
+	$(GOTESTSUM) --format pkgname --jsonfile $(TEST_RESULTS)/swarm.json -- -tags=swarm -race -count=1 -shuffle=on -timeout 60m $$pkgs
 
 smoke:
 	scripts/smoke.sh
@@ -188,6 +278,11 @@ lint:
 	  (cd $$m && $(GOLANGCI_LINT) run ./...); \
 	done
 	scripts/insecure-tls-check.sh
+	scripts/timeouts-check.sh
+	scripts/no-retries-check.sh
+	scripts/poll-check.sh
+	scripts/quarantine-check.sh
+	scripts/wallclock-check.sh
 	pnpm -C web exec biome ci .
 	pnpm -C web exec tsc --noEmit
 
@@ -287,6 +382,10 @@ E2E_COMPOSE := docker compose -f e2e/compose.yaml
 # (E2E_BROWSER_ARGS=chromium) on a machine that already has them.
 E2E_BROWSER_ARGS ?= --with-deps chromium
 
+# Extra arguments for `playwright test` in `make e2e`, empty by default. A single
+# project can be repeated on one stack: make e2e E2E_ARGS='--project=dashboard --repeat-each=2'
+E2E_ARGS ?=
+
 # The image under test: a linux/amd64 binary with the SPA embedded, wrapped by
 # the release Dockerfile the way goreleaser does it ($TARGETPLATFORM/bayplan in
 # the build context), tagged bayplan:e2e and loaded into the local engine.
@@ -303,6 +402,17 @@ e2e-image: web
 # line per check; any FAIL fails the target.
 proxy-smoke: e2e-image
 	scripts/proxy-smoke.sh
+
+# D-23: removes the containers, networks and volumes labelled bayplan.ci.owner=
+# $BAYPLAN_CI_OWNER (the smokes label what they create) and nothing else. ci.yml runs
+# it in an if: always() step of every job that uses Docker. Needs BAYPLAN_CI_OWNER.
+ci-clean:
+	scripts/ci-clean.sh
+
+# D-23: docker system df, and a failure naming the filesystem when the workspace or
+# Docker's root has less than BAYPLAN_CI_MIN_FREE_GB (default 20) free.
+ci-preflight:
+	scripts/ci-preflight.sh
 
 # The upgrade proof (D-34, PLAT-02): run the previous build, put state into it (setup, an
 # agent environment with a real agent connected, and a user, a team and a grant when
@@ -370,13 +480,13 @@ e2e: e2e-image agent-image
 	@set -e; \
 	go run scripts/e2e-cert.go -out $(E2E_TLS); \
 	pnpm -C e2e install --frozen-lockfile; \
-	trap '$(E2E_COMPOSE) down -v' EXIT; \
+	trap '$(E2E_COMPOSE) down -v --remove-orphans' EXIT; \
 	$(E2E_COMPOSE) up -d --wait || { $(E2E_COMPOSE) logs --no-color --tail 100; exit 1; }; \
 	docker save bayplan-agent:dev | $(E2E_COMPOSE) exec -T agenthost docker load; \
 	$(E2E_COMPOSE) exec -T agenthost docker tag bayplan-agent:dev ghcr.io/ianglennon/bayplan-agent:edge; \
 	pnpm -C e2e exec playwright install $(E2E_BROWSER_ARGS); \
 	status=0; \
-	BAYPLAN_E2E_BROWSER_WS=$(E2E_BROWSER_WS) pnpm -C e2e exec playwright test || status=$$?; \
+	BAYPLAN_E2E_BROWSER_WS=$(E2E_BROWSER_WS) pnpm -C e2e exec playwright test $(E2E_ARGS) || status=$$?; \
 	if [ "$$status" -ne 0 ]; then \
 		$(E2E_COMPOSE) logs --no-color --tail 100 bayplan || true; \
 		$(E2E_COMPOSE) logs --no-color --tail 50 caddy || true; \

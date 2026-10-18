@@ -17,6 +17,7 @@ import {
   type ContainerSearchPatch,
   containerSearchSchema,
 } from "@/features/containers/list-search";
+import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
@@ -244,6 +245,10 @@ describe("container list: groups", () => {
     expect(parsed.dir).toBeUndefined();
     expect(parsed.q).toBe("x");
     expect(containerSearchSchema.parse({ group: "node" }).group).toBe("node");
+    // The live stats switch is stats=1 and nothing else.
+    expect(containerSearchSchema.parse({ stats: 1 }).stats).toBe(1);
+    expect(containerSearchSchema.parse({ stats: "1" }).stats).toBeUndefined();
+    expect(containerSearchSchema.parse({ stats: 2 }).stats).toBeUndefined();
     expect(containerSearchSchema.parse({ status: "exited,bogus,running,exited" }).status).toBe(
       "running,exited",
     );
@@ -263,7 +268,7 @@ describe("container list: search", () => {
     expect((box as HTMLInputElement).value).toBe("shop");
     // Not yet: the box waits for the typing to stop.
     expect(changes).toEqual([]);
-    await waitFor(() => expect(changes).toEqual([{ q: "shop" }]), { timeout: 1500 });
+    await waitFor(() => expect(changes).toEqual([{ q: "shop" }]));
     await waitFor(() => expect(urls).toContain(`/api/env/${ENV}/containers?q=shop`));
     await waitFor(() => expect(screen.queryByText("loose")).toBeNull());
     expect(screen.getByText("shop-web")).toBeTruthy();
@@ -276,7 +281,7 @@ describe("container list: search", () => {
     fireEvent.change(box, { target: { value: "s" } });
     fireEvent.change(box, { target: { value: "sh" } });
     fireEvent.change(box, { target: { value: "sho" } });
-    await waitFor(() => expect(changes).toEqual([{ q: "sho" }]), { timeout: 1500 });
+    await waitFor(() => expect(changes).toEqual([{ q: "sho" }]));
   });
 
   it("clears the search at once with Clear search", async () => {
@@ -344,6 +349,9 @@ describe("container list: status chips", () => {
         .getAllByRole("button")
         .map((b) => b.textContent),
     ).toEqual(["Running 24", "Exited 3", "Paused 0", "Restarting 1", "Unhealthy 2"]);
+    // The chips wrap onto further rows at every width, so none is cut off at 375px (G-06-2).
+    expect(group.classList.contains("flex-wrap")).toBe(true);
+    expect(group.className).not.toMatch(/overflow-x-auto|flex-nowrap/);
   });
 
   it("filters on the server with the chosen statuses and keeps the counts as they were", async () => {
@@ -527,7 +535,7 @@ describe("container list: empty states", () => {
   it("shows an inline error with Retry", async () => {
     answer = () => Response.json({ title: "boom" }, { status: 500 });
     mount();
-    await screen.findByText("Couldn't load containers.", {}, { timeout: 4000 });
+    await screen.findByText("Couldn't load containers.");
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 });
@@ -724,9 +732,7 @@ describe("container list: live updates in place", () => {
     await waitFor(() => expect(within(rowOf("shop-web")).getByText("Paused")).toBeTruthy());
     expect(rowOf("shop-web").hasAttribute("data-changed")).toBe(true);
     expect(rowOf("blog").hasAttribute("data-changed")).toBe(false);
-    await waitFor(() => expect(rowOf("shop-web").hasAttribute("data-changed")).toBe(false), {
-      timeout: 3000,
-    });
+    await waitFor(() => expect(rowOf("shop-web").hasAttribute("data-changed")).toBe(false));
   });
 
   it("slides a new row in without a reload", async () => {
@@ -744,7 +750,7 @@ describe("container list: live updates in place", () => {
     await screen.findByText("shop-web");
     answer = () => Response.json(body(ROWS.filter((r) => r.name !== "loose")));
     await refetch();
-    await waitFor(() => expect(screen.queryByText("loose")).toBeNull(), { timeout: 2000 });
+    await waitFor(() => expect(screen.queryByText("loose")).toBeNull());
   });
 
   it("holds everything still while a row menu is open, and says so", async () => {
@@ -820,7 +826,7 @@ describe("container list: live updates in place", () => {
     fireEvent.change(screen.getByRole("searchbox", { name: "Search containers" }), {
       target: { value: "shop" },
     });
-    await waitFor(() => expect(screen.queryByText("loose")).toBeNull(), { timeout: 2000 });
+    await waitFor(() => expect(screen.queryByText("loose")).toBeNull());
     for (const name of ["shop-web", "shop-db"]) {
       expect(rowOf(name).hasAttribute("data-added")).toBe(false);
       expect(rowOf(name).hasAttribute("data-removed")).toBe(false);
@@ -1220,5 +1226,140 @@ describe("container list: Bayplan's own container", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(actionPosts).toEqual([]);
+  });
+});
+
+describe("container list: Live stats (06-33)", () => {
+  beforeEach(() => {
+    FakeEventSource.reset();
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+
+  const liveSource = (): FakeEventSource => {
+    const s = FakeEventSource.instances[FakeEventSource.instances.length - 1];
+    if (!s) throw new Error("no stats stream was opened");
+    return s;
+  };
+  const idsOf = (s: FakeEventSource) => new URL(s.url, "http://x").searchParams.get("ids");
+
+  it("has the switch, off by default, with no stats columns and no stream", async () => {
+    mount();
+    await screen.findByText("shop-web");
+    expect(screen.getByRole("switch", { name: "Live stats" }).getAttribute("aria-checked")).toBe(
+      "false",
+    );
+    for (const name of ["CPU", "Memory", "Network"]) {
+      expect(screen.queryByRole("columnheader", { name })).toBeNull();
+    }
+    expect(FakeEventSource.instances).toHaveLength(0);
+  });
+
+  it("asks for stats through the search when the switch is turned on, and takes it out when off", async () => {
+    mount();
+    await screen.findByText("shop-web");
+    fireEvent.click(screen.getByRole("switch", { name: "Live stats" }));
+    expect(changes).toEqual([{ stats: 1 }]);
+    await waitFor(() =>
+      expect(screen.getByRole("switch", { name: "Live stats" }).getAttribute("aria-checked")).toBe(
+        "true",
+      ),
+    );
+    fireEvent.click(screen.getByRole("switch", { name: "Live stats" }));
+    expect(changes.at(-1)).toEqual({ stats: undefined });
+  });
+
+  it("adds CPU, Memory and Network after Created, and one stream for the running rows on screen", async () => {
+    mount({ stats: 1 });
+    await screen.findByText("shop-web");
+    const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
+    expect(heads.slice(heads.indexOf("Created"))).toEqual(
+      expect.arrayContaining(["Created", "CPU", "Memory", "Network"]),
+    );
+    expect(FakeEventSource.instances).toHaveLength(1);
+    const url = new URL(liveSource().url, "http://x");
+    expect(url.pathname).toBe("/api/env/e1/containers/stats/stream");
+    // The node and the container, as the row is named; the exited container is not sampled.
+    expect((idsOf(liveSource()) ?? "").split(",").sort()).toEqual([
+      "n1|id-blog",
+      "n1|id-loose",
+      "n1|id-shop-web",
+    ]);
+  });
+
+  it("fills a row's cells from the stream and leaves a stopped container's as dashes", async () => {
+    mount({ stats: 1 });
+    await screen.findByText("shop-web");
+    act(() =>
+      liveSource().sendFrame("sample", {
+        t: 1,
+        containers: [
+          {
+            id: "n1|id-shop-web",
+            cpu: 142.4,
+            mem: 1.2 * 1024 ** 3,
+            netRx: 1.2 * 1024 ** 2,
+            netTx: 340 * 1024,
+            noData: false,
+            stopped: false,
+          },
+        ],
+      }),
+    );
+    const web = screen.getByRole("row", { name: /shop-web/ });
+    expect(within(web).getByText("142%")).toBeTruthy();
+    expect(within(web).getByText("1.2 GiB")).toBeTruthy();
+    expect(within(web).getByText("↓ 1.2 MiB/s ↑ 340 KiB/s")).toBeTruthy();
+    const db = screen.getByRole("row", { name: /shop-db/ });
+    expect(within(db).getAllByText("—").length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("closes the stream and takes the columns away when the switch is turned off", async () => {
+    mount({ stats: 1 });
+    await screen.findByText("shop-web");
+    const s = liveSource();
+    fireEvent.click(screen.getByRole("switch", { name: "Live stats" }));
+    await waitFor(() => expect(s.closed).toBe(true));
+    expect(screen.queryByRole("columnheader", { name: "CPU" })).toBeNull();
+  });
+});
+
+// Restart loops of standalone containers (plan 06-36, RES-13, D-15): the badge sits in the Name
+// cell, beside the self badge, and only on a container the server flagged.
+describe("container list: restart loops", () => {
+  const LOOPING = [
+    row("crashy", {
+      restartLoop: { state: "flagged", count: 3, windowMinutes: 10, lastExitCode: "3" },
+    }),
+    row("hushed", {
+      restartLoop: { state: "muted", count: 4, windowMinutes: 10, lastExitCode: "1" },
+    }),
+    row("calm"),
+  ];
+
+  it("flags the container the server flagged, and no other", async () => {
+    answer = () => Response.json(body(LOOPING));
+    mount();
+    const crashy = (await screen.findByRole("row", { name: /crashy/ })) as HTMLElement;
+    expect(within(crashy).getByText("Restart loop")).toBeTruthy();
+    expect(
+      within(screen.getByRole("row", { name: /calm/ })).queryByText("Restart loop"),
+    ).toBeNull();
+  });
+
+  it("says the restarts and the last exit code in the badge's tooltip", async () => {
+    answer = () => Response.json(body(LOOPING));
+    mount();
+    const crashy = (await screen.findByRole("row", { name: /crashy/ })) as HTMLElement;
+    fireEvent.focus(within(crashy).getByText("Restart loop"));
+    const tip = await screen.findByRole("tooltip");
+    expect(tip.textContent).toBe("3 restarts in the last 10 minutes. Last exit code 3.");
+  });
+
+  it("shows a muted loop as the grey Muted badge, not as Restart loop", async () => {
+    answer = () => Response.json(body(LOOPING));
+    mount();
+    const hushed = (await screen.findByRole("row", { name: /hushed/ })) as HTMLElement;
+    expect(within(hushed).getByText("Muted")).toBeTruthy();
+    expect(within(hushed).queryByText("Restart loop")).toBeNull();
   });
 });

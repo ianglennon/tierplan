@@ -1,18 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
+import { isSlotMark, type SwarmMark } from "@/features/logs/log-source";
+
 // How many lines the browser keeps (D-17). Past it the oldest are dropped and counted,
 // and the viewer says so, because the page would otherwise grow with the log for as
 // long as it stays open.
 export const BUFFER_CAP = 50_000;
 
-// One line of a container's log as the stream sends it. t is the engine's timestamp,
+// One line of a container's or a service's log as the stream sends it. t is the engine's timestamp,
 // s is "o" for stdout and "e" for stderr, and m is the text exactly as the program wrote
 // it: it is only ever rendered as text, never as markup.
 export interface LogLineData {
   t: string;
   s: "o" | "e";
   m: string;
+  // A line of a service's log also says which task wrote it: the task's ID, its slot (0
+  // for a task of a global service) and the host name of its node (plan 06-29, D-35).
+  task?: string;
+  slot?: number;
+  node?: string;
 }
 
 // A line in the buffer, with the number that names it for as long as it is held.
@@ -23,11 +30,14 @@ export interface BufferedLine extends LogLineData {
   // Set on a row that is not a line of the log but a mark the viewer put between lines:
   // the container started again, or stopped. t is when, m is empty.
   marker?: ContainerMarker;
+  // What a "swarm" marker row says: a task of a service was replaced, a slot is waiting for
+  // one, or a node cannot be reached (plan 06-30, D-34, D-37).
+  swarm?: SwarmMark;
 }
 
 // What a marker row says happened to the container (D-20), or to the stream that
 // follows it: it was cut and could not be resumed, so lines may be missing.
-export type ContainerMarker = "restarted" | "stopped" | "interrupted";
+export type ContainerMarker = "restarted" | "stopped" | "interrupted" | "swarm";
 
 type Listener = () => void;
 
@@ -111,6 +121,45 @@ export class LogBuffer {
     this.bump();
   }
 
+  // Puts a swarm marker row where the old task's last line was: after the last line that is
+  // not newer than at. A marker about a task that already has one is updated in place (a
+  // slot that was waiting for a task now has one), and a node notice that repeats the one
+  // before it is dropped (a reconnect tells again). A marker older than every line held has
+  // nothing to sit beside and is not kept. It counts as a line for the jump pill.
+  insertSwarmMarker(mark: SwarmMark, at: string): void {
+    for (let i = this.items.length - 1; i >= this.start; i--) {
+      const row = this.items[i] as BufferedLine;
+      const held = row.swarm;
+      if (!held) continue;
+      if (isSlotMark(mark)) {
+        if (!isSlotMark(held) || held.old !== mark.old) continue;
+        if (held.kind === mark.kind && held.new === mark.new) return;
+        this.items[i] = { ...row, swarm: mark };
+        this.bump();
+        return;
+      }
+      if (isSlotMark(held) || held.node !== mark.node) continue;
+      // The last thing said about this node: the same again says nothing new.
+      if (held.kind === mark.kind) return;
+      break;
+    }
+    const when = at || new Date().toISOString();
+    let i = this.items.length;
+    while (i > this.start && (this.items[i - 1] as BufferedLine).t > when) i--;
+    if (i === this.start && this.length > 0) return;
+    this.items.splice(i, 0, {
+      t: when,
+      s: "o",
+      m: "",
+      seq: this.nextSeq++,
+      marker: "swarm",
+      swarm: mark,
+    });
+    this.pushedLines++;
+    this.trim();
+    this.bump();
+  }
+
   // Adds a page of earlier lines at the top (Load earlier lines). The page may repeat
   // lines already held at the oldest line's stamp: a request for "everything before
   // this moment" is made one nanosecond late so no line sharing that stamp is missed
@@ -132,7 +181,7 @@ export class LogBuffer {
         const l = this.at(i);
         if (l.marker) continue;
         if (l.t !== first.t) break;
-        const k = `${l.s}\u0000${l.m}`;
+        const k = `${l.s}\u0000${l.task ?? ""}\u0000${l.m}`;
         held.set(k, (held.get(k) ?? 0) + 1);
       }
     }
@@ -140,7 +189,7 @@ export class LogBuffer {
     for (const l of page) {
       if (first && l.t > first.t) continue;
       if (first && l.t === first.t) {
-        const k = `${l.s}\u0000${l.m}`;
+        const k = `${l.s}\u0000${l.task ?? ""}\u0000${l.m}`;
         const n = held.get(k) ?? 0;
         if (n > 0) {
           held.set(k, n - 1);

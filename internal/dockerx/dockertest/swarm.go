@@ -15,11 +15,13 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
@@ -453,35 +455,45 @@ func (s *Swarm) WaitForQuorum(ctx context.Context) error {
 	})
 }
 
-// poll calls fn every second until it reports true or timeout (or ctx) ends. The
-// string is the latest observation, shown when it times out.
+// poll calls fn until it reports true or timeout (or ctx) ends, on testsupport.Poll, so
+// there is one polling implementation and one failure text. The string is the latest
+// observation, shown when it times out. It returns the failure rather than failing a
+// test, for the setup paths that report it themselves.
 func poll(ctx context.Context, timeout time.Duration, what string, fn func() (bool, string)) error {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	tick := time.NewTicker(time.Second)
-	defer tick.Stop()
-	var last string
-	for {
-		ok, seen := fn()
-		if ok {
-			return nil
-		}
-		if seen != "" {
-			last = seen
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("gave up waiting for %s after %s; last seen: %s", what, timeout, strings.TrimSpace(last))
-		case <-tick.C:
-		}
-	}
+	rec := &pollFailure{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		testsupport.Poll(rec, timeout, what, func() (bool, string) {
+			if err := ctx.Err(); err != nil {
+				rec.fail(fmt.Sprintf("gave up waiting for %s: %v", what, err))
+			}
+			return fn()
+		})
+	}()
+	<-done
+	return rec.err
+}
+
+// pollFailure is the testing.TB testsupport.Poll fails, so poll can hand the failure
+// back as an error. Fatalf ends the goroutine Poll runs in, as a real test's would.
+type pollFailure struct {
+	testing.TB
+	err error
+}
+
+func (p *pollFailure) Helper() {}
+
+func (p *pollFailure) Fatalf(format string, args ...any) { p.fail(fmt.Sprintf(format, args...)) }
+
+func (p *pollFailure) fail(msg string) {
+	p.err = errors.New(msg)
+	runtime.Goexit()
 }
 
 // Wait is poll for the tests: it fails the test with the last observation when
 // cond is still false after timeout.
 func Wait(t testing.TB, timeout time.Duration, what string, cond func() (bool, string)) {
 	t.Helper()
-	if err := poll(context.Background(), timeout, what, cond); err != nil {
-		t.Fatal(err)
-	}
+	testsupport.Poll(t, timeout, what, cond)
 }

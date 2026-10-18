@@ -98,6 +98,14 @@ type Controls struct {
 	// TickInterval is how often Idle and StillAllowed are consulted. Zero means 5
 	// seconds.
 	TickInterval time.Duration
+	// Ticks, when set, drives the checks of Idle and StillAllowed instead of a ticker of
+	// TickInterval: each value received is one tick. It is for tests, which send exactly
+	// the ticks they mean; production leaves it nil.
+	Ticks <-chan time.Time
+	// Checked, when set, is called after each of the watcher's checks, including one
+	// that closes the shell (after its closing frame is sent). Tests that change the
+	// clock or the limit between ticks wait for it; production leaves it nil.
+	Checked func()
 }
 
 func (c Controls) withDefaults() Controls {
@@ -344,35 +352,51 @@ func pinger(ctx context.Context, conn *websocket.Conn, ctl Controls) string {
 // closing frame is sent before the reason is returned. Both the limit and the access
 // are read on every tick, never captured when the shell opened.
 func watcher(ctx context.Context, conn *websocket.Conn, s *Session, ctl Controls) string {
-	t := time.NewTicker(ctl.TickInterval)
-	defer t.Stop()
+	ticks := ctl.Ticks
+	if ticks == nil {
+		t := time.NewTicker(ctl.TickInterval)
+		defer t.Stop()
+		ticks = t.C
+	}
 	var warnedFor time.Time // the activity the last warning was sent for
 	for {
 		select {
 		case <-ctx.Done():
 			return ""
-		case <-t.C:
+		case <-ticks:
 		}
-		if ctl.StillAllowed != nil && !ctl.StillAllowed() {
-			writeControl(ctx, conn, ctl, Control{Type: "closed", Reason: ReasonAccessLost})
-			return ReasonAccessLost
-		}
-		if ctl.Idle == nil {
-			continue
-		}
-		limit := ctl.Idle()
-		if limit <= 0 {
-			continue
-		}
-		last := s.LastActivity()
-		quiet := ctl.Clock.Now().Sub(last)
-		switch {
-		case quiet >= limit:
-			writeControl(ctx, conn, ctl, Control{Type: "closed", Reason: ReasonIdle, Minutes: int(limit / time.Minute)})
-			return ReasonIdle
-		case quiet >= limit-IdleWarning && !last.Equal(warnedFor):
-			warnedFor = last
-			writeControl(ctx, conn, ctl, Control{Type: "idle_warning", Seconds: int(IdleWarning / time.Second)})
+		if reason := check(ctx, conn, s, ctl, &warnedFor); reason != "" {
+			return reason
 		}
 	}
+}
+
+// check is one look at the shell's access and idle time. It returns the reason the
+// shell was closed, or "" when it stays open.
+func check(ctx context.Context, conn *websocket.Conn, s *Session, ctl Controls, warnedFor *time.Time) string {
+	if ctl.Checked != nil {
+		defer ctl.Checked()
+	}
+	if ctl.StillAllowed != nil && !ctl.StillAllowed() {
+		writeControl(ctx, conn, ctl, Control{Type: "closed", Reason: ReasonAccessLost})
+		return ReasonAccessLost
+	}
+	if ctl.Idle == nil {
+		return ""
+	}
+	limit := ctl.Idle()
+	if limit <= 0 {
+		return ""
+	}
+	last := s.LastActivity()
+	quiet := ctl.Clock.Now().Sub(last)
+	switch {
+	case quiet >= limit:
+		writeControl(ctx, conn, ctl, Control{Type: "closed", Reason: ReasonIdle, Minutes: int(limit / time.Minute)})
+		return ReasonIdle
+	case quiet >= limit-IdleWarning && !last.Equal(*warnedFor):
+		*warnedFor = last
+		writeControl(ctx, conn, ctl, Control{Type: "idle_warning", Seconds: int(IdleWarning / time.Second)})
+	}
+	return ""
 }

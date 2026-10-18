@@ -43,7 +43,7 @@ import (
 )
 
 const (
-	// readHeaderTimeout, readTimeout and idleTimeout bound slow clients
+	// readHeaderTimeout, defaultReadTimeout and idleTimeout bound slow clients
 	// (T-01-17, Pitfall 8). There is deliberately no global WriteTimeout: the
 	// SSE events stream (plan 21) lives for hours and clears its own write
 	// deadline.
@@ -52,12 +52,13 @@ const (
 	shutdownTimeout   = 10 * time.Second
 )
 
-// readTimeout bounds reading a whole request, headers and body, so a client
-// that sends the headers and then withholds the body is cut off (WR-14,
+// defaultReadTimeout bounds reading a whole request, headers and body, so a
+// client that sends the headers and then withholds the body is cut off (WR-14,
 // T-01-17). Go clears the read deadline once a request with no body is being
 // served, so a long-lived response such as the events stream is unaffected.
-// It is a variable so an internal test can shorten it.
-var readTimeout = 30 * time.Second
+// newHTTPServer takes it as a parameter, so a test that needs a short one
+// builds its own server instead of writing shared state.
+const defaultReadTimeout = 30 * time.Second
 
 // maxHeaderBytes caps the request line and headers. The net/http default is
 // 1 MiB, which let a caller put megabytes into a path segment (an environment ID
@@ -65,8 +66,9 @@ var readTimeout = 30 * time.Second
 const maxHeaderBytes = 64 << 10
 
 // newHTTPServer returns the http.Server Bayplan serves with. huma already caps
-// JSON bodies (MaxBodyBytes), so no MaxBytesReader is added here.
-func newHTTPServer(h http.Handler, tlsCfg *tls.Config) *http.Server {
+// JSON bodies (MaxBodyBytes), so no MaxBytesReader is added here. Production
+// passes defaultReadTimeout.
+func newHTTPServer(h http.Handler, tlsCfg *tls.Config, readTimeout time.Duration) *http.Server {
 	return &http.Server{
 		Handler:           h,
 		ReadHeaderTimeout: readHeaderTimeout,
@@ -114,6 +116,8 @@ type Server struct {
 	shells *shells.Registry
 	// jobs holds the image pulls in progress and the ones that finished a few minutes ago.
 	jobs *jobs.Hub
+	// stats samples the containers that browsers watch; closed with the server.
+	stats *api.StatsHub
 	// tunnel holds the live agent connections; agents creates agent
 	// environments and enrols agents.
 	tunnel  *tunnel.Hub
@@ -131,6 +135,11 @@ type Server struct {
 	keepLock atomic.Bool
 	// restart carries a restore's request to restart the process.
 	restart *restarter
+
+	// listening is closed by Run once its address is bound, and never when the
+	// bind fails. listeningOnce keeps a second Run from closing it twice.
+	listening     chan struct{}
+	listeningOnce sync.Once
 
 	// stopBackground ends the nightly audit prune and waits for it, so Close
 	// never closes the database under a running prune.
@@ -157,6 +166,11 @@ type RouterDeps struct {
 	Dashboard     api.DashboardDeps
 	Containers    api.ContainersDeps
 	Networks      api.NetworksDeps
+	Services      api.ServicesDeps
+	RestartLoop   api.RestartLoopDeps
+	Secrets       api.SecretsDeps
+	Configs       api.ConfigsDeps
+	Nodes         api.NodesDeps
 	Volumes       api.VolumesDeps
 	Images        api.ImagesDeps
 	Pulls         api.PullsDeps
@@ -164,6 +178,8 @@ type RouterDeps struct {
 	Tags          api.TagsDeps
 	Events        api.EventsDeps
 	Logs          api.LogsDeps
+	ServiceLogs   api.ServiceLogsDeps
+	Stats         api.StatsDeps
 	Shells        api.ShellsDeps
 	EnvStream     api.EnvStreamDeps
 	Recent        api.RecentDeps
@@ -197,10 +213,15 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterEnvironments(r, d.Environments)
 	api.RegisterAgents(r, d.Agents)
 	api.RegisterUnknownAgents(r, d.UnknownAgents)
-	api.RegisterEnvWarnings(r, api.EnvWarningsDeps{Envs: d.Environments.Envs, Checker: d.Environments.Checker, Agents: d.Agents, Log: d.Environments.Log})
+	api.RegisterEnvWarnings(r, api.EnvWarningsDeps{Envs: d.Environments.Envs, Checker: d.Environments.Checker, Clusters: d.Services.Clusters, Agents: d.Agents, Log: d.Environments.Log})
 	api.RegisterDashboard(r, d.Dashboard)
 	api.RegisterContainers(r, d.Containers)
 	api.RegisterNetworks(r, d.Networks)
+	api.RegisterServices(r, d.Services)
+	api.RegisterRestartLoop(r, d.RestartLoop)
+	api.RegisterSecrets(r, d.Secrets)
+	api.RegisterConfigs(r, d.Configs)
+	api.RegisterNodes(r, d.Nodes)
 	api.RegisterVolumes(r, d.Volumes)
 	api.RegisterImages(r, d.Images)
 	api.RegisterPulls(r, d.Pulls)
@@ -208,6 +229,8 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterTags(r, d.Tags)
 	api.RegisterEvents(r, d.Events)
 	api.RegisterLogs(r, d.Logs)
+	api.RegisterServiceLogs(r, d.ServiceLogs)
+	api.RegisterStats(r, d.Stats)
 	api.RegisterShells(r, d.Shells)
 	api.RegisterEnvStream(r, d.EnvStream)
 	api.RegisterRecent(r, d.Recent)
@@ -668,6 +691,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// The job hub holds the pulls in progress. It is memory only; the audit log is the
 	// record, and Close ends every running job before the database closes (D-26).
 	jobHub := jobs.New(jobs.Options{})
+	// One sampler hub serves every viewer of any container's stats (D-29 to D-31).
+	statsHub := api.NewStatsHub(aggregator, api.StatsHubOptions{Log: log})
 	registryStore := registry.NewStore(st, vlt, nil)
 	resolver := registry.NewResolver(registryStore)
 	// Every call the server makes to a registry dials through one egress policy (T-05-38).
@@ -734,16 +759,23 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Environments:  api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Checker: checker, Updater: updater, Log: log},
 		UnknownAgents: api.UnknownAgentsDeps{Unknown: agentSvc.Unknown(), Store: st, Log: log},
 		Agents:        api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Updater: updater, Log: log},
-		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, SelfContainerID: selfID, Log: log},
+		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, Checker: checker, SelfContainerID: selfID, Log: log},
 		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, SelfContainerID: selfID, Log: log},
+		Services:      api.ServicesDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Log: log},
+		RestartLoop:   api.RestartLoopDeps{Store: st, Clusters: clusters, Aggregator: aggregator, Audit: aud, Log: log},
+		Secrets:       api.SecretsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Log: log},
+		Configs:       api.ConfigsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Log: log},
+		Nodes:         api.NodesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, Agents: agentSvc, Live: tunnelHub, SelfContainerID: selfID, Log: log},
 		Volumes:       api.VolumesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, Log: log},
 		Images:        api.ImagesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
 		Pulls:         api.PullsDeps{Aggregator: aggregator, Jobs: jobHub, Audit: aud, Checker: checker, Resolver: resolver, Log: log},
 		Registries:    api.RegistriesDeps{Store: registryStore, Envs: envSvc, Aggregator: aggregator, Audit: aud, Checker: checker, Egress: registryEgress, Clients: registryClients, Version: buildinfo.Get().Version, Log: log},
 		Tags:          api.TagsDeps{Resolver: resolver, Tags: registry.NewTagService(registryClients, registryEgress, buildinfo.Get().Version, log), Checker: checker, Aggregator: aggregator, Envs: envSvc, Audit: aud, Log: log},
-		Containers:    api.ContainersDeps{Aggregator: aggregator, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
+		Containers:    api.ContainersDeps{Aggregator: aggregator, Audit: aud, Checker: checker, SelfContainerID: selfID, Clusters: clusters, Log: log},
 		Events:        api.EventsDeps{Aggregator: aggregator, Log: log},
 		Logs:          api.LogsDeps{Aggregator: aggregator, Audit: aud, Checker: checker, Log: log},
+		ServiceLogs:   api.ServiceLogsDeps{Clusters: clusters, Audit: aud, Checker: checker, Log: log},
+		Stats:         api.StatsDeps{Aggregator: aggregator, Clusters: clusters, Hub: statsHub, Log: log},
 		Shells:        api.ShellsDeps{Aggregator: aggregator, Registry: shellRegistry, Audit: aud, Checker: checker, Instance: inst, SelfContainerID: selfID, Store: st, Log: log},
 		EnvStream:     api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
 		Recent:        api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Refusals: refusals, Log: log},
@@ -762,6 +794,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).
 	if err := httpx.VerifyAllGuarded(router); err != nil {
 		jobHub.Close()
+		statsHub.Close()
 		tunnelHub.Close()
 		aggregator.Close()
 		hub.Close()
@@ -772,6 +805,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	srv = &Server{
 		unlock:     unlock,
 		restart:    restart,
+		listening:  make(chan struct{}),
 		refusals:   refusals,
 		cfg:        cfg,
 		log:        log,
@@ -791,6 +825,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		broker:     broker,
 		shells:     shellRegistry,
 		jobs:       jobHub,
+		stats:      statsHub,
 		resolver:   resolver,
 		tunnel:     tunnelHub,
 		agents:     agentSvc,
@@ -820,6 +855,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		stop()
 		srv.background.Wait()
 		jobHub.Close()
+		statsHub.Close()
 		tunnelHub.Close()
 		aggregator.Close()
 		hub.Close()
@@ -918,6 +954,8 @@ func (s *Server) Close() error {
 	s.shells.CloseAll("server_shutdown")
 	// Pulls in flight are cancelled and waited for, so their audit rows are written.
 	s.jobs.Close()
+	// Before the aggregator, so no sample is asked of an engine that is going away.
+	s.stats.Close()
 	s.broker.Close()
 	s.updater.Close()
 	s.tunnel.Close()
@@ -960,8 +998,15 @@ func (s *Server) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listen on %s (BAYPLAN_LISTEN): %w", s.cfg.Listen, err)
 	}
+	s.listeningOnce.Do(func() { close(s.listening) })
 	return s.run(ctx, ln)
 }
+
+// Listening returns a channel that Run closes once it has bound its address, so
+// a caller that started Run in a goroutine learns that the server is accepting
+// connections from the server itself rather than from a timer. It stays open
+// when the address cannot be bound; Run's error says why.
+func (s *Server) Listening() <-chan struct{} { return s.listening }
 
 func (s *Server) run(ctx context.Context, ln net.Listener) error {
 	err := s.serve(ctx, ln)
@@ -985,8 +1030,14 @@ func (s *Server) run(ctx context.Context, ln net.Listener) error {
 	return &RestartError{Request: req}
 }
 
+// httpServer is the http.Server the process serves with: production's read
+// timeout, the TLS settings the configuration chose.
+func (s *Server) httpServer() *http.Server {
+	return newHTTPServer(s.Handler(), s.tlsConfig, defaultReadTimeout)
+}
+
 func (s *Server) serve(ctx context.Context, ln net.Listener) error {
-	srv := newHTTPServer(s.Handler(), s.tlsConfig)
+	srv := s.httpServer()
 	// Shutdown waits for open requests, and an events stream never ends by
 	// itself. Closing the hub ends every stream, so a restart is not held up for
 	// the whole shutdown timeout by a browser that has the feed open.
@@ -1011,6 +1062,9 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 	} else {
 		go func() { errc <- srv.Serve(ln) }()
 	}
+	// The message and the "addr" key are a contract: scripts/smoke.sh binds port 0
+	// and reads the port the kernel assigned from this line (WR-07). ln.Addr is the
+	// bound address, so ":0" shows as the real port.
 	s.log.Info("bayplan listening", "addr", ln.Addr().String(), "scheme", scheme)
 
 	select {

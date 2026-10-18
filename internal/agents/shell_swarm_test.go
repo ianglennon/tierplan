@@ -18,15 +18,14 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 )
 
-// TestSwarmWorkerShellAndLogs opens a shell and a log stream in a swarm task container
+// sharedWorkerShellAndLogs opens a shell and a log stream in a swarm task container
 // that runs on a worker node, through the real agents on a swarm of three managers and
 // a worker (plan 04-25, OBS-03 "including swarm task containers on worker nodes",
 // OBS-01): the container is found in the aggregated containers list, a shell opened with
 // the worker's node ID exchanges bytes over the WebSocket the way the browser's does,
 // its end is audited, and the same container's log reaches an event stream.
-func TestSwarmWorkerShellAndLogs(t *testing.T) {
+func sharedWorkerShellAndLogs(t *testing.T, f *swarmFix) {
 	started := time.Now()
-	f := startSwarmFix(t, 3, 1)
 	dockertest.LoadImage(t, "alpine", f.sw.Nodes()...)
 	f.install(t)
 	f.waitSwarmOnline(t, 4)

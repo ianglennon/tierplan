@@ -34,7 +34,8 @@ func detailFake(t *testing.T) *dockerx.Client {
 			Env: []string{"A=1", "TOKEN=a=b"}, Cmd: []string{"nginx", "-g", "daemon off;"}, Entrypoint: []string{"/docker-entrypoint.sh"},
 			WorkingDir: "/app", User: "www", ExitCode: 3, StartedAt: "2026-10-01T10:00:00Z", OOMKilled: true, RestartCount: 2,
 			LogType: "syslog", LogOptions: map[string]string{"splunk-token": "c0ffee-secret"},
-			MountModes: map[string]string{"/srv/site": "ro"},
+			MountModes:  map[string]string{"/srv/site": "ro"},
+			MemoryBytes: 512 << 20, NanoCPUs: 1_500_000_000,
 		},
 	}}, RestartPolicies: map[string]string{"web-id": "on-failure:3"}})
 	return newClient(t, fake)
@@ -56,6 +57,9 @@ func TestContainerDetailMapsTheInspectDocument(t *testing.T) {
 	}
 	if !slices.Equal(d.Env, []string{"A=1", "TOKEN=a=b"}) || d.Labels["com.docker.compose.project"] != "shop" {
 		t.Errorf("env and labels = %v %v", d.Env, d.Labels)
+	}
+	if d.MemoryLimit != 512<<20 || d.NanoCPUs != 1_500_000_000 {
+		t.Errorf("limits = %d bytes, %d nano cpus", d.MemoryLimit, d.NanoCPUs)
 	}
 	if d.RestartPolicy != "on-failure" || d.RestartMaxRetries != 3 {
 		t.Errorf("restart policy = %q %d", d.RestartPolicy, d.RestartMaxRetries)

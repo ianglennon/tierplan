@@ -126,6 +126,7 @@
       "nodeRequired": "Choose a node.",
       "nodeUnreachable": "That node isn't reachable right now. Try again when it's back.",
       "hostReadOnly": "This host is read-only. Changes are turned off on the host itself, so Bayplan can only read from it.",
+      "hostPolicy": "This host's agent doesn't allow a volume that mounts a host folder outside /srv, /mnt or /media, mounts a device, or uses a volume plugin. Use a folder under /srv, /mnt or /media, or ask the host's owner to set BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true on its agent.",
       "permission": "You no longer have permission to do that. Your access may have changed.",
       "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening.",
       "serverRequired": "Enter a server address.",

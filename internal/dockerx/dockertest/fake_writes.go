@@ -118,6 +118,7 @@ func (f *Fake) beginWrite(delay time.Duration) func() {
 	f.inflight++
 	f.maxInflight = max(f.maxInflight, f.inflight)
 	f.mu.Unlock()
+	f.await.notify()
 	if delay > 0 {
 		time.Sleep(delay)
 	}
@@ -125,6 +126,7 @@ func (f *Fake) beginWrite(delay time.Duration) func() {
 		f.mu.Lock()
 		f.inflight--
 		f.mu.Unlock()
+		f.await.notify()
 	}
 }
 

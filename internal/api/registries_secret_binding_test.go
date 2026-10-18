@@ -16,6 +16,7 @@ import (
 // Each of these tries to point it somewhere else without typing it again.
 
 func TestAnEditThatMovesTheSecretToAnotherHostNeedsTheSecretTypedAgain(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	admin := f.asAdmin(t)
 	c := f.storeCredential(t, admin,
@@ -54,6 +55,7 @@ func TestAnEditThatMovesTheSecretToAnotherHostNeedsTheSecretTypedAgain(t *testin
 }
 
 func TestATestOfAStoredCredentialNeverSendsItsSecretToAnotherHost(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	home, evil := newFakeRegistry(t), newFakeRegistry(t)
 	f.trusting(t, home, evil)
@@ -84,6 +86,7 @@ func TestATestOfAStoredCredentialNeverSendsItsSecretToAnotherHost(t *testing.T) 
 }
 
 func TestATestFromAnEnvironmentNeverSendsTheStoredSecretToAnotherHost(t *testing.T) {
+	t.Parallel()
 	f, env, node, _ := twoNodes(t,
 		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
 		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
@@ -110,6 +113,7 @@ func TestATestFromAnEnvironmentNeverSendsTheStoredSecretToAnotherHost(t *testing
 // A check from an environment is made by the node's engine, outside the server's egress policy, so
 // an address the policy refuses is not sent to the node at all (WR-B02).
 func TestATestFromAnEnvironmentNeverAsksANodeToReachAnAddressTheEgressPolicyRefuses(t *testing.T) {
+	t.Parallel()
 	f, env, node, _ := twoNodes(t,
 		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
 		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},

@@ -8,6 +8,7 @@ import (
 	"context"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -232,21 +234,17 @@ func TestTwoHellosForTheSameAgentReplaceTheOldSessionWithTheNewOne(t *testing.T)
 	if newSess == nil || newSess == oldSess {
 		t.Fatal("the hub still holds the old session")
 	}
-	select {
-	case <-oldSess.Done():
-	case <-time.After(5 * time.Second):
-		t.Fatal("the old session was not closed")
-	}
+	testsupport.Await(t, "the old session to be closed", oldSess.Done())
 	select {
 	case <-newSess.Done():
 		t.Fatal("the new session ended with the old one")
 	default:
 	}
 	// The old connection really is dead: the agent end can read nothing more.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if _, _, err := first.WS.Read(ctx); err == nil {
-		t.Error("the replaced session's WebSocket is still open")
+	ctx := testsupport.Context(t)
+	// A read that ends because the deadline passed says the server never closed.
+	if _, _, err := first.WS.Read(ctx); err == nil || ctx.Err() != nil {
+		t.Errorf("the replaced session's WebSocket is still open (err %v)", err)
 	}
 	if n := len(srv.Events.Log()); n != 3 {
 		t.Errorf("the replaced session was reported again: %v", srv.Events.Log())
@@ -279,11 +277,7 @@ func TestAnOlderHandshakeThatFinishesLastDoesNotReplaceTheNewerSession(t *testin
 		t.Fatalf("the older hello was refused: %+v", late.Refuse)
 	}
 	// The server turns the older connection away after its welcome.
-	select {
-	case <-late.Mux.CloseChan():
-	case <-time.After(5 * time.Second):
-		t.Fatal("the older connection was not closed")
-	}
+	testsupport.Await(t, "the older connection to be closed", late.Mux.CloseChan())
 	if got := srv.Hub.Session(id.AgentID); got != live {
 		t.Fatalf("the hub holds %p after the older hello finished, want the newer session %p", got, live)
 	}
@@ -320,26 +314,34 @@ func TestSimultaneousHellosForOneAgentLeaveExactlyOneSession(t *testing.T) {
 	// Every hello ends up either replaced by a newer one or turned away because a
 	// newer one registered first; exactly one connection is left, and it is open.
 	// The agent end of each connection sees the other n-1 close.
-	waitFor := time.Now().Add(10 * time.Second)
-	var survivors []*tunneltest.Conn
-	for {
-		survivors = survivors[:0]
-		for _, c := range conns {
-			if !c.Mux.IsClosed() {
-				survivors = append(survivors, c)
+	// The agent end of each connection closes on its own, with no event the test
+	// could count but the multiplexer's close channel: wait for n-1 of the n.
+	ctx := testsupport.Context(t)
+	closedConns := make(chan struct{}, n)
+	for _, c := range conns {
+		go func() {
+			select {
+			case <-c.Mux.CloseChan():
+				closedConns <- struct{}{}
+			case <-ctx.Done():
 			}
-		}
-		if len(survivors) == 1 {
-			break
-		}
-		if time.Now().After(waitFor) {
-			t.Fatalf("%d connections are still open, want exactly one", len(survivors))
-		}
-		time.Sleep(10 * time.Millisecond)
+		}()
 	}
-	// A replaced session is closed a moment before it is reported, so the log may
-	// still be one event short of what the connections show.
-	var log []string
+	for range n - 1 {
+		testsupport.Await(t, "all but one of the connections to be closed", closedConns)
+	}
+	var survivors []*tunneltest.Conn
+	for _, c := range conns {
+		if !c.Mux.IsClosed() {
+			survivors = append(survivors, c)
+		}
+	}
+	if len(survivors) != 1 {
+		t.Fatalf("%d connections are open, want exactly one", len(survivors))
+	}
+	// A replaced session is closed a moment before it is reported, and the session
+	// that stays is reported last, after every replacement: wait until the one the
+	// hub holds has been reported connected and the log shows exactly one live.
 	liveIn := func(log []string) int {
 		live := 0
 		for _, e := range log[2:] {
@@ -352,14 +354,10 @@ func TestSimultaneousHellosForOneAgentLeaveExactlyOneSession(t *testing.T) {
 		}
 		return live
 	}
-	for end := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		if log = srv.Events.Log(); len(log) >= 3 && liveIn(log) == 1 {
-			break
-		}
-		if time.Now().After(end) {
-			t.Fatalf("the lifecycle never settled on one session: %v", log)
-		}
-	}
+	log := srv.Events.Await(t, "the lifecycle to settle on one session", func(log []string, reported []*tunnel.Session) bool {
+		winner := srv.Hub.Session(id.AgentID)
+		return len(log) >= 3 && liveIn(log) == 1 && winner != nil && slices.Contains(reported, winner)
+	})
 
 	// Per agent the lifecycle alternates: never a disconnect before its connect,
 	// never two live sessions at once.
@@ -530,8 +528,7 @@ func TestClockSkewOfFortySecondsIsAcceptedWithAWarningAndTwentyWithout(t *testin
 			t.Fatalf("an agent %v off was refused: %+v", tc.skew, c.Refuse)
 		}
 		// The session is registered just after the welcome is sent.
-		var s *tunnel.Session
-		waitFor(t, "the session to be registered", func() bool { s = srv.Hub.Session(c.Welcome.AgentID); return s != nil })
+		s := awaitRegistered(t, srv.Hub, c.Welcome.AgentID)
 		st := s.Status()
 		// The agent's ts is whole milliseconds, so the offset is exact to a millisecond.
 		if d := st.ClockOffset - tc.skew; d < -time.Millisecond || d > time.Millisecond || st.ClockWarning != tc.warn {

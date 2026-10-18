@@ -356,6 +356,16 @@ describe("ImageList Dangling chip and search", () => {
     expect(changes).toEqual([{ dangling: 1 }]);
   });
 
+  it("wraps the filter chips onto further rows instead of scrolling sideways (G-06-2)", async () => {
+    body = list([image("a")], { danglingCount: 6 });
+    mount();
+    const group = await screen.findByRole("group", { name: "Filter images" });
+    await within(group).findByRole("button", { name: "Dangling 6" });
+    // The chips wrap onto further rows at every width, so none is cut off at 375px (G-06-2).
+    expect(group.classList.contains("flex-wrap")).toBe(true);
+    expect(group.className).not.toMatch(/overflow-x-auto|flex-nowrap/);
+  });
+
   it("shows the chip pressed when dangling is in the URL, sends it, and clears it when pressed again", async () => {
     search = { dangling: 1 };
     body = list([image("b", { repoTags: ["<none>"], dangling: true })], {
@@ -379,10 +389,12 @@ describe("ImageList Dangling chip and search", () => {
     changes = [];
     search = {};
     mount();
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const box = await screen.findByRole("searchbox", { name: "Search images" });
+    expect(box.getAttribute("placeholder")).toBe("Search by name, tag or ID");
+    // The debounce is a timer of the component's own, set by the keystroke below. The clock is
+    // fully fake from here, so real time cannot fire it before the test moves the clock.
+    vi.useFakeTimers();
     try {
-      const box = await screen.findByRole("searchbox", { name: "Search images" });
-      expect(box.getAttribute("placeholder")).toBe("Search by name, tag or ID");
       fireEvent.change(box, { target: { value: "redis" } });
       expect(changes).toEqual([]);
       await vi.advanceTimersByTimeAsync(300);

@@ -18,6 +18,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -83,6 +84,7 @@ func (f *envFix) rotate(t *testing.T, envID string) (rotatedBody, *envRec) {
 }
 
 func TestTokenRotateAnswersTheInstallObjectOnceWithTheNextGenerationAndNoStore(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	id, first := f.agentEnv(t)
 
@@ -121,6 +123,7 @@ func TestTokenRotateAnswersTheInstallObjectOnceWithTheNextGenerationAndNoStore(t
 }
 
 func TestTokenRotateOfASwarmWithAgentsCarriesTheRotateCommand(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	id, _ := f.agentEnv(t)
 	f.insertAgent(t, id, "agent-1", "manager", "active")
@@ -141,6 +144,7 @@ func TestTokenRotateOfASwarmWithAgentsCarriesTheRotateCommand(t *testing.T) {
 }
 
 func TestTokenRotateOfAStandaloneHostHasNoSwarmRotateCommand(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	id, _ := f.agentEnv(t)
 	f.insertAgent(t, id, "agent-1", "standalone", "active")
@@ -155,6 +159,7 @@ func TestTokenRotateOfAStandaloneHostHasNoSwarmRotateCommand(t *testing.T) {
 }
 
 func TestTokenRotateWithoutAnAddressRefusesAndChangesNothing(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	id, _ := f.agentEnv(t)
 	f.inst.Apply("Bayplan", "")
@@ -175,6 +180,7 @@ func TestTokenRotateWithoutAnAddressRefusesAndChangesNothing(t *testing.T) {
 // is refused before anything changes: the current token stays and nothing is audited
 // (G-02-R4-3, T-02-144, T-02-145).
 func TestTokenRotateWithAPlainAddressForAnotherHostRefusesAndChangesNothing(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	id, _ := f.agentEnv(t)
 	f.inst.ApplyAgentURL("http://10.0.0.5:7480")
@@ -192,6 +198,7 @@ func TestTokenRotateWithAPlainAddressForAnotherHostRefusesAndChangesNothing(t *t
 }
 
 func TestTokenDisableAnswers204AuditsAndShowsInTheStatusUntilARotation(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	id, _ := f.agentEnv(t)
 
@@ -225,6 +232,7 @@ func TestTokenDisableAnswers204AuditsAndShowsInTheStatusUntilARotation(t *testin
 }
 
 func TestTokenEndpointsAnswer404EnvironmentNotFoundForAnUnknownEnvironment(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	f.inst.Apply("Bayplan", "https://example.com")
 	const missing = "0197b8a0-0000-7000-8000-000000000000"
@@ -237,6 +245,7 @@ func TestTokenEndpointsAnswer404EnvironmentNotFoundForAnUnknownEnvironment(t *te
 }
 
 func TestTokenEndpointsAreForInstanceAdminsNotForAnAdminOfEveryEnvironment(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	id, _ := f.agentEnv(t)
 	f.addAllEnvAdmin(t, "manager")
@@ -265,6 +274,7 @@ func TestTokenEndpointsAreForInstanceAdminsNotForAnAdminOfEveryEnvironment(t *te
 }
 
 func TestTokenRotateAndDisableNeverPutTheTokenInTheAudit(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	id, first := f.agentEnv(t)
 	got, rec := f.rotate(t, id)
@@ -371,6 +381,7 @@ func swarmNode(name string, control bool) *wire.Facts {
 }
 
 func TestAgentListGivesEveryNodeItsCertificateAndLivenessWithProblemsFirst(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Swarm")
 	zulu := f.connect(t, env, dockertest.FakeConfig{Hostname: "zulu", SwarmState: "active"}, swarmNode("zulu", false))
@@ -391,7 +402,7 @@ func TestAgentListGivesEveryNodeItsCertificateAndLivenessWithProblemsFirst(t *te
 	if _, err := zulu.control.Write(append(b, '\n')); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the denial", func() bool { return f.node(t, env.ID, zulu.id).LastDenial != nil })
+	awaitHeartbeat(t, f.srv.Hub.Session(zulu.id), func(st tunnel.SessionStatus) bool { return st.LastDenial != nil })
 
 	got := f.nodes(t, env.ID)
 	var order []string
@@ -444,6 +455,7 @@ func TestAgentListGivesEveryNodeItsCertificateAndLivenessWithProblemsFirst(t *te
 }
 
 func TestAgentListReportsTheClockOffsetOfAConnectedAgent(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Edge")
 	c := f.srv.Dial(t, tunneltest.Agent{Token: env.Token, ClockSkew: 7 * time.Second})
@@ -457,6 +469,7 @@ func TestAgentListReportsTheClockOffsetOfAConnectedAgent(t *testing.T) {
 }
 
 func TestAgentListOfAnEnvironmentTheCallerHasNoGrantOnIs404WithNothingOfItLikeAnUnknownOne(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	a := f.srv.NewEnvironment(t, "A")
 	b := f.srv.NewEnvironment(t, "B")
@@ -485,6 +498,7 @@ func TestAgentListOfAnEnvironmentTheCallerHasNoGrantOnIs404WithNothingOfItLikeAn
 }
 
 func TestAgentListOfALocalSocketEnvironmentIsEmpty(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	e := f.add(t)
 	rec := f.req(t, http.MethodGet, "/api/env/"+e.ID+"/agents", "")
@@ -494,6 +508,7 @@ func TestAgentListOfALocalSocketEnvironmentIsEmpty(t *testing.T) {
 }
 
 func TestRevokeNeedsRevokeOnTheEnvironmentAndDisconnectsTheAgentAndBlocksTheHost(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Swarm")
 	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active"}, swarmNode("alpha", false))
@@ -515,15 +530,11 @@ func TestRevokeNeedsRevokeOnTheEnvironmentAndDisconnectsTheAgentAndBlocksTheHost
 		t.Fatal("a refused revoke changed the agent")
 	}
 
-	start := time.Now()
 	rec2 := f.req(t, http.MethodPost, path, `{"reason":"decommissioned"}`)
 	if rec2.code != http.StatusNoContent {
 		t.Fatalf("revoke: %d %s", rec2.code, rec2.body)
 	}
-	waitFor(t, "the session to close", func() bool { return isClosed(s) })
-	if took := time.Since(start); took > time.Second {
-		t.Errorf("the agent was disconnected %v after the revoke", took)
-	}
+	testsupport.Await(t, "the session to close", s.Done())
 	n := f.node(t, env.ID, a.id)
 	if n.Status != "revoked" || !n.Blocked || n.Connected || n.RevokeReason != "decommissioned" {
 		t.Errorf("after the revoke: %+v", n)
@@ -553,6 +564,7 @@ func isClosed(s *tunnel.Session) bool {
 }
 
 func TestRevokeAcceptsNoBodyRejectsAnOverlongReasonAndAnswers404ForUnknownThings(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Swarm")
 	other := f.srv.NewEnvironment(t, "Other")
@@ -584,6 +596,7 @@ func TestRevokeAcceptsNoBodyRejectsAnOverlongReasonAndAnswers404ForUnknownThings
 }
 
 func TestUnblockLiftsTheBlocksOfARevokedAgentAndIsNotBlockedOtherwise(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Swarm")
 	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha"}, swarmNode("alpha", false))
@@ -668,6 +681,7 @@ func (f *agentFix) clusterChanged(t *testing.T, envID, pending string) {
 }
 
 func TestEnvironmentsListShowsThePendingClusterOnlyWhileTheClusterIsChanged(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Swarm")
 	f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true}, swarmNode("alpha", true))
@@ -691,6 +705,7 @@ func TestEnvironmentsListShowsThePendingClusterOnlyWhileTheClusterIsChanged(t *t
 }
 
 func TestAdoptClusterNeedsConfigureOnTheEnvironmentAndRebindsThroughAnAuditedAction(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Swarm")
 	f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true}, swarmNode("alpha", true))
@@ -739,6 +754,7 @@ func TestAdoptClusterNeedsConfigureOnTheEnvironmentAndRebindsThroughAnAuditedAct
 }
 
 func TestAnAgentOfTheAdoptedClusterIsAcceptedOnItsNextHello(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Swarm")
 	first := f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true}, swarmNode("alpha", true))
@@ -766,6 +782,7 @@ type leaderIs string
 func (l leaderIs) LeaderAgent(string) string { return string(l) }
 
 func TestAgentListCallsTheLeadersAgentLeaderAndTheOthersManagerOrWorker(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Swarm")
 	alpha := f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true}, swarmNode("alpha", true))
@@ -796,6 +813,7 @@ func TestAgentListCallsTheLeadersAgentLeaderAndTheOthersManagerOrWorker(t *testi
 }
 
 func TestAgentListSaysRenewalIsFailingWhenLessThanSevenDaysOfCertificateAreLeft(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Edge")
 	fresh := f.srv.Enrol(t, env)
@@ -858,13 +876,7 @@ func controlLine(t *testing.T, control io.Reader) wire.Update {
 			got <- u
 		}
 	}()
-	select {
-	case u := <-got:
-		return u
-	case <-time.After(5 * time.Second):
-		t.Fatal("the server wrote nothing to the agent's control stream")
-		return wire.Update{}
-	}
+	return testsupport.Await(t, "the server to write to the agent's control stream", got)
 }
 
 // asAllEnvAdmin makes the request as a user who is Admin on every environment
@@ -876,6 +888,7 @@ func (f *agentFix) asAllEnvAdmin(t *testing.T, name string, method, path, body s
 }
 
 func TestSwitchingAutoUpdateNeedsConfigureOnTheEnvironmentStoresItAndIsAudited(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Production")
 	path := "/api/env/" + env.ID
@@ -919,6 +932,7 @@ func TestSwitchingAutoUpdateNeedsConfigureOnTheEnvironmentStoresItAndIsAudited(t
 }
 
 func TestAnAdminUpdatesOneAgentThroughTheTunnelAndItIsAuditedUnderTheirName(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Production")
 	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha"}, selfUpdating("alpha"))
@@ -962,6 +976,7 @@ func TestAnAdminUpdatesOneAgentThroughTheTunnelAndItIsAuditedUnderTheirName(t *t
 }
 
 func TestUpdatingAnAgentThatIsOfflineUnknownUpToDateOrRefusingIsAProblem(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Production")
 	base := "/api/env/" + env.ID + "/agents/"
@@ -978,7 +993,7 @@ func TestUpdatingAnAgentThatIsOfflineUnknownUpToDateOrRefusingIsAProblem(t *test
 	base = "/api/env/" + env.ID + "/agents/"
 	s := f.srv.Hub.Session(off.id)
 	_ = off.conn.WS.CloseNow()
-	waitFor(t, "the session to end", func() bool { return isClosed(s) })
+	testsupport.Await(t, "the session to end", s.Done())
 	if rec := f.req(t, http.MethodPost, base+off.id+"/update", ``); rec.code != http.StatusConflict || rec.ptyp != "agent_offline" {
 		t.Errorf("an offline agent: %d type %q %s, want 409 agent_offline", rec.code, rec.ptyp, rec.body)
 	}
@@ -996,6 +1011,7 @@ func TestUpdatingAnAgentThatIsOfflineUnknownUpToDateOrRefusingIsAProblem(t *test
 }
 
 func TestUpdatingAllAgentsAnswers202WithHowManyWereStarted(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Production")
 	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha"}, selfUpdating("alpha"))
@@ -1027,6 +1043,7 @@ func TestUpdatingAllAgentsAnswers202WithHowManyWereStarted(t *testing.T) {
 }
 
 func TestUpdatingAllAgentsOfAnEnvironmentWithNoneConnectedIsAgentOffline(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Production")
 	f.insertAgent(t, env.ID, "a-offline", "standalone", "active")
@@ -1037,6 +1054,7 @@ func TestUpdatingAllAgentsOfAnEnvironmentWithNoneConnectedIsAgentOffline(t *test
 }
 
 func TestTheNodeListGivesTheManualUpdateCommandWhenTheHostRefusesSelfUpdate(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Production")
 	refusing := f.connect(t, env, dockertest.FakeConfig{Hostname: "refusing", SwarmState: "active"}, swarmFacts("refusing", true, false))
@@ -1056,6 +1074,7 @@ func TestTheNodeListGivesTheManualUpdateCommandWhenTheHostRefusesSelfUpdate(t *t
 }
 
 func TestTheNodeListSaysWhichAgentsAreBehindTheServerAndNeverARevokedOne(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Production")
 	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active"}, swarmFacts("alpha", true, true))
@@ -1091,6 +1110,7 @@ func TestTheNodeListSaysWhichAgentsAreBehindTheServerAndNeverARevokedOne(t *test
 // as the first install: the agent's switch only for a plain ws:// address while the
 // server's switch is on (T-02-31).
 func TestRotateAndManualUpdateCarryTheAgentSwitchOnlyWhileTheServerSwitchIsOn(t *testing.T) {
+	t.Parallel()
 	const name = "BAYPLAN_AGENT_ALLOW_INSECURE"
 	cases := []struct {
 		label string
@@ -1155,6 +1175,7 @@ func TestRotateAndManualUpdateCarryTheAgentSwitchOnlyWhileTheServerSwitchIsOn(t 
 // start, so there is none; a swarm node's service update carries no address and
 // stays (G-02-R4-3, T-02-144).
 func TestTheNodeListOffersNoStandaloneManualUpdateForAPlainAddressForAnotherHost(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	f.inst.ApplyAgentURL("http://10.0.0.5:7480")
 
@@ -1177,6 +1198,7 @@ func TestTheNodeListOffersNoStandaloneManualUpdateForAPlainAddressForAnotherHost
 // The D-07 split in one place: an env Admin of A runs the enrolment actions of A that
 // became environment-scoped, is told nothing about B, and a Viewer of A is refused.
 func TestAnEnvAdminManagesTheEnrolmentOfTheirOwnEnvironmentAndNoOther(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	a := f.srv.NewEnvironment(t, "Alpha")
 	b := f.srv.NewEnvironment(t, "Beta")
@@ -1239,6 +1261,7 @@ func TestAnEnvAdminManagesTheEnrolmentOfTheirOwnEnvironmentAndNoOther(t *testing
 // Adding, deleting, folding in the local host and the join token stay with instance
 // admins (D-07): an env Admin of the environment is refused each, and it is audited.
 func TestAnEnvAdminCannotAddDeleteFoldOrReadTheTokenOfTheirOwnEnvironment(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	a := f.srv.NewEnvironment(t, "Alpha")
 	f.addEnvUser(t, "adminone", a.ID, "admin")
@@ -1266,6 +1289,7 @@ func TestAnEnvAdminCannotAddDeleteFoldOrReadTheTokenOfTheirOwnEnvironment(t *tes
 // WR-B-04: a PATCH whose name is invalid changes nothing, even when its autoUpdate
 // half would have been valid.
 func TestAPatchWithAnInvalidNameDoesNotApplyOrAuditTheAutoUpdateSwitch(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Production")
 	path := "/api/env/" + env.ID

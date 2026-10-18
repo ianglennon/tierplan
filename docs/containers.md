@@ -12,6 +12,7 @@ shell can keep running after the shell is closed](#closing-a-shell-does-not-stop
 The exact list of what each role may do is in [permissions.md](permissions.md), which is
 generated from the code. [access.md](access.md) explains roles and extra permissions.
 [agent.md](agent.md) explains what the agent on a remote host will and will not forward.
+Swarm services, nodes, secrets and configs are in [services.md](services.md).
 
 Every change on this page goes through a typed route, not through a raw Docker proxy, and
 is checked against the person's role on that environment first. Nothing here is retried: if
@@ -38,11 +39,16 @@ host did not answer, and you look at the host before you try again.
 - **Live updates.** Rows change in place when Docker reports a change. While a menu or
   dialog is open or rows are selected, the list holds still, and a **changes waiting**
   pill applies them when you are ready.
+- **Live stats.** The **Live stats** switch adds CPU, Memory and Network columns for the
+  rows you can see (see [Stats](#stats)). It is off until you turn it on, and it is in the
+  address, so a shared link carries it.
+- **Restart loops.** A container with a restart policy that keeps dying gets a red **Restart
+  loop** badge (see [Restart loops](#restart-loops)).
 
 ### The container page
 
-The page has four tabs: **Overview** (state, health, image, command, ports, mounts, networks,
-restart policy, labels and environment variables), **Logs**, **Shell** and **Inspect** (the
+The page has five tabs: **Overview** (state, health, image, command, ports, mounts, networks,
+restart policy, labels and environment variables), **Logs**, **Stats**, **Shell** and **Inspect** (the
 engine's JSON). The values of environment variables, and of the options of the container's
 log driver, are hidden for everyone who does not hold the **Reveal secrets** extra
 permission, in the Overview and in the Inspect JSON alike. Labels are shown as they are.
@@ -156,6 +162,55 @@ inspect at the moment of the request, never by the cached list) are treated spec
   values of the options are hidden for anyone without **Reveal secrets**.
 - Access is checked again every 15 seconds. A person who loses the permission or signs out
   has the stream closed, and the page says their access changed.
+
+## Stats
+
+The **Stats** tab of a container shows its CPU, memory, network and disk use live: four tiles with
+their trend, and four charts.
+
+- **Who can open it.** Everyone who can see the container (`containers.read`), a Viewer and above.
+- **Where the numbers come from.** About every **2 seconds** Bayplan asks the node that runs the
+  container, through its agent, for one reading, and turns two readings into rates. CPU is a percent
+  of one core, as `docker stats` shows it, so a container using two cores reads about 200%. Memory is
+  what the container uses without the file cache, shown against the container's own limit when it
+  has one (and "No limit set" when it has not). The agent never holds a stats stream open; it answers
+  one reading at a time.
+- **History lives in your browser.** The last five minutes are kept in the page while it is open.
+  **Nothing is stored on the server**, in the database, in the audit log or in Bayplan's log, and
+  closing the page loses the history. Opening the tab writes no audit row, because a reading holds
+  counters and nothing the application wrote.
+- **States.** The tab says when the container is not running (and starts again by itself when it
+  does), when the node is not reporting, and when the view has paused because the browser tab was
+  hidden for a minute. A gap on the chart marks the pause. If the host's owner turned the agent
+  read-only, stats still work, because they are reads.
+- **Cost.** An open tab holds one connection and one reading per 2 seconds for this container.
+  Two people looking at the same container cost one reading. A person can have 8 stats streams
+  open at a time across the container tab, the lists and the service pages. See
+  [reverse-proxy.md](reverse-proxy.md) for the proxy settings these streams need.
+
+Services and nodes have the same figures summed over their tasks, described in
+[services.md](services.md#stats).
+
+## Restart loops
+
+A container whose restart policy keeps bringing it back after it fails is a restart loop, and it is
+easy to miss because the container is "Running" most of the time.
+
+- **The rule.** Bayplan counts the times a container died with a **non-zero exit code**. At **3 deaths
+  in 10 minutes** (the defaults) it is flagged, and the flag clears after a full window, 10 minutes,
+  with no new death. An environment **Admin** changes both numbers in the environment's settings,
+  under **Restart-loop detection**. A container with the restart policy `no` is never flagged, and
+  neither is a task of a swarm service, because its service carries the flag (see
+  [services.md](services.md#restart-loops)).
+- **Where you see it.** A red **Restart loop** badge in the list and on the container's page, with
+  the count, the window and the last exit code in its tooltip, and an entry in the health bell. Two containers with the same name on different nodes are two
+  containers.
+- **Mute.** An Operator (`containers.control`) can **Mute restart-loop alerts** from the row menu or
+  the page's More menu for a container that is meant to fail. A muted container shows a grey **Muted**
+  badge and raises no bell entry. Mute and unmute are audited (`restart_loop.muted` and
+  `restart_loop.unmuted`). A mute is kept when the container is recreated under the same name.
+- **What it cannot see.** Bayplan sees the deaths the host reports while it is connected and checks
+  every 15 seconds. A host that was unreachable shows no deaths for that time.
 
 ## Shells
 
@@ -281,6 +336,16 @@ limit: the process the person left running keeps running.
   the options that will be sent. On a swarm you pick the node, because volumes live on one
   node. Bayplan checks the name on that node first, because Docker silently reuses an
   existing volume of the same name.
+- **On every agent-managed host** (a swarm node or a standalone host), the agent refuses a
+  Host folder that is not an absolute path under `/srv`, `/mnt` or `/media`, a local volume of any
+  filesystem type other than `tmpfs` or a network share (NFS, SMB/CIFS), and any driver other than
+  `local`, unless the host's owner set `BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true` on that
+  host's agent. A service could otherwise mount the volume by name and reach the host.
+  This is a change from earlier versions, where such a Host folder was created on any host.
+  Bayplan shows the refusal in the Create volume dialog, with the folders that are allowed and
+  the setting that lifts it. The server's own host is reached through the local socket, has no
+  agent and no such check. See
+  [the agent's settings](agent.md#settings-on-the-host-read-only-self-update-and-privileged-services).
 - **The SMB password is stored in the volume's options.** Docker keeps the share's password
   among the volume's driver options, in clear. Anyone who can inspect the volume on the host
   can read it. Bayplan writes no password into its audit log, and hides the values of a
@@ -288,8 +353,8 @@ limit: the process the person left running keeps running.
   Inspect JSON. If you can, use a credentials file instead of a password.
 - **A Host folder volume points at a directory on the host**, which must already exist. It
   is a bind of that path. Only an Admin may create one, and the options are in the audit log.
-  Bayplan cannot create containers, so it cannot mount it, but anyone who starts a container
-  with that volume sees the folder. See [agent.md](agent.md#what-the-agent-forwards).
+  A service can mount it by name, and so can a container someone else starts, and either sees
+  the folder. See [agent.md](agent.md#what-the-agent-forwards).
 - **In use.** A volume is in use while any container mounts it, a **stopped container
   included**, or while a swarm service's spec mounts it, even at zero replicas. A bind mount
   that happens to be spelled like the volume is not a use. Delete is disabled, with the users

@@ -16,6 +16,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 func execFake(t *testing.T, missing ...string) (*dockerx.Client, *dockertest.Fake) {
@@ -34,7 +35,7 @@ func readUntil(t *testing.T, s *dockerx.ExecSession, want string) string {
 	t.Helper()
 	var got strings.Builder
 	buf := make([]byte, 256)
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(testsupport.Deadline)
 	for !strings.Contains(got.String(), want) {
 		if time.Now().After(deadline) {
 			t.Fatalf("%q did not arrive; got %q", want, got.String())
@@ -101,8 +102,7 @@ func TestExecRoundTripsBytesAndResizeReachesTheDaemon(t *testing.T) {
 
 func TestExecWaitReportsTheExitCodeOnceTheStreamEnds(t *testing.T) {
 	c, _ := execFake(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := testsupport.Context(t)
 	s, err := c.StartExec(ctx, "web", dockerx.ExecOptions{Cmd: []string{"/bin/sh"}})
 	if err != nil {
 		t.Fatalf("StartExec: %v", err)
@@ -128,17 +128,24 @@ func TestExecWaitHonoursItsContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	// The shell never ends on its own, so only the context can end Wait. The test cancels it
+	// itself instead of waiting for a short deadline to expire.
+	ctx, cancel := context.WithCancel(testsupport.Context(t))
 	defer cancel()
-	if _, err := s.Wait(ctx); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Wait on a shell that still runs = %v, want the context's deadline", err)
+	waited := make(chan error, 1)
+	go func() {
+		_, err := s.Wait(ctx)
+		waited <- err
+	}()
+	cancel()
+	if err := testsupport.Await(t, "Wait on a shell that still runs to end with its context", waited); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Wait on a shell that still runs = %v, want the context's cancellation", err)
 	}
 }
 
 func TestExecAMissingExecutableIsErrNoShell(t *testing.T) {
 	c, _ := execFake(t, "/bin/bash")
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := testsupport.Context(t)
 	s, err := c.StartExec(ctx, "web", dockerx.ExecOptions{Cmd: []string{"/bin/bash"}, Cols: 80, Rows: 24})
 	if err != nil {
 		t.Fatalf("StartExec: %v", err)
@@ -163,8 +170,7 @@ func TestExecAShellThatWasGivenInputAndEndsWith127IsNotErrNoShell(t *testing.T) 
 	for _, code := range []string{"126", "127"} {
 		t.Run(code, func(t *testing.T) {
 			c, _ := execFake(t)
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
+			ctx := testsupport.Context(t)
 			s, err := c.StartExec(ctx, "web", dockerx.ExecOptions{Cmd: []string{"/bin/sh"}})
 			if err != nil {
 				t.Fatalf("StartExec: %v", err)

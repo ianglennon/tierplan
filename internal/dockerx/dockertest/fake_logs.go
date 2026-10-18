@@ -241,10 +241,12 @@ func (f *Fake) serveLogs(w http.ResponseWriter, r *http.Request, p string, cfg F
 	}
 	l.mu.Unlock()
 	if follow {
+		f.await.notify()
 		defer func() {
 			l.mu.Lock()
 			l.follows--
 			l.mu.Unlock()
+			f.await.notify()
 		}()
 	}
 

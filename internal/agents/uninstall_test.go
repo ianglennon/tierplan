@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/audit"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -45,7 +46,7 @@ func TestUninstallAllSendsEveryOnlineStandaloneAgentAnUninstallThatRemovesItsDat
 	r.hub.set(r.env, r.standalone("a1", "0.2.1", true), r.standalone("a2", "0.2.1", true))
 	r.answerWith(okAlways)
 
-	got := r.uninstall(5 * time.Second)
+	got := r.uninstall(testsupport.Deadline)
 	if !reflect.DeepEqual(got, []string{"a1", "a2"}) {
 		t.Fatalf("confirmed = %v, want a1 and a2", got)
 	}
@@ -75,23 +76,34 @@ func TestUninstallAllSendsEveryOnlineStandaloneAgentAnUninstallThatRemovesItsDat
 func TestUninstallAllWaitsForTheAnswersAndNotLongerThanTheTimeout(t *testing.T) {
 	r := newUpdRig(t, "v0.2.1")
 	r.hub.set(r.env, r.standalone("a1", "0.2.1", true), r.standalone("a2", "0.2.1", true))
-	// a1 answers after a moment; a2 never does.
+	// a1 answers; a2 never does, so the call ends only when its timeout does.
 	r.hub.onUninstall = func(agentID string, msg wire.Uninstall) {
 		if agentID == "a1" {
-			go func() {
-				time.Sleep(80 * time.Millisecond)
-				r.upd.HandleResult("a1", wire.UpdateResult{T: wire.TypeUpdateResult, ID: msg.ID, OK: true})
-			}()
+			go r.upd.HandleResult("a1", wire.UpdateResult{T: wire.TypeUpdateResult, ID: msg.ID, OK: true})
 		}
 	}
-	start := time.Now()
-	got := r.uninstall(400 * time.Millisecond)
-	took := time.Since(start)
-	if !reflect.DeepEqual(got, []string{"a1"}) {
-		t.Fatalf("confirmed = %v, want only a1", got)
+	const timeout = 400 * time.Millisecond
+	type outcome struct {
+		confirmed []string
+		took      time.Duration
 	}
-	if took < 350*time.Millisecond || took > 2*time.Second {
-		t.Fatalf("took %v, want to wait for a2 until the 400 ms timeout and no longer", took)
+	done := make(chan outcome, 1)
+	go func() {
+		start := time.Now()
+		got := r.uninstall(timeout)
+		// wall-clock: lower bound; a timer cannot fire early, so load can only lengthen it
+		done <- outcome{got, time.Since(start)}
+	}()
+	// The "not longer than the timeout" half: a call that ignored its timeout and
+	// kept waiting for a2 fails here, at the shared deadline and with this message,
+	// instead of hanging the package until the test binary's timeout.
+	res := testsupport.Await(t, "UninstallAll to return after its 400 ms timeout although a2 never answers", done)
+	if !reflect.DeepEqual(res.confirmed, []string{"a1"}) {
+		t.Fatalf("confirmed = %v, want only a1", res.confirmed)
+	}
+	// A timer cannot fire early, so this holds on any runner.
+	if res.took < timeout {
+		t.Fatalf("took %v, want to wait for a2 until the %v timeout", res.took, timeout)
 	}
 	if rows := r.auditRows(t, audit.ActionAgentUninstalled); len(rows) != 1 || rows[0]["target"] != "a1" {
 		t.Fatalf("audit rows = %v, want only a1's", rows)
@@ -102,10 +114,13 @@ func TestUninstallAllDoesNotWaitForTheTimeoutWhenEveryoneHasAnswered(t *testing.
 	r := newUpdRig(t, "v0.2.1")
 	r.hub.set(r.env, r.standalone("a1", "0.2.1", true))
 	r.answerWith(okAlways)
-	start := time.Now()
-	r.uninstall(30 * time.Second)
-	if took := time.Since(start); took > 3*time.Second {
-		t.Fatalf("took %v with every agent answered", took)
+	// The timeout is longer than the shared deadline, so a call that waited for it
+	// instead of returning once a1 answered would miss the deadline every time.
+	done := make(chan []string, 1)
+	go func() { done <- r.uninstall(10 * time.Minute) }()
+	got := testsupport.Await(t, "UninstallAll to return once its only agent had answered, long before its 10 minute timeout", done)
+	if !reflect.DeepEqual(got, []string{"a1"}) {
+		t.Fatalf("confirmed = %v, want a1", got)
 	}
 }
 
@@ -128,6 +143,7 @@ func TestUninstallAllDoesNotConfirmARefusalAnErrorASendFailureOrAnAnswerForSomeo
 			go r.upd.HandleResult(agentID, wire.UpdateResult{ID: msg.ID, OK: true})
 		}
 	}
+	// wall-clock: liar never gives a valid answer, so the call ends only with its timeout; it is the window the other three answer within
 	got := r.uninstall(500 * time.Millisecond)
 	if !reflect.DeepEqual(got, []string{"good"}) {
 		t.Fatalf("confirmed = %v, want only good", got)
@@ -138,7 +154,7 @@ func TestUninstallAllSkipsAHostThatTurnedSelfUpdateOffAndAsksNothingOfAnEnvironm
 	r := newUpdRig(t, "v0.2.1")
 	r.hub.set(r.env, r.standalone("off", "0.2.1", false), r.standalone("on", "0.2.1", true))
 	r.answerWith(okAlways)
-	if got := r.uninstall(2 * time.Second); !reflect.DeepEqual(got, []string{"on"}) {
+	if got := r.uninstall(testsupport.Deadline); !reflect.DeepEqual(got, []string{"on"}) {
 		t.Fatalf("confirmed = %v, want only on", got)
 	}
 	for _, s := range r.hub.uninstallsTo() {
@@ -148,7 +164,7 @@ func TestUninstallAllSkipsAHostThatTurnedSelfUpdateOffAndAsksNothingOfAnEnvironm
 	}
 
 	r = newUpdRig(t, "v0.2.1")
-	if got := r.uninstall(2 * time.Second); len(got) != 0 || len(r.hub.uninstallsTo()) != 0 {
+	if got := r.uninstall(testsupport.Deadline); len(got) != 0 || len(r.hub.uninstallsTo()) != 0 {
 		t.Fatalf("an environment with nobody online: confirmed %v, sent %v", got, r.hub.uninstallsTo())
 	}
 }
@@ -161,6 +177,11 @@ func TestUninstallAllOnASwarmTellsEveryOtherAgentFirstAndThenOnlyTheLeaderToRemo
 	var mu sync.Mutex
 	answered := map[string]bool{}
 	var leaderSawUnanswered []string
+	// The others answer only once the test has seen all four of them asked and no
+	// service removal sent, so "the leader waits for them" is asserted as an ordering:
+	// the leader is not asked while they are unanswered.
+	release := make(chan struct{})
+	askedOthers := make(chan struct{}, 4)
 	r.hub.onUninstall = func(agentID string, msg wire.Uninstall) {
 		mu.Lock()
 		if msg.Service {
@@ -171,8 +192,13 @@ func TestUninstallAllOnASwarmTellsEveryOtherAgentFirstAndThenOnlyTheLeaderToRemo
 			}
 		}
 		mu.Unlock()
+		if !msg.Service {
+			askedOthers <- struct{}{}
+		}
 		go func() {
-			time.Sleep(20 * time.Millisecond) // the others take a moment to start their helpers
+			if !msg.Service {
+				<-release
+			}
 			mu.Lock()
 			answered[agentID] = true
 			mu.Unlock()
@@ -180,7 +206,18 @@ func TestUninstallAllOnASwarmTellsEveryOtherAgentFirstAndThenOnlyTheLeaderToRemo
 		}()
 	}
 
-	got := r.uninstall(5 * time.Second)
+	result := make(chan []string, 1)
+	go func() { result <- r.uninstall(testsupport.Deadline) }()
+	for range 4 {
+		testsupport.Await(t, "the other four agents to be asked to uninstall", askedOthers)
+	}
+	for _, s := range r.hub.uninstallsTo() {
+		if s.Msg.Service {
+			t.Fatalf("the leader %s was asked to remove the service while the others had not answered", s.AgentID)
+		}
+	}
+	close(release)
+	got := testsupport.Await(t, "the uninstall to finish", result)
 	if !reflect.DeepEqual(got, []string{"m1", "m2", "m3", "w1", "w2"}) {
 		t.Fatalf("confirmed = %v, want all five", got)
 	}
@@ -213,7 +250,7 @@ func TestUninstallAllOnASwarmUsesAnotherManagerWhenTheLeaderIsNotConnectedOrRefu
 	r.hub.set(r.env, m1, m2, r.worker("w1", "0.2.1"))
 	r.leader("m2") // the leader refuses self-update
 	r.answerWith(okAlways)
-	r.uninstall(2 * time.Second)
+	r.uninstall(testsupport.Deadline)
 	var withService []string
 	for _, s := range r.hub.uninstallsTo() {
 		if s.Msg.Service {
@@ -241,7 +278,7 @@ func TestUninstallAllOnASwarmWithNoManagerAbleToRemoveTheServiceSendsNothing(t *
 			r := newUpdRig(t, "v0.2.1")
 			agentsOnline(r)
 			r.answerWith(okAlways)
-			if got := r.uninstall(time.Second); len(got) != 0 {
+			if got := r.uninstall(testsupport.Deadline); len(got) != 0 {
 				t.Fatalf("confirmed %v", got)
 			}
 			if s := r.hub.uninstallsTo(); len(s) != 0 {
@@ -254,12 +291,26 @@ func TestUninstallAllOnASwarmWithNoManagerAbleToRemoveTheServiceSendsNothing(t *
 func TestUninstallAllCanBeCancelled(t *testing.T) {
 	r := newUpdRig(t, "v0.2.1")
 	r.hub.set(r.env, r.standalone("a1", "0.2.1", true))
+	asked := make(chan struct{}, 1)
+	r.hub.onUninstall = func(string, wire.Uninstall) { asked <- struct{}{} }
 	ctx, cancel := context.WithCancel(r.ctx)
-	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
-	start := time.Now()
-	got := r.upd.UninstallAll(ctx, admin, r.env, "", "", 30*time.Second)
-	if len(got) != 0 || time.Since(start) > 3*time.Second {
-		t.Fatalf("confirmed %v after %v", got, time.Since(start))
+	defer cancel()
+	// The call is waiting on the answer a1 never gives once the hub has been asked to
+	// send; cancel it then.
+	go func() {
+		select {
+		case <-asked:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	// The timeout is longer than the shared deadline, so a call that ignored the
+	// cancellation and waited for it would miss the deadline every time.
+	done := make(chan []string, 1)
+	go func() { done <- r.upd.UninstallAll(ctx, admin, r.env, "", "", 10*time.Minute) }()
+	got := testsupport.Await(t, "UninstallAll to return after its context was cancelled", done)
+	if len(got) != 0 {
+		t.Fatalf("confirmed %v after the call was cancelled", got)
 	}
 }
 
@@ -277,7 +328,7 @@ func TestUninstallAllTreatsAnInsecureSessionRefusalAsNotUninstalledSoTheManualCl
 			r := newUpdRig(t, "v0.2.1")
 			set(r)
 			r.answerWith(func(string, wire.Uninstall) (bool, string) { return false, wire.UpdateErrInsecureSession })
-			if got := r.uninstall(500 * time.Millisecond); len(got) != 0 {
+			if got := r.uninstall(testsupport.Deadline); len(got) != 0 {
 				t.Fatalf("confirmed %v: an agent that refused on an insecure session did not uninstall", got)
 			}
 			if rows := r.auditRows(t, audit.ActionAgentUninstalled); len(rows) != 0 {

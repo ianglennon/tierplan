@@ -81,6 +81,8 @@ type Config struct {
 	// SelfUpdate says whether the host lets the agent update itself. Both are
 	// reported in the handshake so the UI can show them (D-28).
 	ReadOnly, SelfUpdate bool
+	// AllowPrivilegedServices is BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES.
+	AllowPrivilegedServices bool
 	// AllowInsecure is BAYPLAN_AGENT_ALLOW_INSECURE: it lets the agent dial a plain
 	// ws:// address for a host that is not loopback. For development only; without
 	// it such an address is never dialed, whether it came from URL, from the stored
@@ -481,7 +483,7 @@ func (r *runner) once(ctx context.Context) (welcomed bool, err error) {
 	}
 	// What the host owner set is part of the facts, so the UI can say "read-only
 	// (set on host)" and show the manual update commands (D-28).
-	reported.Policy = wire.PolicyFacts{ReadOnly: r.cfg.ReadOnly, SelfUpdate: r.cfg.SelfUpdate}
+	reported.Policy = wire.PolicyFacts{ReadOnly: r.cfg.ReadOnly, SelfUpdate: r.cfg.SelfUpdate, PrivilegedServices: r.cfg.AllowPrivilegedServices}
 
 	cr, err := r.credentials()
 	if err != nil {
@@ -576,7 +578,7 @@ func (r *runner) attempt(ctx context.Context, tg target, reported wire.Facts, cr
 	}
 	// A server cannot make the agent spin: the floor is far below any real setting.
 	every = max(every, minHeartbeat)
-	return true, true, serve(ctx, c, r.cfg.SocketPath, every, r.env.now, r.log, proxy.Policy{ReadOnly: r.cfg.ReadOnly}, r.hooks(verified))
+	return true, true, serve(ctx, c, r.cfg.SocketPath, every, r.env.now, r.log, proxy.Policy{ReadOnly: r.cfg.ReadOnly, AllowPrivilegedServices: r.cfg.AllowPrivilegedServices}, r.hooks(verified))
 }
 
 // hooks is what the control stream of the next session hands the server's messages

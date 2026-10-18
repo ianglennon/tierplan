@@ -4,14 +4,18 @@
 import { Link, useParams, useRouterState } from "@tanstack/react-router";
 import {
   Activity,
+  Boxes,
   Container,
+  FileCog,
   HardDrive,
   KeyRound,
   Layers,
   LayoutDashboard,
   LayoutGrid,
+  LockKeyhole,
   Network,
   ScrollText,
+  Server,
   Settings,
   X,
 } from "lucide-react";
@@ -32,8 +36,15 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { VersionFooter } from "@/components/version-footer";
+import { useEnvIsSwarm } from "@/features/resources/swarm-lists";
 import { visibleSettingsTabs } from "@/features/settings/tabs";
-import { useAnyEnvironmentPermission, useCanReadAudit, useMe, usePermission } from "@/hooks/use-me";
+import {
+  hasPermission,
+  useAnyEnvironmentPermission,
+  useCanReadAudit,
+  useMe,
+  usePermission,
+} from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
 // AppSidebar is the left navigation (D-53): the environment switcher on top,
@@ -56,13 +67,26 @@ const RESOURCE_ITEMS = [
   { key: "events", perm: "environments.read", to: "/env/$envId/events", icon: Activity },
 ] as const;
 
+// The Swarm group (Phase 6, UI-SPEC "Sidebar"): the swarm-only pages of the selected
+// environment, below Resources. Shown on a swarm environment alone, each item to a user who may
+// read it.
+const SWARM_ITEMS = [
+  { key: "services", perm: "services.read", to: "/env/$envId/services", icon: Boxes },
+  { key: "nodes", perm: "nodes.read", to: "/env/$envId/nodes", icon: Server },
+  { key: "placement", perm: "services.read", to: "/env/$envId/placement", icon: LayoutGrid },
+  { key: "secrets", perm: "secrets.read", to: "/env/$envId/secrets", icon: LockKeyhole },
+  { key: "configs", perm: "configs.read", to: "/env/$envId/configs", icon: FileCog },
+] as const;
+
+type NavItem = (typeof RESOURCE_ITEMS)[number] | (typeof SWARM_ITEMS)[number];
+
 function ResourceItem({
   envId,
   item,
   onNavigate,
 }: {
   envId: string;
-  item: (typeof RESOURCE_ITEMS)[number];
+  item: NavItem;
   onNavigate: () => void;
 }) {
   const t = useT();
@@ -84,6 +108,28 @@ function ResourceItem({
         </Link>
       </SidebarMenuButton>
     </SidebarMenuItem>
+  );
+}
+
+function SwarmGroup({ envId, onNavigate }: { envId: string; onNavigate: () => void }) {
+  const t = useT();
+  const isSwarm = useEnvIsSwarm(envId);
+  const { data: me } = useMe();
+  // Hiding the group is a convenience, not a control: every services route checks
+  // services.read on the server.
+  const readable = SWARM_ITEMS.some((item) => hasPermission(me, item.perm, envId));
+  if (!isSwarm || !readable) return null;
+  return (
+    <SidebarGroup>
+      <SidebarGroupLabel>{t("shell.nav.swarm")}</SidebarGroupLabel>
+      <SidebarGroupContent>
+        <SidebarMenu>
+          {SWARM_ITEMS.map((item) => (
+            <ResourceItem key={item.key} envId={envId} item={item} onNavigate={onNavigate} />
+          ))}
+        </SidebarMenu>
+      </SidebarGroupContent>
+    </SidebarGroup>
   );
 }
 
@@ -226,6 +272,7 @@ export function AppSidebar() {
             </SidebarGroupContent>
           </SidebarGroup>
         ) : null}
+        {envId ? <SwarmGroup envId={envId} onNavigate={closeMenu} /> : null}
       </SidebarContent>
       <SidebarGroup className="mt-auto">
         <SidebarGroupContent>

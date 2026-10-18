@@ -71,6 +71,7 @@ beforeEach(() => {
       sent.push({ method: req.method, path, body });
       if (path === "/api/me") return Response.json(me);
       if (path.startsWith(`/api/env/${ENV}/containers/`) && req.method === "POST") return answer();
+      if (path.endsWith("/restart-loop-mute")) return answer();
       return Response.json({}, { status: 404 });
     }),
   );
@@ -634,5 +635,48 @@ describe("Bayplan's own containers", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "Start" }));
     await waitFor(() => expect(posts()).toHaveLength(1));
     expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+});
+
+// Muting the restart-loop alerts of a standalone container from its row menu (plan 06-36,
+// RES-13, D-16): offered only for a row the server flagged.
+describe("ContainerRowActions restart-loop mute", () => {
+  const flagged = (state: "flagged" | "muted" = "flagged") =>
+    row({
+      id: "crashy-id",
+      name: "crashy",
+      state: "restarting",
+      restartLoop: { state, count: 3, windowMinutes: 10, lastExitCode: "3" },
+    });
+
+  it("offers Mute restart-loop alerts for a flagged container and sends the node and container", async () => {
+    answer = () => Response.json({ containerId: "crashy-id", muted: true, changed: true });
+    mount(flagged());
+    await openMenu("crashy");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Mute restart-loop alerts" }));
+    await waitFor(() =>
+      expect(sent.some((s) => s.method === "PUT" && s.path.endsWith("/restart-loop-mute"))).toBe(
+        true,
+      ),
+    );
+    const put = sent.find((s) => s.method === "PUT");
+    expect(put?.path).toBe(`/api/env/${ENV}/containers/crashy-id/restart-loop-mute`);
+    expect(await screen.findByText("Muted restart-loop alerts for crashy.")).toBeTruthy();
+  });
+
+  it("offers Unmute for a muted loop", async () => {
+    mount(flagged("muted"));
+    await openMenu("crashy");
+    expect(
+      await screen.findByRole("menuitem", { name: "Unmute restart-loop alerts" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Mute restart-loop alerts" })).toBeNull();
+  });
+
+  it("offers nothing for a container that is not in a loop", async () => {
+    mount();
+    await openMenu();
+    await screen.findByRole("menuitem", { name: "Stop" });
+    expect(screen.queryByRole("menuitem", { name: /restart-loop alerts/ })).toBeNull();
   });
 });

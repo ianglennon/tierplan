@@ -8,9 +8,11 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/jobs"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 func twoItems(owner string) jobs.Spec {
@@ -33,7 +35,7 @@ func hold(release <-chan struct{}) func(context.Context, *jobs.Reporter) {
 func drain(t *testing.T, ch <-chan jobs.Event) []jobs.Event {
 	t.Helper()
 	var out []jobs.Event
-	timeout := time.After(5 * time.Second)
+	timeout := testsupport.Context(t).Done()
 	for {
 		select {
 		case ev, ok := <-ch:
@@ -79,6 +81,14 @@ func TestStartReturnsARunningJobAndFinishEndsItsItems(t *testing.T) {
 }
 
 func TestEventIDsStrictlyIncreaseAndUpdatesAreCoalesced(t *testing.T) {
+	// The coalescer is a timer (time.AfterFunc), so the test runs in a synctest bubble: the
+	// real 60 ms window passes on the bubble's fake clock, in no wall-clock time.
+	synctest.Test(t, func(t *testing.T) {
+		coalescesUpdates(t)
+	})
+}
+
+func coalescesUpdates(t *testing.T) {
 	h := jobs.New(jobs.Options{Coalesce: 60 * time.Millisecond})
 	t.Cleanup(h.Close)
 	started := make(chan struct{})
@@ -101,7 +111,7 @@ func TestEventIDsStrictlyIncreaseAndUpdatesAreCoalesced(t *testing.T) {
 	}
 	defer cancel()
 	<-started
-	time.Sleep(150 * time.Millisecond) // the flush of the folded updates
+	synctest.Sleep(150 * time.Millisecond) // the flush of the folded updates, on the fake clock
 	close(release)
 	evs := drain(t, ch)
 	var last uint64
@@ -130,32 +140,23 @@ func TestSubscribeSnapshotAndResume(t *testing.T) {
 	h := jobs.New(jobs.Options{Coalesce: time.Millisecond})
 	t.Cleanup(h.Close)
 	step := make(chan struct{})
+	n1Finished := make(chan struct{})
 	job, _ := h.Start(twoItems("u"), func(ctx context.Context, r *jobs.Reporter) {
 		<-step
 		r.Finish("n1", jobs.ItemDone, "", "", nil)
+		close(n1Finished)
 		<-step
 		r.Finish("n2", jobs.ItemDone, "", "", nil)
 	})
 	step <- struct{}{}
 	// n1 is finished: the snapshot shows it, and after 0 only later events follow.
-	var snap jobs.Job
-	var ch <-chan jobs.Event
-	var cancel func()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		var err error
-		snap, ch, cancel, err = h.Subscribe(context.Background(), job.ID, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if snap.Items[0].State == jobs.ItemDone {
-			break
-		}
-		cancel()
-		if time.Now().After(deadline) {
-			t.Fatal("n1 never finished")
-		}
-		time.Sleep(time.Millisecond)
+	testsupport.Await(t, "the run to finish n1", n1Finished)
+	snap, ch, cancel, err := h.Subscribe(context.Background(), job.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Items[0].State != jobs.ItemDone {
+		t.Fatalf("snapshot after n1 finished = %+v", snap.Items)
 	}
 	step <- struct{}{}
 	evs := drain(t, ch)
@@ -203,17 +204,14 @@ func TestFinishedJobIsKeptForTheRetentionThenForgotten(t *testing.T) {
 	}
 }
 
+// waitFinished waits for the job's own finish (Hub.Wait returns once it has ended).
 func waitFinished(t *testing.T, h *jobs.Hub, id string) jobs.Job {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if j, ok := h.Get(id); ok && j.Finished() {
-			return j
-		}
-		time.Sleep(time.Millisecond)
+	got, err := h.Wait(testsupport.Context(t), id)
+	if err != nil || !got.Finished() {
+		t.Fatalf("the job never finished: %+v, %v", got, err)
 	}
-	t.Fatal("the job never finished")
-	return jobs.Job{}
+	return got
 }
 
 func TestTheOldestFinishedJobIsEvictedAtTheCap(t *testing.T) {
@@ -457,8 +455,7 @@ func TestWaitReturnsTheJobOnceItHasEnded(t *testing.T) {
 	job, _ := h.Start(threeItems("u"), runOneDone(started))
 	<-started
 	_ = h.Cancel(job.ID)
-	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
-	defer stop()
+	ctx := testsupport.Context(t)
 	got, err := h.Wait(ctx, job.ID)
 	if err != nil || !got.Finished() {
 		t.Fatalf("Wait = %+v, %v, want the finished job", got, err)
@@ -468,6 +465,7 @@ func TestWaitReturnsTheJobOnceItHasEnded(t *testing.T) {
 	}
 	// A job that does not end: Wait gives up with the context and still returns the job.
 	hold2, _ := h.Start(twoItems("v"), hold(make(chan struct{})))
+	// wall-clock: the job never ends, so only this context ends Wait; its length cannot change the result
 	short, stop2 := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer stop2()
 	got, err = h.Wait(short, hold2.ID)

@@ -1,0 +1,277 @@
+{
+  "serviceForm": {
+    "tabs": {
+      "label": "Editor view",
+      "form": "Form",
+      "spec": "Spec",
+      "refused": "The spec has errors, so the form can't show it. Fix them first."
+    },
+    "caution": {
+      "body": "This service has additional settings not shown here. Saving from this form keeps them unchanged. See the Spec tab.",
+      "open": "Open the Spec tab",
+      "notShown": "Not shown: {{paths}}",
+      "more": "and {{count}} more",
+      "list": "Settings not shown"
+    },
+    "basics": {
+      "title": "Basics",
+      "name": {
+        "label": "Name",
+        "helper": "Letters, numbers, dot, dash or underscore. Up to 63 characters.",
+        "readOnly": "A service's name can't change. Create a new service instead."
+      },
+      "image": {
+        "label": "Image",
+        "placeholder": "nginx:1.27 or ghcr.io/acme/app:latest",
+        "helper": "Bayplan pins the tag to its current digest when you apply.",
+        "browse": "Browse tags"
+      },
+      "mode": {
+        "label": "Mode",
+        "replicated": "Replicated",
+        "global": "Global",
+        "readOnly": "A service's mode can't change.",
+        "job": "Jobs are created and edited in the Spec tab only."
+      },
+      "replicas": {
+        "label": "Replicas",
+        "helper": "How many tasks to run."
+      },
+      "labels": {
+        "label": "Labels",
+        "add": "Add label",
+        "key": "Label name",
+        "value": "Label value",
+        "remove": "Remove label {{name}}",
+        "removeRow": "Remove label"
+      }
+    },
+    "environment": {
+      "title": "Environment variables",
+      "add": "Add variable",
+      "key": "Variable name",
+      "value": "Variable value",
+      "remove": "Remove variable {{name}}",
+      "removeRow": "Remove variable",
+      "reset": "Reset {{name}}",
+      "hiddenPlaceholder": "Hidden. Type to replace.",
+      "hiddenHelper": "Values are hidden. A hidden value stays as it is unless you type a new one."
+    },
+    "ports": {
+      "title": "Ports",
+      "row": "Port {{n}}",
+      "add": "Add port",
+      "remove": "Remove port {{n}}",
+      "published": "Published port (optional)",
+      "target": "Container port",
+      "protocol": "Protocol",
+      "mode": "Mode",
+      "modeHelper": "Ingress: any node answers on this port and passes traffic to a task. Host: only nodes running a task answer.",
+      "tcp": "TCP",
+      "udp": "UDP",
+      "sctp": "SCTP",
+      "ingress": "Ingress",
+      "host": "Host"
+    },
+    "mounts": {
+      "title": "Mounts",
+      "row": "Mount {{n}}",
+      "add": "Add mount",
+      "remove": "Remove mount {{n}}",
+      "type": "Type",
+      "volume": "Volume",
+      "bind": "Bind",
+      "tmpfs": "Tmpfs",
+      "source": "Source",
+      "sourceVolumePlaceholder": "Volume name",
+      "sourceBindPlaceholder": "/srv/data",
+      "destination": "Destination",
+      "destinationPlaceholder": "/data",
+      "readOnly": "Read-only",
+      "bindNotice": "A bind mount gives tasks access to a folder on whichever node runs them, and the folder must exist on every node that can run the service. Folders under /srv, /mnt and /media are open to Operators; any other host path or the Docker socket needs Admin."
+    },
+    "resources": {
+      "title": "Resources",
+      "cpuLimit": "CPU limit (cores)",
+      "cpuReservation": "CPU reservation (cores)",
+      "memoryLimit": "Memory limit",
+      "memoryReservation": "Memory reservation",
+      "memoryLimitUnit": "Memory limit unit",
+      "memoryReservationUnit": "Memory reservation unit",
+      "limitHelper": "Leave empty for no limit.",
+      "reservationHelper": "Swarm only places a task on a node with this much free.",
+      "mib": "MiB",
+      "gib": "GiB"
+    },
+    "placement": {
+      "title": "Placement",
+      "constraints": "Constraints",
+      "constraint": "Constraint {{n}}",
+      "add": "Add constraint",
+      "remove": "Remove constraint {{n}}",
+      "helper": "For example node.role==worker or node.labels.disk==ssd.",
+      "matches_one": "Matches {{matched, number}} of {{count, number}} node",
+      "matches_other": "Matches {{matched, number}} of {{count, number}} nodes",
+      "matchesNone": "Matches no nodes",
+      "spread": "Spread over (label)",
+      "spreadPlaceholder": "node.labels.zone",
+      "spreadHelper": "Swarm spreads the tasks evenly across the values of this node label.",
+      "moreSpreads_one": "{{count}} more preference is kept as it is. Edit it in the Spec tab.",
+      "moreSpreads_other": "{{count}} more preferences are kept as they are. Edit them in the Spec tab.",
+      "maxReplicas": "Max replicas per node",
+      "maxReplicasHelper": "Leave empty for no limit."
+    },
+    "restart": {
+      "title": "Restart policy",
+      "condition": "Restart when",
+      "any": "Any exit",
+      "onFailure": "Failure only",
+      "none": "Never",
+      "delay": "Delay",
+      "delayPlaceholder": "5s",
+      "maxAttempts": "Max attempts",
+      "maxAttemptsHelper": "Leave empty to retry forever.",
+      "window": "Window",
+      "windowPlaceholder": "120s",
+      "windowHelper": "How long a task must run before it counts as started."
+    },
+    "update": {
+      "title": "Update policy",
+      "parallelism": "Tasks at a time",
+      "parallelismHelper": "0 updates all at once.",
+      "delay": "Delay between batches",
+      "delayPlaceholder": "10s",
+      "order": "Order",
+      "stopFirst": "Stop first",
+      "startFirst": "Start first",
+      "orderHelper": "Start first brings the new task up before the old one stops.",
+      "monitor": "Monitor",
+      "monitorPlaceholder": "5s",
+      "monitorHelper": "How long to watch each updated task for a failure.",
+      "maxFailureRatio": "Max failure ratio",
+      "maxFailureRatioHelper": "The share of tasks that may fail, from 0 to 1, before the update counts as failed.",
+      "behaviour": "Update behaviour",
+      "autoRollback": {
+        "label": "Roll back automatically if an update fails",
+        "helper": "Saved on the service, so every later update uses it, including one-click image updates.",
+        "reviewHelper": "Saved on the service. Later updates, including one-click image updates, use the same policy.",
+        "continues": "Currently set to continue on failure. Ticking this changes it to roll back."
+      }
+    },
+    "errors": {
+      "nameRequired": "Enter a name.",
+      "nameInvalid": "Use letters, numbers, dot, dash or underscore.",
+      "image": "Enter an image like nginx:1.27 or ghcr.io/acme/app:latest.",
+      "whole": "Enter a whole number of 0 or more.",
+      "port": "Enter a port from 1 to 65535.",
+      "portTwice": "That published port is used twice.",
+      "cores": "Enter a number of cores like 0.5.",
+      "duration": "Enter a duration like 5s, 30s or 2m.",
+      "absolutePath": "Enter an absolute path that starts with /.",
+      "constraint": "Enter a constraint like node.role==worker.",
+      "ratio": "Enter a number from 0 to 1.",
+      "mode": "Enter a mode like 0444.",
+      "chooseSecret": "Choose a secret.",
+      "chooseConfig": "Choose a config.",
+      "chooseNetwork": "Choose a network.",
+      "attachedSecret": "That secret is already attached.",
+      "attachedConfig": "That config is already attached.",
+      "attachedNetwork": "That network is already attached.",
+      "fileName": "Enter a file name."
+    },
+    "picker": {
+      "new": "New",
+      "newTooltip": "Created when you apply.",
+      "secret": {
+        "placeholder": "Choose a secret",
+        "search": "Find a secret…",
+        "empty": "No secrets yet.",
+        "create": "Create new secret…",
+        "error": "Couldn't load secrets."
+      },
+      "config": {
+        "placeholder": "Choose a config",
+        "search": "Find a config…",
+        "empty": "No configs yet.",
+        "create": "Create new config…",
+        "error": "Couldn't load configs."
+      },
+      "network": {
+        "placeholder": "Choose a network",
+        "search": "Find a network…",
+        "empty": "No networks yet.",
+        "create": "Create new network…",
+        "error": "Couldn't load networks."
+      },
+      "noMatch": "No match."
+    },
+    "staged": {
+      "name": {
+        "label": "Name"
+      },
+      "cancel": "Cancel",
+      "secret": {
+        "title": "Create a secret",
+        "body": "It's created when you apply the service. Docker never shows the value again.",
+        "submit": "Add secret"
+      },
+      "config": {
+        "title": "Create a config",
+        "body": "It's created when you apply the service.",
+        "submit": "Add config"
+      },
+      "network": {
+        "title": "Create a network",
+        "body": "It's created when you apply the service, as an attachable overlay network.",
+        "submit": "Add network",
+        "advanced": "Advanced",
+        "driver": "Driver",
+        "subnet": "Subnet (optional)",
+        "subnetPlaceholder": "10.20.0.0/24"
+      },
+      "errors": {
+        "nameRequired": "Enter a name.",
+        "nameInvalid": "Use letters, numbers, dot, dash or underscore.",
+        "nameTaken": "A {{kind}} named {{name}} already exists.",
+        "subnet": "The subnet must be in CIDR form, like 10.20.0.0/24."
+      }
+    },
+    "secrets": {
+      "title": "Secrets",
+      "row": "Secret {{n}}",
+      "add": "Add secret",
+      "remove": "Remove secret {{n}}",
+      "secret": "Secret",
+      "file": "File name",
+      "mounted": "Mounted at /run/secrets/{{file}}",
+      "needsReveal": "Needs the reveal secrets permission to add a secret",
+      "uid": "UID",
+      "gid": "GID",
+      "mode": "Mode",
+      "modePlaceholder": "0444"
+    },
+    "configs": {
+      "title": "Configs",
+      "row": "Config {{n}}",
+      "add": "Add config",
+      "remove": "Remove config {{n}}",
+      "config": "Config",
+      "path": "Path",
+      "uid": "UID",
+      "gid": "GID",
+      "mode": "Mode",
+      "modePlaceholder": "0444",
+      "runtime": "{{name}} is read by Docker at run time, not mounted. It's kept as it is."
+    },
+    "networks": {
+      "title": "Networks",
+      "row": "Network {{n}}",
+      "add": "Add network",
+      "remove": "Remove network {{n}}",
+      "network": "Network",
+      "aliases": "Aliases",
+      "aliasesHelper": "Other names services on this network can use.",
+      "aliasesPlaceholder": "web, api"
+    }
+  }
+}

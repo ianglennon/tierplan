@@ -7,8 +7,9 @@ import { Badge } from "@/components/ui/badge";
 import { useT } from "@/i18n/use-t";
 
 interface SelfContainerBadgeProps {
-  // server for the container Bayplan runs in, agent for an agent's container.
-  kind: "server" | "agent";
+  // server for the container Bayplan runs in, agent for an agent's container, and
+  // agent-service for the swarm service whose tasks are the agents.
+  kind: "server" | "agent" | "agent-service";
 }
 
 // SelfContainerBadge marks a container Bayplan itself depends on: a neutral
@@ -20,7 +21,9 @@ export function SelfContainerBadge({ kind }: SelfContainerBadgeProps) {
   return (
     <Badge variant="outline" className="shrink-0">
       <Lock aria-hidden="true" data-icon="inline-start" />
-      {t(`containers.list.self.${kind}`)}
+      {kind === "agent-service"
+        ? t("services.list.self.agentService")
+        : t(`containers.list.self.${kind}`)}
     </Badge>
   );
 }

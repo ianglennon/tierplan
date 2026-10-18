@@ -1,0 +1,262 @@
+{
+  "specEditor": {
+    "diff": {
+      "caption": "Changes to {{name}}",
+      "columns": {
+        "change": "Change",
+        "setting": "Setting",
+        "current": "Current",
+        "next": "New",
+        "value": "Value"
+      },
+      "change": {
+        "added": "Added",
+        "changed": "Changed",
+        "removed": "Removed"
+      },
+      "hidden": "••••",
+      "replaced": "Hidden value replaced",
+      "absent": "—",
+      "absentLabel": "Not set",
+      "empty": "(empty)",
+      "none": {
+        "title": "No changes",
+        "body": "The spec is the same as the current one. There's nothing to apply."
+      }
+    },
+    "groups": {
+      "basics": "Basics",
+      "environment": "Environment",
+      "ports": "Ports",
+      "secrets": "Secrets",
+      "configs": "Configs",
+      "networks": "Networks",
+      "mounts": "Mounts",
+      "resources": "Resources",
+      "placement": "Placement",
+      "restartPolicy": "Restart policy",
+      "updatePolicy": "Update policy",
+      "other": "Other settings"
+    },
+    "kinds": {
+      "Env": "Environment variable {{key}}",
+      "Mounts": "Mount {{key}}",
+      "Ports": "Port {{key}}",
+      "Secrets": "Secret {{key}}",
+      "Configs": "Config {{key}}",
+      "Networks": "Network {{key}}"
+    },
+    "labels": {
+      "Name": "Name",
+      "Mode": "Mode",
+      "Mode/Replicated/Replicas": "Replicas",
+      "TaskTemplate/ContainerSpec/Image": "Image",
+      "TaskTemplate/ContainerSpec/Command": "Command",
+      "TaskTemplate/ContainerSpec/Args": "Arguments",
+      "TaskTemplate/ContainerSpec/Healthcheck/Test": "Health check command",
+      "TaskTemplate/ForceUpdate": "Forced updates",
+      "TaskTemplate/Resources/Limits/NanoCPUs": "CPU limit (billionths of a core)",
+      "TaskTemplate/Resources/Limits/MemoryBytes": "Memory limit (bytes)",
+      "TaskTemplate/Resources/Reservations/NanoCPUs": "CPU reservation (billionths of a core)",
+      "TaskTemplate/Resources/Reservations/MemoryBytes": "Memory reservation (bytes)",
+      "TaskTemplate/Placement/Constraints": "Placement constraint",
+      "TaskTemplate/Placement/MaxReplicas": "Most tasks on one node",
+      "TaskTemplate/RestartPolicy/Condition": "Restart when",
+      "TaskTemplate/RestartPolicy/Delay": "Delay between restarts",
+      "TaskTemplate/RestartPolicy/MaxAttempts": "Most restart attempts",
+      "TaskTemplate/RestartPolicy/Window": "Restart window",
+      "TaskTemplate/LogDriver/Name": "Log driver",
+      "UpdateConfig/Parallelism": "Tasks at a time",
+      "UpdateConfig/Delay": "Delay between batches",
+      "UpdateConfig/Order": "Order",
+      "UpdateConfig/FailureAction": "On failure",
+      "UpdateConfig/Monitor": "Monitor",
+      "UpdateConfig/MaxFailureRatio": "Max failure ratio",
+      "EndpointSpec/Mode": "Endpoint mode"
+    },
+    "parse": {
+      "unexpectedChar": "Unexpected character {{char}}",
+      "unexpectedEnd": "The spec ends too soon",
+      "empty": "The spec is empty",
+      "expectedKey": "Expected a property name in double quotes",
+      "expectedColon": "Expected a colon after the property name",
+      "expectedCommaOrEnd": "Expected a comma or the closing bracket",
+      "badEscape": "That is not a valid escape in a string",
+      "controlChar": "A string can't hold a line break or a control character. Write it as an escape, like \\n",
+      "unterminated": "A string is missing its closing quote",
+      "badNumber": "That is not a valid number",
+      "notObject": "The spec must be an object",
+      "afterEnd": "Unexpected content after the end of the spec",
+      "unsafeInteger": "{{path}} is {{value}}, a whole number too large to edit here without changing it. Use a smaller number.",
+      "notFinite": "{{path}} is not a number a service spec can hold",
+      "duplicateKey": "The key {{key}} appears twice",
+      "tooDeep": "The spec is nested too deeply",
+      "tooBig": "The spec expands to too many values",
+      "complexKey": "A key must be a plain name, not a list or a map"
+    },
+    "editor": {
+      "format": "Format",
+      "yaml": "YAML",
+      "json": "JSON",
+      "name": "Service spec, {{format}}",
+      "helper": "The full service spec as Docker stores it. Hidden values show as <hidden>. They stay as they are unless you replace them.",
+      "copy": "Copy spec",
+      "copied": "Copied",
+      "discard": "Discard edits",
+      "comments": "Comments are dropped if you switch to JSON.",
+      "error": {
+        "line": "Line {{line}}: {{message}}",
+        "fix": "Fix the spec before you review changes."
+      },
+      "wrap": "Wrap"
+    },
+    "page": {
+      "breadcrumb": {
+        "label": "Breadcrumb",
+        "services": "Services",
+        "edit": "Edit",
+        "create": "Create"
+      },
+      "title": "Edit {{name}}",
+      "description": "Change its settings, review the difference, then apply.",
+      "loading": "Loading the service spec",
+      "cancel": "Cancel",
+      "review": "Review changes",
+      "checking": "Checking…",
+      "reload": "Reload service",
+      "invalid": "Fix the spec before you review changes."
+    },
+    "discard": {
+      "title": "Discard changes?",
+      "body": "The service hasn't been updated.",
+      "keep": "Keep editing",
+      "discard": "Discard changes",
+      "bodyCreate": "The service hasn't been created."
+    },
+    "stackOwned": {
+      "heading": "{{name}} is managed by stack {{stack}}",
+      "body": "Change its settings through the stack so the next deploy doesn't overwrite them.",
+      "back": "Back to {{name}}"
+    },
+    "review": {
+      "title": "Review changes",
+      "body": "Check what will change on {{name}}, then apply.",
+      "changes": "Changes",
+      "image": {
+        "title": "Image",
+        "current": "Current",
+        "next": "New",
+        "lookingUp": "Looking up the digest…",
+        "credential": "Credential: “{{name}}”",
+        "unchanged": "The image stays {{ref}}.",
+        "created": "Image"
+      },
+      "back": "Back to editing",
+      "apply": "Apply changes",
+      "applying": "Applying…",
+      "nothing": "There's nothing to apply.",
+      "refusal": "This service uses settings that need Admin: {{list}}. Ask an administrator to apply it.",
+      "findings": {
+        "bind_path": "a bind mount of {{value}}",
+        "volume_device": "a local volume that mounts {{value}}",
+        "npipe": "a named pipe mount of {{value}}",
+        "cap_add": "the {{value}} capability",
+        "selinux": "SELinux set to {{value}}",
+        "seccomp": "a {{value}} seccomp profile",
+        "apparmor": "AppArmor set to {{value}}",
+        "host_network": "host networking",
+        "plugin_runtime": "a plugin runtime",
+        "other": "{{path}}: {{value}}"
+      },
+      "notes": "Notes from the review",
+      "hiddenOnly": "The changes are to values that are hidden from you, so they aren't listed.",
+      "newObjects": {
+        "title": "New objects",
+        "intro": "These don't exist yet. They're created first, then the service.",
+        "network": "Network {{name}}",
+        "networkNote": "Created as an attachable overlay network.",
+        "secret": "Secret {{name}}",
+        "config": "Config {{name}}",
+        "added": "Value added",
+        "edit": "Edit",
+        "reason": "Add a value for {{count}} secrets and configs first."
+      }
+    },
+    "apply": {
+      "title": "Applying changes to {{name}}",
+      "steps": {
+        "label": "Steps",
+        "lookup": "Look up the image",
+        "update": "Update service {{name}}",
+        "network": "Create network {{name}}",
+        "secret": "Create secret {{name}}",
+        "config": "Create config {{name}}"
+      },
+      "status": {
+        "waiting": "Waiting",
+        "working": "Working",
+        "done": "Done",
+        "failed": "Failed"
+      },
+      "done": {
+        "title": "Update complete",
+        "body_one": "{{name}} is running {{count}} task on the new settings.",
+        "body_other": "{{name}} is running {{count}} tasks on the new settings."
+      },
+      "view": "View service",
+      "back": "Back to editing",
+      "close": "Close editor",
+      "reload": "Reload service",
+      "toast": "Updated {{name}}.",
+      "cleanup": {
+        "removed": "Couldn't update {{name}}. {{reason}} The {{count}} objects created for this change were removed.",
+        "notRemoved": "Couldn't update {{name}}. {{reason}} Bayplan couldn't remove {{list}}. Remove them under Networks, Secrets or Configs.",
+        "item": {
+          "network": "network {{name}}",
+          "secret": "secret {{name}}",
+          "config": "config {{name}}"
+        },
+        "createRemoved": "Couldn't create {{name}}. {{reason}} The {{count}} objects created for this change were removed.",
+        "createNotRemoved": "Couldn't create {{name}}. {{reason}} Bayplan couldn't remove {{list}}. Remove them under Networks, Secrets or Configs."
+      }
+    },
+    "refusal": {
+      "service_changed": "This service was changed by someone else while you were editing. Reload it, then make your changes again.",
+      "stack_owned": "This service is managed by a stack, so it can't be edited here. Change it through the stack.",
+      "spec_invalid": "The spec can't be read: {{message}}.",
+      "spec_invalid_bare": "The spec can't be read as a service spec.",
+      "spec_rejected": "Docker rejected these settings: {{message}}",
+      "name_immutable": "A service's name can't change. Create a new service instead.",
+      "mode_immutable": "A service's mode can't change.",
+      "stack_label_reserved": "Labels starting with com.docker.stack. are reserved.",
+      "placeholder_unmatched": "A hidden value in the spec has nothing behind it: {{path}} isn't in the service. Type its value or remove it.",
+      "placeholder_reserved": "<hidden> is what Bayplan shows for a value it withholds, so it can't be a value. Type the real value or remove it.",
+      "objects_missing": "The spec names objects that don't exist: {{list}}. Create them first, then review again.",
+      "missingKinds": {
+        "networks": "networks {{names}}",
+        "secrets": "secrets {{names}}",
+        "configs": "configs {{names}}"
+      },
+      "nothing_to_apply": "There's nothing to apply.",
+      "object_permission": "{{message}}",
+      "too_many_objects": "One change can create at most 16 objects.",
+      "image_required": "Enter an image like nginx:1.27 or ghcr.io/acme/app:latest.",
+      "create_failed": "Docker couldn't create it: {{message}}"
+    },
+    "create": {
+      "title": "Create service",
+      "description": "Set up a service Swarm runs for you. Review it before anything is created.",
+      "review": {
+        "title": "Review {{name}}",
+        "body": "Check the service Bayplan will create, then create it.",
+        "confirm": "Create service"
+      },
+      "apply": {
+        "title": "Creating {{name}}",
+        "step": "Create service {{name}}",
+        "done": "Created {{name}}"
+      },
+      "toast": "Created service {{name}}."
+    }
+  }
+}

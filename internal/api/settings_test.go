@@ -77,6 +77,7 @@ func (f *authFixture) auditDetails(t *testing.T, action string) []map[string]str
 }
 
 func TestGetSettingsReportsTheNameTheURLAndTheLock(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"instanceName": "Home", "publicUrl": "https://bay.example"}); rec.Code != http.StatusOK {
@@ -95,6 +96,7 @@ func TestGetSettingsReportsTheNameTheURLAndTheLock(t *testing.T) {
 }
 
 func TestPatchSettingsRenamesTheInstanceAndAuditsOldAndNew(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	f.patchSettings(t, cookie, csrf, map[string]string{"instanceName": "Home"})
@@ -129,6 +131,7 @@ func TestPatchSettingsRenamesTheInstanceAndAuditsOldAndNew(t *testing.T) {
 }
 
 func TestPatchSettingsSwitchesTheOriginGuardImmediately(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://old.example/"}); rec.Code != http.StatusOK {
@@ -172,6 +175,7 @@ func TestPatchSettingsSwitchesTheOriginGuardImmediately(t *testing.T) {
 }
 
 func TestPatchSettingsRefusesAnEnvironmentLockedPublicURL(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{PublicURL: "https://fixed.example"})
 	cookie, csrf := f.signIn(t, "admin", false)
 	f.patchSettings(t, cookie, csrf, map[string]string{"instanceName": "Home"})
@@ -198,6 +202,7 @@ func TestPatchSettingsRefusesAnEnvironmentLockedPublicURL(t *testing.T) {
 }
 
 func TestPatchSettingsValidatesEveryField(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	for _, c := range []struct {
@@ -235,6 +240,7 @@ func TestPatchSettingsValidatesEveryField(t *testing.T) {
 }
 
 func TestPatchSettingsWithNothingNewIsANoOpAndIsNotAudited(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	f.patchSettings(t, cookie, csrf, map[string]string{"instanceName": "Home"})
@@ -250,6 +256,7 @@ func TestPatchSettingsWithNothingNewIsANoOpAndIsNotAudited(t *testing.T) {
 }
 
 func TestSettingsNeedSettingsPermissions(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addUser(t, "viewer", false) // no role at all
 	cookie, csrf := f.signIn(t, "viewer", false)
@@ -276,6 +283,7 @@ func TestSettingsNeedSettingsPermissions(t *testing.T) {
 // address people browse to.
 
 func TestGetSettingsReportsTheAgentURLTheLockAndTheEndpoint(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	if _, s := f.getSettings(t, cookie); s.AgentURL != "" || s.AgentURLLocked || s.AgentEndpoint != "" {
@@ -297,6 +305,7 @@ func TestGetSettingsReportsTheAgentURLTheLockAndTheEndpoint(t *testing.T) {
 }
 
 func TestPatchSettingsStoresTheAgentURLAndAuditsIt(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://example.com"})
@@ -340,6 +349,7 @@ func TestPatchSettingsStoresTheAgentURLAndAuditsIt(t *testing.T) {
 }
 
 func TestPatchSettingsRefusesAnInvalidAgentURL(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	for _, bad := range []string{"/agent", "bayplan.lan", "ftp://bayplan.lan", "https://user@bayplan.lan", "https://bayplan.lan/api"} {
@@ -361,6 +371,7 @@ func TestPatchSettingsRefusesAnInvalidAgentURL(t *testing.T) {
 }
 
 func TestPatchSettingsRefusesAnEnvironmentLockedAgentURL(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{AgentURL: "https://fixed.internal:7480"})
 	cookie, csrf := f.signIn(t, "admin", false)
 
@@ -390,6 +401,7 @@ func TestPatchSettingsRefusesAnEnvironmentLockedAgentURL(t *testing.T) {
 }
 
 func TestPatchSettingsWithTheSameAgentURLIsANoOp(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://bayplan.lan:7480"})
@@ -403,6 +415,7 @@ func TestPatchSettingsWithTheSameAgentURLIsANoOp(t *testing.T) {
 }
 
 func TestAgentURLNeedsSettingsPermissions(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addUser(t, "viewer", false)
 	cookie, csrf := f.signIn(t, "viewer", false)
@@ -464,6 +477,7 @@ func agentsFixture(t *testing.T, cfg config.Config, fake *fakeSettingsAgents) (*
 }
 
 func TestGetSettingsCountsEnrolledAgentsAndTheOnesWithNoConnection(t *testing.T) {
+	t.Parallel()
 	fake := &fakeSettingsAgents{enrolled: []string{"a", "b", "c"}, connected: map[string]bool{"a": true, "c": true}}
 	f, cookie, _ := agentsFixture(t, config.Config{}, fake)
 	code, s := f.getSettings(t, cookie)
@@ -477,6 +491,7 @@ func TestGetSettingsCountsEnrolledAgentsAndTheOnesWithNoConnection(t *testing.T)
 }
 
 func TestGetSettingsWithNoAgentsOrNoAgentSourceCountsZero(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, _ := f.signIn(t, "admin", false)
 	if _, s := f.getSettings(t, cookie); s.EnrolledAgents != 0 || s.OfflineAgents != 0 {
@@ -489,6 +504,7 @@ func TestGetSettingsWithNoAgentsOrNoAgentSourceCountsZero(t *testing.T) {
 }
 
 func TestGetSettingsStillAnswersWhenTheAgentsCannotBeCounted(t *testing.T) {
+	t.Parallel()
 	fake := &fakeSettingsAgents{err: context.DeadlineExceeded}
 	f, cookie, _ := agentsFixture(t, config.Config{}, fake)
 	code, s := f.getSettings(t, cookie)
@@ -498,6 +514,7 @@ func TestGetSettingsStillAnswersWhenTheAgentsCannotBeCounted(t *testing.T) {
 }
 
 func TestSavingANewAgentURLPushesItFirstWithTheCurrentPinsToConnectedAgents(t *testing.T) {
+	t.Parallel()
 	fake := &fakeSettingsAgents{pins: []string{"sha256/x"}, connected: map[string]bool{"a": true}}
 	f, cookie, csrf := agentsFixture(t, config.Config{}, fake)
 	f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://pub.example"})
@@ -516,6 +533,7 @@ func TestSavingANewAgentURLPushesItFirstWithTheCurrentPinsToConnectedAgents(t *t
 }
 
 func TestChangingThePublicURLPushesTheNewEndpointWhenItIsWhatAgentsDial(t *testing.T) {
+	t.Parallel()
 	fake := &fakeSettingsAgents{connected: map[string]bool{"a": true}}
 	f, cookie, csrf := agentsFixture(t, config.Config{}, fake)
 	f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://old.example"})
@@ -529,6 +547,7 @@ func TestChangingThePublicURLPushesTheNewEndpointWhenItIsWhatAgentsDial(t *testi
 }
 
 func TestClearingTheAgentURLPushesTheEndpointOfThePublicURL(t *testing.T) {
+	t.Parallel()
 	fake := &fakeSettingsAgents{connected: map[string]bool{"a": true}}
 	f, cookie, csrf := agentsFixture(t, config.Config{}, fake)
 	f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://pub.example", "agentUrl": "https://lan.internal:7480"})
@@ -542,6 +561,7 @@ func TestClearingTheAgentURLPushesTheEndpointOfThePublicURL(t *testing.T) {
 }
 
 func TestNothingIsPushedWhenTheEndpointAgentsDialDidNotChange(t *testing.T) {
+	t.Parallel()
 	fake := &fakeSettingsAgents{connected: map[string]bool{"a": true}}
 	f, cookie, csrf := agentsFixture(t, config.Config{}, fake)
 	f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://pub.example", "agentUrl": "https://lan.internal:7480"})
@@ -562,6 +582,7 @@ func TestNothingIsPushedWhenTheEndpointAgentsDialDidNotChange(t *testing.T) {
 }
 
 func TestARefusedChangeOfALockedAgentURLPushesNothing(t *testing.T) {
+	t.Parallel()
 	fake := &fakeSettingsAgents{connected: map[string]bool{"a": true}}
 	f, cookie, csrf := agentsFixture(t, config.Config{PublicURL: "https://pub.example", AgentURL: "https://agent.internal:7480"}, fake)
 	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://elsewhere.example"}); rec.Code != http.StatusConflict {
@@ -573,6 +594,7 @@ func TestARefusedChangeOfALockedAgentURLPushesNothing(t *testing.T) {
 }
 
 func TestAChangeWithNoAgentSourceStillSaves(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://bayplan.lan:7480"}); rec.Code != http.StatusOK {
@@ -584,6 +606,7 @@ func TestAChangeWithNoAgentSourceStillSaves(t *testing.T) {
 // host that is not this machine, with the development switch off.
 
 func TestGetSettingsSaysWhenAgentsCannotUseTheEndpoint(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		label      string
 		publicURL  string
@@ -624,6 +647,7 @@ func TestGetSettingsSaysWhenAgentsCannotUseTheEndpoint(t *testing.T) {
 }
 
 func TestPatchSettingsRefusesAPlainAgentURLForAnotherHostWithoutTheSwitch(t *testing.T) {
+	t.Parallel()
 	fake := &fakeSettingsAgents{connected: map[string]bool{"a": true}}
 	f, cookie, csrf := agentsFixture(t, config.Config{}, fake)
 	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://agent.internal:7480"}); rec.Code != http.StatusOK {
@@ -653,6 +677,7 @@ func TestPatchSettingsRefusesAPlainAgentURLForAnotherHostWithoutTheSwitch(t *tes
 }
 
 func TestPatchSettingsAcceptsAPlainAgentURLOnlyOnThisMachineOrWithTheSwitch(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		label     string
 		allow     bool
@@ -721,6 +746,7 @@ func (f *authFixture) patchShellSettings(t *testing.T, cookie, csrf, body string
 }
 
 func TestShellSettingsStartAtThirtyMinutesAndTenShells(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, _ := f.signIn(t, "admin", false)
 	if code, s := f.getShellSettings(t, cookie); code != http.StatusOK || s.IdleMinutes != 30 || s.MaxPerUser != 10 {
@@ -729,6 +755,7 @@ func TestShellSettingsStartAtThirtyMinutesAndTenShells(t *testing.T) {
 }
 
 func TestPatchShellSettingsChangesTheLimitsAtOnceAndAuditsThem(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	rec := f.patchShellSettings(t, cookie, csrf, `{"idleMinutes":45,"maxPerUser":3}`)
@@ -753,6 +780,7 @@ func TestPatchShellSettingsChangesTheLimitsAtOnceAndAuditsThem(t *testing.T) {
 }
 
 func TestPatchShellSettingsChangesOnlyTheFieldSentAndANoOpIsNotAudited(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	if rec := f.patchShellSettings(t, cookie, csrf, `{"maxPerUser":4}`); rec.Code != http.StatusOK {
@@ -770,6 +798,7 @@ func TestPatchShellSettingsChangesOnlyTheFieldSentAndANoOpIsNotAudited(t *testin
 }
 
 func TestPatchShellSettingsRefusesValuesOutsideTheirRangeAndChangesNothing(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	for _, body := range []string{`{"idleMinutes":4}`, `{"idleMinutes":241}`, `{"maxPerUser":0}`, `{"maxPerUser":51}`, `{"idleMinutes":60,"maxPerUser":51}`} {
@@ -786,6 +815,7 @@ func TestPatchShellSettingsRefusesValuesOutsideTheirRangeAndChangesNothing(t *te
 }
 
 func TestShellSettingsAreForTheInstanceAdministratorOnly(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addUser(t, "viewer", false) // no role at all
 	cookie, csrf := f.signIn(t, "viewer", false)

@@ -16,17 +16,20 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/server/servertest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
-// output collects what an exec session prints so a test can wait for text.
+// output collects what an exec session prints so a test can wait for text. Each write
+// wakes every waiter by closing and replacing changed under mu.
 type output struct {
-	mu   sync.Mutex
-	buf  bytes.Buffer
-	done chan struct{}
+	mu      sync.Mutex
+	buf     bytes.Buffer
+	changed chan struct{}
+	done    chan struct{}
 }
 
 func collect(r io.Reader) *output {
-	o := &output{done: make(chan struct{})}
+	o := &output{changed: make(chan struct{}), done: make(chan struct{})}
 	go func() {
 		defer close(o.done)
 		b := make([]byte, 4096)
@@ -35,6 +38,8 @@ func collect(r io.Reader) *output {
 			if n > 0 {
 				o.mu.Lock()
 				o.buf.Write(b[:n])
+				close(o.changed)
+				o.changed = make(chan struct{})
 				o.mu.Unlock()
 			}
 			if err != nil {
@@ -51,23 +56,31 @@ func (o *output) text() string {
 	return o.buf.String()
 }
 
-func (o *output) waitFor(t *testing.T, want string, within time.Duration) {
+// awaitOutput waits until the output holds want, the stream ends or the shared
+// testsupport.Deadline passes. The engine under the stream is real, so a loaded host
+// can be slow to answer; the deadline only decides how long a broken test takes to fail.
+func (o *output) awaitOutput(t *testing.T, want string) {
 	t.Helper()
-	deadline := time.Now().Add(within)
-	for time.Now().Before(deadline) {
-		if strings.Contains(o.text(), want) {
+	ctx := testsupport.Context(t)
+	for {
+		o.mu.Lock()
+		text, changed := o.buf.String(), o.changed
+		o.mu.Unlock()
+		if strings.Contains(text, want) {
 			return
 		}
 		select {
+		case <-changed:
 		case <-o.done:
+			// The reader goroutine's last write happened before done closed.
 			if strings.Contains(o.text(), want) {
 				return
 			}
 			t.Fatalf("the stream ended before %q appeared; output %q", want, o.text())
-		case <-time.After(20 * time.Millisecond):
+		case <-ctx.Done():
+			t.Fatalf("%q did not appear within %s; output %q", want, testsupport.Deadline, o.text())
 		}
 	}
-	t.Fatalf("%q did not appear within %s; output %q", want, within, o.text())
 }
 
 // TestStandaloneAgentExec opens a TTY shell in a container on a standalone host
@@ -110,7 +123,7 @@ func TestStandaloneAgentExec(t *testing.T) {
 		if _, err := s.Write([]byte("echo hello-$((1+2))-bayplan\n")); err != nil {
 			return err
 		}
-		out.waitFor(t, "hello-3-bayplan", 20*time.Second)
+		out.awaitOutput(t, "hello-3-bayplan")
 
 		if err := s.Resize(ctx, 100, 30); err != nil {
 			return err
@@ -118,17 +131,17 @@ func TestStandaloneAgentExec(t *testing.T) {
 		if _, err := s.Write([]byte("stty size\n")); err != nil {
 			return err
 		}
-		out.waitFor(t, "30 100", 20*time.Second)
+		out.awaitOutput(t, "30 100")
 
 		if _, err := s.Write([]byte("exit 3\n")); err != nil {
 			return err
 		}
 		select {
 		case <-out.done:
-		case <-time.After(20 * time.Second):
+		case <-time.After(testsupport.Deadline):
 			t.Error("the stream did not end after exit 3")
 		}
-		wctx, wcancel := context.WithTimeout(ctx, 20*time.Second)
+		wctx, wcancel := context.WithTimeout(ctx, testsupport.Deadline)
 		defer wcancel()
 		st, err := s.Wait(wctx)
 		if err != nil {

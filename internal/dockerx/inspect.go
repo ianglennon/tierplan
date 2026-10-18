@@ -84,6 +84,11 @@ type ContainerDetail struct {
 	RestartPolicy     string
 	RestartMaxRetries int
 	LogConfig         LogConfig
+	// MemoryLimit is the container's own memory limit in bytes and NanoCPUs its CPU limit in
+	// billionths of a CPU; both are 0 when the container has none. They come from the
+	// container's host config, never from the stats, whose limit is the host's RAM when
+	// the container has none (RESEARCH E21).
+	MemoryLimit, NanoCPUs int64
 
 	Ports    []PortRow
 	Mounts   []MountRow
@@ -133,6 +138,7 @@ func detailOf(in container.InspectResponse) ContainerDetail {
 			d.RestartPolicy = string(hc.RestartPolicy.Name)
 		}
 		d.RestartMaxRetries = hc.RestartPolicy.MaximumRetryCount
+		d.MemoryLimit, d.NanoCPUs = hc.Memory, hc.NanoCPUs
 		d.LogConfig.Type = hc.LogConfig.Type
 		for k, v := range hc.LogConfig.Config {
 			d.LogConfig.Options[k] = v

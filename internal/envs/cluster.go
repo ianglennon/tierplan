@@ -16,6 +16,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx"
+	"github.com/ianglennon/bayplan/internal/store/sqlc"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 )
 
@@ -109,6 +110,22 @@ type ClusterState struct {
 	// Failing counts failing services of a swarm or failing containers of a
 	// standalone host, nil until worked out or while the quorum is lost.
 	Failing *FailingCounts
+	// RestartLoops are the services flagged as in a restart loop by service ID, nil while
+	// the quorum is lost or before the first read (RES-13).
+	RestartLoops map[string]RestartLoop
+	// MutedServices are the IDs of the listed services whose restart-loop alerts are muted,
+	// whether or not they are looping now.
+	MutedServices map[string]bool
+	// ContainerLoops are the standalone containers that keep dying, by ContainerLoopKey
+	// (node and name). They are kept for every kind of environment, whatever the swarm's
+	// quorum (RES-13, D-15).
+	ContainerLoops map[string]ContainerLoop
+	// MutedContainers are the ContainerLoopKeys whose restart-loop alerts are muted, whether
+	// or not the container is looping now.
+	MutedContainers map[string]bool
+	// HistoryLimit is how many tasks per slot Docker keeps in Read's cluster, 0 before the
+	// first read.
+	HistoryLimit int
 }
 
 // Known is true when a node list is held and the quorum is not lost.
@@ -133,6 +150,10 @@ type clusterEntry struct {
 	// away are the managers a read failed over from that are not back yet.
 	away     map[string]awayManager
 	policies *PolicyCache
+	// loops remembers the failed tasks seen across reads (RES-13).
+	loops *RestartLoopTracker
+	// containerLoops remembers the container deaths seen across reads (RES-13, D-15).
+	containerLoops *ContainerLoopTracker
 }
 
 // Clusters reads the cluster of swarm environments: from which manager, with what
@@ -189,7 +210,7 @@ func (c *Clusters) entry(envID string) *clusterEntry {
 	defer c.mu.Unlock()
 	e := c.entries[envID]
 	if e == nil {
-		e = &clusterEntry{failures: map[string][]time.Time{}, away: map[string]awayManager{}, policies: NewPolicyCache()}
+		e = &clusterEntry{failures: map[string][]time.Time{}, away: map[string]awayManager{}, policies: NewPolicyCache(), loops: NewRestartLoopTracker(), containerLoops: NewContainerLoopTracker()}
 		c.entries[envID] = e
 	}
 	return e
@@ -229,6 +250,128 @@ func (c *Clusters) Cached(envID string) (ClusterState, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.state, true
+}
+
+// SetRestartLoopMute puts a mute or an unmute of a service into the cached state at once, so
+// the page that asked sees it without waiting for the next read (the mute itself is in the
+// store already). The maps of a state are shared with whoever holds a copy, so they are
+// replaced, never changed.
+func (c *Clusters) SetRestartLoopMute(envID, serviceID string, muted bool) {
+	e, ok := c.lookup(envID)
+	if !ok {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	set := make(map[string]bool, len(e.state.MutedServices)+1)
+	for id := range e.state.MutedServices {
+		set[id] = true
+	}
+	if muted {
+		set[serviceID] = true
+	} else {
+		delete(set, serviceID)
+	}
+	e.state.MutedServices = set
+	if l, flagged := e.state.RestartLoops[serviceID]; flagged && l.Muted != muted {
+		loops := make(map[string]RestartLoop, len(e.state.RestartLoops))
+		for id, v := range e.state.RestartLoops {
+			loops[id] = v
+		}
+		l.Muted = muted
+		loops[serviceID] = l
+		e.state.RestartLoops = loops
+	}
+}
+
+// SetContainerRestartLoopMute puts a mute or an unmute of a container (by ContainerLoopKey)
+// into the cached state at once, as SetRestartLoopMute does for a service: the maps are
+// replaced, never changed, because copies of the state share them.
+func (c *Clusters) SetContainerRestartLoopMute(envID, key string, muted bool) {
+	e, ok := c.lookup(envID)
+	if !ok {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	set := make(map[string]bool, len(e.state.MutedContainers)+1)
+	for k := range e.state.MutedContainers {
+		set[k] = true
+	}
+	if muted {
+		set[key] = true
+	} else {
+		delete(set, key)
+	}
+	e.state.MutedContainers = set
+	if l, flagged := e.state.ContainerLoops[key]; flagged && l.Muted != muted {
+		loops := make(map[string]ContainerLoop, len(e.state.ContainerLoops))
+		for k, v := range e.state.ContainerLoops {
+			loops[k] = v
+		}
+		l.Muted = muted
+		loops[key] = l
+		e.state.ContainerLoops = loops
+	}
+}
+
+// muteKindContainer is the kind of a mute of a standalone container. Its target is the
+// container's ContainerLoopKey.
+const muteKindContainer = "container"
+
+// mutedContainerKeys reads the containers whose alerts are muted in one environment. When the
+// store cannot be read the mutes the last read held are kept.
+func (c *Clusters) mutedContainerKeys(ctx context.Context, envID string, previous map[string]bool) []string {
+	rows, err := c.svc.st.RQ.ListRestartLoopMutes(ctx, envID)
+	if err != nil {
+		c.log.Error("could not read the restart-loop mutes", "environment", envID, "error", err)
+		keys := make([]string, 0, len(previous))
+		for k := range previous {
+			keys = append(keys, k)
+		}
+		return keys
+	}
+	var keys []string
+	for _, r := range rows {
+		if r.Kind == muteKindContainer {
+			keys = append(keys, r.TargetID)
+		}
+	}
+	return keys
+}
+
+// muteKindService is the kind of a mute of a swarm service.
+const muteKindService = "service"
+
+// mutedServiceIDs reads the services whose alerts are muted in one environment. When the
+// store cannot be read the mutes the last read held are kept, so a database hiccup does not
+// unmute anything.
+func (c *Clusters) mutedServiceIDs(ctx context.Context, envID string, previous map[string]bool) []string {
+	rows, err := c.svc.st.RQ.ListRestartLoopMutes(ctx, envID)
+	if err != nil {
+		c.log.Error("could not read the restart-loop mutes", "environment", envID, "error", err)
+		ids := make([]string, 0, len(previous))
+		for id := range previous {
+			ids = append(ids, id)
+		}
+		return ids
+	}
+	var ids []string
+	for _, r := range rows {
+		if r.Kind == muteKindService {
+			ids = append(ids, r.TargetID)
+		}
+	}
+	return ids
+}
+
+// pruneMutes deletes the mutes of services a successful read no longer lists.
+func (c *Clusters) pruneMutes(ctx context.Context, envID string, stale []string) {
+	for _, id := range stale {
+		if _, err := c.svc.st.Q.DeleteRestartLoopMute(ctx, sqlc.DeleteRestartLoopMuteParams{EnvID: envID, Kind: muteKindService, TargetID: id}); err != nil {
+			c.log.Error("could not delete the restart-loop mute of a removed service", "environment", envID, "service", id, "error", err)
+		}
+	}
 }
 
 // LeaderAgent is the ID of the agent on the leading manager as of the last read,
@@ -325,9 +468,61 @@ func (c *Clusters) ClusterRead(ctx context.Context, envID string, fn func(*docke
 	return err
 }
 
+// StreamOnManager runs fn on one manager of the environment, once, for a stream the
+// caller keeps open for as long as it reads it (a followed service log). The manager is the
+// one a cluster read would choose: the leader when it is connected, else the best of the
+// others, and the server's own socket for a local swarm manager. fn is never run again
+// on another manager, whatever it returns: a stream that dropped has already shown part
+// of its answer, so the caller resumes from what it showed, and a tunnel error is noted
+// against the manager so that the next choice leaves it. It is a read: nothing may be
+// changed through it. ErrNoManager means no manager agent is connected.
+func (c *Clusters) StreamOnManager(ctx context.Context, envID string, fn func(*dockerx.Client) error) error {
+	in, err := c.svc.Input(ctx, envID, c.now())
+	if err != nil {
+		return err
+	}
+	_, err = c.readWith(ctx, in, fn, false)
+	return err
+}
+
+// IsSwarm reports whether the environment is a swarm: an agent environment whose agents
+// run on swarm nodes, or the local socket of a swarm node. A local socket that has not
+// been probed yet is ErrOffline, because what it is is not known.
+func (c *Clusters) IsSwarm(ctx context.Context, envID string) (bool, error) {
+	in, err := c.svc.Input(ctx, envID, c.now())
+	if err != nil {
+		return false, err
+	}
+	if in.Kind == KindLocal {
+		switch in.Local.Probe.Type {
+		case dockerx.TypeSwarmManager, dockerx.TypeSwarmWorker:
+			return true, nil
+		case "":
+			return false, fmt.Errorf("%w: the local engine has not been probed yet", ErrOffline)
+		}
+		return false, nil
+	}
+	return in.EnvType == envTypeSwarm, nil
+}
+
 // read is ClusterRead over an input already taken, and also says which manager
 // answered.
 func (c *Clusters) read(ctx context.Context, in RollupInput, fn func(*dockerx.Client) error) (AgentView, error) {
+	return c.readWith(ctx, in, fn, true)
+}
+
+// readWith is read, and when retry is false it never runs fn on a second manager: a tunnel
+// error is noted against the manager and returned.
+func (c *Clusters) readWith(ctx context.Context, in RollupInput, fn func(*dockerx.Client) error, retry bool) (AgentView, error) {
+	if in.Kind == KindLocal && in.Local.Probe.Type == dockerx.TypeSwarmManager {
+		// The server's own socket is a swarm manager: it is the one engine there is, so
+		// there is no choice to make and no other manager to fail over to.
+		cli, _, err := c.svc.mon.Client(in.EnvID)
+		if err != nil {
+			return AgentView{}, err
+		}
+		return AgentView{}, fn(cli)
+	}
 	if in.Kind != KindAgent || in.EnvType != envTypeSwarm {
 		return AgentView{}, fmt.Errorf("envs: %s is not a swarm environment reached through agents", in.EnvID)
 	}
@@ -353,7 +548,7 @@ func (c *Clusters) read(ctx context.Context, in RollupInput, fn func(*dockerx.Cl
 	}
 	// The tunnel to that manager is gone: a read is safe to repeat, once.
 	c.noteFailure(e, first.ID)
-	if len(cands) < 2 {
+	if !retry || len(cands) < 2 {
 		return first, err
 	}
 	next := cands[1]
@@ -498,14 +693,22 @@ func (c *Clusters) refresh(ctx context.Context, envID string, e *clusterEntry) e
 	}
 	rctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
+	var rerr error
+	standalone := false
 	switch {
 	case in.Kind == KindLocal:
-		return c.refreshLocal(rctx, in, e)
+		standalone = in.Local.Probe.Type == dockerx.TypeStandalone
+		rerr = c.refreshLocal(rctx, in, e)
 	case in.EnvType == envTypeSwarm:
-		return c.refreshSwarm(rctx, in, e)
+		rerr = c.refreshSwarm(rctx, in, e)
 	default:
-		return c.refreshContainers(rctx, in, e)
+		standalone = true
+		rerr = c.refreshContainers(rctx, in, e)
 	}
+	// Containers that keep dying are told from the events of every node, so whatever kind of
+	// environment this is, and whatever came of the cluster read.
+	c.observeContainerLoops(ctx, in, e, standalone)
+	return rerr
 }
 
 func (c *Clusters) refreshSwarm(ctx context.Context, in RollupInput, e *clusterEntry) error {
@@ -515,7 +718,7 @@ func (c *Clusters) refreshSwarm(ctx context.Context, in RollupInput, e *clusterE
 		read = r
 		return err
 	})
-	c.apply(in, e, read, err)
+	c.apply(ctx, in, e, read, err)
 	if err == nil && c.reaper != nil {
 		// Each successful node list is what an agent's node is missing from or not
 		// (D-10). The read's own deadline is nearly spent, and the writes that may
@@ -537,7 +740,7 @@ func (c *Clusters) refreshLocal(ctx context.Context, in RollupInput, e *clusterE
 			return err
 		}
 		read, err := cli.Cluster(ctx)
-		c.apply(in, e, read, err)
+		c.apply(ctx, in, e, read, err)
 		return err
 	case dockerx.TypeStandalone:
 		return c.refreshContainers(ctx, in, e)
@@ -546,8 +749,21 @@ func (c *Clusters) refreshLocal(ctx context.Context, in RollupInput, e *clusterE
 }
 
 // apply records the outcome of a read of the cluster.
-func (c *Clusters) apply(in RollupInput, e *clusterEntry, read dockerx.ClusterRead, err error) {
+func (c *Clusters) apply(ctx context.Context, in RollupInput, e *clusterEntry, read dockerx.ClusterRead, err error) {
 	now := c.now()
+	// The mutes are read once per successful read, before the state is locked. The read's own
+	// deadline is nearly spent by now, so the store gets one of its own.
+	var mutedIDs []string
+	if err == nil {
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), auditTimeout)
+		defer cancel()
+		e.mu.Lock()
+		previous := e.state.MutedServices
+		e.mu.Unlock()
+		mutedIDs = c.mutedServiceIDs(sctx, in.EnvID, previous)
+		_, _, stale := ApplyMutes(nil, mutedIDs, read.Services)
+		c.pruneMutes(sctx, in.EnvID, stale)
+	}
 	changed := false
 	e.mu.Lock()
 	e.state.AttemptedAt = now
@@ -570,12 +786,18 @@ func (c *Clusters) apply(in RollupInput, e *clusterEntry, read dockerx.ClusterRe
 		}
 		failing, total := FailingServices(read.Services, now, c.grace)
 		e.state.Failing = &FailingCounts{Failing: failing, Total: total}
+		found := e.loops.Observe(now, read.FailedTasks, read.Services, in.RestartLoopFailures, in.RestartLoopWindow)
+		e.state.RestartLoops, e.state.MutedServices, _ = ApplyMutes(found, mutedIDs, read.Services)
+		e.state.HistoryLimit = read.HistoryLimit
 	case ReasonFor(err) == ReasonNoQuorum:
 		if !e.state.NoQuorum {
 			e.state.NoQuorum, e.state.NoQuorumSince = true, now
 			changed = true
 		}
 		e.state.Failing = nil
+		// What was seen stays in the tracker, so the loops are back with the quorum.
+		e.state.RestartLoops = nil
+		e.state.MutedServices = nil
 	}
 	e.mu.Unlock()
 	if changed && c.pub != nil {
@@ -779,4 +1001,40 @@ func engineMajor(v string) (int, bool) {
 	head, _, _ := strings.Cut(strings.TrimPrefix(strings.TrimSpace(v), "v"), ".")
 	n, err := strconv.Atoi(head)
 	return n, err == nil
+}
+
+// ManagerPolicy is what the agent of the manager a cluster write goes to will forward, as its
+// owner set it. Known is false when no agent is in the way: the server's own socket, or no
+// manager connected.
+type ManagerPolicy struct {
+	Known              bool
+	ReadOnly           bool
+	PrivilegedServices bool
+}
+
+// ManagerPolicyOf reads the policy of the manager a cluster read would choose from a rollup input,
+// with no I/O.
+func (c *Clusters) ManagerPolicyOf(in RollupInput) ManagerPolicy {
+	if in.Kind != KindAgent {
+		return ManagerPolicy{}
+	}
+	key, ok := c.Manager(in)
+	if !ok {
+		return ManagerPolicy{}
+	}
+	for _, a := range connectedAgents(in) {
+		if a.TargetKey() == key {
+			return ManagerPolicy{Known: true, ReadOnly: a.ReadOnly, PrivilegedServices: a.PrivilegedServices}
+		}
+	}
+	return ManagerPolicy{}
+}
+
+// ManagerPolicy is ManagerPolicyOf over the environment's current rollup input.
+func (c *Clusters) ManagerPolicy(ctx context.Context, envID string) (ManagerPolicy, error) {
+	in, err := c.svc.Input(ctx, envID, c.now())
+	if err != nil {
+		return ManagerPolicy{}, err
+	}
+	return c.ManagerPolicyOf(in), nil
 }

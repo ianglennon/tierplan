@@ -25,6 +25,7 @@ import (
 // for it has gone away (found by the end-to-end suite: a restart that waits out its
 // stop timeout was audited as "context canceled" when the page was closed).
 func TestContainerActionAuditRowsAreWrittenEvenWhenTheRequestWasCancelled(t *testing.T) {
+	t.Parallel()
 	st := storetest.New(t)
 	v, err := vault.New(bytes.Repeat([]byte{7}, 32), "test")
 	if err != nil {
@@ -53,6 +54,7 @@ func TestContainerActionAuditRowsAreWrittenEvenWhenTheRequestWasCancelled(t *tes
 // The rows of network and volume changes, which are written after the change, survive
 // a cancelled request the same way.
 func TestNetworkAndVolumeAuditRowsAreWrittenEvenWhenTheRequestWasCancelled(t *testing.T) {
+	t.Parallel()
 	st := storetest.New(t)
 	v, err := vault.New(bytes.Repeat([]byte{7}, 32), "test")
 	if err != nil {
@@ -85,6 +87,7 @@ func TestNetworkAndVolumeAuditRowsAreWrittenEvenWhenTheRequestWasCancelled(t *te
 // broken pipe, not a reset: a network disconnect that cuts Bayplan off can end that way.
 // Found in CI under load, where it was answered as an offline environment.
 func TestABrokenPipeIsALostConnection(t *testing.T) {
+	t.Parallel()
 	err := fmt.Errorf("disconnect from network on unix:///x/d.sock: %w", &url.Error{
 		Op: "Post", URL: "http://docker/networks/app0/disconnect",
 		Err: &net.OpError{Op: "write", Net: "unix", Err: os.NewSyscallError("write", syscall.EPIPE)},

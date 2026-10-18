@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -56,6 +57,18 @@ type NodeRow struct {
 	// Reachability is the manager's reachability (reachable, unreachable or
 	// unknown), empty for a worker.
 	Reachability string
+	// Address is the address the swarm reaches the node at (Status.Addr), the one the
+	// node.ip constraint is matched against.
+	Address string
+	// Arch is the platform architecture the engine reports (x86_64, aarch64).
+	Arch string
+	// NanoCPUs and MemoryBytes are the node's resources, zero when not reported.
+	NanoCPUs, MemoryBytes int64
+	// Labels are the labels of the node's spec (node.labels.*), EngineLabels those of
+	// its engine (engine.labels.*). Never nil.
+	Labels, EngineLabels map[string]string
+	// ManagerAddr is the address a manager listens on for the swarm, empty for a worker.
+	ManagerAddr string
 }
 
 // ServiceRow is one swarm service with its task counts.
@@ -67,15 +80,76 @@ type ServiceRow struct {
 	// UpdateState is the state of the service's last update, empty when it has none.
 	UpdateState string
 	UpdatedAt   time.Time
+	// Image is the image the service's spec names, as written; empty for a spec with no
+	// container spec.
+	Image string
+	// Stack is the stack the service belongs to (the com.docker.stack.namespace label of
+	// its spec), empty for a service made on its own.
+	Stack string
+	// Agent is true for a Bayplan agent service (see isAgentService).
+	Agent bool
+	// Ports are the ports the service publishes, sorted by published port, then target
+	// port, then protocol. Never nil.
+	Ports []ServicePort
+	// UpdateMessage is the message of the service's last update (UpdateStatus.Message),
+	// empty when it has none.
+	UpdateMessage string
+	// HasPreviousSpec is true when the swarm still holds the spec before the last update,
+	// which is what a rollback goes back to.
+	HasPreviousSpec bool
+	// CreatedAt is when the service was created, in UTC.
+	CreatedAt time.Time
+	// Labels are the labels of the service's spec. They stay on the server, where the
+	// list search reads them; no response carries them.
+	Labels map[string]string
+	// Constraints are the placement constraints of the service's spec, as written. Never
+	// nil.
+	Constraints []string
+	// Preferences are the spread descriptors of the service's placement preferences (the
+	// label each Spread preference spreads tasks over), in the spec's order. Never nil.
+	Preferences []string
+	// MaxReplicas is the most tasks of the service one node may run; 0 when unset.
+	MaxReplicas uint64
+}
+
+// ServicePort is one port a swarm service publishes.
+type ServicePort struct {
+	// Published is the port on the swarm (or on the node, for host mode), Target the port
+	// in the container.
+	Published, Target uint32
+	// Protocol is tcp, udp or sctp.
+	Protocol string
+	// Mode is ingress (the routing mesh) or host (only the node that runs the task).
+	Mode string
+}
+
+// stackLabel is the label docker stack deploy puts on every service of a stack (E19).
+const stackLabel = "com.docker.stack.namespace"
+
+// servicePorts converts an endpoint's ports, sorted so a row reads the same on every
+// refresh. The result is never nil.
+func servicePorts(in []swarm.PortConfig) []ServicePort {
+	out := make([]ServicePort, 0, len(in))
+	for _, p := range in {
+		out = append(out, ServicePort{
+			Published: p.PublishedPort, Target: p.TargetPort,
+			Protocol: string(p.Protocol), Mode: string(p.PublishMode),
+		})
+	}
+	slices.SortStableFunc(out, func(a, b ServicePort) int {
+		return cmp.Or(cmp.Compare(a.Published, b.Published), cmp.Compare(a.Target, b.Target), cmp.Compare(a.Protocol, b.Protocol))
+	})
+	return out
 }
 
 // AgentTaskRow is the state of the agent service's current task on one node.
 type AgentTaskRow struct{ NodeID, State, Error string }
 
 // ServiceRef is what one swarm service's spec mentions, whatever its tasks are doing:
-// the networks it attaches to, by network ID, and the volumes it mounts, by name. A
-// service scaled to zero still mentions them, which is why the rules for deleting a
-// network or a volume read specs and not tasks (D-41, RESEARCH Pitfall 7).
+// the networks it attaches to, by network ID, the volumes it mounts, by name, and the
+// secrets and configs it references. A service scaled to zero still mentions them, which is
+// why the rules for deleting a network, a volume, a secret or a config read specs and not
+// tasks (D-41, RESEARCH Pitfall 7).
 type ServiceRef struct {
 	ID, Name string
 	// Networks are network IDs. A spec that names a swarm network by name is resolved
@@ -89,6 +163,18 @@ type ServiceRef struct {
 	// Image is the image the service's spec names, as written: a tag, and a digest too once
 	// the swarm has pinned it. Empty for a spec with no container spec.
 	Image string
+	// Secrets and Configs are the secrets and configs the service's container spec references,
+	// whatever its tasks are doing. Never nil.
+	Secrets, Configs []ServiceObjectRef
+}
+
+// ServiceObjectRef is one secret or config reference of a service's container spec: which
+// object, and the file it appears as in the container. File is empty for a config with a
+// runtime target.
+type ServiceObjectRef struct {
+	ID, Name, File string
+	UID, GID       string
+	Mode           uint32
 }
 
 // ServiceVolumeMount is one volume mount of a service's container spec.
@@ -96,6 +182,19 @@ type ServiceVolumeMount struct {
 	// Source is the volume's name, Target where it appears in the container.
 	Source, Target string
 	ReadOnly       bool
+}
+
+// FailedTaskRow is one swarm task that ended failed or rejected, from the history Docker
+// keeps. A task that was shut down (by an update, a scale-down or a removal) or that
+// completed (a job's) is never one, whatever its exit code was (RESEARCH E12).
+type FailedTaskRow struct {
+	ID, ServiceID, NodeID string
+	// Slot is the replica number of a replicated service's task, 0 for a global one.
+	Slot int
+	// State is failed or rejected, Err the swarm's own text about why.
+	State, Err string
+	// At is when the task reached State, in UTC.
+	At time.Time
 }
 
 // ClusterRead is what one manager says about the cluster.
@@ -106,6 +205,12 @@ type ClusterRead struct {
 	// ServiceRefs are the networks and volumes each service's spec mentions, sorted
 	// by service name then ID.
 	ServiceRefs []ServiceRef
+	// FailedTasks are the failed and rejected tasks in the history Docker keeps, newest
+	// first, then by ID. Restart-loop detection counts them (RES-13).
+	FailedTasks []FailedTaskRow
+	// HistoryLimit is how many tasks per slot Docker keeps (TaskHistoryRetentionLimit),
+	// DefaultTaskHistoryLimit when the cluster never set it.
+	HistoryLimit int
 }
 
 // Cluster reads the nodes, the services with their task counts and the tasks of
@@ -131,10 +236,14 @@ func (c *Client) Cluster(ctx context.Context) (ClusterRead, error) {
 			ID: n.ID, Hostname: n.Description.Hostname, Role: string(n.Spec.Role),
 			Availability: string(n.Spec.Availability), State: string(n.Status.State),
 			EngineVersion: n.Description.Engine.EngineVersion, OS: n.Description.Platform.OS,
+			Address: n.Status.Addr, Arch: n.Description.Platform.Architecture,
+			NanoCPUs: n.Description.Resources.NanoCPUs, MemoryBytes: n.Description.Resources.MemoryBytes,
+			Labels: nonNilLabels(n.Spec.Labels), EngineLabels: nonNilLabels(n.Description.Engine.Labels),
 		}
 		if n.ManagerStatus != nil {
 			row.Leader = n.ManagerStatus.Leader
 			row.Reachability = string(n.ManagerStatus.Reachability)
+			row.ManagerAddr = n.ManagerStatus.Addr
 		}
 		out.Nodes = append(out.Nodes, row)
 	}
@@ -152,12 +261,33 @@ func (c *Client) Cluster(ctx context.Context) (ClusterRead, error) {
 		if isAgentService(s) {
 			agentServices = append(agentServices, s.ID)
 		}
-		row := ServiceRow{ID: s.ID, Name: s.Spec.Name, Mode: serviceMode(s.Spec.Mode), UpdatedAt: s.UpdatedAt.UTC()}
+		row := ServiceRow{
+			ID: s.ID, Name: s.Spec.Name, Mode: serviceMode(s.Spec.Mode), UpdatedAt: s.UpdatedAt.UTC(),
+			Stack: s.Spec.Labels[stackLabel], Agent: isAgentService(s),
+		}
+		if cs := s.Spec.TaskTemplate.ContainerSpec; cs != nil {
+			row.Image = cs.Image
+		}
 		if s.ServiceStatus != nil {
 			row.Running, row.Desired = s.ServiceStatus.RunningTasks, s.ServiceStatus.DesiredTasks
 		}
 		if s.UpdateStatus != nil {
 			row.UpdateState = string(s.UpdateStatus.State)
+			row.UpdateMessage = s.UpdateStatus.Message
+		}
+		row.HasPreviousSpec = s.PreviousSpec != nil
+		row.CreatedAt = s.CreatedAt.UTC()
+		row.Labels = s.Spec.Labels
+		row.Ports = servicePorts(s.Endpoint.Ports)
+		row.Constraints, row.Preferences = []string{}, []string{}
+		if pl := s.Spec.TaskTemplate.Placement; pl != nil {
+			row.Constraints = append(row.Constraints, pl.Constraints...)
+			row.MaxReplicas = pl.MaxReplicas
+			for _, pref := range pl.Preferences {
+				if pref.Spread != nil {
+					row.Preferences = append(row.Preferences, pref.Spread.SpreadDescriptor)
+				}
+			}
 		}
 		out.Services = append(out.Services, row)
 	}
@@ -168,17 +298,69 @@ func (c *Client) Cluster(ctx context.Context) (ClusterRead, error) {
 		return ClusterRead{}, err
 	}
 
-	if len(agentServices) == 0 {
-		return out, nil // no agent service, so no agent tasks to ask for
+	if len(agentServices) > 0 {
+		// The services are named by ID: a service filter that names none would list
+		// every task, and an ID cannot be mistaken for another service's name.
+		ts, err := cli.TaskList(ctx, client.TaskListOptions{Filters: make(client.Filters).Add("service", agentServices...)})
+		if err != nil {
+			return ClusterRead{}, fmt.Errorf("list the agent service's tasks on %s: %w", c.t.Describe(), err)
+		}
+		out.AgentTasks = currentAgentTasks(ts.Items)
 	}
-	// The services are named by ID: a service filter that names none would list
-	// every task, and an ID cannot be mistaken for another service's name.
-	ts, err := cli.TaskList(ctx, client.TaskListOptions{Filters: make(client.Filters).Add("service", agentServices...)})
+
+	// The history restart-loop detection counts: every task the swarm has finished with is
+	// desired shutdown, so one filtered list holds all the failures Docker still keeps.
+	hs, err := cli.TaskList(ctx, client.TaskListOptions{Filters: make(client.Filters).Add("desired-state", string(swarm.TaskStateShutdown))})
 	if err != nil {
-		return ClusterRead{}, fmt.Errorf("list the agent service's tasks on %s: %w", c.t.Describe(), err)
+		return ClusterRead{}, fmt.Errorf("list the task history on %s: %w", c.t.Describe(), err)
 	}
-	out.AgentTasks = currentAgentTasks(ts.Items)
+	out.FailedTasks = failedTasks(hs.Items)
+
+	// How many tasks per slot Docker keeps says how much of a loop the history can show.
+	// It is context for the reader, so an engine that will not say is not a failed read.
+	if out.HistoryLimit, err = c.TaskHistoryLimit(ctx); err != nil {
+		if ctx.Err() != nil {
+			return ClusterRead{}, err
+		}
+		out.HistoryLimit = DefaultTaskHistoryLimit
+	}
 	return out, nil
+}
+
+// failedTasks keeps the tasks that ended failed or rejected, newest first, then by ID. A
+// task's state is what counts and never its exit code: the old tasks of a rolling or forced
+// update are shutdown with exit 137, and a job's finished tasks are complete (RESEARCH E12).
+func failedTasks(tasks []swarm.Task) []FailedTaskRow {
+	out := []FailedTaskRow{}
+	for _, t := range tasks {
+		if t.Status.State != swarm.TaskStateFailed && t.Status.State != swarm.TaskStateRejected {
+			continue
+		}
+		at := t.Status.Timestamp
+		if at.IsZero() {
+			at = t.UpdatedAt
+		}
+		if at.IsZero() {
+			at = t.CreatedAt
+		}
+		out = append(out, FailedTaskRow{
+			ID: t.ID, ServiceID: t.ServiceID, NodeID: t.NodeID, Slot: t.Slot,
+			State: string(t.Status.State), Err: t.Status.Err, At: at.UTC(),
+		})
+	}
+	slices.SortFunc(out, func(a, b FailedTaskRow) int {
+		return cmp.Or(b.At.Compare(a.At), cmp.Compare(a.ID, b.ID))
+	})
+	return out
+}
+
+// nonNilLabels returns the labels as a map that is never nil, so a consumer can range
+// over it and encode it as an object.
+func nonNilLabels(in map[string]string) map[string]string {
+	if in == nil {
+		return map[string]string{}
+	}
+	return maps.Clone(in)
 }
 
 // serviceMode names a service's mode.
@@ -279,7 +461,10 @@ func (c *Client) serviceRefsOf(ctx context.Context, cli *client.Client, services
 	}
 	refs := make([]ServiceRef, 0, len(services))
 	for _, s := range services {
-		ref := ServiceRef{ID: s.ID, Name: s.Spec.Name, Networks: []string{}, Volumes: []string{}, VolumeMounts: []ServiceVolumeMount{}}
+		ref := ServiceRef{
+			ID: s.ID, Name: s.Spec.Name, Networks: []string{}, Volumes: []string{}, VolumeMounts: []ServiceVolumeMount{},
+			Secrets: []ServiceObjectRef{}, Configs: []ServiceObjectRef{},
+		}
 		for _, a := range s.Spec.TaskTemplate.Networks {
 			target := a.Target
 			if id, ok := idOf[target]; ok {
@@ -299,6 +484,26 @@ func (c *Client) serviceRefsOf(ctx context.Context, cli *client.Client, services
 					ref.Volumes = append(ref.Volumes, m.Source)
 				}
 				ref.VolumeMounts = append(ref.VolumeMounts, ServiceVolumeMount{Source: m.Source, Target: m.Target, ReadOnly: m.ReadOnly})
+			}
+			for _, r := range cs.Secrets {
+				if r == nil {
+					continue
+				}
+				o := ServiceObjectRef{ID: r.SecretID, Name: r.SecretName}
+				if f := r.File; f != nil {
+					o.File, o.UID, o.GID, o.Mode = f.Name, f.UID, f.GID, uint32(f.Mode)
+				}
+				ref.Secrets = append(ref.Secrets, o)
+			}
+			for _, r := range cs.Configs {
+				if r == nil {
+					continue
+				}
+				o := ServiceObjectRef{ID: r.ConfigID, Name: r.ConfigName}
+				if f := r.File; f != nil {
+					o.File, o.UID, o.GID, o.Mode = f.Name, f.UID, f.GID, uint32(f.Mode)
+				}
+				ref.Configs = append(ref.Configs, o)
 			}
 		}
 		refs = append(refs, ref)

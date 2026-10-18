@@ -199,6 +199,47 @@ type Registry struct {
 	// falls to zero, so CloseAll can wait for every end to be audited.
 	ending int
 	idle   *sync.Cond
+
+	// changed is closed and replaced whenever a session joins the registry, leaves it, or finishes
+	// ending (OnEnd has returned).
+	// Its own mutex is a leaf, so notify may be called with or without mu held.
+	changeMu sync.Mutex
+	changed  chan struct{}
+}
+
+// notify wakes every Await.
+func (r *Registry) notify() {
+	r.changeMu.Lock()
+	defer r.changeMu.Unlock()
+	if r.changed != nil {
+		close(r.changed)
+		r.changed = nil
+	}
+}
+
+// Await returns nil once cond is true, and the context's error if ctx ends first. cond is
+// evaluated now and again after every change to the set of sessions (one registered, one
+// leaving) and after each end has finished, OnEnd included, so what OnEnd wrote can be read
+// by a cond. It never polls, so the deadline in ctx only guards against a hang.
+// cond may call List, Get and CountForUser but not Await.
+func (r *Registry) Await(ctx context.Context, cond func() bool) error {
+	for {
+		// Taken before cond is evaluated, so a change in between is not missed.
+		r.changeMu.Lock()
+		if r.changed == nil {
+			r.changed = make(chan struct{})
+		}
+		ch := r.changed
+		r.changeMu.Unlock()
+		if cond() {
+			return nil
+		}
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 // NewRegistry returns an empty registry. A nil clock is the wall clock.
@@ -294,6 +335,7 @@ func (r *Registry) CreateLimited(s *Session, exec Exec, pendingTTL time.Duration
 	id := s.ID
 	s.pendingStop = r.clock.AfterFunc(pendingTTL, func() { r.expire(id) })
 	r.mu.Unlock()
+	r.notify()
 	return s, nil
 }
 
@@ -370,6 +412,7 @@ func (r *Registry) End(id, reason string) (EndResult, bool) {
 	stop := s.pendingStop
 	s.pendingStop = nil
 	r.mu.Unlock()
+	r.notify()
 	defer r.endDone()
 	if stop != nil {
 		stop()
@@ -428,6 +471,8 @@ func (r *Registry) endDone() {
 		r.idle.Broadcast()
 	}
 	r.mu.Unlock()
+	// OnEnd has returned, so what it wrote (the audit row of the end) can be read now.
+	r.notify()
 }
 
 // List returns a copy of the facts of the open sessions that match f, oldest first.

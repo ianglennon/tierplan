@@ -1,0 +1,180 @@
+{
+  "configs": {
+    "list": {
+      "title": "Configs",
+      "count_one": "{{count, number}} config",
+      "count_other": "{{count, number}} configs",
+      "empty": "No configs",
+      "error": "Couldn't load configs.",
+      "errorRetry": "Retry loading configs",
+      "tooLarge": "There are too many configs, or they are too large, to load in one go. Delete the ones you no longer need and try again.",
+      "caption": {
+        "filtered_one": "{{n, number}} of {{count, number}} config",
+        "filtered_other": "{{n, number}} of {{count, number}} configs"
+      },
+      "search": {
+        "label": "Search configs",
+        "placeholder": "Search by name or label",
+        "clear": "Clear search"
+      },
+      "cap": "Showing the first 500 of {{total, number}}. Narrow the search to see the rest.",
+      "emptySearch": {
+        "title": "No configs match “{{q}}”.",
+        "action": "Clear search"
+      },
+      "columns": {
+        "name": "Name",
+        "usedBy": "Used by",
+        "owner": "Owner",
+        "created": "Created",
+        "updated": "Updated"
+      },
+      "usedBy": {
+        "count_one": "Used by {{count, number}} service",
+        "count_other": "Used by {{count, number}} services",
+        "none": "Not in use",
+        "loading": "Loading the services",
+        "error": "Couldn't load the services."
+      },
+      "owner": "Stack {{name}}",
+      "missing": "—",
+      "open": "Open",
+      "openLabel": "Open config {{name}}",
+      "inUseBy_one": "In use by {{count, number}} service. Open it to see what uses it.",
+      "inUseBy_other": "In use by {{count, number}} services. Open it to see what uses it.",
+      "emptyCreateBody": "Configs hold files that services read at run time, such as a settings file or a certificate."
+    },
+    "delete": {
+      "action": "Delete…",
+      "label": "Delete config {{name}}",
+      "title": "Delete {{name}}?",
+      "body": "This deletes the config and its content.",
+      "cancel": "Cancel",
+      "confirm": "Delete config",
+      "pending": "Deleting…",
+      "done": "Deleted config {{name}}.",
+      "gone": "{{name}} is already gone.",
+      "inUse": "{{name}} is still in use. Remove it from the services that use it, then try again.",
+      "reason_one": "In use by {{count, number}} service.",
+      "reason_other": "In use by {{count, number}} services."
+    },
+    "errors": {
+      "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening.",
+      "permission": "You no longer have permission to do that. Your access may have changed.",
+      "hostReadOnly": "This host is read-only. Changes are turned off on the host itself, so Bayplan can only read from it.",
+      "noManager": "No manager node is connected right now. Try again when one is back.",
+      "notASwarm": "This environment isn't a swarm, so it has no configs.",
+      "nameRequired": "Enter a name.",
+      "nameInvalid": "Use letters, numbers, dot, dash or underscore.",
+      "nameTaken": "A config named {{name}} already exists.",
+      "labels": "Use at most 64 labels, with names up to 256 characters and values up to 4096.",
+      "templating": "Choose None or Go template."
+    },
+    "create": {
+      "button": "Create config"
+    },
+    "sheet": {
+      "title": "Create a config",
+      "description": "Configs aren't encrypted. Don't put passwords or keys in one. Use a secret instead.",
+      "name": {
+        "label": "Name",
+        "helper": "Letters, numbers, dot, dash or underscore. It can't change later."
+      },
+      "labels": {
+        "label": "Labels",
+        "add": "Add label",
+        "key": "Label name",
+        "value": "Label value",
+        "remove": "Remove label {{key}}"
+      },
+      "templating": {
+        "label": "Templating (optional)",
+        "none": "None",
+        "golang": "Go template",
+        "helper": "Go template fills in values such as the service name when a task starts."
+      },
+      "cancel": "Cancel",
+      "submit": "Create config",
+      "done": "Created config {{name}}.",
+      "discard": {
+        "title": "Discard this config?",
+        "body": "The config hasn't been created yet. What you entered will be lost.",
+        "keep": "Keep editing",
+        "discard": "Discard"
+      }
+    },
+    "value": {
+      "tooBig": "Configs can be at most {{max}} KB."
+    },
+    "detail": {
+      "breadcrumb": {
+        "label": "Breadcrumb",
+        "configs": "Configs"
+      },
+      "tabs": {
+        "label": "Config sections",
+        "overview": "Overview",
+        "usedBy": "Used by",
+        "inspect": "Inspect"
+      },
+      "usedBy_one": "Used by {{count, number}} service",
+      "usedBy_other": "Used by {{count, number}} services",
+      "notInUse": "Not in use",
+      "owner": "Stack {{name}}",
+      "missing": "—",
+      "error": {
+        "loadFailed": "Couldn't load {{name}}. Docker may be unreachable. Try again.",
+        "retry": "Retry"
+      },
+      "gone": {
+        "heading": "This config is gone",
+        "body": "It was removed, or a new version replaced it. Go back to the list to find it.",
+        "back": "Back to configs"
+      },
+      "inUse": {
+        "title": "{{name}} is in use",
+        "body": "Services that mention it count, even with no running tasks. Remove it from them first."
+      },
+      "overview": {
+        "loading": "Loading the config",
+        "details": {
+          "title": "Details",
+          "id": "ID",
+          "idLabel": "the config ID",
+          "name": "Name",
+          "created": "Created",
+          "updated": "Updated",
+          "owner": "Owner",
+          "templating": "Templating",
+          "size": "Size"
+        },
+        "templating": {
+          "none": "None",
+          "golang": "Go template"
+        },
+        "labels": {
+          "title": "Labels",
+          "label": "Labels",
+          "empty": "No labels."
+        }
+      },
+      "content": {
+        "title": "Content",
+        "loading": "Loading the content",
+        "viewerLabel": "Content of {{name}}, read only",
+        "copy": "Copy",
+        "copied": "Copied",
+        "download": "Download",
+        "binary": "This config isn't text, so it can't be shown here. Download it to look at it."
+      },
+      "usedByTab": {
+        "loading": "Loading the services"
+      },
+      "inspect": {
+        "loading": "Loading the inspect output",
+        "loadFailed": "Couldn't load the inspect output of {{name}}.",
+        "retry": "Retry"
+      }
+    }
+  }
+}

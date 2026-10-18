@@ -15,6 +15,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // state reads what the engine says a container is doing, bypassing dockerx, so the
@@ -176,15 +177,11 @@ func TestActions(t *testing.T) {
 	})
 }
 
-// waitStopped polls until the engine says the container is no longer running.
+// waitStopped waits until the engine says the container is no longer running.
 func waitStopped(t *testing.T, ctx context.Context, raw *client.Client, name string) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
-		if !state(t, ctx, raw, name).State.Running {
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatalf("%s was still running after 30 s", name)
+	testsupport.Poll(t, 60*time.Second, name+" to stop running", func() (bool, string) {
+		st := state(t, ctx, raw, name).State
+		return !st.Running, "status " + string(st.Status)
+	})
 }

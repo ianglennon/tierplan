@@ -1,0 +1,573 @@
+[
+  {
+    "name": "clean spec",
+    "escalates": false,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [
+            {"Type": "volume", "Source": "web-data", "Target": "/data"},
+            {"Type": "tmpfs", "Target": "/tmp"}
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "bind of the docker socket",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{"Type": "bind", "Source": "/var/run/docker.sock", "Target": "/sock"}]
+        }
+      }
+    }
+  },
+  {
+    "name": "bind of the host root",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{"Type": "bind", "Source": "/", "Target": "/host"}]
+        }
+      }
+    }
+  },
+  {
+    "name": "bind below /srv",
+    "escalates": false,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{"Type": "bind", "Source": "/srv/web", "Target": "/data"}]
+        }
+      }
+    }
+  },
+  {
+    "name": "bind below /var/log",
+    "escalates": false,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{"Type": "bind", "Source": "/var/log/app", "Target": "/logs"}]
+        }
+      }
+    }
+  },
+  {
+    "name": "bind of /var/log whole",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{"Type": "bind", "Source": "/var/log", "Target": "/logs"}]
+        }
+      }
+    }
+  },
+  {
+    "name": "bind of a system tree",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{"Type": "bind", "Source": "/etc", "Target": "/etc"}]
+        }
+      }
+    }
+  },
+  {
+    "name": "local volume that binds the host root",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{
+            "Type": "volume",
+            "Source": "rootvol",
+            "Target": "/host",
+            "VolumeOptions": {"DriverConfig": {"Name": "local", "Options": {"type": "none", "o": "bind", "device": "/"}}}
+          }]
+        }
+      }
+    }
+  },
+  {
+    "name": "local volume with no driver name that binds a host device",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{
+            "Type": "volume",
+            "Source": "diskvol",
+            "Target": "/disk",
+            "VolumeOptions": {"DriverConfig": {"Options": {"type": "ext4", "device": "/dev/sda1"}}}
+          }]
+        }
+      }
+    }
+  },
+  {
+    "name": "local nfs volume",
+    "escalates": false,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{
+            "Type": "volume",
+            "Source": "share",
+            "Target": "/share",
+            "VolumeOptions": {"DriverConfig": {"Name": "local", "Options": {"type": "nfs", "o": "addr=10.0.0.5,rw", "device": ":/export"}}}
+          }]
+        }
+      }
+    }
+  },
+  {
+    "name": "local volume that binds a path under /srv",
+    "escalates": false,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{
+            "Type": "volume",
+            "Source": "srvvol",
+            "Target": "/data",
+            "VolumeOptions": {"DriverConfig": {"Name": "local", "Options": {"type": "none", "o": "bind", "device": "/srv/data"}}}
+          }]
+        }
+      }
+    }
+  },
+  {
+    "name": "named pipe mount",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{"Type": "npipe", "Source": "\\\\.\\pipe\\docker_engine", "Target": "\\\\.\\pipe\\docker_engine"}]
+        }
+      }
+    }
+  },
+  {
+    "name": "added capability",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {"Image": "nginx:1.27", "CapabilityAdd": ["NET_ADMIN"]}
+      }
+    }
+  },
+  {
+    "name": "dropped capability only",
+    "escalates": false,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {"Image": "nginx:1.27", "CapabilityDrop": ["MKNOD"]}
+      }
+    }
+  },
+  {
+    "name": "SELinux disabled",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {"Image": "nginx:1.27", "Privileges": {"SELinuxContext": {"Disable": true}}}
+      }
+    }
+  },
+  {
+    "name": "SELinux spc_t",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {"Image": "nginx:1.27", "Privileges": {"SELinuxContext": {"Type": "spc_t"}}}
+      }
+    }
+  },
+  {
+    "name": "SELinux label that confines",
+    "escalates": false,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {"Image": "nginx:1.27", "Privileges": {"SELinuxContext": {"Type": "container_t", "Level": "s0:c1,c2"}}}
+      }
+    }
+  },
+  {
+    "name": "seccomp unconfined",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {"Image": "nginx:1.27", "Privileges": {"Seccomp": {"Mode": "unconfined"}}}
+      }
+    }
+  },
+  {
+    "name": "seccomp custom profile",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {"Image": "nginx:1.27", "Privileges": {"Seccomp": {"Mode": "custom", "Profile": "e30="}}}
+      }
+    }
+  },
+  {
+    "name": "seccomp default",
+    "escalates": false,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {"Image": "nginx:1.27", "Privileges": {"Seccomp": {"Mode": "default"}}}
+      }
+    }
+  },
+  {
+    "name": "AppArmor disabled",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {"Image": "nginx:1.27", "Privileges": {"AppArmor": {"Mode": "disabled"}}}
+      }
+    }
+  },
+  {
+    "name": "host network by name",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {"Image": "nginx:1.27"},
+        "Networks": [{"Target": "host"}]
+      }
+    }
+  },
+  {
+    "name": "host network by id",
+    "escalates": true,
+    "hostNetworkIDs": ["7a1c0f3e9b2d4c5f8e6a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e"],
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {"Image": "nginx:1.27"},
+        "Networks": [{"Target": "7a1c0f3e9b2d4c5f8e6a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e"}]
+      }
+    }
+  },
+  {
+    "name": "overlay network by id",
+    "escalates": false,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {"Image": "nginx:1.27"},
+        "Networks": [{"Target": "k3v9w2x1y0z8a7b6c5d4e3f2g"}]
+      }
+    }
+  },
+  {
+    "name": "volume with a plugin driver",
+    "escalates": false,
+    "agentRefuses": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{
+            "Type": "volume",
+            "Source": "plug",
+            "Target": "/data",
+            "VolumeOptions": {"DriverConfig": {"Name": "rexray/ebs", "Options": {"size": "10"}}}
+          }]
+        }
+      }
+    }
+  },
+  {
+    "name": "volume with the local driver in capitals and an nfs share",
+    "escalates": false,
+    "agentRefuses": false,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{
+            "Type": "volume",
+            "Source": "share",
+            "Target": "/share",
+            "VolumeOptions": {"DriverConfig": {"Name": "LOCAL", "Options": {"type": "nfs", "o": "addr=10.0.0.5,rw", "device": ":/export"}}}
+          }]
+        }
+      }
+    }
+  },
+  {
+    "name": "cluster volume mount",
+    "escalates": false,
+    "agentRefuses": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{"Type": "cluster", "Source": "csi-vol", "Target": "/data"}]
+        }
+      }
+    }
+  },
+  {
+    "name": "named volume that exists and binds the host root",
+    "escalates": false,
+    "agentRefuses": true,
+    "volumes": {"rootvol-existing": {"driver": "local", "options": {"type": "none", "o": "bind", "device": "/"}}},
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{"Type": "volume", "Source": "rootvol-existing", "Target": "/host"}]
+        }
+      }
+    }
+  },
+  {
+    "name": "named volume that exists as an nfs share",
+    "escalates": false,
+    "agentRefuses": false,
+    "volumes": {"share-existing": {"driver": "local", "options": {"type": "nfs", "o": "addr=10.0.0.5,rw", "device": ":/export"}}},
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{"Type": "volume", "Source": "share-existing", "Target": "/share"}]
+        }
+      }
+    }
+  },
+  {
+    "name": "named volume that exists with a plugin driver",
+    "escalates": false,
+    "agentRefuses": true,
+    "volumes": {"plug-existing": {"driver": "rexray/ebs"}},
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{"Type": "volume", "Source": "plug-existing", "Target": "/data"}]
+        }
+      }
+    }
+  },
+  {
+    "name": "local volume that binds a relative device",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{
+            "Type": "volume",
+            "Source": "relvol",
+            "Target": "/data",
+            "VolumeOptions": {"DriverConfig": {"Name": "local", "Options": {"type": "none", "o": "bind", "device": "etc"}}}
+          }]
+        }
+      }
+    }
+  },
+  {
+    "name": "local volume that binds var/lib/docker relatively",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{
+            "Type": "volume",
+            "Source": "relvol2",
+            "Target": "/data",
+            "VolumeOptions": {"DriverConfig": {"Name": "local", "Options": {"type": "none", "o": "bind", "device": "var/lib/docker"}}}
+          }]
+        }
+      }
+    }
+  },
+  {
+    "name": "local volume that binds var/run relatively",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{
+            "Type": "volume",
+            "Source": "relvol3",
+            "Target": "/data",
+            "VolumeOptions": {"DriverConfig": {"Name": "local", "Options": {"type": "none", "o": "bind", "device": "var/run"}}}
+          }]
+        }
+      }
+    }
+  },
+  {
+    "name": "local volume that binds the docker socket relatively",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{
+            "Type": "volume",
+            "Source": "relvol4",
+            "Target": "/data",
+            "VolumeOptions": {"DriverConfig": {"Name": "local", "Options": {"type": "none", "o": "bind", "device": "var/run/docker.sock"}}}
+          }]
+        }
+      }
+    }
+  },
+  {
+    "name": "local overlay volume over the host root",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{
+            "Type": "volume",
+            "Source": "ovlvol",
+            "Target": "/data",
+            "VolumeOptions": {"DriverConfig": {"Name": "local", "Options": {"type": "overlay", "device": "overlay", "o": "lowerdir=/:/srv/empty"}}}
+          }]
+        }
+      }
+    }
+  },
+  {
+    "name": "local proc volume",
+    "escalates": true,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{
+            "Type": "volume",
+            "Source": "procvol",
+            "Target": "/data",
+            "VolumeOptions": {"DriverConfig": {"Name": "local", "Options": {"type": "proc", "device": "proc"}}}
+          }]
+        }
+      }
+    }
+  },
+  {
+    "name": "local tmpfs volume with a size",
+    "escalates": false,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{
+            "Type": "volume",
+            "Source": "tmpvol",
+            "Target": "/data",
+            "VolumeOptions": {"DriverConfig": {"Name": "local", "Options": {"type": "tmpfs", "device": "tmpfs", "o": "size=64m"}}}
+          }]
+        }
+      }
+    }
+  },
+  {
+    "name": "named volume that exists and binds a relative device",
+    "escalates": false,
+    "agentRefuses": true,
+    "volumes": {"relvol-existing": {"driver": "local", "options": {"type": "none", "o": "bind", "device": "etc"}}},
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{"Type": "volume", "Source": "relvol-existing", "Target": "/data"}]
+        }
+      }
+    }
+  },
+  {
+    "name": "named volume that exists as an overlay over the host root",
+    "escalates": false,
+    "agentRefuses": true,
+    "volumes": {"ovlvol-existing": {"driver": "local", "options": {"type": "overlay", "device": "overlay", "o": "lowerdir=/:/srv/empty"}}},
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{"Type": "volume", "Source": "ovlvol-existing", "Target": "/data"}]
+        }
+      }
+    }
+  },
+  {
+    "name": "named volume that exists as tmpfs",
+    "escalates": false,
+    "agentRefuses": false,
+    "volumes": {"tmpvol-existing": {"driver": "local", "options": {"type": "tmpfs", "device": "tmpfs", "o": "size=64m"}}},
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "nginx:1.27",
+          "Mounts": [{"Type": "volume", "Source": "tmpvol-existing", "Target": "/data"}]
+        }
+      }
+    }
+  }
+]

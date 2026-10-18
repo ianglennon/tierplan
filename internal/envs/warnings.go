@@ -17,7 +17,20 @@ const (
 	WarnPendingLong        = "pending_long"
 	WarnClusterChanged     = "cluster_changed"
 	WarnFoldOffered        = "fold_offered"
+	// WarnRestartLoop is a swarm service whose tasks keep failing and whose alerts nobody
+	// muted (plan 06-35, RES-13, D-15).
+	WarnRestartLoop = "restart_loop"
+	// WarnRestartLoopContainer is a standalone container that keeps dying and whose alerts
+	// nobody muted (plan 06-36, RES-13, D-15).
+	WarnRestartLoopContainer = "restart_loop_container"
 )
+
+// maxWarnError is the longest latest-error text a restart-loop warning carries, in characters.
+const maxWarnError = 300
+
+// maxExitCode is the longest exit code a container-loop warning carries, in characters. A
+// real one is a small integer; the text comes from the engine and is never trusted.
+const maxExitCode = 12
 
 // The severities of an environment warning.
 const (
@@ -32,6 +45,13 @@ type EnvWarning struct {
 	Days, Count                                         int
 	Offset                                              time.Duration
 	ExpiresAt                                           time.Time
+	// For a restart loop: the service, how long a window the count is over, and Docker's
+	// latest task error. Count is how many tasks failed in that window.
+	Service, ServiceID, LatestError string
+	WindowMinutes                   int
+	// For a container loop: the container's name and ID, the node it is on and its last
+	// exit code. Count and WindowMinutes are as for a service.
+	Container, ContainerID, NodeID, LastExitCode string
 }
 
 // AgentState is what the warnings need to know of one agent.
@@ -131,6 +151,51 @@ func Warnings(envs []Environment, agents map[string][]AgentState, now time.Time)
 		}
 		out = append(out, w)
 	}
+	SortWarnings(out)
+	return out
+}
+
+// RestartLoopWarnings are the bell items of the restart loops one environment's last cluster
+// read found: one error per flagged service whose alerts nobody muted. The loops are by
+// service ID. The caller passes only the loops of an environment it may show.
+func RestartLoopWarnings(e Environment, loops map[string]RestartLoop) []EnvWarning {
+	var out []EnvWarning
+	for id, l := range loops {
+		if l.Muted {
+			continue
+		}
+		out = append(out, EnvWarning{
+			ID: WarnRestartLoop, Severity: SeverityError, EnvID: e.ID, EnvName: cleanText(e.Name, maxNodeLen),
+			Service: cleanText(l.Name, maxNodeLen), ServiceID: id, Count: l.Count, WindowMinutes: int(l.Window / time.Minute),
+			LatestError: cleanText(l.LatestError, maxWarnError), Since: l.Since,
+		})
+	}
+	SortWarnings(out)
+	return out
+}
+
+// ContainerLoopWarnings are the bell items of the container loops one environment's last
+// read found: one error per flagged standalone container whose alerts nobody muted. The caller
+// passes only the loops of an environment it may show.
+func ContainerLoopWarnings(e Environment, loops map[string]ContainerLoop) []EnvWarning {
+	var out []EnvWarning
+	for _, l := range loops {
+		if l.Muted {
+			continue
+		}
+		out = append(out, EnvWarning{
+			ID: WarnRestartLoopContainer, Severity: SeverityError, EnvID: e.ID, EnvName: cleanText(e.Name, maxNodeLen),
+			Container: cleanText(l.Name, maxNodeLen), ContainerID: l.ContainerID, NodeID: l.NodeID,
+			Count: l.Count, WindowMinutes: int(l.Window / time.Minute), LastExitCode: cleanText(l.LastExitCode, maxExitCode), Since: l.Since,
+		})
+	}
+	SortWarnings(out)
+	return out
+}
+
+// SortWarnings orders warnings errors first, then newest first, then by environment, node,
+// service, container and ID, so the same warnings always come out in the same order.
+func SortWarnings(out []EnvWarning) {
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := out[i], out[j]
 		if ra, rb := a.Severity == SeverityError, b.Severity == SeverityError; ra != rb {
@@ -145,7 +210,18 @@ func Warnings(envs []Environment, agents map[string][]AgentState, now time.Time)
 		if a.Node != b.Node {
 			return a.Node < b.Node
 		}
+		if a.ServiceID != b.ServiceID {
+			return a.ServiceID < b.ServiceID
+		}
+		if a.NodeID != b.NodeID {
+			return a.NodeID < b.NodeID
+		}
+		if a.Container != b.Container {
+			return a.Container < b.Container
+		}
+		if a.ContainerID != b.ContainerID {
+			return a.ContainerID < b.ContainerID
+		}
 		return a.ID < b.ID
 	})
-	return out
 }

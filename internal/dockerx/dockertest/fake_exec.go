@@ -148,6 +148,7 @@ func (f *Fake) resizeExec(w http.ResponseWriter, r *http.Request, id string) {
 	f.execs.mu.Lock()
 	f.execs.resizes = append(f.execs.resizes, fmt.Sprintf("h=%d&w=%d", h, wd))
 	f.execs.mu.Unlock()
+	f.await.notify()
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -182,10 +183,12 @@ func (f *Fake) startExec(w http.ResponseWriter, r *http.Request, id string, cfg 
 		x.running = false
 		x.exitCode = &code
 		f.execs.mu.Unlock()
+		f.await.notify()
 	}
 	f.execs.mu.Lock()
 	x.started = true
 	f.execs.mu.Unlock()
+	f.await.notify()
 
 	if len(x.cmd) > 0 && slices.Contains(cfg.MissingExecutables, x.cmd[0]) {
 		_, _ = fmt.Fprintf(rw, execOCIMissing, x.cmd[0], x.cmd[0])
@@ -196,6 +199,7 @@ func (f *Fake) startExec(w http.ResponseWriter, r *http.Request, id string, cfg 
 	f.execs.mu.Lock()
 	x.running = true
 	f.execs.mu.Unlock()
+	f.await.notify()
 	_ = rw.Flush()
 
 	br := bufio.NewReader(rw.Reader)

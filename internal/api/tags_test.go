@@ -20,7 +20,6 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/envs"
 )
 
 // Browsing a repository's tags (plan 05-18, IMG-03, D-19, D-24a, T-05-60). The router,
@@ -93,6 +92,7 @@ func problemErrors(t *testing.T, rec *httptest.ResponseRecorder) map[string]stri
 }
 
 func TestBrowseTagsListsTheNamesWithTheInstanceCredentialThatMatches(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)
 	reg.tags = []string{"3", "1", "2"}
@@ -122,6 +122,7 @@ func TestBrowseTagsListsTheNamesWithTheInstanceCredentialThatMatches(t *testing.
 }
 
 func TestBrowseTagsIsAnonymousWhenNoCredentialMatchesAndTheRegistryWantsALogin(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)
 	f.trusting(t, reg)
@@ -142,6 +143,7 @@ func TestBrowseTagsIsAnonymousWhenNoCredentialMatchesAndTheRegistryWantsALogin(t
 }
 
 func TestBrowseTagsRefusesACallerWhoCannotReadImagesAnywhereOrOnTheChosenEnvironment(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	a, b := f.twoEnvironments(t)
 	reg := newFakeRegistry(t)
@@ -181,6 +183,7 @@ func TestBrowseTagsRefusesACallerWhoCannotReadImagesAnywhereOrOnTheChosenEnviron
 }
 
 func TestBrowseTagsNeverServesAListFetchedWithACredentialTheCallerCannotUse(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	a, b := f.twoEnvironments(t)
 	reg := newFakeRegistry(t)
@@ -230,6 +233,7 @@ func TestBrowseTagsNeverServesAListFetchedWithACredentialTheCallerCannotUse(t *t
 }
 
 func TestBrowseTagsNamesTheCredentialTheRegistryRefusedAndRecordsTheFailure(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)
 	f.trusting(t, reg)
@@ -257,6 +261,7 @@ func TestBrowseTagsNamesTheCredentialTheRegistryRefusedAndRecordsTheFailure(t *t
 // A credential with no namespace covers any repository a caller names, so a refusal on one of them
 // is not the credential failing (WR-B03).
 func TestBrowseTagsDoesNotFlagACredentialWithNoNamespaceWhenTheRegistryRefusesIt(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)
 	f.trusting(t, reg)
@@ -279,6 +284,7 @@ func TestBrowseTagsDoesNotFlagACredentialWithNoNamespaceWhenTheRegistryRefusesIt
 // token. The credential's sign-in works, so the refusal is the repository's: the answer says so,
 // and a credential with a namespace is not flagged (G-05-17a, D-07).
 func TestBrowseTagsSaysARepositoryIsUnavailableAndDoesNotFlagACredentialWhoseSignInWorks(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)
 	reg.tagsStatus = http.StatusUnauthorized
@@ -301,6 +307,7 @@ func TestBrowseTagsSaysARepositoryIsUnavailableAndDoesNotFlagACredentialWhoseSig
 }
 
 func TestBrowseTagsMapsAMissingRepositoryAndAnUnparsableReference(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)
 	reg.tagsStatus = http.StatusNotFound
@@ -323,6 +330,7 @@ func TestBrowseTagsMapsAMissingRepositoryAndAnUnparsableReference(t *testing.T) 
 }
 
 func TestBrowseTagsSortsFiltersHidesAndPages(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)
 	reg.tags = []string{"latest", "app.sig"}
@@ -362,6 +370,7 @@ func TestBrowseTagsSortsFiltersHidesAndPages(t *testing.T) {
 }
 
 func TestBrowseTagsRefusesAParameterOutOfRange(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)
 	f.trusting(t, reg)
@@ -451,6 +460,7 @@ func (f *authFixture) details(t *testing.T, u credentialUser, reg *fakeRegistry,
 }
 
 func TestBrowseTagDetailsGiveTheDigestDateAndPlatformsOfTheTagsAsked(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)
 	created := time.Date(2026, 2, 3, 4, 5, 6, 0, time.UTC)
@@ -489,6 +499,7 @@ func TestBrowseTagDetailsGiveTheDigestDateAndPlatformsOfTheTagsAsked(t *testing.
 // read repository_unavailable, and nothing is recorded against a credential with a namespace
 // (G-05-17a, D-07).
 func TestBrowseTagDetailsOfARepositoryTheRegistryRefusesAreUnavailableAndDoNotFlagTheCredential(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)
 	reg.extra = func(w http.ResponseWriter, _ *http.Request) {
@@ -515,6 +526,7 @@ func TestBrowseTagDetailsOfARepositoryTheRegistryRefusesAreUnavailableAndDoNotFl
 }
 
 func TestBrowseTagDetailsRefusesZeroTagsMoreThan25AndAnUnparsableReference(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)
 	serveImage(reg, time.Now())
@@ -542,6 +554,7 @@ func TestBrowseTagDetailsRefusesZeroTagsMoreThan25AndAnUnparsableReference(t *te
 // A tag becomes the last segment of a registry URL sent with the credential, so one that is not
 // in the reference grammar is refused before the registry is asked (WR-B05, WR-A02).
 func TestBrowseTagDetailsRefusesATagThatIsNotInTheReferenceGrammarWithoutAskingTheRegistry(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)
 	serveImage(reg, time.Now())
@@ -561,6 +574,7 @@ func TestBrowseTagDetailsRefusesATagThatIsNotInTheReferenceGrammarWithoutAskingT
 }
 
 func TestBrowseTagDetailsAuthoriseExactlyAsBrowseTagsBeforeAnythingIsRead(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	a, b := f.twoEnvironments(t)
 	reg := newFakeRegistry(t)
@@ -600,6 +614,7 @@ func TestBrowseTagDetailsAuthoriseExactlyAsBrowseTagsBeforeAnythingIsRead(t *tes
 }
 
 func TestBrowseTagDetailsNeverServeWhatACredentialSawToACallerWhoCannotUseIt(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	a, b := f.twoEnvironments(t)
 	reg := newFakeRegistry(t)
@@ -630,6 +645,7 @@ func TestBrowseTagDetailsNeverServeWhatACredentialSawToACallerWhoCannotUseIt(t *
 // Running in (plan 05-19 task 2, IMG-03, D-22, T-05-64).
 
 func TestBrowseTagDetailsSayWhichReadableEnvironmentsRunTheDigestAndNoOthers(t *testing.T) {
+	t.Parallel()
 	reg := newFakeRegistry(t)
 	img := serveImage(reg, time.Now())
 	image := reg.host() + "/acme/app"
@@ -643,7 +659,7 @@ func TestBrowseTagDetailsSayWhichReadableEnvironmentsRunTheDigestAndNoOthers(t *
 	f.trusting(t, reg)
 	f.storeCredential(t, credentialUser{f.cookie, f.csrf}, reg.credentialBody("fake-inst"))
 	a := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(a.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, a.ID)
 	f.inst.Apply("Bayplan", "https://example.com/bayplan")
 	bEnv, rec := f.addAgent(t)
 	if rec.code != http.StatusCreated {
@@ -685,6 +701,7 @@ func TestBrowseTagDetailsSayWhichReadableEnvironmentsRunTheDigestAndNoOthers(t *
 }
 
 func TestBrowseTagDetailsMatchByDigestSoAMovedTagStillShowsWhereItsImageRuns(t *testing.T) {
+	t.Parallel()
 	reg := newFakeRegistry(t)
 	img := serveImage(reg, time.Now())
 	image := reg.host() + "/acme/app"
@@ -700,7 +717,7 @@ func TestBrowseTagDetailsMatchByDigestSoAMovedTagStillShowsWhereItsImageRuns(t *
 	f.trusting(t, reg)
 	f.storeCredential(t, credentialUser{f.cookie, f.csrf}, reg.credentialBody("fake-inst"))
 	a := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(a.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, a.ID)
 	rec := f.details(t, credentialUser{f.cookie, f.csrf}, reg, "acme/app", "", "1.0")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("details: %d %s", rec.Code, rec.Body)
@@ -742,6 +759,7 @@ type envDetailsResp struct {
 }
 
 func TestEnvTagDetailsRunningHereListsContainersAndServicesByDigestEvenAfterTheTagMoved(t *testing.T) {
+	t.Parallel()
 	reg := newFakeRegistry(t)
 	img := serveImage(reg, time.Now())
 	image := reg.host() + "/acme/app"
@@ -759,7 +777,7 @@ func TestEnvTagDetailsRunningHereListsContainersAndServicesByDigestEvenAfterTheT
 	f.trusting(t, reg)
 	f.storeCredential(t, credentialUser{f.cookie, f.csrf}, reg.credentialBody("fake-inst"))
 	a := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(a.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, a.ID)
 	viewer := f.asRoleOn(t, "viewera", a.ID, "viewer")
 
 	rec := f.envDetails(t, viewer, reg, "acme/app", a.ID, "1.0", "other")
@@ -796,6 +814,7 @@ func TestEnvTagDetailsRunningHereListsContainersAndServicesByDigestEvenAfterTheT
 }
 
 func TestEnvBrowseTagsRunningHereRoutesNeedImagesReadOnThatEnvironmentAndUseOnlyItsCredentials(t *testing.T) {
+	t.Parallel()
 	reg := newFakeRegistry(t)
 	reg.tags = []string{"1.0", "2.0"}
 	serveImage(reg, time.Now())
@@ -804,7 +823,7 @@ func TestEnvBrowseTagsRunningHereRoutesNeedImagesReadOnThatEnvironmentAndUseOnly
 	admin := credentialUser{f.cookie, f.csrf}
 	f.storeCredential(t, admin, reg.credentialBody("fake-inst"))
 	a := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(a.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, a.ID)
 	f.inst.Apply("Bayplan", "https://example.com/bayplan")
 	bEnv, rec := f.addAgent(t)
 	if rec.code != http.StatusCreated {
@@ -835,6 +854,7 @@ func TestEnvBrowseTagsRunningHereRoutesNeedImagesReadOnThatEnvironmentAndUseOnly
 }
 
 func TestEnvTagDetailsMissingPlatformsNameTheNodeArchitecturesTheTagLacksOnlyInAnEnvironment(t *testing.T) {
+	t.Parallel()
 	reg := newFakeRegistry(t)
 	// The tag is an arm64 image; the fake node reports amd64.
 	serveImage(reg, time.Now())
@@ -843,7 +863,7 @@ func TestEnvTagDetailsMissingPlatformsNameTheNodeArchitecturesTheTagLacksOnlyInA
 	admin := credentialUser{f.cookie, f.csrf}
 	f.storeCredential(t, admin, reg.credentialBody("fake-inst"))
 	a := f.add(t)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(a.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, a.ID)
 
 	rec := f.envDetails(t, admin, reg, "acme/app", a.ID, "1.0")
 	if rec.Code != http.StatusOK {
@@ -865,6 +885,7 @@ func TestEnvTagDetailsMissingPlatformsNameTheNodeArchitecturesTheTagLacksOnlyInA
 // Every tag request can make the server connect to a host the caller named, so a user is held to a
 // limit that makes scanning hosts and ports through the registry codes slow (WR-B01).
 func TestBrowseTagsLimitsEachUserAndTheLimitIsNotSharedWithAnotherUser(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	reg := newFakeRegistry(t)
 	f.trusting(t, reg)
@@ -897,6 +918,12 @@ func TestBrowseTagsLimitsEachUserAndTheLimitIsNotSharedWithAnotherUser(t *testin
 	// Another user has their own.
 	if rec := f.browse(t, admin, reg, "acme/app", ""); rec.Code != http.StatusOK {
 		t.Errorf("another user: %d %s, want 200", rec.Code, rec.Body)
+	}
+	// The limit is counted on the fixture's clock, which stands still, so no request below depends on
+	// how long the ones above took; a minute on that clock refills 60 requests.
+	f.clk.t = f.clk.t.Add(time.Minute)
+	if rec := f.browse(t, viewer, reg, "acme/app", ""); rec.Code != http.StatusOK {
+		t.Errorf("after a minute on the limiter's clock: %d %s, want 200", rec.Code, rec.Body)
 	}
 }
 

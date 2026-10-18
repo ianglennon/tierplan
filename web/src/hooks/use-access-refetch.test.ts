@@ -11,6 +11,7 @@ import {
 } from "@/hooks/use-access-refetch";
 import type { Me } from "@/hooks/use-me";
 import { makeMe } from "@/test-me";
+import { waitUnderFakeClock } from "@/test-settle";
 
 let clock: number;
 let meAnswer: Me;
@@ -98,6 +99,13 @@ function setup(envId: string | undefined, before: Me) {
 
 const meReads = () => calls.filter((c) => c === "/api/me").length;
 
+// quiet gives everything that is able to run its turns, so that a test can then assert
+// that nothing more happened while a read is held. The handler's own timers are the
+// test's schedule() and never fire by themselves; the clock here is only the one that
+// runs the promise chains. Call useQuietClock() first.
+const useQuietClock = () => vi.useFakeTimers();
+const quiet = () => vi.advanceTimersByTimeAsync(20);
+
 beforeEach(() => {
   clock = 1_000_000;
   calls = [];
@@ -111,6 +119,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const h of handlers) h.dispose();
   vi.unstubAllGlobals();
   qc.clear();
@@ -135,8 +144,8 @@ describe("the throttle (T-03-100)", () => {
 
     clock += ACCESS_REFETCH_THROTTLE_MS;
     fire();
-    await vi.waitFor(() => expect(meReads()).toBe(2));
-    await vi.waitFor(() => expect(isAccessRefetching()).toBe(false));
+    await waitUnderFakeClock(() => expect(meReads()).toBe(2));
+    await waitUnderFakeClock(() => expect(isAccessRefetching()).toBe(false));
     expect(liveTimers()).toHaveLength(0);
     expect(timers).toHaveLength(1);
   });
@@ -158,58 +167,60 @@ describe("the throttle (T-03-100)", () => {
 
     clock += ACCESS_REFETCH_THROTTLE_MS;
     fire();
-    await vi.waitFor(() => expect(moveTo).toHaveBeenCalledExactlyOnceWith(undefined));
+    await waitUnderFakeClock(() => expect(moveTo).toHaveBeenCalledExactlyOnceWith(undefined));
     expect(notifyChanged).toHaveBeenCalledTimes(1);
     expect(meReads()).toBe(2);
   });
 
   it("never has two reads of /api/me outstanding", async () => {
+    useQuietClock();
     meAnswer = makeMe({ envs: { a: "viewer" } });
     const { handle } = setup("a", meAnswer);
     const release = holdMe();
     const first = handle("unseen", "/api/env/a/summary");
-    await vi.waitFor(() => expect(meReads()).toBe(1));
+    await waitUnderFakeClock(() => expect(meReads()).toBe(1));
 
     clock += 1_000;
     await handle("unseen", "/api/env/a/containers");
     clock += ACCESS_REFETCH_THROTTLE_MS;
     fire();
     // The window is over but the first read has not answered.
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await quiet();
     expect(meReads()).toBe(1);
 
     release();
     await first;
-    await vi.waitFor(() => expect(meReads()).toBe(2));
-    await vi.waitFor(() => expect(isAccessRefetching()).toBe(false));
+    await waitUnderFakeClock(() => expect(meReads()).toBe(2));
+    await waitUnderFakeClock(() => expect(isAccessRefetching()).toBe(false));
   });
 
   it("folds a refusal that arrives after the window into the run still outstanding (WR-G-01)", async () => {
+    useQuietClock();
     const before = makeMe({ envs: { a: "viewer", b: "viewer" } });
     meAnswer = makeMe({ envs: { b: "viewer" } });
     items = ["b"];
     const { handle, moveTo, notifyChanged } = setup("a", before);
     const release = holdMe();
     const first = handle("unseen", "/api/env/a/summary");
-    await vi.waitFor(() => expect(meReads()).toBe(1));
+    await waitUnderFakeClock(() => expect(meReads()).toBe(1));
 
     // The window is over but the first read has not answered: a slow /api/me.
     clock += ACCESS_REFETCH_THROTTLE_MS + 1_000;
     await handle("unseen", "/api/env/a/containers");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await quiet();
     // No second read beside the first, and the first was not cancelled.
     expect(meReads()).toBe(1);
     expect(liveTimers()).toHaveLength(1);
     expect(moveTo).not.toHaveBeenCalled();
 
     fire();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await quiet();
     expect(meReads()).toBe(1);
 
     release();
     await first;
-    await vi.waitFor(() => expect(isAccessRefetching()).toBe(false));
-    await vi.waitFor(() => expect(meReads()).toBe(2));
+    await waitUnderFakeClock(() => expect(isAccessRefetching()).toBe(false));
+    await waitUnderFakeClock(() => expect(meReads()).toBe(2));
     // The move and the toast happened once, not once per run.
     expect(moveTo).toHaveBeenCalledExactlyOnceWith("b");
     expect(notifyChanged).toHaveBeenCalledTimes(1);
@@ -237,11 +248,11 @@ describe("the throttle (T-03-100)", () => {
     clock += ACCESS_REFETCH_THROTTLE_MS;
     fire();
     expect(isAccessRefetching()).toBe(true);
-    await vi.waitFor(() => expect(meReads()).toBe(2));
+    await waitUnderFakeClock(() => expect(meReads()).toBe(2));
     expect(isAccessRefetching()).toBe(true);
     release();
-    await vi.waitFor(() => expect(moveTo).toHaveBeenCalledExactlyOnceWith(undefined));
-    await vi.waitFor(() => expect(isAccessRefetching()).toBe(false));
+    await waitUnderFakeClock(() => expect(moveTo).toHaveBeenCalledExactlyOnceWith(undefined));
+    await waitUnderFakeClock(() => expect(isAccessRefetching()).toBe(false));
     expect(notifyChanged).toHaveBeenCalledTimes(1);
   });
 
@@ -256,8 +267,8 @@ describe("the throttle (T-03-100)", () => {
 
     clock += ACCESS_REFETCH_THROTTLE_MS;
     fire();
-    await vi.waitFor(() => expect(meReads()).toBe(2));
-    await vi.waitFor(() => expect(isAccessRefetching()).toBe(false));
+    await waitUnderFakeClock(() => expect(meReads()).toBe(2));
+    await waitUnderFakeClock(() => expect(isAccessRefetching()).toBe(false));
     expect(moveTo).not.toHaveBeenCalled();
     expect(notifyChanged).not.toHaveBeenCalled();
   });
@@ -289,7 +300,7 @@ describe("the throttle (T-03-100)", () => {
 
     clock += ACCESS_REFETCH_THROTTLE_MS;
     fire();
-    await vi.waitFor(() => expect(notifyChanged).toHaveBeenCalledTimes(1));
+    await waitUnderFakeClock(() => expect(notifyChanged).toHaveBeenCalledTimes(1));
     expect(moveTo).not.toHaveBeenCalled();
   });
 
@@ -302,8 +313,8 @@ describe("the throttle (T-03-100)", () => {
     await handle("refused", "/api/env/a/reconnect");
     clock += ACCESS_REFETCH_THROTTLE_MS;
     fire();
-    await vi.waitFor(() => expect(meReads()).toBe(2));
-    await vi.waitFor(() => expect(isAccessRefetching()).toBe(false));
+    await waitUnderFakeClock(() => expect(meReads()).toBe(2));
+    await waitUnderFakeClock(() => expect(isAccessRefetching()).toBe(false));
     expect(notifyRefused).toHaveBeenCalledTimes(2);
     expect(notifyChanged).not.toHaveBeenCalled();
   });
@@ -360,7 +371,7 @@ describe("the move after an environment is lost (D-10)", () => {
     const { handle, moveTo, notifyChanged } = setup("ghost", me);
     const release = holdMe();
     const run = handle("unseen", "/api/env/ghost/summary");
-    await vi.waitFor(() => expect(meReads()).toBe(1));
+    await waitUnderFakeClock(() => expect(meReads()).toBe(1));
     // The plain Page not found is not held back for a read of /api/me (D-08).
     expect(isAccessRefetching()).toBe(false);
     release();
@@ -377,7 +388,7 @@ describe("the move after an environment is lost (D-10)", () => {
     const { handle, moveTo, notifyChanged } = setup("ghost", me);
     const release = holdMe();
     const run = handle("unseen", "/api/env/ghost/summary");
-    await vi.waitFor(() => expect(meReads()).toBe(1));
+    await waitUnderFakeClock(() => expect(meReads()).toBe(1));
     expect(isAccessRefetching()).toBe(false);
     release();
     await run;
@@ -392,7 +403,7 @@ describe("the move after an environment is lost (D-10)", () => {
     const { handle } = setup("a", me);
     const release = holdMe();
     const run = handle("unseen", "/api/env/a/summary");
-    await vi.waitFor(() => expect(meReads()).toBe(1));
+    await waitUnderFakeClock(() => expect(meReads()).toBe(1));
     expect(isAccessRefetching()).toBe(true);
     release();
     await run;
@@ -534,11 +545,12 @@ describe("the baseline (G-03-2)", () => {
 
 describe("dispose", () => {
   it("cancels the trailing run, releases the skeleton and silences a run still in flight", async () => {
+    useQuietClock();
     meAnswer = makeMe({ envs: { a: "viewer", b: "viewer" } });
     const { handle, dispose, moveTo, notifyChanged } = setup("a", meAnswer);
     const release = holdMe();
     const first = handle("unseen", "/api/env/a/summary");
-    await vi.waitFor(() => expect(meReads()).toBe(1));
+    await waitUnderFakeClock(() => expect(meReads()).toBe(1));
     expect(isAccessRefetching()).toBe(true);
     clock += 1_000;
     await handle("unseen", "/api/env/a/containers");
@@ -554,7 +566,7 @@ describe("dispose", () => {
     items = ["b"];
     release();
     await first;
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await quiet();
     expect(moveTo).not.toHaveBeenCalled();
     expect(notifyChanged).not.toHaveBeenCalled();
     expect(isAccessRefetching()).toBe(false);

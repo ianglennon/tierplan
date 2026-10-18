@@ -41,6 +41,17 @@ function stub(who: Who) {
       if (path === "/api/env/e1/containers/c1") {
         return Response.json({ id: "c1", name: "web-1", state: "running", stack: "", labels: [] });
       }
+      if (path === "/api/env/e1/services/web") {
+        return Response.json({
+          id: "svc1",
+          name: "web",
+          mode: "replicated",
+          running: 2,
+          desired: 2,
+          updateStatus: "",
+          labels: [],
+        });
+      }
       if (path === "/api/version") {
         return Response.json({
           version: "",
@@ -130,6 +141,66 @@ describe("the logs pop-out", () => {
   it("says so, and opens no stream, for a person who may not read containers there", async () => {
     stub("no-access");
     visit(PATH);
+    expect(await screen.findByText(/don't have permission|not allowed|permission/i)).toBeTruthy();
+    expect(FakeEventSource.instances).toHaveLength(0);
+  });
+});
+
+// The logs pop-out of a service (plan 06-31, OBS-02, D-35): the same viewer, chrome-less.
+describe("the service logs pop-out", () => {
+  const SERVICE_PATH = "/popout/e1/services/web/logs";
+
+  it("sends a signed-out visitor to sign-in with the pop-out remembered in next", async () => {
+    stub("signed-out");
+    const router = visit(`${SERVICE_PATH}?task=t1&stopped=true`);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
+    const next = (router.state.location.search as { next?: string }).next;
+    expect(next?.startsWith(SERVICE_PATH)).toBe(true);
+    expect(next).toContain("task=t1");
+  });
+
+  it("opens outside the app chrome with the service, its state, the environment and the version footer", async () => {
+    stub("viewer");
+    visit(SERVICE_PATH);
+    expect(await screen.findByRole("heading", { level: 1, name: "web" })).toBeTruthy();
+    expect(await screen.findByText("Homelab")).toBeTruthy();
+    expect(await screen.findByText("Running")).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: /main/i })).toBeNull();
+    expect(document.querySelector('[data-slot="sidebar"]')).toBeNull();
+    expect(await screen.findByRole("link", { name: /dev \(abc1234\)/ })).toBeTruthy();
+    expect(screen.getByRole("log", { name: "Logs for web" })).toBeTruthy();
+  });
+
+  it("titles the window with the service and the instance", async () => {
+    stub("viewer");
+    visit(SERVICE_PATH);
+    await waitFor(() => expect(document.title).toBe("web logs · Bayplan Home"));
+  });
+
+  it("opens the stream of the service narrowed as the address says, and reads the settings from it", async () => {
+    stub("viewer");
+    visit(
+      `${SERVICE_PATH}?task=t1&node=alpha&stopped=true&prefix=false&q=boom&ts=true&wrap=true&since=1h`,
+    );
+    await screen.findByRole("log", { name: "Logs for web" });
+    const url = new URL((FakeEventSource.instances[0] as FakeEventSource).url, "http://x");
+    expect(url.pathname).toBe("/api/env/e1/services/web/logs/stream");
+    expect(url.searchParams.get("task")).toBe("t1");
+    expect(url.searchParams.get("node")).toBe("alpha");
+    expect(url.searchParams.get("stopped")).toBe("1");
+    expect(url.searchParams.has("since")).toBe(true);
+    expect((screen.getByRole("searchbox", { name: "Search logs" }) as HTMLInputElement).value).toBe(
+      "boom",
+    );
+    expect(screen.getByRole("button", { name: "Timestamps", pressed: true })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Wrap", pressed: true })).toBeTruthy();
+    // The pop-out does not offer a pop-out.
+    expect(screen.queryByRole("button", { name: "Open in new window" })).toBeNull();
+  });
+
+  it("says so, and opens no stream, for a person who may not read services there", async () => {
+    stub("no-access");
+    visit(SERVICE_PATH);
     expect(await screen.findByText(/don't have permission|not allowed|permission/i)).toBeTruthy();
     expect(FakeEventSource.instances).toHaveLength(0);
   });

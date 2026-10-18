@@ -22,6 +22,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/engine"
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // Real-engine checks (D-28). CI runs this against docker:24-dind through
@@ -317,11 +318,8 @@ func TestIntegrationEventsHubSeesAContainerStart(t *testing.T) {
 	if err := mon.Start(ctx, env, dockertest.TCPTransportFor(host)); err != nil {
 		t.Fatalf("start the monitor: %v", err)
 	}
-	for deadline := time.Now().Add(30 * time.Second); mon.Status(env).State != envs.StateOnline; {
-		if time.Now().After(deadline) {
-			t.Fatalf("the environment never came online: %+v", mon.Status(env))
-		}
-		time.Sleep(50 * time.Millisecond)
+	if _, err := mon.AwaitStatus(testsupport.Context(t), env, func(st envs.Status) bool { return st.State == envs.StateOnline }); err != nil {
+		t.Fatalf("the environment never came online: %v; last status %+v", err, mon.Status(env))
 	}
 
 	backlog, ch, stop := hub.Subscribe(ctx, env)
@@ -364,7 +362,7 @@ func TestIntegrationEventsHubSeesAContainerStart(t *testing.T) {
 	// a fresh subscriber more than 64 events behind, and the hub then closes its channel
 	// so it reconnects, as a browser does with Last-Event-ID. The test does the same:
 	// subscribe again and look in the backlog as well as the live channel.
-	timeout := time.After(15 * time.Second)
+	timeout := time.After(testsupport.Deadline)
 	for {
 		for _, ev := range backlog {
 			if isStart(ev) {
@@ -383,7 +381,7 @@ func TestIntegrationEventsHubSeesAContainerStart(t *testing.T) {
 				return
 			}
 		case <-timeout:
-			t.Fatal("no container start event within 15 seconds")
+			t.Fatalf("no container start event within %s", testsupport.Deadline)
 		}
 	}
 }
@@ -440,7 +438,7 @@ func TestEventsSwarmTypesOnStandalone(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 
-	timeout := time.After(10 * time.Second)
+	timeout := time.After(testsupport.Deadline)
 	for {
 		select {
 		case row, ok := <-rows:
@@ -459,7 +457,7 @@ func TestEventsSwarmTypesOnStandalone(t *testing.T) {
 			}
 			return
 		case <-timeout:
-			t.Fatal("no container start event within 10 seconds")
+			t.Fatalf("no container start event within %s", testsupport.Deadline)
 		}
 	}
 }
@@ -493,6 +491,7 @@ func TestContainerHealthInList(t *testing.T) {
 		Name: name,
 		Config: &container.Config{
 			Image: "alpine:3", Cmd: []string{"sleep", "300"},
+			// wall-clock: this is the container's own healthcheck setting, not a test wait; the check runs `false`, so it fails at once whatever the timeout
 			Healthcheck: &container.HealthConfig{Test: []string{"CMD-SHELL", "false"}, Interval: time.Second, Timeout: time.Second, Retries: 1},
 		},
 	}); err != nil {
@@ -510,22 +509,20 @@ func TestContainerHealthInList(t *testing.T) {
 		t.Fatalf("Probe: %v", err)
 	}
 
-	var last string
-	deadline := time.Now().Add(90 * time.Second)
-	for time.Now().Before(deadline) {
+	testsupport.Poll(t, 90*time.Second, "the failing container to read unhealthy in the list", func() (bool, string) {
 		snap, err := cli.Snapshot(ctx, false)
 		if err != nil {
 			t.Fatalf("Snapshot: %v", err)
 		}
+		var seen string
 		for _, c := range snap.Containers {
 			if c.Name == name {
-				last = c.Health + " (" + c.Status + ")"
+				seen = c.Health + " (" + c.Status + ")"
 				if c.Health == dockerx.HealthUnhealthy {
-					return
+					return true, seen
 				}
 			}
 		}
-		time.Sleep(time.Second)
-	}
-	t.Fatalf("the failing container never read unhealthy in the list; last seen %q", last)
+		return false, seen
+	})
 }

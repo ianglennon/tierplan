@@ -35,6 +35,10 @@ func (f *Fake) serveVolumeCreate(w http.ResponseWriter, r *http.Request, p strin
 		writeJSON(w, http.StatusForbidden, map[string]string{"message": "agent_policy_denied: " + r.Method + " " + r.URL.Path})
 		return true
 	}
+	if cfg.VolumeHostPolicyDeny {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "agent_policy_denied: host_policy: " + r.Method + " " + r.URL.Path})
+		return true
+	}
 	var req volume.CreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid request body: " + err.Error()})

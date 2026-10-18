@@ -1,0 +1,225 @@
+{
+  "services": {
+    "list": {
+      "title": "Services",
+      "count_one": "{{count, number}} service",
+      "count_other": "{{count, number}} services",
+      "empty": "No services",
+      "error": "Couldn't load services.",
+      "columns": {
+        "name": "Name",
+        "state": "State",
+        "mode": "Mode",
+        "replicas": "Replicas",
+        "image": "Image",
+        "updated": "Updated",
+        "ports": "Ports"
+      },
+      "mode": {
+        "replicated": "Replicated",
+        "global": "Global",
+        "replicated-job": "Replicated job",
+        "global-job": "Global job"
+      },
+      "scaling": "Scaling…",
+      "state": {
+        "running": "Running",
+        "degraded": "Degraded",
+        "notRunning": "Not running",
+        "scaledToZero": "Scaled to 0",
+        "updating": "Updating",
+        "rollingBack": "Rolling back",
+        "updatePaused": "Update paused",
+        "rollbackPaused": "Rollback paused",
+        "rolledBack": "Rolled back",
+        "completed": "Completed"
+      },
+      "stateTooltip": "{{running, number}} of {{desired, number}} replicas running",
+      "noManager": {
+        "title": "No manager is connected",
+        "body": "Swarm changes are off until a manager node's agent reconnects. You can still look at what Bayplan last saw."
+      },
+      "menu": {
+        "scale": "Scale…",
+        "forceUpdate": "Force update…",
+        "rollback": "Roll back…",
+        "remove": "Remove…"
+      },
+      "caption": {
+        "filtered_one": "{{n, number}} of {{count, number}} service",
+        "filtered_other": "{{n, number}} of {{count, number}} services"
+      },
+      "emptyCreateBody": "Services run your containers across the swarm. Create one, or deploy a stack that defines them.",
+      "emptyFilters": {
+        "title": "No services match these filters.",
+        "action": "Clear filters"
+      },
+      "emptySearch": {
+        "title": "No services match “{{q}}”.",
+        "action": "Clear search"
+      },
+      "errorRetry": "Retry loading services",
+      "search": {
+        "label": "Search services",
+        "placeholder": "Search by name, image, label or stack",
+        "clear": "Clear search"
+      },
+      "groupBy": {
+        "label": "Group by",
+        "stack": "Stack",
+        "none": "None"
+      },
+      "group": {
+        "ungrouped": "Ungrouped",
+        "healthy_one": "{{healthy, number}} of {{count, number}} healthy",
+        "healthy_other": "{{healthy, number}} of {{count, number}} healthy",
+        "kind": {
+          "stack": "Stack"
+        }
+      },
+      "collapseAll": "Collapse all groups",
+      "expandAll": "Expand all groups",
+      "clearFilters": "Clear filters",
+      "status": {
+        "label": "Filter by status",
+        "degraded": "Degraded",
+        "updating": "Updating",
+        "problem": "Update problem",
+        "loop": "Restart loop",
+        "chip": "{{label}} {{count, number}}"
+      },
+      "cap": "Showing the first 500 of {{total, number}}. Narrow the search to see the rest.",
+      "changes_one": "{{count}} change waiting",
+      "changes_other": "{{count}} changes waiting",
+      "showChanges": "Show changes",
+      "self": {
+        "agentService": "Bayplan agent"
+      },
+      "select": {
+        "all": "Select all services"
+      },
+      "bulk": {
+        "none": "None of the selected services can be scaled."
+      },
+      "create": "Create service"
+    },
+    "notASwarm": {
+      "heading": "This isn't a swarm",
+      "body": "{{environment}} is a standalone host, so it has no services, nodes, secrets or configs.",
+      "back": "Back to containers"
+    },
+    "scale": {
+      "title": "Scale {{name}}",
+      "body": "Set how many tasks should run. It runs {{count, number}} now.",
+      "replicas": "Replicas",
+      "cancel": "Cancel",
+      "submit": "Scale service",
+      "pending": "Scaling…",
+      "zeroWarning": "Scaling to 0 stops every task. The service stays, and you can scale it up again.",
+      "stackWarning": "{{name}} belongs to stack {{stack}}. The next stack deploy sets its replica count again.",
+      "done": "Scaled {{name}} to {{replicas, number}}.",
+      "unchanged": "{{name}} already runs {{replicas, number}}. Nothing changed.",
+      "errors": {
+        "range": "Enter a whole number from 0 to 1000.",
+        "service_changed": "This service was changed by someone else after it was read. Nothing was changed. Check the list for what it runs now, then scale it again.",
+        "service_not_found": "This service is gone. It was removed, or a stack deploy replaced it.",
+        "not_scalable_global": "Global services can't be scaled.",
+        "not_scalable_job": "Jobs can't be scaled here.",
+        "no_manager_connected": "No manager is connected for {{environment}}, so this swarm can't be changed right now. Reconnect a manager's agent and try again.",
+        "no_quorum": "The swarm has lost its quorum, so it can't be changed right now. Bring its managers back and try again.",
+        "registry_unresolved": "Bayplan couldn't read the registry credential for this service's image, so nothing was sent. Check the credential under Registries, then try again.",
+        "permission": "You no longer have permission to do that. Your access may have changed.",
+        "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening."
+      },
+      "bulkTitle": "Scale {{count}} services",
+      "bulkBody": "Set how many tasks each service should run.",
+      "setAll": "Set all to",
+      "replicasFor": "Replicas for {{name}}",
+      "columns": {
+        "service": "Service",
+        "now": "Now",
+        "new": "New",
+        "note": "Note"
+      },
+      "skipped": "Skipped",
+      "partOfStack": "Part of stack {{stack}}",
+      "submitBulk_one": "Scale {{count}} service",
+      "submitBulk_other": "Scale {{count}} services",
+      "stackWarningMany_one": "{{count}} of these belongs to a stack. The next stack deploy sets its replica count again.",
+      "stackWarningMany_other": "{{count}} of these belong to stacks. The next stack deploy sets their replica counts again.",
+      "bulkDone_one": "Scaled {{count}} service.",
+      "bulkDone_other": "Scaled {{count}} services.",
+      "bulkPartial": "Scaled {{done}}, {{failed}} failed",
+      "results": {
+        "title": "Scale results",
+        "service": "Service"
+      }
+    },
+    "problems": {
+      "agent_host_policy": "This swarm's manager agents don't let Bayplan change services with host access. Set BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true on them to allow it."
+    },
+    "forceUpdate": {
+      "title": "Force update {{name}}?",
+      "body": "Swarm replaces every task, a batch at a time, using the service's update settings. Bayplan looks up the image again, so a tag that has moved is picked up.",
+      "cancel": "Cancel",
+      "submit": "Force update",
+      "pending": "Updating…",
+      "done": "Started a forced update of {{name}}.",
+      "stackWarning": "{{name}} belongs to stack {{stack}}. The next stack deploy applies the compose file again.",
+      "retry": {
+        "title": "Retry the update on {{name}}?",
+        "body": "Swarm tries the update again with the service's current settings.",
+        "submit": "Retry update",
+        "done": "Retrying the update on {{name}}."
+      }
+    },
+    "rollback": {
+      "title": "Roll back {{name}}?",
+      "body": "The service goes back to the settings it had before its last update. Swarm rolls tasks back a batch at a time.",
+      "cancel": "Cancel",
+      "submit": "Roll back service",
+      "pending": "Rolling back…",
+      "done": "Rolling back {{name}}.",
+      "stackWarning": "The next stack deploy applies the compose file again.",
+      "noEarlier": "There's no earlier version to roll back to.",
+      "loading": "Loading the earlier version…",
+      "loadFailed": "Couldn't load the earlier version.",
+      "now": "Now",
+      "after": "After rollback"
+    },
+    "remove": {
+      "title": "Remove {{name}}?",
+      "body_one": "Swarm stops its {{count}} task and deletes the service. Its images, volumes, networks, secrets and configs stay.",
+      "body_other": "Swarm stops its {{count}} tasks and deletes the service. Its images, volumes, networks, secrets and configs stay.",
+      "agentWarning": "This is Bayplan's agent service. Removing it cuts Bayplan off from every node it runs on.",
+      "cancel": "Cancel",
+      "confirm": "Remove service",
+      "confirmAgent": "Remove agent service",
+      "pending": "Removing…",
+      "done": "Removed {{name}}.",
+      "gone": "{{name}} is already gone.",
+      "stackOwned": "Managed by stack {{stack}}. Change it through the stack.",
+      "confirmRequired": "Type {{name}} to remove Bayplan's agent service."
+    },
+    "refusal": {
+      "image_unresolved": "Couldn't look up {{ref}} on {{host}} to pin it to a digest. Check the name, the tag and the credential, then try again.",
+      "service_changed": "This service was changed by someone else after you looked. Nothing was changed. Close this and open it again to see what it runs now.",
+      "service_not_found": "This service is gone. It was removed, or a stack deploy replaced it.",
+      "no_manager_connected": "No manager is connected for {{environment}}, so this swarm can't be changed right now. Reconnect a manager's agent and try again.",
+      "no_quorum": "The swarm has lost its quorum, so it can't be changed right now. Bring its managers back and try again.",
+      "registry_unresolved": "Bayplan couldn't read the registry credential for this service's image, so nothing was sent. Check the credential under Registries, then try again.",
+      "permission": "You no longer have permission to do that. Your access may have changed.",
+      "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening.",
+      "rollback_object_missing": "Can't roll back: {{object}} no longer exists. Create it again or edit the service instead.",
+      "rollback_object_unnamed": "something the earlier version uses",
+      "privileged_rollback": "Can't roll back: the earlier version uses settings that need Admin ({{list}}). Ask an administrator to roll it back.",
+      "privileged_update": "Can't update: this service uses settings that need Admin ({{list}}). Ask an administrator to do it.",
+      "secretReveal": "Can't add {{list}}: adding a secret to a service needs the reveal secrets permission. Ask an administrator to add it.",
+      "secretRevealRollback": "Can't roll back: the earlier version uses {{list}}, which this service doesn't use now, and adding a secret needs the reveal secrets permission. Ask an administrator to roll it back.",
+      "specInvalidRollback": "Can't roll back: the earlier version can't be sent as it is ({{message}}). Ask an administrator to correct the service.",
+      "specInvalid": "The change can't be sent as it is: {{message}}.",
+      "rejectedUpdate": "Docker rejected the update: {{message}}",
+      "rejectedRollback": "Docker rejected the rollback: {{message}}"
+    }
+  }
+}

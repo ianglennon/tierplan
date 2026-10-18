@@ -84,6 +84,10 @@ func writePermissionsMarkdown(w io.Writer, rows []rbac.MatrixRow) error {
 		"The user's page shows where each environment's access comes from.\n")
 	b.WriteString("- **Extras are held by Operators only when granted (D-16, D-17).** The dangerous permissions marked `extra` below " +
 		"belong to an Admin always, to an Operator only when the assignment carries them, and to a Viewer never.\n")
+	b.WriteString("- **Changing a service exposes what it holds (D-13 amended).** `services.control` lets an Operator change what a service runs, " +
+		"so they can read the values withheld from them on the services they edit (environment values, command line, health check and log options) " +
+		"and the secrets those services already use, even without `secrets.reveal`. Adding a secret a service does not already use, " +
+		"or rolling back to a version that uses one, needs `secrets.reveal`. See residual risk 36 in docs/threat-model.md.\n")
 	b.WriteString("- **The instance admin is a flag on a user, not a role (D-01, D-03).** An instance admin holds Admin on every environment " +
 		"with every extra, and is the only holder of the global permissions. Environment roles never grant a global permission.\n")
 	b.WriteString("- **Delegation is capped (D-12).** An environment Admin can assign Admin, Operator or Viewer, and the extras, on the " +

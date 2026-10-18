@@ -1,0 +1,9 @@
+{"Time":"2026-10-16T21:26:10.790052898Z","Action":"start","Package":"example.test/summaryfix/a"}
+{"Time":"2026-10-16T21:26:10.796813817Z","Action":"output","Package":"example.test/summaryfix/a","Output":"-test.shuffle 1792185970796724857\n"}
+{"Time":"2026-10-16T21:26:10.796945826Z","Action":"run","Package":"example.test/summaryfix/a","Test":"TestAPasses"}
+{"Time":"2026-10-16T21:26:10.796953247Z","Action":"output","Package":"example.test/summaryfix/a","Test":"TestAPasses","Output":"=== RUN   TestAPasses\n","OutputType":"frame"}
+{"Time":"2026-10-16T21:26:10.79696368Z","Action":"output","Package":"example.test/summaryfix/a","Test":"TestAPasses","Output":"--- PASS: TestAPasses (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-16T21:26:10.796971194Z","Action":"pass","Package":"example.test/summaryfix/a","Test":"TestAPasses","Elapsed":0}
+{"Time":"2026-10-16T21:26:10.796987375Z","Action":"output","Package":"example.test/summaryfix/a","Output":"PASS\n","OutputType":"frame"}
+{"Time":"2026-10-16T21:26:11.798563716Z","Action":"output","Package":"example.test/summaryfix/a","Output":"ok  \texample.test/summaryfix/a\t1.008s\n"}
+{"Time":"2026-10-16T21:26:11.798617863Z","Action":"pass","Package":"example.test/summaryfix/a","Elapsed":1.009}

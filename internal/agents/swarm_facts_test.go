@@ -16,6 +16,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -34,10 +35,9 @@ func dockerxFor(t *testing.T, n *dockertest.Node) *dockerx.Client {
 	return c
 }
 
-// TestSwarmRealEngineFacts reads a real swarm of three managers and a worker with
+// sharedRealEngineFacts reads a real swarm of three managers and a worker with
 // dockerx directly and through the environment API.
-func TestSwarmRealEngineFacts(t *testing.T) {
-	f := startSwarmFix(t, 3, 1)
+func sharedRealEngineFacts(t *testing.T, f *swarmFix) {
 	worker := f.sw.Workers[0]
 	f.install(t)
 	f.waitSwarmOnline(t, 4)
@@ -192,11 +192,10 @@ func TestSwarmRealEngineFacts(t *testing.T) {
 	}
 }
 
-// TestSwarmRealEvents checks what real cluster events look like and what the
+// sharedRealEvents checks what real cluster events look like and what the
 // merged feed does with them: a swarm-scoped event comes from every manager and
 // shows once, a node-local one comes from its node only and names it.
-func TestSwarmRealEvents(t *testing.T) {
-	f := startSwarmFix(t, 3, 1)
+func sharedRealEvents(t *testing.T, f *swarmFix) {
 	worker, mgr1, mgr2 := f.sw.Workers[0], f.sw.Managers[0], f.sw.Managers[1]
 	dockertest.LoadImage(t, "busybox", worker, mgr2)
 	f.install(t)
@@ -237,7 +236,7 @@ func TestSwarmRealEvents(t *testing.T) {
 				if s == want {
 					return true
 				}
-			case <-time.After(20 * time.Second):
+			case <-time.After(testsupport.Deadline):
 				return false
 			}
 		}

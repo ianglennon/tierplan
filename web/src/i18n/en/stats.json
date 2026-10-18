@@ -1,0 +1,87 @@
+{
+  "stats": {
+    "title": "Stats",
+    "surface": "Live resource use of {{name}}",
+    "note": "Live from each node, every 2 seconds. The last 5 minutes are kept in this browser tab and clear when you leave.",
+    "waiting": "Waiting for the first sample…",
+    "paused": "Paused while this tab is hidden.",
+    "closed": {
+      "failed": "Stats stopped. Reload the page to try again.",
+      "access_lost": "Your access changed. Stats were closed.",
+      "not_running": "Stats stopped because the container isn't running."
+    },
+    "notReporting": "{{node}} isn't reporting right now. Stats resume when it does.",
+    "stopped": "The container stopped. Stats resume when it starts.",
+    "empty": {
+      "title": "{{name}} isn't running",
+      "body": "Start it to see its stats."
+    },
+    "tiles": {
+      "label": "Current values",
+      "cpu": "CPU",
+      "cpuHint": "Percent of one core. 100% is one core fully used.",
+      "memory": "Memory",
+      "memoryLimit": "{{percent}}% of a {{size}} limit",
+      "memoryNoLimit": "No limit set",
+      "network": "Network",
+      "networkIn": "In {{rate}}",
+      "networkOut": "Out {{rate}}",
+      "block": "Block I/O",
+      "blockRead": "Read {{rate}}",
+      "blockWrite": "Write {{rate}}",
+      "memoryLimitTotal": "{{percent}}% of {{size}} in limits",
+      "memoryNoSharedLimit": "No shared limit"
+    },
+    "charts": {
+      "cpu": "CPU",
+      "memory": "Memory",
+      "network": "Network in and out",
+      "block": "Block I/O read and write",
+      "ago": "5 min ago",
+      "now": "now",
+      "limit": "Limit {{size}}",
+      "in": "In",
+      "out": "Out",
+      "read": "Read",
+      "write": "Write",
+      "loading": "Loading the chart",
+      "summary": "{{title}}, now {{now}}, highest {{high}} in the last 5 minutes",
+      "summaryWaiting": "{{title}}, waiting for the first sample"
+    },
+    "thisNode": "This node",
+    "list": {
+      "toggle": "Live stats",
+      "toggleHint": "Adds CPU, memory and network columns. Streams only while this list is open.",
+      "silent_one": "Not counting {{count}} task on a node that isn't reporting.",
+      "silent_other": "Not counting {{count}} tasks on nodes that aren't reporting.",
+      "networkSr": "In {{inRate}}, out {{outRate}}"
+    },
+    "tasks": {
+      "title": "By task",
+      "columns": {
+        "task": "Task",
+        "node": "Node",
+        "trend": "Trend"
+      },
+      "noData": "No data",
+      "noDataTip": "{{node}} isn't reporting right now.",
+      "blockSr": "Read {{read}}, write {{write}}",
+      "stoppedNote": "Stopped tasks drop out of the totals."
+    },
+    "partial_one": "{{count}} task runs on a node that isn't reporting, so these totals leave it out.",
+    "partial_other": "{{count}} tasks run on nodes that aren't reporting, so these totals leave them out.",
+    "serviceEmpty": {
+      "title": "No running tasks",
+      "body": "Stats appear here once the service has a running task."
+    },
+    "placement": {
+      "toggleHint": "Adds CPU and memory bars to each node. Streams only while this page is open.",
+      "waiting": "Waiting for stats…",
+      "notReporting": "Not reporting",
+      "usage": "Tasks use {{cpu}}% CPU and {{used}} of {{total}} memory",
+      "cpuBar": "CPU used by tasks on {{node}}",
+      "memoryBar": "Memory used by tasks on {{node}}",
+      "partial": "Counting only the first 1,000 running tasks."
+    }
+  }
+}

@@ -157,10 +157,16 @@ func (f *Fake) serveDistribution(w http.ResponseWriter, r *http.Request, p strin
 		writeJSON(w, cfg.PullStatus.Code, map[string]string{"message": cfg.PullStatus.Message})
 		return true
 	}
+	f.mu.Lock()
+	dgst, moved := f.distDigest[name]
+	f.mu.Unlock()
+	if !moved {
+		dgst = fakeDigest(name)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"Descriptor": map[string]any{
 			"mediaType": "application/vnd.oci.image.index.v1+json",
-			"digest":    fakeDigest(name),
+			"digest":    dgst,
 			"size":      1024,
 		},
 		"Platforms": []map[string]any{
@@ -171,6 +177,18 @@ func (f *Fake) serveDistribution(w http.ResponseWriter, r *http.Request, p strin
 		},
 	})
 	return true
+}
+
+// SetDistributionDigest makes the distribution route answer digest for the full reference
+// (for example "docker.io/library/nginx:1.27") from now on, as a registry does when a tag is
+// pushed again.
+func (f *Fake) SetDistributionDigest(fullRef, digest string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.distDigest == nil {
+		f.distDigest = map[string]string{}
+	}
+	f.distDigest[fullRef] = digest
 }
 
 // DistributionAuth returns the X-Registry-Auth header of every distribution check the

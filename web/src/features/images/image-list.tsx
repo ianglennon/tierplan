@@ -60,6 +60,7 @@ import {
   TruncatedText,
 } from "@/features/resources/resource-table";
 import { useChosenKeys, useSelection } from "@/features/resources/selection";
+import { STATUS_CHIP_ROW } from "@/features/resources/status-chips";
 import {
   nodeRowKey,
   nodeSearchSchema,
@@ -718,7 +719,7 @@ export function ImageList({ envId, search, onSearchChange }: ImageListProps) {
           onValueChange={(v) =>
             onSearchChange({ dangling: v.includes("dangling") ? 1 : undefined })
           }
-          className="max-w-full max-md:w-full max-md:flex-nowrap max-md:overflow-x-auto md:flex-wrap"
+          className={STATUS_CHIP_ROW}
         >
           <ToggleGroupItem
             value="dangling"

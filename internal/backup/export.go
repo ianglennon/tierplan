@@ -30,13 +30,36 @@ import (
 // status) and means nothing on another.
 const metaKept = "audit_last_pruned_hmac"
 
-// ErrBusy is returned when another export is already running in this process. A
-// backup copies the whole database, so two at once would only compete for the one
-// writer and the disk.
+// ErrBusy is returned when another export of the same database is already
+// running in this process. A backup copies the whole database, so two at once
+// would only compete for the one writer and the disk.
 var ErrBusy = errors.New("another backup is being prepared")
 
-// exportGuard lets one Export run at a time.
-var exportGuard sync.Mutex
+// exporting holds the database files with an export in flight, so that one
+// database is exported at a time while unrelated databases (separate test
+// fixtures) do not wait on each other.
+var (
+	exportingMu sync.Mutex
+	exporting   = map[string]struct{}{}
+)
+
+// beginExport records that the database at path is being exported. It reports
+// !ok when another export of the same database is already running in this
+// process. The caller calls end when the export finishes, which removes the
+// entry so the map never outgrows the exports in flight.
+func beginExport(path string) (end func(), ok bool) {
+	exportingMu.Lock()
+	defer exportingMu.Unlock()
+	if _, busy := exporting[path]; busy {
+		return nil, false
+	}
+	exporting[path] = struct{}{}
+	return func() {
+		exportingMu.Lock()
+		defer exportingMu.Unlock()
+		delete(exporting, path)
+	}, true
+}
 
 // ErrChainBroken is returned when the audit chain does not verify and the
 // export was not told to go on regardless.
@@ -91,10 +114,11 @@ func Export(ctx context.Context, st *store.Store, live *vault.Vault, workDir str
 	if o.Now == nil {
 		o.Now = time.Now
 	}
-	if !exportGuard.TryLock() {
+	end, ok := beginExport(st.Path)
+	if !ok {
 		return ExportResult{}, ErrBusy
 	}
-	defer exportGuard.Unlock()
+	defer end()
 
 	verified, err := verifyChain(ctx, st, live, o.AllowBrokenChain)
 	if err != nil {

@@ -18,8 +18,18 @@ export function TestRouter({ children }: { children: ReactNode }) {
   const [router] = useState(() => {
     const root = createRootRoute();
     const tree = root.addChildren([
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/containers" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/containers/$containerId" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/networks/$networkId" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/services" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/services/new" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/services/$serviceId" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/secrets" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/secrets/$secretId" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/configs" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/configs/$configId" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/nodes" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/nodes/$nodeId" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/events" }),
       createRoute({ getParentRoute: () => root, path: "/registries" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId" }),

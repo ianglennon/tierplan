@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
 	"github.com/ianglennon/bayplan/internal/vault"
 	"github.com/ianglennon/bayplan/proto/authn"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -41,6 +43,64 @@ type rig struct {
 	ctx context.Context
 	// clock is the service's clock; a test moves it to expire a certificate.
 	clock time.Time
+	// logged is the audit writer's own line for each entry it has stored, which a
+	// test waits on instead of polling the table.
+	logged *auditSignal
+}
+
+// auditSignal is the slog.Handler the rig's audit writer logs to. The writer logs an
+// entry after its transaction commits, so once awaitAudit returns the row can be read.
+// Each entry wakes every waiter by closing and replacing a channel under mu.
+type auditSignal struct {
+	mu      sync.Mutex
+	counts  map[string]int
+	changed chan struct{}
+}
+
+func newAuditSignal() *auditSignal {
+	return &auditSignal{counts: map[string]int{}, changed: make(chan struct{})}
+}
+
+func (a *auditSignal) Enabled(context.Context, slog.Level) bool { return true }
+
+func (a *auditSignal) Handle(_ context.Context, rec slog.Record) error {
+	if rec.Message != "audit entry" {
+		return nil
+	}
+	rec.Attrs(func(at slog.Attr) bool {
+		if at.Key != "action" {
+			return true
+		}
+		a.mu.Lock()
+		a.counts[at.Value.String()]++
+		close(a.changed)
+		a.changed = make(chan struct{})
+		a.mu.Unlock()
+		return false
+	})
+	return nil
+}
+
+func (a *auditSignal) WithAttrs([]slog.Attr) slog.Handler { return a }
+func (a *auditSignal) WithGroup(string) slog.Handler      { return a }
+
+// awaitAudit waits until the writer has stored at least n entries of action.
+func (r *rig) awaitAudit(t *testing.T, action string, n int) {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	for {
+		r.logged.mu.Lock()
+		got, changed := r.logged.counts[action], r.logged.changed
+		r.logged.mu.Unlock()
+		if got >= n {
+			return
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for %d %q audit entries, saw %d", n, action, got)
+		}
+	}
 }
 
 func newRig(t *testing.T) *rig {
@@ -50,9 +110,9 @@ func newRig(t *testing.T) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &rig{st: st, vlt: vlt, ctx: context.Background(), clock: fixedNow}
+	r := &rig{st: st, vlt: vlt, ctx: context.Background(), clock: fixedNow, logged: newAuditSignal()}
 	now := func() time.Time { return r.clock }
-	r.svc = agents.NewService(st, vlt, audit.NewWriter(st, vlt, slog.New(slog.DiscardHandler), now), now)
+	r.svc = agents.NewService(st, vlt, audit.NewWriter(st, vlt, slog.New(r.logged), now), now)
 	return r
 }
 
@@ -1493,5 +1553,100 @@ func TestRenewOfAnUnknownAgentIsRefused(t *testing.T) {
 	r := newRig(t)
 	if _, err := r.svc.Renew(r.ctx, "no-such-agent", ""); refusal(t, err).Code != wire.ReasonAuthRejected {
 		t.Error("an unknown agent's renewal was not refused auth_rejected")
+	}
+}
+
+// RevokeRemovedNode (plan 06-17, RES-05, D-22): the agent of a node an admin removed from its swarm is
+// revoked at once and the host is not blocked, so it can rejoin the swarm and enrol again.
+
+func TestRevokeRemovedNodeDoesNotBlock(t *testing.T) {
+	r := newRig(t)
+	s := newSwarmEnv(t, r, "prod")
+	if err := r.svc.RevokeRemovedNode(r.ctx, admin, s.c.EnvID, s.w2.id, "203.0.113.9", "test-agent"); err != nil {
+		t.Fatalf("RevokeRemovedNode: %v", err)
+	}
+	a := r.agentRow(t, s.w2.id)
+	if a.status != "revoked" || a.revokedBy != admin.ID || a.reason != "node_removed" {
+		t.Fatalf("the agent is %+v, want revoked by the admin with the reason node_removed", a)
+	}
+	for name, id := range map[string]string{"manager": s.m.id, "first worker": s.w1.id} {
+		if a := r.agentRow(t, id); a.status != "active" {
+			t.Errorf("the %s was revoked as well: %+v", name, a)
+		}
+	}
+	if n := count(t, r.st, `SELECT COUNT(*) FROM agent_blocks WHERE env_id = ?`, s.c.EnvID); n != 0 {
+		t.Errorf("the revoke made %d block rows, want none: the host may rejoin", n)
+	}
+
+	rows := auditRows(t, r.st, "agent.revoked")
+	if len(rows) != 1 || !strings.Contains(rows[0], `"reason":"node_removed"`) || !strings.Contains(rows[0], `"node":"wrk-2"`) {
+		t.Fatalf("agent.revoked rows = %v, want one naming the node and the reason node_removed", rows)
+	}
+	var actorType, actorID, target, ip, ua string
+	if err := r.st.Read.QueryRow(`SELECT actor_type, actor_id, target_id, COALESCE(ip, ''), COALESCE(user_agent, '') FROM audit_log WHERE action = 'agent.revoked'`).
+		Scan(&actorType, &actorID, &target, &ip, &ua); err != nil || actorType != string(audit.ActorUser) || actorID != admin.ID || target != s.w2.id || ip != "203.0.113.9" || ua != "test-agent" {
+		t.Errorf("actor %s/%s target %s ip %s ua %s, %v; want the admin, the agent and the request's address", actorType, actorID, target, ip, ua, err)
+	}
+	for _, other := range []string{"agent.blocked", "agent.auto_revoked"} {
+		if rows := auditRows(t, r.st, other); len(rows) != 0 {
+			t.Errorf("%s rows = %v, want none", other, rows)
+		}
+	}
+
+	if k := s.kicked; len(k.agents) != 1 || k.agents[0] != s.w2.id || k.codes[0] != tunnel.DisconnectRevoked || k.statusAtKick != "revoked" {
+		t.Errorf("sessions closed = %v %v (row was %q at the time), want the revoked agent's, as revoked, after the commit", k.agents, k.codes, k.statusAtKick)
+	}
+	if got := s.notified.list(); len(got) != 1 || got[0] != s.c.EnvID {
+		t.Errorf("notified %v, want the environment once", got)
+	}
+
+	// The same host rejoins the swarm and runs the install command again.
+	again := r.enrolFacts(t, s.c, worker("ENG:W2-prod", "node-w2-prod", "wrk-2"))
+	if again.id == s.w2.id {
+		t.Fatal("the host enrolled as the revoked agent")
+	}
+	if a := r.agentRow(t, again.id); a.status != "active" {
+		t.Fatalf("the rejoined host is %+v, want a new active agent", a)
+	}
+}
+
+func TestRevokeRemovedNodeOfAnAlreadyRevokedOrUnknownAgentChangesNothing(t *testing.T) {
+	r := newRig(t)
+	s := newSwarmEnv(t, r, "prod")
+	if err := r.svc.RevokeRemovedNode(r.ctx, admin, s.c.EnvID, s.w2.id, "", ""); err != nil {
+		t.Fatalf("RevokeRemovedNode: %v", err)
+	}
+	if err := r.svc.RevokeRemovedNode(r.ctx, admin, s.c.EnvID, s.w2.id, "", ""); !errors.Is(err, agents.ErrAlreadyRevoked) {
+		t.Errorf("a second RevokeRemovedNode = %v, want ErrAlreadyRevoked", err)
+	}
+	if err := r.svc.RevokeRemovedNode(r.ctx, admin, s.c.EnvID, "no-such-agent", "", ""); !errors.Is(err, agents.ErrAgentNotFound) {
+		t.Errorf("RevokeRemovedNode of an unknown agent = %v, want ErrAgentNotFound", err)
+	}
+	if err := r.svc.RevokeRemovedNode(r.ctx, admin, "no-such-env", s.w1.id, "", ""); !errors.Is(err, agents.ErrEnvironmentNotFound) {
+		t.Errorf("RevokeRemovedNode in an unknown environment = %v, want ErrEnvironmentNotFound", err)
+	}
+	if rows := auditRows(t, r.st, "agent.revoked"); len(rows) != 1 {
+		t.Errorf("agent.revoked rows = %v, want one", rows)
+	}
+}
+
+func TestActiveAgentOfSwarmNodeFindsTheActiveAgentThatRunsOnTheNode(t *testing.T) {
+	r := newRig(t)
+	s := newSwarmEnv(t, r, "prod")
+	got, err := r.svc.ActiveAgentOfSwarmNode(r.ctx, s.c.EnvID, "node-w2-prod")
+	if err != nil || got != s.w2.id {
+		t.Fatalf("ActiveAgentOfSwarmNode = %q, %v; want the second worker's agent", got, err)
+	}
+	if got, err := r.svc.ActiveAgentOfSwarmNode(r.ctx, s.c.EnvID, "node-ghost"); err != nil || got != "" {
+		t.Errorf("a node no agent runs on = %q, %v; want none", got, err)
+	}
+	if got, err := r.svc.ActiveAgentOfSwarmNode(r.ctx, s.c.EnvID, ""); err != nil || got != "" {
+		t.Errorf("an empty node ID = %q, %v; want none", got, err)
+	}
+	if err := r.svc.RevokeRemovedNode(r.ctx, admin, s.c.EnvID, s.w2.id, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := r.svc.ActiveAgentOfSwarmNode(r.ctx, s.c.EnvID, "node-w2-prod"); err != nil || got != "" {
+		t.Errorf("after the revoke = %q, %v; want none: a revoked agent is not active", got, err)
 	}
 }

@@ -24,6 +24,7 @@ type memClock struct{ t time.Time }
 func (c *memClock) now() time.Time { return c.t }
 
 func TestLogsAuditMemoryReportsAViewerAsNewOnceAndSeenAfterwards(t *testing.T) {
+	t.Parallel()
 	clk := &memClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	m := newLogAuditMemory(time.Hour, 10, clk.now)
 	k := logAuditKey{user: "user:a", container: "c1", sid: "s1"}
@@ -41,6 +42,7 @@ func TestLogsAuditMemoryReportsAViewerAsNewOnceAndSeenAfterwards(t *testing.T) {
 }
 
 func TestLogsAuditMemoryForgetMakesTheViewerNewAgain(t *testing.T) {
+	t.Parallel()
 	m := newLogAuditMemory(time.Hour, 10, nil)
 	k := logAuditKey{user: "user:a", container: "c1", sid: "s1"}
 	m.seen(k)
@@ -54,6 +56,7 @@ func TestLogsAuditMemoryForgetMakesTheViewerNewAgain(t *testing.T) {
 // WR-07: a viewer is marked before its row is written, so a row that failed must not
 // leave the viewer "already audited" for an hour. The next stream of it writes the row.
 func TestLogsViewedIsWrittenOnTheNextStreamWhenTheFirstRowFailed(t *testing.T) {
+	t.Parallel()
 	st := storetest.New(t)
 	v, err := vault.New(bytes.Repeat([]byte{7}, 32), "test")
 	if err != nil {
@@ -94,6 +97,7 @@ func TestLogsViewedIsWrittenOnTheNextStreamWhenTheFirstRowFailed(t *testing.T) {
 }
 
 func TestLogsAuditMemoryForgetsAViewerAfterTheTTLUnlessItKeepsComingBack(t *testing.T) {
+	t.Parallel()
 	clk := &memClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	m := newLogAuditMemory(time.Hour, 10, clk.now)
 	idle := logAuditKey{user: "u", container: "c", sid: "idle"}
@@ -115,6 +119,7 @@ func TestLogsAuditMemoryForgetsAViewerAfterTheTTLUnlessItKeepsComingBack(t *test
 }
 
 func TestLogsAuditMemoryEvictsExpiredEntriesAndReportsFullAtTheCapSoTheRowIsWritten(t *testing.T) {
+	t.Parallel()
 	clk := &memClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	m := newLogAuditMemory(time.Hour, 3, clk.now)
 	for i := range 3 {

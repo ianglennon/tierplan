@@ -1,0 +1,340 @@
+{
+  "nodes": {
+    "list": {
+      "title": "Nodes",
+      "count_one": "{{count, number}} node",
+      "count_other": "{{count, number}} nodes",
+      "empty": "No nodes",
+      "error": "Couldn't load nodes.",
+      "errorRetry": "Retry loading nodes",
+      "caption": {
+        "nodes_one": "{{count, number}} node",
+        "nodes_other": "{{count, number}} nodes",
+        "managers_one": "{{count, number}} manager",
+        "managers_other": "{{count, number}} managers",
+        "summary": "{{nodes}}, {{managers}}",
+        "filtered_one": "{{n, number}} of {{count, number}} node",
+        "filtered_other": "{{n, number}} of {{count, number}} nodes"
+      },
+      "search": {
+        "label": "Search nodes",
+        "placeholder": "Search by name, address or label",
+        "clear": "Clear search"
+      },
+      "status": {
+        "label": "Filter nodes",
+        "managers": "Managers",
+        "workers": "Workers",
+        "drained": "Drained",
+        "down": "Down",
+        "chip": "{{label}} {{count, number}}"
+      },
+      "clearFilters": "Clear filters",
+      "emptyFilters": {
+        "title": "No nodes match these filters.",
+        "action": "Clear filters"
+      },
+      "noManager": {
+        "title": "No manager is connected",
+        "body": "Node changes are off until a manager node's agent reconnects. You can still look at what Bayplan last saw."
+      },
+      "columns": {
+        "name": "Name",
+        "status": "Status",
+        "availability": "Availability",
+        "role": "Role",
+        "address": "Address",
+        "engine": "Engine",
+        "platform": "Platform",
+        "cpu": "CPU",
+        "memory": "Memory",
+        "tasks": "Tasks",
+        "agent": "Agent"
+      },
+      "tasksTooltip": "{{running, number}} running, {{notRunning, number}} not running"
+    },
+    "state": {
+      "ready": "Ready",
+      "down": "Down",
+      "disconnected": "Disconnected",
+      "unknown": "Unknown"
+    },
+    "availability": {
+      "active": "Active",
+      "pause": "Paused",
+      "drain": "Draining",
+      "drainTasks_one": "Draining ({{count, number}} task left)",
+      "drainTasks_other": "Draining ({{count, number}} tasks left)",
+      "drained": "Drained"
+    },
+    "role": {
+      "manager": "Manager",
+      "worker": "Worker",
+      "unreachable": "Unreachable"
+    },
+    "badge": {
+      "leader": "Leader",
+      "runsBayplan": "Runs Bayplan"
+    },
+    "agent": {
+      "reporting": "Reporting",
+      "notReporting": "Not reporting"
+    },
+    "detail": {
+      "breadcrumb": {
+        "label": "Breadcrumb",
+        "nodes": "Nodes"
+      },
+      "tabs": {
+        "label": "Node sections",
+        "overview": "Overview",
+        "tasks": "Tasks",
+        "labels": "Labels",
+        "inspect": "Inspect"
+      },
+      "loading": "Loading the node",
+      "header": {
+        "docker": "Docker {{version}}",
+        "separator": " · "
+      },
+      "gone": {
+        "heading": "This node is gone",
+        "body": "It left the swarm or was removed. Go back to the list to find it.",
+        "back": "Back to nodes"
+      },
+      "error": {
+        "loadFailed": "Couldn't load {{name}}.",
+        "retry": "Retry loading {{name}}"
+      }
+    },
+    "overview": {
+      "node": {
+        "title": "Node",
+        "id": "ID",
+        "idLabel": "Node ID",
+        "hostname": "Hostname",
+        "address": "Address",
+        "role": "Role",
+        "status": "Status",
+        "availability": "Availability",
+        "created": "Created",
+        "updated": "Updated"
+      },
+      "system": {
+        "title": "System",
+        "engine": "Engine version",
+        "os": "Operating system",
+        "arch": "Architecture",
+        "cpus": "CPUs",
+        "memory": "Memory"
+      },
+      "manager": {
+        "title": "Manager",
+        "reachability": "Reachability",
+        "leader": "Leader",
+        "address": "Address",
+        "reachable": "Reachable",
+        "unreachable": "Unreachable",
+        "unknown": "Unknown"
+      },
+      "agent": {
+        "title": "Bayplan agent",
+        "reporting": "Reporting",
+        "version": "Version",
+        "lastSeen": "Last seen"
+      },
+      "engineLabels": {
+        "title": "Engine labels",
+        "caption": "Set in the node's Docker daemon settings. Bayplan can't change them.",
+        "empty": "No engine labels."
+      },
+      "yes": "Yes",
+      "no": "No"
+    },
+    "tasks": {
+      "columns": {
+        "service": "Service"
+      },
+      "caption_one": "{{count, number}} task",
+      "caption_other": "{{count, number}} tasks",
+      "capped": "Older tasks are left out. The swarm holds {{total, number}} for this node.",
+      "empty": {
+        "title": "No tasks on this node",
+        "body": "Tasks the swarm places here show up as they are created."
+      },
+      "loading": "Loading tasks",
+      "error": {
+        "title": "Couldn't load the tasks of this node.",
+        "body": "Docker may be unreachable. Try again.",
+        "retry": "Retry loading tasks"
+      }
+    },
+    "labels": {
+      "title": "Node labels",
+      "helper": "Services use labels in placement constraints, such as node.labels.disk==ssd.",
+      "empty": "No labels.",
+      "add": "Add label",
+      "key": "Label name",
+      "value": "Label value",
+      "remove": "Remove label {{name}}",
+      "removeEmpty": "Remove label",
+      "save": "Save labels",
+      "discard": "Discard changes",
+      "saved": "Saved labels on {{name}}.",
+      "problem": {
+        "reserved": "Labels starting with {{prefix}} are reserved.",
+        "keyTooLong": "A label name can be at most 256 bytes.",
+        "valueTooLong": "A label value can be at most 4096 bytes.",
+        "duplicate": "This name is used twice.",
+        "tooMany": "A node can have at most 64 labels."
+      },
+      "impact": {
+        "title": "Effect on services",
+        "service": "Service",
+        "constraint": "Constraint",
+        "before": "Before",
+        "after": "After",
+        "matches": "Matches",
+        "doesNotMatch": "Doesn't match",
+        "noLongerMatches": "No longer matches",
+        "nowMatches": "Now matches",
+        "summary_one": "Swarm may move {{count, number}} task off this node.",
+        "summary_other": "Swarm may move {{count, number}} tasks off this node.",
+        "empty": "No service uses these labels in a placement constraint.",
+        "checking": "Checking services…",
+        "failed": "Couldn't check which services use these labels.",
+        "retry": "Retry checking services"
+      },
+      "confirm": {
+        "title": "Apply label changes?",
+        "body_one": "{{count, number}} service has a constraint this node would no longer meet. Swarm moves its tasks to other nodes, or leaves them pending if no node matches.",
+        "body_other": "{{count, number}} services have constraints this node would no longer meet. Swarm moves their tasks to other nodes, or leaves them pending if no node matches.",
+        "cancel": "Cancel",
+        "apply": "Apply labels"
+      },
+      "refusal": {
+        "node_changed": "This node changed after you started editing. Nothing was saved. Check the services below and save again."
+      }
+    },
+    "inspect": {
+      "loadFailed": "Couldn't load the inspect document of {{name}}.",
+      "retry": "Retry loading the inspect document",
+      "loading": "Loading the inspect document"
+    },
+    "menu": {
+      "drain": "Drain…",
+      "pause": "Pause…",
+      "activate": "Activate node",
+      "promote": "Promote…",
+      "demote": "Demote…",
+      "copyId": "Copy node ID",
+      "more": "More",
+      "remove": "Remove…"
+    },
+    "pending": {
+      "drain": "Draining…",
+      "pause": "Pausing…",
+      "activate": "Activating…",
+      "promote": "Promoting…",
+      "demote": "Demoting…"
+    },
+    "noManagerReason": "No manager is connected, so swarm changes are off.",
+    "copied": "Copied node ID.",
+    "copyFailed": "Couldn't copy the node ID.",
+    "action": {
+      "checking": "Checking what this will do…",
+      "loadFailed": "Couldn't check what this will do. Try again.",
+      "gone": "{{name}} is no longer in the swarm.",
+      "tryAgain": "Try again",
+      "cancel": "Cancel",
+      "doing": {
+        "drain": "Draining",
+        "demote": "Demoting"
+      },
+      "noTasks": "No tasks are running here.",
+      "tasks": {
+        "label": "Tasks on {{name}}",
+        "task": "Task",
+        "service": "Service",
+        "outcome": "What happens"
+      },
+      "outcome": {
+        "moves": "Moves to another node",
+        "stops": "Stops. Global services aren't moved.",
+        "cannot_place": "Can't be placed anywhere else",
+        "stays": "Keeps running"
+      },
+      "drain": {
+        "title": "Drain {{name}}?",
+        "body": "Swarm stops sending tasks to it and moves the ones it has to other nodes.",
+        "confirm": "Drain node",
+        "confirmNamed": "Drain {{name}}",
+        "pending": "Draining…",
+        "done": "Drained {{name}}."
+      },
+      "pause": {
+        "title": "Pause {{name}}?",
+        "body": "Swarm stops sending new tasks to it.",
+        "tasks_one": "The {{count, number}} task already there keeps running.",
+        "tasks_other": "The {{count, number}} tasks already there keep running.",
+        "confirm": "Pause node",
+        "pending": "Pausing…",
+        "done": "Paused {{name}}."
+      },
+      "activate": {
+        "pending": "Activating…",
+        "done": "Activated {{name}}."
+      },
+      "promote": {
+        "title": "Promote {{name}} to manager?",
+        "body": "Managers keep the swarm's state and answer API calls.",
+        "managers_one": "You'll have {{count, number}} manager.",
+        "managers_other": "You'll have {{count, number}} managers.",
+        "confirm": "Promote node",
+        "pending": "Promoting…",
+        "done": "Promoted {{name}}."
+      },
+      "demote": {
+        "title": "Demote {{name}} to worker?",
+        "body": "It stops being a manager.",
+        "managers_one": "You'll have {{count, number}} manager.",
+        "managers_other": "You'll have {{count, number}} managers.",
+        "confirm": "Demote node",
+        "confirmNamed": "Demote {{name}}",
+        "pending": "Demoting…",
+        "done": "Demoted {{name}}."
+      },
+      "warning": {
+        "even_count": "With {{n, number}} managers the swarm tolerates losing {{losses, number}}, the same as with {{fewer, number}}. An odd number is better.",
+        "quorum_at_risk": "Only {{reachable, number}} of {{total, number}} managers are reachable. Demoting this one could leave the swarm without a majority, and it would stop accepting changes.",
+        "runs_bayplan": "Bayplan runs on {{name}}. {{doing}} it can cut Bayplan off from this swarm.",
+        "only_manager_agent": "{{name}} has the only manager agent connected to Bayplan. {{doing}} it leaves Bayplan unable to change this swarm until another manager's agent connects.",
+        "facts_unreadable": "Bayplan couldn't check the managers' state, so it can't tell whether this is safe."
+      },
+      "refusal": {
+        "last_manager": "You can't demote the last manager. Promote another node first.",
+        "node_changed": "That changed while you were looking at it. Reload the page and try again.",
+        "node_not_found": "{{name}} is no longer in the swarm.",
+        "confirmation_required": "Type {{name}} to confirm this.",
+        "rejected": "Docker refused: {{message}}"
+      }
+    },
+    "remove": {
+      "title": "Remove {{name}}?",
+      "body": "{{name}} is down, so Swarm forgets it. If it comes back, it has to join the swarm again. Bayplan also marks its agent as gone.",
+      "cancel": "Cancel",
+      "confirm": "Remove node",
+      "pending": "Removing…",
+      "done": "Removed {{name}}.",
+      "gone": "{{name}} is already gone.",
+      "reason": {
+        "notDown": "Only a node that is down can be removed.",
+        "manager": "Demote {{name}} before removing it."
+      },
+      "refusal": {
+        "node_not_down": "{{name}} isn't down. Only a node that is down can be removed.",
+        "node_is_manager": "Demote {{name}} before removing it."
+      }
+    }
+  }
+}

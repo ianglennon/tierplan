@@ -39,6 +39,9 @@ type FakeInspect struct {
 	OOMKilled    bool
 	Error        string
 	RestartCount int
+	// MemoryBytes and NanoCPUs are the container's own limits, HostConfig.Memory and
+	// HostConfig.NanoCPUs; zero is no limit.
+	MemoryBytes, NanoCPUs int64
 	// LogType and LogOptions are HostConfig.LogConfig.
 	LogType    string
 	LogOptions map[string]string
@@ -80,6 +83,7 @@ func (f *Fake) serveInspect(w http.ResponseWriter, r *http.Request, p string, cf
 		},
 		HostConfig: &container.HostConfig{
 			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyMode(name), MaximumRetryCount: max},
+			Resources:     container.Resources{Memory: found.Inspect.MemoryBytes, NanoCPUs: found.Inspect.NanoCPUs},
 		},
 		State: &container.State{},
 	}

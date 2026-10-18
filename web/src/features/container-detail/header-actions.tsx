@@ -18,6 +18,7 @@ import {
 import { ActionDialog, type DialogVerb } from "@/features/containers/action-dialog";
 import { eligibleFor, ownKind } from "@/features/containers/eligibility";
 import { type ImmediateAction, useImmediateAction } from "@/features/containers/row-actions";
+import { MuteMenuItem } from "@/features/restart-loop/mute-menu-item";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 
@@ -201,6 +202,20 @@ export function HeaderActions({ envId, detail }: HeaderActionsProps) {
                 event.preventDefault();
               }}
             >
+              {detail.restartLoop || detail.muted ? (
+                <>
+                  <MuteMenuItem
+                    kind="container"
+                    envId={envId}
+                    nodeId={detail.nodeId}
+                    containerId={detail.id}
+                    name={detail.name}
+                    muted={detail.muted}
+                    needs={needs}
+                  />
+                  <DropdownMenuSeparator />
+                </>
+              ) : null}
               {secondary.map((e, i) => (
                 <Fragment key={e.id}>
                   {e.destructive && !secondary[i - 1]?.destructive && i > 0 ? (

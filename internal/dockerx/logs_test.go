@@ -17,6 +17,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 func logsFake(t *testing.T) (*dockerx.Client, *dockertest.Fake) {
@@ -133,7 +134,7 @@ func TestContainerLogsFollowDeliversNewLinesAndCloseEndsTheFollow(t *testing.T) 
 		select {
 		case s := <-done:
 			return s
-		case <-time.After(5 * time.Second):
+		case <-time.After(testsupport.Deadline):
 			t.Fatal("no line arrived")
 			return ""
 		}
@@ -149,12 +150,8 @@ func TestContainerLogsFollowDeliversNewLinesAndCloseEndsTheFollow(t *testing.T) 
 		t.Fatalf("%d follows open, want 1", n)
 	}
 	_ = rc.Close()
-	deadline := time.Now().Add(5 * time.Second)
-	for fake.LogFollows() != 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("the engine's follow stayed open after Close")
-		}
-		time.Sleep(5 * time.Millisecond)
+	if err := fake.Await(testsupport.Context(t), func() bool { return fake.LogFollows() == 0 }); err != nil {
+		t.Fatalf("the engine's follow stayed open after Close: %v", err)
 	}
 }
 

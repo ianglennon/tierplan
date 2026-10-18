@@ -15,6 +15,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // GET /api/local-host (plan 15, D-19). The fake daemon is a real unix socket,
@@ -51,17 +52,27 @@ func (f *authFixture) localHostCall(t *testing.T, cookie string) (*localHostResp
 	return &out, rec.Code
 }
 
+// localHostFixture probes with testsupport.Deadline, so a slow machine never cuts a good probe
+// short and reads it as an unreachable engine.
 func localHostFixture(t *testing.T, dockerHost string) (f *authFixture, cookie string) {
+	t.Helper()
+	return localHostFixtureWithin(t, dockerHost, testsupport.Deadline)
+}
+
+// localHostFixtureWithin is localHostFixture with the probe timeout, for the test whose subject
+// is that timeout.
+func localHostFixtureWithin(t *testing.T, dockerHost string, probeTimeout time.Duration) (f *authFixture, cookie string) {
 	t.Helper()
 	f = newAuthFixture(t, config.Config{})
 	f.localHost.DockerHost = dockerHost
-	f.localHost.ProbeTimeout = 500 * time.Millisecond
+	f.localHost.ProbeTimeout = probeTimeout
 	f.h = f.build(t)
 	cookie, _ = f.signIn(t, "admin", false)
 	return f, cookie
 }
 
 func TestLocalHostReportsNoSocketWhenNoneExistsAtThePath(t *testing.T) {
+	t.Parallel()
 	missing := filepath.Join(t.TempDir(), "docker.sock")
 	f, cookie := localHostFixture(t, "unix://"+missing)
 	got, code := f.localHostCall(t, cookie)
@@ -71,6 +82,7 @@ func TestLocalHostReportsNoSocketWhenNoneExistsAtThePath(t *testing.T) {
 }
 
 func TestLocalHostIgnoresAPlainFileAtThePath(t *testing.T) {
+	t.Parallel()
 	file := filepath.Join(t.TempDir(), "docker.sock")
 	if err := os.WriteFile(file, []byte("not a socket"), 0o600); err != nil {
 		t.Fatal(err)
@@ -83,6 +95,7 @@ func TestLocalHostIgnoresAPlainFileAtThePath(t *testing.T) {
 }
 
 func TestLocalHostProbesTheEngineBehindTheSocket(t *testing.T) {
+	t.Parallel()
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{APIVersion: "1.52", Version: "29.1.0", Hostname: "node-1",
 		SwarmState: "active", SwarmControl: true})
 	f, cookie := localHostFixture(t, "unix://"+fake.SocketPath())
@@ -98,6 +111,7 @@ func TestLocalHostProbesTheEngineBehindTheSocket(t *testing.T) {
 }
 
 func TestLocalHostNamesAnUnsupportedEngine(t *testing.T) {
+	t.Parallel()
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{APIVersion: "1.41", Version: "20.10.24"})
 	f, cookie := localHostFixture(t, "unix://"+fake.SocketPath())
 	got, code := f.localHostCall(t, cookie)
@@ -111,6 +125,7 @@ func TestLocalHostNamesAnUnsupportedEngine(t *testing.T) {
 }
 
 func TestLocalHostReportsASocketNobodyAnswersOnAsUnreachable(t *testing.T) {
+	t.Parallel()
 	// A socket that accepts and hangs up: it exists, but nothing speaks Docker.
 	dir, err := os.MkdirTemp("", "bplh")
 	if err != nil {
@@ -144,6 +159,7 @@ func TestLocalHostReportsASocketNobodyAnswersOnAsUnreachable(t *testing.T) {
 }
 
 func TestLocalHostGivesUpOnAnEngineThatAcceptsAndNeverAnswers(t *testing.T) {
+	t.Parallel()
 	dir, err := os.MkdirTemp("", "bplh")
 	if err != nil {
 		t.Fatal(err)
@@ -167,18 +183,19 @@ func TestLocalHostGivesUpOnAnEngineThatAcceptsAndNeverAnswers(t *testing.T) {
 		}
 	}()
 
-	f, cookie := localHostFixture(t, "unix://"+path)
-	start := time.Now()
+	f, cookie := localHostFixtureWithin(t, "unix://"+path, 500*time.Millisecond)
+	// The engine never answers until the test ends, so only the probe timeout can return this
+	// request (500 ms here: it is the behaviour under test, not a failure deadline). That it
+	// returns is the proof, and a regression hangs until go test's own -timeout prints the
+	// goroutines. No elapsed-time bound is kept.
 	got, code := f.localHostCall(t, cookie)
-	if elapsed := time.Since(start); elapsed > 3*time.Second {
-		t.Errorf("a hung engine held the request for %s; the probe timeout is 500ms in this test", elapsed)
-	}
 	if code != http.StatusOK || got.Probe == nil || got.Probe.Reachable || got.Probe.Reason != "unreachable" {
 		t.Fatalf("got %d probe=%+v, want 200 and an unreachable probe", code, got.Probe)
 	}
 }
 
 func TestLocalHostDefaultsToTheStandardSocketPath(t *testing.T) {
+	t.Parallel()
 	// An empty DOCKER_HOST is the default path. Whether that socket exists on
 	// the machine running the tests is not this test's business.
 	f, cookie := localHostFixture(t, "")
@@ -189,6 +206,7 @@ func TestLocalHostDefaultsToTheStandardSocketPath(t *testing.T) {
 }
 
 func TestLocalHostIsForInstanceAdminsOnly(t *testing.T) {
+	t.Parallel()
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
 	f, _ := localHostFixture(t, "unix://"+fake.SocketPath())
 	f.addUser(t, "viewer", false) // no assignment at all
@@ -211,6 +229,7 @@ func TestLocalHostIsForInstanceAdminsOnly(t *testing.T) {
 }
 
 func TestLocalHostHasNoWritePath(t *testing.T) {
+	t.Parallel()
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
 	f, cookie := localHostFixture(t, "unix://"+fake.SocketPath())
 	_, csrf := f.signIn(t, "admin", false)

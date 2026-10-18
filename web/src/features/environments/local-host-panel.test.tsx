@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LocalHostPanel } from "@/features/environments/local-host-panel";
 import "@/i18n";
+import { settled } from "@/test-settle";
 
 const toastError = vi.fn();
 vi.mock("@/lib/toast", () => ({
@@ -92,7 +93,7 @@ function renderPanel(props: { mode?: "wizard" | "settings"; onDone?: () => void 
       />
     </QueryClientProvider>,
   );
-  return { onDone, invalidate };
+  return { onDone, invalidate, client };
 }
 
 // While pending, the spinner's label and the text both name the button.
@@ -101,7 +102,7 @@ const button = (name: string) => screen.getByRole("button", { name }) as HTMLBut
 
 describe("LocalHostPanel, a detected host", () => {
   it("shows the engine, the type and the root-equivalence notice, and adds nothing by itself", async () => {
-    renderPanel();
+    const { client } = renderPanel();
 
     expect(await screen.findByRole("heading", { name: "Manage this Docker host?" })).toBeTruthy();
     expect(
@@ -118,7 +119,7 @@ describe("LocalHostPanel, a detected host", () => {
     expect(button("Skip for now")).toBeTruthy();
 
     // D-19: loading the panel, however long it sits there, never adds the host.
-    await new Promise((r) => setTimeout(r, 50));
+    await settled(client);
     expect(posts()).toEqual([]);
     expect(gets("/api/local-host")).toHaveLength(1);
   });
@@ -235,9 +236,9 @@ describe("LocalHostPanel, a detected host", () => {
 
   it("renders nothing once the host is managed", async () => {
     localHost = host({ managed: true });
-    const { onDone } = renderPanel();
+    const { onDone, client } = renderPanel();
     await waitFor(() => expect(gets("/api/local-host")).toHaveLength(1));
-    await new Promise((r) => setTimeout(r, 20));
+    await settled(client);
     expect(screen.queryByRole("heading")).toBeNull();
     expect(screen.queryByRole("button")).toBeNull();
     expect(onDone).not.toHaveBeenCalled();
@@ -257,7 +258,7 @@ describe("LocalHostPanel, an unsupported engine", () => {
   });
 
   it("names the engine, version and API, and adds nothing by itself", async () => {
-    renderPanel();
+    const { client } = renderPanel();
 
     expect(await screen.findByText("Unsupported")).toBeTruthy();
     expect(
@@ -269,7 +270,7 @@ describe("LocalHostPanel, an unsupported engine", () => {
       screen.getByText("It will appear as unsupported, with no operations available."),
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Manage this host" })).toBeNull();
-    await new Promise((r) => setTimeout(r, 50));
+    await settled(client);
     expect(posts()).toEqual([]);
   });
 
@@ -335,7 +336,7 @@ describe("LocalHostPanel, no Docker socket", () => {
   });
 
   it("shows the install snippet, the footnote and Check again", async () => {
-    renderPanel();
+    const { client } = renderPanel();
 
     expect(await screen.findByRole("heading", { name: "No Docker socket found" })).toBeTruthy();
     expect(
@@ -357,7 +358,7 @@ describe("LocalHostPanel, no Docker socket", () => {
       screen.getByText("You can add remote hosts and swarms after setup from Environments."),
     ).toBeTruthy();
     expect(button("Continue")).toBeTruthy();
-    await new Promise((r) => setTimeout(r, 50));
+    await settled(client);
     expect(posts()).toEqual([]);
   });
 

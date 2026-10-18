@@ -12,10 +12,17 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/api/types/volume"
+
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // fakeSocket is a Docker daemon stand-in on a unix socket. It records every
@@ -32,6 +39,13 @@ type fakeSocket struct {
 	bodies [][]byte
 	// release lets the /events and /logs handlers finish.
 	release chan struct{}
+	// answers maps a request path to the JSON the daemon answers with, for the
+	// network and volume lookups a service-spec check makes. Set before the first
+	// request.
+	answers map[string]string
+	// status maps a request path in answers to the status it is answered with,
+	// where it is not 200. Set before the first request.
+	status map[string]int
 }
 
 func newFakeSocket(t *testing.T) *fakeSocket {
@@ -80,6 +94,22 @@ func (f *fakeSocket) serve(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(conn, rw)
 		return
 	}
+	if answer, ok := f.answers[r.URL.Path]; ok {
+		w.Header().Set("Content-Type", "application/json")
+		if code, ok := f.status[r.URL.Path]; ok {
+			w.WriteHeader(code)
+		}
+		_, _ = w.Write([]byte(answer))
+		return
+	}
+	if name, ok := strings.CutPrefix(r.URL.Path, "/volumes/"); ok && r.Method == http.MethodGet && name != "" {
+		// An engine answers a volume it does not have with 404.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		// Encoded, not concatenated: the name comes from the request path.
+		_ = json.NewEncoder(w).Encode(map[string]string{"message": "get " + name + ": no such volume"})
+		return
+	}
 	w.Header().Set("Api-Version", "1.52")
 	w.Header().Set("Ostype", "linux")
 	w.Header().Set("Swarm", "inactive")
@@ -117,7 +147,7 @@ func do(t *testing.T, h http.Handler, raw string) *http.Response {
 	client, server := net.Pipe()
 	go ServeConn(server, h)
 	t.Cleanup(func() { _ = client.Close() })
-	_ = client.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = client.SetDeadline(time.Now().Add(testsupport.Deadline))
 	// The request is written on its own goroutine: a net.Pipe has no buffer, so a
 	// handler that refuses a large body and answers before reading it all would
 	// otherwise leave this write blocked.
@@ -198,7 +228,8 @@ func TestEverythingElseIsRefusedWithATypedAnswerAndNeverReachesTheEngine(t *test
 		name, raw, wantMessage string
 	}{
 		{"create a container", request("POST", "/containers/create", "Content-Length: 2\r\n") + "{}", "agent_policy_denied: POST /containers/create"},
-		{"the stats of a container", get("/containers/abc/stats"), "agent_policy_denied: GET /containers/abc/stats"},
+		{"the archive of a container", get("/containers/abc/archive"), "agent_policy_denied: GET /containers/abc/archive"},
+		{"the stats of a container with a key the one-shot read does not send", get("/containers/abc/stats?decode=1"), "agent_policy_denied: GET /containers/abc/stats"},
 		{"inspect a container with a POST", request("POST", "/containers/abc/json"), "agent_policy_denied: POST /containers/abc/json"},
 		{"swarm inspect returns the join tokens", get("/swarm"), "agent_policy_denied: GET /swarm"},
 		{"plugins", get("/plugins"), "agent_policy_denied: GET /plugins"},
@@ -286,11 +317,7 @@ func TestServeConnReturnsWhenTheStreamCloses(t *testing.T) {
 		close(done)
 	}()
 	_ = client.Close()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("ServeConn did not return after the stream closed")
-	}
+	testsupport.Await(t, "ServeConn to return after the stream closed", done)
 }
 
 func TestAKeepAliveStreamServesSeveralRequests(t *testing.T) {
@@ -298,7 +325,7 @@ func TestAKeepAliveStreamServesSeveralRequests(t *testing.T) {
 	client, server := net.Pipe()
 	go ServeConn(server, Handler(sock.path, Policy{}, nil))
 	defer func() { _ = client.Close() }()
-	_ = client.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = client.SetDeadline(time.Now().Add(testsupport.Deadline))
 	br := bufio.NewReader(client)
 	for i := 0; i < 3; i++ {
 		if _, err := io.WriteString(client, get("/_ping")); err != nil {
@@ -503,8 +530,8 @@ func TestHopByHopAndForwardingHeadersDoNotReachTheEngine(t *testing.T) {
 // The one thing opened up for plan 20 (D-27, T-02-70): GET and HEAD of
 // /containers/{id}/json, which Bayplan reads only for a container's restart
 // policy. Phase 4 adds the lifecycle, the logs and the exec create under
-// /containers/{id}/ (routes_test.go, body_test.go); the stats, archive, attach and
-// export stay refused.
+// /containers/{id}/ (routes_test.go, body_test.go) and Phase 6 the stats; the archive,
+// attach and export stay refused.
 func TestAllowedOpensOnlyTheInspectOfOneContainer(t *testing.T) {
 	for _, tc := range []struct {
 		name, method, path string
@@ -517,7 +544,7 @@ func TestAllowedOpensOnlyTheInspectOfOneContainer(t *testing.T) {
 		{"a POST of an inspect", "POST", "/containers/abc/json", false},
 		{"a DELETE of an inspect", "DELETE", "/containers/abc/json", false},
 		{"the logs", "GET", "/containers/abc/logs", true},
-		{"a stats stream", "GET", "/containers/abc/stats", false},
+		{"the stats", "GET", "/containers/abc/stats", true},
 		{"a file archive", "GET", "/containers/abc/archive", false},
 		{"an export", "GET", "/containers/abc/export", false},
 		{"a dot-dot ID", "GET", "/containers/../json", false},
@@ -784,5 +811,351 @@ func TestDistributionKeepsTheRegistryHeaderWhileInspectAndHistoryDropIt(t *testi
 		if v := seen[before].Values("X-Registry-Config"); len(v) != 0 {
 			t.Errorf("%s %s: the engine received X-Registry-Config %q", tc.method, tc.target, v)
 		}
+	}
+}
+
+// A service spec that gives tasks host access is refused on a host that did not
+// opt in, whichever write route it arrives on, and never reaches the engine.
+func TestHostPolicyRefusalIsA403WithTheTypedMessageAndTheHostPolicyReason(t *testing.T) {
+	for _, tc := range []struct{ name, method, target, wantMsg string }{
+		{"an update", "POST", "/services/web/update?version=3", "agent_policy_denied: host_policy: POST /services/web/update"},
+		{"a create", "POST", "/services/create", "agent_policy_denied: host_policy: POST /services/create"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sock := newFakeSocket(t)
+			var reasons []string
+			h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+			spec := sampleSpec()
+			spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{{Type: mount.TypeBind, Source: "/var/run/docker.sock", Target: "/sock"}}
+			resp := do(t, h, postJSON(tc.method, tc.target, enc(t, spec)))
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("status %d, want 403", resp.StatusCode)
+			}
+			var msg struct{ Message string }
+			if err := json.NewDecoder(resp.Body).Decode(&msg); err != nil || msg.Message != tc.wantMsg {
+				t.Fatalf("message = %q (%v), want %q", msg.Message, err, tc.wantMsg)
+			}
+			if !slices.Equal(reasons, []string{"host_policy"}) {
+				t.Errorf("onDenied reasons = %v, want [host_policy]", reasons)
+			}
+			if got := sock.requests(); len(got) != 0 {
+				t.Fatalf("a refused spec reached the engine: %v", got)
+			}
+		})
+	}
+}
+
+func TestHostPolicyOptInForwardsTheSameSpec(t *testing.T) {
+	sock := newFakeSocket(t)
+	h := Handler(sock.path, Policy{AllowPrivilegedServices: true}, nil)
+	spec := sampleSpec()
+	spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{{Type: mount.TypeBind, Source: "/", Target: "/host"}}
+	spec.TaskTemplate.ContainerSpec.CapabilityAdd = []string{"SYS_ADMIN"}
+	resp := do(t, h, postJSON("POST", "/services/web/update?version=3", enc(t, spec)))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", resp.StatusCode)
+	}
+	if got := sock.requests(); !slices.Equal(got, []string{"POST /services/web/update?version=3"}) {
+		t.Fatalf("the engine saw %v", got)
+	}
+}
+
+// The create-then-mount sequence (S2-CR-01): the service that mounts a volume by name
+// carries no host path for escalations() to judge, so the volume create is where the
+// host access is refused. With the volume never made, the mount has nothing of the host.
+func TestHostPolicyAVolumeThatMountsTheHostIsRefusedSoAServiceCannotMountItByName(t *testing.T) {
+	bind := volume.CreateRequest{
+		Name: "hostroot", Driver: "local",
+		DriverOpts: map[string]string{"type": "none", "o": "bind", "device": "/"},
+	}
+	plugin := volume.CreateRequest{Name: "plug", Driver: "rexray/ebs"}
+	for _, tc := range []struct {
+		name string
+		req  volume.CreateRequest
+	}{
+		{"a local volume that binds the host root", bind},
+		{"a volume of a plugin driver", plugin},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sock := newFakeSocket(t)
+			var reasons []string
+			h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+			resp := do(t, h, postJSON("POST", "/volumes/create", enc(t, tc.req)))
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("status %d, want 403", resp.StatusCode)
+			}
+			var msg struct{ Message string }
+			if err := json.NewDecoder(resp.Body).Decode(&msg); err != nil || msg.Message != "agent_policy_denied: host_policy: POST /volumes/create" {
+				t.Fatalf("message = %q (%v)", msg.Message, err)
+			}
+			if !slices.Equal(reasons, []string{"host_policy"}) {
+				t.Errorf("onDenied reasons = %v, want [host_policy]", reasons)
+			}
+			if got := sock.requests(); len(got) != 0 {
+				t.Fatalf("a refused volume create reached the engine: %v", got)
+			}
+		})
+	}
+
+	t.Run("the service that mounts the name afterwards is judged by its own spec", func(t *testing.T) {
+		sock := newFakeSocket(t)
+		h := Handler(sock.path, Policy{}, nil)
+		spec := sampleSpec()
+		spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{{Type: mount.TypeVolume, Source: "hostroot", Target: "/host"}}
+		resp := do(t, h, postJSON("POST", "/services/create", enc(t, spec)))
+		_ = resp.Body.Close()
+		// The guard is the refused volume create above: the volume was never made, so
+		// the engine has nothing of the host to mount under this name.
+		if got := sock.requests(); !slices.Contains(got, "POST /services/create") {
+			t.Fatalf("the engine saw %v, want the service create", got)
+		}
+	})
+
+	t.Run("the opt-in forwards the bind volume create", func(t *testing.T) {
+		sock := newFakeSocket(t)
+		h := Handler(sock.path, Policy{AllowPrivilegedServices: true}, nil)
+		resp := do(t, h, postJSON("POST", "/volumes/create", enc(t, bind)))
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status %d, want 200", resp.StatusCode)
+		}
+		if got := sock.requests(); !slices.Equal(got, []string{"POST /volumes/create"}) {
+			t.Fatalf("the engine saw %v", got)
+		}
+	})
+}
+
+// A volume that already exists (made outside Bayplan, or while the host had opted in)
+// is mounted as it is, so the agent asks its own engine what backs a name a service
+// mounts (S2-CR-01, plan 06-44).
+func TestHostPolicyAServiceCannotMountAPreExistingVolumeThatMountsTheHost(t *testing.T) {
+	const hostroot = `{"Name":"hostroot","Driver":"local","Options":{"type":"none","o":"bind","device":"/"},"Scope":"local"}`
+	spec := sampleSpec()
+	spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{{Type: mount.TypeVolume, Source: "hostroot", Target: "/host"}}
+	for _, tc := range []struct{ name, target, wantMsg string }{
+		{"a create", "/services/create", "agent_policy_denied: host_policy: POST /services/create"},
+		{"an update", "/services/web/update?version=3", "agent_policy_denied: host_policy: POST /services/web/update"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sock := newFakeSocket(t)
+			sock.answers = map[string]string{"/volumes/hostroot": hostroot}
+			var reasons []string
+			h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+			resp := do(t, h, postJSON("POST", tc.target, enc(t, spec)))
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("status %d, want 403", resp.StatusCode)
+			}
+			var msg struct{ Message string }
+			if err := json.NewDecoder(resp.Body).Decode(&msg); err != nil || msg.Message != tc.wantMsg {
+				t.Fatalf("message = %q (%v), want %q", msg.Message, err, tc.wantMsg)
+			}
+			if !slices.Equal(reasons, []string{"host_policy"}) {
+				t.Errorf("onDenied reasons = %v, want [host_policy]", reasons)
+			}
+			if got := sock.requests(); !slices.Equal(got, []string{"GET /volumes/hostroot"}) {
+				t.Fatalf("the engine saw %v, want the one volume lookup", got)
+			}
+		})
+	}
+
+	t.Run("the opt-in forwards it without a lookup", func(t *testing.T) {
+		sock := newFakeSocket(t)
+		sock.answers = map[string]string{"/volumes/hostroot": hostroot}
+		h := Handler(sock.path, Policy{AllowPrivilegedServices: true}, nil)
+		resp := do(t, h, postJSON("POST", "/services/create", enc(t, spec)))
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status %d, want 200", resp.StatusCode)
+		}
+		if got := sock.requests(); !slices.Equal(got, []string{"POST /services/create"}) {
+			t.Fatalf("the engine saw %v", got)
+		}
+	})
+}
+
+// Docker mounts an existing volume as it is, so unlike the network lookup a volume
+// lookup that cannot answer still stops the write. It is an engine fault and not host
+// access, so it is answered like any request the engine does not answer, and a person
+// is not told to lower the host's security setting for it (review WR-02).
+func TestHostPolicyAVolumeLookupThatFailsIsAnEngineFaultNotHostAccess(t *testing.T) {
+	sock := newFakeSocket(t)
+	sock.answers = map[string]string{"/volumes/data": `{"message":"boom"}`}
+	sock.status = map[string]int{"/volumes/data": http.StatusInternalServerError}
+	var reasons []string
+	h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+	spec := sampleSpec()
+	spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{{Type: mount.TypeVolume, Source: "data", Target: "/data"}}
+	resp := do(t, h, postJSON("POST", "/services/create", enc(t, spec)))
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway || len(reasons) != 0 {
+		t.Fatalf("status %d reasons %v, want 502 and no denial reported", resp.StatusCode, reasons)
+	}
+	if !strings.Contains(string(body), "agent_engine_unreachable: the Docker engine did not answer a volume lookup") {
+		t.Fatalf("body %s does not name the engine fault", body)
+	}
+	if got := sock.requests(); !slices.Equal(got, []string{"GET /volumes/data"}) {
+		t.Fatalf("the engine saw %v, want the one volume lookup", got)
+	}
+
+	t.Run("a real host-access finding is still named as such", func(t *testing.T) {
+		sock := newFakeSocket(t)
+		sock.answers = map[string]string{"/volumes/data": `{"message":"boom"}`}
+		sock.status = map[string]int{"/volumes/data": http.StatusInternalServerError}
+		var reasons []string
+		h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+		spec := sampleSpec()
+		spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{
+			{Type: mount.TypeVolume, Source: "data", Target: "/data"},
+			{Type: mount.TypeBind, Source: "/", Target: "/host"},
+		}
+		resp := do(t, h, postJSON("POST", "/services/create", enc(t, spec)))
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden || !slices.Equal(reasons, []string{"host_policy"}) {
+			t.Fatalf("status %d reasons %v, want 403 host_policy", resp.StatusCode, reasons)
+		}
+	})
+}
+
+// A volume the manager's engine does not have is created by Docker from the mount's
+// own options, so those options are what is judged.
+func TestHostPolicyANamedVolumeTheEngineDoesNotHaveIsJudgedByTheMountsOwnOptions(t *testing.T) {
+	mountWith := func(opts map[string]string) swarm.ServiceSpec {
+		spec := sampleSpec()
+		spec.TaskTemplate.ContainerSpec.Mounts = []mount.Mount{{
+			Type: mount.TypeVolume, Source: "fresh", Target: "/data",
+			VolumeOptions: &mount.VolumeOptions{DriverConfig: &mount.Driver{Name: "local", Options: opts}},
+		}}
+		return spec
+	}
+
+	t.Run("an nfs share is forwarded", func(t *testing.T) {
+		sock := newFakeSocket(t)
+		h := Handler(sock.path, Policy{}, nil)
+		spec := mountWith(map[string]string{"type": "nfs", "o": "addr=10.0.0.5,rw", "device": ":/export"})
+		resp := do(t, h, postJSON("POST", "/services/create", enc(t, spec)))
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status %d, want 200", resp.StatusCode)
+		}
+		if got := sock.requests(); !slices.Equal(got, []string{"GET /volumes/fresh", "POST /services/create"}) {
+			t.Fatalf("the engine saw %v", got)
+		}
+	})
+
+	t.Run("a bind of /etc is refused", func(t *testing.T) {
+		sock := newFakeSocket(t)
+		var reasons []string
+		h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+		spec := mountWith(map[string]string{"type": "none", "o": "bind", "device": "/etc"})
+		resp := do(t, h, postJSON("POST", "/services/create", enc(t, spec)))
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden || !slices.Equal(reasons, []string{"host_policy"}) {
+			t.Fatalf("status %d reasons %v, want 403 host_policy", resp.StatusCode, reasons)
+		}
+		for _, r := range sock.requests() {
+			if strings.HasPrefix(r, "POST ") {
+				t.Fatalf("a refused spec reached the engine: %v", sock.requests())
+			}
+		}
+	})
+}
+
+func TestHostPolicyAHostNetworkNamedByIDIsFoundOnTheAgentsOwnEngine(t *testing.T) {
+	const id = "7a1c0f3e9b2d4c5f8e6a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e"
+	sock := newFakeSocket(t)
+	sock.answers = map[string]string{"/networks/" + id: `{"Name":"host","Driver":"host","Scope":"local"}`}
+	var reasons []string
+	h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+	spec := sampleSpec()
+	spec.TaskTemplate.Networks = []swarm.NetworkAttachmentConfig{{Target: id}}
+	resp := do(t, h, postJSON("POST", "/services/create", enc(t, spec)))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden || !slices.Equal(reasons, []string{"host_policy"}) {
+		t.Fatalf("status %d reasons %v, want 403 host_policy", resp.StatusCode, reasons)
+	}
+	if got := sock.requests(); !slices.Equal(got, []string{"GET /networks/" + id}) {
+		t.Fatalf("the engine saw %v, want the one network lookup", got)
+	}
+}
+
+// A lookup that cannot answer is not an escalation: the engine refuses an unknown
+// network itself when it gets the spec.
+func TestHostPolicyALookupThatFailsDoesNotRefuseTheSpec(t *testing.T) {
+	sock := newFakeSocket(t) // answers "OK", which is not a network
+	h := Handler(sock.path, Policy{}, nil)
+	spec := sampleSpec()
+	spec.TaskTemplate.Networks = []swarm.NetworkAttachmentConfig{{Target: "app_net"}}
+	resp := do(t, h, postJSON("POST", "/services/create", enc(t, spec)))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", resp.StatusCode)
+	}
+	if got := sock.requests(); !slices.Equal(got, []string{"GET /networks/app_net", "POST /services/create"}) {
+		t.Fatalf("the engine saw %v", got)
+	}
+}
+
+func TestServiceCreateKeepsTheRegistryCredentialAndRemoveIsForwarded(t *testing.T) {
+	sock := newFakeSocket(t)
+	h := Handler(sock.path, Policy{}, nil)
+	resp := do(t, h, postJSON("POST", "/v1.52/services/create", enc(t, sampleSpec()), "X-Registry-Auth: eyJ1c2VybmFtZSI6InUifQ==\r\n"))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create: status %d, want 200", resp.StatusCode)
+	}
+	resp = do(t, h, request("DELETE", "/services/web"))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("remove: status %d, want 200", resp.StatusCode)
+	}
+	if got := sock.requests(); !slices.Equal(got, []string{"POST /v1.52/services/create", "DELETE /services/web"}) {
+		t.Fatalf("the engine saw %v", got)
+	}
+	sock.mu.Lock()
+	defer sock.mu.Unlock()
+	if got := sock.headers[0].Get("X-Registry-Auth"); got != "eyJ1c2VybmFtZSI6InUifQ==" {
+		t.Errorf("X-Registry-Auth = %q, want it kept on a create", got)
+	}
+}
+
+func TestServiceRemoveWithAnyQueryKeyIsRefused(t *testing.T) {
+	sock := newFakeSocket(t)
+	h := Handler(sock.path, Policy{}, nil)
+	resp := do(t, h, request("DELETE", "/services/web?force=1"))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status %d, want 403", resp.StatusCode)
+	}
+	if got := sock.requests(); len(got) != 0 {
+		t.Fatalf("the engine saw %v", got)
+	}
+}
+
+func TestAReadOnlyHostRefusesServiceCreateAndRemoveBeforeAnyValidator(t *testing.T) {
+	sock := newFakeSocket(t)
+	var reasons []string
+	h := Handler(sock.path, Policy{ReadOnly: true, AllowPrivilegedServices: true}, func(_, _, reason string) { reasons = append(reasons, reason) })
+	for _, raw := range []string{
+		postJSON("POST", "/services/create", enc(t, sampleSpec())),
+		postJSON("POST", "/services/create", `{not json`),
+		request("DELETE", "/services/web"),
+		postJSON("POST", "/services/web/update?version=1", enc(t, sampleSpec())),
+	} {
+		resp := do(t, h, raw)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("status %d, want 403 for %.40q", resp.StatusCode, raw)
+		}
+	}
+	if !slices.Equal(reasons, []string{"read_only_flag", "read_only_flag", "read_only_flag", "read_only_flag"}) {
+		t.Errorf("reasons = %v", reasons)
+	}
+	if got := sock.requests(); len(got) != 0 {
+		t.Fatalf("the engine saw %v", got)
 	}
 }

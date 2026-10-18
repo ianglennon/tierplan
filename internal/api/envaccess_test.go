@@ -90,6 +90,7 @@ func (f *authFixture) envAccess(t *testing.T, name, envID string) *envRec {
 }
 
 func TestEnvAccessAnEnvAdminSeesWhoCanUseTheirEnvironmentAndWhyWithTheInstanceAdminsAlwaysThere(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, richEngine())
 	a, _ := f.twoEnvironments(t)
 	f.addEnvUser(t, "carol", a.ID, "admin")
@@ -121,6 +122,7 @@ func TestEnvAccessAnEnvAdminSeesWhoCanUseTheirEnvironmentAndWhyWithTheInstanceAd
 }
 
 func TestEnvAccessTheWhoListOffersUsernamesDisplayNamesAndTeamNamesNeverEmailsAndLeavesOutWhoHasAGrantHere(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, richEngine())
 	a, _ := f.twoEnvironments(t)
 	f.addEnvUser(t, "carol", a.ID, "admin")
@@ -154,6 +156,7 @@ func TestEnvAccessTheWhoListOffersUsernamesDisplayNamesAndTeamNamesNeverEmailsAn
 }
 
 func TestEnvAccessAnEnvAdminGrantsOperatorWithTheShellOnTheirEnvironmentAndTheGranteeHasItThereAndNowhereElse(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, richEngine())
 	a, b := f.twoEnvironments(t)
 	f.addEnvUser(t, "carol", a.ID, "admin")
@@ -199,6 +202,7 @@ func TestEnvAccessAnEnvAdminGrantsOperatorWithTheShellOnTheirEnvironmentAndTheGr
 }
 
 func TestEnvAccessAnEnvAdminGivesATeamAccessToTheirEnvironmentAndTheTeamRowListsItsMembers(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, richEngine())
 	a, _ := f.twoEnvironments(t)
 	f.addEnvUser(t, "carol", a.ID, "admin")
@@ -241,6 +245,7 @@ func (f *authFixture) assignmentCount(t *testing.T) int {
 }
 
 func TestDelegationRefusesAnInstanceAdminSubjectAndEveryAttemptToAimElsewhereAndChangesNothing(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, richEngine())
 	a, b := f.twoEnvironments(t)
 	f.addEnvUser(t, "carol", a.ID, "admin")
@@ -284,6 +289,7 @@ func TestDelegationRefusesAnInstanceAdminSubjectAndEveryAttemptToAimElsewhereAnd
 }
 
 func TestDelegationAnEnvAdminOfAGetsNotFoundOnBAndAViewerOrOperatorOnAGetsForbidden(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, richEngine())
 	a, b := f.twoEnvironments(t)
 	f.addEnvUser(t, "carol", a.ID, "admin")
@@ -325,6 +331,7 @@ func TestDelegationAnEnvAdminOfAGetsNotFoundOnBAndAViewerOrOperatorOnAGetsForbid
 }
 
 func TestDelegationRemovesAGrantOnTheEnvironmentWithItsImpactAndRefusesOtherScopes(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, richEngine())
 	a, b := f.twoEnvironments(t)
 	f.addEnvUser(t, "carol", a.ID, "admin")
@@ -407,6 +414,7 @@ func TestDelegationRemovesAGrantOnTheEnvironmentWithItsImpactAndRefusesOtherScop
 }
 
 func TestDelegationAnEnvAdminMakesAnotherAdminAndMayRemoveTheirOwnAdminGrant(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, richEngine())
 	a, _ := f.twoEnvironments(t)
 	f.addEnvUser(t, "carol", a.ID, "admin")
@@ -435,6 +443,7 @@ func TestDelegationAnEnvAdminMakesAnotherAdminAndMayRemoveTheirOwnAdminGrant(t *
 }
 
 func TestDelegationNoEnvironmentRouteCreatesUsersOrTeamsOrChangesMembership(t *testing.T) {
+	t.Parallel()
 	f := newEnvFix(t, richEngine())
 	a, _ := f.twoEnvironments(t)
 	f.addEnvUser(t, "carol", a.ID, "admin")

@@ -18,6 +18,8 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import "@/i18n";
 import { makeMe } from "@/test-me";
+import { splitPermissions } from "@/test-permissions";
+import { settled } from "@/test-settle";
 
 // The switcher and the version footer have their own tests and their own endpoints.
 vi.mock("@/components/env-switcher", () => ({ EnvSwitcher: () => null }));
@@ -25,13 +27,24 @@ vi.mock("@/components/version-footer", () => ({ VersionFooter: () => null }));
 
 const DESKTOP_WIDTH = window.innerWidth;
 
+// What the stubbed server says: who is signed in and what kind of environment e1 is.
+let me: ReturnType<typeof makeMe>;
+let envType: "swarm" | "standalone";
+
 beforeEach(() => {
   setCsrfToken(null);
+  me = makeMe({ envs: { e1: "viewer" } });
+  envType = "swarm";
   vi.stubGlobal(
     "fetch",
     vi.fn(async (req: Request) => {
       const url = new URL(req.url);
-      if (url.pathname === "/api/me") return Response.json(makeMe({ envs: { e1: "viewer" } }));
+      if (url.pathname === "/api/me") return Response.json(me);
+      if (url.pathname === "/api/environments") {
+        return Response.json({ items: [{ id: "e1", name: "Env one", envType }] });
+      }
+      // The summary is not what these tests are about: the environment list names the type.
+      if (url.pathname.endsWith("/summary")) return Response.json({}, { status: 404 });
       return Response.json({ items: [] });
     }),
   );
@@ -44,9 +57,11 @@ afterEach(() => {
 });
 
 // A phone is what useIsMobile reads: a window narrower than 768px.
-function mount(width: number) {
+let client: QueryClient;
+
+function mount(width: number, path = "/") {
   window.innerWidth = width;
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const root = createRootRoute({
     component: () => (
       <TooltipProvider>
@@ -62,8 +77,12 @@ function mount(width: number) {
       createRoute({ getParentRoute: () => root, path: "/" }),
       createRoute({ getParentRoute: () => root, path: "/environments" }),
       createRoute({ getParentRoute: () => root, path: "/registries" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/containers" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/services" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/placement" }),
     ]),
-    history: createMemoryHistory({ initialEntries: ["/"] }),
+    history: createMemoryHistory({ initialEntries: [path] }),
   });
   render(
     <QueryClientProvider client={client}>
@@ -120,5 +139,100 @@ describe("the desktop sidebar", () => {
     expect(await screen.findByRole("link", { name: "Registries" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Close menu" })).toBeNull();
     expect(screen.queryByRole("dialog", { name: "Navigation" })).toBeNull();
+  });
+});
+
+describe("the Swarm group", () => {
+  it("lists Services below Resources on a swarm environment, for a user who can read services", async () => {
+    mount(1280, "/env/e1");
+    const link = await screen.findByRole("link", { name: "Services" });
+    expect(link.getAttribute("href")).toBe("/env/e1/services");
+    const groups = screen.getAllByText(/^(Resources|Swarm)$/).map((g) => g.textContent);
+    expect(groups).toEqual(["Resources", "Swarm"]);
+  });
+
+  it("lists Nodes after Services, for a user who can read nodes", async () => {
+    mount(1280, "/env/e1");
+    const link = await screen.findByRole("link", { name: "Nodes" });
+    expect(link.getAttribute("href")).toBe("/env/e1/nodes");
+    const swarm = screen.getAllByRole("link").map((l) => l.textContent);
+    expect(swarm.indexOf("Nodes")).toBe(swarm.indexOf("Services") + 1);
+  });
+
+  it("lists Placement after Nodes, for a user who can read services", async () => {
+    mount(1280, "/env/e1");
+    const link = await screen.findByRole("link", { name: "Placement" });
+    expect(link.getAttribute("href")).toBe("/env/e1/placement");
+    const swarm = screen.getAllByRole("link").map((l) => l.textContent);
+    expect(swarm.indexOf("Placement")).toBe(swarm.indexOf("Nodes") + 1);
+  });
+
+  it("lists Secrets after Placement, for a user who can read secrets", async () => {
+    mount(1280, "/env/e1");
+    const link = await screen.findByRole("link", { name: "Secrets" });
+    expect(link.getAttribute("href")).toBe("/env/e1/secrets");
+    const swarm = screen.getAllByRole("link").map((l) => l.textContent);
+    expect(swarm.indexOf("Secrets")).toBe(swarm.indexOf("Placement") + 1);
+  });
+
+  it("lists Configs after Secrets, for a user who can read configs", async () => {
+    mount(1280, "/env/e1");
+    const link = await screen.findByRole("link", { name: "Configs" });
+    expect(link.getAttribute("href")).toBe("/env/e1/configs");
+    const swarm = screen.getAllByRole("link").map((l) => l.textContent);
+    expect(swarm.indexOf("Configs")).toBe(swarm.indexOf("Secrets") + 1);
+  });
+
+  it("leaves Configs out for a user who can read services but not configs", async () => {
+    me = makeMe({
+      envs: { e1: "viewer" },
+      permissions: splitPermissions(["containers.read", "environments.read", "services.read"]),
+    });
+    mount(1280, "/env/e1");
+    expect(await screen.findByRole("link", { name: "Services" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Configs" })).toBeNull();
+  });
+
+  it("leaves Secrets out for a user who can read services but not secrets", async () => {
+    me = makeMe({
+      envs: { e1: "viewer" },
+      permissions: splitPermissions(["containers.read", "environments.read", "services.read"]),
+    });
+    mount(1280, "/env/e1");
+    expect(await screen.findByRole("link", { name: "Services" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Secrets" })).toBeNull();
+  });
+
+  it("leaves Nodes out for a user who can read services but not nodes", async () => {
+    me = makeMe({
+      envs: { e1: "viewer" },
+      permissions: splitPermissions(["containers.read", "environments.read", "services.read"]),
+    });
+    mount(1280, "/env/e1");
+    expect(await screen.findByRole("link", { name: "Services" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Nodes" })).toBeNull();
+  });
+
+  it("is not there on a standalone environment", async () => {
+    envType = "standalone";
+    mount(1280, "/env/e1");
+    expect(await screen.findByRole("link", { name: "Containers" })).toBeTruthy();
+    // Let the environment list answer: the group must stay away once it has.
+    await settled(client);
+    expect(screen.queryByText("Swarm")).toBeNull();
+    expect(screen.queryByRole("link", { name: "Services" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Placement" })).toBeNull();
+  });
+
+  it("is not there for a user without services.read, though a swarm environment is open", async () => {
+    me = makeMe({
+      envs: { e1: "viewer" },
+      permissions: splitPermissions(["containers.read", "environments.read"]),
+    });
+    mount(1280, "/env/e1");
+    expect(await screen.findByRole("link", { name: "Containers" })).toBeTruthy();
+    await settled(client);
+    expect(screen.queryByRole("link", { name: "Services" })).toBeNull();
+    expect(screen.queryByText("Swarm")).toBeNull();
   });
 });

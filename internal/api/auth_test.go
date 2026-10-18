@@ -137,6 +137,26 @@ type authFixture struct {
 	logsMaxStreams  int
 	logsMaxLifetime time.Duration
 	logsWrap        func(api.LogsSource) api.LogsSource
+	// serviceLogsHeartbeat, serviceLogsMaxStreams and serviceLogsMaxLifetime tune the service
+	// log stream (plan 06-29); zero is the default.
+	serviceLogsHeartbeat   time.Duration
+	serviceLogsRefresh     time.Duration
+	serviceLogsMaxStreams  int
+	serviceLogsMaxLifetime time.Duration
+	// serviceLogsBurstEnded is called when a service log stream has taken its opening burst as
+	// complete (newSvcLogsFix sets it, and tests await it through svcLogsFix.awaitBurstEnd).
+	serviceLogsBurstEnded func()
+	// serviceLogsMaxPageBytes, serviceLogsMaxDownloadBytes and serviceLogsMaxDownloads tune the
+	// page and the download of a service's log (plan 06-31).
+	serviceLogsMaxPageBytes     int
+	serviceLogsMaxDownloadBytes int
+	serviceLogsMaxDownloads     int
+	// statsHub, when set, is the sampler behind the container stats stream (plan 06-32);
+	// statsHeartbeat, statsMaxStreams and statsMaxLifetime tune the stream, zero is the default.
+	statsHub         *api.StatsHub
+	statsHeartbeat   time.Duration
+	statsMaxStreams  int
+	statsMaxLifetime time.Duration
 	// logsMaxPageBytes shortens how much one page of earlier lines may hold (plan 04-20).
 	logsMaxPageBytes int
 	// volumeSizesTimeout shortens the per-node time limit of the volume sizes route.
@@ -193,6 +213,9 @@ type authFixture struct {
 	// restore is what the restore routes (plan 03-25) restart through and keep
 	// their upload in; build creates it on first use and keeps it across builds.
 	restore *restoreHook
+	// restoreBurst narrows the restore routes' per-user limiter for this fixture
+	// when set before a build; 0 keeps restoreLimiterBurst.
+	restoreBurst int
 	// unknown is the registry of agents refused unknown_agent that the unknown-agents
 	// route and the warnings read (plan 03-28); newAuthFixture makes one.
 	unknown *agents.UnknownAgents
@@ -278,7 +301,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	})
 	if f.envSvc != nil {
 		api.RegisterEnvWarnings(r, api.EnvWarningsDeps{
-			Envs: f.envSvc, Checker: checker, Now: f.envWarningsNow, Log: log,
+			Envs: f.envSvc, Checker: checker, Clusters: f.clusters, Now: f.envWarningsNow, Log: log,
 			Agents: api.AgentsDeps{
 				Agents: agentSvc, Live: f.liveAgents, Instance: f.inst, TLSPin: func() string { return f.tlsPin },
 				AgentAllowInsecure: f.agentAllowInsecure,
@@ -287,9 +310,21 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		})
 	}
 	if f.envSvc != nil && f.agg != nil {
-		api.RegisterDashboard(r, api.DashboardDeps{Aggregator: f.agg, Clusters: f.clusters, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
-		api.RegisterContainers(r, api.ContainersDeps{Aggregator: f.agg, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
+		api.RegisterDashboard(r, api.DashboardDeps{Aggregator: f.agg, Clusters: f.clusters, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
+		api.RegisterContainers(r, api.ContainersDeps{Aggregator: f.agg, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Clusters: f.clusters, Log: log})
 		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
+		api.RegisterServices(r, api.ServicesDeps{
+			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
+			Audit: f.aud, Checker: checker, Log: log,
+		})
+		api.RegisterRestartLoop(r, api.RestartLoopDeps{Store: f.st, Clusters: f.clusters, Aggregator: f.agg, Audit: f.aud, Log: log})
+		rotateResolver := registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now))
+		api.RegisterSecrets(r, api.SecretsDeps{Aggregator: f.agg, Clusters: f.clusters, Resolver: rotateResolver, Audit: f.aud, Checker: checker, Log: log})
+		api.RegisterConfigs(r, api.ConfigsDeps{Aggregator: f.agg, Clusters: f.clusters, Resolver: rotateResolver, Audit: f.aud, Checker: checker, Log: log})
+		api.RegisterNodes(r, api.NodesDeps{
+			Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, Agents: agentSvc, Live: f.liveAgents,
+			SelfContainerID: f.envSvc.SelfContainerID(), Log: log,
+		})
 		api.RegisterVolumes(r, api.VolumesDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, SizesTimeout: f.volumeSizesTimeout, Log: log})
 		api.RegisterImages(r, api.ImagesDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
 		if f.jobHub == nil {
@@ -309,6 +344,20 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			Aggregator: logsSrc, Audit: f.aud, Checker: checker, Heartbeat: f.logsHeartbeat, MaxStreamsPerUser: f.logsMaxStreams,
 			MaxLifetime: f.logsMaxLifetime, MaxPageBytes: f.logsMaxPageBytes, Now: f.clk.now, Log: log,
 		})
+		if f.statsHub != nil {
+			api.RegisterStats(r, api.StatsDeps{
+				Aggregator: f.agg, Clusters: f.clusters, Hub: f.statsHub, Heartbeat: f.statsHeartbeat,
+				MaxStreamsPerUser: f.statsMaxStreams, MaxLifetime: f.statsMaxLifetime, Log: log,
+			})
+		}
+		if f.clusters != nil {
+			api.RegisterServiceLogs(r, api.ServiceLogsDeps{
+				Clusters: f.clusters, Audit: f.aud, Checker: checker, Heartbeat: f.serviceLogsHeartbeat,
+				TaskRefresh: f.serviceLogsRefresh, MaxStreamsPerUser: f.serviceLogsMaxStreams, MaxLifetime: f.serviceLogsMaxLifetime,
+				MaxPageBytes: f.serviceLogsMaxPageBytes, MaxDownloadBytes: f.serviceLogsMaxDownloadBytes, MaxServerDownloads: f.serviceLogsMaxDownloads,
+				Now: f.clk.now, BurstEnded: f.serviceLogsBurstEnded, Log: log,
+			})
+		}
 		if f.shellsReg == nil {
 			f.shellsReg = shells.NewRegistry(nil)
 		}
@@ -330,7 +379,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	regStore := registry.NewStore(f.st, f.v, f.clk.now)
 	api.RegisterTags(r, api.TagsDeps{
 		Resolver: registry.NewResolver(regStore), Tags: registry.NewTagService(nil, f.registryEgress, "test", log),
-		Checker: checker, Aggregator: f.agg, Envs: f.envSvc, Audit: f.aud, Log: log,
+		Checker: checker, Aggregator: f.agg, Envs: f.envSvc, Audit: f.aud, Now: f.clk.now, Log: log,
 	})
 	api.RegisterUnknownAgents(r, api.UnknownAgentsDeps{Unknown: f.unknown, Store: f.st, Now: f.clk.now, Log: log})
 	api.RegisterRecent(r, api.RecentDeps{Store: f.st, Envs: f.envSvc, Checker: checker, Refusals: f.aud, Now: f.clk.now, Log: log})
@@ -492,6 +541,7 @@ func (f *authFixture) sessionCount(t *testing.T) int {
 // --- POST /api/auth/login --------------------------------------------------
 
 func TestLoginSignsInWithABrowserSessionCookieAndReturnsTheUserAndCSRFToken(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody("Admin", goodPassword, false)})
 	if rec.Code != http.StatusOK {
@@ -526,6 +576,7 @@ func TestLoginSignsInWithABrowserSessionCookieAndReturnsTheUserAndCSRFToken(t *t
 }
 
 func TestLoginRememberMeSetsAThirtyDayCookieAndSession(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody("admin", goodPassword, true)})
 	if rec.Code != http.StatusOK {
@@ -542,6 +593,7 @@ func TestLoginRememberMeSetsAThirtyDayCookieAndSession(t *testing.T) {
 }
 
 func TestLoginOverHTTPSUsesTheHostPrefixedSecureCookie(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{PublicURL: "https://bayplan.example"})
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody("admin", goodPassword, false)})
 	if rec.Code != http.StatusOK {
@@ -554,6 +606,7 @@ func TestLoginOverHTTPSUsesTheHostPrefixedSecureCookie(t *testing.T) {
 }
 
 func TestLoginUnknownUserWrongPasswordLockedAndDisabledAreByteIdentical(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addUser(t, "locked", false)
 	f.addUser(t, "off", false)
@@ -604,6 +657,7 @@ func TestLoginUnknownUserWrongPasswordLockedAndDisabledAreByteIdentical(t *testi
 }
 
 func TestLoginWithAnExistingSessionRotatesIt(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	oldCookie, oldCSRF := f.signIn(t, "admin", false)
 
@@ -630,6 +684,7 @@ func TestLoginWithAnExistingSessionRotatesIt(t *testing.T) {
 }
 
 func TestLoginWhileHoldingASessionStillNeedsItsCSRFToken(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, _ := f.signIn(t, "admin", false)
 	rec := f.call(t, authReq{
@@ -644,6 +699,7 @@ func TestLoginWhileHoldingASessionStillNeedsItsCSRFToken(t *testing.T) {
 }
 
 func TestLoginIsRateLimitedPerAddressWithTheSameError(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.limiter = auth.NewIPLimiter(time.Hour, 2, time.Hour, f.clk.now)
 	h := f.build(t)
@@ -665,6 +721,7 @@ func TestLoginIsRateLimitedPerAddressWithTheSameError(t *testing.T) {
 }
 
 func TestLoginAndFailedLoginAreAuditedWithIPAndUserAgent(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody("admin", "wrong wrong wrong", false)})
 	f.signIn(t, "admin", false)
@@ -680,6 +737,7 @@ func TestLoginAndFailedLoginAreAuditedWithIPAndUserAgent(t *testing.T) {
 }
 
 func TestLoginFiveWrongPasswordsLockTheAccountAndAuditIt(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	for range 5 {
 		f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody("admin", "wrong wrong wrong", false)})
@@ -695,6 +753,7 @@ func TestLoginFiveWrongPasswordsLockTheAccountAndAuditIt(t *testing.T) {
 }
 
 func TestLoginNeverEchoesOrLogsThePassword(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	const secret = "an-attempted-secret-9876"
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody("admin", secret, false)})
@@ -712,6 +771,7 @@ func TestLoginNeverEchoesOrLogsThePassword(t *testing.T) {
 // third string is a valid-looking name, so only "no account matched" can keep it
 // out.
 func TestLoginWithAPasswordTypedAsTheUsernameLeavesNoTraceInTheAuditLogItsExportsOrTheLog(t *testing.T) {
+	t.Parallel()
 	f := newAuditFix(t)
 	typed := []string{"Tr0ub4dor&3 hunter", "correct horse battery staple!", "hunter2hunter2"}
 	for _, name := range typed {
@@ -763,6 +823,7 @@ func TestLoginWithAPasswordTypedAsTheUsernameLeavesNoTraceInTheAuditLogItsExport
 }
 
 func TestLoginRejectsAnOversizedBodyFieldsWithoutTouchingTheAccount(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody(strings.Repeat("x", 65), goodPassword, false)})
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -847,6 +908,7 @@ func (f *authFixture) addTeamRole(t *testing.T, teamID, envID, role string) {
 }
 
 func TestMeReturnsTheUserCSRFTokenAndEffectivePermissions(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/me", cookie: cookie})
@@ -883,6 +945,7 @@ func TestMeReturnsTheUserCSRFTokenAndEffectivePermissions(t *testing.T) {
 }
 
 func TestMeForAUserWithNoRoleHasEmptyPermissionListsNotNull(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addUser(t, "plain", false)
 	cookie, _ := f.signIn(t, "plain", false)
@@ -904,6 +967,7 @@ func TestMeForAUserWithNoRoleHasEmptyPermissionListsNotNull(t *testing.T) {
 }
 
 func TestMeForTheFirstAdminIsAnInstanceAdminWithOneAllEnvironmentsEntry(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	got, raw := f.getMe(t, "admin")
 	if !got.User.InstanceAdmin || got.User.DisplayName != "" {
@@ -951,6 +1015,7 @@ func TestMeForTheFirstAdminIsAnInstanceAdminWithOneAllEnvironmentsEntry(t *testi
 }
 
 func TestMeShowsATeamAndADirectGrantAsSourcesOfTheHigherRole(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addUser(t, "dev", false)
 	f.addEnvRole(t, "dev", "env-a", "viewer")
@@ -977,6 +1042,7 @@ func TestMeShowsATeamAndADirectGrantAsSourcesOfTheHigherRole(t *testing.T) {
 }
 
 func TestMeListsTheActiveInstanceAdminsOnlyForAUserWithNoEnvironmentAccess(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addInstanceAdmin(t, "zed")
 	f.addInstanceAdmin(t, "gone")
@@ -1007,6 +1073,7 @@ func TestMeListsTheActiveInstanceAdminsOnlyForAUserWithNoEnvironmentAccess(t *te
 }
 
 func TestMeWithoutASessionIs401AndAuditedAsADeniedRead(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/me"})
 	if rec.Code != http.StatusUnauthorized {
@@ -1019,6 +1086,7 @@ func TestMeWithoutASessionIs401AndAuditedAsADeniedRead(t *testing.T) {
 }
 
 func TestMeWithAGarbageOrForeignCookieIs401(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	for _, v := range []string{"garbage", strings.Repeat("A", 43), strings.Repeat("A", 5000)} {
 		if rec := f.call(t, authReq{method: http.MethodGet, path: "/api/me", cookie: v}); rec.Code != http.StatusUnauthorized {
@@ -1028,6 +1096,7 @@ func TestMeWithAGarbageOrForeignCookieIs401(t *testing.T) {
 }
 
 func TestAnHTTPSInstanceIgnoresABareSessionCookie(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{PublicURL: "https://bayplan.example"})
 	raw, _ := f.signIn(t, "admin", false)
 	me := func(name string) int {
@@ -1047,6 +1116,7 @@ func TestAnHTTPSInstanceIgnoresABareSessionCookie(t *testing.T) {
 }
 
 func TestAPlainHTTPInstanceIgnoresAHostPrefixedCookie(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	raw, _ := f.signIn(t, "admin", false)
 	me := func(name string) int {
@@ -1066,6 +1136,7 @@ func TestAPlainHTTPInstanceIgnoresAHostPrefixedCookie(t *testing.T) {
 }
 
 func TestMeSessionSurvivesAServerRestart(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	restarted := f.build(t) // new Authenticator and Login, same database
@@ -1081,6 +1152,7 @@ func TestMeSessionSurvivesAServerRestart(t *testing.T) {
 }
 
 func TestMeSessionEndsAfterTwelveHoursIdleButARememberedOneDoesNot(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	plain, _ := f.signIn(t, "admin", false)
 	kept, _ := f.signIn(t, "admin", true)
@@ -1101,6 +1173,7 @@ func TestMeSessionEndsAfterTwelveHoursIdleButARememberedOneDoesNot(t *testing.T)
 // --- POST /api/auth/logout -------------------------------------------------
 
 func TestLogoutEndsOnlyThisDevicesSessionClearsTheCookieAndIsAudited(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	phone, _ := f.signIn(t, "admin", false)
 	laptop, laptopCSRF := f.signIn(t, "admin", true)
@@ -1126,6 +1199,7 @@ func TestLogoutEndsOnlyThisDevicesSessionClearsTheCookieAndIsAudited(t *testing.
 }
 
 func TestLogoutWithoutAValidCSRFTokenIs403AndKeepsTheSession(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	for name, token := range map[string]string{"missing": "", "wrong": "not-the-token", "truncated": csrf[:8]} {
@@ -1147,6 +1221,7 @@ func TestLogoutWithoutAValidCSRFTokenIs403AndKeepsTheSession(t *testing.T) {
 }
 
 func TestLogoutAnotherSessionsTokenIsRefused(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	a, _ := f.signIn(t, "admin", false)
 	_, bCSRF := f.signIn(t, "admin", false)
@@ -1157,6 +1232,7 @@ func TestLogoutAnotherSessionsTokenIsRefused(t *testing.T) {
 }
 
 func TestLogoutWithoutASessionOrWithAnExpiredOneIs401(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	if rec := f.call(t, authReq{method: http.MethodPost, path: "/api/auth/logout"}); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("no session: %d, want 401", rec.Code)
@@ -1169,6 +1245,7 @@ func TestLogoutWithoutASessionOrWithAnExpiredOneIs401(t *testing.T) {
 }
 
 func TestMutationFromAnotherOriginIsRefusedBeforeLogin(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{PublicURL: "https://bayplan.example"})
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(loginBody("admin", goodPassword, false)))
 	req.Header.Set("Content-Type", "application/json")

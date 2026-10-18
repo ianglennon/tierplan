@@ -11,6 +11,7 @@ import { queryClient } from "@/api/query-client";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
 import { makeMe } from "@/test-me";
+import { settled } from "@/test-settle";
 
 const ME = makeMe({
   instanceAdmin: true,
@@ -363,7 +364,7 @@ describe("instance answer reuse (WR-18)", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/audit"));
     await router.navigate({ to: "/" });
     await screen.findByText("No environments yet");
-    await new Promise((r) => setTimeout(r, 50));
+    await settled(queryClient);
 
     expect(instanceCalls()).toBe(before);
   });

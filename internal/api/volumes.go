@@ -327,7 +327,9 @@ func RegisterVolumes(r *httpx.Router, d VolumesDeps) {
 		Description: "Creates a volume on one node, once and never retried. " +
 			"Volumes are node-local: nodeId names the node (the nodeId of a row of a list) and may be left out only on an environment of one node that is not a swarm (else 422 node_required). " +
 			"The driver is local unless one is named. " +
-			"409 name_taken when the node already has a volume of that name (the engine would silently reuse it), 409 host_read_only on a read-only host, 503 node_unavailable when the node is not a connected node of the environment. " +
+			"409 name_taken when the node already has a volume of that name (the engine would silently reuse it), 409 host_read_only on a read-only host, " +
+			"409 agent_host_policy when the node's agent refuses a volume that mounts a host folder outside /srv, /mnt and /media, mounts a device or uses a volume plugin, because its owner did not set BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true, " +
+			"503 node_unavailable when the node is not a connected node of the environment. " +
 			"Needs volumes.create (Admin) on the environment. Every attempt is audited as volume.created, with result failure and the code when it was refused. " +
 			"The audit row carries the driver option names and values with any password-like part replaced.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusCreated,
@@ -614,6 +616,15 @@ func createVolume(ctx context.Context, d VolumesDeps, p *rbac.Principal, envID s
 func volumeCreateProblem(log *slog.Logger, envID, name string, err error) (string, error) {
 	if errors.Is(err, errVolumeExists) || dockerx.IsConflict(err) {
 		return problemNameTaken, httpx.Problem(http.StatusConflict, problemNameTaken, "A volume named "+name+" already exists on that node.")
+	}
+	// The agent refuses a volume that mounts the host as it refuses a service that does
+	// (D-36): the same code and the same setting that lifts it. It is not an out-of-date
+	// agent, so it is not agent_policy_denied.
+	var denied *envs.AgentPolicyDeniedError
+	if errors.As(envs.ClassifyDockerError(err), &denied) && denied.HostPolicy {
+		return codeAgentHostPolicy, httpx.Problem(http.StatusConflict, codeAgentHostPolicy,
+			"This host's agent doesn't let Bayplan create a volume that mounts a host folder outside /srv, /mnt and /media, mounts a device, or uses a volume plugin. "+
+				"Its owner can allow it by setting BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true on the agent.")
 	}
 	return networkWriteProblem(log, envID, err)
 }

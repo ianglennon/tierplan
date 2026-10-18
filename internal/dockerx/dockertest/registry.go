@@ -189,12 +189,29 @@ func PushImage(t testing.TB, node *Node, src, target string, login *Login) strin
 	if out, err := node.Exec(ctx, "docker", "tag", src, target); err != nil {
 		t.Fatalf("tag %s as %s: %v\n%s", src, target, err, out)
 	}
+	return pushTagged(t, node, target, login)
+}
+
+// pushTagged pushes target, an image the node already holds under that name, signing in
+// first when login is given, and returns the digest the registry answered with.
+func pushTagged(t testing.TB, node *Node, target string, login *Login) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
 	if login != nil {
 		host, _, _ := strings.Cut(target, "/")
 		out, err := node.Sh(ctx, fmt.Sprintf("echo '%s' | docker login -u '%s' --password-stdin %s", login.Password, login.User, host))
 		if err != nil {
 			t.Fatalf("sign in to %s on %s: %v\n%s", host, node.Hostname, err, out)
 		}
+	}
+	// A push to the fixture registry goes through the node's own port 5000 (the routing
+	// mesh on a swarm). Wait until that answers /v2/ from this node, so the push never
+	// starts against a mesh that is not answering yet; the push itself runs once.
+	if host, _, _ := strings.Cut(target, "/"); host == registryHost || host == swarmRegistryHost {
+		Wait(t, 2*time.Minute, "the registry to answer /v2/ from "+node.Hostname+" before the push", func() (bool, string) {
+			return registryUp(ctx, node, RegistryOptions{})
+		})
 	}
 	out, err := node.Exec(ctx, "docker", "push", target)
 	if err != nil {

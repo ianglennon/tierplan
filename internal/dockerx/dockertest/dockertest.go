@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -106,6 +107,11 @@ type FakeConfig struct {
 	Images     []FakeImage
 	Volumes    []FakeVolume
 	Networks   []FakeNetwork
+	// Secrets are the swarm secrets /secrets lists, none with a value (fake_secrets.go).
+	Secrets []FakeSecret
+	// Configs are the swarm configs /configs lists, each with its content, as a real manager
+	// lists them (fake_configs.go).
+	Configs []FakeConfigObject
 	// DiskUsageFail makes GET /system/df answer 500, as an engine does when a volume's files
 	// cannot be walked.
 	DiskUsageFail bool
@@ -137,10 +143,20 @@ type FakeConfig struct {
 	// WriteError makes every container write answer 500 with this message, as an engine
 	// does when it refuses one.
 	WriteError string
+	// RemoveErrors makes the removal of the secret, config or network of that name answer 500 with the
+	// message, as a manager does when it cannot remove one. A name not listed removes as usual.
+	RemoveErrors map[string]string
+	// NodeUpdateError makes every node update answer with this message, as a manager does when it
+	// refuses one: 400 for the last-manager refusal, 500 for any other text.
+	NodeUpdateError string
 	// PolicyDeny makes the four list endpoints and every write answer 403 with the
 	// message an agent gives for a request its policy refuses: agent_policy_denied:
 	// followed by the method and path.
 	PolicyDeny bool
+	// VolumeHostPolicyDeny makes only the volume create answer 403 with the message an
+	// agent gives for a host-policy refusal: agent_policy_denied: host_policy: followed
+	// by the method and path.
+	VolumeHostPolicyDeny bool
 	// HistoryDeny makes only the image history route answer 403 agent_policy_denied, as
 	// an agent older than the route does, while the lists and the image inspect answer.
 	HistoryDeny bool
@@ -154,9 +170,26 @@ type FakeConfig struct {
 	// ServiceRows are the services /services lists, in place of the Services count.
 	// With ?status=true each carries its ServiceStatus.
 	ServiceRows []FakeService
+	// ServiceCreateError, when set, makes the creation of a service answer 400 with this text, as a
+	// manager does for a spec it cannot accept; ServiceCreateWarnings are the warnings an accepted
+	// creation answers with (fake_services.go).
+	ServiceCreateError    string
+	ServiceCreateWarnings []string
 	// AgentTasks are the tasks /tasks lists. A task is listed when the request's
 	// service filter names its service, by ID or by name, as a real daemon matches.
 	AgentTasks []FakeAgentTask
+	// Tasks are whole swarm tasks /tasks lists, with the filters of a real daemon (service,
+	// node, desired-state and id), beside AgentTasks (fake_tasks.go).
+	Tasks []swarm.Task
+	// ServiceLogs are the lines the tasks of each service wrote, by service ID, which
+	// /services/{id}/logs and /tasks/{id}/logs answer (fake_servicelogs.go).
+	ServiceLogs map[string][]FakeServiceLogLine
+	// Stats is the resource use each container reports, by container ID, which
+	// /containers/{id}/stats answers one more sample of per call (fake_stats.go).
+	Stats map[string]FakeStats
+	// HistoryLimit is Swarm.Cluster.Spec.Orchestration.TaskHistoryRetentionLimit /info
+	// reports; zero leaves the field unset, as a cluster that never set it does.
+	HistoryLimit int
 	// QuorumLost makes /nodes, /services, /tasks and /swarm answer the 500 a
 	// manager gives when the swarm has no leader. Node-local calls keep working,
 	// and so does /_ping, as on a real manager (RESEARCH Pitfall 11).
@@ -179,6 +212,21 @@ type FakeConfig struct {
 	// PullHold holds every pull, after it is recorded and before it answers, until the
 	// channel is closed or the caller gives up, so a test can look at a pull in progress.
 	PullHold <-chan struct{}
+	// ProbeHold holds every /_ping, after it is recorded and before it answers, until the
+	// channel is closed or the request's context ends, so a test can show a target whose first
+	// probe has not finished (an environment that reads online from another target while this
+	// one is still unknown).
+	ProbeHold <-chan struct{}
+	// ProbeDelay answers every /_ping that much later (deliberate fake latency, not
+	// synchronisation). NewFake reads BAYPLAN_TEST_PROBE_DELAY, a time.ParseDuration value,
+	// and uses it as the delay of every fake whose ProbeDelay is zero, so a whole package can
+	// be swept with slow first probes to find a test that treats "online" as "ready".
+	ProbeDelay time.Duration
+	// ListHold holds every container list (/containers/json), after it is recorded and before
+	// it answers, until the channel is closed or the request's context ends, so a test can
+	// show what must keep working while a list is outstanding (a probe, a stop, a caller that
+	// gave up) by ordering instead of by comparing elapsed time with a bound.
+	ListHold <-chan struct{}
 }
 
 // FakePullStatus is an HTTP status and message a pull is answered with.
@@ -201,6 +249,19 @@ type FakeNode struct {
 	OS            string
 	Leader        bool
 	Reachability  string
+	// Address is the node's Status.Addr, Arch its platform architecture (zero is
+	// "x86_64"), NanoCPUs and MemoryBytes its resources, Labels its spec labels,
+	// EngineLabels the labels of its engine and ManagerAddr the address a manager
+	// reports for the raft port.
+	Address               string
+	Arch                  string
+	NanoCPUs, MemoryBytes int64
+	Labels, EngineLabels  map[string]string
+	ManagerAddr           string
+	// Version is the node's object version (zero is 1), CreatedAt and UpdatedAt its
+	// times (zero is the Unix epoch).
+	Version              uint64
+	CreatedAt, UpdatedAt time.Time
 }
 
 // FakeService is one entry of /services. Mode is "replicated" (the default),
@@ -222,6 +283,46 @@ type FakeService struct {
 	Mounts   []FakeServiceMount
 	// Image is the image the spec names; empty leaves the container spec without one.
 	Image string
+	// Secrets and Configs are the secrets and configs the spec's container spec references.
+	Secrets, Configs []FakeServiceObject
+	// Constraints are the placement constraints of the service's spec.
+	Constraints []string
+	// Preferences are the spread descriptors of the spec's placement preferences.
+	Preferences []string
+	// MaxReplicas is the spec's placement limit of tasks per node.
+	MaxReplicas uint64
+	// Version is the version the service reports and a write must send back; zero is 1.
+	// Every update the fake accepts adds one.
+	Version uint64
+	// Replicas is the replica count of a replicated service's spec; zero takes Desired.
+	Replicas uint64
+	// Spec, when set, is the service's spec as /services answers it, in place of the one
+	// the fields above make up (fake_services.go).
+	Spec *swarm.ServiceSpec
+	// Ports are the service's endpoint ports, the ones the swarm publishes.
+	Ports []swarm.PortConfig
+	// UpdateMessage is the UpdateStatus message, empty for none.
+	UpdateMessage string
+	// PreviousSpec, when set, is the spec the service had before its last update.
+	PreviousSpec *swarm.ServiceSpec
+	// CreatedAt is when the service was created; zero is the Unix epoch.
+	CreatedAt time.Time
+	// RollbackError, when set, makes a rollback of the service answer 400 with this text, as a
+	// manager does when the previous spec names a secret, a config or a network that is gone.
+	RollbackError string
+	// UpdateError, when set, makes an update of the service answer 400 with this text, as a
+	// manager does for a spec it cannot accept (a secret or config that does not exist, a
+	// field it refuses). UpdateWarnings are the warnings an accepted update answers with.
+	UpdateError    string
+	UpdateWarnings []string
+}
+
+// FakeServiceObject is one secret or config reference of a service's container spec. File
+// is the file name in the container, empty for a config with a runtime target.
+type FakeServiceObject struct {
+	ID, Name, File string
+	UID, GID       string
+	Mode           uint32
 }
 
 // FakeServiceMount is one mount of a service's container spec. Type is "volume",
@@ -424,6 +525,10 @@ type Fake struct {
 	execs fakeExecs
 	// logs is the container log state (fake_logs.go).
 	logs fakeLogs
+	// svcLogs is the service log state (fake_servicelogs.go).
+	svcLogs fakeServiceLogs
+	// stats is the container stats state (fake_stats.go).
+	stats fakeStatsState
 	// nets are the networks created through the fake, and netCreates the bodies of
 	// those requests (fake_networks.go).
 	nets       []FakeNetwork
@@ -453,6 +558,35 @@ type Fake struct {
 	// (normalised) taken off an image, by its ID.
 	imgGone     map[string]bool
 	imgUntagged map[string]map[string]bool
+	// svcState is what the updates the fake accepted left each service with, by ID, and
+	// svcUpdates the updates themselves (fake_services.go).
+	svcState   map[string]fakeServiceState
+	svcUpdates []FakeServiceUpdate
+	// svcCreated are the services created through the fake, listed after the configured ones, and
+	// svcCreates the creates themselves (fake_services.go).
+	svcCreated []FakeService
+	svcCreates []FakeServiceCreate
+	// nodeState is what the updates the fake accepted left each node with, by ID, and
+	// nodeUpdates the updates themselves (fake_nodes.go).
+	nodeState   map[string]fakeNodeState
+	nodeUpdates []FakeNodeUpdate
+	// nodeGone are the IDs of the nodes removed through the fake.
+	nodeGone map[string]bool
+	// svcGone are the IDs of the services removed through the fake.
+	svcGone map[string]bool
+	// secrets are the secrets created through the fake, secretCreates the requests that made
+	// them (as byte counts) and secretGone the IDs of those removed (fake_secrets.go).
+	secrets       []FakeSecret
+	secretCreates []FakeSecretCreate
+	secretGone    map[string]bool
+	// configs are the configs created through the fake, configCreates the requests that made
+	// them and configGone the IDs of those removed (fake_configs.go).
+	configs       []FakeConfigObject
+	configCreates []FakeConfigCreate
+	configGone    map[string]bool
+	// distDigest is the digest the distribution route answers a full reference with, where a
+	// test has moved a tag (SetDistributionDigest); a reference not in it gets fakeDigest.
+	distDigest map[string]string
 	// distAuth and distRefs are the header and reference of each distribution check.
 	distAuth, distRefs []string
 
@@ -461,6 +595,57 @@ type Fake struct {
 	evHistory []FakeEvent
 	evSubs    map[*eventSub]struct{}
 	evQueries []url.Values
+
+	// await wakes Await whenever the fake served or finished a request, was reconfigured or
+	// stopped, or a long-lived handler changed a counter a test reads.
+	await awaitHub
+}
+
+// awaitHub is a change broadcast: notify wakes everyone who took the channel before it.
+// Its mutex is a leaf, so notify may be called with any other lock of the fake held.
+type awaitHub struct {
+	mu sync.Mutex
+	ch chan struct{}
+}
+
+func (a *awaitHub) channel() <-chan struct{} {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.ch == nil {
+		a.ch = make(chan struct{})
+	}
+	return a.ch
+}
+
+func (a *awaitHub) notify() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.ch != nil {
+		close(a.ch)
+		a.ch = nil
+	}
+}
+
+// Await returns nil once cond is true, and ctx's error if ctx ends first. cond is evaluated
+// now and again after every change of the fake: a request served or finished (so a counter a
+// handler changes, such as writes in flight, is seen after the handler returns), a
+// Reconfigure or Stop, and each change a long-lived handler makes while it runs (an event
+// stream, a log or service log follow, a stats stream or an exec session opening or ending).
+// It never polls, so the deadline in ctx only guards against a hang. cond may read the
+// fake's counters (for example ServiceLogFollows() == 1) but must not call Await.
+func (f *Fake) Await(ctx context.Context, cond func() bool) error {
+	for {
+		// The channel is taken before cond is evaluated, so a change in between is not missed.
+		ch := f.await.channel()
+		if cond() {
+			return nil
+		}
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 var versionPrefix = regexp.MustCompile(`^/v(\d+)\.(\d+)(/.*)$`)
@@ -482,6 +667,11 @@ func NewFake(t testing.TB, cfg FakeConfig) *Fake {
 		t.Fatalf("make the fake daemon directory: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	cfg, err = withEnvProbeDelay(cfg)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
 
 	f := &Fake{path: filepath.Join(dir, "d.sock"), cfg: cfg.withDefaults(), evSubs: map[*eventSub]struct{}{}, states: map[string]fakeState{}}
 	f.evHistory = append(f.evHistory, cfg.Events...)
@@ -516,6 +706,7 @@ func (f *Fake) Stop() {
 	srv := f.srv
 	f.srv = nil
 	f.mu.Unlock()
+	defer f.await.notify()
 	if srv != nil {
 		// An open /events stream would keep Close waiting.
 		f.DropEventStreams()
@@ -571,13 +762,35 @@ func (f *Fake) Requests() []string {
 func (f *Fake) Reconfigure(cfg FakeConfig) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// The environment was validated by NewFake, so the error cannot occur here.
+	cfg, _ = withEnvProbeDelay(cfg)
 	f.cfg = cfg.withDefaults()
+	f.await.notify()
+}
+
+// withEnvProbeDelay gives cfg the BAYPLAN_TEST_PROBE_DELAY delay (a time.ParseDuration value)
+// when its own ProbeDelay is zero. NewFake and Reconfigure both apply it, so a sweep with slow
+// first probes keeps applying after a test reconfigures the fake.
+func withEnvProbeDelay(cfg FakeConfig) (FakeConfig, error) {
+	if cfg.ProbeDelay != 0 {
+		return cfg, nil
+	}
+	v := os.Getenv("BAYPLAN_TEST_PROBE_DELAY")
+	if v == "" {
+		return cfg, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return cfg, fmt.Errorf("BAYPLAN_TEST_PROBE_DELAY=%q is not a duration: %w", v, err)
+	}
+	cfg.ProbeDelay = d
+	return cfg, nil
 }
 
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged)
+	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withCreatedServices(f.svcCreated).withServices(f.svcState).withoutServices(f.svcGone).withNodes(f.nodeState).withoutNodes(f.nodeGone).withSecrets(f.secrets).withoutSecrets(f.secretGone).withConfigs(f.configs).withoutConfigs(f.configGone)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
@@ -585,9 +798,27 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.requests = append(f.requests, r.URL.Path)
 	f.mu.Unlock()
+	f.await.notify()
+	defer f.await.notify()
 
 	p := r.URL.Path
 	if p == "/_ping" {
+		if cfg.ProbeHold != nil {
+			select {
+			case <-cfg.ProbeHold:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		if cfg.ProbeDelay > 0 {
+			timer := time.NewTimer(cfg.ProbeDelay)
+			select {
+			case <-timer.C:
+			case <-r.Context().Done():
+				timer.Stop()
+				return
+			}
+		}
 		h := w.Header()
 		h.Set("API-Version", cfg.APIVersion)
 		h.Set("OSType", cfg.OSType)
@@ -680,6 +911,13 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 	case "/events":
 		f.serveEvents(w, r)
 	case "/containers/json":
+		if cfg.ListHold != nil {
+			select {
+			case <-cfg.ListHold:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		if cfg.ListDelay > 0 {
 			select {
 			case <-time.After(cfg.ListDelay):
@@ -765,8 +1003,12 @@ func (c FakeConfig) swarmInfo() swarm.Info {
 		LocalNodeState:   swarm.LocalNodeState(c.SwarmState),
 		ControlAvailable: c.SwarmControl,
 	}
-	if c.SwarmClusterID != "" {
+	if c.SwarmClusterID != "" || c.HistoryLimit != 0 {
 		info.Cluster = &swarm.ClusterInfo{ID: c.SwarmClusterID}
+	}
+	if c.HistoryLimit != 0 {
+		limit := int64(c.HistoryLimit)
+		info.Cluster.Spec.Orchestration.TaskHistoryRetentionLimit = &limit
 	}
 	return info
 }
@@ -1041,10 +1283,12 @@ func (f *Fake) serveEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	f.evSubs[sub] = struct{}{}
 	f.evMu.Unlock()
+	f.await.notify()
 	defer func() {
 		f.evMu.Lock()
 		delete(f.evSubs, sub)
 		f.evMu.Unlock()
+		f.await.notify()
 	}()
 
 	rc := http.NewResponseController(w)
@@ -1141,22 +1385,31 @@ func (c FakeConfig) nodeList() []swarm.Node {
 		if state == "" {
 			state = "ready"
 		}
+		arch := fn.Arch
+		if arch == "" {
+			arch = "x86_64"
+		}
 		n := swarm.Node{
 			ID:   fn.ID,
-			Spec: swarm.NodeSpec{Role: swarm.NodeRole(role), Availability: swarm.NodeAvailability(avail)},
-			Description: swarm.NodeDescription{
-				Hostname: fn.Hostname,
-				Platform: swarm.Platform{OS: fn.OS, Architecture: "x86_64"},
-				Engine:   swarm.EngineDescription{EngineVersion: fn.EngineVersion},
+			Meta: swarm.Meta{Version: swarm.Version{Index: max(fn.Version, 1)}, CreatedAt: fn.CreatedAt, UpdatedAt: fn.UpdatedAt},
+			Spec: swarm.NodeSpec{
+				Annotations: swarm.Annotations{Labels: fn.Labels},
+				Role:        swarm.NodeRole(role), Availability: swarm.NodeAvailability(avail),
 			},
-			Status: swarm.NodeStatus{State: swarm.NodeState(state)},
+			Description: swarm.NodeDescription{
+				Hostname:  fn.Hostname,
+				Platform:  swarm.Platform{OS: fn.OS, Architecture: arch},
+				Resources: swarm.Resources{NanoCPUs: fn.NanoCPUs, MemoryBytes: fn.MemoryBytes},
+				Engine:    swarm.EngineDescription{EngineVersion: fn.EngineVersion, Labels: fn.EngineLabels},
+			},
+			Status: swarm.NodeStatus{State: swarm.NodeState(state), Addr: fn.Address},
 		}
 		if role == "manager" {
 			reach := fn.Reachability
 			if reach == "" {
 				reach = "reachable"
 			}
-			n.ManagerStatus = &swarm.ManagerStatus{Leader: fn.Leader, Reachability: swarm.Reachability(reach)}
+			n.ManagerStatus = &swarm.ManagerStatus{Leader: fn.Leader, Reachability: swarm.Reachability(reach), Addr: fn.ManagerAddr}
 		}
 		out = append(out, n)
 	}
@@ -1177,13 +1430,47 @@ func (c FakeConfig) serviceList(withStatus bool) []swarm.Service {
 	out := make([]swarm.Service, 0, len(c.ServiceRows))
 	for _, fs := range c.ServiceRows {
 		s := swarm.Service{ID: fs.ID}
+		s.Version.Index = max(fs.Version, 1)
+		if fs.Spec != nil {
+			s.Spec = *fs.Spec
+			s.UpdatedAt = fs.UpdatedAt
+			if withStatus {
+				s.ServiceStatus = &swarm.ServiceStatus{RunningTasks: fs.Running, DesiredTasks: fs.Desired}
+			}
+			fs.decorate(&s)
+			out = append(out, s)
+			continue
+		}
 		s.Spec.Name = fs.Name
 		s.Spec.Labels = fs.Labels
+		if len(fs.Constraints) > 0 || len(fs.Preferences) > 0 || fs.MaxReplicas > 0 {
+			pl := &swarm.Placement{Constraints: slices.Clone(fs.Constraints), MaxReplicas: fs.MaxReplicas}
+			for _, label := range fs.Preferences {
+				pl.Preferences = append(pl.Preferences, swarm.PlacementPreference{Spread: &swarm.SpreadOver{SpreadDescriptor: label}})
+			}
+			s.Spec.TaskTemplate.Placement = pl
+		}
 		for _, target := range fs.Networks {
 			s.Spec.TaskTemplate.Networks = append(s.Spec.TaskTemplate.Networks, swarm.NetworkAttachmentConfig{Target: target})
 		}
-		if len(fs.Mounts) > 0 || fs.Image != "" {
+		if len(fs.Mounts) > 0 || fs.Image != "" || len(fs.Secrets) > 0 || len(fs.Configs) > 0 {
 			s.Spec.TaskTemplate.ContainerSpec = &swarm.ContainerSpec{Image: fs.Image}
+			for _, o := range fs.Secrets {
+				ref := &swarm.SecretReference{SecretID: o.ID, SecretName: o.Name}
+				if o.File != "" {
+					ref.File = &swarm.SecretReferenceFileTarget{Name: o.File, UID: o.UID, GID: o.GID, Mode: os.FileMode(o.Mode)}
+				}
+				s.Spec.TaskTemplate.ContainerSpec.Secrets = append(s.Spec.TaskTemplate.ContainerSpec.Secrets, ref)
+			}
+			for _, o := range fs.Configs {
+				ref := &swarm.ConfigReference{ConfigID: o.ID, ConfigName: o.Name}
+				if o.File != "" {
+					ref.File = &swarm.ConfigReferenceFileTarget{Name: o.File, UID: o.UID, GID: o.GID, Mode: os.FileMode(o.Mode)}
+				} else {
+					ref.Runtime = &swarm.ConfigReferenceRuntimeTarget{}
+				}
+				s.Spec.TaskTemplate.ContainerSpec.Configs = append(s.Spec.TaskTemplate.ContainerSpec.Configs, ref)
+			}
 			for _, m := range fs.Mounts {
 				s.Spec.TaskTemplate.ContainerSpec.Mounts = append(s.Spec.TaskTemplate.ContainerSpec.Mounts, mount.Mount{Type: mount.Type(m.Type), Source: m.Source, Target: m.Target, ReadOnly: m.ReadOnly})
 			}
@@ -1197,43 +1484,30 @@ func (c FakeConfig) serviceList(withStatus bool) []swarm.Service {
 		case "global-job":
 			s.Spec.Mode.GlobalJob = &swarm.GlobalJob{}
 		default:
-			s.Spec.Mode.Replicated = &swarm.ReplicatedService{}
-		}
-		if fs.UpdateState != "" {
-			s.UpdateStatus = &swarm.UpdateStatus{State: swarm.UpdateState(fs.UpdateState)}
+			replicas := fs.Replicas
+			if replicas == 0 {
+				replicas = fs.Desired
+			}
+			s.Spec.Mode.Replicated = &swarm.ReplicatedService{Replicas: &replicas}
 		}
 		if withStatus {
 			s.ServiceStatus = &swarm.ServiceStatus{RunningTasks: fs.Running, DesiredTasks: fs.Desired}
 		}
+		fs.decorate(&s)
 		out = append(out, s)
 	}
 	return out
 }
 
-// taskList is the /tasks answer. A task is listed only when the filter names its
-// service, by ID or by name, as a real daemon lists only what matches.
-func (c FakeConfig) taskList(rawFilters string) []swarm.Task {
-	out := []swarm.Task{}
-	var f map[string]map[string]bool
-	if json.Unmarshal([]byte(rawFilters), &f) != nil {
-		return out
+// decorate sets what every row has whatever made its spec: the update status and its
+// message, the endpoint's published ports, the previous spec and the creation time.
+func (fs FakeService) decorate(s *swarm.Service) {
+	if fs.UpdateState != "" || fs.UpdateMessage != "" {
+		s.UpdateStatus = &swarm.UpdateStatus{State: swarm.UpdateState(fs.UpdateState), Message: fs.UpdateMessage}
 	}
-	alias := map[string]string{} // service ID <-> name
-	for _, fs := range c.ServiceRows {
-		alias[fs.ID], alias[fs.Name] = fs.Name, fs.ID
+	if len(fs.Ports) > 0 {
+		s.Endpoint.Ports = slices.Clone(fs.Ports)
 	}
-	for _, ft := range c.AgentTasks {
-		svc := ft.Service
-		if svc == "" {
-			svc = "bayplan-agent"
-		}
-		if !f["service"][svc] && !f["service"][alias[svc]] {
-			continue
-		}
-		t := swarm.Task{ID: ft.ID, NodeID: ft.NodeID, ServiceID: svc}
-		t.CreatedAt = ft.Created
-		t.Status = swarm.TaskStatus{State: swarm.TaskState(ft.State), Err: ft.Error}
-		out = append(out, t)
-	}
-	return out
+	s.PreviousSpec = fs.PreviousSpec
+	s.CreatedAt = fs.CreatedAt
 }

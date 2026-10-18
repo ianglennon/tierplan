@@ -544,3 +544,38 @@ func TestExportWorksFromARelativeWorkDirectory(t *testing.T) {
 		t.Errorf("the work directory is not empty: %v", entries)
 	}
 }
+
+func TestTwoDatabasesExportAtTheSameTimeWhileOneDatabaseStillAllowsOneAtATime(t *testing.T) {
+	first, second := newExportFixture(t), newExportFixture(t)
+	slow := newBlockedWriter()
+	done := make(chan error, 1)
+	go func() {
+		_, err := backup.Export(context.Background(), first.st, first.live, first.dir, slow, []byte(exportPass), testOptions)
+		done <- err
+	}()
+	select {
+	case <-slow.started:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the held export never started writing")
+	}
+
+	if _, _, err := second.export(t, exportPass, testOptions); err != nil {
+		t.Fatalf("an export of another database while the first is held = %v, want success", err)
+	}
+
+	_, file, err := first.export(t, exportPass, testOptions)
+	if !errors.Is(err, backup.ErrBusy) {
+		t.Fatalf("a second export of the held database = %v, want ErrBusy", err)
+	}
+	if len(file) != 0 {
+		t.Fatalf("the refused export wrote %d bytes", len(file))
+	}
+
+	close(slow.release)
+	if err := <-done; err != nil {
+		t.Fatalf("the held export: %v", err)
+	}
+	if _, _, err := first.export(t, exportPass, testOptions); err != nil {
+		t.Fatalf("an export of the first database after the held one finished: %v", err)
+	}
+}

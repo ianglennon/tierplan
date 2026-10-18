@@ -50,17 +50,22 @@ type restoreHook struct {
 
 // restoreLimiterBurst is how many Settings checks and restores one user may make
 // at once in these tests. It is wide so the tests that repeat a step are not
-// throttled; the rate-limit test narrows it before it builds its fixture.
-var restoreLimiterBurst = 100
+// throttled; the rate-limit test narrows it for its own fixture through
+// authFixture.restoreBurst, so no parallel test sees the narrow value.
+const restoreLimiterBurst = 100
 
 func (f *authFixture) restoreDeps(log *slog.Logger) api.RestoreDeps {
+	burst := restoreLimiterBurst
+	if f.restoreBurst > 0 {
+		burst = f.restoreBurst
+	}
 	if f.restore == nil {
 		f.restore = &restoreHook{uploads: backup.NewUploads(f.dataInfo.Path, 0)}
 	}
 	h := f.restore
 	return api.RestoreDeps{
 		Uploads: h.uploads, Vault: f.v, Audit: f.aud, Instance: f.inst,
-		Limiter: auth.NewIPLimiter(12*time.Second, restoreLimiterBurst, 10*time.Minute, f.clk.now),
+		Limiter: auth.NewIPLimiter(12*time.Second, burst, 10*time.Minute, f.clk.now),
 		DataDir: f.dataInfo.Path, AppVersion: "v9.9.9", Now: f.clk.now, Log: log,
 		Restart: func(swap func(context.Context) error) bool {
 			if h.refuse {
@@ -156,6 +161,7 @@ func uploadedID(t *testing.T, rec *httptest.ResponseRecorder) string {
 }
 
 func TestRestoreCheckAnswersWhatIsInTheUploadedBackupAndAuditsIt(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{PublicURL: "https://new.example.com"})
 	cookie, csrf := f.signIn(t, "admin", false)
 	id := uploadedID(t, f.upload(t, cookie, csrf, makeBackup(t, "Old lab", "oldadmin", "https://old.example.com")))
@@ -203,6 +209,7 @@ func TestRestoreCheckAnswersWhatIsInTheUploadedBackupAndAuditsIt(t *testing.T) {
 }
 
 func TestRestoreCheckSaysTheBackupAddressIsTheOneInUseWhenItMatches(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{PublicURL: "https://same.example.com"})
 	cookie, csrf := f.signIn(t, "admin", false)
 	id := uploadedID(t, f.upload(t, cookie, csrf, makeBackup(t, "Old lab", "oldadmin", "https://same.example.com/")))
@@ -213,6 +220,7 @@ func TestRestoreCheckSaysTheBackupAddressIsTheOneInUseWhenItMatches(t *testing.T
 }
 
 func TestRestoreApplyByAnInstanceAdminSwapsInTheBackupOnceTheServerHasStopped(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.inst.Apply("Home lab", "")
 	cookie, csrf := f.signIn(t, "admin", false)
@@ -293,6 +301,7 @@ func TestRestoreApplyByAnInstanceAdminSwapsInTheBackupOnceTheServerHasStopped(t 
 }
 
 func TestRestoreApplyWhenARestartIsAlreadyPendingDiscardsThePreparedCopy(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.inst.Apply("Home lab", "")
 	cookie, csrf := f.signIn(t, "admin", false)
@@ -311,6 +320,7 @@ func TestRestoreApplyWhenARestartIsAlreadyPendingDiscardsThePreparedCopy(t *test
 }
 
 func TestRestoreRoutesAreRefusedForAnyoneButAnInstanceAdmin(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addUser(t, "viewer", false)
 	cookie, csrf := f.signIn(t, "viewer", false)
@@ -340,6 +350,7 @@ func TestRestoreRoutesAreRefusedForAnyoneButAnInstanceAdmin(t *testing.T) {
 }
 
 func TestBackupInfoReportsTheLargestAcceptedUpload(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, _ := f.signIn(t, "admin", false)
 	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/backup/info", cookie: cookie})
@@ -439,6 +450,7 @@ func hostileHeaderFile(t *testing.T) []byte {
 }
 
 func TestRestoreRefusalsAnswerTheirOwnProblemAndLeaveEverythingAsItWas(t *testing.T) {
+	t.Parallel()
 	good := makeBackup(t, "Old lab", "oldadmin", "")
 	damaged := bytes.Clone(good)
 	damaged[len(damaged)-20] ^= 0xFF
@@ -470,7 +482,6 @@ func TestRestoreRefusalsAnswerTheirOwnProblemAndLeaveEverythingAsItWas(t *testin
 			cookie, csrf := f.signIn(t, "admin", false)
 			id := uploadedID(t, f.upload(t, cookie, csrf, tc.file))
 
-			started := time.Now()
 			body := map[string]string{"uploadId": id, "passphrase": tc.passphrase}
 			if tc.step == "apply" {
 				body["confirm"] = "Home lab"
@@ -482,9 +493,8 @@ func TestRestoreRefusalsAnswerTheirOwnProblemAndLeaveEverythingAsItWas(t *testin
 			if tc.detail != "" && !strings.Contains(rec.Body.String(), tc.detail) {
 				t.Errorf("the answer does not name %s: %s", tc.detail, rec.Body)
 			}
-			if time.Since(started) > 5*time.Second {
-				t.Errorf("the refusal took %v: the file must be refused before a key is derived from it", time.Since(started))
-			}
+			// That the hostile header is refused before a key is derived is proved in
+			// internal/backup (the kdfRuns counter), not by how long this answer took.
 			if sum() != before {
 				t.Error("bayplan.db changed")
 			}
@@ -500,6 +510,7 @@ func TestRestoreRefusalsAnswerTheirOwnProblemAndLeaveEverythingAsItWas(t *testin
 }
 
 func TestRestoreAllowsOneUploadAtATimeAndFreesTheSlotAfterFifteenMinutes(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	now := time.Now()
@@ -523,6 +534,7 @@ func TestRestoreAllowsOneUploadAtATimeAndFreesTheSlotAfterFifteenMinutes(t *test
 }
 
 func TestRestoreUploadAboveTheCapIs413AndACutOffUploadIs400AndNeitherLeavesAFile(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	f.restore.uploads.MaxBytes = 2048
@@ -561,6 +573,7 @@ func TestRestoreUploadAboveTheCapIs413AndACutOffUploadIs400AndNeitherLeavesAFile
 }
 
 func TestRestoreTwoConcurrentAppliesOfOneUploadGiveOne202AndOne409(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.inst.Apply("Home lab", "")
 	cookie, csrf := f.signIn(t, "admin", false)
@@ -688,6 +701,7 @@ func (w *wizardFixture) addUser(t *testing.T) {
 }
 
 func TestWizardRestoreWithTheSetupTokenUploadsChecksAndRestoresOnAFreshInstall(t *testing.T) {
+	t.Parallel()
 	w := newWizardFixture(t)
 	id := uploadedID(t, w.upload(t, w.token, makeBackup(t, "Old lab", "oldadmin", "")))
 
@@ -720,6 +734,7 @@ func TestWizardRestoreWithTheSetupTokenUploadsChecksAndRestoresOnAFreshInstall(t
 }
 
 func TestWizardRestoreRoutesAnswer409SetupCompleteOnceAnyUserExists(t *testing.T) {
+	t.Parallel()
 	w := newWizardFixture(t)
 	file := makeBackup(t, "Old lab", "oldadmin", "")
 	id := uploadedID(t, w.upload(t, w.token, file))
@@ -744,6 +759,7 @@ func TestWizardRestoreRoutesAnswer409SetupCompleteOnceAnyUserExists(t *testing.T
 }
 
 func TestWizardRestoreWithAWrongTokenIs401RateLimitedAndRecorded(t *testing.T) {
+	t.Parallel()
 	w := newWizardFixture(t)
 	file := makeBackup(t, "Old lab", "oldadmin", "")
 
@@ -771,6 +787,7 @@ func TestWizardRestoreWithAWrongTokenIs401RateLimitedAndRecorded(t *testing.T) {
 }
 
 func TestWizardRestoreRefusesABadFileWithTheSameProblemsAsSettings(t *testing.T) {
+	t.Parallel()
 	w := newWizardFixture(t)
 	id := uploadedID(t, w.upload(t, w.token, makeBackup(t, "Old lab", "oldadmin", "")))
 	rec := w.call(t, "check", map[string]string{"setupToken": w.token, "uploadId": id, "passphrase": "not the passphrase"})
@@ -789,6 +806,7 @@ func TestWizardRestoreRefusesABadFileWithTheSameProblemsAsSettings(t *testing.T)
 // WR-B-02: the upload's lifetime runs from the moment the file was complete, the
 // answer says so, and a file sent by mistake can be discarded.
 func TestRestoreUploadReportsAnExpiryCountedFromTheCompletedFile(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	done := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -814,6 +832,7 @@ func (f *authFixture) discardUpload(t *testing.T, cookie, csrf string) *httptest
 }
 
 func TestRestoreDiscardRemovesTheWaitingUploadFreesTheSlotAndIsAudited(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	file := makeBackup(t, "Old lab", "oldadmin", "")
@@ -836,6 +855,7 @@ func TestRestoreDiscardRemovesTheWaitingUploadFreesTheSlotAndIsAudited(t *testin
 }
 
 func TestRestoreDiscardWithNothingWaitingIs204AndWritesNoEntry(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	if rec := f.discardUpload(t, cookie, csrf); rec.Code != http.StatusNoContent {
@@ -847,6 +867,7 @@ func TestRestoreDiscardWithNothingWaitingIs204AndWritesNoEntry(t *testing.T) {
 }
 
 func TestRestoreDiscardIsRefusedForAnyoneButAnInstanceAdmin(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	id := uploadedID(t, f.upload(t, cookie, csrf, makeBackup(t, "Old lab", "oldadmin", "")))
@@ -876,6 +897,7 @@ func (w *wizardFixture) discard(t *testing.T, token string) *httptest.ResponseRe
 }
 
 func TestWizardRestoreDiscardNeedsTheSetupTokenAndRemovesTheUpload(t *testing.T) {
+	t.Parallel()
 	w := newWizardFixture(t)
 	id := uploadedID(t, w.upload(t, w.token, makeBackup(t, "Old lab", "oldadmin", "")))
 
@@ -901,6 +923,7 @@ func TestWizardRestoreDiscardNeedsTheSetupTokenAndRemovesTheUpload(t *testing.T)
 // WR-B-03: a refused check or restore leaves an entry, on both paths, without the
 // passphrase.
 func TestRestoreCheckWithAWrongPassphraseIsAuditedAsAFailure(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	id := uploadedID(t, f.upload(t, cookie, csrf, makeBackup(t, "Old lab", "oldadmin", "")))
@@ -925,6 +948,7 @@ func TestRestoreCheckWithAWrongPassphraseIsAuditedAsAFailure(t *testing.T) {
 }
 
 func TestRestoreCheckOfAFileThatIsNotABackupIsAuditedWithItsReason(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	id := uploadedID(t, f.upload(t, cookie, csrf, bytes.Repeat([]byte("plain text, not a backup. "), 100)))
@@ -938,6 +962,7 @@ func TestRestoreCheckOfAFileThatIsNotABackupIsAuditedWithItsReason(t *testing.T)
 }
 
 func TestRestoreApplyThatIsRefusedIsAuditedAsABackupFailure(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.inst.Apply("Home lab", "")
 	cookie, csrf := f.signIn(t, "admin", false)
@@ -963,10 +988,10 @@ func TestRestoreApplyThatIsRefusedIsAuditedAsABackupFailure(t *testing.T) {
 }
 
 func TestRestoreSettingsStepsAreRateLimitedPerUserAndTheRefusalIsAudited(t *testing.T) {
-	old := restoreLimiterBurst
-	restoreLimiterBurst = 3
-	t.Cleanup(func() { restoreLimiterBurst = old })
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
+	f.restoreBurst = 3
+	f.h = f.build(t)
 	cookie, csrf := f.signIn(t, "admin", false)
 	id := uploadedID(t, f.upload(t, cookie, csrf, makeBackup(t, "Old lab", "oldadmin", "")))
 
@@ -991,6 +1016,7 @@ func TestRestoreSettingsStepsAreRateLimitedPerUserAndTheRefusalIsAudited(t *test
 }
 
 func TestWizardRestoreCheckWithAWrongPassphraseIsAuditedAsAnonymous(t *testing.T) {
+	t.Parallel()
 	w := newWizardFixture(t)
 	id := uploadedID(t, w.upload(t, w.token, makeBackup(t, "Old lab", "oldadmin", "")))
 	rec := w.call(t, "check", map[string]string{"setupToken": w.token, "uploadId": id, "passphrase": "wrong passphrase 12345"})

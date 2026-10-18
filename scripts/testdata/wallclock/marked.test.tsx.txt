@@ -1,0 +1,33 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+// Fixture for scripts/test-scripts.sh (wallclock-check): stored as .txt so the tree's
+// tools never compile it. Every case below is allowed, each for its own reason.
+import { screen, waitFor } from "@testing-library/react";
+import { expect, it, vi } from "vitest";
+
+it("keeps what it can say a reason for", async () => {
+  // wall-clock: the test measures how a real timer paces a retry, so the clock must follow real time
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  await screen.findByText("x", {}, { timeout: 500 }); // wall-clock: the element is absent after 500 ms by design; a longer wait only delays the pass
+});
+
+it("uses what is generous", async () => {
+  await screen.findByText("y", {}, { timeout: 30_000 });
+  await waitFor(() => expect(1).toBe(1), { timeout: 45000 });
+  await vi.waitFor(() => expect(2).toBe(2), { timeout: 30_000 });
+  await vi.waitFor(
+    () => {
+      expect(3).toBe(3);
+    },
+    { timeout: 30_000, interval: 10 },
+  );
+  // vi.waitFor( named in a comment is not a call
+}, 60_000);
+
+it("takes a request field named timeout", async () => {
+  const body = {
+    timeout: 30, // wall-clock: request body field, not a wait
+  };
+  expect(body).toBeTruthy();
+});

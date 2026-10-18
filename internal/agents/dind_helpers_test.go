@@ -18,6 +18,7 @@ import (
 // execCtx is the context a command run in a dind node gets.
 func execCtx(t testing.TB, d time.Duration) context.Context {
 	t.Helper()
+	// wall-clock: this is a deadline on a docker command run in a dind node, not a wait; every caller passes a minute or more and the helper only ends a command that never returns
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	t.Cleanup(cancel)
 	return ctx

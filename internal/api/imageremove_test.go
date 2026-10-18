@@ -106,7 +106,7 @@ func (f *envFix) imageDeleter(t *testing.T, e envBody, user, role string) func(r
 	t.Helper()
 	f.addUser(t, user, false)
 	f.addEnvRole(t, user, e.ID, role)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	cookie, csrf := f.signIn(t, user, false)
 	return func(route, body string) *httptest.ResponseRecorder {
 		return f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/images/" + route, body: body, cookie: cookie, csrf: csrf})
@@ -130,6 +130,7 @@ func imageWrites(f *dockertest.Fake) []string {
 }
 
 func TestRemoveImageAnOperatorRemovesAnUnusedImageWithAllItsNamesAndItIsAudited(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, removeEngine())
 	post := f.imageDeleter(t, e, "ops", "operator")
 	rec := post("remove", removeImagesJSON([2]string{e.ID, rmMulti}))
@@ -172,6 +173,7 @@ func TestRemoveImageAnOperatorRemovesAnUnusedImageWithAllItsNamesAndItIsAudited(
 }
 
 func TestRemoveImageAViewerIs403AndNothingIsSent(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, removeEngine())
 	post := f.imageDeleter(t, e, "looker", "viewer")
 	rec := post("remove", removeImagesJSON([2]string{e.ID, rmApp}))
@@ -191,6 +193,7 @@ func TestRemoveImageAViewerIs403AndNothingIsSent(t *testing.T) {
 }
 
 func TestRemoveImageASecondRemoveOfTheSameImageAnswersNotFoundAndIsNotAudited(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, removeEngine())
 	post := f.imageDeleter(t, e, "ops", "operator")
 	body := removeImagesJSON([2]string{e.ID, rmApp})
@@ -211,6 +214,7 @@ func TestRemoveImageASecondRemoveOfTheSameImageAnswersNotFoundAndIsNotAudited(t 
 }
 
 func TestRemoveImageAReadOnlyHostIsHostReadOnlyAuditedAndNothingIsSent(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Locked")
 	a := f.connect(t, env, removeEngine(), &wire.Facts{
@@ -237,6 +241,7 @@ func TestRemoveImageAReadOnlyHostIsHostReadOnlyAuditedAndNothingIsSent(t *testin
 }
 
 func TestRemoveImageTheSchemaRefusesAnEmptyListAndAnIDOfTheWrongShape(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, removeEngine())
 	post := f.imageDeleter(t, e, "ops", "operator")
 	for name, body := range map[string]string{
@@ -321,6 +326,7 @@ func (s *swarmFix) imageAudits(t *testing.T) []auditRowFull {
 }
 
 func TestRemoveImageAContainerBlocksOnlyItsOwnNodeAndTheOthersAreRemoved(t *testing.T) {
+	t.Parallel()
 	s := removeSwarm(t)
 	rec, got := s.postImages(t, "remove", removeImagesJSON([2]string{s.m1.id, rmUsed}, [2]string{s.m2.id, rmUsed}, [2]string{s.w.id, rmUsed}))
 	if rec.code != http.StatusOK || len(got.Results) != 3 {
@@ -351,6 +357,7 @@ func TestRemoveImageAContainerBlocksOnlyItsOwnNodeAndTheOthersAreRemoved(t *test
 }
 
 func TestRemoveImageDanglingBulkSkipsANamedImageAndRemovesTheUntaggedOnesUnderOneBulkID(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, removeEngine())
 	post := f.imageDeleter(t, e, "ops", "operator")
 	rec := post("remove", removeImagesJSON([2]string{e.ID, rmBase}, [2]string{e.ID, rmApp}, [2]string{e.ID, rmDang2}))
@@ -383,6 +390,7 @@ func TestRemoveImageDanglingBulkSkipsANamedImageAndRemovesTheUntaggedOnesUnderOn
 }
 
 func TestRemoveImageDanglingASingleTargetStillRemovesATaggedImage(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, removeEngine())
 	post := f.imageDeleter(t, e, "ops", "operator")
 	rec := post("remove", removeImagesJSON([2]string{e.ID, rmApp}))
@@ -393,6 +401,7 @@ func TestRemoveImageDanglingASingleTargetStillRemovesATaggedImage(t *testing.T) 
 }
 
 func TestRemoveImageDanglingBulkNeverRemovesANamedImageWhateverTheBrowserSends(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, removeEngine())
 	post := f.imageDeleter(t, e, "ops", "operator")
 	rec := post("remove", removeImagesJSON([2]string{e.ID, rmApp}, [2]string{e.ID, rmUsed}, [2]string{e.ID, rmMulti}))
@@ -414,6 +423,7 @@ func TestRemoveImageDanglingBulkNeverRemovesANamedImageWhateverTheBrowserSends(t
 }
 
 func TestRemoveImageDanglingBulkOnASwarmSkipsANamedImageAndRefusesAnUsedOneByNode(t *testing.T) {
+	t.Parallel()
 	s := removeSwarm(t)
 	rec, got := s.postImages(t, "remove", removeImagesJSON([2]string{s.m1.id, rmDangUsed}, [2]string{s.m2.id, rmDangUsed}, [2]string{s.m1.id, rmMulti}))
 	if rec.code != http.StatusOK || len(got.Results) != 3 {
@@ -443,6 +453,7 @@ func TestRemoveImageDanglingBulkOnASwarmSkipsANamedImageAndRefusesAnUsedOneByNod
 }
 
 func TestRemoveImageDanglingASingleImageSentWithABulkIDIsStillADanglingOnlyRequest(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, removeEngine())
 	post := f.imageDeleter(t, e, "ops", "operator")
 	bulk := "0198f8d0-4c2a-7000-8000-000000000001"
@@ -461,6 +472,7 @@ func TestRemoveImageDanglingASingleImageSentWithABulkIDIsStillADanglingOnlyReque
 }
 
 func TestRemoveImageAServiceSpecWithNoTaskBlocksEveryNodeAndNothingIsSent(t *testing.T) {
+	t.Parallel()
 	s := removeSwarm(t)
 	rec, got := s.postImages(t, "remove", removeImagesJSON([2]string{s.m1.id, rmSvc}, [2]string{s.m2.id, rmSvc}, [2]string{s.w.id, rmSvc}))
 	if rec.code != http.StatusOK || len(got.Results) != 3 {
@@ -477,6 +489,7 @@ func TestRemoveImageAServiceSpecWithNoTaskBlocksEveryNodeAndNothingIsSent(t *tes
 }
 
 func TestRemoveImageAContainerThatStartsBetweenTheCheckAndTheCallMakesTheEngineRefuseAsImageInUse(t *testing.T) {
+	t.Parallel()
 	cfg := removeEngine()
 	cfg.BusyImages = []string{rmApp}
 	f, e := dashEnv(t, cfg)
@@ -498,6 +511,7 @@ func TestRemoveImageAContainerThatStartsBetweenTheCheckAndTheCallMakesTheEngineR
 }
 
 func TestRemoveImageWhenTheServicesCannotBeReadNothingIsRemovedAndTheTargetIsNodeUnreachable(t *testing.T) {
+	t.Parallel()
 	s, cfgs := removeSwarmCfgs(t)
 	for host, a := range map[string]*agentConn{"mgr-1": s.m1, "mgr-2": s.m2} {
 		cfg := cfgs[host]
@@ -522,6 +536,7 @@ func untagJSON(imageID, ref string, nodeIDs ...string) string {
 }
 
 func TestUntagOneOfSeveralNamesIsAllowedWhileTheImageIsInUse(t *testing.T) {
+	t.Parallel()
 	cfg := removeEngine()
 	cfg.Containers = append(cfg.Containers,
 		dockertest.FakeContainer{ID: "c-web", Names: []string{"/web"}, Image: "nginx:latest", ImageID: rmMulti, State: "running"})
@@ -545,6 +560,7 @@ func TestUntagOneOfSeveralNamesIsAllowedWhileTheImageIsInUse(t *testing.T) {
 }
 
 func TestUntagTheLastNameOfAnImageInUseIsLastNameInUseAndNothingIsSent(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, removeEngine())
 	post := f.imageDeleter(t, e, "ops", "operator")
 	rec := post("untag", untagJSON(rmUsed, "redis:8", e.ID))
@@ -564,6 +580,7 @@ func TestUntagTheLastNameOfAnImageInUseIsLastNameInUseAndNothingIsSent(t *testin
 }
 
 func TestUntagTheOnlyNameOfAnUnusedImageRemovesItAndIsAuditedAsARemove(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, removeEngine())
 	post := f.imageDeleter(t, e, "ops", "operator")
 	rec := post("untag", untagJSON(rmApp, "ghcr.io/acme/app:1", e.ID))
@@ -584,6 +601,7 @@ func TestUntagTheOnlyNameOfAnUnusedImageRemovesItAndIsAuditedAsARemove(t *testin
 }
 
 func TestUntagANameTheNodeDoesNotHaveIsNotFoundAndIsNotAudited(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, removeEngine())
 	post := f.imageDeleter(t, e, "ops", "operator")
 	rec := post("untag", untagJSON(rmMulti, "nginx:9", e.ID))
@@ -603,6 +621,7 @@ func TestUntagANameTheNodeDoesNotHaveIsNotFoundAndIsNotAudited(t *testing.T) {
 }
 
 func TestUntagWithNoNodesGoesToEveryNodeThatHasTheNameWithOneBulkID(t *testing.T) {
+	t.Parallel()
 	s := removeSwarm(t)
 	rec, got := s.postImages(t, "untag", untagJSON(rmMulti, "app:2"))
 	if rec.code != http.StatusOK || len(got.Results) != 3 {
@@ -629,6 +648,7 @@ func TestUntagWithNoNodesGoesToEveryNodeThatHasTheNameWithOneBulkID(t *testing.T
 }
 
 func TestUntagAViewerIs403AndAnImageNoNodeHasWithNoNodesNamedIs404(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, removeEngine())
 	viewer := f.imageDeleter(t, e, "looker", "viewer")
 	if rec := viewer("untag", untagJSON(rmMulti, "app:1", e.ID)); rec.Code != http.StatusForbidden {

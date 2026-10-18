@@ -17,6 +17,7 @@ import {
   dind,
   environmentsOf,
   expect,
+  expectChipsInsideScreen,
   retryName,
   test,
   trackPage,
@@ -285,4 +286,45 @@ test("a Viewer on a phone sees Registries, Volumes and Networks at the width of 
       // Already gone.
     }
   }
+});
+
+// The Containers, Volumes and Images lists keep every filter chip on the screen (G-06-2). They are
+// covered here, on the standalone host Bayplan manages, and services.spec.ts covers Services and
+// Nodes, because those two lists need the swarm that only the services story creates. The chips'
+// counts arrive with each list's data and widen the chips, so a row is measured only once its last
+// chip reads its final text.
+test("the Containers, Volumes and Images lists keep every filter chip on a 375px screen", async ({
+  page,
+}) => {
+  const envs = await environmentsOf(page.context());
+  const env = envs.find((e) => e.isLocalSocket);
+  expect(env, "the managed Docker host").toBeDefined();
+  if (!env) return;
+
+  await page.goto(at(`/env/${env.id}/containers`));
+  const status = page.getByRole("group", { name: "Filter by status" });
+  await expect(status.locator('[data-slot="toggle-group-item"]').last()).toHaveText(
+    /^Unhealthy [\d,]+$/,
+  );
+  await expectChipsInsideScreen(page, status, "Containers list");
+  await expectNoSidewaysScroll(page, "Containers list");
+
+  // The Volumes chips carry no counts, so the row is measured once the list has loaded: its table,
+  // or its empty state when no earlier test left a volume on the host.
+  await page.goto(at(`/env/${env.id}/volumes`));
+  await expect(
+    page.getByRole("table").or(page.getByRole("heading", { name: "No volumes" })).first(),
+  ).toBeVisible();
+  const usage = page.getByRole("group", { name: "Filter by usage" });
+  await expect(usage.locator('[data-slot="toggle-group-item"]').last()).toHaveText("Unused");
+  await expectChipsInsideScreen(page, usage, "Volumes list");
+  await expectNoSidewaysScroll(page, "Volumes list");
+
+  await page.goto(at(`/env/${env.id}/images`));
+  const images = page.getByRole("group", { name: "Filter images" });
+  await expect(images.locator('[data-slot="toggle-group-item"]').last()).toHaveText(
+    /^Dangling [\d,]+$/,
+  );
+  await expectChipsInsideScreen(page, images, "Images list");
+  await expectNoSidewaysScroll(page, "Images list");
 });

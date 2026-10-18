@@ -41,6 +41,7 @@ type notifyCounter struct{ n int }
 func (c *notifyCounter) Notify() { c.n++ }
 
 func TestAnInstanceAdminTurnsOnADailyScheduleAndReadsItBackWithoutThePassphrase(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	notified := &notifyCounter{}
 	f.scheduler = notified
@@ -83,6 +84,7 @@ func TestAnInstanceAdminTurnsOnADailyScheduleAndReadsItBackWithoutThePassphrase(
 }
 
 func TestScheduleNoPassphraseIsEverReturnedLoggedOrAudited(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 
@@ -122,6 +124,7 @@ func TestScheduleNoPassphraseIsEverReturnedLoggedOrAudited(t *testing.T) {
 }
 
 func TestTheScheduleRoutesNeedBackupManage(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addUser(t, "viewer", false)
 	cookie, csrf := f.signIn(t, "viewer", false)
@@ -141,6 +144,7 @@ func TestTheScheduleRoutesNeedBackupManage(t *testing.T) {
 }
 
 func TestSavedBackupsAreListedAndDownloadedByAnInstanceAdmin(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, _ := f.signIn(t, "admin", false)
 	if err := os.MkdirAll(f.backupDir, 0o700); err != nil {
@@ -193,6 +197,7 @@ func TestSavedBackupsAreListedAndDownloadedByAnInstanceAdmin(t *testing.T) {
 }
 
 func TestAFolderWithNoBackupsYetListsNone(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, _ := f.signIn(t, "admin", false)
 	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/backup/files", cookie: cookie})
@@ -213,6 +218,7 @@ func rawSchedule(m map[string]any) string {
 }
 
 func TestAScheduleOutOfRangeIsAnswered422AndSavesNothing(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	base := func() map[string]any {
@@ -242,6 +248,7 @@ func TestAScheduleOutOfRangeIsAnswered422AndSavesNothing(t *testing.T) {
 }
 
 func TestAWeeklyScheduleIsSavedWithItsDayAndFiresOnThatDay(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	// The fixture's clock is Thursday 2026-01-01 00:00 UTC.
@@ -261,6 +268,7 @@ func TestAWeeklyScheduleIsSavedWithItsDayAndFiresOnThatDay(t *testing.T) {
 }
 
 func TestTurningTheScheduleOnWithoutAPassphraseIs422PassphraseRequiredAndAShortOneIs422(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 
@@ -279,6 +287,7 @@ func TestTurningTheScheduleOnWithoutAPassphraseIs422PassphraseRequiredAndAShortO
 }
 
 func TestSavingTheScheduleWithoutAPassphraseKeepsTheSavedOne(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	if rec := f.putSchedule(t, cookie, csrf, scheduleJSON(true, schedulePass)); rec.Code != http.StatusOK {
@@ -304,6 +313,7 @@ func TestSavingTheScheduleWithoutAPassphraseKeepsTheSavedOne(t *testing.T) {
 }
 
 func TestAFileNameThatIsNotABackupAnswers404WithoutTouchingTheFileSystem(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, _ := f.signIn(t, "admin", false)
 	// Files the route must never serve: the database and the key sit in the data
@@ -388,6 +398,7 @@ func (f *authFixture) turnScheduleOn(t *testing.T, cookie, csrf string) {
 }
 
 func TestAFailedScheduledBackupRaisesBackupFailedForAnInstanceAdminUntilALaterRunSucceeds(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	f.turnScheduleOn(t, cookie, csrf)
@@ -413,6 +424,7 @@ func TestAFailedScheduledBackupRaisesBackupFailedForAnInstanceAdminUntilALaterRu
 }
 
 func TestAFailedBackupWithNoGoodRunBeforeItHasNoSinceAndOneThatIsOffRaisesNothing(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	f.turnScheduleOn(t, cookie, csrf)
@@ -431,6 +443,7 @@ func TestAFailedBackupWithNoGoodRunBeforeItHasNoSinceAndOneThatIsOffRaisesNothin
 }
 
 func TestBackupFailedIsNeverShownToAnyoneButAnInstanceAdmin(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	adminCookie, adminCSRF := f.signIn(t, "admin", false)
 	f.turnScheduleOn(t, adminCookie, adminCSRF)

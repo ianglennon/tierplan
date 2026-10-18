@@ -26,6 +26,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -36,13 +37,30 @@ import (
 type auditSink struct {
 	mu      sync.Mutex
 	entries []audit.Entry
+	// changed is closed and cleared on each entry, to wake waitEntries; a waiter makes it.
+	changed chan struct{}
 }
 
 func (a *auditSink) Record(_ context.Context, e audit.Entry) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.entries = append(a.entries, e)
+	if a.changed != nil {
+		close(a.changed)
+		a.changed = nil
+	}
 	return nil
+}
+
+// snapshot is the entries so far together with a channel closed by the next one,
+// taken in one step so an entry recorded after the read is not missed.
+func (a *auditSink) snapshot() ([]audit.Entry, <-chan struct{}) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.changed == nil {
+		a.changed = make(chan struct{})
+	}
+	return append([]audit.Entry(nil), a.entries...), a.changed
 }
 
 func (a *auditSink) all() []audit.Entry {
@@ -176,7 +194,7 @@ func upgradeRequest(t *testing.T, url string, headers map[string]string) (status
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{Timeout: testsupport.Deadline}
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -393,7 +411,15 @@ func TestOneAddressCannotHoldEveryHandshakeSlot(t *testing.T) {
 	if c.Welcome == nil {
 		t.Fatalf("the enrolled agent was not welcomed during the flood: %+v (err %v)", c.Refuse, c.Err)
 	}
-	waitFor(t, "the enrolled agent's session", func() bool { return srv.Hub.Session(id.AgentID) != nil })
+	awaitRegistered(t, srv.Hub, id.AgentID)
+}
+
+// awaitHandshakeSlots waits until at most n handshakes are in flight in the hub.
+func awaitHandshakeSlots(t *testing.T, h *tunnel.Hub, n int) {
+	t.Helper()
+	if got, err := h.AwaitHandshakes(testsupport.Context(t), func(inFlight int) bool { return inFlight <= n }); err != nil {
+		t.Fatalf("waiting for at most %d handshakes in flight: %v (still %d)", n, err, got)
+	}
 }
 
 // holdFrom opens a handshake that says it comes from xff and does not answer the
@@ -435,19 +461,14 @@ func TestConcurrentHandshakeCapRefusesThe65thWithRateLimitedAndARetryAfter(t *te
 		t.Fatalf("the 65th handshake got %q %+v, want a refusal rate_limited with retryAfterMs", typ, ref)
 	}
 
-	// Letting one go frees its slot.
+	// Letting one go frees its slot: the hub says when the count of handshakes in
+	// flight has dropped, and a handshake that starts after that is let in.
 	_ = held[0].CloseNow()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		ws2, _, typ := firstMessageFrom(t, ctx, srv, "198.51.100.5")
-		_ = ws2.CloseNow()
-		if typ == wire.TypeChallenge {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the slot of a closed handshake was never freed")
-		}
-		time.Sleep(20 * time.Millisecond)
+	awaitHandshakeSlots(t, srv.Hub, 63)
+	ws2, _, typ2 := firstMessageFrom(t, ctx, srv, "198.51.100.5")
+	_ = ws2.CloseNow()
+	if typ2 != wire.TypeChallenge {
+		t.Fatalf("after a handshake was closed the next got %q, want a challenge: its slot was never freed", typ2)
 	}
 }
 
@@ -479,11 +500,12 @@ func TestTheHandshakeCapPerAddressCountsAnIPv6SlashSixtyFourAsOneAddress(t *test
 
 	// Closing a held handshake gives its address's count back.
 	_ = held[0].CloseNow()
-	waitFor(t, "the /64 to get a slot back", func() bool {
-		ws, _, typ := firstMessageFrom(t, ctx, srv, "2001:db8:1:2::ffff")
-		_ = ws.CloseNow()
-		return typ == wire.TypeChallenge
-	})
+	awaitHandshakeSlots(t, srv.Hub, 16) // 15 from the /64 and one from the other
+	ws, _, typ := firstMessageFrom(t, ctx, srv, "2001:db8:1:2::ffff")
+	_ = ws.CloseNow()
+	if typ != wire.TypeChallenge {
+		t.Fatalf("after a handshake of the /64 was closed the next got %q, want a challenge: the count was never given back", typ)
+	}
 
 	// An IPv4-mapped address and its IPv4 address share one count.
 	for i := range 16 {
@@ -527,27 +549,34 @@ func TestAForwardedForHeaderFromAnUntrustedPeerDoesNotBuyMoreHandshakes(t *testi
 
 // A client that reads the challenge and says nothing is let go when the first-frame
 // deadline passes, long before the 10 s the whole handshake may take (T-02-123).
+//
+// The slow path the claim rules out is the whole-handshake timeout, which is a
+// constant of the wire protocol and cannot be lengthened. So the first-frame
+// deadline is set to a small fraction of it and the drop is awaited on the shared
+// deadline; a server that waited for the whole-handshake timeout instead would take
+// wire.HandshakeTimeout, which is more than the bound below.
 func TestASilentHandshakeIsDroppedAtTheFirstFrameDeadline(t *testing.T) {
-	srv := tunneltest.Start(t, tunneltest.Options{})
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
+	const firstFrame = 200 * time.Millisecond
+	srv := tunneltest.Start(t, tunneltest.Options{Configure: func(h *tunnel.Hub) *tunnel.Hub { return h.WithFirstFrameTimeout(firstFrame) }})
+	ctx := testsupport.Context(t)
 
 	ws, _, typ := firstMessageFrom(t, ctx, srv, "")
 	defer func() { _ = ws.CloseNow() }()
 	if typ != wire.TypeChallenge {
 		t.Fatalf("got %q, want a challenge", typ)
 	}
-	start := time.Now()
+	start := time.Now() // wall-clock: the elapsed time is bounded by a fraction of the whole-handshake timeout, the slow path this test rules out
 	_, _, err := ws.Read(ctx)
-	elapsed := time.Since(start)
+	elapsed := time.Since(start) // wall-clock: see above
 	if err == nil {
 		t.Fatal("the server sent something to a client that said nothing")
 	}
 	if ctx.Err() != nil {
 		t.Fatalf("the server was still holding the connection after %s", elapsed.Round(100*time.Millisecond))
 	}
-	if elapsed < 2500*time.Millisecond || elapsed > 6*time.Second {
-		t.Fatalf("a silent handshake was dropped %s after the challenge, want between 2.5 s and 6 s", elapsed.Round(10*time.Millisecond))
+	if limit := wire.HandshakeTimeout / 2; elapsed > limit {
+		t.Fatalf("a silent handshake was dropped %s after the challenge, want it at the first-frame deadline (%s), well before the whole-handshake timeout (%s)",
+			elapsed.Round(10*time.Millisecond), firstFrame, wire.HandshakeTimeout)
 	}
 }
 
@@ -569,17 +598,13 @@ func TestTheFirstFrameDeadlineGivesTheAddressItsSlotsBack(t *testing.T) {
 	if _, ref, typ := holdFrom(t, ctx, srv, "198.51.100.7"); typ != wire.TypeRefuse || ref.Code != wire.RefuseRateLimited {
 		t.Fatalf("a 17th handshake got %q %+v, want rate_limited", typ, ref)
 	}
-	deadline := time.Now().Add(8 * time.Second)
-	for {
-		ws, _, typ := firstMessageFrom(t, ctx, srv, "198.51.100.7")
-		_ = ws.CloseNow()
-		if typ == wire.TypeChallenge {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the silent handshakes still held every slot of the address 8 s after their challenges")
-		}
-		time.Sleep(100 * time.Millisecond)
+	// The hub says when the last silent handshake has been let go; the address
+	// has its slots back by then.
+	awaitHandshakeSlots(t, srv.Hub, 0)
+	ws, _, typ := firstMessageFrom(t, ctx, srv, "198.51.100.7")
+	_ = ws.CloseNow()
+	if typ != wire.TypeChallenge {
+		t.Fatalf("after the first-frame deadline the address got %q, want a challenge: the silent handshakes kept its slots", typ)
 	}
 }
 
@@ -587,53 +612,59 @@ func TestTheFirstFrameDeadlineGivesTheAddressItsSlotsBack(t *testing.T) {
 // agent that is a little slow still gets in; one that is slower than the deadline
 // does not, and the server has closed the connection by then.
 func TestAnAgentThatAnswersWithinTheDeadlineIsWelcomedAndOneThatDoesNotIsDropped(t *testing.T) {
-	srv := tunneltest.Start(t, tunneltest.Options{})
-
-	t.Run("answers after 1 s", func(t *testing.T) {
+	t.Run("answers within the deadline", func(t *testing.T) {
+		srv := tunneltest.Start(t, tunneltest.Options{Configure: func(h *tunnel.Hub) *tunnel.Hub { return h.WithFirstFrameTimeout(time.Minute) }})
 		env := srv.NewEnvironment(t, "Prompt")
 		p := srv.Begin(t, tunneltest.Agent{Token: env.Token})
-		time.Sleep(time.Second)
 		if c := p.Finish(); c.Welcome == nil {
-			t.Fatalf("an agent that answered after 1 s was not welcomed: %+v (err %v)", c.Refuse, c.Err)
+			t.Fatalf("an agent that answered within the deadline was not welcomed: %+v (err %v)", c.Refuse, c.Err)
 		}
 	})
-	t.Run("answers after 4 s", func(t *testing.T) {
+	t.Run("is dropped when it does not answer by the deadline", func(t *testing.T) {
+		// The deadline is shortened so the test does not wait the default 3 s.
+		srv := tunneltest.Start(t, tunneltest.Options{Configure: func(h *tunnel.Hub) *tunnel.Hub { return h.WithFirstFrameTimeout(200 * time.Millisecond) }})
 		env := srv.NewEnvironment(t, "Slow")
 		p := srv.Begin(t, tunneltest.Agent{Token: env.Token})
-		time.Sleep(4 * time.Second)
-		if c := p.Finish(); c.Welcome != nil {
-			t.Fatal("an agent that answered 4 s after the challenge was welcomed, want the connection closed at the deadline")
+		// The hub gives the handshake's slot back when it stops waiting for the
+		// agent, which is the moment the deadline has passed on the server.
+		awaitHandshakeSlots(t, srv.Hub, 0)
+		// Only now does the agent answer, late. It has not read anything since the
+		// challenge, so it finds the connection gone: no welcome, and the close is
+		// the whole outcome.
+		c := p.Finish()
+		if c.Welcome != nil {
+			t.Fatalf("an agent that answered after the first-frame deadline was welcomed: %+v", c.Welcome)
+		}
+		if c.Err == nil {
+			t.Fatalf("the late agent was neither welcomed nor dropped: refuse %+v", c.Refuse)
 		}
 	})
 }
 
-func TestWithFirstFrameTimeoutReplacesTheDeadlineOnlyWhenPositive(t *testing.T) {
-	// dropped reports how long a silent handshake lasts, or ok false when it is
-	// still open after limit.
-	dropped := func(t *testing.T, d time.Duration, limit time.Duration) (time.Duration, bool) {
-		t.Helper()
-		srv := tunneltest.Start(t, tunneltest.Options{Configure: func(h *tunnel.Hub) *tunnel.Hub { return h.WithFirstFrameTimeout(d) }})
-		ctx, cancel := context.WithTimeout(context.Background(), limit)
-		defer cancel()
-		ws, _, typ := firstMessageFrom(t, ctx, srv, "")
-		defer func() { _ = ws.CloseNow() }()
-		if typ != wire.TypeChallenge {
-			t.Fatalf("got %q, want a challenge", typ)
-		}
-		start := time.Now()
-		_, _, err := ws.Read(ctx)
-		if err == nil {
-			t.Fatal("the server sent something to a client that said nothing")
-		}
-		return time.Since(start), ctx.Err() == nil
+// The documented default is 3 s: long enough for an agent that sends its auth as
+// soon as it reads the challenge, short enough that a silent client gives its slot
+// back in seconds (T-02-123, T-02-24). A hub that has not been told otherwise uses it.
+func TestTheShippedFirstFrameTimeoutIsThreeSeconds(t *testing.T) {
+	if tunnel.FirstFrameTimeout != 3*time.Second {
+		t.Fatalf("the shipped first-frame timeout is %s, want 3s", tunnel.FirstFrameTimeout)
 	}
+	srv := tunneltest.Start(t, tunneltest.Options{})
+	if got := srv.Hub.FirstFrame(); got != tunnel.FirstFrameTimeout {
+		t.Fatalf("a hub nobody configured has a first-frame timeout of %s, want the shipped %s", got, tunnel.FirstFrameTimeout)
+	}
+}
 
-	if elapsed, ok := dropped(t, 300*time.Millisecond, 2*time.Second); !ok || elapsed > 2*time.Second {
-		t.Errorf("with a deadline of 300 ms a silent handshake lasted %s (dropped %v), want it dropped quickly", elapsed, ok)
+func TestWithFirstFrameTimeoutReplacesTheDeadlineOnlyWhenPositive(t *testing.T) {
+	srv := tunneltest.Start(t, tunneltest.Options{})
+	h := srv.Hub
+	h.WithFirstFrameTimeout(300 * time.Millisecond)
+	if got := h.FirstFrame(); got != 300*time.Millisecond {
+		t.Fatalf("after WithFirstFrameTimeout(300ms) the deadline is %s, want 300ms", got)
 	}
 	for _, d := range []time.Duration{0, -time.Second} {
-		if elapsed, ok := dropped(t, d, 1500*time.Millisecond); ok {
-			t.Errorf("with a deadline of %s a silent handshake was dropped after %s, want the 3 s default", d, elapsed)
+		h.WithFirstFrameTimeout(d)
+		if got := h.FirstFrame(); got != 300*time.Millisecond {
+			t.Errorf("after WithFirstFrameTimeout(%s) the deadline is %s, want it left at 300ms", d, got)
 		}
 	}
 }
@@ -942,9 +973,18 @@ func sendDenied(t *testing.T, control io.Writer, method, path, reason string) {
 
 func waitEntries(t *testing.T, sink *auditSink, n int) []audit.Entry {
 	t.Helper()
-	var got []audit.Entry
-	waitFor(t, "audit entries", func() bool { got = sink.all(); return len(got) >= n })
-	return got
+	ctx := testsupport.Context(t)
+	for {
+		got, changed := sink.snapshot()
+		if len(got) >= n {
+			return got
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for %d audit entries; have %d", n, len(got))
+		}
+	}
 }
 
 func TestADeniedMessageIsAuditedUnderTheAgentHubAndRemembered(t *testing.T) {
@@ -982,7 +1022,7 @@ func TestADeniedMessageIsAuditedUnderTheAgentHubAndRemembered(t *testing.T) {
 	}
 
 	s := srv.Hub.Session(c.Identity.AgentID)
-	waitFor(t, "the last denial on the session", func() bool { return s.Status().LastDenial != nil })
+	awaitStatus(t, s, "the last denial on the session", func(st tunnel.SessionStatus) bool { return st.LastDenial != nil })
 	if d := s.Status().LastDenial; d.Method != "POST" || d.Endpoint != "/containers/create" || d.Reason != wire.DeniedReadOnly || d.At.IsZero() {
 		t.Errorf("last denial = %+v", d)
 	}
@@ -1015,7 +1055,7 @@ func TestAFloodOfDeniedMessagesCostsAtMostTheBurstOfAuditRowsThenOneSummary(t *t
 	// Heartbeat after them: heartbeats and denials share one reader, so when it has
 	// seen the heartbeat it has handled every denial before it.
 	tunneltest.SendHeartbeat(t, control, true, 1)
-	waitFor(t, "the reader to catch up", func() bool { return !s.Status().LastHeartbeat.IsZero() })
+	awaitStatus(t, s, "the reader to catch up", func(st tunnel.SessionStatus) bool { return st.ClockMs == 1 })
 	if n := len(sink.all()); n != 20 {
 		t.Fatalf("%d audit rows for 100 denials, want the burst of 20", n)
 	}
@@ -1043,6 +1083,16 @@ func TestStartsStreamRequestClassifiesByTheRequestLine(t *testing.T) {
 		{"events, plain", line("GET /events"), "events", true},
 		{"logs, versioned and followed", line("GET /v1.47/containers/abc/logs?follow=1&stdout=1"), "logs", true},
 		{"logs, plain", line("GET /containers/abc/logs"), "logs", true},
+		{"a service's logs, followed", line("GET /services/x/logs?follow=1&details=1"), "logs", true},
+		{"a service's logs, versioned", line("GET /v1.56/services/x/logs?tail=500"), "logs", true},
+		{"a task's logs, versioned", line("GET /v1.56/tasks/y/logs?follow=1"), "logs", true},
+		{"a task's logs, plain", line("GET /tasks/y/logs"), "logs", true},
+		{"a service's logs by POST are not a follow", line("POST /services/x/logs"), "other", true},
+		{"a task's logs by DELETE are not a follow", line("DELETE /v1.56/tasks/y/logs"), "other", true},
+		{"the service list is an ordinary call", line("GET /v1.56/services"), "other", true},
+		{"a service inspect is an ordinary call", line("GET /v1.56/services/x"), "other", true},
+		{"a nested service path that ends in logs", line("GET /v1.56/services/x/y/logs"), "other", true},
+		{"a node's logs are not a stream", line("GET /v1.56/nodes/x/logs"), "other", true},
 		{"exec start, versioned", line("POST /v1.47/exec/abc/start"), "exec", true},
 		{"exec start, plain", line("POST /exec/abc/start"), "exec", true},
 		{"list", line("GET /containers/json"), "other", true},

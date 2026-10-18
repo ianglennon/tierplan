@@ -4,7 +4,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { imageDetailKey, imageUsedByQuery } from "@/api/images";
+import { nodeKey, nodesQuery } from "@/api/nodes";
+import { placementKey } from "@/api/placement";
 import type { components } from "@/api/schema";
+import { servicesQuery } from "@/api/services";
 import {
   createEventsConnection,
   type EventsSnapshot,
@@ -176,10 +179,49 @@ describe("invalidationKeys", () => {
     expect(invalidationKeys("image", "e1")).toEqual([summary, list("images")]);
   });
 
-  it("makes only the summary stale for swarm objects and for a row of Bayplan's own", () => {
-    for (const type of ["service", "node", "secret", "config", "bayplan"] as const) {
-      expect(invalidationKeys(type, "e1")).toEqual([summary]);
-    }
+  it("makes only the summary stale for a row of Bayplan's own", () => {
+    expect(invalidationKeys("bayplan", "e1")).toEqual([summary]);
+  });
+
+  it("maps a config event to the summary and the configs list, which an open config page extends", () => {
+    expect(invalidationKeys("config", "e1")).toEqual([summary, list("configs")]);
+    const configs = list("configs");
+    expect(["env", "e1", "configs", "detail", "cid"].slice(0, configs.length)).toEqual(configs);
+  });
+
+  it("maps a secret event to the summary and the secrets list, which an open secret page extends", () => {
+    expect(invalidationKeys("secret", "e1")).toEqual([summary, list("secrets")]);
+    const secrets = list("secrets");
+    expect(["env", "e1", "secrets", "detail", "sid"].slice(0, secrets.length)).toEqual(secrets);
+  });
+
+  it("maps a node event to the summary, the nodes list and the services list (which holds the placement view)", () => {
+    expect(invalidationKeys("node", "e1")).toEqual([summary, list("nodes"), list("services")]);
+  });
+
+  it("refreshes an open node page and its filtered reads, since their keys extend the nodes list's", () => {
+    const keys = invalidationKeys("node", "e1");
+    const nodes = keys.find((k) => k[2] === "nodes") ?? [];
+    const filtered = nodesQuery("e1", { q: "mgr", status: "managers" }).queryKey;
+    expect(filtered.slice(0, nodes.length)).toEqual(nodes);
+    expect(nodeKey("e1", "n1").slice(0, nodes.length)).toEqual(nodes);
+    expect(placementKey("e1").slice(0, 3)).toEqual(keys.find((k) => k[2] === "services"));
+  });
+
+  it("maps a service event to the summary, the services list, and the secrets and configs lists, whose Used by counts follow the services' specs", () => {
+    expect(invalidationKeys("service", "e1")).toEqual([
+      summary,
+      list("services"),
+      list("secrets"),
+      list("configs"),
+    ]);
+  });
+
+  it("refreshes every filtered read of the services list, since their keys extend the list's", () => {
+    const keys = invalidationKeys("service", "e1");
+    const services = keys.find((k) => k[2] === "services") ?? [];
+    const filtered = servicesQuery("e1", { q: "web", status: "degraded" }).queryKey;
+    expect(filtered.slice(0, services.length)).toEqual(services);
   });
 });
 

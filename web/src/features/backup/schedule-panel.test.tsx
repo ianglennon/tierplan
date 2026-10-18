@@ -91,6 +91,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // A save's "Schedule saved." toast is raised when its answer arrives. toast.dismiss() takes
+  // the ones already up away, so the next test's Toaster does not show an old one.
+  toast.dismiss();
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -166,6 +169,8 @@ describe("Scheduled backups card", () => {
     fireEvent.click(card().getByRole("button", { name: "Save schedule" }));
     await waitFor(() => expect(puts()).toHaveLength(1));
     expect(puts()[0]?.body).not.toHaveProperty("passphrase");
+    // The save is over when its toast is up; without it the toast would come after this test.
+    await waitFor(() => expect(successToast).toHaveBeenCalled());
     expect(errorToast).not.toHaveBeenCalled();
   });
 });
@@ -210,6 +215,8 @@ describe("Scheduled backups card: how often", () => {
 
     await waitFor(() => expect(puts()).toHaveLength(1));
     expect(puts()[0]?.body).toMatchObject({ frequency: "weekly", weekday: 3 });
+    // The save is over when its toast is up; without it the toast would come after this test.
+    await waitFor(() => expect(successToast).toHaveBeenCalled());
 
     await chooseOption(card().getByRole("combobox", { name: "How often" }), "Every day");
     expect(card().queryByRole("combobox", { name: "Day" })).toBeNull();
@@ -323,9 +330,7 @@ describe("Saved backups: empty, loading and long names", () => {
     filesStatus = 500;
     renderPanel();
     // The query retries once, a second later, before it gives up.
-    expect(
-      await card().findByText("Couldn't load the saved backups.", {}, { timeout: 5000 }),
-    ).toBeTruthy();
+    expect(await card().findByText("Couldn't load the saved backups.")).toBeTruthy();
     expect(card().queryByText("No scheduled backups yet.")).toBeNull();
   });
 });

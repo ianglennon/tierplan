@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"net/netip"
 	"net/url"
@@ -13,7 +14,9 @@ import (
 	"testing"
 
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/api/types/volume"
 )
 
@@ -76,6 +79,16 @@ var oracle = []oracleEntry{
 		"since": rx(`^[0-9TZ:.+-]{1,40}$`), "until": rx(`^[0-9TZ:.+-]{1,40}$`), "tail": rx(`^(all|[0-9]{1,6})$`),
 	}),
 
+	// The logs of a service and of a task: the container log keys without until, which the
+	// engine ignores on these routes (RESEARCH E2).
+	oEntry("GET", `(services|tasks)/`+oID+`/logs`, map[string]*regexp.Regexp{
+		"stdout": oBool, "stderr": oBool, "timestamps": oBool, "follow": oBool, "details": oBool,
+		"since": rx(`^[0-9TZ:.+-]{1,40}$`), "tail": rx(`^(all|[0-9]{1,6})$`),
+	}),
+
+	// The stats of a container: only the two keys a one-shot read sends, and never a stream.
+	oEntry("GET", `containers/`+oID+`/stats`, map[string]*regexp.Regexp{"stream": rx(`^(0|false)$`), "one-shot": oBool}),
+
 	{method: "POST", path: rx(oVer + `containers/` + oID + `/exec$`), body: true},
 	{method: "POST", path: oExecStart, body: true, upgrade: true},
 	oEntry("POST", `exec/`+oID+`/resize`, map[string]*regexp.Regexp{"h": rx(`^[0-9]{1,4}$`), "w": rx(`^[0-9]{1,4}$`)}),
@@ -103,6 +116,37 @@ var oracle = []oracleEntry{
 	oEntry("GET", `distribution/`+oImg+`/json`, nil),
 
 	oEntry("GET", `system/df`, map[string]*regexp.Regexp{"type": rx(`^volume$`), "verbose": oBool}),
+
+	// One service: the inspect, the create and update that take a whole spec as
+	// their body, and the remove, which takes no key at all.
+	oEntry("GET", `services/`+oID, map[string]*regexp.Regexp{"insertDefaults": oBool}),
+	// One node: the inspect, which takes no key at all.
+	oEntry("GET", `nodes/`+oID, nil),
+	// A node remove takes no key at all: force is never sent.
+	oEntry("DELETE", `nodes/`+oID, nil),
+	// A node update: a version and a node spec body.
+	{method: "POST", path: rx(oVer + `nodes/` + oID + `/update$`), body: true, keys: map[string]*regexp.Regexp{"version": rx(`^[0-9]{1,20}$`)}},
+	{method: "POST", path: rx(oVer + `services/create$`), body: true},
+	oEntry("DELETE", `services/`+oID, nil),
+	// Secrets: the list and the inspect take no key at all, the create takes a SecretSpec body, and the
+	// remove takes no key either.
+	oEntry("GET", `secrets`, nil),
+	oEntry("GET", `secrets/`+oID, nil),
+	{method: "POST", path: rx(oVer + `secrets/create$`), body: true},
+	oEntry("DELETE", `secrets/`+oID, nil),
+	// Configs: the same four, none with a key.
+	oEntry("GET", `configs`, nil),
+	oEntry("GET", `configs/`+oID, nil),
+	{method: "POST", path: rx(oVer + `configs/create$`), body: true},
+	oEntry("DELETE", `configs/`+oID, nil),
+	{
+		method: "POST", path: rx(oVer + `services/` + oID + `/update$`), body: true,
+		keys: map[string]*regexp.Regexp{
+			"version":          rx(`^[0-9]{1,20}$`),
+			"registryAuthFrom": rx(`^(spec|previous-spec)$`),
+			"rollback":         rx(`^(previous|none)$`),
+		},
+	},
 }
 
 // oracleFor returns every oracle entry a method and path fall under. HEAD stands
@@ -158,6 +202,78 @@ func FuzzAllowed(f *testing.F) {
 		{"DELETE", "/volumes/v1", "", false, false, false},
 		{"DELETE", "/volumes/v1", "force=1", false, false, false},
 		{"GET", "/system/df", "type=volume&verbose=1", false, false, false},
+		{"GET", "/nodes/abc123", "", false, false, false},
+		{"GET", "/nodes/abc123", "x=1", false, false, false},
+		{"GET", "/nodes/abc123", "", true, false, false},
+		{"HEAD", "/v1.56/nodes/abc123", "", false, false, true},
+		{"GET", "/nodes/abc123/tasks", "", false, false, false},
+		{"POST", "/nodes/abc123/update", "version=1", true, false, false},
+		{"POST", "/nodes/abc123/update", "version=1&x=2", true, false, false},
+		{"POST", "/nodes/abc123/update", "version=x", true, false, false},
+		{"POST", "/nodes/abc123/update", "version=1", false, false, false},
+		{"POST", "/nodes/abc123/update", "version=1", true, false, true},
+		{"POST", "/v1.56/nodes/abc123/update", "version=12", true, false, false},
+		{"DELETE", "/nodes/abc123", "", false, false, false},
+		{"GET", "/services/web", "insertDefaults=1", false, false, false},
+		{"GET", "/services/web", "insertDefaults=maybe", false, false, false},
+		{"GET", "/services/web", "", true, false, false},
+		{"HEAD", "/v1.56/services/abc", "", false, false, true},
+		{"POST", "/services/web/update", "version=12&registryAuthFrom=spec&rollback=none", true, false, false},
+		{"POST", "/services/web/update", "version=12", false, false, false},
+		{"POST", "/services/web/update", "version=12", true, false, true},
+		{"POST", "/services/web/update", "version=12&force=1", true, false, false},
+		{"POST", "/services/web/update", "version=12", true, true, false},
+		{"POST", "/services/create", "", true, false, false},
+		{"DELETE", "/services/web", "", false, false, false},
+		{"GET", "/secrets", "", false, false, false},
+		{"GET", "/secrets", "filters=%7B%7D", false, false, false},
+		{"HEAD", "/v1.56/secrets", "", false, false, true},
+		{"GET", "/secrets/abc123", "", false, false, false},
+		{"GET", "/secrets/abc123", "x=1", false, false, false},
+		{"GET", "/secrets/abc123/update", "", false, false, false},
+		{"POST", "/secrets/create", "", true, false, false},
+		{"POST", "/secrets/create", "x=1", true, false, false},
+		{"POST", "/secrets/create", "", false, false, false},
+		{"POST", "/secrets/create", "", true, false, true},
+		{"POST", "/secrets/abc123/update", "version=1", true, false, false},
+		{"DELETE", "/secrets/abc123", "", false, false, false},
+		{"DELETE", "/secrets/abc123", "force=1", false, false, false},
+		{"DELETE", "/secrets/abc123", "", true, false, false},
+		{"GET", "/configs", "", false, false, false},
+		{"GET", "/configs", "filters=%7B%7D", false, false, false},
+		{"HEAD", "/v1.56/configs", "", false, false, true},
+		{"GET", "/configs/abc123", "", false, false, false},
+		{"GET", "/configs/abc123", "x=1", false, false, false},
+		{"GET", "/configs/abc123/update", "", false, false, false},
+		{"POST", "/configs/create", "", true, false, false},
+		{"POST", "/configs/create", "x=1", true, false, false},
+		{"POST", "/configs/create", "", false, false, false},
+		{"POST", "/configs/create", "", true, false, true},
+		{"POST", "/configs/abc123/update", "version=1", true, false, false},
+		{"DELETE", "/configs/abc123", "", false, false, false},
+		{"DELETE", "/configs/abc123", "force=1", false, false, false},
+		{"DELETE", "/configs/abc123", "", true, false, false},
+		{"GET", "/containers/abc/stats", "stream=false&one-shot=true", false, false, false},
+		{"GET", "/v1.56/containers/abc/stats", "stream=0&one-shot=1", false, false, false},
+		{"GET", "/containers/abc/stats", "", false, false, false},
+		{"GET", "/containers/abc/stats", "stream=true&decode=1", false, false, false},
+		{"GET", "/containers/abc/stats", "stream=maybe", false, false, false},
+		{"GET", "/containers/abc/stats", "", true, false, false},
+		{"GET", "/containers/abc/stats/x", "", false, false, false},
+		{"GET", "/containers/../stats", "", false, false, false},
+		{"HEAD", "/containers/abc/stats", "stream=false", false, false, true},
+		{"POST", "/containers/abc/stats", "", false, false, false},
+		{"GET", "/services/web/logs", "follow=1", false, false, false},
+		{"GET", "/v1.56/services/web/logs", "follow=1&details=1&timestamps=1&stdout=1&stderr=1&tail=500&since=1700000000.5", false, false, false},
+		{"GET", "/services/web/logs", "until=1700000000", false, false, false},
+		{"GET", "/tasks/abc/logs", "follow=1&tail=all", false, false, false},
+		{"GET", "/tasks/abc/logs", "until=1", false, false, false},
+		{"GET", "/tasks/abc", "", false, false, false},
+		{"GET", "/tasks/abc/logs/x", "", false, false, false},
+		{"GET", "/services/a/b/logs", "", false, false, false},
+		{"GET", "/tasks/../logs", "", false, false, false},
+		{"HEAD", "/tasks/abc/logs", "follow=1", false, false, true},
+		{"POST", "/tasks/abc/logs", "", false, false, false},
 		{"POST", "/images/create", "fromSrc=http://x", false, false, false},
 		{"POST", "/images/create", "fromImage=a&tag=b&platform=linux/arm64", false, false, false},
 		{"POST", "/images/create", "fromImage=ghcr.io/acme/app&tag=sha256:0000000000000000000000000000000000000000000000000000000000000000", false, false, false},
@@ -331,6 +447,32 @@ var bodyShapes = map[BodyKind]bodyShape{
 	BodyVolumeCreate: {
 		keys: map[string]*bodyShape{"Name": nil, "Driver": nil, "DriverOpts": nil, "Labels": nil},
 	},
+	// A node spec is a name, labels, a role and an availability, and nothing else.
+	BodyNodeSpec: {
+		keys: map[string]*bodyShape{"Name": nil, "Labels": nil, "Role": nil, "Availability": nil},
+	},
+	// A secret to create is a name, labels and the value; a driver and templating are never forwarded.
+	BodySecretCreate: {
+		keys: map[string]*bodyShape{"Name": nil, "Labels": nil, "Data": nil},
+	},
+	// A config to create is a name, labels, the content and the golang templating driver; no other driver
+	// and no driver option is ever forwarded.
+	BodyConfigCreate: {
+		keys: map[string]*bodyShape{"Name": nil, "Labels": nil, "Data": nil, "Templating": {keys: map[string]*bodyShape{"Name": nil}}},
+	},
+	// A service spec is the user's whole service, so the shape is its top-level keys.
+	// What it must not hold is a plugin or a network attachment task, and a runtime
+	// other than container (checked in FuzzBody).
+	BodyServiceSpec: {
+		keys: map[string]*bodyShape{
+			"Name": nil, "Labels": nil, "Mode": nil, "UpdateConfig": nil, "RollbackConfig": nil, "EndpointSpec": nil,
+			"TaskTemplate": {keys: map[string]*bodyShape{
+				"ContainerSpec": nil, "PluginSpec": nil, "NetworkAttachmentSpec": nil, "Resources": nil,
+				"RestartPolicy": nil, "Placement": nil, "Networks": nil, "LogDriver": nil, "ForceUpdate": nil, "Runtime": nil,
+			}},
+		},
+		zero: []string{"TaskTemplate.PluginSpec", "TaskTemplate.NetworkAttachmentSpec"},
+	},
 }
 
 // checkShape returns the first key under v that the shape does not name, or "".
@@ -427,14 +569,40 @@ func FuzzBody(f *testing.F) {
 		{uint8(BodyNetworkDisconnect), enc(network.DisconnectRequest{Container: "c", Force: true})},
 		{uint8(BodyVolumeCreate), enc(volume.CreateRequest{Name: "v", Driver: "local", DriverOpts: map[string]string{"type": "tmpfs"}, Labels: map[string]string{"a": "b"}})},
 		{uint8(BodyVolumeCreate), enc(volume.CreateRequest{Name: "v", ClusterVolumeSpec: &volume.ClusterVolumeSpec{Group: "g"}})},
+		{uint8(BodyServiceSpec), enc(swarm.ServiceSpec{
+			Annotations:  swarm.Annotations{Name: "web", Labels: map[string]string{"a": "b"}},
+			TaskTemplate: swarm.TaskSpec{ContainerSpec: &swarm.ContainerSpec{Image: "ghcr.io/acme/web:1", Env: []string{"A=1"}}},
+			Mode:         swarm.ServiceMode{Replicated: &swarm.ReplicatedService{Replicas: new(uint64)}},
+		})},
+		{uint8(BodyServiceSpec), enc(swarm.ServiceSpec{TaskTemplate: swarm.TaskSpec{Runtime: swarm.RuntimePlugin, PluginSpec: &swarm.RuntimeSpec{Name: "p"}}})},
+		{uint8(BodyServiceSpec), enc(swarm.ServiceSpec{TaskTemplate: swarm.TaskSpec{NetworkAttachmentSpec: &swarm.NetworkAttachmentSpec{ContainerID: "c"}}})},
+		{uint8(BodyServiceSpec), enc(swarm.ServiceSpec{TaskTemplate: swarm.TaskSpec{ContainerSpec: &swarm.ContainerSpec{
+			Image: "x", Mounts: []mount.Mount{{Type: mount.TypeBind, Source: "/var/run/docker.sock", Target: "/s"}},
+		}}})},
+		{uint8(BodyServiceSpec), enc(swarm.ServiceSpec{TaskTemplate: swarm.TaskSpec{ContainerSpec: &swarm.ContainerSpec{
+			Image: "x", CapabilityAdd: []string{"SYS_ADMIN"}, Privileges: &swarm.Privileges{Seccomp: &swarm.SeccompOpts{Mode: swarm.SeccompModeUnconfined}},
+		}}})},
+		{uint8(BodyNodeSpec), enc(swarm.NodeSpec{Annotations: swarm.Annotations{Name: "alpha", Labels: map[string]string{"a": "b"}}, Role: swarm.NodeRoleWorker, Availability: swarm.NodeAvailabilityDrain})},
+		{uint8(BodyNodeSpec), enc(swarm.NodeSpec{Role: swarm.NodeRoleManager, Availability: swarm.NodeAvailabilityActive})},
+		{uint8(BodyNodeSpec), `{"Role":"leader","Availability":"down"}`},
+		{uint8(BodyNodeSpec), `{"Role":"worker","Availability":"active","ID":"x"}`},
+		{uint8(BodySecretCreate), enc(swarm.SecretSpec{Annotations: swarm.Annotations{Name: "dbpw", Labels: map[string]string{"a": "b"}}, Data: []byte("v")})},
+		{uint8(BodySecretCreate), enc(swarm.SecretSpec{Annotations: swarm.Annotations{Name: "dbpw"}, Data: []byte("v"), Driver: &swarm.Driver{Name: "vault"}})},
+		{uint8(BodySecretCreate), enc(swarm.SecretSpec{Annotations: swarm.Annotations{Name: "dbpw"}, Data: []byte("v"), Templating: &swarm.Driver{Name: "golang"}})},
+		{uint8(BodySecretCreate), `{"Name":"dbpw","Data":""}`},
+		{uint8(BodyConfigCreate), enc(swarm.ConfigSpec{Annotations: swarm.Annotations{Name: "nginx.conf", Labels: map[string]string{"a": "b"}}, Data: []byte("v")})},
+		{uint8(BodyConfigCreate), enc(swarm.ConfigSpec{Annotations: swarm.Annotations{Name: "nginx.conf"}, Data: []byte("v"), Templating: &swarm.Driver{Name: "golang"}})},
+		{uint8(BodyConfigCreate), enc(swarm.ConfigSpec{Annotations: swarm.Annotations{Name: "nginx.conf"}, Data: []byte("v"), Templating: &swarm.Driver{Name: "vault"}})},
+		{uint8(BodyConfigCreate), enc(swarm.ConfigSpec{Annotations: swarm.Annotations{Name: "nginx.conf"}, Data: []byte("v"), Templating: &swarm.Driver{Name: "golang", Options: map[string]string{"a": "b"}}})},
+		{uint8(BodyConfigCreate), `{"Name":"nginx.conf","Data":"","Driver":{"Name":"vault"}}`},
 		{uint8(BodyNone), `{}`},
 	}
 	for _, s := range seeds {
 		f.Add(s.kind, s.body)
 	}
 	f.Fuzz(func(t *testing.T, kind uint8, body string) {
-		k := BodyKind(kind % 8)
-		out, err := validateBody(k, strings.NewReader(body))
+		k := BodyKind(kind % 11) // BodyNone and the ten kinds
+		out, err := validateBody(k, strings.NewReader(body), bodyEnv{})
 		if err != nil {
 			return
 		}
@@ -442,7 +610,7 @@ func FuzzBody(f *testing.F) {
 		if !known {
 			t.Fatalf("kind %d accepted a body but has no shape", k)
 		}
-		if len(out) > maxBody*2 {
+		if int64(len(out)) > bodyCap(k)*2 {
 			t.Fatalf("the forwarded body is %d bytes", len(out))
 		}
 		var m map[string]any
@@ -455,6 +623,135 @@ func FuzzBody(f *testing.F) {
 		for _, z := range shape.zero {
 			if !emptyAt(m, z) {
 				t.Fatalf("kind %d forwarded %s set: %s", k, z, out)
+			}
+		}
+		if k == BodyVolumeCreate {
+			// A volume created here can be mounted by name in a spec that carries no
+			// host path, so a volume with host access must never be forwarded without
+			// the opt-in (D-36 and D-38 as amended). The judge is volumeOracle, which
+			// shares no code with the rule, so a gap in the rule is not also a gap
+			// here.
+			var req volume.CreateRequest
+			if err := json.Unmarshal(out, &req); err != nil {
+				t.Fatalf("the forwarded volume create does not decode: %v: %.200s", err, out)
+			}
+			if reason := volumeOracle(req.Driver, req.DriverOpts); reason != "" {
+				t.Fatalf("a volume create with host access (%s) was forwarded: %.200s", reason, out)
+			}
+		}
+		if k == BodyNodeSpec {
+			var spec swarm.NodeSpec
+			if err := json.Unmarshal(out, &spec); err != nil {
+				t.Fatalf("the forwarded node spec does not decode: %v: %s", err, out)
+			}
+			if spec.Role != swarm.NodeRoleManager && spec.Role != swarm.NodeRoleWorker {
+				t.Fatalf("a node spec with the role %q was forwarded: %s", spec.Role, out)
+			}
+			if a := spec.Availability; a != swarm.NodeAvailabilityActive && a != swarm.NodeAvailabilityPause && a != swarm.NodeAvailabilityDrain {
+				t.Fatalf("a node spec with the availability %q was forwarded: %s", a, out)
+			}
+			if len(spec.Labels) > maxMapEntries || len(spec.Name) > maxAliasChars {
+				t.Fatalf("a node spec over the bounds was forwarded: %s", out)
+			}
+		}
+		if k == BodySecretCreate {
+			var spec swarm.SecretSpec
+			if err := json.Unmarshal(out, &spec); err != nil {
+				t.Fatalf("the forwarded secret spec does not decode: %v: %s", err, out)
+			}
+			if spec.Driver != nil || spec.Templating != nil {
+				t.Fatalf("a secret spec with a driver or templating was forwarded: %.200s", out)
+			}
+			if n := len(spec.Data); n < 1 || n > maxSecretData {
+				t.Fatalf("a secret spec with %d bytes of value was forwarded", n)
+			}
+			if !secretNameRe.MatchString(spec.Name) || len(spec.Labels) > maxMapEntries {
+				t.Fatalf("a secret spec over the bounds was forwarded: %.200s", out)
+			}
+		}
+		if k == BodyConfigCreate {
+			var spec swarm.ConfigSpec
+			if err := json.Unmarshal(out, &spec); err != nil {
+				t.Fatalf("the forwarded config spec does not decode: %v: %s", err, out)
+			}
+			if tpl := spec.Templating; tpl != nil && (tpl.Name != "golang" || len(tpl.Options) > 0) {
+				t.Fatalf("a config spec with the templating driver %+v was forwarded: %.200s", tpl, out)
+			}
+			if n := len(spec.Data); n < 1 || n > maxConfigData {
+				t.Fatalf("a config spec with %d bytes of content was forwarded", n)
+			}
+			if !secretNameRe.MatchString(spec.Name) || len(spec.Labels) > maxMapEntries {
+				t.Fatalf("a config spec over the bounds was forwarded: %.200s", out)
+			}
+		}
+		if k == BodyServiceSpec {
+			var spec swarm.ServiceSpec
+			if err := json.Unmarshal(out, &spec); err != nil {
+				t.Fatalf("the forwarded service spec does not decode: %v: %s", err, out)
+			}
+			if rt := spec.TaskTemplate.Runtime; rt != "" && rt != swarm.RuntimeContainer {
+				t.Fatalf("a service spec with the runtime %q was forwarded: %s", rt, out)
+			}
+			// With the zero environment (no opt-in, no lookup) nothing that gives
+			// tasks host access may be forwarded.
+			if found := escalations(context.Background(), spec, nil); len(found) > 0 {
+				t.Fatalf("a service spec with host access %v was forwarded: %s", found, out)
+			}
+			// A plugin or cluster mount cannot be judged, and with no lookup a named
+			// volume cannot be shown to be free of host access, so none is forwarded.
+			if found := pluginVolumes(spec); len(found) > 0 {
+				t.Fatalf("a service spec with the plugin volume mounts %v was forwarded: %.200s", found, out)
+			}
+			found, err := namedVolumes(context.Background(), spec, nil)
+			if err != nil {
+				t.Fatalf("with no lookup, namedVolumes returned the error %v: %.200s", err, out)
+			}
+			if len(found) > 0 {
+				t.Fatalf("a service spec with the named volume mounts %v was forwarded: %.200s", found, out)
+			}
+			// An inline local volume is judged by the oracle, apart from the rule.
+			if cs := spec.TaskTemplate.ContainerSpec; cs != nil {
+				for i, m := range cs.Mounts {
+					if m.VolumeOptions == nil || m.VolumeOptions.DriverConfig == nil {
+						continue
+					}
+					dc := m.VolumeOptions.DriverConfig
+					if reason := volumeOracle(dc.Name, dc.Options); reason != "" {
+						t.Fatalf("a service spec with host access in the inline volume of mount %d (%s) was forwarded: %.200s", i, reason, out)
+					}
+				}
+			}
+		}
+		if k == BodyServiceSpec {
+			// A named volume the engine does not have is created from the mount's own
+			// options, so it is forwarded, and only on inline options that pass.
+			absent := bodyEnv{volumes: func(context.Context, string) (string, map[string]string, bool, error) {
+				return "", nil, false, nil
+			}}
+			again, err := validateBody(k, strings.NewReader(body), absent)
+			if err != nil {
+				return
+			}
+			var spec swarm.ServiceSpec
+			if err := json.Unmarshal(again, &spec); err != nil {
+				t.Fatalf("the forwarded service spec does not decode: %v: %.200s", err, again)
+			}
+			if found := escalations(context.Background(), spec, nil); len(found) > 0 {
+				t.Fatalf("a service spec with host access %v was forwarded for an absent volume: %.200s", found, again)
+			}
+			if found := pluginVolumes(spec); len(found) > 0 {
+				t.Fatalf("a service spec with the plugin volume mounts %v was forwarded for an absent volume: %.200s", found, again)
+			}
+			if cs := spec.TaskTemplate.ContainerSpec; cs != nil {
+				for i, m := range cs.Mounts {
+					if m.VolumeOptions == nil || m.VolumeOptions.DriverConfig == nil {
+						continue
+					}
+					dc := m.VolumeOptions.DriverConfig
+					if reason := volumeOracle(dc.Name, dc.Options); reason != "" {
+						t.Fatalf("a service spec with host access in the inline volume of mount %d (%s) was forwarded for an absent volume: %.200s", i, reason, again)
+					}
+				}
 			}
 		}
 	})

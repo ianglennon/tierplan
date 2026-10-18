@@ -11,6 +11,7 @@ import { queryClient } from "@/api/query-client";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
 import { makeMe } from "@/test-me";
+import { settled } from "@/test-settle";
 
 const ADMIN = makeMe({
   instanceAdmin: true,
@@ -144,7 +145,7 @@ describe("/welcome (wizard step 4)", () => {
     expect(screen.getByText("Docker Engine 29.8.2")).toBeTruthy();
     expect(screen.getByText("Standalone")).toBeTruthy();
     expect(document.title).toBe("Welcome · Lab");
-    await new Promise((r) => setTimeout(r, 50));
+    await settled(queryClient);
     expect(posts()).toEqual([]);
   });
 
@@ -205,7 +206,7 @@ describe("the signed-in home with no environments", () => {
 
     expect(await screen.findByText("No environments yet")).toBeTruthy();
     expect(await screen.findByRole("heading", { name: "Manage this Docker host?" })).toBeTruthy();
-    await new Promise((r) => setTimeout(r, 50));
+    await settled(queryClient);
     expect(posts()).toEqual([]);
 
     fireEvent.click(screen.getByRole("button", { name: "Manage this host" }));
@@ -241,7 +242,7 @@ describe("the signed-in home with no environments", () => {
     environments = [{ ...ADDED }];
     renderAt("/");
     await waitFor(() => expect(calls.some((c) => c.path === "/api/environments")).toBe(true));
-    await new Promise((r) => setTimeout(r, 50));
+    await settled(queryClient);
     expect(screen.queryByText("No environments yet")).toBeNull();
     expect(screen.queryByRole("heading", { name: "Manage this Docker host?" })).toBeNull();
   });

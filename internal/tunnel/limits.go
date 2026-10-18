@@ -234,9 +234,20 @@ func (h *Hub) preflight(r *http.Request, ip string) (aud string, ref *preflightR
 type addrInflight struct {
 	mu sync.Mutex
 	n  map[string]int
+	// changed is closed and cleared whenever a count changes, to wake
+	// Hub.AwaitHandshakes waiters; a waiter makes it.
+	changed chan struct{}
 }
 
 func newAddrInflight() *addrInflight { return &addrInflight{n: map[string]int{}} }
+
+// notifyLocked wakes every waiter. a.mu must be held.
+func (a *addrInflight) notifyLocked() {
+	if a.changed != nil {
+		close(a.changed)
+		a.changed = nil
+	}
+}
 
 // take counts one more handshake for key, or reports false when key already has
 // max in flight.
@@ -247,6 +258,7 @@ func (a *addrInflight) take(key string, max int) bool {
 		return false
 	}
 	a.n[key]++
+	a.notifyLocked()
 	return true
 }
 
@@ -254,11 +266,43 @@ func (a *addrInflight) take(key string, max int) bool {
 func (a *addrInflight) give(key string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	defer a.notifyLocked()
 	if a.n[key] <= 1 {
 		delete(a.n, key)
 		return
 	}
 	a.n[key]--
+}
+
+// AwaitHandshakes returns the first count of handshakes in flight, over all
+// addresses, for which cond is true. It evaluates cond now and again whenever a
+// handshake starts or ends, and never polls. A handshake that has ended has given
+// back its place in the global cap before this count drops, so a caller that
+// sees the drop can start another. When ctx ends first it returns the last count
+// together with the context's error.
+func (h *Hub) AwaitHandshakes(ctx context.Context, cond func(inFlight int) bool) (int, error) {
+	a := h.perAddr
+	for {
+		// Take the channel in the same critical section as the read, so a change
+		// between the read and the wait is not missed.
+		a.mu.Lock()
+		if a.changed == nil {
+			a.changed = make(chan struct{})
+		}
+		ch, total := a.changed, 0
+		for _, n := range a.n {
+			total += n
+		}
+		a.mu.Unlock()
+		if cond(total) {
+			return total, nil
+		}
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return total, ctx.Err()
+		}
+	}
 }
 
 // admit decides whether one more handshake may start. Three bounds apply, in this
@@ -399,7 +443,8 @@ const (
 	streamOther streamKind = iota
 	// streamEvents is the events feed: endless, uncapped, not interactive.
 	streamEvents
-	// streamLogs is a container's logs, which a client may follow for hours.
+	// streamLogs is the logs of a container, a service or a task, which a client may follow
+	// for hours.
 	streamLogs
 	// streamExec is the start of an exec, whose stream carries a shell.
 	streamExec
@@ -419,14 +464,17 @@ var (
 	requestLine = regexp.MustCompile(`^([A-Z]+) (\S+) HTTP/1\.[01]\r\n`)
 	// versionedPath splits an optional /vX.Y prefix off a Docker path.
 	versionedPath = regexp.MustCompile(`^/v[0-9]+(?:\.[0-9]+)?(/.*)$`)
-	// logsPath and execStartPath are the two stream routes besides the events feed.
-	logsPath      = regexp.MustCompile(`^/containers/[^/]+/logs$`)
+	// logsPath and execStartPath are the two stream routes besides the events feed. A
+	// service's and a task's logs are as long-lived as a container's (a swarm manager
+	// answers them on one stream), so without services and tasks here a followed service
+	// log would be an ordinary call and die at the response cap (plan 06-29, D-37).
+	logsPath      = regexp.MustCompile(`^/(containers|services|tasks)/[^/]+/logs$`)
 	execStartPath = regexp.MustCompile(`^/exec/[^/]+/start$`)
 )
 
 // startsStreamRequest classifies p when it begins an HTTP request: the events feed
-// (any method, a path ending in /events), a container's logs (GET
-// /containers/{id}/logs) or an exec start (POST /exec/{id}/start), each with or
+// (any method, a path ending in /events), the logs of a container, a service or a task (GET
+// /containers/{id}/logs, /services/{id}/logs, /tasks/{id}/logs) or an exec start (POST /exec/{id}/start), each with or
 // without a /vX.Y prefix, and every other request as streamOther. It reports ok false
 // when p is not the start of a request at all, for example the next piece of a body,
 // or a first write too short to hold the whole request line, so the caller keeps what

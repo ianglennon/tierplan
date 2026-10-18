@@ -2,16 +2,17 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import {
   createLogStream,
+  fetchLogPage,
   type LogStreamOptions,
   type LogStreamState,
   logStreamUrl,
   makeViewerId,
   plusNanosecond,
 } from "@/features/logs/log-stream";
+import { waitUnderFakeClock } from "@/test-settle";
 
 // The connection to a container's log stream (plan 04-19, OBS-01, D-24, P3 D-10).
 
@@ -528,5 +529,319 @@ describe("suspending", () => {
     expect(FakeEventSource.instances).toHaveLength(1);
     stream.resume();
     expect(FakeEventSource.instances).toHaveLength(2);
+  });
+});
+
+// A service's merged log (plan 06-29, OBS-02, D-35, D-37): the same stream, addressed by the
+// service, narrowed by the filters and naming the task of every line.
+describe("a service's log", () => {
+  const web = { kind: "service", id: "web" } as const;
+
+  function openService(extra: Partial<LogStreamOptions> = {}) {
+    const states: LogStreamState[] = [];
+    const lines: unknown[][] = [];
+    const stream = createLogStream({
+      envId: "e1",
+      source: web,
+      sid: SID,
+      onLines: (l) => lines.push(l),
+      onState: (s) => states.push(s),
+      ...extra,
+    } as LogStreamOptions);
+    const source = FakeEventSource.instances.at(-1);
+    if (!source) throw new Error("no source");
+    return { stream, source, states, lines };
+  }
+
+  it("is addressed by the service, with the viewer, the tail and the filters, and no node", () => {
+    const url = new URL(
+      logStreamUrl({
+        envId: "e 1",
+        source: { kind: "service", id: "web/api" },
+        sid: SID,
+        tail: 500,
+        service: { tasks: ["t1", "t2"], nodes: ["alpha"], stopped: true },
+      }),
+      "http://x",
+    );
+    expect(url.pathname).toBe("/api/env/e%201/services/web%2Fapi/logs/stream");
+    expect(url.searchParams.get("sid")).toBe(SID);
+    expect(url.searchParams.get("tail")).toBe("500");
+    expect(url.searchParams.get("task")).toBe("t1,t2");
+    expect(url.searchParams.get("node")).toBe("alpha");
+    expect(url.searchParams.get("stopped")).toBe("1");
+    expect(url.searchParams.has("nodeId")).toBe(false);
+  });
+
+  it("leaves out filters that are empty and stopped when it is off", () => {
+    const url = new URL(
+      logStreamUrl({
+        envId: "e1",
+        source: web,
+        sid: SID,
+        service: { tasks: [], nodes: [], stopped: false },
+      }),
+      "http://x",
+    );
+    expect(url.searchParams.has("task")).toBe(false);
+    expect(url.searchParams.has("node")).toBe(false);
+    expect(url.searchParams.has("stopped")).toBe(false);
+  });
+
+  it("resumes with after and the same filters, and no tail", () => {
+    vi.useFakeTimers();
+    const { source } = openService({ tail: 500, service: { tasks: ["t1"] } });
+    source.sendFrame("ready", { tty: false, tasks: [] });
+    source.sendFrame(
+      "log",
+      {
+        lines: [
+          { t: "2026-10-14T10:00:00.000000000Z", s: "o", m: "x", task: "t1", slot: 1, node: "a" },
+        ],
+      },
+      "2026-10-14T10:00:00.000000000Z",
+    );
+    source.fail();
+    vi.advanceTimersByTime(1000);
+    const next = FakeEventSource.instances.at(-1) as FakeEventSource;
+    const url = new URL(next.url, "http://x");
+    expect(url.searchParams.get("after")).toBe("2026-10-14T10:00:00.000000000Z");
+    expect(url.searchParams.has("tail")).toBe(false);
+    expect(url.searchParams.get("task")).toBe("t1");
+  });
+
+  it("tells onReady the tasks it was given and onTasks each time the list changes", () => {
+    const onReady = vi.fn();
+    const onTasks = vi.fn();
+    const { source } = openService({ onReady, onTasks });
+    const tasks = [{ id: "t1", slot: 1, node: "alpha", state: "running" }];
+    source.sendFrame("ready", { tty: false, tasks });
+    expect(onReady).toHaveBeenCalledWith({ tty: false, tasks });
+    const more = [...tasks, { id: "t2", slot: 2, node: "beta", state: "running" }];
+    source.sendFrame("tasks", { tty: false, tasks: more });
+    expect(onTasks).toHaveBeenCalledWith(more);
+  });
+
+  it("hands on the task, slot and node of every line", () => {
+    const { source, lines } = openService();
+    source.sendFrame("ready", { tty: false, tasks: [] });
+    const line = {
+      t: "2026-10-14T10:00:00.000000000Z",
+      s: "o",
+      m: "x",
+      task: "t1",
+      slot: 2,
+      node: "alpha",
+    };
+    source.sendFrame("log", { lines: [line] }, line.t);
+    expect(lines).toEqual([[line]]);
+  });
+
+  it("keeps two identical lines of different tasks that share a stamp apart at a reopen", () => {
+    vi.useFakeTimers();
+    const { source, lines } = openService();
+    source.sendFrame("ready", { tty: false, tasks: [] });
+    const t = "2026-10-14T10:00:00.000000000Z";
+    const a = { t, s: "o", m: "tick", task: "t1", slot: 1, node: "alpha" };
+    const b = { t, s: "o", m: "tick", task: "t2", slot: 2, node: "beta" };
+    source.sendFrame("log", { lines: [a] }, t);
+    source.fail();
+    vi.advanceTimersByTime(1000);
+    const next = FakeEventSource.instances.at(-1) as FakeEventSource;
+    next.sendFrame("ready", { tty: false, tasks: [] });
+    next.sendFrame("log", { lines: [a, b] }, t);
+    expect(lines.flat()).toEqual([a, b]);
+  });
+
+  it("asks the tasks route why a reopened stream was refused, and ends on a service that is gone", () => {
+    vi.useFakeTimers();
+    const onInterrupted = vi.fn();
+    const probe = vi.fn().mockResolvedValue(404);
+    const { source, states } = openService({ onInterrupted, probe });
+    source.sendFrame("ready", { tty: false, tasks: [] });
+    source.fail(true);
+    return waitUnderFakeClock(() => {
+      expect(probe).toHaveBeenCalled();
+      expect(onInterrupted).toHaveBeenCalled();
+      expect(states.at(-1)).toEqual({ status: "closed", reason: "failed" });
+    });
+  });
+});
+
+// The marker and node events of a service's stream (plan 06-30, D-34, D-37).
+describe("a service's markers and node notices", () => {
+  const web = { kind: "service", id: "web" } as const;
+
+  function openService(extra: Partial<LogStreamOptions> = {}) {
+    const markers: unknown[] = [];
+    const notices: unknown[] = [];
+    const stream = createLogStream({
+      envId: "e1",
+      source: web,
+      sid: SID,
+      onLines: () => {},
+      onState: () => {},
+      onMarker: (m) => markers.push(m),
+      onNode: (n) => notices.push(n),
+      ...extra,
+    } as LogStreamOptions);
+    const source = FakeEventSource.instances.at(-1);
+    if (!source) throw new Error("no source");
+    return { stream, source, markers, notices };
+  }
+
+  it("hands on a marker event", () => {
+    const { source, markers } = openService();
+    source.sendFrame("ready", { tty: false, tasks: [] });
+    const m = {
+      kind: "replaced",
+      slot: 2,
+      old: "t1",
+      oldState: "failed",
+      oldNode: "alpha",
+      exitCode: 1,
+      new: "t2",
+      node: "beta",
+      at: "2026-10-14T10:00:02.000000000Z",
+    };
+    source.sendFrame("marker", m);
+    expect(markers).toEqual([m]);
+  });
+
+  it("hands on a stopped marker that has no new task", () => {
+    const { source, markers } = openService();
+    source.sendFrame("marker", {
+      kind: "stopped",
+      slot: 2,
+      old: "t1",
+      oldState: "rejected",
+      oldNode: "alpha",
+    });
+    expect(markers).toEqual([
+      { kind: "stopped", slot: 2, old: "t1", oldState: "rejected", oldNode: "alpha" },
+    ]);
+  });
+
+  it("hands on a node event", () => {
+    const { source, notices } = openService();
+    source.sendFrame("node", { kind: "down", node: "beta", at: "2026-10-14T10:00:02.000Z" });
+    expect(notices).toEqual([{ kind: "down", node: "beta", at: "2026-10-14T10:00:02.000Z" }]);
+  });
+
+  it("ignores events that are not what the server sends", () => {
+    const { source, markers, notices } = openService();
+    source.sendFrame("marker", { kind: "exploded", slot: 1, old: "t1" });
+    source.sendFrame("marker", { kind: "replaced", slot: "x" });
+    source.sendFrame("marker", "nonsense");
+    source.sendFrame("node", { kind: "sideways", node: "beta" });
+    source.sendFrame("node", { kind: "down" });
+    expect(markers).toEqual([]);
+    expect(notices).toEqual([]);
+  });
+
+  it("says nothing once it is closed", () => {
+    const { stream, source, markers } = openService();
+    stream.close();
+    source.sendFrame("marker", {
+      kind: "stopped",
+      slot: 1,
+      old: "t1",
+      oldState: "failed",
+      oldNode: "a",
+    });
+    expect(markers).toEqual([]);
+  });
+});
+
+// A page of earlier lines of a service's log (plan 06-31, OBS-02, D-35).
+describe("a page of a service's log", () => {
+  function stubPage(body: unknown = { lines: [], startOfLogs: true }) {
+    const fetchMock = vi.fn(async (_req: Request) => Response.json(body));
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+  const requestUrl = (m: ReturnType<typeof stubPage>) =>
+    new URL((m.mock.calls[0] as [Request])[0].url);
+
+  it("asks the service's page route with the viewer, the tail and the filters, and no node", async () => {
+    const m = stubPage();
+    await fetchLogPage({
+      envId: "e 1",
+      source: { kind: "service", id: "web/api" },
+      sid: SID,
+      until: "2026-10-14T10:00:05.000000001Z",
+      tail: 300,
+      service: { tasks: ["t1", "t2"], nodes: ["alpha"], stopped: true },
+    });
+    const url = requestUrl(m);
+    expect(url.pathname).toBe("/api/env/e%201/services/web%2Fapi/logs");
+    expect(url.searchParams.get("sid")).toBe(SID);
+    expect(url.searchParams.get("until")).toBe("2026-10-14T10:00:05.000000001Z");
+    expect(url.searchParams.get("tail")).toBe("300");
+    expect(url.searchParams.get("task")).toBe("t1,t2");
+    expect(url.searchParams.get("node")).toBe("alpha");
+    expect(url.searchParams.get("stopped")).toBe("true");
+    expect(url.searchParams.has("nodeId")).toBe(false);
+  });
+
+  it("leaves out the filters that are not set", async () => {
+    const m = stubPage();
+    await fetchLogPage({
+      envId: "e1",
+      source: { kind: "service", id: "web" },
+      sid: SID,
+      until: "2026-10-14T10:00:05.000000001Z",
+    });
+    const url = requestUrl(m);
+    expect(url.searchParams.get("tail")).toBe("500");
+    expect(["task", "node", "stopped"].some((k) => url.searchParams.has(k))).toBe(false);
+  });
+
+  it("gives back the lines of the page, with the task of each, and whether it is the start", async () => {
+    stubPage({
+      lines: [
+        { t: "2026-10-14T10:00:01.000000000Z", s: "o", m: "hi", task: "t1", slot: 1, node: "a" },
+      ],
+      startOfLogs: true,
+    });
+    const page = await fetchLogPage({
+      envId: "e1",
+      source: { kind: "service", id: "web" },
+      sid: SID,
+      until: "2026-10-14T10:00:05.000000001Z",
+    });
+    expect(page.startOfLogs).toBe(true);
+    expect(page.lines).toEqual([
+      { t: "2026-10-14T10:00:01.000000000Z", s: "o", m: "hi", task: "t1", slot: 1, node: "a" },
+    ]);
+  });
+
+  it("still reads a container's page from the container's route", async () => {
+    const m = stubPage();
+    await fetchLogPage({
+      envId: "e1",
+      containerId: "c1",
+      nodeId: "n1",
+      sid: SID,
+      until: "2026-10-14T10:00:05.000000001Z",
+    });
+    const url = requestUrl(m);
+    expect(url.pathname).toBe("/api/env/e1/containers/c1/logs");
+    expect(url.searchParams.get("nodeId")).toBe("n1");
+  });
+
+  it("throws when the server refuses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({}, { status: 503 })),
+    );
+    await expect(
+      fetchLogPage({
+        envId: "e1",
+        source: { kind: "service", id: "web" },
+        sid: SID,
+        until: "2026-10-14T10:00:05.000000001Z",
+      }),
+    ).rejects.toThrow();
   });
 });

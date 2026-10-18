@@ -18,9 +18,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/moby/moby/api/types/swarm"
+
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/engine"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 func dockerFacts(version string) dockerx.VersionFacts {
@@ -404,9 +407,7 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 			if i%3 == 0 {
 				fake.Reconfigure(dockertest.FakeConfig{APIVersion: "1.45", Version: "26.0.0"})
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			if _, err := c.Probe(ctx); err != nil {
+			if _, err := c.Probe(testsupport.Context(t)); err != nil {
 				errs <- err
 			}
 		})
@@ -458,13 +459,53 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // no force option, so an image a container uses is refused by the engine. ImageUntag (Phase 5, RES-09)
 // removes one name of an image and never sends force. ImageUsers (Phase 5, RES-09) is a read: the names of
 // the containers created from one image.
+// ServiceInspect (Phase 6, RES-02) is a read: one service inspect by ID or name, typed, with the raw
+// document; it asks for no defaults. SwarmNetworkNames (Phase 6, RES-02) is a read: it only lists the
+// swarm networks, to name a service's attachments. ServiceScale (Phase 6, RES-02) changes one service's
+// replica count, once, with the version it just read; it takes an ID, a count and an optional credential, cannot express
+// any other change to the spec, and is never retried.
+// ResolveImage (Phase 6, RES-02) is a read: it asks the engine's registry for the digest a tag points at now, with
+// an optional credential. ServiceForceUpdate (Phase 6, RES-02) bumps ForceUpdate on one service and optionally
+// pins its image, once, with the version it just read; it takes an ID, a version, a pinned reference, platforms and
+// a credential, takes no spec from the caller and cannot express any other change. ServiceRollback (Phase 6,
+// RES-02) rolls one service back to its previous spec, once, with the version it just read.
+// ServiceUpdate (Phase 6, RES-03) sends one full service spec, strictly decoded inside dockerx (unknown fields are
+// refused before any call), with the version the caller read and an optional credential, QueryRegistry off, once; the
+// API judges the spec (host escalation, immutable fields, masked values) before it is called, and it is never retried.
+// Networks (Phase 6, RES-03) is a read: every network of the engine, local ones too, so a service spec that names the host
+// network by ID can be recognised.
+// ServiceCreate (Phase 6, RES-03) creates one service from a strictly decoded spec with QueryRegistry false and an optional
+// credential, once and never retried; the API judges the spec before it is called.
+// ServiceRemove (Phase 6, RES-02) removes one service by ID, once; it takes no options, and the API refuses a
+// service a stack owns and a Bayplan agent service nobody confirmed before it is called.
+// NodeUpdate (Phase 6, RES-05) changes one node's availability, role or labels, once, with the version the
+// caller read: it reads the node, sends its whole spec with only those fields changed and never retries; it
+// takes an ID and a NodeChange and cannot express any other change.
+// NodeRemove (Phase 6, RES-05, D-22) removes one node by ID, once, and never forced: it takes an ID and no
+// options, and the API refuses a node that is not Down or is a manager before it is called.
+// Tasks (Phase 6, RES-04) is a read: swarm tasks by service, node, task ID or desired state, typed; a
+// filter that names none is refused before any call. TaskHistoryLimit (Phase 6, RES-04) is a read: the
+// cluster's task history retention limit, from the engine's info.
+// SecretList and SecretInspect (Phase 6, RES-08) are reads: the swarm's secrets by name, labels and times, never a
+// value, which the manager does not return. SecretCreate (Phase 6, RES-08) sends one secret's name, labels and value
+// once and never retries; it takes no driver and no templating, and the value is not kept anywhere. SecretRemove (Phase 6,
+// RES-08) removes one secret by ID, once; the manager itself refuses a secret a service's spec still references.
+// ConfigList is a read that strips the content the manager sends with every config (Phase 6, RES-08); ConfigInspect
+// is a read that returns one config's content, its templating driver and the raw document. ConfigCreate sends one
+// config's name, labels, content and, optionally, the golang templating driver, once and never retries; ConfigRemove
+// removes one config by ID, once, and the manager itself refuses a config a service's spec still references.
 // ContainerLogs (Phase 4, OBS-01) is a read: one inspect, then the engine's log of the container
 // with stdout, stderr and timestamps always on; it takes only the time range, the tail and follow.
-var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "DistributionInspect", "Events", "ImageDetail", "ImageHistory", "ImagePull", "ImageRemove", "ImageUntag", "ImageUsers", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "Probe", "RestartPolicies", "ServiceRefs", "Snapshot", "StartExec", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers"}
+// ServiceLogs and TaskLogs (Phase 6, OBS-02) are reads of the same kind on a manager: one inspect for the TTY flag,
+// then the engine's log of the service or task with stdout, stderr, timestamps and details always on; they take only
+// follow, since and tail.
+// ContainerStatsOnce (Phase 6, RES-11) is a read: one one-shot stats sample of a container by ID, with stream off and
+// one-shot on; it takes no options and nothing that picks a path.
+var allowedMethods = []string{"Close", "Cluster", "ConfigCreate", "ConfigInspect", "ConfigList", "ConfigRemove", "ContainerAction", "ContainerDetail", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "ContainerStatsOnce", "DistributionInspect", "Events", "ImageDetail", "ImageHistory", "ImagePull", "ImageRemove", "ImageUntag", "ImageUsers", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "Networks", "NodeInspect", "NodeRemove", "NodeUpdate", "Probe", "RestartPolicies", "ResolveImage", "SecretCreate", "SecretInspect", "SecretList", "SecretRemove", "ServiceCreate", "ServiceForceUpdate", "ServiceInspect", "ServiceLogs", "ServiceRefs", "ServiceRemove", "ServiceRollback", "ServiceScale", "ServiceUpdate", "Snapshot", "StartExec", "SwarmNetworkNames", "TaskHistoryLimit", "TaskLogs", "Tasks", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers"}
 
 // typedMethodsWithForbiddenWords are allowed methods whose names contain a word the
 // pattern below refuses, each reviewed one by one.
-var typedMethodsWithForbiddenWords = []string{"StartExec", "ContainerRemove", "NetworkCreate", "NetworkRemove", "VolumeCreate", "VolumeRemove", "ImageRemove"}
+var typedMethodsWithForbiddenWords = []string{"ServiceCreate", "ServiceForceUpdate", "ServiceUpdate", "ServiceRemove", "StartExec", "ContainerRemove", "NetworkCreate", "NetworkRemove", "VolumeCreate", "VolumeRemove", "ImageRemove", "NodeRemove", "NodeUpdate", "SecretCreate", "SecretRemove", "ConfigCreate", "ConfigRemove"}
 
 var forbiddenName = regexp.MustCompile(`Plugin|Swarm(Init|Join|Leave|Unlock)|Create|Remove|Start|Stop|Kill|Exec|Update|Prune|Raw|Do$|Passthrough`)
 
@@ -812,16 +853,23 @@ func TestSnapshotFailsWhenTheEngineIsDown(t *testing.T) {
 // The events stream (plan 21, ENV-07, D-57, A12, Pitfall 7). The fake daemon
 // serves /events over a real socket, so the real client code runs.
 
-// waitFor polls cond until it holds, failing after ten seconds.
-func waitFor(t *testing.T, what string, cond func() bool) {
+// awaitFake blocks until cond holds, woken by every change of the fake daemon (a request
+// served, a stream opened or closed), and fails naming what was awaited. It never polls.
+func awaitFake(t *testing.T, fake *dockertest.Fake, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(2 * time.Millisecond)
+	if err := fake.Await(testsupport.Context(t), cond); err != nil {
+		t.Fatalf("waiting for %s: %v", what, err)
 	}
+}
+
+// listRequested reports whether the fake has received a container list request.
+func listRequested(fake *dockertest.Fake) bool {
+	for _, p := range fake.Requests() {
+		if strings.HasSuffix(p, "/containers/json") {
+			return true
+		}
+	}
+	return false
 }
 
 // recvRow waits for the next row, failing when none comes.
@@ -833,7 +881,7 @@ func recvRow(t *testing.T, rows <-chan dockerx.EventRow) dockerx.EventRow {
 			t.Fatal("the events channel closed while a row was expected")
 		}
 		return r
-	case <-time.After(5 * time.Second):
+	case <-time.After(testsupport.Deadline):
 		t.Fatal("timed out waiting for an event row")
 	}
 	return dockerx.EventRow{}
@@ -873,10 +921,11 @@ func TestEventsKeepsContainerImageNetworkAndVolumeEventsAndDropsExecNoise(t *tes
 	if got[3].Name != "data" {
 		t.Errorf("a volume's name is its actor ID, got %q", got[3].Name)
 	}
-	select {
-	case r := <-rows:
-		t.Errorf("a fifth row arrived: %+v (exec events must be dropped)", r)
-	case <-time.After(150 * time.Millisecond):
+	// Fence: a later event must be the very next row, so nothing (the dropped exec event
+	// included) was delivered between the fourth row and it.
+	fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: "fence"})
+	if r := recvRow(t, rows); r.Action != "start" || r.ActorID != "fence" {
+		t.Errorf("the row after the fourth is %+v, want the fence event (exec events must be dropped)", r)
 	}
 }
 
@@ -902,7 +951,7 @@ func TestEventsDropsAttachDetachResizeAndTopToo(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rows, _ := newClient(t, fake).Events(ctx, time.Time{})
-	waitFor(t, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
+	awaitFake(t, fake, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
 
 	for _, a := range []string{"attach", "detach", "resize", "top", "exec_die", "exec_create: sh"} {
 		fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: a, ActorID: "c1"})
@@ -918,7 +967,7 @@ func TestEventsCopyOnlyTheAllowlistedAttributes(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rows, _ := newClient(t, fake).Events(ctx, time.Time{})
-	waitFor(t, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
+	awaitFake(t, fake, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
 
 	fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "die", ActorID: "c1", Attributes: map[string]string{
 		"name": "web", "image": "nginx:1.27", "exitCode": "137", "signal": "9",
@@ -959,10 +1008,10 @@ func TestEventsDeliverSwarmServiceNodeSecretAndConfigEvents(t *testing.T) {
 			t.Errorf("row %d leaks an attribute outside the allowlist: %v", i, r.Attributes)
 		}
 	}
-	select {
-	case r := <-rows:
-		t.Errorf("a plugin event arrived: %+v", r)
-	case <-time.After(150 * time.Millisecond):
+	// Fence: a later event must be the very next row, so the plugin event was not delivered.
+	fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: "fence"})
+	if r := recvRow(t, rows); r.Action != "start" || r.ActorID != "fence" {
+		t.Errorf("the row after the fourth is %+v, want the fence event (a plugin event must not arrive)", r)
 	}
 }
 
@@ -973,7 +1022,7 @@ func TestEventsTurnAHealthStatusChangeIntoAnInvalidateOnlyRowWithoutAttributes(t
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rows, _ := newClient(t, fake).Events(ctx, time.Time{})
-	waitFor(t, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
+	awaitFake(t, fake, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
 
 	fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "health_status: unhealthy", ActorID: "c1", Attributes: map[string]string{
 		"name": "web", "image": "nginx:1.27", "healthcheck": "curl -u admin:hunter2 localhost", "API_TOKEN": "hunter2",
@@ -1002,7 +1051,7 @@ func TestEventsAskForTheEightTypesAndPassSinceAsSecondsOrSecondsAndNanoseconds(t
 	_, _ = cli.Events(ctx, time.Unix(1700000000, 0))
 	_, _ = cli.Events(ctx, time.Unix(1700000000, 123456789))
 	_, _ = cli.Events(ctx, time.Time{})
-	waitFor(t, "three requests", func() bool { return len(fake.EventQueries()) == 3 })
+	awaitFake(t, fake, "three requests", func() bool { return len(fake.EventQueries()) == 3 })
 
 	qs := fake.EventQueries()
 	sinces := []string{qs[0].Get("since"), qs[1].Get("since"), qs[2].Get("since")}
@@ -1025,7 +1074,7 @@ func TestEventsEndsWithAnErrorWhenTheStreamDrops(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rows, errc := newClient(t, fake).Events(ctx, time.Time{})
-	waitFor(t, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
+	awaitFake(t, fake, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
 
 	fake.DropEventStreams()
 	select {
@@ -1033,7 +1082,7 @@ func TestEventsEndsWithAnErrorWhenTheStreamDrops(t *testing.T) {
 		if ok {
 			t.Fatal("a row arrived on a dropped stream")
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testsupport.Deadline):
 		t.Fatal("the rows channel did not close after the drop")
 	}
 	if err := <-errc; err == nil {
@@ -1045,7 +1094,7 @@ func TestEventsStopsWhenTheContextEnds(t *testing.T) {
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
 	ctx, cancel := context.WithCancel(context.Background())
 	rows, errc := newClient(t, fake).Events(ctx, time.Time{})
-	waitFor(t, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
+	awaitFake(t, fake, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
 
 	cancel()
 	select {
@@ -1053,13 +1102,13 @@ func TestEventsStopsWhenTheContextEnds(t *testing.T) {
 		if ok {
 			t.Fatal("a row arrived after cancel")
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testsupport.Deadline):
 		t.Fatal("the rows channel did not close after the context ended")
 	}
 	if err := <-errc; !errors.Is(err, context.Canceled) {
 		t.Errorf("error = %v, want context.Canceled", err)
 	}
-	waitFor(t, "the daemon to see the stream end", func() bool { return fake.OpenEventStreams() == 0 })
+	awaitFake(t, fake, "the daemon to see the stream end", func() bool { return fake.OpenEventStreams() == 0 })
 }
 
 func TestEventsDoesNotHoldTheClientLockSoProbeStillRuns(t *testing.T) {
@@ -1071,11 +1120,9 @@ func TestEventsDoesNotHoldTheClientLockSoProbeStillRuns(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	_, _ = cli.Events(ctx, time.Time{})
-	waitFor(t, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
+	awaitFake(t, fake, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
 
-	pctx, pcancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer pcancel()
-	if res, err := cli.Probe(pctx); err != nil || !res.Reachable {
+	if res, err := cli.Probe(testsupport.Context(t)); err != nil || !res.Reachable {
 		t.Fatalf("Probe while a stream is open: %+v, %v", res, err)
 	}
 }
@@ -1108,35 +1155,47 @@ func TestEventRowIDIsStableAndTellsEventsApart(t *testing.T) {
 func TestProbeIsNotDelayedByASlowSnapshot(t *testing.T) {
 	// WR-06: a snapshot used to hold the client lock for its whole run, so a
 	// probe that started meanwhile waited for it, timed out and reported a
-	// healthy engine offline.
-	fake := dockertest.NewFake(t, dockertest.FakeConfig{ListDelay: 2 * time.Second})
+	// healthy engine offline. WR-12: proved by ordering, not by elapsed time. The
+	// list is held until the probe has answered, so a Probe that waited for the
+	// snapshot would block until the hold closes and fail at the test deadline.
+	hold := make(chan struct{})
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{ListHold: hold})
 	cli := newClient(t, fake)
 
-	sctx, scancel := context.WithCancel(context.Background())
+	sctx, scancel := context.WithCancel(testsupport.Context(t))
 	defer scancel()
 	done := make(chan error, 1)
 	go func() {
 		_, err := cli.Snapshot(sctx, false)
 		done <- err
 	}()
-	time.Sleep(50 * time.Millisecond)
+	// The snapshot is in flight once the fake has received its list request, which it then
+	// holds.
+	awaitFake(t, fake, "the snapshot's list request to reach the daemon", func() bool { return listRequested(fake) })
 
-	pctx, pcancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer pcancel()
-	start := time.Now()
-	res, err := cli.Probe(pctx)
-	if err != nil || !res.Supported {
-		t.Fatalf("Probe during a slow snapshot: Supported=%v err=%v", res.Supported, err)
+	type probed struct {
+		res dockerx.ProbeResult
+		err error
 	}
-	if d := time.Since(start); d > time.Second {
-		t.Errorf("Probe took %s while a snapshot ran, want well under 1s", d)
+	probeDone := make(chan probed, 1)
+	go func() {
+		res, err := cli.Probe(testsupport.Context(t))
+		probeDone <- probed{res, err}
+	}()
+	p := testsupport.Await(t, "the Probe to answer while the snapshot's list is still held", probeDone)
+	if p.err != nil || !p.res.Supported {
+		t.Fatalf("Probe during a slow snapshot: Supported=%v err=%v", p.res.Supported, p.err)
 	}
+	close(hold)
 	scancel()
-	<-done
+	_ = testsupport.Await(t, "the snapshot to end", done)
 }
 
 func TestASnapshotOnTheOldClientSurvivesARenegotiation(t *testing.T) {
-	fake := dockertest.NewFake(t, dockertest.FakeConfig{ListDelay: 500 * time.Millisecond})
+	// The list is held while Probe swaps in a new client and closes the old one, so the
+	// snapshot is on the old client for exactly as long as the test says.
+	hold := make(chan struct{})
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{ListHold: hold})
 	cli := newClient(t, fake)
 
 	type result struct {
@@ -1145,34 +1204,56 @@ func TestASnapshotOnTheOldClientSurvivesARenegotiation(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		snap, err := cli.Snapshot(context.Background(), false)
+		snap, err := cli.Snapshot(testsupport.Context(t), false)
 		done <- result{snap, err}
 	}()
-	time.Sleep(50 * time.Millisecond)
+	awaitFake(t, fake, "the snapshot's list request to reach the daemon", func() bool { return listRequested(fake) })
 	// Probe swaps in a freshly negotiated client and closes the old one.
-	if _, err := cli.Probe(context.Background()); err != nil {
+	if _, err := cli.Probe(testsupport.Context(t)); err != nil {
 		t.Fatalf("Probe: %v", err)
 	}
-	r := <-done
+	close(hold)
+	r := testsupport.Await(t, "the snapshot that began before the renegotiation", done)
 	if r.err != nil {
 		t.Fatalf("the snapshot that began before the renegotiation failed: %v", r.err)
 	}
 }
 
 func TestAProbeWaitingForAnotherGivesUpWhenItsContextEnds(t *testing.T) {
-	// Probes are serialised, and a queued one must be abandonable.
-	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
+	// Probes are serialised, and a queued one must be abandonable. A first probe is held at
+	// the daemon, so the others queue behind it for as long as the test says; they are
+	// cancelled and must all return while it is still held.
+	hold := make(chan struct{})
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{ProbeHold: hold})
 	cli := newClient(t, fake)
-	var wg sync.WaitGroup
-	for range 4 {
-		wg.Go(func() {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
-			defer cancel()
-			_, _ = cli.Probe(ctx)
-		})
+	first := make(chan error, 1)
+	go func() {
+		_, err := cli.Probe(testsupport.Context(t))
+		first <- err
+	}()
+	awaitFake(t, fake, "the first probe to reach the daemon", func() bool {
+		return slices.ContainsFunc(fake.Requests(), func(p string) bool { return strings.HasSuffix(p, "/_ping") })
+	})
+
+	ctx, cancel := context.WithCancel(testsupport.Context(t))
+	defer cancel()
+	const queued = 3
+	abandoned := make(chan error, queued)
+	for range queued {
+		go func() {
+			_, err := cli.Probe(ctx)
+			abandoned <- err
+		}()
 	}
-	wg.Wait()
-	if res, err := cli.Probe(context.Background()); err != nil || !res.Reachable {
+	cancel()
+	for range queued {
+		_ = testsupport.Await(t, "a probe whose context ended to return while the first is held", abandoned)
+	}
+	close(hold)
+	if err := testsupport.Await(t, "the held probe", first); err != nil {
+		t.Fatalf("the held probe failed: %v", err)
+	}
+	if res, err := cli.Probe(testsupport.Context(t)); err != nil || !res.Reachable {
 		t.Fatalf("Probe after abandoned probes: %+v, %v", res, err)
 	}
 }
@@ -1270,6 +1351,169 @@ func TestClusterReadsNodesServicesAndTheAgentTasksFromAManager(t *testing.T) {
 	}
 	if len(got.AgentTasks) != 2 || tasks["n1"].State != "running" || tasks["n3"].State != "failed" || tasks["n3"].Error != "task: non-zero exit (1)" {
 		t.Errorf("agent tasks = %+v, want n1 running and n3's newest task, failed", got.AgentTasks)
+	}
+}
+
+// failedTaskFixture is a manager whose history holds every kind of task a restart-loop
+// count must tell apart (plan 06-34, RES-13, RESEARCH E11 and E12).
+func failedTaskFixture() dockertest.FakeConfig {
+	cfg := clusterManager()
+	at := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
+	mk := func(id, svc string, slot int, state, desired, errText string, ago time.Duration) swarm.Task {
+		tk := swarm.Task{ID: id, ServiceID: svc, NodeID: "n1", Slot: slot, DesiredState: swarm.TaskState(desired)}
+		tk.CreatedAt = at.Add(-ago - time.Minute)
+		tk.Status = swarm.TaskStatus{Timestamp: at.Add(-ago), State: swarm.TaskState(state), Err: errText}
+		return tk
+	}
+	forced := mk("t-forced", "s2", 1, "shutdown", "shutdown", "", 5*time.Minute)
+	forced.Status.ContainerStatus = &swarm.ContainerStatus{ExitCode: 137}
+	cfg.Tasks = []swarm.Task{
+		mk("t-failed", "s2", 1, "failed", "shutdown", "task: non-zero exit (1)", 3*time.Minute),
+		mk("t-rejected", "s2", 2, "rejected", "shutdown", "No such image: nope:latest", 2*time.Minute),
+		forced,
+		mk("t-complete", "s3", 1, "complete", "shutdown", "", 4*time.Minute),
+		mk("t-job-failed", "s3", 1, "failed", "shutdown", "task: non-zero exit (2)", time.Minute),
+		mk("t-live", "s2", 1, "running", "running", "", time.Minute),
+	}
+	return cfg
+}
+
+func TestClusterReadsTheFailedAndRejectedTasksOfTheShutdownHistoryAndNothingElse(t *testing.T) {
+	cfg := failedTaskFixture()
+	got, err := newClient(t, dockertest.NewFake(t, cfg)).Cluster(context.Background())
+	if err != nil {
+		t.Fatalf("Cluster: %v", err)
+	}
+	var ids []string
+	for _, f := range got.FailedTasks {
+		ids = append(ids, f.ID)
+	}
+	if want := []string{"t-job-failed", "t-rejected", "t-failed"}; !slices.Equal(ids, want) {
+		t.Fatalf("failed tasks are %v, want %v: newest first, no shutdown, complete or running task", ids, want)
+	}
+	at := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
+	want := dockerx.FailedTaskRow{ID: "t-rejected", ServiceID: "s2", NodeID: "n1", Slot: 2, State: "rejected", Err: "No such image: nope:latest", At: at.Add(-2 * time.Minute)}
+	if got.FailedTasks[1] != want || got.FailedTasks[1].At.Location() != time.UTC {
+		t.Errorf("rejected task = %+v, want %+v in UTC", got.FailedTasks[1], want)
+	}
+	if f := got.FailedTasks[2]; f.State != "failed" || f.Err != "task: non-zero exit (1)" || f.Slot != 1 || f.ServiceID != "s2" {
+		t.Errorf("failed task = %+v", f)
+	}
+}
+
+func TestClusterWithNoFailedTasksHasNone(t *testing.T) {
+	got, err := newClient(t, dockertest.NewFake(t, clusterManager())).Cluster(context.Background())
+	if err != nil || len(got.FailedTasks) != 0 {
+		t.Fatalf("failed tasks = %+v, %v; want none", got.FailedTasks, err)
+	}
+}
+
+func TestClusterReportsHowManyTasksPerSlotDockerKeeps(t *testing.T) {
+	cfg := clusterManager()
+	cfg.SwarmClusterID, cfg.HistoryLimit = "cluster-1", 9
+	got, err := newClient(t, dockertest.NewFake(t, cfg)).Cluster(context.Background())
+	if err != nil || got.HistoryLimit != 9 {
+		t.Fatalf("history limit = %d, %v; want 9", got.HistoryLimit, err)
+	}
+	got, err = newClient(t, dockertest.NewFake(t, clusterManager())).Cluster(context.Background())
+	if err != nil || got.HistoryLimit != dockerx.DefaultTaskHistoryLimit {
+		t.Fatalf("history limit = %d, %v; want the default %d", got.HistoryLimit, err, dockerx.DefaultTaskHistoryLimit)
+	}
+}
+
+func TestClusterNodeRowsCarryTheFactsAConstraintReads(t *testing.T) {
+	cfg := dockertest.FakeConfig{
+		SwarmState: "active", SwarmControl: true,
+		NodeRows: []dockertest.FakeNode{
+			{
+				ID: "n1", Hostname: "mgr-a", Role: "manager", Leader: true, OS: "linux", Arch: "aarch64",
+				Address: "10.0.0.5", ManagerAddr: "10.0.0.5:2377", NanoCPUs: 4_000_000_000, MemoryBytes: 8 << 30,
+				Labels: map[string]string{"disk": "ssd"}, EngineLabels: map[string]string{"type": "gpu"},
+			},
+			{ID: "n2", Hostname: "wrk-a", OS: "linux"},
+		},
+		ServiceRows: []dockertest.FakeService{
+			{ID: "s1", Name: "web", Mode: "replicated", Desired: 1, Constraints: []string{"node.role==worker", "node.labels.disk==ssd"}},
+			{ID: "s2", Name: "plain", Mode: "global", Desired: 1},
+		},
+	}
+	got, err := newClient(t, dockertest.NewFake(t, cfg)).Cluster(context.Background())
+	if err != nil {
+		t.Fatalf("Cluster: %v", err)
+	}
+	byHost := map[string]dockerx.NodeRow{}
+	for _, n := range got.Nodes {
+		byHost[n.Hostname] = n
+	}
+	m := byHost["mgr-a"]
+	if m.Address != "10.0.0.5" || m.Arch != "aarch64" || m.NanoCPUs != 4_000_000_000 || m.MemoryBytes != 8<<30 || m.ManagerAddr != "10.0.0.5:2377" {
+		t.Errorf("mgr-a = %+v, want its address, architecture, resources and manager address", m)
+	}
+	if m.Labels["disk"] != "ssd" || m.EngineLabels["type"] != "gpu" {
+		t.Errorf("mgr-a labels = %v, engine labels = %v", m.Labels, m.EngineLabels)
+	}
+	w := byHost["wrk-a"]
+	if w.Labels == nil || w.EngineLabels == nil || len(w.Labels) != 0 || w.ManagerAddr != "" {
+		t.Errorf("wrk-a = %+v, want empty non-nil label maps and no manager address", w)
+	}
+	svc := map[string]dockerx.ServiceRow{}
+	for _, s := range got.Services {
+		svc[s.Name] = s
+	}
+	if want := []string{"node.role==worker", "node.labels.disk==ssd"}; !slices.Equal(svc["web"].Constraints, want) {
+		t.Errorf("web constraints = %v, want %v", svc["web"].Constraints, want)
+	}
+	if svc["plain"].Constraints == nil || len(svc["plain"].Constraints) != 0 {
+		t.Errorf("plain constraints = %#v, want empty and not nil", svc["plain"].Constraints)
+	}
+}
+
+func TestClusterServiceRowsCarryPortsUpdateMessagePreviousSpecAndCreatedAt(t *testing.T) {
+	created := time.Date(2026, 9, 1, 8, 30, 0, 0, time.UTC)
+	cfg := clusterManager()
+	cfg.ServiceRows = []dockertest.FakeService{
+		{
+			ID: "s-web", Name: "web", Mode: "replicated", Running: 2, Desired: 2, UpdateState: "paused",
+			UpdateMessage: "update paused due to failure or early termination of task t1", CreatedAt: created,
+			Labels: map[string]string{"com.docker.stack.namespace": "shop", "team": "web-ops"},
+			Ports: []swarm.PortConfig{
+				{Protocol: "udp", TargetPort: 53, PublishedPort: 5353, PublishMode: "host"},
+				{Protocol: "tcp", TargetPort: 80, PublishedPort: 8080, PublishMode: "ingress"},
+				{Protocol: "tcp", TargetPort: 443, PublishedPort: 8443, PublishMode: "ingress"},
+			},
+			PreviousSpec: &swarm.ServiceSpec{Annotations: swarm.Annotations{Name: "web"}},
+		},
+		{ID: "s-plain", Name: "plain", Mode: "global", Running: 1, Desired: 1},
+	}
+	got, err := newClient(t, dockertest.NewFake(t, cfg)).Cluster(context.Background())
+	if err != nil {
+		t.Fatalf("Cluster: %v", err)
+	}
+	svc := map[string]dockerx.ServiceRow{}
+	for _, s := range got.Services {
+		svc[s.Name] = s
+	}
+	web := svc["web"]
+	want := []dockerx.ServicePort{
+		{Published: 5353, Target: 53, Protocol: "udp", Mode: "host"},
+		{Published: 8080, Target: 80, Protocol: "tcp", Mode: "ingress"},
+		{Published: 8443, Target: 443, Protocol: "tcp", Mode: "ingress"},
+	}
+	if !reflect.DeepEqual(web.Ports, want) {
+		t.Errorf("web ports = %+v, want %+v", web.Ports, want)
+	}
+	if web.UpdateMessage != "update paused due to failure or early termination of task t1" || !web.HasPreviousSpec || !web.CreatedAt.Equal(created) || web.CreatedAt.Location() != time.UTC {
+		t.Errorf("web = %+v, want the update message, a previous spec and the creation time in UTC", web)
+	}
+	if web.Labels["team"] != "web-ops" || web.Labels["com.docker.stack.namespace"] != "shop" {
+		t.Errorf("web labels = %v, want the spec's labels kept for the server-side search", web.Labels)
+	}
+	plain := svc["plain"]
+	if plain.Ports == nil || len(plain.Ports) != 0 {
+		t.Errorf("plain ports = %#v, want an empty, non-nil list", plain.Ports)
+	}
+	if plain.UpdateMessage != "" || plain.HasPreviousSpec {
+		t.Errorf("plain = %+v, want no update message and no previous spec", plain)
 	}
 }
 

@@ -39,6 +39,7 @@ func get(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
 }
 
 func TestVersionIsPublicAndComplete(t *testing.T) {
+	t.Parallel()
 	rec := get(t, newRouter(t).Handler(), "/api/version")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
@@ -58,6 +59,7 @@ func TestVersionIsPublicAndComplete(t *testing.T) {
 }
 
 func TestUnknownAPIPathIsJSONProblem(t *testing.T) {
+	t.Parallel()
 	rec := get(t, newRouter(t).Handler(), "/api/nope")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
@@ -71,6 +73,7 @@ func TestUnknownAPIPathIsJSONProblem(t *testing.T) {
 }
 
 func TestSPAFallback(t *testing.T) {
+	t.Parallel()
 	rec := get(t, newRouter(t).Handler(), "/login")
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `id="root"`) {
 		t.Fatalf("/login = %d %q, want SPA index", rec.Code, rec.Body)
@@ -81,6 +84,7 @@ func TestSPAFallback(t *testing.T) {
 }
 
 func TestNoHumaDefaultRoutes(t *testing.T) {
+	t.Parallel()
 	h := newRouter(t).Handler()
 	for _, p := range []string{"/openapi", "/openapi.json", "/openapi.yaml", "/docs", "/schemas/x"} {
 		if rec := get(t, h, p); rec.Code != http.StatusNotFound {
@@ -90,6 +94,7 @@ func TestNoHumaDefaultRoutes(t *testing.T) {
 }
 
 func TestSecurityHeaders(t *testing.T) {
+	t.Parallel()
 	h := newRouter(t).Handler()
 	for _, p := range []string{"/api/version", "/api/nope", "/login"} {
 		rec := get(t, h, p)
@@ -114,6 +119,7 @@ func TestSecurityHeaders(t *testing.T) {
 }
 
 func TestNonPublicRequirementIsRefusedWithoutASession(t *testing.T) {
+	t.Parallel()
 	r := newRouter(t)
 	httpx.Register(r, huma.Operation{
 		OperationID: "secret", Method: http.MethodGet, Path: "/api/secret",
@@ -136,6 +142,7 @@ func TestNonPublicRequirementIsRefusedWithoutASession(t *testing.T) {
 }
 
 func TestZeroRequirementPanics(t *testing.T) {
+	t.Parallel()
 	r := newRouter(t)
 	defer func() {
 		if recover() == nil {
@@ -156,6 +163,7 @@ func routerWithReady(t *testing.T, ready func(context.Context) error) *httpx.Rou
 }
 
 func TestHealthzIsAlwaysOK(t *testing.T) {
+	t.Parallel()
 	// Even with a failing readiness check, the process is alive.
 	r := routerWithReady(t, func(context.Context) error { return errors.New("db down") })
 	rec := get(t, r.Handler(), "/healthz")
@@ -165,6 +173,7 @@ func TestHealthzIsAlwaysOK(t *testing.T) {
 }
 
 func TestReadyzFollowsTheReadyFunc(t *testing.T) {
+	t.Parallel()
 	r := routerWithReady(t, func(context.Context) error { return nil })
 	rec := get(t, r.Handler(), "/readyz")
 	if rec.Code != http.StatusOK || rec.Body.String() != "ready" {
@@ -186,6 +195,7 @@ func TestReadyzFollowsTheReadyFunc(t *testing.T) {
 }
 
 func TestProbeBodiesCarryNoVersionDetails(t *testing.T) {
+	t.Parallel()
 	h := routerWithReady(t, nil).Handler()
 	for _, p := range []string{"/healthz", "/readyz"} {
 		rec := get(t, h, p)
@@ -202,6 +212,7 @@ func TestProbeBodiesCarryNoVersionDetails(t *testing.T) {
 }
 
 func TestHealthRoutesAreRegisteredAsExempt(t *testing.T) {
+	t.Parallel()
 	var exempt []string
 	for _, rt := range newRouter(t).Routes() {
 		if rt.Exempt {
@@ -214,6 +225,7 @@ func TestHealthRoutesAreRegisteredAsExempt(t *testing.T) {
 }
 
 func TestHealthRoutesAreNotInTheOpenAPIContract(t *testing.T) {
+	t.Parallel()
 	doc, err := json.Marshal(newRouter(t).API().OpenAPI())
 	if err != nil {
 		t.Fatal(err)

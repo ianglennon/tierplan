@@ -11,6 +11,7 @@ This page is generated from the permission registry in `internal/rbac/permission
 - **Roles are per environment.** Viewer, Operator and Admin apply inside one environment, or inside every environment when the assignment is made for all environments. A higher role holds everything a lower one does.
 - **Grants are a union (D-06).** A user's access to an environment is the union of the grants made to them, to the teams they belong to, and to all environments. The highest role wins, the extras of every grant add up, and there are no deny rules. The user's page shows where each environment's access comes from.
 - **Extras are held by Operators only when granted (D-16, D-17).** The dangerous permissions marked `extra` below belong to an Admin always, to an Operator only when the assignment carries them, and to a Viewer never.
+- **Changing a service exposes what it holds (D-13 amended).** `services.control` lets an Operator change what a service runs, so they can read the values withheld from them on the services they edit (environment values, command line, health check and log options) and the secrets those services already use, even without `secrets.reveal`. Adding a secret a service does not already use, or rolling back to a version that uses one, needs `secrets.reveal`. See residual risk 36 in docs/threat-model.md.
 - **The instance admin is a flag on a user, not a role (D-01, D-03).** An instance admin holds Admin on every environment with every extra, and is the only holder of the global permissions. Environment roles never grant a global permission.
 - **Delegation is capped (D-12).** An environment Admin can assign Admin, Operator or Viewer, and the extras, on the environments they administer. They cannot grant all-environments scope or instance admin.
 
@@ -22,6 +23,8 @@ This page is generated from the permission registry in `internal/rbac/permission
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `audit.read` | global | no | no | no | yes | no | Read the audit log |
 | `backup.manage` | global | no | no | no | yes | yes | Back up and restore Bayplan |
+| `configs.manage` | environment | no | no | yes | yes | no | Create, rotate and delete swarm configs |
+| `configs.read` | environment | yes | yes | yes | yes | no | View swarm configs and their content |
 | `containers.control` | environment | no | yes | yes | yes | no | Start, stop, restart, kill, pause and unpause containers |
 | `containers.exec` | environment | no | extra | yes | yes | yes | Open a shell in a container |
 | `containers.read` | environment | yes | yes | yes | yes | no | View containers |
@@ -42,9 +45,16 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `networks.connect` | environment | no | yes | yes | yes | no | Connect and disconnect containers and networks |
 | `networks.manage` | environment | no | no | yes | yes | no | Create and delete networks |
 | `networks.read` | environment | yes | yes | yes | yes | no | View networks |
+| `nodes.manage` | environment | no | no | yes | yes | no | Drain, pause, activate, promote, demote, label and remove nodes |
+| `nodes.read` | environment | yes | yes | yes | yes | no | View swarm nodes |
 | `registries.instance` | global | no | no | no | yes | yes | Manage registry credentials that apply to every environment |
 | `registries.manage` | environment | no | no | yes | yes | no | Manage this environment's registry credentials |
+| `secrets.manage` | environment | no | no | yes | yes | no | Create, rotate and delete swarm secrets |
+| `secrets.read` | environment | yes | yes | yes | yes | no | View swarm secrets' names, labels and users, never their values |
 | `secrets.reveal` | environment | no | extra | yes | yes | yes | Reveal secret values |
+| `services.control` | environment | no | yes | yes | yes | no | Scale, force update, roll back and change the settings of services, and mute their restart-loop alerts |
+| `services.manage` | environment | no | no | yes | yes | no | Create and remove services |
+| `services.read` | environment | yes | yes | yes | yes | no | View services, their tasks, logs, stats and placement |
 | `settings.read` | global | no | no | no | yes | no | View settings |
 | `settings.write` | global | no | no | no | yes | no | Change settings |
 | `shells.manage` | environment | no | no | yes | yes | no | See and end other people's shells |

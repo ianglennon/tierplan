@@ -63,6 +63,11 @@ var Tables = map[string]Class{
 	// registered in vault.SealedColumns, so RewrapAll moves it with the rest.
 	"registry_credentials": Included,
 
+	// Restart-loop mutes (Phase 6): which flagged services and containers a user chose to stop
+	// being told about. They belong to their environment and hold no secret; the thresholds are
+	// columns of environments and travel with it.
+	"restart_loop_mutes": Included,
+
 	// Credentials and state that must not travel: a restored instance starts with
 	// no sessions, no outstanding invite or reset links, no agent join tokens and
 	// an empty run history.

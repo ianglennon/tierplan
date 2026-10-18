@@ -19,6 +19,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -72,7 +73,7 @@ func (f *envFix) act(t *testing.T, e envBody, body string) *envRec {
 	t.Helper()
 	// A write goes only to a node the monitor has seen online, so wait for its
 	// first probe: without it a fast run reads the node as offline.
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	return f.req(t, http.MethodPost, "/api/env/"+e.ID+"/containers/actions", body)
 }
 
@@ -108,6 +109,7 @@ func (f *envFix) actionAudits(t *testing.T) []auditRowFull {
 }
 
 func TestContainerActionStopRoutesByNodeIDAuditsOnceAndTheListRefreshes(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, actionEngine())
 
 	// The list rows carry the node ID the write is routed by.
@@ -156,6 +158,7 @@ func TestContainerActionStopRoutesByNodeIDAuditsOnceAndTheListRefreshes(t *testi
 }
 
 func TestContainerActionStartAnExitedContainerNeedsNoConfirmationAndIsAudited(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, actionEngine())
 	rec := f.act(t, e, actionJSON("start", [2]string{e.ID, "db"}))
 	if rec.code != http.StatusOK {
@@ -174,6 +177,7 @@ func TestContainerActionStartAnExitedContainerNeedsNoConfirmationAndIsAudited(t 
 }
 
 func TestContainerActionAnUnknownNodeIsNodeUnreachableAndNothingIsSent(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, actionEngine())
 	// "node-1" is the display name of the host: a name never routes a write.
 	for _, node := range []string{"nope", "node-1"} {
@@ -196,6 +200,7 @@ func TestContainerActionAnUnknownNodeIsNodeUnreachableAndNothingIsSent(t *testin
 }
 
 func TestContainerActionBayplansOwnContainersAreSkippedInABulkFromAFreshInspect(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, actionEngine())
 	// The server's own container, named by a short prefix of its ID, and an agent
 	// container, found by its label: neither the list nor the client is trusted.
@@ -217,6 +222,7 @@ func TestContainerActionBayplansOwnContainersAreSkippedInABulkFromAFreshInspect(
 }
 
 func TestContainerActionAnUnknownContainerIsNotFound(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, actionEngine())
 	rec := f.act(t, e, actionJSON("stop", [2]string{e.ID, "ghost"}))
 	if rec.code != http.StatusOK {
@@ -231,6 +237,7 @@ func TestContainerActionAnUnknownContainerIsNotFound(t *testing.T) {
 }
 
 func TestContainerActionEachTargetIsAnsweredInOrderAndOneFailureDoesNotStopTheRest(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, actionEngine())
 	rec := f.act(t, e, actionJSON("stop", [2]string{e.ID, "ghost"}, [2]string{e.ID, webID}, [2]string{e.ID, "bayplan-agent"}))
 	got := decode[actionBody](t, rec).Results
@@ -252,6 +259,7 @@ func TestContainerActionEachTargetIsAnsweredInOrderAndOneFailureDoesNotStopTheRe
 }
 
 func TestContainerActionTheSchemaRefusesBadBodies(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, actionEngine())
 	many := make([][2]string, 26)
 	for i := range many {
@@ -279,6 +287,7 @@ func TestContainerActionTheSchemaRefusesBadBodies(t *testing.T) {
 }
 
 func TestContainerActionAViewerIsRefusedAndAnOperatorIsNot(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, actionEngine())
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
@@ -315,6 +324,7 @@ func TestContainerActionAViewerIsRefusedAndAnOperatorIsNot(t *testing.T) {
 }
 
 func TestContainerActionAnUnknownEnvironmentIs404(t *testing.T) {
+	t.Parallel()
 	f, _ := dashEnv(t, actionEngine())
 	rec := f.req(t, http.MethodPost, "/api/env/nope/containers/actions", actionJSON("stop", [2]string{"x", "web"}))
 	if rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
@@ -332,6 +342,7 @@ func (f *agentFix) actOn(t *testing.T, envID, body string) *envRec {
 }
 
 func TestContainerActionOnAReadOnlyHostIsHostReadOnlyAuditedAndNothingIsSent(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Locked")
 	a := f.connect(t, env, actionEngine(), &wire.Facts{
@@ -358,6 +369,7 @@ func TestContainerActionOnAReadOnlyHostIsHostReadOnlyAuditedAndNothingIsSent(t *
 }
 
 func TestContainerActionAnAgentThatRefusesByPolicyIsAgentPolicyDenied(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Old agent")
 	cfg := actionEngine()
@@ -399,6 +411,7 @@ func bulkEngine() dockertest.FakeConfig {
 }
 
 func TestBulkStopAnswersInRequestOrderAndEveryAuditRowSharesTheServersBulkID(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, bulkEngine())
 	rec := f.act(t, e, actionJSON("stop", [2]string{e.ID, webID}, [2]string{e.ID, cacheID}, [2]string{e.ID, "ghost"}))
 	if rec.code != http.StatusOK {
@@ -433,6 +446,7 @@ func TestBulkStopAnswersInRequestOrderAndEveryAuditRowSharesTheServersBulkID(t *
 }
 
 func TestBulkIDSentByTheClientIsUsedVerbatimAndANonUUIDIsRefused(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, bulkEngine())
 	const sent = "0190a0a0-1b2c-7d3e-8f40-5a6b7c8d9e0f"
 	body := strings.Replace(actionJSON("stop", [2]string{e.ID, webID}, [2]string{e.ID, cacheID}), `{"action"`, `{"bulkId":"`+sent+`","action"`, 1)
@@ -460,6 +474,7 @@ func TestBulkIDSentByTheClientIsUsedVerbatimAndANonUUIDIsRefused(t *testing.T) {
 }
 
 func TestBulkOfNoTargetsOrMoreThan25IsRefusedBeforeAnyDockerCall(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, bulkEngine())
 	many := make([][2]string, 26)
 	for i := range many {
@@ -482,6 +497,7 @@ func TestBulkOfNoTargetsOrMoreThan25IsRefusedBeforeAnyDockerCall(t *testing.T) {
 }
 
 func TestBulkRunsAtMostFourCallsAtOnceOnOneNode(t *testing.T) {
+	t.Parallel()
 	cfg := dockertest.FakeConfig{Hostname: "node-1", Version: "29.1.0", WriteDelay: 150 * time.Millisecond}
 	var targets [][2]string
 	for i := range 12 {
@@ -511,6 +527,7 @@ func TestBulkRunsAtMostFourCallsAtOnceOnOneNode(t *testing.T) {
 }
 
 func TestBulkATargetOnANodeThatIsNotConnectedIsNodeUnreachableAndTheOthersStillRun(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, bulkEngine())
 	rec := f.act(t, e, actionJSON("stop", [2]string{"elsewhere", webID}, [2]string{e.ID, cacheID}))
 	if rec.code != http.StatusOK {
@@ -530,7 +547,7 @@ func TestBulkATargetOnANodeThatIsNotConnectedIsNodeUnreachableAndTheOthersStillR
 
 func (f *envFix) remove(t *testing.T, e envBody, body string) *envRec {
 	t.Helper()
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	return f.req(t, http.MethodPost, "/api/env/"+e.ID+"/containers/remove", body)
 }
 
@@ -555,6 +572,7 @@ func withOptions(body string, timeout int, signal string) string {
 }
 
 func TestContainerActionRestartKillPauseAndUnpauseReachTheEngineAsTheirOwnCalls(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		verb, container, id, want string
 		wantAudit                 string
@@ -585,6 +603,7 @@ func TestContainerActionRestartKillPauseAndUnpauseReachTheEngineAsTheirOwnCalls(
 }
 
 func TestContainerActionAStopOrKillWithOptionsSendsThemAndWithoutSendsNeither(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, body, want string
 	}{
@@ -609,6 +628,7 @@ func TestContainerActionAStopOrKillWithOptionsSendsThemAndWithoutSendsNeither(t 
 }
 
 func TestContainerActionOptionsWithMoreThanOneTargetAreRefusedAsSingleOnly(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, actionEngine())
 	two := actionJSON("stop", [2]string{e.ID, "web"}, [2]string{e.ID, "db"})
 	for name, body := range map[string]string{
@@ -629,6 +649,7 @@ func TestContainerActionOptionsWithMoreThanOneTargetAreRefusedAsSingleOnly(t *te
 }
 
 func TestContainerActionOptionsAreRecordedInTheAuditRowOfTheVerbsThatUseThem(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, actionEngine())
 	if rec := f.act(t, e, withOptions(actionJSON("stop", [2]string{e.ID, "web"}), 7, "SIGQUIT")); rec.code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.code, rec.body)
@@ -640,6 +661,7 @@ func TestContainerActionOptionsAreRecordedInTheAuditRowOfTheVerbsThatUseThem(t *
 }
 
 func TestContainerActionRepeatingAnActionIsAnsweredDoneAndARemovedContainerIsNotFound(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, actionEngine())
 	// Start of a running container and stop of a stopped one are Docker's 304.
 	for _, tc := range []struct{ action, id string }{{"start", "web"}, {"stop", "db"}} {
@@ -661,6 +683,7 @@ func TestContainerActionRepeatingAnActionIsAnsweredDoneAndARemovedContainerIsNot
 }
 
 func TestContainerRemoveSendsNeitherForceNorVolumesByDefaultAndEachWhenAsked(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name          string
 		force, volume bool
@@ -692,6 +715,7 @@ func TestContainerRemoveSendsNeitherForceNorVolumesByDefaultAndEachWhenAsked(t *
 }
 
 func TestContainerRemoveOfARunningContainerWithoutForceIsContainerRunningAndSendsNothing(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, actionEngine())
 	rec := f.remove(t, e, removeJSON(false, false, [2]string{e.ID, "web"}, [2]string{e.ID, "db"}))
 	if rec.code != http.StatusOK {
@@ -711,6 +735,7 @@ func TestContainerRemoveOfARunningContainerWithoutForceIsContainerRunningAndSend
 }
 
 func TestContainerRemoveAskingForVolumesNeedsTheDeleteVolumesExtra(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, actionEngine())
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
@@ -722,7 +747,7 @@ func TestContainerRemoveAskingForVolumesNeedsTheDeleteVolumesExtra(t *testing.T)
 		t.Fatal(err)
 	}
 	path := "/api/env/" + e.ID + "/containers/remove"
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	as := func(user, body string) *httptest.ResponseRecorder {
 		cookie, csrf := f.signIn(t, user, false)
 		return f.call(t, authReq{method: http.MethodPost, path: path, body: body, cookie: cookie, csrf: csrf})
@@ -776,6 +801,7 @@ func TestContainerRemoveAskingForVolumesNeedsTheDeleteVolumesExtra(t *testing.T)
 }
 
 func TestContainerActionsOnTwoNodesWithSameNamedContainersActOnExactlyTheNodeNamed(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Swarm")
 	const alphaWeb = "1111111111111111111111111111111111111111111111111111111111111111"
@@ -825,6 +851,7 @@ func withConfirm(body, confirm string) string {
 }
 
 func TestOwnContainerSingleTargetNeedsItsNameTypedAndNothingIsSentWithout(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ name, ref, container string }{
 		{"the server", selfID, "bayplan"},
 		{"an agent", "bayplan-agent", "bayplan-agent"},
@@ -860,6 +887,7 @@ func TestOwnContainerSingleTargetNeedsItsNameTypedAndNothingIsSentWithout(t *tes
 }
 
 func TestOwnContainerEveryDisruptiveVerbNeedsTheNameAndStartAndUnpauseDoNot(t *testing.T) {
+	t.Parallel()
 	for _, verb := range []string{"stop", "kill", "restart", "pause"} {
 		f, e := dashEnv(t, actionEngine())
 		rec := f.act(t, e, actionJSON(verb, [2]string{e.ID, "bayplan-agent"}))
@@ -895,6 +923,7 @@ func TestOwnContainerEveryDisruptiveVerbNeedsTheNameAndStartAndUnpauseDoNot(t *t
 }
 
 func TestOwnContainerInAMultiTargetRequestIsSkippedNeverActedOnAndTheOthersRun(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, actionEngine())
 	for _, tc := range []struct {
 		name string
@@ -941,6 +970,7 @@ func TestOwnContainerInAMultiTargetRequestIsSkippedNeverActedOnAndTheOthersRun(t
 }
 
 func TestOwnContainerAnAttemptIsRecordedAsInitiatedBeforeTheCallAndCompletedAfter(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, actionEngine())
 	rec := f.act(t, e, withConfirm(actionJSON("restart", [2]string{e.ID, "bayplan-agent"}), "bayplan-agent"))
 	if rec.code != http.StatusOK {
@@ -965,6 +995,7 @@ func TestOwnContainerAnAttemptIsRecordedAsInitiatedBeforeTheCallAndCompletedAfte
 }
 
 func TestOwnContainerADroppedConnectionIsRecordedAsConnectionLostWithResultSuccess(t *testing.T) {
+	t.Parallel()
 	cfg := actionEngine()
 	cfg.DropWrites = true
 	f, e := dashEnv(t, cfg)
@@ -992,6 +1023,7 @@ func TestOwnContainerADroppedConnectionIsRecordedAsConnectionLostWithResultSucce
 }
 
 func TestOwnContainerADroppedAgentConnectionIsRecordedAsConnectionLost(t *testing.T) {
+	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Remote")
 	cfg := actionEngine()
@@ -1086,7 +1118,7 @@ func detailEngine() dockertest.FakeConfig {
 
 func (f *envFix) detail(t *testing.T, cookie string, e envBody, id, query string) *envRec {
 	t.Helper()
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + e.ID + "/containers/" + id + query, cookie: cookie})
 	ptyp := ""
 	if rec.Code >= 400 {
@@ -1096,6 +1128,7 @@ func (f *envFix) detail(t *testing.T, cookie string, e envBody, id, query string
 }
 
 func TestContainerDetailOfAViewerNamesTheVariablesAndWithholdsEveryValue(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, detailEngine())
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
@@ -1145,6 +1178,7 @@ func TestContainerDetailOfAViewerNamesTheVariablesAndWithholdsEveryValue(t *test
 }
 
 func TestContainerDetailOfAnAdminCarriesTheValues(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, detailEngine())
 	rec := f.detail(t, f.cookie, e, webID, "?nodeId="+e.ID)
 	if rec.code != http.StatusOK {
@@ -1163,6 +1197,7 @@ func TestContainerDetailOfAnAdminCarriesTheValues(t *testing.T) {
 }
 
 func TestContainerDetailOfAnOperatorShowsValuesOnlyWithTheRevealExtra(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, detailEngine())
 	f.addUser(t, "plain", false)
 	f.addEnvRole(t, "plain", e.ID, "operator")
@@ -1184,6 +1219,7 @@ func TestContainerDetailOfAnOperatorShowsValuesOnlyWithTheRevealExtra(t *testing
 }
 
 func TestContainerDetailAnUnknownContainerIs404AndWithoutAGrantTheEnvironmentIsNotFound(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, detailEngine())
 	rec := f.detail(t, f.cookie, e, "ghost", "?nodeId="+e.ID)
 	if rec.code != http.StatusNotFound || rec.ptyp != "container_not_found" {
@@ -1201,6 +1237,7 @@ func TestContainerDetailAnUnknownContainerIs404AndWithoutAGrantTheEnvironmentIsN
 }
 
 func TestContainerDetailNodeIDMayBeLeftOutOnOneNodeAndAnUnknownNodeIs503(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, detailEngine())
 	rec := f.detail(t, f.cookie, e, "web", "")
 	if rec.code != http.StatusOK || decode[detailBody](t, rec).NodeID != e.ID {
@@ -1213,6 +1250,7 @@ func TestContainerDetailNodeIDMayBeLeftOutOnOneNodeAndAnUnknownNodeIs503(t *test
 }
 
 func TestContainerDetailOnASwarmWithoutANodeIDIs422NodeRequired(t *testing.T) {
+	t.Parallel()
 	cfg := detailEngine()
 	cfg.SwarmState, cfg.SwarmControl, cfg.SwarmClusterID, cfg.SwarmNodeID = "active", true, "cluster-1", "node-a"
 	f, e := dashEnv(t, cfg)
@@ -1226,6 +1264,7 @@ func TestContainerDetailOnASwarmWithoutANodeIDIs422NodeRequired(t *testing.T) {
 }
 
 func TestContainerDetailMarksBayplansOwnContainers(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, detailEngine())
 	own := decode[detailBody](t, f.detail(t, f.cookie, e, selfCtr, "?nodeId="+e.ID))
 	if !own.IsSelf || own.SelfKind != "server" {
@@ -1259,6 +1298,7 @@ type inspectBody struct {
 }
 
 func TestContainerInspectOfAViewerMasksEveryVariableValue(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, detailEngine())
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
@@ -1281,6 +1321,7 @@ func TestContainerInspectOfAViewerMasksEveryVariableValue(t *testing.T) {
 }
 
 func TestContainerInspectOfAnAdminCarriesTheFullDocument(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, detailEngine())
 	rec := f.detail(t, f.cookie, e, "web/inspect", "?nodeId="+e.ID)
 	if rec.code != http.StatusOK {
@@ -1296,6 +1337,7 @@ func TestContainerInspectOfAnAdminCarriesTheFullDocument(t *testing.T) {
 }
 
 func TestContainerInspectSharesTheDetailRoutesNodeRulesAndProblems(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, detailEngine())
 	rec := f.detail(t, f.cookie, e, "ghost/inspect", "?nodeId="+e.ID)
 	if rec.code != http.StatusNotFound || rec.ptyp != "container_not_found" {
@@ -1317,6 +1359,7 @@ func TestContainerInspectSharesTheDetailRoutesNodeRulesAndProblems(t *testing.T)
 }
 
 func TestContainerInspectShowsThePlaceholderForALogDriverTokenToAViewerAndTheTokenToAnAdmin(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, detailEngine())
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
@@ -1346,21 +1389,27 @@ func TestContainerInspectShowsThePlaceholderForALogDriverTokenToAViewerAndTheTok
 // the host's network changes). The engine finishes it either way, so the result and the
 // audit row say it was done, not "context canceled".
 func TestContainerActionAStopIsSeenThroughWhenTheRequestEndsWhileItRuns(t *testing.T) {
+	t.Parallel()
 	cfg := actionEngine()
 	cfg.WriteDelay = 300 * time.Millisecond
 	f, e := dashEnv(t, cfg)
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	// The fake wakes the wait as the stop is recorded, before its write delay starts. The
+	// goroutine reports through a channel because only the test goroutine may fail the test.
+	awaited := make(chan error, 1)
 	go func() {
-		for len(f.fake.Writes()) == 0 {
-			time.Sleep(5 * time.Millisecond)
-		}
+		err := f.fake.Await(testsupport.Context(t), func() bool { return len(f.fake.Writes()) > 0 })
 		cancel() // the stop has reached the engine; the browser goes away
+		awaited <- err
 	}()
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/containers/actions",
 		body: actionJSON("stop", [2]string{e.ID, webID}), cookie: f.cookie, csrf: f.csrf, ctx: ctx})
 	cancel()
+	if err := <-awaited; err != nil {
+		t.Fatalf("waiting for the stop to reach the engine: %v", err)
+	}
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s\n%s", rec.Code, rec.Body, f.logs)
 	}
@@ -1377,6 +1426,7 @@ func TestContainerActionAStopIsSeenThroughWhenTheRequestEndsWhileItRuns(t *testi
 // An engine's refusal reaches the caller as action_failed with the engine's message, and
 // the server log records it whole: the audit row keeps only the code.
 func TestContainerActionAnEngineRefusalIsActionFailedWithItsMessageAndIsLogged(t *testing.T) {
+	t.Parallel()
 	cfg := actionEngine()
 	cfg.WriteError = "cannot stop container: web: tried to kill container, but did not receive an exit event"
 	f, e := dashEnv(t, cfg)
@@ -1395,5 +1445,74 @@ func TestContainerActionAnEngineRefusalIsActionFailedWithItsMessageAndIsLogged(t
 	}
 	if rows := f.actionAudits(t); len(rows) != 1 || rows[0].Result != "failure" || rows[0].Reason != "action_failed" {
 		t.Fatalf("audit rows = %+v", rows)
+	}
+}
+
+// Restart loops of standalone containers on the list and the detail (plan 06-36, RES-13,
+// D-15). The fixture is restartloop_test.go's containerLoopEnv.
+
+func TestContainersListFlagsAContainerInARestartLoopAndNoOtherNeverATaskContainer(t *testing.T) {
+	t.Parallel()
+	f, e := containerLoopEnv(t)
+	rec := f.get(t, e, "containers")
+	if rec.code != http.StatusOK {
+		t.Fatalf("list = %d %s", rec.code, rec.body)
+	}
+	var raw struct {
+		Items []map[string]json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(rec.body, &raw); err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]*containerLoopBody{}
+	for _, it := range raw.Items {
+		var name string
+		if err := json.Unmarshal(it["name"], &name); err != nil {
+			t.Fatal(err)
+		}
+		loop, present := it["restartLoop"]
+		if present != (name == "crashy") {
+			t.Errorf("row %s has restartLoop present = %v, want it only on crashy", name, present)
+		}
+		if present {
+			var b containerLoopBody
+			if err := json.Unmarshal(loop, &b); err != nil {
+				t.Fatal(err)
+			}
+			byName[name] = &b
+		}
+	}
+	if got := byName["crashy"]; got == nil || got.State != "flagged" || got.Count != 3 || got.WindowMinutes != 10 || got.LastExitCode != "3" {
+		t.Fatalf("crashy restartLoop = %+v, want flagged, 3 deaths in 10 minutes, last exit code 3", got)
+	}
+}
+
+func TestContainerDetailCarriesTheRestartLoopAndWhetherItsAlertsAreMuted(t *testing.T) {
+	t.Parallel()
+	f, e := containerLoopEnv(t)
+	_, detail, muted := loopOfContainer(t, f, e, "crashy")
+	if muted || detail == nil || detail.State != "flagged" || detail.Count != 3 || detail.LastExitCode != "3" || detail.WindowMinutes != 10 {
+		t.Fatalf("crashy detail = muted %v, loop %+v, want flagged with 3 deaths and exit code 3", muted, detail)
+	}
+	for _, name := range []string{"calm", "web.1.abcdef"} {
+		if _, d, m := loopOfContainer(t, f, e, name); d != nil || m {
+			t.Errorf("%s detail = muted %v, loop %+v, want neither: calm exited cleanly, and a task container's service has the loop", name, m, d)
+		}
+	}
+}
+
+func TestContainerDetailOfAMutedContainerThatIsNotLoopingSaysMutedWithNoLoop(t *testing.T) {
+	t.Parallel()
+	f, e := containerLoopEnv(t)
+	op := loopAs(t, f, e, "loop-operator", "operator")
+	if rec := op(http.MethodPut, containerMutePath(e, "calm"), ""); rec.code != http.StatusOK {
+		t.Fatalf("mute = %d %s", rec.code, rec.body)
+	}
+	list, detail, muted := loopOfContainer(t, f, e, "calm")
+	if !muted || detail != nil {
+		t.Errorf("calm detail = muted %v, loop %+v, want muted with no loop", muted, detail)
+	}
+	if list != nil {
+		t.Errorf("calm in the list = %+v, want no loop: a list shows the badge only while the loop holds", list)
 	}
 }

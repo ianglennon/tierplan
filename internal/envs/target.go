@@ -147,3 +147,35 @@ func nodeTarget(in RollupInput, nodeID string) (key string, readOnly, ok bool) {
 	}
 	return "", false, false
 }
+
+// SwarmNodeTargets maps each swarm node of the environment that Bayplan can reach now to
+// the node ID that the container routes take (the ID OnNode and WriteOnNode are given).
+// The key is the swarm node ID, as a task or a node row carries it, so a task can be
+// followed to its node's engine.
+//
+// A node is in the map when an agent that runs on it is connected and not revoked: the
+// value is that agent's ID. The local socket's own swarm node is the environment's ID,
+// and the host folded into a swarm environment is socket:<envId>, which is the ID of its
+// view. A node nothing reaches (down, disconnected, revoked, with no agent, or unknown) is
+// not in the map; that is how a caller tells that a node cannot be opened. A standalone
+// host has no swarm node IDs and the map is empty.
+func (a *Aggregator) SwarmNodeTargets(ctx context.Context, envID string) (map[string]NodeRef, error) {
+	in, err := a.svc.Input(ctx, envID, a.now())
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]NodeRef{}
+	if in.Kind == KindLocal {
+		if id := in.Local.Probe.SwarmNodeID; id != "" && in.Local.State == StateOnline {
+			out[id] = nodeOf(in, in.EnvID, in.Local)
+		}
+		return out, nil
+	}
+	for _, ag := range in.Agents {
+		if ag.SwarmNodeID == "" || !ag.Connected || ag.Revoked {
+			continue
+		}
+		out[ag.SwarmNodeID] = NodeRef{ID: ag.ID, Name: nodeName(ag), Role: ag.Role, Arch: dockerx.OCIArch(ag.Target.Probe.Arch), ReadOnly: ag.ReadOnly}
+	}
+	return out, nil
+}

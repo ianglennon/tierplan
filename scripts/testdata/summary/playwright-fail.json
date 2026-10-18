@@ -1,0 +1,249 @@
+{
+  "config": {
+    "rootDir": "/work/e2e",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "zzfixture",
+        "name": "zzfixture",
+        "testDir": "/work/e2e/tests",
+        "testIgnore": [],
+        "testMatch": [
+          "zz-fixture.spec.ts"
+        ],
+        "timeout": 30000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "json",
+        {
+          "outputFile": "out.json"
+        }
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.63.0",
+    "workers": 2,
+    "webServer": null
+  },
+  "suites": [
+    {
+      "title": "zz-fixture.spec.ts",
+      "file": "zz-fixture.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "fails at top level",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "zzfixture",
+              "projectName": "zzfixture",
+              "results": [
+                {
+                  "workerIndex": 1,
+                  "parallelIndex": 0,
+                  "status": "failed",
+                  "duration": 4,
+                  "error": {
+                    "message": "Error: boom\nsecond line",
+                    "location": {
+                      "file": "/work/e2e/tests/zz-fixture.spec.ts",
+                      "column": 9,
+                      "line": 13
+                    }
+                  },
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "/work/e2e/tests/zz-fixture.spec.ts",
+                        "column": 9,
+                        "line": 13
+                      },
+                      "message": "Error: boom\nsecond line\n\n  11 |\n  12 | test(\"fails at top level\", () => {\n> 13 |   throw new Error(\"boom\\nsecond line\");\n     |         ^\n  14 | });\n  15 |\n  16 | test(\"times out waiting\", async () => {\n    at /work/e2e/tests/zz-fixture.spec.ts:13:9"
+                    }
+                  ],
+                  "retry": 0,
+                  "startTime": "2026-10-16T22:50:03.107Z",
+                  "annotations": []
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "e79b90377be0d9062294-accb992af56e0c6e9c42",
+          "file": "zz-fixture.spec.ts",
+          "line": 12,
+          "column": 1
+        },
+        {
+          "title": "times out waiting",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 200,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "zzfixture",
+              "projectName": "zzfixture",
+              "results": [
+                {
+                  "workerIndex": 2,
+                  "parallelIndex": 0,
+                  "status": "timedOut",
+                  "duration": 201,
+                  "error": {
+                    "message": "\u001b[31mTest timeout of 200ms exceeded.\u001b[39m"
+                  },
+                  "errors": [
+                    {
+                      "message": "\u001b[31mTest timeout of 200ms exceeded.\u001b[39m"
+                    }
+                  ],
+                  "retry": 0,
+                  "startTime": "2026-10-16T22:50:03.799Z",
+                  "annotations": []
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "e79b90377be0d9062294-64adb934574922c2ffa0",
+          "file": "zz-fixture.spec.ts",
+          "line": 16,
+          "column": 1
+        }
+      ],
+      "suites": [
+        {
+          "title": "fixture group",
+          "file": "zz-fixture.spec.ts",
+          "line": 3,
+          "column": 6,
+          "specs": [
+            {
+              "title": "passes",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "zzfixture",
+                  "projectName": "zzfixture",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 7,
+                      "errors": [],
+                      "retry": 0,
+                      "startTime": "2026-10-16T22:50:02.449Z",
+                      "annotations": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "e79b90377be0d9062294-8563a728035495efd05a",
+              "file": "zz-fixture.spec.ts",
+              "line": 4,
+              "column": 3
+            },
+            {
+              "title": "fails with a message",
+              "ok": false,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "zzfixture",
+                  "projectName": "zzfixture",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "failed",
+                      "duration": 5,
+                      "error": {
+                        "message": "Error: the summary fixture fails\n\n\u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32m2\u001b[39m\nReceived: \u001b[31m1\u001b[39m",
+                        "location": {
+                          "file": "/work/e2e/tests/zz-fixture.spec.ts",
+                          "column": 44,
+                          "line": 8
+                        }
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "/work/e2e/tests/zz-fixture.spec.ts",
+                            "column": 44,
+                            "line": 8
+                          },
+                          "message": "Error: the summary fixture fails\n\n\u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32m2\u001b[39m\nReceived: \u001b[31m1\u001b[39m\n\n   6 |   });\n   7 |   test(\"fails with a message\", () => {\n>  8 |     expect(1, \"the summary fixture fails\").toBe(2);\n     |                                            ^\n   9 |   });\n  10 | });\n  11 |\n    at /work/e2e/tests/zz-fixture.spec.ts:8:44"
+                        }
+                      ],
+                      "retry": 0,
+                      "startTime": "2026-10-16T22:50:02.491Z",
+                      "annotations": []
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "e79b90377be0d9062294-ae00cca055df9f392e3c",
+              "file": "zz-fixture.spec.ts",
+              "line": 7,
+              "column": 3
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-10-16T22:50:01.728Z",
+    "duration": 2325.393,
+    "expected": 1,
+    "skipped": 0,
+    "unexpected": 3,
+    "flaky": 0
+  }
+}

@@ -3,6 +3,16 @@
 
 package tunnel
 
+import "time"
+
+// FirstFrameTimeout is the shipped default for how long an agent has to answer the
+// challenge, for the black-box tests to pin to its documented 3 s.
+const FirstFrameTimeout = firstFrameTimeout
+
+// FirstFrame reports the first-frame deadline this hub applies, so a test can read
+// what WithFirstFrameTimeout did without waiting for the deadline to pass.
+func (h *Hub) FirstFrame() time.Duration { return h.firstFrame }
+
 // ClassifyStreamRequest exposes startsStreamRequest to the black-box tests, naming the
 // kind it found.
 func ClassifyStreamRequest(p []byte) (kind string, ok bool) {

@@ -4,12 +4,18 @@
 #
 # Real-binary smoke check: starts bin/bayplan on a scratch port and working
 # directory and asserts the walking-skeleton contract. Later plans extend it.
+#
+# The server listens on 127.0.0.1:0 and the script reads the address the kernel gave
+# it from the server's own "bayplan listening" log line, so no port is ever probed
+# for and released before the server binds it (two runners share each VM). A restart
+# gets a new port. SMOKE_PORT pins one (D-23). It starts no container. Needs jq.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-PORT="${SMOKE_PORT:-17480}"
-BASE="http://127.0.0.1:${PORT}"
+LISTEN_PORT="${SMOKE_PORT:-0}"
+PORT=""
+BASE=""
 WORK="$(mktemp -d)"
 LOG="${WORK}/server.log"
 PID=""
@@ -34,11 +40,32 @@ fail() {
 
 [ -x bin/bayplan ] || fail "bin/bayplan missing; run make build first"
 
+# await_listening reads the bound address from the "bayplan listening" line the
+# server logs once its accept loop runs, sets PORT and BASE from it, and fails if the
+# server exits or says nothing within 10 seconds.
+await_listening() {
+  local line addr
+  for _ in $(seq 1 100); do
+    line="$(grep -m1 '"msg":"bayplan listening"' "${LOG}" 2>/dev/null || true)"
+    if [ -n "${line}" ]; then
+      addr="$(printf '%s' "${line}" | jq -r '.addr')" || fail "the listening line is not JSON: ${line}"
+      PORT="${addr##*:}"
+      [[ "${PORT}" =~ ^[0-9]+$ ]] || fail "the listening line has no port: ${line}"
+      BASE="http://127.0.0.1:${PORT}"
+      return 0
+    fi
+    kill -0 "${PID}" 2>/dev/null || fail "$1 exited during startup"
+    sleep 0.1
+  done
+  fail "$1 did not log 'bayplan listening' within 10 seconds"
+}
+
 BIN="$(pwd)/bin/bayplan"
 DATA="${WORK}/data"
-(cd "${WORK}" && BAYPLAN_DATA_DIR="${DATA}" exec "${BIN}" serve --listen "127.0.0.1:${PORT}") >"${LOG}" 2>&1 &
+(cd "${WORK}" && BAYPLAN_DATA_DIR="${DATA}" exec "${BIN}" serve --listen "127.0.0.1:${LISTEN_PORT}") >"${LOG}" 2>&1 &
 PID=$!
 
+await_listening "the server"
 up=""
 for _ in $(seq 1 100); do
   if curl -fsS "${BASE}/api/version" -o "${WORK}/version.json" 2>/dev/null; then
@@ -243,7 +270,7 @@ BAYPLAN_LISTEN="127.0.0.1:${PORT}" "${BIN}" healthcheck \
   || fail "bayplan healthcheck exited non-zero while the server is up"
 
 # A bad setting stops startup and names the env var (D-11).
-if BAYPLAN_PUBLIC_URL=nope BAYPLAN_DATA_DIR="${WORK}/bad" "${BIN}" serve --listen "127.0.0.1:$((PORT + 1))" >"${WORK}/bad.log" 2>&1; then
+if BAYPLAN_PUBLIC_URL=nope BAYPLAN_DATA_DIR="${WORK}/bad" "${BIN}" serve --listen "127.0.0.1:0" >"${WORK}/bad.log" 2>&1; then
   fail "serve accepted BAYPLAN_PUBLIC_URL=nope"
 fi
 grep -q 'BAYPLAN_PUBLIC_URL' "${WORK}/bad.log" || fail "startup error does not name BAYPLAN_PUBLIC_URL"
@@ -259,8 +286,9 @@ fi
 # Restart on the same data directory (PLAT-01): state is kept, /readyz is 200
 # and no migration re-runs, so no pre-migration snapshot is taken (D-83).
 LOG="${WORK}/restart.log"
-(cd "${WORK}" && BAYPLAN_DATA_DIR="${DATA}" exec "${BIN}" serve --listen "127.0.0.1:${PORT}") >"${LOG}" 2>&1 &
+(cd "${WORK}" && BAYPLAN_DATA_DIR="${DATA}" exec "${BIN}" serve --listen "127.0.0.1:${LISTEN_PORT}") >"${LOG}" 2>&1 &
 PID=$!
+await_listening "the restarted server"
 up=""
 for _ in $(seq 1 100); do
   if curl -fsS "${BASE}/readyz" -o "${WORK}/readyz2.txt" 2>/dev/null; then

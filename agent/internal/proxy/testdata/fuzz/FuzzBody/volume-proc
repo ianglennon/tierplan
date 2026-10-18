@@ -1,0 +1,3 @@
+go test fuzz v1
+uint8(6)
+string("{\"Name\":\"procfs\",\"Driver\":\"local\",\"DriverOpts\":{\"type\":\"proc\",\"device\":\"proc\"}}")

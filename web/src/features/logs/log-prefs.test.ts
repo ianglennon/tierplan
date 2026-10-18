@@ -8,9 +8,12 @@ import {
   formatShow,
   fromLocalInput,
   loadLogPrefs,
+  loadTaskNames,
   logSearchSchema,
   parseShow,
   saveLogPrefs,
+  saveTaskNames,
+  serviceLogSearchSchema,
   streamRange,
   toLocalInput,
 } from "@/features/logs/log-prefs";
@@ -139,5 +142,79 @@ describe("the Show range", () => {
     expect(fromLocalInput(local)).toBe(iso);
     expect(fromLocalInput("")).toBeUndefined();
     expect(toLocalInput("garbage")).toBe("");
+  });
+});
+
+// The Task names choice and the address of a service's log (plan 06-29, D-32, D-35).
+describe("the Task names choice", () => {
+  it("is on until it is turned off", () => {
+    expect(loadTaskNames()).toBe(true);
+    saveTaskNames(false);
+    expect(loadTaskNames()).toBe(false);
+    saveTaskNames(true);
+    expect(loadTaskNames()).toBe(true);
+  });
+
+  it("is kept with the other choices, and adds nothing to what they are read as", () => {
+    saveLogPrefs({ wrap: true, timestamps: false, utc: false });
+    saveTaskNames(false);
+    expect(Object.keys(localStorage)).toEqual(["bayplan.logs.view"]);
+    expect(loadLogPrefs()).toEqual({ wrap: true, timestamps: false, utc: false });
+    expect(JSON.parse(localStorage.getItem("bayplan.logs.view") ?? "")).toEqual({
+      wrap: true,
+      timestamps: false,
+      utc: false,
+      taskNames: false,
+    });
+  });
+
+  it("survives the other choices being saved again", () => {
+    saveTaskNames(false);
+    saveLogPrefs({ wrap: true, timestamps: true, utc: true });
+    expect(loadTaskNames()).toBe(false);
+    expect(loadLogPrefs()).toEqual({ wrap: true, timestamps: true, utc: true });
+  });
+
+  it("is on when what was saved is damaged, and does not stop the page when storage is off", () => {
+    localStorage.setItem("bayplan.logs.view", "{not json");
+    expect(loadTaskNames()).toBe(true);
+    localStorage.setItem("bayplan.logs.view", JSON.stringify({ taskNames: "no" }));
+    expect(loadTaskNames()).toBe(true);
+    vi.stubGlobal("localStorage", {
+      getItem: () => {
+        throw new Error("blocked");
+      },
+      setItem: () => {
+        throw new Error("blocked");
+      },
+    });
+    expect(loadTaskNames()).toBe(true);
+    expect(() => saveTaskNames(false)).not.toThrow();
+  });
+});
+
+describe("the address of a service's log", () => {
+  it("keeps the container log's choices and adds the prefix, the tasks, the nodes and the stopped switch", () => {
+    expect(
+      serviceLogSearchSchema.parse({
+        since: "1h",
+        q: "x",
+        prefix: false,
+        task: "t1,t2",
+        node: "alpha",
+        stopped: true,
+      }),
+    ).toEqual({ since: "1h", q: "x", prefix: false, task: "t1,t2", node: "alpha", stopped: true });
+  });
+
+  it("reads prefix=0 as off, as the router hands it over a number, and drops what does not fit", () => {
+    expect(serviceLogSearchSchema.parse({ prefix: 0 }).prefix).toBe(false);
+    expect(serviceLogSearchSchema.parse({ prefix: "0" }).prefix).toBe(false);
+    expect(serviceLogSearchSchema.parse({ prefix: 1 }).prefix).toBe(true);
+    expect(serviceLogSearchSchema.parse({ prefix: "maybe" }).prefix).toBeUndefined();
+    expect(serviceLogSearchSchema.parse({ stopped: 1 }).stopped).toBe(true);
+    expect(serviceLogSearchSchema.parse({ stopped: "x" }).stopped).toBeUndefined();
+    expect(serviceLogSearchSchema.parse({ task: "", node: 7 }).task).toBeUndefined();
+    expect(serviceLogSearchSchema.parse({ task: "", node: 7 }).node).toBe("7");
   });
 });

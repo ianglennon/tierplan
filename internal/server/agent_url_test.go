@@ -14,10 +14,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/coder/websocket"
 
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -147,7 +147,7 @@ func TestAPlainAgentURLForAnotherHostIsRefusedUnlessTheSwitchIsOn(t *testing.T) 
 			})
 
 			if tc.admitted {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				ctx, cancel := context.WithTimeout(context.Background(), testsupport.Deadline)
 				defer cancel()
 				c, resp, err := websocket.Dial(ctx, "ws://"+addr+"/agent/connect", &websocket.DialOptions{Subprotocols: []string{wire.Subprotocol}}) //nolint:bodyclose // a WebSocket upgrade response has no body to close
 				if err != nil {

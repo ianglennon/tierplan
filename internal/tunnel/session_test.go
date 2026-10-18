@@ -22,6 +22,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -48,18 +49,73 @@ func isDone(s *tunnel.Session) bool {
 	}
 }
 
-// stays asserts that the session is still open after the hub has had many
-// chances to look at it.
-func stays(t *testing.T, s *tunnel.Session, why string) {
+// ticks is a watchdog the test drives: handed to a hub through option, it is the
+// only thing that makes the hub look for silent sessions, and each value sent on
+// it is one look. A nil ticks leaves the hub on its own ticker.
+type ticks chan time.Time
+
+func newTicks() ticks { return make(ticks) }
+
+// option is a hub option that makes k the watchdog's tick source.
+func (k ticks) option(h *tunnel.Hub) *tunnel.Hub { return h.WithWatchTicks(k) }
+
+// look has the watchdog look at the session twice. The channel is unbuffered, so a
+// send that completes means the watchdog took the tick and the second one
+// completing means it finished evaluating the first. It returns early when the
+// session ends, which nothing takes ticks for any more.
+func (k ticks) look(t testing.TB, s *tunnel.Session) {
 	t.Helper()
-	time.Sleep(60 * time.Millisecond) // a dozen watch intervals
+	ctx := testsupport.Context(t)
+	for range 2 {
+		select {
+		case k <- time.Time{}:
+		case <-s.Done():
+			return
+		case <-ctx.Done():
+			t.Fatal("the watchdog took no tick")
+		}
+	}
+}
+
+// stays asserts that the session is still open after the watchdog has looked at
+// it twice, on the clock as the test left it.
+func stays(t *testing.T, k ticks, s *tunnel.Session, why string) {
+	t.Helper()
+	k.look(t, s)
 	if isDone(s) {
 		t.Fatalf("the session was closed: %s", why)
 	}
 }
 
+// staysAfterAHeartbeat asserts that the session is still open once the server has
+// read a heartbeat the agent sent after the thing under test. The control stream
+// is read in order, so the heartbeat being read means everything sent before it
+// was read first, and a session that something closed in between ends the wait
+// with ErrSessionEnded.
+func staysAfterAHeartbeat(t *testing.T, s *tunnel.Session, control io.Writer, clockMs int64, why string) {
+	t.Helper()
+	tunneltest.SendHeartbeat(t, control, true, clockMs)
+	if _, err := s.AwaitStatus(testsupport.Context(t), func(st tunnel.SessionStatus) bool { return st.ClockMs == clockMs }); err != nil {
+		t.Fatalf("the session did not stay open: %s (%v)", why, err)
+	}
+	if isDone(s) {
+		t.Fatalf("the session was closed: %s", why)
+	}
+}
+
+// awaitStatus waits until the session's status satisfies cond.
+func awaitStatus(t *testing.T, s *tunnel.Session, what string, cond func(tunnel.SessionStatus) bool) tunnel.SessionStatus {
+	t.Helper()
+	st, err := s.AwaitStatus(testsupport.Context(t), cond)
+	if err != nil {
+		t.Fatalf("waiting for %s: %v (last status %+v)", what, err, st)
+	}
+	return st
+}
+
 func TestTimeoutClosesASessionThatHasBeenSilentForTheOfflineWindow(t *testing.T) {
-	srv := timed(t, nil)
+	k := newTicks()
+	srv := timed(t, k.option)
 	env := srv.NewEnvironment(t, "Production")
 	c := srv.Enrol(t, env)
 	srv.Events.WaitLen(t, 1)
@@ -67,32 +123,58 @@ func TestTimeoutClosesASessionThatHasBeenSilentForTheOfflineWindow(t *testing.T)
 	control := c.OpenControl(t)
 
 	tunneltest.SendHeartbeat(t, control, true, 1)
-	waitFor(t, "the heartbeat", func() bool { return !s.Status().LastHeartbeat.IsZero() })
+	awaitStatus(t, s, "the heartbeat", func(st tunnel.SessionStatus) bool { return !st.LastHeartbeat.IsZero() })
 
 	// A heartbeat at 29 s of a 30 s window keeps the session open.
 	srv.Clock.Advance(29 * time.Second)
-	stays(t, s, "29 s of silence is inside the 30 s window")
+	stays(t, k, s, "29 s of silence is inside the 30 s window")
 	tunneltest.SendHeartbeat(t, control, true, 2)
-	waitFor(t, "the second heartbeat", func() bool { return s.Status().LastHeartbeat.Equal(srv.Clock.Now()) })
+	awaitStatus(t, s, "the second heartbeat", func(st tunnel.SessionStatus) bool { return st.LastHeartbeat.Equal(srv.Clock.Now()) })
 	srv.Clock.Advance(29 * time.Second)
-	stays(t, s, "the heartbeat 29 s ago reset the window")
+	stays(t, k, s, "the heartbeat 29 s ago reset the window")
 
 	// Past the window the session is closed, with the reason timeout.
 	srv.Clock.Advance(2 * time.Second)
-	waitFor(t, "the session to be closed", func() bool { return isDone(s) })
+	k.look(t, s)
+	testsupport.Await(t, "the session to be closed", s.Done())
 	log := srv.Events.WaitLen(t, 2)
 	if want := "disconnected:" + c.Identity.AgentID + ":" + tunnel.DisconnectTimeout; log[1] != want {
 		t.Fatalf("lifecycle = %v, want %q", log, want)
 	}
 }
 
+func TestTheWatchdogClosesASessionOnlyAfterItHasBeenSilentForTheOfflineWindow(t *testing.T) {
+	k := newTicks()
+	srv := timed(t, k.option)
+	c := srv.Enrol(t, srv.NewEnvironment(t, "Production"))
+	srv.Events.WaitLen(t, 1)
+	s := srv.Hub.Session(c.Identity.AgentID)
+	control := c.OpenControl(t)
+	tunneltest.SendHeartbeat(t, control, true, 1)
+	awaitStatus(t, s, "the heartbeat", func(st tunnel.SessionStatus) bool { return st.ClockMs == 1 })
+
+	// Exactly the window of silence is not more than the window.
+	srv.Clock.Advance(30 * time.Second)
+	stays(t, k, s, "30 s of silence in a 30 s window is not past it")
+
+	// A second more is, and the very next look closes the session.
+	srv.Clock.Advance(time.Second)
+	k.look(t, s)
+	testsupport.Await(t, "the watchdog to close the silent session", s.Done())
+	if got := s.Reason(); got != tunnel.DisconnectTimeout {
+		t.Fatalf("the session ended with %q, want %q", got, tunnel.DisconnectTimeout)
+	}
+}
+
 func TestASessionThatNeverHeartbeatsIsClosedToo(t *testing.T) {
-	srv := timed(t, nil)
+	k := newTicks()
+	srv := timed(t, k.option)
 	c := srv.Enrol(t, srv.NewEnvironment(t, "Production"))
 	srv.Events.WaitLen(t, 1)
 	s := srv.Hub.Session(c.Identity.AgentID)
 	srv.Clock.Advance(31 * time.Second)
-	waitFor(t, "the silent session to be closed", func() bool { return isDone(s) })
+	k.look(t, s)
+	testsupport.Await(t, "the silent session to be closed", s.Done())
 	log := srv.Events.WaitLen(t, 2)
 	if log[1] != "disconnected:"+c.Identity.AgentID+":timeout" {
 		t.Fatalf("lifecycle = %v", log)
@@ -111,12 +193,12 @@ func TestStatusReportsTheLastHeartbeatFromMemory(t *testing.T) {
 	srv.Clock.Advance(3 * time.Second)
 	at := srv.Clock.Now()
 	tunneltest.SendHeartbeat(t, control, true, 1_700_000_000_123)
-	waitFor(t, "the heartbeat", func() bool { return s.Status().ClockMs == 1_700_000_000_123 })
+	awaitStatus(t, s, "the heartbeat", func(st tunnel.SessionStatus) bool { return st.ClockMs == 1_700_000_000_123 })
 	if st := s.Status(); !st.LastHeartbeat.Equal(at) || !st.EngineReachable {
 		t.Fatalf("status = %+v, want the server's time %v and an engine that is reachable", st, at)
 	}
 	tunneltest.SendHeartbeat(t, control, false, 1_700_000_000_456)
-	waitFor(t, "the engine to be reported unreachable", func() bool { return !s.Status().EngineReachable })
+	awaitStatus(t, s, "the engine to be reported unreachable", func(st tunnel.SessionStatus) bool { return !st.EngineReachable })
 	if got := s.Status().ClockMs; got != 1_700_000_000_456 {
 		t.Errorf("clock = %d", got)
 	}
@@ -135,33 +217,52 @@ func TestUnknownControlMessagesAreIgnoredAndAnOverlongLineEndsTheSession(t *test
 		}
 	}
 	tunneltest.SendHeartbeat(t, control, true, 7)
-	waitFor(t, "the heartbeat after the unknown messages", func() bool { return s.Status().ClockMs == 7 })
-	stays(t, s, "an unknown control message is not an error")
+	awaitStatus(t, s, "the heartbeat after the unknown messages", func(st tunnel.SessionStatus) bool { return st.ClockMs == 7 })
+	// The control stream is read in order, so the heartbeat being read means the
+	// unknown messages before it were read and ignored.
+	if isDone(s) {
+		t.Fatal("the session was closed: an unknown control message is not an error")
+	}
 
 	// A line over 64 KiB is a misbehaving agent: the session ends.
 	_, _ = io.WriteString(control, strings.Repeat("x", wire.MaxControlLine+10)+"\n")
-	waitFor(t, "the session to end", func() bool { return isDone(s) })
+	testsupport.Await(t, "the session to end", s.Done())
 }
 
-// slowDocker answers a request only when told to, so a request can be held open.
-func holdOpenStreams(t *testing.T, c *tunneltest.Conn) {
+// holdOpenStreams reads every stream the server opens and never answers, so a
+// request can be held open. The channel it returns receives once for each stream
+// on which the agent has read the first byte of a request, so a test knows the
+// request is blocked on its stream and not still on its way.
+func holdOpenStreams(t *testing.T, c *tunneltest.Conn) <-chan struct{} {
 	t.Helper()
+	requests := make(chan struct{}, 64)
 	go func() {
 		for {
 			st, err := c.Mux.Accept()
 			if err != nil {
 				return
 			}
-			go func() { _, _ = io.Copy(io.Discard, st) }() // reads the request, never answers
+			go func() {
+				var first [1]byte
+				if _, err := io.ReadFull(st, first[:]); err != nil {
+					return
+				}
+				select {
+				case requests <- struct{}{}:
+				default:
+				}
+				_, _ = io.Copy(io.Discard, st) // reads the rest of the request, never answers
+			}()
 		}
 	}()
+	return requests
 }
 
 func httpOver(s *tunnel.Session) *http.Client {
 	return &http.Client{Transport: &http.Transport{DialContext: s.Transport().DialContext}}
 }
 
-func TestFailFastABlockedRequestEndsWithErrAgentGoneWithinASecondOfTheDrop(t *testing.T) {
+func TestFailFastABlockedRequestEndsWithErrAgentGoneWhenTheSessionDrops(t *testing.T) {
 	for name, closeIt := range map[string]func(srv *tunneltest.Server, c *tunneltest.Conn){
 		"the agent drops the connection": func(_ *tunneltest.Server, c *tunneltest.Conn) { _ = c.WS.CloseNow() },
 		"the server shuts down":          func(srv *tunneltest.Server, _ *tunneltest.Conn) { srv.Hub.Close() },
@@ -171,7 +272,7 @@ func TestFailFastABlockedRequestEndsWithErrAgentGoneWithinASecondOfTheDrop(t *te
 			c := srv.Enrol(t, srv.NewEnvironment(t, "Production"))
 			srv.Events.WaitLen(t, 1)
 			s := srv.Hub.Session(c.Identity.AgentID)
-			holdOpenStreams(t, c)
+			requests := holdOpenStreams(t, c)
 
 			errc := make(chan error, 1)
 			go func() {
@@ -181,19 +282,15 @@ func TestFailFastABlockedRequestEndsWithErrAgentGoneWithinASecondOfTheDrop(t *te
 				}
 				errc <- err
 			}()
-			time.Sleep(100 * time.Millisecond) // the request is now blocked on its stream
-			closed := time.Now()
+			testsupport.Await(t, "the request to reach the agent's stream", requests)
 			closeIt(srv, c)
-			select {
-			case err := <-errc:
-				if !errors.Is(err, tunnel.ErrAgentGone) {
-					t.Fatalf("the blocked request ended with %v, want an error wrapping ErrAgentGone", err)
-				}
-				if took := time.Since(closed); took > time.Second {
-					t.Errorf("the blocked request took %v to fail", took)
-				}
-			case <-time.After(3 * time.Second):
-				t.Fatal("the blocked request is still hanging")
+			// "At once" is proved by awaiting the failure on the shared deadline. The
+			// slow path it rules out is the multiplexer noticing a dead peer by itself,
+			// which tunneltest sets to a minute (WithMuxTimeouts), and the request has
+			// no timeout of its own, so a session that did not fail its streams on the
+			// drop would leave this request hanging past testsupport.Deadline.
+			if err := testsupport.Await(t, "the blocked request to fail", errc); !errors.Is(err, tunnel.ErrAgentGone) {
+				t.Fatalf("the blocked request ended with %v, want an error wrapping ErrAgentGone", err)
 			}
 			if _, err := s.Transport().DialContext(context.Background(), "tcp", "x"); !errors.Is(err, tunnel.ErrAgentGone) {
 				t.Errorf("a dial after the drop = %v, want ErrAgentGone", err)
@@ -212,12 +309,16 @@ func TestFailFastTwentyConcurrentDialsDuringTheCloseAllReturn(t *testing.T) {
 	const n = 20
 	var started, finished sync.WaitGroup
 	var wrong atomic.Int32
+	// dialling is closed by the first dial that succeeds, so the close below lands
+	// while dials are demonstrably in progress.
+	dialling := make(chan struct{})
+	var firstDial sync.Once
 	started.Add(n)
 	for range n {
 		finished.Go(func() {
 			started.Done()
 			started.Wait()
-			deadline := time.Now().Add(3 * time.Second)
+			deadline := time.Now().Add(testsupport.Deadline)
 			for time.Now().Before(deadline) {
 				conn, err := s.Transport().DialContext(context.Background(), "tcp", "x")
 				if err != nil {
@@ -226,22 +327,19 @@ func TestFailFastTwentyConcurrentDialsDuringTheCloseAllReturn(t *testing.T) {
 					}
 					return
 				}
+				firstDial.Do(func() { close(dialling) })
 				_ = conn.Close()
 			}
 			wrong.Add(1) // never failed
 		})
 	}
 	started.Wait()
-	time.Sleep(5 * time.Millisecond)
+	testsupport.Await(t, "a dial to succeed before the close", dialling)
 	_ = c.WS.CloseNow()
 
 	done := make(chan struct{})
 	go func() { finished.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("a dial is still hanging after the close")
-	}
+	testsupport.Await(t, "every dial to fail after the close", done)
 	if w := wrong.Load(); w != 0 {
 		t.Fatalf("%d dials did not fail with ErrAgentGone", w)
 	}
@@ -260,7 +358,7 @@ func TestFailFastReadsAndWritesOnAStreamOfADeadSessionWrapErrAgentGone(t *testin
 	defer func() { _ = conn.Close() }()
 
 	_ = c.WS.CloseNow()
-	waitFor(t, "the session to end", func() bool { return isDone(s) })
+	testsupport.Await(t, "the session to end", s.Done())
 	if _, err := conn.Read(make([]byte, 8)); !errors.Is(err, tunnel.ErrAgentGone) {
 		t.Errorf("Read on a stream of a dead session = %v, want ErrAgentGone", err)
 	}
@@ -280,7 +378,7 @@ func TestAReadDeadlineOnALiveSessionIsNotAnAgentGone(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = conn.Close() }()
-	_ = conn.SetReadDeadline(time.Now().Add(20 * time.Millisecond))
+	_ = conn.SetReadDeadline(time.Now().Add(-time.Second)) // already past: the read times out at once, with no window to wait through
 	_, err = conn.Read(make([]byte, 8))
 	var ne net.Error
 	if errors.Is(err, tunnel.ErrAgentGone) || !errors.As(err, &ne) || !ne.Timeout() {
@@ -297,21 +395,45 @@ func TestHeartbeatsAndTheConnectAreReportedToTheLastSeenRecorder(t *testing.T) {
 	for range 3 {
 		tunneltest.SendHeartbeat(t, control, true, 1)
 	}
-	waitFor(t, "the recorder to hear of three heartbeats", func() bool { return rec.count(c.Identity.AgentID) >= 3 })
+	for range 3 {
+		testsupport.Await(t, "the recorder to be touched", rec.heard())
+	}
+	if got := rec.count(c.Identity.AgentID); got < 3 {
+		t.Fatalf("the recorder heard of %d heartbeats, want at least 3", got)
+	}
 }
 
+// countingRecorder counts the touches per agent and sends on a channel for each.
 type countingRecorder struct {
-	mu sync.Mutex
-	n  map[string]int
+	mu    sync.Mutex
+	n     map[string]int
+	touch chan struct{}
 }
 
-func (r *countingRecorder) TouchLastSeen(_ context.Context, agentID string) {
+func (r *countingRecorder) touches() chan struct{} {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.touch == nil {
+		r.touch = make(chan struct{}, 64)
+	}
+	return r.touch
+}
+
+// heard receives once for each touch.
+func (r *countingRecorder) heard() <-chan struct{} { return r.touches() }
+
+func (r *countingRecorder) TouchLastSeen(_ context.Context, agentID string) {
+	ch := r.touches()
+	r.mu.Lock()
 	if r.n == nil {
 		r.n = map[string]int{}
 	}
 	r.n[agentID]++
+	r.mu.Unlock()
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
 }
 
 func (r *countingRecorder) count(agentID string) int {
@@ -372,19 +494,9 @@ func (c *controlLines) next() []byte {
 			c.t.Fatal("the control stream ended before the server answered")
 		}
 		return l
-	case <-time.After(5 * time.Second):
+	case <-time.After(testsupport.Deadline):
 		c.t.Fatal("the server wrote nothing on the control stream")
 		return nil
-	}
-}
-
-// none asserts that nothing arrives for a while.
-func (c *controlLines) none(why string) {
-	c.t.Helper()
-	select {
-	case l := <-c.lines:
-		c.t.Fatalf("the server wrote %s on the control stream: %s", l, why)
-	case <-time.After(100 * time.Millisecond):
 	}
 }
 
@@ -432,7 +544,7 @@ func TestARenewOnTheControlStreamIsAnsweredWithAFreshCertificateForTheSameKey(t 
 	if d := time.Duration(notAfter - leaf.NotAfter.UnixNano()); serial == oldSerial || d < 0 || d >= time.Second {
 		t.Errorf("the agent row says serial %s expiring %d; the certificate is new and expires %d", serial, notAfter, leaf.NotAfter.UnixNano())
 	}
-	stays(t, srv.Hub.Session(c.Identity.AgentID), "a renewal keeps the session")
+	staysAfterAHeartbeat(t, srv.Hub.Session(c.Identity.AgentID), control, 901, "a renewal keeps the session")
 }
 
 func TestARenewFromAnAgentThatIsNotDueIsRefusedAndTheSessionStays(t *testing.T) {
@@ -447,7 +559,7 @@ func TestARenewFromAnAgentThatIsNotDueIsRefusedAndTheSessionStays(t *testing.T) 
 	if err := json.Unmarshal(answers.next(), &got); err != nil || got.T != wire.TypeRenewRefused || got.Code != wire.RenewNotDue {
 		t.Fatalf("answer = %+v, %v; want renew_refused not_due", got, err)
 	}
-	stays(t, srv.Hub.Session(c.Identity.AgentID), "an early renew is refused, not punished")
+	staysAfterAHeartbeat(t, srv.Hub.Session(c.Identity.AgentID), control, 902, "an early renew is refused, not punished")
 }
 
 func TestARenewFromAnAgentRevokedMeanwhileIsRefusedAndTheSessionClosed(t *testing.T) {
@@ -474,11 +586,11 @@ func TestARenewFromAnAgentRevokedMeanwhileIsRefusedAndTheSessionClosed(t *testin
 					t.Fatalf("answer = %s, want renew_refused revoked", line)
 				}
 			}
-		case <-time.After(5 * time.Second):
+		case <-time.After(testsupport.Deadline):
 			t.Fatal("the server neither answered nor closed the session")
 		}
 	}
-	waitFor(t, "the session to be closed", func() bool { return isDone(s) })
+	testsupport.Await(t, "the session to be closed", s.Done())
 	if got := s.Reason(); got != tunnel.DisconnectRevoked {
 		t.Errorf("the session ended with %q, want %q", got, tunnel.DisconnectRevoked)
 	}
@@ -499,8 +611,12 @@ func TestABurstOfRenewsMakesOneCertificateAndOneAuditRow(t *testing.T) {
 	for range 20 {
 		askToRenew(t, control)
 	}
-	waitFor(t, "an answer", func() bool { return len(answers.lines) > 0 })
-	time.Sleep(200 * time.Millisecond)
+	answers.next()
+	// The control stream is read in order: once a heartbeat sent after the twenty
+	// renews has been read, all twenty were dispatched, and the count below is of
+	// what they made.
+	tunneltest.SendHeartbeat(t, control, true, 903)
+	awaitStatus(t, srv.Hub.Session(c.Identity.AgentID), "the heartbeat after the renews", func(st tunnel.SessionStatus) bool { return st.ClockMs == 903 })
 	var n int
 	if err := srv.Store.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'agent.cert_renewed'`).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("%d agent.cert_renewed rows after twenty renews, want 1 (%v)", n, err)
@@ -514,7 +630,9 @@ func TestARenewFromAnAgentWhoseVerifierFailsIsAnsweredInternalAndRetryable(t *te
 	if c.welcome == nil {
 		t.Fatalf("no welcome: %+v", c)
 	}
-	waitFor(t, "the session", func() bool { return len(f.hub.Sessions()) == 1 })
+	if _, err := f.hub.AwaitSession(testsupport.Context(t), c.welcome.AgentID, func(s *tunnel.Session) bool { return s != nil }); err != nil {
+		t.Fatalf("waiting for the session: %v", err)
+	}
 	st, err := c.mux.OpenStream()
 	if err != nil {
 		t.Fatal(err)
@@ -542,11 +660,39 @@ const (
 // which a test changes while agents are connected.
 func withEndpoint(t *testing.T, cur *atomic.Value) *tunneltest.Server {
 	t.Helper()
+	srv, _ := withEndpointWatchingControls(t, cur)
+	return srv
+}
+
+// controlWatch counts the control streams the hub has set up, so a test knows the
+// hub can write to an agent's control stream before it asks it to.
+type controlWatch struct {
+	opened chan struct{}
+}
+
+func (w *controlWatch) ControlOpened(*tunnel.Session)                   { w.opened <- struct{}{} }
+func (w *controlWatch) UpdateResult(*tunnel.Session, wire.UpdateResult) {}
+
+// await blocks until n more control streams have been set up. The hub reports one
+// after it has decided whether the agent must be told a newer address, so nothing
+// the hub writes on account of the opening can arrive after this returns.
+func (w *controlWatch) await(t *testing.T, n int) {
+	t.Helper()
+	for range n {
+		testsupport.Await(t, "a control stream to be set up", w.opened)
+	}
+}
+
+// withEndpointWatchingControls is withEndpoint with a controlWatch on the hub.
+func withEndpointWatchingControls(t *testing.T, cur *atomic.Value) (*tunneltest.Server, *controlWatch) {
+	t.Helper()
+	w := &controlWatch{opened: make(chan struct{}, 64)}
 	return tunneltest.Start(t, tunneltest.Options{Configure: func(h *tunnel.Hub) *tunnel.Hub {
 		return h.WithTiming(10*time.Second, 1000*day).
 			WithEndpoint(func() string { s, _ := cur.Load().(string); return s }).
-			WithPins(func() []string { return []string{testPin} })
-	}})
+			WithPins(func() []string { return []string{testPin} }).
+			WithUpdateObserver(w)
+	}}), w
 }
 
 func readURLUpdate(t *testing.T, lines *controlLines) wire.URLUpdate {
@@ -574,21 +720,23 @@ func TestTheWelcomeCarriesTheEndpointAgentsAreToldToDial(t *testing.T) {
 func TestPushURLsWritesTheNewAddressFirstAndThePinsToEveryConnectedAgent(t *testing.T) {
 	var cur atomic.Value
 	cur.Store(endpointOld)
-	srv := withEndpoint(t, &cur)
+	srv, controls := withEndpointWatchingControls(t, &cur)
 	var streams []*controlLines
 	for _, name := range []string{"A", "B", "C"} {
 		c := srv.Enrol(t, srv.NewEnvironment(t, name))
 		streams = append(streams, readControlLines(t, c.OpenControl(t)))
 	}
 	srv.Events.WaitLen(t, 3)
-	for _, s := range streams {
-		s.none("nothing is pushed until an address changes")
-	}
+	controls.await(t, 3)
 
 	cur.Store(endpointNew)
 	if n := srv.Hub.PushURLs([]string{endpointNew}, srv.Hub.Pins()); n != 3 {
 		t.Fatalf("PushURLs wrote to %d sessions, want 3", n)
 	}
+	// Nothing is pushed until an address changes: the first line each agent reads is
+	// the one this push wrote, and it carries the new address. A line the hub had
+	// written earlier would be read first, with the old address or none, and fail
+	// the check below.
 	for i, s := range streams {
 		u := readURLUpdate(t, s)
 		if len(u.URLs) != 1 || u.URLs[0] != endpointNew || len(u.Pins) != 1 || u.Pins[0] != testPin {
@@ -611,14 +759,25 @@ func TestPushURLsSkipsASessionWithNoControlStreamAndNeverFails(t *testing.T) {
 func TestPushURLsWithNoAddressesWritesNothing(t *testing.T) {
 	var cur atomic.Value
 	cur.Store(endpointOld)
-	srv := withEndpoint(t, &cur)
+	srv, controls := withEndpointWatchingControls(t, &cur)
 	c := srv.Enrol(t, srv.NewEnvironment(t, "A"))
 	lines := readControlLines(t, c.OpenControl(t))
 	srv.Events.WaitLen(t, 1)
+	controls.await(t, 1)
 	if n := srv.Hub.PushURLs(nil, []string{testPin}); n != 0 {
 		t.Fatalf("PushURLs wrote to %d sessions with no address to give", n)
 	}
-	lines.none("an empty address list is not a message")
+	// An empty address list is not a message: the fence is a push that is one. It
+	// is written after the empty one, so the first line the agent reads is its
+	// own; a message the empty push had written would be read first and has no
+	// address.
+	cur.Store(endpointNew)
+	if n := srv.Hub.PushURLs([]string{endpointNew}, []string{testPin}); n != 1 {
+		t.Fatalf("PushURLs wrote to %d sessions, want 1", n)
+	}
+	if u := readURLUpdate(t, lines); len(u.URLs) != 1 || u.URLs[0] != endpointNew {
+		t.Fatalf("the first message after an empty push was %+v, want the one carrying %s", u, endpointNew)
+	}
 }
 
 func TestAnAgentThatOpensItsControlStreamAfterTheAddressChangedIsToldAtOnce(t *testing.T) {
@@ -639,9 +798,22 @@ func TestAnAgentThatOpensItsControlStreamAfterTheAddressChangedIsToldAtOnce(t *t
 func TestAnAgentWelcomedWithTheCurrentAddressIsNotToldAgainWhenItOpensItsControlStream(t *testing.T) {
 	var cur atomic.Value
 	cur.Store(endpointOld)
-	srv := withEndpoint(t, &cur)
+	srv, controls := withEndpointWatchingControls(t, &cur)
 	c := srv.Enrol(t, srv.NewEnvironment(t, "Production"))
 	srv.Events.WaitLen(t, 1)
 	lines := readControlLines(t, c.OpenControl(t))
-	lines.none("the welcome already carried the current address")
+	// The hub reports the control stream after deciding whether to tell the agent a
+	// newer address, so once it has, whatever it was going to write is written.
+	controls.await(t, 1)
+	// The welcome already carried the current address, so nothing is written on the
+	// opening. The fence is the push of a changed address: the first line the agent
+	// reads must be that one. A repeat of the old address written on the opening
+	// would be read first.
+	cur.Store(endpointNew)
+	if n := srv.Hub.PushURLs([]string{endpointNew}, nil); n != 1 {
+		t.Fatalf("PushURLs wrote to %d sessions, want 1", n)
+	}
+	if u := readURLUpdate(t, lines); len(u.URLs) != 1 || u.URLs[0] != endpointNew {
+		t.Fatalf("the first message on the control stream was %+v, want the changed address %s", u, endpointNew)
+	}
 }

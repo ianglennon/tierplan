@@ -100,9 +100,11 @@ var phase4DetailKeys = map[string][]string{
 	audit.ActionContainerUnpaused:  {"container", "node", "code", "bulk", "stage", "own"},
 	audit.ActionContainerRemoved:   {"container", "node", "code", "bulk", "stage", "own", "force", "volumes"},
 	// A network create records what was asked and where it landed; the remove of plan
-	// 04-13 records the name, node and scope, and the code of a refusal.
-	audit.ActionNetworkCreated: {"name", "node", "driver", "scope", "subnet", "gateway", "internal", "attachable", "code"},
-	audit.ActionNetworkRemoved: {"name", "node", "driver", "scope", "code"},
+	// 04-13 records the name, node and scope, and the code of a refusal. A network, secret or config
+	// made or removed by a service apply also records its source, service_apply or
+	// service_apply_cleanup (plan 06-26).
+	audit.ActionNetworkCreated: {"name", "node", "driver", "scope", "subnet", "gateway", "internal", "attachable", "source", "code"},
+	audit.ActionNetworkRemoved: {"name", "node", "driver", "scope", "source", "code"},
 	// Connecting a container records the network, the container, its node and, when asked
 	// for, the alias and addresses; disconnecting the first three.
 	audit.ActionNetworkConnected:    {"network", "container", "node", "alias", "ipv4", "ipv6", "code"},
@@ -113,8 +115,10 @@ var phase4DetailKeys = map[string][]string{
 	audit.ActionVolumeCreated: {"name", "node", "driver", "options", "code"},
 	audit.ActionVolumeRemoved: {"name", "node", "driver", "bulk", "code"},
 	// Opening a log stream records the container, its node, the viewer's random ID (sid)
-	// and what was asked for; never any line of the log (plan 04-19, D-23, D-24).
-	audit.ActionLogsViewed: {"container", "node", "sid", "since", "tail"},
+	// and what was asked for; never any line of the log (plan 04-19, D-23, D-24). A service's
+	// log records the service in place of the container, and the task and node filters
+	// (plan 06-29, D-35).
+	audit.ActionLogsViewed: {"container", "service", "node", "task", "sid", "since", "tail"},
 	// A browser shell records that a session began and how it ended, never what was
 	// typed or shown (plan 04-22, D-28): the container, its node, the session's ID
 	// (sid), the command as chosen, the user and working directory (empty for the
@@ -154,6 +158,111 @@ var phase5DetailKeys = map[string][]string{
 	// type, each step's result, the code of the first failure, the repository tried and, from
 	// an environment, the node. Never the secret (plan 05-11, D-12, D-31).
 	audit.ActionRegistryCredentialTested: {"name", "layer", "host", "prefix", "type", "reachable", "signed_in", "can_pull", "code", "via", "repository", "node"},
+}
+
+// phase6DetailKeys maps every Phase 6 action to the detail keys the plans that record it must
+// use, for the same reason as phase3DetailKeys. A scale records one row per service: its name, the new
+// replica count, the count it had, the code of a refusal, the bulk ID of a selection scaled at
+// once and the node the manager answered on (plan 06-01, RES-02). A force update records the image
+// the service was left with, its digest, whether it was pinned, whether it was a retry and the
+// code; a rollback records the version it was asked at and the code (plan 06-08, RES-02). A remove records the name, the stack the service belonged to, whether it was
+// Bayplan's agent service, whether its name was typed to confirm, and the code (plan 06-10, RES-02).
+var phase6DetailKeys = map[string][]string{
+	audit.ActionServiceScaled:       {"name", "replicas", "previous", "code", "bulk", "node"},
+	audit.ActionServiceForceUpdated: {"name", "image", "digest", "retry", "pinned", "code"},
+	audit.ActionServiceRolledBack:   {"name", "version", "code"},
+	audit.ActionServiceRemoved:      {"name", "stack", "agent", "confirmed", "code"},
+	// An edit records the version it was applied at, the image the service was left with and its digest,
+	// whether the spec changed, how many host-escalation findings it had and the code; never a value of
+	// the spec (plan 06-18, RES-03).
+	audit.ActionServiceUpdated: {"name", "version", "image", "digest", "changed", "findings", "code"},
+	// A create records the name, the image the service was made with and its digest, how many objects
+	// were made for it and the code; never a value of the spec (plan 06-27, RES-03).
+	audit.ActionServiceCreated: {"name", "image", "digest", "objects", "code"},
+	// A mute or an unmute of a restart-loop alert records what was muted (kind: service or
+	// container) and its name; a container's also the node it runs on. A change of the
+	// threshold records the new failures and window in minutes and the ones it replaced
+	// (plan 06-35, RES-13).
+	audit.ActionRestartLoopMuted:                      {"name", "kind", "node"},
+	audit.ActionRestartLoopUnmuted:                    {"name", "kind", "node"},
+	audit.ActionEnvironmentRestartLoopSettingsChanged: {"failures", "window_minutes", "previous_failures", "previous_window_minutes"},
+	// An availability or role change records the node's name, the value it had and the one asked for,
+	// whether its name was typed to confirm, the warnings the change carried (comma separated) and the
+	// code (plan 06-15, RES-05).
+	audit.ActionNodeAvailabilityChanged: {"name", "from", "to", "confirmed", "warnings", "code"},
+	audit.ActionNodeRoleChanged:         {"name", "from", "to", "confirmed", "warnings", "code"},
+	// A label change records the node's name, how many labels were added, changed and removed, how
+	// many services have a placement constraint the change affects and the code (plan 06-16, RES-05).
+	audit.ActionNodeLabelsChanged: {"name", "added", "changed", "removed", "affected", "code"},
+	// A node remove records the node's host name, the agent that was revoked with it (empty when no
+	// agent ran on the node) and the code (plan 06-17, RES-05).
+	audit.ActionNodeRemoved: {"hostname", "agent", "code"},
+	// A secret create records the name, how many labels it has, the size of the value in bytes, where
+	// the request came from (typed, file, rotate, apply or api) and the code; never the value. A
+	// remove records the name and the code (plan 06-22, RES-08).
+	audit.ActionSecretCreated: {"name", "labels", "size", "source", "code"},
+	audit.ActionSecretRemoved: {"name", "source", "code"},
+	// A config create records the name, how many labels it has, the size of the content in bytes, the
+	// templating driver (none or golang), where the request came from (typed, file, rotate, apply or api)
+	// and the code. A remove records the name and the code (plan 06-24, RES-08).
+	audit.ActionConfigCreated: {"name", "labels", "size", "templating", "source", "code"},
+	audit.ActionConfigRemoved: {"name", "source", "code"},
+	// A rotate records the name of the object it replaced and of the new one, how many services it moved
+	// and skipped, whether the old object was removed and the code; never a value (plan 06-28, RES-08).
+	audit.ActionSecretRotated: {"from", "to", "updated", "skipped", "removed_old", "code"},
+	audit.ActionConfigRotated: {"from", "to", "updated", "skipped", "removed_old", "code"},
+}
+
+func TestEveryPhase6ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
+	f := newFixture(t)
+	for action, keys := range phase6DetailKeys {
+		details := make(map[string]string, len(keys))
+		for _, k := range keys {
+			details[k] = "x"
+		}
+		e := ent(action)
+		e.Details = details
+		if err := f.w.Record(context.Background(), e); err != nil {
+			if errors.Is(err, audit.ErrSecretField) {
+				t.Errorf("%s: a documented detail key trips the secret-word filter: %v", action, err)
+			} else {
+				t.Errorf("%s: Record: %v", action, err)
+			}
+		}
+	}
+	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase6DetailKeys) {
+		t.Fatalf("verify = %+v", got)
+	}
+	for key, constant := range map[string]string{
+		"service.scaled":        audit.ActionServiceScaled,
+		"service.force_updated": audit.ActionServiceForceUpdated,
+		"service.rolled_back":   audit.ActionServiceRolledBack,
+		"service.removed":       audit.ActionServiceRemoved,
+		"service.updated":       audit.ActionServiceUpdated,
+		"service.created":       audit.ActionServiceCreated,
+
+		"restart_loop.muted":   audit.ActionRestartLoopMuted,
+		"restart_loop.unmuted": audit.ActionRestartLoopUnmuted,
+
+		"environment.restart_loop_settings_changed": audit.ActionEnvironmentRestartLoopSettingsChanged,
+
+		"node.availability_changed": audit.ActionNodeAvailabilityChanged,
+		"node.role_changed":         audit.ActionNodeRoleChanged,
+		"node.labels_changed":       audit.ActionNodeLabelsChanged,
+		"node.removed":              audit.ActionNodeRemoved,
+
+		"secret.created": audit.ActionSecretCreated,
+		"secret.removed": audit.ActionSecretRemoved,
+		"config.created": audit.ActionConfigCreated,
+		"config.removed": audit.ActionConfigRemoved,
+
+		"secret.rotated": audit.ActionSecretRotated,
+		"config.rotated": audit.ActionConfigRotated,
+	} {
+		if key != constant {
+			t.Errorf("constant = %q, want %q", constant, key)
+		}
+	}
 }
 
 func TestEveryPhase5ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {

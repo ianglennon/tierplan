@@ -92,8 +92,14 @@ export function mergeEvents(existing: EventDTO[], incoming: EventDTO[], cap: num
 // columns of (D-57, RES-14). A container event also refreshes volumes and
 // networks (Used by, attached) and images (what uses an image), a network event
 // the containers list (its networks). Detail queries share their list's key
-// prefix, so an open image page, with its Used by tab, refreshes with its list. A swarm object, or a row of Bayplan's own, has no list in this phase and
-// refreshes the summary only.
+// prefix, so an open image page, with its Used by tab, refreshes with its list. A
+// service event refreshes the services list and every filtered read of it, whose keys
+// extend the list's, and the secrets and configs lists, whose Used by counts come from the services' specs. A
+// secret event refreshes the secrets list and the secret pages, whose keys extend it, and a
+// config event does the same for the configs list and the config pages. A node event refreshes
+// the nodes list, the node pages (their keys extend the list's) and the services list, whose key
+// the placement view extends, since a node going down or being drained moves tasks. A row of
+// Bayplan's own has no list and refreshes the summary only.
 export function invalidationKeys(type: EventType, envId: string): QueryKey[] {
   const summary: QueryKey = ["env", envId, "summary"];
   switch (type) {
@@ -111,6 +117,19 @@ export function invalidationKeys(type: EventType, envId: string): QueryKey[] {
       return [summary, [...listKey(envId, "volumes")]];
     case "image":
       return [summary, [...listKey(envId, "images")]];
+    case "service":
+      return [
+        summary,
+        [...listKey(envId, "services")],
+        [...listKey(envId, "secrets")],
+        [...listKey(envId, "configs")],
+      ];
+    case "secret":
+      return [summary, [...listKey(envId, "secrets")]];
+    case "config":
+      return [summary, [...listKey(envId, "configs")]];
+    case "node":
+      return [summary, [...listKey(envId, "nodes")], [...listKey(envId, "services")]];
     default:
       return [summary];
   }

@@ -24,6 +24,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/tunnel"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // The container log stream (plan 04-19, OBS-01, D-15, D-23, D-24, P3 D-10). Docker is
@@ -77,7 +78,7 @@ func newLogsFix(t *testing.T, cfg dockertest.FakeConfig, tune func(*envFix)) *lo
 	f.h = f.build(t)
 	e := f.add(t)
 	// A read goes only to a node the monitor has seen online.
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	return &logsFix{envFix: f, env: e}
 }
 
@@ -91,14 +92,11 @@ func (f *logsFix) open(t *testing.T, cookie, container, query, lastEventID strin
 }
 
 // readLines reads log events until n lines have arrived, and returns them with the id of
-// the last event.
+// the last event. It waits on testsupport.Deadline and fails when the stream ends first.
 func readLines(t *testing.T, c *sseConn, n int) (lines []logLine, lastID string) {
 	t.Helper()
 	for len(lines) < n {
-		fr, ok := c.next(5 * time.Second)
-		if !ok {
-			t.Fatalf("only %d of %d lines arrived: %+v", len(lines), n, lines)
-		}
+		fr := c.nextData(t, fmt.Sprintf("%d more log lines (have %d: %+v)", n-len(lines), len(lines), lines))
 		switch fr.event {
 		case "ready", "state":
 			continue
@@ -116,16 +114,12 @@ func readLines(t *testing.T, c *sseConn, n int) (lines []logLine, lastID string)
 	return lines, lastID
 }
 
-// nextEvent returns the next frame of the named event, skipping others.
-func nextEvent(t *testing.T, c *sseConn, name string, wait time.Duration) frame {
+// nextEvent returns the next frame of the named event, skipping others. It waits on
+// testsupport.Deadline and fails when the stream ends first.
+func nextEvent(t *testing.T, c *sseConn, name string) frame {
 	t.Helper()
-	deadline := time.Now().Add(wait)
 	for {
-		fr, ok := c.next(time.Until(deadline))
-		if !ok {
-			t.Fatalf("no %q event arrived", name)
-		}
-		if fr.event == name {
+		if fr := c.nextData(t, "a "+name+" event"); fr.event == name {
 			return fr
 		}
 	}
@@ -163,6 +157,7 @@ func (f *logsFix) logAudits(t *testing.T) []logAuditRow {
 }
 
 func TestLogStreamSendsReadyThenBatchedLinesWithTheStreamAndTheLastTimestampAsEventID(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	at := time.Date(2026, 10, 9, 12, 58, 0, 123456789, time.UTC)
 	f.fake.AppendLogs("web",
@@ -182,8 +177,8 @@ func TestLogStreamSendsReadyThenBatchedLinesWithTheStreamAndTheLastTimestampAsEv
 	if got := c.header.Get("X-Accel-Buffering"); got != "no" {
 		t.Errorf("X-Accel-Buffering = %q, want no so nginx does not buffer the stream", got)
 	}
-	ready, ok := c.next(5 * time.Second)
-	if !ok || ready.event != "ready" || ready.data != `{"tty":false}` {
+	ready := c.nextData(t, "the ready frame")
+	if ready.event != "ready" || ready.data != `{"tty":false}` {
 		t.Fatalf("first frame = %+v, want ready {tty:false}", ready)
 	}
 	lines, id := readLines(t, c, 2)
@@ -204,10 +199,11 @@ func TestLogStreamSendsReadyThenBatchedLinesWithTheStreamAndTheLastTimestampAsEv
 }
 
 func TestLogStreamOfATTYContainerIsRawAndReadySaysSo(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	f.fake.AppendLogs("db", dockertest.FakeLogLine{Text: "tty line"})
 	c := f.open(t, f.cookie, dbID, "sid="+sidA, "")
-	ready := nextEvent(t, c, "ready", 5*time.Second)
+	ready := nextEvent(t, c, "ready")
 	if ready.data != `{"tty":true}` {
 		t.Errorf("ready = %s", ready.data)
 	}
@@ -218,6 +214,7 @@ func TestLogStreamOfATTYContainerIsRawAndReadySaysSo(t *testing.T) {
 }
 
 func TestLogStreamTailDefaultsTo500AndIsCappedAt50000(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	for query, want := range map[string]string{
 		"sid=" + sidA:                  "500",
@@ -226,7 +223,7 @@ func TestLogStreamTailDefaultsTo500AndIsCappedAt50000(t *testing.T) {
 		"sid=" + sidA + "&tail=999999": "50000",
 	} {
 		c := f.open(t, f.cookie, webID, query, "")
-		nextEvent(t, c, "ready", 5*time.Second)
+		nextEvent(t, c, "ready")
 		qs := f.fake.LogQueries()
 		if got := qs[len(qs)-1].Get("tail"); got != want {
 			t.Errorf("%s: the engine was asked tail=%q, want %q", query, got, want)
@@ -239,6 +236,7 @@ func TestLogStreamTailDefaultsTo500AndIsCappedAt50000(t *testing.T) {
 }
 
 func TestLogStreamNeedsAWellFormedViewerID(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	for _, query := range []string{"", "sid=short", "sid=" + strings.Repeat("a", 65), "sid=has%20spaces%20in%20it%20here", "sid=" + sidA + "&tail=-1", "sid=" + sidA + "&tail=lots", "sid=" + sidA + "&since=yesterday", "sid=" + sidA + "&after=nope"} {
 		rec := f.req(t, http.MethodGet, f.path(webID, query), "")
@@ -252,6 +250,7 @@ func TestLogStreamNeedsAWellFormedViewerID(t *testing.T) {
 }
 
 func TestLogStreamOfAContainerTheEngineDoesNotHaveIs404BeforeAnyStream(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	rec := f.req(t, http.MethodGet, f.path("nope", "sid="+sidA), "")
 	if rec.code != http.StatusNotFound || rec.ptyp != "container_not_found" {
@@ -263,12 +262,13 @@ func TestLogStreamOfAContainerTheEngineDoesNotHaveIs404BeforeAnyStream(t *testin
 }
 
 func TestLogStreamSendsAHeartbeatAndStateStoppedWhenTheContainerEnds(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), func(f *envFix) { f.logsHeartbeat = 30 * time.Millisecond })
 	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: "last words"})
 	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
 	readLines(t, c, 1)
 	f.fake.EndLogs("web")
-	st := nextEvent(t, c, "state", 5*time.Second)
+	st := nextEvent(t, c, "state")
 	var body struct{ State, At string }
 	if err := json.Unmarshal([]byte(st.data), &body); err != nil || body.State != "stopped" {
 		t.Fatalf("state = %s (%v)", st.data, err)
@@ -278,7 +278,7 @@ func TestLogStreamSendsAHeartbeatAndStateStoppedWhenTheContainerEnds(t *testing.
 	}
 	// The stream stays open, beating.
 	beats := 0
-	deadline := time.After(5 * time.Second)
+	ctx := testsupport.Context(t)
 	for beats < 2 {
 		select {
 		case fr, ok := <-c.frames:
@@ -288,13 +288,14 @@ func TestLogStreamSendsAHeartbeatAndStateStoppedWhenTheContainerEnds(t *testing.
 			if fr.comment == "heartbeat" {
 				beats++
 			}
-		case <-deadline:
+		case <-ctx.Done():
 			t.Fatalf("only %d heartbeats", beats)
 		}
 	}
 }
 
 func TestLogStreamResumesAfterTheLastEventIDWithoutRepeatingALine(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	at := time.Date(2026, 10, 9, 12, 0, 0, 5, time.UTC)
 	for i := range 4 {
@@ -313,8 +314,11 @@ func TestLogStreamResumesAfterTheLastEventIDWithoutRepeatingALine(t *testing.T) 
 	if got[0].M != "line 2" || got[1].M != "line 3" {
 		t.Fatalf("resumed lines = %+v, want line 2 and line 3 only", got)
 	}
-	if fr, ok := c2.next(150 * time.Millisecond); ok && fr.event == "log" {
-		t.Errorf("an extra log event arrived: %+v", fr)
+	// Fence: a line written after the resume must be the very next line, so a repeat of any
+	// earlier line would have to arrive before it and shows up here.
+	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: "line 4 fence", Time: at.Add(4 * time.Second)})
+	if next, _ := readLines(t, c2, 1); next[0].M != "line 4 fence" {
+		t.Errorf("the next line after the resume = %q, want the fence and no repeat", next[0].M)
 	}
 	qs := f.fake.LogQueries()
 	last := qs[len(qs)-1]
@@ -324,6 +328,7 @@ func TestLogStreamResumesAfterTheLastEventIDWithoutRepeatingALine(t *testing.T) 
 }
 
 func TestLogStreamBatchesAChattyContainerIntoEventsOfAtMostAHundredLines(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	for i := range 250 {
 		f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: fmt.Sprintf("n%d", i)})
@@ -331,7 +336,7 @@ func TestLogStreamBatchesAChattyContainerIntoEventsOfAtMostAHundredLines(t *test
 	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
 	seen, events := 0, 0
 	for seen < 250 {
-		fr := nextEvent(t, c, "log", 5*time.Second)
+		fr := nextEvent(t, c, "log")
 		var ev logEvent
 		if err := json.Unmarshal([]byte(fr.data), &ev); err != nil {
 			t.Fatal(err)
@@ -348,6 +353,7 @@ func TestLogStreamBatchesAChattyContainerIntoEventsOfAtMostAHundredLines(t *test
 }
 
 func TestLogsAuditWritesOneRowPerViewerAndNeverALineOfTheLog(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	const secret = "LOG-LINE-THAT-MUST-NOT-BE-KEPT-1f9e" //nolint:gosec // a marker, not a credential
 	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: secret})
@@ -393,6 +399,7 @@ func TestLogsAuditWritesOneRowPerViewerAndNeverALineOfTheLog(t *testing.T) {
 }
 
 func TestLogStreamTwoUsersEachGetTheirOwnStreamAndTheirOwnAuditRow(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", f.env.ID, "viewer")
@@ -424,6 +431,7 @@ func TestLogStreamTwoUsersEachGetTheirOwnStreamAndTheirOwnAuditRow(t *testing.T)
 }
 
 func TestLogStreamAllowsEightPerUserAndRefusesTheNinthWith429(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	conns := make([]*sseConn, 0, 8)
 	for i := range 8 {
@@ -439,7 +447,7 @@ func TestLogStreamAllowsEightPerUserAndRefusesTheNinthWith429(t *testing.T) {
 	}
 	// The status is set before the problem body is written, so let the refused request
 	// finish before reading its body: a loaded run can look in between.
-	ninth.waitEnded(t, 5*time.Second, "the 429 was answered")
+	ninth.awaitEnd(t, "the 429 was answered")
 	if body := ninth.bodyString(); !strings.Contains(body, `"type":"rate_limited"`) {
 		t.Errorf("429 body = %s", body)
 	}
@@ -453,6 +461,7 @@ func TestLogStreamAllowsEightPerUserAndRefusesTheNinthWith429(t *testing.T) {
 }
 
 func TestLogStreamEndsWithClosedAccessLostWithinAHeartbeatOfLosingTheGrant(t *testing.T) {
+	t.Parallel()
 	const heartbeat = 40 * time.Millisecond
 	f := newLogsFix(t, logsEngine(), func(f *envFix) { f.logsHeartbeat = heartbeat })
 	f.addUser(t, "viewer", false)
@@ -460,54 +469,37 @@ func TestLogStreamEndsWithClosedAccessLostWithinAHeartbeatOfLosingTheGrant(t *te
 	cookie, _ := f.signIn(t, "viewer", false)
 
 	c := f.open(t, cookie, webID, "sid="+sidA, "")
-	nextEvent(t, c, "ready", 5*time.Second)
+	nextEvent(t, c, "ready")
 	if _, err := f.st.Write.Exec(`DELETE FROM role_assignments WHERE principal_id = 'id-viewer'`); err != nil {
 		t.Fatal(err)
 	}
-	closed := nextEvent(t, c, "closed", 2*heartbeat+2*time.Second)
+	// Counted in heartbeats after the grant went, never in elapsed time.
+	c.endsWithinBeats(t, 1, "the grant was deleted")
+	closed := nextEvent(t, c, "closed")
 	if closed.data != `{"reason":"access_lost"}` {
 		t.Errorf("closed = %s", closed.data)
 	}
-	c.waitEnded(t, time.Second, "it told the viewer the access was lost")
 	// The engine's request is cancelled with the stream.
-	deadline := time.Now().Add(5 * time.Second)
-	for f.fake.LogFollows() != 0 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if n := f.fake.LogFollows(); n != 0 {
-		t.Errorf("%d engine follows stayed open", n)
-	}
+	awaitFake(t, f.fake, "the engine follow to be released", func() bool { return f.fake.LogFollows() == 0 })
 }
 
 func TestLogStreamEndsCleanlyAtItsMaximumLifetimeAndFreesTheEngineFollow(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), func(f *envFix) { f.logsMaxLifetime = 50 * time.Millisecond })
 	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
-	nextEvent(t, c, "ready", 5*time.Second)
-	c.waitEnded(t, 3*time.Second, "its lifetime of 50 ms")
-	deadline := time.Now().Add(5 * time.Second)
-	for f.fake.LogFollows() != 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("the engine follow stayed open after the stream ended")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	nextEvent(t, c, "ready")
+	c.awaitEnd(t, "its lifetime of 50 ms")
+	awaitFake(t, f.fake, "the engine follow to be released after the stream ended", func() bool { return f.fake.LogFollows() == 0 })
 }
 
 func TestLogStreamReleasesTheEngineFollowWhenTheBrowserLeaves(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
-	nextEvent(t, c, "ready", 5*time.Second)
-	if n := f.fake.LogFollows(); n != 1 {
-		t.Fatalf("%d follows open, want 1", n)
-	}
+	nextEvent(t, c, "ready")
+	awaitFake(t, f.fake, "the engine follow to open", func() bool { return f.fake.LogFollows() == 1 })
 	c.close()
-	deadline := time.Now().Add(5 * time.Second)
-	for f.fake.LogFollows() != 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("the engine follow stayed open after the browser left")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	awaitFake(t, f.fake, "the engine follow to be released after the browser left", func() bool { return f.fake.LogFollows() == 0 })
 }
 
 // busyAgg refuses every node call as an agent with no interactive slot left does.
@@ -518,6 +510,7 @@ func (busyAgg) OnNode(_ context.Context, _, _ string, _ func(*dockerx.Client) er
 }
 
 func TestLogStreamOfABusyAgentIs503StreamBusyAndIsNotAudited(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), func(f *envFix) {
 		f.logsWrap = func(src api.LogsSource) api.LogsSource { return busyAgg{src} }
 	})
@@ -547,17 +540,18 @@ func logStateOf(t *testing.T, fr frame) (state, at string) {
 }
 
 func TestLogStopSendsStateStoppedAndTheStreamWaitsForTheContainerToStart(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), func(f *envFix) { f.logsHeartbeat = 30 * time.Millisecond })
 	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: "last words"})
 	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
 	readLines(t, c, 1)
 	f.fake.EndLogs("web")
-	if state, _ := logStateOf(t, nextEvent(t, c, "state", 5*time.Second)); state != "stopped" {
+	if state, _ := logStateOf(t, nextEvent(t, c, "state")); state != "stopped" {
 		t.Fatalf("state = %q, want stopped", state)
 	}
 	// Nothing ends the stream: it beats and waits.
 	beats := 0
-	deadline := time.After(5 * time.Second)
+	ctx := testsupport.Context(t)
 	for beats < 2 {
 		select {
 		case fr, ok := <-c.frames:
@@ -567,13 +561,14 @@ func TestLogStopSendsStateStoppedAndTheStreamWaitsForTheContainerToStart(t *test
 			if fr.comment == "heartbeat" {
 				beats++
 			}
-		case <-deadline:
+		case <-ctx.Done():
 			t.Fatalf("only %d heartbeats", beats)
 		}
 	}
 }
 
 func TestLogRestartReopensTheLogFromTheLastLineAndNeverRepeatsOrLosesOne(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	at := time.Date(2026, 10, 9, 12, 0, 0, 7, time.UTC)
 	f.fake.AppendLogs("web",
@@ -582,7 +577,7 @@ func TestLogRestartReopensTheLogFromTheLastLineAndNeverRepeatsOrLosesOne(t *test
 	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
 	readLines(t, c, 2)
 	f.fake.EndLogs("web")
-	if state, _ := logStateOf(t, nextEvent(t, c, "state", 5*time.Second)); state != "stopped" {
+	if state, _ := logStateOf(t, nextEvent(t, c, "state")); state != "stopped" {
 		t.Fatalf("state = %q, want stopped", state)
 	}
 
@@ -593,7 +588,7 @@ func TestLogRestartReopensTheLogFromTheLastLineAndNeverRepeatsOrLosesOne(t *test
 		dockertest.FakeLogLine{Text: "same stamp, new text", Time: at.Add(time.Second)},
 		dockertest.FakeLogLine{Text: "second run", Time: at.Add(2 * time.Second)})
 	f.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: webID, Attributes: map[string]string{"name": "web"}})
-	state, when := logStateOf(t, nextEvent(t, c, "state", 5*time.Second))
+	state, when := logStateOf(t, nextEvent(t, c, "state"))
 	if state != "restarted" {
 		t.Fatalf("state = %q, want restarted", state)
 	}
@@ -618,6 +613,7 @@ func TestLogRestartReopensTheLogFromTheLastLineAndNeverRepeatsOrLosesOne(t *test
 }
 
 func TestLogRestartKeepsTwoIdenticalLinesWrittenAtTheSameNanosecond(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	at := time.Date(2026, 10, 9, 12, 0, 0, 7, time.UTC)
 	f.fake.AppendLogs("web",
@@ -626,22 +622,26 @@ func TestLogRestartKeepsTwoIdenticalLinesWrittenAtTheSameNanosecond(t *testing.T
 	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
 	readLines(t, c, 2)
 	f.fake.EndLogs("web")
-	nextEvent(t, c, "state", 5*time.Second)
+	nextEvent(t, c, "state")
 	f.fake.StartLogs("web")
 	// A third identical line at the same stamp was written by the new run.
 	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: "tick", Time: at})
 	f.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: webID})
-	nextEvent(t, c, "state", 5*time.Second)
+	nextEvent(t, c, "state")
 	got, _ := readLines(t, c, 1)
 	if got[0].M != "tick" {
 		t.Fatalf("got %+v, want the one new tick", got)
 	}
-	if fr, ok := c.next(200 * time.Millisecond); ok && fr.event == "log" {
-		t.Errorf("a repeat of the first run arrived: %+v", fr)
+	// Fence: a line written after that tick must be the next line, so a repeat of the first
+	// run's ticks would have to arrive before it.
+	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: "fence", Time: at.Add(time.Second)})
+	if next, _ := readLines(t, c, 1); next[0].M != "fence" {
+		t.Errorf("a repeat of the first run arrived before the fence: %+v", next)
 	}
 }
 
 func TestLogRestartIgnoresTheEventsOfOtherContainers(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: "a"})
 	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
@@ -649,24 +649,42 @@ func TestLogRestartIgnoresTheEventsOfOtherContainers(t *testing.T) {
 	f.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: dbID})
 	f.fake.PublishEvent(dockertest.FakeEvent{Type: "network", Action: "start", ActorID: webID})
 	f.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "die", ActorID: webID})
-	for {
-		fr, ok := c.next(300 * time.Millisecond)
-		if !ok {
-			break
-		}
-		if fr.event == "state" {
-			t.Fatalf("an event of another container or action moved the stream: %+v", fr)
-		}
+	// Fence: a start of this container, stamped so it can be told apart, moves the stream.
+	// The events are handled in order, so a state frame that any of the three above caused
+	// would be sent before the fence's and carry another stamp.
+	fenceAt := time.Now().Add(time.Hour).UTC()
+	f.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: webID, TimeNano: fenceAt.UnixNano()})
+	state, when := logStateOf(t, nextEvent(t, c, "state"))
+	if state != "restarted" || when != fenceAt.Format(time.RFC3339Nano) {
+		t.Fatalf("the first state frame = %q at %q, want the fence's restart at %s: an event of another container or action moved the stream",
+			state, when, fenceAt.Format(time.RFC3339Nano))
 	}
-	if n := len(f.fake.LogQueries()); n != 1 {
-		t.Errorf("the engine's log was opened %d times, want 1", n)
+	if n := len(f.fake.LogQueries()); n != 2 {
+		t.Errorf("the engine's log was opened %d times, want 2: the first and the fence's restart", n)
 	}
 }
 
-// spyEvents counts the event subscriptions that are open.
+// spyEvents counts the event subscriptions that are open and signals each one that is cancelled.
 type spyEvents struct {
 	api.LogsSource
 	open atomic.Int32
+	// cancelled gets one value after each subscription is cancelled; see awaitNone.
+	cancelled chan struct{}
+}
+
+func newSpyEvents() *spyEvents { return &spyEvents{cancelled: make(chan struct{}, 16)} }
+
+// awaitNone waits until no subscription is open, woken by each cancel rather than by polling.
+func (s *spyEvents) awaitNone(t *testing.T, what string) {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	for s.open.Load() != 0 {
+		select {
+		case <-s.cancelled:
+		case <-ctx.Done():
+			t.Fatalf("waiting for %s: %d subscriptions still open", what, s.open.Load())
+		}
+	}
 }
 
 func (s *spyEvents) Events(ctx context.Context, envID string) ([]envs.NodeEvent, <-chan envs.NodeEvent, func()) {
@@ -675,6 +693,10 @@ func (s *spyEvents) Events(ctx context.Context, envID string) ([]envs.NodeEvent,
 	return backlog, ch, func() {
 		s.open.Add(-1)
 		cancel()
+		select {
+		case s.cancelled <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -693,6 +715,7 @@ func (d *dropEvents) Events(ctx context.Context, envID string) ([]envs.NodeEvent
 // WR-03: a stream whose event subscription was dropped ends, so the browser's reconnect
 // subscribes again, rather than carrying on deaf to the container's next start.
 func TestLogStreamEndsWhenItsEventSubscriptionIsDropped(t *testing.T) {
+	t.Parallel()
 	drop := &dropEvents{ch: make(chan envs.NodeEvent)}
 	f := newLogsFix(t, logsEngine(), func(f *envFix) {
 		f.logsWrap = func(src api.LogsSource) api.LogsSource { drop.LogsSource = src; return drop }
@@ -701,25 +724,22 @@ func TestLogStreamEndsWhenItsEventSubscriptionIsDropped(t *testing.T) {
 	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
 	readLines(t, c, 1)
 	close(drop.ch)
-	select {
-	case <-c.done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the stream stayed open after its event subscription was dropped")
-	}
+	c.awaitEnd(t, "its event subscription was dropped")
 }
 
 func TestLogRestartCancelsItsEventSubscriptionWhenTheStreamEnds(t *testing.T) {
-	spy := &spyEvents{}
+	t.Parallel()
+	spy := newSpyEvents()
 	f := newLogsFix(t, logsEngine(), func(f *envFix) {
 		f.logsWrap = func(src api.LogsSource) api.LogsSource { spy.LogsSource = src; return spy }
 	})
 	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
-	nextEvent(t, c, "ready", 5*time.Second)
+	nextEvent(t, c, "ready")
 	if n := spy.open.Load(); n != 1 {
 		t.Fatalf("%d event subscriptions while the stream is open, want 1", n)
 	}
 	c.close()
-	waitFor(t, "the subscription to be cancelled", func() bool { return spy.open.Load() == 0 })
+	spy.awaitNone(t, "the subscription to be cancelled")
 }
 
 // The page of earlier lines behind "Load earlier lines" (plan 04-20, D-15, Pitfall 12).
@@ -753,6 +773,7 @@ func numberedLines(f *logsFix, n int, at time.Time) {
 }
 
 func TestLogPageAnswersTheLinesBeforeUntilOldestFirstAndSaysWhenThereAreMore(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	numberedLines(f, 10, at)
@@ -786,6 +807,7 @@ func TestLogPageAnswersTheLinesBeforeUntilOldestFirstAndSaysWhenThereAreMore(t *
 }
 
 func TestLogPageFindsEarlierLinesFarBackWithoutReadingTheWholeLogFirst(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	old := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	f.fake.AppendLogs("web",
@@ -812,6 +834,7 @@ func TestLogPageFindsEarlierLinesFarBackWithoutReadingTheWholeLogFirst(t *testin
 }
 
 func TestLogPageIsEmptyAndTheStartWhenNothingIsEarlier(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	numberedLines(f, 3, at)
@@ -822,6 +845,7 @@ func TestLogPageIsEmptyAndTheStartWhenNothingIsEarlier(t *testing.T) {
 }
 
 func TestLogPageKeepsTwoLinesThatShareAStampOnEitherSideOfThePageBoundary(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	at := time.Date(2026, 10, 9, 12, 0, 0, 5, time.UTC)
 	// Three lines written at one nanosecond, then one a second later.
@@ -849,10 +873,11 @@ func TestLogPageKeepsTwoLinesThatShareAStampOnEitherSideOfThePageBoundary(t *tes
 const logTimeLayoutTest = "2006-01-02T15:04:05.000000000Z"
 
 func TestLogPageSharesTheViewersAuditMemoryAndWritesNoRowForTheSameViewer(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	numberedLines(f, 3, time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC))
 	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
-	nextEvent(t, c, "ready", 5*time.Second)
+	nextEvent(t, c, "ready")
 	if n := len(f.logAudits(t)); n != 1 {
 		t.Fatalf("%d audit rows after the stream opened, want 1", n)
 	}
@@ -869,6 +894,7 @@ func TestLogPageSharesTheViewersAuditMemoryAndWritesNoRowForTheSameViewer(t *tes
 }
 
 func TestLogPageRefusesWhatIsNotAPage(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	for _, query := range []string{
 		"", "sid=short&tail=5", "sid=" + sidA + "&tail=0", "sid=" + sidA + "&tail=2001",
@@ -889,6 +915,7 @@ func TestLogPageRefusesWhatIsNotAPage(t *testing.T) {
 }
 
 func TestLogPageNeedsContainersRead(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	f.addUser(t, "nobody", false)
 	cookie, _ := f.signIn(t, "nobody", false)
@@ -899,6 +926,7 @@ func TestLogPageNeedsContainersRead(t *testing.T) {
 }
 
 func TestLogPageKeepsTheNewestLinesWhenThePageIsOverItsByteBudget(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), func(f *envFix) { f.logsMaxPageBytes = 100 })
 	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	for i := range 10 {
@@ -949,12 +977,13 @@ type unreadableBody struct {
 }
 
 func TestLogStreamOfAContainerTheEngineCannotReadSendsUnreadableWithTheDriverAndEndsWithoutAnAuditRow(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, unreadableEngine(), nil)
 	c := f.open(t, f.cookie, quietID, "sid="+sidA, "")
 	if c.status0() != http.StatusOK {
 		t.Fatalf("status = %d: %s", c.status0(), c.bodyString())
 	}
-	fr := nextEvent(t, c, "unreadable", 5*time.Second)
+	fr := nextEvent(t, c, "unreadable")
 	var body unreadableBody
 	if err := json.Unmarshal([]byte(fr.data), &body); err != nil {
 		t.Fatalf("unreadable data %q: %v", fr.data, err)
@@ -965,7 +994,7 @@ func TestLogStreamOfAContainerTheEngineCannotReadSendsUnreadableWithTheDriverAnd
 	if len(body.Options) != 2 || body.Options[0].Name != "syslog-address" || body.Options[1].Name != "tag" {
 		t.Errorf("options = %+v, want the two by name", body.Options)
 	}
-	c.waitEnded(t, 3*time.Second, "an unreadable log has nothing to stream")
+	c.awaitEnd(t, "an unreadable log has nothing to stream")
 	if n := len(f.logAudits(t)); n != 0 {
 		t.Errorf("%d audit rows for a log that was never read", n)
 	}
@@ -975,10 +1004,11 @@ func TestLogStreamOfAContainerTheEngineCannotReadSendsUnreadableWithTheDriverAnd
 }
 
 func TestLogStreamUnreadableMasksTheOptionValuesForAViewerAndShowsThemToAHolderOfSecretsReveal(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, unreadableEngine(), nil)
 	admin := f.open(t, f.cookie, quietID, "sid="+sidA, "")
 	var shown unreadableBody
-	if err := json.Unmarshal([]byte(nextEvent(t, admin, "unreadable", 5*time.Second).data), &shown); err != nil {
+	if err := json.Unmarshal([]byte(nextEvent(t, admin, "unreadable").data), &shown); err != nil {
 		t.Fatal(err)
 	}
 	if shown.Options[0].Masked || shown.Options[0].Value != syslogAddr {
@@ -989,7 +1019,7 @@ func TestLogStreamUnreadableMasksTheOptionValuesForAViewerAndShowsThemToAHolderO
 	f.addEnvRole(t, "viewer", f.env.ID, "viewer")
 	cookie, _ := f.signIn(t, "viewer", false)
 	viewer := f.open(t, cookie, quietID, "sid="+sidB, "")
-	frame := nextEvent(t, viewer, "unreadable", 5*time.Second)
+	frame := nextEvent(t, viewer, "unreadable")
 	if strings.Contains(frame.data, "pw@") || strings.Contains(frame.data, "10.0.0.9") || strings.Contains(frame.data, `"web"`) {
 		t.Fatalf("a viewer was sent a value: %s", frame.data)
 	}
@@ -1005,20 +1035,25 @@ func TestLogStreamUnreadableMasksTheOptionValuesForAViewerAndShowsThemToAHolderO
 }
 
 func TestLogStreamOfASyslogContainerWhoseLogsReadStreamsNormally(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, unreadableEngine(), nil)
 	f.fake.AppendLogs("sys", dockertest.FakeLogLine{Text: "dual logging keeps a copy"})
 	c := f.open(t, f.cookie, sysID, "sid="+sidA, "")
-	nextEvent(t, c, "ready", 5*time.Second)
+	nextEvent(t, c, "ready")
 	lines, _ := readLines(t, c, 1)
 	if lines[0].M != "dual logging keeps a copy" {
 		t.Errorf("line = %+v", lines[0])
 	}
-	if fr, ok := c.next(150 * time.Millisecond); ok && fr.event == "unreadable" {
-		t.Errorf("a readable syslog container was called unreadable: %+v", fr)
+	// Fence: a second line must be the next frame, so an unreadable frame sent after the
+	// first line would arrive before it; readLines fails on any event but log, ready and state.
+	f.fake.AppendLogs("sys", dockertest.FakeLogLine{Text: "and another"})
+	if more, _ := readLines(t, c, 1); more[0].M != "and another" {
+		t.Errorf("the next line = %+v, want the fence", more)
 	}
 }
 
 func TestLogPageOfAContainerTheEngineCannotReadIs409LogsUnreadable(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, unreadableEngine(), nil)
 	rec := f.req(t, http.MethodGet, f.pagePath(quietID, "sid="+sidA+"&tail=5"), "")
 	if rec.code != http.StatusConflict || rec.ptyp != "logs_unreadable" {
@@ -1115,11 +1150,7 @@ func (f *logsFix) startDownload(cookie, container, query string, w http.Response
 func (f *logsFix) download(t *testing.T, container, query string) *dlWriter {
 	t.Helper()
 	w := newDLWriter(true)
-	select {
-	case <-f.startDownload(f.cookie, container, query, w):
-	case <-time.After(20 * time.Second):
-		t.Fatal("the download never finished")
-	}
+	testsupport.Await(t, "the download to finish", f.startDownload(f.cookie, container, query, w))
 	return w
 }
 
@@ -1150,6 +1181,7 @@ func (f *logsFix) downloadAudits(t *testing.T) []logAuditRow {
 }
 
 func TestLogDownloadAnswersATextFileNamedByContainerAndUTCMinuteWithBothStreamsInOrder(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	at := time.Date(2026, 10, 9, 12, 58, 0, 123456789, time.UTC)
 	f.fake.AppendLogs("web",
@@ -1186,6 +1218,7 @@ func TestLogDownloadAnswersATextFileNamedByContainerAndUTCMinuteWithBothStreamsI
 }
 
 func TestLogDownloadPrefixesDockersRawUTCTimestampWhenAskedAndReadsTheRangeFromTheEngine(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	at := time.Date(2026, 10, 9, 12, 58, 0, 123456789, time.UTC)
 	for i := range 5 {
@@ -1209,6 +1242,7 @@ func TestLogDownloadPrefixesDockersRawUTCTimestampWhenAskedAndReadsTheRangeFromT
 }
 
 func TestLogDownloadOfSeventyMiBStreamsInBoundedWritesWithoutHoldingItInMemory(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	const lineLen, count = 200 << 10, 360 // 70.3 MiB
 	text := strings.Repeat("x", lineLen)
@@ -1241,6 +1275,7 @@ func TestLogDownloadOfSeventyMiBStreamsInBoundedWritesWithoutHoldingItInMemory(t
 }
 
 func TestLogDownloadAllowsTwoAtOnceAndRefusesTheThirdWith429(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	text := strings.Repeat("y", 60<<10)
 	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: text}, dockertest.FakeLogLine{Text: text})
@@ -1251,18 +1286,10 @@ func TestLogDownloadAllowsTwoAtOnceAndRefusesTheThirdWith429(t *testing.T) {
 		w := newDLWriter(false)
 		w.gate = gate
 		dones = append(dones, f.startDownload(f.cookie, webID, "", w))
-		select {
-		case <-w.wrote:
-		case <-time.After(5 * time.Second):
-			t.Fatal("a download never started writing")
-		}
+		testsupport.Await(t, "a download to start writing", w.wrote)
 	}
 	third := newDLWriter(true)
-	select {
-	case <-f.startDownload(f.cookie, webID, "", third):
-	case <-time.After(5 * time.Second):
-		t.Fatal("the third download was not answered")
-	}
+	testsupport.Await(t, "the third download to be answered", f.startDownload(f.cookie, webID, "", third))
 	if third.code() != http.StatusTooManyRequests || !strings.Contains(third.body.String(), `"type":"rate_limited"`) {
 		t.Fatalf("the third download = %d %s, want 429 rate_limited", third.code(), third.body.String())
 	}
@@ -1279,6 +1306,7 @@ func TestLogDownloadAllowsTwoAtOnceAndRefusesTheThirdWith429(t *testing.T) {
 }
 
 func TestLogDownloadIsAuditedOncePerDownloadWithItsRangeAndNeverALineOfTheLog(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	const secret = "DOWNLOADED-LINE-THAT-MUST-NOT-BE-KEPT-77c1" //nolint:gosec // a marker, not a credential
 	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: secret})
@@ -1311,6 +1339,7 @@ func TestLogDownloadIsAuditedOncePerDownloadWithItsRangeAndNeverALineOfTheLog(t 
 }
 
 func TestLogDownloadNameKeepsOnlySafeCharacters(t *testing.T) {
+	t.Parallel()
 	cfg := logsEngine()
 	cfg.Containers = append(cfg.Containers, dockertest.FakeContainer{
 		ID: "eeeeeeeeeeee55555555555555555555555555555555555555555555555555", Names: []string{`/we"b;../x y`}, Image: "alpine", State: "running", Status: "Up 1 hour"})
@@ -1326,6 +1355,7 @@ func TestLogDownloadNameKeepsOnlySafeCharacters(t *testing.T) {
 }
 
 func TestLogDownloadRefusalsAreAnsweredBeforeAnythingIsSentAndAreNotAudited(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, unreadableEngine(), nil)
 	for name, tc := range map[string]struct {
 		container, query string
@@ -1353,6 +1383,7 @@ func TestLogDownloadRefusalsAreAnsweredBeforeAnythingIsSentAndAreNotAudited(t *t
 }
 
 func TestLogDownloadNeedsContainersRead(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	f.addUser(t, "nobody", false)
 	cookie, _ := f.signIn(t, "nobody", false)
@@ -1364,6 +1395,7 @@ func TestLogDownloadNeedsContainersRead(t *testing.T) {
 }
 
 func TestLogDownloadStopsReadingTheEngineWhenTheBrowserLeaves(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	text := strings.Repeat("z", 60<<10)
 	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: text}, dockertest.FakeLogLine{Text: text})
@@ -1380,18 +1412,10 @@ func TestLogDownloadStopsReadingTheEngineWhenTheBrowserLeaves(t *testing.T) {
 		defer close(done)
 		f.h.ServeHTTP(w, req)
 	}()
-	select {
-	case <-w.wrote:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the download never started writing")
-	}
+	testsupport.Await(t, "the download to start writing", w.wrote)
 	cancel()
 	close(gate)
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the download kept running after the browser left")
-	}
+	testsupport.Await(t, "the download to stop after the browser left", done)
 }
 
 // Resuming a log stream (plan 04-21, OBS-01, D-24, Pitfall 12). A browser that lost
@@ -1412,6 +1436,7 @@ func resumeFix(t *testing.T) (*logsFix, []logLine) {
 }
 
 func TestLogStreamResumeTakesTheLaterOfAfterAndLastEventID(t *testing.T) {
+	t.Parallel()
 	f, lines := resumeFix(t)
 
 	// after is the later one: the stream resumes after line 3.
@@ -1420,8 +1445,10 @@ func TestLogStreamResumeTakesTheLaterOfAfterAndLastEventID(t *testing.T) {
 	if got[0].M != "line 4" {
 		t.Errorf("with after later than Last-Event-ID the first line = %q, want line 4", got[0].M)
 	}
-	if fr, ok := c.next(150 * time.Millisecond); ok && fr.event == "log" {
-		t.Errorf("an extra log event arrived: %+v", fr)
+	// Fence: a line written after the resume must be the very next line.
+	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: "line 5 fence", Time: time.Date(2026, 10, 9, 12, 0, 5, 5, time.UTC)})
+	if next, _ := readLines(t, c, 1); next[0].M != "line 5 fence" {
+		t.Errorf("the next line after the resume = %q, want the fence and no repeat of line 4", next[0].M)
 	}
 	c.close()
 
@@ -1434,6 +1461,7 @@ func TestLogStreamResumeTakesTheLaterOfAfterAndLastEventID(t *testing.T) {
 }
 
 func TestLogStreamResumeWithTheSameViewerIDWritesNoSecondAuditRow(t *testing.T) {
+	t.Parallel()
 	f, lines := resumeFix(t)
 	for i := range 3 {
 		c := f.open(t, f.cookie, webID, "sid="+sidA, lines[i].T)
@@ -1446,6 +1474,7 @@ func TestLogStreamResumeWithTheSameViewerIDWritesNoSecondAuditRow(t *testing.T) 
 }
 
 func TestLogStreamIgnoresALastEventIDThatIsNotATime(t *testing.T) {
+	t.Parallel()
 	f := newLogsFix(t, logsEngine(), nil)
 	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: "a"}, dockertest.FakeLogLine{Text: "b"})
 	c := f.open(t, f.cookie, webID, "sid="+sidA, "not a time")

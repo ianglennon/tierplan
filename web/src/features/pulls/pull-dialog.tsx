@@ -59,7 +59,7 @@ const MAX_REF = 512;
 
 // How long the typing must stop before the credential preview asks the server (UI-SPEC
 // "Credential preview").
-const PREVIEW_DEBOUNCE_MS = 400;
+export const PREVIEW_DEBOUNCE_MS = 400;
 
 // Messages are i18n keys, never literals (D-65).
 const schema = z.object({
@@ -628,7 +628,7 @@ interface TagPickerProps {
 // in the field, read through the chosen environment (or the Registries page's own routes
 // until one is chosen). Typing in the field moves the repository only once the typing stops,
 // so the registry is not asked after every key. The tag in the field is the chosen row.
-function TagPicker({ typed, envId, onChoose }: TagPickerProps) {
+export function TagPicker({ typed, envId, onChoose }: TagPickerProps) {
   const latest = repoOf(typed);
   const [repo, setRepo] = useState(latest);
   useEffect(() => {

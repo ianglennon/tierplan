@@ -14,6 +14,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -24,7 +25,7 @@ import (
 // next waits for the next event for which match is true, skipping the others.
 func next(t *testing.T, ch <-chan HealthEvent, what string, match func(HealthEvent) bool) HealthEvent {
 	t.Helper()
-	deadline := time.After(5 * time.Second)
+	deadline := testsupport.Context(t).Done()
 	for {
 		select {
 		case ev, ok := <-ch:
@@ -287,11 +288,11 @@ func TestASubscriberThatFallsBehindIsDroppedAndTheOthersAreNotSlowed(t *testing.
 	}()
 	for range 500 {
 		b.Publish(HealthEvent{Type: EventAgentRefused, EnvID: "e"})
-		time.Sleep(20 * time.Microsecond) // the fast reader keeps up
+		time.Sleep(20 * time.Microsecond) //nolint:forbidigo // paces the publisher so the fast reader is never behind; the pace is the input of the slow-subscriber test
 	}
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-testsupport.Context(t).Done():
 		t.Fatal("the fast subscriber did not receive its events")
 	}
 	if len(got) != 500 {
@@ -311,7 +312,7 @@ func TestASubscriberThatFallsBehindIsDroppedAndTheOthersAreNotSlowed(t *testing.
 				break
 			}
 			n++
-		case <-time.After(time.Second):
+		case <-testsupport.Context(t).Done():
 			t.Fatalf("the slow subscriber's channel was never closed (read %d events)", n)
 		}
 	}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
@@ -83,6 +84,7 @@ func (f *foldFix) list(t *testing.T) map[string]foldEnv {
 func (f *foldFix) foldPath() string { return "/api/environments/" + f.env.ID + "/fold-local" }
 
 func TestBothEnvironmentsReportFoldOfferedWhenTheLocalHostManagesTheEnrolledSwarm(t *testing.T) {
+	t.Parallel()
 	f := newFoldFix(t, nil)
 	got := f.list(t)
 	if !got[f.local.ID].FoldOffered || !got[f.env.ID].FoldOffered {
@@ -91,6 +93,7 @@ func TestBothEnvironmentsReportFoldOfferedWhenTheLocalHostManagesTheEnrolledSwar
 }
 
 func TestFoldOfferedIsFalseForAnotherClusterAndFoldingItAnswers409FoldNotOffered(t *testing.T) {
+	t.Parallel()
 	f := newFoldFix(t, func(c *dockertest.FakeConfig) { c.SwarmClusterID = "cluster-elsewhere" })
 	got := f.list(t)
 	if got[f.local.ID].FoldOffered || got[f.env.ID].FoldOffered {
@@ -109,6 +112,7 @@ func TestFoldOfferedIsFalseForAnotherClusterAndFoldingItAnswers409FoldNotOffered
 }
 
 func TestFoldLocalIsForInstanceAdminsThenRetiresTheLocalEnvironmentAndAuditsIt(t *testing.T) {
+	t.Parallel()
 	f := newFoldFix(t, nil)
 
 	f.addAllEnvAdmin(t, "ops")
@@ -152,6 +156,7 @@ func TestFoldLocalIsForInstanceAdminsThenRetiresTheLocalEnvironmentAndAuditsIt(t
 }
 
 func TestTheNodeListOfAFoldedEnvironmentHasALocalSocketRowWithNoCertificateAndNoClock(t *testing.T) {
+	t.Parallel()
 	f := newFoldFix(t, nil)
 	if rec := f.req(t, http.MethodPost, f.foldPath(), ""); rec.code != http.StatusOK {
 		t.Fatalf("fold: %d %s", rec.code, rec.body)
@@ -161,23 +166,23 @@ func TestTheNodeListOfAFoldedEnvironmentHasALocalSocketRowWithNoCertificateAndNo
 	}
 	var row map[string]any
 	// The fold re-registers the socket, so its row reads as unprobed until the
-	// next probe answers; wait for that rather than racing it.
-	waitFor(t, "the folded host to be probed", func() bool {
-		rec := f.req(t, http.MethodGet, "/api/env/"+f.env.ID+"/agents", "")
-		if rec.code != http.StatusOK {
-			t.Fatalf("agents: %d %s", rec.code, rec.body)
+	// next probe answers; wait for that probe, then read the list once.
+	awaitProbed(t, f.mon, envs.SocketTarget(f.env.ID))
+	rec := f.req(t, http.MethodGet, "/api/env/"+f.env.ID+"/agents", "")
+	if rec.code != http.StatusOK {
+		t.Fatalf("agents: %d %s", rec.code, rec.body)
+	}
+	if err := json.Unmarshal(rec.body, &list); err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range list.Items {
+		if it["role"] == "local" {
+			row = it
 		}
-		if err := json.Unmarshal(rec.body, &list); err != nil {
-			t.Fatal(err)
-		}
-		row = nil
-		for _, it := range list.Items {
-			if it["role"] == "local" {
-				row = it
-			}
-		}
-		return row != nil && row["connected"] == true
-	})
+	}
+	if row == nil || row["connected"] != true {
+		t.Fatalf("the folded host's row after its first probe is %v in %s, want it connected", row, rec.body)
+	}
 	if len(list.Items) != 2 {
 		t.Fatalf("items = %v, want mgr-1 and the folded host", list.Items)
 	}

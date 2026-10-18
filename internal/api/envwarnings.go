@@ -22,6 +22,9 @@ type EnvWarningsDeps struct {
 	Envs *envs.Service
 	// Checker says which environments the caller may read.
 	Checker *rbac.Checker
+	// Clusters is the cluster reader whose last read says which services are in a restart loop
+	// (RES-13). Nil lists none.
+	Clusters *envs.Clusters
 	// Agents are the node list's own dependencies, so an agent reads here as it does
 	// in the list: its certificate, clock, update state and the manual update need.
 	Agents AgentsDeps
@@ -33,7 +36,7 @@ type EnvWarningsDeps struct {
 
 // EnvWarningBody is one environment problem in the header bell.
 type EnvWarningBody struct {
-	ID            string `json:"id" enum:"env_offline,cert_not_renewing,manual_update_needed,clock_skew,pending_long,cluster_changed,fold_offered" doc:"Which problem this is"`
+	ID            string `json:"id" enum:"env_offline,cert_not_renewing,manual_update_needed,clock_skew,pending_long,cluster_changed,fold_offered,restart_loop,restart_loop_container" doc:"Which problem this is"`
 	Severity      string `json:"severity" enum:"error,warning" doc:"error: an environment is out of reach or a certificate has expired. warning: something needs attention"`
 	EnvID         string `json:"envId,omitempty" doc:"The environment the problem is about. Absent for manual_update_needed when it spans more than one environment"`
 	EnvName       string `json:"envName,omitempty" doc:"That environment's name, at most 64 characters. For fold_offered, the swarm environment"`
@@ -43,8 +46,18 @@ type EnvWarningBody struct {
 	Since         string `json:"since,omitempty" format:"date-time" doc:"When the problem began, where that is known. Items are shown newest first"`
 	ExpiresAt     string `json:"expiresAt,omitempty" format:"date-time" doc:"For cert_not_renewing: when the certificate expires"`
 	Days          int    `json:"days,omitempty" doc:"For pending_long: whole days since the environment was added"`
-	Count         int    `json:"count,omitempty" doc:"For manual_update_needed: how many agents need an update by hand"`
+	Count         int    `json:"count,omitempty" doc:"For manual_update_needed: how many agents need an update by hand. For restart_loop: how many tasks of the service failed inside the window. For restart_loop_container: how many times the container died inside the window"`
 	OffsetSeconds int    `json:"offsetSeconds,omitempty" doc:"For clock_skew: how far the agent's clock is ahead of the server's, in seconds; negative is behind"`
+
+	Service       string `json:"service,omitempty" doc:"For restart_loop: the service's name, at most 64 characters"`
+	ServiceID     string `json:"serviceId,omitempty" doc:"For restart_loop: the service's ID"`
+	WindowMinutes int    `json:"windowMinutes,omitempty" doc:"For restart_loop and restart_loop_container: the window the count is over, in minutes"`
+	LatestError   string `json:"latestError,omitempty" doc:"For restart_loop: the error text of the newest failed task, at most 300 characters; absent when Docker gave none"`
+
+	Container    string `json:"container,omitempty" doc:"For restart_loop_container: the container's name, at most 64 characters"`
+	ContainerID  string `json:"containerId,omitempty" doc:"For restart_loop_container: the container's ID as the last read holds it"`
+	NodeID       string `json:"nodeId,omitempty" doc:"For restart_loop_container: the node the container is on, as the container routes take it"`
+	LastExitCode string `json:"lastExitCode,omitempty" doc:"For restart_loop_container: the exit code of the container's newest death"`
 }
 
 // EnvWarningsBody lists the environment warnings that apply now.
@@ -64,6 +77,8 @@ func envWarningBody(w envs.EnvWarning) EnvWarningBody {
 		ID: w.ID, Severity: w.Severity, EnvID: w.EnvID, EnvName: w.EnvName, Node: w.Node, AgentID: w.AgentID, Reason: w.Reason,
 		Since: rfc3339(w.Since), ExpiresAt: rfc3339(w.ExpiresAt), Days: w.Days, Count: w.Count,
 		OffsetSeconds: envs.ClockOffsetSeconds(w.Offset),
+		Service:       w.Service, ServiceID: w.ServiceID, WindowMinutes: w.WindowMinutes, LatestError: w.LatestError,
+		Container: w.Container, ContainerID: w.ContainerID, NodeID: w.NodeID, LastExitCode: w.LastExitCode,
 	}
 }
 
@@ -90,7 +105,9 @@ func RegisterEnvWarnings(r *httpx.Router, d EnvWarningsDeps) {
 			"(cert_not_renewing), agents that need an update by hand (manual_update_needed, one item with a count), a clock that is out " +
 			"of step (clock_skew), an environment still waiting for its first agent after 7 days (pending_long), a swarm that was " +
 			"re-initialised (cluster_changed) and a local host that can be folded into a swarm environment it manages (fold_offered, " +
-			"only for callers who hold environments.manage). Only environments the caller holds environments.read for are considered, " +
+			"only for callers who hold environments.manage) and a swarm service whose tasks keep failing (restart_loop, one item per service that is not muted, " +
+			"only for callers who hold services.read on that environment; with service, serviceId, count, windowMinutes, latestError and since) and a standalone container that keeps dying (restart_loop_container, one item per container that is not muted, " +
+			"only for callers who hold containers.read on that environment; with container, containerId, nodeId, count, windowMinutes, lastExitCode and since). Only environments the caller holds environments.read for are considered, " +
 			"so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. " +
 			"Errors come first, then the newest. Names are at most 64 characters.",
 		Tags: []string{"environments"},
@@ -144,10 +161,66 @@ func RegisterEnvWarnings(r *httpx.Router, d EnvWarningsDeps) {
 				})
 			}
 		}
-		items := make([]EnvWarningBody, 0)
-		for _, w := range envs.Warnings(visible, states, at) {
+		warnings := envs.Warnings(visible, states, at)
+		warnings = append(warnings, restartLoopWarnings(d, perEnv, visible)...)
+		warnings = append(warnings, containerLoopWarnings(d, perEnv, visible)...)
+		envs.SortWarnings(warnings)
+		items := make([]EnvWarningBody, 0, len(warnings))
+		for _, w := range warnings {
 			items = append(items, envWarningBody(w))
 		}
 		return &EnvWarningsOutput{CacheControl: "no-store", Body: EnvWarningsBody{Items: items}}, nil
 	})
+}
+
+// canReadServices reports whether the grants listed for each environment include reading its
+// services.
+func canReadServices(perEnv map[string][]rbac.Perm, id string) bool {
+	return slices.Contains(perEnv[id], rbac.PermServicesRead) ||
+		slices.Contains(perEnv[rbac.AllEnvironments], rbac.PermServicesRead)
+}
+
+// canReadContainers reports whether the grants listed for each environment include reading its
+// containers.
+func canReadContainers(perEnv map[string][]rbac.Perm, id string) bool {
+	return slices.Contains(perEnv[id], rbac.PermContainersRead) ||
+		slices.Contains(perEnv[rbac.AllEnvironments], rbac.PermContainersRead)
+}
+
+// containerLoopWarnings are the container-loop items of the environments the caller may read
+// containers on, from the cluster reader's last read of each: nothing is read from Docker for
+// the bell.
+func containerLoopWarnings(d EnvWarningsDeps, perEnv map[string][]rbac.Perm, visible []envs.Environment) []envs.EnvWarning {
+	if d.Clusters == nil {
+		return nil
+	}
+	var out []envs.EnvWarning
+	for _, e := range visible {
+		if !canReadContainers(perEnv, e.ID) {
+			continue
+		}
+		if st, ok := d.Clusters.Cached(e.ID); ok && len(st.ContainerLoops) > 0 {
+			out = append(out, envs.ContainerLoopWarnings(e, st.ContainerLoops)...)
+		}
+	}
+	return out
+}
+
+// restartLoopWarnings are the restart-loop items of the swarms the caller may read services on,
+// from the cluster reader's last read of each: nothing is read from Docker for the bell, and a
+// loop that stopped is gone with the next read.
+func restartLoopWarnings(d EnvWarningsDeps, perEnv map[string][]rbac.Perm, visible []envs.Environment) []envs.EnvWarning {
+	if d.Clusters == nil {
+		return nil
+	}
+	var out []envs.EnvWarning
+	for _, e := range visible {
+		if !canReadServices(perEnv, e.ID) {
+			continue
+		}
+		if st, ok := d.Clusters.Cached(e.ID); ok && len(st.RestartLoops) > 0 {
+			out = append(out, envs.RestartLoopWarnings(e, st.RestartLoops)...)
+		}
+	}
+	return out
 }

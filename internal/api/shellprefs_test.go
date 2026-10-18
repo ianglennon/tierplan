@@ -35,6 +35,7 @@ func (f *shellFix) prefRows(t *testing.T, userID string) int {
 }
 
 func TestShellAnOpenRemembersTheChoiceForTheImageAndTheRouteGivesItBack(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	rec := f.open(t, "web", `{"shell":"bash","user":"root","workingDir":"/var/www","cols":80,"rows":24}`)
 	if rec.code != http.StatusCreated {
@@ -67,6 +68,7 @@ func TestShellAnOpenRemembersTheChoiceForTheImageAndTheRouteGivesItBack(t *testi
 }
 
 func TestShellAPreferenceIsTheCallersOwnAndAnotherImageHasNone(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	f.addEnvUser(t, "olive", f.env.ID, "viewer")
 	if rec := f.open(t, "web", `{"shell":"bash","user":"root","cols":80,"rows":24}`); rec.code != http.StatusCreated {
@@ -94,6 +96,7 @@ func TestShellAPreferenceIsTheCallersOwnAndAnotherImageHasNone(t *testing.T) {
 }
 
 func TestShellAnAnonymousCallerCannotAskForAPreference(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	rec := f.call(t, authReq{method: http.MethodGet, path: prefPath("nginx:1.27")})
 	if rec.Code != http.StatusUnauthorized {
@@ -102,6 +105,7 @@ func TestShellAnAnonymousCallerCannotAskForAPreference(t *testing.T) {
 }
 
 func TestShellARefusedOpenRemembersNothing(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	// db is stopped, so the open is refused before any exec.
 	if rec := f.open(t, "db", `{"shell":"bash","user":"root","cols":80,"rows":24}`); rec.code != http.StatusConflict {
@@ -116,6 +120,7 @@ func TestShellARefusedOpenRemembersNothing(t *testing.T) {
 }
 
 func TestShellOnlyTheNewest200ChoicesOfAUserAreKept(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	var adminID string
 	if err := f.st.Read.QueryRow(`SELECT id FROM users WHERE username = 'admin'`).Scan(&adminID); err != nil {
@@ -148,6 +153,7 @@ func TestShellOnlyTheNewest200ChoicesOfAUserAreKept(t *testing.T) {
 }
 
 func TestShellRemovingAUserRemovesTheirPreferences(t *testing.T) {
+	t.Parallel()
 	f := newShellFix(t, nil)
 	cookie, csrf := f.operatorWithShell(t, "olive")
 	rec := f.call(t, authReq{method: http.MethodPost, path: f.openPath("web"), body: openBody, cookie: cookie, csrf: csrf})

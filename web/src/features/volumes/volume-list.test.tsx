@@ -173,6 +173,14 @@ describe("VolumeList filters", () => {
     expect(changes[1]).toEqual({ usage: "unused" });
   });
 
+  it("wraps the usage chips onto further rows instead of scrolling sideways (G-06-2)", async () => {
+    mount();
+    const group = await screen.findByRole("group", { name: "Filter by usage" });
+    // The chips wrap onto further rows at every width, so none is cut off at 375px (G-06-2).
+    expect(group.classList.contains("flex-wrap")).toBe(true);
+    expect(group.className).not.toMatch(/overflow-x-auto|flex-nowrap/);
+  });
+
   it("asks the server for the usage and the search it is told, before any cap", async () => {
     search = { usage: "unused", q: "ca" };
     mount();

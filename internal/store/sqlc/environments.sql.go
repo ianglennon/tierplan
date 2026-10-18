@@ -73,7 +73,7 @@ func (q *Queries) FoldLocalHost(ctx context.Context, arg FoldLocalHostParams) (i
 }
 
 const getEnvironment = `-- name: GetEnvironment :one
-SELECT id, kind, name, socket_path, enabled, created_at, updated_at, env_type, swarm_cluster_id, engine_id, cluster_changed_at, auto_update, pending_cluster_id, name_auto, local_node_id, local_socket_path FROM environments WHERE id = ?
+SELECT id, kind, name, socket_path, enabled, created_at, updated_at, env_type, swarm_cluster_id, engine_id, cluster_changed_at, auto_update, pending_cluster_id, name_auto, local_node_id, local_socket_path, restart_loop_failures, restart_loop_window_minutes FROM environments WHERE id = ?
 `
 
 func (q *Queries) GetEnvironment(ctx context.Context, id string) (Environment, error) {
@@ -96,6 +96,8 @@ func (q *Queries) GetEnvironment(ctx context.Context, id string) (Environment, e
 		&i.NameAuto,
 		&i.LocalNodeID,
 		&i.LocalSocketPath,
+		&i.RestartLoopFailures,
+		&i.RestartLoopWindowMinutes,
 	)
 	return i, err
 }
@@ -130,7 +132,7 @@ const listEnvironments = `-- name: ListEnvironments :many
 /* SPDX-License-Identifier: AGPL-3.0-or-later
    SPDX-FileCopyrightText: 2026 The Bayplan Authors */
 
-SELECT id, kind, name, socket_path, enabled, created_at, updated_at, env_type, swarm_cluster_id, engine_id, cluster_changed_at, auto_update, pending_cluster_id, name_auto, local_node_id, local_socket_path FROM environments ORDER BY created_at, id
+SELECT id, kind, name, socket_path, enabled, created_at, updated_at, env_type, swarm_cluster_id, engine_id, cluster_changed_at, auto_update, pending_cluster_id, name_auto, local_node_id, local_socket_path, restart_loop_failures, restart_loop_window_minutes FROM environments ORDER BY created_at, id
 `
 
 func (q *Queries) ListEnvironments(ctx context.Context) ([]Environment, error) {
@@ -159,6 +161,8 @@ func (q *Queries) ListEnvironments(ctx context.Context) ([]Environment, error) {
 			&i.NameAuto,
 			&i.LocalNodeID,
 			&i.LocalSocketPath,
+			&i.RestartLoopFailures,
+			&i.RestartLoopWindowMinutes,
 		); err != nil {
 			return nil, err
 		}

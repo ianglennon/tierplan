@@ -512,6 +512,114 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/configs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the swarm configs of an environment
+         * @description The configs of a swarm environment with their labels, times, templating, owner and how many services use each, at most 500 rows sorted by name then ID, read through a manager. No row has content: the manager sends every config's content with the list and Bayplan drops it, so the content is read on one config's own route. Optionally a search (q) that runs before the 500-row cap. 502 config_list_too_large when the configs are too many or too large for one answer; 409 not_a_swarm when the environment is a standalone host; 503 no_manager_connected when no manager is connected. Needs configs.read (Viewer) on the environment.
+         */
+        get: operations["listConfigs"];
+        put?: never;
+        /**
+         * Create a swarm config
+         * @description Creates a config once, through a manager, and never retries. The answer holds the new config's ID and name. A name that is not 1 to 64 letters, numbers, dots, dashes and underscores starting and ending with a letter or number is 422 name_invalid; templating other than none or golang is 422 templating_invalid; content that is missing or empty is 422 value_required; content of 1,024,000 bytes or more is 422 value_too_large (1,023,999 bytes is accepted); more than 64 labels is 422, and a label key over 256 or value over 4096 characters is 422 labels_invalid. All are checked before anything is sent. A request body over 2 MiB is refused. 409 name_taken when the swarm has the name already, 409 not_a_swarm for a standalone host, 409 host_read_only on a read-only host. Needs configs.manage (Admin) on the environment. Every attempt is audited as config.created with the name, the number of labels, the size in bytes, the templating and where the request came from; a refusal is a failure row with its code.
+         */
+        post: operations["createConfig"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/configs/{configId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One swarm config, its content and the services that use it
+         * @description The config's metadata, templating, size and content (as base64, and as text when it is valid UTF-8, else text is null), and every service whose spec references it, with the file name, owner, group and mode each mounts it with. The config is named by its ID or its name. A config is not encrypted: anyone who can read configs can read its content. 404 config_not_found; 409 not_a_swarm. Needs configs.read (Viewer) on the environment.
+         */
+        get: operations["getConfig"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a swarm config
+         * @description Deletes one config, once and never retried. No name needs to be typed. A config that any service's spec references is 409 object_in_use, naming up to three of the services, read live just before the delete and counting a service scaled to 0. 404 config_not_found for a config that is not there (not audited); 409 not_a_swarm for a standalone host. Needs configs.manage (Admin) on the environment. Every attempt on a config that exists is audited as config.removed, with result failure and the code when it was refused.
+         */
+        delete: operations["deleteConfig"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/configs/{configId}/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One swarm config's raw inspect document
+         * @description The manager's inspect document of the config, for the Inspect tab. Like the detail it carries the content (as base64). 404 config_not_found; 409 not_a_swarm. Needs configs.read (Viewer) on the environment.
+         */
+        get: operations["inspectConfig"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/configs/{configId}/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate a swarm config to a new version
+         * @description Creates a new config with the new content under {base}_v{n} (or the name given), with the templating given and the old config's labels, points every standalone service that uses the old config at the new one, with the same file name or path, owner, group and mode, and removes the old config when removeOld is set and nothing uses it any more. Each service is updated through the same steps as an edit (the host-escalation policy on its whole spec for the caller, the registry credential, the version just read), one at a time in name order and never retried. Services a stack owns are skipped. The first failure stops the run and leaves the old config and the services after it as they were: the answer is that failure's problem (for example 409 service_changed, 422 spec_rejected, 403 privileged_service), with errors listing the new config (created), the services already moved (updated), the stack's (skipped), the one it stopped at (failedAt) and the reason, and a detail that says Updated k of n services. A failed create of the new config (409 name_taken, ...) changes nothing else and says so. A body over 2 MiB is refused. Needs configs.manage (Admin) and services.control (Operator) on the environment; a caller without the second is refused 403 and audited as permission.denied. Audited as config.rotated (from, to, updated, skipped, removed_old, code) with the new config as config.created (source rotate), the old one as config.removed when it was removed and each service attempted as service.updated.
+         */
+        post: operations["rotateConfig"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/configs/{configId}/rotate/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview the rotate of a swarm config
+         * @description What a new version of the config would do, without changing anything: the name the new config would have (the next {base}_v{n}, or the one given in newName, with nameTaken when the swarm has it), its templating and labels, which the new version copies, and every service whose spec references the config in name order, with how it mounts the config and, for a standalone service, its spec as it is and as it would be (current and next, masked for a caller without secrets.reveal). Services a stack owns are listed as skipped. 404 config_not_found; 409 not_a_swarm. Needs configs.manage (Admin) and services.control (Operator) on the environment; a caller without the second is refused 403 and audited as permission.denied. A preview is not audited otherwise.
+         */
+        post: operations["previewConfigRotate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/containers": {
         parameters: {
             query?: never;
@@ -627,6 +735,30 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/containers/{containerId}/restart-loop-mute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Mute the restart-loop alerts of a standalone container
+         * @description The container keeps being flagged as in a restart loop, but raises no health bell item. The mute is keyed by the node and the container's name, so a container recreated under the same name stays muted, and it is kept until it is removed. Muting a container that is muted already changes and records nothing and answers 200 with changed false. The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). Needs containers.control (Operator) on the environment. Audited as restart_loop.muted, with kind container.
+         */
+        put: operations["muteContainerRestartLoop"];
+        post?: never;
+        /**
+         * Unmute the restart-loop alerts of a standalone container
+         * @description Removes the mute. Unmuting a container that is not muted changes and records nothing and answers 200 with changed false. A container that is gone can be unmuted by its name. Same node rules and problems as the mute. Needs containers.control (Operator) on the environment. Audited as restart_loop.unmuted, with kind container.
+         */
+        delete: operations["unmuteContainerRestartLoop"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1000,6 +1132,210 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the nodes of a swarm
+         * @description Every node of a swarm with the facts the Nodes list shows: role, leader, state, availability, address, engine, platform, CPUs, memory, how many tasks run there and whether a Bayplan agent reports from it, read through a manager's agent or through the local socket of a swarm manager, sorted by host name then ID. runsBayplan marks the node whose engine hosts Bayplan's own container. Optionally a search (q) and a status filter (status: managers, workers, drained, down); counts are the chip numbers before them. When no manager is connected the answer is 200 with noManager true and the rows last read, or none. A task counts as running only on a node that is ready. 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.read (Viewer) on the environment.
+         */
+        get: operations["listNodes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/nodes/{nodeId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One swarm node
+         * @description The facts of one node read live from a manager: its object version, role, state, availability, manager status, platform, resources, labels and engine labels, when it was created and last changed, and the Bayplan agent on it (whether it reports, its version, when it was last seen). 404 node_not_found when the swarm has no such node. 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.read (Viewer) on the environment.
+         */
+        get: operations["getNode"];
+        put?: never;
+        post?: never;
+        /**
+         * Remove a node that is down
+         * @description Removes one node from the swarm, never forced. Only a worker whose state is down is removed: a manager is refused 409 node_is_manager (demote it first) and a node that is not down 409 node_not_down, both before anything is written, and the query's confirm must be the node's host name, else 422 confirmation_required. The remove is sent once on a manager and never retried; the request to the agent carries no force key, so a node that is still up cannot be removed by any means. The swarm forgets the node, and Bayplan revokes the agent that ran on it at once with the reason node_removed and without blocking the host, so a host that rejoins the swarm can enrol again; a revoke that fails after the node is gone is logged and left to the reaper, which revokes the agent of a node missing from two node lists. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected; Docker's own refusal comes back as 409 node_not_down or 502 node_remove_failed with Docker's words. Every attempt on a node that exists is audited as node.removed with the host name, the agent revoked and the code. Needs nodes.manage (Admin) on the environment.
+         */
+        delete: operations["removeNode"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/nodes/{nodeId}/availability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Drain, pause or activate a node
+         * @description Sets the availability of one node to active, pause or drain, once. The server reads the node fresh and sends its whole spec with only the availability changed and the version sent, so nothing else about the node changes. Before it writes, the server judges the change as getNodeActionImpact does; when that says needsConfirm (a drain of the node that runs Bayplan or of the only connected manager agent) the body's confirm must be the node's host name, else 422 confirmation_required and nothing is sent. A node whose version is not the one sent is 409 node_changed, and nothing is retried. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Docker's own refusals come back mapped: 409 last_manager for the demotion of the last manager, 502 node_update_failed with Docker's words for any other. Bayplan itself never blocks a change that was confirmed by typing the node's name. Needs nodes.manage (Admin) on the environment. Every attempt on a node that exists is audited as node.availability_changed with the name, from, to, whether the name was typed, the warnings and the code.
+         */
+        post: operations["setNodeAvailability"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/nodes/{nodeId}/impact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What a change to a swarm node will do
+         * @description Judges a drain, pause, promote or demote of one node from a live read of the swarm, and is the same judgement the change itself enforces. For a drain or a pause it lists the node's tasks that are meant to run with what happens to each: moves (another active, ready node meets the service's placement constraints), stops (a global service's task is not moved), cannot_place, or stays (a pause). managers gives the manager counts now and after the change. warnings are quorum_at_risk, even_count, runs_bayplan, only_manager_agent and facts_unreadable, and needsConfirm says the node's name must be typed for the change to be accepted. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.manage (Admin) on the environment.
+         */
+        get: operations["getNodeActionImpact"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/nodes/{nodeId}/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The raw inspect document of a swarm node
+         * @description The manager's inspect document of the node, for the Inspect tab. It holds the TLS trust root of the swarm and the node's certificate subject, which are public, and no join token. 404 node_not_found when the swarm has no such node. 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.read (Viewer) on the environment.
+         */
+        get: operations["getNodeInspect"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/nodes/{nodeId}/labels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace a node's labels
+         * @description Replaces the labels of one node, once. The server reads the node fresh and sends its whole spec with only the labels changed and the version sent, so nothing else about the node changes. A node whose version is not the one sent is 409 node_changed and nothing is retried; Docker's own refusals are 502 node_update_failed with Docker's words. Whether a constraint would stop matching is the caller's to confirm: Bayplan does not block it. Every attempt on a node that exists is audited as node.labels_changed with the name, how many labels were added, changed and removed, how many services are affected and the code. 422 label_reserved for a name starting with com.docker., io.docker. or org.dockerproject. (without regard to case; Docker itself accepts them), 422 label_invalid for a name of 0 or over 256 bytes, a value over 4096 bytes or more than 64 labels; 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.manage (Admin) on the environment.
+         */
+        put: operations["setNodeLabels"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/nodes/{nodeId}/labels/impact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * What a change of a node's labels will do to placement
+         * @description Judges the labels a node would have, from a live read of the swarm, and writes nothing. Every placement constraint of a service that names a label the change adds, changes the value of or removes is listed with whether the node meets it before and after (names compare byte for byte, values without regard to case). noLongerMatches counts the services with a constraint the node would stop meeting, and tasksMayMove the tasks on the node that belong to them. version is the node's version, which the save must send. 422 label_reserved for a name starting with com.docker., io.docker. or org.dockerproject. (without regard to case; Docker itself accepts them), 422 label_invalid for a name of 0 or over 256 bytes, a value over 4096 bytes or more than 64 labels; 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.manage (Admin) on the environment.
+         */
+        post: operations["getNodeLabelImpact"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/nodes/{nodeId}/role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Promote a worker or demote a manager
+         * @description Sets the role of one node to manager or worker, once. The server reads the node fresh and sends its whole spec with only the role changed and the version sent. Before it writes, the server judges the change as getNodeActionImpact does; when that says needsConfirm (a demote that puts quorum at risk, of the node that runs Bayplan, of the only connected manager agent, or with the managers' state unreadable) the body's confirm must be the node's host name, else 422 confirmation_required and nothing is sent. A node whose version is not the one sent is 409 node_changed, and nothing is retried. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Docker's own refusals come back mapped: 409 last_manager for the demotion of the last manager, 502 node_update_failed with Docker's words for any other. Bayplan itself never blocks a change that was confirmed by typing the node's name. Needs nodes.manage (Admin) on the environment. Every attempt on a node that exists is audited as node.role_changed with the name, from, to, whether the name was typed, the warnings and the code.
+         */
+        post: operations["setNodeRole"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/nodes/{nodeId}/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The tasks of a swarm node
+         * @description The tasks the swarm holds for one node: those whose desired state is running first, newest first, then the 50 newest others, each with its service's name. A task that has not ended on a node that is not ready reads unknown, never running; dockerState keeps Docker's own word. Docker's error and message text is cleaned of control characters and is to be shown as plain text. 404 node_not_found when the swarm has no such node. 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.read (Viewer) on the environment.
+         */
+        get: operations["listNodeTasks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/placement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Where the tasks of a swarm run
+         * @description The nodes of the swarm, the tasks whose desired state is running and the services they belong to, read live from a manager in one read. A task with no node (pending, no suitable node) has an empty nodeId and its error; a task on a node the swarm no longer lists has nodeKnown false. A task that has not ended on a node that is down, disconnected or removed reads unknown, never running; dockerState keeps Docker's own word. With serviceId the tasks and services are narrowed to that service while every node stays, so empty columns show. Each node carries the facts a placement constraint is matched against, and each service its constraints. 404 service_not_found for an unknown serviceId; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs services.read (Viewer) on the environment.
+         */
+        get: operations["getPlacement"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/reconnect": {
         parameters: {
             query?: never;
@@ -1124,6 +1460,430 @@ export interface paths {
         patch: operations["updateEnvCredential"];
         trace?: never;
     };
+    "/api/env/{envId}/restart-loop-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The restart-loop threshold of an environment
+         * @description How many failed tasks within how many minutes make a restart loop here (default 3 in 10), and Docker's task history limit as of the last cluster read, which says how many failed tasks Docker itself keeps per slot (the limit less one). Needs environments.configure (Env Admin) on the environment.
+         */
+        get: operations["getRestartLoopSettings"];
+        /**
+         * Set the restart-loop threshold of an environment
+         * @description failures is 2 to 50 (422 failures_invalid) and windowMinutes 1 to 120 (422 window_invalid), both checked before anything is written. The next cluster read uses them. A save that changes nothing answers 200 and records nothing. Needs environments.configure (Env Admin) on the environment. A change is audited as environment.restart_loop_settings_changed, with the new and the previous values.
+         */
+        put: operations["setRestartLoopSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the swarm secrets of an environment
+         * @description The secrets of a swarm environment with their labels, times, owner and how many services use each, at most 500 rows sorted by name then ID, read through a manager. No row has a value: the swarm never returns one. Optionally a search (q) that runs before the 500-row cap. 409 not_a_swarm when the environment is a standalone host; 503 no_manager_connected when no manager is connected. Needs secrets.read (Viewer) on the environment.
+         */
+        get: operations["listSecrets"];
+        put?: never;
+        /**
+         * Create a swarm secret
+         * @description Creates a secret once, through a manager, and never retries. The value goes to the swarm's encrypted store and nowhere else: Bayplan does not return, log, audit, cache or store it, and the answer holds the new secret's ID and name only. A name that is not 1 to 64 letters, numbers, dots, dashes and underscores starting and ending with a letter or number is 422 name_invalid; a value that is missing or empty is 422 value_required; one of 512,000 bytes or more is 422 value_too_large (a value of 511,999 bytes is accepted); more than 64 labels is 422, and a label key over 256 or value over 4096 characters is 422 labels_invalid. All are checked before anything is sent. A request body over 1 MiB is refused. 409 name_taken when the swarm has the name already, 409 not_a_swarm for a standalone host, 409 host_read_only on a read-only host. Needs secrets.manage (Admin) on the environment. Every attempt is audited as secret.created with the name, the number of labels, the size in bytes and where the request came from, never the value; a refusal is a failure row with its code.
+         */
+        post: operations["createSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/secrets/{secretId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One swarm secret and the services that use it
+         * @description The secret's metadata and every service whose spec references it, with the file name, owner, group and mode each mounts it with. The secret is named by its ID or its name. There is no value, ever. 404 secret_not_found; 409 not_a_swarm. Needs secrets.read (Viewer) on the environment.
+         */
+        get: operations["getSecret"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a swarm secret
+         * @description Deletes one secret, once and never retried. The secret's name must be typed in confirm, else 422 confirmation_required and nothing is sent. A secret that any service's spec references is 409 object_in_use, naming up to three of the services, read live just before the delete and counting a service scaled to 0. 404 secret_not_found for a secret that is not there (not audited); 409 not_a_swarm for a standalone host. Needs secrets.manage (Admin) on the environment. Every attempt on a secret that exists is audited as secret.removed, with result failure and the code when it was refused.
+         */
+        delete: operations["deleteSecret"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/secrets/{secretId}/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One swarm secret's raw inspect document
+         * @description The manager's inspect document of the secret, for the Inspect tab. It carries no data field, and a data field is removed if one ever appears. 404 secret_not_found; 409 not_a_swarm. Needs secrets.read (Viewer) on the environment.
+         */
+        get: operations["inspectSecret"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/secrets/{secretId}/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate a swarm secret to a new version
+         * @description Creates a new secret with the new value under {base}_v{n} (or the name given), copies the old secret's labels, points every standalone service that uses the old secret at the new one, with the same file name, owner, group and mode, and removes the old secret when removeOld is set and nothing uses it any more. Each service is updated through the same steps as an edit (the host-escalation policy on its whole spec for the caller, the registry credential, the version just read), one at a time in name order and never retried. Services a stack owns are skipped. The first failure stops the run and leaves the old secret and the services after it as they were: the answer is that failure's problem (for example 409 service_changed for a service somebody edited in between, 422 spec_rejected, 403 privileged_service), with errors listing the new secret (created), the services already moved (updated), the stack's (skipped), the one it stopped at (failedAt) and the reason, and a detail that says Updated k of n services. A failed create of the new secret (409 name_taken, 422 spec_rejected, ...) changes nothing else and says so. The value goes to the swarm once and is never kept, logged, audited or returned. A body over 1 MiB is refused. Needs secrets.manage (Admin) and services.control (Operator) on the environment; a caller without the second is refused 403 and audited as permission.denied. Audited as secret.rotated (from, to, updated, skipped, removed_old, code) with the new secret as secret.created (source rotate), the old one as secret.removed when it was removed and each service attempted as service.updated, never with a value.
+         */
+        post: operations["rotateSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/secrets/{secretId}/rotate/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview the rotate of a swarm secret
+         * @description What a new version of the secret would do, without changing anything: the name the new secret would have (the next {base}_v{n}, or the one given in newName, with nameTaken when the swarm has it), the labels it would copy, and every service whose spec references the secret in name order, with how it mounts the secret and, for a standalone service, its spec as it is and as it would be (current and next, masked for a caller without secrets.reveal). Services a stack owns are listed as skipped. 404 secret_not_found; 409 not_a_swarm. Needs secrets.manage (Admin) and services.control (Operator) on the environment; a caller without the second is refused 403 and audited as permission.denied. A preview is not audited otherwise.
+         */
+        post: operations["previewSecretRotate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/services": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the swarm services of an environment
+         * @description The services of a swarm environment with their mode, running and desired task counts, image, stack and last update, read through a manager's agent or through the local socket of a swarm manager, at most 500 rows sorted by name then ID. Optionally a search (q) and a status filter (status: degraded, updating, problem, loop). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Each row has its published ports, the update message, whether a rollback has a spec to go back to and its creation time. 409 not_a_swarm when the environment is a standalone host. When no manager is connected the answer is 200 with noManager true and the rows last read, or none. Needs services.read (Viewer) on the environment.
+         */
+        get: operations["listServices"];
+        put?: never;
+        /**
+         * Create a service
+         * @description Creates one standalone service from a full spec, once and never retried; the tasks start in the swarm, so the answer is 201. The spec is decoded strictly, the host-escalation policy runs on the whole of it, the image is required and resolved to its digest (a failed lookup is 422 image_unresolved and nothing is created), and one create is sent with the registry credential and without the engine's own registry lookup. The networks, secrets and configs in objects are created first, networks then secrets then configs, their IDs are written into the spec's references, and then the service is created; each is audited as network.created, secret.created or config.created with source service_apply, never with a value. If the service cannot be created, every object this request made is removed again in reverse order (audited with source service_apply_cleanup); the problem's detail says so and its errors carry the reason on its own (location reason) and the objects as removed and notRemoved, each as kind:name. Also 422 objects_missing for a network, secret or config the spec names that does not exist and was not sent in objects, 422 spec_rejected, with Docker's words, for a spec Docker refuses, 422 too_many_objects for more than 16 objects, 422 object_duplicate for the same kind and name twice, the name, value, labels, templating and subnet problems of the secrets, configs and networks routes for a bad object, 409 name_taken when an object's name exists already, and 403 object_permission, before anything is created, for a caller without networks.manage, secrets.manage or configs.manage for a kind it would create. Problems, all before anything is created: 409 service_name_taken for a name a service has; 422 image_required for no image; 422 name_invalid for a name that is not 1 to 63 letters, numbers, dot, dash or underscore; 422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec, or for a secret reference whose SecretName is not the name of the secret its SecretID points at; 422 placeholder_unmatched for a <hidden> in the spec; 422 stack_label_reserved for a com.docker.stack. label; 422 image_unresolved when the tag cannot be resolved to a digest (a new service is never created unpinned); 409 not_a_swarm for a standalone host; 403 privileged_service, with each finding in errors, when the caller is below env Admin and the spec asks for host access. No answer, error or audit row carries a value of the environment, the command line, the health check or the log options for a caller without secrets.reveal, or the value of a staged secret or config. Needs services.manage (Env Admin) on the environment. Every attempt is audited as service.created, with result failure and the code when it was refused.
+         */
+        post: operations["createService"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/services/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Review a new service
+         * @description Judges the full spec of a service that does not exist yet and answers what a create would do, without changing Docker. The image is required and is resolved to its digest through the manager with the stored registry credential (a failed lookup is imageError, and the spec stays unpinned), and the host-escalation policy runs on the decoded spec a create would forward. The answer is the normalised spec (masked for a caller without secrets.reveal), the image, the findings, whether the caller may have them (allowed) and the networks, secrets and configs the spec names that do not exist (missing). version is 0 and changed is true. Problems, all before anything is created: 409 service_name_taken for a name a service has; 422 image_required for no image; 422 name_invalid for a name that is not 1 to 63 letters, numbers, dot, dash or underscore; 422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec, or for a secret reference whose SecretName is not the name of the secret its SecretID points at; 422 placeholder_unmatched for a <hidden> in the spec; 422 stack_label_reserved for a com.docker.stack. label; 422 image_unresolved when the tag cannot be resolved to a digest (a new service is never created unpinned); 409 not_a_swarm for a standalone host; 403 privileged_service, with each finding in errors, when the caller is below env Admin and the spec asks for host access. Needs services.manage (Env Admin) on the environment. A review is not audited.
+         */
+        post: operations["reviewServiceCreate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/services/scale": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Scale swarm services
+         * @description Sets the replica count of one or more replicated services, once each and never retried. Each target is read from the manager, and the update is sent with the version just read, so a service somebody else changed in between is service_changed and nothing is changed. Only the replica count of the spec changes. The registry credential for the service's image is sent with the update. A service that already has the count is answered done with changed false and nothing is sent. A global or job service is skipped with not_scalable. replicas outside 0 to 1000 is 422 replicas_invalid, a service named twice is 422 duplicate_target, and more than 100 targets is 422 too_many_targets, all before anything is sent. 409 not_a_swarm for a standalone host. Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.scaled, with the new and the previous count.
+         */
+        post: operations["scaleServices"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/services/{serviceId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One swarm service: its settings
+         * @description Everything the service detail page shows, read live from a manager: mode, task counts, image (tag, digest, pinned), published ports, mounts, secrets and configs by reference, networks with their names, environment variables, resources, placement, restart and update policy and labels. The values of the environment variables can be credentials: they are withheld on the server, and sent only to a caller who holds secrets.reveal on the environment. env then lists the names with masked true and no value, and envMasked says so. The command line, the health check and the log driver's options are not part of this answer; they are in the inspect document, where they are withheld the same way. 404 service_not_found when the swarm has no such service; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs services.read (Viewer) on the environment.
+         */
+        get: operations["getService"];
+        put?: never;
+        post?: never;
+        /**
+         * Remove a service
+         * @description Removes one service, once and never retried: the swarm stops its tasks and deletes the service. Its images, volumes, networks, secrets and configs stay. A service that belongs to a stack (com.docker.stack.namespace) is refused: 409 stack_owned, with the stack in errors as stack, before anything is sent. Bayplan's own agent service is removed only when confirm is its name, else 422 confirmation_required and nothing is sent. 404 service_not_found for a service that is not there; 409 not_a_swarm for a standalone host. Needs services.manage (Admin) on the environment. Every attempt on a service that exists is audited as service.removed, with result failure and the code when it was refused.
+         */
+        delete: operations["removeService"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/services/{serviceId}/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply a full service spec
+         * @description Sends a full service spec once and never retried; the rollout continues in the swarm, so the answer is 202. In one write on a manager it inspects the service fresh, refuses a version that is not the one sent, merges the masked values back, runs the host-escalation policy on the merged spec that will be forwarded, resolves the digest when the image changed (a failed lookup is 422 image_unresolved and nothing is sent) and sends one update with the version and the registry credential. Two applies racing on one service: Docker's version check lets one through and the other gets 409 service_changed; neither is retried, and sending the same version twice makes the second 409. Also 422 nothing_to_apply for a spec equal to the current one, 422 objects_missing for a network, secret or config the spec names that does not exist and was not sent in objects, and 422 spec_rejected, with Docker's words, for a spec Docker refuses. The networks, secrets and configs in objects are created first, networks then secrets then configs, their IDs are written into the spec's references, and then the service is updated; each is audited as network.created, secret.created or config.created with source service_apply, never with a value. If anything after the first creation fails, every object this apply made is removed again in reverse order (audited with source service_apply_cleanup); the problem's detail says so and its errors carry the reason on its own (location reason) and the objects as removed and notRemoved, each as kind:name. Also 422 too_many_objects for more than 16 objects, 422 object_duplicate for the same kind and name twice, the name, value, labels, templating and subnet problems of the secrets, configs and networks routes for a bad object, 409 name_taken when an object's name exists already (nothing is retried), and 403 object_permission, before anything is created, for a caller without networks.manage, secrets.manage or configs.manage (Env Admin) for a kind it would create. Problems, all before anything is sent: 409 service_changed when the version is not the current one; 409 stack_owned for a service a stack owns; 404 service_not_found; 409 not_a_swarm for a standalone host; 422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec, or for a secret reference whose SecretName is not the name of the secret its SecretID points at, whoever sends it; 422 placeholder_unmatched for a <hidden> with no current value behind it; 422 placeholder_reserved when a caller who may reveal secrets sends <hidden>; 422 name_immutable and 422 mode_immutable for a changed name or kind of mode; 422 stack_label_reserved for a com.docker.stack. label the service did not have; 403 privileged_service, with each finding in errors, when a caller below env Admin sends host access (a bind outside /srv, /mnt and /media or of a runtime socket, a local volume that binds a relative host path or one outside those roots, or mounts a filesystem type other than tmpfs or a network share, a named pipe, an added capability, SELinux disabled or spc_t, seccomp unconfined or custom, AppArmor disabled, the host network, a plugin runtime). 403 secret_reveal_required, with each added reference in errors, when a caller without secrets.reveal adds a secret the service does not use (compared by the engine's secret ID, a name being resolved through the swarm's secret list); No answer, error or audit row carries a value of the environment, the command line, the health check or the log options for a caller without secrets.reveal, or the value of a staged secret or config. Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.updated, with result failure and the code when it was refused.
+         */
+        post: operations["applyServiceUpdate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/services/{serviceId}/force-update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Force a service update
+         * @description Replaces every task of a service again with the settings it has now, once and never retried. Bayplan strips any digest from the spec's image, resolves the tag to its current digest through the manager with the stored registry credential, writes tag@sha256 into the spec, raises the spec's ForceUpdate counter and sends the update with the version just read, so a tag that moved is picked up. A lookup that fails is 422 image_unresolved (errors name image.ref, image.host and reason) and nothing is sent: a force update never falls back to the unpinned tag. An image that names a digest and no tag is not re-pinned: the answer says pinned false with reason digest_only. A version that is not the current one is 409 service_changed; 409 not_a_swarm for a standalone host. Works on a service that belongs to a stack. Repeating it replaces every task again: each call is its own rollout. Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.force_updated.
+         */
+        post: operations["forceUpdateService"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/services/{serviceId}/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One swarm service's raw inspect document
+         * @description The manager's inspect document of the service, for the Inspect tab. The environment variables' values, the command line (Command and Args), the command of the health check and the log driver's option values, in Spec and in PreviousSpec, can be credentials: for a caller without secrets.reveal on the environment each is replaced by the placeholder <hidden> on the server, and masked says something was. The same problems as the service detail route (404 service_not_found, 409 not_a_swarm, 503 no_manager_connected). Needs services.read (Viewer) on the environment.
+         */
+        get: operations["inspectService"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/services/{serviceId}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A page of earlier lines of a service's log
+         * @description Up to tail lines of the service's log, merged across its tasks in time order and oldest first, that were written before until, for "Load earlier lines". It does not follow the log. until is an RFC 3339 time or Unix seconds and is exclusive; leave it out for the newest lines. since, when given, is the earliest time to look back to. startOfLogs is true when fewer than tail lines came back because the log has no more, and false when more may be earlier (including when the page was cut to a size limit, newest lines kept). To page without losing a line that shares its timestamp with the one before, ask for until one nanosecond after the oldest line held and drop the lines already held by timestamp, task and text. task and node narrow the page to those tasks and nodes as the live stream does. Tasks that have already ended are left out unless stopped is set. sid is the viewer's ID, the one its live stream uses: a viewer is audited once however many pages it reads. Lines are returned as the application wrote them and are never masked. Needs services.read (Viewer) on the environment.
+         */
+        get: operations["getServiceLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/services/{serviceId}/restart-loop-mute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Mute the restart-loop alerts of a service
+         * @description The service keeps being flagged as in a restart loop, but raises no health bell item and is not counted on the dashboard. The mute is kept until it is removed, and goes away by itself when the service is removed. Muting a service that is muted already changes and records nothing and answers 200 with changed false. 404 service_not_found for a service the last cluster read does not hold; 409 not_a_swarm for a standalone host. Needs services.control (Operator) on the environment. Audited as restart_loop.muted.
+         */
+        put: operations["muteServiceRestartLoop"];
+        post?: never;
+        /**
+         * Unmute the restart-loop alerts of a service
+         * @description Removes the mute. Unmuting a service that is not muted changes and records nothing and answers 200 with changed false. 404 service_not_found for a service that is neither held by the last cluster read nor muted; 409 not_a_swarm for a standalone host. Needs services.control (Operator) on the environment. Audited as restart_loop.unmuted.
+         */
+        delete: operations["unmuteServiceRestartLoop"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/services/{serviceId}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Review a full service spec
+         * @description Judges a full service spec and answers what an apply would do, without changing Docker. The spec is read fresh against the service: the values a caller without secrets.reveal could not see (<hidden>) are merged back in, a changed tag is resolved to its digest through the manager with the stored registry credential (a failed lookup is imageError, and the spec stays unpinned), and the host-escalation policy runs on the decoded spec an apply would forward. The answer is the merged, normalised spec (masked again for a caller without secrets.reveal), the image, the findings, whether the caller may have them (allowed) and the networks the spec names that do not exist (missing). A refusal by the policy is not an error here: allowed is false and refusal lists the findings. Problems, all before anything is sent: 409 service_changed when the version is not the current one; 409 stack_owned for a service a stack owns; 404 service_not_found; 409 not_a_swarm for a standalone host; 422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec, or for a secret reference whose SecretName is not the name of the secret its SecretID points at, whoever sends it; 422 placeholder_unmatched for a <hidden> with no current value behind it; 422 placeholder_reserved when a caller who may reveal secrets sends <hidden>; 422 name_immutable and 422 mode_immutable for a changed name or kind of mode; 422 stack_label_reserved for a com.docker.stack. label the service did not have; 403 privileged_service, with each finding in errors, when a caller below env Admin sends host access (a bind outside /srv, /mnt and /media or of a runtime socket, a local volume that binds a relative host path or one outside those roots, or mounts a filesystem type other than tmpfs or a network share, a named pipe, an added capability, SELinux disabled or spc_t, seccomp unconfined or custom, AppArmor disabled, the host network, a plugin runtime). 403 secret_reveal_required, with each added reference in errors, when a caller without secrets.reveal adds a secret the service does not use (compared by the engine's secret ID, a name being resolved through the swarm's secret list); Needs services.control (Operator) on the environment. A review is not audited.
+         */
+        post: operations["reviewServiceUpdate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/services/{serviceId}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Roll a service back to its previous spec
+         * @description Sends the service's current spec with rollback=previous and the version, once and never retried; the manager swaps the current and the previous spec, so a second rollback goes back to the spec just replaced. The registry credential for the previous spec's image is sent with it. The answer is 202: the rollout continues in the swarm. A service that has no previous spec is 409 no_previous_spec. The previous spec is judged by the same host-access policy as an apply: a caller below env Admin is refused 403 privileged_service, with each setting in errors, when it binds the Docker socket or a host path outside /srv, /mnt and /media, adds a capability, lowers the sandbox or joins the host network, and nothing is sent. A caller without secrets.reveal is refused 403 secret_reveal_required when the previous spec uses a secret the current one does not, and nothing is sent. A previous spec with a secret reference whose SecretName is not the name of the secret its SecretID points at is refused 422 spec_invalid, whoever rolls back, and nothing is sent. A manager that refuses because the previous spec names a secret, a config or a network that no longer exists is 409 rollback_object_missing, with its words in detail. A version that is not the current one is 409 service_changed; 409 not_a_swarm for a standalone host. Works on a service that belongs to a stack. Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.rolled_back.
+         */
+        post: operations["rollbackService"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/services/{serviceId}/rollout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How far a service's rolling update has got
+         * @description The state of the service's last update or rollback as the swarm reports it, and how many of the tasks it wants running are running on the service's current task template (a task's spec equals the template but for its runtime): updated of total. A service with no UpdateStatus, which is also a service that was only scaled, answers state none. latestTaskError is the error of the newest failed or rejected task. Docker's message and task error text are cleaned of control characters and invalid UTF-8 on the server and are to be shown as plain text. One inspect and one task list read live from a manager; nothing is written. 404 service_not_found when the swarm has no such service; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs services.read (Viewer) on the environment.
+         */
+        get: operations["getServiceRollout"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/services/{serviceId}/spec": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One swarm service's spec and its previous spec
+         * @description The spec the manager holds for the service and the spec before its last update, with the version a write must send back. The values of the environment variables, the command line (Command and Args), the command of the health check and the log driver's option values, in both specs, can be credentials: for a caller without secrets.reveal on the environment each is replaced by the placeholder <hidden> on the server, and masked says something was. previousSpec is absent when the service was never updated. The same problems as the service detail route (404 service_not_found, 409 not_a_swarm, 503 no_manager_connected). Needs services.read (Viewer) on the environment.
+         */
+        get: operations["getServiceSpec"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/services/{serviceId}/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The tasks of a swarm service, grouped by slot
+         * @description The tasks of one service read live from a manager: for a replicated service one entry per slot, for a global service one per node, each with the task that is current there and the earlier tasks Docker still keeps (up to the cluster's TaskHistoryRetentionLimit, given as retention). A task that has not ended on a node that is down, disconnected or no longer in the swarm reads unknown, never running; dockerState keeps Docker's own word. A task whose node the swarm no longer lists has nodeKnown false. targetNodeId is the node ID the container routes take, empty when nothing reaches the node now. Docker's error and message text is cleaned of control characters and invalid UTF-8 on the server and is to be shown as plain text. 404 service_not_found when the swarm has no such service; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs services.read (Viewer) on the environment.
+         */
+        get: operations["listServiceTasks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/shells": {
         parameters: {
             query?: never;
@@ -1219,7 +1979,7 @@ export interface paths {
         put?: never;
         /**
          * Create a volume
-         * @description Creates a volume on one node, once and never retried. Volumes are node-local: nodeId names the node (the nodeId of a row of a list) and may be left out only on an environment of one node that is not a swarm (else 422 node_required). The driver is local unless one is named. 409 name_taken when the node already has a volume of that name (the engine would silently reuse it), 409 host_read_only on a read-only host, 503 node_unavailable when the node is not a connected node of the environment. Needs volumes.create (Admin) on the environment. Every attempt is audited as volume.created, with result failure and the code when it was refused. The audit row carries the driver option names and values with any password-like part replaced.
+         * @description Creates a volume on one node, once and never retried. Volumes are node-local: nodeId names the node (the nodeId of a row of a list) and may be left out only on an environment of one node that is not a swarm (else 422 node_required). The driver is local unless one is named. 409 name_taken when the node already has a volume of that name (the engine would silently reuse it), 409 host_read_only on a read-only host, 409 agent_host_policy when the node's agent refuses a volume that mounts a host folder outside /srv, /mnt and /media, mounts a device or uses a volume plugin, because its owner did not set BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true, 503 node_unavailable when the node is not a connected node of the environment. Needs volumes.create (Admin) on the environment. Every attempt is audited as volume.created, with result failure and the code when it was refused. The audit row carries the driver option names and values with any password-like part replaced.
          */
         post: operations["createVolume"];
         delete?: never;
@@ -1361,7 +2121,7 @@ export interface paths {
         };
         /**
          * List the environment problems that need attention
-         * @description Derived from live state, never stored, so an item is there exactly while its cause is and cannot be dismissed: an environment that is offline (env_offline, with since and reason), a certificate that is not renewing or has expired (cert_not_renewing), agents that need an update by hand (manual_update_needed, one item with a count), a clock that is out of step (clock_skew), an environment still waiting for its first agent after 7 days (pending_long), a swarm that was re-initialised (cluster_changed) and a local host that can be folded into a swarm environment it manages (fold_offered, only for callers who hold environments.manage). Only environments the caller holds environments.read for are considered, so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. Errors come first, then the newest. Names are at most 64 characters.
+         * @description Derived from live state, never stored, so an item is there exactly while its cause is and cannot be dismissed: an environment that is offline (env_offline, with since and reason), a certificate that is not renewing or has expired (cert_not_renewing), agents that need an update by hand (manual_update_needed, one item with a count), a clock that is out of step (clock_skew), an environment still waiting for its first agent after 7 days (pending_long), a swarm that was re-initialised (cluster_changed) and a local host that can be folded into a swarm environment it manages (fold_offered, only for callers who hold environments.manage) and a swarm service whose tasks keep failing (restart_loop, one item per service that is not muted, only for callers who hold services.read on that environment; with service, serviceId, count, windowMinutes, latestError and since) and a standalone container that keeps dying (restart_loop_container, one item per container that is not muted, only for callers who hold containers.read on that environment; with container, containerId, nodeId, count, windowMinutes, lastExitCode and since). Only environments the caller holds environments.read for are considered, so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. Errors come first, then the newest. Names are at most 64 characters.
          */
         get: operations["listEnvironmentWarnings"];
         put?: never;
@@ -2948,6 +3708,162 @@ export interface components {
             /** @description 3 to 32 characters from a-z, 0-9, dot, dash and underscore; stored lower-case */
             username: string;
         };
+        ConfigCreateBody: {
+            /** @description The ID of the config the swarm made */
+            id: string;
+            /** @description The config name */
+            name: string;
+        };
+        ConfigCreateRequest: {
+            /** @description The content, as standard base64. 1 to 1,023,999 bytes once decoded: empty is 422 value_required, 1,024,000 or more is 422 value_too_large, and text that is not base64 is 422 value_invalid */
+            data?: string;
+            /** @description Labels, at most 64 */
+            labels?: {
+                [key: string]: string;
+            };
+            /** @description The config name: letters, numbers, dot, dash and underscore, starting and ending with a letter or number, at most 64 characters (else 422 name_invalid) */
+            name: string;
+            /**
+             * @description Where the content came from, for the audit log only: typed or file (the create sheet), rotate (a new version of a config) or apply (a config staged with a service). Left out, the audit log says api
+             * @enum {string}
+             */
+            source?: "typed" | "file" | "rotate" | "apply";
+            /** @description none (the default) or golang, to have the swarm fill the content in as a Go template when a task starts; anything else is 422 templating_invalid */
+            templating?: string;
+        };
+        ConfigDetailBody: {
+            /**
+             * Format: date-time
+             * @description When the config was created
+             */
+            createdAt: string;
+            /** @description The content as standard base64 */
+            data: string;
+            /** @description The config ID */
+            id: string;
+            /** @description Every label of the config */
+            labels: {
+                [key: string]: string;
+            };
+            /** @description The config name */
+            name: string;
+            /** @description The stack (com.docker.stack.namespace) label value; empty when the config has none */
+            owner: string;
+            /**
+             * @description stack, or empty when the config has no owner
+             * @enum {string}
+             */
+            ownerKind: "stack" | "";
+            /**
+             * Format: int64
+             * @description The content's size in bytes
+             */
+            size: number;
+            /**
+             * @description golang when the swarm fills the content in as a Go template when a task starts, else none
+             * @enum {string}
+             */
+            templating: "none" | "golang";
+            /** @description The content as text; null when it is not valid UTF-8, which the page shows as a file to download */
+            text: string | null;
+            /**
+             * Format: date-time
+             * @description When the config was last updated
+             */
+            updatedAt: string;
+            /**
+             * Format: int64
+             * @description How many services' specs reference the config
+             */
+            usedBy: number;
+            /** @description Every service whose spec references the config, sorted by service name then ID */
+            usedByRows: components["schemas"]["ConfigUserBody"][] | null;
+        };
+        ConfigInspectBody: {
+            /** @description The manager's inspect document: the ID, the version, the times and the spec's name, labels, content (as base64) and templating */
+            inspect: {
+                [key: string]: unknown;
+            };
+        };
+        ConfigItem: {
+            /**
+             * Format: date-time
+             * @description When the config was created
+             */
+            createdAt: string;
+            /** @description The config ID */
+            id: string;
+            /** @description Every label of the config */
+            labels: {
+                [key: string]: string;
+            };
+            /** @description The config name */
+            name: string;
+            /** @description The stack (com.docker.stack.namespace) label value; empty when the config has none */
+            owner: string;
+            /**
+             * @description stack, or empty when the config has no owner
+             * @enum {string}
+             */
+            ownerKind: "stack" | "";
+            /**
+             * @description golang when the swarm fills the content in as a Go template when a task starts, else none
+             * @enum {string}
+             */
+            templating: "none" | "golang";
+            /**
+             * Format: date-time
+             * @description When the config was last updated
+             */
+            updatedAt: string;
+            /**
+             * Format: int64
+             * @description How many services' specs reference the config, whatever their tasks are doing, a service scaled to 0 included
+             */
+            usedBy: number;
+        };
+        ConfigListBody: {
+            /** @description True when total is more than the rows returned */
+            capped: boolean;
+            /** @description At most 500 rows that match the search, sorted by name then ID */
+            items: components["schemas"]["ConfigItem"][] | null;
+            /**
+             * Format: int64
+             * @description How many configs match the search, whatever the cap
+             */
+            total: number;
+            /**
+             * Format: int64
+             * @description How many configs there are before the search
+             */
+            unfilteredTotal: number;
+        };
+        ConfigRotateRequest: {
+            /** @description The new content, as standard base64, with the limits of a create: empty is 422 value_required, 1,024,000 bytes or more 422 value_too_large, text that is not base64 422 value_invalid */
+            data?: string;
+            /** @description The new config's name, as for a create (else 422 name_invalid); left out, the next version of the old name */
+            name?: string;
+            /** @description Remove the old config when no service spec names it any more */
+            removeOld?: boolean;
+            /** @description none (the default) or golang, as for a create (else 422 templating_invalid). The page prefills the old config's */
+            templating?: string;
+        };
+        ConfigUserBody: {
+            /** @description The file name the config appears as in the container; empty when the service reads it at runtime only */
+            file: string;
+            /** @description The group of the file */
+            gid: string;
+            /** @description The file mode in octal, for example 0444; empty when none is set */
+            mode: string;
+            /** @description The service name */
+            service: string;
+            /** @description The service ID */
+            serviceId: string;
+            /** @description The stack the service belongs to; empty for a service made on its own */
+            stack: string;
+            /** @description The owner of the file */
+            uid: string;
+        };
         ConsideredCredentialBody: {
             /** @description The credential's ID */
             credentialId: string;
@@ -3059,6 +3975,8 @@ export interface components {
             /** @description True when any value was withheld from env, logConfig.options, command or entrypoint */
             masked: boolean;
             mounts: components["schemas"]["ContainerMountBody"][] | null;
+            /** @description True when a user muted the container's restart-loop alerts, whether or not it is in a loop now. The mute is keyed by node and name */
+            muted: boolean;
             /** @description The container name without the leading slash */
             name: string;
             networks: components["schemas"]["ContainerNetworkBody"][] | null;
@@ -3079,6 +3997,8 @@ export interface components {
              * @description How many times the engine has restarted it
              */
             restartCount: number;
+            /** @description Present while the container is in a restart loop: it died with a non-zero exit code the environment's threshold of times inside its window. Absent otherwise */
+            restartLoop?: components["schemas"]["ContainerRestartLoopBody"];
             /**
              * Format: int64
              * @description The on-failure maximum; 0 when none is set
@@ -3148,6 +4068,8 @@ export interface components {
             project: string;
             /** @description True when the host of this container's node is read-only, so no change to it will be accepted */
             readOnly: boolean;
+            /** @description Present while the container is in a restart loop: it died with a non-zero exit code the environment's threshold of times inside its window. Absent otherwise */
+            restartLoop?: components["schemas"]["ContainerRestartLoopBody"];
             /**
              * @description server for the container Bayplan itself runs in, agent for a Bayplan agent's container (marked by the label bayplan.agent=true), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect
              * @enum {string}
@@ -3249,6 +4171,37 @@ export interface components {
             removeVolumes: boolean;
             /** @description The containers to remove, at most 25. Each is answered separately; one that fails never stops the others */
             targets: components["schemas"]["ContainerActionTarget"][] | null;
+        };
+        ContainerRestartLoopBody: {
+            /**
+             * Format: int64
+             * @description How many times the container died with a non-zero exit code inside the window
+             */
+            count: number;
+            /** @description The exit code of its newest death, at most 12 characters */
+            lastExitCode: string;
+            /**
+             * @description flagged while the loop holds; muted when the loop holds and a user muted its alerts: the container raises no bell item
+             * @enum {string}
+             */
+            state: "flagged" | "muted";
+            /**
+             * Format: int64
+             * @description The window the deaths are counted in, in minutes: the environment's setting
+             */
+            windowMinutes: number;
+        };
+        ContainerRestartLoopMuteBody: {
+            /** @description False when the container was in that state already, so nothing was written */
+            changed: boolean;
+            /** @description The container's ID as the last read holds it; the name that was asked when the container is gone */
+            containerId: string;
+            /** @description Whether the container's restart-loop alerts are muted now */
+            muted: boolean;
+            /** @description The container's name: with the node, what the mute is keyed by, so a container recreated under the same name stays muted */
+            name: string;
+            /** @description The node the container is on */
+            nodeId: string;
         };
         CreateTeamInputBody: {
             /** @description 1 to 64 characters; not case-sensitive for uniqueness */
@@ -3656,9 +4609,13 @@ export interface components {
         EnvWarningBody: {
             /** @description For cert_not_renewing and clock_skew: the agent */
             agentId?: string;
+            /** @description For restart_loop_container: the container's name, at most 64 characters */
+            container?: string;
+            /** @description For restart_loop_container: the container's ID as the last read holds it */
+            containerId?: string;
             /**
              * Format: int64
-             * @description For manual_update_needed: how many agents need an update by hand
+             * @description For manual_update_needed: how many agents need an update by hand. For restart_loop: how many tasks of the service failed inside the window. For restart_loop_container: how many times the container died inside the window
              */
             count?: number;
             /**
@@ -3679,9 +4636,15 @@ export interface components {
              * @description Which problem this is
              * @enum {string}
              */
-            id: "env_offline" | "cert_not_renewing" | "manual_update_needed" | "clock_skew" | "pending_long" | "cluster_changed" | "fold_offered";
+            id: "env_offline" | "cert_not_renewing" | "manual_update_needed" | "clock_skew" | "pending_long" | "cluster_changed" | "fold_offered" | "restart_loop" | "restart_loop_container";
+            /** @description For restart_loop_container: the exit code of the container's newest death */
+            lastExitCode?: string;
+            /** @description For restart_loop: the error text of the newest failed task, at most 300 characters; absent when Docker gave none */
+            latestError?: string;
             /** @description For cert_not_renewing and clock_skew: the node's host name, at most 64 characters */
             node?: string;
+            /** @description For restart_loop_container: the node the container is on, as the container routes take it */
+            nodeId?: string;
             /**
              * Format: int64
              * @description For clock_skew: how far the agent's clock is ahead of the server's, in seconds; negative is behind
@@ -3689,6 +4652,10 @@ export interface components {
             offsetSeconds?: number;
             /** @description For env_offline and cluster_changed: the environment's reason code, as in its status */
             reason?: string;
+            /** @description For restart_loop: the service's name, at most 64 characters */
+            service?: string;
+            /** @description For restart_loop: the service's ID */
+            serviceId?: string;
             /**
              * @description error: an environment is out of reach or a certificate has expired. warning: something needs attention
              * @enum {string}
@@ -3699,6 +4666,11 @@ export interface components {
              * @description When the problem began, where that is known. Items are shown newest first
              */
             since?: string;
+            /**
+             * Format: int64
+             * @description For restart_loop and restart_loop_container: the window the count is over, in minutes
+             */
+            windowMinutes?: number;
         };
         EnvWarningsBody: {
             /** @description Only the warnings that apply, errors first, then newest first; empty when there are none */
@@ -3908,6 +4880,8 @@ export interface components {
             isWorker: boolean;
             /** @description Nodes that should have answered and did not: no agent connected, or its read failed or timed out. Their rows are left out of the counts, so when this is not empty the counts are not the whole cluster */
             notReporting: string[] | null;
+            /** @description Swarm managers only, and only for a caller who may read services: how many services are in a restart loop, from the last cluster read. Absent on a standalone host, on a worker, and while the swarm has not been read or has lost its quorum */
+            restartLoops?: components["schemas"]["RestartLoopCountsBody"];
             /** @description The ID of Bayplan's own container, when it can tell (D-27) */
             selfContainerId?: string;
         };
@@ -4736,6 +5710,31 @@ export interface components {
             /** @description True when total is more than the rows returned */
             truncated: boolean;
         };
+        NodeAgentBody: {
+            /**
+             * Format: date-time
+             * @description The agent's last sign of life this server run; empty when none
+             */
+            lastSeen: string;
+            /** @description True when Bayplan reaches the node now: a connected agent runs on it, or it is the local socket's own node */
+            reporting: boolean;
+            /** @description The agent's version; empty when no agent is connected there and for the local socket's node */
+            version: string;
+        };
+        NodeAvailabilityRequest: {
+            /**
+             * @description What the node's spec should let the swarm do with it: active, pause (no new tasks) or drain (move its tasks away)
+             * @enum {string}
+             */
+            availability: "active" | "pause" | "drain";
+            /** @description The node's host name, typed. Needed when the change's impact says needsConfirm; ignored otherwise */
+            confirm?: string;
+            /**
+             * Format: int64
+             * @description The node's version as the page last read it (the version of getNode); a node changed since is refused 409 node_changed
+             */
+            version: number;
+        };
         NodeCountsBody: {
             /**
              * Format: int64
@@ -4753,6 +5752,384 @@ export interface components {
             node: string;
             /** Format: int64 */
             volumes: number;
+        };
+        NodeDetailBody: {
+            /** @description The address the swarm reaches the node at; empty when unknown */
+            address: string;
+            /** @description The Bayplan agent on the node */
+            agent: components["schemas"]["NodeAgentBody"];
+            /** @description The node's architecture as the engine reports it (x86_64, aarch64) */
+            arch: string;
+            /**
+             * @description What the node's spec lets the swarm do with it
+             * @enum {string}
+             */
+            availability: "active" | "pause" | "drain";
+            /**
+             * Format: double
+             * @description The CPUs the node reports; 0 when it reports none
+             */
+            cpus: number;
+            /**
+             * Format: date-time
+             * @description When the node joined the swarm
+             */
+            createdAt: string;
+            /** @description The labels of the node's engine (engine.labels.*), set in its daemon settings; an empty object when it has none */
+            engineLabels: {
+                [key: string]: string;
+            };
+            /** @description The Docker Engine version the node reports */
+            engineVersion: string;
+            /** @description The node's host name */
+            hostname: string;
+            /** @description The swarm node ID */
+            id: string;
+            /** @description The node's labels (node.labels.*), which can be changed; an empty object when it has none */
+            labels: {
+                [key: string]: string;
+            };
+            /** @description True for the manager that leads the swarm */
+            leader: boolean;
+            /** @description The address a manager listens on for the swarm; empty for a worker */
+            managerAddr: string;
+            /**
+             * Format: int64
+             * @description The memory the node reports, in bytes; 0 when it reports none
+             */
+            memoryBytes: number;
+            /** @description The node's operating system */
+            os: string;
+            /** @description A manager's reachability (reachable, unreachable or unknown); empty for a worker */
+            reachability: string;
+            /**
+             * @description The node's role
+             * @enum {string}
+             */
+            role: "manager" | "worker";
+            /** @description True for the node whose engine hosts Bayplan's own container (or, on the local socket, the node the socket is) */
+            runsBayplan: boolean;
+            /** @description The swarm's word for the node: ready, down, disconnected or unknown */
+            state: string;
+            /** @description The node ID the container routes of this environment take (?node= of the container page) for this node; empty when nothing reaches it now */
+            targetNodeId: string;
+            /**
+             * Format: date-time
+             * @description When the node last changed
+             */
+            updatedAt: string;
+            /**
+             * Format: int64
+             * @description The node's object version, which a change to the node must send back
+             */
+            version: number;
+        };
+        NodeImpactBody: {
+            /**
+             * @description The change judged
+             * @enum {string}
+             */
+            action: "drain" | "pause" | "promote" | "demote" | "activate";
+            /** @description The node's host name, which is what is typed to confirm */
+            hostname: string;
+            /** @description The manager counts */
+            managers: components["schemas"]["NodeImpactManagers"];
+            /** @description True when the node's name must be typed to make the change: a drain or demote of Bayplan's node or of the only manager agent, a demote that puts quorum at risk, and a demote whose quorum facts could not be read. The server refuses the change without it */
+            needsConfirm: boolean;
+            /** @description For drain and pause, the node's tasks whose desired state is running, by service then slot; empty otherwise */
+            tasks: components["schemas"]["NodeImpactTask"][] | null;
+            /**
+             * Format: int64
+             * @description The node's object version as read for this judgement: the version a change made on the strength of it must send back
+             */
+            version: number;
+            /** @description What to warn of: quorum_at_risk (a demote could leave no majority), even_count (a demote leaves an even number of managers), runs_bayplan (the node hosts Bayplan), only_manager_agent (it has the only manager agent connected to Bayplan), facts_unreadable (a manager's state is not known, so the first cannot be judged). Never null */
+            warnings: string[] | null;
+        };
+        NodeImpactManagers: {
+            /**
+             * Format: int64
+             * @description Managers there would be after the change
+             */
+            after: number;
+            /**
+             * Format: int64
+             * @description Managers whose reachability is reachable now
+             */
+            reachable: number;
+            /**
+             * Format: int64
+             * @description Nodes whose role is manager now
+             */
+            total: number;
+        };
+        NodeImpactTask: {
+            /** @description The task ID */
+            id: string;
+            /**
+             * @description What happens to it: moves (another active, ready node meets the service's constraints), stops (a global service's task is not moved), cannot_place (no other node can take it) or stays (a pause leaves it running)
+             * @enum {string}
+             */
+            outcome: "moves" | "stops" | "cannot_place" | "stays";
+            /** @description The service's name; its ID when the swarm no longer lists the service */
+            service: string;
+            /** @description The service the task belongs to */
+            serviceId: string;
+            /**
+             * Format: int64
+             * @description The replica number of a replicated service's task; 0 for a global service's
+             */
+            slot: number;
+        };
+        NodeInspectBody: {
+            /** @description The manager's inspect document of the node: its spec, description, status and manager status, with the TLS trust root and certificate subject of its description */
+            document: {
+                [key: string]: unknown;
+            };
+        };
+        NodeItem: {
+            /** @description The address the swarm reaches the node at; empty when unknown */
+            address: string;
+            /** @description True when Bayplan reaches the node now: a connected agent runs on it, or it is the local socket's own node */
+            agentReporting: boolean;
+            /** @description The node's architecture as the engine reports it (x86_64, aarch64) */
+            arch: string;
+            /**
+             * @description What the node's spec lets the swarm do with it
+             * @enum {string}
+             */
+            availability: "active" | "pause" | "drain";
+            /**
+             * Format: double
+             * @description The CPUs the node reports; 0 when it reports none
+             */
+            cpus: number;
+            /** @description The Docker Engine version the node reports */
+            engineVersion: string;
+            /** @description The node's host name */
+            hostname: string;
+            /** @description The swarm node ID */
+            id: string;
+            /** @description True for the manager that leads the swarm */
+            leader: boolean;
+            /**
+             * Format: int64
+             * @description The memory the node reports, in bytes; 0 when it reports none
+             */
+            memoryBytes: number;
+            /** @description The node's operating system (node.platform.os) */
+            os: string;
+            /** @description A manager's reachability (reachable, unreachable or unknown); empty for a worker */
+            reachability: string;
+            /**
+             * @description The node's role
+             * @enum {string}
+             */
+            role: "manager" | "worker";
+            /** @description True for the node whose engine hosts Bayplan's own container (or, on the local socket, the node the socket is) */
+            runsBayplan: boolean;
+            /** @description The swarm's word for the node: ready, down, disconnected or unknown */
+            state: string;
+            /** @description The node ID the container routes of this environment take (?node= of the container page) for this node; empty when nothing reaches it now */
+            targetNodeId: string;
+            /**
+             * Format: int64
+             * @description Tasks whose desired state is running that are not: still starting, failed to place, or on a node that is not ready and so cannot say. 0 when tasksKnown is false
+             */
+            tasksNotRunning: number;
+            /**
+             * Format: int64
+             * @description Tasks whose desired state is running that are running on the node. 0 when tasksKnown is false
+             */
+            tasksRunning: number;
+        };
+        NodeLabelImpactBody: {
+            /**
+             * Format: int64
+             * @description Labels the change adds
+             */
+            added: number;
+            /**
+             * Format: int64
+             * @description Labels whose value the change changes
+             */
+            changed: number;
+            /**
+             * Format: int64
+             * @description How many services have a constraint the node met and would no longer meet
+             */
+            noLongerMatches: number;
+            /**
+             * Format: int64
+             * @description Labels the change removes
+             */
+            removed: number;
+            /** @description Each placement constraint of a service that names a label the change adds, changes or removes, by service name then constraint. Never null */
+            rows: components["schemas"]["NodeLabelImpactRow"][] | null;
+            /**
+             * Format: int64
+             * @description How many tasks on the node belong to those services, which the swarm may move off it
+             */
+            tasksMayMove: number;
+            /**
+             * Format: int64
+             * @description The node's object version as read for this judgement: the version the save must send back
+             */
+            version: number;
+        };
+        NodeLabelImpactRequest: {
+            /** @description The node's labels as they would be saved; they replace the ones it has. At most 64, names of 1 to 256 bytes, values of at most 4096 bytes, and none starting with com.docker., io.docker. or org.dockerproject. (compared without regard to case) */
+            labels: {
+                [key: string]: string;
+            };
+        };
+        NodeLabelImpactRow: {
+            /** @description True when the node would meet the constraint with the labels asked for */
+            after: boolean;
+            /** @description True when the node meets the constraint with the labels it has now */
+            before: boolean;
+            /** @description The constraint as the service's spec writes it, such as node.labels.disk==ssd */
+            constraint: string;
+            /** @description The service's name */
+            service: string;
+            /** @description The service the constraint belongs to */
+            serviceId: string;
+        };
+        NodeLabelsRequest: {
+            /** @description The node's labels as they are to be saved; they replace the ones it has, and an empty object removes them all. The limits are those of the impact check */
+            labels: {
+                [key: string]: string;
+            };
+            /**
+             * Format: int64
+             * @description The node's version as the page last read it (the version of the impact); a node changed since is refused 409 node_changed
+             */
+            version: number;
+        };
+        NodeListBody: {
+            /** @description How many nodes each status chip counts, before the search and the status filter, so the numbers never shrink with what was typed */
+            counts: components["schemas"]["NodeStatusCountsBody"];
+            /**
+             * Format: date-time
+             * @description When the rows were read from a manager; empty when none were
+             */
+            fetchedAt: string;
+            /** @description The nodes that match the search and the status filter, sorted by host name then ID */
+            items: components["schemas"]["NodeItem"][] | null;
+            /** @description True when no manager of the swarm is connected: the rows are the last ones read, or none */
+            noManager: boolean;
+            /** @description False when the tasks could not be read (no manager is connected, or the read failed): tasksRunning and tasksNotRunning are then 0 and mean nothing */
+            tasksKnown: boolean;
+            /**
+             * Format: int64
+             * @description How many nodes match the search and the status filter
+             */
+            total: number;
+            /**
+             * Format: int64
+             * @description How many nodes the swarm has before the search and the status filter
+             */
+            unfilteredTotal: number;
+        };
+        NodeRoleRequest: {
+            /** @description The node's host name, typed. Needed when the change's impact says needsConfirm; ignored otherwise */
+            confirm?: string;
+            /**
+             * @description manager promotes a worker, worker demotes a manager
+             * @enum {string}
+             */
+            role: "manager" | "worker";
+            /**
+             * Format: int64
+             * @description The node's version as the page last read it (the version of getNode); a node changed since is refused 409 node_changed
+             */
+            version: number;
+        };
+        NodeStatusCountsBody: {
+            /**
+             * Format: int64
+             * @description Nodes whose state is down or disconnected
+             */
+            down: number;
+            /**
+             * Format: int64
+             * @description Nodes whose availability is drain
+             */
+            drained: number;
+            /**
+             * Format: int64
+             * @description Nodes whose role is manager
+             */
+            managers: number;
+            /**
+             * Format: int64
+             * @description Nodes whose role is worker
+             */
+            workers: number;
+        };
+        NodeTaskItem: {
+            /** @description The task's container ID on its node; empty until it has one */
+            containerId: string;
+            /**
+             * Format: date-time
+             * @description When the task was created
+             */
+            createdAt: string;
+            /** @description The state the swarm wants the task in */
+            desiredState: string;
+            /** @description The state Docker last recorded for the task (new, pending, assigned, accepted, preparing, ready, starting, running, complete, failed, shutdown, rejected, remove, orphaned) */
+            dockerState: string;
+            /** @description Docker's error text about the task, cleaned of control characters; empty when there is none. Docker's free text, to be shown as plain text */
+            error: string;
+            /**
+             * Format: int64
+             * @description The exit code of the task's container once the task has ended; null while it runs and when it never had a container
+             */
+            exitCode: number | null;
+            /** @description The task ID */
+            id: string;
+            /** @description Docker's status message, cleaned the same way */
+            message: string;
+            /** @description The node's host name; empty when the task has no node or its node is no longer in the swarm */
+            node: string;
+            /** @description The swarm node the task was placed on; empty while it is not placed. The swarm keeps the ID of a node that has since been removed */
+            nodeId: string;
+            /** @description False when the task names a node the swarm no longer lists (a removed node); true otherwise, also for a task with no node */
+            nodeKnown: boolean;
+            /** @description The service's name; empty when the swarm no longer lists the service */
+            service: string;
+            /** @description The service the task belongs to */
+            serviceId: string;
+            /**
+             * Format: int64
+             * @description The replica number of a replicated service's task; 0 for a global service's
+             */
+            slot: number;
+            /** @description The state to show: Docker's own word, except unknown for a task that has not ended on a node that is down, disconnected or removed, which cannot say it is still running */
+            state: string;
+            /**
+             * Format: date-time
+             * @description When the task reached dockerState
+             */
+            stateSince: string;
+            /** @description The node ID the container routes of this environment take (?node= of the container page) for the task's node; empty when no connected agent or local socket reaches that node now */
+            targetNodeId: string;
+            /**
+             * Format: date-time
+             * @description When the task last changed
+             */
+            updatedAt: string;
+        };
+        NodeTasksBody: {
+            /** @description True when earlier tasks were left out of items */
+            capped: boolean;
+            /** @description The tasks whose desired state is running, newest first, then the 50 newest others, newest first */
+            items: components["schemas"]["NodeTaskItem"][] | null;
+            /**
+             * Format: int64
+             * @description Every task the swarm holds for the node, current and earlier
+             */
+            total: number;
         };
         OptionVar: {
             /** @description True when the value was withheld because the caller may not reveal secrets on this environment */
@@ -4790,6 +6167,100 @@ export interface components {
             };
             /** @description Installation-wide permissions */
             global: string[] | null;
+        };
+        PlacementBody: {
+            /** @description Every node of the swarm, sorted by host name then ID */
+            nodes: components["schemas"]["PlacementNode"][] | null;
+            /** @description The services the tasks belong to (every service, or the one asked for), sorted by name */
+            services: components["schemas"]["PlacementService"][] | null;
+            /** @description The tasks whose desired state is running, sorted by service name, slot then task ID. A task with no node has an empty nodeId; one on a node the swarm no longer lists has nodeKnown false */
+            tasks: components["schemas"]["PlacementTask"][] | null;
+        };
+        PlacementNode: {
+            /** @description The address the swarm reaches the node at, which node.ip constraints are matched against; empty when unknown */
+            address: string;
+            /** @description The node's architecture (node.platform.arch) */
+            arch: string;
+            /** @description active, pause or drain */
+            availability: string;
+            /**
+             * Format: double
+             * @description The CPUs the node reports; 0 when it reports none
+             */
+            cpus: number;
+            /** @description The labels of the node's engine (engine.labels.*); an empty object when it has none */
+            engineLabels: {
+                [key: string]: string;
+            };
+            /** @description The node's host name */
+            hostname: string;
+            /** @description The swarm node ID */
+            id: string;
+            /** @description The node's labels (node.labels.*); an empty object when it has none */
+            labels: {
+                [key: string]: string;
+            };
+            /** @description True for the manager that leads the swarm */
+            leader: boolean;
+            /**
+             * Format: int64
+             * @description The memory the node reports, in bytes; 0 when it reports none
+             */
+            memoryBytes: number;
+            /** @description The node's operating system (node.platform.os) */
+            os: string;
+            /** @description The node's role */
+            role: string;
+            /** @description The swarm's word for the node: ready, down, disconnected or unknown */
+            state: string;
+            /** @description The node ID the container routes of this environment take (?node= of the container page) for this node; empty when no connected agent or local socket reaches it now */
+            targetNodeId: string;
+        };
+        PlacementService: {
+            /** @description The placement constraints of the service's spec, as written; an empty list when it has none */
+            constraints: string[] | null;
+            /** @description The service ID */
+            id: string;
+            /**
+             * Format: int64
+             * @description The most tasks of the service one node may run; 0 when the spec sets no limit
+             */
+            maxReplicas: number;
+            /** @description replicated, global, replicated-job or global-job */
+            mode: string;
+            /** @description The service's name */
+            name: string;
+            /** @description The label each Spread placement preference spreads tasks over (node.labels.zone), in the spec's order; an empty list when it has none */
+            preferences: string[] | null;
+            /** @description The stack the service belongs to; empty for a service made on its own */
+            stack: string;
+        };
+        PlacementTask: {
+            /** @description The state the swarm wants the task in */
+            desiredState: string;
+            /** @description The state Docker last recorded for the task */
+            dockerState: string;
+            /** @description Docker's error text about the task (for a task that could not be placed, why), cleaned of control characters; empty when there is none. To be shown as plain text */
+            error: string;
+            /** @description The task ID */
+            id: string;
+            /** @description The swarm node the task was placed on; empty while it is not placed. The swarm keeps the ID of a node that has since been removed */
+            nodeId: string;
+            /** @description False when the task names a node the swarm no longer lists (a removed node); true otherwise, also for a task with no node */
+            nodeKnown: boolean;
+            /** @description The service's name */
+            service: string;
+            /** @description The service the task belongs to */
+            serviceId: string;
+            /**
+             * Format: int64
+             * @description The replica number of a replicated service's task; 0 for a global service's
+             */
+            slot: number;
+            /** @description The stack the service belongs to; empty for a service made on its own */
+            stack: string;
+            /** @description The state to show: Docker's own word, except unknown for a task that has not ended on a node that is down, disconnected or removed, which cannot say it is still running */
+            state: string;
         };
         PlatformBody: {
             /** @description The CPU architecture by its OCI name, like amd64, arm64 or arm */
@@ -5112,6 +6583,79 @@ export interface components {
             /** @description Where it applies */
             scope: components["schemas"]["CredentialScopeBody"];
         };
+        RestartLoopBody: {
+            /**
+             * Format: int64
+             * @description How many tasks failed or were rejected inside the window, as of the last read
+             */
+            count: number;
+            /** @description The error text of the newest failed task; empty when Docker gave none */
+            latestError: string;
+            /**
+             * Format: date-time
+             * @description When the service was flagged
+             */
+            since: string;
+            /**
+             * @description flagged while the loop holds; muted when the loop holds and a user muted its alerts: the service raises no bell item and is not counted on the dashboard
+             * @enum {string}
+             */
+            state: "flagged" | "muted";
+            /**
+             * Format: int64
+             * @description The window the count is over, in minutes: the environment's restart-loop setting
+             */
+            windowMinutes: number;
+        };
+        RestartLoopCountsBody: {
+            /**
+             * Format: int64
+             * @description Services in a restart loop whose alerts are not muted
+             */
+            flagged: number;
+            /**
+             * Format: int64
+             * @description Services in a restart loop whose alerts are muted
+             */
+            muted: number;
+        };
+        RestartLoopMuteBody: {
+            /** @description False when the service was in that state already, so nothing was written */
+            changed: boolean;
+            /** @description Whether the service's restart-loop alerts are muted now */
+            muted: boolean;
+            /** @description The service's ID */
+            serviceId: string;
+        };
+        RestartLoopSettingsBody: {
+            /**
+             * Format: int64
+             * @description How many failed tasks within the window make a restart loop, 2 to 50
+             */
+            failures: number;
+            /**
+             * Format: int64
+             * @description How many tasks per slot Docker keeps (its task history limit, R): Docker shows R-1 failed tasks per slot. 0 when the environment has not been read yet or is not a swarm
+             */
+            historyLimit: number;
+            /**
+             * Format: int64
+             * @description The window the failures are counted in, in minutes, 1 to 120
+             */
+            windowMinutes: number;
+        };
+        RestartLoopSettingsInputBody: {
+            /**
+             * Format: int64
+             * @description How many failed tasks within the window make a restart loop: 2 to 50, else 422 failures_invalid
+             */
+            failures: number;
+            /**
+             * Format: int64
+             * @description The window in minutes: 1 to 120, else 422 window_invalid
+             */
+            windowMinutes: number;
+        };
         RestoreApplyBody: {
             /** @description Always true: Bayplan is swapping the database and restarting, and everyone is signed out */
             restarting: boolean;
@@ -5182,6 +6726,116 @@ export interface components {
             /** @description Why the node is revoked, for the audit log and the node table. Optional */
             reason?: string;
         };
+        RolloutBody: {
+            /**
+             * Format: date-time
+             * @description When it completed; absent while it has not
+             */
+            completedAt?: string;
+            /** @description Docker's error text of the newest failed or rejected task, cleaned of control characters; empty when there is none. Docker's free text, to be shown as plain text */
+            latestTaskError: string;
+            /** @description Docker's own message about the update, cleaned of control characters; empty when it gave none. Docker's free text, to be shown as plain text */
+            message: string;
+            /**
+             * Format: date-time
+             * @description When the update or rollback started; absent when Docker says none
+             */
+            startedAt?: string;
+            /**
+             * @description The swarm's UpdateStatus state: updating, paused or completed for an update; rollback_started, rollback_paused or rollback_completed for a rollback. none when the service has no UpdateStatus, which is also what a scale leaves
+             * @enum {string}
+             */
+            state: "none" | "updating" | "paused" | "completed" | "rollback_started" | "rollback_paused" | "rollback_completed";
+            /**
+             * Format: int64
+             * @description Tasks the swarm wants running (desired state running)
+             */
+            total: number;
+            /**
+             * Format: int64
+             * @description Tasks that should run and are running on the service's current task template: the new version after an update, the earlier one after a rollback
+             */
+            updated: number;
+        };
+        RotateBody: {
+            /** @description The ID of the new object */
+            id: string;
+            /** @description Its name */
+            name: string;
+            /** @description The name of the object it replaces */
+            oldName: string;
+            /** @description True when the old object was removed */
+            oldRemoved: boolean;
+            /**
+             * @description Why the old object stayed although removeOld was asked for: object_in_use (a service spec, a stack's, still names it) or remove_failed; empty otherwise
+             * @enum {string}
+             */
+            removeCode: "object_in_use" | "remove_failed" | "";
+            /** @description The services that used the old object, in the order they were taken */
+            services: components["schemas"]["RotateServiceBody"][] | null;
+            /**
+             * Format: int64
+             * @description How many services a stack owns, which were left alone
+             */
+            skipped: number;
+            /**
+             * Format: int64
+             * @description How many services now use the new object
+             */
+            updated: number;
+        };
+        RotatePreviewBody: {
+            /** @description The ID of the object to replace */
+            id: string;
+            /**
+             * @description secret or config
+             * @enum {string}
+             */
+            kind: "secret" | "config";
+            /** @description The labels the new version would be given: the old object's */
+            labels: {
+                [key: string]: string;
+            };
+            /** @description Its name */
+            name: string;
+            /** @description True when the swarm has an object of that name already, so the rotate would answer 409 name_taken */
+            nameTaken: boolean;
+            /** @description The name the new version would have */
+            newName: string;
+            /**
+             * Format: int64
+             * @description How many of them a stack owns
+             */
+            skipped: number;
+            /**
+             * @description A config's templating (none or golang); empty for a secret
+             * @enum {string}
+             */
+            templating: "none" | "golang" | "";
+            /** @description The services whose spec references the object, in name order */
+            users: components["schemas"]["RotateUserBody"][] | null;
+        };
+        RotatePreviewRequest: {
+            /** @description The name the new version would have; left out, the next version of the old name ({base}_v{n}: the old name without a trailing _v<digits>, then the lowest unused number above the old version). Not a valid name is 422 name_invalid; a taken one is nameTaken in the answer */
+            newName?: string;
+        };
+        RotateServiceBody: {
+            /** @description Its digest; empty when it names none */
+            digest: string;
+            /** @description The image the service was updated with; empty when it was not updated */
+            image: string;
+            /** @description The service name */
+            service: string;
+            /** @description The service ID */
+            serviceId: string;
+            /** @description The stack that owns a skipped service */
+            stack: string;
+            /**
+             * @description updated (now uses the new object; its rollout continues in the swarm), skipped (a stack owns it) or unchanged (it no longer used the old object when it was read)
+             * @enum {string}
+             */
+            state: "updated" | "skipped" | "unchanged";
+        };
         RotateTokenBody: {
             /**
              * @description What the environment's active agents run on. Absent while it has none
@@ -5192,6 +6846,32 @@ export interface components {
             hasAgents: boolean;
             /** @description The new token and every command and file built from it. Shown only in this answer: the server keeps the token's hash and cannot show it again. install.generation is one more than the token it replaced, and the swarm secret is named for it */
             install: components["schemas"]["InstallBody"];
+        };
+        RotateUserBody: {
+            /** @description The service's spec as it is, masked for a caller without secrets.reveal; left out for a skipped service */
+            current?: {
+                [key: string]: unknown;
+            };
+            /** @description The file name or path the object appears as in the container; kept by the rotate */
+            file: string;
+            /** @description The group of the file; kept */
+            gid: string;
+            /** @description The file mode in octal; kept */
+            mode: string;
+            /** @description The spec after the rotate, masked in the same way, with the reference to the new object and no ID, which it doesn't have yet; left out for a skipped service */
+            next?: {
+                [key: string]: unknown;
+            };
+            /** @description The service name */
+            service: string;
+            /** @description The service ID */
+            serviceId: string;
+            /** @description True for a service a stack owns: a rotate does not change it, because the stack's next deploy would put the old object back */
+            skipped: boolean;
+            /** @description The stack that owns the service; empty for a standalone service */
+            stack: string;
+            /** @description The owner of the file; kept */
+            uid: string;
         };
         RunningContainerBody: {
             /** @description The container's ID */
@@ -5240,6 +6920,788 @@ export interface components {
              * @description The size of that file in bytes
              */
             size?: number;
+        };
+        SecretCreateBody: {
+            /** @description The ID of the secret the swarm made */
+            id: string;
+            /** @description The secret name */
+            name: string;
+        };
+        SecretCreateRequest: {
+            /** @description The value, as standard base64. 1 to 511,999 bytes once decoded: empty is 422 value_required, 512,000 or more is 422 value_too_large, and text that is not base64 is 422 value_invalid. It is sent to the swarm once and never kept, logged, audited or returned */
+            data?: string;
+            /** @description Labels, at most 64 */
+            labels?: {
+                [key: string]: string;
+            };
+            /** @description The secret name: letters, numbers, dot, dash and underscore, starting and ending with a letter or number, at most 64 characters (else 422 name_invalid) */
+            name: string;
+            /**
+             * @description Where the value came from, for the audit log only: typed or file (the create sheet), rotate (a new version of a secret) or apply (a secret staged with a service). Left out, the audit log says api
+             * @enum {string}
+             */
+            source?: "typed" | "file" | "rotate" | "apply";
+        };
+        SecretDetailBody: {
+            /**
+             * Format: date-time
+             * @description When the secret was created
+             */
+            createdAt: string;
+            /** @description The secret ID */
+            id: string;
+            /** @description Every label of the secret */
+            labels: {
+                [key: string]: string;
+            };
+            /** @description The secret name */
+            name: string;
+            /** @description The stack (com.docker.stack.namespace) label value; empty when the secret has none */
+            owner: string;
+            /**
+             * @description stack, or empty when the secret has no owner
+             * @enum {string}
+             */
+            ownerKind: "stack" | "";
+            /**
+             * Format: date-time
+             * @description When the secret was last updated
+             */
+            updatedAt: string;
+            /**
+             * Format: int64
+             * @description How many services' specs reference the secret
+             */
+            usedBy: number;
+            /** @description Every service whose spec references the secret, sorted by service name then ID */
+            usedByRows: components["schemas"]["SecretUserBody"][] | null;
+        };
+        SecretInspectBody: {
+            /** @description The manager's inspect document: the ID, the version, the times and the spec's name and labels. It has no data field, and none is ever added */
+            inspect: {
+                [key: string]: unknown;
+            };
+        };
+        SecretItem: {
+            /**
+             * Format: date-time
+             * @description When the secret was created
+             */
+            createdAt: string;
+            /** @description The secret ID */
+            id: string;
+            /** @description Every label of the secret */
+            labels: {
+                [key: string]: string;
+            };
+            /** @description The secret name */
+            name: string;
+            /** @description The stack (com.docker.stack.namespace) label value; empty when the secret has none */
+            owner: string;
+            /**
+             * @description stack, or empty when the secret has no owner
+             * @enum {string}
+             */
+            ownerKind: "stack" | "";
+            /**
+             * Format: date-time
+             * @description When the secret was last updated
+             */
+            updatedAt: string;
+            /**
+             * Format: int64
+             * @description How many services' specs reference the secret, whatever their tasks are doing, a service scaled to 0 included
+             */
+            usedBy: number;
+        };
+        SecretListBody: {
+            /** @description True when total is more than the rows returned */
+            capped: boolean;
+            /** @description At most 500 rows that match the search, sorted by name then ID */
+            items: components["schemas"]["SecretItem"][] | null;
+            /**
+             * Format: int64
+             * @description How many secrets match the search, whatever the cap
+             */
+            total: number;
+            /**
+             * Format: int64
+             * @description How many secrets there are before the search
+             */
+            unfilteredTotal: number;
+        };
+        SecretRotateRequest: {
+            /** @description The new value, as standard base64, with the limits of a create: empty is 422 value_required, 512,000 bytes or more 422 value_too_large, text that is not base64 422 value_invalid. It is sent to the swarm once and never kept, logged, audited or returned */
+            data?: string;
+            /** @description The new secret's name, as for a create (else 422 name_invalid); left out, the next version of the old name */
+            name?: string;
+            /** @description Remove the old secret when no service spec names it any more */
+            removeOld?: boolean;
+        };
+        SecretUserBody: {
+            /** @description The file name the secret appears as in the container */
+            file: string;
+            /** @description The group of the file */
+            gid: string;
+            /** @description The file mode in octal, for example 0444 */
+            mode: string;
+            /** @description The service name */
+            service: string;
+            /** @description The service ID */
+            serviceId: string;
+            /** @description The stack the service belongs to; empty for a service made on its own */
+            stack: string;
+            /** @description The owner of the file */
+            uid: string;
+        };
+        ServiceApplyBody: {
+            /** @description Empty after a successful apply. A failed apply answers a problem whose errors carry the same lists */
+            cleanup: components["schemas"]["ServiceCleanupBody"];
+            /** @description The digest the image is pinned to; empty when it names none */
+            digest: string;
+            /** @description The image the service now names: tag@sha256:digest when the tag was resolved */
+            image: string;
+            /** @description True when Bayplan resolved the tag and wrote the digest into the spec */
+            pinned: boolean;
+            /** @description The steps of the apply in order: the image, each object created, the service */
+            steps: components["schemas"]["ServiceApplyStepBody"][] | null;
+            /** @description The manager's warnings about the update, scrubbed of masked values; empty when there are none */
+            warnings: string[] | null;
+        };
+        ServiceApplyRequest: {
+            /** @description The networks, secrets and configs the spec names by name that do not exist yet, with the values to make them from. At most 16 (else 422 too_many_objects). Each is created, networks then secrets then configs, before the service is updated, and every one is removed again if anything after the first creation fails. One the spec does not name is ignored. The caller needs networks.manage, secrets.manage or configs.manage (Env Admin) for each kind created, else 403 object_permission before anything is created */
+            objects?: components["schemas"]["ServiceStagedObject"][] | null;
+            /** @description The full service spec to review or apply. Without secrets.reveal it is the masked spec the caller read, changed: a value left as <hidden> keeps its current value, a value typed replaces it, a removed entry is removed */
+            spec: {
+                [key: string]: unknown;
+            };
+            /**
+             * Format: int64
+             * @description The version of the service the caller read (what GET .../spec answered). When it is not the current one nothing is changed and the answer is 409 service_changed
+             */
+            version: number;
+        };
+        ServiceApplyStepBody: {
+            /** @description Why a step failed; empty otherwise */
+            code: string;
+            /** @description For an object step: network, secret or config; empty otherwise */
+            kind: string;
+            /** @description For an object step the object's name, for the service step the service's; empty for the image */
+            name: string;
+            /**
+             * @description skipped is a step with nothing to do or one that was not reached
+             * @enum {string}
+             */
+            state: "done" | "failed" | "skipped";
+            /**
+             * @description image (the tag resolved to a digest), object (one network, secret or config created) or service (the update)
+             * @enum {string}
+             */
+            step: "image" | "object" | "service";
+        };
+        ServiceCleanupBody: {
+            /** @description The objects made by the apply that could not be removed and are still there; empty when none */
+            notRemoved: components["schemas"]["ServiceObjectBody"][] | null;
+            /** @description The objects made by the apply that were removed again, in the order they were removed. Empty after a successful apply */
+            removed: components["schemas"]["ServiceObjectBody"][] | null;
+        };
+        ServiceCreateBody: {
+            /** @description Empty after a successful create. A failed create answers a problem whose errors carry the same lists */
+            cleanup: components["schemas"]["ServiceCleanupBody"];
+            /** @description The digest the image is pinned to; empty when it names none */
+            digest: string;
+            /** @description The ID the swarm gave the new service */
+            id: string;
+            /** @description The image the service was created with: tag@sha256:digest when the tag was resolved */
+            image: string;
+            /** @description The service's name */
+            name: string;
+            /** @description True when Bayplan resolved the tag and wrote the digest into the spec */
+            pinned: boolean;
+            /** @description The steps of the create in order: the image, each object created, the service */
+            steps: components["schemas"]["ServiceApplyStepBody"][] | null;
+            /** @description The manager's warnings about the creation, scrubbed of masked values; empty when there are none */
+            warnings: string[] | null;
+        };
+        ServiceCreateRequest: {
+            /** @description The networks, secrets and configs the spec names by name that do not exist yet, with the values to make them from, exactly as for an apply. At most 16 (else 422 too_many_objects). Each is created before the service, and every one is removed again if the service cannot be created */
+            objects?: components["schemas"]["ServiceStagedObject"][] | null;
+            /** @description The full service spec to create, as Docker states it (Name, Labels, TaskTemplate, Mode, ...), decoded strictly: an unknown field is 422 spec_invalid. A <hidden> placeholder stands for nothing in a new service and is 422 placeholder_unmatched */
+            spec: {
+                [key: string]: unknown;
+            };
+        };
+        ServiceCreateReviewRequest: {
+            /** @description The full service spec to create, as Docker states it (Name, Labels, TaskTemplate, Mode, ...), decoded strictly: an unknown field is 422 spec_invalid. A <hidden> placeholder stands for nothing in a new service and is 422 placeholder_unmatched */
+            spec: {
+                [key: string]: unknown;
+            };
+        };
+        ServiceDetailBody: {
+            /** @description True for a Bayplan agent service */
+            agent: boolean;
+            /** @description The swarm configs the service uses, by reference */
+            configs: components["schemas"]["ServiceFileRefBody"][] | null;
+            /**
+             * Format: date-time
+             * @description When the service was created
+             */
+            createdAt: string;
+            /**
+             * Format: int64
+             * @description Tasks the swarm wants running, from the last cluster read; for a replicated service whose row was not read yet, the spec's replica count
+             */
+            desired: number;
+            /** @description The environment variables in spec order. Without secrets.reveal each is the name with masked true and no value */
+            env: components["schemas"]["EnvVar"][] | null;
+            /** @description True when the values were withheld because the caller may not reveal secrets on this environment */
+            envMasked: boolean;
+            /** @description True when the swarm still holds the spec before the last update, so a rollback has something to go back to */
+            hasPreviousSpec: boolean;
+            /** @description The service ID */
+            id: string;
+            /** @description The image the spec names */
+            image: components["schemas"]["ServiceImageBody"];
+            /** @description The service's own labels, as Docker reports them */
+            labels: {
+                [key: string]: string;
+            };
+            /**
+             * @description How the swarm runs it
+             * @enum {string}
+             */
+            mode: "replicated" | "global" | "replicated-job" | "global-job";
+            /** @description The mounts of the container spec */
+            mounts: components["schemas"]["ServiceMountBody"][] | null;
+            /** @description True when a user muted the service's restart-loop alerts, whether or not it is in a loop now */
+            muted: boolean;
+            /** @description The service name */
+            name: string;
+            /** @description The networks the service is attached to */
+            networks: components["schemas"]["ServiceNetworkBody"][] | null;
+            /** @description Where tasks may run */
+            placement: components["schemas"]["ServicePlacementBody"];
+            /** @description The ports the service publishes, sorted by published port; empty when it publishes none */
+            ports: components["schemas"]["ServicePortBody"][] | null;
+            /** @description CPU and memory limits and reservations */
+            resources: components["schemas"]["ServiceResourcesBody"];
+            /** @description Present while the service is in a restart loop: its tasks keep failing. Absent otherwise, and while the last cluster read does not hold the service */
+            restartLoop?: components["schemas"]["RestartLoopBody"];
+            /** @description The restart policy; absent when the spec sets none (the engine's default, restart on any exit) */
+            restartPolicy?: components["schemas"]["ServiceRestartPolicyBody"];
+            /**
+             * Format: int64
+             * @description Tasks that are running now, from the last cluster read
+             */
+            running: number;
+            /** @description The swarm secrets the service uses, by reference; no value is ever sent */
+            secrets: components["schemas"]["ServiceFileRefBody"][] | null;
+            /** @description The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own */
+            stack: string;
+            /** @description The swarm's message about the last update; empty when it has none */
+            updateMessage: string;
+            /** @description The update policy; absent when the spec sets none (the engine's defaults) */
+            updatePolicy?: components["schemas"]["ServiceUpdatePolicyBody"];
+            /** @description The state of the last update or rollback (updating, paused, completed, rollback_started, rollback_paused, rollback_completed); empty when it has none */
+            updateStatus: string;
+            /**
+             * Format: date-time
+             * @description When the service's spec last changed
+             */
+            updatedAt: string;
+        };
+        ServiceEditRequest: {
+            /** @description The full service spec to review or apply. Without secrets.reveal it is the masked spec the caller read, changed: a value left as <hidden> keeps its current value, a value typed replaces it, a removed entry is removed */
+            spec: {
+                [key: string]: unknown;
+            };
+            /**
+             * Format: int64
+             * @description The version of the service the caller read (what GET .../spec answered). When it is not the current one nothing is changed and the answer is 409 service_changed
+             */
+            version: number;
+        };
+        ServiceFileRefBody: {
+            /** @description The file name in the container; empty for a config used at runtime rather than as a file */
+            file: string;
+            /** @description The file's group */
+            gid: string;
+            /** @description The secret's or config's ID */
+            id: string;
+            /** @description The file's permissions in octal (0444); empty when there is no file */
+            mode: string;
+            /** @description Its name */
+            name: string;
+            /** @description The file's owner */
+            uid: string;
+        };
+        ServiceFindingBody: {
+            /** @description Where it is in the spec, for example TaskTemplate.ContainerSpec.Mounts[1].Source */
+            path: string;
+            /**
+             * @description The rule that fired
+             * @enum {string}
+             */
+            rule: "bind_path" | "volume_device" | "npipe" | "cap_add" | "selinux" | "seccomp" | "apparmor" | "host_network" | "plugin_runtime";
+            /** @description The offending value */
+            value: string;
+            /** @description Why the setting needs env Admin */
+            why: string;
+        };
+        ServiceForceUpdateBody: {
+            /** @description The digest the image is pinned to; empty when it names none */
+            digest: string;
+            /** @description The image the service now names: tag@sha256:digest when the tag was resolved, else what it named */
+            image: string;
+            /** @description True when Bayplan resolved the tag and wrote the digest into the spec */
+            pinned: boolean;
+            /** @description The image the service named before */
+            previousImage: string;
+            /**
+             * @description Why nothing was pinned. digest_only: the image names a digest and no tag, so it already is the exact image. no_image: the spec has no container image
+             * @enum {string}
+             */
+            reason?: "digest_only" | "no_image";
+        };
+        ServiceForceUpdateRequest: {
+            /** @description True when this repeats a stalled or failed update. It changes nothing but the audit row */
+            retry?: boolean;
+            /**
+             * Format: int64
+             * @description The version of the service the caller saw. When it is not the current one nothing is changed and the answer is 409 service_changed. Left out (0), the version read at the start of the update is used, so a repeated force update always goes through
+             */
+            version?: number;
+        };
+        ServiceHostPolicyBody: {
+            /** @description False when the manager's agent refuses services with host access because its owner did not set BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true; true when it allows them or there is no agent in the way */
+            managerAllowsPrivileged: boolean;
+            /** @description True when the manager's host is read-only (BAYPLAN_AGENT_READ_ONLY): nothing can be applied */
+            readOnly: boolean;
+        };
+        ServiceImageBody: {
+            /** @description The digest the reference is pinned to (sha256:...); empty when it is not pinned */
+            digest: string;
+            /** @description True when the reference carries a digest */
+            pinned: boolean;
+            /** @description The image as the spec wrote it; empty when the spec has no container spec */
+            ref: string;
+            /** @description The tag, latest when the reference names none; empty for a reference by digest alone or one that is not a valid reference */
+            tag: string;
+        };
+        ServiceInspectBody: {
+            /** @description The manager's inspect document of the service, with the values of the environment variables, the command line, the health check command and the log driver's options replaced by <hidden>, in Spec and in PreviousSpec, unless the caller holds secrets.reveal */
+            document: {
+                [key: string]: unknown;
+            };
+            /** @description True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment */
+            masked: boolean;
+        };
+        ServiceItem: {
+            /** @description True for a Bayplan agent service */
+            agent: boolean;
+            /**
+             * Format: date-time
+             * @description When the service was created
+             */
+            createdAt: string;
+            /**
+             * Format: int64
+             * @description Tasks the swarm wants running. For a global service this is the count of nodes it runs on; for a job, 0
+             */
+            desired: number;
+            /** @description True when the swarm still holds the spec before the last update, so a rollback has something to go back to */
+            hasPreviousSpec: boolean;
+            /** @description The service ID */
+            id: string;
+            /** @description The image the service's spec names, as written; empty when it has none */
+            image: string;
+            /**
+             * @description How the swarm runs it
+             * @enum {string}
+             */
+            mode: "replicated" | "global" | "replicated-job" | "global-job";
+            /** @description The service name */
+            name: string;
+            /** @description The ports the service publishes, as published->target/protocol (8080->80/tcp), with (host) after a port published in host mode; sorted by published port. Empty when it publishes none */
+            ports: string[] | null;
+            /** @description Present while the service is in a restart loop: its tasks keep failing. Absent otherwise */
+            restartLoop?: components["schemas"]["RestartLoopBody"];
+            /**
+             * Format: int64
+             * @description Tasks that are running now
+             */
+            running: number;
+            /** @description The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own */
+            stack: string;
+            /** @description The swarm's message about the last update; empty when it has none */
+            updateMessage: string;
+            /** @description The state of the service's last update or rollback (updating, paused, completed, rollback_started, rollback_paused, rollback_completed); empty when it has none */
+            updateState: string;
+            /**
+             * Format: date-time
+             * @description When the service's spec last changed
+             */
+            updatedAt: string;
+        };
+        ServiceListBody: {
+            /** @description True when total is more than the rows returned */
+            capped: boolean;
+            /**
+             * Format: date-time
+             * @description When the rows were read from a manager; empty when none were
+             */
+            fetchedAt: string;
+            /** @description At most 500 rows that match the search and the status filter, sorted by name then ID */
+            items: components["schemas"]["ServiceItem"][] | null;
+            /** @description True when no manager of the swarm is connected: the rows are the last ones read, or none */
+            noManager: boolean;
+            /** @description How many services each status chip counts, before the search and the status filter, so the numbers never shrink with what was typed */
+            statusCounts: components["schemas"]["ServiceStatusCountsBody"];
+            /**
+             * Format: int64
+             * @description How many services match the search and the status filter, whatever the cap
+             */
+            total: number;
+            /**
+             * Format: int64
+             * @description How many services there are before the search and the status filter, so a page can say 3 of 600
+             */
+            unfilteredTotal: number;
+        };
+        ServiceLogLine: {
+            m: string;
+            node: string;
+            s: string;
+            /** Format: int64 */
+            slot: number;
+            t: string;
+            task: string;
+        };
+        ServiceLogsBody: {
+            /** @description The lines, oldest first, merged across tasks. t is the engine's timestamp (UTC, nine digits), s is o for stdout and e for stderr, m is the text as written, task is the task that wrote it, slot its replica number (0 for a global service) and node its host */
+            lines: components["schemas"]["ServiceLogLine"][] | null;
+            /** @description True when there are no earlier lines than these */
+            startOfLogs: boolean;
+        };
+        ServiceMissingBody: {
+            /** @description Configs the spec names that the swarm does not have */
+            configs: string[] | null;
+            /** @description Networks the spec names, by the name or ID it used, that the swarm does not have */
+            networks: string[] | null;
+            /** @description Secrets the spec names that the swarm does not have */
+            secrets: string[] | null;
+        };
+        ServiceMountBody: {
+            /** @description True when mounted read-only */
+            readOnly: boolean;
+            /** @description The volume name or host path; empty for a tmpfs */
+            source: string;
+            /** @description Where it appears in the container */
+            target: string;
+            /** @description volume, bind, tmpfs, npipe, cluster or image */
+            type: string;
+        };
+        ServiceNetworkBody: {
+            /** @description The service's aliases on the network */
+            aliases: string[] | null;
+            /** @description The network's ID; what the spec wrote when no network of the swarm has that name or ID */
+            id: string;
+            /** @description The network's name; the ID when the swarm has no such network */
+            name: string;
+        };
+        ServiceObjectBody: {
+            /** @description The ID the swarm gave it */
+            id: string;
+            /**
+             * @description network, secret or config
+             * @enum {string}
+             */
+            kind: "network" | "secret" | "config";
+            /** @description The object's name */
+            name: string;
+        };
+        ServicePlacementBody: {
+            /** @description The placement constraints, as written (node.role==worker) */
+            constraints: string[] | null;
+            /**
+             * Format: int64
+             * @description The most tasks of the service on one node; 0 for no limit
+             */
+            maxReplicas: number;
+            /** @description The spread preferences: the label each spreads over (node.labels.zone) */
+            preferences: string[] | null;
+        };
+        ServicePortBody: {
+            /** @description ingress (the routing mesh) or host (only the node that runs the task) */
+            mode: string;
+            /** @description tcp, udp or sctp */
+            protocol: string;
+            /**
+             * Format: int32
+             * @description The port on the swarm, or on the node for host mode; 0 while the swarm has not assigned one
+             */
+            published: number;
+            /**
+             * Format: int32
+             * @description The port in the container
+             */
+            target: number;
+        };
+        ServiceResourcesBody: {
+            /**
+             * Format: double
+             * @description CPU limit in cores; 0 for none
+             */
+            cpuLimit: number;
+            /**
+             * Format: double
+             * @description CPU reservation in cores; 0 for none
+             */
+            cpuReservation: number;
+            /**
+             * Format: int64
+             * @description Memory limit in bytes; 0 for none
+             */
+            memoryLimit: number;
+            /**
+             * Format: int64
+             * @description Memory reservation in bytes; 0 for none
+             */
+            memoryReservation: number;
+        };
+        ServiceRestartPolicyBody: {
+            /** @description none, on-failure or any */
+            condition: string;
+            /** @description How long to wait between restarts, as a Go duration (5s); empty for the engine's default */
+            delay: string;
+            /**
+             * Format: int64
+             * @description The most restart attempts before giving up; 0 for no limit
+             */
+            maxAttempts: number;
+            /** @description How long to wait before a restart counts as having worked, as a Go duration; empty for the engine's default */
+            window: string;
+        };
+        ServiceReviewBody: {
+            /** @description False when the caller is below env Admin and findings is not empty */
+            allowed: boolean;
+            /** @description False when the spec equals the current one: an apply would answer 422 nothing_to_apply */
+            changed: boolean;
+            /** @description The host-escalation settings of the spec, returned whether or not the caller may have them */
+            findings: components["schemas"]["ServiceFindingBody"][] | null;
+            /** @description What the manager's agent will forward */
+            hostPolicy: components["schemas"]["ServiceHostPolicyBody"];
+            /** @description How the image resolved */
+            image: components["schemas"]["ServiceReviewImageBody"];
+            /** @description Present when the digest of a changed tag could not be looked up; the spec is then unpinned, and an apply would answer 422 image_unresolved */
+            imageError?: components["schemas"]["ServiceReviewImageErrorBody"];
+            /** @description Objects the spec names that do not exist; an apply would answer 422 objects_missing */
+            missing: components["schemas"]["ServiceMissingBody"];
+            /** @description When not allowed, one finding per line as {path}: {value} */
+            refusal: string;
+            /** @description The merged, normalised spec the apply would send, with the image pinned when it could be, as the caller may see it: the values of the environment, the command line, the health check command and the log options are <hidden> unless the caller holds secrets.reveal */
+            spec: {
+                [key: string]: unknown;
+            };
+            /**
+             * Format: int64
+             * @description The service's current version
+             */
+            version: number;
+            /** @description Notes about the review; empty when there are none */
+            warnings: string[] | null;
+        };
+        ServiceReviewImageBody: {
+            /** @description True when the spec's image differs from the service's current one */
+            changed: boolean;
+            /** @description The name of the stored credential the lookup used; empty for none. Never its secret */
+            credential: string;
+            /** @description The digest the image is pinned to; empty when it is not pinned */
+            digest: string;
+            /** @description The registry the image is on */
+            host: string;
+            /** @description The image the spec will carry: tag@sha256:digest when the tag was resolved, else as written */
+            ref: string;
+            /** @description The tag; empty for a reference by digest alone */
+            tag: string;
+        };
+        ServiceReviewImageErrorBody: {
+            /** @description The registry asked */
+            host: string;
+            /** @description Why, as a pull failure code (unauthorized, not_found, rate_limited, unreachable, ...) */
+            reason: string;
+            /** @description The image that could not be looked up */
+            ref: string;
+        };
+        ServiceRollbackBody: {
+            /** @description The image of the spec the service is going back to; empty when that spec names none */
+            image: string;
+        };
+        ServiceRollbackRequest: {
+            /**
+             * Format: int64
+             * @description The version of the service the caller saw (what GET .../spec answered). When it is not the current one nothing is changed and the answer is 409 service_changed, so a rollback only ever goes back to the spec that was shown
+             */
+            version: number;
+        };
+        ServiceScaleRequest: {
+            /**
+             * Format: uuid
+             * @description Groups the audit rows of one bulk request. Send a UUID to name the bulk yourself; with more than one target and none sent, the server makes one (a UUIDv7) and answers it
+             */
+            bulkId?: string;
+            /** @description The services to scale, at most 100 (else 422 too_many_targets), each named once (else 422 duplicate_target). Each is answered separately; one that fails never stops the others */
+            targets: components["schemas"]["ServiceScaleTarget"][] | null;
+        };
+        ServiceScaleResponse: {
+            /** @description The bulk ID recorded in the audit rows of this request: the one sent, or the one the server made for a request with more than one target. Absent for a single target with none sent */
+            bulkId?: string;
+            /** @description One entry per requested target, in request order */
+            results: components["schemas"]["ServiceScaleResult"][] | null;
+        };
+        ServiceScaleResult: {
+            /** @description False when the service already had that count: it was answered done and no update was sent */
+            changed: boolean;
+            /**
+             * @description Why a target failed or was skipped. not_scalable (with skipped): a global or job service has no replica count. service_changed: somebody else changed the service after it was read, so nothing was changed and nothing is retried; ask again. service_not_found: the swarm has no such service. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the manager's agent, so nothing was sent. agent_policy_denied: the manager's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. agent_host_policy: the service's spec gives tasks host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, a lowered sandbox, the host network) and the manager's agent refuses that unless its owner set BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true; every update carries the whole spec, so a service that already has host access cannot be scaled either. no_manager_connected: no manager of the swarm is connected, or the one reached is not a manager. no_quorum: the swarm has lost its quorum. registry_unresolved: the registry credential chosen for the image could not be read, so nothing was sent. scale_failed: the manager refused it; detail has its message
+             * @enum {string}
+             */
+            code?: "not_scalable" | "service_changed" | "service_not_found" | "host_read_only" | "agent_policy_denied" | "agent_host_policy" | "no_manager_connected" | "no_quorum" | "registry_unresolved" | "scale_failed";
+            /** @description The manager's message for scale_failed, at most 300 characters; for the other codes a plain sentence */
+            detail?: string;
+            /** @description The service name when the manager could be asked; otherwise what the request named */
+            name: string;
+            /**
+             * Format: int64
+             * @description The replica count the service had; absent when it was not read
+             */
+            previous?: number;
+            /**
+             * Format: int64
+             * @description The replica count that was asked for
+             */
+            replicas: number;
+            /**
+             * @description done: the service has the replica count asked for (changed says whether an update was sent). failed: it could not be scaled; code says why. skipped: it has no replica count to set (not_scalable)
+             * @enum {string}
+             */
+            result: "done" | "failed" | "skipped";
+            /** @description The service ID or name the request named */
+            serviceId: string;
+        };
+        ServiceScaleTarget: {
+            /**
+             * Format: int64
+             * @description The replica count to set, a whole number from 0 to 1000 (else 422 replicas_invalid)
+             */
+            replicas: number;
+            /** @description The service ID or name: the id of a row of the services list */
+            serviceId: string;
+        };
+        ServiceSpecBody: {
+            /** @description True for a Bayplan agent service */
+            agent: boolean;
+            /** @description True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment */
+            masked: boolean;
+            /**
+             * @description How the swarm runs it
+             * @enum {string}
+             */
+            mode: "replicated" | "global" | "replicated-job" | "global-job";
+            /** @description The service name */
+            name: string;
+            /** @description The spec before the last update, masked the same way; absent when the service was never updated, so there is nothing to roll back to */
+            previousSpec?: {
+                [key: string]: unknown;
+            };
+            /** @description The service's spec as the manager states it (Name, Labels, TaskTemplate, Mode, ...), with the values of the environment variables, the command line, the health check command and the log driver's options replaced by <hidden> unless the caller holds secrets.reveal */
+            spec: {
+                [key: string]: unknown;
+            };
+            /** @description The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own */
+            stack: string;
+            /**
+             * Format: int64
+             * @description The service's version: what an update or a rollback must send back to be accepted
+             */
+            version: number;
+        };
+        ServiceStagedObject: {
+            /** @description A secret's value or a config's content, as standard base64: 1 to 511,999 bytes for a secret and 1 to 1,023,999 for a config (else 422 value_required, value_invalid or value_too_large). It is sent to the swarm once and never kept, logged, audited or returned. Ignored for a network */
+            data?: string;
+            /**
+             * @description What to create. A network is made as an attachable overlay
+             * @enum {string}
+             */
+            kind: "network" | "secret" | "config";
+            /** @description Labels of a secret or config, at most 64 (422 labels_invalid for a key over 256 or a value over 4096 characters) */
+            labels?: {
+                [key: string]: string;
+            };
+            /** @description The name the spec uses for it: letters, numbers, dot, dash and underscore, starting and ending with a letter or number, at most 64 characters (else 422 name_invalid) */
+            name: string;
+            /** @description A network only: the subnet in CIDR form; left out, the swarm chooses (422 subnet_invalid) */
+            subnet?: string;
+            /** @description A config only: none (the default) or golang, to have the swarm fill the content in as a Go template; anything else is 422 templating_invalid */
+            templating?: string;
+        };
+        ServiceStatusCountsBody: {
+            /**
+             * Format: int64
+             * @description Services with some but not all of their tasks running
+             */
+            degraded: number;
+            /**
+             * Format: int64
+             * @description Services in a restart loop: their tasks keep failing (RES-13)
+             */
+            loop: number;
+            /**
+             * Format: int64
+             * @description Services whose update or rollback stopped or went wrong (paused, rollback_paused, rollback_completed)
+             */
+            problem: number;
+            /**
+             * Format: int64
+             * @description Services whose update or rollback is in progress (updating, rollback_started)
+             */
+            updating: number;
+        };
+        ServiceTasksBody: {
+            /** @description True for a global service, whose rows are nodes rather than slots */
+            global: boolean;
+            /**
+             * Format: int64
+             * @description How many tasks per slot Docker keeps (TaskHistoryRetentionLimit); 5 when the cluster sets none
+             */
+            retention: number;
+            /** @description A replicated service by slot number, a global one by node name (nodes the swarm no longer lists last) */
+            slots: components["schemas"]["TaskSlot"][] | null;
+            /**
+             * Format: int64
+             * @description Every task listed, current and earlier
+             */
+            total: number;
+        };
+        ServiceUpdatePolicyBody: {
+            /** @description The pause between batches, as a Go duration; empty for none */
+            delay: string;
+            /** @description pause, continue or rollback; empty for the engine's default */
+            failureAction: string;
+            /**
+             * Format: double
+             * @description The share of failed tasks that is tolerated, 0 to 1
+             */
+            maxFailureRatio: number;
+            /** @description How long each task is watched for failure, as a Go duration; empty for the engine's default */
+            monitor: string;
+            /** @description stop-first or start-first; empty for the engine's default */
+            order: string;
+            /**
+             * Format: int64
+             * @description How many tasks are updated at once; 0 for all at once
+             */
+            parallelism: number;
         };
         SessionBody: {
             /**
@@ -5610,6 +8072,68 @@ export interface components {
             name: string;
             /** @description The platforms of the tag, with the same limit as the digest */
             platforms?: components["schemas"]["PlatformBody"][] | null;
+        };
+        TaskItem: {
+            /** @description The task's container ID on its node; empty until it has one */
+            containerId: string;
+            /**
+             * Format: date-time
+             * @description When the task was created
+             */
+            createdAt: string;
+            /** @description The state the swarm wants the task in */
+            desiredState: string;
+            /** @description The state Docker last recorded for the task (new, pending, assigned, accepted, preparing, ready, starting, running, complete, failed, shutdown, rejected, remove, orphaned) */
+            dockerState: string;
+            /** @description Docker's error text about the task, cleaned of control characters; empty when there is none. Docker's free text, to be shown as plain text */
+            error: string;
+            /**
+             * Format: int64
+             * @description The exit code of the task's container once the task has ended; null while it runs and when it never had a container
+             */
+            exitCode: number | null;
+            /** @description The task ID */
+            id: string;
+            /** @description Docker's status message, cleaned the same way */
+            message: string;
+            /** @description The node's host name; empty when the task has no node or its node is no longer in the swarm */
+            node: string;
+            /** @description The swarm node the task was placed on; empty while it is not placed. The swarm keeps the ID of a node that has since been removed */
+            nodeId: string;
+            /** @description False when the task names a node the swarm no longer lists (a removed node); true otherwise, also for a task with no node */
+            nodeKnown: boolean;
+            /**
+             * Format: int64
+             * @description The replica number of a replicated service's task; 0 for a global service's
+             */
+            slot: number;
+            /** @description The state to show: Docker's own word, except unknown for a task that has not ended on a node that is down, disconnected or removed, which cannot say it is still running */
+            state: string;
+            /**
+             * Format: date-time
+             * @description When the task reached dockerState
+             */
+            stateSince: string;
+            /** @description The node ID the container routes of this environment take (?node= of the container page) for the task's node; empty when no connected agent or local socket reaches that node now */
+            targetNodeId: string;
+            /**
+             * Format: date-time
+             * @description When the task last changed
+             */
+            updatedAt: string;
+        };
+        TaskSlot: {
+            /** @description The task that should be running there: the newest one whose desired state is running, else the newest */
+            current: components["schemas"]["TaskItem"];
+            /** @description The earlier tasks, newest first, as many as Docker keeps; empty when there are none */
+            history: components["schemas"]["TaskItem"][] | null;
+            /** @description The host name of the node the current task is on; empty when it has none or its node is gone */
+            node: string;
+            /**
+             * Format: int64
+             * @description The slot number; 0 for a global service's row
+             */
+            slot: number;
         };
         TeamBody: {
             /**
@@ -7085,6 +9609,259 @@ export interface operations {
             };
         };
     };
+    listConfigs: {
+        parameters: {
+            query?: {
+                /** @description Search: a case-insensitive substring of the config name, its owner or any label key or value, at most 128 characters (else 422 query_too_long) */
+                q?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigCreateBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The config ID or name: the id of a row of the configs list */
+                configId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The config ID or name: the id of a row of the configs list */
+                configId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    inspectConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The config ID or name: the id of a row of the configs list */
+                configId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigInspectBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    rotateConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The config ID or name: the id of a row of the configs list */
+                configId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigRotateRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotateBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewConfigRotate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The config ID or name: the id of a row of the configs list */
+                configId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RotatePreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotatePreviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     listContainers: {
         parameters: {
             query?: {
@@ -7326,6 +10103,82 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ContainerLogsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    muteContainerRestartLoop: {
+        parameters: {
+            query?: {
+                /** @description The node the container is on: the nodeId of its row in the containers list. May be left out on an environment of one node; on a swarm it is required (422 node_required) */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The container ID or name */
+                containerId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerRestartLoopMuteBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    unmuteContainerRestartLoop: {
+        parameters: {
+            query?: {
+                /** @description The node the container is on: the nodeId of its row in the containers list. May be left out on an environment of one node; on a swarm it is required (422 node_required) */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The container ID or name */
+                containerId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerRestartLoopMuteBody"];
                 };
             };
             /** @description Error */
@@ -8127,6 +10980,405 @@ export interface operations {
             };
         };
     };
+    listNodes: {
+        parameters: {
+            query?: {
+                /** @description Search: a case-insensitive substring of the host name, the address or any label key or value (of the node's spec or of its engine), at most 128 characters (else 422 query_too_long) */
+                q?: string;
+                /** @description Only nodes in one of these statuses, comma separated: managers, workers, drained (availability drain) or down (state down or disconnected). Any other value is refused 422 status_invalid */
+                status?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getNode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm node ID: the id of a row of the nodes list */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    removeNode: {
+        parameters: {
+            query?: {
+                /** @description The node's host name, typed. Always needed: a node is removed only by typing its name */
+                confirm?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm node ID: the id of a row of the nodes list */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setNodeAvailability: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm node ID: the id of a row of the nodes list */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NodeAvailabilityRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getNodeActionImpact: {
+        parameters: {
+            query: {
+                /** @description The change to judge: drain, pause, promote or demote */
+                action: "drain" | "pause" | "promote" | "demote";
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm node ID: the id of a row of the nodes list */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeImpactBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getNodeInspect: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm node ID: the id of a row of the nodes list */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeInspectBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setNodeLabels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm node ID: the id of a row of the nodes list */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NodeLabelsRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getNodeLabelImpact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm node ID: the id of a row of the nodes list */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NodeLabelImpactRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeLabelImpactBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setNodeRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm node ID: the id of a row of the nodes list */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NodeRoleRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listNodeTasks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm node ID: the id of a row of the nodes list */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeTasksBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getPlacement: {
+        parameters: {
+            query?: {
+                /** @description Only the tasks and the service of this service ID or name; every node is still listed. 404 service_not_found for a service the swarm does not have */
+                serviceId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlacementBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     reconnectEnvironment: {
         parameters: {
             query?: never;
@@ -8366,6 +11618,967 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getRestartLoopSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestartLoopSettingsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setRestartLoopSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestartLoopSettingsInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestartLoopSettingsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listSecrets: {
+        parameters: {
+            query?: {
+                /** @description Search: a case-insensitive substring of the secret name, its owner or any label key or value, at most 128 characters (else 422 query_too_long) */
+                q?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecretCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretCreateBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The secret ID or name: the id of a row of the secrets list */
+                secretId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteSecret: {
+        parameters: {
+            query?: {
+                /** @description The secret's name, typed (else 422 confirmation_required and nothing is sent) */
+                confirm?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The secret ID or name: the id of a row of the secrets list */
+                secretId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    inspectSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The secret ID or name: the id of a row of the secrets list */
+                secretId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretInspectBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    rotateSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The secret ID or name: the id of a row of the secrets list */
+                secretId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecretRotateRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotateBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewSecretRotate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The secret ID or name: the id of a row of the secrets list */
+                secretId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RotatePreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotatePreviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listServices: {
+        parameters: {
+            query?: {
+                /** @description Search: a case-insensitive substring of the service name, image, stack or any label key or value, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap */
+                q?: string;
+                /** @description Only services in one of these statuses, comma separated: degraded (some but not all tasks running), updating (updating, rollback_started), problem (paused, rollback_paused, rollback_completed) or loop (in a restart loop). Applied before the 500-row cap; any other value is refused 422 status_invalid */
+                status?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceCreateBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    reviewServiceCreate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceCreateReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceReviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    scaleServices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceScaleRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceScaleResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The service ID or name: the id of a row of the services list */
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    removeService: {
+        parameters: {
+            query?: {
+                /** @description The service's name, typed. Needed only to remove Bayplan's own agent service; ignored for any other service */
+                confirm?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The service ID or name: the id of a row of the services list */
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    applyServiceUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The service ID or name: the id of a row of the services list */
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceApplyBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    forceUpdateService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The service ID or name: the id of a row of the services list */
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceForceUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceForceUpdateBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    inspectService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The service ID or name: the id of a row of the services list */
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceInspectBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getServiceLogs: {
+        parameters: {
+            query: {
+                /** @description The viewer's ID: 16 to 64 letters, digits, dashes or underscores */
+                sid: string;
+                /** @description Only lines written before this time: an RFC 3339 time or Unix seconds. Left out, the newest lines */
+                until?: string;
+                /** @description Do not look further back than this time: an RFC 3339 time or Unix seconds */
+                since?: string;
+                /** @description How many lines at most; 500 by default */
+                tail?: number;
+                /** @description Only these tasks: comma-separated task IDs, or the first eight or more characters of one */
+                task?: string;
+                /** @description Only tasks on these nodes: comma-separated host names or node IDs */
+                node?: string;
+                /** @description Also the lines of tasks that have ended */
+                stopped?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The service ID or name */
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceLogsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    muteServiceRestartLoop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The service ID or name: the id of a row of the services list */
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestartLoopMuteBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    unmuteServiceRestartLoop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The service ID or name: the id of a row of the services list */
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestartLoopMuteBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    reviewServiceUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The service ID or name: the id of a row of the services list */
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceEditRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceReviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    rollbackService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The service ID or name: the id of a row of the services list */
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceRollbackRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceRollbackBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getServiceRollout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The service ID or name: the id of a row of the services list */
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RolloutBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getServiceSpec: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The service ID or name: the id of a row of the services list */
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceSpecBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listServiceTasks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The service ID or name: the id of a row of the services list */
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceTasksBody"];
                 };
             };
             /** @description Error */

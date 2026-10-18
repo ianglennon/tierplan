@@ -43,6 +43,7 @@ func (f *authFixture) saveProfile(t *testing.T, cookie, csrf, body string) *http
 }
 
 func TestMyProfileIsReadAndSavedByTheUserThemselvesAndAuditedWithThemAsActor(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	f.addUser(t, "alice", false) // nothing to do with the user being edited
 	cookie, csrf := f.signIn(t, "alice", false)
@@ -77,6 +78,7 @@ func TestMyProfileIsReadAndSavedByTheUserThemselvesAndAuditedWithThemAsActor(t *
 }
 
 func TestMyProfileSaveWithAnOldVersionIs409StaleChangeAndSavesNothing(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	p := f.getProfile(t, cookie)
@@ -93,6 +95,7 @@ func TestMyProfileSaveWithAnOldVersionIs409StaleChangeAndSavesNothing(t *testing
 }
 
 func TestMyProfileSaveRefusesABadEmailAndAnOverlongNameWithFieldCodes(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	p := f.getProfile(t, cookie)
@@ -111,6 +114,7 @@ func TestMyProfileSaveRefusesABadEmailAndAnOverlongNameWithFieldCodes(t *testing
 }
 
 func TestMyProfileHasNoUsernameFieldAndABodyThatNamesOneIsRefused(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
 	p := f.getProfile(t, cookie)
@@ -160,6 +164,7 @@ func TestMyProfileHasNoUsernameFieldAndABodyThatNamesOneIsRefused(t *testing.T) 
 }
 
 func TestMyProfileNeedsASessionAndACSRFTokenToSave(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, _ := f.signIn(t, "admin", false)
 	p := f.getProfile(t, cookie)

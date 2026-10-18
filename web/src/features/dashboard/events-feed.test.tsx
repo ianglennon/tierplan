@@ -12,11 +12,15 @@ import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import "@/i18n";
 import { TestRouter } from "@/test-router";
 
+// Fixture dates count from one fixed instant, and beforeEach freezes Date at it, so a
+// minute-granularity "N min ago" is exact however late the run starts. Only Date is faked:
+// findBy and waitFor and the app's timers keep running in real time.
+const NOW = new Date("2026-10-03T12:00:00Z");
 function ev(id: string, over: Partial<EventDTO> = {}): EventDTO {
   return {
     id,
     node: "node-1",
-    time: new Date(Date.now() - 60_000).toISOString(),
+    time: new Date(NOW.getTime() - 60_000).toISOString(),
     type: "container",
     action: "start",
     actorId: `0123456789abcdef-${id}`,
@@ -46,6 +50,8 @@ const stream = () => FakeEventSource.instances[0] as FakeEventSource;
 const rows = () => screen.queryAllByRole("listitem");
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(NOW);
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
   recent = async () => Response.json({ items: [] });
@@ -57,6 +63,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -142,7 +149,7 @@ describe("EventsFeed", () => {
             type: "service",
             action: "update",
             name: `svc-${i}`,
-            time: new Date(Date.now() + i * 1000).toISOString(),
+            time: new Date(NOW.getTime() + i * 1000).toISOString(),
           }),
         );
       }

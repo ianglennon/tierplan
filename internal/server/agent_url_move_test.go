@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -17,9 +18,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/internal/tunnel"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // TestAnAgentOfflineDuringASecondAddressChange is the tracer for G-02-4b: an
@@ -163,37 +165,13 @@ func TestAnAgentOfflineDuringASecondAddressChange(t *testing.T) {
 		}
 		return s.EnrolledAgents, s.OfflineAgents
 	}
-	// waitOnline polls until the environment is online and the server holds a
-	// connection from every enrolled agent, failing with the agent's log after the
-	// deadline. The second condition matters after a restart: the environment can
-	// still read online for a moment after its agent left.
-	waitOnline := func(within time.Duration, log *lockedBuffer) {
+	// waitOnline waits until the server holds a session from the agent and the monitor
+	// has found its engine online, failing with the agent's log otherwise. The session
+	// is what matters after a restart: the environment can still read online for a
+	// moment after its agent left, so the caller has seen the old session end first.
+	waitOnline := func(log *lockedBuffer) {
 		t.Helper()
-		deadline := time.Now().Add(within)
-		for {
-			code, body := call(http.MethodGet, "/api/environments", "")
-			var list struct {
-				Items []struct {
-					ID     string `json:"id"`
-					Status struct {
-						State string `json:"state"`
-					} `json:"status"`
-				} `json:"items"`
-			}
-			if code == http.StatusOK && json.Unmarshal(body, &list) == nil {
-				for _, e := range list.Items {
-					if e.ID == created.ID && e.Status.State == "online" {
-						if _, offline := settings(); offline == 0 {
-							return
-						}
-					}
-				}
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("the environment was not online within %s\nagent output:\n%s", within, log.String())
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
+		awaitAgentOnline(t, srv, created.ID, nil, log, false)
 	}
 	setAgentURL := func(u string) {
 		t.Helper()
@@ -205,55 +183,44 @@ func TestAnAgentOfflineDuringASecondAddressChange(t *testing.T) {
 	// and the agent saves identity.json just after, so wait for the file.
 	agentID := func() string {
 		t.Helper()
-		deadline := time.Now().Add(10 * time.Second)
-		for {
+		var got string
+		testsupport.Poll(t, testsupport.Deadline, "identity.json to hold an agent ID", func() (bool, string) { // testsupport: external, the agent process writing its state file
 			raw, err := os.ReadFile(filepath.Join(stateDir, "identity.json")) //nolint:gosec // the test's own temporary directory
 			var id struct {
 				AgentID string `json:"agentId"`
 			}
 			if err == nil && json.Unmarshal(raw, &id) == nil && id.AgentID != "" {
-				return id.AgentID
+				got = id.AgentID
+				return true, ""
 			}
-			if time.Now().After(deadline) {
-				t.Fatalf("identity.json never held an agent ID: %q, %v", raw, err)
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
+			return false, fmt.Sprintf("%q, %v", raw, err)
+		})
+		return got
 	}
 
 	// The agent enrols at the install address.
 	stop, log := startAgent(created.Install.AgentURL, created.Install.JoinToken)
-	waitOnline(15*time.Second, log)
+	waitOnline(log)
 	enrolledAs := agentID()
 
 	// The first change: B. The connected agent is told and keeps it first.
 	wssB := "wss://" + tsB.Listener.Addr().String() + "/agent/connect"
 	setAgentURL("https://" + tsB.Listener.Addr().String())
-	deadline := time.Now().Add(10 * time.Second)
-	for {
+	testsupport.Poll(t, testsupport.Deadline, "urls.json to list "+wssB+" first", func() (bool, string) { // testsupport: external, the agent process writing its state file
 		raw, _ := os.ReadFile(filepath.Join(stateDir, "urls.json")) //nolint:gosec // the test's own temporary directory
 		var entries []struct {
 			URL string `json:"url"`
 		}
 		if json.Unmarshal(raw, &entries) == nil && len(entries) > 0 && entries[0].URL == wssB {
-			break
+			return true, ""
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("urls.json never listed %s first: %s\nagent output:\n%s", wssB, raw, log.String())
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+		return false, string(raw) + "\nagent output:\n" + log.String()
+	})
 
 	// The agent goes offline, and the address changes again while it is away.
 	stop()
-	for deadline := time.Now().Add(10 * time.Second); ; {
-		if _, offline := settings(); offline == 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the server never saw the agent leave")
-		}
-		time.Sleep(50 * time.Millisecond)
+	if _, err := srv.tunnel.AwaitSession(testsupport.Context(t), enrolledAs, func(s *tunnel.Session) bool { return s == nil }); err != nil {
+		t.Fatalf("the server never saw the agent leave: %v", err)
 	}
 	wssC := "wss://" + tsC.Listener.Addr().String() + "/agent/connect"
 	setAgentURL("https://" + tsC.Listener.Addr().String())
@@ -261,7 +228,7 @@ func TestAnAgentOfflineDuringASecondAddressChange(t *testing.T) {
 	// The operator starts the agent again on its volume with the new address and no
 	// join token. It comes back as the same agent.
 	_, log = startAgent(wssC, "")
-	waitOnline(20*time.Second, log)
+	waitOnline(log)
 	if got := agentID(); got != enrolledAs {
 		t.Errorf("the agent ID changed from %s to %s: it enrolled again", enrolledAs, got)
 	}

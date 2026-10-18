@@ -14,6 +14,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -43,7 +44,7 @@ func (r *updateRecorder) UpdateResult(_ *tunnel.Session, res wire.UpdateResult) 
 
 func (r *updateRecorder) wait(t *testing.T, ok func() bool) {
 	t.Helper()
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(testsupport.Deadline)
 	for {
 		r.mu.Lock()
 		done := ok()
@@ -54,7 +55,7 @@ func (r *updateRecorder) wait(t *testing.T, ok func() bool) {
 		select {
 		case <-r.changed:
 		case <-deadline:
-			t.Fatal("timed out waiting for the update observer")
+			t.Fatalf("the update observer did not report what the test waited for within %v", testsupport.Deadline)
 		}
 	}
 }
@@ -155,7 +156,7 @@ func TestAnUpdateResultWithNoObserverIsIgnored(t *testing.T) {
 	if _, err := io.WriteString(control, `{"t":"update_result","id":"x","ok":true,"error":""}`+"\n"); err != nil {
 		t.Fatal(err)
 	}
-	stays(t, srv.Hub.Session(c.Identity.AgentID), "an update_result nobody asked for does not end the session")
+	staysAfterAHeartbeat(t, srv.Hub.Session(c.Identity.AgentID), control, 904, "an update_result nobody asked for does not end the session")
 }
 
 func TestSendUninstallWritesTheFrozenUninstallLineAndAlwaysSendsThatType(t *testing.T) {

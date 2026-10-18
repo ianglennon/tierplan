@@ -43,6 +43,7 @@ func (f *authFixture) unknownAgents(t *testing.T, cookie string) (int, unknownAg
 }
 
 func TestAnInstanceAdminListsTheUnknownAgentsWithTheirEnvironmentNewestFirst(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, _ := f.signIn(t, "admin", false)
 	f.addAgentEnv(t, "env-a", "Production")
@@ -70,6 +71,7 @@ func TestAnInstanceAdminListsTheUnknownAgentsWithTheirEnvironmentNewestFirst(t *
 }
 
 func TestTheUnknownAgentsListIsEmptyWithNoneAndRefusedToAnyoneButAnInstanceAdmin(t *testing.T) {
+	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	adminCookie, _ := f.signIn(t, "admin", false)
 	f.addAgentEnv(t, "env-a", "Production")

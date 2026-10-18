@@ -275,7 +275,6 @@ func TestTagListOfAnEndlessAnswerFailsAtTheSizeBound(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := NewClient(HostOptions{Host: strings.TrimPrefix(srv.URL, "http://"), Insecure: true}, NewEgressPolicy(nil), "test", quietLog())
-	start := time.Now()
 	_, err := c.TagList(context.Background(), "acme/app", 100)
 	if err == nil {
 		t.Fatal("an endless tag list was read")
@@ -283,8 +282,11 @@ func TestTagListOfAnEndlessAnswerFailsAtTheSizeBound(t *testing.T) {
 	if !errors.Is(err, ErrResponseTooLarge) || classify(err) != CodeRegistryHTTP {
 		t.Errorf("err = %v (code %s), want ErrResponseTooLarge", err, classify(err))
 	}
-	if took := time.Since(start); took > 15*time.Second {
-		t.Errorf("took %v; the bound should stop it long before the call timeout", took)
+	// Promptness is proved by what ended the read, not by a stopwatch: had the size
+	// bound not stopped it, the endless body would have run until the call timeout and
+	// the error would be that deadline, not ErrResponseTooLarge.
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v: the read ran into the %v call timeout instead of stopping at the size bound", err, callTimeout)
 	}
 	if n := sent.Load(); n > 4*responseBytesMax {
 		t.Errorf("server wrote %d bytes before the client stopped, want about %d", n, responseBytesMax)

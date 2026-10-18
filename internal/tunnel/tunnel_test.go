@@ -26,6 +26,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/proto/authn"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -85,20 +86,31 @@ type observer struct {
 	mu     sync.Mutex
 	events []string
 	conn   chan *tunnel.Session
+	// changed is closed and replaced whenever an event is recorded, to wake awaitLen.
+	changed chan struct{}
 }
 
-func newObserver() *observer { return &observer{conn: make(chan *tunnel.Session, 4)} }
+func newObserver() *observer {
+	return &observer{conn: make(chan *tunnel.Session, 4), changed: make(chan struct{})}
+}
+
+// recordLocked appends an event and wakes every awaitLen. o.mu must be held.
+func (o *observer) recordLocked(event string) {
+	o.events = append(o.events, event)
+	close(o.changed)
+	o.changed = make(chan struct{})
+}
 
 func (o *observer) Connected(s *tunnel.Session) {
 	o.mu.Lock()
-	o.events = append(o.events, "connected:"+s.AgentID)
+	o.recordLocked("connected:" + s.AgentID)
 	o.mu.Unlock()
 	o.conn <- s
 }
 
 func (o *observer) Disconnected(s *tunnel.Session, code string) {
 	o.mu.Lock()
-	o.events = append(o.events, "disconnected:"+s.AgentID+":"+code)
+	o.recordLocked("disconnected:" + s.AgentID + ":" + code)
 	o.mu.Unlock()
 }
 
@@ -108,14 +120,23 @@ func (o *observer) log() []string {
 	return append([]string(nil), o.events...)
 }
 
-func waitFor(t *testing.T, what string, cond func() bool) {
+// awaitLen waits until the observer has heard n events and returns them. It wakes
+// on each event the observer records and never polls.
+func (o *observer) awaitLen(t *testing.T, n int) []string {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
+	ctx := testsupport.Context(t)
+	for {
+		o.mu.Lock()
+		ch, got := o.changed, append([]string(nil), o.events...)
+		o.mu.Unlock()
+		if len(got) >= n {
+			return got
 		}
-		time.Sleep(5 * time.Millisecond)
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for %d lifecycle events; heard %v", n, got)
+		}
 	}
 }
 
@@ -195,8 +216,7 @@ type agentConn struct {
 // after the server's welcome or refusal.
 func (f *fixture) dial(t *testing.T, h hs) *agentConn {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	t.Cleanup(cancel)
+	ctx := testsupport.Context(t)
 	sub := h.subproto
 	if sub == "" {
 		sub = wire.Subprotocol
@@ -349,13 +369,8 @@ func TestAHandshakeWelcomesTheAgentAndTheServerOpensStreamsToIt(t *testing.T) {
 		t.Fatalf("DialContext: %v", err)
 	}
 	defer func() { _ = conn.Close() }()
-	select {
-	case kind := <-served:
-		if kind != wire.StreamKindDockerHTTP {
-			t.Fatalf("the first byte of the stream is %#x, want %#x", kind, wire.StreamKindDockerHTTP)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the agent never saw the stream")
+	if kind := testsupport.Await(t, "the agent to see the stream", served); kind != wire.StreamKindDockerHTTP {
+		t.Fatalf("the first byte of the stream is %#x, want %#x", kind, wire.StreamKindDockerHTTP)
 	}
 	buf := make([]byte, 4)
 	if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != "pong" {
@@ -365,19 +380,26 @@ func TestAHandshakeWelcomesTheAgentAndTheServerOpensStreamsToIt(t *testing.T) {
 	// The agent goes away: the observer hears of it with a D-40 code, and a dial
 	// now fails at once with ErrAgentGone instead of hanging (D-42).
 	_ = ac.ws.CloseNow()
-	waitFor(t, "the disconnect", func() bool { return len(f.o.log()) == 2 })
+	f.o.awaitLen(t, 2)
 	if got := f.o.log(); got[0] != "connected:agent-1" || got[1] != "disconnected:agent-1:"+tunnel.DisconnectClosed {
 		t.Fatalf("lifecycle = %v", got)
 	}
 	if f.hub.Session("agent-1") != nil {
 		t.Error("the session is still registered after it ended")
 	}
-	start := time.Now()
-	if _, err := sess.Transport().DialContext(context.Background(), "tcp", "x"); !errors.Is(err, tunnel.ErrAgentGone) {
+	// "At once" means the dial never reaches the multiplexer, where the slow path
+	// is a stream-open or write timeout (10 s, a constant of the hub's mux
+	// configuration that a test cannot lengthen). The dial has no timeout of its
+	// own and is awaited on the shared deadline, so a dial that hangs fails the
+	// test; one that gave up on a timeout would not carry ErrAgentGone through the
+	// dead session check below.
+	dialErr := make(chan error, 1)
+	go func() {
+		_, err := sess.Transport().DialContext(context.Background(), "tcp", "x")
+		dialErr <- err
+	}()
+	if err := testsupport.Await(t, "the dial on a dead session to fail", dialErr); !errors.Is(err, tunnel.ErrAgentGone) {
 		t.Fatalf("DialContext on a dead session = %v, want ErrAgentGone", err)
-	}
-	if time.Since(start) > time.Second {
-		t.Error("a dial on a dead session did not fail at once")
 	}
 }
 
@@ -576,8 +598,7 @@ func TestAConnectionWithoutTheSubprotocolIsClosed(t *testing.T) {
 
 func TestAnOversizedHandshakeMessageClosesTheConnection(t *testing.T) {
 	f := newFixture(t, true, sameAddr("https"))
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := testsupport.Context(t)
 	ws, _, err := websocket.Dial(ctx, f.wsURL(), &websocket.DialOptions{HTTPClient: f.ts.Client(), Subprotocols: []string{wire.Subprotocol}}) //nolint:bodyclose // coder/websocket reads and closes the body of a refused upgrade itself
 	if err != nil {
 		t.Fatal(err)
@@ -610,15 +631,8 @@ func TestANewSessionOfTheSameAgentReplacesTheOldOne(t *testing.T) {
 	if oldSess == newSess || f.hub.Session("agent-1") != newSess {
 		t.Fatal("the new session did not replace the old one")
 	}
-	waitFor(t, "the old session to end", func() bool {
-		select {
-		case <-oldSess.Done():
-			return true
-		default:
-			return false
-		}
-	})
-	waitFor(t, "the old session's disconnect", func() bool { return len(f.o.log()) == 3 })
+	testsupport.Await(t, "the old session to end", oldSess.Done())
+	f.o.awaitLen(t, 3)
 	// The old session is reported gone, with the reason replaced, before the new
 	// one is reported connected, and the hub still has the new one.
 	if got := f.o.log(); got[0] != "connected:agent-1" || got[1] != "disconnected:agent-1:"+tunnel.DisconnectReplaced || got[2] != "connected:agent-1" {
@@ -645,21 +659,13 @@ func TestClosingTheHubEndsEverySessionAndRefusesNewOnes(t *testing.T) {
 	go func() { f.hub.Close(); close(done) }()
 
 	// The agent is told with a close frame (going away), so it reconnects with backoff.
-	_, _, err := ac.ws.Read(context.Background())
+	_, _, err := ac.ws.Read(testsupport.Context(t))
 	if websocket.CloseStatus(err) != websocket.StatusGoingAway {
 		t.Fatalf("close status %v, want going away (%v)", websocket.CloseStatus(err), err)
 	}
 	_ = ac.ws.CloseNow()
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("Hub.Close did not return")
-	}
-	select {
-	case <-sess.Done():
-	case <-time.After(5 * time.Second):
-		t.Fatal("the session did not end")
-	}
+	testsupport.Await(t, "Hub.Close to return", done)
+	testsupport.Await(t, "the session to end", sess.Done())
 	if _, err := sess.Transport().DialContext(context.Background(), "tcp", "x"); !errors.Is(err, tunnel.ErrAgentGone) {
 		t.Fatalf("dial after Close = %v, want ErrAgentGone", err)
 	}

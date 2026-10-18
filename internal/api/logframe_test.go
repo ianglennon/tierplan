@@ -11,7 +11,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // The framing of a container's log stream (plan 04-19, OBS-01, D-15, Pitfall 12).
@@ -40,6 +41,7 @@ const (
 )
 
 func TestLogFrameSplitsEachStreamIntoLinesAndStripsTheStampIntoT(t *testing.T) {
+	t.Parallel()
 	var s []byte
 	s = append(s, dockerFrame(1, t1+" first\n"+t2+" second\n")...)
 	s = append(s, dockerFrame(2, t3+" oops\n")...)
@@ -51,6 +53,7 @@ func TestLogFrameSplitsEachStreamIntoLinesAndStripsTheStampIntoT(t *testing.T) {
 }
 
 func TestLogFrameKeepsALineThatCrossesTwoDockerFramesWhole(t *testing.T) {
+	t.Parallel()
 	var s []byte
 	s = append(s, dockerFrame(1, t1+" hel")...)
 	// The other stream's frame in the middle must not cut the line of the first.
@@ -65,6 +68,7 @@ func TestLogFrameKeepsALineThatCrossesTwoDockerFramesWhole(t *testing.T) {
 }
 
 func TestLogFrameKeepsA20KBLineWhole(t *testing.T) {
+	t.Parallel()
 	long := strings.Repeat("x", 20<<10)
 	var s []byte
 	// The engine's logger cuts long lines into 16 KB frames.
@@ -77,6 +81,7 @@ func TestLogFrameKeepsA20KBLineWhole(t *testing.T) {
 }
 
 func TestLogFrameCutsALineThatNeverEndsAtTheLimitAndSendsEveryByte(t *testing.T) {
+	t.Parallel()
 	long := strings.Repeat("y", maxLogLine*2+10)
 	s := dockerFrame(1, t1+" "+long+"\n"+t2+" after\n")
 	got := pumpAll(t, s, false)
@@ -102,6 +107,7 @@ func TestLogFrameCutsALineThatNeverEndsAtTheLimitAndSendsEveryByte(t *testing.T)
 }
 
 func TestLogFrameSendsTheLastLineEvenWithoutALineEnding(t *testing.T) {
+	t.Parallel()
 	got := pumpAll(t, dockerFrame(1, t1+" a\n"+t2+" no newline"), false)
 	if len(got) != 2 || got[1].M != "no newline" {
 		t.Fatalf("lines = %+v", got)
@@ -109,6 +115,7 @@ func TestLogFrameSendsTheLastLineEvenWithoutALineEnding(t *testing.T) {
 }
 
 func TestLogFrameKeepsEmptyLinesAndLinesWithoutAStamp(t *testing.T) {
+	t.Parallel()
 	got := pumpAll(t, dockerFrame(1, t1+" \n"+"plain text\n"), false)
 	want := []LogLine{{T: t1, S: "o", M: ""}, {T: t1, S: "o", M: "plain text"}}
 	if !slices.Equal(got, want) {
@@ -117,6 +124,7 @@ func TestLogFrameKeepsEmptyLinesAndLinesWithoutAStamp(t *testing.T) {
 }
 
 func TestLogFrameATTYStreamIsRawAndEveryLineIsStdout(t *testing.T) {
+	t.Parallel()
 	raw := []byte(t1 + " prompt$ \r\n" + t2 + " second\r\n" + t3 + " par")
 	got := pumpAll(t, raw, true)
 	want := []LogLine{{T: t1, S: "o", M: "prompt$ "}, {T: t2, S: "o", M: "second"}, {T: t3, S: "o", M: "par"}}
@@ -126,6 +134,7 @@ func TestLogFrameATTYStreamIsRawAndEveryLineIsStdout(t *testing.T) {
 }
 
 func TestLogFrameANonTTYStreamShowsALineExactlyAsTheProgramWroteIt(t *testing.T) {
+	t.Parallel()
 	got := pumpAll(t, dockerFrame(1, t1+" with cr\r\n"), false)
 	if len(got) != 1 || got[0].M != "with cr\r" {
 		t.Fatalf("lines = %q", got)
@@ -133,6 +142,7 @@ func TestLogFrameANonTTYStreamShowsALineExactlyAsTheProgramWroteIt(t *testing.T)
 }
 
 func TestLogFrameBatcherIsFullAtHundredLinesOrThirtyTwoKilobytes(t *testing.T) {
+	t.Parallel()
 	var b batcher
 	for i := range batchLines - 1 {
 		if b.add(LogLine{T: t1, S: "o", M: "x"}) {
@@ -158,6 +168,7 @@ func TestLogFrameBatcherIsFullAtHundredLinesOrThirtyTwoKilobytes(t *testing.T) {
 }
 
 func TestLogFramePumpStopsWhenTheReaderIsClosed(t *testing.T) {
+	t.Parallel()
 	pr, pw := io.Pipe()
 	done := make(chan error, 1)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -170,7 +181,7 @@ func TestLogFramePumpStopsWhenTheReaderIsClosed(t *testing.T) {
 		if err == nil {
 			t.Fatal("a read that was cut short returned no error")
 		}
-	case <-time.After(5 * time.Second):
+	case <-testsupport.Context(t).Done():
 		t.Fatal("pumpLogs did not return after its reader was closed")
 	}
 }

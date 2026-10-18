@@ -1,0 +1,12 @@
+# Fixture for scripts/no-retries-check.sh: two ways a workflow retries.
+name: fixture
+jobs:
+  flaky:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run it again
+        run: gh run rerun "${GITHUB_RUN_ID}" --failed
+      - uses: nick-fields/retry@v3
+        with:
+          max_attempts: 3
+          command: make test

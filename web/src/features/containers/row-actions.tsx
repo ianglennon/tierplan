@@ -27,6 +27,7 @@ import {
 import type { BulkReport } from "@/features/containers/bulk-result-dialog";
 import { eligibleFor, ownKind } from "@/features/containers/eligibility";
 import { pendingFingerprint, pendingKey, usePendingApi } from "@/features/containers/pending";
+import { MuteMenuItem } from "@/features/restart-loop/mute-menu-item";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { toastError, toastInfo, toastSuccess } from "@/lib/toast";
@@ -237,6 +238,17 @@ export function ContainerRowActions({
             <NeedsTooltip reason={reason}>
               {item(t("actions.menu.unpause"), () => void run("unpause"))}
             </NeedsTooltip>
+          ) : null}
+          {row.restartLoop ? (
+            <MuteMenuItem
+              kind="container"
+              envId={envId}
+              nodeId={row.nodeId}
+              containerId={row.id}
+              name={row.name}
+              muted={row.restartLoop.state === "muted"}
+              needs={needs}
+            />
           ) : null}
           {(canKill || canRemove) &&
           (canStart || canStop || canRestart || canPause || canUnpause) ? (

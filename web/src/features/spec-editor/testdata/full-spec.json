@@ -1,0 +1,226 @@
+{
+  "Name": "web",
+  "Labels": {
+    "tier": "frontend",
+    "enabled": "yes",
+    "answer": "0444",
+    "sci": "1e3",
+    "nothing": "null",
+    "tilde": "~",
+    "flag": "true",
+    "off": "off",
+    "empty": "",
+    "note": "a: b # not a comment",
+    "padded": "  spaced  ",
+    "multi": "line one\nline two\n",
+    "quote": "she said \"hi\" and 'bye'",
+    "unicode": "café ☃ 😀",
+    "com.example.version": "1.0"
+  },
+  "TaskTemplate": {
+    "ContainerSpec": {
+      "Image": "registry.example.com/shop/web:1.4@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "Labels": { "role": "web" },
+      "Command": ["/bin/sh", "-c"],
+      "Args": ["exec nginx -g 'daemon off;'", "", "0444", "yes", "null"],
+      "Hostname": "web-{{.Task.Slot}}",
+      "Env": [
+        "MODE=prod",
+        "EMPTY=",
+        "URL=https://example.com/?a=1&b=2#frag",
+        "DB_PASSWORD=<hidden>"
+      ],
+      "Dir": "/app",
+      "User": "1000:1000",
+      "Groups": ["wheel", "0444"],
+      "Privileges": {
+        "CredentialSpec": { "Config": "cred", "File": "", "Registry": "" },
+        "SELinuxContext": {
+          "Disable": false,
+          "User": "u",
+          "Role": "r",
+          "Type": "t",
+          "Level": "s0"
+        },
+        "Seccomp": {
+          "Mode": "custom",
+          "Profile": "eyJkZWZhdWx0QWN0aW9uIjoiU0NNUF9BQ1RfQUxMT1cifQ=="
+        },
+        "AppArmor": { "Mode": "default" },
+        "NoNewPrivileges": true
+      },
+      "Init": true,
+      "StopSignal": "SIGTERM",
+      "TTY": false,
+      "OpenStdin": false,
+      "ReadOnly": true,
+      "Mounts": [
+        {
+          "Type": "volume",
+          "Source": "web-data",
+          "Target": "/data",
+          "ReadOnly": false,
+          "Consistency": "default",
+          "VolumeOptions": {
+            "NoCopy": true,
+            "Labels": { "backup": "nightly" },
+            "DriverConfig": {
+              "Name": "local",
+              "Options": { "type": "nfs", "o": "addr=10.0.0.1,rw", "device": ":/export" }
+            },
+            "Subpath": "sub/dir"
+          }
+        },
+        {
+          "Type": "bind",
+          "Source": "/srv/conf",
+          "Target": "/etc/conf",
+          "ReadOnly": true,
+          "BindOptions": {
+            "Propagation": "rprivate",
+            "NonRecursive": false,
+            "CreateMountpoint": true,
+            "ReadOnlyNonRecursive": false,
+            "ReadOnlyForceRecursive": false
+          }
+        },
+        {
+          "Type": "tmpfs",
+          "Target": "/tmp",
+          "TmpfsOptions": {
+            "SizeBytes": 4294967296,
+            "Mode": 1023,
+            "Options": [["noexec"], ["nosuid", "size=64m"]]
+          }
+        },
+        {
+          "Type": "image",
+          "Source": "docker.io/library/alpine:3",
+          "Target": "/img",
+          "ImageOptions": { "Subpath": "etc" }
+        }
+      ],
+      "StopGracePeriod": 10000000000,
+      "Healthcheck": {
+        "Test": ["CMD-SHELL", "curl -f http://localhost/ || exit 1"],
+        "Interval": 30000000000,
+        "Timeout": 5000000000,
+        "StartPeriod": 0,
+        "StartInterval": 1000000000,
+        "Retries": 3
+      },
+      "Hosts": ["10.0.0.5 db.internal", "::1 localhost6"],
+      "DNSConfig": {
+        "Nameservers": ["1.1.1.1", "2606:4700:4700::1111"],
+        "Search": ["example.com"],
+        "Options": ["ndots:2"]
+      },
+      "Secrets": [
+        {
+          "File": { "Name": "db_pw.txt", "UID": "0", "GID": "0", "Mode": 292 },
+          "SecretID": "sec1",
+          "SecretName": "db_pw"
+        }
+      ],
+      "Configs": [
+        {
+          "File": { "Name": "/etc/app.conf", "UID": "1000", "GID": "1000", "Mode": 288 },
+          "ConfigID": "cfg1",
+          "ConfigName": "app_conf"
+        },
+        { "Runtime": {}, "ConfigID": "cfg2", "ConfigName": "runtime_conf" }
+      ],
+      "Isolation": "default",
+      "Sysctls": { "net.core.somaxconn": "1024" },
+      "CapabilityAdd": ["NET_ADMIN"],
+      "CapabilityDrop": ["MKNOD", "AUDIT_WRITE"],
+      "Ulimits": [
+        { "Name": "nofile", "Soft": 1024, "Hard": 4096 },
+        { "Name": "memlock", "Soft": -1, "Hard": -1 }
+      ],
+      "OomScoreAdj": -500
+    },
+    "Resources": {
+      "Limits": { "NanoCPUs": 500000000, "MemoryBytes": 8589934592, "Pids": 4096 },
+      "Reservations": {
+        "NanoCPUs": 250000000,
+        "MemoryBytes": 268435456,
+        "GenericResources": [
+          { "NamedResourceSpec": { "Kind": "gpu", "Value": "uuid-1" } },
+          { "DiscreteResourceSpec": { "Kind": "ssd", "Value": 3 } }
+        ]
+      }
+    },
+    "RestartPolicy": {
+      "Condition": "on-failure",
+      "Delay": 5000000000,
+      "MaxAttempts": 4,
+      "Window": 120000000000
+    },
+    "Placement": {
+      "Constraints": ["node.role==worker", "node.labels.disk==ssd"],
+      "Preferences": [{ "Spread": { "SpreadDescriptor": "node.labels.zone" } }],
+      "MaxReplicas": 2,
+      "Platforms": [
+        { "Architecture": "amd64", "OS": "linux" },
+        { "Architecture": "arm64", "OS": "linux" }
+      ]
+    },
+    "Networks": [
+      {
+        "Target": "net-front",
+        "Aliases": ["web", "web.internal"],
+        "DriverOpts": { "com.docker.network.driver.mtu": "1400" }
+      }
+    ],
+    "LogDriver": { "Name": "json-file", "Options": { "max-size": "10m", "max-file": "3" } },
+    "ForceUpdate": 2,
+    "Runtime": "container"
+  },
+  "Mode": { "Replicated": { "Replicas": 3 } },
+  "UpdateConfig": {
+    "Parallelism": 2,
+    "Delay": 10000000000,
+    "FailureAction": "rollback",
+    "Monitor": 5000000000,
+    "MaxFailureRatio": 0.25,
+    "Order": "start-first"
+  },
+  "RollbackConfig": {
+    "Parallelism": 1,
+    "Delay": 0,
+    "FailureAction": "pause",
+    "Monitor": 5000000000,
+    "MaxFailureRatio": 0.1,
+    "Order": "stop-first"
+  },
+  "Networks": [{ "Target": "net-legacy", "Aliases": null }],
+  "EndpointSpec": {
+    "Mode": "vip",
+    "Ports": [
+      {
+        "Name": "http",
+        "Protocol": "tcp",
+        "TargetPort": 80,
+        "PublishedPort": 8080,
+        "PublishMode": "ingress"
+      },
+      { "Protocol": "udp", "TargetPort": 53, "PublishedPort": 5353, "PublishMode": "host" }
+    ]
+  },
+  "Extras": {
+    "ratio": 0.1,
+    "big": 4294967296,
+    "limit": 9007199254740991,
+    "negative": -42,
+    "float": 1.5e-7,
+    "huge": 1e21,
+    "zero": 0,
+    "no": false,
+    "nil": null,
+    "emptyList": [],
+    "emptyMap": {},
+    "nested": [[1, 2], [[3]], [], [null, "x"]],
+    "order": { "z": 1, "a": 2, "m": { "b": 1, "a": 2 } }
+  }
+}

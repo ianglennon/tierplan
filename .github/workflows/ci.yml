@@ -13,6 +13,27 @@
 # make e2e-copy (the clipboard fallback on an insecure origin) to the e2e job.
 # Plan 03-21 adds the upgrade job (an image swap on one volume, D-34), which edge waits for;
 # plan 03-25 adds a restore over a running container to it (D-30).
+# Plan 06.1-15 splits the web unit suite into its own job (web), so the Vitest minutes
+# are off the Go unit job's (test) critical path, and adds a failing-test summary
+# (make test-summary) to every test job.
+#
+# Plan 06.1-20 closes the D-23 audit of what a job can leave behind or run out of. Its
+# results, so the next reader does not repeat it:
+#   - Fixed names and ports: only the e2e stack has them, by design (the nested agent
+#     needs a fixed address), and it is torn down in an always step. The smokes publish
+#     on ports Docker or the kernel assigns, so a leftover process cannot block a run.
+#   - Leftovers: every container, network and volume a smoke creates carries
+#     bayplan.ci.owner=<run>-<attempt>-<job>, and each job that uses Docker directly
+#     (build, proxy-smoke, upgrade) ends with make ci-clean in an if: always() step, which
+#     removes exactly that owner's resources and never another runner's on the shared
+#     daemon. The integration job's dind service is removed by the runner; the Go suites'
+#     containers are removed by testcontainers' reaper (TESTCONTAINERS_RYUK_DISABLED is
+#     set nowhere).
+#   - Disk: build, integration, swarm, e2e, proxy-smoke and upgrade start with
+#     make ci-preflight, so a full disk is reported as one.
+#   - Readiness: dind is polled with a deadline (the integration wait step), as are the
+#     swarm suites' wait.ForHTTP and the compose healthchecks; no job sleeps a fixed time.
+#   - Ordering: only edge has needs; every other job is independent.
 name: CI
 
 on:
@@ -36,8 +57,18 @@ env:
 # upgrade and restore smokes). So one run at a time, across every branch: a newer
 # run waits, and replaces any run already waiting. Nothing running is cancelled,
 # so an edge publish is never cut off between push and sign (WR-11, D-75).
+# The release workflow stays outside the group on purpose.
+#
+# Accepted trade-off (WR-04): GitHub keeps one running and one pending run per group, so a
+# pending push-to-main run is also displaced by a later pull request run.
+# That is the price of one run at a time on the shared Docker daemons. After merging,
+# check that main's head commit has a run that was not cancelled:
+#   gh run list --workflow CI --branch main --limit 1 --json headSha,conclusion
+# and rerun it with `gh run rerun <id>` if the conclusion is cancelled (docs/testing.md).
+# Every upload below runs on `failure() || cancelled()`, so a job ended by its timeout
+# still leaves its evidence.
 concurrency:
-  group: ci-${{ github.workflow }}
+  group: bayplan-self-hosted-runners
   cancel-in-progress: false
 
 jobs:
@@ -86,7 +117,53 @@ jobs:
       # The server tests serve the embedded SPA (TestBasePathInvariant checks the
       # index under a base path), so web/dist must be built first.
       - run: pnpm -C web build
-      - run: make test
+      - run: make test-go
+      # D-21: the failing and hung tests, their packages and the shuffle seed, in the
+      # log and in the run page's summary. The step exits 0 when it read every
+      # file, so the result stays the test step's.
+      - name: Name the failing tests
+        if: always()
+        run: make test-summary
+      - name: Upload the test results
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: go-test-json-${{ github.job }}
+          path: .devdata/test/*.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # D-18: the web unit suite in a job of its own, shuffled with a printed seed
+  # (make test-web WEB_SEED=<seed> reproduces it). Its failing tests are named in
+  # the summary the same way as the Go jobs' (D-21).
+  web:
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          # Per runner, not ~/setup-pnpm: two runners share each VM and its home directory.
+          dest: ${{ runner.temp }}/setup-pnpm
+          package_json_file: web/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - run: pnpm -C web install --frozen-lockfile
+      - run: make test-web
+      - name: Name the failing tests
+        if: always()
+        run: make test-summary
+      - name: Upload the test results
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: web-test-json
+          path: |
+            .devdata/test/web.json
+            .devdata/test/web.seed
+          retention-days: 7
+          if-no-files-found: ignore
 
   gen-check:
     runs-on: [self-hosted, linux, x64]
@@ -142,8 +219,15 @@ jobs:
   build:
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 20
+    env:
+      BAYPLAN_CI_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # D-23: prints the free disk and docker system df, and fails naming the
+      # filesystem when the workspace or Docker has less than BAYPLAN_CI_MIN_FREE_GB
+      # (default 20) free.
+      - name: Check the free disk
+        run: make ci-preflight
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -162,6 +246,10 @@ jobs:
       # The agent image under the install commands' hardening flags: UID 1000,
       # no-new-privileges, a writable state volume, the Docker socket.
       - run: make agent-image agent-image-smoke
+      # D-23: what the smokes labelled with this job's owner, whatever the outcome.
+      - name: Remove what this job left on the VM's Docker
+        if: always()
+        run: make ci-clean
 
   dco:
     runs-on: [self-hosted, linux, x64]
@@ -177,6 +265,9 @@ jobs:
   # 24 to 29 on every pull request. Each matrix leg gets its own docker:N-dind
   # service, and the tests dial it over TCP through the same dockerx code path
   # (a socket shared out of dind is root-only, so the runner user cannot open it).
+  # A leg runs the integration-tagged packages only (internal/agents,
+  # internal/dockerx and internal/registry, shuffled); the unit suite runs once,
+  # in the test job.
   integration:
     runs-on: [self-hosted, linux, x64]
     # Two legs can share a 4-core runner VM under -race, which roughly doubles the
@@ -200,6 +291,11 @@ jobs:
       BAYPLAN_TEST_ENGINE: ${{ matrix.engine }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # D-23: prints the free disk and docker system df, and fails naming the
+      # filesystem when the workspace or Docker has less than BAYPLAN_CI_MIN_FREE_GB
+      # (default 20) free.
+      - name: Check the free disk
+        run: make ci-preflight
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -225,16 +321,34 @@ jobs:
       - run: make test-int
         env:
           BAYPLAN_TEST_DOCKER_HOST: tcp://localhost:${{ job.services.dind.ports['2375'] }}
+      # D-21: the failing and hung tests, their packages and the shuffle seed.
+      - name: Name the failing tests
+        if: always()
+        run: make test-summary
+      - name: Upload the test results
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: go-test-json-integration-${{ matrix.engine }}
+          path: .devdata/test/*.json
+          retention-days: 7
+          if-no-files-found: ignore
 
   # D-57, D-58: the multi-node suite on the oldest and newest Engines, on every
   # pull request. Unlike the integration job there is no dind service: every test
   # starts its own swarm of dind nodes (3 managers and a worker) on a network of
   # its own, so the in-process Bayplan is reachable from them, and loads the agent
-  # image built here. One engine takes about ten minutes.
+  # image built here. A leg runs the swarm-tagged internal/agents suite only
+  # (make test-swarm, shuffled); go test allows 60 minutes and the job 70, so a
+  # hang ends in Go's goroutine dump and not in a silent kill (D-22).
   swarm:
     # Each leg runs four dind nodes (6-8 GB), so the two legs go to different VMs.
     runs-on: [self-hosted, linux, x64, "${{ matrix.vm }}"]
-    timeout-minutes: 45
+    # 60 and 70 since CI run 39125458463: the suite (then every test with a swarm of its
+    # own) took 2321 s on Engine 24 on bp-a and reached the old 40-minute go test limit with
+    # no test hung. Twenty tests now share one swarm (TestSwarmShared, docs/testing.md), which
+    # took the suite from 2201 s to 1670 s on the dev host; lower these once CI shows the leg.
+    timeout-minutes: 70
     strategy:
       fail-fast: false
       matrix:
@@ -247,6 +361,11 @@ jobs:
       BAYPLAN_TEST_ENGINE: ${{ matrix.engine }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # D-23: prints the free disk and docker system df, and fails naming the
+      # filesystem when the workspace or Docker has less than BAYPLAN_CI_MIN_FREE_GB
+      # (default 20) free.
+      - name: Check the free disk
+        run: make ci-preflight
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -254,6 +373,18 @@ jobs:
           # over them while another job on the VM builds corrupts them.
           cache: false
       - run: make test-swarm
+      # D-21: the failing and hung tests, their packages and the shuffle seed.
+      - name: Name the failing tests
+        if: always()
+        run: make test-summary
+      - name: Upload the test results
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: go-test-json-swarm-${{ matrix.engine }}
+          path: .devdata/test/*.json
+          retention-days: 7
+          if-no-files-found: ignore
 
   # D-75: the release configuration stays valid on every pull request, without a
   # tag and without Docker: goreleaser check, a snapshot build of this runner's
@@ -289,9 +420,18 @@ jobs:
   # needs (T-01-115).
   e2e:
     runs-on: [self-hosted, linux, x64]
-    timeout-minutes: 30
+    # IN-07: this covers the setup that runs BEFORE Playwright's globalTimeout starts
+    # (preflight, e2e-copy, the image and agent builds, compose up) plus the 20 minutes
+    # of e2e/playwright.config.ts globalTimeout plus a margin, so a hang ends in
+    # Playwright's own report and not in the job's silent kill. Keep the two in step.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # D-23: prints the free disk and docker system df, and fails naming the
+      # filesystem when the workspace or Docker has less than BAYPLAN_CI_MIN_FREE_GB
+      # (default 20) free.
+      - name: Check the free disk
+        run: make ci-preflight
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -311,8 +451,17 @@ jobs:
       # browser on an insecure origin (G-02-1a).
       - run: make e2e-copy
       - run: make e2e
+      # D-21: the failing specs by name, from Playwright's JSON reports.
+      - name: Name the failing specs
+        if: always()
+        run: make test-summary
+      # D-23: the stack has fixed names and ports on a VM another runner shares, so
+      # a cancelled or timed-out job must not leave it for the next run.
+      - name: Tear the e2e stack down
+        if: always()
+        run: make e2e-down
       - name: Upload the Playwright report
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: playwright-report
@@ -329,8 +478,15 @@ jobs:
   proxy-smoke:
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 20
+    env:
+      BAYPLAN_CI_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # D-23: prints the free disk and docker system df, and fails naming the
+      # filesystem when the workspace or Docker has less than BAYPLAN_CI_MIN_FREE_GB
+      # (default 20) free.
+      - name: Check the free disk
+        run: make ci-preflight
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -347,6 +503,11 @@ jobs:
           node-version: 24
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - run: make proxy-smoke
+      # D-23: a cancelled or timed-out job must not leave its containers and network on
+      # the VM's shared daemon; this removes only what carries this job's owner label.
+      - name: Remove what this job left on the VM's Docker
+        if: always()
+        run: make ci-clean
 
   # Plan 03-21 (D-34, PLAT-02): the upgrade proof. Builds the previous commit's
   # image from a git worktree (the pull request's base commit, or the commit before
@@ -359,10 +520,17 @@ jobs:
   upgrade:
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 30
+    env:
+      BAYPLAN_CI_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      # D-23: prints the free disk and docker system df, and fails naming the
+      # filesystem when the workspace or Docker has less than BAYPLAN_CI_MIN_FREE_GB
+      # (default 20) free.
+      - name: Check the free disk
+        run: make ci-preflight
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -409,6 +577,10 @@ jobs:
         env:
           RESTART_MODE: exit
         run: scripts/restore-smoke.sh
+      # D-23: what the smokes labelled with this job's owner, whatever the outcome.
+      - name: Remove what this job left on the VM's Docker
+        if: always()
+        run: make ci-clean
 
   # D-75: every push to main publishes ghcr.io/ianglennon/bayplan:edge for amd64
   # and arm64, signed with keyless cosign. It is the only tag a push can move;
@@ -416,12 +588,15 @@ jobs:
   # for a pull request, so fork code never gets the package or id-token
   # permissions. It waits for every gate that runs on a push: the licence and
   # SPDX gates, the integration matrix and e2e must block a public image
-  # (D-70, D-74), and so must the upgrade proof (D-34). dco runs only for pull requests, so it cannot be needed here.
+  # (D-70, D-74), and so must the upgrade proof (D-34) and the swarm legs: the
+  # multi-node suite is deterministic now (Phase 6.1), so a red swarm leg is a
+  # real defect and must not publish :edge (D-23). dco runs only for pull
+  # requests, so it cannot be needed here.
   # Push and sign are one step in a non-cancelling group, so nothing can leave
   # :edge pushed but unsigned (WR-11).
   edge:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [lint, test, gen-check, licences, spdx, build, integration, release-check, e2e, proxy-smoke, upgrade]
+    needs: [lint, test, web, gen-check, licences, spdx, build, integration, swarm, release-check, e2e, proxy-smoke, upgrade]
     concurrency:
       group: edge-publish
       cancel-in-progress: false

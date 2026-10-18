@@ -70,6 +70,7 @@
       "empty": "Leave a field empty to start at the beginning of the log or to run to the end.",
       "timestamps": "Include timestamps",
       "note": "Downloads come straight from Docker, so they aren't limited to what's loaded here. Times are in UTC.",
+      "serviceNote": "Lines from all of the service's tasks are merged in time order, each starting with its task name. Downloads come straight from Docker, so they aren't limited to what's loaded here. Times are in UTC.",
       "cancel": "Cancel",
       "submit": "Download logs",
       "starting": "Starting the download",
@@ -80,6 +81,63 @@
       "body": "This container sends its logs to {{driver}}, so Docker has none to show.",
       "options": "Driver options",
       "noOptions": "No driver options."
+    },
+    "taskNames": {
+      "label": "Task names",
+      "tooltip": "Show which task wrote each line"
+    },
+    "following_one": "Following {{count}} task",
+    "following_other": "Following {{count}} tasks",
+    "prefix": {
+      "task": "Task {{id}}",
+      "state": "State: {{state}}"
+    },
+    "service": {
+      "emptyBody": "New lines appear here as the service's tasks write them.",
+      "noTasksMatch": "No tasks match these filters."
+    },
+    "marker": {
+      "replaced": "— {{label}} replaced: task {{old}} {{what}} → task {{new}} starting on {{node}} —",
+      "stopped": "— {{label}} stopped: task {{old}} {{what}}. Waiting for a new task. —",
+      "what": {
+        "failed": "failed",
+        "failedExit": "failed (exit {{code}})",
+        "shutdown": "shut down",
+        "rejected": "was rejected"
+      }
+    },
+    "nodeNotice": {
+      "down": "— {{node}} is down, so new lines from its tasks can't reach Bayplan. —",
+      "disconnected": "— {{node}} is disconnected, so new lines from its tasks can't reach Bayplan. —",
+      "back": "— {{node}} is back. —"
+    },
+    "filter": {
+      "tasks": "Tasks",
+      "tasksCount": "Tasks ({{count}})",
+      "nodes": "Nodes",
+      "nodesCount": "Nodes ({{count}})",
+      "findTask": "Find a task",
+      "findNode": "Find a node",
+      "taskList": "Tasks of this service",
+      "nodeList": "Nodes running this service",
+      "noTasks": "No tasks",
+      "noNodes": "No nodes",
+      "noMatch": "No match",
+      "clear": "Clear",
+      "selected": "Selected",
+      "taskChip": "Task: {{name}}",
+      "nodeChip": "Node: {{name}}",
+      "taskNotFound": "Task not found",
+      "removeTask": "Remove task filter {{name}}",
+      "removeNode": "Remove node filter {{name}}",
+      "stopped": "Include stopped tasks",
+      "stoppedTooltip": "Off shows only the tasks running now, and new ones as they start.",
+      "role": {
+        "manager": "Manager",
+        "worker": "Worker"
+      },
+      "taskCount_one": "{{count}} task",
+      "taskCount_other": "{{count}} tasks"
     }
   }
 }

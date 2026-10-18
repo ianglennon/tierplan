@@ -12,9 +12,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ianglennon/bayplan/internal/rbac/compose"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 func fixture(t *testing.T, name string) []byte {
@@ -399,13 +399,8 @@ func TestHostileAliasesAreRefusedNotExpanded(t *testing.T) {
 		_, err := compose.Check([]byte(b.String()))
 		done <- err
 	}()
-	select {
-	case err := <-done:
-		if !errors.Is(err, compose.ErrInvalid) {
-			t.Fatalf("want ErrInvalid, got %v", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("an exponential alias file must be refused promptly")
+	if err := testsupport.Await(t, "compose.Check to refuse an exponential alias file promptly", done); !errors.Is(err, compose.ErrInvalid) {
+		t.Fatalf("want ErrInvalid, got %v", err)
 	}
 	for _, cyc := range []string{"services:\n  a: &a\n    <<: *a\n", "services:\n  a:\n    cap_add: &c [*c]\n"} {
 		fs, err := compose.Check([]byte(cyc))

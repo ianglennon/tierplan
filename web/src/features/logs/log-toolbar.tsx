@@ -33,6 +33,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Toggle } from "@/components/ui/toggle";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { fromLocalInput, type ShowRange, toLocalInput } from "@/features/logs/log-prefs";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useT } from "@/i18n/use-t";
@@ -65,6 +66,14 @@ export interface LogToolbarProps {
   onTimestampsChange: (on: boolean) => void;
   utc: boolean;
   onUtcChange: (on: boolean) => void;
+
+  // A service's log (plan 06-29, D-32): the Task names switch, and how many tasks the stream
+  // follows, said beside the Live chip once connected. A container's log has neither.
+  taskNames?: { on: boolean; onChange: (on: boolean) => void };
+  following?: number;
+  // The third row of a service's log: the task and node filters and the stopped switch
+  // (plan 06-30, D-33).
+  filterBar?: ReactNode;
 
   // Shown when the stream is connected or retrying; absent otherwise.
   live?: "live" | "reconnecting";
@@ -119,8 +128,28 @@ export function LogToolbar(p: LogToolbarProps) {
         disabled={!p.timestamps}
         onChange={p.onUtcChange}
       />
+      {p.taskNames ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
+              <ViewToggle
+                label={t("logs.taskNames.label")}
+                on={p.taskNames.on}
+                onChange={p.taskNames.onChange}
+              />
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>{t("logs.taskNames.tooltip")}</TooltipContent>
+        </Tooltip>
+      ) : null}
     </>
   );
+  const followingLabel =
+    p.live && p.following !== undefined ? (
+      <span className="text-xs text-muted-foreground">
+        {t("logs.following", { count: p.following })}
+      </span>
+    ) : null;
 
   return (
     <div
@@ -144,6 +173,7 @@ export function LogToolbar(p: LogToolbarProps) {
         {mobile ? (
           <>
             {p.live ? <LiveChip state={p.live} /> : null}
+            {followingLabel}
             <Popover>
               <PopoverTrigger asChild>
                 <Button type="button" variant="outline" size="sm" className="max-md:h-11">
@@ -178,6 +208,7 @@ export function LogToolbar(p: LogToolbarProps) {
           <>
             {viewToggles}
             {p.live ? <LiveChip state={p.live} /> : null}
+            {followingLabel}
             <span className="flex-1" />
             {p.actions}
             {p.onOpenPopout ? (
@@ -189,6 +220,7 @@ export function LogToolbar(p: LogToolbarProps) {
           </>
         )}
       </div>
+      {p.filterBar ? <div className="flex flex-wrap items-center gap-2">{p.filterBar}</div> : null}
       <span role="status" aria-live="polite" className="sr-only">
         {p.announcement}
       </span>

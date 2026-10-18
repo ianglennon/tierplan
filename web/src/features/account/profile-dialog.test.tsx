@@ -4,6 +4,7 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -59,6 +60,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // A "Profile saved." toast still up when a test ends would be found by the next test.
+  toast.dismiss();
   cleanup();
   vi.unstubAllGlobals();
   queryClient.clear();
@@ -180,9 +183,7 @@ describe("the Profile dialog (D-24)", () => {
     const d = await dialog();
     // The shared query client retries once after a one-second delay, so the
     // error appears just past findByText's default one-second timeout.
-    expect(
-      await within(d).findByText("Couldn't load your profile.", undefined, { timeout: 5000 }),
-    ).toBeTruthy();
+    expect(await within(d).findByText("Couldn't load your profile.")).toBeTruthy();
     getStatus = 200;
     fireEvent.click(within(d).getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(field("Display name").value).toBe("Alice"));
@@ -232,6 +233,8 @@ describe("the Profile dialog (D-24)", () => {
     fireEvent.change(field("Email"), { target: { value: "new@example.test" } });
     fireEvent.click(within(d).getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(patches).toHaveLength(2));
+    // The save is over when the dialog closes, which is after its toast is raised.
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(patches[1]).toEqual({
       displayName: "Alice L",
       email: "new@example.test",

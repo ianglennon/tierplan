@@ -6,9 +6,12 @@ package proxy
 import (
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/moby/moby/api/types/swarm"
 )
 
 func TestRouteContainerActionsReachTheEngineUnchanged(t *testing.T) {
@@ -299,5 +302,527 @@ func TestRouteImageRemoveIsRefusedOnAReadOnlyHostAndInspectsStillAnswer(t *testi
 		if ok, reason, _ := Allowed("GET", p, "", false, false, Policy{ReadOnly: true}); !ok {
 			t.Errorf("GET %s on a read-only host was refused (%s)", p, reason)
 		}
+	}
+}
+
+func replicas(n uint64) *uint64 { return &n }
+
+func sampleSpec() swarm.ServiceSpec {
+	var s swarm.ServiceSpec
+	s.Name = "web"
+	s.Labels = map[string]string{"com.docker.stack.namespace": "shop"}
+	s.TaskTemplate.ContainerSpec = &swarm.ContainerSpec{Image: "ghcr.io/acme/web:1", Env: []string{"A=1"}}
+	s.Mode.Replicated = &swarm.ReplicatedService{Replicas: replicas(3)}
+	return s
+}
+
+func TestRouteServiceInspectAndUpdateQueryCases(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, path, query string
+		body                      bool
+		wantRoute                 string // "" means refused
+	}{
+		{"an inspect", "GET", "/services/web", "", false, "service inspect"},
+		{"a trailing slash on an inspect", "GET", "/v1.56/services/abc123/", "", false, ""},
+		{"an inspect by ID with insertDefaults", "GET", "/v1.56/services/abc123", "insertDefaults=1", false, "service inspect"},
+		{"a HEAD of an inspect", "HEAD", "/services/web", "", false, "service inspect"},
+		{"the list is only the list", "GET", "/services", "status=true&filters=x", false, "services"},
+		{"an update", "POST", "/services/web/update", "version=12", true, "service update"},
+		{"an update with the version prefix", "POST", "/v1.56/services/web/update", "version=12&registryAuthFrom=previous-spec", true, "service update"},
+		{"an update with rollback", "POST", "/services/web/update", "version=12&rollback=previous", true, "service update"},
+		{"an update with rollback none", "POST", "/services/web/update", "version=12&rollback=none", true, "service update"},
+		{"an update with spec credentials", "POST", "/services/web/update", "version=12&registryAuthFrom=spec", true, "service update"},
+
+		{"an inspect with an unknown key", "GET", "/services/web", "foo=1", false, ""},
+		{"an inspect with a bad bool", "GET", "/services/web", "insertDefaults=yes", false, ""},
+		{"an inspect with a body", "GET", "/services/web", "", true, ""},
+		{"an update with no body", "POST", "/services/web/update", "version=12", false, ""},
+		{"an update with an unknown key", "POST", "/services/web/update", "version=12&foo=1", true, ""},
+		{"an update with a non-numeric version", "POST", "/services/web/update", "version=abc", true, ""},
+		{"an update with a negative version", "POST", "/services/web/update", "version=-1", true, ""},
+		{"an update with a 21 digit version", "POST", "/services/web/update", "version=" + strings.Repeat("1", 21), true, ""},
+		{"an update with a 20 digit version", "POST", "/services/web/update", "version=" + strings.Repeat("1", 20), true, "service update"},
+		{"an update with a bad registryAuthFrom", "POST", "/services/web/update", "version=1&registryAuthFrom=other", true, ""},
+		{"an update with a bad rollback", "POST", "/services/web/update", "version=1&rollback=next", true, ""},
+		{"an update with a second bad version", "POST", "/services/web/update", "version=1&version=x", true, ""},
+		{"a dot-dot service", "GET", "/services/../x", "", false, ""},
+		{"a service starting with a dot", "GET", "/services/.x", "", false, ""},
+		{"a delete of a service", "DELETE", "/services/web", "", false, "service remove"},
+		{"a delete of a service with the version prefix", "DELETE", "/v1.56/services/abc123", "", false, "service remove"},
+		{"a delete of a service with a key", "DELETE", "/services/web", "force=1", false, ""},
+		{"a delete of a service with a body", "DELETE", "/services/web", "", true, ""},
+		{"a delete of a service with a trailing slash", "DELETE", "/services/web/", "", false, ""},
+		{"a service create", "POST", "/services/create", "", true, "service create"},
+		{"a service create with the version prefix", "POST", "/v1.56/services/create", "", true, "service create"},
+		{"a service create with no body", "POST", "/services/create", "", false, ""},
+		{"a service create with a key", "POST", "/services/create", "version=1", true, ""},
+		{"a GET of create is an inspect of a service named create", "GET", "/services/create", "", false, "service inspect"},
+		{"service logs", "GET", "/services/web/logs", "", false, "service logs"},
+		{"service logs, versioned, with every key", "GET", "/v1.56/services/web/logs", "stdout=1&stderr=1&timestamps=1&follow=1&details=1&since=1700000000.5&tail=500", false, "service logs"},
+		{"service logs with tail all", "GET", "/services/web/logs", "tail=all", false, "service logs"},
+		{"service logs with an RFC 3339 since", "GET", "/services/web/logs", "since=2026-10-14T10:00:00.123456789Z", false, "service logs"},
+		{"service logs have no until", "GET", "/services/web/logs", "until=1700000000", false, ""},
+		{"service logs with an unknown key", "GET", "/services/web/logs", "foo=1", false, ""},
+		{"service logs with a bad bool", "GET", "/services/web/logs", "follow=yes", false, ""},
+		{"service logs with a bad tail", "GET", "/services/web/logs", "tail=-1", false, ""},
+		{"service logs with a 7 digit tail", "GET", "/services/web/logs", "tail=1000000", false, ""},
+		{"service logs with a body", "GET", "/services/web/logs", "", true, ""},
+		{"service logs by POST", "POST", "/services/web/logs", "", false, ""},
+		{"service logs of a dot-dot service", "GET", "/services/../logs", "", false, ""},
+		{"a nested service logs path", "GET", "/services/web/x/logs", "", false, ""},
+		{"task logs", "GET", "/tasks/abc123/logs", "", false, "task logs"},
+		{"task logs, versioned, with every key", "GET", "/v1.56/tasks/abc123/logs", "stdout=1&stderr=1&timestamps=1&follow=1&details=1&since=1700000000&tail=all", false, "task logs"},
+		{"task logs have no until", "GET", "/tasks/abc123/logs", "until=1700000000", false, ""},
+		{"task logs with an unknown key", "GET", "/tasks/abc123/logs", "x=1", false, ""},
+		{"task logs by DELETE", "DELETE", "/tasks/abc123/logs", "", false, ""},
+		{"a task inspect is not forwarded", "GET", "/tasks/abc123", "", false, ""},
+		{"the task list is only the list", "GET", "/tasks", "filters=x", false, "tasks"},
+		{"container stats, one shot", "GET", "/containers/web/stats", "stream=false&one-shot=true", false, "container stats"},
+		{"container stats, versioned, with the numeric bools", "GET", "/v1.56/containers/abc123/stats", "stream=0&one-shot=1", false, "container stats"},
+		{"container stats followed is refused, the agent answers one sample", "GET", "/containers/web/stats", "stream=true", false, ""},
+		{"container stats followed with 1 is refused", "GET", "/containers/web/stats", "stream=1&one-shot=0", false, ""},
+		{"container stats with no key", "GET", "/containers/web/stats", "", false, "container stats"},
+		{"a HEAD of container stats", "HEAD", "/containers/web/stats", "stream=false", false, "container stats"},
+		{"container stats with an unknown key", "GET", "/containers/web/stats", "stream=false&foo=1", false, ""},
+		{"container stats with a bad bool", "GET", "/containers/web/stats", "stream=yes", false, ""},
+		{"container stats with a bad one-shot", "GET", "/containers/web/stats", "one-shot=maybe", false, ""},
+		{"container stats with a second bad value", "GET", "/containers/web/stats", "stream=false&stream=x", false, ""},
+		{"container stats with a body", "GET", "/containers/web/stats", "", true, ""},
+		{"container stats by POST", "POST", "/containers/web/stats", "", false, ""},
+		{"container stats by DELETE", "DELETE", "/containers/web/stats", "", false, ""},
+		{"container stats of a dot-dot container", "GET", "/containers/../stats", "", false, ""},
+		{"container stats of a container starting with a dot", "GET", "/containers/.x/stats", "", false, ""},
+		{"a nested container stats path", "GET", "/containers/web/x/stats", "", false, ""},
+		{"container stats with a trailing slash", "GET", "/containers/web/stats/", "", false, ""},
+		{"a GET of update", "GET", "/services/web/update", "", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, _, kind := Allowed(tc.method, tc.path, tc.query, tc.body, false, Policy{})
+			if ok != (tc.wantRoute != "") {
+				t.Fatalf("Allowed(%s %s?%s) = %v, want %v", tc.method, tc.path, tc.query, ok, tc.wantRoute != "")
+			}
+			if !ok {
+				return
+			}
+			rt, found := Match(tc.method, tc.path)
+			if !found || rt.name != tc.wantRoute {
+				t.Fatalf("Match(%s %s) = %q, want %q", tc.method, tc.path, rt.name, tc.wantRoute)
+			}
+			if wantKind := map[string]BodyKind{"service update": BodyServiceSpec, "service create": BodyServiceSpec}[tc.wantRoute]; kind != wantKind {
+				t.Errorf("body kind = %d, want %d", kind, wantKind)
+			}
+			if wantAuth := tc.wantRoute == "service update" || tc.wantRoute == "service create"; rt.registryAuth != wantAuth {
+				t.Errorf("route %q has registryAuth %v, want %v", rt.name, rt.registryAuth, wantAuth)
+			}
+		})
+	}
+}
+
+func TestRouteNodeInspectTakesNoQueryAndNeverShadowsTheList(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, path, query string
+		body                      bool
+		wantRoute                 string // "" means refused
+	}{
+		{"an inspect", "GET", "/nodes/abc123", "", false, "node inspect"},
+		{"an inspect with the version prefix", "GET", "/v1.56/nodes/abc123", "", false, "node inspect"},
+		{"a HEAD of an inspect", "HEAD", "/nodes/abc123", "", false, "node inspect"},
+		{"the list still takes any query", "GET", "/nodes", "filters=x&whatever=1", false, "nodes"},
+		{"an inspect with a key", "GET", "/nodes/abc123", "x=1", false, ""},
+		{"an inspect with an empty key", "GET", "/nodes/abc123", "x=", false, ""},
+		{"an inspect with a body", "GET", "/nodes/abc123", "", true, ""},
+		{"a trailing slash on an inspect", "GET", "/nodes/abc123/", "", false, ""},
+		{"a dot-dot node", "GET", "/nodes/../x", "", false, ""},
+		{"a node starting with a dot", "GET", "/nodes/.x", "", false, ""},
+		{"a 129 character node", "GET", "/nodes/" + strings.Repeat("a", 129), "", false, ""},
+		{"a 128 character node", "GET", "/nodes/" + strings.Repeat("a", 128), "", false, "node inspect"},
+		{"a node's sub-path", "GET", "/nodes/abc123/tasks", "", false, ""},
+		{"a node delete is the remove, which has its own test", "DELETE", "/nodes/abc123", "", false, "node remove"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, _, _ := Allowed(tc.method, tc.path, tc.query, tc.body, false, Policy{})
+			if ok != (tc.wantRoute != "") {
+				t.Fatalf("Allowed(%s %s?%s) = %v, want %v", tc.method, tc.path, tc.query, ok, tc.wantRoute != "")
+			}
+			if !ok {
+				return
+			}
+			if rt, found := Match(tc.method, tc.path); !found || rt.name != tc.wantRoute {
+				t.Fatalf("Match(%s %s) = %q, want %q", tc.method, tc.path, rt.name, tc.wantRoute)
+			}
+		})
+	}
+	if ok, reason, _ := Allowed("GET", "/nodes/abc123", "", false, false, Policy{ReadOnly: true}); !ok {
+		t.Errorf("a node inspect on a read-only host was refused (%s)", reason)
+	}
+}
+
+func TestRouteNodeUpdateTakesOnlyAVersionAndANodeSpecBody(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, path, query string
+		body                      bool
+		wantRoute                 string // "" means refused
+	}{
+		{"an update", "POST", "/nodes/abc123/update", "version=12", true, "node update"},
+		{"an update with the version prefix", "POST", "/v1.56/nodes/abc123/update", "version=12", true, "node update"},
+		{"an update with a 20 digit version", "POST", "/nodes/abc123/update", "version=" + strings.Repeat("1", 20), true, "node update"},
+		{"an update with a 21 digit version", "POST", "/nodes/abc123/update", "version=" + strings.Repeat("1", 21), true, ""},
+		{"an update with a non-numeric version", "POST", "/nodes/abc123/update", "version=abc", true, ""},
+		{"an update with a negative version", "POST", "/nodes/abc123/update", "version=-1", true, ""},
+		{"an update with a second bad version", "POST", "/nodes/abc123/update", "version=1&version=x", true, ""},
+		{"an update with another key", "POST", "/nodes/abc123/update", "version=12&force=1", true, ""},
+		{"an update with no body", "POST", "/nodes/abc123/update", "version=12", false, ""},
+		{"an update with a trailing slash", "POST", "/nodes/abc123/update/", "version=12", true, ""},
+		{"an update of a dot-dot node", "POST", "/nodes/../update", "version=12", true, ""},
+		{"an update of a node starting with a dot", "POST", "/nodes/.x/update", "version=12", true, ""},
+		{"an update of a 129 character node", "POST", "/nodes/" + strings.Repeat("a", 129) + "/update", "version=12", true, ""},
+		{"a GET of update", "GET", "/nodes/abc123/update", "", false, ""},
+		{"a PUT of update", "PUT", "/nodes/abc123/update", "version=12", true, ""},
+		{"a POST to a node", "POST", "/nodes/abc123", "version=12", true, ""},
+		{"a node's other sub-path", "POST", "/nodes/abc123/join", "version=12", true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, _, kind := Allowed(tc.method, tc.path, tc.query, tc.body, false, Policy{})
+			if ok != (tc.wantRoute != "") {
+				t.Fatalf("Allowed(%s %s?%s) = %v, want %v", tc.method, tc.path, tc.query, ok, tc.wantRoute != "")
+			}
+			if !ok {
+				return
+			}
+			if rt, found := Match(tc.method, tc.path); !found || rt.name != tc.wantRoute || rt.registryAuth {
+				t.Fatalf("Match(%s %s) = %q (registryAuth %v), want %q without one", tc.method, tc.path, rt.name, rt.registryAuth, tc.wantRoute)
+			}
+			if kind != BodyNodeSpec {
+				t.Errorf("body kind = %d, want BodyNodeSpec (%d)", kind, BodyNodeSpec)
+			}
+		})
+	}
+	if ok, reason, _ := Allowed("POST", "/nodes/abc123/update", "version=1", true, false, Policy{ReadOnly: true}); ok || reason != "read_only_flag" {
+		t.Errorf("a node update on a read-only host = %v %q, want refused read_only_flag", ok, reason)
+	}
+	if ok, _, _ := Allowed("POST", "/nodes/abc123/update", "version=1", true, true, Policy{}); ok {
+		t.Error("a node update with an upgrade was allowed")
+	}
+}
+
+func TestRouteNodeRemoveTakesNoKeysSoForceCanNeverBeSent(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, path, query string
+		wantRoute                 string // "" means refused
+	}{
+		{"a remove", "DELETE", "/nodes/abc123", "", "node remove"},
+		{"a remove with the version prefix", "DELETE", "/v1.56/nodes/abc123", "", "node remove"},
+		{"a remove with force=1", "DELETE", "/nodes/abc123", "force=1", ""},
+		{"a remove with force=true", "DELETE", "/nodes/abc123", "force=true", ""},
+		{"a remove with force=0", "DELETE", "/nodes/abc123", "force=0", ""},
+		{"a remove with an empty force", "DELETE", "/nodes/abc123", "force=", ""},
+		{"a remove with any other key", "DELETE", "/nodes/abc123", "version=1", ""},
+		{"a remove with a trailing slash", "DELETE", "/nodes/abc123/", "", ""},
+		{"a remove of a dot-dot node", "DELETE", "/nodes/../update", "", ""},
+		{"a remove of a node starting with a dot", "DELETE", "/nodes/.x", "", ""},
+		{"a remove of a 129 character node", "DELETE", "/nodes/" + strings.Repeat("a", 129), "", ""},
+		{"a remove of the node list", "DELETE", "/nodes", "", ""},
+		{"a remove of a node's sub-path", "DELETE", "/nodes/abc123/update", "", ""},
+		{"a POST to a node", "POST", "/nodes/abc123", "", ""},
+		{"a PUT to a node", "PUT", "/nodes/abc123", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, _, kind := Allowed(tc.method, tc.path, tc.query, false, false, Policy{})
+			if ok != (tc.wantRoute != "") {
+				t.Fatalf("Allowed(%s %s?%s) = %v, want %v", tc.method, tc.path, tc.query, ok, tc.wantRoute != "")
+			}
+			if !ok {
+				return
+			}
+			if rt, found := Match(tc.method, tc.path); !found || rt.name != tc.wantRoute || rt.registryAuth {
+				t.Fatalf("Match(%s %s) = %q (registryAuth %v), want %q without one", tc.method, tc.path, rt.name, rt.registryAuth, tc.wantRoute)
+			}
+			if kind != BodyNone {
+				t.Errorf("body kind = %d, want none", kind)
+			}
+		})
+	}
+	if ok, _, _ := Allowed("DELETE", "/nodes/abc123", "", true, false, Policy{}); ok {
+		t.Error("a node remove with a body was allowed")
+	}
+	if ok, _, _ := Allowed("DELETE", "/nodes/abc123", "", false, true, Policy{}); ok {
+		t.Error("a node remove with an upgrade was allowed")
+	}
+	if ok, reason, _ := Allowed("DELETE", "/nodes/abc123", "", false, false, Policy{ReadOnly: true}); ok || reason != "read_only_flag" {
+		t.Errorf("a node remove on a read-only host = %v %q, want refused read_only_flag", ok, reason)
+	}
+}
+
+func TestRouteSecretsTakeNoQueryAndTheListNeverShadowsTheInspect(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, path, query string
+		body                      bool
+		wantRoute                 string // "" means refused
+	}{
+		{"the list", "GET", "/secrets", "", false, "secrets list"},
+		{"the list with the version prefix", "GET", "/v1.56/secrets", "", false, "secrets list"},
+		{"a HEAD of the list", "HEAD", "/secrets", "", false, "secrets list"},
+		{"the list with a filter", "GET", "/secrets", "filters=%7B%7D", false, ""},
+		{"the list with a body", "GET", "/secrets", "", true, ""},
+		{"an inspect", "GET", "/secrets/abc123", "", false, "secret inspect"},
+		{"an inspect with the version prefix", "GET", "/v1.56/secrets/abc123", "", false, "secret inspect"},
+		{"an inspect with a key", "GET", "/secrets/abc123", "x=1", false, ""},
+		{"an inspect with a dot-dot", "GET", "/secrets/../x", "", false, ""},
+		{"an inspect starting with a dot", "GET", "/secrets/.x", "", false, ""},
+		{"a 129 character inspect", "GET", "/secrets/" + strings.Repeat("a", 129), "", false, ""},
+		{"an inspect with a sub-path", "GET", "/secrets/abc/update", "", false, ""},
+		{"a create", "POST", "/secrets/create", "", true, "secret create"},
+		{"a create with the version prefix", "POST", "/v1.56/secrets/create", "", true, "secret create"},
+		{"a create with a key", "POST", "/secrets/create", "x=1", true, ""},
+		{"a create with no body", "POST", "/secrets/create", "", false, ""},
+		{"a GET of create is an inspect of that name", "GET", "/secrets/create", "", false, "secret inspect"},
+		{"an update", "POST", "/secrets/abc123/update", "version=1", true, ""},
+		{"a remove", "DELETE", "/secrets/abc123", "", false, "secret remove"},
+		{"a remove with the version prefix", "DELETE", "/v1.56/secrets/abc123", "", false, "secret remove"},
+		{"a remove with a key", "DELETE", "/secrets/abc123", "force=1", false, ""},
+		{"a remove with a body", "DELETE", "/secrets/abc123", "", true, ""},
+		{"a remove of the list", "DELETE", "/secrets", "", false, ""},
+		{"a remove with a trailing slash", "DELETE", "/secrets/abc123/", "", false, ""},
+		{"a PUT to a secret", "PUT", "/secrets/abc123", "", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, _, kind := Allowed(tc.method, tc.path, tc.query, tc.body, false, Policy{})
+			if ok != (tc.wantRoute != "") {
+				t.Fatalf("Allowed(%s %s?%s) = %v, want %v", tc.method, tc.path, tc.query, ok, tc.wantRoute != "")
+			}
+			if !ok {
+				return
+			}
+			rt, found := Match(tc.method, tc.path)
+			if !found || rt.name != tc.wantRoute || rt.registryAuth {
+				t.Fatalf("Match(%s %s) = %q (registryAuth %v), want %q without one", tc.method, tc.path, rt.name, rt.registryAuth, tc.wantRoute)
+			}
+			if wantKind := map[string]BodyKind{"secret create": BodySecretCreate}[tc.wantRoute]; kind != wantKind {
+				t.Errorf("body kind = %d, want %d", kind, wantKind)
+			}
+		})
+	}
+	if ok, reason, _ := Allowed("GET", "/secrets", "", false, false, Policy{ReadOnly: true}); !ok {
+		t.Errorf("a secrets list on a read-only host was refused (%s)", reason)
+	}
+	for _, w := range []struct{ method, path string }{{"POST", "/secrets/create"}, {"DELETE", "/secrets/abc123"}} {
+		if ok, reason, _ := Allowed(w.method, w.path, "", w.method == "POST", false, Policy{ReadOnly: true}); ok || reason != "read_only_flag" {
+			t.Errorf("%s %s on a read-only host = %v %q, want refused read_only_flag", w.method, w.path, ok, reason)
+		}
+	}
+}
+
+func TestRouteConfigsTakeNoQueryAndTheListNeverShadowsTheInspect(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, path, query string
+		body                      bool
+		wantRoute                 string // "" means refused
+	}{
+		{"the list", "GET", "/configs", "", false, "configs list"},
+		{"the list with the version prefix", "GET", "/v1.56/configs", "", false, "configs list"},
+		{"a HEAD of the list", "HEAD", "/configs", "", false, "configs list"},
+		{"the list with a filter", "GET", "/configs", "filters=%7B%7D", false, ""},
+		{"the list with a body", "GET", "/configs", "", true, ""},
+		{"an inspect", "GET", "/configs/abc123", "", false, "config inspect"},
+		{"an inspect with the version prefix", "GET", "/v1.56/configs/abc123", "", false, "config inspect"},
+		{"an inspect with a key", "GET", "/configs/abc123", "x=1", false, ""},
+		{"an inspect with a dot-dot", "GET", "/configs/../x", "", false, ""},
+		{"an inspect starting with a dot", "GET", "/configs/.x", "", false, ""},
+		{"a 129 character inspect", "GET", "/configs/" + strings.Repeat("a", 129), "", false, ""},
+		{"an inspect with a sub-path", "GET", "/configs/abc/update", "", false, ""},
+		{"a create", "POST", "/configs/create", "", true, "config create"},
+		{"a create with the version prefix", "POST", "/v1.56/configs/create", "", true, "config create"},
+		{"a create with a key", "POST", "/configs/create", "x=1", true, ""},
+		{"a create with no body", "POST", "/configs/create", "", false, ""},
+		{"a GET of create is an inspect of that name", "GET", "/configs/create", "", false, "config inspect"},
+		{"an update", "POST", "/configs/abc123/update", "version=1", true, ""},
+		{"a remove", "DELETE", "/configs/abc123", "", false, "config remove"},
+		{"a remove with the version prefix", "DELETE", "/v1.56/configs/abc123", "", false, "config remove"},
+		{"a remove with a key", "DELETE", "/configs/abc123", "force=1", false, ""},
+		{"a remove with a body", "DELETE", "/configs/abc123", "", true, ""},
+		{"a remove of the list", "DELETE", "/configs", "", false, ""},
+		{"a remove with a trailing slash", "DELETE", "/configs/abc123/", "", false, ""},
+		{"a PUT to a config", "PUT", "/configs/abc123", "", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, _, kind := Allowed(tc.method, tc.path, tc.query, tc.body, false, Policy{})
+			if ok != (tc.wantRoute != "") {
+				t.Fatalf("Allowed(%s %s?%s) = %v, want %v", tc.method, tc.path, tc.query, ok, tc.wantRoute != "")
+			}
+			if !ok {
+				return
+			}
+			rt, found := Match(tc.method, tc.path)
+			if !found || rt.name != tc.wantRoute || rt.registryAuth {
+				t.Fatalf("Match(%s %s) = %q (registryAuth %v), want %q without one", tc.method, tc.path, rt.name, rt.registryAuth, tc.wantRoute)
+			}
+			if wantKind := map[string]BodyKind{"config create": BodyConfigCreate}[tc.wantRoute]; kind != wantKind {
+				t.Errorf("body kind = %d, want %d", kind, wantKind)
+			}
+		})
+	}
+	if ok, reason, _ := Allowed("GET", "/configs", "", false, false, Policy{ReadOnly: true}); !ok {
+		t.Errorf("a configs list on a read-only host was refused (%s)", reason)
+	}
+	for _, w := range []struct{ method, path string }{{"POST", "/configs/create"}, {"DELETE", "/configs/abc123"}} {
+		if ok, reason, _ := Allowed(w.method, w.path, "", w.method == "POST", false, Policy{ReadOnly: true}); ok || reason != "read_only_flag" {
+			t.Errorf("%s %s on a read-only host = %v %q, want refused read_only_flag", w.method, w.path, ok, reason)
+		}
+	}
+}
+
+func TestRouteServiceWritesAreRefusedOnAReadOnlyHostAndInspectStillAnswers(t *testing.T) {
+	for _, tc := range []struct {
+		method, path, query string
+		body                bool
+	}{
+		{"POST", "/services/web/update", "version=1", true},
+		{"POST", "/services/create", "", true},
+		{"DELETE", "/services/web", "", false},
+	} {
+		if ok, reason, _ := Allowed(tc.method, tc.path, tc.query, tc.body, false, Policy{ReadOnly: true}); ok || reason != "read_only_flag" {
+			t.Errorf("%s %s on a read-only host = %v %q, want refused read_only_flag", tc.method, tc.path, ok, reason)
+		}
+	}
+	if ok, reason, _ := Allowed("GET", "/services/web", "", false, false, Policy{ReadOnly: true}); !ok {
+		t.Errorf("a service inspect on a read-only host was refused (%s)", reason)
+	}
+}
+
+func TestBodyServiceSpecIsRebuiltAndDecodesToTheSameSpec(t *testing.T) {
+	want := sampleSpec()
+	var got swarm.ServiceSpec
+	if err := roundTrip(t, BodyServiceSpec, enc(t, want), &got); err != nil {
+		t.Fatalf("a service spec was refused: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("rebuilt = %+v, want %+v", got, want)
+	}
+	// A spec with the container runtime named is the same service.
+	withRuntime := sampleSpec()
+	withRuntime.TaskTemplate.Runtime = swarm.RuntimeContainer
+	if err := roundTrip(t, BodyServiceSpec, enc(t, withRuntime), &got); err != nil {
+		t.Errorf("a spec with the container runtime was refused: %v", err)
+	}
+}
+
+func TestBodyServiceSpecRefusals(t *testing.T) {
+	plugin := sampleSpec()
+	plugin.TaskTemplate.Runtime = swarm.RuntimePlugin
+	pluginSpec := sampleSpec()
+	pluginSpec.TaskTemplate.PluginSpec = &swarm.RuntimeSpec{Name: "p"}
+	attach := sampleSpec()
+	attach.TaskTemplate.NetworkAttachmentSpec = &swarm.NetworkAttachmentSpec{ContainerID: "c"}
+	for name, body := range map[string]string{
+		"the plugin runtime":      enc(t, plugin),
+		"a plugin spec":           enc(t, pluginSpec),
+		"a network attachment":    enc(t, attach),
+		"an unknown top key":      `{"Name":"web","Foo":1}`,
+		"an unknown nested key":   `{"Name":"web","TaskTemplate":{"ContainerSpec":{"Image":"x","Foo":true}}}`,
+		"not an object":           `[1,2]`,
+		"data after the value":    `{"Name":"web"} {"Name":"x"}`,
+		"a runtime that is a lie": `{"Name":"web","TaskTemplate":{"Runtime":"host"}}`,
+		"an empty body":           ``,
+	} {
+		if _, err := validateBody(BodyServiceSpec, strings.NewReader(body), bodyEnv{}); err == nil {
+			t.Errorf("%s: the body was accepted", name)
+		}
+	}
+}
+
+func TestBodyServiceSpecCapIs256KiBAndOtherKindsKeep64KiB(t *testing.T) {
+	if bodyCap(BodyServiceSpec) != 256<<10 || bodyCap(BodyVolumeCreate) != 64<<10 || bodyCap(BodyExecCreate) != 64<<10 {
+		t.Fatalf("caps = %d / %d / %d", bodyCap(BodyServiceSpec), bodyCap(BodyVolumeCreate), bodyCap(BodyExecCreate))
+	}
+	spec := func(n int) string {
+		s := sampleSpec()
+		s.Labels["pad"] = strings.Repeat("a", n)
+		b, _ := json.Marshal(s)
+		return string(b)
+	}
+	// Over 64 KiB (four labels' worth is over the per-value limit of other kinds, but a
+	// service spec has no such limit) and under 256 KiB.
+	under := spec(100 << 10)
+	if _, err := validateBody(BodyServiceSpec, strings.NewReader(under), bodyEnv{}); err != nil {
+		t.Errorf("a 100 KiB service spec was refused: %v", err)
+	}
+	over := spec(260 << 10)
+	if _, err := validateBody(BodyServiceSpec, strings.NewReader(over), bodyEnv{}); err == nil {
+		t.Error("a service spec over 256 KiB was accepted")
+	}
+	if _, err := validateBody(BodyVolumeCreate, strings.NewReader(`{"Name":"`+strings.Repeat("a", 70<<10)+`"}`), bodyEnv{}); err == nil {
+		t.Error("a volume body over 64 KiB was accepted")
+	}
+}
+
+func TestServiceUpdateForwardsTheRebuiltSpecAndTheCredentialOnlyOnTheUpdate(t *testing.T) {
+	sock := newFakeSocket(t)
+	h := Handler(sock.path, Policy{}, nil)
+	body := enc(t, sampleSpec())
+	resp := do(t, h, postJSON("POST", "/v1.56/services/web/update?version=12&registryAuthFrom=previous-spec", body,
+		"X-Registry-Auth: "+testRegistryAuth+"\r\n", "X-Registry-Config: e30=\r\n",
+		"Content-Type: application/x-www-form-urlencoded\r\n"))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", resp.StatusCode)
+	}
+	// The inspect carries a credential header too; it must not cross.
+	resp = do(t, h, request("GET", "/services/web?insertDefaults=1", "X-Registry-Auth: "+testRegistryAuth+"\r\n"))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("inspect status %d, want 200", resp.StatusCode)
+	}
+	seen := sock.requests()
+	if len(seen) != 2 || seen[0] != "POST /v1.56/services/web/update?version=12&registryAuthFrom=previous-spec" || seen[1] != "GET /services/web?insertDefaults=1" {
+		t.Fatalf("the engine saw %v", seen)
+	}
+	hdrs := sock.headersSeen()
+	if got := hdrs[0].Values("X-Registry-Auth"); len(got) != 1 || got[0] != testRegistryAuth {
+		t.Errorf("update X-Registry-Auth = %q, want the one value untouched", got)
+	}
+	if got := hdrs[1].Values("X-Registry-Auth"); len(got) != 0 {
+		t.Errorf("inspect X-Registry-Auth = %q, want none", got)
+	}
+	if v := hdrs[0].Get("X-Registry-Config"); v != "" {
+		t.Errorf("update X-Registry-Config = %q, want none", v)
+	}
+	if ct := hdrs[0].Get("Content-Type"); ct != "application/json" {
+		t.Errorf("update content type = %q", ct)
+	}
+	var got, want swarm.ServiceSpec
+	_ = json.Unmarshal(sock.bodiesSeen()[0], &got)
+	_ = json.Unmarshal([]byte(body), &want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the engine received %s, want the same spec as %s", sock.bodiesSeen()[0], body)
+	}
+}
+
+func TestServiceUpdateRefusalsNeverReachTheEngine(t *testing.T) {
+	sock := newFakeSocket(t)
+	var reasons []string
+	h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+	plugin := sampleSpec()
+	plugin.TaskTemplate.Runtime = swarm.RuntimePlugin
+	big := sampleSpec()
+	big.Labels["pad"] = strings.Repeat("a", 260<<10)
+	for _, tc := range []struct{ name, raw string }{
+		{"a plugin runtime", postJSON("POST", "/services/web/update?version=1", enc(t, plugin))},
+		{"a spec over 256 KiB", postJSON("POST", "/services/web/update?version=1", enc(t, big))},
+		{"no body", request("POST", "/services/web/update?version=1")},
+		{"a bad version", postJSON("POST", "/services/web/update?version=x", enc(t, sampleSpec()))},
+		{"a credential of two values", postJSON("POST", "/services/web/update?version=1", enc(t, sampleSpec()),
+			"X-Registry-Auth: YQ==\r\n", "X-Registry-Auth: Yg==\r\n")},
+	} {
+		resp := do(t, h, tc.raw)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%s: status %d, want 403", tc.name, resp.StatusCode)
+		}
+	}
+	if got := sock.requests(); len(got) != 0 {
+		t.Fatalf("a refused request reached the engine: %v", got)
+	}
+	if len(reasons) != 5 {
+		t.Errorf("onDenied ran %d times, want 5", len(reasons))
 	}
 }

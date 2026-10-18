@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/envs"
 )
 
 // What uses an image (plan 05-15 task 1, RES-09, D-18, D-28). Docker is a fake daemon behind
@@ -65,8 +64,9 @@ func imageUsageEngine() dockertest.FakeConfig {
 }
 
 func TestImageUsageTheListCountsContainersByImageIDWhetherTheyRunOrNot(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, imageUsageEngine())
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	rec := f.get(t, e, "images")
 	if rec.code != http.StatusOK {
 		t.Fatalf("images: %d %s", rec.code, rec.body)
@@ -90,8 +90,9 @@ func TestImageUsageTheListCountsContainersByImageIDWhetherTheyRunOrNot(t *testin
 }
 
 func TestImageUsedByListsEachContainerOfTheImageByNameAndNothingForAnUnusedImage(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, imageUsageEngine())
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	rec := f.get(t, e, "images/"+hexID("a")+"/used-by")
 	if rec.code != http.StatusOK {
 		t.Fatalf("used-by: %d %s", rec.code, rec.body)
@@ -118,8 +119,9 @@ func TestImageUsedByListsEachContainerOfTheImageByNameAndNothingForAnUnusedImage
 }
 
 func TestImageUsedByAnIDOfTheWrongShapeIs422AnUnknownImageIs404AndAForeignNodeIs503(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, imageUsageEngine())
-	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	awaitOnline(t, f.mon, e.ID)
 	if rec := f.get(t, e, "images/nginx/used-by"); rec.code != http.StatusUnprocessableEntity {
 		t.Errorf("a name: %d, want 422: %s", rec.code, rec.body)
 	}
@@ -135,6 +137,7 @@ func TestImageUsedByAnIDOfTheWrongShapeIs422AnUnknownImageIs404AndAForeignNodeIs
 }
 
 func TestImageUsedByNeedsImagesRead(t *testing.T) {
+	t.Parallel()
 	f, e := dashEnv(t, imageUsageEngine())
 	f.addUser(t, "stranger", false)
 	cookie, csrf := f.signIn(t, "stranger", false)
@@ -180,19 +183,18 @@ func usageSwarm(t *testing.T) *swarmFix {
 }
 
 func TestImageUsageAServiceCountsFromItsSpecEvenWithNoTasksByDigestElseByTag(t *testing.T) {
+	t.Parallel()
 	s := usageSwarm(t)
-	var byNode map[string]usageItem
-	waitFor(t, "the cluster read to reach the list", func() bool {
-		rec := s.get(t, s.env.ID, "images?view=node")
-		if rec.code != http.StatusOK {
-			return false
-		}
-		byNode = map[string]usageItem{}
-		for _, it := range decode[listBody[usageItem]](t, rec).Items {
-			byNode[it.Node+" "+it.ID] = it
-		}
-		return byNode["mgr-1 "+usageNginx].UsedByServices == 1
-	})
+	// usageSwarm returned with every agent connected and probed; the request makes the cluster
+	// read behind "used by" itself, so the list is read once.
+	rec := s.get(t, s.env.ID, "images?view=node")
+	if rec.code != http.StatusOK {
+		t.Fatalf("images: %d %s", rec.code, rec.body)
+	}
+	byNode := map[string]usageItem{}
+	for _, it := range decode[listBody[usageItem]](t, rec).Items {
+		byNode[it.Node+" "+it.ID] = it
+	}
 	for _, node := range []string{"mgr-1", "mgr-2"} {
 		want := map[string][2]int{usageNginx: {1, 1}, usageOld: {0, 1}, usageNew: {0, 0}, usageShort: {0, 1}}
 		for id, w := range want {
@@ -202,7 +204,7 @@ func TestImageUsageAServiceCountsFromItsSpecEvenWithNoTasksByDigestElseByTag(t *
 		}
 	}
 
-	rec := s.get(t, s.env.ID, "images/"+usageNginx+"/used-by")
+	rec = s.get(t, s.env.ID, "images/"+usageNginx+"/used-by")
 	if rec.code != http.StatusOK {
 		t.Fatalf("used-by: %d %s", rec.code, rec.body)
 	}
