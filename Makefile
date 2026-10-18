@@ -283,6 +283,7 @@ lint:
 	scripts/no-retries-check.sh
 	scripts/poll-check.sh
 	scripts/quarantine-check.sh
+	scripts/wallclock-check.sh
 	pnpm -C web exec biome ci .
 	pnpm -C web exec tsc --noEmit
 

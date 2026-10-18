@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+// Fixture for scripts/test-scripts.sh (wallclock-check): stored as .txt so the tree's
+// Go tools never compile it. Every call below is allowed, each for its own reason.
+package zzwallclockprobe
+
+import (
+	"context"
+	"net/http"
+	"testing"
+	"time"
+
+	"github.com/ianglennon/bayplan/proto/testsupport"
+)
+
+func TestWaitsOnlyAsAllowed(t *testing.T) {
+	ch := make(chan struct{})
+	// testsupport deadlines are generous.
+	select {
+	case <-ch:
+	case <-time.After(testsupport.Deadline):
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), testsupport.Deadline)
+	defer cancel()
+	// A literal of 30 s or more is generous too.
+	_, cancel2 := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel2()
+	_ = time.NewTimer(2 * time.Minute)
+	_ = time.NewTimer(time.Hour)
+	// A measurement printed for people asserts nothing.
+	start := time.Now()
+	t.Logf("took %v", time.Since(start))
+	// A reason at the end of the line, or on the line above.
+	_ = time.After(10 * time.Millisecond) // wall-clock: paces a fake; no assertion depends on it
+	// wall-clock: lower bound; a timer cannot fire early, so load can only lengthen it
+	_ = time.Since(start)
+	// A call named only in a comment is not a call: time.After(time.Millisecond)
+	_ = &http.Client{Timeout: testsupport.Deadline}
+	_ = &http.Client{Timeout: time.Minute}
+	_ = &http.Client{Timeout: timeout}                  // a value held elsewhere is not on this line
+	_ = &http.Server{ReadHeaderTimeout: time.Second}    // wall-clock: the fake answers headers at once; the window is not waited on
+}

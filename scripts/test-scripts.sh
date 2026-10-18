@@ -479,6 +479,52 @@ expect fail "poll-negated-tag-is-not-a-tag" scripts/poll-check.sh "${scratch}/ne
 expect fail "poll-missing-file" scripts/poll-check.sh "${scratch}/no-such_test.go"
 expect pass "poll-check-repository" scripts/poll-check.sh
 
+# --- Wall-clock guard (06.1-48, WR-08..WR-16): a short real-time wait needs testsupport or a reason ---
+wc=scripts/testdata/wallclock
+expect fail "wallclock-go-unmarked" scripts/wallclock-check.sh "${wc}/unmarked_test.go.txt"
+for n in 20 23 25 27 30 34 35 36 37; do
+  expect_out "wallclock-go-unmarked names the file and line ${n}" "${wc}/unmarked_test.go.txt:${n}: "
+done
+# Lines 33-34: a marker with no reason does not excuse the call under it.
+if grep -qF -- "unmarked_test.go.txt:33:" <<<"${LAST_OUT}"; then
+  echo "SCRIPT TEST FAIL: wallclock-go-unmarked (the empty marker line itself is not a finding)"
+  failures=$((failures + 1))
+fi
+expect_out "wallclock-go-timeout-field is a finding" "a Timeout field set to a short duration"
+expect pass "wallclock-go-marked" scripts/wallclock-check.sh "${wc}/marked_test.go.txt"
+expect fail "wallclock-web-unmarked" scripts/wallclock-check.sh "${wc}/unmarked.test.tsx.txt"
+for n in 11 12 13 18 21 24 29; do
+  expect_out "wallclock-web-unmarked names the file and line ${n}" "${wc}/unmarked.test.tsx.txt:${n}: "
+done
+expect_out "wallclock-web-vi-waitFor with no options is a finding" "vi.waitFor( with no timeout"
+expect pass "wallclock-web-marked" scripts/wallclock-check.sh "${wc}/marked.test.tsx.txt"
+expect fail "wallclock-missing-file" scripts/wallclock-check.sh "${scratch}/no-such_test.go"
+# A web threshold that cannot be read is exit 2, never a silent pass.
+printf 'export default {};\n' >"${scratch}/no-thresholds.ts"
+wallclock_rc() { "$@" >"${scratch}/wallclock.out" 2>&1; echo "$?"; }
+rc="$(wallclock_rc env WALLCLOCK_VITEST_CONFIG="${scratch}/no-thresholds.ts" scripts/wallclock-check.sh "${wc}/marked.test.tsx.txt")"
+if [ "${rc}" != "2" ]; then
+  echo "SCRIPT TEST FAIL: wallclock-no-testTimeout (expected exit 2, got ${rc})"
+  failures=$((failures + 1))
+fi
+if ! grep -qF -- "no testTimeout value found" "${scratch}/wallclock.out"; then
+  echo "SCRIPT TEST FAIL: wallclock-no-testTimeout (output does not name testTimeout)"
+  failures=$((failures + 1))
+fi
+rc="$(wallclock_rc env WALLCLOCK_TEST_SETUP="${scratch}/no-thresholds.ts" scripts/wallclock-check.sh "${wc}/marked.test.tsx.txt")"
+if [ "${rc}" != "2" ]; then
+  echo "SCRIPT TEST FAIL: wallclock-no-asyncUtilTimeout (expected exit 2, got ${rc})"
+  failures=$((failures + 1))
+fi
+rc="$(wallclock_rc env WALLCLOCK_TEST_SETUP="${scratch}/gone.ts" scripts/wallclock-check.sh "${wc}/marked.test.tsx.txt")"
+if [ "${rc}" != "2" ]; then
+  echo "SCRIPT TEST FAIL: wallclock-no-setup-file (expected exit 2, got ${rc})"
+  failures=$((failures + 1))
+fi
+# The Go rule needs no web threshold.
+expect pass "wallclock-go-needs-no-web-thresholds" env WALLCLOCK_VITEST_CONFIG="${scratch}/no-thresholds.ts" scripts/wallclock-check.sh "${wc}/marked_test.go.txt"
+expect pass "wallclock-check-repository" scripts/wallclock-check.sh
+
 # --- Quarantine guard (06.1-24, D-12, D-13): call sites and the docs/testing.md table agree ---
 qdir=scripts/testdata/quarantine
 mkdir -p "${quarantine_probe_dir}"
