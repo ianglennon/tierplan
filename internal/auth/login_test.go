@@ -27,6 +27,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/store/sqlc"
 	"github.com/ianglennon/bayplan/internal/store/storetest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // Sign-in, session lookup, CSRF and unlock (plan 12, AUTH-02, AUTH-03, AUTH-08).
@@ -983,11 +984,7 @@ func sweepsIdleSessions(t *testing.T) {
 		t.Fatal("cleanup deleted a live session")
 	}
 	cancel()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("RunSessionCleanup did not return after its context was cancelled")
-	}
+	testsupport.Await(t, "RunSessionCleanup to return after its context was cancelled", done)
 }
 
 // --- Invited users and the last sign-in (plan 03-11, AUTH-04) -------------------

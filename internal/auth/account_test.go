@@ -187,6 +187,7 @@ func TestVerifyPasswordRejectsMalformedHashesWithoutPanicking(t *testing.T) {
 func TestDummyVerifyDoesARealArgon2idComputation(t *testing.T) {
 	start := time.Now()
 	auth.DummyVerify("anything at all")
+	// wall-clock: lower bound; the dummy verify cannot finish faster under load
 	if d := time.Since(start); d < time.Millisecond {
 		t.Fatalf("DummyVerify took %v; it must hash for real so unknown users cost the same as known ones", d)
 	}

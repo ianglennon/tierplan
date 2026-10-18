@@ -16,6 +16,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -237,7 +238,7 @@ func TestSwarmRealEvents(t *testing.T) {
 				if s == want {
 					return true
 				}
-			case <-time.After(20 * time.Second):
+			case <-time.After(testsupport.Deadline):
 				return false
 			}
 		}

@@ -16,6 +16,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/auth"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // Plan 01-31, WR-04: anonymous refusals are bounded per address and every one
@@ -248,11 +249,7 @@ func flushesOnTicksAndAtShutdown(t *testing.T) {
 	_ = th.Record(context.Background(), anon(audit.ActionSetupAttemptDenied, "setup_complete", "", "198.51.100.7"))
 	_ = th.Record(context.Background(), anon(audit.ActionSetupAttemptDenied, "setup_complete", "", "198.51.100.7"))
 	cancel()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("Run did not return after its context was cancelled")
-	}
+	testsupport.Await(t, "Run to return after its context was cancelled", done)
 	if th.Pending() != 0 {
 		t.Fatalf("pending after shutdown = %d, want the final Flush to have emptied it", th.Pending())
 	}
