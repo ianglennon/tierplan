@@ -43,6 +43,8 @@ type TagsDeps struct {
 	Audit *audit.Writer
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
+	// Now is the clock the per-user request limit refills by. Nil means time.Now.
+	Now func() time.Time
 
 	// limiter is the per-user limit on tag requests, made by RegisterTags.
 	limiter *browseLimiter
@@ -225,6 +227,9 @@ func RegisterTags(r *httpx.Router, d TagsDeps) {
 	}
 	if d.limiter == nil {
 		d.limiter = &browseLimiter{}
+	}
+	if d.Now == nil {
+		d.Now = time.Now
 	}
 	httpx.Register(r, huma.Operation{
 		OperationID: "browseTags",
@@ -521,7 +526,7 @@ func (d TagsDeps) open(ctx context.Context, p *rbac.Principal, envID, refText, u
 	if !viewer.anyImages || (envID != "" && !viewer.holds(envID, rbac.PermImagesRead)) {
 		return credentialViewer{}, registry.Ref{}, nil, d.refuse(ctx, p, envID, userAgent, target)
 	}
-	if d.limiter != nil && !d.limiter.allow(p.ID, time.Now()) {
+	if d.limiter != nil && !d.limiter.allow(p.ID, d.Now()) {
 		return credentialViewer{}, registry.Ref{}, nil, httpx.Problem(http.StatusTooManyRequests, problemRateLimited, "Too many tag requests. Wait a moment and try again.")
 	}
 	ref, err := registry.ParseRef(refText)

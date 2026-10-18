@@ -919,6 +919,12 @@ func TestBrowseTagsLimitsEachUserAndTheLimitIsNotSharedWithAnotherUser(t *testin
 	if rec := f.browse(t, admin, reg, "acme/app", ""); rec.Code != http.StatusOK {
 		t.Errorf("another user: %d %s, want 200", rec.Code, rec.Body)
 	}
+	// The limit is counted on the fixture's clock, which stands still, so no request below depends on
+	// how long the ones above took; a minute on that clock refills 60 requests.
+	f.clk.t = f.clk.t.Add(time.Minute)
+	if rec := f.browse(t, viewer, reg, "acme/app", ""); rec.Code != http.StatusOK {
+		t.Errorf("after a minute on the limiter's clock: %d %s, want 200", rec.Code, rec.Body)
+	}
 }
 
 // browseBurstForTest is the burst of the tag request limit (browseBurst in package api).
