@@ -61,7 +61,8 @@ type fakeEngine struct {
 	// onStart runs, with the lock held, when a container is started.
 	onStart func(f *fakeEngine, c *container.InspectResponse)
 	// onInspect runs, with the lock held, when a container that exists is inspected,
-	// before the answer is written.
+	// before the answer is written. A test sets it before the code under test starts,
+	// since it is read under the lock only once requests arrive.
 	onInspect func(f *fakeEngine, c *container.InspectResponse)
 	// failStart makes starting the container with this ID fail.
 	failStart map[string]bool
@@ -321,6 +322,7 @@ func (f *fakeEngine) containerOp(w http.ResponseWriter, r *http.Request, rest st
 			notFound(w, "container: "+ref)
 			return
 		}
+		// onInspect is set before the code under test starts; it is read here under f.mu.
 		if f.onInspect != nil {
 			f.onInspect(f, c)
 		}
