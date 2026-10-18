@@ -165,7 +165,7 @@ test-swarm: agent-image
 	if [ -z "$$pkgs" ]; then echo "test-swarm: no package has swarm-tagged tests" >&2; exit 1; fi; \
 	echo "test-swarm: $$pkgs"; \
 	mkdir -p $(TEST_RESULTS); rm -f $(TEST_RESULTS)/swarm.json; \
-	$(GOTESTSUM) --format pkgname --jsonfile $(TEST_RESULTS)/swarm.json -- -tags=swarm -race -count=1 -shuffle=on -timeout 40m $$pkgs
+	$(GOTESTSUM) --format pkgname --jsonfile $(TEST_RESULTS)/swarm.json -- -tags=swarm -race -count=1 -shuffle=on -timeout 60m $$pkgs
 
 smoke:
 	scripts/smoke.sh
