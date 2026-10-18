@@ -127,12 +127,17 @@ describe("EventsPage", () => {
   });
 
   it("reads the last hour, up to 1000 events", async () => {
+    // The request's since is bounded by the clock read before mounting and after the request,
+    // so the check holds however slowly the page renders.
+    const before = Date.now();
     mount();
     await screen.findByText("No events in this range");
+    const after = Date.now();
     const url = eventUrls[0] as URL;
     expect(url.searchParams.get("limit")).toBe("1000");
     const since = Date.parse(url.searchParams.get("since") ?? "");
-    expect(Math.abs(Date.now() - 60 * 60_000 - since)).toBeLessThan(5_000);
+    expect(since).toBeGreaterThanOrEqual(before - 60 * 60_000);
+    expect(since).toBeLessThanOrEqual(after - 60 * 60_000);
   });
 
   it("lists the events newest first, then puts a new one at the top, with a Live chip", async () => {
@@ -241,11 +246,14 @@ describe("EventsPage range", () => {
       "Last hour",
       "Last 24 hours",
     ]);
+    const before = Date.now();
     fireEvent.click(screen.getByRole("option", { name: "Last 24 hours" }));
     expect(spy).toHaveBeenCalledWith({ since: "24h" });
     await waitFor(() => expect(eventUrls).toHaveLength(2));
+    const after = Date.now();
     const since = Date.parse((eventUrls[1] as URL).searchParams.get("since") ?? "");
-    expect(Math.abs(Date.now() - 24 * 60 * 60_000 - since)).toBeLessThan(5_000);
+    expect(since).toBeGreaterThanOrEqual(before - 24 * 60 * 60_000);
+    expect(since).toBeLessThanOrEqual(after - 24 * 60 * 60_000);
     // The old stream is closed and a new one opened.
     expect(FakeEventSource.instances).toHaveLength(2);
     expect((FakeEventSource.instances[0] as FakeEventSource).closed).toBe(true);
