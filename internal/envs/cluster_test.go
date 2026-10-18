@@ -786,7 +786,7 @@ func TestRunRefreshesEnvironmentsOnAnIntervalAndStopsWhenItsContextEnds(t *testi
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-testsupport.Context(t).Done():
 		t.Fatal("Run did not return after its context ended")
 	}
 }
@@ -927,7 +927,7 @@ func TestAWorkerRemovedFromTheSwarmLosesItsAgentAfterTwoReadsAndItsSessionIsClos
 	}
 	select {
 	case <-sess.Done():
-	case <-time.After(5 * time.Second):
+	case <-testsupport.Context(t).Done():
 		t.Fatal("the revoked agent's session is still open")
 	}
 	if n := rowCount(t, s.tunRig, `SELECT COUNT(*) FROM audit_log WHERE action = 'agent.auto_revoked' AND env_id = ? AND actor_id = 'system:agent-reaper'`, s.env.ID); n != 1 {

@@ -478,8 +478,7 @@ func TestTheAggregatorServesTheEventsOfTheAgentsTarget(t *testing.T) {
 	a := r.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1"}, nil)
 	r.whenOnline(t, env.ID)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := testsupport.Context(t)
 	backlog, ch, stop := r.agg.Events(ctx, env.ID)
 	defer stop()
 	a.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: "abc123", Attributes: map[string]string{"name": "web"}})
@@ -725,8 +724,8 @@ func TestRemovingAnAgentEnvironmentRevokesAndDisconnectsEveryAgentAndDeletesWhat
 	for name, s := range map[string]*tunnel.Session{"first": s1, "second": s2} {
 		select {
 		case <-s.Done():
-		case <-time.After(time.Second):
-			t.Errorf("the %s agent's session is still open a second after the environment was removed", name)
+		case <-testsupport.Context(t).Done():
+			t.Errorf("the %s agent's session is still open after the environment was removed", name)
 		}
 	}
 	for _, table := range []string{"agents", "agent_blocks", "env_cas", "env_join_tokens"} {
@@ -810,9 +809,11 @@ func newFanRig(t *testing.T, extraNodes []dockertest.FakeNode, cfg func(i int, c
 	return f
 }
 
+// read takes the aggregate on a context that ends after testsupport.Deadline, so a read that
+// waits for a node that never answers fails at the deadline, every time, instead of hanging.
 func (f *fanRig) read(t *testing.T) Aggregate {
 	t.Helper()
-	agg, _, err := f.agg.Snapshot(context.Background(), f.env.ID)
+	agg, _, err := f.agg.Snapshot(testsupport.Context(t), f.env.ID)
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
@@ -905,16 +906,33 @@ func TestAggregateSwarmScopedNetworksComeFromTheManagerInUseOnceAndLocalOnesFrom
 	}
 }
 
+// containerListRequests counts the container lists a fake daemon has received.
+func containerListRequests(f *dockertest.Fake) int {
+	n := 0
+	for _, p := range f.Requests() {
+		if strings.HasSuffix(p, "/containers/json") {
+			n++
+		}
+	}
+	return n
+}
+
 func TestAggregateSlowNodeIsNamedAndTheRestAreNotHeldUp(t *testing.T) {
+	// The worker's list is held and never released during the read, so the node never
+	// answers. The read returns anyway (at the per-node timeout), naming that node; a read
+	// that waited for the slow node would block until the context of f.read ends and fail
+	// there, every time. No elapsed time is compared with a bound (WR-12).
+	hold := make(chan struct{})
 	f := newFanRig(t, nil, func(i int, c *dockertest.FakeConfig) {
 		if i == 4 {
-			c.ListDelay = 3 * time.Second
+			c.ListHold = hold
 		}
 	})
-	start := time.Now()
 	agg := f.read(t)
-	if took := time.Since(start); took > 2*time.Second {
-		t.Errorf("the read took %v, want about the per-node timeout, not the slow node's delay", took)
+	// The worker was asked and is holding the list: the read did not name it for want of
+	// asking it.
+	if err := f.w.fake.Await(testsupport.Context(t), func() bool { return containerListRequests(f.w.fake) >= 1 }); err != nil {
+		t.Fatalf("the slow node was never asked for its containers: %v", err)
 	}
 	if !reflect.DeepEqual(agg.NotReporting, []string{"wrk-1"}) {
 		t.Errorf("notReporting = %v, want the slow node by name", agg.NotReporting)
@@ -972,28 +990,66 @@ func TestAggregateWhenNoNodeReportsTheListsAreEmptyAndEveryNodeIsNamed(t *testin
 }
 
 func TestAggregateReadsTwentyNodesInParallelNotOneAfterAnother(t *testing.T) {
-	// 20 workers behind a 200 ms list each: serial reads would take 4 s, parallel ones
-	// about 400 ms (the limit is 16 at once).
+	// Every node's container list is held on one channel. A read that goes node after node
+	// can have one list outstanding and no more; a parallel read has the first 16 (the
+	// limit, T-02-72) outstanding at once. The test waits until 16 nodes have been asked
+	// while all are still held, and only then closes the hold. No elapsed time is compared
+	// with a bound (WR-12).
+	const nodes, limit = 20, 16
 	r := newTunRig(t, nil)
 	r.pastGrace()
 	env := r.srv.NewEnvironment(t, "Many")
-	r.agg.WithNodeTimeout(5 * time.Second)
-	for i := 1; i <= 20; i++ {
+	// Held lists must not be given up on: the hold, not the node timeout, decides when a node answers.
+	r.agg.WithNodeTimeout(10 * time.Minute)
+	hold := make(chan struct{})
+	agents := make([]*agentConn, 0, nodes)
+	for i := 1; i <= nodes; i++ {
 		name := fmt.Sprintf("w-%02d", i)
-		r.connect(t, env, dockertest.FakeConfig{
-			Hostname: name, SwarmState: "active", ListDelay: 200 * time.Millisecond,
+		agents = append(agents, r.connect(t, env, dockertest.FakeConfig{
+			Hostname: name, SwarmState: "active", ListHold: hold,
 			Containers: []dockertest.FakeContainer{fakeContainer("c"+name, "job-"+name)},
-		}, workerFacts(name))
+		}, workerFacts(name)))
 	}
 	r.whenOnline(t, env.ID)
-	start := time.Now()
-	agg, _, err := r.agg.Snapshot(context.Background(), env.ID)
-	took := time.Since(start)
-	if err != nil || len(agg.Containers) != 20 || len(agg.NotReporting) != 0 {
-		t.Fatalf("Snapshot = %d containers, notReporting %v, %v; want all 20 nodes", len(agg.Containers), agg.NotReporting, err)
+
+	type snap struct {
+		agg Aggregate
+		err error
 	}
-	if took > 2*time.Second {
-		t.Errorf("the read took %v: the nodes were read one after another", took)
+	done := make(chan snap, 1)
+	ctx := testsupport.Context(t)
+	go func() {
+		agg, _, err := r.agg.Snapshot(ctx, env.ID)
+		done <- snap{agg, err}
+	}()
+	// Each fake signals when its node has been asked, so the test counts signals instead of polling.
+	askedCh := make(chan struct{}, nodes)
+	for _, a := range agents {
+		go func() {
+			if a.fake.Await(ctx, func() bool { return containerListRequests(a.fake) > 0 }) == nil {
+				askedCh <- struct{}{}
+			}
+		}()
+	}
+	for range limit {
+		testsupport.Await(t, "16 nodes to be asked for their containers while all are held", askedCh)
+	}
+	// The 17th to 20th nodes wait for a free slot, and none is free while every list is held,
+	// so a read within its limit has not asked them. (An instant check: it can only miss a
+	// breach of the limit, never fail a correct read.)
+	asked := 0
+	for _, a := range agents {
+		if containerListRequests(a.fake) > 0 {
+			asked++
+		}
+	}
+	if asked > limit {
+		t.Errorf("%d nodes were asked while every list was held, want at most %d: the read is bounded to %d at once", asked, limit, limit)
+	}
+	close(hold)
+	res := testsupport.Await(t, "the read of the twenty nodes", done)
+	if res.err != nil || len(res.agg.Containers) != nodes || len(res.agg.NotReporting) != 0 {
+		t.Fatalf("Snapshot = %d containers, notReporting %v, %v; want all %d nodes", len(res.agg.Containers), res.agg.NotReporting, res.err, nodes)
 	}
 }
 
