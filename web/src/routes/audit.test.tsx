@@ -21,6 +21,10 @@ const VIEWER = makeMe({ permissions: { global: [], environments: {} } });
 const ENV_ADMIN = makeMe({ envs: { e1: "admin" } });
 const OPERATOR = makeMe({ envs: { e1: "operator" } });
 
+// The clock is frozen at a fixed time (only Date is faked), so the entry times and the default range
+// are exact, and nothing here compares against real elapsed time.
+const NOW = "2026-10-01T12:00:00Z";
+
 const LONG_AGENT = `Mozilla/5.0 ${"VeryLongUserAgentToken/1.0.0-".repeat(30)}`;
 
 function entry(over: Record<string, unknown> = {}) {
@@ -58,6 +62,8 @@ const listCalls = () => calls.filter((c) => c.path === "/api/audit");
 const lastList = () => listCalls()[listCalls().length - 1]?.search as URLSearchParams;
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(NOW));
   calls = [];
   me = ADMIN;
   actors = ["admin", "alice", "bob"].map((name) => ({ name, deleted: false }));
@@ -108,6 +114,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   queryClient.clear();
   setCsrfToken(null);
@@ -161,7 +168,7 @@ describe("the audit log", () => {
     await screen.findByText("Signed in");
     const search = lastList();
     const from = new Date(search.get("from") ?? "").getTime();
-    expect(Math.abs(Date.now() - 24 * 3_600_000 - from)).toBeLessThan(60_000);
+    expect(from).toBe(Date.parse(NOW) - 24 * 3_600_000);
     expect(search.has("to")).toBe(false);
     expect(search.has("user")).toBe(false);
     expect(search.has("action")).toBe(false);
@@ -479,7 +486,7 @@ describe("filters live in the URL", () => {
     expect(search.get("user")).toBe("alice");
     expect(search.getAll("action")).toEqual(["auth.login", "auth.logout"]);
     const from = new Date(search.get("from") ?? "").getTime();
-    expect(Math.abs(Date.now() - 7 * 24 * 3_600_000 - from)).toBeLessThan(60_000);
+    expect(from).toBe(Date.parse(NOW) - 7 * 24 * 3_600_000);
     expect(screen.getByRole("button", { name: /alice/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /2 actions/ })).toBeTruthy();
   });
