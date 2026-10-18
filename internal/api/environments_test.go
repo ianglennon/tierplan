@@ -1346,8 +1346,7 @@ func TestOverviewOfASwarmCountsNodesAndAgentsSeparatelyAndTakesTheOldestAgentVer
 // it waits on the monitor's own first-probe signal rather than on a clock.
 func (f *envFix) awaitFirstProbe(t *testing.T, id string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
+	ctx := testsupport.Context(t)
 	f.mon.AwaitProbe(ctx, id)
 	if st := f.mon.Status(id); st.State == envs.StateUnknown {
 		t.Fatalf("the monitor of %s has no first probe result: %v", id, ctx.Err())

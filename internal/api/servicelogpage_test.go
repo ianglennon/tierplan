@@ -15,6 +15,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // The page of earlier lines and the merged download of a service's log (plan 06-31, OBS-02,
@@ -65,11 +66,7 @@ func (f *svcLogsFix) startDownload(service, query string, w http.ResponseWriter)
 func (f *svcLogsFix) download(t *testing.T, service, query string) *dlWriter {
 	t.Helper()
 	w := newDLWriter(true)
-	select {
-	case <-f.startDownload(service, query, w):
-	case <-time.After(20 * time.Second):
-		t.Fatal("the download never finished")
-	}
+	testsupport.Await(t, "the download to finish", f.startDownload(service, query, w))
 	return w
 }
 
@@ -240,7 +237,7 @@ func TestServiceLogPageSharesTheViewersAuditMemoryAndWritesNoRowForTheSameViewer
 	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
-	if fr, ok := c.next(5 * time.Second); !ok || fr.event != "ready" {
+	if fr := c.nextData(t, "the ready frame"); fr.event != "ready" {
 		t.Fatalf("first frame = %+v, want ready", fr)
 	}
 	if n := len(f.viewedRows(t)); n != 1 {
@@ -394,18 +391,10 @@ func TestServiceLogDownloadAllowsTwoAtOnceForAUserAndRefusesTheThirdWith429(t *t
 		w := newDLWriter(false)
 		w.gate = gate
 		dones = append(dones, f.startDownload("web", "", w))
-		select {
-		case <-w.wrote:
-		case <-time.After(10 * time.Second):
-			t.Fatal("a download never started writing")
-		}
+		testsupport.Await(t, "a download to start writing", w.wrote)
 	}
 	third := newDLWriter(true)
-	select {
-	case <-f.startDownload("web", "", third):
-	case <-time.After(10 * time.Second):
-		t.Fatal("the third download was not answered")
-	}
+	testsupport.Await(t, "the third download to be answered", f.startDownload("web", "", third))
 	if third.code() != http.StatusTooManyRequests || !strings.Contains(third.body.String(), `"type":"stream_busy"`) {
 		t.Fatalf("the third download = %d %s, want 429 stream_busy", third.code(), third.body.String())
 	}
@@ -431,17 +420,9 @@ func TestServiceLogDownloadAllowsOnlyTheServersShareAtOnceWhoeverAsks(t *testing
 	first := newDLWriter(false)
 	first.gate = gate
 	done := f.startDownload("web", "", first)
-	select {
-	case <-first.wrote:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the first download never started writing")
-	}
+	testsupport.Await(t, "the first download to start writing", first.wrote)
 	second := newDLWriter(true)
-	select {
-	case <-f.startDownload("web", "", second):
-	case <-time.After(10 * time.Second):
-		t.Fatal("the second download was not answered")
-	}
+	testsupport.Await(t, "the second download to be answered", f.startDownload("web", "", second))
 	if second.code() != http.StatusTooManyRequests || !strings.Contains(second.body.String(), `"type":"stream_busy"`) {
 		t.Fatalf("the second download = %d %s, want 429 stream_busy from the server's limit", second.code(), second.body.String())
 	}

@@ -140,10 +140,7 @@ func (f *svcLogsFix) open(t *testing.T, cookie, service, query, lastEventID stri
 func readSvcLines(t *testing.T, c *sseConn, n int) (lines []svcLogLine, lastID string) {
 	t.Helper()
 	for len(lines) < n {
-		fr, ok := c.next(8 * time.Second)
-		if !ok {
-			t.Fatalf("only %d of %d lines arrived: %+v", len(lines), n, lines)
-		}
+		fr := c.nextData(t, fmt.Sprintf("%d more log lines (have %d: %+v)", n-len(lines), len(lines), lines))
 		if fr.event != "log" {
 			continue
 		}
@@ -216,8 +213,8 @@ func TestServiceLogStreamSendsReadyWithTheTasksThenTheBurstMergedInTimeOrderWith
 	if got := c.header.Get("X-Accel-Buffering"); got != "no" {
 		t.Errorf("X-Accel-Buffering = %q, want no", got)
 	}
-	ready, ok := c.next(5 * time.Second)
-	if !ok || ready.event != "ready" {
+	ready := c.nextData(t, "the ready frame")
+	if ready.event != "ready" {
 		t.Fatalf("first frame = %+v, want ready", ready)
 	}
 	var rd svcReady
@@ -250,9 +247,13 @@ func TestServiceLogStreamKeepsTheNewestTailLinesOfTheMergedBurst(t *testing.T) {
 	if got, want := svcTexts(lines), []string{"a2", "b2", "a3"}; !slices.Equal(got, want) {
 		t.Fatalf("lines = %v, want the newest 3 of the merge %v", got, want)
 	}
-	// Nothing more comes of the burst.
-	if fr, ok := c.next(800 * time.Millisecond); ok && fr.event == "log" {
-		t.Errorf("an extra log event after the burst: %+v", fr)
+	// Nothing more comes of the burst. Fence: once the stream has taken the burst as complete,
+	// a live line must be the very next line, so an extra line of the burst would arrive
+	// before it.
+	f.awaitBurstEnd(t)
+	f.fake.PushServiceLog("web", svcLine("tk-1", "node-1", 200, "live fence"))
+	if more, _ := readSvcLines(t, c, 1); more[0].M != "live fence" {
+		t.Errorf("the next line after the burst = %+v, want the fence and no extra line of the burst", more)
 	}
 	// The engine was asked for tail=3 (per task) and for the details it needs.
 	qs := f.fake.ServiceLogQueries()
@@ -328,10 +329,7 @@ func TestServiceLogStreamKeepsATaskFirstSeenAfterTheStreamOpenedAndAnnouncesIt(t
 	var announced svcReady
 	var lines []svcLogLine
 	for len(lines) == 0 {
-		fr, ok := c.next(8 * time.Second)
-		if !ok {
-			t.Fatal("neither a tasks event nor the new task's line arrived")
-		}
+		fr := c.nextData(t, "a tasks event or the new task's line")
 		switch fr.event {
 		case "tasks":
 			if err := json.Unmarshal([]byte(fr.data), &announced); err != nil {
@@ -379,8 +377,16 @@ func TestServiceLogStreamNarrowsToTasksAndNodesAndUsesTheTaskRouteForOne(t *test
 	if got, want := svcTexts(lines), []string{"b1", "b2"}; !slices.Equal(got, want) {
 		t.Fatalf("node=wrk-ready gave %v, want %v", got, want)
 	}
-	if fr, ok := byNode.next(800 * time.Millisecond); ok && fr.event == "log" {
-		t.Errorf("a line of another node came through the node filter: %+v", fr)
+	// Fence: a line of another node, then one of this node, are written. Lines are sent in
+	// time order whether they land in the burst or live, so the other node's line would be the
+	// first to arrive if the filter let it through. (The burst-end signal is shared by the
+	// three streams of this test, so this wait may be answered by an earlier stream's; it
+	// only keeps the lines out of the opening burst when it is this stream's own.)
+	f.awaitBurstEnd(t)
+	f.fake.PushServiceLog("web", svcLine("tk-1", "node-1", 200, "other node"))
+	f.fake.PushServiceLog("web", svcLine("tk-2", "node-3", 300, "right node"))
+	if more, _ := readSvcLines(t, byNode, 1); more[0].M != "right node" {
+		t.Errorf("a line of another node came through the node filter: %+v", more)
 	}
 }
 
@@ -401,8 +407,12 @@ func TestServiceLogStreamWithNoOutputOrNoTasksIsReadyAndQuiet(t *testing.T) {
 			if len(rd.Tasks) != len(tasks)-boolInt(len(tasks) > 0) { // the failed task is hidden
 				t.Errorf("ready tasks = %+v for %d tasks", rd.Tasks, len(tasks))
 			}
-			if fr, ok := c.next(900 * time.Millisecond); ok && fr.event == "log" {
-				t.Errorf("a log event from a service that wrote nothing: %+v", fr)
+			// Fence: the first line the service writes must be the first log event, so an
+			// event of a service that wrote nothing would arrive before it.
+			f.awaitBurstEnd(t)
+			f.fake.PushServiceLog("web", svcLine("tk-1", "node-1", 100, "first line"))
+			if more, _ := readSvcLines(t, c, 1); more[0].M != "first line" {
+				t.Errorf("the first log event = %+v, want the line pushed after the burst", more)
 			}
 		})
 	}
@@ -530,7 +540,7 @@ func TestServiceLogStreamAllowsTheConfiguredNumberPerUserAndRefusesTheNextWith42
 	if third.status0() != http.StatusTooManyRequests {
 		t.Fatalf("the 3rd stream = %d, want 429", third.status0())
 	}
-	third.waitEnded(t, 5*time.Second, "the 429 was answered")
+	third.awaitEnd(t, "the 429 was answered")
 	if body := third.bodyString(); !strings.Contains(body, `"type":"rate_limited"`) {
 		t.Errorf("429 body = %s", body)
 	}
@@ -553,11 +563,12 @@ func TestServiceLogStreamEndsWithClosedAccessLostWithinAHeartbeatOfLosingTheGran
 	if _, err := f.st.Write.Exec(`DELETE FROM role_assignments WHERE principal_id = 'id-viewer'`); err != nil {
 		t.Fatal(err)
 	}
+	// Counted in heartbeats after the grant went, never in elapsed time.
+	c.endsWithinBeats(t, 1, "the grant was deleted")
 	closed := nextEvent(t, c, "closed")
 	if closed.data != `{"reason":"access_lost"}` {
 		t.Errorf("closed = %s", closed.data)
 	}
-	c.waitEnded(t, time.Second, "it told the viewer the access was lost")
 	awaitFake(t, f.fake, "the engine follow to be released", func() bool { return f.fake.ServiceLogFollows() == 0 })
 }
 
@@ -566,7 +577,7 @@ func TestServiceLogStreamEndsAtItsMaximumLifetimeAndFreesTheEngineFollow(t *test
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), func(f *envFix) { f.serviceLogsMaxLifetime = 80 * time.Millisecond })
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
 	nextEvent(t, c, "ready")
-	c.waitEnded(t, 5*time.Second, "its lifetime of 80 ms")
+	c.awaitEnd(t, "its lifetime of 80 ms")
 	awaitFake(t, f.fake, "the engine follow to be released", func() bool { return f.fake.ServiceLogFollows() == 0 })
 }
 
@@ -623,10 +634,7 @@ func readEvents(t *testing.T, c *sseConn, name string, n int) []string {
 	t.Helper()
 	var out []string
 	for len(out) < n {
-		fr, ok := c.next(10 * time.Second)
-		if !ok {
-			t.Fatalf("only %d of %d %q events arrived: %v", len(out), n, name, out)
-		}
+		fr := c.nextData(t, fmt.Sprintf("%d more %q events (have %d: %v)", n-len(out), name, len(out), out))
 		if fr.event == name {
 			out = append(out, fr.data)
 		}
@@ -692,10 +700,7 @@ func TestServiceLogStreamMarkersTellOfATaskThatWasReplacedAndAnnounceTheNewOne(t
 	var marker svcMarker
 	gotMarker := false
 	for !gotMarker {
-		fr, ok := c.next(10 * time.Second)
-		if !ok {
-			t.Fatal("no marker arrived")
-		}
+		fr := c.nextData(t, "a marker")
 		switch fr.event {
 		case "tasks":
 			if err := json.Unmarshal([]byte(fr.data), &announced); err != nil {
@@ -814,10 +819,7 @@ func TestServiceLogStreamTellsOnceAfterTheBurstOfANodeThatIsAlreadyDown(t *testi
 	logs := 0
 	var notice svcNodeNotice
 	for notice.Kind == "" {
-		fr, ok := c.next(10 * time.Second)
-		if !ok {
-			t.Fatalf("no node notice arrived after %d log events", logs)
-		}
+		fr := c.nextData(t, fmt.Sprintf("a node notice after %d log events", logs))
 		switch fr.event {
 		case "log":
 			logs++

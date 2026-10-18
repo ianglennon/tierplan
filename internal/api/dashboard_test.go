@@ -5,7 +5,6 @@ package api_test
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -773,8 +772,7 @@ func TestAgentEnvironmentEventsStreamDeliversAnEventPublishedOnTheAgentsDaemon(t
 
 	ts := httptest.NewServer(f.h)
 	defer ts.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := testsupport.Context(t)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/env/"+env.ID+"/events/stream", nil)
 	if err != nil {
 		t.Fatal(err)

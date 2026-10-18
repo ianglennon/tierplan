@@ -15,6 +15,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -31,13 +32,7 @@ func uninstallLine(t *testing.T, control io.Reader) wire.Uninstall {
 			got <- u
 		}
 	}()
-	select {
-	case u := <-got:
-		return u
-	case <-time.After(5 * time.Second):
-		t.Fatal("the server wrote nothing to the agent's control stream")
-		return wire.Uninstall{}
-	}
+	return testsupport.Await(t, "the server to write to the agent's control stream", got)
 }
 
 // removeAsync sends DELETE and returns where the answer will arrive, so the test can
@@ -54,13 +49,7 @@ func (f *agentFix) removeAsync(t *testing.T, path string) <-chan *envRec {
 
 func waitRemoval(t *testing.T, done <-chan *envRec) *envRec {
 	t.Helper()
-	select {
-	case rec := <-done:
-		return rec
-	case <-time.After(10 * time.Second):
-		t.Fatal("the removal did not finish")
-		return nil
-	}
+	return testsupport.Await(t, "the removal to finish", done)
 }
 
 // assertEnvironmentGoneAndAgentRefused checks that the environment cannot be read and
@@ -93,20 +82,24 @@ func TestRemoveEnvironmentWithUninstallOnASwarmTellsTheWorkerFirstThenTheManager
 	}
 	// The manager is told last: removing the service ends every agent, so the others
 	// must have started their helpers first. It is waiting for the worker's answer.
-	select {
-	case rec := <-done:
-		t.Fatalf("the removal answered %d before the worker had", rec.code)
-	case <-time.After(150 * time.Millisecond):
-	}
 	f.updater.HandleResult(wrk.id, wire.UpdateResult{T: wire.TypeUpdateResult, ID: uw.ID, OK: true})
 
 	um := uninstallLine(t, mgr.control)
 	if um.T != wire.TypeUninstall || !um.RemoveData || !um.Service || um.ID == "" {
 		t.Fatalf("the manager was sent %+v, want an uninstall that removes its data and the service", um)
 	}
+	// Fence: the manager's line is the next step after the worker's answer, so an answer given
+	// before the worker had answered is already on done by now. The removal still waits for
+	// the manager, so a correct server has not answered yet.
+	select {
+	case rec := <-done:
+		t.Fatalf("the removal answered %d before the worker had (it answered with the manager still to be told)", rec.code)
+	default:
+	}
 	select {
 	case rec := <-done:
 		t.Fatalf("the removal answered %d before the manager had", rec.code)
+	// wall-clock: nothing is sent after the manager's line, so there is no later step to fence on; a correct server cannot answer before this test hands it the manager's result, so this can only miss a late wrong answer, never fail a correct run
 	case <-time.After(150 * time.Millisecond):
 	}
 	if got := f.audits(t, audit.ActionEnvironmentRemoved); len(got) != 0 {
@@ -228,20 +221,35 @@ func TestRemoveEnvironmentWithUninstallIsForInstanceAdminsAndTellsNoAgentWithout
 	if rec.code != http.StatusForbidden {
 		t.Fatalf("remove as an admin of every environment: %d %s, want 403", rec.code, rec.body)
 	}
-	got := make(chan string, 1)
-	go func() {
-		sc := bufio.NewScanner(a.control)
-		if sc.Scan() {
-			got <- sc.Text()
-		}
-	}()
-	select {
-	case line := <-got:
-		t.Fatalf("a refused request still told the agent something: %s", line)
-	case <-time.After(150 * time.Millisecond):
-	}
 	if _, err := f.envSvc.Get(t.Context(), env.ID); err != nil {
 		t.Fatalf("the environment was removed: %v", err)
+	}
+
+	// Fence: a removal by an instance admin does tell the agent. Every line the agent is sent
+	// arrives in order, so a line the refused request wrote would come before this one. The
+	// first line is answered; a correct server then finishes the removal, and a second line
+	// (the other request's) shows instead that the refused request had told the agent too.
+	lines := make(chan wire.Uninstall, 4)
+	go func() {
+		sc := bufio.NewScanner(a.control)
+		for sc.Scan() {
+			var u wire.Uninstall
+			_ = json.Unmarshal(sc.Bytes(), &u)
+			lines <- u
+		}
+	}()
+	done := f.removeAsync(t, "/api/environments/"+env.ID+"?uninstallAgents=true")
+	first := testsupport.Await(t, "the admin's removal to tell the agent", lines)
+	f.updater.HandleResult(a.id, wire.UpdateResult{T: wire.TypeUpdateResult, ID: first.ID, OK: true})
+	select {
+	case rec := <-done:
+		if rec.code != http.StatusNoContent {
+			t.Fatalf("remove as an instance admin: %d %s, want 204", rec.code, rec.body)
+		}
+	case extra := <-lines:
+		t.Fatalf("a refused request still told the agent something: %+v (before or besides the admin's own)", extra)
+	case <-testsupport.Context(t).Done():
+		t.Fatal("the admin's removal did not finish")
 	}
 }
 

@@ -244,7 +244,7 @@ func TestPullJobOnTheLocalHostStreamsToDone(t *testing.T) {
 		done.Items[0].UpToDate || done.Items[0].Count != 2 || done.Items[0].Done != 2 || done.FinishedAt == "" {
 		t.Fatalf("done job = %+v", done)
 	}
-	c.waitEnded(t, 5*time.Second, "the done frame")
+	c.awaitEnd(t, "the done frame")
 
 	if w := f.fake.Writes(); len(w) != 1 || !strings.HasPrefix(w[0], "POST /images/create?") || !strings.Contains(w[0], "fromImage=docker.io%2Flibrary%2Fbusybox") || !strings.Contains(w[0], "tag=1.36.1") {
 		t.Fatalf("the engine saw %v, want one pull", w)
@@ -470,7 +470,7 @@ func TestPullStreamResumesFromLastEventIDAndPingsAndEndsWhenSignedOut(t *testing
 	if fr := nextFrame(t, c); fr.event != "done" {
 		t.Fatalf("second = %+v, want done", fr)
 	}
-	c.waitEnded(t, 5*time.Second, "the done frame")
+	c.awaitEnd(t, "the done frame")
 
 	// A reconnect that last saw event 1 is sent a snapshot and what came after 1.
 	c = openSSE(t, f.authFixture, path, f.cookie, "1")
@@ -516,7 +516,7 @@ func TestPullStreamHeartbeatReauthorises(t *testing.T) {
 	if _, err := f.st.Write.Exec(`DELETE FROM sessions`); err != nil {
 		t.Fatal(err)
 	}
-	c.waitEnded(t, time.Second, "the session was deleted")
+	c.endsWithinBeats(t, 1, "the session was deleted")
 	// The pull itself goes on without the stream.
 	if job, ok := f.jobHub.Get(started.JobID); !ok || job.Finished() {
 		t.Errorf("closing the stream stopped the pull: %+v", job)

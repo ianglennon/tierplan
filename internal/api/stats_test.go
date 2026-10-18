@@ -170,7 +170,7 @@ func TestContainerStatsStreamOfAContainerThatIsNotRunningIsReadyWithNoSamplesThe
 	if closed.data != `{"reason":"not_running"}` {
 		t.Errorf("closed = %s", closed.data)
 	}
-	c.waitEnded(t, 5*time.Second, "it told the viewer the container is not running")
+	c.awaitEnd(t, "it told the viewer the container is not running")
 	if n := f.fake.StatsCalls(webID); n != 0 {
 		t.Errorf("%d stats requests for a container that is not running, want none", n)
 	}
@@ -183,7 +183,7 @@ func TestContainerStatsStreamOfAnUnknownContainerIs404(t *testing.T) {
 	t.Parallel()
 	f := newStatsFix(t, statsEngine(dockertest.FakeInspect{}, "running"), nil)
 	c := f.open(t, f.cookie, "nope", "")
-	c.waitEnded(t, 5*time.Second, "the 404 was answered")
+	c.awaitEnd(t, "the 404 was answered")
 	if c.status0() != http.StatusNotFound || !strings.Contains(c.bodyString(), `"type":"container_not_found"`) {
 		t.Errorf("status = %d body = %s, want 404 container_not_found", c.status0(), c.bodyString())
 	}
@@ -262,7 +262,7 @@ func TestContainerStatsStreamRefusesAStreamOverThePerUserLimitWith429(t *testing
 		}
 	}
 	third := f.open(t, f.cookie, "web", "")
-	third.waitEnded(t, 5*time.Second, "the 429 was answered")
+	third.awaitEnd(t, "the 429 was answered")
 	if third.status0() != http.StatusTooManyRequests || !strings.Contains(third.bodyString(), `"type":"rate_limited"`) {
 		t.Errorf("third stream = %d %s, want 429 rate_limited", third.status0(), third.bodyString())
 	}
@@ -277,7 +277,7 @@ func TestContainerStatsStreamEndsCleanlyAtItsMaximumLifetime(t *testing.T) {
 	f := newStatsFix(t, statsEngine(dockertest.FakeInspect{}, "running"), func(f *envFix, _ *downable) { f.statsMaxLifetime = 50 * time.Millisecond })
 	c := f.open(t, f.cookie, "web", "")
 	readyOf(t, c)
-	c.waitEnded(t, 5*time.Second, "its lifetime of 50 ms")
+	c.awaitEnd(t, "its lifetime of 50 ms")
 	awaitSamplersStopped(t, f.statsHub, "the sampler to stop with its only viewer")
 }
 
@@ -294,11 +294,12 @@ func TestContainerStatsStreamEndsWithClosedAccessLostWithinAHeartbeatOfLosingThe
 	if _, err := f.st.Write.Exec(`DELETE FROM role_assignments WHERE principal_id = 'id-viewer'`); err != nil {
 		t.Fatal(err)
 	}
+	// Counted in heartbeats after the grant went, never in elapsed time.
+	c.endsWithinBeats(t, 1, "the grant was deleted")
 	closed := nextEvent(t, c, "closed")
 	if closed.data != `{"reason":"access_lost"}` {
 		t.Errorf("closed = %s", closed.data)
 	}
-	c.waitEnded(t, 5*time.Second, "it told the viewer the access was lost")
 	awaitSamplersStopped(t, f.statsHub, "the sampler to stop")
 }
 

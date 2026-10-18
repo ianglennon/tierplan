@@ -298,12 +298,12 @@ func TestServiceStatsStreamOfAnUnknownServiceIs404AndOfANonsenseIDIs422(t *testi
 	t.Parallel()
 	f := newSwFix(t, swTasks(0))
 	c := f.open(t, "services/nope/stats/stream")
-	c.waitEnded(t, 5*time.Second, "the 404 was answered")
+	c.awaitEnd(t, "the 404 was answered")
 	if c.status0() != http.StatusNotFound || !strings.Contains(c.bodyString(), `"type":"service_not_found"`) {
 		t.Errorf("status = %d body = %s, want 404 service_not_found", c.status0(), c.bodyString())
 	}
 	bad := f.open(t, "services/"+url2(" ;x")+"/stats/stream")
-	bad.waitEnded(t, 5*time.Second, "the 422 was answered")
+	bad.awaitEnd(t, "the 422 was answered")
 	if bad.status0() != http.StatusUnprocessableEntity {
 		t.Errorf("status = %d, want 422 for an id that is not one", bad.status0())
 	}
@@ -436,7 +436,7 @@ func TestListStatsStreamsRefuseMoreThanAHundredIDsAndNoneAtAll(t *testing.T) {
 		"containers": "containers/stats/stream?ids=" + strings.Join(containers, ","),
 	} {
 		c := f.open(t, path)
-		c.waitEnded(t, 5*time.Second, name+" answered")
+		c.awaitEnd(t, name+" answered")
 		if c.status0() != http.StatusUnprocessableEntity || !strings.Contains(c.bodyString(), `"type":"too_many_ids"`) {
 			t.Errorf("%s: status = %d body = %s, want 422 too_many_ids", name, c.status0(), c.bodyString())
 		}
@@ -456,7 +456,7 @@ func TestListStatsStreamsRefuseMoreThanAHundredIDsAndNoneAtAll(t *testing.T) {
 		"containers empty one": "containers/stats/stream?ids=n%7C",
 	} {
 		c := f.open(t, path)
-		c.waitEnded(t, 5*time.Second, name+" answered")
+		c.awaitEnd(t, name+" answered")
 		if c.status0() != http.StatusUnprocessableEntity {
 			t.Errorf("%s: status = %d body = %s, want 422", name, c.status0(), c.bodyString())
 		}
@@ -512,7 +512,7 @@ func TestStatsAggregateStreamsNeedASignedInUser(t *testing.T) {
 		"services/svc-web/stats/stream", "services/stats/stream?ids=svc-web", "containers/stats/stream?ids=a%7Cb", "nodes/stats/stream",
 	} {
 		c := openSSE(t, f.authFixture, "/api/env/"+f.env.ID+"/"+path, "", "")
-		c.waitEnded(t, 5*time.Second, path+" answered")
+		c.awaitEnd(t, path+" answered")
 		if c.status0() != http.StatusUnauthorized {
 			t.Errorf("%s without a session: status = %d, want 401", path, c.status0())
 		}
