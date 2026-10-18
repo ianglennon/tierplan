@@ -61,6 +61,28 @@ Other rules:
 - **Every top-level test in `internal/api` runs in parallel.** The `paralleltest` linter fails a test there that does not call `t.Parallel()`. Where a fixture shares state (a fixed port, a package variable, one store), remove the sharing instead of leaving the test serial.
 - **Test helpers stay out of shipped code.** `proto/testsupport` may be imported by `_test.go` files and by the test helper packages (`internal/dockerx/dockertest`, `internal/tunnel/tunneltest`, `internal/server/servertest`, `internal/store/storetest`), nowhere else. `make lint` fails an import from product code.
 
+### The wall-clock gate
+
+A short wait on real time is a flake that has not failed yet. `scripts/wallclock-check.sh` (part of `make lint`) fails a line that waits on, or is bounded by, a short stretch of real time and says nothing about why that is safe. It checks:
+
+- **Go (`_test.go`).** A call to `time.After(`, `time.NewTimer(`, `context.WithTimeout(`, `context.WithDeadline(` or `time.Since(`, and any `...Timeout:` struct field set to a short duration literal (`Timeout: 5 * time.Second`). Not a finding: a line that uses `testsupport.` (its deadlines are generous), holds a literal of 30 s or more (`N * time.Second` with N >= 30, `time.Minute`, `time.Hour`), or is a `t.Log`/`t.Logf` call. `proto/testsupport/` implements the waits and is exempt.
+- **Web (`*.test.ts`, `*.test.tsx`).** `shouldAdvanceTime: true` (the fake clock then follows real time), `timeout: <n>` below `asyncUtilTimeout`, a per-test `}, <n>)` below `testTimeout`, and `vi.waitFor(` with no timeout (Vitest then waits only 1 s). The two thresholds are read from `web/src/test-setup.ts` (`asyncUtilTimeout`) and `web/vitest.config.ts` (`testTimeout`), so they follow the configured deadlines. A value the script cannot read is an error (exit 2), never a pass.
+
+A finding is fixed in this order: wait on a signal or a `testsupport` deadline (above), compare against a frozen clock (`vi.useFakeTimers({ toFake: ["Date"] })` with a fixed time) instead of real elapsed time, or keep the line with its reason as a marker at the end of the line or on the line above:
+
+```go
+case <-time.After(100 * time.Millisecond): // wall-clock: CloseAll cannot return before release on a correct registry, so this window can only false-pass, never fail a correct run
+```
+
+```ts
+// wall-clock: the test measures how a real timer paces a retry, so the clock must follow real time
+vi.useFakeTimers({ shouldAdvanceTime: true });
+```
+
+The marker needs a reason; an empty one fails. A good reason says why the window is the behaviour under test and why it cannot fail a correct run (a lower bound, because a timer cannot fire early; an absence check that can only miss a late wrong answer, never fail a correct one), or that the line is not a wait at all (a request field, a container's own healthcheck setting).
+
+What the gate cannot see is a short duration held somewhere else and used as a deadline later: a `within` parameter, a `timeout` variable, `Timeout: timeout`. The value is not on the line that uses it, and a rule that guessed would flag half the helpers in the tree. Keep those out by passing `testsupport.Deadline` (or nothing) from the caller, and mark the one place that must take a duration (the helper's own `context.WithTimeout(ctx, d)` line is checked, so it carries a marker saying the callers pass a long one). Review catches the rest.
+
 When a flake turns out to be a real race or ordering bug in the product, fix the product code and add a regression test that fails every time without the fix. A test-only workaround that hides a product race is not acceptable.
 
 ## Quarantine
