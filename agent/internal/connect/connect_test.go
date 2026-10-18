@@ -85,8 +85,7 @@ func (rt *recordingTransport) seen() []string {
 // unless the agent itself carries BAYPLAN_AGENT_ALLOW_INSECURE (T-02-31).
 func TestRunRefusesPlainWSToAnotherHostWithoutTheSwitchAndNeverDials(t *testing.T) {
 	rt := &recordingTransport{}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := testsupport.Context(t)
 	err := Run(ctx, Config{
 		URL: "ws://bayplan.example/agent/connect", JoinToken: "bpjt_tok",
 		HTTPClient: &http.Client{Transport: rt}, SocketPath: filepath.Join(t.TempDir(), "none.sock"),
@@ -410,7 +409,7 @@ func fastEnv() runEnv {
 	return runEnv{
 		sleep: func(ctx context.Context, d time.Duration) error {
 			select {
-			case <-time.After(min(d, 5*time.Millisecond)):
+			case <-time.After(min(d, 5*time.Millisecond)): // wall-clock: paces a fake sleeper; no assertion depends on it
 				return nil
 			case <-ctx.Done():
 				return ctx.Err()
@@ -1095,8 +1094,7 @@ func TestBackoffUsesRealRandomnessByDefault(t *testing.T) {
 
 func TestARefusalOfTheVeryFirstEnrolmentEndsTheAgentSoAWrongTokenIsVisible(t *testing.T) {
 	srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{refuse: wire.ReasonAuthRejected} })
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := testsupport.Context(t)
 	err := runWith(ctx, Config{
 		URL: srv.url(), JoinToken: "bpjt_wrong", SocketPath: filepath.Join(t.TempDir(), "none.sock"), Log: slog.New(slog.DiscardHandler),
 	}, fastEnv())

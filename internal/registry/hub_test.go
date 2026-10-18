@@ -315,13 +315,14 @@ func TestHubWaitsForRetryAfterOnceThenAnswersRateLimited(t *testing.T) {
 	h.tags = hubTags(3)
 	h.limited429, h.retryAfter = 1, "1"
 	s := hubService(t, h)
-	start := time.Now()
+	start := time.Now() // wall-clock: lower bound; a timer cannot fire early, so load can only lengthen it
 	page, err := s.List(context.Background(), nil, hubRef(t), "", true, 0)
 	if err != nil || len(page.Tags) != 3 {
 		t.Fatalf("list after one 429: %v %v", page, err)
 	}
-	if time.Since(start) < 900*time.Millisecond {
-		t.Errorf("retried after %v, want the 1 second Retry-After waited", time.Since(start))
+	waited := time.Since(start) // wall-clock: lower bound; a timer cannot fire early, so load can only lengthen it
+	if waited < 900*time.Millisecond {
+		t.Errorf("retried after %v, want the 1 second Retry-After waited", waited)
 	}
 
 	h2 := newFakeHub(t)

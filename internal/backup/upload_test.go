@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/backup"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 func newUploads(t *testing.T, max int64) (*backup.Uploads, string) {
@@ -285,17 +286,13 @@ func TestUploadsAnArrivingBodyDoesNotBlockOtherCalls(t *testing.T) {
 	go func() { _, err := u.Discard(); answered <- err }()
 	want := []error{backup.ErrUploadNotFound, backup.ErrRestoreBusy, backup.ErrRestoreBusy}
 	for range want {
-		select {
-		case err := <-answered:
-			ok := false
-			for _, w := range want {
-				ok = ok || errors.Is(err, w)
-			}
-			if !ok {
-				t.Errorf("a call beside the arriving upload answered %v", err)
-			}
-		case <-time.After(5 * time.Second):
-			t.Fatal("a call beside the arriving upload blocked behind it")
+		err := testsupport.Await(t, "a call beside the arriving upload to answer instead of blocking behind it", answered)
+		ok := false
+		for _, w := range want {
+			ok = ok || errors.Is(err, w)
+		}
+		if !ok {
+			t.Errorf("a call beside the arriving upload answered %v", err)
 		}
 	}
 	_ = pw.Close()
