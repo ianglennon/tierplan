@@ -102,6 +102,10 @@ type Controls struct {
 	// TickInterval: each value received is one tick. It is for tests, which send exactly
 	// the ticks they mean; production leaves it nil.
 	Ticks <-chan time.Time
+	// Checked, when set, is called after each of the watcher's checks, including one
+	// that closes the shell (after its closing frame is sent). Tests that change the
+	// clock or the limit between ticks wait for it; production leaves it nil.
+	Checked func()
 }
 
 func (c Controls) withDefaults() Controls {
@@ -361,26 +365,38 @@ func watcher(ctx context.Context, conn *websocket.Conn, s *Session, ctl Controls
 			return ""
 		case <-ticks:
 		}
-		if ctl.StillAllowed != nil && !ctl.StillAllowed() {
-			writeControl(ctx, conn, ctl, Control{Type: "closed", Reason: ReasonAccessLost})
-			return ReasonAccessLost
-		}
-		if ctl.Idle == nil {
-			continue
-		}
-		limit := ctl.Idle()
-		if limit <= 0 {
-			continue
-		}
-		last := s.LastActivity()
-		quiet := ctl.Clock.Now().Sub(last)
-		switch {
-		case quiet >= limit:
-			writeControl(ctx, conn, ctl, Control{Type: "closed", Reason: ReasonIdle, Minutes: int(limit / time.Minute)})
-			return ReasonIdle
-		case quiet >= limit-IdleWarning && !last.Equal(warnedFor):
-			warnedFor = last
-			writeControl(ctx, conn, ctl, Control{Type: "idle_warning", Seconds: int(IdleWarning / time.Second)})
+		if reason := check(ctx, conn, s, ctl, &warnedFor); reason != "" {
+			return reason
 		}
 	}
+}
+
+// check is one look at the shell's access and idle time. It returns the reason the
+// shell was closed, or "" when it stays open.
+func check(ctx context.Context, conn *websocket.Conn, s *Session, ctl Controls, warnedFor *time.Time) string {
+	if ctl.Checked != nil {
+		defer ctl.Checked()
+	}
+	if ctl.StillAllowed != nil && !ctl.StillAllowed() {
+		writeControl(ctx, conn, ctl, Control{Type: "closed", Reason: ReasonAccessLost})
+		return ReasonAccessLost
+	}
+	if ctl.Idle == nil {
+		return ""
+	}
+	limit := ctl.Idle()
+	if limit <= 0 {
+		return ""
+	}
+	last := s.LastActivity()
+	quiet := ctl.Clock.Now().Sub(last)
+	switch {
+	case quiet >= limit:
+		writeControl(ctx, conn, ctl, Control{Type: "closed", Reason: ReasonIdle, Minutes: int(limit / time.Minute)})
+		return ReasonIdle
+	case quiet >= limit-IdleWarning && !last.Equal(*warnedFor):
+		*warnedFor = last
+		writeControl(ctx, conn, ctl, Control{Type: "idle_warning", Seconds: int(IdleWarning / time.Second)})
+	}
+	return ""
 }

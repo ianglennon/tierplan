@@ -392,10 +392,11 @@ func TestAnAnsweredPingKeepsASessionAndAnUnansweredOneEndsIt(t *testing.T) {
 // the absence of one, without a read timeout closing the connection.
 type idleRig struct {
 	*rig
-	clk    *fakeClock
-	limit  atomic.Int64 // nanoseconds
-	frames chan Control
-	ticks  chan time.Time
+	clk     *fakeClock
+	limit   atomic.Int64 // nanoseconds
+	frames  chan Control
+	ticks   chan time.Time
+	checked chan struct{}
 
 	mu     sync.Mutex
 	output bytes.Buffer
@@ -414,8 +415,8 @@ func newIdleRig(t *testing.T, limit time.Duration) *idleRig {
 func startIdleRig(t *testing.T, withIdle bool) *idleRig {
 	t.Helper()
 	clk := newFakeClock()
-	ir := &idleRig{clk: clk, frames: make(chan Control, 16), outSig: make(chan struct{}, 1), ticks: make(chan time.Time)}
-	ctl := Controls{Clock: clk, Ticks: ir.ticks}
+	ir := &idleRig{clk: clk, frames: make(chan Control, 16), outSig: make(chan struct{}, 1), ticks: make(chan time.Time), checked: make(chan struct{}, 1)}
+	ctl := Controls{Clock: clk, Ticks: ir.ticks, Checked: func() { ir.checked <- struct{}{} }}
 	if withIdle {
 		ctl.Idle = func() time.Duration { return time.Duration(ir.limit.Load()) }
 	}
@@ -466,14 +467,21 @@ func (ir *idleRig) awaitOutput(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-// tick turns the bridge's checks once. The bridge takes a tick only between checks,
-// so a tick being taken proves the check before it is over.
+// tick turns the bridge's checks once and returns when that check is over (Controls.Checked),
+// so the test may then move the clock or change the limit. A tick being taken only proves the
+// check is starting: a test that moved the clock straight after it raced the check, which could
+// read the new time, close the shell and leave the next tick untaken (CI run 39125458463).
 func (ir *idleRig) tick(t *testing.T) {
 	t.Helper()
 	select {
 	case ir.ticks <- time.Time{}:
 	case <-testsupport.Context(t).Done():
 		t.Fatal("the bridge took no tick")
+	}
+	select {
+	case <-ir.checked:
+	case <-testsupport.Context(t).Done():
+		t.Fatal("the bridge's check did not finish")
 	}
 }
 
