@@ -7,6 +7,9 @@
 # The loops are tracked by PID and are killed when the command ends, fails or the
 # script gets INT or TERM; none is ever found by a name pattern, because two
 # runners share each VM and a stray loop would starve the other one.
+# The command runs in its own session (setsid) and a signal reaches its whole
+# process group, so no process the command started (go test's compiled test
+# binaries, a server a test left running) outlives the run.
 #
 # Usage: scripts/with-load.sh N -- command [args...]
 #   N is a positive integer or "auto" (the output of nproc).
@@ -33,9 +36,11 @@ pids=()
 cmd_pid=""
 cleanup() {
   local pid
-  # Only reached with the command still running when a signal arrived.
+  # Only reached with the command still running when a signal arrived. The
+  # command leads its own session (setsid), so the negative PID reaches it and
+  # everything it started; the plain PID covers a command that did not.
   if [ -n "${cmd_pid}" ]; then
-    kill "${cmd_pid}" 2>/dev/null || true
+    kill -- "-${cmd_pid}" 2>/dev/null || kill "${cmd_pid}" 2>/dev/null || true
     wait "${cmd_pid}" 2>/dev/null || true
     cmd_pid=""
   fi
@@ -59,8 +64,10 @@ done
 echo "with-load: ${n} busy loops (pids ${pids[*]}) on ${cpus} CPUs" >&2
 
 # The command runs as a background job that keeps this script's stdin, so a
-# signal reaches the trap at once instead of after the command ends.
-"$@" <&0 &
+# signal reaches the trap at once instead of after the command ends. A background
+# job of a non-interactive shell is not a group leader, so setsid does not fork
+# and $! is the command's own PID, which is also its process group ID.
+setsid "$@" <&0 &
 cmd_pid=$!
 rc=0
 wait "${cmd_pid}" || rc=$?

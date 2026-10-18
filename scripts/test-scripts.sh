@@ -688,11 +688,15 @@ for pid in ${load_pids}; do
   fi
 done
 # A signal runs the same cleanup: TERM the harness while its command still runs.
+# The command starts a grandchild (as go test's compiled test binaries are), whose
+# PID it records; the group signal must take it down with the command (WR-02).
 load_err="${scratch}/with-load.err"
-scripts/with-load.sh 2 -- sleep 30 2>"${load_err}" &
+load_grandchild="${scratch}/with-load.grandchild"
+rm -f "${load_grandchild}"
+scripts/with-load.sh 2 -- bash -c 'sleep 31 & echo $! >"$1"; wait' _ "${load_grandchild}" 2>"${load_err}" &
 load_pid=$!
-for _ in $(seq 1 50); do
-  grep -q 'busy loops' "${load_err}" 2>/dev/null && break
+for _ in $(seq 1 100); do
+  grep -q 'busy loops' "${load_err}" 2>/dev/null && [ -s "${load_grandchild}" ] && break
   sleep 0.1
 done
 load_pids="$(sed -n 's/^with-load: [0-9]* busy loops (pids \([0-9 ]*\)).*/\1/p' "${load_err}")"
@@ -705,6 +709,15 @@ for pid in ${load_pids}; do
     kill "${pid}" 2>/dev/null
   fi
 done
+grandchild_pid="$(cat "${load_grandchild}" 2>/dev/null)"
+if [ -z "${grandchild_pid}" ]; then
+  echo "SCRIPT TEST FAIL: with-load-kills-grandchild (the command never recorded its grandchild)"
+  failures=$((failures + 1))
+elif kill -0 "${grandchild_pid}" 2>/dev/null; then
+  echo "SCRIPT TEST FAIL: with-load-kills-grandchild (grandchild ${grandchild_pid} of the command survived the TERM)"
+  failures=$((failures + 1))
+  kill "${grandchild_pid}" 2>/dev/null
+fi
 
 # --- CI cleanup (D-23): ci-clean removes what carries this owner's label and nothing else ---
 expect fail "ci-clean-no-owner" env -u BAYPLAN_CI_OWNER scripts/ci-clean.sh
