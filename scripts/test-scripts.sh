@@ -196,6 +196,47 @@ expect pass "timeouts-check-repository" scripts/timeouts-check.sh
 expect fail "timeouts-thin-gotestsum" scripts/timeouts-check.sh scripts/testdata/timeouts/ci-thin.yml scripts/testdata/timeouts/Makefile.gotestsum
 expect_out "timeouts-thin-gotestsum names the job" "job slow runs make slow with go test -timeout 40m but the job allows 45 minutes"
 
+# One budget per multi-pass target (06.1-46, WR-01): a TEST_BUDGET is the target's time,
+# several targets of one job add up, and go test in a loop with no budget is refused.
+tmo=scripts/testdata/timeouts
+timeouts_job() { # NAME LIMIT TARGET...: a one-job workflow in ${scratch}
+  local name="$1" limit="$2"
+  shift 2
+  printf 'name: fixture\non: push\njobs:\n  slow:\n    runs-on: [self-hosted, linux, x64]\n    timeout-minutes: %s\n    steps:\n' "${limit}" >"${scratch}/${name}.yml"
+  local t
+  for t in "$@"; do printf '      - run: make %s\n' "${t}" >>"${scratch}/${name}.yml"; done
+}
+timeouts_job budget-over 45 over
+expect fail "timeouts-budget-over" scripts/timeouts-check.sh "${scratch}/budget-over.yml" "${tmo}/Makefile.budget"
+expect_out "timeouts-budget-over names the budget" "job slow runs make over with a TEST_BUDGET of 40m but the job allows 45 minutes"
+timeouts_job budget-within 45 within
+expect pass "timeouts-budget-within" scripts/timeouts-check.sh "${scratch}/budget-within.yml" "${tmo}/Makefile.budget"
+timeouts_job budget-sum 45 first second
+expect fail "timeouts-budget-sum-of-targets" scripts/timeouts-check.sh "${scratch}/budget-sum.yml" "${tmo}/Makefile.budget"
+expect_out "timeouts-budget-sum-of-targets adds the targets" "job slow runs make first second with 40m of go test time but the job allows 45 minutes"
+timeouts_job budget-sum-ok 60 first second
+expect pass "timeouts-budget-sum-of-targets-fits" scripts/timeouts-check.sh "${scratch}/budget-sum-ok.yml" "${tmo}/Makefile.budget"
+timeouts_job timeouts-sum 45 twice
+expect fail "timeouts-sum-not-max" scripts/timeouts-check.sh "${scratch}/timeouts-sum.yml" "${tmo}/Makefile.budget"
+expect_out "timeouts-sum-not-max adds the timeouts" "job slow runs make twice with 40m of go test time but the job allows 45 minutes"
+timeouts_job loop 90 looped
+expect fail "timeouts-loop-without-budget" scripts/timeouts-check.sh "${scratch}/loop.yml" "${tmo}/Makefile.loop"
+expect_out "timeouts-loop-without-budget says why" "make looped runs go test in a loop; give it a TEST_BUDGET so the passes can be counted"
+
+# IN-05 (06.1-46): the shapes in which the gate used to pass vacuously.
+printf 'name: fixture\non: push\njobs:\n  slow:\n    runs-on: [self-hosted, linux, x64]\n    steps:\n      - run: make slow\n' >"${scratch}/no-limit.yml"
+expect fail "timeouts-job-without-limit" scripts/timeouts-check.sh "${scratch}/no-limit.yml" "${tmo}/Makefile"
+expect_out "timeouts-job-without-limit names the job" "job slow runs make slow but has no timeout-minutes"
+printf 'name: fixture\non: push\n' >"${scratch}/no-job.yml"
+expect fail "timeouts-workflow-without-job" scripts/timeouts-check.sh "${scratch}/no-job.yml" "${tmo}/Makefile"
+expect_out "timeouts-workflow-without-job says so" "found no job in"
+printf 'zero:\n\tgo test -timeout 0 ./...\nzero-s:\n\tgo test -timeout=0s ./...\n' >"${scratch}/Makefile.zero"
+timeouts_job zero 50 zero
+expect fail "timeouts-zero-timeout" scripts/timeouts-check.sh "${scratch}/zero.yml" "${scratch}/Makefile.zero"
+expect_out "timeouts-zero-timeout says why" "job slow runs make zero with go test -timeout 0, which is no timeout"
+timeouts_job zero-s 50 zero-s
+expect fail "timeouts-zero-seconds-timeout" scripts/timeouts-check.sh "${scratch}/zero-s.yml" "${scratch}/Makefile.zero"
+
 # --- No retries (06.1-22, D-15): CI never reruns a test, a check or a job ---
 retr=scripts/testdata/retries
 expect fail "retries-workflow" scripts/no-retries-check.sh "${retr}/workflow-rerun.yml"
@@ -302,14 +343,52 @@ expect fail "stress-no-shard" scripts/stress.sh
 expect fail "stress-bad-count" env STRESS_COUNT=lots scripts/stress.sh api
 expect pass "test-stress-plan" mk test-stress STRESS_SHARD=rest
 expect_out "test-stress passes the shard" "scripts/stress.sh rest"
-expect_out "test-stress passes the 20-run timeout" "-timeout 270m"
+expect_out "test-stress shows the one budget" "TEST_BUDGET=330m"
 expect_out "test-stress hands over gotestsum" "gotestsum@"
+if grep -qF -- "-timeout" <<<"${LAST_OUT}"; then
+  echo "SCRIPT TEST FAIL: test-stress-no-timeout-flag (the budget governs every pass, no -timeout is passed)"
+  failures=$((failures + 1))
+fi
 
-# The nightly workflow's timeout stays above the 270 minute stress pass (D-22, 06.1-23).
+# One time budget per shard (06.1-46, WR-01): each pass gets the time left, a pass with
+# none left fails the shard, and a caller's own -timeout is refused.
+expect fail "stress-no-budget" env -u TEST_BUDGET scripts/stress.sh api
+expect_out "stress-no-budget says what is needed" "TEST_BUDGET must be whole minutes as <N>m"
+expect fail "stress-bad-budget" env TEST_BUDGET=300 scripts/stress.sh api
+expect fail "stress-timeout-flag-refused" env TEST_BUDGET=60m scripts/stress.sh api -timeout 20m
+expect_out "stress-timeout-flag-refused says why" "TEST_BUDGET governs the -timeout of every pass"
+stress_res="${scratch}/stress-results"
+expect fail "stress-budget-used-up" env TEST_BUDGET=0m GOTESTSUM=echo TEST_RESULTS="${stress_res}" scripts/stress.sh api
+expect_out "stress-budget-used-up names the pass" "stress: api budget of 0 minutes used up before pass count"
+expect pass "stress-budget-passes-time-left" env TEST_BUDGET=60m GOTESTSUM=echo STRESS_COUNT=1 TEST_RESULTS="${stress_res}" scripts/stress.sh api
+if ! grep -qE -- "-count=1 -shuffle=on -timeout=[0-9]+s" <<<"${LAST_OUT}"; then
+  echo "SCRIPT TEST FAIL: stress-budget-passes-time-left (the count pass got no -timeout=<seconds>s)"
+  failures=$((failures + 1))
+fi
+# WR-05: the agent-web shard clears the previous run's stress-web files.
+mkdir -p "${stress_res}"
+: >"${stress_res}/stress-web-3.json"
+: >"${stress_res}/stress-web-3.seed"
+expect pass "stress-agent-web-runs" env TEST_BUDGET=60m GOTESTSUM=echo WEB_RUNS=0 STRESS_COUNT=1 TEST_RESULTS="${stress_res}" scripts/stress.sh agent-web
+if [ -e "${stress_res}/stress-web-3.json" ] || [ -e "${stress_res}/stress-web-3.seed" ]; then
+  echo "SCRIPT TEST FAIL: stress-stale-web-results (an earlier run's stress-web file survived)"
+  failures=$((failures + 1))
+fi
+# WR-06: a go list that fails stops the shard, naming the module.
+expect fail "stress-go-list-fails" env GO=false TEST_BUDGET=60m GOTESTSUM=echo TEST_RESULTS="${stress_res}" scripts/stress.sh api
+expect_out "stress-go-list-fails names the module" "stress: go list failed for . ./internal/api"
+expect fail "stress-go-list-empty" env GO=true TEST_BUDGET=60m GOTESTSUM=echo TEST_RESULTS="${stress_res}" scripts/stress.sh api
+expect_out "stress-go-list-empty names the module" "stress: go list found no package in . (./internal/api)"
+
+# The nightly workflow's timeout stays above the shard's budget (D-22, 06.1-23, 06.1-46).
 expect pass "nightly-timeout-ok" scripts/timeouts-check.sh .github/workflows/nightly.yml
-sed 's/timeout-minutes: 360/timeout-minutes: 275/' .github/workflows/nightly.yml >"${scratch}/nightly-short.yml"
+sed 's/timeout-minutes: 360/timeout-minutes: 335/' .github/workflows/nightly.yml >"${scratch}/nightly-short.yml"
 expect fail "nightly-timeout-too-short" scripts/timeouts-check.sh "${scratch}/nightly-short.yml"
-expect_out "nightly-timeout-too-short names the target" "make test-stress with go test -timeout 270m"
+expect_out "nightly-timeout-too-short names the budget" "make test-stress with a TEST_BUDGET of 330m but the job allows 335 minutes"
+if ! grep -qF -- "failure() || cancelled()" .github/workflows/nightly.yml; then
+  echo "SCRIPT TEST FAIL: nightly-upload-on-cancel (the upload step must run on failure or cancel)"
+  failures=$((failures + 1))
+fi
 
 # --- ci-gate.sh (06.1-23, D-18, D-20): five green attempts of one commit, judged from a file ---
 gate=scripts/testdata/gate
@@ -344,7 +423,16 @@ expect_out "test runs the web suite" "vitest run"
 # --- test-go (06.1-15, D-21, D-15): every Go module through the pinned gotestsum ---
 expect pass "test-go-gotestsum" mk test-go
 expect_out "test-go uses the pinned gotestsum" "gotest.tools/gotestsum@v1.13.0"
-expect_out "test-go keeps race, shuffle and the timeout" "-race -count=1 -shuffle=on -timeout 20m"
+expect_out "test-go keeps race, shuffle and a timeout from the budget" "-race -count=1 -shuffle=on -timeout \${left}s"
+expect_out "test-go shows its one budget" "TEST_BUDGET=30m"
+# 06.1-46: the modules share one budget; a module with no time left fails, it is not skipped.
+expect fail "test-go-budget-used-up" env -u MAKEFLAGS -u MAKELEVEL make test-go GOTESTSUM=echo TEST_GO_BUDGET=0m TEST_RESULTS="${scratch}/go-results"
+expect_out "test-go-budget-used-up names the budget" "test-go: the 0m budget (TEST_GO_BUDGET) was used up before ."
+expect pass "test-go-budget-left" env -u MAKEFLAGS -u MAKELEVEL make test-go GOTESTSUM=echo TEST_GO_BUDGET=5m TEST_RESULTS="${scratch}/go-results"
+if ! grep -qE -- "-shuffle=on -timeout [0-9]+s" <<<"${LAST_OUT}"; then
+  echo "SCRIPT TEST FAIL: test-go-budget-left (a module got no -timeout from the time left)"
+  failures=$((failures + 1))
+fi
 expect_out "test-go writes the JSON" "--jsonfile"
 if grep -qF -- "rerun-fails" Makefile; then
   echo "SCRIPT TEST FAIL: no-rerun-fails (Makefile passes a retry option to gotestsum, D-15)"

@@ -1,0 +1,14 @@
+# Fixture for scripts/timeouts-check.sh: targets that run several go test passes in a
+# row inside one TEST_BUDGET (the recipe gives each pass the time left in it), and one
+# that runs two go test commands with a -timeout each.
+over:
+	@TEST_BUDGET=40m; for m in a b; do go test -timeout $${left}s ./...; done
+within:
+	@TEST_BUDGET=30m; for m in a b; do go test -timeout $${left}s ./...; done
+first:
+	@TEST_BUDGET=20m; for m in a b; do go test -timeout $${left}s ./...; done
+second:
+	@TEST_BUDGET=20m; for m in a b; do go test -timeout $${left}s ./...; done
+twice:
+	go test -timeout 20m ./a
+	go test -timeout 20m ./b

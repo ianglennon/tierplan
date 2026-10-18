@@ -1,0 +1,4 @@
+# Fixture for scripts/timeouts-check.sh: go test runs in a shell loop and the recipe
+# has no TEST_BUDGET, so the passes cannot be counted.
+looped:
+	for m in a b; do go test -timeout 10m ./...; done

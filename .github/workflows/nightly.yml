@@ -51,8 +51,14 @@ concurrency:
 jobs:
   stress:
     runs-on: [self-hosted, linux, x64, "${{ matrix.vm }}"]
-    # D-22: above the 270 minute go test -timeout of the 20-run pass
-    # (scripts/timeouts-check.sh checks it in make lint).
+    # D-22: a shard runs inside one time budget, STRESS_BUDGET in the Makefile (330
+    # minutes): every go test pass and web run gets the time left in it as its
+    # -timeout, so a hang ends in Go's goroutine dump and the passes cannot add up
+    # past this limit. The 30 minutes above it hold the setup, build and summary
+    # steps; scripts/timeouts-check.sh keeps the limit 10 or more minutes above the
+    # budget (make lint). go test applies -timeout to each package's test binary, so
+    # a hang in a package that starts late can run past the budget by up to that
+    # package's own run; the margin and the summary step cover that.
     timeout-minutes: 360
     strategy:
       fail-fast: false
@@ -92,8 +98,10 @@ jobs:
       - name: Name the failing tests
         if: always()
         run: make test-summary
+      # A job that hits its timeout-minutes is cancelled, and failure() is false for
+      # a cancelled job, so the results of the run that hung would be lost.
       - name: Upload the test results
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: stress-json-${{ matrix.shard }}

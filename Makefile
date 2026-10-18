@@ -68,14 +68,29 @@ TEST_RESULTS := .devdata/test
 # Go unit job's critical path.
 test: test-go test-web
 
+# D-22: a hang must end in Go's goroutine dump, not in the job being killed. A target
+# that runs several go test passes in a row therefore has ONE time budget, written
+# as the literal TEST_BUDGET=<N>m in its recipe (so `make -n` shows it), and each
+# pass gets -timeout <the time left in the budget>, so the passes cannot add up past
+# the job's timeout-minutes. scripts/timeouts-check.sh reads the budget from
+# `make -n` and keeps it 10 minutes below the job; it refuses a looped go test with
+# no budget. TEST_GO_BUDGET is the budget of the test job (40 minutes). go test
+# applies -timeout to each package's test binary, so see docs/testing.md for the
+# per-binary caveat.
+TEST_GO_BUDGET := 30m
+
 # gotestsum cannot wrap `go -C dir test`, so each module runs from a subshell. A
-# failing module does not stop the next one, so one red run reports them all.
+# failing module does not stop the next one, so one red run reports them all. A
+# module that finds no time left in the budget fails, it is never skipped quietly.
 test-go:
-	@mkdir -p $(TEST_RESULTS); rm -f $(TEST_RESULTS)/go-*.json; rc=0; \
+	@TEST_BUDGET=$(TEST_GO_BUDGET); mkdir -p $(TEST_RESULTS); rm -f $(TEST_RESULTS)/go-*.json; rc=0; \
+	end=$$(( $$(date +%s) + $${TEST_BUDGET%m} * 60 )); \
 	for m in $(GO_MODULES); do \
 	  name=$$(basename "$$(cd $$m && pwd)"); [ "$$m" = . ] && name=root; \
-	  echo "test-go: $$m"; \
-	  (cd $$m && $(GOTESTSUM) --format pkgname --jsonfile $(CURDIR)/$(TEST_RESULTS)/go-$$name.json -- ./... -race -count=1 -shuffle=on -timeout 20m) || rc=1; \
+	  left=$$(( end - $$(date +%s) )); \
+	  if [ "$$left" -le 0 ]; then echo "test-go: the $$TEST_BUDGET budget (TEST_GO_BUDGET) was used up before $$m" >&2; rc=1; continue; fi; \
+	  echo "test-go: $$m ($${left}s left of the $$TEST_BUDGET budget)"; \
+	  (cd $$m && $(GOTESTSUM) --format pkgname --jsonfile $(CURDIR)/$(TEST_RESULTS)/go-$$name.json -- ./... -race -count=1 -shuffle=on -timeout $${left}s) || rc=1; \
 	done; \
 	exit $$rc
 
@@ -94,13 +109,15 @@ test-web:
 # STRESS_SHARD is api, core, rest or agent-web (scripts/stress.sh documents them).
 # Each Go package set runs 20 shuffled -race runs, then once each at -cpu=1 and
 # -cpu=4, with quarantined tests included (D-12); agent-web also runs ten shuffled
-# Vitest runs. The nightly workflow runs the four shards. STRESS_TIMEOUT is the
-# go test -timeout of the 20-run pass; the nightly job's timeout-minutes stays
-# above it (D-22, scripts/timeouts-check.sh).
+# Vitest runs. The nightly workflow runs the four shards. STRESS_BUDGET is the one
+# time budget of a shard (D-22, see TEST_GO_BUDGET): every go test pass and every
+# web run gets the time left in it, and the nightly job's timeout-minutes stays
+# 10 minutes or more above it (scripts/timeouts-check.sh). It leaves the job's
+# setup, build and summary steps room inside the rest of the 360 minutes.
 STRESS_SHARD ?= api
-STRESS_TIMEOUT := 270m
+STRESS_BUDGET := 330m
 test-stress:
-	@GOTESTSUM='$(GOTESTSUM)' TEST_RESULTS=$(TEST_RESULTS) scripts/stress.sh $(STRESS_SHARD) -timeout $(STRESS_TIMEOUT)
+	@GOTESTSUM='$(GOTESTSUM)' TEST_RESULTS=$(TEST_RESULTS) TEST_BUDGET=$(STRESS_BUDGET) scripts/stress.sh $(STRESS_SHARD)
 
 # Takes the fixed-name e2e stack (project bayplan-e2e, subnet 172.30.0.0/24, ports
 # 8443 and 8444, two privileged dind containers) down with its volumes and any
