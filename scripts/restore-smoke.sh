@@ -36,11 +36,12 @@
 # "RESTORE SMOKE PASS". The container and volume are removed on exit.
 #
 # Environment: IMAGE (default bayplan:e2e, built by `make e2e-image`),
-# SMOKE_PORT (default: a free loopback port the kernel assigns, published on
-# 127.0.0.1), RESTORE_WAIT (90) and RESTART_MODE (exec or exit; default exec). The
+# SMOKE_PORT (default: unset, so Docker assigns the loopback host port and the script
+# reads it back, again after the restart in exit mode; the public URL the server is
+# told is a fixed one that does not name it), RESTORE_WAIT (90) and RESTART_MODE (exec or exit; default exec). The
 # container and volume carry the label bayplan.ci.owner=$BAYPLAN_CI_OWNER
 # (local-<pid> when unset) so `make ci-clean` removes them after a cancelled CI job
-# (D-23). Needs Docker, curl, jq, tar and python3. The passwords
+# (D-23). Needs Docker, curl, jq and tar. The passwords
 # belong to a container that is destroyed at the end; no repository secret is
 # involved.
 set -euo pipefail
@@ -48,13 +49,6 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 IMAGE="${IMAGE:-bayplan:e2e}"
-# free_port prints a TCP port the kernel has just handed out on loopback, so no fixed
-# port is ever in the way (D-23). SMOKE_PORT still overrides it.
-free_port() {
-  python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
-}
-
-PORT="${SMOKE_PORT:-$(free_port)}"
 OWNER_LABEL="bayplan.ci.owner=${BAYPLAN_CI_OWNER:-local-$$}"
 RESTORE_WAIT="${RESTORE_WAIT:-90}"
 RESTART_MODE="${RESTART_MODE:-exec}"
@@ -63,7 +57,7 @@ case "${RESTART_MODE}" in
   *) echo "RESTORE SMOKE FAIL: RESTART_MODE must be exec or exit, not ${RESTART_MODE}" >&2; exit 1 ;;
 esac
 
-for tool in docker curl jq tar python3; do
+for tool in docker curl jq tar; do
   command -v "${tool}" >/dev/null || { echo "RESTORE SMOKE FAIL: ${tool} is required" >&2; exit 1; }
 done
 docker image inspect "${IMAGE}" >/dev/null 2>&1 \
@@ -71,7 +65,12 @@ docker image inspect "${IMAGE}" >/dev/null 2>&1 \
 
 NAME="bayplan-restore-smoke-$$"
 VOLUME="${NAME}"
-PUBLIC="http://127.0.0.1:${PORT}"
+# The public URL the server is told is fixed, and is the Origin of every request. The
+# host port Docker assigns is never probed for beforehand (two runners share each VM,
+# so a port found free can be taken before docker run); refresh_host_url reads it
+# back, and requests go to HOST_URL.
+PUBLIC="http://127.0.0.1:7480"
+HOST_URL="" # set by refresh_host_url
 WORK="$(mktemp -d)"
 JSON_H='Content-Type: application/json'
 ADMIN_PW='correct horse battery'
@@ -100,12 +99,23 @@ fail() {
 # inspect FIELD prints one field of `docker inspect` for the container.
 inspect() { docker inspect -f "$1" "${NAME}" 2>/dev/null; }
 
+# refresh_host_url sets HOST_URL from the host port Docker published for 7480, and
+# returns 1 while the container has none (it is stopped or between restarts). A
+# restart under a restart policy gets a new port, so the wait after a restore calls
+# this on every pass.
+refresh_host_url() {
+  local port
+  port="$(docker port "${NAME}" 7480/tcp 2>/dev/null | head -n 1 | sed 's/.*://')" || return 1
+  [ -n "${port}" ] || return 1
+  HOST_URL="http://127.0.0.1:${port}"
+}
+
 # api METHOD PATH [BODY] sends the session's cookie, CSRF token and Origin and
 # sets HTTP_CODE and API_BODY. It is not run in a subshell.
 COOKIE="" CSRF=""
 api() {
   HTTP_CODE="$(curl -sS -o "${WORK}/api.out" -w '%{http_code}' -X "$1" -H "Origin: ${PUBLIC}" \
-    ${CSRF:+-H "X-CSRF-Token: ${CSRF}"} ${COOKIE:+-H "Cookie: ${COOKIE}"} ${3:+-H "${JSON_H}" -d "$3"} "${PUBLIC}$2")" || HTTP_CODE="curl-failed"
+    ${CSRF:+-H "X-CSRF-Token: ${CSRF}"} ${COOKIE:+-H "Cookie: ${COOKIE}"} ${3:+-H "${JSON_H}" -d "$3"} "${HOST_URL}$2")" || HTTP_CODE="curl-failed"
   API_BODY="$(cat "${WORK}/api.out" 2>/dev/null || true)"
 }
 
@@ -114,7 +124,7 @@ api() {
 login() {
   local code
   code="$(curl -sS -o "${WORK}/login.json" -D "${WORK}/login.hdr" -w '%{http_code}' -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
-    -d "{\"username\":\"$1\",\"password\":\"$2\"}" "${PUBLIC}/api/auth/login")" || return 1
+    -d "{\"username\":\"$1\",\"password\":\"$2\"}" "${HOST_URL}/api/auth/login")" || return 1
   [ "${code}" = "200" ] || return 1
   COOKIE="$(grep -i '^set-cookie:' "${WORK}/login.hdr" | head -n 1 | tr -d '\r' | sed 's/^[^:]*: *//; s/;.*//')"
   CSRF="$(jq -r .csrfToken "${WORK}/login.json")"
@@ -131,7 +141,7 @@ new_member() {
   token="${invite##*#token=}"
   [ -n "${token}" ] && [ "${token}" != "${invite}" ] || fail "user $1 created" "the invite link carries no token: ${invite}"
   code="$(curl -sS -o "${WORK}/accept.out" -w '%{http_code}' -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
-    -d "{\"token\":\"${token}\",\"password\":\"$2\"}" "${PUBLIC}/api/invite/accept")" || code="curl-failed"
+    -d "{\"token\":\"${token}\",\"password\":\"$2\"}" "${HOST_URL}/api/invite/accept")" || code="curl-failed"
   [ "${code}" = "204" ] || fail "user $1 created" "accepting the invite returned ${code}: $(cat "${WORK}/accept.out")"
 }
 
@@ -155,13 +165,14 @@ fi
 # The 3 second health interval only speeds up the wait; the probe is the one
 # baked into the image. There is deliberately no restart policy in exec mode.
 docker run -d --name "${NAME}" --label "${OWNER_LABEL}" \
-  -p "127.0.0.1:${PORT}:7480" \
+  -p "127.0.0.1:${SMOKE_PORT:-}:7480" \
   -v "${VOLUME}:/data" \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e "BAYPLAN_PUBLIC_URL=${PUBLIC}" \
   --health-interval 3s --health-start-period 0s --health-retries 5 \
   ${RUN_ARGS[@]+"${RUN_ARGS[@]}"} \
   "${IMAGE}" >/dev/null || fail "image starts" "docker run failed"
+refresh_host_url || fail "image starts" "docker assigned no host port for 7480"
 wait_healthy || fail "image healthy" "the container did not become healthy within 90 seconds"
 pass "image healthy (${IMAGE}, restart mode ${RESTART_MODE})"
 
@@ -170,7 +181,7 @@ pass "image healthy (${IMAGE}, restart mode ${RESTART_MODE})"
 TOKEN="$(docker exec "${NAME}" /usr/local/bin/bayplan setup-token)" || fail "setup token" "docker exec bayplan setup-token failed"
 code="$(curl -sS -o "${WORK}/complete.json" -D "${WORK}/complete.hdr" -w '%{http_code}' -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
   -d "{\"token\":\"${TOKEN}\",\"username\":\"admin\",\"password\":\"${ADMIN_PW}\",\"instanceName\":\"${INSTANCE}\",\"publicUrl\":\"${PUBLIC}\"}" \
-  "${PUBLIC}/api/setup/complete")" || code="curl-failed"
+  "${HOST_URL}/api/setup/complete")" || code="curl-failed"
 [ "${code}" = "200" ] || fail "setup done" "setup completion returned ${code}: $(cat "${WORK}/complete.json" 2>/dev/null)"
 COOKIE="$(grep -i '^set-cookie:' "${WORK}/complete.hdr" | head -n 1 | tr -d '\r' | sed 's/^[^:]*: *//; s/;.*//')"
 CSRF="$(jq -r .csrfToken "${WORK}/complete.json")"
@@ -181,7 +192,7 @@ new_member member1 "${M1_PW}"
 pass "user member1 created"
 
 code="$(curl -sS -o "${WORK}/backup.bayplan" -w '%{http_code}' -X POST -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
-  -H "X-CSRF-Token: ${CSRF}" -H "Cookie: ${COOKIE}" -d "{\"passphrase\":\"${BACKUP_PW}\"}" "${PUBLIC}/api/backup/export")" || code="curl-failed"
+  -H "X-CSRF-Token: ${CSRF}" -H "Cookie: ${COOKIE}" -d "{\"passphrase\":\"${BACKUP_PW}\"}" "${HOST_URL}/api/backup/export")" || code="curl-failed"
 [ "${code}" = "200" ] || fail "backup exported" "POST /api/backup/export returned ${code}"
 [ -s "${WORK}/backup.bayplan" ] || fail "backup exported" "the downloaded file is empty"
 pass "backup exported ($(wc -c <"${WORK}/backup.bayplan") bytes)"
@@ -199,7 +210,7 @@ pass "container state recorded (pid ${BEFORE_PID}, started ${BEFORE_STARTED}, re
 OLD_COOKIE="${COOKIE}"
 
 code="$(curl -sS -o "${WORK}/upload.json" -w '%{http_code}' -X POST -H "Content-Type: application/octet-stream" -H "Origin: ${PUBLIC}" \
-  -H "X-CSRF-Token: ${CSRF}" -H "Cookie: ${COOKIE}" --data-binary "@${WORK}/backup.bayplan" "${PUBLIC}/api/backup/restore/upload")" || code="curl-failed"
+  -H "X-CSRF-Token: ${CSRF}" -H "Cookie: ${COOKIE}" --data-binary "@${WORK}/backup.bayplan" "${HOST_URL}/api/backup/restore/upload")" || code="curl-failed"
 [ "${code}" = "201" ] || fail "backup uploaded" "upload returned ${code}: $(cat "${WORK}/upload.json" 2>/dev/null)"
 UPLOAD_ID="$(jq -r .uploadId "${WORK}/upload.json")"
 [ -n "${UPLOAD_ID}" ] && [ "${UPLOAD_ID}" != null ] || fail "backup uploaded" "the answer carries no upload ID"
@@ -220,7 +231,8 @@ pass "restore accepted (202)"
 RESTORED=false
 for _ in $(seq 1 "${RESTORE_WAIT}"); do
   if docker logs "${NAME}" 2>&1 | grep -q '"restore completed"' \
-    && [ "$(curl -sS -o /dev/null -w '%{http_code}' "${PUBLIC}/readyz" 2>/dev/null || true)" = "200" ]; then
+    && refresh_host_url \
+    && [ "$(curl -sS -o /dev/null -w '%{http_code}' "${HOST_URL}/readyz" 2>/dev/null || true)" = "200" ]; then
     RESTORED=true
     break
   fi

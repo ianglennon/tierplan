@@ -628,6 +628,18 @@ expect pass "upgrade-smoke-target" mk upgrade-smoke UPGRADE_BASE_REF=0123abc
 expect_out "upgrade-smoke-target builds the base from a worktree" "git worktree add --detach .devdata/upgrade-base '0123abc'"
 expect_out "upgrade-smoke-target runs the script" "scripts/upgrade-smoke.sh"
 
+# --- Smoke ports (WR-07): no smoke picks a port by binding and releasing it first. Two
+# runners share each VM, so a port found free can be taken before the server binds it.
+# The container smokes publish 127.0.0.1::7480 and read the port back; the binary smoke
+# listens on 127.0.0.1:0 and reads the "bayplan listening" line.
+no_port_probe() { ! grep -nE 'free_port|\.bind\(\("127\.0\.0\.1", 0\)\)' "$@"; }
+printf 'free_port() {\n  python3 -c "s.bind((\\"127.0.0.1\\", 0))"\n}\n' >"${scratch}/probe-then-bind.sh"
+expect fail "smoke-port-probe-is-caught" no_port_probe "${scratch}/probe-then-bind.sh"
+expect pass "smoke-no-port-probe" no_port_probe scripts/smoke.sh scripts/image-smoke.sh scripts/restore-smoke.sh scripts/upgrade-smoke.sh
+expect pass "smoke-reads-the-listening-line" grep -q '"msg":"bayplan listening"' scripts/smoke.sh
+expect pass "image-smoke-reads-the-assigned-port" grep -q 'docker port' scripts/image-smoke.sh
+expect pass "restore-smoke-reads-the-assigned-port" grep -q 'docker port' scripts/restore-smoke.sh
+
 # --- Restore smoke (D-30, RESEARCH A3/A5): the script parses, refuses to run without
 # its image or with an unknown restart mode, and the make target builds the image first.
 # The Docker run itself is proved by `make restore-smoke`, not here.
