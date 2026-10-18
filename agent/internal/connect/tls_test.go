@@ -114,7 +114,7 @@ func getWith(ts *httptest.Server, pins, override []string, roots *x509.CertPool)
 	if err != nil {
 		return err
 	}
-	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig(pins, override, roots, u.Hostname())}, Timeout: 5 * time.Second}
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig(pins, override, roots, u.Hostname())}, Timeout: testsupport.Deadline}
 	defer client.CloseIdleConnections()
 	resp, err := client.Get(ts.URL) //nolint:noctx // a test against a loopback listener
 	if err != nil {

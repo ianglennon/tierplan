@@ -316,6 +316,7 @@ func (f *floodExec) Inspect(context.Context) (dockerx.ExecState, error) {
 
 func TestABrowserThatStopsReadingBlocksTheShellAndTheWriteTimeoutEndsTheSession(t *testing.T) {
 	x := newFloodExec()
+	// wall-clock: the write timeout is the behaviour under test (a client that stops reading ends the session once it passes); the test waits for the end on gotReason, so a longer window only delays it and a correct run cannot fail on it
 	r := newRig(t, Controls{WriteTimeout: 300 * time.Millisecond}, x)
 
 	// The client never reads. The shell would print without end; what the bridge takes
@@ -345,6 +346,7 @@ func TestAnAnsweredPingKeepsASessionAndAnUnansweredOneEndsIt(t *testing.T) {
 	answer.Store(true)
 	pings := make(chan struct{}, 64)
 	x := newFakeExec()
+	// wall-clock: the write timeout is the behaviour under test (an unanswered ping ends the session after it), so the second half of the test lasts as long as it does; 2 s is long for the in-process pongs of the first half
 	r := newRigDialing(t, Controls{PingInterval: 20 * time.Millisecond, WriteTimeout: 2 * time.Second}, x, &websocket.DialOptions{
 		OnPingReceived: func(context.Context, []byte) bool {
 			select {

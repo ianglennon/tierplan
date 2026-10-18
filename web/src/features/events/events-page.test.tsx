@@ -531,9 +531,7 @@ describe("EventsPage rows", () => {
         ),
       });
     mount();
-    expect(
-      await screen.findByText("Showing the newest 1000 events.", {}, { timeout: 15_000 }),
-    ).toBeTruthy();
+    expect(await screen.findByText("Showing the newest 1000 events.")).toBeTruthy();
     cleanup();
     recent = async () => Response.json({ items: [ev("1")] });
     mount();

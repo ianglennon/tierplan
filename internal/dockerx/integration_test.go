@@ -491,6 +491,7 @@ func TestContainerHealthInList(t *testing.T) {
 		Name: name,
 		Config: &container.Config{
 			Image: "alpine:3", Cmd: []string{"sleep", "300"},
+			// wall-clock: this is the container's own healthcheck setting, not a test wait; the check runs `false`, so it fails at once whatever the timeout
 			Healthcheck: &container.HealthConfig{Test: []string{"CMD-SHELL", "false"}, Interval: time.Second, Timeout: time.Second, Retries: 1},
 		},
 	}); err != nil {

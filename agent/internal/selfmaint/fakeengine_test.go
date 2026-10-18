@@ -23,6 +23,8 @@ import (
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/api/types/system"
+
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // fakeEngine is a small Docker Engine API on a Unix socket: enough of the
@@ -106,7 +108,7 @@ func newFakeEngine(t *testing.T) *fakeEngine {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := &http.Server{Handler: http.HandlerFunc(f.serve), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Handler: http.HandlerFunc(f.serve), ReadHeaderTimeout: testsupport.Deadline}
 	go func() { _ = srv.Serve(l) }()
 	t.Cleanup(func() { _ = srv.Close() })
 	return f
