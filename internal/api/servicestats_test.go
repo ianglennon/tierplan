@@ -165,7 +165,7 @@ type swSampleEvent struct {
 
 func decodeEvent[T any](t *testing.T, c *sseConn, name string) T {
 	t.Helper()
-	fr := nextEvent(t, c, name, 5*time.Second)
+	fr := nextEvent(t, c, name)
 	var v T
 	if err := json.Unmarshal([]byte(fr.data), &v); err != nil {
 		t.Fatalf("%s %q: %v", name, fr.data, err)
@@ -373,7 +373,7 @@ func TestListStatsStreamsServicesSendOneTotalPerServicePerTick(t *testing.T) {
 	if c.status0() != http.StatusOK {
 		t.Fatalf("status = %d: %s", c.status0(), c.bodyString())
 	}
-	nextEvent(t, c, "ready", 5*time.Second)
+	nextEvent(t, c, "ready")
 	decodeEvent[swServicesEvent](t, c, "sample")
 	f.ticks.fire()
 	got := decodeEvent[swServicesEvent](t, c, "sample")
@@ -401,7 +401,7 @@ func TestListStatsStreamsContainersSendOneSamplePerContainerAndMarkUnreachableOn
 	if c.status0() != http.StatusOK {
 		t.Fatalf("status = %d: %s", c.status0(), c.bodyString())
 	}
-	nextEvent(t, c, "ready", 5*time.Second)
+	nextEvent(t, c, "ready")
 	decodeEvent[swContainersEvent](t, c, "sample")
 	f.ticks.fire()
 	got := decodeEvent[swContainersEvent](t, c, "sample")
@@ -485,7 +485,7 @@ func TestNodeStatsStreamSumsTheTasksOfEachNodeAndNamesTheOnesThatAreNotReporting
 	if c.status0() != http.StatusOK {
 		t.Fatalf("status = %d: %s", c.status0(), c.bodyString())
 	}
-	nextEvent(t, c, "ready", 5*time.Second)
+	nextEvent(t, c, "ready")
 	decodeEvent[swNodesEvent](t, c, "sample")
 	f.ticks.fire()
 	got := decodeEvent[swNodesEvent](t, c, "sample")

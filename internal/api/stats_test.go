@@ -98,7 +98,7 @@ type statsSampleEvent struct {
 
 func readyOf(t *testing.T, c *sseConn) statsReady {
 	t.Helper()
-	fr := nextEvent(t, c, "ready", 5*time.Second)
+	fr := nextEvent(t, c, "ready")
 	var r statsReady
 	if err := json.Unmarshal([]byte(fr.data), &r); err != nil {
 		t.Fatalf("ready %q: %v", fr.data, err)
@@ -108,7 +108,7 @@ func readyOf(t *testing.T, c *sseConn) statsReady {
 
 func sampleOf(t *testing.T, c *sseConn) statsSampleEvent {
 	t.Helper()
-	fr := nextEvent(t, c, "sample", 5*time.Second)
+	fr := nextEvent(t, c, "sample")
 	var s statsSampleEvent
 	if err := json.Unmarshal([]byte(fr.data), &s); err != nil {
 		t.Fatalf("sample %q: %v", fr.data, err)
@@ -166,7 +166,7 @@ func TestContainerStatsStreamOfAContainerThatIsNotRunningIsReadyWithNoSamplesThe
 	if r := readyOf(t, c); r.Running {
 		t.Errorf("ready = %+v, want running false", r)
 	}
-	closed := nextEvent(t, c, "closed", 5*time.Second)
+	closed := nextEvent(t, c, "closed")
 	if closed.data != `{"reason":"not_running"}` {
 		t.Errorf("closed = %s", closed.data)
 	}
@@ -196,12 +196,12 @@ func TestContainerStatsStreamTellsWhenTheNodeIsNotReportingAndWhenItIs(t *testin
 	src.down.Store(true)
 	c := f.open(t, f.cookie, "web", "")
 	readyOf(t, c)
-	if fr := nextEvent(t, c, "node", 5*time.Second); fr.data != `{"state":"not_reporting"}` {
+	if fr := nextEvent(t, c, "node"); fr.data != `{"state":"not_reporting"}` {
 		t.Fatalf("node event = %s", fr.data)
 	}
 	src.down.Store(false)
 	f.ticks.fire()
-	if fr := nextEvent(t, c, "node", 5*time.Second); fr.data != `{"state":"reporting"}` {
+	if fr := nextEvent(t, c, "node"); fr.data != `{"state":"reporting"}` {
 		t.Fatalf("node event = %s, want reporting before the first sample", fr.data)
 	}
 	sampleOf(t, c)
@@ -216,7 +216,7 @@ func TestContainerStatsStreamTellsWhenTheContainerStops(t *testing.T) {
 	cfg := statsEngine(dockertest.FakeInspect{}, "exited")
 	f.fake.Reconfigure(cfg)
 	f.ticks.fire()
-	if fr := nextEvent(t, c, "state", 5*time.Second); fr.data != `{"state":"stopped"}` {
+	if fr := nextEvent(t, c, "state"); fr.data != `{"state":"stopped"}` {
 		t.Errorf("state event = %s, want stopped", fr.data)
 	}
 }
@@ -294,7 +294,7 @@ func TestContainerStatsStreamEndsWithClosedAccessLostWithinAHeartbeatOfLosingThe
 	if _, err := f.st.Write.Exec(`DELETE FROM role_assignments WHERE principal_id = 'id-viewer'`); err != nil {
 		t.Fatal(err)
 	}
-	closed := nextEvent(t, c, "closed", 2*heartbeat+5*time.Second)
+	closed := nextEvent(t, c, "closed")
 	if closed.data != `{"reason":"access_lost"}` {
 		t.Errorf("closed = %s", closed.data)
 	}

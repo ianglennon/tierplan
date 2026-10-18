@@ -278,7 +278,7 @@ func TestServiceLogStreamShowsTheFailedTasksToo(t *testing.T) {
 	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 	c := f.open(t, f.cookie, "web", "sid="+sidA+"&stopped=1", "")
-	ready := nextEvent(t, c, "ready", 5*time.Second)
+	ready := nextEvent(t, c, "ready")
 	var rd svcReady
 	if err := json.Unmarshal([]byte(ready.data), &rd); err != nil {
 		t.Fatal(err)
@@ -296,7 +296,7 @@ func TestServiceLogStreamHoldsLiveLinesInAWindowAndSendsThemInTimeOrder(t *testi
 	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), nil, nil)
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
-	nextEvent(t, c, "ready", 5*time.Second)
+	nextEvent(t, c, "ready")
 	// Let the (empty) burst end, so what follows is live.
 	f.awaitBurstEnd(t)
 	// The later line is written first; both are within the window.
@@ -315,7 +315,7 @@ func TestServiceLogStreamKeepsATaskFirstSeenAfterTheStreamOpenedAndAnnouncesIt(t
 	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), nil, nil)
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
-	nextEvent(t, c, "ready", 5*time.Second)
+	nextEvent(t, c, "ready")
 	f.awaitBurstEnd(t)
 
 	cfg := f.cfg
@@ -393,7 +393,7 @@ func TestServiceLogStreamWithNoOutputOrNoTasksIsReadyAndQuiet(t *testing.T) {
 			if c.status0() != http.StatusOK {
 				t.Fatalf("status = %d: %s", c.status0(), c.bodyString())
 			}
-			ready := nextEvent(t, c, "ready", 5*time.Second)
+			ready := nextEvent(t, c, "ready")
 			var rd svcReady
 			if err := json.Unmarshal([]byte(ready.data), &rd); err != nil {
 				t.Fatal(err)
@@ -549,11 +549,11 @@ func TestServiceLogStreamEndsWithClosedAccessLostWithinAHeartbeatOfLosingTheGran
 	cookie, _ := f.signIn(t, "viewer", false)
 
 	c := f.open(t, cookie, "web", "sid="+sidA, "")
-	nextEvent(t, c, "ready", 5*time.Second)
+	nextEvent(t, c, "ready")
 	if _, err := f.st.Write.Exec(`DELETE FROM role_assignments WHERE principal_id = 'id-viewer'`); err != nil {
 		t.Fatal(err)
 	}
-	closed := nextEvent(t, c, "closed", 2*heartbeat+2*time.Second)
+	closed := nextEvent(t, c, "closed")
 	if closed.data != `{"reason":"access_lost"}` {
 		t.Errorf("closed = %s", closed.data)
 	}
@@ -565,7 +565,7 @@ func TestServiceLogStreamEndsAtItsMaximumLifetimeAndFreesTheEngineFollow(t *test
 	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), func(f *envFix) { f.serviceLogsMaxLifetime = 80 * time.Millisecond })
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
-	nextEvent(t, c, "ready", 5*time.Second)
+	nextEvent(t, c, "ready")
 	c.waitEnded(t, 5*time.Second, "its lifetime of 80 ms")
 	awaitFake(t, f.fake, "the engine follow to be released", func() bool { return f.fake.ServiceLogFollows() == 0 })
 }
@@ -574,7 +574,7 @@ func TestServiceLogStreamReleasesTheEngineFollowWhenTheBrowserLeaves(t *testing.
 	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), svcBurstLines(), nil)
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
-	nextEvent(t, c, "ready", 5*time.Second)
+	nextEvent(t, c, "ready")
 	awaitFake(t, f.fake, "the engine follow to open", func() bool { return f.fake.ServiceLogFollows() == 1 })
 	c.close()
 	awaitFake(t, f.fake, "the engine follow to be released", func() bool { return f.fake.ServiceLogFollows() == 0 })
@@ -677,7 +677,7 @@ func TestServiceLogStreamMarkersTellOfATaskThatWasReplacedAndAnnounceTheNewOne(t
 	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), nil, fastRefresh)
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
-	nextEvent(t, c, "ready", 5*time.Second)
+	nextEvent(t, c, "ready")
 
 	// tk-1 (slot 1) fails with exit 3 and the swarm starts tk-new in its slot on the worker.
 	f.retask([]swarm.Task{
@@ -727,7 +727,7 @@ func TestServiceLogStreamSaysASlotStoppedWhenNoNewTaskHasStartedAndThenThatItWas
 	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), nil, fastRefresh)
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
-	nextEvent(t, c, "ready", 5*time.Second)
+	nextEvent(t, c, "ready")
 
 	base := svcTasks()
 	failed := slices.Clone(base)
@@ -749,7 +749,7 @@ func TestServiceLogStreamOnlySendsMarkersForTheTasksAndNodesItWasNarrowedTo(t *t
 	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), nil, fastRefresh)
 	c := f.open(t, f.cookie, "web", "sid="+sidA+"&node=mgr-1", "")
-	nextEvent(t, c, "ready", 5*time.Second)
+	nextEvent(t, c, "ready")
 
 	// tk-2 (on wrk-ready) and tk-3 (on mgr-1) both fail and are replaced on their nodes.
 	step1 := []swarm.Task{
@@ -778,7 +778,7 @@ func TestServiceLogStreamTellsOfANodeThatStopsReportingAndOfItsReturn(t *testing
 	t.Parallel()
 	f := newSvcLogsFix(t, svcTasks(), nil, fastRefresh)
 	c := f.open(t, f.cookie, "web", "sid="+sidA, "")
-	nextEvent(t, c, "ready", 5*time.Second)
+	nextEvent(t, c, "ready")
 
 	setNode := func(state string) {
 		cfg := f.cfg
