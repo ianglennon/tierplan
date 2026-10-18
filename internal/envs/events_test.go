@@ -118,21 +118,22 @@ func recvEvent(t *testing.T, ch <-chan dockerx.EventRow) dockerx.EventRow {
 			t.Fatal("the subscriber channel closed while an event was expected")
 		}
 		return ev
-	case <-time.After(5 * time.Second):
+	case <-testsupport.Context(t).Done():
 		t.Fatal("timed out waiting for an event")
 	}
 	return dockerx.EventRow{}
 }
 
-func expectQuiet(t *testing.T, ch <-chan dockerx.EventRow) {
+// expectNext proves a row did not arrive twice, or at all, without waiting for it not to: it
+// takes the sentinel row the caller published after the one under test, and requires it to be
+// the next row the subscriber receives. The hub hands every subscriber its rows in the order
+// they were ingested (feed.fanOutLocked, under the feed's lock, into one channel), so a
+// duplicate or a stray row would be delivered before the sentinel and fail this check every
+// time, on a fast machine and a slow one.
+func expectNext(t *testing.T, ch <-chan dockerx.EventRow, sentinelID string) {
 	t.Helper()
-	select {
-	case ev, ok := <-ch:
-		if ok {
-			t.Fatalf("an unexpected event arrived: %+v", ev)
-		}
-		t.Fatal("the subscriber channel closed unexpectedly")
-	case <-time.After(150 * time.Millisecond):
+	if ev := recvEvent(t, ch); ev.ActorID != sentinelID && ev.ID != sentinelID {
+		t.Fatalf("an unexpected event arrived before the sentinel %q: %+v", sentinelID, ev)
 	}
 }
 
@@ -269,13 +270,14 @@ func TestHubAfterADropResumesFromTheLastEventAndShowsItOnce(t *testing.T) {
 	if ev := recvEvent(t, ch); ev.ActorID != "c-n1" {
 		t.Errorf("after the drop the next event is %+v, want c-n1 (c-n must appear once)", ev)
 	}
-	expectQuiet(t, ch)
+	r.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: "sentinel", TimeNano: n + 2})
+	expectNext(t, ch, "sentinel")
 
 	want := fmt.Sprintf("%d.%09d", n/int64(time.Second), n%int64(time.Second))
 	if got := r.fake.EventQueries()[1].Get("since"); got != want {
 		t.Errorf("the reconnect asked since=%q, want the last event's time %q", got, want)
 	}
-	if got := actors(r.hub.Recent(hubEnv, 10)); !slices.Equal(got, []string{"c-n1", "c-n"}) {
+	if got := actors(r.hub.Recent(hubEnv, 10)); !slices.Equal(got, []string{"sentinel", "c-n1", "c-n"}) {
 		t.Errorf("the buffer holds %v, want each event once", got)
 	}
 }
@@ -518,7 +520,7 @@ func TestHubDropsASlowSubscriberInsteadOfBlockingTheOthers(t *testing.T) {
 
 	// The slow channel holds its buffer of 64 and is then closed.
 	got := 0
-	timeout := time.After(5 * time.Second)
+	timeout := testsupport.Context(t).Done()
 	for open := true; open; {
 		select {
 		case _, ok := <-slow:
@@ -546,7 +548,7 @@ func TestHubCancelClosesTheChannelAndStopsDelivery(t *testing.T) {
 		if ok {
 			t.Error("an event arrived after cancel")
 		}
-	case <-time.After(time.Second):
+	case <-testsupport.Context(t).Done():
 		t.Error("the channel was not closed by cancel")
 	}
 	r.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: "later"})
@@ -565,7 +567,7 @@ func TestHubSubscribeEndsWhenItsContextEnds(t *testing.T) {
 		if ok {
 			t.Error("an event arrived after the context ended")
 		}
-	case <-time.After(time.Second):
+	case <-testsupport.Context(t).Done():
 		t.Error("the channel was not closed when the context ended")
 	}
 }
@@ -581,7 +583,7 @@ func TestHubStopEndsTheStreamAndClosesSubscribers(t *testing.T) {
 		if ok {
 			t.Error("an event arrived after the environment stopped")
 		}
-	case <-time.After(5 * time.Second):
+	case <-testsupport.Context(t).Done():
 		t.Fatal("the subscriber was not closed when the environment was removed")
 	}
 	r.awaitFake(t, "the daemon stream to end", func() bool { return r.fake.OpenEventStreams() == 0 })
@@ -607,7 +609,7 @@ func TestHubCloseEndsEverythingAndLaterSubscribersGetAClosedChannel(t *testing.T
 		if ok {
 			t.Error("an event arrived after Close")
 		}
-	case <-time.After(5 * time.Second):
+	case <-testsupport.Context(t).Done():
 		t.Fatal("Close did not end the subscriber")
 	}
 	r.awaitFake(t, "the daemon stream to end", func() bool { return r.fake.OpenEventStreams() == 0 })
@@ -643,7 +645,7 @@ func TestHubSubscribeToAnUnknownEnvironmentGivesAnEmptyBacklogAndAClosedChannel(
 		if ok {
 			t.Error("an unknown environment delivered an event")
 		}
-	case <-time.After(time.Second):
+	case <-testsupport.Context(t).Done():
 		t.Error("the channel of an unknown environment is open and would block a stream forever")
 	}
 }
@@ -668,13 +670,17 @@ func TestInjectedRowsAppearInTheBacklogAndToSubscribersAndRepeatsShowOnce(t *tes
 	if !r.hub.Inject(hubEnv, row) {
 		t.Fatal("a repeated Inject reported no feed")
 	}
-	expectQuiet(t, ch)
-	if rows := r.hub.Recent(hubEnv, 10); len(rows) != 1 || rows[0].Type != "bayplan" {
-		t.Fatalf("Recent = %+v, want the one injected row", rows)
+	sentinel := dockerx.EventRow{ID: "bayplan-2", Time: time.Now().UTC(), TimeNano: time.Now().UnixNano(), Type: "bayplan", Action: "failover", ActorID: hubEnv, Name: "sentinel"}
+	if !r.hub.Inject(hubEnv, sentinel) {
+		t.Fatal("Inject of the sentinel reported no feed")
+	}
+	expectNext(t, ch, "bayplan-2")
+	if rows := r.hub.Recent(hubEnv, 10); len(rows) != 2 || rows[0].ID != "bayplan-2" || rows[1].Type != "bayplan" || rows[1].ID != "bayplan-1" {
+		t.Fatalf("Recent = %+v, want the sentinel, then the injected row once (newest first)", rows)
 	}
 	backlog, _, _ := r.hub.Subscribe(context.Background(), hubEnv)
-	if len(backlog) != 1 || backlog[0].ID != "bayplan-1" {
-		t.Fatalf("backlog of a later subscriber = %+v, want the injected row", backlog)
+	if len(backlog) != 2 || backlog[0].ID != "bayplan-1" {
+		t.Fatalf("backlog of a later subscriber = %+v, want the injected row once, then the sentinel", backlog)
 	}
 }
 
@@ -993,7 +999,7 @@ func TestMergedFeedOfAnEnvironmentWithNoAgentIsEmptyAndAlreadyClosed(t *testing.
 		if open {
 			t.Error("the channel delivered an event")
 		}
-	case <-time.After(time.Second):
+	case <-testsupport.Context(t).Done():
 		t.Error("the channel of an environment with nothing to read is not closed")
 	}
 	if rows := r.agg.Recent(context.Background(), env.ID, 5); len(rows) != 0 {
@@ -1011,7 +1017,7 @@ func TestMergedFeedClosesItsSubscribersWhenTheAggregatorIsClosed(t *testing.T) {
 		if open {
 			t.Error("an event arrived instead of the end of the feed")
 		}
-	case <-time.After(5 * time.Second):
+	case <-testsupport.Context(t).Done():
 		t.Fatal("the subscription is still open after Close")
 	}
 	if _, ch, stop := s.agg.Events(context.Background(), s.env.ID); true {
