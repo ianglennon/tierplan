@@ -60,12 +60,43 @@ func (t StreamTransport) DialContext(ctx context.Context, _, _ string) (net.Conn
 }
 
 // wrap marks a dead-session error as ErrAgentGone and keeps any other error as
-// it is.
+// it is. It is for the errors of opening a stream and writing its first byte.
 func (t StreamTransport) wrap(err error) error {
-	if t.s.gone(err) {
+	if t.s.gone(err) || fromConnection(err) {
 		return fmt.Errorf("open a stream to agent %s: %w: %w", t.s.AgentID, ErrAgentGone, err)
 	}
 	return fmt.Errorf("open a stream to agent %s: %w", t.s.AgentID, err)
+}
+
+// muxErrors are the errors yamux makes itself. Opening a stream or writing to one
+// fails with one of these, or with the error the connection under the session gave
+// when yamux wrote to it.
+var muxErrors = []error{
+	yamux.ErrSessionShutdown, yamux.ErrStreamsExhausted, yamux.ErrRemoteGoAway,
+	yamux.ErrStreamClosed, yamux.ErrConnectionReset, yamux.ErrConnectionWriteTimeout,
+	yamux.ErrKeepAliveTimeout, yamux.ErrTimeout, yamux.ErrInvalidVersion,
+	yamux.ErrInvalidMsgType, yamux.ErrDuplicateStream, yamux.ErrRecvWindowExceeded,
+	yamux.ErrUnexpectedFlag,
+}
+
+// fromConnection reports whether an error of opening or first writing a stream came
+// from the connection under the session rather than from yamux. Such an error means
+// the agent is gone even when the session does not say so yet. yamux hands the
+// connection's write error to the writer before it closes the session, so for a moment
+// a dial holds a raw socket error while the session still reads as open (CI run
+// 39162361452: one of twenty dials during a close was not ErrAgentGone). yamux always
+// ends the session after such an error. It is not used for reads, where io.EOF ends
+// a body normally.
+func fromConnection(err error) bool {
+	if err == nil || errors.Is(err, ErrAgentGone) || errors.Is(err, ErrBusy) {
+		return false
+	}
+	for _, own := range muxErrors {
+		if errors.Is(err, own) {
+			return false
+		}
+	}
+	return true
 }
 
 // streamConn is a Docker stream whose errors say so when the agent is gone. A
