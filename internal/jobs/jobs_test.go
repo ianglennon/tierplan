@@ -35,7 +35,7 @@ func hold(release <-chan struct{}) func(context.Context, *jobs.Reporter) {
 func drain(t *testing.T, ch <-chan jobs.Event) []jobs.Event {
 	t.Helper()
 	var out []jobs.Event
-	timeout := time.After(5 * time.Second)
+	timeout := testsupport.Context(t).Done()
 	for {
 		select {
 		case ev, ok := <-ch:
@@ -455,8 +455,7 @@ func TestWaitReturnsTheJobOnceItHasEnded(t *testing.T) {
 	job, _ := h.Start(threeItems("u"), runOneDone(started))
 	<-started
 	_ = h.Cancel(job.ID)
-	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
-	defer stop()
+	ctx := testsupport.Context(t)
 	got, err := h.Wait(ctx, job.ID)
 	if err != nil || !got.Finished() {
 		t.Fatalf("Wait = %+v, %v, want the finished job", got, err)
@@ -466,6 +465,7 @@ func TestWaitReturnsTheJobOnceItHasEnded(t *testing.T) {
 	}
 	// A job that does not end: Wait gives up with the context and still returns the job.
 	hold2, _ := h.Start(twoItems("v"), hold(make(chan struct{})))
+	// wall-clock: the job never ends, so only this context ends Wait; its length cannot change the result
 	short, stop2 := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer stop2()
 	got, err = h.Wait(short, hold2.ID)

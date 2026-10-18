@@ -14,6 +14,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/store/storetest"
 	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 func TestRunNightlyPrunesOnTheTimerAndStopsWithItsContext(t *testing.T) {
@@ -57,9 +58,5 @@ func runsNightlyOnItsTimer(t *testing.T) {
 		t.Fatalf("%d audit.pruned rows after the first delay, want 1 (the nightly prune did not run)", n)
 	}
 	cancel()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("runNightly did not stop when its context was cancelled")
-	}
+	testsupport.Await(t, "runNightly to stop when its context was cancelled", done)
 }
