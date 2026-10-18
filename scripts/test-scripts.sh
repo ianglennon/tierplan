@@ -10,6 +10,13 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# The golangci-lint version the lint probes run is the one make lint runs (06.1-48, IN-06).
+golangci_version="$(sed -n 's/^GOLANGCI_LINT_VERSION[[:space:]]*:=[[:space:]]*//p' Makefile | head -n 1)"
+if [ -z "${golangci_version}" ]; then
+  echo "SCRIPT TEST FAIL: GOLANGCI_LINT_VERSION is not set in the Makefile" >&2
+  exit 1
+fi
+
 failures=0
 scratch="$(mktemp -d)"
 ui_probe="web/src/components/ui/zz-spdx-probe.tsx"
@@ -459,12 +466,12 @@ fi
 # EXIT trap), because the rule needs a real, type-checked _test.go file.
 mkdir -p "${sleep_probe_dir}"
 cp scripts/testdata/forbidigo/sleep_test.go.txt "${sleep_probe_dir}/sleep_test.go"
-expect fail "sleep-guard-flags-a-test-sleep" go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run "./${sleep_probe_dir}/"
+expect fail "sleep-guard-flags-a-test-sleep" go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${golangci_version} run "./${sleep_probe_dir}/"
 expect_out "sleep-guard-flags-a-test-sleep names time.Sleep" "time.Sleep"
 expect_out "sleep-guard-flags-a-test-sleep names the file" "sleep_test.go"
 # The same sleep with a reason passes: a sleep that is behaviour under test is allowed.
 sed -i 's|time.Sleep(time.Millisecond)|time.Sleep(time.Millisecond) //nolint:forbidigo // the probe sleeps on purpose|' "${sleep_probe_dir}/sleep_test.go"
-expect pass "sleep-guard-allows-a-reasoned-sleep" go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run "./${sleep_probe_dir}/"
+expect pass "sleep-guard-allows-a-reasoned-sleep" go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${golangci_version} run "./${sleep_probe_dir}/"
 rm -rf "${sleep_probe_dir}"
 
 # --- Poll guard (06.1-24, D-09): testsupport.WaitFor/Poll needs a tag or the external marker ---
@@ -525,6 +532,29 @@ fi
 expect pass "wallclock-go-needs-no-web-thresholds" env WALLCLOCK_VITEST_CONFIG="${scratch}/no-thresholds.ts" scripts/wallclock-check.sh "${wc}/marked_test.go.txt"
 expect pass "wallclock-check-repository" scripts/wallclock-check.sh
 
+# IN-01 (06.1-48): in default mode a tracked test file deleted from the working tree is skipped
+# by poll-check, quarantine-check and wallclock-check, and an explicit missing file still fails.
+del="${scratch}/deleted-repo"
+mkdir -p "${del}/scripts" "${del}/docs" "${del}/web/src"
+cp scripts/poll-check.sh scripts/quarantine-check.sh scripts/wallclock-check.sh "${del}/scripts/"
+cp docs/testing.md "${del}/docs/"
+cp web/vitest.config.ts "${del}/web/"
+cp web/src/test-setup.ts "${del}/web/src/"
+printf 'package probe\n' >"${del}/probe_test.go"
+printf 'export {};\n' >"${del}/web/src/probe.test.ts"
+git -C "${del}" init -q
+git -C "${del}" add -A
+rm "${del}/probe_test.go" "${del}/web/src/probe.test.ts"
+for gate in poll-check quarantine-check wallclock-check; do
+  expect pass "${gate}-skips-a-deleted-tracked-file" "${del}/scripts/${gate}.sh"
+  if grep -qiE -- "no such file|awk:" <<<"${LAST_OUT}"; then
+    echo "SCRIPT TEST FAIL: ${gate}-skips-a-deleted-tracked-file (it complained about the deleted file)"
+    failures=$((failures + 1))
+  fi
+done
+expect fail "wallclock-explicit-deleted-file-still-fails" "${del}/scripts/wallclock-check.sh" probe_test.go
+expect fail "poll-explicit-deleted-file-still-fails" "${del}/scripts/poll-check.sh" probe_test.go
+
 # --- Quarantine guard (06.1-24, D-12, D-13): call sites and the docs/testing.md table agree ---
 qdir=scripts/testdata/quarantine
 mkdir -p "${quarantine_probe_dir}"
@@ -559,7 +589,7 @@ expect pass "quarantine-none-repository" scripts/quarantine-check.sh --none
 expect fail "quarantine-missing-doc" scripts/quarantine-check.sh "${scratch}/no-such.md"
 
 # --- Parallel and import guards (06.1-24, D-18): lint flags a serial api test, and a testsupport import from product code ---
-lint_run() { go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run "$@"; }
+lint_run() { go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${golangci_version} run "$@"; }
 printf 'package api_test\n\nimport "testing"\n\nfunc TestSerialProbe(t *testing.T) {}\n' >"${api_probe_file}"
 expect fail "paralleltest-flags-a-serial-api-test" lint_run ./internal/api/
 expect_out "paralleltest-flags-a-serial-api-test names the linter" "paralleltest"

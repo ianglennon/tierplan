@@ -37,6 +37,7 @@ rows="$(mktemp)"
 trap 'rm -f "${calls}" "${rows}"' EXIT
 
 while IFS= read -r -d '' f; do
+  [ -f "${f}" ] || continue # tracked, but deleted in the working tree (not yet staged)
   awk -v file="${f}" -v pkg="$(dirname "${f}")" '
     /^func / {
       name = $0

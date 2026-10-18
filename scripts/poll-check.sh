@@ -26,6 +26,7 @@ if [ "$#" -gt 0 ]; then
   files=("$@")
 else
   while IFS= read -r -d '' f; do
+    [ -f "$f" ] || continue # tracked, but deleted in the working tree (not yet staged)
     files+=("$f")
   done < <(git ls-files -z --cached --others --exclude-standard -- '*_test.go')
 fi
