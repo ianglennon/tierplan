@@ -37,11 +37,21 @@ type guardClient struct {
 func (guardClient) Close() error { return nil }
 
 // Building images: the Compose SDK builds an image from a build context. Bayplan strips every `build` key before
-// it hands a project over and never builds an image (A5), and a build context would be read from the server's own
+// it hands over a project and never builds an image (A5), and a build context would be read from the server's own
 // filesystem.
 func (guardClient) ImageBuild(_ context.Context, _ io.Reader, _ client.ImageBuildOptions) (client.ImageBuildResult, error) {
 	var zero client.ImageBuildResult
 	return zero, forbidden("ImageBuild")
+}
+
+func (guardClient) BuildCachePrune(_ context.Context, _ client.BuildCachePruneOptions) (client.BuildCachePruneResult, error) {
+	var zero client.BuildCachePruneResult
+	return zero, forbidden("BuildCachePrune")
+}
+
+func (guardClient) BuildCancel(_ context.Context, _ string, _ client.BuildCancelOptions) (client.BuildCancelResult, error) {
+	var zero client.BuildCancelResult
+	return zero, forbidden("BuildCancel")
 }
 
 // Moving image content in or out of the engine: a stack deploy pulls by reference and never saves, loads, pushes
@@ -66,8 +76,19 @@ func (guardClient) ImageImport(_ context.Context, _ client.ImageImportSource, _ 
 	return zero, forbidden("ImageImport")
 }
 
-// Reading a container's filesystem out of the engine: exporting, committing and copying out of a container would
-// read a stack's data into the Bayplan server.
+func (guardClient) ImageSearch(_ context.Context, _ string, _ client.ImageSearchOptions) (client.ImageSearchResult, error) {
+	var zero client.ImageSearchResult
+	return zero, forbidden("ImageSearch")
+}
+
+func (guardClient) ImageAttestations(_ context.Context, _ string, _ ...client.ImageAttestationsOption) (client.ImageAttestationsResult, error) {
+	var zero client.ImageAttestationsResult
+	return zero, forbidden("ImageAttestations")
+}
+
+// Reading or changing a container's filesystem or state beyond what a deploy needs: exporting, committing, diffing
+// and copying out of a container would read a stack's data into the Bayplan server, and an in-place update would
+// change a container the deploy did not recreate.
 func (guardClient) ContainerExport(_ context.Context, _ string, _ client.ContainerExportOptions) (client.ContainerExportResult, error) {
 	var zero client.ContainerExportResult
 	return zero, forbidden("ContainerExport")
@@ -78,13 +99,23 @@ func (guardClient) ContainerCommit(_ context.Context, _ string, _ client.Contain
 	return zero, forbidden("ContainerCommit")
 }
 
+func (guardClient) ContainerDiff(_ context.Context, _ string, _ client.ContainerDiffOptions) (client.ContainerDiffResult, error) {
+	var zero client.ContainerDiffResult
+	return zero, forbidden("ContainerDiff")
+}
+
 func (guardClient) CopyFromContainer(_ context.Context, _ string, _ client.CopyFromContainerOptions) (client.CopyFromContainerResult, error) {
 	var zero client.CopyFromContainerResult
 	return zero, forbidden("CopyFromContainer")
 }
 
+func (guardClient) ContainerUpdate(_ context.Context, _ string, _ client.ContainerUpdateOptions) (client.ContainerUpdateResult, error) {
+	var zero client.ContainerUpdateResult
+	return zero, forbidden("ContainerUpdate")
+}
+
 // Exec and attach: a stack deploy never runs a process in a container or attaches to one. The shell and the
-// terminal are Bayplan's own routes, each with its own permission.
+// terminal are Bayplan's own routes with their own permission.
 func (guardClient) ContainerAttach(_ context.Context, _ string, _ client.ContainerAttachOptions) (client.ContainerAttachResult, error) {
 	var zero client.ContainerAttachResult
 	return zero, forbidden("ContainerAttach")
@@ -115,8 +146,30 @@ func (guardClient) ExecResize(_ context.Context, _ string, _ client.ExecResizeOp
 	return zero, forbidden("ExecResize")
 }
 
-// Swarm: a standalone deploy has nothing to do with a swarm, and its membership, nodes, services, tasks, secrets
-// and configs are changed only through Bayplan's own typed routes.
+// Sweeping prunes: removing what nothing uses is the janitor's job, with its own rules and its own lock, never a
+// side effect of a deploy.
+func (guardClient) ContainerPrune(_ context.Context, _ client.ContainerPruneOptions) (client.ContainerPruneResult, error) {
+	var zero client.ContainerPruneResult
+	return zero, forbidden("ContainerPrune")
+}
+
+func (guardClient) ImagePrune(_ context.Context, _ client.ImagePruneOptions) (client.ImagePruneResult, error) {
+	var zero client.ImagePruneResult
+	return zero, forbidden("ImagePrune")
+}
+
+func (guardClient) NetworkPrune(_ context.Context, _ client.NetworkPruneOptions) (client.NetworkPruneResult, error) {
+	var zero client.NetworkPruneResult
+	return zero, forbidden("NetworkPrune")
+}
+
+func (guardClient) VolumePrune(_ context.Context, _ client.VolumePruneOptions) (client.VolumePruneResult, error) {
+	var zero client.VolumePruneResult
+	return zero, forbidden("VolumePrune")
+}
+
+// Swarm: a standalone deploy has nothing to do with the swarm, and the swarm membership, nodes, services, tasks,
+// secrets and configs are changed only through Bayplan's own typed routes.
 func (guardClient) SwarmInit(_ context.Context, _ client.SwarmInitOptions) (client.SwarmInitResult, error) {
 	var zero client.SwarmInitResult
 	return zero, forbidden("SwarmInit")
@@ -267,8 +320,76 @@ func (guardClient) ConfigRemove(_ context.Context, _ string, _ client.ConfigRemo
 	return zero, forbidden("ConfigRemove")
 }
 
-// Plugins: installing an engine plugin runs third-party code with host privileges, and no stack deploy needs one.
+// Plugins: installing or changing an engine plugin runs third-party code with host privileges, and no stack deploy
+// needs one.
+func (guardClient) PluginCreate(_ context.Context, _ io.Reader, _ client.PluginCreateOptions) (client.PluginCreateResult, error) {
+	var zero client.PluginCreateResult
+	return zero, forbidden("PluginCreate")
+}
+
 func (guardClient) PluginInstall(_ context.Context, _ string, _ client.PluginInstallOptions) (client.PluginInstallResult, error) {
 	var zero client.PluginInstallResult
 	return zero, forbidden("PluginInstall")
+}
+
+func (guardClient) PluginInspect(_ context.Context, _ string, _ client.PluginInspectOptions) (client.PluginInspectResult, error) {
+	var zero client.PluginInspectResult
+	return zero, forbidden("PluginInspect")
+}
+
+func (guardClient) PluginList(_ context.Context, _ client.PluginListOptions) (client.PluginListResult, error) {
+	var zero client.PluginListResult
+	return zero, forbidden("PluginList")
+}
+
+func (guardClient) PluginRemove(_ context.Context, _ string, _ client.PluginRemoveOptions) (client.PluginRemoveResult, error) {
+	var zero client.PluginRemoveResult
+	return zero, forbidden("PluginRemove")
+}
+
+func (guardClient) PluginEnable(_ context.Context, _ string, _ client.PluginEnableOptions) (client.PluginEnableResult, error) {
+	var zero client.PluginEnableResult
+	return zero, forbidden("PluginEnable")
+}
+
+func (guardClient) PluginDisable(_ context.Context, _ string, _ client.PluginDisableOptions) (client.PluginDisableResult, error) {
+	var zero client.PluginDisableResult
+	return zero, forbidden("PluginDisable")
+}
+
+func (guardClient) PluginUpgrade(_ context.Context, _ string, _ client.PluginUpgradeOptions) (client.PluginUpgradeResult, error) {
+	var zero client.PluginUpgradeResult
+	return zero, forbidden("PluginUpgrade")
+}
+
+func (guardClient) PluginPush(_ context.Context, _ string, _ client.PluginPushOptions) (client.PluginPushResult, error) {
+	var zero client.PluginPushResult
+	return zero, forbidden("PluginPush")
+}
+
+func (guardClient) PluginSet(_ context.Context, _ string, _ client.PluginSetOptions) (client.PluginSetResult, error) {
+	var zero client.PluginSetResult
+	return zero, forbidden("PluginSet")
+}
+
+// Registry sign-in and checkpoints: the SDK's registry credentials come from Bayplan (Resolver.AuthFor), never
+// from a login it makes, and checkpoint and restore is experimental.
+func (guardClient) RegistryLogin(_ context.Context, _ client.RegistryLoginOptions) (client.RegistryLoginResult, error) {
+	var zero client.RegistryLoginResult
+	return zero, forbidden("RegistryLogin")
+}
+
+func (guardClient) CheckpointCreate(_ context.Context, _ string, _ client.CheckpointCreateOptions) (client.CheckpointCreateResult, error) {
+	var zero client.CheckpointCreateResult
+	return zero, forbidden("CheckpointCreate")
+}
+
+func (guardClient) CheckpointRemove(_ context.Context, _ string, _ client.CheckpointRemoveOptions) (client.CheckpointRemoveResult, error) {
+	var zero client.CheckpointRemoveResult
+	return zero, forbidden("CheckpointRemove")
+}
+
+func (guardClient) CheckpointList(_ context.Context, _ string, _ client.CheckpointListOptions) (client.CheckpointListResult, error) {
+	var zero client.CheckpointListResult
+	return zero, forbidden("CheckpointList")
 }

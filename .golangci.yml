@@ -67,6 +67,18 @@ linters:
           deny:
             - pkg: github.com/moby/moby/client
               desc: only internal/dockerx may import the Docker client, so negotiation, timeouts and the Transport seam stay in one place (D-52, T-01-14)
+        # The Compose SDK and the Docker CLI library it needs (plan 07-20, T-07-99): they reach the engine
+        # only through the guard client, which lives in internal/dockerx.
+        compose-sdk-seam:
+          list-mode: lax
+          files:
+            - $all
+            - "!**/internal/dockerx/**"
+          deny:
+            - pkg: github.com/docker/compose/v5
+              desc: only internal/dockerx may hold the Compose SDK and the docker CLI library, behind the guard client (RESEARCH Q6)
+            - pkg: github.com/docker/cli
+              desc: only internal/dockerx may hold the Compose SDK and the docker CLI library, behind the guard client (RESEARCH Q6)
         agent-docker-client-seam:
           list-mode: lax
           files:
@@ -102,6 +114,8 @@ linters:
               desc: unmaintained since 2024; use github.com/coder/websocket (CLAUDE.md "What NOT to Use")
             - pkg: github.com/mattn/go-sqlite3
               desc: needs CGO, which breaks static multi-arch builds; use modernc.org/sqlite (CLAUDE.md "What NOT to Use")
+            - pkg: github.com/docker/cli/cli/compose/loader
+              desc: legacy v3.13 schema; Bayplan loads with compose-go v2 in internal/stacks
 
   exclusions:
     generated: lax
