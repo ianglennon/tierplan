@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -47,13 +48,30 @@ type saFix struct {
 // host. The registry requires a sign-in when o has an htpasswd file.
 func startSAFix(t *testing.T, o dockertest.RegistryOptions) *saFix {
 	t.Helper()
+	return startSAFixWith(t, o, false)
+}
+
+// startSAFixWith is startSAFix with the one setting a host owner adds to let containers that share another
+// container's namespaces or volumes through (BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES, D-36), put in the
+// command the server generated and nothing else changed. A stack whose service has network_mode, ipc or pid
+// service:X, or volumes_from X, creates a container with a container:<id> mode or VolumesFrom, which the
+// agent refuses as host access without it (docs/agent.md, "Container creates and host access").
+func startSAFixWith(t *testing.T, o dockertest.RegistryOptions, shareNamespaces bool) *saFix {
+	t.Helper()
 	host := dockertest.StartHost(t, "")
 	dockertest.LoadAgentImage(t, host)
 	dumpOnFailure(t, host)
 	srv := servertest.Start(t, servertest.Options{Host: host.Gateway})
 	f := &saFix{host: host, srv: srv, registry: dockertest.StartRegistry(t, host, o)}
 	f.env = srv.CreateAgentEnvironment("")
-	sh(t, host, f.env.Install.Standalone.Command)
+	cmd := f.env.Install.Standalone.Command
+	if shareNamespaces {
+		cmd = strings.Replace(cmd, " "+f.env.Install.Image, " -e BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true "+f.env.Install.Image, 1)
+		if cmd == f.env.Install.Standalone.Command {
+			t.Fatalf("the generated standalone command has no image to put the setting before:\n%s", cmd)
+		}
+	}
+	sh(t, host, cmd)
 	srv.WaitOnline(f.env.ID, 60*time.Second)
 	if agents := srv.Agents(f.env.ID); len(agents) != 1 {
 		t.Fatalf("agents = %+v, want the one that enrolled", agents)
@@ -97,8 +115,20 @@ func (f *saFix) api() string { return "/api/env/" + f.env.ID + "/stacks" }
 
 // saJob is a deploy job as the route answers it.
 type saJob struct {
-	State string      `json:"state"`
-	Items []saJobItem `json:"items"`
+	State  string      `json:"state"`
+	Items  []saJobItem `json:"items"`
+	Output []struct {
+		Text string `json:"text"`
+	} `json:"output"`
+}
+
+// outputText is the job's output log, a line each.
+func (j saJob) outputText() string {
+	var b strings.Builder
+	for _, l := range j.Output {
+		b.WriteString(l.Text + "\n")
+	}
+	return b.String()
 }
 
 type saJobItem struct {
@@ -403,4 +433,197 @@ func TestStandalonePrivateImageThroughAnAgent(t *testing.T) {
 		t.Errorf("the host has a Docker client configuration after the deploy: Bayplan must not log in")
 	}
 	f.noDenials(t)
+}
+
+// saReviewRow is one service row of a review as the route answers it.
+type saReviewRow struct {
+	Short    string `json:"short"`
+	Change   string `json:"change"`
+	Because  string `json:"because"`
+	Settings int    `json:"settings"`
+	Current  any    `json:"current"`
+	Next     any    `json:"next"`
+}
+
+// reviewRows reviews the stack's draft and returns its service rows and how many other resources it lists.
+func (f *saFix) reviewRows(t *testing.T, stackID string) ([]saReviewRow, int) {
+	t.Helper()
+	code, body := f.srv.Do(http.MethodPost, f.api()+"/"+stackID+"/review", map[string]any{})
+	var rv struct {
+		Services []saReviewRow     `json:"services"`
+		Objects  []json.RawMessage `json:"objects"`
+		Problems []struct {
+			Severity, Code, Message string
+		} `json:"problems"`
+	}
+	if code != http.StatusOK || json.Unmarshal(body, &rv) != nil {
+		t.Fatalf("POST the review of stack %s = %d %s", stackID, code, body)
+	}
+	for _, p := range rv.Problems {
+		if p.Severity == "error" {
+			t.Fatalf("the review of stack %s has a blocking problem: %s", stackID, body)
+		}
+	}
+	return rv.Services, len(rv.Objects)
+}
+
+// words are the rows of a review as "change service", with "because parent" for a carried one.
+func (rows saRows) words() []string {
+	var out []string
+	for _, r := range rows {
+		w := r.Change + " " + r.Short
+		if r.Because != "" {
+			w += " because " + r.Because
+		}
+		out = append(out, w)
+	}
+	return out
+}
+
+type saRows []saReviewRow
+
+// saState is what a test reads of a container to tell whether it is the one it was.
+type saState struct{ ID, Started, ImageID, ImageRef string }
+
+// states reads every container of a project: its ID, when it last started, the image it was created from
+// and the reference it was created with.
+func (f *saFix) states(t *testing.T, project string) map[string]saState {
+	t.Helper()
+	out := sh(t, f.host, `docker ps -a --filter label=com.docker.compose.project=`+project+
+		` --format '{{.Label "com.docker.compose.service"}} {{.Names}}'`)
+	got := map[string]saState{}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		raw := strings.TrimSpace(sh(t, f.host, `docker inspect -f '{{.Id}} {{.State.StartedAt}} {{.Image}} {{.Config.Image}}' `+fields[1]))
+		parts := strings.Fields(raw)
+		if len(parts) != 4 {
+			t.Fatalf("inspect of %s = %q", fields[1], raw)
+		}
+		got[fields[0]] = saState{ID: parts[0], Started: parts[1], ImageID: parts[2], ImageRef: parts[3]}
+	}
+	return got
+}
+
+// TestStandaloneReviewEmptyAfterDeployThroughAnAgent is the completeness test of the review's normaliser
+// (plan 07-22, STK-06, Pitfall 5) on a host behind a real agent: right after a deploy of the full stack of
+// 07-21 (networks, a volume, a healthcheck, depends_on, a secret and a config) the review lists nothing.
+func TestStandaloneReviewEmptyAfterDeployThroughAnAgent(t *testing.T) {
+	f := startSAFix(t, dockertest.RegistryOptions{})
+	image := f.registry + "/bp/app:1"
+	f.pushBusybox(t, image, nil)
+
+	const name = "srev"
+	files := []saFile{{Path: "tok.txt", Content: standaloneToken}, {Path: "nginx.conf", Content: standaloneConfText}}
+	id := f.create(t, name, saCorpus(t, "standalone-full.yaml", map[string]string{"IMAGE": image, "MODE": "one"}), files)
+
+	if rows, objects := f.reviewRows(t, id); len(rows) != 2 || objects == 0 {
+		t.Fatalf("the review before the deploy lists %v and %d other resources, want the services added", saRows(rows).words(), objects)
+	}
+	f.deployOK(t, id)
+
+	rows, objects := f.reviewRows(t, id)
+	if len(rows) != 0 || objects != 0 {
+		raw, _ := json.Marshal(rows)
+		t.Errorf("the review right after a deploy lists %v and %d other resources, want nothing: %s", saRows(rows).words(), objects, raw)
+	}
+	f.noDenials(t)
+}
+
+// TestStandaloneHandChangedContainerIsReviewedAndRedeployed is the proof that the review predicts what the
+// Compose SDK does (plan 07-22, STK-06): web is changed by hand on the host (docker update keeps every
+// compose label and the config hash), the review lists web changed at its restart policy, the sidecar that
+// shares web's network as recreated because of web and the restarter that depends on web with restart: true
+// as restarted, and nothing else; a deploy with no edit then does exactly that, and the next review is empty.
+func TestStandaloneHandChangedContainerIsReviewedAndRedeployed(t *testing.T) {
+	// The sidecar shares web's network namespace, which the agent refuses without the host owner's opt-in.
+	f := startSAFixWith(t, dockertest.RegistryOptions{}, true)
+	image := f.registry + "/bp/app:1"
+	f.pushBusybox(t, image, nil)
+
+	const name = "sdep"
+	id := f.create(t, name, saCorpus(t, "standalone-dependents.yaml", map[string]string{"IMAGE": image}), nil)
+	f.deployOK(t, id)
+	if rows, objects := f.reviewRows(t, id); len(rows) != 0 || objects != 0 {
+		t.Fatalf("the review right after the deploy lists %v and %d other resources, want nothing", saRows(rows).words(), objects)
+	}
+	first := f.states(t, name)
+	if len(first) != 5 {
+		t.Fatalf("containers after the deploy = %v, want five", first)
+	}
+
+	sh(t, f.host, "docker update --restart always "+name+"-web-1")
+	rows, _ := f.reviewRows(t, id)
+	want := []string{"changed web", "recreated sidecar because web", "restarted restarter because web"}
+	if got := saRows(rows).words(); !slices.Equal(got, want) {
+		t.Fatalf("the review of a hand-changed web lists %v, want %v", got, want)
+	}
+	if rows[0].Settings != 1 {
+		t.Errorf("web is changed at %d settings, want its restart policy alone", rows[0].Settings)
+	}
+	cur, _ := json.Marshal(rows[0].Current)
+	next, _ := json.Marshal(rows[0].Next)
+	if !strings.Contains(string(cur), `"restart":"always"`) || !strings.Contains(string(next), `"restart":"unless-stopped"`) {
+		t.Errorf("web: current %s next %s, want the restart policy always against unless-stopped", cur, next)
+	}
+
+	// A deploy with no edit puts web right, recreates what shares its network and restarts what depends on it.
+	job := f.deployOK(t, id)
+	after := f.states(t, name)
+	if len(after) != 5 {
+		t.Fatalf("containers after the redeploy = %v, want five and none left over", after)
+	}
+	for _, svc := range []string{"web", "sidecar"} {
+		if after[svc].ID == first[svc].ID {
+			t.Errorf("%s keeps its container %s, want it recreated", svc, first[svc].ID)
+		}
+	}
+	if after["sidecar"].ImageID != first["sidecar"].ImageID || after["sidecar"].ImageRef != first["sidecar"].ImageRef {
+		t.Errorf("the recreated sidecar runs %s (%s), want the image it was pinned to, %s (%s)",
+			after["sidecar"].ImageRef, after["sidecar"].ImageID, first["sidecar"].ImageRef, first["sidecar"].ImageID)
+	}
+	if after["restarter"].ID != first["restarter"].ID || !after["restarter"].startedAfter(first["restarter"]) {
+		t.Errorf("restarter: %+v after, %+v before, want the same container started again", after["restarter"], first["restarter"])
+	}
+	for _, svc := range []string{"worker", "other"} {
+		if after[svc] != first[svc] {
+			t.Errorf("%s: %+v after, %+v before, want the container untouched", svc, after[svc], first[svc])
+		}
+	}
+	if got := strings.TrimSpace(sh(t, f.host, "docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "+name+"-web-1")); got != "unless-stopped" {
+		t.Errorf("web restart policy = %q after the deploy, want the file's unless-stopped", got)
+	}
+	// The SDK's own events say what the review said: the sidecar recreated, the restarter stopped and started.
+	lines := job.outputText()
+	for _, want := range []string{"Recreated container " + name + "-sidecar-1", "Stopping container " + name + "-restarter-1", "Started container " + name + "-restarter-1"} {
+		if !strings.Contains(lines, want) {
+			t.Errorf("the deploy's output lacks %q:\n%s", want, lines)
+		}
+	}
+	// The two it left alone are waited for and found running, never stopped, started, created or recreated.
+	for _, line := range strings.Split(lines, "\n") {
+		if !strings.Contains(line, name+"-worker-1") && !strings.Contains(line, name+"-other-1") {
+			continue
+		}
+		for _, did := range []string{"Stopping", "Stopped", "Starting", "Started", "Creating", "Created", "Recreate", "Recreated", "Removing", "Removed"} {
+			if strings.HasPrefix(line, did+" container ") {
+				t.Errorf("the deploy's output says %q of a container it left alone:\n%s", line, lines)
+			}
+		}
+	}
+
+	if rows, objects := f.reviewRows(t, id); len(rows) != 0 || objects != 0 {
+		t.Errorf("the review after the redeploy lists %v and %d other resources, want nothing", saRows(rows).words(), objects)
+	}
+	f.noDenials(t)
+}
+
+// startedAfter reports whether s started later than before did (their StartedAt are RFC 3339 with
+// nanoseconds, which compare as text only when they are written the same way, so they are parsed).
+func (s saState) startedAfter(before saState) bool {
+	a, err1 := time.Parse(time.RFC3339Nano, s.Started)
+	b, err2 := time.Parse(time.RFC3339Nano, before.Started)
+	return err1 == nil && err2 == nil && a.After(b)
 }

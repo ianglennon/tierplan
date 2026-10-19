@@ -521,3 +521,164 @@ func assertKindsRecorded(t *testing.T, reqs []composeRequest) {
 		}
 	}
 }
+
+// TestStandaloneReviewEmptyAfterDeployLocal is the completeness test of the review's normaliser (plan 07-22,
+// STK-06, Pitfall 5) on Bayplan's own host: a stack that sets many of the settings the engine keeps (a
+// restart policy, a healthcheck, a user, a working directory, a hostname, capabilities, ulimits, a log
+// driver with options, limits, a tmpfs, a read-only root, init, extra hosts, DNS, a sysctl, labels and an
+// environment, user networks with an alias and a named volume) and services that share another's network
+// namespace, PID namespace and volumes is deployed through the real Compose SDK, and the review right
+// after lists nothing: no service, no network and no volume. Nothing the image or the engine filled in may
+// read as a difference, and a reference to another service must hash as the SDK hashed it.
+func TestStandaloneReviewEmptyAfterDeployLocal(t *testing.T) {
+	if err := dockerx.InitCompose(t.TempDir(), slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatalf("InitCompose: %v", err)
+	}
+	node := dockertest.StartHost(t, "")
+	registry := dockertest.StartRegistry(t, node, dockertest.RegistryOptions{})
+	image := registry + "/bp/web:1"
+	dockertest.PushImage(t, node, "busybox:1.36.1", image, nil)
+
+	rig := newRigOver(t, dockertest.UnixProxy(t, node.Host()))
+	rig.deps.ConvergeTimeout = 3 * time.Minute
+	pins := &memPins{}
+	const name = "ireview"
+	compose := strings.ReplaceAll(`services:
+  db:
+    image: IMAGE
+    command: ["sleep", "3600"]
+    stop_grace_period: 1s
+    stop_signal: SIGTERM
+    restart: unless-stopped
+    volumes:
+      - data:/data
+    networks:
+      - back
+    environment:
+      MODE: prod
+      EMPTY: ""
+    labels:
+      team: platform
+    healthcheck:
+      test: ["CMD", "true"]
+      interval: 2s
+      timeout: 2s
+      retries: 3
+    init: true
+    read_only: true
+    tmpfs:
+      - /run
+    user: "1000:1000"
+    working_dir: /tmp
+    hostname: dbhost
+    cap_drop: [NET_RAW]
+    ulimits:
+      nofile:
+        soft: 1024
+        hard: 2048
+    logging:
+      driver: json-file
+      options:
+        max-size: 1m
+    mem_limit: 64m
+    cpus: 0.5
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    extra_hosts:
+      - "x.local:10.1.2.3"
+    dns:
+      - 1.1.1.1
+  web:
+    image: IMAGE
+    command: ["httpd", "-f", "-p", "80"]
+    stop_grace_period: 1s
+    ports:
+      - "18080:80"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      back:
+        aliases: [www]
+      front: {}
+  sidecar:
+    image: IMAGE
+    command: ["sleep", "3600"]
+    stop_grace_period: 1s
+    network_mode: service:web
+    volumes_from: [web]
+  watcher:
+    image: IMAGE
+    command: ["sleep", "3600"]
+    stop_grace_period: 1s
+    pid: service:web
+  extras:
+    image: IMAGE
+    container_name: ireview-extras
+    command: ["sleep 3600"]
+    entrypoint: ["/bin/sh", "-c"]
+    stop_grace_period: 1s
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+    dns_search: [example.test]
+    dns_opt: ["ndots:1"]
+    domainname: example.test
+    tty: true
+    stdin_open: true
+    shm_size: 128m
+    pids_limit: 100
+    cpu_shares: 512
+    mem_reservation: 32m
+    devices:
+      - "/dev/null:/dev/nulltest"
+    ports:
+      - "5353:53/udp"
+      - "127.0.0.1:18443:443/tcp"
+    expose: ["9000", "9100-9101"]
+    deploy:
+      restart_policy:
+        condition: on-failure
+        max_attempts: 3
+    networks:
+      front:
+        ipv4_address: 172.28.7.10
+networks:
+  back: {}
+  front:
+    ipam:
+      config:
+        - subnet: 172.28.7.0/24
+volumes:
+  data: {}
+`, "IMAGE", image)
+	ctx := testsupport.Context(t)
+
+	rv, err := rig.deps.Review(ctx, rig.standaloneReviewInput(t, name, compose, pins))
+	if err != nil || rv.Problems.Errors() != 0 {
+		t.Fatalf("first review: %v problems %v", err, rv.Problems)
+	}
+	in := standaloneInput(name, compose)
+	in.Pins, in.RevisionID, in.Reviewed = pins, "rev-1", rv.Pins
+	res, job := rig.deployStandalone(t, in)
+	if !res.OK() {
+		var words []string
+		for _, it := range job.Items {
+			if it.Detail != "" {
+				words = append(words, it.ID+": "+it.Detail)
+			}
+		}
+		t.Fatalf("deploy: %+v items %v details %q", res, itemStates(job), words)
+	}
+
+	rv, err = rig.deps.Review(ctx, rig.standaloneReviewInput(t, name, compose, pins))
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	if len(rv.Services) != 0 || len(rv.Objects) != 0 {
+		var detail []string
+		for _, c := range rv.Services {
+			detail = append(detail, c.Change+" "+c.Short+"\n  current: "+string(c.Current)+"\n  next:    "+string(c.Next))
+		}
+		t.Fatalf("the review right after a deploy lists services %v objects %v, want nothing:\n%s", changesOf(rv), objectsOf(rv), strings.Join(detail, "\n"))
+	}
+}

@@ -1,0 +1,36 @@
+# The standalone stack of plan 07-22: a service and the services that follow it when it is recreated, each
+# from an image of the fixture registry. {{IMAGE}} is where the test puts the image it pushed.
+#   web        restarts unless stopped (the one a test changes by hand)
+#   sidecar    shares web's network namespace: recreated with web, keeping its pinned image
+#   restarter  depends_on web with restart: true: stopped and started again, the same container
+#   worker     a plain depends_on web: left alone
+#   other      no relation to web: left alone
+services:
+  web:
+    image: {{IMAGE}}
+    command: ["sleep", "3600"]
+    stop_grace_period: 1s
+    restart: unless-stopped
+  sidecar:
+    image: {{IMAGE}}
+    command: ["sleep", "3600"]
+    stop_grace_period: 1s
+    network_mode: service:web
+  restarter:
+    image: {{IMAGE}}
+    command: ["sleep", "3600"]
+    stop_grace_period: 1s
+    depends_on:
+      web:
+        condition: service_started
+        restart: true
+  worker:
+    image: {{IMAGE}}
+    command: ["sleep", "3600"]
+    stop_grace_period: 1s
+    depends_on:
+      - web
+  other:
+    image: {{IMAGE}}
+    command: ["sleep", "3600"]
+    stop_grace_period: 1s
