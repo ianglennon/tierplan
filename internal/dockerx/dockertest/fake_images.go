@@ -33,12 +33,26 @@ func (c FakeConfig) resolveImage(name string) (FakeImage, bool) {
 			return fi, true
 		}
 		for _, rt := range append(slices.Clone(fi.RepoTags), fi.RepoDigests...) {
-			if normaliseImage(rt) == normaliseImage(name) {
+			if normaliseImage(rt) == normaliseImage(name) || byDigest(rt) == byDigest(name) {
 				return fi, true
 			}
 		}
 	}
 	return FakeImage{}, false
+}
+
+// byDigest is a reference written name:tag@digest read the way the engine reads it: the digest says
+// which image, and the tag is only how the person wrote it, so it is dropped. A reference without a digest
+// is returned as it is (never equal to another: it has no "@").
+func byDigest(ref string) string {
+	repo, digest, ok := strings.Cut(normaliseImage(ref), "@")
+	if !ok {
+		return ref
+	}
+	if i := strings.LastIndex(repo, ":"); i > strings.LastIndex(repo, "/") {
+		repo = repo[:i]
+	}
+	return repo + "@" + digest
 }
 
 // serveImageInspect answers GET /images/{name}/json: the image as the daemon documents it,
