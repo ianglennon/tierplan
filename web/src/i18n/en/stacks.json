@@ -1,11 +1,5 @@
 {
   "stacks": {
-    "state": {
-      "not_deployed": "Not deployed",
-      "deploying": "Deploying",
-      "deploy_failed": "Deploy failed",
-      "deployed": "Running"
-    },
     "target": {
       "swarm": "Swarm",
       "standalone": "Standalone"

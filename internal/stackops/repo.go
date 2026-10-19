@@ -798,10 +798,18 @@ func (r Repo) LatestDeploy(ctx context.Context, stackID string) (DeployRow, bool
 	return deployOf(row), true, nil
 }
 
-// DraftStates says, for each stack of an environment, whether its draft holds changes that
-// have not been deployed: it was saved after the stack's newest revision was taken, or the
-// stack has no revision and its draft has been saved since it was created.
-func (r Repo) DraftStates(ctx context.Context, envID string) (map[string]bool, error) {
+// DraftSave is the draft of a stack: who last saved it, when, and whether it holds changes that have not
+// been deployed.
+type DraftSave struct {
+	By      string
+	At      time.Time
+	Pending bool
+}
+
+// DraftSaves says, for each stack of an environment that has a draft, who saved it last and when, and
+// whether it holds changes that have not been deployed: it was saved after the stack's newest revision was
+// taken, or the stack has no revision and its draft has been saved since it was created.
+func (r Repo) DraftSaves(ctx context.Context, envID string) (map[string]DraftSave, error) {
 	drafts, err := r.Store.RQ.ListDraftsByEnv(ctx, envID)
 	if err != nil {
 		return nil, fmt.Errorf("list drafts: %w", err)
@@ -814,10 +822,27 @@ func (r Repo) DraftStates(ctx context.Context, envID string) (map[string]bool, e
 	for _, t := range taken {
 		revisionAt[t.StackID] = t.TakenAt
 	}
-	out := make(map[string]bool, len(drafts))
+	out := make(map[string]DraftSave, len(drafts))
 	for _, d := range drafts {
 		at, deployed := revisionAt[d.StackID]
-		out[d.StackID] = (deployed && d.CreatedAt > at) || (!deployed && d.Version > 1)
+		out[d.StackID] = DraftSave{
+			By: d.CreatedBy, At: time.Unix(0, d.CreatedAt).UTC(),
+			Pending: (deployed && d.CreatedAt > at) || (!deployed && d.Version > 1),
+		}
+	}
+	return out, nil
+}
+
+// DraftStates says, for each stack of an environment, whether its draft holds changes that
+// have not been deployed (see DraftSaves).
+func (r Repo) DraftStates(ctx context.Context, envID string) (map[string]bool, error) {
+	saves, err := r.DraftSaves(ctx, envID)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(saves))
+	for id, s := range saves {
+		out[id] = s.Pending
 	}
 	return out, nil
 }

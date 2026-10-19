@@ -831,7 +831,8 @@ func TestADeployedStackReadsDegradedWhenSomeServicesRunAndNotRunningWhenNoneDo(t
 		t.Fatalf("deploy: %+v", job)
 	}
 
-	reconfigureSwarm(t, f, e, ownedService(st, "a", 2, 2), ownedService(st, "b", 1, 3))
+	// The deploy's own web service runs; a second service of the stack has 1 of its 3 tasks.
+	reconfigureSwarm(t, f, e, ownedService(st, "worker", 1, 3))
 	for name, got := range map[string]stackAnswer{"page": readStackAnswer(t, operator, st.ID), "list": listedStack(t, operator, st.ID)} {
 		if got.State != "degraded" {
 			t.Errorf("%s state = %q, want degraded", name, got.State)
@@ -839,7 +840,18 @@ func TestADeployedStackReadsDegradedWhenSomeServicesRunAndNotRunningWhenNoneDo(t
 		wantCounts(t, got, 1, 2)
 	}
 
-	reconfigureSwarm(t, f, e, ownedService(st, "a", 0, 2), ownedService(st, "b", 0, 3))
+	// Scaled to nothing, web does not run either, and the stack was not stopped by anyone.
+	web := answerOf[stackServicesAnswer](t, operator.do(http.MethodGet, "stacks/"+st.ID+"/services", "")).Items
+	var webID string
+	for _, s := range web {
+		if s.Short == "web" {
+			webID = s.ID
+		}
+	}
+	if rec := operator.do(http.MethodPost, "services/scale", `{"targets":[{"serviceId":"`+webID+`","replicas":0}]}`); rec.Code != http.StatusOK {
+		t.Fatalf("scale: %d %s", rec.Code, rec.Body)
+	}
+	reconfigureSwarm(t, f, e, ownedService(st, "worker", 0, 3))
 	for name, got := range map[string]stackAnswer{"page": readStackAnswer(t, operator, st.ID), "list": listedStack(t, operator, st.ID)} {
 		if got.State != "not_running" {
 			t.Errorf("%s state = %q, want not_running", name, got.State)
@@ -859,8 +871,10 @@ func TestAServiceOfTheSameNamespaceThatAnotherStackOwnsIsNotCountedForThisOne(t 
 	}
 	foreign := ownedService(st, "foreign", 0, 1)
 	foreign.Labels = map[string]string{"com.docker.stack.namespace": st.Name}
+	another := ownedService(st, "other", 0, 1)
+	another.Labels["bayplan.stack.id"] = "someone-elses"
 
-	reconfigureSwarm(t, f, e, ownedService(st, "a", 1, 1), foreign)
+	reconfigureSwarm(t, f, e, foreign, another)
 
 	got := readStackAnswer(t, operator, st.ID)
 	if got.State != "running" {

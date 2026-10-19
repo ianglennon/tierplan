@@ -6,13 +6,22 @@ import type { StackState } from "@/api/stacks";
 import { StatusDot } from "@/components/status-dot";
 import { useT } from "@/i18n/use-t";
 
-// The status colour of each state this version's server returns (UI-SPEC "Color"). Later plans
-// add the live states (Degraded, Stopped, Rolling back ...) to the same map.
+// The status colour of each state (UI-SPEC "Color"). An operation under way is the pulsing warning
+// dot, which StatusDot turns off under reduced motion; Degraded is the warning colour without the
+// pulse; a failure and a stack that is not running are offline; a stack that is stopped, not
+// deployed or not known is neutral.
 const TONE: Record<StackState, HealthState> = {
-  not_deployed: "unknown",
+  removing: "reconnecting",
   deploying: "reconnecting",
+  rolling_back: "reconnecting",
+  starting: "reconnecting",
+  stopped: "unknown",
   deploy_failed: "offline",
-  deployed: "online",
+  not_running: "offline",
+  degraded: "degraded",
+  running: "online",
+  not_deployed: "unknown",
+  unknown: "unknown",
 };
 
 interface StackStateCellProps {
@@ -23,5 +32,5 @@ interface StackStateCellProps {
 // nodes, so nothing a stack is named can add markup.
 export function StackStateCell({ state }: StackStateCellProps) {
   const t = useT();
-  return <StatusDot state={TONE[state]} label={t(`stacks.state.${state}`)} />;
+  return <StatusDot state={TONE[state]} label={t(`stackOverview.state.${state}`)} />;
 }

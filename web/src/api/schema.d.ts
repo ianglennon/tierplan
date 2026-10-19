@@ -1957,7 +1957,7 @@ export interface paths {
         };
         /**
          * One stack
-         * @description The stack with its state. A stack ID of another environment is 404 stack_not_found, as one that does not exist. Needs stacks.read (Viewer).
+         * @description The stack with its state, derived as on the list, and who saved its pending draft. A stack ID of another environment is 404 stack_not_found, as one that does not exist. Needs stacks.read (Viewer).
          */
         get: operations["getStack"];
         put?: never;
@@ -8289,6 +8289,10 @@ export interface components {
             createdAt: string;
             /** @description Who created the stack */
             createdBy: string;
+            /** @description When the draft that holds changes that have not been deployed was last saved, RFC 3339 UTC; empty when there is no such draft */
+            draftSavedAt: string;
+            /** @description Who saved it, as a name; empty when there is no such draft */
+            draftSavedBy: string;
             /** @description The environment the stack belongs to */
             envId: string;
             /** @description True when the draft holds changes that have not been deployed */
@@ -8308,6 +8312,16 @@ export interface components {
             /** @description Whether a roll back has a version to restore: the newest version that ran well, or, when the newest version is the one that runs, the one before it */
             rollback: components["schemas"]["StackRollbackBody"];
             /**
+             * Format: int64
+             * @description Services of the stack that run now; left out for a stack not deployed and when the engine could not be read
+             */
+            servicesRunning?: number;
+            /**
+             * Format: int64
+             * @description Services the stack has on the engine; left out for a stack not deployed and when the engine could not be read
+             */
+            servicesTotal?: number;
+            /**
              * @description Where the stack's definition lives. Only inline exists today
              * @enum {string}
              */
@@ -8315,10 +8329,10 @@ export interface components {
             /** @description A reference to the stack's source: empty for an inline stack */
             sourceRef: string;
             /**
-             * @description Where the stack is, from its newest operation: not_deployed before the first deploy, deploying while one runs, deploy_failed when the newest one failed, was cancelled or was interrupted, deployed otherwise
+             * @description The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back or starting while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run
              * @enum {string}
              */
-            state: "not_deployed" | "deploying" | "deploy_failed" | "deployed";
+            state: "removing" | "deploying" | "rolling_back" | "starting" | "stopped" | "deploy_failed" | "not_running" | "degraded" | "running" | "not_deployed" | "unknown";
             /** @description True while the stack is stopped */
             stopped: boolean;
             /**
@@ -8458,15 +8472,25 @@ export interface components {
             /** @description The stack name, also its swarm namespace or compose project */
             name: string;
             /**
+             * Format: int64
+             * @description Services of the stack that run now; left out for a stack not deployed and when the engine could not be read
+             */
+            servicesRunning?: number;
+            /**
+             * Format: int64
+             * @description Services the stack has on the engine; left out for a stack not deployed and when the engine could not be read
+             */
+            servicesTotal?: number;
+            /**
              * @description Where the stack's definition lives. Only inline exists today
              * @enum {string}
              */
             source: "inline" | "adopted" | "git";
             /**
-             * @description Where the stack is, from its newest operation: not_deployed before the first deploy, deploying while one runs, deploy_failed when the newest one failed, was cancelled or was interrupted, deployed otherwise
+             * @description The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back or starting while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run
              * @enum {string}
              */
-            state: "not_deployed" | "deploying" | "deploy_failed" | "deployed";
+            state: "removing" | "deploying" | "rolling_back" | "starting" | "stopped" | "deploy_failed" | "not_running" | "degraded" | "running" | "not_deployed" | "unknown";
             /**
              * @description Where the stack deploys: fixed when it was created, from the kind of the environment
              * @enum {string}

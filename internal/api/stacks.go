@@ -59,12 +59,6 @@ const (
 	problemJobFinished         = "job_finished"
 	problemOperationLocked     = "operation_locked"
 
-	// The states a stack is listed in, from its newest operation.
-	stackNotDeployed  = "not_deployed"
-	stackDeploying    = "deploying"
-	stackDeployFailed = "deploy_failed"
-	stackDeployed     = "deployed"
-
 	stackStartExample = "example"
 	stackStartEmpty   = "empty"
 
@@ -136,10 +130,14 @@ type StackItem struct {
 	Name           string `json:"name" doc:"The stack name, also its swarm namespace or compose project"`
 	Target         string `json:"target" enum:"swarm,standalone" doc:"Where the stack deploys: fixed when it was created, from the kind of the environment"`
 	Source         string `json:"source" enum:"inline,adopted,git" doc:"Where the stack's definition lives. Only inline exists today"`
-	State          string `json:"state" enum:"not_deployed,deploying,deploy_failed,deployed" doc:"Where the stack is, from its newest operation: not_deployed before the first deploy, deploying while one runs, deploy_failed when the newest one failed, was cancelled or was interrupted, deployed otherwise"`
+	State          string `json:"state" enum:"removing,deploying,rolling_back,starting,stopped,deploy_failed,not_running,degraded,running,not_deployed,unknown" doc:"The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back or starting while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run"`
 	LastDeployedAt string `json:"lastDeployedAt" doc:"When the newest successful deploy ended, RFC 3339 UTC; empty when there is none"`
 	LastDeployedBy string `json:"lastDeployedBy" doc:"Who started it; empty when there is none"`
 	HasDraft       bool   `json:"hasDraft" doc:"True when the draft holds changes that have not been deployed"`
+	// ServicesRunning and ServicesTotal are the engine's own count of the stack's services, read from the
+	// cache the lists use. They are left out for a stack that was never deployed and for one the engine could not be read for.
+	ServicesRunning *int `json:"servicesRunning,omitempty" doc:"Services of the stack that run now; left out for a stack not deployed and when the engine could not be read"`
+	ServicesTotal   *int `json:"servicesTotal,omitempty" doc:"Services the stack has on the engine; left out for a stack not deployed and when the engine could not be read"`
 }
 
 // StackListBody is the stacks of an environment.
@@ -161,6 +159,9 @@ type StackDetail struct {
 	CreatedBy string `json:"createdBy" doc:"Who created the stack"`
 	CreatedAt string `json:"createdAt" doc:"When it was created, RFC 3339 UTC"`
 	Stopped   bool   `json:"stopped" doc:"True while the stack is stopped"`
+	// DraftSavedAt and DraftSavedBy say who last saved the draft that holds changes not yet deployed.
+	DraftSavedAt string `json:"draftSavedAt" doc:"When the draft that holds changes that have not been deployed was last saved, RFC 3339 UTC; empty when there is no such draft"`
+	DraftSavedBy string `json:"draftSavedBy" doc:"Who saved it, as a name; empty when there is no such draft"`
 	// Lock is set while a stack operation runs on the environment, whichever stack it is on.
 	Lock *StackLockBody `json:"lock,omitempty" doc:"Left out unless set: set while a stack operation runs on this environment, on any of its stacks, and names it. Only one runs at a time: a second is refused 409 operation_locked"`
 	// Rollback is whether a roll back has a version to restore, and which.
@@ -274,7 +275,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "getStack", Method: http.MethodGet, Path: "/api/env/{envId}/stacks/{stackId}",
 		Summary:     "One stack",
-		Description: "The stack with its state. A stack ID of another environment is 404 stack_not_found, as one that does not exist. Needs stacks.read (Viewer).",
+		Description: "The stack with its state, derived as on the list, and who saved its pending draft. A stack ID of another environment is 404 stack_not_found, as one that does not exist. Needs stacks.read (Viewer).",
 		Tags:        []string{"stacks"},
 	}, rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackPathInput) (*StackDetailOutput, error) {
@@ -305,25 +306,60 @@ func stackInternal(d StacksDeps, what, envID string, err error) error {
 	return huma.Error500InternalServerError("internal error")
 }
 
-// stackState is the state of a stack from its newest operation.
-func stackState(latest stackops.DeployRow, has bool) string {
-	switch {
-	case !has:
-		return stackNotDeployed
-	case latest.State == stackops.DeployRunning:
-		return stackDeploying
-	case latest.State == stackops.DeployDone:
-		return stackDeployed
-	default:
-		return stackDeployFailed
-	}
+// stackReads reads what an environment's engine holds for the stacks of a list or a page, once for each
+// kind of target, from the caches the lists are made from. A read that fails leaves the stacks that need it
+// without a state read from the engine: they are Unknown, never Running or Not running.
+type stackReads struct {
+	ctx   context.Context
+	d     StacksDeps
+	envID string
+	held  map[bool]heldRead
 }
 
-// stackItemOf builds a stack's list entry from its stored rows.
-func stackItemOf(st stackops.Stack, latest stackops.DeployRow, hasLatest bool, last stackops.DeployRow, hasLast, hasDraft bool) StackItem {
+type heldRead struct {
+	held stackops.Held
+	err  error
+}
+
+func newStackReads(ctx context.Context, d StacksDeps, envID string) *stackReads {
+	return &stackReads{ctx: ctx, d: d, envID: envID, held: map[bool]heldRead{}}
+}
+
+// rows are the services the stack owns, and false when they could not be read.
+func (r *stackReads) rows(st stackops.Stack) ([]stackops.ServiceRow, bool) {
+	swarm := st.Target == stacks.TargetSwarm
+	h, ok := r.held[swarm]
+	if !ok {
+		h.held, h.err = r.d.ops().Cached(r.ctx, r.envID, swarm)
+		if h.err != nil {
+			r.d.Log.Debug("could not read what an environment runs for its stacks", "environment", r.envID, "error", h.err)
+		}
+		r.held[swarm] = h
+	}
+	if h.err != nil {
+		return nil, false
+	}
+	return h.held.RowsOf(st), true
+}
+
+// stackItemOf builds a stack's list entry from its stored rows and what the engine runs.
+func stackItemOf(reads *stackReads, st stackops.Stack, latest stackops.DeployRow, hasLatest bool, last stackops.DeployRow, hasLast, hasDraft bool) StackItem {
+	in := stackops.StateInput{Stopped: st.Stopped, Deployed: hasLast}
+	if hasLatest {
+		in.Latest = &latest
+	}
+	// A stack that has had no operation has nothing on the engine to read.
+	if hasLatest || hasLast {
+		rows, known := reads.rows(st)
+		in.Services, in.Unknown = rows, !known
+	}
+	state, running, total := stackops.DeriveState(in)
 	item := StackItem{
 		ID: st.ID, Name: st.Name, Target: string(st.Target), Source: string(st.Source.Kind),
-		State: stackState(latest, hasLatest), HasDraft: hasDraft,
+		State: string(state), HasDraft: hasDraft,
+	}
+	if state != stackops.StateNotDeployed && state != stackops.StateUnknown && !in.Unknown {
+		item.ServicesRunning, item.ServicesTotal = &running, &total
 	}
 	if hasLast {
 		item.LastDeployedAt, item.LastDeployedBy = rfc3339(last.EndedAt), last.StartedBy
@@ -345,15 +381,16 @@ func listStacks(ctx context.Context, d StacksDeps, in *EnvironmentPathInput) (*S
 	if err != nil {
 		return nil, stackInternal(d, "last deployed", in.EnvID, err)
 	}
-	drafts, err := repo.DraftStates(ctx, in.EnvID)
+	drafts, err := repo.DraftSaves(ctx, in.EnvID)
 	if err != nil {
 		return nil, stackInternal(d, "drafts", in.EnvID, err)
 	}
+	reads := newStackReads(ctx, d, in.EnvID)
 	body := StackListBody{Items: make([]StackItem, 0, len(list))}
 	for _, st := range list {
 		l, hasL := latest[st.ID]
 		g, hasG := done[st.ID]
-		body.Items = append(body.Items, stackItemOf(st, l, hasL, g, hasG, drafts[st.ID]))
+		body.Items = append(body.Items, stackItemOf(reads, st, l, hasL, g, hasG, drafts[st.ID].Pending))
 	}
 	return &StackListOutput{CacheControl: "no-store", Body: body}, nil
 }
@@ -384,14 +421,18 @@ func stackDetailOf(ctx context.Context, d StacksDeps, st stackops.Stack) (StackD
 	if err != nil {
 		return StackDetail{}, err
 	}
-	drafts, err := repo.DraftStates(ctx, st.EnvID)
+	drafts, err := repo.DraftSaves(ctx, st.EnvID)
 	if err != nil {
 		return StackDetail{}, err
 	}
 	g, hasG := done[st.ID]
+	draft := drafts[st.ID]
 	detail := StackDetail{
-		StackItem: stackItemOf(st, latest, hasLatest, g, hasG, drafts[st.ID]),
+		StackItem: stackItemOf(newStackReads(ctx, d, st.EnvID), st, latest, hasLatest, g, hasG, draft.Pending),
 		EnvID:     st.EnvID, SourceRef: st.Source.Ref, CreatedBy: st.CreatedBy, CreatedAt: rfc3339(st.CreatedAt), Stopped: st.Stopped,
+	}
+	if draft.Pending {
+		detail.DraftSavedAt, detail.DraftSavedBy = rfc3339(draft.At), draft.By
 	}
 	back, hasBack, err := repo.RollbackInfo(ctx, st.ID)
 	if err != nil {

@@ -277,6 +277,10 @@ func (d Deps) Overview(ctx context.Context, envID string, stack Stack) ([]Servic
 	return nil, errors.New("stackops: unknown stack target " + string(stack.Target))
 }
 
+// ErrNotRead means what an environment's engine runs is not known: its cluster was never read, or has lost
+// its quorum.
+var ErrNotRead = errors.New("stackops: what the environment runs has not been read")
+
 // Held is what an environment holds, read from the caches the lists use: the swarm's services, or the
 // standalone host's containers.
 type Held struct {
@@ -302,11 +306,15 @@ func (d Deps) Cached(ctx context.Context, envID string, swarm bool) (Held, error
 			return Held{}, errors.New("stackops: no cluster reader to read the swarm with")
 		}
 		st, err := d.Clusters.State(ctx, envID)
-		if err != nil && st.FetchedAt.IsZero() {
+		// A cluster that was never read, or whose quorum is lost, says nothing about the stacks. One
+		// whose latest read failed after a good one serves that one: it is old, not wrong, and the
+		// environment's own banners say it is not being read.
+		if !st.Known() {
+			if err == nil {
+				err = ErrNotRead
+			}
 			return Held{}, err
 		}
-		// A read that failed after one that worked serves the last one: it is old, not wrong, and the
-		// environment's own banners say it is not being read.
 		return Held{Services: st.Read.Services}, nil
 	}
 	if d.Aggregator == nil {

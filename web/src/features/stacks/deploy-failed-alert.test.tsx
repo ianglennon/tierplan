@@ -37,6 +37,8 @@ const stackOf = (over: Partial<StackDetail> = {}): StackDetail => ({
   createdBy: "ada",
   createdAt: "2026-10-19T10:00:00Z",
   stopped: false,
+  draftSavedAt: "",
+  draftSavedBy: "",
   rollback: rollbackInfo,
   lastOperation: {
     kind: "deploy",
@@ -225,7 +227,7 @@ describe("DeployFailedAlert", () => {
   });
 
   it.each([
-    ["a stack that is deployed", stackOf({ state: "deployed" })],
+    ["a stack that is deployed", stackOf({ state: "running" })],
     ["a stack that is deploying", stackOf({ state: "deploying" })],
     ["a stack never deployed", stackOf({ state: "not_deployed", lastOperation: undefined })],
   ])("is not shown for %s", async (_name, stack) => {

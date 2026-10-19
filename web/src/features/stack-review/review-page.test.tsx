@@ -114,7 +114,7 @@ beforeEach(() => {
           name: "web",
           target: "swarm",
           source: "inline",
-          state: "deployed",
+          state: "running",
           lastDeployedAt: "2026-10-19T11:00:00Z",
           lastDeployedBy: "bob",
           hasDraft: true,

@@ -111,7 +111,7 @@ describe("StackDetailLayout", () => {
   it("shows the details and the last deploy of a deployed stack", async () => {
     detail = {
       ...detail,
-      state: "deployed",
+      state: "running",
       lastDeployedAt: "2026-10-19T11:00:00Z",
       lastDeployedBy: "bob",
       hasDraft: true,
@@ -251,7 +251,7 @@ describe("the failed deploy alert", () => {
   });
 
   it("is not shown once the stack is deployed", async () => {
-    detail = { ...failed(), state: "deployed" };
+    detail = { ...failed(), state: "running" };
     mount();
     await screen.findByRole("heading", { name: "tracer", level: 2 });
     expect(screen.queryByText("The last deploy failed")).toBeNull();

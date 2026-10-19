@@ -95,7 +95,7 @@ describe("StackList", () => {
         stack({
           id: "d",
           name: "d-stack",
-          state: "deployed",
+          state: "running",
           lastDeployedAt: "2026-10-18T10:00:00Z",
           lastDeployedBy: "ada",
         }),

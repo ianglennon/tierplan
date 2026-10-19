@@ -11463,6 +11463,14 @@
             "description": "Who created the stack",
             "type": "string"
           },
+          "draftSavedAt": {
+            "description": "When the draft that holds changes that have not been deployed was last saved, RFC 3339 UTC; empty when there is no such draft",
+            "type": "string"
+          },
+          "draftSavedBy": {
+            "description": "Who saved it, as a name; empty when there is no such draft",
+            "type": "string"
+          },
           "envId": {
             "description": "The environment the stack belongs to",
             "type": "string"
@@ -11499,6 +11507,16 @@
             "$ref": "#/components/schemas/StackRollbackBody",
             "description": "Whether a roll back has a version to restore: the newest version that ran well, or, when the newest version is the one that runs, the one before it"
           },
+          "servicesRunning": {
+            "description": "Services of the stack that run now; left out for a stack not deployed and when the engine could not be read",
+            "format": "int64",
+            "type": "integer"
+          },
+          "servicesTotal": {
+            "description": "Services the stack has on the engine; left out for a stack not deployed and when the engine could not be read",
+            "format": "int64",
+            "type": "integer"
+          },
           "source": {
             "description": "Where the stack's definition lives. Only inline exists today",
             "enum": [
@@ -11513,12 +11531,19 @@
             "type": "string"
           },
           "state": {
-            "description": "Where the stack is, from its newest operation: not_deployed before the first deploy, deploying while one runs, deploy_failed when the newest one failed, was cancelled or was interrupted, deployed otherwise",
+            "description": "The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back or starting while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run",
             "enum": [
-              "not_deployed",
+              "removing",
               "deploying",
+              "rolling_back",
+              "starting",
+              "stopped",
               "deploy_failed",
-              "deployed"
+              "not_running",
+              "degraded",
+              "running",
+              "not_deployed",
+              "unknown"
             ],
             "type": "string"
           },
@@ -11541,6 +11566,8 @@
           "createdBy",
           "createdAt",
           "stopped",
+          "draftSavedAt",
+          "draftSavedBy",
           "rollback",
           "id",
           "name",
@@ -11871,6 +11898,16 @@
             "description": "The stack name, also its swarm namespace or compose project",
             "type": "string"
           },
+          "servicesRunning": {
+            "description": "Services of the stack that run now; left out for a stack not deployed and when the engine could not be read",
+            "format": "int64",
+            "type": "integer"
+          },
+          "servicesTotal": {
+            "description": "Services the stack has on the engine; left out for a stack not deployed and when the engine could not be read",
+            "format": "int64",
+            "type": "integer"
+          },
           "source": {
             "description": "Where the stack's definition lives. Only inline exists today",
             "enum": [
@@ -11881,12 +11918,19 @@
             "type": "string"
           },
           "state": {
-            "description": "Where the stack is, from its newest operation: not_deployed before the first deploy, deploying while one runs, deploy_failed when the newest one failed, was cancelled or was interrupted, deployed otherwise",
+            "description": "The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back or starting while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run",
             "enum": [
-              "not_deployed",
+              "removing",
               "deploying",
+              "rolling_back",
+              "starting",
+              "stopped",
               "deploy_failed",
-              "deployed"
+              "not_running",
+              "degraded",
+              "running",
+              "not_deployed",
+              "unknown"
             ],
             "type": "string"
           },
@@ -21957,7 +22001,7 @@
     },
     "/api/env/{envId}/stacks/{stackId}": {
       "get": {
-        "description": "The stack with its state. A stack ID of another environment is 404 stack_not_found, as one that does not exist. Needs stacks.read (Viewer).",
+        "description": "The stack with its state, derived as on the list, and who saved its pending draft. A stack ID of another environment is 404 stack_not_found, as one that does not exist. Needs stacks.read (Viewer).",
         "operationId": "getStack",
         "parameters": [
           {
