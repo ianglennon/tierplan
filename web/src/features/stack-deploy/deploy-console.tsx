@@ -6,8 +6,14 @@ import { Link } from "@tanstack/react-router";
 import { CircleX, Rocket } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { type StackJob, stackQuery } from "@/api/stacks";
+import {
+  type CancelRequestError,
+  type StackJob,
+  stackQuery,
+  useCancelStackJob,
+} from "@/api/stacks";
 import { LiveChip } from "@/components/live-chip";
+import { NeedsTooltip } from "@/components/needs-tooltip";
 import { useNow } from "@/components/relative-time";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -22,12 +28,15 @@ import {
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useEnvName } from "@/features/resources/use-env-name";
+import { CancelDeployDialog } from "@/features/stack-deploy/cancel-deploy-dialog";
 import { DeployOutput } from "@/features/stack-deploy/deploy-output";
 import { DeployResult, servicesOf } from "@/features/stack-deploy/deploy-result";
 import { DeployStepList, failureOf } from "@/features/stack-deploy/deploy-step-list";
 import { useStackJob } from "@/features/stack-deploy/stack-job-stream";
+import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { formatRelative } from "@/lib/format";
+import { toastError, toastInfo } from "@/lib/toast";
 
 interface DeployConsoleProps {
   envId: string;
@@ -158,6 +167,46 @@ function Announcer({ job }: { job: StackJob }) {
   );
 }
 
+// CancelAction is the header's Cancel deploy (UI-SPEC "Deploy console"): it opens the question and
+// sends nothing. Once a cancel is on its way it reads Cancelling… and cannot be sent again. A person
+// who may not deploy sees it off with the role it takes, and one whose permissions are not known yet
+// sees nothing rather than a button that may turn off.
+function CancelAction({
+  cancelling,
+  allowed,
+  reason,
+  onAsk,
+}: {
+  cancelling: boolean;
+  allowed: boolean;
+  reason?: string;
+  onAsk: () => void;
+}) {
+  const t = useT();
+  if (cancelling) {
+    return (
+      <span role="status" className="text-sm text-muted-foreground">
+        {t("stackDeploy.cancel.pending")}
+      </span>
+    );
+  }
+  if (allowed) {
+    return (
+      <Button type="button" variant="outline" className="max-md:h-11" onClick={onAsk}>
+        {t("stackDeploy.cancel.action")}
+      </Button>
+    );
+  }
+  if (!reason) return null;
+  return (
+    <NeedsTooltip reason={reason}>
+      <Button type="button" variant="outline" className="max-md:h-11">
+        {t("stackDeploy.cancel.action")}
+      </Button>
+    </NeedsTooltip>
+  );
+}
+
 // DeployConsole is the live view of a deploy (STK-07, D-13): the title and how long it has run, the
 // connection, the overall progress, the steps with a row for each service, and the result. It is a
 // view of a job on the server, so leaving never stops the deploy: opening it again shows the job as
@@ -173,6 +222,30 @@ export function DeployConsole({ envId, stackId, jobId }: DeployConsoleProps) {
   const title = useRef<HTMLHeadingElement>(null);
   const name = stack.data?.name;
   const job = follow.job;
+
+  // Cancel deploy: the dialog asks first, one cancel is sent, and the console says Cancelling…
+  // until the job reports that it stopped. A cancel that did not go through, or that came too late,
+  // takes the word back.
+  const needs = useNeeds("stacks.deploy", envId);
+  const cancel = useCancelStackJob(envId, stackId, jobId);
+  const [asking, setAsking] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const sending = useRef(false);
+  function confirmCancel() {
+    if (sending.current) return;
+    sending.current = true;
+    setCancelling(true);
+    cancel.mutate(undefined, {
+      onError: (error: CancelRequestError) => {
+        setCancelling(false);
+        if (error.type === "job_finished") toastInfo(t("stackDeploy.cancel.finished"));
+        else toastError(t("stackDeploy.cancel.failed"));
+      },
+      onSettled: () => {
+        sending.current = false;
+      },
+    });
+  }
 
   // Focus moves to the title once, when the route opens and the title is there.
   const titled = name !== undefined && !!job;
@@ -249,7 +322,17 @@ export function DeployConsole({ envId, stackId, jobId }: DeployConsoleProps) {
           <h3 ref={title} tabIndex={-1} className="text-xl font-semibold break-all outline-none">
             {t("stackDeploy.title", { name })}
           </h3>
-          {chip ? <LiveChip state={chip} /> : null}
+          <div className="flex items-center gap-3">
+            {ended ? null : (
+              <CancelAction
+                cancelling={cancelling}
+                allowed={needs.allowed}
+                reason={needs.reason}
+                onAsk={() => setAsking(true)}
+              />
+            )}
+            {chip ? <LiveChip state={chip} /> : null}
+          </div>
         </div>
         <p className="text-sm text-muted-foreground">
           {job.startedBy
@@ -258,6 +341,7 @@ export function DeployConsole({ envId, stackId, jobId }: DeployConsoleProps) {
           <Elapsed job={job} />
         </p>
       </div>
+      <CancelDeployDialog open={asking} onOpenChange={setAsking} onConfirm={confirmCancel} />
       <DeployProgress job={job} />
       <DeployStepList items={job.items ?? []} />
       <DeployOutput

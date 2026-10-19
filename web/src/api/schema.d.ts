@@ -2028,6 +2028,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks/{stackId}/deploys/{jobId}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel a deploy that is running
+         * @description Asks the deploy to stop at the step it has reached and answers 202 at once; follow the job until it reads cancelled. A service being written when the cancel arrives is finished and no other is started; services already updated stay updated and nothing is rolled back. The networks, secrets and configs this deploy created that no service uses are removed again. The deploy is recorded in the audit log as stack.deployed with the result cancelled, and who cancelled it. A job that has ended answers 409 job_finished and nothing changes, so cancelling twice is safe; a job of another stack, or one that is gone, is 404 stack_job_not_found. A cancel is a change and is never retried. Needs stacks.deploy (Operator), not necessarily the person who started the deploy.
+         */
+        post: operations["cancelStackDeploy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/stacks/{stackId}/draft": {
         parameters: {
             query?: never;
@@ -8122,6 +8142,10 @@ export interface components {
             /** @description The team's name; set when kind is team */
             teamName?: string;
         };
+        StackCancelBody: {
+            /** @description The deploy that is being stopped: follow it at GET .../deploys/{jobId} or its stream until it reads cancelled */
+            jobId: string;
+        };
         StackCheckBody: {
             /** @description The problems, ordered by file and line */
             problems: components["schemas"]["StackProblemBody"][] | null;
@@ -13644,6 +13668,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackJobBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    cancelStackDeploy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+                /** @description The job ID the deploy answered with */
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackCancelBody"];
                 };
             };
             /** @description Error */

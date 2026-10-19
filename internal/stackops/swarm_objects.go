@@ -71,8 +71,8 @@ func (d Deps) ensureNetworks(ctx context.Context, envID string, stack Stack, pla
 		}
 		spec := networkSpec(n)
 		prog.start(idNetwork + n.Name)
-		werr := d.Aggregator.WriteOnManager(ctx, envID, func(c *dockerx.Client) error {
-			_, _, e := c.NetworkCreate(ctx, spec)
+		werr := d.write(ctx, envID, func(wctx context.Context, c *dockerx.Client) error {
+			_, _, e := c.NetworkCreate(wctx, spec)
 			return e
 		})
 		if werr != nil {
@@ -142,7 +142,7 @@ func (d Deps) pruneServices(ctx context.Context, envID string, stack Stack, decl
 		if ctx.Err() != nil {
 			return removed, &stepError{code: CodeCancelled, name: s.Name, err: ctx.Err()}
 		}
-		werr := d.Aggregator.WriteOnManager(ctx, envID, func(c *dockerx.Client) error { return c.ServiceRemove(ctx, s.ID) })
+		werr := d.write(ctx, envID, func(wctx context.Context, c *dockerx.Client) error { return c.ServiceRemove(wctx, s.ID) })
 		switch {
 		case werr == nil:
 			removed = append(removed, s.Name)
@@ -324,12 +324,12 @@ func (d Deps) ensureObjects(ctx context.Context, envID string, stack Stack, objs
 		}
 		prog.start(itemID)
 		var id string
-		werr := d.Aggregator.WriteOnManager(ctx, envID, func(c *dockerx.Client) error {
+		werr := d.write(ctx, envID, func(wctx context.Context, c *dockerx.Client) error {
 			var e error
 			if o.Kind == stacks.KindSecret {
-				id, e = c.SecretCreate(ctx, dockerx.SecretSpec{Name: full, Labels: labels, Data: o.Content})
+				id, e = c.SecretCreate(wctx, dockerx.SecretSpec{Name: full, Labels: labels, Data: o.Content})
 			} else {
-				id, e = c.ConfigCreate(ctx, dockerx.ConfigSpec{Name: full, Labels: labels, Data: o.Content})
+				id, e = c.ConfigCreate(wctx, dockerx.ConfigSpec{Name: full, Labels: labels, Data: o.Content})
 			}
 			return e
 		})
@@ -411,11 +411,11 @@ func (d Deps) removeReplacedObjects(ctx context.Context, envID string, stack Sta
 			continue
 		}
 		prog.start(removalID(r))
-		rerr := d.Aggregator.WriteOnManager(ctx, envID, func(c *dockerx.Client) error {
+		rerr := d.write(ctx, envID, func(wctx context.Context, c *dockerx.Client) error {
 			if r.Kind == stacks.KindSecret {
-				return c.SecretRemove(ctx, r.ID)
+				return c.SecretRemove(wctx, r.ID)
 			}
-			return c.ConfigRemove(ctx, r.ID)
+			return c.ConfigRemove(wctx, r.ID)
 		})
 		switch {
 		case rerr == nil:

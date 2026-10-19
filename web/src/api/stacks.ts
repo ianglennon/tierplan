@@ -526,6 +526,45 @@ export function useDeployStack(envId: string, stackId: string) {
   });
 }
 
+// CancelRequestError is a cancel the server refused or that got no answer. The status is 0 when the
+// server could not be reached; the type is job_finished for a deploy that had already ended.
+export class CancelRequestError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  constructor(status: number, type?: string) {
+    super(`POST cancel failed (${status})`);
+    this.name = "CancelRequestError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+// useCancelStackJob asks a running deploy to stop at the step it has reached. It is never retried:
+// a second cancel is the person's to send. The job is read again whatever the answer, so the page
+// shows what became of it.
+export function useCancelStackJob(envId: string, stackId: string, jobId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, CancelRequestError, void>({
+    mutationFn: async () => {
+      try {
+        const res = await api.POST("/api/env/{envId}/stacks/{stackId}/deploys/{jobId}/cancel", {
+          params: { path: { envId, stackId, jobId } },
+        });
+        if (!res.response.ok) {
+          const problem = readProblem(res.error, res.response);
+          throw new CancelRequestError(problem.status, problem.type);
+        }
+      } catch (e) {
+        // A network failure has no status.
+        throw e instanceof CancelRequestError ? e : new CancelRequestError(0);
+      }
+    },
+    retry: false,
+    onSettled: () =>
+      void queryClient.invalidateQueries({ queryKey: stackJobKey(envId, stackId, jobId) }),
+  });
+}
+
 // The query key of one deploy job.
 export function stackJobKey(envId: string, stackId: string, jobId: string) {
   return ["stack-job", envId, stackId, jobId] as const;

@@ -54,6 +54,7 @@ const (
 	problemStackJobNotFound    = "stack_job_not_found"
 	problemNameClash           = "stack_name_clash"
 	problemTargetChanged       = "target_changed"
+	problemJobFinished         = "job_finished"
 
 	// The states a stack is listed in, from its newest operation.
 	stackNotDeployed  = "not_deployed"
@@ -101,6 +102,10 @@ type StacksDeps struct {
 	MaxLifetime time.Duration
 	// MaxStreamsPerUser caps concurrent deploy streams per user. Zero means 4.
 	MaxStreamsPerUser int
+
+	// cancels remembers who cancelled which deploy until the deploy ends and is audited. RegisterStacks
+	// makes it; every copy of the deps shares it.
+	cancels *deployCancels
 }
 
 func (d StacksDeps) repo() stackops.Repo { return stackops.Repo{Store: d.Store, Vault: d.Vault} }
@@ -186,6 +191,9 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 	}
 	if d.MaxStreamsPerUser <= 0 {
 		d.MaxStreamsPerUser = defaultMaxStreams
+	}
+	if d.cancels == nil {
+		d.cancels = &deployCancels{by: map[string]string{}}
 	}
 	httpx.Register(r, huma.Operation{
 		OperationID: "listStacks", Method: http.MethodGet, Path: "/api/env/{envId}/stacks",

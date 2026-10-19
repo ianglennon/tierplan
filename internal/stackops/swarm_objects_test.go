@@ -206,8 +206,12 @@ func TestANameAnotherOwnerHoldsIsNotReusedOrReplaced(t *testing.T) {
 	if got := itemStates(job); got[stackops.ItemObjects] != "failed:object_name_taken" {
 		t.Errorf("items = %v", got)
 	}
-	if n := countWrites(rig.fake.Writes(), "DELETE"); n != 0 {
+	// The deploy takes back the network it had made; it never touches the secret that is not its own.
+	if countWrites(rig.fake.Writes(), "DELETE /secrets") != 0 {
 		t.Errorf("writes = %v, nothing of another owner may be removed", rig.fake.Writes())
+	}
+	if !slices.Contains(rig.secretNames(t), name) {
+		t.Errorf("secrets = %v, the other owner's secret %s is gone", rig.secretNames(t), name)
 	}
 }
 
@@ -230,11 +234,14 @@ func TestAReplacedSecretIsKeptWhenAServiceUpdateFails(t *testing.T) {
 	if got := itemStates(job); got[stackops.ItemCleanup] != "skipped:not_run" {
 		t.Errorf("items = %v, the cleanup must not run after a failed update", got)
 	}
-	if n := countWrites(rig.fake.Writes(), "DELETE /secrets"); n != 0 {
-		t.Errorf("writes = %v, the replaced secret must stay while a service may still use it", rig.fake.Writes())
+	// The new secret was made for this deploy and nothing uses it, so it goes again; the old one stays
+	// because the service that was not updated still uses it.
+	if w := rig.fake.Writes(); countWrites(w, "DELETE /secrets/oldsec") != 0 {
+		t.Errorf("writes = %v, the replaced secret must stay while a service may still use it", w)
 	}
-	if got := rig.secretNames(t); !slices.Contains(got, oldName) {
-		t.Errorf("secrets = %v, the old secret %s was removed", got, oldName)
+	got := rig.secretNames(t)
+	if !slices.Contains(got, oldName) || len(got) != 1 {
+		t.Errorf("secrets = %v, want only the old secret %s: the new one was made by this deploy and nothing uses it", got, oldName)
 	}
 }
 

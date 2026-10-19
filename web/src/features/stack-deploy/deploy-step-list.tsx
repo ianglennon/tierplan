@@ -124,7 +124,11 @@ export function DeployStepList({ items }: DeployStepListProps) {
           <span className="flex items-center gap-2">
             <StepMark state={item.state} />
             <span className="min-w-0 break-words">{item.label}</span>
-            <span className="text-muted-foreground">{t(`stackDeploy.state.${item.state}`)}</span>
+            <span className="text-muted-foreground">
+              {item.result?.cleaned === "true"
+                ? t("stackDeploy.cleanup.label")
+                : t(`stackDeploy.state.${item.state}`)}
+            </span>
           </span>
           {item.state === "failed" && rows.every((r) => r.state !== "failed") ? (
             <div className="ms-6">

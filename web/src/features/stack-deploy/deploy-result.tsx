@@ -7,6 +7,7 @@ import { CircleX, Info } from "lucide-react";
 import type { StackJob, StackJobItem } from "@/api/stacks";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { CONVERGE_TIMEOUT } from "@/features/stack-deploy/deploy-service-row";
 import { useT } from "@/i18n/use-t";
 import { withBase } from "@/lib/base-path";
 
@@ -38,12 +39,59 @@ export function failureOf(job: StackJob): StackJobItem | undefined {
   );
 }
 
+// updatedServices is how many services the swarm took before the deploy stopped: those it finished
+// with, and those whose write it accepted but that did not settle (a timeout counts, a rejection does
+// not).
+export function updatedServices(job: StackJob): number {
+  return servicesOf(job).filter((r) => r.state === "done" || Boolean(r.result?.action)).length;
+}
+
+// The cleanup a deploy that stopped did: the objects it created and removed again, and the ones it
+// could not remove. An object a service uses stays and is not reported: it is not a failure.
+export interface Cleanup {
+  removed: number;
+  // "network s1_front", "secret s1_tok_ab12": what stays on the swarm that Bayplan could not remove.
+  stuck: string[];
+}
+
+export function cleanupOf(job: StackJob): Cleanup {
+  const out: Cleanup = { removed: 0, stuck: [] };
+  for (const it of job.items ?? []) {
+    if (it.result?.cleaned === "true") out.removed += 1;
+    else if (it.result?.left === "failed") {
+      out.stuck.push(`${it.result.kind ?? ""} ${it.result.name ?? ""}`.trim());
+    }
+  }
+  return out;
+}
+
 interface DeployResultProps {
   job: StackJob;
   envId: string;
   stackId: string;
   name: string;
   envName: string;
+}
+
+// CleanupReport is the second part of a stopped deploy's account: how many of the objects it created
+// were removed again, and which it could not remove and where the person removes them. A cancel
+// words the first part itself and shows only the second.
+function CleanupReport({ cleanup, stuckOnly = false }: { cleanup: Cleanup; stuckOnly?: boolean }) {
+  const t = useT();
+  return (
+    <>
+      {!stuckOnly && cleanup.removed > 0 ? (
+        <p className="break-words">
+          {t("stackDeploy.cleanup.removed", { count: cleanup.removed })}
+        </p>
+      ) : null}
+      {cleanup.stuck.length > 0 ? (
+        <p className="break-words">
+          {t("stackDeploy.cleanup.left", { list: cleanup.stuck.join(", ") })}
+        </p>
+      ) : null}
+    </>
+  );
 }
 
 // DeployResult is what the console says when the job has ended: Deploy complete with what is
@@ -98,18 +146,30 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
       rows.length > 0
         ? t("stackDeploy.failed.stopped", {
             step: failed?.label ?? name,
-            done: rows.filter((r) => r.state === "done").length,
+            done: updatedServices(job),
             count: rows.length,
           })
         : failed?.message
           ? failed.message
           : t("stackDeploy.failed.fallback", { step: failed?.label ?? name });
+    // A service that never settled has its own sentence: how long it was given, and what to do.
+    const timedOut = rows.find((r) => r.code === CONVERGE_TIMEOUT);
+    const cleanup = cleanupOf(job);
     return (
       <Alert variant="destructive">
         <CircleX aria-hidden="true" />
         <AlertTitle>{t("stackDeploy.failed.title")}</AlertTitle>
         <AlertDescription className="flex flex-col gap-3">
+          {timedOut ? (
+            <p className="break-words">
+              {t("stackConverge.timeout.body", {
+                service: timedOut.label,
+                count: Number(timedOut.result?.minutes) || 0,
+              })}
+            </p>
+          ) : null}
           <p className="break-words">{sentence}</p>
+          <CleanupReport cleanup={cleanup} />
           <div className="flex flex-wrap gap-2">
             <Button asChild variant="outline" className="max-md:h-11">
               <Link to="/env/$envId/stacks/$stackId/editor" params={{ envId, stackId }}>
@@ -123,13 +183,35 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
     );
   }
   if (job.state === "cancelled") {
+    const stoppedAt = failureOf(job);
+    const rows = servicesOf(job);
+    const cleanup = cleanupOf(job);
     return (
       <Alert>
         <Info aria-hidden="true" />
         <AlertTitle>{t("stackDeploy.cancelled.title")}</AlertTitle>
         <AlertDescription className="flex flex-col gap-3">
-          <p>{t("stackDeploy.cancelled.body")}</p>
-          <div className="flex flex-wrap gap-2">{outline}</div>
+          {rows.length > 0 ? (
+            <p className="break-words">
+              {t("stackDeploy.cancelled.stopped", {
+                step: stoppedAt?.label ?? name,
+                done: updatedServices(job),
+                count: rows.length,
+              })}
+              {cleanup.removed > 0 ? ` ${t("stackDeploy.cleanup.removedCancelled")}` : ""}
+            </p>
+          ) : (
+            <p>{t("stackDeploy.cancelled.body")}</p>
+          )}
+          <CleanupReport cleanup={cleanup} stuckOnly />
+          <div className="flex flex-wrap gap-2">
+            <Button asChild variant="outline" className="max-md:h-11">
+              <Link to="/env/$envId/stacks/$stackId/editor" params={{ envId, stackId }}>
+                {t("stackDeploy.backToEditing")}
+              </Link>
+            </Button>
+            {outline}
+          </div>
         </AlertDescription>
       </Alert>
     );

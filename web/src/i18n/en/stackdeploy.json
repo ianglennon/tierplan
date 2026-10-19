@@ -61,7 +61,9 @@
     },
     "cancelled": {
       "title": "Deploy cancelled",
-      "body": "Bayplan stopped at the step it had reached."
+      "body": "Bayplan stopped at the step it had reached.",
+      "stopped_one": "Bayplan stopped at {{step}}. {{done}} of {{count}} service was already updated.",
+      "stopped_other": "Bayplan stopped at {{step}}. {{done}} of {{count}} services were already updated."
     },
     "openStack": "Open stack",
     "backToEditing": "Back to editing",
@@ -84,6 +86,24 @@
       "failed": "{{service}} failed: {{reason}}",
       "complete": "Deploy complete",
       "cancelled": "Deploy cancelled"
+    },
+    "cancel": {
+      "action": "Cancel deploy",
+      "pending": "Cancelling…",
+      "title": "Cancel this deploy?",
+      "body": "Bayplan stops at the step it has reached. Services already updated stay updated, and objects created for this deploy that nothing uses are removed.",
+      "keep": "Keep deploying",
+      "confirm": "Cancel deploy",
+      "finished": "This deploy has already ended.",
+      "failed": "Couldn't cancel the deploy. Try again."
+    },
+    "cleanup": {
+      "removed_one": "The {{count}} object created for this deploy that nothing uses was removed.",
+      "removed_other": "The {{count}} objects created for this deploy that nothing uses were removed.",
+      "removedCancelled": "Objects created for this deploy that nothing uses were removed.",
+      "left": "Bayplan couldn't remove {{list}}. Remove them under Networks, Secrets or Configs.",
+      "object": "{{kind}} {{name}}",
+      "label": "Cleaned up"
     }
   }
 }

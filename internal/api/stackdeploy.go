@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
@@ -115,6 +116,47 @@ type StackJobOutput struct {
 	Body         StackJobBody
 }
 
+// StackCancelBody is the answer to a cancel: the deploy is being stopped.
+type StackCancelBody struct {
+	JobID string `json:"jobId" doc:"The deploy that is being stopped: follow it at GET .../deploys/{jobId} or its stream until it reads cancelled"`
+}
+
+// StackCancelOutput wraps StackCancelBody for huma.
+type StackCancelOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         StackCancelBody
+}
+
+// deployCancels remembers who cancelled a deploy, so the audit row written when the deploy ends can
+// say it: the person who started a deploy is not always the person who stopped it.
+type deployCancels struct {
+	mu sync.Mutex
+	by map[string]string
+}
+
+func (c *deployCancels) note(jobID, who string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.by[jobID] = who
+}
+
+func (c *deployCancels) forget(jobID string) { _ = c.take(jobID) }
+
+// take returns who cancelled the job and forgets it, empty when nobody did.
+func (c *deployCancels) take(jobID string) string {
+	if c == nil {
+		return ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	who := c.by[jobID]
+	delete(c.by, jobID)
+	return who
+}
+
 func registerStackDeploy(r *httpx.Router, d StacksDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "deployStack", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/deploys",
@@ -143,6 +185,21 @@ func registerStackDeploy(r *httpx.Router, d StacksDeps) {
 	}, rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackJobPathInput) (*StackJobOutput, error) {
 			return getStackJob(ctx, d, in)
+		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "cancelStackDeploy", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/deploys/{jobId}/cancel",
+		Summary: "Cancel a deploy that is running",
+		Description: "Asks the deploy to stop at the step it has reached and answers 202 at once; follow the job until it reads cancelled. " +
+			"A service being written when the cancel arrives is finished and no other is started; services already updated stay updated and nothing is rolled back. " +
+			"The networks, secrets and configs this deploy created that no service uses are removed again. " +
+			"The deploy is recorded in the audit log as stack.deployed with the result cancelled, and who cancelled it. " +
+			"A job that has ended answers 409 job_finished and nothing changes, so cancelling twice is safe; a job of another stack, or one that is gone, is 404 stack_job_not_found. A cancel is a change and is never retried. " +
+			"Needs stacks.deploy (Operator), not necessarily the person who started the deploy.",
+		Tags: []string{"stacks"}, DefaultStatus: http.StatusAccepted,
+	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *StackJobPathInput) (*StackCancelOutput, error) {
+			return cancelStackJob(ctx, d, in)
 		})
 
 	lim := &streamLimiter{max: d.MaxStreamsPerUser, open: map[string]int{}}
@@ -198,6 +255,41 @@ func serveStackJobStream(w http.ResponseWriter, req *http.Request, d StacksDeps,
 			return nil, false
 		},
 	})
+}
+
+// cancelStackJob asks a running deploy of this stack to stop. The job's context ends; the deploy
+// finishes the write it is on, cleans up and ends the job (stackops.DeploySwarm).
+func cancelStackJob(ctx context.Context, d StacksDeps, in *StackJobPathInput) (*StackCancelOutput, error) {
+	p := httpx.PrincipalFrom(ctx)
+	if p == nil {
+		return nil, huma.Error500InternalServerError("internal error")
+	}
+	if d.Jobs == nil {
+		return nil, httpx.Problem(http.StatusServiceUnavailable, problemJobsUnavail, "Deploys are not available right now.")
+	}
+	if _, err := d.repo().Stack(ctx, in.EnvID, in.StackID); err != nil {
+		return nil, stackLookupProblem(d, in.EnvID, err)
+	}
+	gone := httpx.Problem(http.StatusNotFound, problemStackJobNotFound, stackJobGone)
+	job, ok := d.Jobs.Get(in.JobID)
+	if !ok || !stackJobOf(job, in.EnvID, in.StackID) {
+		return nil, gone
+	}
+	// Who cancelled is noted first: the deploy can end, and be audited, the moment it is cancelled.
+	d.cancels.note(in.JobID, p.Name)
+	switch err := d.Jobs.Cancel(in.JobID); {
+	case errors.Is(err, jobs.ErrFinished):
+		d.cancels.forget(in.JobID)
+		return nil, httpx.Problem(http.StatusConflict, problemJobFinished, "This deploy has already ended.")
+	case errors.Is(err, jobs.ErrNotFound):
+		d.cancels.forget(in.JobID)
+		return nil, gone
+	case err != nil:
+		d.cancels.forget(in.JobID)
+		d.Log.Error("could not cancel a stack deploy", "job", in.JobID, "error", err)
+		return nil, huma.Error500InternalServerError("internal error")
+	}
+	return &StackCancelOutput{CacheControl: "no-store", Body: StackCancelBody{JobID: in.JobID}}, nil
 }
 
 // stackJobOf reports whether a job in the hub is a deploy of that stack on that environment.
@@ -408,6 +500,7 @@ func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userA
 	}
 	wctx, cancel := doneActionAuditContext(ctx)
 	defer cancel()
+	cancelledBy := d.cancels.take(deploy.JobID)
 	repo := d.repo()
 	if err := repo.SetOutcome(wctx, rev.ID, outcome, "", ""); err != nil {
 		d.Log.Error("could not mark a revision", "stack", st.ID, "revision", rev.Seq, "error", err)
@@ -424,13 +517,17 @@ func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userA
 	if err := repo.FinishDeploy(wctx, deploy.ID, state, res.FailedService, res.Code); err != nil {
 		d.Log.Error("could not finish a deploy row", "stack", st.ID, "deploy", deploy.ID, "error", err)
 	}
+	details := map[string]string{
+		"stack": st.Name, "mode": mode, "result": resultWord, "revision": itoa(rev.Seq), "job": deploy.JobID,
+		"services": itoa(int64(res.Services + res.Updated)), "code": res.Code,
+	}
+	if resultWord == "cancelled" && cancelledBy != "" {
+		details["cancelledBy"] = cancelledBy
+	}
 	if err := d.Audit.Record(wctx, audit.Entry{
 		Actor: actor, Action: audit.ActionStackDeployed, TargetType: stackTargetType, TargetID: st.ID, EnvID: st.EnvID,
 		Result: result, Reason: res.Code, IP: httpx.ClientIP(ctx), UserAgent: userAgent,
-		Details: map[string]string{
-			"stack": st.Name, "mode": mode, "result": resultWord, "revision": itoa(rev.Seq), "job": deploy.JobID,
-			"services": itoa(int64(res.Services + res.Updated)), "code": res.Code,
-		},
+		Details: details,
 	}); err != nil {
 		d.Log.Error("could not audit a stack deploy", "stack", st.ID, "error", err)
 	}
@@ -577,7 +674,7 @@ func getStackJob(ctx context.Context, d StacksDeps, in *StackJobPathInput) (*Sta
 
 func stackJobBody(j jobs.Job, output []jobs.Output) StackJobBody {
 	b := StackJobBody{
-		ID: j.ID, StackID: j.Meta[metaStackID], Mode: j.Meta[metaMode], StartedBy: j.Meta[metaStartedBy], State: j.State,
+		ID: j.ID, StackID: j.Meta[metaStackID], Mode: j.Meta[metaMode], StartedBy: j.Meta[metaStartedBy], State: stackJobState(j),
 		CreatedAt: rfc3339(j.CreatedAt), FinishedAt: rfc3339(j.FinishedAt), Items: make([]StackJobItemBody, 0, len(j.Items)),
 		Output: make([]StackJobOutputLine, 0, len(output)),
 	}
@@ -588,6 +685,29 @@ func stackJobBody(j jobs.Job, output []jobs.Output) StackJobBody {
 		b.Output = append(b.Output, stackJobOutputLine(o))
 	}
 	return b
+}
+
+// stackJobState is the state of a deploy job as the console reads it. The hub calls a job partial
+// when some of its items are done, so a deploy that was cancelled after its first steps would read
+// partial; it reads cancelled when it was stopped by a cancel and nothing failed. An object the
+// cleanup could not remove is not a failure of the deploy: it is reported on its own.
+func stackJobState(j jobs.Job) string {
+	if j.State != jobs.JobPartial && j.State != jobs.JobFailed {
+		return j.State
+	}
+	cancelled := false
+	for _, it := range j.Items {
+		switch {
+		case it.State == jobs.ItemFailed && it.Code != stackops.CodeRemoveFailed:
+			return j.State
+		case it.State == jobs.ItemCancelled && it.Code == stackops.CodeCancelled:
+			cancelled = true
+		}
+	}
+	if cancelled {
+		return jobs.JobCancelled
+	}
+	return j.State
 }
 
 func stackJobOutputLine(o jobs.Output) StackJobOutputLine {

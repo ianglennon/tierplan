@@ -489,7 +489,9 @@ describe("a service coming up (plan 07-18, D-13)", () => {
       ],
     };
     mount();
-    expect(await screen.findByText(/web didn't settle within 1 minute\. /)).toBeTruthy();
+    expect(
+      (await screen.findAllByText(/web didn't settle within 1 minute\. /)).length,
+    ).toBeGreaterThan(0);
   });
 
   it("reads Updated, not Running, for a service the deploy took but did not wait for", async () => {
@@ -1149,7 +1151,7 @@ describe("the result of a deploy that stopped", () => {
     mount();
     await screen.findByText("Deploy cancelled");
     expect(
-      screen.getByText("Bayplan stopped at Deploy services. 0 of 1 service were already updated."),
+      screen.getByText("Bayplan stopped at Deploy services. 0 of 1 service was already updated."),
     ).toBeTruthy();
     expect(screen.queryByText(/nothing uses were removed/)).toBeNull();
   });
@@ -1232,7 +1234,8 @@ describe("cancelling a deploy", () => {
         "9",
       );
     });
-    expect(screen.getByText("Deploy cancelled")).toBeTruthy();
+    // The result's title, and the polite region saying it once.
+    expect(screen.getAllByText("Deploy cancelled")).toHaveLength(2);
     expect(screen.queryByText("Cancelling…")).toBeNull();
   });
 

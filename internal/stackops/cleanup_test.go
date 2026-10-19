@@ -189,7 +189,8 @@ func (c *cancelOn) hook(write string) {
 		return
 	}
 	<-c.ready
-	_ = c.hub.Load().Cancel(c.id.Load().(string))
+	id, _ := c.id.Load().(string)
+	_ = c.hub.Load().Cancel(id)
 }
 
 // arm tells the hook which job to cancel; the deploy waits for it at the write.

@@ -179,6 +179,11 @@ func (r DeployResult) OK() bool { return r.Code == "" }
 // removed. Nothing is removed before the last item, after every service was created or updated, so
 // a deploy that stops earlier leaves the old services and objects where they are (D-07).
 //
+// A write that has begun is finished even if the job is cancelled: the cancel is looked for between
+// writes, so a service is never left half written and no write is repeated. When the deploy stops,
+// by a failure or a cancel, nothing is rolled back and nothing is retried; the networks, secrets and
+// configs it created that no service uses are removed again (cleanupCreated).
+//
 // The last item is finished only after in.OnDone returns.
 func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Reporter) (res DeployResult) {
 	prog := newProgress(r, in.Masker)
@@ -235,6 +240,9 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 			}
 		}
 		prog.rest(later.state, later.code, later.message)
+		// What this deploy created and no service uses goes again; nothing else is touched, and no
+		// service is put back (D-14).
+		d.cleanupCreated(ctx, in.EnvID, in.Stack, &res, prog)
 		return res
 	}
 	fail := func(item, code, name string) DeployResult { return failWith(item, code, name, "") }
@@ -267,6 +275,7 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		d.log().Warn("a stack could not be converted for a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
 		return fail(ItemCheck, CodeStackInvalid, "")
 	}
+	res.Total = len(planned.Services)
 	extSecrets, extConfigs := hasExternalObject(objs, stacks.KindSecret), hasExternalObject(objs, stacks.KindConfig)
 	owned, err := d.readLive(ctx, in.EnvID, in.Stack.Name, liveWant{allNetworks: hasExternal(planned), allSecrets: extSecrets, allConfigs: extConfigs})
 	if err != nil {
@@ -404,12 +413,12 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 			return fail(ItemServices, CodeRegistryUnresolved, sp.Name)
 		}
 		serviceID := existing.ID
-		err = d.Aggregator.WriteOnManager(ctx, in.EnvID, func(c *dockerx.Client) error {
+		err = d.write(ctx, in.EnvID, func(wctx context.Context, c *dockerx.Client) error {
 			if update {
-				_, e := c.ServiceUpdate(ctx, existing.ID, existing.Version, raw, auth)
+				_, e := c.ServiceUpdate(wctx, existing.ID, existing.Version, raw, auth)
 				return e
 			}
-			id, _, e := c.ServiceCreate(ctx, raw, auth)
+			id, _, e := c.ServiceCreate(wctx, raw, auth)
 			serviceID = id
 			return e
 		})

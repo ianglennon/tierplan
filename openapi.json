@@ -11195,6 +11195,19 @@
         ],
         "type": "object"
       },
+      "StackCancelBody": {
+        "additionalProperties": false,
+        "properties": {
+          "jobId": {
+            "description": "The deploy that is being stopped: follow it at GET .../deploys/{jobId} or its stream until it reads cancelled",
+            "type": "string"
+          }
+        },
+        "required": [
+          "jobId"
+        ],
+        "type": "object"
+      },
       "StackCheckBody": {
         "additionalProperties": false,
         "properties": {
@@ -21820,6 +21833,77 @@
           }
         },
         "summary": "One deploy job and its steps",
+        "tags": [
+          "stacks"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/deploys/{jobId}/cancel": {
+      "post": {
+        "description": "Asks the deploy to stop at the step it has reached and answers 202 at once; follow the job until it reads cancelled. A service being written when the cancel arrives is finished and no other is started; services already updated stay updated and nothing is rolled back. The networks, secrets and configs this deploy created that no service uses are removed again. The deploy is recorded in the audit log as stack.deployed with the result cancelled, and who cancelled it. A job that has ended answers 409 job_finished and nothing changes, so cancelling twice is safe; a job of another stack, or one that is gone, is 404 stack_job_not_found. A cancel is a change and is never retried. Needs stacks.deploy (Operator), not necessarily the person who started the deploy.",
+        "operationId": "cancelStackDeploy",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The job ID the deploy answered with",
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "description": "The job ID the deploy answered with",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackCancelBody"
+                }
+              }
+            },
+            "description": "Accepted",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Cancel a deploy that is running",
         "tags": [
           "stacks"
         ]
