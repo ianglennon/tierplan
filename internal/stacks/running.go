@@ -573,9 +573,10 @@ func NormalizeComposeService(svc types.ServiceConfig, img ImageDefaults, rc Runn
 }
 
 // AlignDaemonDefaults makes a running service agree with the desired one on the settings a daemon fills in
-// from its own configuration when the container sets none (the default log driver, the default ulimits, the
-// shared memory size, the IPC mode): where the file sets nothing, the running side is taken to set nothing
-// either, so a daemon's configuration never makes a service look changed.
+// from its own configuration or from another setting when the container sets none (the default log driver,
+// the default ulimits, the shared memory size, the IPC mode, the swap limit that follows the memory limit):
+// where the file sets nothing, the running side is taken to set nothing either, so a daemon's configuration
+// never makes a service look changed.
 func AlignDaemonDefaults(desired, running types.ServiceConfig) types.ServiceConfig {
 	if desired.Logging == nil {
 		running.Logging = nil
@@ -595,6 +596,10 @@ func AlignDaemonDefaults(desired, running types.ServiceConfig) types.ServiceConf
 	}
 	if desired.ShmSize == 0 {
 		running.ShmSize = 0
+	}
+	// A memory limit with no swap limit is recorded with a swap limit of twice the memory.
+	if desired.MemSwapLimit == 0 {
+		running.MemSwapLimit = 0
 	}
 	if desired.Ipc == "" {
 		running.Ipc = ""
