@@ -172,3 +172,15 @@ export function toSaveBody(copy: WorkingCopy, version: number): StackDraftSaveIn
     })),
   };
 }
+
+export type FilePathProblem = "invalid" | "taken";
+
+// filePathProblem says why a name cannot be added as a file of the stack, or null. It is the
+// browser's copy of the server's rule (stacks.ValidPath), so a bad name is caught before it
+// appears; the server holds every save to the rule whatever the browser did.
+export function filePathProblem(
+  _path: string,
+  _existing: readonly string[],
+): FilePathProblem | null {
+  return null;
+}

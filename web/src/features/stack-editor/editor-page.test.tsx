@@ -9,7 +9,7 @@ import {
   createRouter,
   RouterProvider,
 } from "@tanstack/react-router";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -126,11 +126,11 @@ afterEach(() => {
 
 const puts = () => server.sent.filter((s) => s.method === "PUT");
 
-function mount(file?: string) {
+function mount(file?: string, onFileChange?: (path: string | undefined) => void) {
   const root = createRootRoute({
     component: () => (
       <TooltipProvider>
-        <StackEditorPage envId={ENV} stackId={STACK} file={file} />
+        <StackEditorPage envId={ENV} stackId={STACK} file={file} onFileChange={onFileChange} />
         <Toaster />
       </TooltipProvider>
     ),
@@ -359,5 +359,185 @@ describe("what the page sends", () => {
     expect(draftReads).toHaveLength(1);
     const writes = server.sent.filter((s) => s.method !== "GET");
     expect(writes.every((s) => s.path === `/api/env/${ENV}/stacks/${STACK}/draft`)).toBe(true);
+  });
+});
+
+const withFiles = () =>
+  draftBody({
+    files: [
+      { path: "compose.yaml", content: COMPOSE, secret: false },
+      { path: "nginx.conf", content: "events {}\n", secret: false },
+      { path: "config/app.env", content: "A=1\n", secret: false },
+    ],
+  });
+
+const railButton = (name: string) =>
+  within(screen.getByRole("navigation", { name: "Stack files" })).getByRole("button", { name });
+
+describe("the file rail in the page", () => {
+  it("lists the files of the draft and opens the one clicked in its own editor", async () => {
+    server.draft = () => Response.json(withFiles());
+    const changed = vi.fn();
+    mount(undefined, changed);
+    await ready();
+    const names = within(screen.getByRole("navigation", { name: "Stack files" }))
+      .getAllByRole("listitem")
+      .map((li) => li.querySelector("[data-file]")?.getAttribute("data-file"));
+    expect(names).toEqual(["compose.yaml", "config/app.env", "nginx.conf"]);
+    fireEvent.click(railButton("nginx.conf"));
+    expect(await screen.findByRole("textbox", { name: "nginx.conf, text" })).toBeTruthy();
+    expect(editorText()).toBe("events {}\n");
+    expect(changed).toHaveBeenCalledWith("nginx.conf");
+    expect(railButton("nginx.conf").getAttribute("aria-current")).toBe("true");
+  });
+
+  it("opens the file the address names, and goes back to compose.yaml by dropping it", async () => {
+    server.draft = () => Response.json(withFiles());
+    const changed = vi.fn();
+    mount("config/app.env", changed);
+    await screen.findByRole("textbox", { name: "config/app.env, text" });
+    expect(editorText()).toBe("A=1\n");
+    fireEvent.click(railButton("compose.yaml"));
+    expect(changed).toHaveBeenCalledWith(undefined);
+  });
+
+  it("ignores an address that names a file the draft does not have", async () => {
+    server.draft = () => Response.json(withFiles());
+    mount("gone.txt");
+    await ready();
+  });
+
+  it("shows a skeleton rail with the skeleton editor until the draft is read", async () => {
+    server.draft = () => new Promise<Response>(() => {});
+    mount();
+    expect(await screen.findByTestId("rail-skeleton")).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "Stack files" })).toBeNull();
+  });
+
+  it("adds a file, opens it empty, and saves it with the others in path order", async () => {
+    server.draft = () => Response.json(withFiles());
+    const changed = vi.fn();
+    mount(undefined, changed);
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Add file" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add a file" });
+    fireEvent.change(within(dialog).getByLabelText("File name"), { target: { value: ".env" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add file" }));
+    await screen.findByRole("textbox", { name: ".env, text" });
+    expect(editorText()).toBe("");
+    expect(changed).toHaveBeenCalledWith(".env");
+    expect(await screen.findByText("Unsaved changes")).toBeTruthy();
+
+    typeIntoEditor("PORT=80\n");
+    fireEvent.click(saveButton());
+    await screen.findByText("Saved the draft of tracer.");
+    expect(puts()[0]?.body?.files).toEqual([
+      { path: "compose.yaml", content: COMPOSE, secret: false },
+      { path: ".env", content: "PORT=80\n", secret: false },
+      { path: "config/app.env", content: "A=1\n", secret: false },
+      { path: "nginx.conf", content: "events {}\n", secret: false },
+    ]);
+  });
+
+  it("renames and deletes files in the working copy, and sends neither until Save", async () => {
+    server.draft = () => Response.json(withFiles());
+    mount();
+    await ready();
+    const rail = () => screen.getByRole("navigation", { name: "Stack files" });
+
+    fireEvent.keyDown(within(rail()).getByRole("button", { name: "Actions for nginx.conf" }), {
+      key: "Enter",
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Rename…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Rename nginx.conf" });
+    fireEvent.change(within(dialog).getByLabelText("File name"), { target: { value: "web.conf" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Rename" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    fireEvent.keyDown(within(rail()).getByRole("button", { name: "Actions for config/app.env" }), {
+      key: "Enter",
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete file" }));
+
+    expect(within(rail()).getByRole("button", { name: "web.conf" })).toBeTruthy();
+    expect(within(rail()).queryByRole("button", { name: "config/app.env" })).toBeNull();
+    expect(puts()).toHaveLength(0);
+    expect(await screen.findByText("Unsaved changes")).toBeTruthy();
+
+    fireEvent.click(saveButton());
+    await screen.findByText("Saved the draft of tracer.");
+    expect((puts()[0]?.body?.files as { path: string }[]).map((f) => f.path)).toEqual([
+      "compose.yaml",
+      "web.conf",
+    ]);
+  });
+
+  it("opens compose.yaml when the open file is deleted", async () => {
+    server.draft = () => Response.json(withFiles());
+    mount();
+    await ready();
+    fireEvent.click(railButton("nginx.conf"));
+    await screen.findByRole("textbox", { name: "nginx.conf, text" });
+    fireEvent.keyDown(railButton("Actions for nginx.conf"), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete file" }));
+    await ready();
+  });
+
+  it("gives a Viewer the rail to read with, and no way to change it", async () => {
+    server.role = "viewer";
+    server.draft = () => Response.json(withFiles());
+    mount();
+    await ready();
+    expect(screen.queryByRole("button", { name: "Add file" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Actions for/ })).toBeNull();
+    fireEvent.click(railButton("nginx.conf"));
+    const box = await screen.findByRole("textbox", { name: "nginx.conf, text" });
+    expect(box.getAttribute("aria-readonly")).toBe("true");
+  });
+});
+
+describe("a save the server refuses over a file", () => {
+  async function refused(type: string, location: string, status = 422) {
+    server.save = () =>
+      Response.json(
+        { type, title: "x", status, detail: "d", errors: [{ location, message: "m" }] },
+        { status },
+      );
+    mount();
+    await ready();
+    typeIntoEditor("x");
+    fireEvent.click(saveButton());
+    return screen.findByRole("alert");
+  }
+
+  it("says a path is not allowed", async () => {
+    const alert = await refused("file_path_invalid", "../x");
+    expect(alert.textContent).toBe("Use a path inside this stack, without “..” or a leading /.");
+  });
+
+  it("says a name is taken, naming it", async () => {
+    const alert = await refused("file_name_taken", "a.env");
+    expect(alert.textContent).toBe("A file named a.env already exists.");
+  });
+
+  it("says a file is too large", async () => {
+    const alert = await refused("file_too_large", "big.bin");
+    expect(alert.textContent).toBe("Files can be at most 1 MB.");
+  });
+
+  it("says the stack is too large", async () => {
+    const alert = await refused("stack_too_large", "files");
+    expect(alert.textContent).toBe("A stack can hold at most 50 files and 8 MB in all.");
+  });
+
+  it("says a compose file is missing", async () => {
+    const alert = await refused("compose_missing", "compose.yaml");
+    expect(alert.textContent).toBe("A stack needs a compose.yaml.");
+  });
+
+  it("keeps everything that was typed", async () => {
+    await refused("file_path_invalid", "../x");
+    expect(editorText()).toBe("x");
+    expect(screen.getByText("Unsaved changes")).toBeTruthy();
   });
 });

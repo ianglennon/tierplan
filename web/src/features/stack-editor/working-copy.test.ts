@@ -7,6 +7,7 @@ import type { StackDraft } from "@/api/stacks";
 import {
   COMPOSE_FILE,
   emptyWorkingCopy,
+  filePathProblem,
   isDirty,
   toSaveBody,
   type WorkingCopy,
@@ -233,5 +234,69 @@ describe("toSaveBody", () => {
       content: "new secret",
       secret: true,
     });
+  });
+});
+
+describe("filePathProblem", () => {
+  const existing = [COMPOSE_FILE, "nginx.conf"];
+
+  it("accepts a path inside the stack", () => {
+    for (const p of [
+      ".env",
+      "config/nginx.conf",
+      "a/b/c/d.txt",
+      "my file.txt",
+      "zażółć.conf",
+      "app.prod.env",
+    ]) {
+      expect(filePathProblem(p, existing), p).toBeNull();
+    }
+  });
+
+  it("accepts a path of 255 characters and a segment of 100", () => {
+    expect(
+      filePathProblem(`${"a".repeat(100)}/${"b".repeat(100)}/${"c".repeat(53)}`, existing),
+    ).toBeNull();
+    expect(filePathProblem("ż".repeat(100), existing)).toBeNull();
+  });
+
+  it("refuses what could leave the stack or is not a name", () => {
+    const refused = [
+      "",
+      "/etc/passwd",
+      "../x",
+      "a/../b",
+      "a/..",
+      "..",
+      ".",
+      "a/./b",
+      "./x",
+      "a//b",
+      "a/",
+      "a\\b",
+      "C:/x",
+      "c:/x",
+      "C:",
+      "a:b",
+      "x\u0000",
+      "a\nb",
+      "a\tb",
+      "a\u007fb",
+      "a\u202eb",
+      "a\u2028b",
+      `${"a".repeat(100)}/${"b".repeat(100)}/${"c".repeat(54)}`,
+      "a".repeat(101),
+      `ok/${"a".repeat(101)}/x`,
+      "ż".repeat(101),
+    ];
+    for (const p of refused)
+      expect(filePathProblem(p, existing), JSON.stringify(p)).toBe("invalid");
+  });
+
+  it("says taken for a path the stack already holds, and invalid first for a bad one", () => {
+    expect(filePathProblem("nginx.conf", existing)).toBe("taken");
+    expect(filePathProblem(COMPOSE_FILE, existing)).toBe("taken");
+    expect(filePathProblem("Nginx.conf", existing)).toBeNull();
+    expect(filePathProblem("../nginx.conf", ["../nginx.conf"])).toBe("invalid");
   });
 });
