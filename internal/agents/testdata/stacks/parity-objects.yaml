@@ -1,0 +1,41 @@
+# The secrets and configs of the parity corpus (plan 07-11). The content is in files beside this
+# one. docker stack deploy names each object <stack>_<name>; Bayplan adds a short hash of the content
+# to the end, which the normaliser removes. Every object is used by a service, because Bayplan (unlike
+# docker stack deploy) creates only the objects a service uses.
+services:
+  app:
+    image: {{IMAGE}}
+    command: ["sleep", "3600"]
+    stop_grace_period: 1s
+    secrets:
+      - source: dbpass
+        target: db-password
+        uid: "1000"
+        gid: "1000"
+        mode: 0440
+      - tokenfile
+    configs:
+      - source: appconf
+        target: /etc/app/app.conf
+        uid: "1000"
+        gid: "1000"
+        mode: 0444
+      - shortconf
+    deploy:
+      replicas: 1
+
+secrets:
+  dbpass:
+    file: ./dbpass.txt
+  tokenfile:
+    file: ./token.txt
+    labels:
+      tier: gold
+
+configs:
+  appconf:
+    file: ./app.conf
+    labels:
+      parity.config: "app"
+  shortconf:
+    file: ./short.conf

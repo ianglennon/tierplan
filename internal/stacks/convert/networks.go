@@ -99,9 +99,10 @@ func networkKeys(svc composetypes.ServiceConfig) []string {
 	return keys
 }
 
-// convertNetwork converts the network the compose file calls key. The default network is
-// attachable; one the file declares keeps its own settings. An external network is referenced by
-// the name the file gave it and is never created.
+// convertNetwork converts the network the compose file calls key. The default network is a plain
+// overlay network, not attachable, as docker stack deploy makes it (the parity oracle on a real
+// swarm showed the engine holding attachable=false there); one the file declares keeps its own
+// settings. An external network is referenced by the name the file gave it and is never created.
 func convertNetwork(key string, p *composetypes.Project, o Options) NetworkPlan {
 	decl, declared := p.Networks[key]
 	np := NetworkPlan{Key: key, Name: o.StackName + "_" + key, Driver: "overlay"}
@@ -120,9 +121,6 @@ func convertNetwork(key string, p *composetypes.Project, o Options) NetworkPlan 
 				np.Pools = append(np.Pools, Pool{Subnet: pool.Subnet, Gateway: pool.Gateway, IPRange: pool.IPRange})
 			}
 		}
-	}
-	if key == defaultNetwork && !np.External {
-		np.Attachable = true
 	}
 	if np.External {
 		return np

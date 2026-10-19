@@ -242,7 +242,7 @@ var hashedSuffix = regexp.MustCompile(`_[0-9a-f]{8}$`)
 //     UpdateStatus and the rest are what the engine did, not what was asked of it;
 //   - the stack's name, which becomes STACK (in a name, STACK_ and a prefix of one);
 //   - the ID of a network, secret or config, which becomes its name;
-//   - the hash at the end of a secret's or a config's name;
+//   - the hash at the end of a secret's or a config's name (and so of the name its ID became);
 //   - every label whose key starts with bayplan., which are Bayplan's own;
 //   - the order of the networks, which both converters give by ID and which therefore follows the
 //     IDs of two different deploys; they are put in order by name instead.
@@ -312,7 +312,7 @@ func (n normaliser) walk(key string, v any) any {
 			x = name
 		}
 		x = n.name(x)
-		if key == "SecretName" || key == "ConfigName" {
+		if key == "SecretName" || key == "ConfigName" || key == "SecretID" || key == "ConfigID" {
 			x = hashedSuffix.ReplaceAllString(x, "")
 		}
 		return x
@@ -376,13 +376,98 @@ func stackSpecDiff(a, b map[string]any) string {
 	return strings.Join(lines, "\n")
 }
 
-// stackSnapshot is what the engine holds for one stack, normalised: the spec of each of its services
-// by service name.
+// stackSnapshot is what the engine holds for one stack, normalised, by name without the stack's
+// prefix (and, for a secret or a config, without the hash): the spec of each service, each network
+// the stack made, and each secret and config it made.
 type stackSnapshot struct {
-	Services map[string]map[string]any
+	Services, Networks, Secrets, Configs map[string]map[string]any
 }
 
-// snapshotStack reads and normalises the stack's services from a manager.
+// runtimeNetworkKeys are the parts of a network's inspect the engine fills in as it runs: its
+// ID, when it was made, which containers, peers and services are on it, and its Status (the count
+// of addresses in use, which follows how many tasks had started when it was read).
+var runtimeNetworkKeys = []string{"Id", "Created", "Containers", "Peers", "Services", "Status"}
+
+// vxlanOption is the overlay option the engine gives every network a number of its own in.
+const vxlanOption = "com.docker.network.driver.overlay.vxlanid_list"
+
+// normaliseNetwork is `docker network inspect` of a network the stack made, with what the engine
+// fills in as it runs removed (runtimeNetworkKeys), the overlay's own VXLAN number removed from its
+// options (it is numbered by the engine, not asked for) and the stack's name, Bayplan's labels
+// replaced as normaliseSpec does.
+func normaliseNetwork(raw json.RawMessage, stack string, ids map[string]string) map[string]any {
+	var net map[string]any
+	if err := json.Unmarshal(raw, &net); err != nil {
+		return map[string]any{"unreadable": string(raw)}
+	}
+	for _, k := range runtimeNetworkKeys {
+		delete(net, k)
+	}
+	if opts, ok := net["Options"].(map[string]any); ok {
+		delete(opts, vxlanOption)
+	}
+	out, _ := normaliser{stack: stack, ids: ids}.walk("", net).(map[string]any)
+	return out
+}
+
+// normaliseObject is `docker secret inspect` or `docker config inspect` of an object the stack
+// made: its Spec (the name without the hash, the labels, the driver and, for a config, the content),
+// without the ID, version and times.
+func normaliseObject(raw json.RawMessage, stack string, ids map[string]string) map[string]any {
+	var whole map[string]any
+	if err := json.Unmarshal(raw, &whole); err != nil {
+		return map[string]any{"unreadable": string(raw)}
+	}
+	spec, _ := whole["Spec"].(map[string]any)
+	if spec == nil {
+		return map[string]any{"no Spec": string(raw)}
+	}
+	out, _ := normaliser{stack: stack, ids: ids}.walk("", spec).(map[string]any)
+	if name, ok := out["Name"].(string); ok {
+		out["Name"] = hashedSuffix.ReplaceAllString(name, "")
+	}
+	return out
+}
+
+// inspectFirst runs `docker <noun> inspect id` and returns the first element of its answer.
+func inspectFirst(ctx context.Context, node *dockertest.Node, noun, id string) (json.RawMessage, error) {
+	out, err := node.Sh(ctx, "docker "+noun+" inspect "+id)
+	if err != nil {
+		return nil, err
+	}
+	var list []json.RawMessage
+	if err := json.Unmarshal([]byte(out), &list); err != nil || len(list) != 1 {
+		return nil, fmt.Errorf("docker %s inspect %s answered %s", noun, id, strings.TrimSpace(out))
+	}
+	return list[0], nil
+}
+
+// stackObjects inspects every network, secret or config the stack made and returns them normalised
+// by their name without the stack's prefix and, for a secret or a config, without the hash.
+func stackObjects(ctx context.Context, node *dockertest.Node, noun, stack string, ids map[string]string, norm func(json.RawMessage, string, map[string]string) map[string]any) (map[string]map[string]any, error) {
+	// Only a network's ID is shortened by ls; a secret's and a config's is whole, and their ls has no --no-trunc.
+	trunc := ""
+	if noun == "network" {
+		trunc = " --no-trunc"
+	}
+	list, err := node.Sh(ctx, "docker "+noun+" ls"+trunc+" --filter label=com.docker.stack.namespace="+stack+" --format '{{.ID}}'")
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]map[string]any{}
+	for _, id := range strings.Fields(list) {
+		raw, err := inspectFirst(ctx, node, noun, id)
+		if err != nil {
+			return nil, err
+		}
+		obj := norm(raw, stack, ids)
+		name, _ := obj["Name"].(string)
+		out[strings.TrimPrefix(name, stackToken+"_")] = obj
+	}
+	return out, nil
+}
+
+// snapshotStack reads and normalises what the engine holds for the stack, from a manager.
 func snapshotStack(ctx context.Context, node *dockertest.Node, stack string) (stackSnapshot, error) {
 	specs, err := serviceSpecs(ctx, node, stack)
 	if err != nil {
@@ -396,45 +481,64 @@ func snapshotStack(ctx context.Context, node *dockertest.Node, stack string) (st
 	for name, raw := range specs {
 		snap.Services[strings.TrimPrefix(name, stack+"_")] = normaliseSpec(raw, stack, ids)
 	}
+	if snap.Networks, err = stackObjects(ctx, node, "network", stack, ids, normaliseNetwork); err != nil {
+		return stackSnapshot{}, err
+	}
+	if snap.Secrets, err = stackObjects(ctx, node, "secret", stack, ids, normaliseObject); err != nil {
+		return stackSnapshot{}, err
+	}
+	if snap.Configs, err = stackObjects(ctx, node, "config", stack, ids, normaliseObject); err != nil {
+		return stackSnapshot{}, err
+	}
 	return snap, nil
 }
 
-// compareSnapshots fails the test with the field-level differences between the docker CLI's deploy
-// and Bayplan's.
-func compareSnapshots(t *testing.T, cli, bp stackSnapshot) {
+// compareGroup fails the test with the field-level differences between the docker CLI's objects of
+// one kind and Bayplan's. An empty group on both sides is fine (a file with no secrets has none).
+func compareGroup(t *testing.T, kind string, cli, bp map[string]map[string]any) {
 	t.Helper()
-	var names []string
 	seen := map[string]bool{}
-	for n := range cli.Services {
+	for n := range cli {
 		seen[n] = true
 	}
-	for n := range bp.Services {
+	for n := range bp {
 		seen[n] = true
 	}
+	var names []string
 	for n := range seen {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	if len(names) == 0 {
-		t.Fatal("neither deploy created a service: the comparison would prove nothing")
-	}
 	for _, n := range names {
-		a, okA := cli.Services[n]
-		b, okB := bp.Services[n]
+		a, okA := cli[n]
+		b, okB := bp[n]
 		switch {
 		case !okA:
-			t.Errorf("service %s: only Bayplan created it", n)
+			t.Errorf("%s %s: only Bayplan made it", kind, n)
 		case !okB:
-			t.Errorf("service %s: only docker stack deploy created it", n)
+			t.Errorf("%s %s: only docker stack deploy made it", kind, n)
 		default:
 			fields := map[string]string{}
 			flattenJSON("", a, fields)
-			t.Logf("service %s: %d fields of the spec compared", n, len(fields))
+			t.Logf("%s %s: %d fields compared", kind, n, len(fields))
 			if d := stackSpecDiff(a, b); d != "" {
-				t.Errorf("service %s differs between docker stack deploy and Bayplan:\n%s", n, d)
+				t.Errorf("%s %s differs between docker stack deploy and Bayplan:\n%s", kind, n, d)
 			}
 		}
 	}
+}
+
+// compareSnapshots fails the test with every difference between the docker CLI's deploy and
+// Bayplan's, and when neither made a service, because then it would prove nothing.
+func compareSnapshots(t *testing.T, cli, bp stackSnapshot) {
+	t.Helper()
+	if len(cli.Services) == 0 && len(bp.Services) == 0 {
+		t.Fatal("neither deploy created a service: the comparison would prove nothing")
+	}
+	compareGroup(t, "service", cli.Services, bp.Services)
+	compareGroup(t, "network", cli.Networks, bp.Networks)
+	compareGroup(t, "secret", cli.Secrets, bp.Secrets)
+	compareGroup(t, "config", cli.Configs, bp.Configs)
 }
 
 // removeStackCLI removes the stack with the docker CLI and waits until no service, no container and
@@ -482,4 +586,91 @@ func removeStackCLI(t *testing.T, f *swarmFix, stack string) {
 		}
 		return len(left) == 0, strings.Join(left, ", ")
 	})
+}
+
+// removeNetwork removes a network the case made and waits until the swarm no longer lists it.
+func removeNetwork(t *testing.T, f *swarmFix, name string) {
+	t.Helper()
+	mgr := f.sw.Managers[0]
+	testsupport.Poll(t, stackGoneWait, "the network "+name+" to be removed", func() (bool, string) {
+		ctx := execCtx(t, time.Minute)
+		out, err := mgr.Sh(ctx, "docker network ls -q --filter name=^"+name+"$")
+		if err != nil {
+			return false, err.Error()
+		}
+		if strings.TrimSpace(out) == "" {
+			return true, ""
+		}
+		rm, err := mgr.Sh(ctx, "docker network rm "+name+" 2>&1")
+		return false, strings.TrimSpace(rm) + " " + fmt.Sprint(err)
+	})
+}
+
+// stackServiceNames are the names of the stack's services.
+func stackServiceNames(ctx context.Context, node *dockertest.Node, stack string) ([]string, error) {
+	out, err := node.Sh(ctx, "docker service ls --filter label=com.docker.stack.namespace="+stack+" --format '{{.Name}}'")
+	if err != nil {
+		return nil, err
+	}
+	names := strings.Fields(out)
+	sort.Strings(names)
+	return names, nil
+}
+
+// waitStackConverged waits until the stack has services and every one has all its tasks running.
+func waitStackConverged(t *testing.T, f *swarmFix, stack string) {
+	t.Helper()
+	mgr := f.sw.Managers[0]
+	testsupport.Poll(t, taskWait, "every service of "+stack+" to have all its tasks running", func() (bool, string) {
+		out, err := mgr.Sh(execCtx(t, time.Minute), "docker service ls --filter label=com.docker.stack.namespace="+stack+" --format '{{.Name}} {{.Replicas}}'")
+		if err != nil {
+			return false, err.Error()
+		}
+		rows := strings.Split(strings.TrimSpace(out), "\n")
+		if strings.TrimSpace(out) == "" {
+			return false, "no service yet"
+		}
+		for _, row := range rows {
+			fields := strings.Fields(row)
+			if len(fields) < 2 {
+				return false, row
+			}
+			have, want, _ := strings.Cut(fields[1], "/")
+			if have != want || want == "0" {
+				return false, strings.TrimSpace(out)
+			}
+		}
+		return true, strings.TrimSpace(out)
+	})
+}
+
+// stackTaskIDs are the IDs of every task the stack's services have had, current and past, sorted. A
+// task that was replaced adds an ID, so the list is the same before and after only when nothing
+// restarted.
+func stackTaskIDs(t *testing.T, f *swarmFix, stack string) []string {
+	t.Helper()
+	ctx := execCtx(t, 2*time.Minute)
+	mgr := f.sw.Managers[0]
+	names, err := stackServiceNames(ctx, mgr, stack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, name := range names {
+		out, err := mgr.Sh(ctx, "docker service ps -q --no-trunc "+name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, id := range strings.Fields(out) {
+			ids = append(ids, name+"/"+id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// serviceField is one field of `docker service inspect` of a service, by Go template.
+func serviceField(t *testing.T, f *swarmFix, service, tmpl string) string {
+	t.Helper()
+	return strings.TrimSpace(sh(t, f.sw.Managers[0], "docker service inspect --format '"+tmpl+"' "+service))
 }

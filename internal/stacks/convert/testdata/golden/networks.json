@@ -28,7 +28,7 @@
       "Key": "default",
       "Name": "networks_default",
       "Driver": "overlay",
-      "Attachable": true,
+      "Attachable": false,
       "Internal": false,
       "External": false,
       "Labels": {

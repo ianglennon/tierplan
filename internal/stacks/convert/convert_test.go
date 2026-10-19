@@ -148,8 +148,8 @@ func TestConvertNamesTheServiceAndLabelsItAndItsDefaultNetwork(t *testing.T) {
 		}
 	}
 	net := got.Networks[0]
-	if net.Name != "shop_default" || net.Driver != "overlay" || !net.Attachable || net.External {
-		t.Errorf("network = %+v, want overlay attachable shop_default", net)
+	if net.Name != "shop_default" || net.Driver != "overlay" || net.Attachable || net.External {
+		t.Errorf("network = %+v, want overlay shop_default that is not attachable, as docker stack deploy makes it", net)
 	}
 	if net.Labels["com.docker.stack.namespace"] != "shop" || net.Labels["bayplan.stack.id"] != "id-shop" {
 		t.Errorf("network labels = %v", net.Labels)
