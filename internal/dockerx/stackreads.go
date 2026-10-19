@@ -57,14 +57,13 @@ func (c *Client) NetworksWithLabel(ctx context.Context, key, value string) ([]Ne
 	return out, nil
 }
 
-// SecretsWithLabel lists the swarm secrets that carry the label key=value, sorted by name then ID,
-// built the same way as ServicesWithLabel: the filter is one encoded term, and the label is
-// checked again on each row. It is read-only and needs a manager. A value is not a field of a
+// SecretsWithLabel lists the swarm secrets that carry the label key=value, sorted by name then ID.
+// The list is asked for whole and the label is matched on each row here, because an agent's secrets
+// list takes no filter (its route takes no query key, so a filtered list is refused on a real swarm
+// and a fake engine cannot tell). It is read-only and needs a manager. A value is not a field of a
 // row, so none is read.
 func (c *Client) SecretsWithLabel(ctx context.Context, key, value string) ([]SecretRow, error) {
-	res, err := c.cur().SecretList(ctx, client.SecretListOptions{
-		Filters: make(client.Filters).Add("label", key+"="+value),
-	})
+	res, err := c.cur().SecretList(ctx, client.SecretListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("list swarm secrets on %s: %w", c.t.Describe(), err)
 	}
@@ -81,12 +80,10 @@ func (c *Client) SecretsWithLabel(ctx context.Context, key, value string) ([]Sec
 }
 
 // ConfigsWithLabel lists the swarm configs that carry the label key=value, without their content,
-// sorted by name then ID, built the same way as SecretsWithLabel. It is read-only and needs a
-// manager.
+// sorted by name then ID, built the same way as SecretsWithLabel: asked for whole, matched here. It
+// is read-only and needs a manager.
 func (c *Client) ConfigsWithLabel(ctx context.Context, key, value string) ([]ConfigRow, error) {
-	res, err := c.cur().ConfigList(ctx, client.ConfigListOptions{
-		Filters: make(client.Filters).Add("label", key+"="+value),
-	})
+	res, err := c.cur().ConfigList(ctx, client.ConfigListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("list swarm configs on %s: %w", c.t.Describe(), err)
 	}

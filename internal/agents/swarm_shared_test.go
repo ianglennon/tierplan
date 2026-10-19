@@ -45,6 +45,7 @@ var sharedSwarmCases = []struct {
 	{"ServiceAutoRollback", sharedServiceAutoRollback},
 	{"ServiceLifecycle", sharedServiceLifecycle},
 	{"ServiceLogsMerged", sharedServiceLogsMerged},
+	{"StackDeployParity", sharedStackDeployParity},
 	{"StatsFromWorker", sharedStatsFromWorker},
 	{"UninstallOnRemove", sharedUninstallOnRemove},
 	{"Volumes", sharedVolumes},

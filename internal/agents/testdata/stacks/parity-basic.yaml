@@ -1,0 +1,21 @@
+# The basic parity corpus file (plan 07-11): one service with a published port, an environment,
+# a user network, two replicas and a digest-pinned image. {{IMAGE}} is the fixture registry's
+# image by digest, so a deploy by docker stack deploy (--resolve-image=never) and a deploy by
+# Bayplan name the same image text.
+services:
+  web:
+    image: {{IMAGE}}
+    command: ["sleep", "3600"]
+    stop_grace_period: 1s
+    environment:
+      GREETING: hello
+      MODE: parity
+    ports:
+      - "18080:80"
+    networks:
+      - back
+    deploy:
+      replicas: 2
+
+networks:
+  back: {}
