@@ -24,6 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEnvName } from "@/features/resources/use-env-name";
+import { OperationLockAlert } from "@/features/stacks/operation-lock-alert";
 import { StackStateCell } from "@/features/stacks/stack-state-cell";
 import { useDocumentTitle } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
@@ -260,6 +261,11 @@ export function StackDetailLayout({ envId, stackId, children, flow }: StackDetai
           <Skeleton className="h-8 w-64" />
         )}
       </header>
+      {/* Another operation holds the environment. The console is that operation's own page, so it
+          does not warn about itself. */}
+      {data?.lock && flow !== "deploy" ? (
+        <OperationLockAlert lock={data.lock} envId={envId} envName={envName} />
+      ) : null}
       {flow ? (
         <FlowCaption step={flow} />
       ) : (

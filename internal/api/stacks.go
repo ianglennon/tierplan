@@ -55,6 +55,7 @@ const (
 	problemNameClash           = "stack_name_clash"
 	problemTargetChanged       = "target_changed"
 	problemJobFinished         = "job_finished"
+	problemOperationLocked     = "operation_locked"
 
 	// The states a stack is listed in, from its newest operation.
 	stackNotDeployed  = "not_deployed"
@@ -103,6 +104,9 @@ type StacksDeps struct {
 	// MaxStreamsPerUser caps concurrent deploy streams per user. Zero means 4.
 	MaxStreamsPerUser int
 
+	// Locks is the per-environment operation lock: one stack operation at a time runs on an environment.
+	// The janitor of Phase 11 takes the same one. Nil means a lock of this deps' own.
+	Locks stackops.OperationLock
 	// BeforeJob, when set, is called in a deploy after it has been judged and recorded and just before its job
 	// starts. Tests use it to change the world between the check and the job.
 	BeforeJob func(ctx context.Context)
@@ -221,6 +225,9 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 	}
 	if d.MaxStreamsPerUser <= 0 {
 		d.MaxStreamsPerUser = defaultMaxStreams
+	}
+	if d.Locks == nil {
+		d.Locks = stackops.NewLocks()
 	}
 	if d.cancels == nil {
 		d.cancels = &deployCancels{by: map[string]string{}}
@@ -366,10 +373,28 @@ func stackDetailOf(ctx context.Context, d StacksDeps, st stackops.Stack) (StackD
 		return StackDetail{}, err
 	}
 	g, hasG := done[st.ID]
-	return StackDetail{
+	detail := StackDetail{
 		StackItem: stackItemOf(st, latest, hasLatest, g, hasG, drafts[st.ID]),
 		EnvID:     st.EnvID, SourceRef: st.Source.Ref, CreatedBy: st.CreatedBy, CreatedAt: rfc3339(st.CreatedAt), Stopped: st.Stopped,
-	}, nil
+	}
+	if hasLatest {
+		detail.LastOperation = &StackOperationBody{
+			Kind: latest.Kind, State: latest.State, Code: latest.Code, FailedService: latest.FailedService, JobID: latest.JobID,
+			StartedBy: latest.StartedBy, StartedAt: rfc3339(latest.StartedAt), EndedAt: rfc3339(latest.EndedAt),
+		}
+	}
+	if h, ok := d.Locks.Held(st.EnvID); ok {
+		detail.Lock = lockBody(h)
+	}
+	return detail, nil
+}
+
+// lockBody is the holder of an environment's operation lock as the answers show it.
+func lockBody(h stackops.Holder) *StackLockBody {
+	return &StackLockBody{
+		StackID: h.StackID, StackName: h.StackName, JobID: h.JobID, Kind: h.Kind,
+		StartedAt: rfc3339(h.Started), StartedBy: h.By,
+	}
 }
 
 func createStack(ctx context.Context, d StacksDeps, in *StackCreateInput) (*StackDetailOutput, error) {

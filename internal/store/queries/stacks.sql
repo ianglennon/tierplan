@@ -97,6 +97,20 @@ VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?);
 UPDATE stack_deploys SET state = ?, ended_at = ?, failed_service = ?, code = ?
 WHERE id = ? AND state = 'running';
 
+-- name: MarkRunningRevisionsFailed :execrows
+-- A deploy or an update that was running when the server stopped did not finish: the revision it took
+-- is failed. Only a revision still pending is touched, and only one a deploy or an update made (a roll
+-- back redeploys a revision that was already good).
+UPDATE stack_snapshots SET outcome = 'failed'
+WHERE kind = 'revision' AND outcome = 'pending'
+  AND EXISTS (SELECT 1 FROM stack_deploys d
+              WHERE d.stack_id = stack_snapshots.stack_id AND d.revision_seq = stack_snapshots.seq
+                AND d.state = 'running' AND d.kind IN ('deploy', 'update'));
+
+-- name: MarkRunningDeploysInterrupted :execrows
+-- Every operation still running at startup was running in a process that is gone: it ends interrupted.
+UPDATE stack_deploys SET state = 'interrupted', ended_at = ?, code = 'interrupted' WHERE state = 'running';
+
 -- name: LatestStackDeploy :one
 SELECT id, stack_id, env_id, kind, state, revision_seq, job_id, started_by, started_at, ended_at, failed_service, code
 FROM stack_deploys WHERE stack_id = ? ORDER BY started_at DESC, id DESC LIMIT 1;

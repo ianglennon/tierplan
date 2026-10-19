@@ -149,7 +149,7 @@ func registerStackReview(r *httpx.Router, d StacksDeps) {
 			"Right after a deploy, a review shows no change. yaml is the one comparison with the last deploy and not with what is running: the rendered stack against the masked rendering stored with the last good revision, as hunks computed here with 3 lines of context. " +
 			"concurrent is set when someone deployed after the draft was started, with what that deployment changed and what the draft changed, file by file; the deploy then needs acknowledgeConcurrent. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. " +
 			"For a caller below env Admin, host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables, is a blocking needs_admin problem at its line, and needsAdmin names the kinds. " +
-			"A name that something Bayplan does not manage holds is a blocking stack_name_clash problem. " +
+			"A name that something Bayplan does not manage holds is a blocking stack_name_clash problem, and another stack operation running on the environment is a blocking operation_locked problem. " +
 			"An environment that is no longer the kind of target the stack was created for is 409 target_changed, and a standalone stack is 409 target_engine_missing. Needs stacks.deploy (Operator).",
 		Tags: []string{"stacks"},
 	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
@@ -201,6 +201,14 @@ func reviewStack(ctx context.Context, d StacksDeps, in *StackReviewInput) (*Stac
 	rv, err := d.ops().Review(ctx, ri)
 	if err != nil {
 		return nil, targetProblem(d, env.ID, err)
+	}
+	// Another operation holds the environment: a deploy now would be refused, so the review says so
+	// as a blocking problem that has no place in the files.
+	if h, ok := d.Locks.Held(env.ID); ok {
+		rv.Problems = append(rv.Problems, stacks.Problem{
+			Severity: stacks.SeverityError, Code: problemOperationLocked,
+			Message: "Another stack operation is running on " + env.Name + ": " + h.StackName + ", started " + rfc3339(h.Started) + ".",
+		})
 	}
 	return &StackReviewOutput{CacheControl: "no-store", Body: stackReviewBody(rv)}, nil
 }

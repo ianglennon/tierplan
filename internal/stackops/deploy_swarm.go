@@ -87,6 +87,8 @@ var codeMessages = map[string]string{
 	CodeNotRun:              "Not run because an earlier step failed.",
 	CodeConvergeTimeout:     "The service didn't settle in time. Docker may still finish it.",
 	CodeUpdateStopped:       "The swarm stopped the update of the service.",
+	CodeNeedsAdmin:          "The stack uses host access that needs Admin.",
+	CodePolicyUnavailable:   "The host-access policy could not be applied, so nothing was deployed.",
 	CodePinsInvalid:         "The images in the request don't match what the deploy would use. Review the stack again.",
 }
 
@@ -280,6 +282,20 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		return fail(ItemCheck, CodeStackInvalid, "")
 	}
 	res.Total = len(planned.Services)
+	// The host-access policy is judged again here, for the person who asked, on the values this deploy
+	// will send and before it writes anything: the request was judged some time ago, and a grant can
+	// be gone since. A stack that cannot be judged is not an allowed one (T-07-86).
+	pol, perr := d.Policy(ctx, in.Caller, in.EnvID, in.Copy, planned)
+	switch {
+	case perr != nil:
+		if !errors.Is(perr, ErrNoPolicy) {
+			d.log().Error("the host-access policy could not be applied to a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", perr)
+		}
+		return fail(ItemCheck, CodePolicyUnavailable, "")
+	case pol.Refused:
+		detail = policyWords(pol)
+		return fail(ItemCheck, CodeNeedsAdmin, "")
+	}
 	extSecrets, extConfigs := hasExternalObject(objs, stacks.KindSecret), hasExternalObject(objs, stacks.KindConfig)
 	owned, err := d.readLive(ctx, in.EnvID, in.Stack.Name, liveWant{allNetworks: hasExternal(planned), allSecrets: extSecrets, allConfigs: extConfigs})
 	if err != nil {
@@ -490,6 +506,19 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		"removedObjects":  strconv.Itoa(len(res.RemovedObjects)), "leftInPlace": strconv.Itoa(len(res.LeftInPlace)),
 	}}
 	return res
+}
+
+// policyWords says what the policy refused, for the check step that failed: each setting and where it
+// is, as the refusal of the request words it.
+func policyWords(pol PolicyResult) string {
+	if len(pol.Entries) == 0 {
+		return "The compose file can't be checked for host access."
+	}
+	parts := make([]string, 0, len(pol.Entries))
+	for _, e := range pol.Entries {
+		parts = append(parts, e.Text+" at "+e.File+":"+strconv.Itoa(e.Line))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // engineWords are the words of an error from the engine, for the item that failed: what the manager

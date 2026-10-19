@@ -51,8 +51,10 @@ interface ReviewPageProps {
 // deployRefusal words a deploy the server refused. The server decides every refusal; this only
 // says what it means in the page's words (T-06-60). A draft or digests that moved since the
 // review are the same advice: look again.
-function deployRefusal(t: Translate, err: DeployRequestError): string {
+function deployRefusal(t: Translate, err: DeployRequestError, envName: string): string {
   switch (err.type) {
+    case "operation_locked":
+      return t("stackConverge.lock.refused", { env: envName });
     case "draft_changed":
       return t("stackReview.deployErrors.draftChanged");
     case "pins_invalid":
@@ -74,6 +76,10 @@ function deployRefusal(t: Translate, err: DeployRequestError): string {
   return t("stackReview.deployErrors.generic");
 }
 
+// The review's code for the blocking problem of an environment that is busy. It has nothing in the
+// files to fix, so it is shown as the operation lock and not among the errors.
+const OPERATION_LOCKED = "operation_locked";
+
 // listOf joins the kinds of host access into one phrase: "bind mounts and host networking".
 function listOf(items: string[]): string {
   return new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(items);
@@ -92,14 +98,24 @@ function noChange(data: StackReview): boolean {
 // and a deployment made after the draft was started that the person has not acknowledged.
 // Warnings are never a reason (D-10). Absent when a deploy may start. The server refuses
 // every one of these again at the deploy; this only says why the button waits.
-function deployReason(t: Translate, data: StackReview, acknowledged: boolean): string | undefined {
+function deployReason(
+  t: Translate,
+  data: StackReview,
+  acknowledged: boolean,
+  locked: boolean,
+  envName: string,
+): string | undefined {
+  // Another operation holds the environment: nothing can start until it ends, whatever else is true.
+  if (locked) return t("stackConverge.lock.reason", { env: envName });
   const kinds = data.needsAdmin ?? [];
   if (kinds.length > 0) return t("stackReview.reasons.needsAdmin", { kinds: listOf(kinds) });
   const lost = (data.images ?? []).find(
     (i) => i.state === "unreachable" || i.state === "unresolved",
   );
   if (lost) return t("stackReview.reasons.lookup", { ref: lost.image });
-  const errors = (data.problems ?? []).filter((p) => p.severity === "error").length;
+  const errors = (data.problems ?? []).filter(
+    (p) => p.severity === "error" && p.code !== OPERATION_LOCKED,
+  ).length;
   if (errors > 0) return t("stackReview.reasons.errors", { count: errors });
   if (noChange(data)) return t("stackReview.reasons.nothing");
   // A deployment made since the draft was started needs the person to say they saw it (D-09).
@@ -156,16 +172,19 @@ export function ReviewPage({
       },
       {
         onSuccess: (answer) => onDeployed(answer.jobId),
-        onError: (err) => setDeployError(deployRefusal(t, err)),
+        onError: (err) => setDeployError(deployRefusal(t, err, envName)),
       },
     );
   }
 
-  const reason = data ? deployReason(t, data, acknowledged) : undefined;
+  // The lock shows in the stack's own answer and in the review's problems; either holds Deploy back.
+  const locked =
+    Boolean(stack.data?.lock) || (data?.problems ?? []).some((p) => p.code === OPERATION_LOCKED);
+  const reason = data ? deployReason(t, data, acknowledged, locked, envName) : undefined;
   const blocked = !data || reason !== undefined;
   const starting = deploy$.isPending || deploy$.isSuccess;
   const reasonId = useId();
-  const problems = data?.problems ?? [];
+  const problems = (data?.problems ?? []).filter((p) => p.code !== OPERATION_LOCKED);
   const changed = data?.services ?? [];
   const unchanged = data !== undefined && noChange(data);
   const yaml = data?.yaml;

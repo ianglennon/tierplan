@@ -646,6 +646,38 @@ func (q *Queries) ListStacksByEnv(ctx context.Context, envID string) ([]Stack, e
 	return items, nil
 }
 
+const markRunningDeploysInterrupted = `-- name: MarkRunningDeploysInterrupted :execrows
+UPDATE stack_deploys SET state = 'interrupted', ended_at = ?, code = 'interrupted' WHERE state = 'running'
+`
+
+// Every operation still running at startup was running in a process that is gone: it ends interrupted.
+func (q *Queries) MarkRunningDeploysInterrupted(ctx context.Context, endedAt int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markRunningDeploysInterrupted, endedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const markRunningRevisionsFailed = `-- name: MarkRunningRevisionsFailed :execrows
+UPDATE stack_snapshots SET outcome = 'failed'
+WHERE kind = 'revision' AND outcome = 'pending'
+  AND EXISTS (SELECT 1 FROM stack_deploys d
+              WHERE d.stack_id = stack_snapshots.stack_id AND d.revision_seq = stack_snapshots.seq
+                AND d.state = 'running' AND d.kind IN ('deploy', 'update'))
+`
+
+// A deploy or an update that was running when the server stopped did not finish: the revision it took
+// is failed. Only a revision still pending is touched, and only one a deploy or an update made (a roll
+// back redeploys a revision that was already good).
+func (q *Queries) MarkRunningRevisionsFailed(ctx context.Context) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markRunningRevisionsFailed)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const nextRevisionSeq = `-- name: NextRevisionSeq :one
 SELECT CAST(COALESCE(MAX(seq), 0) AS INTEGER) + 1 AS seq FROM stack_snapshots
 WHERE stack_id = ? AND kind = 'revision'

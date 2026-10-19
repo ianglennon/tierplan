@@ -620,8 +620,32 @@ func (r Repo) FinishDeploy(ctx context.Context, id, state, failedService, code s
 	return nil
 }
 
-// MarkInterrupted is filled in by the next commit.
-func (r Repo) MarkInterrupted(_ context.Context) (int, error) { return 0, nil }
+// MarkInterrupted ends every operation still recorded as running as interrupted, and fails the
+// revision a deploy or an update of them had taken. The server runs it once, when the store is open
+// and before it serves anything: the jobs and the operation lock are in memory, so an operation that
+// was running when the server stopped is not running now, and the swarm may be partly updated. The
+// stack then reads Deploy failed and offers a roll back (Open Q5). It returns how many operations
+// it ended.
+func (r Repo) MarkInterrupted(ctx context.Context) (int, error) {
+	tx, err := r.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := r.Store.Q.WithTx(tx)
+	// The revisions first: they are found through the deploys that are still running.
+	if _, err := q.MarkRunningRevisionsFailed(ctx); err != nil {
+		return 0, fmt.Errorf("fail the revisions of interrupted deploys: %w", err)
+	}
+	n, err := q.MarkRunningDeploysInterrupted(ctx, r.now().UnixNano())
+	if err != nil {
+		return 0, fmt.Errorf("mark running deploys interrupted: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit: %w", err)
+	}
+	return int(n), nil
+}
 
 // LatestDeploys is the newest operation of each stack of an environment, by stack ID.
 func (r Repo) LatestDeploys(ctx context.Context, envID string) (map[string]DeployRow, error) {

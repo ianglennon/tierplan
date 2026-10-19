@@ -35,6 +35,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/registry"
 	"github.com/ianglennon/bayplan/internal/shells"
+	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/vault"
@@ -473,6 +474,18 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	}
 	log.Info("database ready", attrs...)
 
+	// The jobs and the operation lock are in memory, so a deploy that was running when the last process
+	// stopped is not running now. It ends interrupted, its revision failed, and its stack reads Deploy
+	// failed and offers a roll back (Open Q5).
+	interrupted, err := stackops.Repo{Store: st, Vault: vlt}.MarkInterrupted(ctx)
+	if err != nil {
+		_ = st.Close()
+		return nil, restoredStateError{fmt.Errorf("mark interrupted stack deploys: %w", err)}
+	}
+	if interrupted > 0 {
+		log.Warn("stack operations that were running when the server stopped were marked interrupted", "count", interrupted)
+	}
+
 	// /readyz needs a usable data directory and a database at this binary's
 	// schema version (D-86).
 	ready := func(ctx context.Context) error {
@@ -771,7 +784,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Volumes:       api.VolumesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, Log: log},
 		Images:        api.ImagesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
 		Pulls:         api.PullsDeps{Aggregator: aggregator, Jobs: jobHub, Audit: aud, Checker: checker, Resolver: resolver, Log: log},
-		Stacks:        api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Log: log},
+		Stacks:        api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackops.NewLocks(), Log: log},
 		Registries:    api.RegistriesDeps{Store: registryStore, Envs: envSvc, Aggregator: aggregator, Audit: aud, Checker: checker, Egress: registryEgress, Clients: registryClients, Version: buildinfo.Get().Version, Log: log},
 		Tags:          api.TagsDeps{Resolver: resolver, Tags: registry.NewTagService(registryClients, registryEgress, buildinfo.Get().Version, log), Checker: checker, Aggregator: aggregator, Envs: envSvc, Audit: aud, Log: log},
 		Containers:    api.ContainersDeps{Aggregator: aggregator, Audit: aud, Checker: checker, SelfContainerID: selfID, Clusters: clusters, Log: log},

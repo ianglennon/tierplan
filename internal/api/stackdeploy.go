@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
@@ -169,6 +170,8 @@ func registerStackDeploy(r *httpx.Router, d StacksDeps) {
 			"A compose file that does not load is 422 compose_invalid; one that uses a setting a swarm can't deploy at all is 422 compose_unsupported; one whose check finds an error is 422 stack_invalid. " +
 			"A caller below env Admin is refused 403 privileged_compose, with each setting and its line in errors, when the stack asks for host access (a bind of the Docker socket or a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables. " +
 			"A name that something Bayplan does not manage holds is 409 stack_name_clash. An environment that is no longer the kind of target the stack was created for is 409 target_changed, and a standalone stack is 409 target_engine_missing. At most 5 jobs of one user run at once (429 too_many_deploys). " +
+			"Only one stack operation at a time runs on an environment: while one does, on any stack, a deploy is refused 409 operation_locked with errors naming the stack, the job and when it started, and nothing is stored. " +
+			"Just before it writes anything the job judges the host access of the stack again for the caller, so a grant removed since the request still stops it (the check step fails needs_admin). " +
 			"Writes one stack.deployed audit row, with the result, when the job ends. Needs stacks.deploy (Operator).",
 		Tags: []string{"stacks"}, DefaultStatus: http.StatusAccepted,
 	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
@@ -377,6 +380,22 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 		return nil, nameClashProblem(st.Name)
 	}
 
+	// One stack operation at a time runs on an environment. The lock is taken once the deploy has been
+	// judged and before anything is stored, so a refused operation leaves no revision behind; it is
+	// held for the life of the job, which frees it however it ends (STK-09, T-07-87).
+	release, held, ok := d.Locks.TryAcquire(env.ID, stackops.Holder{
+		StackID: st.ID, StackName: st.Name, Kind: mode, By: p.Name, Started: time.Now().UTC(),
+	})
+	if !ok {
+		return nil, operationLocked(env.Name, held)
+	}
+	jobOwnsLock := false
+	defer func() {
+		if !jobOwnsLock {
+			release()
+		}
+	}()
+
 	rev, err := repo.NewRevision(ctx, st.ID, p.Name)
 	if err != nil {
 		return nil, stackInternal(d, "revision", env.ID, err)
@@ -408,19 +427,26 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 	reqCtx := context.WithoutCancel(ctx)
 	actor, userAgent := p.AuditActor(), in.UserAgent
 	in2 := stackops.SwarmDeployInput{
-		EnvID: env.ID, Stack: st, Project: loaded.Project, Files: files, Vars: vars,
+		EnvID: env.ID, Stack: st, Project: loaded.Project, Files: files, Vars: vars, Copy: draft.Copy,
 		Caller: caller, Masker: rendering.masker,
 		Pins: repo, RevisionID: rev.ID, Update: update, Reviewed: in.Body.Pins,
 	}
 	in2.OnDone = func(res stackops.DeployResult) {
 		recordDeployEnd(reqCtx, d, actor, userAgent, st, rev, deploy, mode, res, rendering)
+		// The lock is free before the job reads as finished, so whoever sees it end can start the next
+		// operation at once. Freeing it again when the run returns changes nothing.
+		release()
 	}
 	spec := jobs.Spec{
 		Kind: stackDeployJobKind, EnvID: env.ID, Owner: stackJobOwner(p),
 		Meta:  map[string]string{metaStackID: st.ID, metaStackName: st.Name, metaMode: mode, metaStartedBy: p.Name},
 		Items: stackops.DeployItemSpecs(),
 	}
+	if d.BeforeJob != nil {
+		d.BeforeJob(ctx)
+	}
 	job, err := d.Jobs.Start(spec, func(jctx context.Context, r *jobs.Reporter) {
+		defer release()
 		select {
 		case <-ready:
 		case <-jctx.Done():
@@ -439,6 +465,9 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 		_ = repo.SetOutcome(reqCtx, rev.ID, stackops.OutcomeFailed, "", "")
 		return nil, stackInternal(d, "start the deploy job", env.ID, err)
 	}
+	// The job owns the lock now, and the holder can name it.
+	jobOwnsLock = true
+	d.Locks.Attach(env.ID, job.ID)
 	row, err := repo.StartDeploy(reqCtx, st.ID, env.ID, stackops.DeployKindDeploy, rev.Seq, job.ID, p.Name)
 	if err != nil {
 		_ = d.Jobs.Cancel(job.ID)
@@ -546,6 +575,21 @@ func targetProblem(d StacksDeps, envID string, err error) error {
 		return stackInternal(d, "policy", envID, err)
 	}
 	return snapshotProblem(d.Log, envID, err)
+}
+
+// operationLocked is the 409 for an operation asked for while another holds the environment: it names
+// the stack, the job and when it started, so the page can say who to wait for and open it.
+func operationLocked(envName string, h stackops.Holder) error {
+	started := rfc3339(h.Started)
+	return &huma.ErrorModel{
+		Type: problemOperationLocked, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
+		Detail: "Another stack operation is running on " + envName + ": " + h.StackName + ", started " + started + ". Try again when it finishes.",
+		Errors: []*huma.ErrorDetail{
+			{Location: "stack", Message: h.StackName},
+			{Location: "job", Message: h.JobID},
+			{Location: "started", Message: started},
+		},
+	}
 }
 
 // nameClashProblem is the 409 for a name that something Bayplan does not manage holds.
