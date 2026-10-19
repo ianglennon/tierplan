@@ -21,6 +21,11 @@ const (
 	ChangeAdded   = "added"
 	ChangeChanged = "changed"
 	ChangeRemoved = "removed"
+	// ChangeRecreated and ChangeRestarted are the changes of a standalone service the file did not change:
+	// the deploy recreates it because a service it shares a namespace or volumes with is recreated, or
+	// stops it and starts it again because a service it depends on (restart: true) is recreated.
+	ChangeRecreated = "recreated"
+	ChangeRestarted = "restarted"
 )
 
 // ServiceChange is one service the review says a deploy would add, change or remove. Current and
@@ -39,6 +44,9 @@ type ServiceChange struct {
 	HiddenChanges []string
 	// Settings counts the settings that differ between Current and Next, hidden ones included.
 	Settings int
+	// Because names the service that is recreated and carries this one with it, for a recreated or
+	// restarted row. Swarm never sets it.
+	Because string `json:"because,omitempty"`
 }
 
 // MaskSpec walks every string of a value as it appears in JSON and replaces what m hides with

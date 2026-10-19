@@ -111,6 +111,10 @@ type ComposeUpOptions struct {
 	// WaitTimeout is how long the SDK waits for the containers to be running (or healthy, when a service
 	// has a health check) before it gives up. Zero waits as long as the context lives.
 	WaitTimeout time.Duration
+	// ForceRecreate are the services whose containers the up recreates though their configuration hash
+	// is the one on the container: a container changed by hand on the host keeps its labels, and the SDK
+	// compares labels only (mustRecreate), so it would leave such a container as it is.
+	ForceRecreate []string
 }
 
 // The kinds of resource a ComposeEvent is about.
@@ -290,12 +294,18 @@ func (c *Client) ComposeUp(ctx context.Context, p *types.Project, o ComposeUpOpt
 	if err != nil {
 		return err
 	}
-	return svc.Up(ctx, p, api.UpOptions{
+	return svc.Up(ctx, p, composeUpOptions(p, o))
+}
+
+// composeUpOptions are the SDK's options for an up: orphans removed, every service recreated when its
+// configuration diverged, and the wait for the containers to run.
+func composeUpOptions(p *types.Project, o ComposeUpOptions) api.UpOptions {
+	return api.UpOptions{
 		Create: api.CreateOptions{
 			RemoveOrphans: true, Recreate: api.RecreateDiverged, RecreateDependencies: api.RecreateDiverged, QuietPull: true,
 		},
 		Start: api.StartOptions{Project: p, Wait: true, WaitTimeout: o.WaitTimeout},
-	})
+	}
 }
 
 // ComposeStop stops the containers of the project the way `docker compose stop` does, with their own stop

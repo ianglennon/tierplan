@@ -334,3 +334,27 @@ func TestServiceHashIsTheSDKsAndNotTheCustomLabels(t *testing.T) {
 
 // keep the moby import for the interface assertion below.
 var _ client.APIClient = guardClient{}
+
+func TestComposeUpForcesTheRecreateOfTheServicesItIsGiven(t *testing.T) {
+	t.Parallel()
+	p := &types.Project{Name: "demo"}
+
+	forced := composeUpOptions(p, ComposeUpOptions{ForceRecreate: []string{"web"}})
+	if !slices.Equal(forced.Create.Services, []string{"web"}) || forced.Create.Recreate != api.RecreateForce || forced.Create.RecreateDependencies != api.RecreateDiverged {
+		t.Errorf("with web forced: services %v recreate %q dependencies %q, want [web] force diverged",
+			forced.Create.Services, forced.Create.Recreate, forced.Create.RecreateDependencies)
+	}
+
+	plain := composeUpOptions(p, ComposeUpOptions{})
+	if len(plain.Create.Services) != 0 || plain.Create.Recreate != api.RecreateDiverged || plain.Create.RecreateDependencies != api.RecreateDiverged {
+		t.Errorf("with none forced: services %v recreate %q dependencies %q, want every service diverged",
+			plain.Create.Services, plain.Create.Recreate, plain.Create.RecreateDependencies)
+	}
+
+	for name, o := range map[string]api.UpOptions{"forced": forced, "plain": plain} {
+		if !o.Create.RemoveOrphans || !o.Create.QuietPull || !o.Start.Wait || o.Start.Project != p {
+			t.Errorf("%s: orphans removed %v quiet pull %v wait %v project %v, want the 07-20 options kept",
+				name, o.Create.RemoveOrphans, o.Create.QuietPull, o.Start.Wait, o.Start.Project == p)
+		}
+	}
+}

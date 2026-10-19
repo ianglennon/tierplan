@@ -294,3 +294,9 @@ func ResolveServiceRefs(svc types.ServiceConfig, ids map[string][]string) types.
 	}
 	return out
 }
+
+// RecreateCascade lists the services a deploy carries along when it recreates the services in recreated
+// (see the doc of the full version).
+func RecreateCascade(p *types.Project, recreated []string, running map[string]bool) []ServiceChange {
+	return nil
+}

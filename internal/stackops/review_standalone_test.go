@@ -249,3 +249,101 @@ func TestStandaloneReviewNeverWritesAndAsksOnlyForInspectDocuments(t *testing.T)
 		t.Errorf("a review wrote to the engine: %v", w)
 	}
 }
+
+// A recreate carries other services with it, as docker compose makes it (plan 07-22): what shares the
+// recreated service's namespaces or volumes is recreated and keeps its pinned image, a dependent with
+// restart: true is stopped and started again, and a plain depends_on and every other service stay.
+
+const dependentsCompose = `services:
+  web:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+  worker:
+    image: nginx:1.27-alpine
+    depends_on: [web]
+  restarter:
+    image: nginx:1.27-alpine
+    depends_on:
+      web:
+        condition: service_started
+        restart: true
+  sidecar:
+    image: nginx:1.27-alpine
+    network_mode: service:web
+  other:
+    image: nginx:1.27-alpine
+`
+
+// carriedOf are the rows of a review that no file change caused, as "change service because parent".
+func carriedOf(rv stackops.Review) []string {
+	var out []string
+	for _, c := range rv.Services {
+		if c.Change == stacks.ChangeRecreated || c.Change == stacks.ChangeRestarted {
+			out = append(out, c.Change+" "+c.Short+" because "+c.Because)
+		}
+	}
+	return out
+}
+
+func TestStandaloneReviewIsEmptyRightAfterADeployOfAStackWithDependents(t *testing.T) {
+	t.Parallel()
+	rig := hostRig(t, hostStack(t, "demo", dependentsCompose, nil))
+
+	rv := rig.reviewOf(t, "demo", dependentsCompose, nil, nil)
+
+	if len(rv.Services) != 0 {
+		t.Errorf("services = %v, want none", changesOf(rv))
+	}
+}
+
+func TestStandaloneReviewNamesTheServicesAHandChangedWebCarriesWithIt(t *testing.T) {
+	t.Parallel()
+	h := hostStack(t, "demo", dependentsCompose, nil)
+	h.Docs["web"].HostConfig.RestartPolicy = mobycontainer.RestartPolicy{Name: "always"}
+	rig := hostRig(t, h)
+
+	rv := rig.reviewOf(t, "demo", dependentsCompose, nil, nil)
+
+	if got := changesOf(rv); !slices.Equal(got, []string{"changed web", "recreated sidecar", "restarted restarter"}) {
+		t.Fatalf("services = %v, want web changed, the sidecar recreated and the restarter restarted, and neither worker nor other", got)
+	}
+	if got := carriedOf(rv); !slices.Equal(got, []string{"recreated sidecar because web", "restarted restarter because web"}) {
+		t.Errorf("carried = %v", got)
+	}
+	for _, c := range rv.Services[1:] {
+		if c.Settings != 0 || c.Current != nil || c.Next != nil {
+			t.Errorf("row %+v carries a field diff, want none", c)
+		}
+	}
+	if got := rv.Summary.Services; got != (stackops.Counts{Changed: 1}) {
+		t.Errorf("summary = %+v, want web alone counted as changed", got)
+	}
+}
+
+func TestStandaloneReviewGivesTheSameCarriedRowsForAnEditOfWebsPort(t *testing.T) {
+	t.Parallel()
+	rig := hostRig(t, hostStack(t, "demo", dependentsCompose, nil))
+
+	rv := rig.reviewOf(t, "demo", strings.Replace(dependentsCompose, "8080:80", "9090:80", 1), nil, nil)
+
+	if got := changesOf(rv); !slices.Equal(got, []string{"changed web", "recreated sidecar", "restarted restarter"}) {
+		t.Fatalf("services = %v", got)
+	}
+	if rv.Summary.Services != (stackops.Counts{Changed: 1}) {
+		t.Errorf("summary = %+v", rv.Summary.Services)
+	}
+}
+
+func TestStandaloneReviewCarriesNothingForARemovedService(t *testing.T) {
+	t.Parallel()
+	rig := hostRig(t, hostStack(t, "demo", dependentsCompose, nil))
+	withoutOther := strings.Replace(dependentsCompose, "  other:\n    image: nginx:1.27-alpine\n", "", 1)
+
+	rv := rig.reviewOf(t, "demo", withoutOther, nil, nil)
+
+	if got := changesOf(rv); !slices.Equal(got, []string{"removed other"}) {
+		t.Errorf("services = %v, want other removed and nothing carried", got)
+	}
+}

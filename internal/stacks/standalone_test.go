@@ -6,6 +6,7 @@ package stacks_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -310,5 +311,140 @@ func TestCheckFlagsAConfigFileOverWhatAStandaloneHostWritesAtItsKey(t *testing.T
 				t.Errorf("%s with %d bytes flagged: %+v", tc.target, tc.size, p)
 			}
 		}
+	}
+}
+
+// RecreateCascade (plan 07-22, STK-06): the services the Compose SDK's reconciler carries along when it
+// recreates one (v5.6.0 parentNamespaceRecreated and planStopDependents), so the review can name them.
+
+const cascadeCompose = `services:
+  web:
+    image: nginx:1.27-alpine
+  sidecar:
+    image: nginx:1.27-alpine
+    network_mode: service:web
+  agent:
+    image: nginx:1.27-alpine
+    ipc: service:web
+  watcher:
+    image: nginx:1.27-alpine
+    pid: service:web
+  mounts:
+    image: nginx:1.27-alpine
+    volumes_from: [web]
+  nested:
+    image: nginx:1.27-alpine
+    network_mode: service:sidecar
+  restarter:
+    image: nginx:1.27-alpine
+    depends_on:
+      web:
+        condition: service_started
+        restart: true
+  restarter_of_sidecar:
+    image: nginx:1.27-alpine
+    depends_on:
+      sidecar:
+        condition: service_started
+        restart: true
+  both:
+    image: nginx:1.27-alpine
+    network_mode: service:web
+    depends_on:
+      web:
+        condition: service_started
+        restart: true
+  worker:
+    image: nginx:1.27-alpine
+    depends_on: [web]
+  other:
+    image: nginx:1.27-alpine
+  idle:
+    image: nginx:1.27-alpine
+    network_mode: service:web
+`
+
+func cascadeRows(t *testing.T, recreated []string, notRunning ...string) []string {
+	t.Helper()
+	p := loadProject(t, cascadeCompose)
+	running := map[string]bool{}
+	for name := range p.Services {
+		running[name] = !slices.Contains(notRunning, name)
+	}
+	var out []string
+	for _, c := range stacks.RecreateCascade(p, recreated, running) {
+		if c.Name != c.Short || c.Current != nil || c.Next != nil || c.Settings != 0 {
+			t.Errorf("row %+v carries a name that differs from its short name, a spec or a count of settings", c)
+		}
+		out = append(out, c.Change+" "+c.Name+" because "+c.Because)
+	}
+	return out
+}
+
+func TestRecreateCascadeCarriesWhatSharesTheRecreatedServicesNamespacesAndVolumes(t *testing.T) {
+	t.Parallel()
+	got := cascadeRows(t, []string{"web"}, "idle")
+	want := []string{
+		// recreated because web shares nothing of its own: they share web's network, IPC, PID or volumes
+		"recreated agent because web", "recreated both because web", "recreated mounts because web",
+		"recreated nested because sidecar", "recreated sidecar because web", "recreated watcher because web",
+		// restarted: depends_on web with restart: true, and the one whose parent was carried along
+		"restarted restarter because web", "restarted restarter_of_sidecar because sidecar",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("rows =\n  %s\nwant\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
+	}
+}
+
+func TestRecreateCascadeLeavesAPlainDependsOnAndEveryOtherServiceAlone(t *testing.T) {
+	t.Parallel()
+	for _, row := range cascadeRows(t, []string{"web"}) {
+		for _, left := range []string{" worker ", " other "} {
+			if strings.Contains(row, left) {
+				t.Errorf("row %q: a service with a plain depends_on, or none of web's, keeps its container", row)
+			}
+		}
+	}
+}
+
+func TestRecreateCascadeRecreatesAServiceThatAlsoRestartsOnceAndNeverRestartsIt(t *testing.T) {
+	t.Parallel()
+	got := cascadeRows(t, []string{"web"})
+	recreated, restarted := 0, 0
+	for _, row := range got {
+		if strings.Contains(row, " both ") {
+			if strings.HasPrefix(row, "recreated") {
+				recreated++
+			} else {
+				restarted++
+			}
+		}
+	}
+	if recreated != 1 || restarted != 0 {
+		t.Errorf("both: recreated %d times, restarted %d times, want recreated once and not restarted: %v", recreated, restarted, got)
+	}
+}
+
+func TestRecreateCascadeGivesNothingForAServiceWithNoContainer(t *testing.T) {
+	t.Parallel()
+	for _, row := range cascadeRows(t, []string{"web"}, "idle", "restarter", "mounts") {
+		for _, none := range []string{" idle ", " restarter ", " mounts "} {
+			if strings.Contains(row, none) {
+				t.Errorf("row %q: a service with no container is neither recreated nor restarted", row)
+			}
+		}
+	}
+}
+
+func TestRecreateCascadeStartsFromTheServicesRecreatedAndNotFromWeb(t *testing.T) {
+	t.Parallel()
+	if got := cascadeRows(t, nil); len(got) != 0 {
+		t.Errorf("nothing recreated: rows = %v, want none", got)
+	}
+	// Only the sidecar is recreated (its own change): what shares its namespace follows, web does not.
+	got := cascadeRows(t, []string{"sidecar"})
+	want := []string{"recreated nested because sidecar", "restarted restarter_of_sidecar because sidecar"}
+	if !slices.Equal(got, want) {
+		t.Errorf("rows = %v, want %v", got, want)
 	}
 }

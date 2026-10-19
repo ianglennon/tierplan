@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/compose-spec/compose-go/v2/types"
+	mobycontainer "github.com/moby/moby/api/types/container"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
@@ -235,14 +236,15 @@ func TestReviewRefusesAnExternalSecretOnAStandaloneHost(t *testing.T) {
 type upStandIn struct {
 	mu      sync.Mutex
 	project *types.Project
+	opts    dockerx.ComposeUpOptions
 	events  []dockerx.ComposeEvent
 	err     error
 	calls   int
 }
 
-func (u *upStandIn) up(_ context.Context, _ *dockerx.Client, p *types.Project, _ dockerx.ComposeUpOptions, on func(dockerx.ComposeEvent)) error {
+func (u *upStandIn) up(_ context.Context, _ *dockerx.Client, p *types.Project, o dockerx.ComposeUpOptions, on func(dockerx.ComposeEvent)) error {
 	u.mu.Lock()
-	u.project, u.calls = p, u.calls+1
+	u.project, u.opts, u.calls = p, o, u.calls+1
 	u.mu.Unlock()
 	for _, ev := range u.events {
 		on(ev)
@@ -430,3 +432,53 @@ func TestDeployStandaloneJudgesTheHostAccessPolicyAgainForTheCaller(t *testing.T
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+// The deploy applies what the review shows (plan 07-22): a container changed by hand keeps its compose
+// labels and its hash, which the SDK compares and nothing else, so the deploy has it recreated.
+
+func TestDeployStandaloneForcesTheRecreateOfAContainerChangedByHand(t *testing.T) {
+	t.Parallel()
+	h := hostStack(t, "demo", hostedCompose, nil)
+	h.Docs["web"].HostConfig.RestartPolicy = mobycontainer.RestartPolicy{Name: "always"}
+	rig := hostRig(t, h)
+	stand := &upStandIn{}
+	rig.deps.Up = stand.up
+
+	res, _ := rig.deployStandalone(t, standaloneInput("demo", hostedCompose))
+
+	if !res.OK() || stand.calls != 1 {
+		t.Fatalf("result = %+v, the SDK stand-in was called %d times", res, stand.calls)
+	}
+	if !slices.Equal(stand.opts.ForceRecreate, []string{"web"}) {
+		t.Errorf("force recreate = %v, want web: its running configuration differs from the file and its hash matches", stand.opts.ForceRecreate)
+	}
+	if res.Updated != 1 || res.Services != 0 {
+		t.Errorf("result = %+v, want web counted as updated", res)
+	}
+}
+
+func TestDeployStandaloneForcesNothingWhenNothingDiffers(t *testing.T) {
+	t.Parallel()
+	rig := hostRig(t, hostStack(t, "demo", hostedCompose, nil))
+	stand := &upStandIn{}
+	rig.deps.Up = stand.up
+
+	res, _ := rig.deployStandalone(t, standaloneInput("demo", hostedCompose))
+
+	if !res.OK() || len(stand.opts.ForceRecreate) != 0 || res.Updated != 0 {
+		t.Errorf("result = %+v force recreate = %v, want a deploy that changes nothing", res, stand.opts.ForceRecreate)
+	}
+}
+
+func TestDeployStandaloneLeavesAServiceWhoseHashDiffersToTheSDK(t *testing.T) {
+	t.Parallel()
+	rig := hostRig(t, hostStack(t, "demo", hostedCompose, nil))
+	stand := &upStandIn{}
+	rig.deps.Up = stand.up
+
+	res, _ := rig.deployStandalone(t, standaloneInput("demo", strings.Replace(hostedCompose, "8080:80", "9090:80", 1)))
+
+	if !res.OK() || len(stand.opts.ForceRecreate) != 0 || res.Updated != 1 {
+		t.Errorf("result = %+v force recreate = %v, want web recreated by its hash and not forced", res, stand.opts.ForceRecreate)
+	}
+}
