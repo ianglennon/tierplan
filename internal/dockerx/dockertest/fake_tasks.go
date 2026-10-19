@@ -40,6 +40,22 @@ func (f *Fake) SetTaskState(service, state, errText string) {
 	f.taskStates[service] = fakeTaskState{state: state, errText: errText}
 }
 
+// LoseQuorum makes the swarm lose its quorum from now on, as QuorumLost does from the start: the
+// cluster questions (/nodes, /services, /tasks) answer 500. A test uses it to cut the reads that
+// follow a write.
+func (f *Fake) LoseQuorum() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.quorumLost = true
+}
+
+func (c FakeConfig) withQuorum(lost bool) FakeConfig {
+	if lost {
+		c.QuorumLost = true
+	}
+	return c
+}
+
 // withUpdateStates returns c with the update statuses SetUpdateState gave the services.
 func (c FakeConfig) withUpdateStates(states map[string]fakeTaskState) FakeConfig {
 	if len(states) == 0 {

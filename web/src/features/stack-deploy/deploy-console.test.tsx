@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -48,6 +48,10 @@ let output: Line[];
 let status: number;
 let reads: number;
 let client: QueryClient;
+// What the caller may do on the environment, and what the server answers a cancel with.
+let role: "viewer" | "operator";
+let cancelStatus: number;
+let cancels: Request[];
 
 const item = (over: Item): Record<string, unknown> => ({
   code: "",
@@ -94,6 +98,9 @@ beforeEach(() => {
   output = [];
   status = 200;
   reads = 0;
+  role = "viewer";
+  cancelStatus = 202;
+  cancels = [];
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
   // The job query keeps its own retry rule; a zero delay makes its three tries instant.
@@ -103,7 +110,7 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (req: Request) => {
       const path = new URL(req.url).pathname;
-      if (path === "/api/me") return Response.json(makeMe({ envs: { [ENV]: "viewer" } }));
+      if (path === "/api/me") return Response.json(makeMe({ envs: { [ENV]: role } }));
       if (path === "/api/environments") {
         return Response.json({ items: [{ id: ENV, name: "Prod", envType: "swarm" }] });
       }
@@ -123,6 +130,14 @@ beforeEach(() => {
           createdAt: "2026-10-19T10:00:00Z",
           stopped: false,
         });
+      }
+      if (path === `/api/env/${ENV}/stacks/${STACK}/deploys/j1/cancel` && req.method === "POST") {
+        cancels.push(req);
+        if (cancelStatus === 202) return Response.json({ jobId: "j1" }, { status: 202 });
+        return Response.json(
+          { type: "job_finished", title: "Conflict", status: cancelStatus, detail: "ended" },
+          { status: cancelStatus },
+        );
       }
       if (path === `/api/env/${ENV}/stacks/${STACK}/deploys/j1`) {
         reads += 1;
@@ -971,6 +986,265 @@ describe("the result", () => {
       ),
     ).toBeTruthy();
     expect(within(alert).getByRole("link", { name: "Back to editing" })).toBeTruthy();
+  });
+});
+
+// A deploy that stopped (plan 07-18, D-14): where it stopped, what the deploy cleaned up, and what it
+// could not.
+describe("the result of a deploy that stopped", () => {
+  const cleanup1 = (kind: string, name: string, over: Partial<Item> = {}): Item => ({
+    id: `clean-${kind}:${name}`,
+    label: `Remove ${kind} ${name}`,
+    state: "done",
+    parent: "cleanup",
+    kind: "step",
+    result: { cleaned: "true", kind, name },
+    ...over,
+  });
+  const stopped: Item[] = [
+    check,
+    { ...services, state: "failed" },
+    row("api", "done", { result: { action: "updated", settled: "false" } }),
+    row("web", "failed", { code: "service_rejected", detail: "no such image" }),
+    row("db", "skipped", { code: "not_run" }),
+    {
+      id: "cleanup",
+      label: "Remove services no longer in the stack",
+      state: "skipped",
+      code: "not_run",
+    },
+  ];
+
+  it("counts the services the swarm took, and says the objects nothing uses were removed", async () => {
+    job = {
+      state: "partial",
+      items: [...stopped, cleanup1("network", "s1_front"), cleanup1("secret", "s1_tok_ab12")],
+    };
+    mount();
+    const alert = await screen.findByRole("alert");
+    expect(
+      within(alert).getByText(
+        "Bayplan stopped at web. 1 of 3 services were updated before it stopped, and nothing was rolled back.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(alert).getByText(
+        "The 2 objects created for this deploy that nothing uses were removed.",
+      ),
+    ).toBeTruthy();
+    expect(within(alert).queryByText(/couldn't remove/)).toBeNull();
+  });
+
+  it("lists each removal in the steps as Cleaned up", async () => {
+    job = { state: "partial", items: [...stopped, cleanup1("network", "s1_front")] };
+    mount();
+    await screen.findByRole("alert");
+    const lines = within(screen.getByRole("list", { name: "Steps of the deploy" }))
+      .getAllByRole("listitem")
+      .filter((li) => li.getAttribute("data-slot") !== "deploy-service-row")
+      .map((li) => li.firstElementChild?.textContent ?? "");
+    expect(lines).toContain("Remove network s1_frontCleaned up");
+  });
+
+  it("names what it could not remove and where to remove it", async () => {
+    job = {
+      state: "partial",
+      items: [
+        ...stopped,
+        cleanup1("secret", "s1_tok_ab12"),
+        cleanup1("network", "s1_front", {
+          state: "failed",
+          code: "remove_failed",
+          result: { cleaned: "false", left: "failed", kind: "network", name: "s1_front" },
+        }),
+        cleanup1("config", "s1_conf_cd34", {
+          state: "failed",
+          code: "remove_failed",
+          result: { cleaned: "false", left: "failed", kind: "config", name: "s1_conf_cd34" },
+        }),
+      ],
+    };
+    mount();
+    const alert = await screen.findByRole("alert");
+    expect(
+      within(alert).getByText(
+        "Bayplan couldn't remove network s1_front, config s1_conf_cd34. Remove them under Networks, Secrets or Configs.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("says nothing of a network that stays because a service uses it", async () => {
+    job = {
+      state: "partial",
+      items: [
+        ...stopped,
+        cleanup1("network", "s1_front", {
+          result: { cleaned: "false", left: "in_use", kind: "network", name: "s1_front" },
+        }),
+      ],
+    };
+    mount();
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).queryByText(/couldn't remove/)).toBeNull();
+    expect(within(alert).queryByText(/nothing uses were removed/)).toBeNull();
+  });
+
+  it("carries the timeout state of a service that did not settle", async () => {
+    job = {
+      state: "partial",
+      items: [
+        check,
+        { ...services, state: "failed", code: "converge_timeout" },
+        row("web", "failed", {
+          code: "converge_timeout",
+          detail: "No such image: web:2",
+          result: { action: "updated", minutes: "10" },
+        }),
+      ],
+    };
+    mount();
+    const alert = await screen.findByRole("alert");
+    expect(
+      within(alert).getByText(
+        "web didn't settle within 10 minutes. Docker may still finish it. Check the service, or roll back.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(alert).getByText(
+        "Bayplan stopped at web. 1 of 1 service was updated before it stopped, and nothing was rolled back.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("reads cancelled with how far it got and what was cleaned up", async () => {
+    job = {
+      state: "cancelled",
+      items: [
+        check,
+        { ...services, state: "cancelled", code: "cancelled" },
+        row("api", "done", { result: { action: "created", settled: "false" } }),
+        row("web", "cancelled", { code: "not_run" }),
+        cleanup1("secret", "s1_tok_ab12"),
+      ],
+    };
+    mount();
+    expect(await screen.findByText("Deploy cancelled")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Bayplan stopped at Deploy services. 1 of 2 services were already updated. Objects created for this deploy that nothing uses were removed.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Back to editing" })).toBeTruthy();
+  });
+
+  it("leaves the cleanup sentence out of a cancel that removed nothing", async () => {
+    job = {
+      state: "cancelled",
+      items: [
+        check,
+        { ...services, state: "cancelled", code: "cancelled" },
+        row("api", "cancelled", { code: "not_run" }),
+      ],
+    };
+    mount();
+    await screen.findByText("Deploy cancelled");
+    expect(
+      screen.getByText("Bayplan stopped at Deploy services. 0 of 1 service were already updated."),
+    ).toBeTruthy();
+    expect(screen.queryByText(/nothing uses were removed/)).toBeNull();
+  });
+});
+
+// Cancel deploy (plan 07-18): asks first, sends one cancel, says Cancelling… until the job reports
+// it.
+describe("cancelling a deploy", () => {
+  const dialog = () => screen.getByRole("alertdialog");
+
+  it("offers Cancel deploy to an Operator while the deploy runs and not after it ended", async () => {
+    role = "operator";
+    job = { state: "running", items: [check, services, row("api", "running")] };
+    await mountLive(jobBody());
+    expect(await screen.findByRole("button", { name: "Cancel deploy" })).toBeTruthy();
+    act(() => {
+      source().sendFrame(
+        "done",
+        jobBody({
+          state: "done",
+          items: [check, { ...services, state: "done" }, row("api", "done")],
+        }),
+        "9",
+      );
+    });
+    expect(screen.queryByRole("button", { name: "Cancel deploy" })).toBeNull();
+  });
+
+  it("is off with Needs Operator for a Viewer", async () => {
+    job = { state: "running", items: [check, services, row("api", "running")] };
+    await mountLive(jobBody());
+    const button = await screen.findByRole("button", { name: "Cancel deploy" });
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    const id = button.getAttribute("aria-describedby");
+    expect(document.getElementById(id as string)?.textContent).toBe("Needs Operator");
+  });
+
+  it("asks Cancel this deploy? with Keep deploying focused, and sends nothing when it is kept", async () => {
+    role = "operator";
+    await mountLive(jobBody({ items: [check, services, row("api", "running")] }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel deploy" }));
+    expect(within(dialog()).getByText("Cancel this deploy?")).toBeTruthy();
+    expect(
+      within(dialog()).getByText(
+        "Bayplan stops at the step it has reached. Services already updated stay updated, and objects created for this deploy that nothing uses are removed.",
+      ),
+    ).toBeTruthy();
+    expect(document.activeElement).toBe(
+      within(dialog()).getByRole("button", { name: "Keep deploying" }),
+    );
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Keep deploying" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(cancels).toHaveLength(0);
+  });
+
+  it("sends one cancel on confirming and says Cancelling… until the job reports cancelled", async () => {
+    role = "operator";
+    await mountLive(jobBody({ items: [check, services, row("api", "running")] }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel deploy" }));
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Cancel deploy" }));
+    await screen.findByText("Cancelling…");
+    expect(cancels).toHaveLength(1);
+    expect(new URL(cancels[0]?.url ?? "").pathname).toBe(
+      `/api/env/${ENV}/stacks/${STACK}/deploys/j1/cancel`,
+    );
+    // No second cancel can be sent while one is on its way.
+    expect(screen.queryByRole("button", { name: "Cancel deploy" })).toBeNull();
+
+    act(() => {
+      source().sendFrame(
+        "done",
+        jobBody({
+          state: "cancelled",
+          items: [
+            check,
+            { ...services, state: "cancelled", code: "cancelled" },
+            row("api", "done"),
+          ],
+        }),
+        "9",
+      );
+    });
+    expect(screen.getByText("Deploy cancelled")).toBeTruthy();
+    expect(screen.queryByText("Cancelling…")).toBeNull();
+  });
+
+  it("goes back to the job as it is when the deploy had already ended", async () => {
+    role = "operator";
+    cancelStatus = 409;
+    await mountLive(jobBody({ items: [check, services, row("api", "running")] }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel deploy" }));
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Cancel deploy" }));
+    await waitFor(() => expect(cancels).toHaveLength(1));
+    // Nothing was cancelled, so the console does not claim it is cancelling.
+    await waitFor(() => expect(screen.queryByText("Cancelling…")).toBeNull());
   });
 });
 

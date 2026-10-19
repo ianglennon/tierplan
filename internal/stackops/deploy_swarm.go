@@ -137,6 +137,13 @@ type DeployResult struct {
 	// declares that were removed, RemovedObjects the secrets and configs it replaced that were
 	// removed, and LeftInPlace the replaced ones that could not be removed.
 	CreatedNetworks, CreatedObjects, RemovedServices, RemovedObjects, LeftInPlace []string
+	// Total is how many services the stack declares, Updated and Services how many of them the swarm
+	// accepted before the deploy ended. A deploy that stopped reads "{Updated+Services} of {Total}".
+	Total int
+	// CleanedUp names the networks, secrets and configs this deploy created and removed again because
+	// it stopped before any service used them. LeftInPlace, for a deploy that stopped, names those it
+	// created that stay: a service uses them, or they could not be removed.
+	CleanedUp []string
 	// FailedService names the service, network, secret or config the failure is about.
 	FailedService, Code string
 	// Pins are the images the services were deployed with, by swarm service name, and Problems

@@ -355,3 +355,156 @@ func TestStackJobStreamCarriesTheOutputLogAndResumesIt(t *testing.T) {
 		t.Errorf("replayed lines = %q, want only the line after the one the browser had", texts)
 	}
 }
+
+// Cancel deploy (plan 07-18, STK-07, D-14): the deploy stops after the step it is on, the job ends
+// cancelled, and stack.deployed records it.
+
+// awaitStackJobItem reads the job's events until an item satisfies cond, starting with the job as it stands.
+func awaitStackJobItem(t *testing.T, f *envFix, jobID string, cond func(jobs.Item) bool) {
+	t.Helper()
+	snap, ch, cancel, err := f.jobHub.Subscribe(testsupport.Context(t), jobID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	for _, it := range snap.Items {
+		if cond(it) {
+			return
+		}
+	}
+	ctx := testsupport.Context(t)
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				t.Fatalf("the job ended before the item the test waited for")
+			}
+			if ev.Item != nil && cond(*ev.Item) {
+				return
+			}
+		case <-ctx.Done():
+			t.Fatal("timed out waiting for the item")
+		}
+	}
+}
+
+// startStuckDeploy deploys the starter stack to a swarm whose service never gets past preparing,
+// and returns when the deploy has begun waiting for it.
+func startStuckDeploy(t *testing.T, f *envFix, operator *roleCaller, st stackAnswer) string {
+	t.Helper()
+	f.fake.SetTaskState(st.Name+"_web", "preparing", "")
+	rec := operator.deploy(st.ID, `{"draftVersion":1}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("deploy: %d %s", rec.Code, rec.Body)
+	}
+	started := answerOf[struct {
+		JobID string `json:"jobId"`
+	}](t, rec)
+	awaitStackJobItem(t, f, started.JobID, func(it jobs.Item) bool { return it.ID == "service:"+st.Name+"_web" && it.Unit == "tasks" })
+	return started.JobID
+}
+
+func cancelPath(stackID, jobID string) string {
+	return "stacks/" + stackID + "/deploys/" + jobID + "/cancel"
+}
+
+func TestCancelDeployStopsTheJobAndRecordsItCancelled(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	other := f.caller(t, e, "operator-2", "operator")
+	st := newStack(t, admin, "tracer")
+	jobID := startStuckDeploy(t, f, operator, st)
+
+	// Someone other than the starter may cancel: it needs stacks.deploy, not the job.
+	rec := other.do(http.MethodPost, cancelPath(st.ID, jobID), "")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("cancel: %d %s", rec.Code, rec.Body)
+	}
+	job := f.awaitDeploy(t, jobID)
+	if job.State == "running" {
+		t.Fatalf("job = %+v, want it ended", job)
+	}
+
+	// The job reads cancelled, though services before the stop were written.
+	rec = operator.do(http.MethodGet, "stacks/"+st.ID+"/deploys/"+jobID, "")
+	if got := answerOf[struct {
+		State string `json:"state"`
+	}](t, rec).State; got != "cancelled" {
+		t.Errorf("job state = %q, want cancelled", got)
+	}
+	var row *auditRowFull
+	for _, r := range f.stackAudits(t) {
+		if r.Action == "stack.deployed" {
+			row = &r
+		}
+	}
+	if row == nil || row.Details["result"] != "cancelled" || row.Details["cancelledBy"] != "operator-2" {
+		t.Errorf("stack.deployed = %+v, want result cancelled by operator-2", row)
+	}
+	if n := len(f.fake.ServiceUpdates()); n != 0 {
+		t.Errorf("service updates = %d, a cancel writes nothing", n)
+	}
+}
+
+func TestCancelDeployOfAJobThatEndedIsRefusedAndChangesNothing(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "tracer")
+	rec := operator.deploy(st.ID, `{"draftVersion":1}`)
+	started := answerOf[struct {
+		JobID string `json:"jobId"`
+	}](t, rec)
+	if job := f.awaitDeploy(t, started.JobID); job.State != "done" {
+		t.Fatalf("job = %+v", job)
+	}
+	rec = operator.do(http.MethodPost, cancelPath(st.ID, started.JobID), "")
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "job_finished") {
+		t.Fatalf("cancel of a finished job: %d %s, want 409 job_finished", rec.Code, rec.Body)
+	}
+}
+
+func TestCancelDeployIsOnlyForADeployOfThatStack(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "tracer")
+	elsewhere := newStack(t, admin, "elsewhere")
+	jobID := startStuckDeploy(t, f, operator, st)
+	t.Cleanup(func() { _ = f.jobHub.Cancel(jobID) })
+
+	for name, path := range map[string]string{
+		"a job of another stack":  cancelPath(elsewhere.ID, jobID),
+		"a job that is not there": cancelPath(st.ID, "no-such-job"),
+	} {
+		rec := operator.do(http.MethodPost, path, "")
+		if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "stack_job_not_found") {
+			t.Errorf("%s: %d %s, want 404 stack_job_not_found", name, rec.Code, rec.Body)
+		}
+	}
+	if j, ok := f.jobHub.Get(jobID); !ok || j.Finished() {
+		t.Errorf("job = %+v, a refused cancel must leave it running", j)
+	}
+}
+
+func TestCancelDeployNeedsOperator(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	st := newStack(t, admin, "tracer")
+	jobID := startStuckDeploy(t, f, operator, st)
+	t.Cleanup(func() { _ = f.jobHub.Cancel(jobID) })
+
+	if rec := viewer.do(http.MethodPost, cancelPath(st.ID, jobID), ""); rec.Code != http.StatusForbidden {
+		t.Errorf("a viewer's cancel: %d %s, want 403", rec.Code, rec.Body)
+	}
+	if j, ok := f.jobHub.Get(jobID); !ok || j.Finished() {
+		t.Errorf("job = %+v, a refused cancel must leave it running", j)
+	}
+}

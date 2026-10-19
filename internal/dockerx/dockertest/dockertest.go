@@ -188,6 +188,11 @@ type FakeConfig struct {
 	TasksFollowWrites bool
 	// taskStates are the states SetTaskState gave those tasks, by service name.
 	taskStates map[string]fakeTaskState
+	// OnWrite, when set, is called with each write as Writes lists it ("METHOD path?query") the
+	// moment the daemon receives it, before it answers, from the goroutine that serves the request. A
+	// test uses it to do something at an exact point of a deploy, like cancelling it while its first
+	// service is being written. It must not call the daemon's own client.
+	OnWrite func(write string)
 	// ServiceLogs are the lines the tasks of each service wrote, by service ID, which
 	// /services/{id}/logs and /tasks/{id}/logs answer (fake_servicelogs.go).
 	ServiceLogs map[string][]FakeServiceLogLine
@@ -583,6 +588,8 @@ type Fake struct {
 	svcGone map[string]bool
 	// taskStates are the states SetTaskState gave the tasks that follow writes, by service name.
 	taskStates map[string]fakeTaskState
+	// quorumLost is set by LoseQuorum.
+	quorumLost bool
 	// updateStates are the update statuses SetUpdateState gave services, by service name.
 	updateStates map[string]fakeTaskState
 	// secrets are the secrets created through the fake, secretCreates the requests that made
@@ -804,7 +811,7 @@ func withEnvProbeDelay(cfg FakeConfig) (FakeConfig, error) {
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withCreatedServices(f.svcCreated).withServices(f.svcState).withoutServices(f.svcGone).withNodes(f.nodeState).withoutNodes(f.nodeGone).withSecrets(f.secrets).withoutSecrets(f.secretGone).withConfigs(f.configs).withoutConfigs(f.configGone).withTaskStates(f.taskStates).withUpdateStates(f.updateStates)
+	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withCreatedServices(f.svcCreated).withServices(f.svcState).withoutServices(f.svcGone).withNodes(f.nodeState).withoutNodes(f.nodeGone).withSecrets(f.secrets).withoutSecrets(f.secretGone).withConfigs(f.configs).withoutConfigs(f.configGone).withTaskStates(f.taskStates).withUpdateStates(f.updateStates).withQuorum(f.quorumLost)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
