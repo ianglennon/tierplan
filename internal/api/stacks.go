@@ -185,6 +185,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 		})
 
 	registerStackDraft(r, d)
+	registerStackCheck(r, d)
 	registerStackDeploy(r, d)
 }
 

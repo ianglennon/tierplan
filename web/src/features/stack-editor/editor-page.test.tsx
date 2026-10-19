@@ -20,7 +20,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { StackEditorPage } from "@/features/stack-editor/editor-page";
 import "@/i18n";
-import { editorText, typeIntoEditor } from "@/test-editor";
+import { editorText, editorView, typeIntoEditor } from "@/test-editor";
 import { makeMe } from "@/test-me";
 import { settled } from "@/test-settle";
 
@@ -45,6 +45,8 @@ interface Server {
   draft: () => Response | Promise<Response>;
   save: (body: Record<string, unknown>) => Response | Promise<Response>;
   discard: () => Response | Promise<Response>;
+  // The answer to a check of the working copy (plan 07-06).
+  check: (body: Record<string, unknown>) => Response | Promise<Response>;
 }
 
 let server: Server;
@@ -79,6 +81,7 @@ beforeEach(() => {
         savedAt: new Date().toISOString(),
       }),
     discard: () => new Response(null, { status: 204 }),
+    check: () => Response.json({ problems: [], unusedFiles: [] }),
   };
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
@@ -89,7 +92,7 @@ beforeEach(() => {
       const entry: Sent = {
         method: req.method,
         path,
-        body: req.method === "PUT" ? await req.clone().json() : undefined,
+        body: req.method === "PUT" || req.method === "POST" ? await req.clone().json() : undefined,
       };
       server.sent.push(entry);
       if (path === "/api/me") return Response.json(makeMe({ envs: { [ENV]: server.role } }));
@@ -117,6 +120,9 @@ beforeEach(() => {
         if (req.method === "PUT") return server.save(entry.body ?? {});
         if (req.method === "DELETE") return server.discard();
         return server.draft();
+      }
+      if (path === `/api/env/${ENV}/stacks/${STACK}/check` && req.method === "POST") {
+        return server.check(entry.body ?? {});
       }
       return Response.json({}, { status: 404 });
     }),
@@ -379,7 +385,11 @@ describe("what the page sends", () => {
     await settled(client);
     const draftReads = server.sent.filter((s) => s.method === "GET" && s.path.endsWith("/draft"));
     expect(draftReads).toHaveLength(1);
-    const writes = server.sent.filter((s) => s.method !== "GET");
+    // A check is a POST that writes nothing: it is the one request that is not a read of the draft
+    // and not a write to it.
+    const writes = server.sent.filter(
+      (s) => s.method !== "GET" && !s.path.endsWith(`/stacks/${STACK}/check`),
+    );
     expect(writes.every((s) => s.path === `/api/env/${ENV}/stacks/${STACK}/draft`)).toBe(true);
   });
 });
@@ -903,5 +913,148 @@ describe("leaving with unsaved edits", () => {
     const dirty = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(dirty);
     expect(dirty.defaultPrevented).toBe(true);
+  });
+});
+
+// The Problems panel (plan 07-06, STK-01, D-10): the server's check of the working copy, listed with
+// the line of each problem, and a click on one opens the file at that line.
+
+const checks = () => server.sent.filter((s) => s.method === "POST" && s.path.endsWith("/check"));
+
+const problemOf = (over: Record<string, unknown> = {}) => ({
+  severity: "error",
+  code: "yaml_invalid",
+  message: "Line 3: found character that cannot start any token",
+  file: "compose.yaml",
+  line: 3,
+  col: 1,
+  endLine: 3,
+  endCol: 2,
+  ...over,
+});
+
+describe("the Problems panel", () => {
+  it("counts the problems and names each row by severity, message, file and line", async () => {
+    server.check = () => Response.json({ problems: [problemOf()], unusedFiles: [] });
+    mount();
+    await ready();
+    const row = await screen.findByRole("button", {
+      name: "Error: Line 3: found character that cannot start any token, compose.yaml line 3",
+    });
+    expect(row.textContent).toContain("compose.yaml:3");
+    expect(screen.getByText("1 error, 0 warnings")).toBeTruthy();
+  });
+
+  it("says there are no problems when the check finds none", async () => {
+    mount();
+    await ready();
+    expect(await screen.findByText("No problems")).toBeTruthy();
+  });
+
+  it("opens the file of a problem and puts the cursor on its line when it is clicked", async () => {
+    server.draft = () =>
+      Response.json(
+        draftBody({
+          files: [
+            { path: "app.env", content: "A=1\nB=2\nC=3\n", secret: false },
+            { path: "compose.yaml", content: COMPOSE, secret: false },
+          ],
+        }),
+      );
+    server.check = () =>
+      Response.json({
+        problems: [problemOf({ file: "app.env", line: 2, col: 2, message: "B is wrong" })],
+        unusedFiles: [],
+      });
+    mount();
+    await ready();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Error: B is wrong, app.env line 2" }),
+    );
+    await screen.findByRole("textbox", { name: "app.env, text" });
+    // Line 2 starts after "A=1\n" (4 characters) and the cursor is on column 2.
+    await waitFor(() => expect(editorView().state.selection.main.head).toBe(5));
+    expect(document.activeElement?.closest(".cm-editor")).not.toBeNull();
+  });
+
+  it("opens by itself on the first error and stays as the person leaves it", async () => {
+    let answer = { problems: [problemOf()], unusedFiles: [] as string[] };
+    server.check = () => Response.json(answer);
+    mount();
+    await ready();
+    const header = await screen.findByRole("button", { name: /Problems/ });
+    await waitFor(() => expect(header.getAttribute("aria-expanded")).toBe("true"));
+    fireEvent.click(header);
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+    // A save asks again; a closed panel stays closed when the answer changes.
+    answer = {
+      problems: [problemOf(), problemOf({ line: 4, message: "Another" })],
+      unusedFiles: [],
+    };
+    typeIntoEditor("services: {}\n");
+    fireEvent.click(saveButton());
+    await screen.findByText("Saved the draft of tracer.");
+    await screen.findByText("2 errors, 0 warnings");
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("checks again after a save", async () => {
+    mount();
+    await ready();
+    await waitFor(() => expect(checks()).toHaveLength(1));
+    typeIntoEditor("services: {}\n");
+    fireEvent.click(saveButton());
+    await screen.findByText("Saved the draft of tracer.");
+    await waitFor(() => expect(checks().length).toBeGreaterThanOrEqual(2));
+  });
+
+  it("sends the working copy in the save shape, with a hidden secret as the keep marker", async () => {
+    server.draft = () =>
+      Response.json(
+        draftBody({
+          files: [
+            { path: "compose.yaml", content: COMPOSE, secret: false },
+            { path: "key.pem", content: "<hidden>", secret: true },
+          ],
+        }),
+      );
+    mount();
+    await ready();
+    await waitFor(() => expect(checks()).toHaveLength(1));
+    expect(checks()[0]?.body).toEqual({
+      files: [
+        { path: "compose.yaml", content: COMPOSE, secret: false },
+        { path: "key.pem", content: "<hidden>", secret: true },
+      ],
+      vars: [],
+    });
+  });
+
+  it("keeps the last results and says it will retry when a check fails", async () => {
+    let fail = false;
+    server.check = () =>
+      fail
+        ? problem(500, "about:blank")
+        : Response.json({ problems: [problemOf()], unusedFiles: [] });
+    mount();
+    await ready();
+    await screen.findByText("1 error, 0 warnings");
+    fail = true;
+    typeIntoEditor(`${COMPOSE}# more\n`);
+    fireEvent.click(saveButton());
+    await screen.findByText("Couldn't check the stack. It will retry.");
+    expect(screen.getByText("1 error, 0 warnings")).toBeTruthy();
+  });
+
+  it("shows Checking… while the server has not answered", async () => {
+    let release: (r: Response) => void = () => {};
+    server.check = () => new Promise<Response>((resolve) => (release = resolve));
+    mount();
+    await ready();
+    expect(await screen.findByText("Checking…")).toBeTruthy();
+    await act(async () => {
+      release(Response.json({ problems: [], unusedFiles: [] }));
+    });
+    await waitFor(() => expect(screen.queryByText("Checking…")).toBeNull());
   });
 });

@@ -11195,6 +11195,67 @@
         ],
         "type": "object"
       },
+      "StackCheckBody": {
+        "additionalProperties": false,
+        "properties": {
+          "problems": {
+            "description": "The problems, ordered by file and line",
+            "items": {
+              "$ref": "#/components/schemas/StackProblemBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "unusedFiles": {
+            "description": "Stack files the compose file never refers to",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "problems",
+          "unusedFiles"
+        ],
+        "type": "object"
+      },
+      "StackCheckRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "files": {
+            "description": "Every file of the working copy, as a save sends them. A secret file sent as \u003chidden\u003e is filled from the saved draft",
+            "items": {
+              "$ref": "#/components/schemas/DraftFileBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "vars": {
+            "description": "Every variable of the working copy. A secret variable sent as \u003chidden\u003e is filled from the saved draft",
+            "items": {
+              "$ref": "#/components/schemas/DraftVarBody"
+            },
+            "maxItems": 500,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "files",
+          "vars"
+        ],
+        "type": "object"
+      },
       "StackCreateRequest": {
         "additionalProperties": false,
         "properties": {
@@ -11667,6 +11728,62 @@
         },
         "required": [
           "items"
+        ],
+        "type": "object"
+      },
+      "StackProblemBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "A stable name for the kind of problem, such as yaml_invalid or relative_bind",
+            "type": "string"
+          },
+          "col": {
+            "description": "The 1-based column",
+            "format": "int64",
+            "type": "integer"
+          },
+          "endCol": {
+            "description": "The column the marked range ends before",
+            "format": "int64",
+            "type": "integer"
+          },
+          "endLine": {
+            "description": "The line the marked range ends on",
+            "format": "int64",
+            "type": "integer"
+          },
+          "file": {
+            "description": "The stack file the problem is in",
+            "type": "string"
+          },
+          "line": {
+            "description": "The 1-based line",
+            "format": "int64",
+            "type": "integer"
+          },
+          "message": {
+            "description": "What is wrong, then what to do",
+            "type": "string"
+          },
+          "severity": {
+            "description": "An error stops a deploy; a warning only informs",
+            "enum": [
+              "error",
+              "warning"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "severity",
+          "code",
+          "message",
+          "file",
+          "line",
+          "col",
+          "endLine",
+          "endCol"
         ],
         "type": "object"
       },
@@ -20678,6 +20795,77 @@
           }
         },
         "summary": "One stack",
+        "tags": [
+          "stacks"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/check": {
+      "post": {
+        "description": "Checks the files and variables in the body, as the editor holds them, and answers every problem with its file, line and column. The check works only on the bytes it is sent: it reads no file from the Bayplan server, fetches nothing, writes nothing and sends nothing to an engine. include, extends and label_file are refused, and every env_file and file: reference must name one of the stack's own files. The editor calls it while a person types and on Save, and the review and the deploy run the same check. Needs stacks.read (Viewer).",
+        "operationId": "checkStack",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StackCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackCheckBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Check a stack's working copy",
         "tags": [
           "stacks"
         ]

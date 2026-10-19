@@ -12,6 +12,7 @@ import {
   draftQuery,
   type StackDraft,
   type StackDraftSaved,
+  type StackProblem,
   stackQuery,
   useDiscardDraft,
   useSaveDraft,
@@ -33,9 +34,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EditorFooter } from "@/features/service-editor/editor-footer";
-import { FileEditor } from "@/features/stack-editor/file-editor";
+import { FileEditor, type FileEditorHandle } from "@/features/stack-editor/file-editor";
 import { FileRail } from "@/features/stack-editor/file-rail";
+import { ProblemsPanel } from "@/features/stack-editor/problems-panel";
 import { SaveStatus } from "@/features/stack-editor/save-status";
+import { useStackCheck } from "@/features/stack-editor/use-stack-check";
 import {
   COMPOSE_FILE,
   emptyWorkingCopy,
@@ -105,6 +108,10 @@ export function StackEditorPage({ envId, stackId, file, onFileChange }: StackEdi
   const loaded = useRef(false);
   const copyRef = useRef(copy);
   copyRef.current = copy;
+  const check = useStackCheck(envId, stackId, copy);
+  const editor = useRef<FileEditorHandle>(null);
+  // A click on a problem: the file to open and where to put the cursor once its editor is there.
+  const [jump, setJump] = useState<{ file: string; line: number; col: number } | null>(null);
 
   const name = stack.data?.name ?? "";
 
@@ -155,6 +162,13 @@ export function StackEditorPage({ envId, stackId, file, onFileChange }: StackEdi
     withResolver: true,
   });
   const open = copy.files.find((f) => f.path === copy.selected);
+  // The jump waits for its file to be the open one, then moves the cursor and takes the focus. A
+  // file with no editor (a hidden secret) has nowhere to put a cursor, so the jump ends there.
+  useEffect(() => {
+    if (!jump || copy.selected !== jump.file) return;
+    if (editor.current) editor.current.cursorTo(jump.line, jump.col);
+    setJump(null);
+  }, [jump, copy.selected]);
   const hasSaved = (stack.data?.hasDraft ?? false) || savedChange;
 
   // Moving to a file, or off one that is gone, moves the address with it. compose.yaml is the
@@ -164,6 +178,14 @@ export function StackEditorPage({ envId, stackId, file, onFileChange }: StackEdi
   function selectFile(path: string) {
     dispatch({ type: "select", path });
     showInAddress(path);
+  }
+
+  // Opening a problem selects its file and puts the cursor on its line (UI-SPEC "Lint and inline
+  // errors"). A problem in a file that is no longer there selects nothing.
+  function openProblem(p: StackProblem) {
+    if (!copyRef.current.files.some((f) => f.path === p.file)) return;
+    if (copyRef.current.selected !== p.file) selectFile(p.file);
+    setJump({ file: p.file, line: p.line, col: p.col });
   }
 
   function addFile(path: string, content?: string) {
@@ -207,6 +229,7 @@ export function StackEditorPage({ envId, stackId, file, onFileChange }: StackEdi
     setBase({ version: answer.version, savedAt: answer.savedAt, savedBy: answer.savedBy });
     if (answer.changed) setSavedChange(true);
     setSaveError(null);
+    check.runNow();
     toastSuccess(t("stackEditor.save.toast", { name }));
   }
 
@@ -339,6 +362,7 @@ export function StackEditorPage({ envId, stackId, file, onFileChange }: StackEdi
             ) : (
               <FileEditor
                 key={open.path}
+                ref={editor}
                 file={open}
                 readOnly={!canEdit}
                 onChange={(content) => dispatch({ type: "edit", path: open.path, content })}
@@ -349,6 +373,15 @@ export function StackEditorPage({ envId, stackId, file, onFileChange }: StackEdi
               <Skeleton className="h-100 w-full" />
             </div>
           )}
+          {ready ? (
+            <ProblemsPanel
+              problems={check.problems}
+              checking={check.checking}
+              failed={check.failed}
+              checked={check.checked}
+              onOpen={openProblem}
+            />
+          ) : null}
           <p className="text-sm text-muted-foreground">
             <Trans
               i18nKey="stackEditor.editor.helper"

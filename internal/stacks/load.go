@@ -23,6 +23,15 @@ const sandboxDir = "/bayplan-stack-sandbox"
 // loadTimeout bounds one load; compose-go walks a YAML tree that a user wrote.
 const loadTimeout = 5 * time.Second
 
+// LoadError is a compose file compose-go refused: Err is compose-go's own error, so Check can read
+// the position and the sentence out of it. Its text is the one Load has always returned.
+type LoadError struct{ Err error }
+
+func (e *LoadError) Error() string { return fmt.Sprintf("stacks: load %s: %v", ComposeFile, e.Err) }
+
+// Unwrap returns compose-go's error.
+func (e *LoadError) Unwrap() error { return e.Err }
+
 // LoadInput is what Load needs: the stack's name (it becomes the compose project name), its
 // target and the working copy to load.
 type LoadInput struct {
@@ -70,7 +79,7 @@ func Load(ctx context.Context, in LoadInput) (*Loaded, error) {
 		o.ResolvePaths = false
 	})
 	if err != nil {
-		return nil, fmt.Errorf("stacks: load %s: %w", ComposeFile, err)
+		return nil, &LoadError{Err: err}
 	}
 	return &Loaded{Project: project}, nil
 }

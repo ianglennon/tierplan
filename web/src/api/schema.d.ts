@@ -1968,6 +1968,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks/{stackId}/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check a stack's working copy
+         * @description Checks the files and variables in the body, as the editor holds them, and answers every problem with its file, line and column. The check works only on the bytes it is sent: it reads no file from the Bayplan server, fetches nothing, writes nothing and sends nothing to an engine. include, extends and label_file are refused, and every env_file and file: reference must name one of the stack's own files. The editor calls it while a person types and on Save, and the review and the deploy run the same check. Needs stacks.read (Viewer).
+         */
+        post: operations["checkStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/stacks/{stackId}/deploys": {
         parameters: {
             query?: never;
@@ -8022,6 +8042,18 @@ export interface components {
             /** @description The team's name; set when kind is team */
             teamName?: string;
         };
+        StackCheckBody: {
+            /** @description The problems, ordered by file and line */
+            problems: components["schemas"]["StackProblemBody"][] | null;
+            /** @description Stack files the compose file never refers to */
+            unusedFiles: string[] | null;
+        };
+        StackCheckRequest: {
+            /** @description Every file of the working copy, as a save sends them. A secret file sent as <hidden> is filled from the saved draft */
+            files: components["schemas"]["DraftFileBody"][] | null;
+            /** @description Every variable of the working copy. A secret variable sent as <hidden> is filled from the saved draft */
+            vars: components["schemas"]["DraftVarBody"][] | null;
+        };
         StackCreateRequest: {
             /** @description The text of the first compose.yaml. When it is given, start is ignored */
             compose?: string;
@@ -8212,6 +8244,39 @@ export interface components {
         StackListBody: {
             /** @description The environment's stacks by name */
             items: components["schemas"]["StackItem"][] | null;
+        };
+        StackProblemBody: {
+            /** @description A stable name for the kind of problem, such as yaml_invalid or relative_bind */
+            code: string;
+            /**
+             * Format: int64
+             * @description The 1-based column
+             */
+            col: number;
+            /**
+             * Format: int64
+             * @description The column the marked range ends before
+             */
+            endCol: number;
+            /**
+             * Format: int64
+             * @description The line the marked range ends on
+             */
+            endLine: number;
+            /** @description The stack file the problem is in */
+            file: string;
+            /**
+             * Format: int64
+             * @description The 1-based line
+             */
+            line: number;
+            /** @description What is wrong, then what to do */
+            message: string;
+            /**
+             * @description An error stops a deploy; a warning only informs
+             * @enum {string}
+             */
+            severity: "error" | "warning";
         };
         StatusCountsBody: {
             /**
@@ -13071,6 +13136,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackDetail"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    checkStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackCheckBody"];
                 };
             };
             /** @description Error */

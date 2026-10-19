@@ -15,6 +15,9 @@ export type StackDraftSaveInput = components["schemas"]["StackDraftSaveRequest"]
 export type StackDraftSaved = components["schemas"]["StackDraftSaveBody"];
 export type StackCreateInput = components["schemas"]["StackCreateRequest"];
 export type StackState = StackItem["state"];
+export type StackCheck = components["schemas"]["StackCheckBody"];
+export type StackProblem = components["schemas"]["StackProblemBody"];
+export type StackCheckInput = components["schemas"]["StackCheckRequest"];
 
 // The query key of an environment's stacks list, and of every read that extends it: one stack's
 // page is under it, so a change to the list refreshes the page too.
@@ -238,4 +241,44 @@ export function useDiscardDraft(envId: string, stackId: string) {
     retry: false,
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: stacksKey(envId) }),
   });
+}
+
+// CheckRequestError is a check the server refused or that got no answer. The status is 0 when the
+// server could not be reached; 429 with the type check_busy means the person already has two
+// checks running.
+export class CheckRequestError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  constructor(status: number, type?: string) {
+    super(`POST check failed (${status})`);
+    this.name = "CheckRequestError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+// postStackCheck sends the working copy to be checked. The server reads nothing but the bytes it is
+// sent and writes nothing, so a check is safe to repeat; it is never retried all the same, because
+// the editor sends the next one when the person types again. The answer's lists are never null.
+export async function postStackCheck(
+  envId: string,
+  stackId: string,
+  body: StackCheckInput,
+  signal?: AbortSignal,
+): Promise<{ problems: StackProblem[]; unusedFiles: string[] }> {
+  try {
+    const res = await api.POST("/api/env/{envId}/stacks/{stackId}/check", {
+      params: { path: { envId, stackId } },
+      body,
+      signal,
+    });
+    if (!res.data) {
+      const problem = readProblem(res.error, res.response);
+      throw new CheckRequestError(problem.status, problem.type);
+    }
+    return { problems: res.data.problems ?? [], unusedFiles: res.data.unusedFiles ?? [] };
+  } catch (e) {
+    // A network failure has no status.
+    throw e instanceof CheckRequestError ? e : new CheckRequestError(0);
+  }
 }
