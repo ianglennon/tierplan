@@ -90,7 +90,7 @@ func engineStateReads(requests []string) int {
 
 func TestCheckIsPureAndPositioned(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	viewer := f.caller(t, e, "viewer-1", "viewer")
 	st := newStack(t, admin, "lint")
@@ -145,7 +145,7 @@ func TestCheckIsPureAndPositioned(t *testing.T) {
 
 func TestCheckRefusesWhatSaveRefuses(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	st := newStack(t, admin, "rules")
 
@@ -161,7 +161,7 @@ func TestCheckRefusesWhatSaveRefuses(t *testing.T) {
 
 func TestCheckRefusesWhatNamesAFileOfTheServerAndListsUnusedFiles(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	st := newStack(t, admin, "files")
 
@@ -200,7 +200,7 @@ func TestCheckRefusesWhatNamesAFileOfTheServerAndListsUnusedFiles(t *testing.T) 
 
 func TestCheckAnswersWhatTheTargetIgnoresAsWarningsAtTheirLines(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	st := newStack(t, admin, "target-lint")
 
@@ -318,7 +318,7 @@ func checkBodyWithVars(compose, vars string) string {
 
 func TestCheckIsGivenTheVariablesOfTheTableAndAnswersThemResolved(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	viewer := f.caller(t, e, "viewer-1", "viewer")
 	st := newStack(t, admin, "vars")

@@ -62,7 +62,7 @@ func startStackJob(t *testing.T, f *envFix, envID, stackID string, run func(ctx 
 
 func TestStackJobStreamResumes(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	viewer := f.caller(t, e, "viewer-1", "viewer")
 	st := newStack(t, admin, "web")
@@ -173,7 +173,7 @@ func TestStackJobStreamResumes(t *testing.T) {
 
 func TestStackJobStreamIsOnlyOfItsOwnStackAndEnvironment(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	viewer := f.caller(t, e, "viewer-1", "viewer")
 	st := newStack(t, admin, "web")
@@ -207,7 +207,7 @@ func TestStackJobStreamIsOnlyOfItsOwnStackAndEnvironment(t *testing.T) {
 func TestConsoleNeverShowsASecret(t *testing.T) {
 	t.Parallel()
 	const secret = "tok-9f8e7d6c5b4a" //nolint:gosec // a made-up value the test must never find in an answer
-	f, e := actionsEnv(t, func(c *dockertest.FakeConfig) {
+	f, e := stackEnv(t, func(c *dockertest.FakeConfig) {
 		c.ServiceCreateError = "rpc error: code = InvalidArgument desc = env TOKEN=" + secret + " is not allowed"
 	})
 	admin := f.caller(t, e, "envadmin-1", "admin")
@@ -279,7 +279,7 @@ func TestConsoleNeverShowsASecret(t *testing.T) {
 
 func TestStackJobStreamCarriesTheOutputLogAndResumesIt(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	viewer := f.caller(t, e, "viewer-1", "viewer")
 	st := newStack(t, admin, "web")

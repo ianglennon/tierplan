@@ -83,6 +83,11 @@ type StacksDeps struct {
 	// Store and Vault hold the stored stacks and seal their secret values.
 	Store *store.Store
 	Vault *vault.Vault
+	// Clock and ConvergeTimeout are what a swarm deploy waits on and for: the clock its polls and
+	// its timeout run on (nil is the wall clock), and how long each service gets to settle (zero is
+	// ten minutes; BAYPLAN_STACK_CONVERGE_TIMEOUT).
+	Clock           stackops.Clock
+	ConvergeTimeout time.Duration
 	// CheckDeadline bounds one check of a stack's working copy. Zero is five seconds.
 	CheckDeadline time.Duration
 	// OnCheck, when set, is called once a check holds its slot and before it runs. Tests use it to
@@ -101,7 +106,10 @@ type StacksDeps struct {
 func (d StacksDeps) repo() stackops.Repo { return stackops.Repo{Store: d.Store, Vault: d.Vault} }
 
 func (d StacksDeps) ops() stackops.Deps {
-	return stackops.Deps{Aggregator: d.Aggregator, Clusters: d.Clusters, Resolver: d.Resolver, Checker: d.Checker, Log: d.Log}
+	return stackops.Deps{
+		Aggregator: d.Aggregator, Clusters: d.Clusters, Resolver: d.Resolver, Checker: d.Checker,
+		Clock: d.Clock, ConvergeTimeout: d.ConvergeTimeout, Log: d.Log,
+	}
 }
 
 // StackItem is one stack as the list shows it.

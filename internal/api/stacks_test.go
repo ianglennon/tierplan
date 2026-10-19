@@ -21,6 +21,18 @@ import (
 // monitor, aggregator and cluster reader; the router, policy, CSRF guard, registry resolver, job hub
 // and audit writer are the real ones.
 
+// stackEnv is actionsEnv for the stack tests: the services a deploy writes settle at once, as they do
+// on a swarm that has the images and room. A test that wants one stuck moves it with Fake.SetTaskState.
+func stackEnv(t *testing.T, tune func(*dockertest.FakeConfig), services ...dockertest.FakeService) (*envFix, envBody) {
+	t.Helper()
+	return actionsEnv(t, func(c *dockertest.FakeConfig) {
+		c.TasksFollowWrites = true
+		if tune != nil {
+			tune(c)
+		}
+	}, services...)
+}
+
 type stackAnswer struct {
 	ID             string `json:"id"`
 	Name           string `json:"name"`
@@ -143,7 +155,7 @@ func (f *envFix) awaitDeploy(t *testing.T, jobID string) jobAnswer {
 
 func TestDeployAOneServiceStackToALocalSwarmManagerEndToEnd(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 
@@ -245,7 +257,7 @@ func TestDeployAOneServiceStackToALocalSwarmManagerEndToEnd(t *testing.T) {
 
 func TestStackSaveSendsNoEngineRequest(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 
@@ -268,7 +280,7 @@ func TestStackSaveSendsNoEngineRequest(t *testing.T) {
 
 func TestStackDraftConflictAndIdempotentSave(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	ada := f.caller(t, e, "ada", "operator")
 	bob := f.caller(t, e, "bob", "operator")
@@ -318,7 +330,7 @@ func TestStackDraftConflictAndIdempotentSave(t *testing.T) {
 
 func TestStackRefusals(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	viewer := f.caller(t, e, "viewer-1", "viewer")
@@ -367,7 +379,7 @@ func TestStackRefusals(t *testing.T) {
 
 func TestAStackOfAnotherEnvironmentIsNotFound(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	st := newStack(t, admin, "mine")
 	// The same stack ID under a different environment ID resolves no stack, whoever asks.
@@ -379,7 +391,7 @@ func TestAStackOfAnotherEnvironmentIsNotFound(t *testing.T) {
 
 func TestStackDraftHidesSecretValuesAndKeepsThemWhenSavedAsThePlaceholder(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "vault")
@@ -428,7 +440,7 @@ func TestStackDraftHidesSecretValuesAndKeepsThemWhenSavedAsThePlaceholder(t *tes
 
 func TestSavingADraftRefusesAPathOrNameThatCouldEscapeTheStack(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "paths")
@@ -456,7 +468,7 @@ func TestSavingADraftRefusesAPathOrNameThatCouldEscapeTheStack(t *testing.T) {
 
 func TestDeployRefusesAComposeFileItCannotLoadOrConvertAndStoresNothing(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "broken")
@@ -496,7 +508,7 @@ func draftVersion(t *testing.T, c *roleCaller, stackID string) int64 {
 
 func TestADeployFailureIsRecordedAndShownAsDeployFailed(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, func(c *dockertest.FakeConfig) { c.ServiceCreateError = "secret not found: hidden-name" })
+	f, e := stackEnv(t, func(c *dockertest.FakeConfig) { c.ServiceCreateError = "secret not found: hidden-name" })
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "failing")
@@ -538,7 +550,7 @@ func TestADeployFailureIsRecordedAndShownAsDeployFailed(t *testing.T) {
 
 func TestADeployToAStandaloneHostIsRefusedUntilTheComposeEngineExists(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, func(c *dockertest.FakeConfig) {
+	f, e := stackEnv(t, func(c *dockertest.FakeConfig) {
 		c.SwarmState, c.SwarmControl, c.NodeRows = "", false, nil
 	})
 	admin := f.caller(t, e, "envadmin-1", "admin")
@@ -558,7 +570,7 @@ func TestADeployToAStandaloneHostIsRefusedUntilTheComposeEngineExists(t *testing
 
 func TestTheStackListShowsADraftThatWasSavedAfterTheLastDeploy(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "drafty")

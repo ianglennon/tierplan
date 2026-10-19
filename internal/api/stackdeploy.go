@@ -75,18 +75,18 @@ type StackJobPathInput struct {
 
 // StackJobItemBody is one step or service of a deploy.
 type StackJobItemBody struct {
-	ID      string            `json:"id" doc:"The item: check, lookup, networks, objects, services or cleanup, or one made for an object or service of the deploy, like service:web"`
+	ID      string            `json:"id" doc:"The item: check, lookup, networks, objects, services or cleanup, or one made for an object, service or task of the deploy, like service:web or task:<task id>"`
 	Label   string            `json:"label" doc:"The item's name: a step's words, or a service's name"`
-	Parent  string            `json:"parent" doc:"The ID of the item this one belongs to, empty for a top-level step. A service is under services; a network is under networks, a secret or config under objects, and an old secret or config under cleanup"`
-	Kind    string            `json:"kind" doc:"step for a line of the step list, service for a service row, group for an item that only holds steps and is not shown itself"`
+	Parent  string            `json:"parent" doc:"The ID of the item this one belongs to, empty for a top-level step. A service is under services; a network is under networks, a secret or config under objects, an old secret or config under cleanup, and a task under its service"`
+	Kind    string            `json:"kind" doc:"step for a line of the step list, service for a service row, task for a swarm task listed under its service while the deploy waits for the service to settle, group for an item that only holds steps and is not shown itself"`
 	State   string            `json:"state" enum:"waiting,running,done,failed,skipped,cancelled" doc:"Where the item is. skipped is an item that was not run because an earlier one failed"`
 	Code    string            `json:"code" doc:"A stable word for how an item failed or was not run, empty otherwise"`
 	Message string            `json:"message" doc:"A sentence for the code. The SPA words the code itself"`
 	Detail  string            `json:"detail" doc:"The engine's own words about a failed item, cleaned of control characters, clipped to 2,048 characters and with the stack's secret values hidden. Empty when there are none"`
-	Current int64             `json:"current" doc:"How many of total were done"`
-	Total   int64             `json:"total" doc:"How many there are to do, 0 until known"`
-	Unit    string            `json:"unit" doc:"What current and total count, or empty"`
-	Result  map[string]string `json:"result" doc:"What a finished step produced, like the counts of services created and updated"`
+	Current int64             `json:"current" doc:"How many of total were done. On a service row, how many tasks run on its current spec"`
+	Total   int64             `json:"total" doc:"How many there are to do, 0 until known. On a service row, how many tasks must run for it to settle"`
+	Unit    string            `json:"unit" doc:"What current and total count, or empty: services for the services step, tasks for a service row"`
+	Result  map[string]string `json:"result" doc:"What a step, service or task produced or shows. A service row: action (created or updated), settled (true once its tasks run, false when the deploy did not wait for it), running and desired at the end, phase pulling while a task prepares its image, minutes on a timeout. A task: state (the swarm's) and node (the host name). The steps: the counts of services created and updated"`
 }
 
 // StackJobOutputLine is one line of a deploy's output log.
@@ -121,9 +121,10 @@ func registerStackDeploy(r *httpx.Router, d StacksDeps) {
 		Summary: "Deploy a stack's draft",
 		Description: "Takes a revision from the draft and deploys it as a job, answering 202 with the job ID at once; the deploy goes on if the browser closes. " +
 			"draftVersion must be the version of the draft you reviewed, or the answer is 409 draft_changed. A draft that started from an older revision than the newest good one (someone deployed since) is 409 concurrent_unacknowledged unless acknowledgeConcurrent is true; a deploy never overwrites a newer one unseen. pins, when sent, are the review's: the deploy uses exactly those digests and makes no registry lookup (422 pins_invalid for one the server would not have chosen). " +
-			"On a swarm the job creates the stack's networks, then its secrets and configs under names that end in a short hash of their content, then its services, through one manager, each once and never retried; each carries com.docker.stack.namespace and bayplan.stack.id, and each service com.docker.stack.image with the image as written. " +
+			"On a swarm the job checks the stack, looks up each image and pins it to a digest (the one the service runs, or a fresh lookup through a manager), creates the stack's networks, then its secrets and configs under names that end in a short hash of their content, then its services, through one manager, each once and never retried; each carries com.docker.stack.namespace and bayplan.stack.id, and each service com.docker.stack.image with the image as written. " +
+			"A service is done when it converges, not when the swarm took it: the job polls each service every 2 seconds, up to BAYPLAN_STACK_CONVERGE_TIMEOUT (10 minutes by default), until its tasks run on its current spec and its update completed. " +
 			"A secret or config that content changes replaces is removed at the end, once every service uses the new one. " +
-			"A compose file that does not load is 422 compose_invalid; one that uses a setting not converted yet is 422 compose_unsupported; one whose check finds an error is 422 stack_invalid. " +
+			"A compose file that does not load is 422 compose_invalid; one that uses a setting a swarm can't deploy at all is 422 compose_unsupported; one whose check finds an error is 422 stack_invalid. " +
 			"A caller below env Admin is refused 403 privileged_compose, with each setting and its line in errors, when the stack asks for host access (a bind of the Docker socket or a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables. " +
 			"A name that something Bayplan does not manage holds is 409 stack_name_clash. An environment that is no longer the kind of target the stack was created for is 409 target_changed, and a standalone stack is 409 target_engine_missing. At most 5 jobs of one user run at once (429 too_many_deploys). " +
 			"Writes one stack.deployed audit row, with the result, when the job ends. Needs stacks.deploy (Operator).",
@@ -545,7 +546,7 @@ func convertProblem(err error) error {
 		}
 		return &huma.ErrorModel{
 			Type: problemComposeUnsupported, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
-			Detail: "Service " + nc.Service + " uses " + strings.Join(nc.Fields, ", ") + ", which this version of Bayplan cannot deploy yet.", Errors: details,
+			Detail: "Service " + nc.Service + " uses " + strings.Join(nc.Fields, ", ") + ", which a swarm stack can't deploy.", Errors: details,
 		}
 	}
 	if errors.Is(err, convert.ErrNoImage) {

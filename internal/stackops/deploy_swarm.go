@@ -58,6 +58,8 @@ const (
 	CodeEngineError        = "engine_error"
 	CodeCancelled          = "cancelled"
 	CodeNotRun             = "not_run"
+	CodeConvergeTimeout    = "converge_timeout"
+	CodeUpdateStopped      = "update_stopped"
 )
 
 var codeMessages = map[string]string{
@@ -82,6 +84,8 @@ var codeMessages = map[string]string{
 	CodeEngineError:         "The engine could not complete the request.",
 	CodeCancelled:           "The deploy was cancelled.",
 	CodeNotRun:              "Not run because an earlier step failed.",
+	CodeConvergeTimeout:     "The service didn't settle in time. Docker may still finish it.",
+	CodeUpdateStopped:       "The swarm stopped the update of the service.",
 	CodePinsInvalid:         "The images in the request don't match what the deploy would use. Review the stack again.",
 }
 
@@ -368,6 +372,7 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		return fail(ItemServices, CodeStackInvalid, "")
 	}
 	r.Update(ItemServices, func(it *jobs.Item) { it.Unit, it.Total = "services", int64(len(plan.Services)) })
+	var writes []serviceWrite
 	for i, sp := range plan.Services {
 		if ctx.Err() != nil {
 			return fail(ItemServices, CodeCancelled, sp.Name)
@@ -391,12 +396,14 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 			d.log().Error("could not resolve the registry credential of a stack service", "environment", in.EnvID, "stack", in.Stack.Name, "service", sp.Name, "error", err)
 			return fail(ItemServices, CodeRegistryUnresolved, sp.Name)
 		}
+		serviceID := existing.ID
 		err = d.Aggregator.WriteOnManager(ctx, in.EnvID, func(c *dockerx.Client) error {
 			if update {
 				_, e := c.ServiceUpdate(ctx, existing.ID, existing.Version, raw, auth)
 				return e
 			}
-			_, _, e := c.ServiceCreate(ctx, raw, auth)
+			id, _, e := c.ServiceCreate(ctx, raw, auth)
+			serviceID = id
 			return e
 		})
 		if err != nil {
@@ -404,15 +411,36 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 			return failErr(ItemServices, codeOf(ctx, err), sp.Name, err)
 		}
 		action := "created"
+		var prior *dockerx.ServiceUpdateStatus
 		if update {
 			res.Updated++
 			action = "updated"
+			prior = existing.UpdateStatus
 		} else {
 			res.Services++
 		}
 		prog.line(strings.ToUpper(action[:1]) + action[1:] + " service " + sp.Name)
-		prog.done(idService+sp.Name, map[string]string{"action": action})
+		// The swarm took the spec; the row goes on working until its tasks run.
+		prog.accept(sp.Name, action)
+		writes = append(writes, serviceWrite{name: sp.Name, id: serviceID, action: action, prior: prior, job: isJob(sp)})
 		r.Update(ItemServices, func(it *jobs.Item) { it.Current = int64(i + 1) })
+	}
+
+	// A service is done when it converges, not when the swarm took it: wait for every service that
+	// was written, a few at a time. The first that did not settle, in the file's order, is where the
+	// deploy stopped; the others have their own answer on their rows.
+	for _, v := range d.awaitServices(ctx, in.EnvID, writes, prog) {
+		switch {
+		case v.err == nil:
+		case errors.Is(v.err, ErrConvergeTimeout):
+			return fail(ItemServices, CodeConvergeTimeout, v.name)
+		case errors.Is(v.err, ErrUpdateStopped):
+			return fail(ItemServices, CodeUpdateStopped, v.name)
+		case ctx.Err() != nil:
+			return fail(ItemServices, CodeCancelled, "")
+		default:
+			return fail(ItemServices, CodeEngineError, v.name)
+		}
 	}
 	r.Finish(ItemServices, jobs.ItemDone, "", "", map[string]string{
 		"services": strconv.Itoa(res.Services), "updated": strconv.Itoa(res.Updated),
@@ -481,6 +509,12 @@ func firstError(ps stacks.Problems) (stacks.Problem, bool) {
 		}
 	}
 	return stacks.Problem{}, false
+}
+
+// isJob reports whether a service runs to its end (a replicated or global job) rather than staying
+// up.
+func isJob(sp convert.ServicePlan) bool {
+	return sp.Spec.Mode.ReplicatedJob != nil || sp.Spec.Mode.GlobalJob != nil
 }
 
 // liveForceUpdate is the force-update counter of a service's spec as the swarm holds it, zero

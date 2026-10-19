@@ -673,7 +673,7 @@ func ConvertDetail(err error) string {
 	var nc *convert.NotConvertedError
 	switch {
 	case errors.As(err, &nc):
-		return "Service " + nc.Service + " uses " + strings.Join(nc.Fields, ", ") + ", which this version of Bayplan cannot deploy yet."
+		return "Service " + nc.Service + " uses " + strings.Join(nc.Fields, ", ") + ", which a swarm stack can't deploy."
 	case errors.Is(err, convert.ErrNoImage):
 		return "A service has no image. Bayplan deploys images, it does not build them."
 	}

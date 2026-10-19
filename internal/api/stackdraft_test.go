@@ -41,7 +41,7 @@ var composeFile = draftFile{Path: "compose.yaml", Content: "services: {}\n"}
 
 func TestSaveDraftRefusesBadFiles(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "files")
@@ -110,7 +110,7 @@ func TestSaveDraftRefusesBadFiles(t *testing.T) {
 
 func TestSaveDraftKeepsFiftyFilesInPathOrder(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "fifty")
@@ -169,7 +169,7 @@ func discardAudits(t *testing.T, f *envFix) []auditRowFull {
 
 func TestDiscardDraftIsIdempotent(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "scratch")
@@ -214,7 +214,7 @@ func TestDiscardDraftIsIdempotent(t *testing.T) {
 
 func TestDiscardSendsNoEngineRequest(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "quiet-discard")
@@ -237,7 +237,7 @@ func TestDiscardSendsNoEngineRequest(t *testing.T) {
 
 func TestDiscardRefusals(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	viewer := f.caller(t, e, "viewer-1", "viewer")
 	operator := f.caller(t, e, "operator-1", "operator")
@@ -260,7 +260,7 @@ func TestDiscardRefusals(t *testing.T) {
 
 func TestDiscardingADraftOfADeployedStackShowsTheDeployedDefinition(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "shipped")
@@ -304,7 +304,7 @@ func TestDiscardingADraftOfADeployedStackShowsTheDeployedDefinition(t *testing.T
 
 func TestSavingAfterADiscardStartsAFreshDraftAndAStaleVersionConflicts(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	ada := f.caller(t, e, "ada", "operator")
 	bob := f.caller(t, e, "bob", "operator")

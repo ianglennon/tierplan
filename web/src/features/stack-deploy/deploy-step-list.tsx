@@ -5,10 +5,13 @@ import { Check, CircleX, Minus } from "lucide-react";
 
 import type { StackJobItem } from "@/api/stacks";
 import { Spinner } from "@/components/ui/spinner";
-import { DeployServiceRow } from "@/features/stack-deploy/deploy-service-row";
+import { CONVERGE_TIMEOUT, DeployServiceRow } from "@/features/stack-deploy/deploy-service-row";
 import { useT } from "@/i18n/use-t";
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
+
+// The server's code for a service whose update the swarm paused or rolled back.
+const UPDATE_STOPPED = "update_stopped";
 
 // failureOf is why an item failed, as the console words it: the sentence for the code, and Docker's
 // own words under it. Docker's rejection of a service reads as one sentence naming the service. Both
@@ -21,6 +24,22 @@ export function failureOf(
     return {
       sentence: t("stackDeploy.failure.rejected", { service: item.label, message: item.detail }),
       words: "",
+    };
+  }
+  // A service that did not settle: how long it was given, and the swarm's last words about it.
+  if (item.code === CONVERGE_TIMEOUT) {
+    return {
+      sentence: t("stackConverge.timeout.body", {
+        service: item.label,
+        count: Number(item.result?.minutes) || 0,
+      }),
+      words: item.detail,
+    };
+  }
+  if (item.code === UPDATE_STOPPED) {
+    return {
+      sentence: t("stackConverge.stopped.body", { service: item.label }),
+      words: item.detail,
     };
   }
   if (!item.message && !item.detail) return undefined;
@@ -59,6 +78,11 @@ export interface DeployStep {
   item: StackJobItem;
   // The service rows of the step (Deploy services has them).
   rows: StackJobItem[];
+}
+
+// tasksOf are the task items under a service row, in the order they appeared.
+function tasksOf(items: readonly StackJobItem[], row: StackJobItem): StackJobItem[] {
+  return items.filter((i) => i.parent === row.id && i.kind === "task");
 }
 
 // stepsOf arranges a job's items into the lines of the step list, in run order. The server adds the
@@ -110,7 +134,12 @@ export function DeployStepList({ items }: DeployStepListProps) {
           {rows.length > 0 ? (
             <ul aria-label={t("stackDeploy.steps.services")} className="ms-6 flex flex-col">
               {rows.map((row) => (
-                <DeployServiceRow key={row.id} item={row} defaultOpen={row.state === "failed"}>
+                <DeployServiceRow
+                  key={row.id}
+                  item={row}
+                  tasks={tasksOf(items, row)}
+                  defaultOpen={row.state === "failed"}
+                >
                   {row.state === "failed" ? <FailureText item={row} /> : undefined}
                 </DeployServiceRow>
               ))}

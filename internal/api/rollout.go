@@ -12,16 +12,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
-)
-
-const (
-	// rolloutNone is the state of a service with no UpdateStatus: never updated, or only
-	// scaled (RESEARCH E9).
-	rolloutNone = "none"
-
-	taskStateRunning  = "running"
-	taskStateFailed   = "failed"
-	taskStateRejected = "rejected"
+	"github.com/ianglennon/bayplan/internal/stackops"
 )
 
 // RolloutBody is how far a service's rolling update or rollback has got.
@@ -93,27 +84,17 @@ func getServiceRollout(ctx context.Context, d ServicesDeps, envID, serviceID str
 	return rolloutBody(detail, rows), nil
 }
 
-// rolloutBody builds the answer from a service and its tasks (newest first).
+// rolloutBody builds the answer from a service and its tasks (newest first). The counting is
+// stackops.Progress, the same a stack deploy waits on.
 func rolloutBody(detail dockerx.ServiceDetail, rows []dockerx.TaskRow) RolloutBody {
-	body := RolloutBody{State: rolloutNone}
+	c := stackops.Progress(detail, rows)
+	body := RolloutBody{
+		State: c.State, Message: cleanTaskText(c.Message), Updated: c.Running, Total: c.Desired,
+		LatestTaskError: cleanTaskText(c.Err),
+	}
 	if u := detail.UpdateStatus; u != nil && u.State != "" {
-		body.State = u.State
-		body.Message = cleanTaskText(u.Message)
 		body.StartedAt = rfc3339(u.StartedAt)
 		body.CompletedAt = rfc3339(u.CompletedAt)
-	}
-	latestSeen := false
-	for _, r := range rows {
-		if r.DesiredState == taskStateRunning {
-			body.Total++
-			if r.State == taskStateRunning && detail.TemplateHash != "" && r.SpecHash == detail.TemplateHash {
-				body.Updated++
-			}
-		}
-		if !latestSeen && (r.State == taskStateFailed || r.State == taskStateRejected) {
-			latestSeen = true
-			body.LatestTaskError = cleanTaskText(r.Err)
-		}
 	}
 	return body
 }

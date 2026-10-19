@@ -151,7 +151,7 @@ const reviewCompose = `services:
 
 func TestReviewThenDeployUsesTheReviewedDigests(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "shop")
@@ -214,7 +214,7 @@ func TestReviewThenDeployUsesTheReviewedDigests(t *testing.T) {
 
 func TestReviewListsAChangedServiceAndARemovedOne(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "shop")
@@ -259,7 +259,7 @@ func TestReviewListsAChangedServiceAndARemovedOne(t *testing.T) {
 
 func TestReviewHidesASecretThatChangedAndNamesItsPath(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "shop")
@@ -293,7 +293,7 @@ func TestReviewHidesASecretThatChangedAndNamesItsPath(t *testing.T) {
 
 func TestReviewOfAStandaloneStackIsRefusedUntilTheComposeEngineExists(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, func(c *dockertest.FakeConfig) {
+	f, e := stackEnv(t, func(c *dockertest.FakeConfig) {
 		c.SwarmState, c.SwarmControl, c.NodeRows = "", false, nil
 	})
 	admin := f.caller(t, e, "envadmin-1", "admin")
@@ -310,7 +310,7 @@ func TestReviewOfAStandaloneStackIsRefusedUntilTheComposeEngineExists(t *testing
 
 func TestReviewNeedsTheDeployPermission(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	viewer := f.caller(t, e, "viewer-1", "viewer")
 	st := newStack(t, admin, "shop")
@@ -322,7 +322,7 @@ func TestReviewNeedsTheDeployPermission(t *testing.T) {
 
 func TestDeployRefusesAMovedDraft(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "stale")
@@ -349,7 +349,7 @@ func TestDeployRefusesAMovedDraft(t *testing.T) {
 
 func TestDeployRefusesAPinTheServerWouldNotHaveChosen(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "shop")
@@ -434,7 +434,7 @@ func (a stackReviewAnswer) problem(code string) (struct {
 
 func TestOperatorCannotDeployHostEscalation(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "esc")
@@ -482,7 +482,7 @@ func TestOperatorCannotDeployHostEscalation(t *testing.T) {
 
 func TestOperatorCannotDeployAHostPathHiddenBehindAVariable(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "hidden")
@@ -502,7 +502,7 @@ func TestOperatorCannotDeployAHostPathHiddenBehindAVariable(t *testing.T) {
 func TestNameClashIsRefusedAtCreateAndReview(t *testing.T) {
 	t.Parallel()
 	foreign := dockertest.FakeService{ID: "s1", Name: "taken_app", Mode: "replicated", Image: "x", Labels: map[string]string{"com.docker.stack.namespace": "taken"}}
-	f, e := actionsEnv(t, nil, foreign)
+	f, e := stackEnv(t, nil, foreign)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 
@@ -558,7 +558,7 @@ func TestNameClashIsRefusedAtCreateAndReview(t *testing.T) {
 func TestTargetChangedIsRefused(t *testing.T) {
 	t.Parallel()
 	// A stack made for a standalone host, on an environment that is a swarm now.
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	operator := f.caller(t, e, "operator-1", "operator")
 	solo := f.seedStack(t, e.ID, "solo", stacks.TargetStandalone)
 	rec := operator.do(http.MethodPost, "stacks/"+solo+"/review", `{}`)
@@ -571,7 +571,7 @@ func TestTargetChangedIsRefused(t *testing.T) {
 	}
 
 	// A stack made for a swarm, on an environment that is a standalone host now.
-	f2, e2 := actionsEnv(t, func(c *dockertest.FakeConfig) {
+	f2, e2 := stackEnv(t, func(c *dockertest.FakeConfig) {
 		c.SwarmState, c.SwarmControl, c.NodeRows = "", false, nil
 	})
 	operator2 := f2.caller(t, e2, "operator-1", "operator")
@@ -594,7 +594,7 @@ func TestTargetChangedIsRefused(t *testing.T) {
 
 func TestReviewDiffsTheRenderingAgainstTheLastDeploy(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "shop")
@@ -647,7 +647,7 @@ func TestReviewDiffsTheRenderingAgainstTheLastDeploy(t *testing.T) {
 
 func TestReviewNeverSendsASecretInTheRenderedYAML(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "shop")
@@ -696,7 +696,7 @@ func revisionCount(t *testing.T, f *envFix, stackID string) int {
 
 func TestConcurrentDraftNeedsAcknowledgement(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "shop")
@@ -786,7 +786,7 @@ func TestConcurrentDraftNeedsAcknowledgement(t *testing.T) {
 
 func TestASecondDeployOfTheSameDraftNeedsNoAcknowledgement(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "shop")
@@ -803,7 +803,7 @@ func TestASecondDeployOfTheSameDraftNeedsNoAcknowledgement(t *testing.T) {
 
 func TestADraftOfAStackNeverDeployedIsNeverConcurrent(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "shop")

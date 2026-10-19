@@ -71,6 +71,11 @@ type Deps struct {
 	Resolver *registry.Resolver
 	// Checker is the permission checker the later plans' policy checks use.
 	Checker *rbac.Checker
+	// Clock is the time the deploy waits on for a service to settle. Nil is the wall clock.
+	Clock Clock
+	// ConvergeTimeout is how long a deploy waits for each service to settle. Zero is
+	// DefaultConvergeTimeout.
+	ConvergeTimeout time.Duration
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }

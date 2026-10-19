@@ -181,6 +181,13 @@ type FakeConfig struct {
 	// Tasks are whole swarm tasks /tasks lists, with the filters of a real daemon (service,
 	// node, desired-state and id), beside AgentTasks (fake_tasks.go).
 	Tasks []swarm.Task
+	// TasksFollowWrites makes /tasks list, for every service whose spec the daemon holds (one a
+	// client created or updated through it), the tasks a settled swarm shows: a replicated service
+	// has its replica count, a global one a task on each node, all running on the service's current
+	// task template. A service that is not running is set with SetTaskState (fake_tasks.go).
+	TasksFollowWrites bool
+	// taskStates are the states SetTaskState gave those tasks, by service name.
+	taskStates map[string]fakeTaskState
 	// ServiceLogs are the lines the tasks of each service wrote, by service ID, which
 	// /services/{id}/logs and /tasks/{id}/logs answer (fake_servicelogs.go).
 	ServiceLogs map[string][]FakeServiceLogLine
@@ -574,6 +581,10 @@ type Fake struct {
 	nodeGone map[string]bool
 	// svcGone are the IDs of the services removed through the fake.
 	svcGone map[string]bool
+	// taskStates are the states SetTaskState gave the tasks that follow writes, by service name.
+	taskStates map[string]fakeTaskState
+	// updateStates are the update statuses SetUpdateState gave services, by service name.
+	updateStates map[string]fakeTaskState
 	// secrets are the secrets created through the fake, secretCreates the requests that made
 	// them (as byte counts) and secretGone the IDs of those removed (fake_secrets.go).
 	secrets       []FakeSecret
@@ -793,7 +804,7 @@ func withEnvProbeDelay(cfg FakeConfig) (FakeConfig, error) {
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withCreatedServices(f.svcCreated).withServices(f.svcState).withoutServices(f.svcGone).withNodes(f.nodeState).withoutNodes(f.nodeGone).withSecrets(f.secrets).withoutSecrets(f.secretGone).withConfigs(f.configs).withoutConfigs(f.configGone)
+	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withCreatedServices(f.svcCreated).withServices(f.svcState).withoutServices(f.svcGone).withNodes(f.nodeState).withoutNodes(f.nodeGone).withSecrets(f.secrets).withoutSecrets(f.secretGone).withConfigs(f.configs).withoutConfigs(f.configGone).withTaskStates(f.taskStates).withUpdateStates(f.updateStates)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {

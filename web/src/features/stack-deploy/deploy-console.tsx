@@ -24,7 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { DeployOutput } from "@/features/stack-deploy/deploy-output";
 import { DeployResult, servicesOf } from "@/features/stack-deploy/deploy-result";
-import { DeployStepList } from "@/features/stack-deploy/deploy-step-list";
+import { DeployStepList, failureOf } from "@/features/stack-deploy/deploy-step-list";
 import { useStackJob } from "@/features/stack-deploy/stack-job-stream";
 import { useT } from "@/i18n/use-t";
 import { formatRelative } from "@/lib/format";
@@ -106,9 +106,20 @@ export function outcomesOf(
   const out: string[] = [];
   for (const row of servicesOf(job)) {
     if (before.items.get(row.id) === row.state) continue;
-    if (row.state === "done") out.push(t("stackDeploy.announce.running", { service: row.label }));
-    else if (row.state === "failed") {
-      const reason = row.detail || row.message;
+    // A service the deploy did not wait for is not known to run, so it is not announced as running.
+    if (row.state === "done") {
+      if (row.result?.settled !== "false") {
+        out.push(t("stackDeploy.announce.running", { service: row.label }));
+      }
+    } else if (row.state === "failed") {
+      // A timeout or a stopped update has a sentence of its own; Docker's words follow it.
+      const why =
+        row.code === "converge_timeout" || row.code === "update_stopped"
+          ? failureOf(t, row)
+          : undefined;
+      const reason = why
+        ? [why.sentence, why.words].filter(Boolean).join(" ")
+        : row.detail || row.message;
       out.push(t("stackDeploy.announce.failed", { service: row.label, reason }));
     }
   }

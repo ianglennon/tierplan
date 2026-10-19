@@ -1,0 +1,27 @@
+{
+  "stackConverge": {
+    "converging": "Converging {{running}}/{{total}}",
+    "pulling": "Pulling image",
+    "timedOut": "Timed out",
+    "created": "Created",
+    "updated": "Updated",
+    "progress": {
+      "label": "Convergence of {{service}}",
+      "tasks": "{{running}}/{{desired}} tasks"
+    },
+    "timeout": {
+      "body_one": "{{service}} didn't settle within {{count}} minute. Docker may still finish it. Check the service, or roll back.",
+      "body_other": "{{service}} didn't settle within {{count}} minutes. Docker may still finish it. Check the service, or roll back."
+    },
+    "stopped": {
+      "body": "The swarm stopped updating {{service}}. Check the service, or roll back."
+    },
+    "tasks": {
+      "caption": "Tasks of {{service}}",
+      "task": "Task",
+      "state": "State",
+      "node": "Node",
+      "error": "Error"
+    }
+  }
+}

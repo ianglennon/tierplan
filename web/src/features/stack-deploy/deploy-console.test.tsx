@@ -33,6 +33,8 @@ interface Item {
   code?: string;
   current?: number;
   total?: number;
+  unit?: string;
+  result?: Record<string, string>;
 }
 
 interface Line {
@@ -51,6 +53,7 @@ const item = (over: Item): Record<string, unknown> => ({
   code: "",
   current: 0,
   total: 0,
+  unit: "",
   message: "",
   detail: "",
   parent: "",
@@ -328,6 +331,183 @@ describe("the steps and the service rows", () => {
     await mountLive(jobBody());
     const name = await screen.findByText("<i>web</i>");
     expect(name.querySelector("i")).toBeNull();
+  });
+});
+
+// A task of a service, as the server lists it under the service's row.
+const task = (service: string, slot: number, state: string, node: string, detail = ""): Item => ({
+  id: `task:t${service}${slot}`,
+  label: `s1_${service}.${slot}`,
+  state: "running",
+  parent: `service:s1_${service}`,
+  kind: "task",
+  detail,
+  result: { state, node },
+});
+
+describe("a service coming up (plan 07-18, D-13)", () => {
+  const converging = (running: number, total: number, over: Partial<Item> = {}): Item =>
+    row("api", "running", {
+      current: running,
+      total,
+      unit: "tasks",
+      result: { action: "updated" },
+      ...over,
+    });
+
+  it("reads Converging k/n with a bar named for the service and the task count beside it", async () => {
+    job = { state: "running", items: [check, { ...services, state: "running" }, converging(1, 3)] };
+    await mountLive(jobBody());
+    const list = within(screen.getByRole("list", { name: "Services" }));
+    expect(list.getByText("Converging 1/3")).toBeTruthy();
+    const bar = list.getByRole("progressbar", { name: "Convergence of api" });
+    expect(bar.getAttribute("aria-valuenow")).toBe("33");
+    expect(list.getByText("1/3 tasks")).toBeTruthy();
+  });
+
+  it("reads Pulling image while a task prepares its image", async () => {
+    job = {
+      state: "running",
+      items: [
+        check,
+        { ...services, state: "running" },
+        converging(0, 2, { result: { action: "created", phase: "pulling" } }),
+      ],
+    };
+    await mountLive(jobBody());
+    expect(screen.getByText("Pulling image")).toBeTruthy();
+    expect(screen.queryByText("Converging 0/2")).toBeNull();
+  });
+
+  it("follows the tasks coming up from the stream: Converging 0/2, then 2/2 and Running", async () => {
+    job = { state: "running", items: [check, { ...services, state: "running" }, converging(0, 2)] };
+    await mountLive(jobBody());
+    expect(screen.getByText("Converging 0/2")).toBeTruthy();
+    act(() => {
+      source().sendFrame("item", item(converging(1, 2)), "6");
+    });
+    expect(screen.getByText("Converging 1/2")).toBeTruthy();
+    act(() => {
+      source().sendFrame(
+        "item",
+        item(
+          row("api", "done", {
+            current: 2,
+            total: 2,
+            unit: "tasks",
+            result: { action: "updated", settled: "true", running: "2", desired: "2" },
+          }),
+        ),
+        "7",
+      );
+    });
+    expect(screen.getByText("Running")).toBeTruthy();
+    expect(screen.queryByText(/^Converging/)).toBeNull();
+  });
+
+  it("lists the tasks under the row, with their state, node and error, when it is opened", async () => {
+    job = {
+      state: "running",
+      items: [
+        check,
+        { ...services, state: "running" },
+        converging(1, 2),
+        task("api", 1, "running", "mgr-1"),
+        task("api", 2, "rejected", "wrk-1", "No such image: api:2"),
+      ],
+    };
+    await mountLive(jobBody());
+    // Collapsed to begin with: the table is not drawn until the row opens.
+    expect(screen.queryByRole("table", { name: "Tasks of api" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Show what happened to api/ }));
+    const table = within(screen.getByRole("table", { name: "Tasks of api" }));
+    expect(table.getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
+      "Task",
+      "State",
+      "Node",
+      "Error",
+    ]);
+    const rows = table.getAllByRole("row").slice(1);
+    expect(rows.map((r) => r.textContent)).toEqual([
+      "s1_api.1Runningmgr-1",
+      "s1_api.2Rejectedwrk-1No such image: api:2",
+    ]);
+  });
+
+  it("reads Timed out with the sentence, the minutes and Docker's last words when the service never settled", async () => {
+    job = {
+      state: "failed",
+      items: [
+        check,
+        { ...services, state: "failed" },
+        row("web", "failed", {
+          code: "converge_timeout",
+          message: "The service didn't settle in time. Docker may still finish it.",
+          detail: "No such image: web:2",
+          current: 0,
+          total: 2,
+          unit: "tasks",
+          result: { action: "updated", minutes: "10" },
+        }),
+      ],
+    };
+    mount();
+    expect(await screen.findByText("Timed out")).toBeTruthy();
+    // A failed row starts open.
+    expect(
+      screen.getAllByText(
+        "web didn't settle within 10 minutes. Docker may still finish it. Check the service, or roll back.",
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByText("No such image: web:2")).toBeTruthy();
+    // The row says Timed out, not Failed; the step above it is the one that failed.
+    expect(within(screen.getByRole("list", { name: "Services" })).queryByText("Failed")).toBeNull();
+  });
+
+  it("says one minute, not one minutes", async () => {
+    job = {
+      state: "failed",
+      items: [
+        check,
+        { ...services, state: "failed" },
+        row("web", "failed", { code: "converge_timeout", result: { minutes: "1" } }),
+      ],
+    };
+    mount();
+    expect(await screen.findByText(/web didn't settle within 1 minute\. /)).toBeTruthy();
+  });
+
+  it("reads Updated, not Running, for a service the deploy took but did not wait for", async () => {
+    job = {
+      state: "failed",
+      items: [
+        check,
+        { ...services, state: "failed" },
+        row("api", "done", { result: { action: "updated", settled: "false" } }),
+        row("web", "done", { result: { action: "created", settled: "false" } }),
+      ],
+    };
+    mount();
+    await screen.findByText("Updated");
+    expect(screen.getByText("Created")).toBeTruthy();
+    expect(screen.queryByText("Running", { selector: "span" })).toBeNull();
+  });
+
+  it("draws a task's error, node and name as text", async () => {
+    job = {
+      state: "running",
+      items: [
+        check,
+        { ...services, state: "running" },
+        converging(0, 1),
+        { ...task("api", 1, "rejected", "<b>n</b>", "<i>bad</i>"), label: "<u>t</u>" },
+      ],
+    };
+    await mountLive(jobBody());
+    fireEvent.click(screen.getByRole("button", { name: /Show what happened to api/ }));
+    for (const markup of ["<b>n</b>", "<i>bad</i>", "<u>t</u>"]) {
+      expect(screen.getByText(markup).children).toHaveLength(0);
+    }
   });
 });
 
@@ -805,6 +985,27 @@ describe("the announcements", () => {
     const region = document.querySelector('[data-slot="deploy-announcer"]');
     expect(region?.getAttribute("aria-live")).toBe("polite");
     expect(spoken()).toEqual([]);
+  });
+
+  it("announces a service that never settled with its sentence, and one that was only taken as nothing", async () => {
+    await mountLive(
+      jobBody({ items: [check, services, row("api", "waiting"), row("web", "waiting")] }),
+    );
+    act(() => {
+      source().sendFrame(
+        "item",
+        item(row("api", "done", { result: { action: "updated", settled: "false" } })),
+        "4",
+      );
+      source().sendFrame(
+        "item",
+        item(row("web", "failed", { code: "converge_timeout", result: { minutes: "10" } })),
+        "5",
+      );
+    });
+    expect(spoken()).toEqual([
+      "web failed: web didn't settle within 10 minutes. Docker may still finish it. Check the service, or roll back.",
+    ]);
   });
 
   it("announces a service that runs and a service that fails once each, and leaves the failed deploy to its alert", async () => {

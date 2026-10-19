@@ -70,7 +70,7 @@ func lineOf(text, want string) string {
 
 func TestRenderShowsTheStackAsItWillDeployAndNeverCaches(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	viewer := f.caller(t, e, "viewer-1", "viewer")
 	st := newStack(t, admin, "shop")
@@ -118,7 +118,7 @@ func TestRenderShowsTheStackAsItWillDeployAndNeverCaches(t *testing.T) {
 
 func TestRenderNeverChangesTheStoredCompose(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	st := newStack(t, admin, "untouched")
 
@@ -181,7 +181,7 @@ func TestRenderNeverChangesTheStoredCompose(t *testing.T) {
 
 func TestRenderHidesSecretsAndRefusesAStackWithErrors(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	st := stackWithSecret(t, f, admin, "rendermask")
 

@@ -50,6 +50,9 @@ func newSwarmRig(t *testing.T, tune func(*dockertest.FakeConfig), services ...do
 		Hostname: "mgr-1", Version: "29.1.0", SwarmState: "active", SwarmControl: true,
 		NodeRows:    []dockertest.FakeNode{{ID: "node-1", Hostname: "mgr-1", Role: "manager", Leader: true, EngineVersion: "29.1.0", OS: "linux"}},
 		ServiceRows: services,
+		// The services this deploy writes settle at once; a test that wants one to be slow or stuck
+		// moves it with Fake.SetTaskState.
+		TasksFollowWrites: true,
 	}
 	if tune != nil {
 		tune(&cfg)
@@ -1130,14 +1133,30 @@ func outputOf(t *testing.T, rig *swarmRig, j jobs.Job) []string {
 	return out
 }
 
+// writesThenRunning puts the lines that say a service is running after the others, sorted: the
+// services are waited for side by side, so the order they settle in is not the file's.
+func writesThenRunning(lines []string) []string {
+	var writes, running []string
+	for _, l := range lines {
+		if strings.HasSuffix(l, " is running") {
+			running = append(running, l)
+		} else {
+			writes = append(writes, l)
+		}
+	}
+	slices.Sort(running)
+	return append(writes, running...)
+}
+
 func TestDeploySwarmWritesOneOutputLineForEachWrite(t *testing.T) {
 	t.Parallel()
 	rig := newSwarmRig(t, nil)
 	_, in := stackInput(t, "web", consoleCompose, nil)
 	_, job := rig.deploy(t, in)
 	full := hashedName("web", "conf", "listen 80;")
-	want := []string{"Created network web_default", "Created config " + full, "Created service web_api", "Created service web_web"}
-	if got := outputOf(t, rig, job); !slices.Equal(got, want) {
+	want := []string{"Created network web_default", "Created config " + full, "Created service web_api", "Created service web_web",
+		"Service web_api is running", "Service web_web is running"}
+	if got := writesThenRunning(outputOf(t, rig, job)); !slices.Equal(got, want) {
 		t.Errorf("output = %q, want %q", got, want)
 	}
 }
@@ -1153,7 +1172,7 @@ func TestDeploySwarmWritesUpdatedAndRemovedLines(t *testing.T) {
 	)
 	_, in := starterPlan(t, "tracer")
 	_, job := rig.deploy(t, in)
-	want := []string{"Updated service tracer_web", "Removed service tracer_old"}
+	want := []string{"Updated service tracer_web", "Service tracer_web is running", "Removed service tracer_old"}
 	if got := outputOf(t, rig, job); !slices.Equal(got, want) {
 		t.Errorf("output = %q, want %q", got, want)
 	}

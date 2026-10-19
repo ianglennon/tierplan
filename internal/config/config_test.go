@@ -517,6 +517,36 @@ func TestTheFailingServiceGraceCanBeOverriddenAndMustBeAPositiveDuration(t *test
 	}
 }
 
+// BAYPLAN_STACK_CONVERGE_TIMEOUT (plan 07-18, D-13): how long a swarm stack deploy waits for a
+// service to settle.
+func TestTheStackConvergeTimeoutDefaultsToTenMinutesAndIsListed(t *testing.T) {
+	if !strings.Contains(strings.Join(config.Names(), " "), "BAYPLAN_STACK_CONVERGE_TIMEOUT") {
+		t.Error("Names() does not list BAYPLAN_STACK_CONVERGE_TIMEOUT")
+	}
+	c, err := load(t, nil, envMap{}, files{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.StackConvergeTimeout != 10*time.Minute {
+		t.Fatalf("StackConvergeTimeout = %v, want 10m", c.StackConvergeTimeout)
+	}
+}
+
+func TestTheStackConvergeTimeoutAcceptsOneMinuteToTwoHoursAndRefusesTheRest(t *testing.T) {
+	for raw, want := range map[string]time.Duration{"1m": time.Minute, "45m": 45 * time.Minute, "2h": 2 * time.Hour} {
+		c, err := load(t, nil, envMap{"BAYPLAN_STACK_CONVERGE_TIMEOUT": raw}, files{})
+		if err != nil || c.StackConvergeTimeout != want {
+			t.Errorf("%s: %v, %v, want %v", raw, c.StackConvergeTimeout, err, want)
+		}
+	}
+	for name, v := range map[string]string{"under a minute": "30s", "over two hours": "121m", "zero": "0s", "negative": "-5m", "not a duration": "soon"} {
+		_, err := load(t, nil, envMap{"BAYPLAN_STACK_CONVERGE_TIMEOUT": v}, files{})
+		if err == nil || !strings.Contains(err.Error(), "BAYPLAN_STACK_CONVERGE_TIMEOUT") {
+			t.Errorf("%s: error = %v, want one naming BAYPLAN_STACK_CONVERGE_TIMEOUT", name, err)
+		}
+	}
+}
+
 // BAYPLAN_INVITE_TTL (plan 03-11, D-24): how long an invite or reset link works.
 func TestInviteTTLDefaultsToSeventyTwoHours(t *testing.T) {
 	c, err := load(t, nil, envMap{}, files{})

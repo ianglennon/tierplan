@@ -52,7 +52,7 @@ func stackWithSecret(t *testing.T, f *envFix, admin *roleCaller, name string) st
 
 func TestRevealIsAuditedAndNeedsThePermission(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	viewer := f.caller(t, e, "viewer-1", "viewer")
@@ -119,7 +119,7 @@ func TestRevealIsAuditedAndNeedsThePermission(t *testing.T) {
 
 func TestRevealOnlyAnswersForASavedSecretVariable(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	st := stackWithSecret(t, f, admin, "reveal404")
 	for name, tc := range map[string]struct{ stack, variable string }{
@@ -144,7 +144,7 @@ func TestRevealOnlyAnswersForASavedSecretVariable(t *testing.T) {
 
 func TestADraftNeverShowsASecretVariableValue(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	st := stackWithSecret(t, f, admin, "draftmask")
 	rec := admin.do(http.MethodGet, "stacks/"+st.ID+"/draft", "")
@@ -167,7 +167,7 @@ func TestADraftNeverShowsASecretVariableValue(t *testing.T) {
 
 func TestCheckNeverReturnsASecretValue(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	viewer := f.caller(t, e, "viewer-1", "viewer")
 	st := stackWithSecret(t, f, admin, "checkmask")
@@ -203,7 +203,7 @@ func TestCheckNeverReturnsASecretValue(t *testing.T) {
 
 func TestSavingRefusesAVariableTheMaskerCouldNotHideAndNamesTheFault(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "varrules")
@@ -316,7 +316,7 @@ func fileOf(d secretDraft, path string) (content string, secret, found bool) {
 
 func TestSecretFileIsSealedOnSaveAndAlwaysShownHidden(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	viewer := f.caller(t, e, "viewer-1", "viewer")
 	st := stackWithSecretFile(t, admin, "sealfile")
@@ -362,7 +362,7 @@ func TestSecretFileIsSealedOnSaveAndAlwaysShownHidden(t *testing.T) {
 
 func TestSecretFileSentBackHiddenIsKeptAndSentNewReplacesIt(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	st := stackWithSecretFile(t, admin, "keepfile")
 	hidden := fileBody{Path: "tok.txt", Content: "<hidden>", Secret: true}
@@ -406,7 +406,7 @@ func TestSecretFileSentBackHiddenIsKeptAndSentNewReplacesIt(t *testing.T) {
 
 func TestSecretFileStaysSecretWhenTheReferenceGoes(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	st := stackWithSecretFile(t, admin, "stayfile")
 
@@ -436,7 +436,7 @@ func TestSecretFileStaysSecretWhenTheReferenceGoes(t *testing.T) {
 
 func TestRevealAFileIsAuditedAndNeedsThePermission(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	viewer := f.caller(t, e, "viewer-1", "viewer")
@@ -500,7 +500,7 @@ func TestRevealAFileIsAuditedAndNeedsThePermission(t *testing.T) {
 
 func TestRevealAFileOnlyAnswersForASavedSecretFile(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	st := stackWithSecretFile(t, admin, "revealfile404")
 	for name, tc := range map[string]struct{ stack, path string }{
@@ -525,7 +525,7 @@ func TestRevealAFileOnlyAnswersForASavedSecretFile(t *testing.T) {
 
 func TestCheckNamesSecretFilesAndNeverReturnsTheirContent(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	viewer := f.caller(t, e, "viewer-1", "viewer")
 	st := stackWithSecretFile(t, admin, "checkfile")
@@ -554,7 +554,7 @@ func TestCheckNamesSecretFilesAndNeverReturnsTheirContent(t *testing.T) {
 
 func TestRenderNeverCarriesASecretFilesContent(t *testing.T) {
 	t.Parallel()
-	f, e := actionsEnv(t, nil)
+	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	st := newStack(t, admin, "renderfile")
 	compose := "services:\n  web:\n    image: nginx:1.27-alpine\n    env_file: app.env\nsecrets:\n  tok:\n    file: app.env\n"
