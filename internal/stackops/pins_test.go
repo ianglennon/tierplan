@@ -272,3 +272,127 @@ func TestPinAnUnreachableRegistryIsNeverRescuedByALocalImage(t *testing.T) {
 		t.Errorf("outcome = %+v, want registry_unreachable: a registry that is down says nothing about the image", out)
 	}
 }
+
+// The standalone path of the pin decision (plan 07-22, D-17, D-18): the same table as a swarm, read through the
+// host's own engine. An image no registry gave is pinned to its ID with a warning, and a registry that cannot
+// be reached blocks only the services that need a fresh lookup.
+
+func TestPinAStandaloneHostsLocalOnlyImagePinsToItsIDWithAWarning(t *testing.T) {
+	t.Parallel()
+	rig := newStandaloneRig(t)
+	rig.fake.Reconfigure(dockertest.FakeConfig{
+		Images: []dockertest.FakeImage{{ID: localImageID, RepoTags: []string{localImageRef}}},
+	})
+	rig.fake.SetDistributionFailure("docker.io/library/myapp:1", 404, "pull access denied for myapp, repository does not exist or may require authorization")
+
+	rv := rig.standaloneReview(t, "demo", "services:\n  web:\n    image: "+localImageRef+"\n")
+
+	if rv.Problems.Errors() != 0 {
+		t.Fatalf("problems = %v, a local image must not block", rv.Problems)
+	}
+	if rv.Pins["web"] != localImageID {
+		t.Errorf("pins = %v, want web pinned to the local image ID %s", rv.Pins, localImageID)
+	}
+	if len(rv.Images) != 1 || rv.Images[0].State != stackops.ImageLocal {
+		t.Errorf("images = %+v, want web local", rv.Images)
+	}
+	wantNote := "“myapp:1” isn't from a registry, so Bayplan pins it to the local image ID."
+	found := false
+	for _, p := range rv.Problems {
+		found = found || (p.Severity == stacks.SeverityWarning && p.Code == stackops.CodeLocalImage && p.Message == wantNote)
+	}
+	if !found {
+		t.Errorf("problems = %+v, want the local-image warning %q", rv.Problems, wantNote)
+	}
+}
+
+func TestPinAStandaloneHostsImageThatCameFromARegistryIsNeverTakenForALocalOne(t *testing.T) {
+	t.Parallel()
+	rig := newStandaloneRig(t)
+	rig.fake.Reconfigure(dockertest.FakeConfig{
+		Images: []dockertest.FakeImage{{ID: localImageID, RepoTags: []string{localImageRef}, RepoDigests: []string{"myapp@" + digestOf("f")}}},
+	})
+	rig.fake.SetDistributionFailure("docker.io/library/myapp:1", 404, "manifest unknown")
+
+	rv := rig.standaloneReview(t, "demo", "services:\n  web:\n    image: "+localImageRef+"\n")
+
+	if len(rv.Pins) != 0 || rv.Problems.Errors() == 0 || rv.Problems[0].Code != stackops.CodeImageUnresolved {
+		t.Errorf("pins = %v problems = %+v, want image_unresolved: an image a registry gave is not a local one", rv.Pins, rv.Problems)
+	}
+}
+
+func TestPinAStandaloneHostsUnreachableRegistryBlocksOnlyTheServiceThatNeedsAFreshLookup(t *testing.T) {
+	t.Parallel()
+	// web runs, pinned; cache is new and its registry is down.
+	h := hostStack(t, "demo", "services:\n  web:\n    image: nginx:1.27-alpine\n", nil)
+	rig := hostRig(t, h)
+	rig.fake.SetDistributionFailure(hostApp, 500, registryDown)
+	compose := "services:\n  web:\n    image: nginx:1.27-alpine\n  cache:\n    image: " + hostApp + "\n"
+
+	rv := rig.reviewOf(t, "demo", compose, nil, nil)
+
+	var blocking []string
+	for _, p := range rv.Problems {
+		if p.Severity == stacks.SeverityError {
+			blocking = append(blocking, p.Code+" "+p.Key)
+		}
+	}
+	if !slices.Equal(blocking, []string{stackops.CodeRegistryUnreachable + " services.cache.image"}) {
+		t.Errorf("blocking problems = %v, want the cache alone", blocking)
+	}
+	if rv.Pins["web"] != h.Pins["web"] {
+		t.Errorf("pins = %v, want web to keep %s", rv.Pins, h.Pins["web"])
+	}
+	if refs := rig.fake.DistributionRefs(); !slices.Equal(refs, []string{hostApp}) {
+		t.Errorf("the registry was asked about %v, want only the cache's image: web keeps its digest", refs)
+	}
+}
+
+func TestDeployStandaloneOfAServiceThatKeepsItsDigestNeedsNoRegistry(t *testing.T) {
+	t.Parallel()
+	h := hostStack(t, "demo", "services:\n  web:\n    image: nginx:1.27-alpine\n", nil)
+	rig := hostRig(t, h)
+	// Every registry is down: web runs the text it is deployed with, so it is not asked.
+	rig.fake.SetDistributionFailure("docker.io/library/nginx:1.27-alpine", 500, registryDown)
+	stand := &upStandIn{}
+	rig.deps.Up = stand.up
+
+	res, _ := rig.deployStandalone(t, standaloneInput("demo", "services:\n  web:\n    image: nginx:1.27-alpine\n"))
+
+	if !res.OK() || stand.calls != 1 {
+		t.Fatalf("result = %+v (the SDK ran %d times), want a deploy that never needed the registry", res, stand.calls)
+	}
+	if refs := rig.fake.DistributionRefs(); len(refs) != 0 {
+		t.Errorf("the registry was asked about %v", refs)
+	}
+}
+
+func TestDeployStandaloneOfALocalOnlyImageHandsTheSDKTheImageIDAndKeepsTheTextAsWritten(t *testing.T) {
+	t.Parallel()
+	rig := newStandaloneRig(t)
+	rig.fake.Reconfigure(dockertest.FakeConfig{
+		Images: []dockertest.FakeImage{{ID: localImageID, RepoTags: []string{localImageRef}}},
+	})
+	rig.fake.SetDistributionFailure("docker.io/library/myapp:1", 404, "pull access denied for myapp, repository does not exist or may require authorization")
+	stand := &upStandIn{}
+	rig.deps.Up = stand.up
+	pins := &memPins{}
+	in := standaloneInput("demo", "services:\n  web:\n    image: "+localImageRef+"\n")
+	in.Pins, in.RevisionID = pins, "rev-1"
+
+	res, _ := rig.deployStandalone(t, in)
+
+	if !res.OK() || stand.project == nil {
+		t.Fatalf("result = %+v, want a deploy of the local image", res)
+	}
+	web := stand.project.Services["web"]
+	if web.Image != localImageID || web.CustomLabels[stacks.LabelStackImage] != localImageRef {
+		t.Errorf("image = %q, as written = %q, want the image ID and the text as written", web.Image, web.CustomLabels[stacks.LabelStackImage])
+	}
+	if got := pins.pinsOf("rev-1"); got["web"] != localImageID {
+		t.Errorf("stored pins = %v, want the image ID", got)
+	}
+	if w := rig.fake.Writes(); len(w) != 0 {
+		t.Errorf("engine writes = %v, want none: the image is on the host and is not pulled", w)
+	}
+}

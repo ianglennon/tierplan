@@ -682,3 +682,76 @@ volumes:
 		t.Fatalf("the review right after a deploy lists services %v objects %v, want nothing:\n%s", changesOf(rv), objectsOf(rv), strings.Join(detail, "\n"))
 	}
 }
+
+// TestLocalOnlyImagePinsToItsID reviews and deploys a stack whose image exists only on the host, through the
+// real Compose SDK (plan 07-22, D-18): the registry on the host answers 404 for the repository, the host holds
+// the image under that name with no repository digest, so the review pins it to the image ID with the warning
+// and the SDK runs the container from the ID. The engine is 28 on purpose: the containerd image store, the
+// default of Engine 29, lists a repository digest for every image, built on the host or not, so this rule
+// cannot tell a local image from one a registry lost there (see deferred-items.md).
+func TestLocalOnlyImagePinsToItsID(t *testing.T) {
+	if err := dockerx.InitCompose(t.TempDir(), slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatalf("InitCompose: %v", err)
+	}
+	node := dockertest.StartHost(t, "28")
+	registry := dockertest.StartRegistry(t, node, dockertest.RegistryOptions{})
+	// busybox under a name of its own, on the host only: the registry does not have the repository.
+	local := registry + "/local/only:1"
+	dockertest.LoadImage(t, "busybox:1.36.1", node)
+	if out, err := node.Sh(testsupport.Context(t), "docker tag busybox:1.36.1 "+local); err != nil {
+		t.Fatalf("tag the local image: %v\n%s", err, out)
+	}
+	out, err := node.Sh(testsupport.Context(t), "docker image inspect --format '{{.Id}} {{.RepoDigests}}' "+local)
+	if err != nil {
+		t.Fatalf("inspect the local image: %v\n%s", err, out)
+	}
+	imageID, digests, _ := strings.Cut(strings.TrimSpace(out), " ")
+	if digests != "[]" {
+		t.Skipf("the engine lists repository digests %s for an image no registry ever gave it, so Bayplan cannot take it for a local image on this engine's image store", digests)
+	}
+
+	rig := newRigOver(t, dockertest.UnixProxy(t, node.Host()))
+	rig.deps.ConvergeTimeout = 3 * time.Minute
+	pins := &memPins{}
+	const name = "ilocal"
+	compose := "services:\n  app:\n    image: " + local + "\n    command: [\"sleep\", \"3600\"]\n    stop_grace_period: 1s\n"
+	ctx := testsupport.Context(t)
+
+	rv, err := rig.deps.Review(ctx, rig.standaloneReviewInput(t, name, compose, pins))
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	if rv.Problems.Errors() != 0 || rv.Pins["app"] != imageID || len(rv.Images) != 1 || rv.Images[0].State != stackops.ImageLocal {
+		t.Fatalf("review: pins %v images %+v problems %v, want app pinned to the image ID %s as a local image and nothing blocking", rv.Pins, rv.Images, rv.Problems, imageID)
+	}
+	warned := false
+	for _, p := range rv.Problems {
+		warned = warned || (p.Severity == stacks.SeverityWarning && p.Code == stackops.CodeLocalImage)
+	}
+	if !warned {
+		t.Errorf("review: problems %v, want the local-image warning", rv.Problems)
+	}
+
+	in := standaloneInput(name, compose)
+	in.Pins, in.RevisionID, in.Reviewed = pins, "rev-1", rv.Pins
+	res, job := rig.deployStandalone(t, in)
+	if !res.OK() {
+		t.Fatalf("deploy: %+v items %v", res, itemStates(job))
+	}
+	ran, err := node.Sh(ctx, "docker inspect --format '{{.Image}} {{index .Config.Labels \"bayplan.stack.image\"}}' "+name+"-app-1")
+	if err != nil {
+		t.Fatalf("inspect the container: %v\n%s", err, ran)
+	}
+	if got := strings.TrimSpace(ran); got != imageID+" "+local {
+		t.Errorf("the container runs %q, want the image ID and the text as written %q", got, imageID+" "+local)
+	}
+
+	// Right after the deploy the review has nothing to do, and the image stays pinned to its ID.
+	rv, err = rig.deps.Review(ctx, rig.standaloneReviewInput(t, name, compose, pins))
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	if len(rv.Services) != 0 || rv.Pins["app"] != imageID {
+		t.Errorf("review after the deploy: services %v pins %v, want nothing to do and the image ID kept", changesOf(rv), rv.Pins)
+	}
+}
