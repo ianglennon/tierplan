@@ -27,11 +27,17 @@ import { StackStateCell } from "@/features/stacks/stack-state-cell";
 import { useDocumentTitle } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
+// The steps of a deploy, which the Review and the console routes show instead of the tab bar.
+export type StackFlow = "review" | "deploy";
+
 interface StackDetailLayoutProps {
   envId: string;
   stackId: string;
   // The tab under the header. The route passes its Outlet; a test passes its own.
   children?: ReactNode;
+  // Set on the Review and the console routes: the flow caption replaces the tab bar (UI-SPEC
+  // "Review"). The header, the alerts and the breadcrumb stay.
+  flow?: StackFlow;
 }
 
 // The tabs of the page, in the order they show. Each is a child route of the page under
@@ -80,6 +86,41 @@ function Breadcrumb({ envId, name }: { envId: string; name: string | undefined }
   );
 }
 
+// FlowCaption is the caption that replaces the tabs while a deploy is being made: "Step 2 of 3:
+// Review" with the steps either side of it as plain text. The current step carries
+// aria-current="step", and the words, not the weight, say where the person is.
+function FlowCaption({ step }: { step: StackFlow }) {
+  const t = useT();
+  const steps = [
+    { id: "edit", text: t("stackReview.flow.edit"), current: false },
+    {
+      id: "review",
+      text: step === "review" ? t("stackReview.flow.reviewCurrent") : t("stackReview.flow.review"),
+      current: step === "review",
+    },
+    {
+      id: "deploy",
+      text: step === "deploy" ? t("stackReview.flow.deployCurrent") : t("stackReview.flow.deploy"),
+      current: step === "deploy",
+    },
+  ];
+  return (
+    <nav aria-label={t("stackReview.flow.label")}>
+      <ol className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm text-muted-foreground">
+        {steps.map((s) => (
+          <li
+            key={s.id}
+            aria-current={s.current ? "step" : undefined}
+            className={s.current ? "font-medium text-foreground" : undefined}
+          >
+            {s.text}
+          </li>
+        ))}
+      </ol>
+    </nav>
+  );
+}
+
 // Gone is what a stack's page becomes when the stack no longer exists. It replaces the page,
 // tabs included.
 function Gone({ envId }: { envId: string }) {
@@ -116,7 +157,7 @@ function Gone({ envId }: { envId: string }) {
 // deploy), the tab bar (Link triggers, the active tab follows the URL) and the tab under it.
 // The tabs render at once, before the stack has loaded (UI-SPEC "Loading"). A stack that is
 // gone replaces the page.
-export function StackDetailLayout({ envId, stackId, children }: StackDetailLayoutProps) {
+export function StackDetailLayout({ envId, stackId, children, flow }: StackDetailLayoutProps) {
   const t = useT();
   const envName = useEnvName(envId);
   const query = useQuery(stackQuery(envId, stackId));
@@ -188,32 +229,36 @@ export function StackDetailLayout({ envId, stackId, children }: StackDetailLayou
           <Skeleton className="h-8 w-64" />
         )}
       </header>
-      <Tabs value="" className="gap-4">
-        <TabsList
-          variant="line"
-          aria-label={t("stacks.detail.tabs.label")}
-          className="h-9 max-md:h-11"
-        >
-          {TABS.map((tab) => (
-            <TabsTrigger
-              key={tab.id}
-              value={tab.id}
-              asChild
-              className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
-            >
-              <Link
-                to={tab.to}
-                params={{ envId, stackId }}
-                activeOptions={{ exact: tab.exact }}
-                activeProps={{ "data-active": true }}
-                inactiveProps={{ "data-active": undefined }}
+      {flow ? (
+        <FlowCaption step={flow} />
+      ) : (
+        <Tabs value="" className="gap-4">
+          <TabsList
+            variant="line"
+            aria-label={t("stacks.detail.tabs.label")}
+            className="h-9 max-md:h-11"
+          >
+            {TABS.map((tab) => (
+              <TabsTrigger
+                key={tab.id}
+                value={tab.id}
+                asChild
+                className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
               >
-                {t(tab.labelKey)}
-              </Link>
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
+                <Link
+                  to={tab.to}
+                  params={{ envId, stackId }}
+                  activeOptions={{ exact: tab.exact }}
+                  activeProps={{ "data-active": true }}
+                  inactiveProps={{ "data-active": undefined }}
+                >
+                  {t(tab.labelKey)}
+                </Link>
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+      )}
       {children ?? <Outlet />}
     </div>
   );

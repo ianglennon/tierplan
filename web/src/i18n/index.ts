@@ -52,6 +52,7 @@ import stackeditor from "./en/stackeditor.json";
 import stackimport from "./en/stackimport.json";
 import stackproblems from "./en/stackproblems.json";
 import stackrendered from "./en/stackrendered.json";
+import stackreview from "./en/stackreview.json";
 import stacks from "./en/stacks.json";
 import stackvars from "./en/stackvars.json";
 import stats from "./en/stats.json";
@@ -68,7 +69,7 @@ import volumes from "./en/volumes.json";
 // English only for now (D-65). Resources are bundled statically, so there is
 // no language detector and no backend plugin: nothing is fetched at runtime.
 // Each later plan adds its own namespace file (setup, auth, shell, env,
-// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule, actions, activeshells, containers, containerdetail, networks, volumes, logs, terminal, events, pulls, registries, images, usedBy, tags, services, servicedetail, serviceForm, tasks, specedit, placement, nodes, secrets, configs, stats, restartLoop, stacks, stackEditor, stackImport, stackProblems, stackRendered, stackVars) and registers it
+// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule, actions, activeshells, containers, containerdetail, networks, volumes, logs, terminal, events, pulls, registries, images, usedBy, tags, services, servicedetail, serviceForm, tasks, specedit, placement, nodes, secrets, configs, stats, restartLoop, stacks, stackEditor, stackImport, stackProblems, stackRendered, stackReview, stackVars) and registers it
 // here, so parallel work never edits the same JSON. The "containers" namespace
 // holds the containers list copy, and the "terminal" namespace the browser shell's
 // (never "shell", which is the app chrome's). Keys are shaped
@@ -123,6 +124,7 @@ export const resources = {
     stackImport: stackimport,
     stackProblems: stackproblems,
     stackRendered: stackrendered,
+    stackReview: stackreview,
     stackVars: stackvars,
     stacks,
     stats,

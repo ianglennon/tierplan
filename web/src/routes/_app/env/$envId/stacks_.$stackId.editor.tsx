@@ -19,12 +19,14 @@ const StackEditorPage = lazy(() =>
 export const editorSearchSchema = z.object({
   pane: z.enum(["files", "variables", "rendered"]).optional().catch(undefined),
   file: z.string().max(255).optional().catch(undefined),
+  // A line to put the cursor on, from a link in the Review's list of errors; used once.
+  line: z.number().int().positive().max(1_000_000).optional().catch(undefined),
 });
 
 // The Editor tab of a stack: the tab under the stack's header, so the header and the tab bar stay.
 function StackEditorRoute() {
   const { envId, stackId } = Route.useParams();
-  const { pane, file } = Route.useSearch();
+  const { pane, file, line } = Route.useSearch();
   const navigate = Route.useNavigate();
   return (
     <Suspense fallback={<Skeleton className="h-100 w-full" />}>
@@ -48,6 +50,16 @@ function StackEditorRoute() {
         file={file}
         onFileChange={(next) =>
           void navigate({ search: (prev) => ({ ...prev, file: next }), replace: true })
+        }
+        line={line}
+        onLineHandled={() =>
+          void navigate({ search: (prev) => ({ ...prev, line: undefined }), replace: true })
+        }
+        onReview={() =>
+          void navigate({
+            to: "/env/$envId/stacks/$stackId/review",
+            params: { envId, stackId },
+          })
         }
       />
     </Suspense>

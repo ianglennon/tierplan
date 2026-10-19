@@ -21,6 +21,15 @@ export type StackProblem = components["schemas"]["StackProblemBody"];
 export type StackCheckInput = components["schemas"]["StackCheckRequest"];
 export type StackVariable = components["schemas"]["StackVariableBody"];
 export type StackRender = components["schemas"]["StackRenderBody"];
+export type StackReview = components["schemas"]["StackReviewBody"];
+export type StackReviewService = components["schemas"]["StackReviewServiceBody"];
+export type StackReviewImage = components["schemas"]["StackReviewImageBody"];
+export type StackReviewObject = components["schemas"]["StackReviewObjectBody"];
+export type StackReviewSummary = components["schemas"]["StackReviewSummaryBody"];
+export type StackDeployInput = components["schemas"]["StackDeployRequest"];
+export type StackDeployed = components["schemas"]["StackDeployBody"];
+export type StackJob = components["schemas"]["StackJobBody"];
+export type StackJobItem = components["schemas"]["StackJobItemBody"];
 
 // The query key of an environment's stacks list, and of every read that extends it: one stack's
 // page is under it, so a change to the list refreshes the page too.
@@ -400,4 +409,159 @@ export async function revealFile(envId: string, stackId: string, path: string): 
     // A network failure has no status.
     throw e instanceof RevealRequestError ? e : new RevealRequestError(0);
   }
+}
+
+// What a review is of: the saved draft (deploy), or a newly looked-up digest for some services
+// (update).
+export type ReviewMode = "deploy" | "update";
+
+// ReviewRequestError is a review the server refused or that got no answer. The status is 0 when
+// the server could not be reached; the type is the problem type it named (target_changed,
+// target_engine_missing ...).
+export class ReviewRequestError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  constructor(status: number, type?: string) {
+    super(`POST review failed (${status})`);
+    this.name = "ReviewRequestError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+// The query key of one review. Under its own prefix and not under stackKey: a refresh of the page
+// (a poll, the events feed) must not look the digests up again behind a review that holds the
+// ones the person is looking at.
+export function reviewKey(envId: string, stackId: string, mode: ReviewMode, services: string[]) {
+  return ["stack-review", envId, stackId, mode, services.join(",")] as const;
+}
+
+// The review of a stack: what a deploy would change against what is running, the images with the
+// digests it would use, and what stops it. It saves nothing and sends nothing to an engine, so it
+// is a read even though it is a POST. It is looked at once: it is read again only when the person
+// asks (Retry loading the review), because a second answer may carry other digests than the ones
+// on screen. It is never retried, and not kept when the page closes: the answer holds the specs
+// of the stack, and the server has already masked its secrets (T-07-72).
+export function reviewQuery(
+  envId: string,
+  stackId: string,
+  mode: ReviewMode = "deploy",
+  services: string[] = [],
+) {
+  return queryOptions({
+    queryKey: reviewKey(envId, stackId, mode, services),
+    queryFn: async ({ signal }): Promise<StackReview> => {
+      try {
+        const res = await api.POST("/api/env/{envId}/stacks/{stackId}/review", {
+          params: { path: { envId, stackId } },
+          body: mode === "update" ? { mode, services } : { mode },
+          signal,
+        });
+        if (!res.data) {
+          const problem = readProblem(res.error, res.response);
+          throw new ReviewRequestError(problem.status, problem.type);
+        }
+        return res.data;
+      } catch (e) {
+        // A network failure has no status.
+        throw e instanceof ReviewRequestError ? e : new ReviewRequestError(0);
+      }
+    },
+    retry: false,
+    gcTime: 0,
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+}
+
+// DeployRequestError is a deploy the server refused or that got no answer. The status is 0 when
+// the server could not be reached; the type is the problem type it named (draft_changed,
+// pins_invalid, privileged_compose, stack_name_clash, target_changed, too_many_deploys ...).
+export class DeployRequestError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  readonly fields: ProblemField[];
+  constructor(status: number, type?: string, fields: ProblemField[] = []) {
+    super(`POST deploys failed (${status})`);
+    this.name = "DeployRequestError";
+    this.status = status;
+    this.type = type;
+    this.fields = fields;
+  }
+}
+
+// useDeployStack starts the deploy of what was reviewed: the version of the draft the review was
+// made of and the digests it chose, so the server deploys exactly that and refuses a draft that
+// moved since (409 draft_changed). It is never retried: a deploy whose answer was lost may have
+// started, and the stack's page, read again, shows whether it did. The stack's page and the list
+// are read again whatever the answer.
+export function useDeployStack(envId: string, stackId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<StackDeployed, DeployRequestError, StackDeployInput>({
+    mutationFn: async (body) => {
+      try {
+        const res = await api.POST("/api/env/{envId}/stacks/{stackId}/deploys", {
+          params: { path: { envId, stackId } },
+          body,
+        });
+        if (!res.data) {
+          const problem = readProblem(res.error, res.response);
+          throw new DeployRequestError(problem.status, problem.type, problem.fields);
+        }
+        return res.data;
+      } catch (e) {
+        // A network failure has no status.
+        throw e instanceof DeployRequestError ? e : new DeployRequestError(0);
+      }
+    },
+    retry: false,
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: stacksKey(envId) }),
+  });
+}
+
+// The query key of one deploy job.
+export function stackJobKey(envId: string, stackId: string, jobId: string) {
+  return ["stack-job", envId, stackId, jobId] as const;
+}
+
+// isJobGone says whether the error is the server answering that the job is not listed: a finished
+// job stays for ten minutes, and the address may name the job of another stack.
+export function isJobGone(error: unknown): boolean {
+  return (
+    error instanceof StacksLoadError && error.status === 404 && error.type === "stack_job_not_found"
+  );
+}
+
+// isJobRunning says whether a job is still going, so a view of it keeps asking.
+export function isJobRunning(job: StackJob): boolean {
+  return job.state === "running";
+}
+
+// How often a view of a running job asks for it again.
+export const JOB_REFETCH_MS = 1000;
+
+// One deploy job and its steps, asked for again every second while it runs and not after it ends.
+// A job that is gone is not asked for again: it will not come back on a second try.
+export function stackJobQuery(envId: string, stackId: string, jobId: string) {
+  return queryOptions({
+    queryKey: stackJobKey(envId, stackId, jobId),
+    queryFn: async (): Promise<StackJob> => {
+      const res = await api.GET("/api/env/{envId}/stacks/{stackId}/deploys/{jobId}", {
+        params: { path: { envId, stackId, jobId } },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new StacksLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    retry: (count, error) => !isJobGone(error) && count < 3,
+    refetchInterval: (query) => {
+      if (isJobGone(query.state.error)) return false;
+      const job = query.state.data;
+      return job !== undefined && !isJobRunning(job) ? false : JOB_REFETCH_MS;
+    },
+    refetchOnWindowFocus: false,
+  });
 }

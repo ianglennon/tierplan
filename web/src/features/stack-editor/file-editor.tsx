@@ -90,13 +90,17 @@ export function FileEditor({
   useEffect(() => {
     cm.current?.view?.dispatch({ effects: setLintProblems.of(problems) });
   }, [problems]);
-  // A jump asked for before the surface exists (the file was only just opened) waits for it.
+  // A jump asked for before the surface exists (the file was only just opened) waits for it. The
+  // view is kept from onCreateEditor as well as read from the ref: the library's ref follows the
+  // view a render later, so a jump asked for in between would otherwise wait for a creation that
+  // has already happened.
   const pending = useRef<{ line: number; col: number } | null>(null);
+  const created = useRef<EditorView | null>(null);
   useImperativeHandle(
     ref,
     () => ({
       cursorTo(line, col) {
-        const view = cm.current?.view;
+        const view = created.current ?? cm.current?.view;
         if (view) moveTo(view, line, col);
         else pending.current = { line, col };
       },
@@ -109,6 +113,7 @@ export function FileEditor({
         {...editorProps}
         ref={cm}
         onCreateEditor={(view) => {
+          created.current = view;
           view.dispatch({ effects: setLintProblems.of(shown.current) });
           const jump = pending.current;
           pending.current = null;

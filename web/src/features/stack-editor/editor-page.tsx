@@ -19,6 +19,7 @@ import {
   useDiscardDraft,
   useSaveDraft,
 } from "@/api/stacks";
+import { NeedsTooltip } from "@/components/needs-tooltip";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -55,6 +56,7 @@ import {
   workingCopyReducer,
 } from "@/features/stack-editor/working-copy";
 import { usePermission } from "@/hooks/use-me";
+import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { isMacPlatform } from "@/lib/env-nav";
 import { toastSuccess } from "@/lib/toast";
@@ -73,6 +75,13 @@ interface StackEditorPageProps {
   file?: string;
   // What to do to change the file in the address.
   onFileChange?: (path: string | undefined) => void;
+  // A line the address names (a link from the Review's list of errors): the cursor goes there
+  // once, in the file the address names.
+  line?: number;
+  // What to do once the line has been used, so the address no longer carries it.
+  onLineHandled?: () => void;
+  // What to do to open the Review once the draft is saved: the route navigates to it.
+  onReview?: () => void;
 }
 
 // Where the saved draft stands: the version to send with the next save (the one read when the
@@ -102,12 +111,16 @@ export function StackEditorPage({
   onPaneChange,
   file,
   onFileChange,
+  line,
+  onLineHandled,
+  onReview,
 }: StackEditorPageProps) {
   const t = useT();
   const activePane: EditorPane = pane === "variables" || pane === "rendered" ? pane : "files";
   const mac = isMacPlatform();
   const canEdit = usePermission("stacks.update", envId);
   const canReveal = usePermission("secrets.reveal", envId);
+  const deployNeeds = useNeeds("stacks.deploy", envId);
   const stack = useQuery(stackQuery(envId, stackId));
   const draft = useQuery(draftQuery(envId, stackId));
   const save$ = useSaveDraft(envId, stackId);
@@ -127,6 +140,9 @@ export function StackEditorPage({
   const [saveCount, setSaveCount] = useState(0);
   // "Show problems" in the Rendered pane opens the Problems panel of the Files pane it moves to.
   const [showProblems, setShowProblems] = useState(false);
+  // Review and deploy has been pressed: it saves, then opens the Review. The button says Saving…
+  // and then Checking… until the page is left (UI-SPEC "Editor" footer).
+  const [reviewing, setReviewing] = useState(false);
   const loaded = useRef(false);
   const copyRef = useRef(copy);
   copyRef.current = copy;
@@ -231,6 +247,15 @@ export function StackEditorPage({
     if (editor.current) editor.current.cursorTo(jump.line, jump.col);
     setJump(null);
   }, [jump, copy.selected, activePane]);
+  // The line the address names is used once, when the draft is in: the cursor goes to it in the
+  // file the address names, and the address is cleared of it.
+  const lineHandled = useRef(onLineHandled);
+  lineHandled.current = onLineHandled;
+  useEffect(() => {
+    if (line === undefined || !copyLoaded) return;
+    setJump({ file: urlFile, line, col: 1 });
+    lineHandled.current?.();
+  }, [line, copyLoaded, urlFile]);
   const hasSaved = (stack.data?.hasDraft ?? false) || savedChange;
 
   // Moving to a file, or off one that is gone, moves the address with it. compose.yaml is the
@@ -317,14 +342,18 @@ export function StackEditorPage({
   // Save sends the working copy at the version the editor holds. Save over it sends it at the
   // version the server named in the conflict, which is how the person chooses their copy over
   // another's.
-  function save(version?: number) {
+  function save(version?: number, then?: () => void) {
     if (!canEdit || !base || !copy.loaded || save$.isPending) return;
     const sent = copy;
     setSaveError(null);
     setConflict(null);
     save$.mutate(toSaveBody(sent, version ?? base.version), {
-      onSuccess: (answer) => onSaved(sent, answer),
+      onSuccess: (answer) => {
+        onSaved(sent, answer);
+        then?.();
+      },
       onError: (err) => {
+        setReviewing(false);
         if (err.status === 409 && err.type === "draft_conflict") {
           const named = (key: string) => err.fields.find((f) => f.location === key)?.message ?? "";
           setConflict({ user: named("savedBy"), version: Number(named("version")) || 0 });
@@ -333,6 +362,26 @@ export function StackEditorPage({
         }
       },
     });
+  }
+
+  // openReview leaves for the Review. The draft is saved by now, so the router's guard against
+  // unsaved edits must not ask: it reads a ref the next render would clear.
+  function openReview() {
+    dirtyRef.current = false;
+    onReview?.();
+  }
+
+  // Review and deploy saves the working copy first, so the Review is of what is on screen, and
+  // opens the Review only if the save went through. A save that conflicts shows the conflict
+  // alert and the Review does not open (D-08). With nothing unsaved there is nothing to save.
+  function reviewAndDeploy() {
+    if (!canEdit || !base || !copy.loaded || save$.isPending || reviewing) return;
+    setReviewing(true);
+    if (!dirty) {
+      openReview();
+      return;
+    }
+    save(undefined, openReview);
   }
 
   // Reload draft reads what is saved now and drops the edits.
@@ -599,7 +648,7 @@ export function StackEditorPage({
             aria-disabled={pending ? true : undefined}
             onClick={pending ? undefined : () => save()}
           >
-            {pending ? (
+            {pending && !reviewing ? (
               <>
                 <Spinner aria-hidden="true" />
                 {t("stackEditor.save.pending")}
@@ -613,6 +662,29 @@ export function StackEditorPage({
               </>
             )}
           </Button>
+          <NeedsTooltip reason={deployNeeds.reason}>
+            <Button
+              type="button"
+              className="max-md:h-11"
+              disabled={!ready}
+              aria-disabled={pending || reviewing ? true : undefined}
+              onClick={pending || reviewing ? undefined : reviewAndDeploy}
+            >
+              {pending && reviewing ? (
+                <>
+                  <Spinner aria-hidden="true" />
+                  {t("stackReview.editor.saving")}
+                </>
+              ) : reviewing ? (
+                <>
+                  <Spinner aria-hidden="true" />
+                  {t("stackReview.editor.checking")}
+                </>
+              ) : (
+                t("stackReview.editor.button")
+              )}
+            </Button>
+          </NeedsTooltip>
         </EditorFooter>
       ) : (
         <p className="text-sm text-muted-foreground">{t("stackEditor.readOnly")}</p>

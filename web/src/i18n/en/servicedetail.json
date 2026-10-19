@@ -17,8 +17,6 @@
     "header": {
       "stack": "Stack {{stack}}",
       "updated": "Updated",
-      "copyDigest": "Copy digest",
-      "digestCopied": "Copied",
       "digestTooltip": "Copy {{digest}}"
     },
     "stackOwned": {

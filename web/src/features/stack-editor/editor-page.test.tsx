@@ -12,7 +12,7 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useState } from "react";
+import { type ComponentProps, useState } from "react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -180,6 +180,7 @@ function mount(
   history = createMemoryHistory({ initialEntries: ["/"] }),
   pane?: "files" | "variables" | "rendered",
   onPaneChange?: (pane: "files" | "variables" | "rendered") => void,
+  extra: Partial<ComponentProps<typeof StackEditorPage>> = {},
 ) {
   const root = createRootRoute({
     component: () => (
@@ -202,6 +203,7 @@ function mount(
             onFileChange={onFileChange}
             pane={pane}
             onPaneChange={onPaneChange}
+            {...extra}
           />
         ),
       }),
@@ -1764,5 +1766,158 @@ describe("secret stack files", () => {
     expect(await screen.findByText("The content of tok.txt is hidden.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Replace content" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Upload a file" })).toBeNull();
+  });
+});
+
+describe("Review and deploy", () => {
+  const reviewButton = () =>
+    screen.getByRole("button", { name: /^(Review and deploy|Saving…|Checking…)$/ });
+
+  it("saves the unsaved edits first and then opens the review", async () => {
+    const onReview = vi.fn();
+    mount(undefined, undefined, undefined, undefined, undefined, { onReview });
+    await ready();
+    typeIntoEditor(`${COMPOSE}# more\n`);
+    fireEvent.click(reviewButton());
+    await waitFor(() => expect(onReview).toHaveBeenCalledTimes(1));
+    expect(puts()).toHaveLength(1);
+    expect(puts()[0]?.body?.version).toBe(4);
+    // The save was answered before the review opened, so the review is of what was on screen.
+    const order = server.sent.map((s) => s.method);
+    expect(order.lastIndexOf("PUT")).toBeLessThan(order.length);
+  });
+
+  it("says Saving… while the save is out and Checking… once it is saved", async () => {
+    let release: (r: Response) => void = () => {};
+    server.save = () =>
+      new Promise<Response>((resolve) => {
+        release = resolve;
+      });
+    const onReview = vi.fn();
+    mount(undefined, undefined, undefined, undefined, undefined, { onReview });
+    await ready();
+    typeIntoEditor("x");
+    fireEvent.click(reviewButton());
+    expect(await screen.findByRole("button", { name: "Saving…" })).toBeTruthy();
+    expect(onReview).not.toHaveBeenCalled();
+    release(
+      Response.json({
+        changed: true,
+        version: 5,
+        savedBy: "grace",
+        savedAt: "2026-10-19T12:00:00Z",
+      }),
+    );
+    expect(await screen.findByRole("button", { name: "Checking…" })).toBeTruthy();
+    expect(onReview).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the review without a save when nothing is unsaved", async () => {
+    const onReview = vi.fn();
+    mount(undefined, undefined, undefined, undefined, undefined, { onReview });
+    await ready();
+    fireEvent.click(reviewButton());
+    await waitFor(() => expect(onReview).toHaveBeenCalledTimes(1));
+    expect(puts()).toHaveLength(0);
+  });
+
+  it("is pressed once: a second press while it works saves and opens nothing more", async () => {
+    const onReview = vi.fn();
+    mount(undefined, undefined, undefined, undefined, undefined, { onReview });
+    await ready();
+    typeIntoEditor("x");
+    const button = reviewButton();
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await waitFor(() => expect(onReview).toHaveBeenCalled());
+    expect(puts()).toHaveLength(1);
+    expect(onReview).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the conflict alert and does not open the review when someone else saved", async () => {
+    server.save = () =>
+      Response.json(
+        {
+          type: "draft_conflict",
+          title: "Conflict",
+          status: 409,
+          detail: "d",
+          errors: [
+            { location: "savedBy", message: "grace" },
+            { location: "savedAt", message: "2026-10-19T11:00:00Z" },
+            { location: "version", message: "5" },
+          ],
+        },
+        { status: 409 },
+      );
+    const onReview = vi.fn();
+    mount(undefined, undefined, undefined, undefined, undefined, { onReview });
+    await ready();
+    typeIntoEditor("mine");
+    fireEvent.click(reviewButton());
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("grace saved this draft while you were editing.");
+    expect(onReview).not.toHaveBeenCalled();
+    // The button is back to its name, and the edits are still there.
+    expect(await screen.findByRole("button", { name: "Review and deploy" })).toBeTruthy();
+    expect(editorText()).toBe("mine");
+  });
+
+  it("does not open the review when the save is refused", async () => {
+    server.save = () => problem(500, "internal");
+    const onReview = vi.fn();
+    mount(undefined, undefined, undefined, undefined, undefined, { onReview });
+    await ready();
+    typeIntoEditor("x");
+    fireEvent.click(reviewButton());
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Something went wrong on the server",
+    );
+    expect(onReview).not.toHaveBeenCalled();
+  });
+
+  it("leaves for the review without asking about unsaved changes, because the draft is saved", async () => {
+    let router: ReturnType<typeof mount> | undefined;
+    router = mount(undefined, undefined, undefined, undefined, undefined, {
+      onReview: () => void router?.navigate({ to: "/away" as never }),
+    });
+    await ready();
+    typeIntoEditor("x");
+    fireEvent.click(reviewButton());
+    expect(await screen.findByText("Away")).toBeTruthy();
+    expect(screen.queryByRole("alertdialog", { name: "Discard changes?" })).toBeNull();
+  });
+
+  it("is not offered to a Viewer", async () => {
+    server.role = "viewer";
+    mount();
+    await ready();
+    expect(screen.queryByRole("button", { name: "Review and deploy" })).toBeNull();
+  });
+});
+
+describe("a line in the address", () => {
+  it("puts the cursor on that line of compose.yaml once, and then lets the address go of it", async () => {
+    const onLineHandled = vi.fn();
+    mount(undefined, undefined, undefined, undefined, undefined, { line: 2, onLineHandled });
+    await ready();
+    // Line 2 starts after "services:\n" (10 characters), at column 1.
+    await waitFor(() => expect(editorView().state.selection.main.head).toBe(10));
+    expect(onLineHandled).toHaveBeenCalledTimes(1);
+  });
+
+  it("goes to the line of the file the address names", async () => {
+    server.draft = () =>
+      Response.json(
+        draftBody({
+          files: [
+            { path: "app.env", content: "A=1\nB=2\nC=3\n", secret: false },
+            { path: "compose.yaml", content: COMPOSE, secret: false },
+          ],
+        }),
+      );
+    mount("app.env", undefined, undefined, undefined, undefined, { line: 3 });
+    await screen.findByRole("textbox", { name: "app.env, text" });
+    await waitFor(() => expect(editorView().state.selection.main.head).toBe(8));
   });
 });

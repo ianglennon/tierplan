@@ -66,12 +66,12 @@ afterEach(() => {
   client.clear();
 });
 
-function mount() {
+function mount(flow?: "review" | "deploy") {
   render(
     <QueryClientProvider client={client}>
       <TestRouter>
         <TooltipProvider>
-          <StackDetailLayout envId={ENV} stackId="s1">
+          <StackDetailLayout envId={ENV} stackId="s1" flow={flow}>
             <StackOverview envId={ENV} stackId="s1" />
           </StackDetailLayout>
         </TooltipProvider>
@@ -139,5 +139,44 @@ describe("StackDetailLayout", () => {
       "/env/e1/stacks",
     );
     expect(screen.queryByRole("tab", { name: "Overview" })).toBeNull();
+  });
+});
+
+describe("the flow caption", () => {
+  const stepsOf = () =>
+    within(screen.getByRole("navigation", { name: "Deploy steps" }))
+      .getAllByRole("listitem")
+      .map((li) => [li.textContent, li.getAttribute("aria-current")]);
+
+  it("replaces the tab bar on the Review, with Step 2 of 3: Review as the current step", async () => {
+    mount("review");
+    await screen.findByRole("heading", { name: "tracer", level: 2 });
+    expect(stepsOf()).toEqual([
+      ["1 Edit", null],
+      ["Step 2 of 3: Review", "step"],
+      ["3 Deploy", null],
+    ]);
+    expect(screen.queryByRole("tab", { name: "Overview" })).toBeNull();
+    expect(screen.queryByRole("tablist")).toBeNull();
+  });
+
+  it("makes Step 3 of 3: Deploy the current step on the console", async () => {
+    mount("deploy");
+    await screen.findByRole("heading", { name: "tracer", level: 2 });
+    expect(stepsOf()).toEqual([
+      ["1 Edit", null],
+      ["2 Review", null],
+      ["Step 3 of 3: Deploy", "step"],
+    ]);
+  });
+
+  it("keeps the breadcrumb and the header, and shows the tabs and no caption without a flow", async () => {
+    mount("review");
+    expect(await screen.findByText("Not deployed")).toBeTruthy();
+    expect(screen.getByRole("navigation", { name: "Breadcrumb" })).toBeTruthy();
+    cleanup();
+    mount();
+    expect(await screen.findByRole("tab", { name: "Overview" })).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "Deploy steps" })).toBeNull();
   });
 });
