@@ -1,0 +1,1429 @@
+[
+  {
+    "name": "plain container",
+    "body": {
+      "Image": "nginx:1.27",
+      "Env": [
+        "A=1"
+      ],
+      "Cmd": [
+        "nginx",
+        "-g",
+        "daemon off;"
+      ],
+      "HostConfig": {
+        "RestartPolicy": {
+          "Name": "unless-stopped"
+        }
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "no host config at all",
+    "body": {
+      "Image": "nginx:1.27"
+    },
+    "refused": []
+  },
+  {
+    "name": "bind below /srv",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Binds": [
+          "/srv/data:/data:rw"
+        ]
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "bind below /mnt read-only",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Binds": [
+          "/mnt/backups:/backups:ro"
+        ]
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "bind strictly below /var/log",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Binds": [
+          "/var/log/app:/logs"
+        ]
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "anonymous volume in binds",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Binds": [
+          "/data"
+        ]
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "named volume the engine does not have",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Binds": [
+          "shop_data:/data:rw"
+        ]
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "named volume that is a plain local volume",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Binds": [
+          "shop_data:/data"
+        ]
+      }
+    },
+    "refused": [],
+    "volumes": {
+      "shop_data": {
+        "driver": "local"
+      }
+    }
+  },
+  {
+    "name": "named volume backed by tmpfs",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Binds": [
+          "cache:/cache"
+        ]
+      }
+    },
+    "refused": [],
+    "volumes": {
+      "cache": {
+        "driver": "local",
+        "options": {
+          "type": "tmpfs",
+          "device": "tmpfs",
+          "o": "size=64m"
+        }
+      }
+    }
+  },
+  {
+    "name": "named volume backed by an nfs share",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Binds": [
+          "media:/media"
+        ]
+      }
+    },
+    "refused": [],
+    "volumes": {
+      "media": {
+        "driver": "local",
+        "options": {
+          "type": "nfs",
+          "o": "addr=10.0.0.2,rw",
+          "device": ":/export"
+        }
+      }
+    }
+  },
+  {
+    "name": "named volume bound to a folder under /srv",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Binds": [
+          "files:/files"
+        ]
+      }
+    },
+    "refused": [],
+    "volumes": {
+      "files": {
+        "driver": "local",
+        "options": {
+          "type": "none",
+          "o": "bind",
+          "device": "/srv/files"
+        }
+      }
+    }
+  },
+  {
+    "name": "bind mount below /mnt",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Mounts": [
+          {
+            "Type": "bind",
+            "Source": "/mnt/data",
+            "Target": "/data"
+          }
+        ]
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "volume mount of a name the engine does not have",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Mounts": [
+          {
+            "Type": "volume",
+            "Source": "fresh",
+            "Target": "/data"
+          }
+        ]
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "anonymous volume mount",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Mounts": [
+          {
+            "Type": "volume",
+            "Target": "/data"
+          }
+        ]
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "volume mount with a tmpfs inline",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Mounts": [
+          {
+            "Type": "volume",
+            "Source": "scratch",
+            "Target": "/s",
+            "VolumeOptions": {
+              "DriverConfig": {
+                "Name": "local",
+                "Options": {
+                  "type": "tmpfs",
+                  "device": "tmpfs"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "volume mount with the local driver and no options",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Mounts": [
+          {
+            "Type": "volume",
+            "Source": "plain",
+            "Target": "/s",
+            "VolumeOptions": {
+              "DriverConfig": {
+                "Name": "local"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "tmpfs mount",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Mounts": [
+          {
+            "Type": "tmpfs",
+            "Target": "/run",
+            "TmpfsOptions": {
+              "SizeBytes": 16777216
+            }
+          }
+        ]
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "image mount",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Mounts": [
+          {
+            "Type": "image",
+            "Source": "busybox:1",
+            "Target": "/img",
+            "ImageOptions": {
+              "Subpath": "bin"
+            }
+          }
+        ]
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "bridge network",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "NetworkMode": "bridge"
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "no network",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "NetworkMode": "none"
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "a user network with an endpoint",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "NetworkMode": "shop_default"
+      },
+      "NetworkingConfig": {
+        "EndpointsConfig": {
+          "shop_default": {
+            "Aliases": [
+              "web"
+            ]
+          }
+        }
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "two user networks",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "NetworkMode": "shop_default"
+      },
+      "NetworkingConfig": {
+        "EndpointsConfig": {
+          "shop_default": {
+            "Aliases": [
+              "web"
+            ]
+          },
+          "shop_backend": {
+            "Aliases": [
+              "web",
+              "api"
+            ],
+            "GwPriority": 5
+          }
+        }
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "capabilities dropped, sysctls, ulimits",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "CapDrop": [
+          "ALL"
+        ],
+        "Sysctls": {
+          "net.core.somaxconn": "1024"
+        },
+        "Ulimits": [
+          {
+            "Name": "nofile",
+            "Soft": 1024,
+            "Hard": 2048
+          }
+        ]
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "resource limits",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Memory": 268435456,
+        "NanoCpus": 500000000,
+        "PidsLimit": 200
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "shareable and none ipc",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "IpcMode": "shareable"
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "private cgroup namespace",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "CgroupnsMode": "private"
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "runtime runc",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Runtime": "runc"
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "harmless security options",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "SecurityOpt": [
+          "no-new-privileges",
+          "seccomp=builtin",
+          "apparmor=docker-default",
+          "label=type:container_t"
+        ]
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "the default seccomp profile by name",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "SecurityOpt": [
+          "seccomp=default"
+        ]
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "links and extra hosts",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Links": [
+          "db:database"
+        ],
+        "ExtraHosts": [
+          "db:10.0.0.9"
+        ]
+      }
+    },
+    "refused": []
+  },
+  {
+    "name": "privileged",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Privileged": true
+      }
+    },
+    "refused": [
+      "HostConfig.Privileged"
+    ]
+  },
+  {
+    "name": "added capabilities",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "CapAdd": [
+          "SYS_ADMIN",
+          "NET_ADMIN"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.CapAdd[0]",
+      "HostConfig.CapAdd[1]"
+    ]
+  },
+  {
+    "name": "a device",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Devices": [
+          {
+            "PathOnHost": "/dev/sda",
+            "PathInContainer": "/dev/xvda",
+            "CgroupPermissions": "rwm"
+          }
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Devices"
+    ]
+  },
+  {
+    "name": "device cgroup rules",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "DeviceCgroupRules": [
+          "c 1:3 mr"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.DeviceCgroupRules"
+    ]
+  },
+  {
+    "name": "a gpu device request",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "DeviceRequests": [
+          {
+            "Driver": "nvidia",
+            "Count": -1,
+            "Capabilities": [
+              [
+                "gpu"
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.DeviceRequests"
+    ]
+  },
+  {
+    "name": "bind of the docker socket",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Binds": [
+          "/var/run/docker.sock:/var/run/docker.sock"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Binds[0]"
+    ]
+  },
+  {
+    "name": "bind of the host root",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Binds": [
+          "/:/host"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Binds[0]"
+    ]
+  },
+  {
+    "name": "bind of a system tree",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Binds": [
+          "/etc:/etc:ro"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Binds[0]"
+    ]
+  },
+  {
+    "name": "bind of /var/log whole",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Binds": [
+          "/var/log:/logs"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Binds[0]"
+    ]
+  },
+  {
+    "name": "bind of a runtime socket under a data root",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Binds": [
+          "/srv/podman.sock:/s"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Binds[0]"
+    ]
+  },
+  {
+    "name": "second bind is the bad one",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Binds": [
+          "/srv/ok:/ok",
+          "/proc:/proc"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Binds[1]"
+    ]
+  },
+  {
+    "name": "a bind that climbs out of a data root",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Binds": [
+          "/srv/../etc:/etc"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Binds[0]"
+    ]
+  },
+  {
+    "name": "a bind source that is neither a path nor a volume name",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Binds": [
+          "../etc:/etc"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Binds[0]"
+    ]
+  },
+  {
+    "name": "a bind with an empty source",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Binds": [
+          ":/data"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Binds[0]"
+    ]
+  },
+  {
+    "name": "bind mount of the docker socket",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Mounts": [
+          {
+            "Type": "bind",
+            "Source": "/var/run/docker.sock",
+            "Target": "/s"
+          }
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Mounts[0].Source"
+    ]
+  },
+  {
+    "name": "bind mount of a relative source",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Mounts": [
+          {
+            "Type": "bind",
+            "Source": "etc",
+            "Target": "/etc"
+          }
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Mounts[0].Source"
+    ]
+  },
+  {
+    "name": "bind mount with no type is a bind",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Mounts": [
+          {
+            "Source": "/root",
+            "Target": "/r"
+          }
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Mounts[0].Source"
+    ]
+  },
+  {
+    "name": "bind mount with a source with a trailing space",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Mounts": [
+          {
+            "Type": "bind",
+            "Source": "/srv ",
+            "Target": "/r"
+          }
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Mounts[0].Source"
+    ]
+  },
+  {
+    "name": "named pipe mount",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Mounts": [
+          {
+            "Type": "npipe",
+            "Source": "\\\\.\\pipe\\docker_engine",
+            "Target": "\\\\.\\pipe\\docker_engine"
+          }
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Mounts[0].Source"
+    ]
+  },
+  {
+    "name": "cluster mount",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Mounts": [
+          {
+            "Type": "cluster",
+            "Source": "csi",
+            "Target": "/c"
+          }
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Mounts[0].Type"
+    ]
+  },
+  {
+    "name": "a mount type that does not exist",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Mounts": [
+          {
+            "Type": "overlay",
+            "Source": "x",
+            "Target": "/c"
+          }
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Mounts[0].Type"
+    ]
+  },
+  {
+    "name": "inline local volume that binds the host root",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Mounts": [
+          {
+            "Type": "volume",
+            "Source": "rootvol",
+            "Target": "/host",
+            "VolumeOptions": {
+              "DriverConfig": {
+                "Name": "local",
+                "Options": {
+                  "type": "none",
+                  "o": "bind",
+                  "device": "/"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Mounts[0].VolumeOptions.DriverConfig.Options.device"
+    ]
+  },
+  {
+    "name": "inline local volume of a block device type",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Mounts": [
+          {
+            "Type": "volume",
+            "Source": "blk",
+            "Target": "/b",
+            "VolumeOptions": {
+              "DriverConfig": {
+                "Options": {
+                  "type": "ext4",
+                  "device": "/dev/sda1"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Mounts[0].VolumeOptions.DriverConfig.Options.type"
+    ]
+  },
+  {
+    "name": "inline volume plugin driver",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Mounts": [
+          {
+            "Type": "volume",
+            "Source": "ebs",
+            "Target": "/e",
+            "VolumeOptions": {
+              "DriverConfig": {
+                "Name": "rexray/ebs"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Mounts[0].VolumeOptions.DriverConfig.Name"
+    ]
+  },
+  {
+    "name": "inline volume plugin driver in capitals with spaces",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Mounts": [
+          {
+            "Type": "volume",
+            "Target": "/e",
+            "VolumeOptions": {
+              "DriverConfig": {
+                "Name": " Local2 "
+              }
+            }
+          }
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Mounts[0].VolumeOptions.DriverConfig.Name"
+    ]
+  },
+  {
+    "name": "existing volume that binds the host root",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Binds": [
+          "rootvol:/host"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Binds[0]"
+    ],
+    "volumes": {
+      "rootvol": {
+        "driver": "local",
+        "options": {
+          "type": "none",
+          "o": "bind",
+          "device": "/"
+        }
+      }
+    }
+  },
+  {
+    "name": "existing volume that binds a relative device",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Binds": [
+          "relvol:/host"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Binds[0]"
+    ],
+    "volumes": {
+      "relvol": {
+        "driver": "local",
+        "options": {
+          "type": "none",
+          "o": "bind",
+          "device": "etc"
+        }
+      }
+    }
+  },
+  {
+    "name": "existing volume of a block device type",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Binds": [
+          "blk:/b"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Binds[0]"
+    ],
+    "volumes": {
+      "blk": {
+        "driver": "local",
+        "options": {
+          "type": "ext4",
+          "device": "/dev/sda1"
+        }
+      }
+    }
+  },
+  {
+    "name": "existing volume backed by a volume plugin",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Binds": [
+          "ebs:/e"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Binds[0]"
+    ],
+    "volumes": {
+      "ebs": {
+        "driver": "rexray/ebs"
+      }
+    }
+  },
+  {
+    "name": "existing volume mounted by a mount that binds the host root",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Mounts": [
+          {
+            "Type": "volume",
+            "Source": "rootvol",
+            "Target": "/host"
+          }
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Mounts[0].Source"
+    ],
+    "volumes": {
+      "rootvol": {
+        "driver": "local",
+        "options": {
+          "type": "none",
+          "o": "bind",
+          "device": "/etc"
+        }
+      }
+    }
+  },
+  {
+    "name": "network mode host",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "NetworkMode": "host"
+      }
+    },
+    "refused": [
+      "HostConfig.NetworkMode"
+    ]
+  },
+  {
+    "name": "network mode host in capitals",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "NetworkMode": " HOST"
+      }
+    },
+    "refused": [
+      "HostConfig.NetworkMode"
+    ]
+  },
+  {
+    "name": "network mode of another container",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "NetworkMode": "container:abc123"
+      }
+    },
+    "refused": [
+      "HostConfig.NetworkMode"
+    ]
+  },
+  {
+    "name": "network mode that is the host network by id",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "NetworkMode": "f1e2d3c4b5a6"
+      }
+    },
+    "refused": [
+      "HostConfig.NetworkMode"
+    ],
+    "hostNetworkIDs": [
+      "f1e2d3c4b5a6"
+    ]
+  },
+  {
+    "name": "an endpoint on the host network",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "NetworkMode": "shop_default"
+      },
+      "NetworkingConfig": {
+        "EndpointsConfig": {
+          "shop_default": {},
+          "host": {}
+        }
+      }
+    },
+    "refused": [
+      "NetworkingConfig.EndpointsConfig[\"host\"]"
+    ]
+  },
+  {
+    "name": "an endpoint on the host network by id",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "NetworkMode": "shop_default"
+      },
+      "NetworkingConfig": {
+        "EndpointsConfig": {
+          "shop_default": {},
+          "aa11bb22cc33": {}
+        }
+      }
+    },
+    "refused": [
+      "NetworkingConfig.EndpointsConfig[\"aa11bb22cc33\"]"
+    ],
+    "hostNetworkIDs": [
+      "aa11bb22cc33"
+    ]
+  },
+  {
+    "name": "pid mode host",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "PidMode": "host"
+      }
+    },
+    "refused": [
+      "HostConfig.PidMode"
+    ]
+  },
+  {
+    "name": "pid mode of another container",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "PidMode": "container:abc"
+      }
+    },
+    "refused": [
+      "HostConfig.PidMode"
+    ]
+  },
+  {
+    "name": "ipc mode host",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "IpcMode": "host"
+      }
+    },
+    "refused": [
+      "HostConfig.IpcMode"
+    ]
+  },
+  {
+    "name": "ipc mode of another container",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "IpcMode": "container:abc"
+      }
+    },
+    "refused": [
+      "HostConfig.IpcMode"
+    ]
+  },
+  {
+    "name": "uts mode host",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "UTSMode": "host"
+      }
+    },
+    "refused": [
+      "HostConfig.UTSMode"
+    ]
+  },
+  {
+    "name": "userns mode host",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "UsernsMode": "host"
+      }
+    },
+    "refused": [
+      "HostConfig.UsernsMode"
+    ]
+  },
+  {
+    "name": "cgroup namespace host",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "CgroupnsMode": "host"
+      }
+    },
+    "refused": [
+      "HostConfig.CgroupnsMode"
+    ]
+  },
+  {
+    "name": "a cgroup parent",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "CgroupParent": "/system.slice"
+      }
+    },
+    "refused": [
+      "HostConfig.CgroupParent"
+    ]
+  },
+  {
+    "name": "volumes from another container",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "VolumesFrom": [
+          "other:ro"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.VolumesFrom"
+    ]
+  },
+  {
+    "name": "masked paths emptied",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "MaskedPaths": []
+      }
+    },
+    "refused": [
+      "HostConfig.MaskedPaths"
+    ]
+  },
+  {
+    "name": "readonly paths emptied",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "ReadonlyPaths": []
+      }
+    },
+    "refused": [
+      "HostConfig.ReadonlyPaths"
+    ]
+  },
+  {
+    "name": "masked paths listed",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "MaskedPaths": [
+          "/proc/kcore"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.MaskedPaths"
+    ]
+  },
+  {
+    "name": "runtime other than runc",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Runtime": "nvidia"
+      }
+    },
+    "refused": [
+      "HostConfig.Runtime"
+    ]
+  },
+  {
+    "name": "seccomp unconfined",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "SecurityOpt": [
+          "seccomp=unconfined"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.SecurityOpt[0]"
+    ]
+  },
+  {
+    "name": "a custom seccomp profile",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "SecurityOpt": [
+          "no-new-privileges",
+          "seccomp={\"defaultAction\":\"SCMP_ACT_ALLOW\"}"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.SecurityOpt[1]"
+    ]
+  },
+  {
+    "name": "seccomp unconfined with the colon spelling",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "SecurityOpt": [
+          "seccomp:unconfined"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.SecurityOpt[0]"
+    ]
+  },
+  {
+    "name": "apparmor unconfined",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "SecurityOpt": [
+          "apparmor=unconfined"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.SecurityOpt[0]"
+    ]
+  },
+  {
+    "name": "selinux label disabled",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "SecurityOpt": [
+          "label=disable"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.SecurityOpt[0]"
+    ]
+  },
+  {
+    "name": "selinux label disabled with the colon spelling",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "SecurityOpt": [
+          "label:disable"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.SecurityOpt[0]"
+    ]
+  },
+  {
+    "name": "selinux type spc_t",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "SecurityOpt": [
+          "label=type:spc_t"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.SecurityOpt[0]"
+    ]
+  },
+  {
+    "name": "selinux type spc_t in capitals",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "SecurityOpt": [
+          "Label=Type:SPC_T"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.SecurityOpt[0]"
+    ]
+  },
+  {
+    "name": "system paths unconfined",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "SecurityOpt": [
+          "systempaths=unconfined"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.SecurityOpt[0]"
+    ]
+  },
+  {
+    "name": "several findings come in the order of the spec",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "Privileged": true,
+        "CapAdd": [
+          "ALL"
+        ],
+        "NetworkMode": "host",
+        "PidMode": "host",
+        "SecurityOpt": [
+          "apparmor=unconfined"
+        ],
+        "Binds": [
+          "/:/host"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.Privileged",
+      "HostConfig.CapAdd[0]",
+      "HostConfig.NetworkMode",
+      "HostConfig.PidMode",
+      "HostConfig.SecurityOpt[0]",
+      "HostConfig.Binds[0]"
+    ]
+  }
+]

@@ -6,6 +6,7 @@ package hostpath
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -149,6 +150,51 @@ func TestVectors(t *testing.T) {
 	for _, v := range vs {
 		if v.Name == "host network by id" && len(v.HostNetworkIDs) == 0 {
 			t.Error("the host-network-by-id vector must list its host network IDs")
+		}
+	}
+}
+
+func TestContainerVectors(t *testing.T) {
+	vs := ContainerVectors()
+	if len(vs) < 30 {
+		t.Fatalf("ContainerVectors() returned %d, want at least 30", len(vs))
+	}
+	seen := map[string]bool{}
+	var refused, forwarded int
+	for _, v := range vs {
+		if v.Name == "" || seen[v.Name] {
+			t.Fatalf("vector name %q is empty or repeated", v.Name)
+		}
+		seen[v.Name] = true
+		var body struct {
+			Image string
+		}
+		if err := json.Unmarshal(v.Body, &body); err != nil || body.Image == "" {
+			t.Fatalf("vector %q: the body is not a container create with an image: %v", v.Name, err)
+		}
+		for _, path := range v.Refused {
+			if !strings.HasPrefix(path, "HostConfig.") && !strings.HasPrefix(path, "NetworkingConfig.") {
+				t.Errorf("vector %q: the finding %q names no HostConfig or NetworkingConfig field", v.Name, path)
+			}
+		}
+		if len(v.Refused) > 0 {
+			refused++
+		} else {
+			forwarded++
+		}
+	}
+	if refused < 15 || forwarded < 10 {
+		t.Fatalf("want a mix of vectors, got %d refused and %d forwarded", refused, forwarded)
+	}
+	for _, want := range []string{
+		"privileged", "added capabilities", "a device", "bind of the docker socket", "bind of the host root",
+		"network mode host", "pid mode host", "ipc mode host", "uts mode host", "userns mode host",
+		"cgroup namespace host", "a cgroup parent", "volumes from another container", "masked paths emptied",
+		"runtime other than runc", "seccomp unconfined", "apparmor unconfined", "selinux label disabled",
+		"selinux type spc_t", "named volume the engine does not have", "bind below /srv",
+	} {
+		if !seen[want] {
+			t.Errorf("missing vector %q", want)
 		}
 	}
 }
