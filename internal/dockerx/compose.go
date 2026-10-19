@@ -298,6 +298,40 @@ func (c *Client) ComposeUp(ctx context.Context, p *types.Project, o ComposeUpOpt
 	})
 }
 
+// ComposeStop stops the containers of the project the way `docker compose stop` does, with their own stop
+// timeouts: nothing is removed, so the networks, volumes and containers stay for ComposeStart. p names the
+// project and its services (the stop order follows depends_on); it need not be sandboxed.
+func (c *Client) ComposeStop(ctx context.Context, p *types.Project) error {
+	svc, err := c.composeService(p, nil)
+	if err != nil {
+		return err
+	}
+	return svc.Stop(ctx, p.Name, api.StopOptions{Project: p})
+}
+
+// ComposeStart starts the stopped containers of the project the way `docker compose start` does, in
+// depends_on order, and waits until they run (and are healthy, where a service has a health check). It
+// creates nothing: a service without a container is not started.
+func (c *Client) ComposeStart(ctx context.Context, p *types.Project) error {
+	svc, err := c.composeService(p, nil)
+	if err != nil {
+		return err
+	}
+	return svc.Start(ctx, p.Name, api.StartOptions{Project: p, Wait: true})
+}
+
+// ComposeDown removes the containers and the networks of the project the way `docker compose down
+// --remove-orphans` does. It never removes a volume, an image or an external network (Volumes false and no
+// Images): what a stack keeps is for the person who removes the stack to choose. The project is found by
+// its name, from the labels of what the host holds.
+func (c *Client) ComposeDown(ctx context.Context, projectName string) error {
+	svc, err := c.composeService(&types.Project{Name: projectName}, nil)
+	if err != nil {
+		return err
+	}
+	return svc.Down(ctx, projectName, api.DownOptions{RemoveOrphans: true})
+}
+
 // ComposeContainer is a container of a Compose project as the engine lists it, with the labels the
 // review and the pin decision read.
 type ComposeContainer struct {

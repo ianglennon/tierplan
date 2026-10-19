@@ -203,6 +203,35 @@ func TestComposeUpTalksToTheEngineThroughTheGuard(t *testing.T) {
 	}
 }
 
+func TestComposeStopStartAndDownAskTheEngineForTheProjectsContainers(t *testing.T) {
+	initCompose(t)
+	p := &types.Project{Name: "demo", Services: types.Services{"web": types.ServiceConfig{Name: "web", Image: "nginx:1.27"}}}
+	calls := map[string]func(*Client) error{
+		"stop":  func(c *Client) error { return c.ComposeStop(testsupport.Context(t), p) },
+		"start": func(c *Client) error { return c.ComposeStart(testsupport.Context(t), p) },
+		"down":  func(c *Client) error { return c.ComposeDown(testsupport.Context(t), "demo") },
+	}
+	for name, call := range calls {
+		t.Run(name, func(t *testing.T) {
+			fake := dockertest.NewFake(t, dockertest.FakeConfig{})
+			c, err := New(fake)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = c.Close() })
+			// A host with no container of the project: nothing to do, and the SDK found that out by asking
+			// the engine, over the client the guard wraps.
+			err = call(c)
+			if errors.Is(err, ErrComposeForbidden) || errors.Is(err, ErrComposeNotReady) {
+				t.Fatalf("%s was refused before it reached the engine: %v", name, err)
+			}
+			if !slices.ContainsFunc(fake.Requests(), func(r string) bool { return strings.HasSuffix(r, "/containers/json") }) {
+				t.Errorf("requests = %v, want %s to list the project's containers", fake.Requests(), name)
+			}
+		})
+	}
+}
+
 func TestServiceOfContainerReadsTheNamesComposeGives(t *testing.T) {
 	t.Parallel()
 	p := &types.Project{Name: "demo", Services: types.Services{

@@ -1,0 +1,50 @@
+# The standalone stack of plan 07-21: two services from an image of the fixture registry, a user network
+# and the default one, a named volume, a healthcheck, depends_on with condition service_healthy, a stack-file
+# secret (tok.txt) and a config (nginx.conf). The files are beside this one. {{IMAGE}} is where the
+# test puts the image it pushed.
+services:
+  db:
+    image: {{IMAGE}}
+    command: ["sleep", "3600"]
+    stop_grace_period: 1s
+    healthcheck:
+      test: ["CMD", "test", "-f", "/etc/nginx.conf"]
+      interval: 2s
+      timeout: 2s
+      retries: 5
+    volumes:
+      - data:/data
+    networks:
+      - back
+    configs:
+      - source: nginxconf
+        target: /etc/nginx.conf
+    secrets:
+      - tok
+  web:
+    image: {{IMAGE}}
+    command: ["sleep", "3600"]
+    stop_grace_period: 1s
+    environment:
+      MODE: "{{MODE}}"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - back
+      - front
+
+networks:
+  back: {}
+  front: {}
+
+volumes:
+  data: {}
+
+secrets:
+  tok:
+    file: ./tok.txt
+
+configs:
+  nginxconf:
+    file: ./nginx.conf
