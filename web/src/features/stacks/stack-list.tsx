@@ -3,14 +3,21 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { Plus } from "lucide-react";
+import { Ellipsis, Plus } from "lucide-react";
 import { useMemo } from "react";
 
 import { type StackItem, stacksQuery } from "@/api/stacks";
 import { NoPermission } from "@/components/full-page-state";
+import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Empty,
   EmptyContent,
@@ -46,6 +53,7 @@ export function StackList({ envId, creating, onCreatingChange }: StackListProps)
   const t = useT();
   const allowed = usePermission("stacks.read", envId);
   const create = useNeeds("stacks.create", envId);
+  const deploy = useNeeds("stacks.deploy", envId);
   const query = useQuery({ ...stacksQuery(envId), enabled: allowed });
   const envName = useEnvName(envId);
   const { data } = query;
@@ -113,15 +121,39 @@ export function StackList({ envId, creating, onCreatingChange }: StackListProps)
       header: <span className="sr-only">{t("actions.column")}</span>,
       className: "w-px px-1 text-end",
       cell: (s) => (
-        <Button asChild variant="ghost" size="sm" className="max-md:h-11">
-          <Link
-            to="/env/$envId/stacks/$stackId"
-            params={{ envId, stackId: s.id }}
-            aria-label={t("stacks.list.openLabel", { name: s.name })}
-          >
-            {t("stacks.list.open")}
-          </Link>
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="max-md:size-11"
+              aria-label={t("stackReview.rowMenu.label", { name: s.name })}
+            >
+              <Ellipsis aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem asChild className="max-md:min-h-11">
+              <Link to="/env/$envId/stacks/$stackId" params={{ envId, stackId: s.id }}>
+                {t("stackReview.rowMenu.open")}
+              </Link>
+            </DropdownMenuItem>
+            {deploy.allowed ? (
+              <DropdownMenuItem asChild className="max-md:min-h-11">
+                <Link to="/env/$envId/stacks/$stackId/review" params={{ envId, stackId: s.id }}>
+                  {t("stackReview.deploy.action")}
+                </Link>
+              </DropdownMenuItem>
+            ) : (
+              <NeedsTooltip reason={deploy.reason}>
+                <DropdownMenuItem className="max-md:min-h-11">
+                  {t("stackReview.deploy.action")}
+                </DropdownMenuItem>
+              </NeedsTooltip>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
       ),
     },
   ];

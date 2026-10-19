@@ -7,6 +7,7 @@ import { SquareStack } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { isStackGone, stackQuery } from "@/api/stacks";
+import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +26,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useEnvName } from "@/features/resources/use-env-name";
 import { StackStateCell } from "@/features/stacks/stack-state-cell";
 import { useDocumentTitle } from "@/hooks/use-me";
+import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 
 // The steps of a deploy, which the Review and the console routes show instead of the tab bar.
@@ -83,6 +85,32 @@ function Breadcrumb({ envId, name }: { envId: string; name: string | undefined }
         </li>
       </ol>
     </nav>
+  );
+}
+
+// DeployAction is the header's Deploy… (UI-SPEC "Stack page"): it opens the Review of the stack's
+// saved draft against what is running, and never starts a deploy by itself. A user who may not
+// deploy sees it off with the role it takes, and a user whose permissions are not known yet sees
+// nothing rather than a button that may turn off.
+function DeployAction({ envId, stackId }: { envId: string; stackId: string }) {
+  const t = useT();
+  const needs = useNeeds("stacks.deploy", envId);
+  if (needs.allowed) {
+    return (
+      <Button asChild variant="outline" className="max-md:h-11">
+        <Link to="/env/$envId/stacks/$stackId/review" params={{ envId, stackId }}>
+          {t("stackReview.deploy.action")}
+        </Link>
+      </Button>
+    );
+  }
+  if (!needs.reason) return null;
+  return (
+    <NeedsTooltip reason={needs.reason}>
+      <Button type="button" variant="outline" className="max-md:h-11">
+        {t("stackReview.deploy.action")}
+      </Button>
+    </NeedsTooltip>
   );
 }
 
@@ -198,32 +226,35 @@ export function StackDetailLayout({ envId, stackId, children, flow }: StackDetai
       <header className="flex flex-col gap-2">
         <Breadcrumb envId={envId} name={data?.name} />
         {data ? (
-          <div className="flex min-w-0 flex-col gap-1">
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <h2 className="line-clamp-2 max-w-full min-w-0 break-all text-2xl font-semibold">
-                    {data.name}
-                  </h2>
-                </TooltipTrigger>
-                <TooltipContent className="break-all">{data.name}</TooltipContent>
-              </Tooltip>
-              <StackStateCell state={data.state} />
-              <Badge variant="outline">{t(`stacks.target.${data.target}`)}</Badge>
-              <Badge variant="outline">{t(`stacks.source.${data.source}`)}</Badge>
-              {data.hasDraft ? <Badge variant="outline">{t("stacks.draft")}</Badge> : null}
+          <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+            <div className="flex min-w-0 flex-col gap-1">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <h2 className="line-clamp-2 max-w-full min-w-0 break-all text-2xl font-semibold">
+                      {data.name}
+                    </h2>
+                  </TooltipTrigger>
+                  <TooltipContent className="break-all">{data.name}</TooltipContent>
+                </Tooltip>
+                <StackStateCell state={data.state} />
+                <Badge variant="outline">{t(`stacks.target.${data.target}`)}</Badge>
+                <Badge variant="outline">{t(`stacks.source.${data.source}`)}</Badge>
+                {data.hasDraft ? <Badge variant="outline">{t("stacks.draft")}</Badge> : null}
+              </div>
+              <p className="text-sm text-muted-foreground">
+                {data.lastDeployedAt ? (
+                  <>
+                    {t("stacks.detail.meta.deployedPrefix", { env: envName })}{" "}
+                    <RelativeTime value={data.lastDeployedAt} />{" "}
+                    {t("stacks.list.lastDeployedBy", { user: data.lastDeployedBy })}
+                  </>
+                ) : (
+                  t("stacks.detail.meta.neverDeployed", { env: envName })
+                )}
+              </p>
             </div>
-            <p className="text-sm text-muted-foreground">
-              {data.lastDeployedAt ? (
-                <>
-                  {t("stacks.detail.meta.deployedPrefix", { env: envName })}{" "}
-                  <RelativeTime value={data.lastDeployedAt} />{" "}
-                  {t("stacks.list.lastDeployedBy", { user: data.lastDeployedBy })}
-                </>
-              ) : (
-                t("stacks.detail.meta.neverDeployed", { env: envName })
-              )}
-            </p>
+            {flow ? null : <DeployAction envId={envId} stackId={stackId} />}
           </div>
         ) : (
           <Skeleton className="h-8 w-64" />

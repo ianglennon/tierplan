@@ -33,6 +33,23 @@ let review: () => Response | Promise<Response>;
 let deploy: () => Response | Promise<Response>;
 let client: QueryClient;
 
+const specOf = (replicas: number, env: string[] = []) => ({
+  Name: "s1_web",
+  Mode: { Replicated: { Replicas: replicas } },
+  TaskTemplate: { ContainerSpec: { Image: "nginx:1.27", Env: env } },
+});
+
+const changedWeb = (over: Record<string, unknown> = {}) => ({
+  name: "s1_web",
+  short: "web",
+  change: "changed",
+  current: specOf(2),
+  next: specOf(3),
+  hiddenChanges: [],
+  settings: 1,
+  ...over,
+});
+
 const counts = (added = 0, changed = 0, removed = 0) => ({ added, changed, removed });
 
 function reviewBody(over: Record<string, unknown> = {}) {
@@ -45,7 +62,7 @@ function reviewBody(over: Record<string, unknown> = {}) {
     objects: [],
     pins: { s1_web: `nginx:1.27@${D1}` },
     problems: [],
-    services: [],
+    services: [changedWeb()],
     summary: {
       services: counts(0, 1, 0),
       networks: counts(),
@@ -484,23 +501,6 @@ const problemOf = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-const specOf = (replicas: number, env: string[] = []) => ({
-  Name: "s1_web",
-  Mode: { Replicated: { Replicas: replicas } },
-  TaskTemplate: { ContainerSpec: { Image: "nginx:1.27", Env: env } },
-});
-
-const changedWeb = (over: Record<string, unknown> = {}) => ({
-  name: "s1_web",
-  short: "web",
-  change: "changed",
-  current: specOf(2),
-  next: specOf(3),
-  hiddenChanges: [],
-  settings: 1,
-  ...over,
-});
-
 const reasonText = () => {
   const button = deployButton();
   const id = button.getAttribute("aria-describedby");
@@ -572,7 +572,7 @@ describe("the Changes tab", () => {
     expect(
       screen.getByText("Nothing from this stack is running yet, so everything below is new."),
     ).toBeTruthy();
-    expect(screen.getAllByText("Added")).toHaveLength(2);
+    expect(within(screen.getByRole("list")).getAllByText("Added")).toHaveLength(2);
   });
 
   it("does not call a deploy of a stack that is partly running a first deploy", async () => {

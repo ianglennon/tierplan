@@ -50,11 +50,12 @@ describe("the rows", () => {
       service({ name: "api", change: "added", current: null, settings: 9 }),
       service({ name: "old", change: "removed", next: null, settings: 0 }),
     ]);
-    const web = rowOf("web");
-    expect(within(web).getByText("Changed")).toBeTruthy();
-    expect(within(web).getByText("2 settings changed")).toBeTruthy();
+    // The word is in the row's own button; an open row also has the diff's Change column below.
+    const web = within(within(rowOf("web")).getByRole("button"));
+    expect(web.getByText("Changed")).toBeTruthy();
+    expect(web.getByText("2 settings changed")).toBeTruthy();
     expect(screen.getByText("web").className).toContain("font-mono");
-    expect(within(rowOf("api")).getByText("Added")).toBeTruthy();
+    expect(within(within(rowOf("api")).getByRole("button")).getByText("Added")).toBeTruthy();
     expect(within(rowOf("old")).getByText("Removed")).toBeTruthy();
   });
 
@@ -88,7 +89,7 @@ describe("the rows", () => {
       service({ name: "api", change: "added", current: null }),
     ]);
     const names = within(screen.getByRole("list")).getAllByRole("listitem");
-    expect(names.map((li) => li.querySelector(".font-mono")?.textContent)).toEqual([
+    expect(names.map((li) => li.querySelector("[data-slot=service-name]")?.textContent)).toEqual([
       "web",
       "api",
       "old",

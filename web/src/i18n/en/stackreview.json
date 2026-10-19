@@ -110,6 +110,85 @@
       },
       "openStack": "Open stack",
       "backToEditing": "Back to editing"
+    },
+    "changes": {
+      "tab": "Changes",
+      "label": "What the review shows"
+    },
+    "serviceDiff": {
+      "added": "Added",
+      "changed": "Changed",
+      "removed": "Removed",
+      "settings_one": "{{count}} setting changed",
+      "settings_other": "{{count}} settings changed",
+      "newDigest": "New digest",
+      "imageTo": "to",
+      "hiddenCaption": "Hidden changes to {{name}}",
+      "hiddenChange": "Changed (hidden)",
+      "changeColumn": "Change",
+      "settingColumn": "Setting"
+    },
+    "other": {
+      "title": "Other resources",
+      "columns": {
+        "change": "Change",
+        "kind": "Kind",
+        "name": "Name",
+        "detail": "Detail"
+      },
+      "change": {
+        "added": "Added",
+        "changed": "Changed",
+        "removed": "Removed",
+        "external": "External"
+      },
+      "kind": {
+        "network": "Network",
+        "secret": "Secret",
+        "config": "Config"
+      },
+      "detail": {
+        "external": "External. Bayplan doesn't touch it.",
+        "removed": "Removed from the stack. Deleted with the deploy."
+      }
+    },
+    "blocking": {
+      "title_one": "{{count}} error stops this deploy",
+      "title_other": "{{count}} errors stop this deploy",
+      "back": "Back to editing"
+    },
+    "warnings": {
+      "title_one": "{{count}} warning",
+      "title_other": "{{count}} warnings"
+    },
+    "firstDeploy": {
+      "title": "First deploy",
+      "body": "Nothing from this stack is running yet, so everything below is new."
+    },
+    "noChanges": {
+      "title": "No changes",
+      "body": "The stack is the same as what's running. There's nothing to deploy.",
+      "bodyUpdate": "Every selected image is already up to date."
+    },
+    "reasons": {
+      "errors_one": "Fix {{count}} error first.",
+      "errors_other": "Fix {{count}} errors first.",
+      "nothing": "There's nothing to deploy.",
+      "needsAdmin": "Needs Admin to use {{kinds}}",
+      "lookup": "Bayplan can't look up {{ref}} right now."
+    },
+    "error": {
+      "title": "Couldn't load the review.",
+      "body": "Check the connection and try again.",
+      "targetChanged": "This environment is no longer the kind of target the stack was made for.",
+      "retry": "Retry loading the review"
+    },
+    "deploy": {
+      "action": "Deploy…"
+    },
+    "rowMenu": {
+      "open": "Open stack",
+      "label": "Actions for {{name}}"
     }
   }
 }

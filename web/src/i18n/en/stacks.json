@@ -32,9 +32,7 @@
         "lastDeployed": "Last deployed"
       },
       "lastDeployedBy": "by {{user}}",
-      "never": "Never",
-      "open": "Open",
-      "openLabel": "Open stack {{name}}"
+      "never": "Never"
     },
     "create": {
       "button": "Create stack",
