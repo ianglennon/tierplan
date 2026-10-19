@@ -133,7 +133,14 @@ func Convert(p *composetypes.Project, o Options) (Plan, error) {
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		plan.Networks = append(plan.Networks, convertNetwork(key, p, o))
+		np := convertNetwork(key, p, o)
+		// A stack makes overlay networks only. Another driver (macvlan, ipvlan, a plugin) reaches
+		// the host's network interfaces, which creating a network by hand needs Admin for; the
+		// policy for it arrives with the review (plan 07-14), and until then it is refused.
+		if !np.External && np.Driver != "overlay" {
+			return Plan{}, &NotConvertedError{Service: "network " + key, Fields: []string{"driver: " + np.Driver}}
+		}
+		plan.Networks = append(plan.Networks, np)
 	}
 	return plan, nil
 }

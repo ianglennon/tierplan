@@ -220,3 +220,56 @@ func TestConvertIsStableBetweenRuns(t *testing.T) {
 		t.Errorf("two conversions differ:\n%s\n%s", ja, jb)
 	}
 }
+
+func TestConvertRefusesANetworkDriverThatReachesTheHost(t *testing.T) {
+	t.Parallel()
+	const compose = `services:
+  web:
+    image: nginx:1
+    networks: [lan]
+networks:
+  lan:
+    driver: macvlan
+    driver_opts:
+      parent: eth0
+`
+	_, err := plan(t, "s", compose)
+	var nc *convert.NotConvertedError
+	if !errors.As(err, &nc) || nc.Service != "network lan" || !slices.Equal(nc.Fields, []string{"driver: macvlan"}) {
+		t.Fatalf("err = %v, want a refusal of the macvlan driver", err)
+	}
+}
+
+func TestConvertOverwritesAnOwnershipLabelTheFileTriesToSet(t *testing.T) {
+	t.Parallel()
+	const compose = `services:
+  web:
+    image: nginx:1
+    labels:
+      com.docker.stack.namespace: someone-elses
+      bayplan.stack.id: not-mine
+    deploy:
+      labels:
+        com.docker.stack.namespace: someone-elses
+        bayplan.stack.id: not-mine
+networks:
+  default:
+    labels:
+      bayplan.stack.id: not-mine
+`
+	got, err := plan(t, "mine", compose)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	svc := got.Services[0].Spec
+	for name, labels := range map[string]map[string]string{
+		"service": svc.Labels, "container": svc.TaskTemplate.ContainerSpec.Labels, "network": got.Networks[0].Labels,
+	} {
+		if labels["bayplan.stack.id"] != "id-mine" {
+			t.Errorf("%s label bayplan.stack.id = %q, want the stack's own", name, labels["bayplan.stack.id"])
+		}
+		if ns, ok := labels["com.docker.stack.namespace"]; ok && ns != "mine" {
+			t.Errorf("%s label com.docker.stack.namespace = %q, want mine", name, ns)
+		}
+	}
+}
