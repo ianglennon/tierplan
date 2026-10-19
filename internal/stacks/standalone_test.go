@@ -217,6 +217,21 @@ func TestPrepareStandaloneRefusesUseAPISocketWhichWouldMountTheHostsDockerSocket
 	}
 }
 
+func TestPrepareStandaloneRefusesWhatTheSDKWouldRunOnTheServerOrThroughExec(t *testing.T) {
+	t.Parallel()
+	pins := map[string]string{"web": "nginx:1.27@sha256:" + hex64('a')}
+	for name, compose := range map[string]string{
+		"a provider":       "services:\n  web:\n    image: nginx:1.27\n    provider:\n      type: some-plugin\n",
+		"a lifecycle hook": "services:\n  web:\n    image: nginx:1.27\n    post_start:\n      - command: echo hi\n",
+		"a model":          "services:\n  web:\n    image: nginx:1.27\n    models: [llm]\nmodels:\n  llm:\n    model: ai/smollm2\n",
+	} {
+		p := loadProject(t, compose)
+		if err := stacks.PrepareStandalone(p, "stack-1", pins, nil); !errors.Is(err, stacks.ErrUnsupportedKey) {
+			t.Errorf("%s: err = %v, want ErrUnsupportedKey", name, err)
+		}
+	}
+}
+
 func TestPrepareStandaloneRefusesWhatWouldReadTheServer(t *testing.T) {
 	t.Parallel()
 	pins := map[string]string{"web": "nginx:1.27@sha256:" + hex64('a')}

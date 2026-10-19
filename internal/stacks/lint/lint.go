@@ -58,6 +58,8 @@ const (
 	// CodeUseAPISocket is use_api_socket on a standalone host, which the Compose SDK would turn into a bind of
 	// the host's Docker socket.
 	CodeUseAPISocket = "use_api_socket_unsupported"
+	// CodeStandaloneUnsupported is a key a standalone deploy never runs: a provider, a model, a lifecycle hook.
+	CodeStandaloneUnsupported = "standalone_unsupported"
 )
 
 // Pos is a range in a stack file: 1-based line and column of its start, and the end.
@@ -117,6 +119,8 @@ var messages = map[string]string{
 	// kind, name
 	CodeExternalFileObject: "The %s “%s” is external, and a standalone host writes the content of each secret and config into the container. Declare it with a file, an environment variable or content instead.",
 	CodeUseAPISocket:       "`use_api_socket` can't be used. It would mount the host's Docker socket into the container, past the checks a bind mount of the socket gets. Mount the socket as a bind volume if the service needs it; that needs Admin.",
+	// key, why
+	CodeStandaloneUnsupported: "`%s` can't be used on a standalone host. %s",
 	// key
 	CodeNetworkOptionUnsupported: "`%s` isn't supported on a stack network. Bayplan creates networks without it. Remove it, or create the network yourself and use it as an external network.",
 	// A build key that is ignored because the image is set (A5); the swarm table words it for Swarm.

@@ -90,7 +90,48 @@ func standaloneFindings(in Input) []Finding {
 	}
 	out = append(out, readOnlyFindings(in)...)
 	out = append(out, apiSocketFindings(in)...)
+	out = append(out, unsupportedKeyFindings(in)...)
 	return append(out, fileObjectFindings(in)...)
+}
+
+// unsupportedKeys are the keys of a service that the Compose SDK carries out by running something the deploy
+// must not: a program of the Bayplan server (a provider service runs the executable its type names, a model
+// runs the docker model plugin), or a command in the container through exec, which the guard refuses (a
+// lifecycle hook). Each is an error, whatever the person's role.
+var unsupportedKeys = []struct{ key, why string }{
+	{"provider", "A provider service runs a program on the Bayplan server."},
+	{"models", "A model is pulled and served by a program on the Bayplan server."},
+	{"pre_start", "A lifecycle hook runs a command in a container, which Bayplan doesn't allow. Run the step in the entrypoint."},
+	{"post_start", "A lifecycle hook runs a command in a container, which Bayplan doesn't allow. Run the step in the entrypoint."},
+	{"pre_stop", "A lifecycle hook runs a command in a container, which Bayplan doesn't allow. Run the step in the entrypoint."},
+}
+
+// unsupportedKeyFindings reports the unsupportedKeys a service sets, and the top-level models.
+func unsupportedKeyFindings(in Input) []Finding {
+	var out []Finding
+	flag := func(path, key, why string) {
+		pos, at := in.at(path)
+		out = append(out, Finding{
+			Severity: SeverityError, Code: CodeStandaloneUnsupported, Key: at, Pos: pos,
+			Message: fmt.Sprintf(messages[CodeStandaloneUnsupported], key, why),
+		})
+	}
+	for _, name := range serviceNames(in.Project) {
+		svc := in.Project.Services[name]
+		set := map[string]bool{
+			"provider": svc.Provider != nil, "models": len(svc.Models) > 0,
+			"pre_start": len(svc.PreStart) > 0, "post_start": len(svc.PostStart) > 0, "pre_stop": len(svc.PreStop) > 0,
+		}
+		for _, k := range unsupportedKeys {
+			if set[k.key] {
+				flag("services."+name+"."+k.key, k.key, k.why)
+			}
+		}
+	}
+	if len(in.Project.Models) > 0 {
+		flag("models", "models", unsupportedKeys[1].why)
+	}
+	return out
 }
 
 // apiSocketFindings reports use_api_socket: the Compose SDK turns it into a bind mount of the host's Docker

@@ -26,6 +26,10 @@ var (
 	// of the host into the container and put the registry logins of its configuration beside it, past the
 	// host-access rules, which judge a socket that is written as a bind.
 	ErrUseAPISocket = errors.New("stacks: use_api_socket is not supported on a standalone host")
+	// ErrUnsupportedKey means a service asks for something the Compose SDK would do by running a program
+	// of the Bayplan server (a provider service, a model) or a command in the container through exec (a
+	// lifecycle hook). A standalone deploy does none of those.
+	ErrUnsupportedKey = errors.New("stacks: the stack uses a key a standalone deploy does not run")
 	// ErrExternalFileObject means a service uses an external secret or config. A standalone host writes
 	// the content of a secret or config into the container, and an external one has none to write.
 	ErrExternalFileObject = errors.New("stacks: an external secret or config cannot be used on a standalone host")
@@ -51,13 +55,17 @@ var (
 // nobody edited builds the same services and the SDK recreates nothing (Pitfall 5).
 //
 // It refuses what the SDK cannot deliver or what would read the server: a service with an image and no
-// pin (ErrPinMissing), a service with use_api_socket (ErrUseAPISocket), an external secret or config
+// pin (ErrPinMissing), a service with use_api_socket (ErrUseAPISocket), a provider, a model or a lifecycle hook
+// (ErrUnsupportedKey: the SDK would run a program of the Bayplan server, or a command through exec), an external secret or config
 // (ErrExternalFileObject), and, after the work, a
 // build, a file-backed secret or config, an env_file or a relative bind mount that is still there
 // (ErrNotSandboxed). The first error is returned.
 func PrepareStandalone(p *types.Project, stackID string, pins map[string]string, objects []ObjectContent) error {
 	if p.Environment == nil {
 		p.Environment = types.Mapping{}
+	}
+	if len(p.Models) > 0 {
+		return fmt.Errorf("%w: models", ErrUnsupportedKey)
 	}
 	content := make(map[string]ObjectContent, len(objects))
 	for _, o := range objects {
@@ -68,6 +76,9 @@ func PrepareStandalone(p *types.Project, stackID string, pins map[string]string,
 		svc := p.Services[name]
 		if svc.UseAPISocket {
 			return fmt.Errorf("%w: service %s", ErrUseAPISocket, name)
+		}
+		if svc.Provider != nil || len(svc.Models) > 0 || len(svc.PreStart) > 0 || len(svc.PostStart) > 0 || len(svc.PreStop) > 0 {
+			return fmt.Errorf("%w: service %s", ErrUnsupportedKey, name)
 		}
 		if svc.Image != "" {
 			ref, ok := pins[name]

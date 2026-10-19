@@ -134,6 +134,10 @@ func prepareProblem(err error) stacks.Problem {
 		code = stacks.CodeUseAPISocket
 		msg = "use_api_socket can't be used on a standalone host: it would mount the host's Docker socket into the container. Mount the socket as a bind volume if the service needs it; that needs Admin."
 	}
+	if errors.Is(err, stacks.ErrUnsupportedKey) {
+		code = stacks.CodeStandaloneUnsupported
+		msg = "The stack uses a provider, a model or a lifecycle hook, which a standalone deploy doesn't run."
+	}
 	if errors.Is(err, stacks.ErrExternalFileObject) {
 		code = CodeExternalFileObject
 		msg = "A standalone host can't use an external secret or config: it writes the content of each into the container, and an external one has none. Declare it with a file, an environment variable or content instead."

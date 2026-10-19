@@ -203,3 +203,22 @@ func TestAStandaloneServiceThatUsesTheAPISocketIsAnError(t *testing.T) {
 		t.Errorf("swarm problems = %+v, want none: a swarm ignores the key", swarm)
 	}
 }
+
+func TestAStandaloneServiceThatWouldRunAProgramOrAHookIsAnError(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		compose string
+		line    int
+	}{
+		"a provider":        {head + "    provider:\n      type: some-plugin\n", 4},
+		"a model":           {head + "    models:\n      - llm\nmodels:\n  llm:\n    model: ai/smollm2\n", 4},
+		"a post_start hook": {head + "    post_start:\n      - command: echo hi\n", 4},
+		"a pre_stop hook":   {head + "    pre_stop:\n      - command: echo bye\n", 4},
+	} {
+		res := checkOf(t, stacks.TargetStandalone, tc.compose)
+		got := byCode(res, stacks.CodeStandaloneUnsupported)
+		if len(got) == 0 || got[0].Severity != stacks.SeverityError || got[0].Line != tc.line {
+			t.Errorf("%s: problems = %+v, want a blocking standalone_unsupported at line %d", name, res.Problems, tc.line)
+		}
+	}
+}
