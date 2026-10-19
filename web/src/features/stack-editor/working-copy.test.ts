@@ -410,6 +410,18 @@ describe("the variables table", () => {
     });
   });
 
+  it("replaces the whole table with the rows bulk edit parsed, in name order", () => {
+    const copy = workingCopyReducer(withHidden(), {
+      type: "setVars",
+      vars: [
+        { name: "ZED", value: "1", secret: false, hidden: false },
+        { name: "TOKEN", value: "", secret: true, hidden: true },
+      ],
+    });
+    expect(copy.vars.map((x) => x.name)).toEqual(["TOKEN", "ZED"]);
+    expect(isDirty(withHidden(), copy)).toBe(true);
+  });
+
   describe("importVars", () => {
     const imported = [
       { name: "PORT", value: "9090" },

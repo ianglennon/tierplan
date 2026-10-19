@@ -98,6 +98,8 @@ export type WorkingCopyAction =
   // does not have and replaces the value of those it does; Replace makes the table exactly the
   // imported names. It edits the working copy only: nothing is saved until Save draft.
   | { type: "importVars"; vars: ImportedVar[]; mode: ImportMode; secret: boolean }
+  // Bulk edit as text: the table becomes these rows.
+  | { type: "setVars"; vars: WorkingVar[] }
   // A save of `sent` succeeded. The server holds every secret variable now and answers <hidden> for
   // it, so the browser lets go of the text it typed: each secret variable that still has the value
   // that was sent becomes hidden again (UI-SPEC "Secret values never leave the browser").
@@ -216,6 +218,8 @@ export function workingCopyReducer(state: WorkingCopy, action: WorkingCopyAction
       };
     case "importVars":
       return { ...state, vars: importVars(state.vars, action.vars, action.mode, action.secret) };
+    case "setVars":
+      return state;
     case "removeVar":
       return { ...state, vars: state.vars.filter((v) => v.name !== action.name) };
     case "setSecret":

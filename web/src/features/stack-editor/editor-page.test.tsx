@@ -1245,6 +1245,34 @@ describe("the Variables pane", () => {
     ]);
   });
 
+  it("saves a bulk-edited table, and refuses to leave the pane while the text does not parse", async () => {
+    server.draft = () =>
+      Response.json(
+        draftBody({ files: [{ path: "compose.yaml", content: STARTER, secret: false }] }),
+      );
+    server.check = () => Response.json({ problems: [], unusedFiles: [], variables: [webPort()] });
+    const onPaneChange = vi.fn();
+    mount(undefined, undefined, undefined, "variables", onPaneChange);
+    await screen.findByLabelText("Value of WEB_PORT");
+    fireEvent.click(screen.getByRole("button", { name: "Bulk edit as text" }));
+    const text = screen.getByRole("textbox", { name: "Variables as text" });
+    fireEvent.change(text, { target: { value: "WEB_PORT=9090\nnot a line" } });
+
+    const files = screen.getByRole("tab", { name: "Files" });
+    fireEvent.mouseDown(files);
+    fireEvent.click(files);
+    expect(onPaneChange).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(screen.getByText("Line 2: write NAME=value."));
+
+    fireEvent.change(text, { target: { value: "WEB_PORT=9090" } });
+    fireEvent.click(saveButton());
+    await screen.findByText("Saved the draft of tracer.");
+    expect(puts()[0]?.body?.vars).toEqual([{ name: "WEB_PORT", value: "9090", secret: false }]);
+    fireEvent.mouseDown(files);
+    fireEvent.click(files);
+    expect(onPaneChange).toHaveBeenCalledWith("files");
+  });
+
   it("moves between the panes through the address", async () => {
     const onPaneChange = vi.fn();
     mount(undefined, undefined, undefined, "files", onPaneChange);

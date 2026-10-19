@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { Plus, Upload } from "lucide-react";
-import { type FormEvent, useId, useMemo, useState } from "react";
+import { type FormEvent, type Ref, useId, useMemo, useState } from "react";
 
 import type { StackVariable } from "@/api/stacks";
 import { Button } from "@/components/ui/button";
@@ -31,7 +31,15 @@ const MAX_NAME = 128;
 // The rows shown while the draft loads.
 const SKELETON_ROWS = 6;
 
+// What the page can ask of the pane. leave() is for a pane change: false means the pane refuses it.
+export interface VariablesTableHandle {
+  leave: () => boolean;
+}
+
 export interface VariablesTableProps {
+  ref?: Ref<VariablesTableHandle>;
+  // The table as bulk-edited text (rows the text parsed into).
+  onBulk?: (rows: WorkingVar[]) => void;
   // The table of the working copy.
   vars: readonly WorkingVar[];
   // What the server resolved for the working copy at its last check, or null before the first.
