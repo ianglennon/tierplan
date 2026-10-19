@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useEnvName } from "@/features/resources/use-env-name";
+import { StackServicesCard } from "@/features/stacks/stack-services-card";
 import { useT } from "@/i18n/use-t";
 
 interface StackOverviewProps {
@@ -39,56 +40,66 @@ export function StackOverview({ envId, stackId }: StackOverviewProps) {
             <Rocket aria-hidden="true" />
           </EmptyMedia>
           <EmptyTitle role="heading" aria-level={2}>
-            {t("stacks.detail.overview.notDeployed.title")}
+            {t("stackOverview.notDeployed.title")}
           </EmptyTitle>
           <EmptyDescription>
-            {t("stacks.detail.overview.notDeployed.body", { name: data.name })}
+            {t("stackOverview.notDeployed.body", { name: data.name })}
           </EmptyDescription>
         </EmptyHeader>
       </Empty>
     );
   }
   return (
-    <section aria-labelledby="stack-details" className="rounded-xl p-4 ring-1 ring-foreground/10">
-      <h3 id="stack-details" className="mb-3 text-base font-medium">
-        {t("stacks.detail.overview.details.title")}
-      </h3>
-      <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2 text-sm">
-        <dt className="text-muted-foreground">{t("stacks.detail.overview.details.environment")}</dt>
-        <dd>
-          <Link
-            to="/env/$envId/stacks"
-            params={{ envId }}
-            className="rounded-sm text-accent-ink hover:underline"
-          >
-            {envName}
-          </Link>
-        </dd>
-        <dt className="text-muted-foreground">{t("stacks.detail.overview.details.target")}</dt>
-        <dd>{t(`stacks.target.${data.target}`)}</dd>
-        <dt className="text-muted-foreground">{t("stacks.detail.overview.details.source")}</dt>
-        <dd>{t(`stacks.source.${data.source}`)}</dd>
-        <dt className="text-muted-foreground">{t("stacks.detail.overview.details.created")}</dt>
-        <dd>
-          <RelativeTime value={data.createdAt} />{" "}
-          {t("stacks.list.lastDeployedBy", { user: data.createdBy })}
-        </dd>
-        <dt className="text-muted-foreground">
-          {t("stacks.detail.overview.details.lastDeployed")}
-        </dt>
-        <dd>
-          {data.lastDeployedAt ? (
-            <>
-              <RelativeTime value={data.lastDeployedAt} />{" "}
-              {t("stacks.list.lastDeployedBy", { user: data.lastDeployedBy })}
-            </>
-          ) : (
-            t("stacks.list.never")
-          )}
-        </dd>
-        <dt className="text-muted-foreground">{t("stacks.detail.overview.details.id")}</dt>
-        <dd className="font-mono text-xs break-all">{data.id}</dd>
-      </dl>
-    </section>
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <StackServicesCard
+        envId={envId}
+        stackId={stackId}
+        name={data.name}
+        target={data.target}
+        busy={data.lastOperation?.state === "running"}
+      />
+      <section
+        aria-labelledby="stack-details"
+        className="h-fit rounded-xl p-4 ring-1 ring-foreground/10"
+      >
+        <h3 id="stack-details" className="mb-3 text-base font-medium">
+          {t("stackOverview.details.title")}
+        </h3>
+        <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2 text-sm">
+          <dt className="text-muted-foreground">{t("stackOverview.details.environment")}</dt>
+          <dd>
+            <Link
+              to="/env/$envId/stacks"
+              params={{ envId }}
+              className="rounded-sm text-accent-ink hover:underline"
+            >
+              {envName}
+            </Link>
+          </dd>
+          <dt className="text-muted-foreground">{t("stackOverview.details.target")}</dt>
+          <dd>{t(`stacks.target.${data.target}`)}</dd>
+          <dt className="text-muted-foreground">{t("stackOverview.details.source")}</dt>
+          <dd>{t(`stacks.source.${data.source}`)}</dd>
+          <dt className="text-muted-foreground">{t("stackOverview.details.created")}</dt>
+          <dd>
+            <RelativeTime value={data.createdAt} />{" "}
+            {t("stacks.list.lastDeployedBy", { user: data.createdBy })}
+          </dd>
+          <dt className="text-muted-foreground">{t("stackOverview.details.lastDeployed")}</dt>
+          <dd>
+            {data.lastDeployedAt ? (
+              <>
+                <RelativeTime value={data.lastDeployedAt} />{" "}
+                {t("stacks.list.lastDeployedBy", { user: data.lastDeployedBy })}
+              </>
+            ) : (
+              t("stacks.list.never")
+            )}
+          </dd>
+          <dt className="text-muted-foreground">{t("stackOverview.details.id")}</dt>
+          <dd className="font-mono text-xs break-all">{data.id}</dd>
+        </dl>
+      </section>
+    </div>
   );
 }

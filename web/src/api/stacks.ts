@@ -39,6 +39,9 @@ export type StackLock = components["schemas"]["StackLockBody"];
 export type StackRollback = components["schemas"]["StackRollbackBody"];
 export type StackJobSummary = components["schemas"]["StackJobSummary"];
 export type StackJobOutputLine = components["schemas"]["StackJobOutputLine"];
+export type StackServices = components["schemas"]["StackServicesBody"];
+export type StackService = components["schemas"]["StackServiceBody"];
+export type StackContainer = components["schemas"]["StackContainerBody"];
 
 // The query key of an environment's stacks list, and of every read that extends it: one stack's
 // page is under it, so a change to the list refreshes the page too.
@@ -131,6 +134,51 @@ export function stackQuery(envId: string, stackId: string) {
     },
     retry: (count, error) => !isStackGone(error) && count < 3,
     refetchInterval: LIST_REFETCH_MS,
+  });
+}
+
+// How often the Overview of a swarm stack reads what runs again while the page is visible: Docker
+// sends no task events, so it polls (UI-SPEC "Shared state and overflow rules"), faster while a
+// stack operation runs. A standalone host emits container events, which refresh it through the
+// stacks key, and falls back to the lists' 30 s.
+export const STACK_SERVICES_POLL_MS = 5_000;
+export const STACK_SERVICES_POLL_BUSY_MS = 2_000;
+
+// The query key of what one stack runs. It extends the stack's key, so the events feed that
+// refreshes the stacks list, and every action that refreshes the page, refresh it too.
+export function stackServicesKey(envId: string, stackId: string) {
+  return [...stackKey(envId, stackId), "services"] as const;
+}
+
+interface StackServicesOptions {
+  // Where the stack deploys: only a swarm needs polling.
+  target: StackDetail["target"];
+  // True while a stack operation runs on the environment.
+  busy?: boolean;
+}
+
+// What a stack runs now, read from the engine. It polls every 5 s (2 s during an operation) on a
+// swarm while the page is visible and not at all while it is hidden, and a read that fails keeps
+// the last rows, so the card can say the read failed and still show what it had.
+export function stackServicesQuery(envId: string, stackId: string, o: StackServicesOptions) {
+  return queryOptions({
+    queryKey: stackServicesKey(envId, stackId),
+    queryFn: async (): Promise<StackServices> => {
+      const res = await api.GET("/api/env/{envId}/stacks/{stackId}/services", {
+        params: { path: { envId, stackId } },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new StacksLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    retry: (count, error) => !isStackGone(error) && count < 2,
+    refetchInterval: () => {
+      if (document.visibilityState !== "visible") return false;
+      if (o.target !== "swarm") return LIST_REFETCH_MS;
+      return o.busy ? STACK_SERVICES_POLL_BUSY_MS : STACK_SERVICES_POLL_MS;
+    },
   });
 }
 

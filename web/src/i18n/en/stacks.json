@@ -84,21 +84,6 @@
         "heading": "This stack is gone",
         "body": "It was removed. Go back to the list to find it.",
         "back": "Back to stacks"
-      },
-      "overview": {
-        "notDeployed": {
-          "title": "Not deployed yet",
-          "body": "{{name}} has a definition, but nothing is running. Review and deploy it when you're ready."
-        },
-        "details": {
-          "title": "Details",
-          "environment": "Environment",
-          "target": "Target",
-          "source": "Source",
-          "created": "Created",
-          "lastDeployed": "Last deployed",
-          "id": "Stack ID"
-        }
       }
     }
   }

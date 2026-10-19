@@ -2156,6 +2156,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks/{stackId}/services": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What a stack runs now
+         * @description The services the stack owns on the engine, read now: on a swarm each service with its task counts, its image as written and as pinned and its published ports; on a standalone host each service with its containers. A service the engine holds under the stack's name that Bayplan did not make is not listed. A stack that was never deployed answers an empty list. A stack ID of another environment is 404 stack_not_found. An environment that cannot be read is the environment's own problem answer. Needs stacks.read (Viewer).
+         */
+        get: operations["listStackServices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/stacks/{stackId}/variables/{name}/reveal": {
         parameters: {
             query?: never;
@@ -8217,6 +8237,16 @@ export interface components {
              */
             revision: number;
         };
+        StackContainerBody: {
+            /** @description none, starting, healthy or unhealthy */
+            health: string;
+            /** @description The container ID */
+            id: string;
+            /** @description The container name */
+            name: string;
+            /** @description The engine's word for the container: running, exited, restarting, paused, created, removing or dead */
+            state: string;
+        };
         StackCreateRequest: {
             /** @description The text of the first compose.yaml. When it is given, start is ignored */
             compose?: string;
@@ -8785,6 +8815,50 @@ export interface components {
             deployedAt: string;
             /** @description Who started it, as a name; empty when there is none */
             deployedBy: string;
+        };
+        StackServiceBody: {
+            /** @description The containers of a standalone service, by name; empty on a swarm */
+            containers: components["schemas"]["StackContainerBody"][] | null;
+            /**
+             * Format: int64
+             * @description Tasks the swarm wants running, or the containers a standalone service has
+             */
+            desired: number;
+            /** @description The swarm service ID, which the service page is at; empty on a standalone host */
+            id: string;
+            /** @description The image as the compose file wrote it */
+            image: string;
+            /** @description replicated, global, replicated-job or global-job on a swarm; empty on a standalone host */
+            mode: string;
+            /** @description The full name: stack_web on a swarm, web on a standalone host */
+            name: string;
+            /**
+             * @description pinned: the reference carries a digest. new: it has none and the next deploy resolves it. local: the engine runs an image ID, an image from no registry
+             * @enum {string}
+             */
+            pinState: "pinned" | "new" | "local";
+            /** @description The reference the engine runs: the image with its digest, or the image ID of one no registry has */
+            pinned: string;
+            /** @description The published ports as published->target/protocol, with (host) after one published in host mode */
+            ports: string[] | null;
+            /**
+             * Format: int64
+             * @description Tasks that run (a swarm) or containers that run (a standalone host)
+             */
+            running: number;
+            /** @description The name in the compose file, without the stack prefix */
+            short: string;
+            /**
+             * @description The roll-up of its tasks or containers: running, degraded (some running, or an update that stopped, or a failing health check), not_running, or stopped (scaled to 0, or every container exited). A job counts as running
+             * @enum {string}
+             */
+            state: "running" | "degraded" | "not_running" | "stopped";
+            /** @description The state of a swarm service's last update or rollback; empty when it has none and on a standalone host */
+            updateState: string;
+        };
+        StackServicesBody: {
+            /** @description The stack's services by name; empty for a stack that has nothing running */
+            items: components["schemas"]["StackServiceBody"][] | null;
         };
         StackTextDiffBody: {
             /**
@@ -14092,6 +14166,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackDeployBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listStackServices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackServicesBody"];
                 };
             };
             /** @description Error */

@@ -100,8 +100,13 @@ export function mergeEvents(existing: EventDTO[], incoming: EventDTO[], cap: num
 // the nodes list, the node pages (their keys extend the list's) and the services list, whose key
 // the placement view extends, since a node going down or being drained moves tasks. A row of
 // Bayplan's own has no list and refreshes the summary only.
-export function invalidationKeys(type: EventType, envId: string): QueryKey[] {
+//
+// An event about an object of a stack (touchesStack: it carries the stack's swarm namespace or
+// Compose project label) also refreshes the stacks list and every stack page under it, the
+// Overview among them (UI-SPEC "Live data"); the caller says so with stack.
+export function invalidationKeys(type: EventType, envId: string, stack = false): QueryKey[] {
   const summary: QueryKey = ["env", envId, "summary"];
+  const stacks: QueryKey[] = stack ? [[...listKey(envId, "stacks")]] : [];
   switch (type) {
     case "container":
       return [
@@ -110,11 +115,17 @@ export function invalidationKeys(type: EventType, envId: string): QueryKey[] {
         [...listKey(envId, "volumes")],
         [...listKey(envId, "networks")],
         [...listKey(envId, "images")],
+        ...stacks,
       ];
     case "network":
-      return [summary, [...listKey(envId, "networks")], [...listKey(envId, "containers")]];
+      return [
+        summary,
+        [...listKey(envId, "networks")],
+        [...listKey(envId, "containers")],
+        ...stacks,
+      ];
     case "volume":
-      return [summary, [...listKey(envId, "volumes")]];
+      return [summary, [...listKey(envId, "volumes")], ...stacks];
     case "image":
       return [summary, [...listKey(envId, "images")]];
     case "service":
@@ -123,16 +134,27 @@ export function invalidationKeys(type: EventType, envId: string): QueryKey[] {
         [...listKey(envId, "services")],
         [...listKey(envId, "secrets")],
         [...listKey(envId, "configs")],
+        ...stacks,
       ];
     case "secret":
-      return [summary, [...listKey(envId, "secrets")]];
+      return [summary, [...listKey(envId, "secrets")], ...stacks];
     case "config":
-      return [summary, [...listKey(envId, "configs")]];
+      return [summary, [...listKey(envId, "configs")], ...stacks];
     case "node":
       return [summary, [...listKey(envId, "nodes")], [...listKey(envId, "services")]];
     default:
       return [summary];
   }
+}
+
+// The labels Docker puts on what a stack owns, which the events carry as attributes.
+const STACK_LABELS = ["com.docker.stack.namespace", "com.docker.compose.project"];
+
+// touchesStack says whether an event may be about an object of a stack: its attributes carry a
+// stack label, or it has no attributes to tell (an invalidate frame may be about anything).
+export function touchesStack(attributes: Readonly<Record<string, string>> | undefined): boolean {
+  if (attributes === undefined) return true;
+  return STACK_LABELS.some((label) => label in attributes);
 }
 
 // The connection.
@@ -282,7 +304,10 @@ export function createEventsConnection(options: EventsConnectionOptions): Events
     const fresh = remember(incoming);
     events = mergeEvents(events, incoming, cap);
     if (live) {
-      for (const e of fresh) for (const key of invalidationKeys(e.type, envId)) throttled(key);
+      for (const e of fresh)
+        for (const key of invalidationKeys(e.type, envId, touchesStack(e.attributes))) {
+          throttled(key);
+        }
     }
     publish();
   }
@@ -350,7 +375,9 @@ export function createEventsConnection(options: EventsConnectionOptions): Events
       return;
     }
     if (typeof parsed?.type !== "string") return;
-    for (const key of invalidationKeys(parsed.type, envId)) throttled(key);
+    for (const key of invalidationKeys(parsed.type, envId, touchesStack(undefined))) {
+      throttled(key);
+    }
   }
 
   return {

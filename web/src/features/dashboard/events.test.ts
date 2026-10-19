@@ -8,6 +8,7 @@ import { nodeKey, nodesQuery } from "@/api/nodes";
 import { placementKey } from "@/api/placement";
 import type { components } from "@/api/schema";
 import { servicesQuery } from "@/api/services";
+import { stackKey, stackServicesKey } from "@/api/stacks";
 import {
   createEventsConnection,
   type EventsSnapshot,
@@ -15,6 +16,7 @@ import {
   invalidationKeys,
   mergeEvents,
   type RecentQuery,
+  touchesStack,
 } from "@/features/dashboard/events";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { resetBasePathForTests } from "@/lib/base-path";
@@ -217,6 +219,29 @@ describe("invalidationKeys", () => {
     ]);
   });
 
+  it("adds the stacks list to the events about an object of a stack, which every stack page extends", () => {
+    for (const type of ["container", "network", "volume", "service", "secret", "config"] as const) {
+      const keys = invalidationKeys(type, "e1", true);
+      const stacks = keys.find((k) => k[2] === "stacks") ?? [];
+      expect(stacks).toEqual(list("stacks"));
+      expect(invalidationKeys(type, "e1").some((k) => k[2] === "stacks")).toBe(false);
+    }
+    expect(stackServicesKey("e1", "s1").slice(0, 3)).toEqual(list("stacks"));
+    expect(stackKey("e1", "s1").slice(0, 3)).toEqual(list("stacks"));
+    // An image, node or Bayplan event is about no stack.
+    for (const type of ["image", "node", "bayplan"] as const) {
+      expect(invalidationKeys(type, "e1", true).some((k) => k[2] === "stacks")).toBe(false);
+    }
+  });
+
+  it("takes an event for a stack's when its attributes carry a stack label, or when it has none to tell", () => {
+    expect(touchesStack({ "com.docker.stack.namespace": "web" })).toBe(true);
+    expect(touchesStack({ "com.docker.compose.project": "web", name: "web-1" })).toBe(true);
+    expect(touchesStack({ name: "loose", image: "nginx" })).toBe(false);
+    expect(touchesStack({})).toBe(false);
+    expect(touchesStack(undefined)).toBe(true);
+  });
+
   it("refreshes every filtered read of the services list, since their keys extend the list's", () => {
     const keys = invalidationKeys("service", "e1");
     const services = keys.find((k) => k[2] === "services") ?? [];
@@ -392,6 +417,8 @@ describe("createEventsConnection", () => {
       ["env", "e1", "volumes"],
       ["env", "e1", "networks"],
       ["env", "e1", "images"],
+      // An invalidate frame carries no attributes, so it may be about a stack's object.
+      ["env", "e1", "stacks"],
     ]);
     expect(c.last().events).toEqual(before.events);
     expect(c.last().events).toHaveLength(0);
