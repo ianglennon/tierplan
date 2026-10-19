@@ -3,7 +3,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { StackJob, StackJobItem } from "@/api/stacks";
+import type { StackJob, StackJobItem, StackJobOutputLine } from "@/api/stacks";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import {
   initialStackStream,
@@ -40,12 +40,20 @@ const job = (over: Partial<StackJob> = {}): StackJob => ({
   createdAt: "2026-10-19T12:00:00Z",
   finishedAt: "",
   items: [item(), item({ id: "services", label: "Deploy services" })],
+  output: [],
   ...over,
+});
+
+const line = (seq: number, text = `line ${seq}`): StackJobOutputLine => ({
+  seq,
+  at: "2026-10-19T12:00:03Z",
+  text,
 });
 
 describe("the reducer", () => {
   it("starts with nothing and is connecting", () => {
     expect(initialStackStream).toEqual({
+      output: [],
       status: "connecting",
       finished: false,
       gone: false,
@@ -133,6 +141,62 @@ describe("the reducer", () => {
   });
 });
 
+describe("the output log", () => {
+  it("takes the log of a snapshot, and replaces its own with the snapshot's after a reconnect", () => {
+    const first = reduceStackStream(initialStackStream, {
+      type: "snapshot",
+      job: job({ output: [line(2), line(3)] }),
+    });
+    expect(first.output.map((l) => l.seq)).toEqual([2, 3]);
+    const again = reduceStackStream(first, {
+      type: "snapshot",
+      job: job({ output: [line(2), line(3), line(4)] }),
+    });
+    expect(again.output.map((l) => l.seq)).toEqual([2, 3, 4]);
+  });
+
+  it("appends a line, once: a line at or before the newest one is ignored", () => {
+    let state = reduceStackStream(initialStackStream, {
+      type: "snapshot",
+      job: job({ output: [line(5)] }),
+    });
+    state = reduceStackStream(state, { type: "output", line: line(7) });
+    expect(state.output.map((l) => l.seq)).toEqual([5, 7]);
+    // A replay after a reconnect repeats lines the snapshot already holds.
+    state = reduceStackStream(state, { type: "output", line: line(7) });
+    state = reduceStackStream(state, { type: "output", line: line(6) });
+    expect(state.output.map((l) => l.seq)).toEqual([5, 7]);
+  });
+
+  it("keeps the newest 2,000 lines", () => {
+    let state = initialStackStream;
+    for (let seq = 1; seq <= 2100; seq++) {
+      state = reduceStackStream(state, { type: "output", line: line(seq) });
+    }
+    expect(state.output).toHaveLength(2000);
+    expect(state.output[0]?.seq).toBe(101);
+    expect(state.output.at(-1)?.seq).toBe(2100);
+  });
+
+  it("completes its log from the done frame without losing a line", () => {
+    let state = reduceStackStream(initialStackStream, {
+      type: "snapshot",
+      job: job({ output: [line(1)] }),
+    });
+    state = reduceStackStream(state, { type: "output", line: line(2) });
+    state = reduceStackStream(state, {
+      type: "done",
+      job: job({ state: "done", output: [line(1), line(2), line(3)] }),
+    });
+    expect(state.output.map((l) => l.seq)).toEqual([1, 2, 3]);
+  });
+
+  it("forgets the log on reset", () => {
+    const state = reduceStackStream(initialStackStream, { type: "output", line: line(1) });
+    expect(reduceStackStream(state, { type: "reset" }).output).toEqual([]);
+  });
+});
+
 describe("the address", () => {
   it("names the job and puts the last event in the query", () => {
     expect(stackJobStreamUrl("e1", "s1", "j1")).toBe("/api/env/e1/stacks/s1/deploys/j1/stream");
@@ -173,6 +237,16 @@ describe("the connection", () => {
     src().sendFrame("done", job({ state: "done" }), "2");
     expect(frames.map((f) => f.type)).toEqual(["snapshot", "item", "done"]);
     expect(src().closed).toBe(true);
+  });
+
+  it("reports an output line with its sequence and resumes after it", async () => {
+    const { frames } = open();
+    src().sendFrame("snapshot", job());
+    src().sendFrame("output", line(9), "9");
+    expect(frames.at(-1)).toEqual({ type: "output", line: line(9) });
+    src().fail();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(src(1).url).toMatch(/\?lastEventId=9$/);
   });
 
   it("reconnects after 1, 2, 4 then 8 seconds, naming the last event it saw", async () => {

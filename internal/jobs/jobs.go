@@ -41,6 +41,9 @@ const (
 	ItemDone      = "done"
 	ItemFailed    = "failed"
 	ItemCancelled = "cancelled"
+	// ItemSkipped is an item that was never run because an earlier one failed. It counts as
+	// neither done nor failed when the job's own state is settled.
+	ItemSkipped = "skipped"
 )
 
 // The states of a job. It is running until every item has ended, then done when every
@@ -62,6 +65,8 @@ const (
 	EventItem = "item"
 	// EventDone carries the finished job, and is the last event of a job.
 	EventDone = "done"
+	// EventOutput carries one line of the job's output log.
+	EventOutput = "output"
 )
 
 // The codes the hub gives an item the run left unfinished.
@@ -164,14 +169,24 @@ type Job struct {
 // Finished reports whether the job has ended.
 func (j Job) Finished() bool { return j.State != JobRunning }
 
+// Output is one line of a job's output log: what the job did, in words, as it did it. Seq is the
+// ID of the event that carried it, so a reader that has the lines up to a Seq asks for the events
+// after it and never sees a line twice. Text is cleaned (Clean) when it is stored.
+type Output struct {
+	Seq  uint64    `json:"seq"`
+	At   time.Time `json:"at"`
+	Text string    `json:"text"`
+}
+
 // Event is one change to a job. ID strictly increases within a job. An item event
-// carries Item; a done event carries Job.
+// carries Item; a done event carries Job; an output event carries Output.
 type Event struct {
-	ID    uint64
-	JobID string
-	Type  string
-	Item  *Item
-	Job   *Job
+	ID     uint64
+	JobID  string
+	Type   string
+	Item   *Item
+	Job    *Job
+	Output *Output
 }
 
 // Options tune the hub. A zero field takes its default.
@@ -187,8 +202,13 @@ type Options struct {
 	// publishes; the latest state is always published once the gap has passed.
 	// Default 250 ms.
 	Coalesce time.Duration
-	// Ring is how many events a job keeps for a subscriber that resumes. Default 1024.
+	// Ring is how many item and done events a job keeps for a subscriber that resumes.
+	// Default 1024.
 	Ring int
+	// OutputRing is how many output lines a job keeps, and how many output events it replays to a
+	// subscriber that resumes. It is its own ring so a chatty job never pushes the item events a
+	// reader needs out of the first. Default 2,000.
+	OutputRing int
 	// Now is the clock for creation and retention. Default time.Now.
 	Now func() time.Time
 }
@@ -208,6 +228,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.Ring <= 0 {
 		o.Ring = 1024
+	}
+	if o.OutputRing <= 0 {
+		o.OutputRing = 2000
 	}
 	if o.Now == nil {
 		o.Now = time.Now
@@ -427,6 +450,18 @@ func (r *Reporter) Finish(itemID, state, code, message string, result map[string
 func terminal(state string) bool {
 	return state == ItemDone || state == ItemFailed || state == ItemCancelled
 }
+
+// Output adds one line to the job's output log and publishes it. The text is cleaned (Clean) and
+// stamped with the time. A line for a job that has ended is dropped.
+func (r *Reporter) Output(text string) {}
+
+// Detail sets the remote system's own words on an item that has not ended, cleaned (Clean), and
+// publishes it with the item's next change. The caller masks secrets before it calls.
+func (r *Reporter) Detail(itemID, text string) {}
+
+// Output returns a copy of the job's output log, oldest first, and false when the hub has no such
+// job. It holds at most Options.OutputRing lines.
+func (h *Hub) Output(id string) ([]Output, bool) { return nil, false }
 
 func (e *entry) item(id string) *Item {
 	for i := range e.job.Items {

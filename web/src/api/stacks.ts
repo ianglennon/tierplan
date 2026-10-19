@@ -35,6 +35,7 @@ export type StackDeployInput = components["schemas"]["StackDeployRequest"];
 export type StackDeployed = components["schemas"]["StackDeployBody"];
 export type StackJob = components["schemas"]["StackJobBody"];
 export type StackJobItem = components["schemas"]["StackJobItemBody"];
+export type StackJobOutputLine = components["schemas"]["StackJobOutputLine"];
 
 // The query key of an environment's stacks list, and of every read that extends it: one stack's
 // page is under it, so a change to the list refreshes the page too.

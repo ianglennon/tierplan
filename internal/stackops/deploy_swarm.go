@@ -101,6 +101,9 @@ type SwarmDeployInput struct {
 	Files  stacks.FileSet
 	Vars   map[string]string
 	Caller Caller
+	// Masker hides the stack's secret values in every text a remote system sent that the deploy puts
+	// in its job: an item's Detail and the output log. The zero Masker hides nothing.
+	Masker stacks.Masker
 	// Pins is where the pins of the stack's last good revision are read from and where this
 	// deploy's are stored, on the revision RevisionID. Nil means neither: the images are still
 	// pinned, and a service the engine lacks is looked up again.

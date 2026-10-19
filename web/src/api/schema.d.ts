@@ -8387,6 +8387,8 @@ export interface components {
              * @enum {string}
              */
             mode: "deploy" | "update";
+            /** @description The output log, oldest first: the newest 2,000 lines */
+            output: components["schemas"]["StackJobOutputLine"][] | null;
             /** @description The stack being deployed */
             stackId: string;
             /** @description Who started the deploy, as a name */
@@ -8433,6 +8435,17 @@ export interface components {
             total: number;
             /** @description What current and total count, or empty */
             unit: string;
+        };
+        StackJobOutputLine: {
+            /** @description When the line was written, RFC 3339 UTC */
+            at: string;
+            /**
+             * Format: int64
+             * @description The event ID that carried the line; it strictly increases
+             */
+            seq: number;
+            /** @description What the deploy did, or what the engine said, cleaned of control characters and clipped, with the stack's secret values hidden */
+            text: string;
         };
         StackListBody: {
             /** @description The environment's stacks by name */

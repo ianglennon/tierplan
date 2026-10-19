@@ -168,7 +168,7 @@ secrets:
 		t.Fatalf("result = %+v, want external_missing naming shared", res)
 	}
 	got := itemStates(job)
-	if got[stackops.ItemObjects] != "failed:external_missing" || got[stackops.ItemServices] != "cancelled:not_run" || got[stackops.ItemCleanup] != "cancelled:not_run" {
+	if got[stackops.ItemObjects] != "failed:external_missing" || got[stackops.ItemServices] != "skipped:not_run" || got[stackops.ItemCleanup] != "skipped:not_run" {
 		t.Errorf("items = %v", got)
 	}
 	if n := len(rig.fake.ServiceCreates()) + len(rig.fake.SecretCreates()); n != 0 {
@@ -227,7 +227,7 @@ func TestAReplacedSecretIsKeptWhenAServiceUpdateFails(t *testing.T) {
 	if res.OK() || res.FailedService != "web_web" {
 		t.Fatalf("result = %+v, want the service update to fail", res)
 	}
-	if got := itemStates(job); got[stackops.ItemCleanup] != "cancelled:not_run" {
+	if got := itemStates(job); got[stackops.ItemCleanup] != "skipped:not_run" {
 		t.Errorf("items = %v, the cleanup must not run after a failed update", got)
 	}
 	if n := countWrites(rig.fake.Writes(), "DELETE /secrets"); n != 0 {

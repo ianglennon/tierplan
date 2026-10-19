@@ -11890,6 +11890,16 @@
             ],
             "type": "string"
           },
+          "output": {
+            "description": "The output log, oldest first: the newest 2,000 lines",
+            "items": {
+              "$ref": "#/components/schemas/StackJobOutputLine"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "stackId": {
             "description": "The stack being deployed",
             "type": "string"
@@ -11918,7 +11928,8 @@
           "state",
           "createdAt",
           "finishedAt",
-          "items"
+          "items",
+          "output"
         ],
         "type": "object"
       },
@@ -12000,6 +12011,31 @@
           "total",
           "unit",
           "result"
+        ],
+        "type": "object"
+      },
+      "StackJobOutputLine": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "description": "When the line was written, RFC 3339 UTC",
+            "type": "string"
+          },
+          "seq": {
+            "description": "The event ID that carried the line; it strictly increases",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "text": {
+            "description": "What the deploy did, or what the engine said, cleaned of control characters and clipped, with the stack's secret values hidden",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "at",
+          "text"
         ],
         "type": "object"
       },

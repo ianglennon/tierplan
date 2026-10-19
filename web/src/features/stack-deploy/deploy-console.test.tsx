@@ -35,7 +35,14 @@ interface Item {
   total?: number;
 }
 
+interface Line {
+  seq: number;
+  at: string;
+  text: string;
+}
+
 let job: { state: string; items: Item[] };
+let output: Line[];
 let status: number;
 let reads: number;
 let client: QueryClient;
@@ -63,6 +70,7 @@ function jobBody(over: Partial<{ state: string; items: Item[] }> = {}) {
     createdAt: "2026-10-19T12:00:00Z",
     finishedAt: j.state === "running" ? "" : "2026-10-19T12:00:09Z",
     items: j.items.map(item),
+    output,
   };
 }
 
@@ -80,6 +88,7 @@ const row = (name: string, state: Item["state"], over: Partial<Item> = {}): Item
 
 beforeEach(() => {
   job = { state: "running", items: [check, lookup, services] };
+  output = [];
   status = 200;
   reads = 0;
   FakeEventSource.reset();
@@ -566,5 +575,318 @@ describe("a job that is not listed", () => {
     status = 200;
     fireEvent.click(screen.getByRole("button", { name: "Retry loading the deploy" }));
     expect(await screen.findByRole("heading", { name: "Deploying web" })).toBeTruthy();
+  });
+});
+
+const line = (seq: number, text: string, at = "2026-10-19T12:00:03Z"): Line => ({ seq, at, text });
+const CLOCK = /^\d{2}:\d{2}:\d{2} /;
+
+describe("the output", () => {
+  it("is collapsed while the deploy runs, with a trigger named Output", async () => {
+    output = [line(1, "Created network web_default")];
+    await mountLive(jobBody());
+    const trigger = screen.getByRole("button", { name: "Output" });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("log")).toBeNull();
+  });
+
+  it("stays collapsed after a deploy that worked", async () => {
+    job = { state: "done", items: [{ ...services, state: "done" }, row("api", "done")] };
+    output = [line(1, "Created service s1_api")];
+    mount();
+    await screen.findByText("Deploy complete");
+    expect(screen.getByRole("button", { name: "Output" }).getAttribute("aria-expanded")).toBe(
+      "false",
+    );
+    expect(screen.queryByRole("log")).toBeNull();
+  });
+
+  it("opens by itself when the deploy fails", async () => {
+    job = {
+      state: "failed",
+      items: [{ ...services, state: "failed" }, row("api", "failed", { code: "service_rejected" })],
+    };
+    output = [line(1, "Failed service s1_api: no such image")];
+    mount();
+    await screen.findByText("Deploy failed");
+    expect(screen.getByRole("button", { name: "Output" }).getAttribute("aria-expanded")).toBe(
+      "true",
+    );
+    expect(screen.getByRole("log")).toBeTruthy();
+  });
+
+  it("opens when the stream says the deploy failed, and a person can close it again", async () => {
+    await mountLive(jobBody({ items: [check, services, row("api", "running")] }));
+    expect(screen.queryByRole("log")).toBeNull();
+    act(() =>
+      source().sendFrame(
+        "done",
+        {
+          ...jobBody({
+            state: "failed",
+            items: [check, { ...services, state: "failed" }, row("api", "failed")],
+          }),
+          output: [line(2, "Failed service s1_api: no such image")],
+        },
+        "9",
+      ),
+    );
+    expect(screen.getByRole("log")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Output" }));
+    expect(screen.queryByRole("log")).toBeNull();
+  });
+
+  it("is a log region that does not announce, with each line as a time and its text", async () => {
+    output = [
+      line(1, "Created network web_default", "2026-10-19T12:00:03Z"),
+      line(2, "Created service s1_api", "2026-10-19T12:00:04Z"),
+    ];
+    await mountLive(jobBody());
+    fireEvent.click(screen.getByRole("button", { name: "Output" }));
+    const log = screen.getByRole("log", { name: "Output" });
+    expect(log.getAttribute("aria-live")).toBe("off");
+    const lines = (log.textContent ?? "").split("\n").filter(Boolean);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(CLOCK);
+    expect(lines[0]).toMatch(/ Created network web_default$/);
+    expect(lines[1]).toMatch(/ Created service s1_api$/);
+  });
+
+  it("adds a line an output frame brings, once, however often it is sent", async () => {
+    await mountLive(jobBody());
+    fireEvent.click(screen.getByRole("button", { name: "Output" }));
+    expect(screen.getByText("No output yet.")).toBeTruthy();
+    act(() => {
+      source().sendFrame("output", line(3, "Created network web_default"), "3");
+      source().sendFrame("output", line(3, "Created network web_default"), "3");
+    });
+    const log = screen.getByRole("log");
+    expect(log.textContent?.match(/Created network web_default/g)).toHaveLength(1);
+    expect(screen.queryByText("No output yet.")).toBeNull();
+  });
+
+  it("draws a line with markup in it, and a hidden secret, as text", async () => {
+    output = [line(1, "<b>TOKEN=<hidden></b>")];
+    await mountLive(jobBody());
+    fireEvent.click(screen.getByRole("button", { name: "Output" }));
+    const log = screen.getByRole("log");
+    expect(log.querySelector("b")).toBeNull();
+    expect(log.textContent).toContain("<b>TOKEN=<hidden></b>");
+  });
+
+  it("wraps long lines when asked to, and not otherwise", async () => {
+    output = [line(1, "x".repeat(300))];
+    await mountLive(jobBody());
+    fireEvent.click(screen.getByRole("button", { name: "Output" }));
+    const wrap = screen.getByRole("button", { name: "Wrap" });
+    expect(wrap.getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByRole("log").className).toContain("whitespace-pre");
+    expect(screen.getByRole("log").className).not.toContain("whitespace-pre-wrap");
+    fireEvent.click(wrap);
+    expect(wrap.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("log").className).toContain("whitespace-pre-wrap");
+  });
+
+  it("copies the output as it reads on the screen", async () => {
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    output = [line(1, "Created network web_default"), line(2, "Created service s1_api")];
+    await mountLive(jobBody());
+    fireEvent.click(screen.getByRole("button", { name: "Output" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy output" }));
+    expect(writeText).toHaveBeenCalledTimes(1);
+    const text = (writeText.mock.calls[0] as unknown as [string])[0];
+    expect(text.split("\n")).toHaveLength(2);
+    expect(text).toMatch(
+      /^\d{2}:\d{2}:\d{2} Created network web_default\n\d{2}:\d{2}:\d{2} Created service s1_api$/,
+    );
+  });
+});
+
+describe("why a service failed", () => {
+  const failedJob = (code: string, detail: string, message = ""): typeof job => ({
+    state: "partial",
+    items: [
+      check,
+      { ...services, state: "failed" },
+      row("api", "failed", { code, detail, message }),
+      row("web", "skipped", {
+        code: "not_run",
+        message: "Not run because an earlier step failed.",
+      }),
+    ],
+  });
+
+  it("starts the failed row open, with Docker's words under it", async () => {
+    job = failedJob(
+      "service_rejected",
+      "no such image: nginx:bad",
+      "The swarm rejected the service.",
+    );
+    mount();
+    await screen.findByText("Deploy failed");
+    const trigger = screen.getByRole("button", { name: /Show what happened to api/ });
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("Docker rejected api: no such image: nginx:bad")).toBeTruthy();
+  });
+
+  it("reads later services as Skipped", async () => {
+    job = failedJob("service_rejected", "no such image");
+    mount();
+    await screen.findByText("Deploy failed");
+    const rows = within(screen.getByRole("list", { name: "Services" })).getAllByRole("listitem");
+    expect(rows[1]?.textContent).toContain("Skipped");
+    expect(rows[1]?.textContent).toContain("web");
+    // A skipped row has nothing to open.
+    expect(within(rows[1] as HTMLElement).queryByRole("button")).toBeNull();
+  });
+
+  it("words another code with the server's sentence and Docker's words", async () => {
+    job = failedJob("agent_policy_denied", "denied by policy", "The agent refused the request.");
+    mount();
+    await screen.findByText("Deploy failed");
+    expect(screen.getAllByText("The agent refused the request.").length).toBeGreaterThan(0);
+    expect(screen.getByText("denied by policy")).toBeTruthy();
+  });
+
+  it("draws Docker's words as text, wrapped", async () => {
+    job = failedJob("service_rejected", "<script>alert(1)</script>".repeat(5));
+    mount();
+    await screen.findByText("Deploy failed");
+    const text = screen.getByText(/^Docker rejected api: <script>/);
+    expect(text.querySelector("script")).toBeNull();
+    expect(text.className).toContain("break-all");
+  });
+});
+
+describe("the result", () => {
+  it("offers Open stack and Open logs when the deploy worked", async () => {
+    job = { state: "done", items: [{ ...services, state: "done" }, row("api", "done")] };
+    mount();
+    await screen.findByText("Deploy complete");
+    expect(screen.getByRole("link", { name: "Open stack" }).getAttribute("href")).toBe(
+      "/env/e1/stacks/s1",
+    );
+    expect(screen.getByRole("link", { name: "Open logs" }).getAttribute("href")).toBe(
+      "/env/e1/stacks/s1/logs",
+    );
+  });
+
+  it("says where it stopped and how many services were updated, in an alert", async () => {
+    job = {
+      state: "partial",
+      items: [
+        check,
+        { ...services, state: "failed" },
+        row("api", "done"),
+        row("web", "failed", { code: "service_rejected", detail: "no such image" }),
+      ],
+    };
+    mount();
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("Deploy failed")).toBeTruthy();
+    expect(
+      within(alert).getByText(
+        "Bayplan stopped at web. 1 of 2 services were updated before it stopped, and nothing was rolled back.",
+      ),
+    ).toBeTruthy();
+    expect(within(alert).getByRole("link", { name: "Back to editing" })).toBeTruthy();
+  });
+});
+
+describe("the announcements", () => {
+  const spoken = () =>
+    Array.from(document.querySelectorAll('[data-slot="deploy-announcer"] p')).map(
+      (p) => p.textContent,
+    );
+
+  it("is one polite region, empty until something happens", async () => {
+    await mountLive(jobBody({ items: [check, services, row("api", "waiting")] }));
+    const region = document.querySelector('[data-slot="deploy-announcer"]');
+    expect(region?.getAttribute("aria-live")).toBe("polite");
+    expect(spoken()).toEqual([]);
+  });
+
+  it("announces a service that runs, a service that fails and the end, once each", async () => {
+    await mountLive(
+      jobBody({ items: [check, services, row("api", "waiting"), row("web", "waiting")] }),
+    );
+    act(() => {
+      source().sendFrame("item", item(row("api", "running")), "4");
+    });
+    expect(spoken()).toEqual([]); // working is not an outcome
+    act(() => {
+      source().sendFrame("item", item(row("api", "done")), "5");
+      source().sendFrame("item", item(row("api", "done")), "5");
+    });
+    act(() => {
+      source().sendFrame(
+        "item",
+        item(row("web", "failed", { code: "service_rejected", detail: "no such image" })),
+        "6",
+      );
+    });
+    act(() =>
+      source().sendFrame(
+        "done",
+        jobBody({
+          state: "partial",
+          items: [
+            check,
+            { ...services, state: "failed" },
+            row("api", "done"),
+            row("web", "failed", { code: "service_rejected", detail: "no such image" }),
+          ],
+        }),
+        "7",
+      ),
+    );
+    expect(spoken()).toEqual(["api is running", "web failed: no such image", "Deploy failed"]);
+  });
+
+  it("announces Deploy complete and Deploy cancelled", async () => {
+    await mountLive(jobBody({ items: [check, services, row("api", "running")] }));
+    act(() =>
+      source().sendFrame(
+        "done",
+        jobBody({
+          state: "done",
+          items: [check, { ...services, state: "done" }, row("api", "done")],
+        }),
+        "8",
+      ),
+    );
+    expect(spoken()).toEqual(["api is running", "Deploy complete"]);
+    cleanup();
+    FakeEventSource.reset();
+    await mountLive(jobBody({ items: [check, services, row("api", "running")] }));
+    act(() =>
+      source().sendFrame(
+        "done",
+        jobBody({
+          state: "cancelled",
+          items: [check, { ...services, state: "cancelled" }, row("api", "cancelled")],
+        }),
+        "8",
+      ),
+    );
+    expect(spoken()).toEqual(["Deploy cancelled"]);
+  });
+
+  it("says nothing about a deploy that had already ended when the console opened", async () => {
+    job = { state: "done", items: [{ ...services, state: "done" }, row("api", "done")] };
+    mount();
+    await screen.findByText("Deploy complete");
+    expect(spoken()).toEqual([]);
+  });
+
+  it("does not move the focus when it announces", async () => {
+    await mountLive(jobBody({ items: [check, services, row("api", "waiting")] }));
+    const title = screen.getByRole("heading", { name: "Deploying web" });
+    expect(document.activeElement).toBe(title);
+    act(() => {
+      source().sendFrame("item", item(row("api", "done")), "5");
+    });
+    expect(document.activeElement).toBe(title);
   });
 });

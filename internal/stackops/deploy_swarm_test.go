@@ -6,6 +6,7 @@ package stackops_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"maps"
 	"reflect"
@@ -227,7 +228,7 @@ func TestDeploySwarmRefusesANameAnotherStackOwns(t *testing.T) {
 	if res.Code != stackops.CodeNameClash {
 		t.Fatalf("result = %+v, want stack_name_clash", res)
 	}
-	if got := itemStates(job); got[stackops.ItemCheck] != "failed:stack_name_clash" || got[stackops.ItemNetworks] != "cancelled:not_run" || got[stackops.ItemServices] != "cancelled:not_run" {
+	if got := itemStates(job); got[stackops.ItemCheck] != "failed:stack_name_clash" || got[stackops.ItemNetworks] != "skipped:not_run" || got[stackops.ItemServices] != "skipped:not_run" {
 		t.Errorf("items = %v", got)
 	}
 	if w := rig.fake.Writes(); len(w) != 0 {
@@ -578,7 +579,7 @@ func TestExternalNetworkMustExist(t *testing.T) {
 			continue
 		}
 		got := itemStates(job)
-		if got[stackops.ItemCheck] != "done" || got[stackops.ItemNetworks] != "failed:"+tc.code || got[stackops.ItemObjects] != "cancelled:not_run" {
+		if got[stackops.ItemCheck] != "done" || got[stackops.ItemNetworks] != "failed:"+tc.code || got[stackops.ItemObjects] != "skipped:not_run" {
 			t.Errorf("%s: items = %v, want the networks step to stop the deploy", tc.name, got)
 		}
 		if w := rig.fake.Writes(); len(w) != 0 {
@@ -654,7 +655,7 @@ func TestUndeclaredServiceIsKeptWhenAnUpdateFails(t *testing.T) {
 	if n := countWrites(rig.fake.Writes(), "DELETE"); n != 0 {
 		t.Errorf("writes = %v, nothing may be removed after a failed update", rig.fake.Writes())
 	}
-	if got := itemStates(job); got[stackops.ItemCleanup] != "cancelled:not_run" {
+	if got := itemStates(job); got[stackops.ItemCleanup] != "skipped:not_run" {
 		t.Errorf("items = %v", got)
 	}
 }
@@ -863,7 +864,7 @@ func TestADeployStopsAtTheLookupWhenAnImageCannotBePinned(t *testing.T) {
 		t.Fatalf("result = %+v, want image_unresolved at site_web", res)
 	}
 	got := itemStates(job)
-	if got[stackops.ItemCheck] != "done" || got[stackops.ItemLookup] != "failed:image_unresolved" || got[stackops.ItemNetworks] != "cancelled:not_run" {
+	if got[stackops.ItemCheck] != "done" || got[stackops.ItemLookup] != "failed:image_unresolved" || got[stackops.ItemNetworks] != "skipped:not_run" {
 		t.Errorf("items = %v", got)
 	}
 	if w := rig.fake.Writes(); len(w) != 0 {
@@ -909,7 +910,7 @@ func TestPinDeployStopsAtTheLookupNamingTheHostAndTheServiceAndWritesNothing(t *
 		t.Fatalf("result = %+v, want registry_unreachable at site_app", res)
 	}
 	got := itemStates(job)
-	if got[stackops.ItemCheck] != "done" || got[stackops.ItemLookup] != "failed:registry_unreachable" || got[stackops.ItemNetworks] != "cancelled:not_run" {
+	if got[stackops.ItemCheck] != "done" || got[stackops.ItemLookup] != "failed:registry_unreachable" || got[stackops.ItemNetworks] != "skipped:not_run" {
 		t.Errorf("items = %v, want the deploy to stop at the lookup", got)
 	}
 	for _, it := range job.Items {
@@ -1105,10 +1106,139 @@ func TestDeploySwarmEndsTheServiceThatFailedAndLeavesTheRestNotRun(t *testing.T)
 	if first == "web_web" {
 		second = "service:web_api"
 	}
-	if got["service:"+first] != "failed:service_rejected" || got[second] != "cancelled:not_run" {
+	if got["service:"+first] != "failed:service_rejected" || got[second] != "skipped:not_run" {
 		t.Errorf("service rows = %v, want %s failed and %s not run", got, first, second)
 	}
 	if got["network:web_default"] != "done" {
 		t.Errorf("network step = %q, want done: it was created before the failure", got["network:web_default"])
+	}
+}
+
+// The words of the console (plan 07-17, STK-07): what the deploy wrote, and what Docker said.
+
+// outputOf reads the output log of a job as plain lines.
+func outputOf(t *testing.T, rig *swarmRig, j jobs.Job) []string {
+	t.Helper()
+	lines, ok := rig.hub.Output(j.ID)
+	if !ok {
+		t.Fatalf("the hub has no job %s", j.ID)
+	}
+	out := make([]string, 0, len(lines))
+	for _, l := range lines {
+		out = append(out, l.Text)
+	}
+	return out
+}
+
+func TestDeploySwarmWritesOneOutputLineForEachWrite(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	_, in := stackInput(t, "web", consoleCompose, nil)
+	_, job := rig.deploy(t, in)
+	full := hashedName("web", "conf", "listen 80;")
+	want := []string{"Created network web_default", "Created config " + full, "Created service web_api", "Created service web_web"}
+	if got := outputOf(t, rig, job); !slices.Equal(got, want) {
+		t.Errorf("output = %q, want %q", got, want)
+	}
+}
+
+func TestDeploySwarmWritesUpdatedAndRemovedLines(t *testing.T) {
+	t.Parallel()
+	owned := map[string]string{"com.docker.stack.namespace": "tracer", "bayplan.stack.id": "stack-tracer"}
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		c.Networks = []dockertest.FakeNetwork{{ID: "n1", Name: "tracer_default", Driver: "overlay", Scope: "swarm", Labels: owned}}
+	},
+		dockertest.FakeService{ID: "svc-web", Name: "tracer_web", Mode: "replicated", Image: "nginx:1.26", Version: 7, Labels: owned},
+		dockertest.FakeService{ID: "svc-old", Name: "tracer_old", Mode: "replicated", Image: "busybox:1", Version: 3, Labels: owned},
+	)
+	_, in := starterPlan(t, "tracer")
+	_, job := rig.deploy(t, in)
+	want := []string{"Updated service tracer_web", "Removed service tracer_old"}
+	if got := outputOf(t, rig, job); !slices.Equal(got, want) {
+		t.Errorf("output = %q, want %q", got, want)
+	}
+}
+
+func TestDeploySwarmPutsDockersWordsOnTheFailedServiceMaskedAndCleaned(t *testing.T) {
+	t.Parallel()
+	const secret = "s3cret-token-value"
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		c.ServiceCreateError = "rpc error: code = InvalidArgument\x1b[0m desc = bad env TOKEN=" + secret
+	})
+	const compose = "services:\n  api:\n    image: busybox:1.36\n    environment:\n      TOKEN: ${TOKEN}\n"
+	vars := []stacks.Var{{Name: "TOKEN", Value: secret, Secret: true}}
+	_, in := stackInput(t, "web", compose, nil, vars...)
+	in.Masker = stacks.NewMasker(vars, nil)
+	res, job := rig.deploy(t, in)
+	if res.Code != stackops.CodeServiceRejected {
+		t.Fatalf("result = %+v, want service_rejected", res)
+	}
+	row := itemByID(t, job, "service:web_api")
+	const want = "rpc error: code = InvalidArgument[0m desc = bad env TOKEN=<hidden>"
+	if row.State != jobs.ItemFailed || row.Code != stackops.CodeServiceRejected || !strings.Contains(row.Detail, want) {
+		t.Errorf("service row = %+v, want it failed with Docker's words (masked, cleaned) in its detail", row)
+	}
+	if row.Message != stackops.CodeMessage(stackops.CodeServiceRejected) {
+		t.Errorf("service message = %q, want the sentence for the code, never Docker's words", row.Message)
+	}
+	if got := itemByID(t, job, stackops.ItemServices).Detail; got != "" {
+		t.Errorf("services step detail = %q, want none: the row carries Docker's words", got)
+	}
+	out := strings.Join(outputOf(t, rig, job), "\n")
+	if !strings.Contains(out, "Failed service web_api: ") || !strings.Contains(out, "TOKEN=<hidden>") {
+		t.Errorf("output = %q, want a failure line with Docker's words, masked", out)
+	}
+	raw, err := json.Marshal(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out+string(raw), secret) {
+		t.Error("the secret reached the job or its output")
+	}
+}
+
+func TestDeploySwarmMasksTheWordsOfAFailedSecretToo(t *testing.T) {
+	t.Parallel()
+	const secret = "correct-horse-battery-staple"
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) { c.WriteError = "engine said: " + secret })
+	vars := []stacks.Var{}
+	files := tokFile(secret)
+	_, in := stackInput(t, "web", tokCompose, files, vars...)
+	in.Masker = stacks.NewMasker(vars, files)
+	res, job := rig.deploy(t, in)
+	if res.OK() {
+		t.Fatal("a deploy against a failing engine succeeded")
+	}
+	raw, err := json.Marshal(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := strings.Join(outputOf(t, rig, job), "\n")
+	if strings.Contains(out+string(raw), secret) {
+		t.Errorf("the secret reached the job or its output: %s\n%s", raw, out)
+	}
+	if !strings.Contains(string(raw), "engine said: <hidden>") {
+		t.Errorf("job = %s, want the engine's words with the secret hidden in a detail", raw)
+	}
+}
+
+func TestDeploySwarmSkipsTheStepsAndServicesAfterAFailure(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) { c.ServiceCreateError = "no such image" })
+	_, in := stackInput(t, "web", consoleCompose, nil)
+	res, job := rig.deploy(t, in)
+	if res.Code != stackops.CodeServiceRejected {
+		t.Fatalf("result = %+v", res)
+	}
+	got := itemStates(job)
+	first, second := res.FailedService, "service:web_web"
+	if first == "web_web" {
+		second = "service:web_api"
+	}
+	if got["service:"+first] != "failed:service_rejected" || got[second] != "skipped:not_run" || got[stackops.ItemCleanup] != "skipped:not_run" {
+		t.Errorf("items = %v, want %s failed, %s and the cleanup skipped", got, first, second)
+	}
+	if job.State != jobs.JobPartial {
+		t.Errorf("job = %s, want partial: the check and the network were done", job.State)
 	}
 }

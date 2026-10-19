@@ -22,6 +22,7 @@ import {
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useEnvName } from "@/features/resources/use-env-name";
+import { DeployOutput } from "@/features/stack-deploy/deploy-output";
 import { DeployResult, servicesOf } from "@/features/stack-deploy/deploy-result";
 import { DeployStepList } from "@/features/stack-deploy/deploy-step-list";
 import { useStackJob } from "@/features/stack-deploy/stack-job-stream";
@@ -195,6 +196,10 @@ export function DeployConsole({ envId, stackId, jobId }: DeployConsoleProps) {
       </div>
       <DeployProgress job={job} />
       <DeployStepList items={job.items ?? []} />
+      <DeployOutput
+        lines={follow.output}
+        failed={job.state === "failed" || job.state === "partial"}
+      />
       <div className="flex flex-col gap-3">
         <DeployResult job={job} envId={envId} stackId={stackId} name={name} envName={envName} />
       </div>

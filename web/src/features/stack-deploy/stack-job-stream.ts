@@ -11,6 +11,7 @@ import {
   JOB_REFETCH_MS,
   type StackJob,
   type StackJobItem,
+  type StackJobOutputLine,
   stackJobQuery,
 } from "@/api/stacks";
 import type { EventSourceLike } from "@/features/dashboard/events";
@@ -23,6 +24,8 @@ export type StackStreamStatus = "connecting" | "live" | "reconnecting" | "closed
 
 export interface StackStreamState {
   job?: StackJob;
+  // The output log, oldest first, one line for each sequence number.
+  output: StackJobOutputLine[];
   status: StackStreamStatus;
   // The job has ended: the server said done, or sent a snapshot of a job that had.
   finished: boolean;
@@ -33,6 +36,7 @@ export interface StackStreamState {
 }
 
 export const initialStackStream: StackStreamState = {
+  output: [],
   status: "connecting",
   finished: false,
   gone: false,
@@ -43,6 +47,7 @@ export const initialStackStream: StackStreamState = {
 export type StackFrame =
   | { type: "snapshot"; job: StackJob }
   | { type: "item"; item: StackJobItem }
+  | { type: "output"; line: StackJobOutputLine }
   | { type: "done"; job: StackJob }
   // The whole job, read over HTTP while the stream is not live.
   | { type: "polled"; job: StackJob }
@@ -81,6 +86,8 @@ export function reduceStackStream(state: StackStreamState, frame: StackFrame): S
         },
       };
     }
+    case "output":
+      return state;
     case "done":
       return { ...state, job: frame.job, status: "closed", finished: true };
     case "polled":

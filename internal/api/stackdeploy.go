@@ -89,16 +89,24 @@ type StackJobItemBody struct {
 	Result  map[string]string `json:"result" doc:"What a finished step produced, like the counts of services created and updated"`
 }
 
+// StackJobOutputLine is one line of a deploy's output log.
+type StackJobOutputLine struct {
+	Seq  uint64 `json:"seq" doc:"The event ID that carried the line; it strictly increases"`
+	At   string `json:"at" doc:"When the line was written, RFC 3339 UTC"`
+	Text string `json:"text" doc:"What the deploy did, or what the engine said, cleaned of control characters and clipped, with the stack's secret values hidden"`
+}
+
 // StackJobBody is a deploy job.
 type StackJobBody struct {
-	ID         string             `json:"id" doc:"The job ID"`
-	StackID    string             `json:"stackId" doc:"The stack being deployed"`
-	Mode       string             `json:"mode" enum:"deploy,update" doc:"What the operation is"`
-	StartedBy  string             `json:"startedBy" doc:"Who started the deploy, as a name"`
-	State      string             `json:"state" enum:"running,done,partial,failed,cancelled" doc:"running until every step has ended, then done when every step is"`
-	CreatedAt  string             `json:"createdAt" doc:"When the job started, RFC 3339 UTC"`
-	FinishedAt string             `json:"finishedAt" doc:"When the job ended, RFC 3339 UTC, empty while it runs"`
-	Items      []StackJobItemBody `json:"items" doc:"The steps and services, in the order they were added. Read the steps in run order by following parent: a top-level step, then its children"`
+	ID         string               `json:"id" doc:"The job ID"`
+	StackID    string               `json:"stackId" doc:"The stack being deployed"`
+	Mode       string               `json:"mode" enum:"deploy,update" doc:"What the operation is"`
+	StartedBy  string               `json:"startedBy" doc:"Who started the deploy, as a name"`
+	State      string               `json:"state" enum:"running,done,partial,failed,cancelled" doc:"running until every step has ended, then done when every step is"`
+	CreatedAt  string               `json:"createdAt" doc:"When the job started, RFC 3339 UTC"`
+	FinishedAt string               `json:"finishedAt" doc:"When the job ended, RFC 3339 UTC, empty while it runs"`
+	Items      []StackJobItemBody   `json:"items" doc:"The steps and services, in the order they were added. Read the steps in run order by following parent: a top-level step, then its children"`
+	Output     []StackJobOutputLine `json:"output" doc:"The output log, oldest first: the newest 2,000 lines"`
 }
 
 // StackJobOutput wraps StackJobBody for huma.
@@ -176,13 +184,13 @@ func serveStackJobStream(w http.ResponseWriter, req *http.Request, d StacksDeps,
 		Hub: d.Jobs, JobID: jobID, Key: string(p.Type) + ":" + p.ID, Limiter: lim, What: "deploy",
 		GoneType: problemStackJobNotFound, GoneDetail: stackJobGone, TooManyType: problemTooManyStreams,
 		Heartbeat: d.Heartbeat, MaxLifetime: d.MaxLifetime, Log: d.Log,
-		Snapshot: func(j jobs.Job) any { return stackJobBody(j) },
+		Snapshot: func(j jobs.Job) any { return stackJobBody(j, outputOf(d.Jobs, j.ID)) },
 		Encode: func(ev jobs.Event) (any, bool) {
 			switch {
 			case ev.Type == jobs.EventItem && ev.Item != nil:
 				return stackJobItemBody(*ev.Item), true
 			case ev.Type == jobs.EventDone && ev.Job != nil:
-				return stackJobBody(*ev.Job), true
+				return stackJobBody(*ev.Job, outputOf(d.Jobs, ev.Job.ID)), true
 			}
 			return nil, false
 		},
@@ -561,18 +569,28 @@ func getStackJob(ctx context.Context, d StacksDeps, in *StackJobPathInput) (*Sta
 	if !ok || !stackJobOf(job, in.EnvID, in.StackID) {
 		return nil, httpx.Problem(http.StatusNotFound, problemStackJobNotFound, "This deploy is no longer here. Deploys are kept for 10 minutes after they end.")
 	}
-	return &StackJobOutput{CacheControl: "no-store", Body: stackJobBody(job)}, nil
+	return &StackJobOutput{CacheControl: "no-store", Body: stackJobBody(job, outputOf(d.Jobs, job.ID))}, nil
 }
 
-func stackJobBody(j jobs.Job) StackJobBody {
+func stackJobBody(j jobs.Job, output []jobs.Output) StackJobBody {
 	b := StackJobBody{
 		ID: j.ID, StackID: j.Meta[metaStackID], Mode: j.Meta[metaMode], StartedBy: j.Meta[metaStartedBy], State: j.State,
 		CreatedAt: rfc3339(j.CreatedAt), FinishedAt: rfc3339(j.FinishedAt), Items: make([]StackJobItemBody, 0, len(j.Items)),
+		Output: make([]StackJobOutputLine, 0, len(output)),
 	}
 	for _, it := range j.Items {
 		b.Items = append(b.Items, stackJobItemBody(it))
 	}
+	for _, o := range output {
+		b.Output = append(b.Output, StackJobOutputLine{Seq: o.Seq, At: rfc3339(o.At), Text: o.Text})
+	}
 	return b
+}
+
+// outputOf is the output log of a job, empty when the hub no longer has it.
+func outputOf(hub *jobs.Hub, id string) []jobs.Output {
+	out, _ := hub.Output(id)
+	return out
 }
 
 func stackJobItemBody(it jobs.Item) StackJobItemBody {
