@@ -383,6 +383,16 @@ describe("under 768px", () => {
     expect(onSelect).toHaveBeenCalledWith("config/nginx.conf");
   });
 
+  it("says in the select which file the compose file does not use", () => {
+    setup({ unused: new Set([".env"]) });
+    const select = screen.getByRole("combobox", { name: "File" }) as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
+      "compose.yaml",
+      ".env (Not used)",
+      "config/nginx.conf",
+    ]);
+  });
+
   it("keeps the actions of the open file beside the select", () => {
     setup({ selected: ".env" });
     const mobile = screen.getByTestId("file-select");

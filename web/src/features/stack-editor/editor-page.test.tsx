@@ -998,6 +998,26 @@ describe("the Problems panel", () => {
     expect(header.getAttribute("aria-expanded")).toBe("false");
   });
 
+  it("labels a file the compose file does not use as Not used in the rail", async () => {
+    server.draft = () =>
+      Response.json(
+        draftBody({
+          files: [
+            { path: ".env", content: "A=1\n", secret: false },
+            { path: "compose.yaml", content: COMPOSE, secret: false },
+          ],
+        }),
+      );
+    server.check = () => Response.json({ problems: [], unusedFiles: [".env"] });
+    mount();
+    await ready();
+    const row = document.querySelector<HTMLElement>('[data-file=".env"]');
+    if (!row) throw new Error("no row for .env");
+    await waitFor(() => expect(within(row).getByText("Not used")).toBeTruthy());
+    const compose = document.querySelector<HTMLElement>('[data-file="compose.yaml"]');
+    expect(within(compose as HTMLElement).queryByText("Not used")).toBeNull();
+  });
+
   it("checks again after a save", async () => {
     mount();
     await ready();

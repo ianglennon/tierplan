@@ -4,7 +4,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useBlocker } from "@tanstack/react-router";
 import { CircleX, TriangleAlert } from "lucide-react";
-import { type KeyboardEvent, useEffect, useReducer, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Trans } from "react-i18next";
 
 import {
@@ -109,6 +109,7 @@ export function StackEditorPage({ envId, stackId, file, onFileChange }: StackEdi
   const copyRef = useRef(copy);
   copyRef.current = copy;
   const check = useStackCheck(envId, stackId, copy);
+  const unused = useMemo(() => new Set(check.unusedFiles), [check.unusedFiles]);
   const editor = useRef<FileEditorHandle>(null);
   // A click on a problem: the file to open and where to put the cursor once its editor is there.
   const [jump, setJump] = useState<{ file: string; line: number; col: number } | null>(null);
@@ -338,6 +339,7 @@ export function StackEditorPage({ envId, stackId, file, onFileChange }: StackEdi
             files={copy.files}
             selected={copy.selected}
             readOnly={!canEdit}
+            unused={unused}
             onSelect={selectFile}
             onAdd={addFile}
             onRename={renameFile}

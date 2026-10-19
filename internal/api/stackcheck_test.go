@@ -6,6 +6,7 @@ package api_test
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -132,5 +133,44 @@ func TestCheckRefusesWhatSaveRefuses(t *testing.T) {
 	_, code, _ = admin.check("no-such-stack", checkBody("services: {}\n"))
 	if code != http.StatusNotFound {
 		t.Errorf("a stack that is not there: %d, want 404", code)
+	}
+}
+
+func TestCheckRefusesWhatNamesAFileOfTheServerAndListsUnusedFiles(t *testing.T) {
+	t.Parallel()
+	f, e := actionsEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "files")
+
+	// include, an env_file outside the stack and a secret file of the server's disk are each a
+	// blocking problem at their line, and nothing is read.
+	const hostile = "include:\n  - /etc/hostname\nservices:\n  web:\n    image: nginx\n    env_file: /proc/self/environ\nsecrets:\n  s:\n    file: /etc/shadow\n"
+	answer, code, raw := admin.check(st.ID, checkBody(hostile))
+	if code != http.StatusOK {
+		t.Fatalf("check: %d %s", code, raw)
+	}
+	type at struct {
+		code string
+		line int
+	}
+	var got []at
+	for _, p := range answer.Problems {
+		got = append(got, at{p.Code, p.Line})
+		if p.Severity != "error" || p.File != "compose.yaml" {
+			t.Errorf("problem = %+v, want an error in compose.yaml", p)
+		}
+	}
+	if want := []at{{"include_unsupported", 1}, {"path_illegal", 6}, {"path_illegal", 9}}; !slices.Equal(got, want) {
+		t.Errorf("problems = %v, want %v", got, want)
+	}
+
+	// A file the compose file refers to is used; one it never mentions is listed.
+	answer, code, raw = admin.check(st.ID, checkBody("services:\n  web:\n    image: nginx\n    env_file: app.env\n",
+		draftFile{Path: "app.env", Content: "A=1\n"}, draftFile{Path: "notes.txt"}))
+	if code != http.StatusOK || len(answer.Problems) != 0 {
+		t.Fatalf("check: %d %s", code, raw)
+	}
+	if len(answer.UnusedFiles) != 1 || answer.UnusedFiles[0] != "notes.txt" {
+		t.Errorf("unusedFiles = %v, want [notes.txt]", answer.UnusedFiles)
 	}
 }

@@ -20,7 +20,7 @@ func FuzzPrescan(f *testing.F) {
 		f.Fatal(err)
 	}
 	for _, path := range paths {
-		content, err := os.ReadFile(path)
+		content, err := os.ReadFile(path) //nolint:gosec // a file of the hostile corpus under testdata
 		if err != nil {
 			f.Fatal(err)
 		}

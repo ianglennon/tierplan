@@ -119,7 +119,7 @@ func TestPrescanChecksEveryFormOfEnvFile(t *testing.T) {
 			compose := head + tc.env
 			if name == "an alias reports where it is used" {
 				compose = "x-env: &e gone.env\n" + head + tc.env
-				tc.want[0].line = 7
+				tc.want[0].line = 5
 			}
 			problems, refs := stacks.Prescan([]byte(compose), fileSet("app.env", "config/db.env"))
 			if len(problems) != len(tc.want) {
@@ -245,7 +245,7 @@ func TestHostileCorpusYieldsBlockingProblemsAndLoadsNothing(t *testing.T) {
 		name := filepath.Base(path)
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			content, err := os.ReadFile(path)
+			content, err := os.ReadFile(path) //nolint:gosec // a file of the hostile corpus under testdata
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -48,12 +49,23 @@ func Check(ctx context.Context, in CheckInput) CheckResult {
 		return res
 	}
 	idx, parseErr := parseIndex(content)
+	if parseErr == nil {
+		// The raw YAML is judged before the loader sees it: a file that names a file of the
+		// server, or that is too complex to read, is refused here and never loaded.
+		found, refs := Prescan(content, NewFileSet(in.Copy.Files))
+		res.UnusedFiles = unusedFiles(in.Copy.Files, refs)
+		if found.Errors() > 0 {
+			res.Problems = found.Sorted()
+			return res
+		}
+		res.Problems = found
+	}
 	loaded, err := Load(ctx, LoadInput(in))
 	if err != nil {
 		// compose-go says where a syntax error is better than the parser used for positions does
 		// (it names the line the parser stopped at, not the line the block started on), so its
 		// text is used whenever it refused the file too.
-		res.Problems = loadProblems(err, idx).Sorted()
+		res.Problems = append(res.Problems, loadProblems(err, idx)...).Sorted()
 		return res
 	}
 	if parseErr != nil {
@@ -65,6 +77,24 @@ func Check(ctx context.Context, in CheckInput) CheckResult {
 	res.Loaded = loaded
 	res.Problems = res.Problems.Sorted()
 	return res
+}
+
+// unusedFiles are the paths of files that refs does not name, sorted. compose.yaml is the file
+// everything else is referred to from, so it is never unused.
+func unusedFiles(files []File, refs []string) []string {
+	used := make(map[string]struct{}, len(refs)+1)
+	used[ComposeFile] = struct{}{}
+	for _, r := range refs {
+		used[r] = struct{}{}
+	}
+	out := []string{}
+	for _, f := range files {
+		if _, ok := used[f.Path]; !ok {
+			out = append(out, f.Path)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // index is the positions of a compose file's keys, read from the stored bytes. It is the only

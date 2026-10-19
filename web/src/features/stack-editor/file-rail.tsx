@@ -48,8 +48,8 @@ export interface FileRailProps {
   selected: string;
   // A Viewer reads the files and changes none.
   readOnly: boolean;
-  // Paths the compose file does not refer to, which get the muted "Not used" label. Filled by the
-  // lint (plan 07-06); none until then.
+  // Paths the compose file does not refer to, which get the muted "Not used" label. The server's
+  // check names them (plan 07-06); none until it has answered.
   unused?: ReadonlySet<string>;
   onSelect: (path: string) => void;
   onAdd: (path: string, content?: string) => void;
@@ -146,7 +146,7 @@ export function FileRail({
             >
               {files.map((f) => (
                 <option key={f.path} value={f.path}>
-                  {f.path}
+                  {unused?.has(f.path) ? `${f.path} (${t("stackEditor.rail.notUsed")})` : f.path}
                 </option>
               ))}
             </select>
