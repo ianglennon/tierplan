@@ -38,6 +38,7 @@ const (
 	problemVariableNameTaken   = "variable_name_taken"
 	problemSecretTooShort      = "secret_too_short"
 	problemVariableNotFound    = "variable_not_found"
+	problemFileNotFound        = "file_not_found"
 	problemStackPlaceholder    = "stack_placeholder_without_value"
 	problemFilePathInvalid     = "file_path_invalid"
 	problemFileNameTaken       = "file_name_taken"

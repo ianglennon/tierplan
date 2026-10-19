@@ -575,7 +575,7 @@ func TestSetPinsRefusesARevisionThatDoesNotExistAndADraft(t *testing.T) {
 // Secret stack files (plan 07-13, STK-04, UI-SPEC Defaults 6): a file the compose file uses under
 // secrets: is stored sealed, and stays sealed until the file is deleted.
 
-const secretsCompose = "services:\n  web:\n    image: nginx:1.27\nsecrets:\n  tok:\n    file: tok.txt\n"
+const composeWithTokFile = "services:\n  web:\n    image: nginx:1.27\nsecrets:\n  tok:\n    file: tok.txt\n"
 
 func filesOf(compose string, extra ...stacks.File) stacks.WorkingCopy {
 	return stacks.WorkingCopy{Files: append([]stacks.File{{Path: stacks.ComposeFile, Content: []byte(compose)}}, extra...)}
@@ -601,7 +601,7 @@ func TestSavingADraftSealsAFileTheComposeFileUsesAsASecret(t *testing.T) {
 	st, draft, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", filesOf("services: {}\n"))
 
 	// The browser sends tok.txt as a plain file; the server decides it is secret from the reference.
-	saved, changed, err := f.repo.SaveDraft(ctx, st.ID, 1, "ada", filesOf(secretsCompose,
+	saved, changed, err := f.repo.SaveDraft(ctx, st.ID, 1, "ada", filesOf(composeWithTokFile,
 		stacks.File{Path: "tok.txt", Content: []byte("TOP-SECRET-TOKEN")},
 		stacks.File{Path: "notes.txt", Content: []byte("visible notes")}))
 	if err != nil || !changed {
@@ -633,8 +633,8 @@ func TestAFileStaysSecretWhenTheReferenceIsRemovedUntilItIsDeleted(t *testing.T)
 	t.Parallel()
 	f := newRepo(t)
 	ctx := context.Background()
-	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", filesOf(secretsCompose, stacks.File{Path: "tok.txt", Content: []byte("TOP-SECRET-TOKEN")}))
-	first, _, err := f.repo.SaveDraft(ctx, st.ID, 1, "ada", filesOf(secretsCompose, stacks.File{Path: "tok.txt", Content: []byte("TOP-SECRET-TOKEN")}))
+	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", filesOf(composeWithTokFile, stacks.File{Path: "tok.txt", Content: []byte("TOP-SECRET-TOKEN")}))
+	first, _, err := f.repo.SaveDraft(ctx, st.ID, 1, "ada", filesOf(composeWithTokFile, stacks.File{Path: "tok.txt", Content: []byte("TOP-SECRET-TOKEN")}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -670,7 +670,7 @@ func TestSavingTheSameSecretFileAgainChangesNothing(t *testing.T) {
 	f := newRepo(t)
 	ctx := context.Background()
 	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", filesOf("services: {}\n"))
-	copy := filesOf(secretsCompose, stacks.File{Path: "tok.txt", Content: []byte("TOP-SECRET-TOKEN")})
+	copy := filesOf(composeWithTokFile, stacks.File{Path: "tok.txt", Content: []byte("TOP-SECRET-TOKEN")})
 	first, changed, err := f.repo.SaveDraft(ctx, st.ID, 1, "ada", copy)
 	if err != nil || !changed {
 		t.Fatalf("first save = %v, %v", changed, err)
@@ -687,7 +687,7 @@ func TestARevisionKeepsASecretFileSealedUnderItsOwnRow(t *testing.T) {
 	f := newRepo(t)
 	ctx := context.Background()
 	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", filesOf("services: {}\n"))
-	if _, _, err := f.repo.SaveDraft(ctx, st.ID, 1, "ada", filesOf(secretsCompose, stacks.File{Path: "tok.txt", Content: []byte("TOP-SECRET-TOKEN")})); err != nil {
+	if _, _, err := f.repo.SaveDraft(ctx, st.ID, 1, "ada", filesOf(composeWithTokFile, stacks.File{Path: "tok.txt", Content: []byte("TOP-SECRET-TOKEN")})); err != nil {
 		t.Fatal(err)
 	}
 	rev, err := f.repo.NewRevision(ctx, st.ID, "ada")

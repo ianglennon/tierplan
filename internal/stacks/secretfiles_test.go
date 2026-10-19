@@ -43,10 +43,10 @@ func TestSecretFilesFollowsAnAnchorAndNamesNoPathAStackCouldNotHave(t *testing.T
 func TestSecretFilesOfTextThatIsNotAComposeFileIsNone(t *testing.T) {
 	t.Parallel()
 	for name, compose := range map[string]string{
-		"empty":         "",
-		"not yaml":      "secrets: [\n",
-		"no secrets":    "services:\n  web:\n    image: nginx\n",
-		"a scalar root": "hello\n",
+		"empty":           "",
+		"not yaml":        "secrets: [\n",
+		"no such section": "services:\n  web:\n    image: nginx\n",
+		"a scalar root":   "hello\n",
 	} {
 		if got := stacks.SecretFiles([]byte(compose)); len(got) != 0 {
 			t.Errorf("%s: SecretFiles = %v, want none", name, got)

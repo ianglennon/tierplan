@@ -244,8 +244,8 @@ func TestSavingRefusesAVariableTheMaskerCouldNotHideAndNamesTheFault(t *testing.
 
 const (
 	tokenText = "tok-abcdef-12345"
-	// secretFileCompose uses tok.txt under secrets:, and nginx.conf under configs:, which is not secret.
-	secretFileCompose = "services:\n  web:\n    image: nginx:1.27-alpine\nsecrets:\n  tok:\n    file: tok.txt\nconfigs:\n  site:\n    file: nginx.conf\n"
+	// composeWithTokFile uses tok.txt under the top-level secrets key, and nginx.conf under configs:, which is not secret.
+	composeWithTokFile = "services:\n  web:\n    image: nginx:1.27-alpine\nsecrets:\n  tok:\n    file: tok.txt\nconfigs:\n  site:\n    file: nginx.conf\n"
 )
 
 type fileBody struct {
@@ -278,7 +278,7 @@ func stackWithSecretFile(t *testing.T, admin *roleCaller, name string) stackAnsw
 	t.Helper()
 	st := newStack(t, admin, name)
 	rec := admin.saveDraft(st.ID, secretFileSave(1,
-		fileBody{Path: "compose.yaml", Content: secretFileCompose},
+		fileBody{Path: "compose.yaml", Content: composeWithTokFile},
 		fileBody{Path: "tok.txt", Content: tokenText},
 		fileBody{Path: "nginx.conf", Content: "events {}\n"}))
 	if rec.Code != http.StatusOK {
@@ -323,7 +323,7 @@ func TestSecretFileIsSealedOnSaveAndAlwaysShownHidden(t *testing.T) {
 
 	// The save answer names the files it sealed, so the browser can let go of what it typed.
 	rec := admin.saveDraft(st.ID, secretFileSave(2,
-		fileBody{Path: "compose.yaml", Content: secretFileCompose + "# touched\n"},
+		fileBody{Path: "compose.yaml", Content: composeWithTokFile + "# touched\n"},
 		fileBody{Path: "tok.txt", Content: tokenText},
 		fileBody{Path: "nginx.conf", Content: "events {}\n"}))
 	var saved struct {
@@ -369,7 +369,7 @@ func TestSecretFileSentBackHiddenIsKeptAndSentNewReplacesIt(t *testing.T) {
 
 	// Untouched: the placeholder keeps the saved content, and with nothing else changed writes nothing.
 	rec := admin.saveDraft(st.ID, secretFileSave(2,
-		fileBody{Path: "compose.yaml", Content: secretFileCompose}, hidden, fileBody{Path: "nginx.conf", Content: "events {}\n"}))
+		fileBody{Path: "compose.yaml", Content: composeWithTokFile}, hidden, fileBody{Path: "nginx.conf", Content: "events {}\n"}))
 	var saved struct {
 		Changed bool `json:"changed"`
 	}
@@ -382,7 +382,7 @@ func TestSecretFileSentBackHiddenIsKeptAndSentNewReplacesIt(t *testing.T) {
 
 	// Replaced: the new content is sealed in its place, and is hidden from then on.
 	rec = admin.saveDraft(st.ID, secretFileSave(2,
-		fileBody{Path: "compose.yaml", Content: secretFileCompose},
+		fileBody{Path: "compose.yaml", Content: composeWithTokFile},
 		fileBody{Path: "tok.txt", Content: "tok-replaced-98765", Secret: true},
 		fileBody{Path: "nginx.conf", Content: "events {}\n"}))
 	if rec.Code != http.StatusOK {
@@ -398,7 +398,7 @@ func TestSecretFileSentBackHiddenIsKeptAndSentNewReplacesIt(t *testing.T) {
 
 	// A placeholder for a secret file that was never stored is refused.
 	rec = admin.saveDraft(st.ID, secretFileSave(3,
-		fileBody{Path: "compose.yaml", Content: secretFileCompose}, fileBody{Path: "other.key", Content: "<hidden>", Secret: true}))
+		fileBody{Path: "compose.yaml", Content: composeWithTokFile}, fileBody{Path: "other.key", Content: "<hidden>", Secret: true}))
 	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "stack_placeholder_without_value" {
 		t.Errorf("a placeholder with nothing to keep: %d %s, want 422", rec.Code, rec.Body)
 	}
@@ -535,7 +535,7 @@ func TestCheckNamesSecretFilesAndNeverReturnsTheirContent(t *testing.T) {
 		"typed in clear":     {Path: "tok.txt", Content: tokenText},
 		"as the placeholder": {Path: "tok.txt", Content: "<hidden>", Secret: true},
 	} {
-		body := checkBody(secretFileCompose, tok, draftFile{Path: "nginx.conf", Content: "events {}\n"})
+		body := checkBody(composeWithTokFile, tok, draftFile{Path: "nginx.conf", Content: "events {}\n"})
 		var answer struct {
 			SecretFiles []string `json:"secretFiles"`
 		}

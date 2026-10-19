@@ -43,7 +43,17 @@
     },
     "secretFile": {
       "title": "The content of {{file}} is hidden.",
-      "body": "Secret files are stored encrypted and never shown again."
+      "body": "Secret files are stored encrypted and never shown again. Replace the content to change it.",
+      "replace": "Replace content",
+      "upload": "Upload a file",
+      "show": "Show content",
+      "hide": "Hide content",
+      "contentLabel": "Content of {{file}}",
+      "hiddenAgain": "{{file}} hidden again",
+      "revealDenied": "Needs the reveal secrets permission to show this content.",
+      "revealFailed": "Couldn't load the content. Try again.",
+      "tooBig": "Secret files can be at most 500 KB.",
+      "readFailed": "Couldn't read that file. Try another."
     },
     "readOnly": "You can read this stack's files but not change them.",
     "rail": {

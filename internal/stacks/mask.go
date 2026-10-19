@@ -23,22 +23,46 @@ type Masker struct {
 	replacer *strings.Replacer
 }
 
-// NewMasker builds the masker of a working copy from its secret variables: every secret value of
-// MinSecretLen characters or more is hidden wherever it appears, the longer values first so a
-// secret that contains another is hidden whole. Plan 07-13 adds the content of secret files, which
-// is why the files are passed.
-func NewMasker(vars []Var, _ []File) Masker {
+// maxMaskedFileBytes and maxMaskedLines bound the work of hiding a secret file line by line. The
+// file as a whole is always hidden, whatever its size.
+const (
+	maxMaskedFileBytes = 64 << 10
+	maxMaskedLines     = 200
+)
+
+// NewMasker builds the masker of a working copy from its secrets: every secret variable value, and
+// the content of every secret file, of MinSecretLen characters or more, is hidden wherever it
+// appears, the longer values first so a secret that contains another is hidden whole.
+//
+// A secret file is one flagged secret, or one the compose file uses under secrets: even before a
+// save has flagged it, so what a person has just typed is hidden too. Its content is hidden as a
+// whole, without the line break an editor adds at the end, and, for a file of lines, each line
+// and the value after the "=" of each (a secret file can be an env_file, whose values land in the
+// rendered stack on their own).
+func NewMasker(vars []Var, files []File) Masker {
 	seen := map[string]struct{}{}
 	var values []string
+	add := func(v string) {
+		if utf8.RuneCountInString(v) < MinSecretLen || v == Hidden {
+			return
+		}
+		if _, dup := seen[v]; dup {
+			return
+		}
+		seen[v] = struct{}{}
+		values = append(values, v)
+	}
 	for _, v := range vars {
-		if !v.Secret || utf8.RuneCountInString(v.Value) < MinSecretLen || v.Value == Hidden {
-			continue
+		if v.Secret {
+			add(v.Value)
 		}
-		if _, dup := seen[v.Value]; dup {
-			continue
+	}
+	for _, f := range MarkSecretFiles(files, nil) {
+		if f.Secret {
+			for _, v := range fileMaskValues(f.Content) {
+				add(v)
+			}
 		}
-		seen[v.Value] = struct{}{}
-		values = append(values, v.Value)
 	}
 	if len(values) == 0 {
 		return Masker{}
@@ -54,6 +78,44 @@ func NewMasker(vars []Var, _ []File) Masker {
 		pairs = append(pairs, v, Hidden)
 	}
 	return Masker{replacer: strings.NewReplacer(pairs...)}
+}
+
+// fileMaskValues are the texts that stand for a secret file's content: the whole of it, and for a
+// small file of lines each line and each value after an "=".
+func fileMaskValues(content []byte) []string {
+	whole := strings.TrimSpace(string(content))
+	if whole == "" {
+		return nil
+	}
+	out := []string{whole}
+	if len(content) > maxMaskedFileBytes {
+		return out
+	}
+	lines := strings.Split(whole, "\n")
+	if len(lines) > maxMaskedLines {
+		lines = lines[:maxMaskedLines]
+	}
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || line == whole {
+			continue
+		}
+		out = append(out, line)
+	}
+	for _, line := range lines {
+		if _, value, ok := strings.Cut(line, "="); ok {
+			out = append(out, unquote(strings.TrimSpace(value)))
+		}
+	}
+	return out
+}
+
+// unquote drops one pair of matching quotes around a value, as an env file writes it.
+func unquote(v string) string {
+	if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
+		return v[1 : len(v)-1]
+	}
+	return v
 }
 
 // Mask replaces every secret value in s with Hidden.

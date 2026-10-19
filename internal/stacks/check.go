@@ -80,6 +80,7 @@ func check(ctx context.Context, in CheckInput) CheckResult {
 	ctx, cancel := context.WithTimeout(ctx, in.Deadline)
 	defer cancel()
 	content := in.Copy.Compose()
+	res.SecretFiles = secretFilePaths(in.Copy.Files)
 	if len(content) > MaxFileBytes {
 		res.Problems = Problems{{
 			Severity: SeverityError, Code: CodeComposeTooLarge, File: ComposeFile, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
@@ -145,6 +146,18 @@ func check(ctx context.Context, in CheckInput) CheckResult {
 	res.Loaded = loaded
 	res.Problems = append(append(res.Problems, binds...), lintProblems(found)...).Sorted()
 	return res
+}
+
+// secretFilePaths are the paths of the files that are secret in a working copy, sorted.
+func secretFilePaths(files []File) []string {
+	var out []string
+	for _, f := range MarkSecretFiles(files, nil) {
+		if f.Secret {
+			out = append(out, f.Path)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // dotenvFile is the name of the file a Compose project directory reads on its own, and Bayplan

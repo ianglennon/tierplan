@@ -277,6 +277,9 @@ func (r Repo) SaveDraft(ctx context.Context, stackID string, version int64, acto
 	if draft.Version != version {
 		return Snapshot{}, false, &DraftConflictError{SavedBy: draft.CreatedBy, SavedAt: draft.CreatedAt, Version: draft.Version}
 	}
+	// The server decides which files are secret, not the browser: a file the compose file uses
+	// under secrets:, or one that is secret already, is stored sealed (UI-SPEC Defaults 6).
+	copy.Files = stacks.MarkSecretFiles(copy.Files, draft.Copy.Files)
 	if sameContent(draft.Copy, copy) {
 		return draft, false, nil
 	}
@@ -359,6 +362,7 @@ func (r Repo) saveFirst(ctx context.Context, tx *sql.Tx, q *sqlc.Queries, stackI
 	if err != nil {
 		return Snapshot{}, false, err
 	}
+	copy.Files = stacks.MarkSecretFiles(copy.Files, base.Copy.Files)
 	if sameContent(base.Copy, copy) {
 		return base, false, nil
 	}

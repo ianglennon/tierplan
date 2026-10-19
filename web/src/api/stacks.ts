@@ -203,6 +203,9 @@ export function useSaveDraft(envId: string, stackId: string) {
     },
     retry: false,
     onSuccess: (answer, body) => {
+      // The files the server sealed, which includes a file it found the compose file uses under
+      // secrets:, are <hidden> in the cache whatever the body said.
+      const sealed = new Set(answer.secretFiles ?? []);
       queryClient.setQueryData(draftKey(envId, stackId), (old: StackDraft | undefined) =>
         old
           ? {
@@ -212,7 +215,9 @@ export function useSaveDraft(envId: string, stackId: string) {
               savedAt: answer.savedAt,
               // The cache holds what the server would answer, not what was typed: a secret's
               // text never enters it (UI-SPEC "Design System").
-              files: (body.files ?? []).map((f) => (f.secret ? { ...f, content: HIDDEN } : f)),
+              files: (body.files ?? []).map((f) =>
+                f.secret || sealed.has(f.path) ? { ...f, secret: true, content: HIDDEN } : f,
+              ),
               vars: (body.vars ?? []).map((v) => (v.secret ? { ...v, value: HIDDEN } : v)),
             }
           : old,
@@ -270,7 +275,12 @@ export async function postStackCheck(
   stackId: string,
   body: StackCheckInput,
   signal?: AbortSignal,
-): Promise<{ problems: StackProblem[]; unusedFiles: string[]; variables: StackVariable[] }> {
+): Promise<{
+  problems: StackProblem[];
+  unusedFiles: string[];
+  variables: StackVariable[];
+  secretFiles: string[];
+}> {
   try {
     const res = await api.POST("/api/env/{envId}/stacks/{stackId}/check", {
       params: { path: { envId, stackId } },
@@ -285,6 +295,7 @@ export async function postStackCheck(
       problems: res.data.problems ?? [],
       unusedFiles: res.data.unusedFiles ?? [],
       variables: res.data.variables ?? [],
+      secretFiles: res.data.secretFiles ?? [],
     };
   } catch (e) {
     // A network failure has no status.
@@ -374,6 +385,19 @@ export async function renderStack(
 
 // revealFile asks for the saved content of a secret stack file. Like revealVariable it is a plain
 // function and not a query, so the content never enters the query cache.
-export async function revealFile(_envId: string, _stackId: string, _path: string): Promise<string> {
-  throw new RevealRequestError(0);
+export async function revealFile(envId: string, stackId: string, path: string): Promise<string> {
+  try {
+    const res = await api.POST("/api/env/{envId}/stacks/{stackId}/files/reveal", {
+      params: { path: { envId, stackId } },
+      body: { path },
+    });
+    if (!res.data) {
+      const problem = readProblem(res.error, res.response);
+      throw new RevealRequestError(problem.status, problem.type);
+    }
+    return res.data.content;
+  } catch (e) {
+    // A network failure has no status.
+    throw e instanceof RevealRequestError ? e : new RevealRequestError(0);
+  }
 }

@@ -64,6 +64,7 @@ type StackCheckBody struct {
 	Problems    []StackProblemBody  `json:"problems" doc:"The problems, ordered by file and line"`
 	UnusedFiles []string            `json:"unusedFiles" doc:"Stack files the compose file never refers to"`
 	Variables   []StackVariableBody `json:"variables" doc:"The rows of the Variables pane, ordered by name. Empty when the compose file is not valid YAML"`
+	SecretFiles []string            `json:"secretFiles" doc:"The stack files that are secret: the ones the compose file uses under secrets: (even before a save has sealed them) and the ones already saved as secret. Ordered by path"`
 }
 
 // StackCheckOutput wraps StackCheckBody for huma.
@@ -164,6 +165,10 @@ func checkStack(ctx context.Context, d StacksDeps, lim *streamLimiter, in *Stack
 		})
 	}
 	body.Variables = variableBodies(res.Variables)
+	body.SecretFiles = res.SecretFiles
+	if body.SecretFiles == nil {
+		body.SecretFiles = []string{}
+	}
 	return &StackCheckOutput{CacheControl: "no-store", Body: body}, nil
 }
 

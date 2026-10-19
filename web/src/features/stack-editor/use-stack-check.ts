@@ -74,6 +74,9 @@ interface StackCheckState {
   unusedFiles: string[];
   // The rows of the Variables pane as the server resolved them, or null before its first answer.
   variables: StackVariable[] | null;
+  // The stack files that are secret: the ones the compose file uses under secrets:, which are
+  // known before a save has sealed them, and the ones already saved as secret.
+  secretFiles: string[];
   // A check is on its way to the server.
   checking: boolean;
   // The last check got no answer. The last results stay.
@@ -93,6 +96,7 @@ export function useStackCheck(envId: string, stackId: string, copy: WorkingCopy)
     problems: StackProblem[];
     unusedFiles: string[];
     variables: StackVariable[];
+    secretFiles: string[];
   } | null>(null);
   const [client, setClient] = useState<StackProblem[]>([]);
   const [checking, setChecking] = useState(false);
@@ -161,6 +165,7 @@ export function useStackCheck(envId: string, stackId: string, copy: WorkingCopy)
     problems,
     unusedFiles: server?.unusedFiles ?? [],
     variables: server?.variables ?? null,
+    secretFiles: server?.secretFiles ?? [],
     checking,
     failed,
     checked: server !== null,

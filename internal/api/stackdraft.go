@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -87,6 +88,8 @@ type StackDraftSaveBody struct {
 	Version int64  `json:"version" doc:"The draft's version now"`
 	SavedBy string `json:"savedBy" doc:"Who saved the draft last"`
 	SavedAt string `json:"savedAt" doc:"When, RFC 3339 UTC"`
+	// SecretFiles lets the browser let go of the text it typed for a file the server sealed.
+	SecretFiles []string `json:"secretFiles" doc:"Every file of the saved draft that is secret, ordered by path: the ones sent as secret, the ones the compose file uses under secrets:, and the ones that were already secret. Their content is stored sealed and is <hidden> in every read"`
 }
 
 // StackDraftSaveOutput wraps StackDraftSaveBody for huma.
@@ -128,7 +131,9 @@ func registerStackDraft(r *httpx.Router, d StacksDeps) {
 			"The files are held to the stack's file rules, each refused with 422 and the path in errors[].location: a path that is absolute, has .., a backslash or a colon (file_path_invalid), a path used twice (file_name_taken), a file over 1 MiB (file_too_large), more than 50 files or 8 MiB in all (stack_too_large), no compose.yaml (compose_missing). " +
 			"A variable name must be letters, digits and underscore, not start with a digit and be at most 128 characters (422 variable_name_invalid), and be used once (422 variable_name_taken); " +
 			"a secret variable's value must be at least 4 characters (422 secret_too_short), because shorter values cannot be hidden reliably; more than 500 variables, or a value over 64 KiB, is 422 stack_var_invalid. " +
-			"A secret file or variable sent as <hidden> keeps its saved value; with none saved it is 422 stack_placeholder_without_value. Audited as stack.draft_saved when it changed. Needs stacks.update (Operator).",
+			"A secret file or variable sent as <hidden> keeps its saved value; with none saved it is 422 stack_placeholder_without_value. " +
+			"A file the compose file uses under secrets: is a secret file whatever the body says: it is stored sealed, and it stays secret until the file is deleted from the draft. The answer lists the secret files. " +
+			"Audited as stack.draft_saved when it changed. Needs stacks.update (Operator).",
 		Tags: []string{"stacks"}, MaxBodyBytes: maxStackSaveBody,
 	}, rbac.Requirement{Perm: rbac.PermStacksUpdate, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackDraftSaveInput) (*StackDraftSaveOutput, error) {
@@ -364,8 +369,16 @@ func saveStackDraft(ctx context.Context, d StacksDeps, in *StackDraftSaveInput) 
 			"stack": st.Name, "version": itoa(saved.Version), "files": itoa(int64(len(wc.Files))), "vars": itoa(int64(len(wc.Vars))),
 		})
 	}
+	secretFiles := []string{}
+	for _, f := range saved.Copy.Files {
+		if f.Secret {
+			secretFiles = append(secretFiles, f.Path)
+		}
+	}
+	slices.Sort(secretFiles)
 	return &StackDraftSaveOutput{CacheControl: "no-store", Body: StackDraftSaveBody{
 		Changed: changed, Version: saved.Version, SavedBy: saved.CreatedBy, SavedAt: rfc3339(saved.CreatedAt),
+		SecretFiles: secretFiles,
 	}}, nil
 }
 

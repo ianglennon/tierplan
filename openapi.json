@@ -11208,6 +11208,16 @@
               "null"
             ]
           },
+          "secretFiles": {
+            "description": "The stack files that are secret: the ones the compose file uses under secrets: (even before a save has sealed them) and the ones already saved as secret. Ordered by path",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "unusedFiles": {
             "description": "Stack files the compose file never refers to",
             "items": {
@@ -11232,7 +11242,8 @@
         "required": [
           "problems",
           "unusedFiles",
-          "variables"
+          "variables",
+          "secretFiles"
         ],
         "type": "object"
       },
@@ -11484,6 +11495,16 @@
             "description": "Who saved the draft last",
             "type": "string"
           },
+          "secretFiles": {
+            "description": "Every file of the saved draft that is secret, ordered by path: the ones sent as secret, the ones the compose file uses under secrets:, and the ones that were already secret. Their content is stored sealed and is \u003chidden\u003e in every read",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "version": {
             "description": "The draft's version now",
             "format": "int64",
@@ -11494,7 +11515,8 @@
           "changed",
           "version",
           "savedBy",
-          "savedAt"
+          "savedAt",
+          "secretFiles"
         ],
         "type": "object"
       },
@@ -11533,6 +11555,33 @@
           "version",
           "files",
           "vars"
+        ],
+        "type": "object"
+      },
+      "StackFileRevealBody": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "description": "The file's saved content, in clear",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "type": "object"
+      },
+      "StackFileRevealRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "description": "The file's path inside the stack. A path that is not a saved secret file is 404 file_not_found",
+            "maxLength": 255,
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
         ],
         "type": "object"
       },
@@ -21244,7 +21293,7 @@
         ]
       },
       "put": {
-        "description": "Replaces the draft's files and variables when the draft is still at the version you read; if someone saved in between the answer is 409 draft_conflict, naming who saved and when, and nothing is written. Saving content equal to the saved draft changes nothing: changed is false, the version does not move and no audit row is written. A save never sends anything to an engine: only a deploy does. The files are held to the stack's file rules, each refused with 422 and the path in errors[].location: a path that is absolute, has .., a backslash or a colon (file_path_invalid), a path used twice (file_name_taken), a file over 1 MiB (file_too_large), more than 50 files or 8 MiB in all (stack_too_large), no compose.yaml (compose_missing). A variable name must be letters, digits and underscore, not start with a digit and be at most 128 characters (422 variable_name_invalid), and be used once (422 variable_name_taken); a secret variable's value must be at least 4 characters (422 secret_too_short), because shorter values cannot be hidden reliably; more than 500 variables, or a value over 64 KiB, is 422 stack_var_invalid. A secret file or variable sent as \u003chidden\u003e keeps its saved value; with none saved it is 422 stack_placeholder_without_value. Audited as stack.draft_saved when it changed. Needs stacks.update (Operator).",
+        "description": "Replaces the draft's files and variables when the draft is still at the version you read; if someone saved in between the answer is 409 draft_conflict, naming who saved and when, and nothing is written. Saving content equal to the saved draft changes nothing: changed is false, the version does not move and no audit row is written. A save never sends anything to an engine: only a deploy does. The files are held to the stack's file rules, each refused with 422 and the path in errors[].location: a path that is absolute, has .., a backslash or a colon (file_path_invalid), a path used twice (file_name_taken), a file over 1 MiB (file_too_large), more than 50 files or 8 MiB in all (stack_too_large), no compose.yaml (compose_missing). A variable name must be letters, digits and underscore, not start with a digit and be at most 128 characters (422 variable_name_invalid), and be used once (422 variable_name_taken); a secret variable's value must be at least 4 characters (422 secret_too_short), because shorter values cannot be hidden reliably; more than 500 variables, or a value over 64 KiB, is 422 stack_var_invalid. A secret file or variable sent as \u003chidden\u003e keeps its saved value; with none saved it is 422 stack_placeholder_without_value. A file the compose file uses under secrets: is a secret file whatever the body says: it is stored sealed, and it stays secret until the file is deleted from the draft. The answer lists the secret files. Audited as stack.draft_saved when it changed. Needs stacks.update (Operator).",
         "operationId": "saveStackDraft",
         "parameters": [
           {
@@ -21308,6 +21357,77 @@
           }
         },
         "summary": "Save a stack's draft",
+        "tags": [
+          "stacks"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/files/reveal": {
+      "post": {
+        "description": "Answers the saved content of a secret file of the stack, in clear: the one way back to a content every other answer shows as \u003chidden\u003e. A file is secret when the compose file uses it under secrets: or it was saved as secret. The content is read from the saved draft, or from the last deployed definition when there is no draft. A path that is not in the stack, is not secret or is empty is 404 file_not_found. The answer is never cached. Every reveal is audited as stack.value_revealed with the stack, the kind (file) and the path, never the content; if the audit row cannot be written the content is not sent. A refusal is audited as permission.denied. Needs secrets.reveal (Admin, or an Operator granted the extra).",
+        "operationId": "revealStackFile",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StackFileRevealRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackFileRevealBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Reveal a secret stack file's saved content",
         "tags": [
           "stacks"
         ]

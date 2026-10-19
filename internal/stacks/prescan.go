@@ -33,20 +33,9 @@ func Prescan(compose []byte, files FileSet) (problems Problems, refs []string) {
 		return Problems{tooLargeProblem()}, nil
 	}
 	w := &walker{budget: maxBudget, files: files, refs: map[string]struct{}{}}
-	dec := yaml.NewDecoder(bytes.NewReader(compose))
-	var roots []*yaml.Node
-	for {
-		var doc yaml.Node
-		err := dec.Decode(&doc)
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return nil, nil
-		}
-		if doc.Kind == yaml.DocumentNode && len(doc.Content) > 0 {
-			roots = append(roots, doc.Content[0])
-		}
+	roots, ok := decodeRoots(compose)
+	if !ok {
+		return nil, nil
 	}
 	// The whole tree is measured first, following every alias, so a file built to expand into
 	// millions of nodes is stopped here and not by the first check that happens to look at it.
@@ -68,6 +57,26 @@ func Prescan(compose []byte, files FileSet) (problems Problems, refs []string) {
 	}
 	sort.Strings(refs)
 	return w.found.Sorted(), refs
+}
+
+// decodeRoots reads every YAML document of a compose file and returns the root node of each. It
+// reports false for text that is not YAML, which the load reports.
+func decodeRoots(compose []byte) ([]*yaml.Node, bool) {
+	dec := yaml.NewDecoder(bytes.NewReader(compose))
+	var roots []*yaml.Node
+	for {
+		var doc yaml.Node
+		err := dec.Decode(&doc)
+		if errors.Is(err, io.EOF) {
+			return roots, true
+		}
+		if err != nil {
+			return nil, false
+		}
+		if doc.Kind == yaml.DocumentNode && len(doc.Content) > 0 {
+			roots = append(roots, doc.Content[0])
+		}
+	}
 }
 
 func tooLargeProblem() Problem {
@@ -138,7 +147,10 @@ type walker struct {
 	err    error
 	files  FileSet
 	refs   map[string]struct{}
-	found  Problems
+	// secrets are the paths named by a top-level secrets.*.file, whether or not the stack has the
+	// file. Nil when the walk does not collect them.
+	secrets map[string]struct{}
+	found   Problems
 }
 
 // spend charges one unit of work and reports whether the walk may continue.
@@ -274,6 +286,9 @@ func (w *walker) document(root *yaml.Node) {
 				for _, f := range w.entries(obj.val, 0) {
 					if f.name == "file" {
 						w.fileRef(top.name+"."+obj.name+".file", f.val, false)
+						if top.name == "secrets" {
+							w.secretRef(f.val)
+						}
 					}
 				}
 			}
@@ -281,6 +296,20 @@ func (w *walker) document(root *yaml.Node) {
 		if w.err != nil {
 			return
 		}
+	}
+}
+
+// secretRef notes the path a top-level secret's file names, when it is a path a stack could have.
+func (w *walker) secretRef(v val) {
+	if w.secrets == nil {
+		return
+	}
+	v = w.resolve(v)
+	if v.n.Kind != yaml.ScalarNode || v.n.ShortTag() != "!!str" {
+		return
+	}
+	if path := strings.TrimPrefix(v.n.Value, "./"); ValidPath(path) == nil {
+		w.secrets[path] = struct{}{}
 	}
 }
 

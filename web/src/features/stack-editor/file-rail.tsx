@@ -70,6 +70,7 @@ export function FileRail({
   selected,
   readOnly,
   unused,
+  secret,
   onSelect,
   onAdd,
   onRename,
@@ -178,7 +179,7 @@ export function FileRail({
                     )}
                   >
                     <span className="truncate">{file.path}</span>
-                    {file.secret ? (
+                    {file.secret || secret?.has(file.path) ? (
                       <Badge variant="outline" className="shrink-0 font-sans">
                         {t("stackEditor.rail.secret")}
                       </Badge>

@@ -2042,7 +2042,7 @@ export interface paths {
         get: operations["getStackDraft"];
         /**
          * Save a stack's draft
-         * @description Replaces the draft's files and variables when the draft is still at the version you read; if someone saved in between the answer is 409 draft_conflict, naming who saved and when, and nothing is written. Saving content equal to the saved draft changes nothing: changed is false, the version does not move and no audit row is written. A save never sends anything to an engine: only a deploy does. The files are held to the stack's file rules, each refused with 422 and the path in errors[].location: a path that is absolute, has .., a backslash or a colon (file_path_invalid), a path used twice (file_name_taken), a file over 1 MiB (file_too_large), more than 50 files or 8 MiB in all (stack_too_large), no compose.yaml (compose_missing). A variable name must be letters, digits and underscore, not start with a digit and be at most 128 characters (422 variable_name_invalid), and be used once (422 variable_name_taken); a secret variable's value must be at least 4 characters (422 secret_too_short), because shorter values cannot be hidden reliably; more than 500 variables, or a value over 64 KiB, is 422 stack_var_invalid. A secret file or variable sent as <hidden> keeps its saved value; with none saved it is 422 stack_placeholder_without_value. Audited as stack.draft_saved when it changed. Needs stacks.update (Operator).
+         * @description Replaces the draft's files and variables when the draft is still at the version you read; if someone saved in between the answer is 409 draft_conflict, naming who saved and when, and nothing is written. Saving content equal to the saved draft changes nothing: changed is false, the version does not move and no audit row is written. A save never sends anything to an engine: only a deploy does. The files are held to the stack's file rules, each refused with 422 and the path in errors[].location: a path that is absolute, has .., a backslash or a colon (file_path_invalid), a path used twice (file_name_taken), a file over 1 MiB (file_too_large), more than 50 files or 8 MiB in all (stack_too_large), no compose.yaml (compose_missing). A variable name must be letters, digits and underscore, not start with a digit and be at most 128 characters (422 variable_name_invalid), and be used once (422 variable_name_taken); a secret variable's value must be at least 4 characters (422 secret_too_short), because shorter values cannot be hidden reliably; more than 500 variables, or a value over 64 KiB, is 422 stack_var_invalid. A secret file or variable sent as <hidden> keeps its saved value; with none saved it is 422 stack_placeholder_without_value. A file the compose file uses under secrets: is a secret file whatever the body says: it is stored sealed, and it stays secret until the file is deleted from the draft. The answer lists the secret files. Audited as stack.draft_saved when it changed. Needs stacks.update (Operator).
          */
         put: operations["saveStackDraft"];
         post?: never;
@@ -2051,6 +2051,26 @@ export interface paths {
          * @description Deletes the saved draft with its files and variables; the editor then shows the last deployed definition, or the starter example for a stack never deployed. Discarding when there is no draft is the same as discarding once: 204, nothing written, no audit row. A discard never sends anything to an engine. Audited as stack.draft_discarded, with the version it deleted, when there was a draft. Needs stacks.update (Operator).
          */
         delete: operations["discardStackDraft"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/files/reveal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reveal a secret stack file's saved content
+         * @description Answers the saved content of a secret file of the stack, in clear: the one way back to a content every other answer shows as <hidden>. A file is secret when the compose file uses it under secrets: or it was saved as secret. The content is read from the saved draft, or from the last deployed definition when there is no draft. A path that is not in the stack, is not secret or is empty is 404 file_not_found. The answer is never cached. Every reveal is audited as stack.value_revealed with the stack, the kind (file) and the path, never the content; if the audit row cannot be written the content is not sent. A refusal is audited as permission.denied. Needs secrets.reveal (Admin, or an Operator granted the extra).
+         */
+        post: operations["revealStackFile"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -8085,6 +8105,8 @@ export interface components {
         StackCheckBody: {
             /** @description The problems, ordered by file and line */
             problems: components["schemas"]["StackProblemBody"][] | null;
+            /** @description The stack files that are secret: the ones the compose file uses under secrets: (even before a save has sealed them) and the ones already saved as secret. Ordered by path */
+            secretFiles: string[] | null;
             /** @description Stack files the compose file never refers to */
             unusedFiles: string[] | null;
             /** @description The rows of the Variables pane, ordered by name. Empty when the compose file is not valid YAML */
@@ -8186,6 +8208,8 @@ export interface components {
             savedAt: string;
             /** @description Who saved the draft last */
             savedBy: string;
+            /** @description Every file of the saved draft that is secret, ordered by path: the ones sent as secret, the ones the compose file uses under secrets:, and the ones that were already secret. Their content is stored sealed and is <hidden> in every read */
+            secretFiles: string[] | null;
             /**
              * Format: int64
              * @description The draft's version now
@@ -8202,6 +8226,14 @@ export interface components {
              * @description The version of the draft you read, or 0 when you read a stack with no saved draft (isDraft false)
              */
             version: number;
+        };
+        StackFileRevealBody: {
+            /** @description The file's saved content, in clear */
+            content: string;
+        };
+        StackFileRevealRequest: {
+            /** @description The file's path inside the stack. A path that is not a saved secret file is 404 file_not_found */
+            path: string;
         };
         StackItem: {
             /** @description True when the draft holds changes that have not been deployed */
@@ -13442,6 +13474,45 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    revealStackFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackFileRevealRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackFileRevealBody"];
+                };
             };
             /** @description Error */
             default: {

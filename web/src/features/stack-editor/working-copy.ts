@@ -100,9 +100,10 @@ export type WorkingCopyAction =
   | { type: "importVars"; vars: ImportedVar[]; mode: ImportMode; secret: boolean }
   // Bulk edit as text: the table becomes these rows.
   | { type: "setVars"; vars: WorkingVar[] }
-  // A save of `sent` succeeded. The server holds every secret variable now and answers <hidden> for
-  // it, so the browser lets go of the text it typed: each secret variable that still has the value
-  // that was sent becomes hidden again (UI-SPEC "Secret values never leave the browser").
+  // A save of `sent` succeeded. The server holds every secret variable and secret file now and
+  // answers <hidden> for it, so the browser lets go of the text it typed: each secret variable and
+  // each file the server sealed (secretFiles) that still has the text that was sent becomes hidden
+  // again (UI-SPEC "Secret values never leave the browser").
   | { type: "saved"; sent: WorkingCopy; secretFiles?: readonly string[] }
   // Replace content on a hidden secret file: the editor opens empty for it.
   | { type: "replaceFile"; path: string };
@@ -155,13 +156,18 @@ function fromDraft(draft: StackDraft, selected: string): WorkingCopy {
   };
 }
 
-// withSecretsHidden is a copy as the server holds it after a save: every secret variable hidden.
+// withSecretsHidden is a copy as the server holds it after a save: every secret variable hidden,
+// and every secret file, which includes the ones the server named as sealed by the save.
 export function withSecretsHidden(
   copy: WorkingCopy,
-  _secretFiles?: readonly string[],
+  secretFiles: readonly string[] = [],
 ): WorkingCopy {
+  const sealed = new Set(secretFiles);
   return {
     ...copy,
+    files: copy.files.map((f) =>
+      f.secret || sealed.has(f.path) ? { ...f, secret: true, content: "", hidden: true } : f,
+    ),
     vars: copy.vars.map((v) => (v.secret ? { ...v, value: "", hidden: true } : v)),
   };
 }
@@ -238,8 +244,22 @@ export function workingCopyReducer(state: WorkingCopy, action: WorkingCopyAction
       };
     case "saved": {
       const sent = new Map(action.sent.vars.map((v) => [v.name, v]));
+      const sentFiles = new Map(action.sent.files.map((f) => [f.path, f]));
+      // The files the server holds sealed: the ones it names and the ones that were sent secret.
+      const sealed = new Set([
+        ...(action.secretFiles ?? []),
+        ...action.sent.files.filter((f) => f.secret).map((f) => f.path),
+      ]);
       return {
         ...state,
+        files: state.files.map((f) => {
+          if (!sealed.has(f.path)) return f;
+          const was = sentFiles.get(f.path);
+          // What was typed since the save was sent is kept; the file is secret all the same.
+          return was && was.content === f.content && was.hidden === f.hidden
+            ? { ...f, secret: true, content: "", hidden: true }
+            : { ...f, secret: true };
+        }),
         vars: state.vars.map((v) => {
           const was = sent.get(v.name);
           return v.secret && was?.secret && was.value === v.value && was.hidden === v.hidden
@@ -249,7 +269,12 @@ export function workingCopyReducer(state: WorkingCopy, action: WorkingCopyAction
       };
     }
     case "replaceFile":
-      return state;
+      return {
+        ...state,
+        files: state.files.map((f) =>
+          f.path === action.path && f.hidden ? { ...f, content: "", hidden: false } : f,
+        ),
+      };
     case "resetVar":
       return {
         ...state,

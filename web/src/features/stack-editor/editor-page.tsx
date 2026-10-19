@@ -10,6 +10,7 @@ import { Trans } from "react-i18next";
 import {
   type DraftRequestError,
   draftQuery,
+  revealFile,
   revealVariable,
   type StackDraft,
   type StackDraftSaved,
@@ -40,6 +41,7 @@ import { FileRail } from "@/features/stack-editor/file-rail";
 import { ProblemsPanel } from "@/features/stack-editor/problems-panel";
 import { RenderedView } from "@/features/stack-editor/rendered-view";
 import { SaveStatus } from "@/features/stack-editor/save-status";
+import { SecretFileCard } from "@/features/stack-editor/secret-file-card";
 import { useStackCheck } from "@/features/stack-editor/use-stack-check";
 import type { VarName } from "@/features/stack-editor/var-completion";
 import { VariablesTable, type VariablesTableHandle } from "@/features/stack-editor/variables-table";
@@ -130,6 +132,8 @@ export function StackEditorPage({
   copyRef.current = copy;
   const check = useStackCheck(envId, stackId, copy);
   const unused = useMemo(() => new Set(check.unusedFiles), [check.unusedFiles]);
+  // The files the compose file uses under secrets:, badged before a save has sealed them.
+  const secretFiles = useMemo(() => new Set(check.secretFiles), [check.secretFiles]);
   // The names typing "${" offers: every variable of the table and every one the files refer to,
   // each with where its value comes from.
   const completionNames = useMemo(() => {
@@ -299,8 +303,9 @@ export function StackEditorPage({
 
   function onSaved(sent: WorkingCopy, answer: StackDraftSaved) {
     // The server holds the secrets now: the browser lets go of the text it typed for them.
-    setSaved(withSecretsHidden(sent));
-    dispatch({ type: "saved", sent });
+    const sealed = answer.secretFiles ?? [];
+    setSaved(withSecretsHidden(sent, sealed));
+    dispatch({ type: "saved", sent, secretFiles: sealed });
     setBase({ version: answer.version, savedAt: answer.savedAt, savedBy: answer.savedBy });
     if (answer.changed) setSavedChange(true);
     setSaveError(null);
@@ -463,6 +468,7 @@ export function StackEditorPage({
               selected={copy.selected}
               readOnly={!canEdit}
               unused={unused}
+              secret={secretFiles}
               onSelect={selectFile}
               onAdd={addFile}
               onRename={renameFile}
@@ -478,14 +484,15 @@ export function StackEditorPage({
           <div className="flex min-w-0 flex-col gap-2">
             {ready && open ? (
               open.hidden ? (
-                <div className="rounded-lg border p-4">
-                  <p className="font-medium break-all">
-                    {t("stackEditor.secretFile.title", { file: open.path })}
-                  </p>
-                  <p className="text-sm text-muted-foreground">
-                    {t("stackEditor.secretFile.body")}
-                  </p>
-                </div>
+                <SecretFileCard
+                  key={open.path}
+                  path={open.path}
+                  canReveal={canReveal}
+                  readOnly={!canEdit}
+                  reveal={() => revealFile(envId, stackId, open.path)}
+                  onReplace={() => dispatch({ type: "replaceFile", path: open.path })}
+                  onUpload={(content) => dispatch({ type: "edit", path: open.path, content })}
+                />
               ) : (
                 <FileEditor
                   key={open.path}
