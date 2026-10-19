@@ -68,6 +68,16 @@ var Tables = map[string]Class{
 	// columns of environments and travel with it.
 	"restart_loop_mutes": Included,
 
+	// Compose stacks (Phase 7): the stacks, their draft and revision snapshots, the files and
+	// variables of each snapshot and the deploy history. Secret variables and secret files are
+	// sealed under row-bound contexts and registered in vault.SealedColumns, so RewrapAll moves
+	// their sealed values with the rest.
+	"stacks":               Included,
+	"stack_snapshots":      Included,
+	"stack_snapshot_files": Included, // content_sealed is re-wrapped by RewrapAll
+	"stack_snapshot_vars":  Included, // value_sealed is re-wrapped by RewrapAll
+	"stack_deploys":        Included,
+
 	// Credentials and state that must not travel: a restored instance starts with
 	// no sessions, no outstanding invite or reset links, no agent join tokens and
 	// an empty run history.

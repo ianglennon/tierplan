@@ -58,6 +58,11 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `settings.read` | global | no | no | no | yes | no | View settings |
 | `settings.write` | global | no | no | no | yes | no | Change settings |
 | `shells.manage` | environment | no | no | yes | yes | no | See and end other people's shells |
+| `stacks.create` | environment | no | no | yes | yes | no | Create stacks |
+| `stacks.delete` | environment | no | no | yes | yes | no | Remove stacks |
+| `stacks.deploy` | environment | no | yes | yes | yes | no | Deploy, update, roll back, stop, start and cancel stack operations |
+| `stacks.read` | environment | yes | yes | yes | yes | no | View stacks, their files, reviews, deploys and logs |
+| `stacks.update` | environment | no | yes | yes | yes | no | Save and discard a stack's draft |
 | `teams.manage` | global | no | no | no | yes | no | Create teams and change their members |
 | `users.manage` | global | no | no | no | yes | no | Create, change, disable and delete users |
 | `volumes.create` | environment | no | no | yes | yes | no | Create volumes |

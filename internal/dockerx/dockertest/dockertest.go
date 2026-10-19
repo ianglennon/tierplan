@@ -931,7 +931,7 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 	case "/volumes":
 		writeJSON(w, http.StatusOK, cfg.volumeList())
 	case "/networks":
-		writeJSON(w, http.StatusOK, cfg.networkList())
+		writeJSON(w, http.StatusOK, filterNetworksByLabel(cfg.networkList(), r.URL.Query().Get("filters")))
 	case "/nodes", "/services", "/tasks", "/swarm":
 		f.serveCluster(w, r, p, cfg)
 	default:
@@ -961,7 +961,7 @@ func (f *Fake) serveCluster(w http.ResponseWriter, r *http.Request, p string, cf
 	case "/nodes":
 		writeJSON(w, http.StatusOK, cfg.nodeList())
 	case "/services":
-		writeJSON(w, http.StatusOK, cfg.serviceList(r.URL.Query().Get("status") == "true"))
+		writeJSON(w, http.StatusOK, filterServicesByLabel(cfg.serviceList(r.URL.Query().Get("status") == "true"), r.URL.Query().Get("filters")))
 	case "/tasks":
 		writeJSON(w, http.StatusOK, cfg.taskList(r.URL.Query().Get("filters")))
 	default:

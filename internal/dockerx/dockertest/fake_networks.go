@@ -445,3 +445,15 @@ func (c FakeConfig) withEndpoints(changes map[[2]string]*FakeEndpoint) FakeConfi
 	c.Containers = cs
 	return c
 }
+
+// filterNetworksByLabel keeps the networks whose labels pass the request's label filter.
+func filterNetworksByLabel(in []network.Summary, rawFilters string) []network.Summary {
+	keep := labelFilter(rawFilters)
+	out := make([]network.Summary, 0, len(in))
+	for _, n := range in {
+		if keep(n.Labels) {
+			out = append(out, n)
+		}
+	}
+	return out
+}

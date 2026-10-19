@@ -336,6 +336,10 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			Resolver:          registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
 			MaxStreamsPerUser: f.pullsMaxStreams, MaxLifetime: f.pullsMaxLifetime, NodeTimeout: f.pullsNodeTimeout, Log: log,
 		})
+		api.RegisterStacks(r, api.StacksDeps{
+			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
+			Audit: f.aud, Checker: checker, Jobs: f.jobHub, Store: f.st, Vault: f.v, Log: log,
+		})
 		var logsSrc api.LogsSource = f.agg
 		if f.logsWrap != nil {
 			logsSrc = f.logsWrap(logsSrc)

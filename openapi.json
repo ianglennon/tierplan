@@ -2759,6 +2759,54 @@
         ],
         "type": "object"
       },
+      "DraftFileBody": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "description": "The file's text. A secret file's content is \u003chidden\u003e on a read; sending \u003chidden\u003e back for a secret file that is already saved keeps the saved content",
+            "type": "string"
+          },
+          "path": {
+            "description": "The file's path inside the stack: relative, with no .. and no leading slash. compose.yaml is the stack's compose file",
+            "maxLength": 255,
+            "type": "string"
+          },
+          "secret": {
+            "description": "True when the file is stored sealed and never shown",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "content",
+          "secret"
+        ],
+        "type": "object"
+      },
+      "DraftVarBody": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "The variable's name: letters, digits and underscore, not starting with a digit",
+            "maxLength": 128,
+            "type": "string"
+          },
+          "secret": {
+            "description": "True when the value is stored sealed and shown as \u003chidden\u003e",
+            "type": "boolean"
+          },
+          "value": {
+            "description": "The variable's value. A secret variable's value is \u003chidden\u003e on a read; sending \u003chidden\u003e back for a secret variable that is already saved keeps the saved value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value",
+          "secret"
+        ],
+        "type": "object"
+      },
       "EffectiveEnvBody": {
         "additionalProperties": false,
         "properties": {
@@ -11145,6 +11193,477 @@
         },
         "required": [
           "kind"
+        ],
+        "type": "object"
+      },
+      "StackCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "compose": {
+            "description": "The text of the first compose.yaml. When it is given, start is ignored",
+            "maxLength": 1100000,
+            "type": "string"
+          },
+          "name": {
+            "description": "The stack's name: lowercase letters, numbers, dash and underscore, starting with a letter or number, at most 63 characters. Anything else is 422 stack_name_invalid",
+            "maxLength": 200,
+            "type": "string"
+          },
+          "start": {
+            "description": "What the first draft holds when compose is left out: example (the default) is a starter file with one web service, empty is an empty compose.yaml. Anything else is 422 stack_start_invalid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "StackDeployBody": {
+        "additionalProperties": false,
+        "properties": {
+          "jobId": {
+            "description": "The deploy job: read it at GET .../deploys/{jobId}",
+            "type": "string"
+          },
+          "revision": {
+            "description": "The number of the revision the deploy took from the draft",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "jobId",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "StackDeployRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "draftVersion": {
+            "description": "The version of the draft you mean to deploy. If the draft moved since, the answer is 409 draft_conflict and nothing is deployed",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "draftVersion"
+        ],
+        "type": "object"
+      },
+      "StackDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "description": "When it was created, RFC 3339 UTC",
+            "type": "string"
+          },
+          "createdBy": {
+            "description": "Who created the stack",
+            "type": "string"
+          },
+          "envId": {
+            "description": "The environment the stack belongs to",
+            "type": "string"
+          },
+          "hasDraft": {
+            "description": "True when the draft holds changes that have not been deployed",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "The stack ID",
+            "type": "string"
+          },
+          "lastDeployedAt": {
+            "description": "When the newest successful deploy ended, RFC 3339 UTC; empty when there is none",
+            "type": "string"
+          },
+          "lastDeployedBy": {
+            "description": "Who started it; empty when there is none",
+            "type": "string"
+          },
+          "name": {
+            "description": "The stack name, also its swarm namespace or compose project",
+            "type": "string"
+          },
+          "source": {
+            "description": "Where the stack's definition lives. Only inline exists today",
+            "enum": [
+              "inline",
+              "adopted",
+              "git"
+            ],
+            "type": "string"
+          },
+          "sourceRef": {
+            "description": "A reference to the stack's source: empty for an inline stack",
+            "type": "string"
+          },
+          "state": {
+            "description": "Where the stack is, from its newest operation: not_deployed before the first deploy, deploying while one runs, deploy_failed when the newest one failed, was cancelled or was interrupted, deployed otherwise",
+            "enum": [
+              "not_deployed",
+              "deploying",
+              "deploy_failed",
+              "deployed"
+            ],
+            "type": "string"
+          },
+          "stopped": {
+            "description": "True while the stack is stopped",
+            "type": "boolean"
+          },
+          "target": {
+            "description": "Where the stack deploys: fixed when it was created, from the kind of the environment",
+            "enum": [
+              "swarm",
+              "standalone"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "envId",
+          "sourceRef",
+          "createdBy",
+          "createdAt",
+          "stopped",
+          "id",
+          "name",
+          "target",
+          "source",
+          "state",
+          "lastDeployedAt",
+          "lastDeployedBy",
+          "hasDraft"
+        ],
+        "type": "object"
+      },
+      "StackDraftBody": {
+        "additionalProperties": false,
+        "properties": {
+          "baseSeq": {
+            "description": "The number of the deployed revision the draft started from, 0 for none",
+            "format": "int64",
+            "type": "integer"
+          },
+          "files": {
+            "description": "The draft's files by path",
+            "items": {
+              "$ref": "#/components/schemas/DraftFileBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "savedAt": {
+            "description": "When, RFC 3339 UTC",
+            "type": "string"
+          },
+          "savedBy": {
+            "description": "Who saved the draft last, or created the stack",
+            "type": "string"
+          },
+          "vars": {
+            "description": "The draft's variables by name",
+            "items": {
+              "$ref": "#/components/schemas/DraftVarBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "The draft's version: send it back with a save, and the save is refused with 409 draft_conflict if the draft moved",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "savedBy",
+          "savedAt",
+          "baseSeq",
+          "files",
+          "vars"
+        ],
+        "type": "object"
+      },
+      "StackDraftSaveBody": {
+        "additionalProperties": false,
+        "properties": {
+          "changed": {
+            "description": "False when the draft already held exactly this content: nothing was written, the version did not move and no audit row was made",
+            "type": "boolean"
+          },
+          "savedAt": {
+            "description": "When, RFC 3339 UTC",
+            "type": "string"
+          },
+          "savedBy": {
+            "description": "Who saved the draft last",
+            "type": "string"
+          },
+          "version": {
+            "description": "The draft's version now",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "changed",
+          "version",
+          "savedBy",
+          "savedAt"
+        ],
+        "type": "object"
+      },
+      "StackDraftSaveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "files": {
+            "description": "Every file of the draft. compose.yaml must be one of them",
+            "items": {
+              "$ref": "#/components/schemas/DraftFileBody"
+            },
+            "maxItems": 100,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "vars": {
+            "description": "Every variable of the draft",
+            "items": {
+              "$ref": "#/components/schemas/DraftVarBody"
+            },
+            "maxItems": 500,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "The version of the draft you read",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "files",
+          "vars"
+        ],
+        "type": "object"
+      },
+      "StackItem": {
+        "additionalProperties": false,
+        "properties": {
+          "hasDraft": {
+            "description": "True when the draft holds changes that have not been deployed",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "The stack ID",
+            "type": "string"
+          },
+          "lastDeployedAt": {
+            "description": "When the newest successful deploy ended, RFC 3339 UTC; empty when there is none",
+            "type": "string"
+          },
+          "lastDeployedBy": {
+            "description": "Who started it; empty when there is none",
+            "type": "string"
+          },
+          "name": {
+            "description": "The stack name, also its swarm namespace or compose project",
+            "type": "string"
+          },
+          "source": {
+            "description": "Where the stack's definition lives. Only inline exists today",
+            "enum": [
+              "inline",
+              "adopted",
+              "git"
+            ],
+            "type": "string"
+          },
+          "state": {
+            "description": "Where the stack is, from its newest operation: not_deployed before the first deploy, deploying while one runs, deploy_failed when the newest one failed, was cancelled or was interrupted, deployed otherwise",
+            "enum": [
+              "not_deployed",
+              "deploying",
+              "deploy_failed",
+              "deployed"
+            ],
+            "type": "string"
+          },
+          "target": {
+            "description": "Where the stack deploys: fixed when it was created, from the kind of the environment",
+            "enum": [
+              "swarm",
+              "standalone"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "target",
+          "source",
+          "state",
+          "lastDeployedAt",
+          "lastDeployedBy",
+          "hasDraft"
+        ],
+        "type": "object"
+      },
+      "StackJobBody": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "description": "When the job started, RFC 3339 UTC",
+            "type": "string"
+          },
+          "finishedAt": {
+            "description": "When the job ended, RFC 3339 UTC, empty while it runs",
+            "type": "string"
+          },
+          "id": {
+            "description": "The job ID",
+            "type": "string"
+          },
+          "items": {
+            "description": "The steps, in order",
+            "items": {
+              "$ref": "#/components/schemas/StackJobItemBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "mode": {
+            "description": "What the operation is",
+            "enum": [
+              "deploy"
+            ],
+            "type": "string"
+          },
+          "stackId": {
+            "description": "The stack being deployed",
+            "type": "string"
+          },
+          "state": {
+            "description": "running until every step has ended, then done when every step is",
+            "enum": [
+              "running",
+              "done",
+              "partial",
+              "failed",
+              "cancelled"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "stackId",
+          "mode",
+          "state",
+          "createdAt",
+          "finishedAt",
+          "items"
+        ],
+        "type": "object"
+      },
+      "StackJobItemBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "A stable word for how a step failed or was not run, empty otherwise",
+            "type": "string"
+          },
+          "current": {
+            "description": "How many of total were done",
+            "format": "int64",
+            "type": "integer"
+          },
+          "id": {
+            "description": "The step: check, networks or services",
+            "type": "string"
+          },
+          "label": {
+            "description": "The step's name",
+            "type": "string"
+          },
+          "message": {
+            "description": "A sentence for the code. The SPA words the code itself",
+            "type": "string"
+          },
+          "result": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "What a finished step produced, like the counts of services created and updated",
+            "type": "object"
+          },
+          "state": {
+            "description": "Where the step is",
+            "enum": [
+              "waiting",
+              "running",
+              "done",
+              "failed",
+              "cancelled"
+            ],
+            "type": "string"
+          },
+          "total": {
+            "description": "How many there are to do, 0 until known",
+            "format": "int64",
+            "type": "integer"
+          },
+          "unit": {
+            "description": "What current and total count, or empty",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "state",
+          "code",
+          "message",
+          "current",
+          "total",
+          "unit",
+          "result"
+        ],
+        "type": "object"
+      },
+      "StackListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "The environment's stacks by name",
+            "items": {
+              "$ref": "#/components/schemas/StackItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
         ],
         "type": "object"
       },
@@ -19987,6 +20506,449 @@
         "summary": "End one of the caller's own shells",
         "tags": [
           "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks": {
+      "get": {
+        "description": "Every stack of the environment by name, with where it deploys, its state and when it was last deployed. The state comes from Bayplan's own records of the stack's deploys, never from a read of the engine. Needs stacks.read (Viewer).",
+        "operationId": "listStacks",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The stacks Bayplan manages on an environment",
+        "tags": [
+          "stacks"
+        ]
+      },
+      "post": {
+        "description": "Creates a stack and its first draft. Nothing is sent to any engine: the stack is Not deployed until it is deployed. The target is fixed here from the environment: swarm when the environment is a swarm, standalone otherwise. The name must match ^[a-z0-9][a-z0-9_-]{0,62}$ (422 stack_name_invalid) and be new on the environment (409 stack_name_taken). start chooses the first compose.yaml: example (a starter with one service) or empty; compose overrides it. Audited as stack.created. Needs stacks.create (Admin).",
+        "operationId": "createStack",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StackCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackDetail"
+                }
+              }
+            },
+            "description": "Created",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Create a stack",
+        "tags": [
+          "stacks"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}": {
+      "get": {
+        "description": "The stack with its state. A stack ID of another environment is 404 stack_not_found, as one that does not exist. Needs stacks.read (Viewer).",
+        "operationId": "getStack",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackDetail"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "One stack",
+        "tags": [
+          "stacks"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/deploys": {
+      "post": {
+        "description": "Takes a revision from the draft and deploys it as a job, answering 202 with the job ID at once; the deploy goes on if the browser closes. draftVersion must be the version of the draft you mean to deploy, or the answer is 409 draft_conflict. On a swarm the job creates the stack's networks and then its services through one manager, each once and never retried; each carries com.docker.stack.namespace and bayplan.stack.id, and each service com.docker.stack.image with the image as written. A compose file that does not load is 422 compose_invalid; one that uses a setting not converted yet is 422 compose_unsupported. A standalone stack is 409 target_engine_missing. At most 5 jobs of one user run at once (429 too_many_deploys). Writes one stack.deployed audit row, with the result, when the job ends. Needs stacks.deploy (Operator).",
+        "operationId": "deployStack",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StackDeployRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackDeployBody"
+                }
+              }
+            },
+            "description": "Accepted",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Deploy a stack's draft",
+        "tags": [
+          "stacks"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/deploys/{jobId}": {
+      "get": {
+        "description": "The deploy as it stands now. A job is kept for 10 minutes after it ends. A job of another stack, or one that is gone, is 404 stack_job_not_found. Needs stacks.read (Viewer).",
+        "operationId": "getStackDeploy",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The job ID the deploy answered with",
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "description": "The job ID the deploy answered with",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackJobBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "One deploy job and its steps",
+        "tags": [
+          "stacks"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/draft": {
+      "get": {
+        "description": "The files and variables of the stack's draft, with its version and who saved it last. The value of a secret variable and the content of a secret file are \u003chidden\u003e. Needs stacks.read (Viewer).",
+        "operationId": "getStackDraft",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackDraftBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "A stack's draft",
+        "tags": [
+          "stacks"
+        ]
+      },
+      "put": {
+        "description": "Replaces the draft's files and variables when the draft is still at the version you read; if someone saved in between the answer is 409 draft_conflict, naming who saved and when, and nothing is written. Saving content equal to the saved draft changes nothing: changed is false, the version does not move and no audit row is written. A save never sends anything to an engine: only a deploy does. compose.yaml must be among the files (422 stack_file_invalid, as for a path that is absolute, has .., is repeated, or a file over 1 MiB); a variable name must be letters, digits and underscore (422 stack_var_invalid). A secret file or variable sent as \u003chidden\u003e keeps its saved value; with none saved it is 422 stack_placeholder_without_value. Audited as stack.draft_saved when it changed. Needs stacks.update (Operator).",
+        "operationId": "saveStackDraft",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StackDraftSaveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackDraftSaveBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Save a stack's draft",
+        "tags": [
+          "stacks"
         ]
       }
     },
