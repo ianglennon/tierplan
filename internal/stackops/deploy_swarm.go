@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	composetypes "github.com/compose-spec/compose-go/v2/types"
+
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/jobs"
@@ -22,8 +24,16 @@ import (
 const (
 	ItemCheck    = "check"
 	ItemNetworks = "networks"
+	ItemObjects  = "objects"
 	ItemServices = "services"
+	ItemCleanup  = "cleanup"
 )
+
+// DeployItems returns the items of a swarm deploy job in the order they run, for the caller that
+// starts the job.
+func DeployItems() []string {
+	return []string{ItemCheck, ItemNetworks, ItemObjects, ItemServices, ItemCleanup}
+}
 
 // The codes a swarm deploy ends a failed item with. Each has a sentence in codeMessages; the
 // manager's own words are never put in a job.
@@ -36,7 +46,11 @@ const (
 	CodeServiceNameTaken   = "service_name_taken"
 	CodeNetworkConflict    = "network_conflict"
 	CodeNetworkFailed      = "network_failed"
-	CodeExternalMissing    = "external_network_missing"
+	CodeExternalMissing    = "external_missing"
+	CodeObjectInvalid      = "object_invalid"
+	CodeObjectFailed       = "object_failed"
+	CodeObjectNameTaken    = "object_name_taken"
+	CodeStackInvalid       = "stack_invalid"
 	CodeNameClash          = "stack_name_clash"
 	CodeRegistryUnresolved = "registry_unresolved"
 	CodeEngineError        = "engine_error"
@@ -53,7 +67,11 @@ var codeMessages = map[string]string{
 	CodeServiceNameTaken:   "The swarm already has a service of that name.",
 	CodeNetworkConflict:    "The swarm already has a network of that name that this stack does not own.",
 	CodeNetworkFailed:      "The swarm could not create the network.",
-	CodeExternalMissing:    "A network the stack names as external does not exist.",
+	CodeExternalMissing:    "A network, secret or config the stack names as external does not exist.",
+	CodeObjectInvalid:      "A secret or config of the stack has no usable content.",
+	CodeObjectFailed:       "The swarm could not create a secret or config.",
+	CodeObjectNameTaken:    "The swarm already has a secret or config of that name that this stack does not own.",
+	CodeStackInvalid:       "The stack could not be converted for the swarm.",
 	CodeNameClash:          "A stack of that name already exists on this environment that Bayplan does not manage.",
 	CodeRegistryUnresolved: "The registry credential for an image could not be read.",
 	CodeEngineError:        "The engine could not complete the request.",
@@ -64,12 +82,18 @@ var codeMessages = map[string]string{
 // CodeMessage is the sentence for a deploy code, empty for a code it does not know.
 func CodeMessage(code string) string { return codeMessages[code] }
 
-// SwarmDeployInput is a stack to deploy to a swarm: the environment, the stack, the converted
-// plan and who asks.
+// SwarmDeployInput is a stack to deploy to a swarm: the environment, the stack, the loaded compose
+// project with the files and variables its secrets and configs are read from, and who asks.
 type SwarmDeployInput struct {
-	EnvID  string
-	Stack  Stack
-	Plan   convert.Plan
+	EnvID string
+	Stack Stack
+	// Project is the stack's compose file as stacks.Load read it. The deploy converts it twice:
+	// once for the networks and the list of services, and again for the services after the
+	// secrets and configs exist, so that they name the objects it created.
+	Project *composetypes.Project
+	// Files and Vars are the stack's working copy: where a secret or config reads its content.
+	Files  stacks.FileSet
+	Vars   map[string]string
 	Caller Caller
 	// OnDone, when set, is called once with the result before the job's last item is finished,
 	// so a job that reads as finished has already been recorded by the caller.
@@ -82,18 +106,29 @@ type DeployResult struct {
 	// Networks and Services count the networks and services created; Updated counts the
 	// services that were updated in place.
 	Networks, Services, Updated int
-	FailedService, Code         string
+	// CreatedNetworks and CreatedObjects name what this deploy created: networks, and secrets and
+	// configs by their hashed names. RemovedServices names the services the file no longer
+	// declares that were removed, RemovedObjects the secrets and configs it replaced that were
+	// removed, and LeftInPlace the replaced ones that could not be removed.
+	CreatedNetworks, CreatedObjects, RemovedServices, RemovedObjects, LeftInPlace []string
+	// FailedService names the service, network, secret or config the failure is about.
+	FailedService, Code string
 }
 
 // OK reports whether the deploy ended without a failure.
 func (r DeployResult) OK() bool { return r.Code == "" }
 
-// DeploySwarm creates the stack's networks and services on the swarm, once each and in order,
-// reporting through r on the items ItemCheck, ItemNetworks and ItemServices. It reads what the
-// stack already owns from a manager (one read), creates each missing network, then creates or
-// updates each service with the registry credential chosen for its image. It stops at the first
-// failure and ends the item that failed with a code; items after it end cancelled with CodeNotRun.
-// Every write goes through Aggregator.WriteOnManager and is never retried (P2 D-42).
+// DeploySwarm creates the stack's networks, secrets, configs and services on the swarm, once each
+// and in order, reporting through r on the items of DeployItems. It reads what the stack already
+// owns from a manager (one read), creates each missing network, creates the secrets and configs
+// whose content is new, then creates or updates each service with the registry credential chosen
+// for its image, and last removes what the deploy replaced. It stops at the first failure and ends
+// the item that failed with a code; items after it end cancelled with CodeNotRun. Every write goes
+// through Aggregator.WriteOnManager and is never retried (P2 D-42).
+//
+// A secret or config that is replaced is removed only in the last item, after every service
+// update succeeded, so a deploy that stops earlier leaves the old objects where the services still
+// use them (D-07).
 //
 // The last item is finished only after in.OnDone returns.
 func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Reporter) (res DeployResult) {
@@ -102,17 +137,17 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		if in.OnDone != nil {
 			in.OnDone(res)
 		}
-		r.Finish(ItemServices, final.state, final.code, final.message, final.result)
+		r.Finish(ItemCleanup, final.state, final.code, final.message, final.result)
 	}()
 	// fail ends the item that failed with its code and the items after it as not run. The last
 	// item is held in final, to be finished after OnDone.
-	fail := func(item, code, service string) DeployResult {
-		res.Code, res.FailedService = code, service
+	fail := func(item, code, name string) DeployResult {
+		res.Code, res.FailedService = code, name
 		state := jobs.ItemFailed
 		if code == CodeCancelled {
 			state = jobs.ItemCancelled
 		}
-		for _, id := range []string{ItemCheck, ItemNetworks, ItemServices} {
+		for _, id := range DeployItems() {
 			var end itemEnd
 			switch {
 			case id == item:
@@ -122,7 +157,7 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 			default:
 				continue // finished before the failure
 			}
-			if id == ItemServices {
+			if id == ItemCleanup {
 				final = end
 			} else {
 				r.Finish(id, end.state, end.code, end.message, nil)
@@ -130,13 +165,35 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		}
 		return res
 	}
+	// failStep ends the item that failed with the code and name a step reported.
+	failStep := func(item string, err error) DeployResult {
+		code, name := stepOf(ctx, err)
+		return fail(item, code, name)
+	}
 
-	// 1. Check: read what the stack owns, once, from a manager.
+	// 1. Check: resolve the secrets and configs, plan the conversion and read what the stack
+	// owns, once, from a manager.
 	r.Update(ItemCheck, func(it *jobs.Item) { it.State = jobs.ItemRunning })
-	var existingNets []dockerx.NetworkRow
+	objs, err := stacks.ResolveObjects(in.Project, in.Files, in.Vars)
+	if err != nil {
+		var oe *stacks.ObjectError
+		name := ""
+		if errors.As(err, &oe) {
+			name = oe.Name
+		}
+		d.log().Warn("a stack's secret or config could not be resolved", "environment", in.EnvID, "stack", in.Stack.Name, "object", name, "error", err)
+		return fail(ItemCheck, CodeObjectInvalid, name)
+	}
+	planned, err := convert.Convert(in.Project, convert.Options{StackName: in.Stack.Name, StackID: in.Stack.ID, Objects: plannedRefs(in.Stack.Name, objs)})
+	if err != nil {
+		d.log().Warn("a stack could not be converted for a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
+		return fail(ItemCheck, CodeStackInvalid, "")
+	}
+	var existingNets, allNets []dockerx.NetworkRow
 	var existingSvcs []dockerx.ServiceDetail
-	var allNets []dockerx.NetworkRow
-	err := d.Clusters.ClusterRead(ctx, in.EnvID, func(c *dockerx.Client) error {
+	var live []objectRow
+	extSecrets, extConfigs := hasExternalObject(objs, stacks.KindSecret), hasExternalObject(objs, stacks.KindConfig)
+	err = d.Clusters.ClusterRead(ctx, in.EnvID, func(c *dockerx.Client) error {
 		var e error
 		if existingNets, e = c.NetworksWithLabel(ctx, stacks.LabelSwarmNamespace, in.Stack.Name); e != nil {
 			return e
@@ -144,19 +201,41 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		if existingSvcs, e = c.ServicesWithLabel(ctx, stacks.LabelSwarmNamespace, in.Stack.Name); e != nil {
 			return e
 		}
-		if hasExternal(in.Plan) {
-			allNets, e = c.Networks(ctx)
+		if hasExternal(planned) {
+			if allNets, e = c.Networks(ctx); e != nil {
+				return e
+			}
 		}
-		return e
+		// The stack's own objects, or every object of a kind that has an external one to find.
+		var secrets []dockerx.SecretRow
+		if extSecrets {
+			secrets, e = c.SecretList(ctx)
+		} else {
+			secrets, e = c.SecretsWithLabel(ctx, stacks.LabelSwarmNamespace, in.Stack.Name)
+		}
+		if e != nil {
+			return e
+		}
+		var configs []dockerx.ConfigRow
+		if extConfigs {
+			configs, e = c.ConfigList(ctx)
+		} else {
+			configs, e = c.ConfigsWithLabel(ctx, stacks.LabelSwarmNamespace, in.Stack.Name)
+		}
+		if e != nil {
+			return e
+		}
+		live = append(secretRows(secrets), configRows(configs)...)
+		return nil
 	})
 	if err != nil {
 		d.log().Warn("could not read a stack's objects before a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
 		return fail(ItemCheck, codeOf(ctx, err), "")
 	}
-	if clash(in.Stack.ID, existingNets, existingSvcs) {
+	if clash(in.Stack.ID, in.Stack.Name, existingNets, existingSvcs, live) {
 		return fail(ItemCheck, CodeNameClash, "")
 	}
-	for _, n := range in.Plan.Networks {
+	for _, n := range planned.Networks {
 		if n.External && !hasNetwork(allNets, n.Name) {
 			return fail(ItemCheck, CodeExternalMissing, n.Name)
 		}
@@ -165,7 +244,7 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 
 	// 2. Networks: create each one the stack uses that does not exist yet.
 	r.Update(ItemNetworks, func(it *jobs.Item) { it.State = jobs.ItemRunning })
-	for _, n := range in.Plan.Networks {
+	for _, n := range planned.Networks {
 		if n.External || hasNetwork(existingNets, n.Name) {
 			continue
 		}
@@ -192,18 +271,33 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 			return fail(ItemNetworks, code, n.Name)
 		}
 		res.Networks++
+		res.CreatedNetworks = append(res.CreatedNetworks, n.Name)
 	}
 	r.Finish(ItemNetworks, jobs.ItemDone, "", "", nil)
 
-	// 3. Services: update the ones that exist at the version just read, create the rest.
-	r.Update(ItemServices, func(it *jobs.Item) {
-		it.State, it.Unit, it.Total = jobs.ItemRunning, "services", int64(len(in.Plan.Services))
-	})
+	// 3. Objects: the secrets and configs, created under their hashed names or found.
+	r.Update(ItemObjects, func(it *jobs.Item) { it.State = jobs.ItemRunning })
+	refs, created, err := d.ensureObjects(ctx, in.EnvID, in.Stack, objs, live)
+	res.CreatedObjects = created
+	if err != nil {
+		return failStep(ItemObjects, err)
+	}
+	r.Finish(ItemObjects, jobs.ItemDone, "", "", nil)
+
+	// 4. Services: convert again with the objects that now exist, update the services that exist at
+	// the version just read and create the rest.
+	r.Update(ItemServices, func(it *jobs.Item) { it.State = jobs.ItemRunning })
+	plan, err := convert.Convert(in.Project, convert.Options{StackName: in.Stack.Name, StackID: in.Stack.ID, Objects: refs})
+	if err != nil {
+		d.log().Warn("a stack could not be converted for a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
+		return fail(ItemServices, CodeStackInvalid, "")
+	}
+	r.Update(ItemServices, func(it *jobs.Item) { it.Unit, it.Total = "services", int64(len(plan.Services)) })
 	byName := make(map[string]dockerx.ServiceDetail, len(existingSvcs))
 	for _, s := range existingSvcs {
 		byName[s.Name] = s
 	}
-	for i, sp := range in.Plan.Services {
+	for i, sp := range plan.Services {
 		if ctx.Err() != nil {
 			return fail(ItemServices, CodeCancelled, sp.Name)
 		}
@@ -236,8 +330,23 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		}
 		r.Update(ItemServices, func(it *jobs.Item) { it.Current = int64(i + 1) })
 	}
+	r.Finish(ItemServices, jobs.ItemDone, "", "", map[string]string{
+		"services": strconv.Itoa(res.Services), "updated": strconv.Itoa(res.Updated),
+	})
+
+	// 5. Cleanup: every service now uses the new objects, so the ones they replaced can go.
+	r.Update(ItemCleanup, func(it *jobs.Item) { it.State = jobs.ItemRunning })
+	if ctx.Err() != nil {
+		return fail(ItemCleanup, CodeCancelled, "")
+	}
+	removed, left, err := d.removeReplacedObjects(ctx, in.EnvID, in.Stack, refs)
+	res.RemovedObjects, res.LeftInPlace = removed, left
+	if err != nil {
+		return fail(ItemCleanup, codeOf(ctx, err), "")
+	}
 	final = itemEnd{state: jobs.ItemDone, result: map[string]string{
-		"services": strconv.Itoa(res.Services), "updated": strconv.Itoa(res.Updated), "networks": strconv.Itoa(res.Networks),
+		"networks": strconv.Itoa(res.Networks), "objects": strconv.Itoa(len(res.CreatedObjects)),
+		"removedObjects": strconv.Itoa(len(res.RemovedObjects)), "leftInPlace": strconv.Itoa(len(res.LeftInPlace)),
 	}}
 	return res
 }
@@ -249,14 +358,12 @@ type itemEnd struct {
 }
 
 func order(item string) int {
-	switch item {
-	case ItemCheck:
-		return 0
-	case ItemNetworks:
-		return 1
-	default:
-		return 2
+	for i, id := range DeployItems() {
+		if id == item {
+			return i
+		}
 	}
+	return len(DeployItems())
 }
 
 // authFor chooses the registry credential an image is sent with, "" for none or no resolver.
@@ -276,7 +383,8 @@ func (d Deps) authFor(ctx context.Context, envID, image string) (string, error) 
 
 // clash reports whether the swarm holds an object under this stack's namespace that another
 // stack, or none of Bayplan's, owns: a stack of that name that Bayplan does not manage (D-12).
-func clash(stackID string, nets []dockerx.NetworkRow, svcs []dockerx.ServiceDetail) bool {
+// objects are the secrets and configs the deploy read; only those under the namespace count.
+func clash(stackID, stackName string, nets []dockerx.NetworkRow, svcs []dockerx.ServiceDetail, objects []objectRow) bool {
 	for _, n := range nets {
 		if n.Labels[stacks.LabelStackID] != stackID {
 			return true
@@ -284,6 +392,11 @@ func clash(stackID string, nets []dockerx.NetworkRow, svcs []dockerx.ServiceDeta
 	}
 	for _, s := range svcs {
 		if s.Labels[stacks.LabelStackID] != stackID {
+			return true
+		}
+	}
+	for _, o := range objects {
+		if o.Labels[stacks.LabelSwarmNamespace] == stackName && o.Labels[stacks.LabelStackID] != stackID {
 			return true
 		}
 	}

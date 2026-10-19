@@ -1999,7 +1999,7 @@ export interface paths {
         put?: never;
         /**
          * Deploy a stack's draft
-         * @description Takes a revision from the draft and deploys it as a job, answering 202 with the job ID at once; the deploy goes on if the browser closes. draftVersion must be the version of the draft you mean to deploy, or the answer is 409 draft_conflict. On a swarm the job creates the stack's networks and then its services through one manager, each once and never retried; each carries com.docker.stack.namespace and bayplan.stack.id, and each service com.docker.stack.image with the image as written. A compose file that does not load is 422 compose_invalid; one that uses a setting not converted yet is 422 compose_unsupported. A standalone stack is 409 target_engine_missing. At most 5 jobs of one user run at once (429 too_many_deploys). Writes one stack.deployed audit row, with the result, when the job ends. Needs stacks.deploy (Operator).
+         * @description Takes a revision from the draft and deploys it as a job, answering 202 with the job ID at once; the deploy goes on if the browser closes. draftVersion must be the version of the draft you mean to deploy, or the answer is 409 draft_conflict. On a swarm the job creates the stack's networks, then its secrets and configs under names that end in a short hash of their content, then its services, through one manager, each once and never retried; each carries com.docker.stack.namespace and bayplan.stack.id, and each service com.docker.stack.image with the image as written. A secret or config that content changes replaces is removed at the end, once every service uses the new one. A compose file that does not load is 422 compose_invalid; one that uses a setting not converted yet is 422 compose_unsupported. A standalone stack is 409 target_engine_missing. At most 5 jobs of one user run at once (429 too_many_deploys). Writes one stack.deployed audit row, with the result, when the job ends. Needs stacks.deploy (Operator).
          */
         post: operations["deployStack"];
         delete?: never;
@@ -8218,7 +8218,7 @@ export interface components {
              * @description How many of total were done
              */
             current: number;
-            /** @description The step: check, networks or services */
+            /** @description The step: check, networks, objects, services or cleanup */
             id: string;
             /** @description The step's name */
             label: string;

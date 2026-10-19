@@ -4,8 +4,10 @@
 package dockerx
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/moby/moby/client"
 )
@@ -53,4 +55,50 @@ func (c *Client) NetworksWithLabel(ctx context.Context, key, value string) ([]Ne
 		}
 	}
 	return out, nil
+}
+
+// SecretsWithLabel lists the swarm secrets that carry the label key=value, sorted by name then ID,
+// built the same way as ServicesWithLabel: the filter is one encoded term, and the label is
+// checked again on each row. It is read-only and needs a manager. A value is not a field of a
+// row, so none is read.
+func (c *Client) SecretsWithLabel(ctx context.Context, key, value string) ([]SecretRow, error) {
+	res, err := c.cur().SecretList(ctx, client.SecretListOptions{
+		Filters: make(client.Filters).Add("label", key+"="+value),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list swarm secrets on %s: %w", c.t.Describe(), err)
+	}
+	rows := make([]SecretRow, 0, len(res.Items))
+	for _, s := range res.Items {
+		if row := secretRow(s); row.Labels[key] == value {
+			rows = append(rows, row)
+		}
+	}
+	slices.SortFunc(rows, func(a, b SecretRow) int {
+		return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.ID, b.ID))
+	})
+	return rows, nil
+}
+
+// ConfigsWithLabel lists the swarm configs that carry the label key=value, without their content,
+// sorted by name then ID, built the same way as SecretsWithLabel. It is read-only and needs a
+// manager.
+func (c *Client) ConfigsWithLabel(ctx context.Context, key, value string) ([]ConfigRow, error) {
+	res, err := c.cur().ConfigList(ctx, client.ConfigListOptions{
+		Filters: make(client.Filters).Add("label", key+"="+value),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list swarm configs on %s: %w", c.t.Describe(), err)
+	}
+	rows := make([]ConfigRow, 0, len(res.Items))
+	for i := range res.Items {
+		if row := configRow(res.Items[i]); row.Labels[key] == value {
+			rows = append(rows, row)
+		}
+		res.Items[i].Spec.Data = nil
+	}
+	slices.SortFunc(rows, func(a, b ConfigRow) int {
+		return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.ID, b.ID))
+	})
+	return rows, nil
 }

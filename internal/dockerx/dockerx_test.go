@@ -497,6 +497,8 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // ServicesWithLabel and NetworksWithLabel (Phase 7, STK-02) are reads: the swarm services or the networks that
 // carry one label key and value, the filter built with the engine client's Filters type so key and value are
 // encoded, never joined into the query; a stack deploy reads what it owns with them before it writes.
+// SecretsWithLabel and ConfigsWithLabel (Phase 7, STK-02) are reads of the same kind for the swarm secrets and configs
+// that carry one label key and value, a config without its content; a stack deploy finds the objects it made with them.
 // ContainerLogs (Phase 4, OBS-01) is a read: one inspect, then the engine's log of the container
 // with stdout, stderr and timestamps always on; it takes only the time range, the tail and follow.
 // ServiceLogs and TaskLogs (Phase 6, OBS-02) are reads of the same kind on a manager: one inspect for the TTY flag,
@@ -504,7 +506,7 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // follow, since and tail.
 // ContainerStatsOnce (Phase 6, RES-11) is a read: one one-shot stats sample of a container by ID, with stream off and
 // one-shot on; it takes no options and nothing that picks a path.
-var allowedMethods = []string{"Close", "Cluster", "ConfigCreate", "ConfigInspect", "ConfigList", "ConfigRemove", "ContainerAction", "ContainerDetail", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "ContainerStatsOnce", "DistributionInspect", "Events", "ImageDetail", "ImageHistory", "ImagePull", "ImageRemove", "ImageUntag", "ImageUsers", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "Networks", "NetworksWithLabel", "NodeInspect", "NodeRemove", "NodeUpdate", "Probe", "RestartPolicies", "ResolveImage", "SecretCreate", "SecretInspect", "SecretList", "SecretRemove", "ServiceCreate", "ServiceForceUpdate", "ServiceInspect", "ServiceLogs", "ServiceRefs", "ServiceRemove", "ServiceRollback", "ServiceScale", "ServiceUpdate", "ServicesWithLabel", "Snapshot", "StartExec", "SwarmNetworkNames", "TaskHistoryLimit", "TaskLogs", "Tasks", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers"}
+var allowedMethods = []string{"Close", "Cluster", "ConfigCreate", "ConfigInspect", "ConfigList", "ConfigRemove", "ConfigsWithLabel", "ContainerAction", "ContainerDetail", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "ContainerStatsOnce", "DistributionInspect", "Events", "ImageDetail", "ImageHistory", "ImagePull", "ImageRemove", "ImageUntag", "ImageUsers", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "Networks", "NetworksWithLabel", "NodeInspect", "NodeRemove", "NodeUpdate", "Probe", "RestartPolicies", "ResolveImage", "SecretCreate", "SecretInspect", "SecretList", "SecretRemove", "SecretsWithLabel", "ServiceCreate", "ServiceForceUpdate", "ServiceInspect", "ServiceLogs", "ServiceRefs", "ServiceRemove", "ServiceRollback", "ServiceScale", "ServiceUpdate", "ServicesWithLabel", "Snapshot", "StartExec", "SwarmNetworkNames", "TaskHistoryLimit", "TaskLogs", "Tasks", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers"}
 
 // typedMethodsWithForbiddenWords are allowed methods whose names contain a word the
 // pattern below refuses, each reviewed one by one.

@@ -24,6 +24,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/registry"
+	"github.com/ianglennon/bayplan/internal/stacks"
 )
 
 const (
@@ -40,7 +41,7 @@ const (
 
 	// maxSecretValue is the most bytes of value a secret may have: the swarm takes 511,999 and
 	// refuses 512,000 (RESEARCH E18, D-40).
-	maxSecretValue = 511999
+	maxSecretValue = stacks.MaxSecretBytes
 	// maxSecretBody is the most bytes a create request may have: the base64 of a value of
 	// maxSecretValue bytes is about 683 KB.
 	maxSecretBody = 1 << 20

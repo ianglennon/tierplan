@@ -91,7 +91,8 @@ func (c FakeConfig) withoutSecrets(gone map[string]bool) FakeConfig {
 	return c
 }
 
-// serveSecretList answers GET /secrets with every secret, none with a value.
+// serveSecretList answers GET /secrets with every secret that passes the request's label filter,
+// none with a value.
 func (f *Fake) serveSecretList(w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) bool {
 	if r.Method != http.MethodGet || p != "/secrets" {
 		return false
@@ -103,9 +104,12 @@ func (f *Fake) serveSecretList(w http.ResponseWriter, r *http.Request, p string,
 	if clusterRefused(w, cfg) {
 		return true
 	}
+	keep := labelFilter(r.URL.Query().Get("filters"))
 	out := make([]swarm.Secret, 0, len(cfg.Secrets))
 	for _, s := range cfg.Secrets {
-		out = append(out, s.asSecret())
+		if keep(s.Labels) {
+			out = append(out, s.asSecret())
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 	return true

@@ -63,7 +63,7 @@ type StackJobPathInput struct {
 
 // StackJobItemBody is one step of a deploy.
 type StackJobItemBody struct {
-	ID      string            `json:"id" doc:"The step: check, networks or services"`
+	ID      string            `json:"id" doc:"The step: check, networks, objects, services or cleanup"`
 	Label   string            `json:"label" doc:"The step's name"`
 	State   string            `json:"state" enum:"waiting,running,done,failed,cancelled" doc:"Where the step is"`
 	Code    string            `json:"code" doc:"A stable word for how a step failed or was not run, empty otherwise"`
@@ -97,7 +97,8 @@ func registerStackDeploy(r *httpx.Router, d StacksDeps) {
 		Summary: "Deploy a stack's draft",
 		Description: "Takes a revision from the draft and deploys it as a job, answering 202 with the job ID at once; the deploy goes on if the browser closes. " +
 			"draftVersion must be the version of the draft you mean to deploy, or the answer is 409 draft_conflict. " +
-			"On a swarm the job creates the stack's networks and then its services through one manager, each once and never retried; each carries com.docker.stack.namespace and bayplan.stack.id, and each service com.docker.stack.image with the image as written. " +
+			"On a swarm the job creates the stack's networks, then its secrets and configs under names that end in a short hash of their content, then its services, through one manager, each once and never retried; each carries com.docker.stack.namespace and bayplan.stack.id, and each service com.docker.stack.image with the image as written. " +
+			"A secret or config that content changes replaces is removed at the end, once every service uses the new one. " +
 			"A compose file that does not load is 422 compose_invalid; one that uses a setting not converted yet is 422 compose_unsupported. A standalone stack is 409 target_engine_missing. At most 5 jobs of one user run at once (429 too_many_deploys). " +
 			"Writes one stack.deployed audit row, with the result, when the job ends. Needs stacks.deploy (Operator).",
 		Tags: []string{"stacks"}, DefaultStatus: http.StatusAccepted,
@@ -125,7 +126,9 @@ func stackJobOwner(p *rbac.Principal) string { return string(p.Type) + ":" + p.I
 var jobStepLabels = []jobs.ItemSpec{
 	{ID: stackops.ItemCheck, Label: "Check the stack"},
 	{ID: stackops.ItemNetworks, Label: "Networks"},
+	{ID: stackops.ItemObjects, Label: "Secrets and configs"},
 	{ID: stackops.ItemServices, Label: "Services"},
+	{ID: stackops.ItemCleanup, Label: "Clean up"},
 }
 
 func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*StackDeployOutput, error) {
@@ -158,8 +161,15 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 	if err != nil {
 		return nil, composeProblem(err)
 	}
-	plan, err := convert.Convert(loaded.Project, convert.Options{StackName: st.Name, StackID: st.ID})
+	files, vars := stacks.NewFileSet(draft.Copy.Files), make(map[string]string, len(draft.Copy.Vars))
+	for _, v := range draft.Copy.Vars {
+		vars[v.Name] = v.Value
+	}
+	objs, err := stacks.ResolveObjects(loaded.Project, files, vars)
 	if err != nil {
+		return nil, objectProblem(err)
+	}
+	if _, err := convert.Convert(loaded.Project, convert.Options{StackName: st.Name, StackID: st.ID, Objects: stackops.PlannedObjects(st.Name, objs)}); err != nil {
 		return nil, convertProblem(err)
 	}
 
@@ -175,7 +185,8 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 	reqCtx := context.WithoutCancel(ctx)
 	actor, userAgent := p.AuditActor(), in.UserAgent
 	in2 := stackops.SwarmDeployInput{
-		EnvID: env.ID, Stack: st, Plan: plan, Caller: stackops.Caller{Principal: p, Actor: p.Name},
+		EnvID: env.ID, Stack: st, Project: loaded.Project, Files: files, Vars: vars,
+		Caller: stackops.Caller{Principal: p, Actor: p.Name},
 	}
 	in2.OnDone = func(res stackops.DeployResult) {
 		recordDeployEnd(reqCtx, d, actor, userAgent, st, rev, deploy, res)
@@ -246,6 +257,34 @@ func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userA
 		},
 	}); err != nil {
 		d.Log.Error("could not audit a stack deploy", "stack", st.ID, "error", err)
+	}
+}
+
+// objectProblem is the 422 for a secret or config that has no usable content.
+func objectProblem(err error) error {
+	reason := "it cannot be read"
+	switch {
+	case errors.Is(err, stacks.ErrObjectSource):
+		reason = "it needs exactly one of file, environment or content"
+	case errors.Is(err, stacks.ErrObjectFileMissing):
+		reason = "its file is not a file of the stack"
+	case errors.Is(err, stacks.ErrObjectVarMissing):
+		reason = "its variable is not in the stack's table"
+	case errors.Is(err, stacks.ErrObjectEmpty):
+		reason = "it has no content"
+	case errors.Is(err, stacks.ErrObjectTooLarge):
+		reason = "it is over the size the swarm takes"
+	case errors.Is(err, stacks.ErrObjectUnsupported):
+		reason = "it sets a driver, which a stack deploy does not apply"
+	}
+	detail := "A secret or config cannot be created: " + reason + "."
+	var oe *stacks.ObjectError
+	if errors.As(err, &oe) {
+		detail = "The " + string(oe.Kind) + " " + oe.Name + " cannot be created: " + reason + "."
+	}
+	return &huma.ErrorModel{
+		Type: problemComposeInvalid, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
+		Detail: detail,
 	}
 }
 

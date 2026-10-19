@@ -68,3 +68,57 @@ func TestNetworksWithLabelListsOnlyTheNetworksThatCarryIt(t *testing.T) {
 		t.Errorf("networks = %+v, want shop_default only", got)
 	}
 }
+
+func objectReadsFake(t *testing.T) *dockertest.Fake {
+	t.Helper()
+	shop := map[string]string{"com.docker.stack.namespace": "shop", "bayplan.stack.id": "s1"}
+	return dockertest.NewFake(t, dockertest.FakeConfig{
+		SwarmState: "active", SwarmControl: true,
+		Secrets: []dockertest.FakeSecret{
+			{ID: "sec1", Name: "shop_tok_aaaaaaaa", Labels: shop},
+			{ID: "sec2", Name: "blog_tok_bbbbbbbb", Labels: map[string]string{"com.docker.stack.namespace": "blog"}},
+			{ID: "sec3", Name: "plain"},
+		},
+		Configs: []dockertest.FakeConfigObject{
+			{ID: "cfg1", Name: "shop_conf_cccccccc", Labels: shop, Data: []byte("content-that-must-not-leak")},
+			{ID: "cfg2", Name: "plain", Data: []byte("x")},
+		},
+	})
+}
+
+func TestSecretsWithLabelListsOnlyTheSecretsThatCarryIt(t *testing.T) {
+	c := newClient(t, objectReadsFake(t))
+	got, err := c.SecretsWithLabel(context.Background(), "com.docker.stack.namespace", "shop")
+	if err != nil {
+		t.Fatalf("SecretsWithLabel: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "shop_tok_aaaaaaaa" || got[0].ID != "sec1" {
+		t.Errorf("secrets = %+v, want shop_tok_aaaaaaaa only", got)
+	}
+	none, err := c.SecretsWithLabel(context.Background(), "com.docker.stack.namespace", "nope")
+	if err != nil || len(none) != 0 {
+		t.Errorf("SecretsWithLabel(nope) = %v, %v; want none", none, err)
+	}
+}
+
+func TestConfigsWithLabelListsOnlyTheConfigsThatCarryItWithoutTheirContent(t *testing.T) {
+	c := newClient(t, objectReadsFake(t))
+	got, err := c.ConfigsWithLabel(context.Background(), "bayplan.stack.id", "s1")
+	if err != nil {
+		t.Fatalf("ConfigsWithLabel: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "shop_conf_cccccccc" || got[0].ID != "cfg1" {
+		t.Errorf("configs = %+v, want shop_conf_cccccccc only", got)
+	}
+}
+
+func TestObjectLabelReadsEncodeTheValueRatherThanJoiningItIntoTheQuery(t *testing.T) {
+	c := newClient(t, objectReadsFake(t))
+	hostile := `shop","x":{"y":true`
+	if got, err := c.SecretsWithLabel(context.Background(), "com.docker.stack.namespace", hostile); err != nil || len(got) != 0 {
+		t.Errorf("SecretsWithLabel = %v, %v; want none and no error", got, err)
+	}
+	if got, err := c.ConfigsWithLabel(context.Background(), "com.docker.stack.namespace", hostile); err != nil || len(got) != 0 {
+		t.Errorf("ConfigsWithLabel = %v, %v; want none and no error", got, err)
+	}
+}

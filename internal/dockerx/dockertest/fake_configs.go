@@ -95,7 +95,8 @@ func (c FakeConfig) withoutConfigs(gone map[string]bool) FakeConfig {
 	return c
 }
 
-// serveConfigList answers GET /configs with every config and its content, as a manager does.
+// serveConfigList answers GET /configs with every config that passes the request's label filter,
+// each with its content, as a manager does.
 func (f *Fake) serveConfigList(w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) bool {
 	if r.Method != http.MethodGet || p != "/configs" {
 		return false
@@ -107,9 +108,12 @@ func (f *Fake) serveConfigList(w http.ResponseWriter, r *http.Request, p string,
 	if clusterRefused(w, cfg) {
 		return true
 	}
+	keep := labelFilter(r.URL.Query().Get("filters"))
 	out := make([]swarm.Config, 0, len(cfg.Configs))
 	for _, o := range cfg.Configs {
-		out = append(out, o.asConfig())
+		if keep(o.Labels) {
+			out = append(out, o.asConfig())
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 	return true

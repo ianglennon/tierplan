@@ -23,6 +23,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/registry"
+	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 )
 
@@ -35,7 +36,7 @@ const (
 
 	// maxConfigValue is the most bytes of content a config may have: the swarm takes 1,023,999
 	// and refuses 1,024,000 (RESEARCH E18, D-40).
-	maxConfigValue = 1023999
+	maxConfigValue = stacks.MaxConfigBytes
 	// maxConfigBody is the most bytes a create request may have: the base64 of content of
 	// maxConfigValue bytes is about 1.37 MB.
 	maxConfigBody = 2 << 20
