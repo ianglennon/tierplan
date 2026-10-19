@@ -371,3 +371,9 @@ export async function renderStack(
     throw e instanceof RenderRequestError ? e : new RenderRequestError(0);
   }
 }
+
+// revealFile asks for the saved content of a secret stack file. Like revealVariable it is a plain
+// function and not a query, so the content never enters the query cache.
+export async function revealFile(_envId: string, _stackId: string, _path: string): Promise<string> {
+  throw new RevealRequestError(0);
+}

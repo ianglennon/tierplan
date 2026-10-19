@@ -116,6 +116,25 @@ describe("the list", () => {
     expect(within(secret).queryByText("Not used")).toBeNull();
   });
 
+  it("badges a file the compose file uses under secrets before the server has sealed it", () => {
+    setup({
+      files: [file("compose.yaml"), file("tok.txt", { content: "abc" })],
+      secret: new Set(["tok.txt"]),
+    });
+    const row = nav().querySelector<HTMLElement>('[data-file="tok.txt"]');
+    expect(within(row as HTMLElement).getByText("Secret")).toBeTruthy();
+    const compose = nav().querySelector<HTMLElement>('[data-file="compose.yaml"]');
+    expect(within(compose as HTMLElement).queryByText("Secret")).toBeNull();
+  });
+
+  it("does not badge a file twice when it is both flagged and used under secrets", () => {
+    setup({
+      files: [file("compose.yaml"), file("tok.txt", { secret: true, hidden: true })],
+      secret: new Set(["tok.txt"]),
+    });
+    expect(within(nav()).getAllByText("Secret")).toHaveLength(1);
+  });
+
   it("keeps the whole name on a long one, truncated by the layout", () => {
     const long = `${"deeply/".repeat(10)}nginx-with-a-very-long-name.conf`;
     setup({ files: [file("compose.yaml"), file(long)] });

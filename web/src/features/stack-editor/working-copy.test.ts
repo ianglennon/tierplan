@@ -476,3 +476,95 @@ describe("the variables table", () => {
     });
   });
 });
+
+// Secret stack files (plan 07-13, STK-04, UI-SPEC Defaults 6): the same rule as for a secret
+// variable, once a save has sealed the file the browser lets go of the text it typed.
+describe("secret files", () => {
+  const withSecretFile = (over: Partial<NonNullable<StackDraft["files"]>[number]> = {}) =>
+    loaded(
+      draft({
+        files: [
+          { path: COMPOSE_FILE, content: "services: {}\n", secret: false },
+          { path: "tok.txt", content: "<hidden>", secret: true, ...over },
+        ],
+      }),
+    );
+  const tok = (copy: WorkingCopy) => copy.files.find((f) => f.path === "tok.txt");
+
+  it("opens an empty editor for a hidden secret file when Replace is chosen, and nothing else", () => {
+    const copy = workingCopyReducer(withSecretFile(), { type: "replaceFile", path: "tok.txt" });
+    expect(tok(copy)).toMatchObject({ content: "", hidden: false, secret: true });
+    expect(isDirty(withSecretFile(), copy)).toBe(true);
+    const sent = toSaveBody(copy, 3).files?.find((f) => f.path === "tok.txt");
+    expect(sent).toEqual({ path: "tok.txt", content: "", secret: true });
+    // A file that is not hidden, or not there, is left as it is.
+    expect(workingCopyReducer(copy, { type: "replaceFile", path: COMPOSE_FILE })).toEqual(copy);
+    expect(workingCopyReducer(copy, { type: "replaceFile", path: "nope" })).toEqual(copy);
+  });
+
+  it("sends an untouched hidden secret file as the keep marker", () => {
+    const body = toSaveBody(withSecretFile(), 3);
+    expect(body.files?.find((f) => f.path === "tok.txt")).toEqual({
+      path: "tok.txt",
+      content: "<hidden>",
+      secret: true,
+    });
+  });
+
+  it("replaces a hidden file with the text typed or uploaded, flagged secret", () => {
+    const copy = workingCopyReducer(withSecretFile(), {
+      type: "edit",
+      path: "tok.txt",
+      content: "new-token",
+    });
+    expect(tok(copy)).toMatchObject({ content: "new-token", hidden: false, secret: true });
+  });
+
+  it("lets go of a file the server sealed: hidden again, flagged, with no text", () => {
+    const typed = workingCopyReducer(loaded(), {
+      type: "addFile",
+      path: "tok.txt",
+      content: "tok-1234",
+    });
+    expect(tok(typed)).toMatchObject({ secret: false, content: "tok-1234" });
+    const after = workingCopyReducer(typed, {
+      type: "saved",
+      sent: typed,
+      secretFiles: ["tok.txt"],
+    });
+    expect(tok(after)).toMatchObject({ secret: true, hidden: true, content: "" });
+    // The baseline the next "unsaved" is measured against is the same.
+    expect(isDirty(withSecretsHidden(typed, ["tok.txt"]), after)).toBe(false);
+    // A file the server did not seal keeps its text.
+    expect(after.files.find((f) => f.path === "nginx.conf")?.content).toBe("events {}");
+  });
+
+  it("keeps what was typed since the save was sent", () => {
+    const typed = workingCopyReducer(loaded(), {
+      type: "addFile",
+      path: "tok.txt",
+      content: "tok-1234",
+    });
+    const more = workingCopyReducer(typed, { type: "edit", path: "tok.txt", content: "tok-12345" });
+    const after = workingCopyReducer(more, {
+      type: "saved",
+      sent: typed,
+      secretFiles: ["tok.txt"],
+    });
+    expect(tok(after)).toMatchObject({ secret: true, hidden: false, content: "tok-12345" });
+  });
+
+  it("lets go of a replaced secret file once it is saved", () => {
+    const replaced = workingCopyReducer(withSecretFile(), {
+      type: "edit",
+      path: "tok.txt",
+      content: "new-token",
+    });
+    const after = workingCopyReducer(replaced, {
+      type: "saved",
+      sent: replaced,
+      secretFiles: ["tok.txt"],
+    });
+    expect(tok(after)).toMatchObject({ secret: true, hidden: true, content: "" });
+  });
+});

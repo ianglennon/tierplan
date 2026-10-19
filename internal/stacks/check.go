@@ -44,6 +44,10 @@ type CheckResult struct {
 	// every variable of the table, with the value a deploy will use and where it comes from. It is
 	// empty when the compose file is not valid YAML or was refused before it was read.
 	Variables []ResolvedVar
+	// SecretFiles are the stack files that are secret: the ones the compose file uses under
+	// secrets:, and the ones already flagged. Sorted. It is set whenever the compose file is
+	// valid YAML.
+	SecretFiles []string
 }
 
 // Check is the one pipeline that judges a stack's working copy: the editor's lint, the review and

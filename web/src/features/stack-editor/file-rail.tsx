@@ -51,6 +51,9 @@ export interface FileRailProps {
   // Paths the compose file does not refer to, which get the muted "Not used" label. The server's
   // check names them (plan 07-06); none until it has answered.
   unused?: ReadonlySet<string>;
+  // Paths the compose file uses under secrets:, which are secret files even before a save has
+  // sealed them (plan 07-13). They get the "Secret" badge a flagged file has.
+  secret?: ReadonlySet<string>;
   onSelect: (path: string) => void;
   onAdd: (path: string, content?: string) => void;
   onRename: (from: string, to: string) => void;

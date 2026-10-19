@@ -4,6 +4,7 @@
 package stacks_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/stacks"
@@ -75,5 +76,77 @@ func TestMaskValueHidesWhatIsKnownToBeSecret(t *testing.T) {
 	}
 	if got := m.MaskValue(""); got != "" {
 		t.Errorf("MaskValue of an empty value = %q, want it empty: nothing is there to hide", got)
+	}
+}
+
+// A secret file's content is hidden like a secret variable's value (plan 07-13, D-02, T-07-62).
+
+func TestMaskerHidesTheContentOfASecretFile(t *testing.T) {
+	t.Parallel()
+	m := stacks.NewMasker(nil, []stacks.File{
+		{Path: "tok.txt", Content: []byte("tok-abcdef-12345\n"), Secret: true},
+		{Path: "notes.txt", Content: []byte("visible-notes")},
+	})
+	for name, tc := range map[string]struct{ in, want string }{
+		"the content":               {"token is tok-abcdef-12345 here", "token is <hidden> here"},
+		"with its trailing line":    {"tok-abcdef-12345\n", "<hidden>\n"},
+		"a file that is not secret": {"visible-notes", "visible-notes"},
+	} {
+		if got := m.Mask(tc.in); got != tc.want {
+			t.Errorf("%s: Mask(%q) = %q, want %q", name, tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestMaskerHidesAFileTheComposeFileUsesAsASecretEvenBeforeItIsFlagged(t *testing.T) {
+	t.Parallel()
+	files := []stacks.File{
+		{Path: stacks.ComposeFile, Content: []byte("secrets:\n  tok:\n    file: tok.txt\n")},
+		{Path: "tok.txt", Content: []byte("typed-but-not-saved-yet")},
+	}
+	if got := stacks.NewMasker(nil, files).Mask("x typed-but-not-saved-yet y"); got != "x <hidden> y" {
+		t.Errorf("Mask = %q, want the content of a file used under secrets: hidden before the first save", got)
+	}
+}
+
+func TestMaskerHidesEachLineAndEachValueOfASecretFile(t *testing.T) {
+	t.Parallel()
+	m := stacks.NewMasker(nil, []stacks.File{
+		{Path: "app.env", Content: []byte("TOKEN=\"tok-abcdef-12345\"\nDB=postgres-pass-9\nQ=1\n"), Secret: true},
+	})
+	for name, tc := range map[string]struct{ in, want string }{
+		"a value alone":     {"TOKEN: tok-abcdef-12345", "TOKEN: <hidden>"},
+		"another value":     {"DB: postgres-pass-9", "DB: <hidden>"},
+		"a value too short": {"Q: 1", "Q: 1"},
+	} {
+		if got := m.Mask(tc.in); got != tc.want {
+			t.Errorf("%s: Mask(%q) = %q, want %q", name, tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestMaskerLeavesAFileTooShortToHideAlone(t *testing.T) {
+	t.Parallel()
+	m := stacks.NewMasker(nil, []stacks.File{{Path: "pin.txt", Content: []byte("123\n"), Secret: true}, {Path: "empty", Secret: true}})
+	if got := m.Mask("pin 123 and ''"); got != "pin 123 and ''" {
+		t.Errorf("Mask = %q: a secret under 4 characters is not masked, as for a variable", got)
+	}
+}
+
+func TestACheckAndARenderNeverCarryASecretFilesContent(t *testing.T) {
+	t.Parallel()
+	// The secret file is also the env_file of the service, so its values land in the environment
+	// of the rendered stack.
+	compose := "services:\n  web:\n    image: nginx:1.27\n    env_file: app.env\nsecrets:\n  tok:\n    file: app.env\n"
+	wc := stacks.WorkingCopy{Files: []stacks.File{
+		{Path: stacks.ComposeFile, Content: []byte(compose)},
+		{Path: "app.env", Content: []byte("TOKEN=tok-abcdef-12345\n")},
+	}}
+	out := renderOf(t, wc, nil)
+	if want := "tok-abcdef-12345"; strings.Contains(out, want) {
+		t.Errorf("the rendered stack carries the content of a secret file:\n%s", out)
+	}
+	if !strings.Contains(out, stacks.Hidden) {
+		t.Errorf("no <hidden> in the rendered stack:\n%s", out)
 	}
 }

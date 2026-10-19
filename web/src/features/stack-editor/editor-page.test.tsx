@@ -55,6 +55,8 @@ interface Server {
   check: (body: Record<string, unknown>) => Response | Promise<Response>;
   // The answer to a render of the working copy (plan 07-13).
   render: (body: Record<string, unknown>) => Response | Promise<Response>;
+  // The answer to a reveal of a secret file's content (plan 07-13).
+  revealFile: (path: string) => Response | Promise<Response>;
 }
 
 let server: Server;
@@ -93,6 +95,7 @@ beforeEach(() => {
     discard: () => new Response(null, { status: 204 }),
     check: () => Response.json({ problems: [], unusedFiles: [] }),
     render: () => Response.json({ name: "tracer", yaml: "name: tracer\nservices: {}\n" }),
+    revealFile: () => Response.json({ content: "the-saved-content" }),
   };
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
@@ -150,6 +153,9 @@ beforeEach(() => {
       }
       if (path === `/api/env/${ENV}/stacks/${STACK}/check` && req.method === "POST") {
         return server.check(entry.body ?? {});
+      }
+      if (path === `/api/env/${ENV}/stacks/${STACK}/files/reveal` && req.method === "POST") {
+        return server.revealFile(String(entry.body?.path ?? ""));
       }
       if (path === `/api/env/${ENV}/stacks/${STACK}/render` && req.method === "POST") {
         return server.render(entry.body ?? {});
@@ -1597,5 +1603,166 @@ describe("the Rendered pane", () => {
         name: "Warning: web uses a moving tag., compose.yaml line 3",
       }),
     ).toBeTruthy();
+  });
+});
+
+// Secret stack files (plan 07-13, STK-04, UI-SPEC Defaults 6): a file the compose file uses under
+// secrets: is hidden like a secret variable. The page shows a card in place of its editor, and the
+// text of one the person typed is let go of once a save has sealed it.
+describe("secret stack files", () => {
+  const TOKEN = "tok-abcdef-12345";
+  const secretDraft = (over: Record<string, unknown> = {}) =>
+    draftBody({
+      files: [
+        { path: "compose.yaml", content: COMPOSE, secret: false },
+        { path: "tok.txt", content: "<hidden>", secret: true },
+      ],
+      ...over,
+    });
+  const reveals = () => server.sent.filter((s) => s.path.endsWith("/files/reveal"));
+  const draftCache = () =>
+    client.getQueryData<{ files: { path: string; content: string; secret: boolean }[] }>([
+      "stack-draft",
+      ENV,
+      STACK,
+    ]);
+
+  it("shows the hidden-content card in place of the editor, and never the content", async () => {
+    server.draft = () => Response.json(secretDraft());
+    mount("tok.txt");
+    expect(await screen.findByText("The content of tok.txt is hidden.")).toBeTruthy();
+    expect(screen.queryByTestId("stack-file-editor")).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "tok.txt, text" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Replace content" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Upload a file" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Show content" })).toBeNull();
+    expect(document.body.textContent).not.toContain(TOKEN);
+  });
+
+  it("reveals the content through the audited route only to a user with secrets.reveal, only on a click", async () => {
+    server.canReveal = true;
+    server.draft = () => Response.json(secretDraft());
+    server.revealFile = () => Response.json({ content: TOKEN });
+    mount("tok.txt");
+    const show = await screen.findByRole("button", { name: "Show content" });
+    expect(reveals()).toHaveLength(0);
+    fireEvent.click(show);
+    const box = (await screen.findByRole("textbox", {
+      name: "Content of tok.txt",
+    })) as HTMLTextAreaElement;
+    expect(box.value).toBe(TOKEN);
+    expect(reveals()).toHaveLength(1);
+    expect(reveals()[0]?.body).toEqual({ path: "tok.txt" });
+    // The content is held in the card and nowhere else: not in the query cache.
+    expect(JSON.stringify(draftCache())).not.toContain(TOKEN);
+  });
+
+  it("opens an empty editor on Replace content, saves the new text as a secret, and is a card again", async () => {
+    server.draft = () => Response.json(secretDraft());
+    server.save = (body) =>
+      Response.json({
+        changed: true,
+        version: (body.version as number) + 1,
+        savedBy: "grace",
+        savedAt: new Date().toISOString(),
+        secretFiles: ["tok.txt"],
+      });
+    mount("tok.txt");
+    fireEvent.click(await screen.findByRole("button", { name: "Replace content" }));
+    const box = await screen.findByRole("textbox", { name: "tok.txt, text" });
+    expect(editorText()).toBe("");
+    typeIntoEditor("tok-replaced-98765");
+    expect(box).toBeTruthy();
+    fireEvent.click(saveButton());
+    await screen.findByText("Saved the draft of tracer.");
+
+    const sentFiles = (puts()[0]?.body?.files ?? []) as {
+      path: string;
+      content: string;
+      secret: boolean;
+    }[];
+    const tok = sentFiles.find((f) => f.path === "tok.txt");
+    expect(tok).toEqual({ path: "tok.txt", content: "tok-replaced-98765", secret: true });
+    expect(await screen.findByText("The content of tok.txt is hidden.")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("tok-replaced-98765");
+    expect(draftCache()?.files.find((f) => f.path === "tok.txt")).toMatchObject({
+      content: "<hidden>",
+      secret: true,
+    });
+  });
+
+  it("saves an untouched hidden secret file as the keep marker", async () => {
+    server.draft = () => Response.json(secretDraft());
+    mount();
+    await ready();
+    typeIntoEditor(`${COMPOSE}# edit\n`);
+    fireEvent.click(saveButton());
+    await screen.findByText("Saved the draft of tracer.");
+    expect(puts()[0]?.body?.files).toEqual([
+      { path: "compose.yaml", content: `${COMPOSE}# edit\n`, secret: false },
+      { path: "tok.txt", content: "<hidden>", secret: true },
+    ]);
+  });
+
+  it("takes a file it typed as secret once the server says it sealed it, and hides it", async () => {
+    server.draft = () =>
+      Response.json(
+        draftBody({
+          files: [
+            { path: "compose.yaml", content: COMPOSE, secret: false },
+            { path: "tok.txt", content: TOKEN, secret: false },
+          ],
+        }),
+      );
+    server.save = (body) =>
+      Response.json({
+        changed: true,
+        version: (body.version as number) + 1,
+        savedBy: "grace",
+        savedAt: new Date().toISOString(),
+        secretFiles: ["tok.txt"],
+      });
+    mount("tok.txt");
+    expect(await screen.findByRole("textbox", { name: "tok.txt, text" })).toBeTruthy();
+    expect(editorText()).toBe(TOKEN);
+    // The server flags the file on this save: nothing the person did, so nothing to edit first.
+    fireEvent.click(saveButton());
+    await screen.findByText("Saved the draft of tracer.");
+    expect(await screen.findByText("The content of tok.txt is hidden.")).toBeTruthy();
+    expect(document.body.textContent).not.toContain(TOKEN);
+    expect(JSON.stringify(draftCache())).not.toContain(TOKEN);
+  });
+
+  it("badges a file the compose file uses under secrets before it is saved, from the check", async () => {
+    server.draft = () =>
+      Response.json(
+        draftBody({
+          files: [
+            { path: "compose.yaml", content: COMPOSE, secret: false },
+            { path: "tok.txt", content: "abc", secret: false },
+          ],
+        }),
+      );
+    server.check = () => Response.json({ problems: [], unusedFiles: [], secretFiles: ["tok.txt"] });
+    mount();
+    await ready();
+    const row = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>('[data-file="tok.txt"]');
+      if (!el || !within(el).queryByText("Secret")) throw new Error("not badged yet");
+      return el;
+    });
+    expect(within(row).getByText("Secret")).toBeTruthy();
+    // It is still editable text until a save seals it.
+    fireEvent.click(row);
+    expect(await screen.findByRole("textbox", { name: "tok.txt, text" })).toBeTruthy();
+  });
+
+  it("lets a Viewer see the card without Replace or Upload", async () => {
+    server.role = "viewer";
+    server.draft = () => Response.json(secretDraft());
+    mount("tok.txt");
+    expect(await screen.findByText("The content of tok.txt is hidden.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Replace content" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Upload a file" })).toBeNull();
   });
 });

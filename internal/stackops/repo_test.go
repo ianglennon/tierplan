@@ -571,3 +571,142 @@ func TestSetPinsRefusesARevisionThatDoesNotExistAndADraft(t *testing.T) {
 		t.Errorf("SetPins of the draft of %s succeeded: only a revision has pins", st.ID)
 	}
 }
+
+// Secret stack files (plan 07-13, STK-04, UI-SPEC Defaults 6): a file the compose file uses under
+// secrets: is stored sealed, and stays sealed until the file is deleted.
+
+const secretsCompose = "services:\n  web:\n    image: nginx:1.27\nsecrets:\n  tok:\n    file: tok.txt\n"
+
+func filesOf(compose string, extra ...stacks.File) stacks.WorkingCopy {
+	return stacks.WorkingCopy{Files: append([]stacks.File{{Path: stacks.ComposeFile, Content: []byte(compose)}}, extra...)}
+}
+
+// storedFile reads how a snapshot holds one file: its plain content, its sealed content and whether
+// it is flagged secret.
+func storedFile(t *testing.T, f repoFixture, snapshotID, path string) (plain, sealed string, secret bool) {
+	t.Helper()
+	var flag int
+	row := f.repo.Store.Read.QueryRowContext(context.Background(),
+		`SELECT content, content_sealed, secret FROM stack_snapshot_files WHERE snapshot_id = ? AND path = ?`, snapshotID, path)
+	if err := row.Scan(&plain, &sealed, &flag); err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return plain, sealed, flag == 1
+}
+
+func TestSavingADraftSealsAFileTheComposeFileUsesAsASecret(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, draft, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", filesOf("services: {}\n"))
+
+	// The browser sends tok.txt as a plain file; the server decides it is secret from the reference.
+	saved, changed, err := f.repo.SaveDraft(ctx, st.ID, 1, "ada", filesOf(secretsCompose,
+		stacks.File{Path: "tok.txt", Content: []byte("TOP-SECRET-TOKEN")},
+		stacks.File{Path: "notes.txt", Content: []byte("visible notes")}))
+	if err != nil || !changed {
+		t.Fatalf("SaveDraft = %v, %v", changed, err)
+	}
+	plain, sealed, secret := storedFile(t, f, saved.ID, "tok.txt")
+	if !secret || plain != "" || sealed == "" || strings.Contains(sealed, "TOP-SECRET") {
+		t.Errorf("tok.txt is stored secret=%v plain=%q sealed=%q, want it flagged and sealed", secret, plain, sealed)
+	}
+	if plain, sealed, secret := storedFile(t, f, saved.ID, "notes.txt"); secret || plain != "visible notes" || sealed != "" {
+		t.Errorf("notes.txt is stored secret=%v plain=%q sealed=%q, want it plain", secret, plain, sealed)
+	}
+	if draft.ID != saved.ID {
+		t.Errorf("the save made a new snapshot %s, want the draft %s updated", saved.ID, draft.ID)
+	}
+
+	got, err := f.repo.Draft(ctx, st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range got.Copy.Files {
+		if file.Path == "tok.txt" && (!file.Secret || string(file.Content) != "TOP-SECRET-TOKEN") {
+			t.Errorf("tok.txt read back = %+v, want the opened secret", file)
+		}
+	}
+}
+
+func TestAFileStaysSecretWhenTheReferenceIsRemovedUntilItIsDeleted(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", filesOf(secretsCompose, stacks.File{Path: "tok.txt", Content: []byte("TOP-SECRET-TOKEN")}))
+	first, _, err := f.repo.SaveDraft(ctx, st.ID, 1, "ada", filesOf(secretsCompose, stacks.File{Path: "tok.txt", Content: []byte("TOP-SECRET-TOKEN")}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, secret := storedFile(t, f, first.ID, "tok.txt"); !secret {
+		t.Fatal("tok.txt is not secret after the first save")
+	}
+
+	// The reference goes; the browser still sends the file plain. It stays sealed.
+	after, changed, err := f.repo.SaveDraft(ctx, st.ID, first.Version, "ada", filesOf("services: {}\n", stacks.File{Path: "tok.txt", Content: []byte("TOP-SECRET-TOKEN")}))
+	if err != nil || !changed {
+		t.Fatalf("SaveDraft = %v, %v", changed, err)
+	}
+	if plain, sealed, secret := storedFile(t, f, after.ID, "tok.txt"); !secret || plain != "" || sealed == "" {
+		t.Errorf("tok.txt without a reference is stored secret=%v plain=%q sealed=%q, want it still sealed", secret, plain, sealed)
+	}
+
+	// Deleting it ends that: a file added again under the name is a new, plain file.
+	deleted, _, err := f.repo.SaveDraft(ctx, st.ID, after.Version, "ada", filesOf("services: {}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	readded, _, err := f.repo.SaveDraft(ctx, st.ID, deleted.Version, "ada", filesOf("services: {}\n", stacks.File{Path: "tok.txt", Content: []byte("plain again")}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain, _, secret := storedFile(t, f, readded.ID, "tok.txt"); secret || plain != "plain again" {
+		t.Errorf("a re-added tok.txt is stored secret=%v plain=%q, want a new plain file", secret, plain)
+	}
+}
+
+func TestSavingTheSameSecretFileAgainChangesNothing(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", filesOf("services: {}\n"))
+	copy := filesOf(secretsCompose, stacks.File{Path: "tok.txt", Content: []byte("TOP-SECRET-TOKEN")})
+	first, changed, err := f.repo.SaveDraft(ctx, st.ID, 1, "ada", copy)
+	if err != nil || !changed {
+		t.Fatalf("first save = %v, %v", changed, err)
+	}
+	// The same plain file sent again is the same content, because the flag is decided on the server.
+	again, changed, err := f.repo.SaveDraft(ctx, st.ID, first.Version, "ada", copy)
+	if err != nil || changed || again.Version != first.Version {
+		t.Errorf("second save = version %d changed %v err %v, want nothing written", again.Version, changed, err)
+	}
+}
+
+func TestARevisionKeepsASecretFileSealedUnderItsOwnRow(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", filesOf("services: {}\n"))
+	if _, _, err := f.repo.SaveDraft(ctx, st.ID, 1, "ada", filesOf(secretsCompose, stacks.File{Path: "tok.txt", Content: []byte("TOP-SECRET-TOKEN")})); err != nil {
+		t.Fatal(err)
+	}
+	rev, err := f.repo.NewRevision(ctx, st.ID, "ada")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain, sealed, secret := storedFile(t, f, rev.ID, "tok.txt"); !secret || plain != "" || sealed == "" {
+		t.Errorf("the revision holds tok.txt secret=%v plain=%q sealed=%q, want it sealed", secret, plain, sealed)
+	}
+	if err := f.repo.SetOutcome(ctx, rev.ID, stackops.OutcomeGood, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	good, found, err := f.repo.LatestGoodRevision(ctx, st.ID)
+	if err != nil || !found {
+		t.Fatalf("LatestGoodRevision = %v, %v", found, err)
+	}
+	for _, file := range good.Copy.Files {
+		if file.Path == "tok.txt" && string(file.Content) != "TOP-SECRET-TOKEN" {
+			t.Errorf("revision file = %+v, want the content opened under the revision's own context", file)
+		}
+	}
+}
