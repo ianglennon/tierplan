@@ -136,6 +136,8 @@ The Compose SDK that deploys a standalone stack creates containers, so every age
 - A bind (a `Binds` entry or a bind mount) of anything that is not an absolute path under `/srv`, `/mnt` or `/media` (or strictly below `/var/log`), the Docker or another runtime socket included, a Windows named pipe, a mount of a volume plugin or a cluster volume, and a `local` volume (named, or given inline in a mount) whose options give host access, judged as for a volume create.
 - A named volume that already exists on the engine with such a backing. The agent asks its own engine once for each distinct name; a volume that does not exist yet is forwarded, because the engine creates it as a plain local volume; a lookup the engine does not answer is `agent_engine_unreachable` (502).
 
+A stack file's `network_mode`, `ipc` or `pid` set to `service:<name>`, and its `volumes_from`, reach the engine as a `container:<id>` mode and `VolumesFrom`, so they are refused in the same way: a standalone stack whose services share a namespace or volumes needs the opt-in on an agent host (the server's own host is reached through the socket and has no such check). The review lists such a stack as fine, because the manager does not count `service:<name>` as host access.
+
 The shared vectors in `proto/hostpath/testdata/container-specs.json` pin these rules, and the agent's fuzz test judges every forwarded body against a second, independent rule. A read-only host refuses the create before the body is read.
 
 ## Writing a stack file into a container
