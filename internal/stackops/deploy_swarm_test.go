@@ -914,6 +914,9 @@ func TestPinDeployStopsAtTheLookupNamingTheHostAndTheServiceAndWritesNothing(t *
 	if res.Pins["site_web"].Action != stacks.PinKeep {
 		t.Errorf("pins = %+v, the pinned service needs no registry", res.Pins)
 	}
+	if len(res.Problems) != 1 || res.Problems[0].File != stacks.ComposeFile || res.Problems[0].Line != 5 {
+		t.Errorf("problems = %+v, want one at the image line of app (compose.yaml:5)", res.Problems)
+	}
 }
 
 func TestPinDeployOfALocalOnlyImageSendsItsImageIDAndWarns(t *testing.T) {

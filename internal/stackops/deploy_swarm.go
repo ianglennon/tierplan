@@ -61,26 +61,27 @@ const (
 )
 
 var codeMessages = map[string]string{
-	CodeHostReadOnly:       "This host is read-only, so Bayplan cannot change it.",
-	CodeAgentPolicyDenied:  "The agent refused the request.",
-	CodeNoManagerConnected: "No manager of this swarm is connected to Bayplan.",
-	CodeServiceRejected:    "The swarm rejected the service.",
-	CodeServiceChanged:     "The service was changed by someone else while the deploy ran.",
-	CodeServiceNameTaken:   "The swarm already has a service of that name.",
-	CodeNetworkConflict:    "The swarm already has a network of that name that this stack does not own.",
-	CodeNetworkFailed:      "The swarm could not create the network.",
-	CodeExternalMissing:    "A network, secret or config the stack names as external does not exist.",
-	CodeExternalNotSwarm:   "A network the stack names as external is not a swarm network.",
-	CodeObjectInvalid:      "A secret or config of the stack has no usable content.",
-	CodeObjectFailed:       "The swarm could not create a secret or config.",
-	CodeObjectNameTaken:    "The swarm already has a secret or config of that name that this stack does not own.",
-	CodeStackInvalid:       "The stack could not be converted for the swarm.",
-	CodeNameClash:          "A stack of that name already exists on this environment that Bayplan does not manage.",
-	CodeRegistryUnresolved: "The registry credential for an image could not be read.",
-	CodeImageUnresolved:    "An image could not be looked up to pin it to a digest.",
-	CodeEngineError:        "The engine could not complete the request.",
-	CodeCancelled:          "The deploy was cancelled.",
-	CodeNotRun:             "Not run because an earlier step failed.",
+	CodeHostReadOnly:        "This host is read-only, so Bayplan cannot change it.",
+	CodeAgentPolicyDenied:   "The agent refused the request.",
+	CodeNoManagerConnected:  "No manager of this swarm is connected to Bayplan.",
+	CodeServiceRejected:     "The swarm rejected the service.",
+	CodeServiceChanged:      "The service was changed by someone else while the deploy ran.",
+	CodeServiceNameTaken:    "The swarm already has a service of that name.",
+	CodeNetworkConflict:     "The swarm already has a network of that name that this stack does not own.",
+	CodeNetworkFailed:       "The swarm could not create the network.",
+	CodeExternalMissing:     "A network, secret or config the stack names as external does not exist.",
+	CodeExternalNotSwarm:    "A network the stack names as external is not a swarm network.",
+	CodeObjectInvalid:       "A secret or config of the stack has no usable content.",
+	CodeObjectFailed:        "The swarm could not create a secret or config.",
+	CodeObjectNameTaken:     "The swarm already has a secret or config of that name that this stack does not own.",
+	CodeStackInvalid:        "The stack could not be converted for the swarm.",
+	CodeNameClash:           "A stack of that name already exists on this environment that Bayplan does not manage.",
+	CodeRegistryUnresolved:  "The registry credential for an image could not be read.",
+	CodeImageUnresolved:     "An image could not be looked up to pin it to a digest.",
+	CodeRegistryUnreachable: "A registry could not be reached to pin an image.",
+	CodeEngineError:         "The engine could not complete the request.",
+	CodeCancelled:           "The deploy was cancelled.",
+	CodeNotRun:              "Not run because an earlier step failed.",
 }
 
 // CodeMessage is the sentence for a deploy code, empty for a code it does not know.
@@ -278,8 +279,17 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	for _, s := range existingSvcs {
 		byName[s.Name] = s
 	}
-	pinned := d.ResolvePins(ctx, in.EnvID, planned.Services, byName, nil, nil)
-	res.Pins, res.Problems = pinned.Pins, pinned.Problems
+	// A service the swarm lost keeps what the stack's last good revision ran for the same text
+	// (A7); a stack with no stored pins simply has none to fall back to.
+	var stored map[string]stacks.LivePin
+	if in.Pins != nil {
+		var err error
+		if stored, err = in.Pins.GoodPins(ctx, in.Stack.ID); err != nil {
+			d.log().Warn("could not read the pins of a stack's last good revision", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
+		}
+	}
+	pinned := d.ResolvePins(ctx, in.EnvID, planned.Services, byName, stored, in.Update)
+	res.Pins, res.Problems = pinned.Pins, placeProblems(in.Files, pinned.Problems)
 	if pinned.Blocked() {
 		msg := ""
 		if isImageFailure(pinned.Code) {

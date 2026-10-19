@@ -5,7 +5,9 @@ package stackops
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 
 	"github.com/distribution/reference"
 
@@ -44,7 +46,9 @@ type PinOutcome struct {
 }
 
 // isImageFailure reports whether a deploy code says an image could not be looked up.
-func isImageFailure(code string) bool { return code == CodeImageUnresolved }
+func isImageFailure(code string) bool {
+	return code == CodeImageUnresolved || code == CodeRegistryUnreachable
+}
 
 // Blocked reports whether the deploy cannot go on.
 func (o PinOutcome) Blocked() bool { return o.Code != "" }
@@ -95,31 +99,44 @@ func (d Deps) ResolvePins(ctx context.Context, envID string, services []convert.
 				out.Code, out.FailedService = res.infra, sp.Name
 				return out
 			}
-			if res.failure != "" {
+			switch {
+			case res.failure != "":
 				out.Problems = append(out.Problems, imageProblem(res, sp))
 				if out.Code == "" {
 					out.Code, out.FailedService = res.failure, sp.Name
 				}
 				continue
+			case res.local:
+				pin.Action, pin.Ref, pin.Note = stacks.PinLocal, res.ref, localImageMessage(text)
+				out.Problems = append(out.Problems, stacks.Problem{
+					Severity: stacks.SeverityWarning, Code: CodeLocalImage, Message: pin.Note,
+					File: stacks.ComposeFile, Key: "services." + sp.Short + ".image",
+				})
+			default:
+				pin.Ref = res.ref
 			}
-			pin.Ref = res.ref
 		}
 		out.Pins[sp.Name] = pin
 	}
 	return out
 }
 
-// lookupResult is the answer of one lookup: the reference to send, or why there is none. failure
-// is a lookup failure that blocks only the services that need it, infra a deploy code for one
-// that blocks the deploy.
+// lookupResult is the answer of one lookup: the reference to send and whether it is a local
+// image ID, or why there is none. failure is a lookup failure that blocks only the services that
+// need it (CodeRegistryUnreachable or CodeImageUnresolved), infra a deploy code for one that
+// blocks the deploy.
 type lookupResult struct {
 	ref            string
+	local          bool
 	failure, infra string
 	host           string
 }
 
 // lookupImage resolves one reference to the digest its registry holds for it now, with the
-// credential chosen for it, through a manager.
+// credential chosen for it, through a manager. A registry that does not give the image, when the
+// manager holds an image of that name that no registry ever gave it (it has no repository
+// digest), is a local image and is pinned to its ID (D-18). A registry that cannot be reached
+// says nothing about the image, so it never falls back to one.
 func (d Deps) lookupImage(ctx context.Context, envID, text string) lookupResult {
 	res := lookupResult{host: registryHost(text)}
 	auth, err := d.authFor(ctx, envID, text)
@@ -129,12 +146,29 @@ func (d Deps) lookupImage(ctx context.Context, envID, text string) lookupResult 
 		return res
 	}
 	var resolved dockerx.ResolvedImage
+	var local *dockerx.ImageDetail
 	err = d.Clusters.ClusterRead(ctx, envID, func(c *dockerx.Client) error {
+		local = nil
 		var rerr error
 		resolved, rerr = c.ResolveImage(ctx, text, auth)
+		if rerr == nil {
+			return nil
+		}
+		switch dockerx.PullFailure(rerr) {
+		case dockerx.PullCodeNotFound, dockerx.PullCodeUnauthorized, dockerx.PullCodeDenied:
+			// A registry that does not give the image may be asked for one built on the host.
+			if det, _, e := c.ImageDetail(ctx, text); e == nil && len(det.RepoDigests) == 0 {
+				local = &det
+			}
+		}
 		return rerr
 	})
-	if err != nil {
+	switch {
+	case err == nil:
+		res.ref = resolved.Ref
+	case local != nil:
+		res.ref, res.local = local.ID, true
+	default:
 		if code := codeOf(ctx, err); code != CodeEngineError {
 			// The agent refused, no manager is connected or the deploy was cancelled: not a
 			// fact about this image.
@@ -142,11 +176,20 @@ func (d Deps) lookupImage(ctx context.Context, envID, text string) lookupResult 
 			return res
 		}
 		res.failure = CodeImageUnresolved
-		d.log().Warn("could not look up a stack image", "environment", envID, "image", text, "reason", dockerx.PullFailure(err))
-		return res
+		if unreachable(err) {
+			res.failure = CodeRegistryUnreachable
+		}
+		d.log().Warn("could not look up a stack image", "environment", envID, "image", text, "failure", res.failure, "reason", dockerx.PullFailure(err))
 	}
-	res.ref = resolved.Ref
 	return res
+}
+
+// unreachable reports whether a lookup failed because the registry could not be reached: a
+// connection that was refused or never made, or a timeout.
+func unreachable(err error) bool {
+	var ne net.Error
+	return dockerx.PullFailure(err) == dockerx.PullCodeRegistryUnreachable ||
+		errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout())
 }
 
 // imageProblem is the blocking problem for a service whose image could not be looked up.
@@ -155,8 +198,16 @@ func imageProblem(res lookupResult, sp convert.ServicePlan) stacks.Problem {
 		Severity: stacks.SeverityError, Code: res.failure,
 		File: stacks.ComposeFile, Key: "services." + sp.Short + ".image",
 	}
-	p.Message = fmt.Sprintf("Couldn't look up %s on %s to pin it to a digest. Check the name, the tag and the credential, then try again.", sp.ImageAsWritten, res.host)
+	if res.failure == CodeRegistryUnreachable {
+		p.Message = fmt.Sprintf("Bayplan can't reach %s, and %s needs a fresh lookup. Services that are already pinned don't need the registry.", res.host, sp.Short)
+	} else {
+		p.Message = fmt.Sprintf("Couldn't look up %s on %s to pin it to a digest. Check the name, the tag and the credential, then try again.", sp.ImageAsWritten, res.host)
+	}
 	return p
+}
+
+func localImageMessage(image string) string {
+	return fmt.Sprintf("“%s” isn't from a registry, so Bayplan pins it to the local image ID.", image)
 }
 
 // registryHost is the registry an image reference names, docker.io for a Docker Hub name; the
@@ -186,4 +237,26 @@ func sameImageText(a, b string) bool {
 		return false
 	}
 	return reference.TagNameOnly(na).String() == reference.TagNameOnly(nb).String()
+}
+
+// placeProblems gives each problem about a key of the compose file the line and column of that
+// key, so the editor and the review can mark it. A problem whose key the file does not have, or a
+// file that cannot be indexed, keeps no position.
+func placeProblems(files stacks.FileSet, ps stacks.Problems) stacks.Problems {
+	f, ok := files[stacks.ComposeFile]
+	if !ok || len(ps) == 0 {
+		return ps
+	}
+	ix, err := stacks.NewPositionIndex(f.Content)
+	if err != nil {
+		return ps
+	}
+	out := make(stacks.Problems, len(ps))
+	copy(out, ps)
+	for i := range out {
+		if pos, found := ix.Lookup(out[i].Key); found && out[i].File == stacks.ComposeFile {
+			out[i].Line, out[i].Col, out[i].EndLine, out[i].EndCol = pos.Line, pos.Col, pos.EndLine, pos.EndCol
+		}
+	}
+	return out
 }
