@@ -2026,7 +2026,11 @@ export interface paths {
          */
         put: operations["saveStackDraft"];
         post?: never;
-        delete?: never;
+        /**
+         * Discard a stack's draft
+         * @description Deletes the saved draft with its files and variables; the editor then shows the last deployed definition, or the starter example for a stack never deployed. Discarding when there is no draft is the same as discarding once: 204, nothing written, no audit row. A discard never sends anything to an engine. Audited as stack.draft_discarded, with the version it deleted, when there was a draft. Needs stacks.update (Operator).
+         */
+        delete: operations["discardStackDraft"];
         options?: never;
         head?: never;
         patch?: never;
@@ -8087,6 +8091,8 @@ export interface components {
             baseSeq: number;
             /** @description The draft's files by path */
             files: components["schemas"]["DraftFileBody"][] | null;
+            /** @description True when this is a saved draft. False when the stack has none (it was discarded): the files and variables are then the last deployed definition, or the starter example for a stack never deployed, and version is 0 */
+            isDraft: boolean;
             /** @description When, RFC 3339 UTC */
             savedAt: string;
             /** @description Who saved the draft last, or created the stack */
@@ -8095,7 +8101,7 @@ export interface components {
             vars: components["schemas"]["DraftVarBody"][] | null;
             /**
              * Format: int64
-             * @description The draft's version: send it back with a save, and the save is refused with 409 draft_conflict if the draft moved
+             * @description The draft's version: send it back with a save, and the save is refused with 409 draft_conflict if the draft moved. 0 when there is no saved draft: a save at version 0 then makes one
              */
             version: number;
         };
@@ -8119,7 +8125,7 @@ export interface components {
             vars: components["schemas"]["DraftVarBody"][] | null;
             /**
              * Format: int64
-             * @description The version of the draft you read
+             * @description The version of the draft you read, or 0 when you read a stack with no saved draft (isDraft false)
              */
             version: number;
         };
@@ -13216,6 +13222,38 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["StackDraftSaveBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    discardStackDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

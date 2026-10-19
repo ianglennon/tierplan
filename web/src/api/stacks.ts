@@ -214,3 +214,28 @@ export function useSaveDraft(envId: string, stackId: string) {
     },
   });
 }
+
+// useDiscardDraft deletes the stack's saved draft. The answer is 204 whether there was a draft or
+// not, so a second press is harmless; it is never retried all the same. On success the list and
+// the page are read again; the caller reads the draft again, which is now what is deployed.
+export function useDiscardDraft(envId: string, stackId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, DraftRequestError, void>({
+    mutationFn: async () => {
+      try {
+        const res = await api.DELETE("/api/env/{envId}/stacks/{stackId}/draft", {
+          params: { path: { envId, stackId } },
+        });
+        if (!res.response.ok) {
+          const problem = readProblem(res.error, res.response);
+          throw new DraftRequestError("DELETE", problem.status, problem.type, problem.fields);
+        }
+      } catch (e) {
+        // A network failure has no status.
+        throw e instanceof DraftRequestError ? e : new DraftRequestError("DELETE", 0);
+      }
+    },
+    retry: false,
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: stacksKey(envId) }),
+  });
+}

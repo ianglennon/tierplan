@@ -50,7 +50,8 @@ type DraftVarBody struct {
 
 // StackDraftBody is a stack's draft.
 type StackDraftBody struct {
-	Version int64           `json:"version" doc:"The draft's version: send it back with a save, and the save is refused with 409 draft_conflict if the draft moved"`
+	IsDraft bool            `json:"isDraft" doc:"True when this is a saved draft. False when the stack has none (it was discarded): the files and variables are then the last deployed definition, or the starter example for a stack never deployed, and version is 0"`
+	Version int64           `json:"version" doc:"The draft's version: send it back with a save, and the save is refused with 409 draft_conflict if the draft moved. 0 when there is no saved draft: a save at version 0 then makes one"`
 	SavedBy string          `json:"savedBy" doc:"Who saved the draft last, or created the stack"`
 	SavedAt string          `json:"savedAt" doc:"When, RFC 3339 UTC"`
 	BaseSeq int64           `json:"baseSeq" doc:"The number of the deployed revision the draft started from, 0 for none"`
@@ -66,7 +67,7 @@ type StackDraftOutput struct {
 
 // StackDraftSaveRequest is the body of PUT .../draft.
 type StackDraftSaveRequest struct {
-	Version int64           `json:"version" minimum:"1" doc:"The version of the draft you read"`
+	Version int64           `json:"version" minimum:"0" doc:"The version of the draft you read, or 0 when you read a stack with no saved draft (isDraft false)"`
 	Files   []DraftFileBody `json:"files" doc:"Every file of the draft. compose.yaml must be one of them. At most 50 files, 1 MiB each and 8 MiB in all"`
 	Vars    []DraftVarBody  `json:"vars" maxItems:"500" doc:"Every variable of the draft"`
 }
@@ -76,6 +77,12 @@ type StackDraftSaveInput struct {
 	StackPathInput
 	UserAgent string `header:"User-Agent" hidden:"true"`
 	Body      StackDraftSaveRequest
+}
+
+// StackDraftDiscardInput is the path of the discard route.
+type StackDraftDiscardInput struct {
+	StackPathInput
+	UserAgent string `header:"User-Agent" hidden:"true"`
 }
 
 // StackDraftSaveBody says what a save did.
@@ -105,6 +112,18 @@ func registerStackDraft(r *httpx.Router, d StacksDeps) {
 		})
 
 	httpx.Register(r, huma.Operation{
+		OperationID: "discardStackDraft", Method: http.MethodDelete, Path: "/api/env/{envId}/stacks/{stackId}/draft",
+		Summary: "Discard a stack's draft",
+		Description: "Deletes the saved draft with its files and variables; the editor then shows the last deployed definition, or the starter example for a stack never deployed. " +
+			"Discarding when there is no draft is the same as discarding once: 204, nothing written, no audit row. A discard never sends anything to an engine. " +
+			"Audited as stack.draft_discarded, with the version it deleted, when there was a draft. Needs stacks.update (Operator).",
+		Tags: []string{"stacks"}, DefaultStatus: http.StatusNoContent,
+	}, rbac.Requirement{Perm: rbac.PermStacksUpdate, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *StackDraftDiscardInput) (*struct{}, error) {
+			return nil, discardStackDraft(ctx, d, in)
+		})
+
+	httpx.Register(r, huma.Operation{
 		OperationID: "saveStackDraft", Method: http.MethodPut, Path: "/api/env/{envId}/stacks/{stackId}/draft",
 		Summary: "Save a stack's draft",
 		Description: "Replaces the draft's files and variables when the draft is still at the version you read; if someone saved in between the answer is 409 draft_conflict, naming who saved and when, and nothing is written. " +
@@ -123,6 +142,7 @@ func registerStackDraft(r *httpx.Router, d StacksDeps) {
 // maskedDraft is the draft as a browser receives it: secret values withheld.
 func maskedDraft(s stackops.Snapshot) StackDraftBody {
 	b := StackDraftBody{
+		IsDraft: s.IsDraft,
 		Version: s.Version, SavedBy: s.CreatedBy, SavedAt: rfc3339(s.CreatedAt), BaseSeq: s.BaseSeq,
 		Files: make([]DraftFileBody, 0, len(s.Copy.Files)), Vars: make([]DraftVarBody, 0, len(s.Copy.Vars)),
 	}
@@ -276,11 +296,16 @@ func placeholderProblem(kind, name string) error {
 	}
 }
 
-// draftConflict is the 409 for a draft that moved: who saved it and when.
+// draftConflict is the 409 for a draft that moved: who saved it and when. A draft that was
+// discarded has no saver: savedBy is empty and version is 0.
 func draftConflict(c *stackops.DraftConflictError) error {
+	detail := "The draft was saved by " + c.SavedBy + " at " + rfc3339(c.SavedAt) + ". Reload it to see their changes."
+	if c.SavedBy == "" {
+		detail = "The draft was discarded. Reload it to see what is saved now."
+	}
 	return &huma.ErrorModel{
 		Type: problemDraftConflict, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
-		Detail: "The draft was saved by " + c.SavedBy + " at " + rfc3339(c.SavedAt) + ". Reload it to see their changes.",
+		Detail: detail,
 		Errors: []*huma.ErrorDetail{
 			{Location: "savedBy", Message: c.SavedBy},
 			{Location: "savedAt", Message: rfc3339(c.SavedAt)},
@@ -323,4 +348,28 @@ func saveStackDraft(ctx context.Context, d StacksDeps, in *StackDraftSaveInput) 
 	return &StackDraftSaveOutput{CacheControl: "no-store", Body: StackDraftSaveBody{
 		Changed: changed, Version: saved.Version, SavedBy: saved.CreatedBy, SavedAt: rfc3339(saved.CreatedAt),
 	}}, nil
+}
+
+// discardStackDraft deletes a stack's draft. It is idempotent: with no draft it answers 204 and
+// writes neither a row nor an audit entry. It never touches an engine.
+func discardStackDraft(ctx context.Context, d StacksDeps, in *StackDraftDiscardInput) error {
+	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+	if p == nil || env == nil {
+		return huma.Error500InternalServerError("internal error")
+	}
+	repo := d.repo()
+	st, err := repo.Stack(ctx, env.ID, in.StackID)
+	if err != nil {
+		return stackLookupProblem(d, env.ID, err)
+	}
+	discarded, version, err := repo.DiscardDraft(ctx, st.ID)
+	if err != nil {
+		return stackInternal(d, "discard draft", env.ID, err)
+	}
+	if discarded {
+		recordStack(ctx, d, p, env.ID, in.UserAgent, audit.ActionStackDraftDiscarded, st.ID, audit.ResultSuccess, "", map[string]string{
+			"stack": st.Name, "version": itoa(version),
+		})
+	}
+	return nil
 }

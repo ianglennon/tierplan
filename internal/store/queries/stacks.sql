@@ -31,6 +31,10 @@ FROM stack_snapshots WHERE stack_id = ? AND kind = 'draft';
 UPDATE stack_snapshots SET version = version + 1, created_by = ?, created_at = ?
 WHERE id = ? AND version = ?;
 
+-- name: DeleteDraft :execrows
+-- Discarding a draft: the stack's draft row only. Revisions are never deleted here.
+DELETE FROM stack_snapshots WHERE id = ? AND kind = 'draft';
+
 -- name: DeleteSnapshotFiles :exec
 DELETE FROM stack_snapshot_files WHERE snapshot_id = ?;
 

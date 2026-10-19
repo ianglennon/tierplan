@@ -236,6 +236,7 @@
       "stack": {
         "created": "Stack created",
         "draft_saved": "Stack draft saved",
+        "draft_discarded": "Stack draft discarded",
         "deployed": "Stack deployed"
       }
     },

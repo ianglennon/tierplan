@@ -11358,6 +11358,10 @@
               "null"
             ]
           },
+          "isDraft": {
+            "description": "True when this is a saved draft. False when the stack has none (it was discarded): the files and variables are then the last deployed definition, or the starter example for a stack never deployed, and version is 0",
+            "type": "boolean"
+          },
           "savedAt": {
             "description": "When, RFC 3339 UTC",
             "type": "string"
@@ -11377,12 +11381,13 @@
             ]
           },
           "version": {
-            "description": "The draft's version: send it back with a save, and the save is refused with 409 draft_conflict if the draft moved",
+            "description": "The draft's version: send it back with a save, and the save is refused with 409 draft_conflict if the draft moved. 0 when there is no saved draft: a save at version 0 then makes one",
             "format": "int64",
             "type": "integer"
           }
         },
         "required": [
+          "isDraft",
           "version",
           "savedBy",
           "savedAt",
@@ -11446,9 +11451,9 @@
             ]
           },
           "version": {
-            "description": "The version of the draft you read",
+            "description": "The version of the draft you read, or 0 when you read a stack with no saved draft (isDraft false)",
             "format": "int64",
-            "minimum": 1,
+            "minimum": 0,
             "type": "integer"
           }
         },
@@ -20821,6 +20826,51 @@
       }
     },
     "/api/env/{envId}/stacks/{stackId}/draft": {
+      "delete": {
+        "description": "Deletes the saved draft with its files and variables; the editor then shows the last deployed definition, or the starter example for a stack never deployed. Discarding when there is no draft is the same as discarding once: 204, nothing written, no audit row. A discard never sends anything to an engine. Audited as stack.draft_discarded, with the version it deleted, when there was a draft. Needs stacks.update (Operator).",
+        "operationId": "discardStackDraft",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Discard a stack's draft",
+        "tags": [
+          "stacks"
+        ]
+      },
       "get": {
         "description": "The files and variables of the stack's draft, with its version and who saved it last. The value of a secret variable and the content of a secret file are \u003chidden\u003e. Needs stacks.read (Viewer).",
         "operationId": "getStackDraft",

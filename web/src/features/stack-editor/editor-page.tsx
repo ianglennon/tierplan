@@ -2,18 +2,31 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
-import { CircleX } from "lucide-react";
+import { useBlocker } from "@tanstack/react-router";
+import { CircleX, TriangleAlert } from "lucide-react";
 import { type KeyboardEvent, useEffect, useReducer, useRef, useState } from "react";
 import { Trans } from "react-i18next";
 
 import {
   type DraftRequestError,
   draftQuery,
+  type StackDraft,
   type StackDraftSaved,
   stackQuery,
+  useDiscardDraft,
   useSaveDraft,
 } from "@/api/stacks";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -59,6 +72,13 @@ interface Base {
   savedBy: string;
 }
 
+// A save the server refused because the draft moved: who moved it (empty when it was discarded)
+// and the version it is at now, which "Save over it" sends.
+interface Conflict {
+  user: string;
+  version: number;
+}
+
 // StackEditorPage is the Editor tab of a stack (STK-01, STK-05, D-08): the files of the stack's
 // one shared draft in a CodeMirror surface. Edits stay in the browser until Save draft, with no
 // autosave; the saved draft is shared and shows who saved it and when. A Viewer reads the files
@@ -70,6 +90,7 @@ export function StackEditorPage({ envId, stackId, file, onFileChange }: StackEdi
   const stack = useQuery(stackQuery(envId, stackId));
   const draft = useQuery(draftQuery(envId, stackId));
   const save$ = useSaveDraft(envId, stackId);
+  const discard$ = useDiscardDraft(envId, stackId);
   const [copy, dispatch] = useReducer(workingCopyReducer, emptyWorkingCopy);
   // The copy last loaded or saved: what "unsaved" is measured against.
   const [saved, setSaved] = useState<WorkingCopy>(emptyWorkingCopy);
@@ -78,25 +99,34 @@ export function StackEditorPage({ envId, stackId, file, onFileChange }: StackEdi
   const [savedChange, setSavedChange] = useState(false);
   // The sentence for the last refused save, shown above the footer until the next save.
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [conflict, setConflict] = useState<Conflict | null>(null);
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const [discardError, setDiscardError] = useState<string | null>(null);
   const loaded = useRef(false);
   const copyRef = useRef(copy);
   copyRef.current = copy;
 
   const name = stack.data?.name ?? "";
 
+  // applyLoaded makes a draft the server sent the working copy, the copy "unsaved" is measured
+  // against, and the version the next save is made at. The open file stays open if it is there.
+  function applyLoaded(data: StackDraft) {
+    dispatch({ type: "load", draft: data });
+    setSaved(workingCopyReducer(copyRef.current, { type: "load", draft: data }));
+    setBase({ version: data.version, savedAt: data.savedAt, savedBy: data.savedBy });
+    setSavedChange(false);
+    setSaveError(null);
+    setConflict(null);
+  }
+
   // The first read of the draft fills the working copy. The draft is read once; later changes to
-  // the cached draft (a save answering) must not overwrite what is being typed.
+  // the cached draft (a save answering) must not overwrite what is being typed. Reading it again
+  // is the person's choice (Reload draft, Discard draft).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: applyLoaded reads refs and setters only, and this runs once
   useEffect(() => {
     if (!draft.data || loaded.current) return;
     loaded.current = true;
-    const next = workingCopyReducer(emptyWorkingCopy, { type: "load", draft: draft.data });
-    dispatch({ type: "load", draft: draft.data });
-    setSaved(next);
-    setBase({
-      version: draft.data.version,
-      savedAt: draft.data.savedAt,
-      savedBy: draft.data.savedBy,
-    });
+    applyLoaded(draft.data);
   }, [draft.data]);
 
   // The file in the address opens when it is there; the address follows the person's choice.
@@ -114,6 +144,16 @@ export function StackEditorPage({ envId, stackId, file, onFileChange }: StackEdi
   }, [urlFile, copyLoaded]);
 
   const dirty = copy.loaded && isDirty(saved, copy);
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  // Leaving the page with unsaved edits asks first, through the router and, for the tab or the
+  // window, through the browser. Moving between files changes the address but not the page, so
+  // only a change of path asks (D-08).
+  const blocker = useBlocker({
+    shouldBlockFn: ({ current, next }) => dirtyRef.current && current.pathname !== next.pathname,
+    enableBeforeUnload: () => dirtyRef.current,
+    withResolver: true,
+  });
   const open = copy.files.find((f) => f.path === copy.selected);
   const hasSaved = (stack.data?.hasDraft ?? false) || savedChange;
 
@@ -170,13 +210,48 @@ export function StackEditorPage({ envId, stackId, file, onFileChange }: StackEdi
     toastSuccess(t("stackEditor.save.toast", { name }));
   }
 
-  function save() {
+  // Save sends the working copy at the version the editor holds. Save over it sends it at the
+  // version the server named in the conflict, which is how the person chooses their copy over
+  // another's.
+  function save(version?: number) {
     if (!canEdit || !base || !copy.loaded || save$.isPending) return;
     const sent = copy;
     setSaveError(null);
-    save$.mutate(toSaveBody(sent, base.version), {
+    setConflict(null);
+    save$.mutate(toSaveBody(sent, version ?? base.version), {
       onSuccess: (answer) => onSaved(sent, answer),
-      onError: (err) => setSaveError(refusal(err)),
+      onError: (err) => {
+        if (err.status === 409 && err.type === "draft_conflict") {
+          const named = (key: string) => err.fields.find((f) => f.location === key)?.message ?? "";
+          setConflict({ user: named("savedBy"), version: Number(named("version")) || 0 });
+        } else {
+          setSaveError(refusal(err));
+        }
+      },
+    });
+  }
+
+  // Reload draft reads what is saved now and drops the edits.
+  async function reload() {
+    const [read] = await Promise.all([draft.refetch(), stack.refetch()]);
+    if (read.data) applyLoaded(read.data);
+  }
+
+  function discard() {
+    if (discard$.isPending) return;
+    setDiscardError(null);
+    discard$.mutate(undefined, {
+      onSuccess: async () => {
+        const read = await draft.refetch();
+        if (read.data) applyLoaded(read.data);
+        setDiscardOpen(false);
+        toastSuccess(t("stackEditor.discard.toast", { name }));
+      },
+      onError: (err) => {
+        if (err.status === 0) setDiscardError(t("stackEditor.discard.errors.lost"));
+        else if (err.status === 403) setDiscardError(t("stackEditor.discard.errors.permission"));
+        else setDiscardError(t("stackEditor.discard.errors.generic"));
+      },
     });
   }
 
@@ -290,6 +365,38 @@ export function StackEditorPage({ envId, stackId, file, onFileChange }: StackEdi
           <AlertDescription className="break-words">{saveError}</AlertDescription>
         </Alert>
       ) : null}
+      {conflict ? (
+        <Alert variant="warning">
+          <TriangleAlert aria-hidden="true" />
+          <AlertDescription className="flex flex-col gap-3 text-status-warning-text">
+            <p className="break-words">
+              {conflict.user
+                ? t("stackEditor.conflict.saved", { user: conflict.user })
+                : t("stackEditor.conflict.discarded")}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="max-md:h-11"
+                disabled={draft.isFetching}
+                onClick={() => void reload()}
+              >
+                {t("stackEditor.conflict.reload")}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="max-md:h-11"
+                aria-disabled={pending ? true : undefined}
+                onClick={pending ? undefined : () => save(conflict.version)}
+              >
+                {t("stackEditor.conflict.over")}
+              </Button>
+            </div>
+          </AlertDescription>
+        </Alert>
+      ) : null}
       {canEdit ? (
         <EditorFooter>
           <div className="mr-auto min-w-0">
@@ -299,13 +406,27 @@ export function StackEditorPage({ envId, stackId, file, onFileChange }: StackEdi
               savedBy={base?.savedBy}
             />
           </div>
+          {hasSaved || dirty ? (
+            <Button
+              type="button"
+              variant="ghost"
+              className="max-md:h-11"
+              disabled={!ready}
+              onClick={() => {
+                setDiscardError(null);
+                setDiscardOpen(true);
+              }}
+            >
+              {t("stackEditor.discard.button")}
+            </Button>
+          ) : null}
           <Button
             type="button"
             variant="outline"
             className="max-md:h-11"
             disabled={!ready}
             aria-disabled={pending ? true : undefined}
-            onClick={pending ? undefined : save}
+            onClick={pending ? undefined : () => save()}
           >
             {pending ? (
               <>
@@ -325,6 +446,68 @@ export function StackEditorPage({ envId, stackId, file, onFileChange }: StackEdi
       ) : (
         <p className="text-sm text-muted-foreground">{t("stackEditor.readOnly")}</p>
       )}
+      <AlertDialog
+        open={discardOpen}
+        onOpenChange={(next) => {
+          // A discard on its way is not interrupted by closing the dialog.
+          if (!discard$.isPending) setDiscardOpen(next);
+        }}
+      >
+        <AlertDialogContent className="sm:max-w-120">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("stackEditor.discard.title")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("stackEditor.discard.body")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          {discardError ? (
+            <Alert variant="destructive">
+              <CircleX aria-hidden="true" />
+              <AlertDescription className="break-words">{discardError}</AlertDescription>
+            </Alert>
+          ) : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel autoFocus disabled={discard$.isPending}>
+              {t("stackEditor.discard.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              aria-disabled={discard$.isPending ? true : undefined}
+              onClick={(e) => {
+                // The dialog stays open until the discard has happened, or says why it did not.
+                e.preventDefault();
+                discard();
+              }}
+            >
+              {discard$.isPending ? (
+                <>
+                  <Spinner aria-hidden="true" />
+                  {t("stackEditor.discard.pending")}
+                </>
+              ) : (
+                t("stackEditor.discard.confirm")
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog
+        open={blocker.status === "blocked"}
+        onOpenChange={(next) => {
+          if (!next) blocker.reset?.();
+        }}
+      >
+        <AlertDialogContent className="sm:max-w-120">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("stackEditor.guard.title")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("stackEditor.guard.body", { name })}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel autoFocus>{t("stackEditor.guard.keep")}</AlertDialogCancel>
+            <AlertDialogAction onClick={() => blocker.proceed?.()}>
+              {t("stackEditor.guard.discard")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

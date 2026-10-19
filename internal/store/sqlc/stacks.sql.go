@@ -9,6 +9,19 @@ import (
 	"context"
 )
 
+const deleteDraft = `-- name: DeleteDraft :execrows
+DELETE FROM stack_snapshots WHERE id = ? AND kind = 'draft'
+`
+
+// Discarding a draft: the stack's draft row only. Revisions are never deleted here.
+func (q *Queries) DeleteDraft(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteDraft, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteSnapshotFiles = `-- name: DeleteSnapshotFiles :exec
 DELETE FROM stack_snapshot_files WHERE snapshot_id = ?
 `

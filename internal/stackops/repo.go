@@ -103,6 +103,7 @@ func snapshotOf(row sqlc.StackSnapshot) Snapshot {
 	return Snapshot{
 		ID: row.ID, StackID: row.StackID, Kind: row.Kind, Seq: row.Seq, BaseSeq: row.BaseSeq, Version: row.Version,
 		Outcome: row.Outcome, CreatedBy: row.CreatedBy, CreatedAt: time.Unix(0, row.CreatedAt).UTC(),
+		IsDraft: row.Kind == KindDraft,
 	}
 }
 
@@ -173,7 +174,7 @@ func (r Repo) CreateStack(ctx context.Context, envID, name string, target stacks
 	}
 	snap := Snapshot{
 		ID: snapID.String(), StackID: st.ID, Kind: KindDraft, Version: 1, Outcome: OutcomePending,
-		CreatedBy: actor, CreatedAt: now, Copy: normalise(copy),
+		CreatedBy: actor, CreatedAt: now, Copy: normalise(copy), IsDraft: true,
 	}
 	return st, snap, nil
 }
@@ -204,10 +205,38 @@ func (r Repo) Stacks(ctx context.Context, envID string) ([]Stack, error) {
 	return out, nil
 }
 
-// Draft reads a stack's draft with its files and variables opened. A stack with no draft is
-// ErrNoDraft.
+// Draft reads a stack's draft with its files and variables opened. A stack that has none (its
+// draft was discarded) answers what the editor starts from instead: the last good revision, or
+// for a stack never deployed the starter compose file. That snapshot has IsDraft false and
+// version 0, which is the version a save from it is made at.
 func (r Repo) Draft(ctx context.Context, stackID string) (Snapshot, error) {
-	return r.readDraft(ctx, r.Store.RQ, stackID)
+	snap, err := r.readDraft(ctx, r.Store.RQ, stackID)
+	if errors.Is(err, ErrNoDraft) {
+		return r.fallback(ctx, r.Store.RQ, stackID)
+	}
+	return snap, err
+}
+
+// fallback is what a stack with no draft starts from: the content of its last good revision,
+// based on that revision, or the starter compose file when it was never deployed. It is not a
+// draft and not stored; the first save from it makes one.
+func (r Repo) fallback(ctx context.Context, q *sqlc.Queries, stackID string) (Snapshot, error) {
+	row, err := q.LatestGoodRevision(ctx, stackID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Snapshot{
+			StackID: stackID, Kind: KindDraft, Outcome: OutcomePending,
+			Copy: stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte(stacks.StarterCompose)}}},
+		}, nil
+	}
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("read revision: %w", err)
+	}
+	snap := snapshotOf(row)
+	snap.IsDraft, snap.Version, snap.BaseSeq = false, 0, row.Seq
+	if snap.Copy, err = r.readContent(ctx, q, snap.ID); err != nil {
+		return Snapshot{}, err
+	}
+	return snap, nil
 }
 
 func (r Repo) readDraft(ctx context.Context, q *sqlc.Queries, stackID string) (Snapshot, error) {
@@ -238,6 +267,9 @@ func (r Repo) SaveDraft(ctx context.Context, stackID string, version int64, acto
 	q := r.Store.Q.WithTx(tx)
 
 	draft, err := r.readDraft(ctx, q, stackID)
+	if errors.Is(err, ErrNoDraft) {
+		return r.saveFirst(ctx, tx, q, stackID, version, actor, copy)
+	}
 	if err != nil {
 		return Snapshot{}, false, err
 	}
@@ -278,7 +310,78 @@ func (r Repo) SaveDraft(ctx context.Context, stackID string, version int64, acto
 // DiscardDraft deletes the stack's draft with its files and variables. It reports false when
 // there was none, which is not an error: discarding twice is the same as discarding once.
 func (r Repo) DiscardDraft(ctx context.Context, stackID string) (discarded bool, version int64, err error) {
-	return false, 0, nil
+	tx, err := r.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return false, 0, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := r.Store.Q.WithTx(tx)
+
+	// The row only: a discard needs neither the vault nor the content, so it works for a draft
+	// whose secrets can no longer be opened.
+	row, err := q.GetDraft(ctx, stackID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, 0, nil
+	}
+	if err != nil {
+		return false, 0, fmt.Errorf("read draft: %w", err)
+	}
+	if err := q.DeleteSnapshotFiles(ctx, row.ID); err != nil {
+		return false, 0, fmt.Errorf("clear files: %w", err)
+	}
+	if err := q.DeleteSnapshotVars(ctx, row.ID); err != nil {
+		return false, 0, fmt.Errorf("clear variables: %w", err)
+	}
+	n, err := q.DeleteDraft(ctx, row.ID)
+	if err != nil {
+		return false, 0, fmt.Errorf("delete draft: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, 0, fmt.Errorf("commit: %w", err)
+	}
+	return n == 1, row.Version, nil
+}
+
+// firstSavedVersion is the version of a draft made by a save, not by the stack's creation: version
+// 1 is the draft a stack is created with, and a list tells "a draft with changes" from "a draft
+// nobody has touched" by it (DraftStates).
+const firstSavedVersion = 2
+
+// saveFirst saves into a stack that has no draft (it was discarded). Only an editor that read the
+// fallback, at version 0, may: an editor holding a version of the draft that was discarded under
+// it is told so, as for any draft that moved. Content equal to the fallback writes nothing.
+func (r Repo) saveFirst(ctx context.Context, tx *sql.Tx, q *sqlc.Queries, stackID string, version int64, actor string, copy stacks.WorkingCopy) (Snapshot, bool, error) {
+	if version != 0 {
+		return Snapshot{}, false, &DraftConflictError{}
+	}
+	base, err := r.fallback(ctx, q, stackID)
+	if err != nil {
+		return Snapshot{}, false, err
+	}
+	if sameContent(base.Copy, copy) {
+		return base, false, nil
+	}
+	id, err := uuid.NewV7()
+	if err != nil {
+		return Snapshot{}, false, fmt.Errorf("new snapshot id: %w", err)
+	}
+	now := r.now()
+	if err := q.InsertSnapshot(ctx, sqlc.InsertSnapshotParams{
+		ID: id.String(), StackID: stackID, Kind: KindDraft, BaseSeq: base.BaseSeq, Version: firstSavedVersion,
+		Outcome: OutcomePending, Pins: "{}", CreatedBy: actor, CreatedAt: now.UnixNano(),
+	}); err != nil {
+		return Snapshot{}, false, fmt.Errorf("insert draft: %w", err)
+	}
+	if err := r.writeContent(ctx, q, id.String(), copy); err != nil {
+		return Snapshot{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Snapshot{}, false, fmt.Errorf("commit: %w", err)
+	}
+	return Snapshot{
+		ID: id.String(), StackID: stackID, Kind: KindDraft, BaseSeq: base.BaseSeq, Version: firstSavedVersion,
+		Outcome: OutcomePending, CreatedBy: actor, CreatedAt: now, Copy: normalise(copy), IsDraft: true,
+	}, true, nil
 }
 
 // NewRevision copies the draft into a new revision, numbered after the stack's last one and

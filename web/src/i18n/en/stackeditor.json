@@ -70,6 +70,32 @@
         "taken": "A file named {{name}} already exists.",
         "large": "Files can be at most 1 MB."
       }
+    },
+    "discard": {
+      "button": "Discard draft",
+      "title": "Discard the draft?",
+      "body": "This deletes the saved draft, including files and variables, and the editor goes back to what is deployed. It can't be undone.",
+      "cancel": "Cancel",
+      "confirm": "Discard draft",
+      "pending": "Discarding…",
+      "toast": "Discarded the draft of {{name}}.",
+      "errors": {
+        "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening.",
+        "lost": "The server didn't answer. The draft may have been discarded: reload the page to check.",
+        "permission": "You can't discard this stack's draft."
+      }
+    },
+    "guard": {
+      "title": "Discard changes?",
+      "body": "Your edits to {{name}} haven't been saved.",
+      "keep": "Keep editing",
+      "discard": "Discard changes"
+    },
+    "conflict": {
+      "saved": "{{user}} saved this draft while you were editing. Reloading shows their version and drops your unsaved changes.",
+      "discarded": "The draft was discarded while you were editing. Reloading shows what is deployed now and drops your unsaved changes.",
+      "reload": "Reload draft",
+      "over": "Save over it"
     }
   }
 }

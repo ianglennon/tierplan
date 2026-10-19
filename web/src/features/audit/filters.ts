@@ -133,6 +133,7 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "config.rotated",
   "stack.created",
   "stack.draft_saved",
+  "stack.draft_discarded",
   "stack.deployed",
 ];
 

@@ -3,6 +3,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  createBrowserHistory,
   createMemoryHistory,
   createRootRoute,
   createRoute,
@@ -131,7 +132,11 @@ afterEach(() => {
 
 const puts = () => server.sent.filter((s) => s.method === "PUT");
 
-function mount(file?: string, onFileChange?: (path: string | undefined) => void) {
+function mount(
+  file?: string,
+  onFileChange?: (path: string | undefined) => void,
+  history = createMemoryHistory({ initialEntries: ["/"] }),
+) {
   const root = createRootRoute({
     component: () => (
       <TooltipProvider>
@@ -151,7 +156,7 @@ function mount(file?: string, onFileChange?: (path: string | undefined) => void)
       }),
       createRoute({ getParentRoute: () => root, path: "/away", component: () => <p>Away</p> }),
     ]),
-    history: createMemoryHistory({ initialEntries: ["/"] }),
+    history,
   });
   render(
     <QueryClientProvider client={client}>
@@ -186,12 +191,15 @@ describe("the Files pane", () => {
     expect(screen.getByText(/Tab leaves the editor\./)).toBeTruthy();
   });
 
-  it("shows a skeleton and a Save draft that cannot be used until the draft is read", async () => {
+  it("shows a skeleton and footer buttons that cannot be used until the draft is read", async () => {
+    server.hasDraft = true;
     server.draft = () => new Promise<Response>(() => {});
     mount();
     expect(await screen.findByRole("status", { name: "Loading the draft" })).toBeTruthy();
     const save = await screen.findByRole("button", { name: "Save draft" });
     expect((save as HTMLButtonElement).disabled).toBe(true);
+    const discard = await screen.findByRole("button", { name: "Discard draft" });
+    expect((discard as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 
@@ -883,7 +891,9 @@ describe("leaving with unsaved edits", () => {
   });
 
   it("makes the browser ask before the tab closes only while there are unsaved edits", async () => {
-    mount();
+    // Only the browser's history listens for the tab closing.
+    window.history.replaceState({}, "", "/");
+    mount(undefined, undefined, createBrowserHistory());
     await ready();
     const clean = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(clean);
