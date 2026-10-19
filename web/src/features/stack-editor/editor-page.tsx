@@ -39,6 +39,7 @@ import { FileRail } from "@/features/stack-editor/file-rail";
 import { ProblemsPanel } from "@/features/stack-editor/problems-panel";
 import { SaveStatus } from "@/features/stack-editor/save-status";
 import { useStackCheck } from "@/features/stack-editor/use-stack-check";
+import { VariablesTable } from "@/features/stack-editor/variables-table";
 import {
   COMPOSE_FILE,
   emptyWorkingCopy,
@@ -57,9 +58,11 @@ export type EditorPane = "files" | "variables" | "rendered";
 interface StackEditorPageProps {
   envId: string;
   stackId: string;
-  // The pane the address names. Only Files exists so far; Variables and Rendered arrive with
-  // their plans.
+  // The pane the address names. Files and Variables exist so far; Rendered arrives with its plan,
+  // and until then it opens Files.
   pane?: EditorPane;
+  // What to do to change the pane in the address.
+  onPaneChange?: (pane: EditorPane) => void;
   // The file the address names, or none for compose.yaml.
   file?: string;
   // What to do to change the file in the address.
@@ -86,8 +89,16 @@ interface Conflict {
 // one shared draft in a CodeMirror surface. Edits stay in the browser until Save draft, with no
 // autosave; the saved draft is shared and shows who saved it and when. A Viewer reads the files
 // and cannot change them. Saving sends nothing to any engine: only a deploy does.
-export function StackEditorPage({ envId, stackId, file, onFileChange }: StackEditorPageProps) {
+export function StackEditorPage({
+  envId,
+  stackId,
+  pane,
+  onPaneChange,
+  file,
+  onFileChange,
+}: StackEditorPageProps) {
   const t = useT();
+  const activePane: EditorPane = pane === "variables" ? "variables" : "files";
   const mac = isMacPlatform();
   const canEdit = usePermission("stacks.update", envId);
   const stack = useQuery(stackQuery(envId, stackId));
@@ -328,7 +339,7 @@ export function StackEditorPage({ envId, stackId, file, onFileChange }: StackEdi
     // The key handler is on the page so it hears the editor's keys as they bubble.
     // biome-ignore lint/a11y/noStaticElementInteractions: a shortcut handler on the container of the editor, which is the focusable element
     <div className="flex flex-col gap-4" onKeyDown={onKeyDown}>
-      <Tabs value="files">
+      <Tabs value={activePane} onValueChange={(next) => onPaneChange?.(next as EditorPane)}>
         <TabsList
           variant="line"
           aria-label={t("stackEditor.panes.label")}
@@ -337,70 +348,89 @@ export function StackEditorPage({ envId, stackId, file, onFileChange }: StackEdi
           <TabsTrigger value="files" className="max-md:h-11">
             {t("stackEditor.panes.files")}
           </TabsTrigger>
+          <TabsTrigger value="variables" className="max-md:h-11">
+            {t("stackEditor.panes.variables")}
+          </TabsTrigger>
         </TabsList>
       </Tabs>
-      <div className="grid gap-4 md:grid-cols-[16rem_minmax(0,1fr)]">
-        {ready ? (
-          <FileRail
-            files={copy.files}
-            selected={copy.selected}
-            readOnly={!canEdit}
-            unused={unused}
-            onSelect={selectFile}
-            onAdd={addFile}
-            onRename={renameFile}
-            onDelete={deleteFile}
-          />
-        ) : (
-          <div data-testid="rail-skeleton" className="flex flex-col gap-2" aria-hidden="true">
-            <Skeleton className="h-6 w-20" />
-            <Skeleton className="h-8 w-full" />
-            <Skeleton className="h-8 w-full" />
-          </div>
-        )}
-        <div className="flex min-w-0 flex-col gap-2">
-          {ready && open ? (
-            open.hidden ? (
-              <div className="rounded-lg border p-4">
-                <p className="font-medium break-all">
-                  {t("stackEditor.secretFile.title", { file: open.path })}
-                </p>
-                <p className="text-sm text-muted-foreground">{t("stackEditor.secretFile.body")}</p>
-              </div>
-            ) : (
-              <FileEditor
-                key={open.path}
-                ref={editor}
-                file={open}
-                readOnly={!canEdit}
-                problems={markers}
-                onChange={(content) => dispatch({ type: "edit", path: open.path, content })}
-              />
-            )
+      {activePane === "variables" ? (
+        <VariablesTable
+          vars={copy.vars}
+          resolved={check.variables}
+          loading={!copy.loaded}
+          failed={check.failed}
+          readOnly={!canEdit}
+          onAdd={(varName) => dispatch({ type: "addVar", name: varName })}
+          onSet={(varName, value) => dispatch({ type: "setVar", name: varName, value })}
+          onSecret={(varName, secret) => dispatch({ type: "setSecret", name: varName, secret })}
+          onRemove={(varName) => dispatch({ type: "removeVar", name: varName })}
+        />
+      ) : (
+        <div className="grid gap-4 md:grid-cols-[16rem_minmax(0,1fr)]">
+          {ready ? (
+            <FileRail
+              files={copy.files}
+              selected={copy.selected}
+              readOnly={!canEdit}
+              unused={unused}
+              onSelect={selectFile}
+              onAdd={addFile}
+              onRename={renameFile}
+              onDelete={deleteFile}
+            />
           ) : (
-            <div role="status" aria-label={t("stackEditor.loading")}>
-              <Skeleton className="h-100 w-full" />
+            <div data-testid="rail-skeleton" className="flex flex-col gap-2" aria-hidden="true">
+              <Skeleton className="h-6 w-20" />
+              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-8 w-full" />
             </div>
           )}
-          {ready ? (
-            <ProblemsPanel
-              problems={check.problems}
-              checking={check.checking}
-              failed={check.failed}
-              checked={check.checked}
-              onOpen={openProblem}
-            />
-          ) : null}
-          <p className="text-sm text-muted-foreground">
-            <Trans
-              i18nKey="stackEditor.editor.helper"
-              ns="stackEditor"
-              values={keys}
-              components={{ kbd: <Kbd /> }}
-            />
-          </p>
+          <div className="flex min-w-0 flex-col gap-2">
+            {ready && open ? (
+              open.hidden ? (
+                <div className="rounded-lg border p-4">
+                  <p className="font-medium break-all">
+                    {t("stackEditor.secretFile.title", { file: open.path })}
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    {t("stackEditor.secretFile.body")}
+                  </p>
+                </div>
+              ) : (
+                <FileEditor
+                  key={open.path}
+                  ref={editor}
+                  file={open}
+                  readOnly={!canEdit}
+                  problems={markers}
+                  onChange={(content) => dispatch({ type: "edit", path: open.path, content })}
+                />
+              )
+            ) : (
+              <div role="status" aria-label={t("stackEditor.loading")}>
+                <Skeleton className="h-100 w-full" />
+              </div>
+            )}
+            {ready ? (
+              <ProblemsPanel
+                problems={check.problems}
+                checking={check.checking}
+                failed={check.failed}
+                checked={check.checked}
+                onOpen={openProblem}
+              />
+            ) : null}
+            <p className="text-sm text-muted-foreground">
+              <Trans
+                i18nKey="stackEditor.editor.helper"
+                ns="stackEditor"
+                values={keys}
+                components={{ kbd: <Kbd /> }}
+              />
+            </p>
+          </div>
         </div>
-      </div>
+      )}
       {saveError ? (
         <Alert variant="destructive">
           <CircleX aria-hidden="true" />

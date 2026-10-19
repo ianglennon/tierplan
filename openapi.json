@@ -11217,11 +11217,22 @@
               "array",
               "null"
             ]
+          },
+          "variables": {
+            "description": "The rows of the Variables pane, ordered by name. Empty when the compose file is not valid YAML",
+            "items": {
+              "$ref": "#/components/schemas/StackVariableBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
           "problems",
-          "unusedFiles"
+          "unusedFiles",
+          "variables"
         ],
         "type": "object"
       },
@@ -11731,6 +11742,25 @@
         ],
         "type": "object"
       },
+      "StackPlaceBody": {
+        "additionalProperties": false,
+        "properties": {
+          "file": {
+            "description": "The stack file",
+            "type": "string"
+          },
+          "line": {
+            "description": "The 1-based line",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "file",
+          "line"
+        ],
+        "type": "object"
+      },
       "StackProblemBody": {
         "additionalProperties": false,
         "properties": {
@@ -11784,6 +11814,70 @@
           "col",
           "endLine",
           "endCol"
+        ],
+        "type": "object"
+      },
+      "StackVariableBody": {
+        "additionalProperties": false,
+        "properties": {
+          "default": {
+            "description": "The default written in the compose file, when hasDefault is true",
+            "type": "string"
+          },
+          "hasDefault": {
+            "description": "True when a reference in the compose file writes a default, even an empty one",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "The variable's name",
+            "type": "string"
+          },
+          "places": {
+            "description": "Where the compose file uses the variable, ordered by line. Empty for an unused variable",
+            "items": {
+              "$ref": "#/components/schemas/StackPlaceBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "required": {
+            "description": "True when the variable has no value in the table and no default, so a deploy is refused",
+            "type": "boolean"
+          },
+          "secret": {
+            "description": "True when the variable is marked secret in the table",
+            "type": "boolean"
+          },
+          "source": {
+            "description": "Where the value comes from: table (the stack's variables), default (the ${NAME:-default} written in the compose file) or unset (neither)",
+            "enum": [
+              "table",
+              "default",
+              "unset"
+            ],
+            "type": "string"
+          },
+          "unused": {
+            "description": "True when the variable is in the table and no file refers to it",
+            "type": "boolean"
+          },
+          "value": {
+            "description": "The value a deploy will use: the table's value, else the default written in the compose file, else empty. A secret variable's value is \u003chidden\u003e",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value",
+          "secret",
+          "source",
+          "default",
+          "hasDefault",
+          "required",
+          "unused",
+          "places"
         ],
         "type": "object"
       },

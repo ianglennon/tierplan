@@ -1,0 +1,51 @@
+{
+  "stackVars": {
+    "caption": "Values come from this table. A variable with no value here uses the default written in the compose file, like ${NAME:-default}. Bayplan fills them in itself before it deploys.",
+    "loading": "Loading the variables",
+    "empty": {
+      "title": "No variables",
+      "body": "The compose file doesn't use any ${VARIABLES}, and none are added. Add one."
+    },
+    "columns": {
+      "name": "Name",
+      "value": "Value",
+      "secret": "Secret",
+      "resolved": "Resolved",
+      "actions": "Actions"
+    },
+    "secretHelp": "A secret value is stored encrypted and shows as •••• everywhere. Only users who can reveal secrets can read it.",
+    "add": {
+      "button": "Add variable",
+      "label": "Variable name",
+      "submit": "Add",
+      "cancel": "Cancel",
+      "errors": {
+        "name": "Use letters, numbers and underscores, and don't start with a number.",
+        "taken": "That variable is already in the table."
+      }
+    },
+    "row": {
+      "usedIn_one": "Used in {{count}} place",
+      "usedIn_other": "Used in {{count}} places",
+      "unused": "Unused",
+      "valueOf": "Value of {{name}}",
+      "required": "Required",
+      "hiddenPlaceholder": "Hidden. Type to replace.",
+      "secretOf": "Secret: {{name}}",
+      "remove": "Remove {{name}}",
+      "clear": "Clear value of {{name}}",
+      "actions": "Actions for {{name}}"
+    },
+    "resolved": {
+      "empty": "(empty)",
+      "failedValue": "—",
+      "failed": "Couldn't check. It will retry.",
+      "loading": "Checking",
+      "source": {
+        "table": "From the table",
+        "default": "From the compose file's default",
+        "unset": "Not set"
+      }
+    }
+  }
+}

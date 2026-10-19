@@ -38,10 +38,31 @@ type StackProblemBody struct {
 	EndCol   int    `json:"endCol" doc:"The column the marked range ends before"`
 }
 
+// StackPlaceBody is a line of a stack file that uses a variable.
+type StackPlaceBody struct {
+	File string `json:"file" doc:"The stack file"`
+	Line int    `json:"line" doc:"The 1-based line"`
+}
+
+// StackVariableBody is one row of the Variables pane: a variable the compose file refers to or the
+// table holds, with the value a deploy will use.
+type StackVariableBody struct {
+	Name       string           `json:"name" doc:"The variable's name"`
+	Value      string           `json:"value" doc:"The value a deploy will use: the table's value, else the default written in the compose file, else empty. A secret variable's value is <hidden>"`
+	Secret     bool             `json:"secret" doc:"True when the variable is marked secret in the table"`
+	Source     string           `json:"source" enum:"table,default,unset" doc:"Where the value comes from: table (the stack's variables), default (the ${NAME:-default} written in the compose file) or unset (neither)"`
+	Default    string           `json:"default" doc:"The default written in the compose file, when hasDefault is true"`
+	HasDefault bool             `json:"hasDefault" doc:"True when a reference in the compose file writes a default, even an empty one"`
+	Required   bool             `json:"required" doc:"True when the variable has no value in the table and no default, so a deploy is refused"`
+	Unused     bool             `json:"unused" doc:"True when the variable is in the table and no file refers to it"`
+	Places     []StackPlaceBody `json:"places" doc:"Where the compose file uses the variable, ordered by line. Empty for an unused variable"`
+}
+
 // StackCheckBody is what a check found.
 type StackCheckBody struct {
-	Problems    []StackProblemBody `json:"problems" doc:"The problems, ordered by file and line"`
-	UnusedFiles []string           `json:"unusedFiles" doc:"Stack files the compose file never refers to"`
+	Problems    []StackProblemBody  `json:"problems" doc:"The problems, ordered by file and line"`
+	UnusedFiles []string            `json:"unusedFiles" doc:"Stack files the compose file never refers to"`
+	Variables   []StackVariableBody `json:"variables" doc:"The rows of the Variables pane, ordered by name. Empty when the compose file is not valid YAML"`
 }
 
 // StackCheckOutput wraps StackCheckBody for huma.
@@ -116,5 +137,22 @@ func checkStack(ctx context.Context, d StacksDeps, lim *streamLimiter, in *Stack
 			Line: p.Line, Col: p.Col, EndLine: p.EndLine, EndCol: p.EndCol,
 		})
 	}
+	body.Variables = variableBodies(res.Variables)
 	return &StackCheckOutput{CacheControl: "no-store", Body: body}, nil
+}
+
+// variableBodies turns the resolved variables of a check into their answer. A list is never null.
+func variableBodies(vars []stacks.ResolvedVar) []StackVariableBody {
+	out := make([]StackVariableBody, 0, len(vars))
+	for _, v := range vars {
+		places := make([]StackPlaceBody, 0, len(v.Places))
+		for _, pl := range v.Places {
+			places = append(places, StackPlaceBody{File: pl.File, Line: pl.Line})
+		}
+		out = append(out, StackVariableBody{
+			Name: v.Name, Value: v.Value, Secret: v.Secret, Source: v.Source, Default: v.Default,
+			HasDefault: v.HasDefault, Required: v.Required, Unused: v.Unused, Places: places,
+		})
+	}
+	return out
 }

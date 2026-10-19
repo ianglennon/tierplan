@@ -301,3 +301,89 @@ describe("filePathProblem", () => {
     expect(filePathProblem("../nginx.conf", ["../nginx.conf"])).toBe("invalid");
   });
 });
+
+describe("the variables table", () => {
+  const withHidden = () =>
+    loaded(
+      draft({
+        vars: [
+          { name: "PORT", value: "8080", secret: false },
+          { name: "TOKEN", value: "<hidden>", secret: true },
+        ],
+      }),
+    );
+
+  it("adds a variable by name in name order, once", () => {
+    const copy = workingCopyReducer(loaded(), { type: "addVar", name: "ALPHA" });
+    expect(copy.vars.map((v) => v.name)).toEqual(["ALPHA", "PORT"]);
+    expect(copy.vars[0]).toEqual({ name: "ALPHA", value: "", secret: false, hidden: false });
+    expect(workingCopyReducer(copy, { type: "addVar", name: "ALPHA" })).toBe(copy);
+  });
+
+  it("sets a value, creating the variable when the compose file uses it and the table has none", () => {
+    const copy = workingCopyReducer(loaded(), { type: "setVar", name: "WEB_PORT", value: "9090" });
+    expect(copy.vars.find((v) => v.name === "WEB_PORT")).toEqual({
+      name: "WEB_PORT",
+      value: "9090",
+      secret: false,
+      hidden: false,
+    });
+    expect(isDirty(loaded(), copy)).toBe(true);
+  });
+
+  it("typing over a hidden secret replaces it, and reset puts the hidden value back", () => {
+    const typed = workingCopyReducer(withHidden(), { type: "setVar", name: "TOKEN", value: "new" });
+    expect(typed.vars.find((v) => v.name === "TOKEN")).toMatchObject({
+      value: "new",
+      hidden: false,
+      secret: true,
+    });
+    const reset = workingCopyReducer(typed, { type: "resetVar", name: "TOKEN" });
+    expect(reset.vars.find((v) => v.name === "TOKEN")).toMatchObject({
+      value: "",
+      hidden: true,
+      secret: true,
+    });
+    expect(isDirty(withHidden(), reset)).toBe(false);
+  });
+
+  it("clears the value and the hidden mark when Secret is turned off on a hidden value", () => {
+    const off = workingCopyReducer(withHidden(), {
+      type: "setSecret",
+      name: "TOKEN",
+      secret: false,
+    });
+    expect(off.vars.find((v) => v.name === "TOKEN")).toEqual({
+      name: "TOKEN",
+      value: "",
+      secret: false,
+      hidden: false,
+    });
+    const on = workingCopyReducer(loaded(), { type: "setSecret", name: "PORT", secret: true });
+    expect(on.vars.find((v) => v.name === "PORT")).toEqual({
+      name: "PORT",
+      value: "8080",
+      secret: true,
+      hidden: false,
+    });
+  });
+
+  it("removes a variable", () => {
+    const copy = workingCopyReducer(loaded(), { type: "removeVar", name: "PORT" });
+    expect(copy.vars).toEqual([]);
+  });
+
+  it("sends an untouched hidden secret as the keep marker and a typed one as its text", () => {
+    const body = toSaveBody(withHidden(), 3);
+    expect(body.vars).toEqual([
+      { name: "PORT", value: "8080", secret: false },
+      { name: "TOKEN", value: "<hidden>", secret: true },
+    ]);
+    const typed = workingCopyReducer(withHidden(), {
+      type: "setVar",
+      name: "TOKEN",
+      value: "abcd",
+    });
+    expect(toSaveBody(typed, 3).vars?.[1]).toEqual({ name: "TOKEN", value: "abcd", secret: true });
+  });
+});

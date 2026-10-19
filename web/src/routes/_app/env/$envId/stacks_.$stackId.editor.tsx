@@ -32,6 +32,9 @@ function StackEditorRoute() {
         envId={envId}
         stackId={stackId}
         pane={pane ?? "files"}
+        onPaneChange={(next) =>
+          void navigate({ search: (prev) => ({ ...prev, pane: next }), replace: true })
+        }
         file={file}
         onFileChange={(next) =>
           void navigate({ search: (prev) => ({ ...prev, file: next }), replace: true })

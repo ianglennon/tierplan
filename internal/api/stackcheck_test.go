@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
@@ -31,9 +32,25 @@ type checkProblem struct {
 	EndCol   int    `json:"endCol"`
 }
 
+type checkVariable struct {
+	Name       string `json:"name"`
+	Value      string `json:"value"`
+	Secret     bool   `json:"secret"`
+	Source     string `json:"source"`
+	Default    string `json:"default"`
+	HasDefault bool   `json:"hasDefault"`
+	Required   bool   `json:"required"`
+	Unused     bool   `json:"unused"`
+	Places     []struct {
+		File string `json:"file"`
+		Line int    `json:"line"`
+	} `json:"places"`
+}
+
 type checkAnswer struct {
-	Problems    []checkProblem `json:"problems"`
-	UnusedFiles []string       `json:"unusedFiles"`
+	Problems    []checkProblem  `json:"problems"`
+	UnusedFiles []string        `json:"unusedFiles"`
+	Variables   []checkVariable `json:"variables"`
 }
 
 func (c *roleCaller) check(stackID, body string) (checkAnswer, int, string) {
@@ -292,3 +309,40 @@ func TestCheckPastItsDeadlineAnswersAProblemNotAnError(t *testing.T) {
 }
 
 const stacksStarter = "services:\n  web:\n    image: nginx:1.27-alpine\n"
+
+// checkBodyWithVars is checkBody with the variables of the table; each is {name, value, secret}.
+func checkBodyWithVars(compose, vars string) string {
+	b, _ := json.Marshal(compose)
+	return `{"files":[{"path":"compose.yaml","content":` + string(b) + `,"secret":false}],"vars":` + vars + `}`
+}
+
+func TestCheckIsGivenTheVariablesOfTheTableAndAnswersThemResolved(t *testing.T) {
+	t.Parallel()
+	f, e := actionsEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	st := newStack(t, admin, "vars")
+
+	answer, code, raw := viewer.check(st.ID, checkBodyWithVars(stacks.StarterCompose, `[]`))
+	if code != http.StatusOK || len(answer.Variables) != 1 {
+		t.Fatalf("check: %d %s, want one variable", code, raw)
+	}
+	v := answer.Variables[0]
+	if v.Name != "WEB_PORT" || v.Value != "8080" || v.Source != "default" || !v.HasDefault || v.Default != "8080" || v.Required || v.Unused {
+		t.Errorf("variable = %+v, want WEB_PORT 8080 from the default", v)
+	}
+	if len(v.Places) != 1 || v.Places[0].File != "compose.yaml" || v.Places[0].Line != 12 {
+		t.Errorf("places = %+v, want compose.yaml line 12", v.Places)
+	}
+
+	answer, code, raw = viewer.check(st.ID, checkBodyWithVars(stacks.StarterCompose, `[{"name":"WEB_PORT","value":"9090","secret":false}]`))
+	if code != http.StatusOK || len(answer.Variables) != 1 || answer.Variables[0].Value != "9090" || answer.Variables[0].Source != "table" {
+		t.Errorf("with WEB_PORT=9090: %d %s, want 9090 from the table", code, raw)
+	}
+
+	// The list is never null.
+	_, code, raw = viewer.check(st.ID, checkBodyWithVars("services: {}\n", `[]`))
+	if code != http.StatusOK || !strings.Contains(raw, `"variables":[]`) {
+		t.Errorf("a file with no variables: %d %s, want an empty list", code, raw)
+	}
+}

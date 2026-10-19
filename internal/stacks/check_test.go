@@ -395,3 +395,39 @@ func TestPositionIndexAnswersExactPathsOnly(t *testing.T) {
 		t.Errorf("Scalar(mode) = %q, %v", v, ok)
 	}
 }
+
+func TestCheckAnswersTheResolvedVariablesOfTheStack(t *testing.T) {
+	t.Parallel()
+	check := func(vars ...stacks.Var) stacks.CheckResult {
+		return stacks.Check(context.Background(), stacks.CheckInput{
+			Name: "probe", Target: stacks.TargetSwarm, Copy: copyOf(stacks.StarterCompose, vars...),
+		})
+	}
+	res := check()
+	if len(res.Variables) != 1 {
+		t.Fatalf("variables = %+v, want WEB_PORT", res.Variables)
+	}
+	if v := res.Variables[0]; v.Name != "WEB_PORT" || v.Value != "8080" || v.Source != stacks.SourceDefault {
+		t.Errorf("with an empty table: %+v, want 8080 from the default", v)
+	}
+	res = check(stacks.Var{Name: "WEB_PORT", Value: "9090"})
+	if v := res.Variables[0]; v.Value != "9090" || v.Source != stacks.SourceTable {
+		t.Errorf("with WEB_PORT=9090: %+v, want 9090 from the table", v)
+	}
+	if res.Loaded == nil || res.Loaded.Project.Services["web"].Ports[0].Published != "9090" {
+		t.Errorf("the project was not loaded with the table's port: %+v", res.Loaded)
+	}
+}
+
+func TestCheckAnswersVariablesEvenWhenTheFileIsRefusedLater(t *testing.T) {
+	t.Parallel()
+	// A schema error: the file parses, so the variables it refers to are still listed.
+	res := checkOf(t, "services:\n  web:\n    imag: nginx:${TAG:-1}\n")
+	if len(res.Variables) != 1 || res.Variables[0].Name != "TAG" {
+		t.Errorf("variables = %+v, want TAG", res.Variables)
+	}
+	// A file that does not parse names none.
+	if res := checkOf(t, "services: [\n"); len(res.Variables) != 0 {
+		t.Errorf("variables = %+v, want none for a file that is not YAML", res.Variables)
+	}
+}

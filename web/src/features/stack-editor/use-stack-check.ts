@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { parseAllDocuments } from "yaml";
 
-import { postStackCheck, type StackProblem } from "@/api/stacks";
+import { postStackCheck, type StackProblem, type StackVariable } from "@/api/stacks";
 import { COMPOSE_FILE, toSaveBody, type WorkingCopy } from "@/features/stack-editor/working-copy";
 import i18n from "@/i18n";
 
@@ -72,6 +72,8 @@ interface StackCheckState {
   problems: StackProblem[];
   // The stack files the compose file never refers to.
   unusedFiles: string[];
+  // The rows of the Variables pane as the server resolved them, or null before its first answer.
+  variables: StackVariable[] | null;
   // A check is on its way to the server.
   checking: boolean;
   // The last check got no answer. The last results stay.
@@ -87,9 +89,11 @@ interface StackCheckState {
 // 800 ms after it. A check is never retried; the next edit sends the next one. When a check fails
 // the last results stay, and `failed` says so. The first check of a loaded copy runs at once.
 export function useStackCheck(envId: string, stackId: string, copy: WorkingCopy): StackCheckState {
-  const [server, setServer] = useState<{ problems: StackProblem[]; unusedFiles: string[] } | null>(
-    null,
-  );
+  const [server, setServer] = useState<{
+    problems: StackProblem[];
+    unusedFiles: string[];
+    variables: StackVariable[];
+  } | null>(null);
   const [client, setClient] = useState<StackProblem[]>([]);
   const [checking, setChecking] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -156,6 +160,7 @@ export function useStackCheck(envId: string, stackId: string, copy: WorkingCopy)
   return {
     problems,
     unusedFiles: server?.unusedFiles ?? [],
+    variables: server?.variables ?? null,
     checking,
     failed,
     checked: server !== null,

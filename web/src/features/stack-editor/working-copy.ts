@@ -51,7 +51,18 @@ export type WorkingCopyAction =
   | { type: "addFile"; path: string; content?: string }
   | { type: "renameFile"; from: string; to: string }
   | { type: "deleteFile"; path: string }
-  | { type: "select"; path: string };
+  | { type: "select"; path: string }
+  // The variables table. A variable the compose file uses is created by the first value typed for
+  // it; addVar is for a name the files do not refer to yet.
+  | { type: "addVar"; name: string }
+  // Typing a value. It replaces a hidden secret value, so the row stops being hidden.
+  | { type: "setVar"; name: string; value: string }
+  | { type: "removeVar"; name: string }
+  // The Secret switch. Turning it off on a hidden value clears the value: the text the server
+  // holds is never in the browser, so it cannot become plain text without being typed again.
+  | { type: "setSecret"; name: string; secret: boolean }
+  // Puts a hidden secret that was typed over back to the value the server holds.
+  | { type: "resetVar"; name: string };
 
 // compose.yaml first, then the rest in path order, so the rail and the save body are stable.
 function ordered(files: WorkingFile[]): WorkingFile[] {
@@ -60,6 +71,22 @@ function ordered(files: WorkingFile[]): WorkingFile[] {
     if (b.path === COMPOSE_FILE) return 1;
     return a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
   });
+}
+
+// The variables by name, so the table and the save body are stable.
+function orderedVars(vars: WorkingVar[]): WorkingVar[] {
+  return [...vars].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+}
+
+// upsertVar changes the variable called name, or adds it when the table has none.
+function upsertVar(
+  vars: WorkingVar[],
+  name: string,
+  change: (v: WorkingVar) => WorkingVar,
+): WorkingVar[] {
+  const found = vars.some((v) => v.name === name);
+  if (found) return vars.map((v) => (v.name === name ? change(v) : v));
+  return orderedVars([...vars, change({ name, value: "", secret: false, hidden: false })]);
 }
 
 function fromDraft(draft: StackDraft, selected: string): WorkingCopy {
@@ -128,6 +155,36 @@ export function workingCopyReducer(state: WorkingCopy, action: WorkingCopyAction
       return state.files.some((f) => f.path === action.path)
         ? { ...state, selected: action.path }
         : state;
+    case "addVar":
+      if (state.vars.some((v) => v.name === action.name)) return state;
+      return { ...state, vars: upsertVar(state.vars, action.name, (v) => v) };
+    case "setVar":
+      return {
+        ...state,
+        vars: upsertVar(state.vars, action.name, (v) => ({
+          ...v,
+          value: action.value,
+          hidden: false,
+        })),
+      };
+    case "removeVar":
+      return { ...state, vars: state.vars.filter((v) => v.name !== action.name) };
+    case "setSecret":
+      return {
+        ...state,
+        vars: upsertVar(state.vars, action.name, (v) =>
+          !action.secret && v.hidden
+            ? { ...v, secret: false, value: "", hidden: false }
+            : { ...v, secret: action.secret },
+        ),
+      };
+    case "resetVar":
+      return {
+        ...state,
+        vars: state.vars.map((v) =>
+          v.name === action.name && v.secret ? { ...v, value: "", hidden: true } : v,
+        ),
+      };
   }
 }
 

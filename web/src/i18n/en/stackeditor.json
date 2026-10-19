@@ -2,7 +2,8 @@
   "stackEditor": {
     "panes": {
       "label": "Editor panes",
-      "files": "Files"
+      "files": "Files",
+      "variables": "Variables"
     },
     "loading": "Loading the draft",
     "error": {

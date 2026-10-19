@@ -18,6 +18,7 @@ export type StackState = StackItem["state"];
 export type StackCheck = components["schemas"]["StackCheckBody"];
 export type StackProblem = components["schemas"]["StackProblemBody"];
 export type StackCheckInput = components["schemas"]["StackCheckRequest"];
+export type StackVariable = components["schemas"]["StackVariableBody"];
 
 // The query key of an environment's stacks list, and of every read that extends it: one stack's
 // page is under it, so a change to the list refreshes the page too.
@@ -265,7 +266,7 @@ export async function postStackCheck(
   stackId: string,
   body: StackCheckInput,
   signal?: AbortSignal,
-): Promise<{ problems: StackProblem[]; unusedFiles: string[] }> {
+): Promise<{ problems: StackProblem[]; unusedFiles: string[]; variables: StackVariable[] }> {
   try {
     const res = await api.POST("/api/env/{envId}/stacks/{stackId}/check", {
       params: { path: { envId, stackId } },
@@ -276,7 +277,11 @@ export async function postStackCheck(
       const problem = readProblem(res.error, res.response);
       throw new CheckRequestError(problem.status, problem.type);
     }
-    return { problems: res.data.problems ?? [], unusedFiles: res.data.unusedFiles ?? [] };
+    return {
+      problems: res.data.problems ?? [],
+      unusedFiles: res.data.unusedFiles ?? [],
+      variables: res.data.variables ?? [],
+    };
   } catch (e) {
     // A network failure has no status.
     throw e instanceof CheckRequestError ? e : new CheckRequestError(0);

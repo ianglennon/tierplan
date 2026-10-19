@@ -142,6 +142,8 @@ function mount(
   file?: string,
   onFileChange?: (path: string | undefined) => void,
   history = createMemoryHistory({ initialEntries: ["/"] }),
+  pane?: "files" | "variables",
+  onPaneChange?: (pane: "files" | "variables" | "rendered") => void,
 ) {
   const root = createRootRoute({
     component: () => (
@@ -157,7 +159,14 @@ function mount(
         getParentRoute: () => root,
         path: "/",
         component: () => (
-          <StackEditorPage envId={ENV} stackId={STACK} file={file} onFileChange={onFileChange} />
+          <StackEditorPage
+            envId={ENV}
+            stackId={STACK}
+            file={file}
+            onFileChange={onFileChange}
+            pane={pane}
+            onPaneChange={onPaneChange}
+          />
         ),
       }),
       createRoute({ getParentRoute: () => root, path: "/away", component: () => <p>Away</p> }),
@@ -1124,5 +1133,73 @@ describe("the Problems panel", () => {
       release(Response.json({ problems: [], unusedFiles: [] }));
     });
     await waitFor(() => expect(screen.queryByText("Checking…")).toBeNull());
+  });
+});
+
+// The Variables pane (plan 07-10, STK-04): the same working copy as the Files pane, as a table.
+describe("the Variables pane", () => {
+  const STARTER =
+    'services:\n  web:\n    image: nginx:1.27-alpine\n    ports:\n      - "$' +
+    '{WEB_PORT:-8080}:80"\n';
+  const webPort = (over: Record<string, unknown> = {}) => ({
+    name: "WEB_PORT",
+    value: "8080",
+    secret: false,
+    source: "default",
+    default: "8080",
+    hasDefault: true,
+    required: false,
+    unused: false,
+    places: [{ file: "compose.yaml", line: 5 }],
+    ...over,
+  });
+
+  it("lists the variable the compose file refers to, resolved from its default", async () => {
+    server.draft = () =>
+      Response.json(
+        draftBody({ files: [{ path: "compose.yaml", content: STARTER, secret: false }] }),
+      );
+    server.check = () => Response.json({ problems: [], unusedFiles: [], variables: [webPort()] });
+    mount(undefined, undefined, undefined, "variables");
+    const input = (await screen.findByLabelText("Value of WEB_PORT")) as HTMLInputElement;
+    expect(input.placeholder).toBe("8080");
+    expect(await screen.findByText("From the compose file's default")).toBeTruthy();
+    expect(screen.queryByTestId("stack-file-editor")).toBeNull();
+  });
+
+  it("sends the check the value typed, shows what the server resolves from it, and saves it", async () => {
+    server.draft = () =>
+      Response.json(
+        draftBody({ files: [{ path: "compose.yaml", content: STARTER, secret: false }] }),
+      );
+    server.check = (body) => {
+      const vars = (body.vars as { name: string; value: string }[]) ?? [];
+      const typed = vars.find((v) => v.name === "WEB_PORT");
+      return Response.json({
+        problems: [],
+        unusedFiles: [],
+        variables: [typed ? webPort({ value: typed.value, source: "table" }) : webPort()],
+      });
+    };
+    mount(undefined, undefined, undefined, "variables");
+    const input = (await screen.findByLabelText("Value of WEB_PORT")) as HTMLInputElement;
+    await screen.findByText("From the compose file's default");
+    fireEvent.change(input, { target: { value: "9090" } });
+    expect(await screen.findByText("From the table")).toBeTruthy();
+    expect(screen.getByText("9090", { selector: "span" })).toBeTruthy();
+    expect(await screen.findByText("Unsaved changes")).toBeTruthy();
+    fireEvent.click(saveButton());
+    await screen.findByText("Saved the draft of tracer.");
+    expect(puts()[0]?.body?.vars).toEqual([{ name: "WEB_PORT", value: "9090", secret: false }]);
+  });
+
+  it("moves between the panes through the address", async () => {
+    const onPaneChange = vi.fn();
+    mount(undefined, undefined, undefined, "files", onPaneChange);
+    await ready();
+    const tab = screen.getByRole("tab", { name: "Variables" });
+    fireEvent.mouseDown(tab);
+    fireEvent.click(tab);
+    expect(onPaneChange).toHaveBeenCalledWith("variables");
   });
 });

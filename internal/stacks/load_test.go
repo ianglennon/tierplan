@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -21,7 +22,7 @@ func copyOf(compose string, vars ...stacks.Var) stacks.WorkingCopy {
 	}
 }
 
-func TestLoadReadsOnlyTheTable(t *testing.T) {
+func TestServerEnvironmentNeverLeaks(t *testing.T) {
 	// Not parallel: t.Setenv changes the test process's environment.
 	t.Setenv("BAYPLAN_LEAK_PROBE", "leaked")
 	const compose = `services:
@@ -168,5 +169,50 @@ func TestLoadHonoursItsDeadline(t *testing.T) {
 	// No deadline is the default, which is ample for a small file.
 	if _, err := stacks.Load(context.Background(), stacks.LoadInput{Name: "ok", Target: stacks.TargetSwarm, Copy: copyOf(stacks.StarterCompose)}); err != nil {
 		t.Fatalf("Load with the default deadline: %v", err)
+	}
+}
+
+func TestLoadNamesThePlainReferencesThatFoundNothing(t *testing.T) {
+	t.Parallel()
+	const compose = `services:
+  web:
+    image: nginx:${TAG}
+    command: ["run", "$MODE"]
+    environment:
+      A: ${HAS_DEFAULT:-x}
+      B: ${PRESENT}
+      C: ${SET_BUT_EMPTY}
+      D: ${A_DASH_DEFAULT-y}
+      E: $${ESCAPED}
+      F: ${OPTIONAL:+yes}
+`
+	loaded, err := stacks.Load(context.Background(), stacks.LoadInput{
+		Name: "probe", Target: stacks.TargetSwarm,
+		Copy: copyOf(compose, stacks.Var{Name: "PRESENT", Value: "here"}, stacks.Var{Name: "SET_BUT_EMPTY", Value: ""}),
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []string{"MODE", "SET_BUT_EMPTY", "TAG"}
+	if !reflect.DeepEqual(loaded.Unset, want) {
+		t.Errorf("Unset = %v, want %v: a default, a presence form and a value in the table are not unset, and a blank table entry has no value", loaded.Unset, want)
+	}
+}
+
+func TestLoadAnswersTheSameWhateverTheServerEnvironmentHolds(t *testing.T) {
+	// Not parallel: t.Setenv changes the test process's environment.
+	t.Setenv("BAYPLAN_LEAK_PROBE", "leaked")
+	loaded, err := stacks.Load(context.Background(), stacks.LoadInput{
+		Name: "probe", Target: stacks.TargetSwarm,
+		Copy: copyOf("services:\n  web:\n    image: x:1\n    hostname: ${BAYPLAN_LEAK_PROBE}\n"),
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := loaded.Project.Services["web"].Hostname; got != "" {
+		t.Errorf("hostname = %q: the server's own environment reached interpolation", got)
+	}
+	if !reflect.DeepEqual(loaded.Unset, []string{"BAYPLAN_LEAK_PROBE"}) {
+		t.Errorf("Unset = %v, want the probe named as unset: the table is the only source", loaded.Unset)
 	}
 }

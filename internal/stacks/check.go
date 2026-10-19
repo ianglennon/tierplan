@@ -39,6 +39,10 @@ type CheckResult struct {
 	// UnusedFiles are the stack's files the compose file never refers to. compose.yaml is never
 	// one of them.
 	UnusedFiles []string
+	// Variables are the rows of the Variables pane: every variable the compose file refers to and
+	// every variable of the table, with the value a deploy will use and where it comes from. It is
+	// empty when the compose file is not valid YAML or was refused before it was read.
+	Variables []ResolvedVar
 }
 
 // Check is the one pipeline that judges a stack's working copy: the editor's lint, the review and
@@ -70,6 +74,7 @@ func Check(ctx context.Context, in CheckInput) CheckResult {
 			return res
 		}
 		res.Problems = found
+		res.Variables = ResolveVars(Refs(in.Copy), in.Copy.Vars)
 	}
 	loaded, err := Load(ctx, LoadInput(in))
 	if err != nil {

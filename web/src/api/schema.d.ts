@@ -8047,6 +8047,8 @@ export interface components {
             problems: components["schemas"]["StackProblemBody"][] | null;
             /** @description Stack files the compose file never refers to */
             unusedFiles: string[] | null;
+            /** @description The rows of the Variables pane, ordered by name. Empty when the compose file is not valid YAML */
+            variables: components["schemas"]["StackVariableBody"][] | null;
         };
         StackCheckRequest: {
             /** @description Every file of the working copy, as a save sends them. A secret file sent as <hidden> is filled from the saved draft */
@@ -8245,6 +8247,15 @@ export interface components {
             /** @description The environment's stacks by name */
             items: components["schemas"]["StackItem"][] | null;
         };
+        StackPlaceBody: {
+            /** @description The stack file */
+            file: string;
+            /**
+             * Format: int64
+             * @description The 1-based line
+             */
+            line: number;
+        };
         StackProblemBody: {
             /** @description A stable name for the kind of problem, such as yaml_invalid or relative_bind */
             code: string;
@@ -8277,6 +8288,29 @@ export interface components {
              * @enum {string}
              */
             severity: "error" | "warning";
+        };
+        StackVariableBody: {
+            /** @description The default written in the compose file, when hasDefault is true */
+            default: string;
+            /** @description True when a reference in the compose file writes a default, even an empty one */
+            hasDefault: boolean;
+            /** @description The variable's name */
+            name: string;
+            /** @description Where the compose file uses the variable, ordered by line. Empty for an unused variable */
+            places: components["schemas"]["StackPlaceBody"][] | null;
+            /** @description True when the variable has no value in the table and no default, so a deploy is refused */
+            required: boolean;
+            /** @description True when the variable is marked secret in the table */
+            secret: boolean;
+            /**
+             * @description Where the value comes from: table (the stack's variables), default (the ${NAME:-default} written in the compose file) or unset (neither)
+             * @enum {string}
+             */
+            source: "table" | "default" | "unset";
+            /** @description True when the variable is in the table and no file refers to it */
+            unused: boolean;
+            /** @description The value a deploy will use: the table's value, else the default written in the compose file, else empty. A secret variable's value is <hidden> */
+            value: string;
         };
         StatusCountsBody: {
             /**
