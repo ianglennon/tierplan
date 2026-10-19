@@ -39,6 +39,9 @@ const (
 	BodyConfigCreate
 	// BodyContainerCreate is POST /containers/create.
 	BodyContainerCreate
+	// BodyArchive is PUT /containers/{id}/archive. Unlike every other kind it is not JSON: the
+	// body is a tar of one regular file, judged by validateArchive and forwarded as received.
+	BodyArchive
 )
 
 // route is one thing the agent forwards: a method, an anchored path, the query
@@ -116,6 +119,12 @@ var (
 	// containerNameValue is the name a container create may ask for: the engine's own
 	// rule, with the optional leading slash, and at most 255 characters.
 	containerNameValue = regexp.MustCompile(`^/?[a-zA-Z0-9][a-zA-Z0-9_.-]{0,254}$`)
+	// rootPathValue is the one directory an archive write may name: the root of the container.
+	// The tar entry's own name says where the file goes (validateArchive).
+	rootPathValue = regexp.MustCompile(`^/$`)
+	// falseValue is the one value copyUIDGID may have: the owner in the tar is not applied, so a
+	// file lands owned by root.
+	falseValue = regexp.MustCompile(`^(0|false)$`)
 )
 
 // pathOf anchors tail and allows the optional /vX.Y prefix, which is the API
@@ -144,7 +153,10 @@ var serviceLogKeys = map[string]*regexp.Regexp{
 // which are credentials to add nodes. The cluster ID is read from /info on a
 // manager instead. A container create is forwarded through a closed-shape body validator and
 // the container host policy (containerpolicy.go), because the Compose SDK that deploys a
-// standalone stack creates containers; attach, archive and export stay absent. The stats
+// standalone stack creates containers. A write into a container's filesystem (archive) is forwarded
+// only as a tar of one regular file into a stopped compose container (archive.go), because the SDK
+// injects a stack file secret or config that way; reading from a container (archive GET and
+// export) and attach stay absent. The stats
 // of a container are forwarded for one sample at a time only (RES-11): the two keys a
 // one-shot read sends, and never a stream the agent would have to hold open.
 var routes = []route{
@@ -226,6 +238,17 @@ var routes = []route{
 		name: "container create", method: http.MethodPost, path: pathOf(`containers/create`),
 		query: map[string]*regexp.Regexp{"name": containerNameValue, "platform": platformValue},
 		body:  BodyContainerCreate,
+	},
+
+	// Container archive: one regular file written into a compose container that is not running,
+	// which is how the Compose SDK injects a stack file secret or config between create and
+	// start. The only keys are the three the SDK's CopyToContainer sends, and the tar is judged by
+	// validateArchive and the container by archiveTargetOK (STK-02). Only PUT: the read of a
+	// container's files stays absent.
+	{
+		name: "container archive", method: http.MethodPut, path: pathOf(`containers/` + idShape + `/archive`),
+		query: map[string]*regexp.Regexp{"path": rootPathValue, "noOverwriteDirNonDir": boolValue, "copyUIDGID": falseValue},
+		body:  BodyArchive,
 	},
 
 	// Container lifecycle.

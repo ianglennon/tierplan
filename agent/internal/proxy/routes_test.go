@@ -884,3 +884,67 @@ func TestRouteContainerCreateTakesOnlyANameAndAPlatformAndABody(t *testing.T) {
 		})
 	}
 }
+
+func TestRouteContainerArchiveTakesOnlyThreeKeysAndOnlyAPut(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, path, query string
+		body                      bool
+		wantRoute                 string // "" means refused
+	}{
+		{"the query the SDK sends", "PUT", "/containers/web-1/archive", "noOverwriteDirNonDir=true&path=%2F", true, "container archive"},
+		{"the version prefix", "PUT", "/v1.52/containers/web-1/archive", "noOverwriteDirNonDir=true&path=%2F", true, "container archive"},
+		{"path alone", "PUT", "/containers/web-1/archive", "path=%2F", true, "container archive"},
+		{"copyUIDGID false", "PUT", "/containers/web-1/archive", "path=%2F&copyUIDGID=false", true, "container archive"},
+		{"copyUIDGID 0", "PUT", "/containers/web-1/archive", "path=%2F&copyUIDGID=0", true, "container archive"},
+		{"noOverwriteDirNonDir false", "PUT", "/containers/web-1/archive", "path=/&noOverwriteDirNonDir=false", true, "container archive"},
+		{"a container ID", "PUT", "/containers/" + strings.Repeat("a", 64) + "/archive", "path=%2F", true, "container archive"},
+
+		{"copyUIDGID true", "PUT", "/containers/web-1/archive", "path=%2F&copyUIDGID=true", true, ""},
+		{"copyUIDGID 1", "PUT", "/containers/web-1/archive", "path=%2F&copyUIDGID=1", true, ""},
+		{"a path other than the root", "PUT", "/containers/web-1/archive", "path=%2Fetc", true, ""},
+		{"a path of two slashes", "PUT", "/containers/web-1/archive", "path=%2F%2F", true, ""},
+		{"a relative path", "PUT", "/containers/web-1/archive", "path=run", true, ""},
+		{"a path with a dot-dot", "PUT", "/containers/web-1/archive", "path=%2F..", true, ""},
+		{"an empty path", "PUT", "/containers/web-1/archive", "path=", true, ""},
+		{"a second path that is not the root", "PUT", "/containers/web-1/archive", "path=%2F&path=%2Fetc", true, ""},
+		{"an unknown key", "PUT", "/containers/web-1/archive", "path=%2F&overwrite=1", true, ""},
+		{"a bad boolean", "PUT", "/containers/web-1/archive", "path=%2F&noOverwriteDirNonDir=yes", true, ""},
+		{"no body", "PUT", "/containers/web-1/archive", "path=%2F", false, ""},
+		{"a GET reads the container's files", "GET", "/containers/web-1/archive", "path=%2F", false, ""},
+		{"a HEAD stats a path", "HEAD", "/containers/web-1/archive", "path=%2F", false, ""},
+		{"a POST", "POST", "/containers/web-1/archive", "path=%2F", true, ""},
+		{"a DELETE", "DELETE", "/containers/web-1/archive", "path=%2F", false, ""},
+		{"a dot-dot container", "PUT", "/containers/../archive", "path=%2F", true, ""},
+		{"a container starting with a dash", "PUT", "/containers/-x/archive", "path=%2F", true, ""},
+		{"a trailing slash", "PUT", "/containers/web-1/archive/", "path=%2F", true, ""},
+		{"an encoded slash in the ID", "PUT", "/containers/a%2Fb/archive", "path=%2F", true, ""},
+		{"the container list", "PUT", "/containers/archive", "path=%2F", true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, _, kind := Allowed(tc.method, tc.path, tc.query, tc.body, false, Policy{})
+			if ok != (tc.wantRoute != "") {
+				t.Fatalf("Allowed(%s %s?%s) = %v, want %v", tc.method, tc.path, tc.query, ok, tc.wantRoute != "")
+			}
+			if !ok {
+				return
+			}
+			rt, found := Match(tc.method, tc.path)
+			if !found || rt.name != tc.wantRoute {
+				t.Fatalf("Match(%s %s) = %q, want %q", tc.method, tc.path, rt.name, tc.wantRoute)
+			}
+			if kind != BodyArchive {
+				t.Errorf("the body kind of %q is %d, want BodyArchive", rt.name, kind)
+			}
+			if rt.registryAuth || rt.upgrade {
+				t.Errorf("route %q may carry a registry credential or an upgrade", rt.name)
+			}
+		})
+	}
+}
+
+func TestRouteContainerArchiveIsRefusedOnAReadOnlyHost(t *testing.T) {
+	ok, reason, _ := Allowed("PUT", "/containers/web-1/archive", "path=%2F", true, false, Policy{ReadOnly: true})
+	if ok || reason != "read_only_flag" {
+		t.Errorf("an archive write on a read-only host = %v %q, want refused read_only_flag", ok, reason)
+	}
+}

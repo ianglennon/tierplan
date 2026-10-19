@@ -63,6 +63,8 @@ func bodyCap(kind BodyKind) int64 {
 		return maxSecretBody
 	case BodyConfigCreate:
 		return maxConfigBody
+	case BodyArchive:
+		return maxArchiveBody
 	}
 	return maxBody
 }
@@ -108,7 +110,8 @@ func refuse(format string, args ...any) error {
 // value is built that carries only the allowlisted fields, and the decoded value
 // must equal that fresh value, so any other field that was set is a refusal. What
 // is forwarded is the fresh value encoded again, so a field the decoder accepted
-// but the allowlist does not name cannot cross.
+// but the allowlist does not name cannot cross. The one exception is an archive, which is a tar
+// and not JSON: it is checked by validateArchive and forwarded as received.
 func validateBody(kind BodyKind, r io.Reader, env bodyEnv) ([]byte, error) {
 	limit := bodyCap(kind)
 	raw, err := io.ReadAll(io.LimitReader(r, limit+1))
@@ -117,6 +120,12 @@ func validateBody(kind BodyKind, r io.Reader, env bodyEnv) ([]byte, error) {
 	}
 	if int64(len(raw)) > limit {
 		return nil, refuse("the body is over %d bytes", limit)
+	}
+	if kind == BodyArchive {
+		if err := validateArchive(raw); err != nil {
+			return nil, err
+		}
+		return raw, nil
 	}
 	var clean any
 	switch kind {

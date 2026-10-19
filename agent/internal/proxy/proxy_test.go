@@ -4,7 +4,9 @@
 package proxy
 
 import (
+	"archive/tar"
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"io"
 	"net"
@@ -13,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1213,6 +1216,177 @@ func TestAReadOnlyHostRefusesContainerCreate(t *testing.T) {
 		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusForbidden {
 			t.Errorf("status %d, want 403 for %.40q", resp.StatusCode, raw)
+		}
+	}
+	if !slices.Equal(reasons, []string{"read_only_flag", "read_only_flag"}) {
+		t.Errorf("reasons = %v", reasons)
+	}
+	if got := sock.requests(); len(got) != 0 {
+		t.Fatalf("the engine saw %v", got)
+	}
+}
+
+// archivePath is the request the Compose SDK's CopyToContainer sends for a stack file secret,
+// without a copyUIDGID key (the secret names no owner).
+const archivePath = "/v1.52/containers/web-1/archive?noOverwriteDirNonDir=true&path=%2F"
+
+// putTar is a PUT with a tar body of the right length.
+func putTar(target string, raw []byte, headers ...string) string {
+	headers = append([]string{"Content-Type: application/x-tar\r\n", "Content-Length: " + strconv.Itoa(len(raw)) + "\r\n"}, headers...)
+	return request(http.MethodPut, target, headers...) + string(raw)
+}
+
+// containerAnswer is what an engine answers to the inspect of a container: the labels and the
+// running flag are the two things the agent reads.
+func containerAnswer(running bool, labels map[string]string) string {
+	b, _ := json.Marshal(map[string]any{
+		"Id": "0123456789ab", "State": map[string]any{"Running": running},
+		"Config": map[string]any{"Image": "nginx:1.27", "Labels": labels},
+	})
+	return string(b)
+}
+
+var composeLabels = map[string]string{"com.docker.compose.project": "shop", "com.docker.compose.service": "web"}
+
+func TestASecretFileIsInjectedIntoACreatedComposeContainer(t *testing.T) {
+	sock := newFakeSocket(t)
+	sock.answers = map[string]string{"/containers/web-1/json": containerAnswer(false, composeLabels)}
+	var reasons []string
+	h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+	raw := sdkArchive(t, "/run/secrets/tok", "s3cret-value", 0o444)
+	resp := do(t, h, putTar(archivePath, raw))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || len(reasons) != 0 {
+		t.Fatalf("status %d, reasons %v, want 200 and no refusal", resp.StatusCode, reasons)
+	}
+	if got := sock.requests(); !slices.Equal(got, []string{"GET /containers/web-1/json", "PUT " + archivePath}) {
+		t.Fatalf("the engine saw %v, want the container lookup and then the write", got)
+	}
+	bodies := sock.bodiesSeen()
+	if len(bodies) != 2 || !bytes.Equal(bodies[1], raw) {
+		t.Fatalf("the engine did not receive the tar byte for byte")
+	}
+	sock.mu.Lock()
+	defer sock.mu.Unlock()
+	if ct := sock.headers[1].Get("Content-Type"); ct != "application/x-tar" {
+		t.Errorf("the engine saw the content type %q, want application/x-tar", ct)
+	}
+}
+
+func TestArchiveIntoARunningContainerIsRefused(t *testing.T) {
+	sock := newFakeSocket(t)
+	sock.answers = map[string]string{"/containers/web-1/json": containerAnswer(true, composeLabels)}
+	var reasons []string
+	h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+	resp := do(t, h, putTar(archivePath, sdkArchive(t, "/run/secrets/tok", "x", 0o444)))
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "agent_policy_denied: PUT /v1.52/containers/web-1/archive") {
+		t.Fatalf("status %d body %s, want a typed 403", resp.StatusCode, body)
+	}
+	if !slices.Equal(reasons, []string{"allowlist"}) {
+		t.Errorf("reasons = %v", reasons)
+	}
+	if got := sock.writesSeen(); len(got) != 0 {
+		t.Fatalf("a write reached the engine: %v", got)
+	}
+}
+
+func TestArchiveIntoAContainerComposeDidNotCreateIsRefused(t *testing.T) {
+	for name, tc := range map[string]struct {
+		answer string
+		status int
+	}{
+		"no compose label":         {answer: containerAnswer(false, map[string]string{"app": "x"})},
+		"no label at all":          {answer: containerAnswer(false, nil)},
+		"a container that is gone": {answer: `{"message":"No such container: web-1"}`, status: http.StatusNotFound},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sock := newFakeSocket(t)
+			sock.answers = map[string]string{"/containers/web-1/json": tc.answer}
+			if tc.status != 0 {
+				sock.status = map[string]int{"/containers/web-1/json": tc.status}
+			}
+			var reasons []string
+			h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+			resp := do(t, h, putTar(archivePath, sdkArchive(t, "/run/secrets/tok", "x", 0o444)))
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden || !slices.Equal(reasons, []string{"allowlist"}) {
+				t.Fatalf("status %d reasons %v, want 403 allowlist", resp.StatusCode, reasons)
+			}
+			if got := sock.writesSeen(); len(got) != 0 {
+				t.Fatalf("a write reached the engine: %v", got)
+			}
+		})
+	}
+}
+
+// An engine that cannot say what a container is gives no permission: the answer is the 502 of an
+// engine fault (the 06-50 rule), nothing is reported as a policy denial and nothing is forwarded.
+func TestArchiveLookupThatFailsIsAnEngineFaultNotAPermission(t *testing.T) {
+	for name, tc := range map[string]struct {
+		answer string
+		status int
+	}{
+		"a server error":      {answer: `{"message":"boom"}`, status: http.StatusInternalServerError},
+		"an unreadable reply": {answer: `not json`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sock := newFakeSocket(t)
+			sock.answers = map[string]string{"/containers/web-1/json": tc.answer}
+			if tc.status != 0 {
+				sock.status = map[string]int{"/containers/web-1/json": tc.status}
+			}
+			var reasons []string
+			h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+			resp := do(t, h, putTar(archivePath, sdkArchive(t, "/run/secrets/tok", "x", 0o444)))
+			body, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusBadGateway || len(reasons) != 0 {
+				t.Fatalf("status %d reasons %v, want 502 and no denial reported", resp.StatusCode, reasons)
+			}
+			if !strings.Contains(string(body), "agent_engine_unreachable: the Docker engine did not answer a container lookup") {
+				t.Fatalf("body %s does not name the engine fault", body)
+			}
+			if got := sock.writesSeen(); len(got) != 0 {
+				t.Fatalf("a write reached the engine: %v", got)
+			}
+		})
+	}
+}
+
+// A bad tar is refused before the engine is asked anything.
+func TestAnInvalidArchiveNeverReachesTheEngineNorItsLookup(t *testing.T) {
+	sock := newFakeSocket(t)
+	sock.answers = map[string]string{"/containers/web-1/json": containerAnswer(false, composeLabels)}
+	h := Handler(sock.path, Policy{}, nil)
+	for name, raw := range map[string][]byte{
+		"a symlink":      tarOf(t, tarEntry{hdr: tar.Header{Typeflag: tar.TypeSymlink, Name: "/run/secrets/tok", Linkname: "/etc/shadow", Mode: 0o777, ModTime: archiveModTime}}),
+		"a dot-dot name": sdkArchive(t, "../etc/passwd", "x", 0o444),
+		"a setuid file":  sdkArchive(t, "/bin/x", "x", 0o4755),
+		"garbage":        []byte("not a tar"),
+	} {
+		resp := do(t, h, putTar(archivePath, raw))
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%s: status %d, want 403", name, resp.StatusCode)
+		}
+	}
+	if got := sock.requests(); len(got) != 0 {
+		t.Fatalf("the engine saw %v", got)
+	}
+}
+
+func TestAReadOnlyHostRefusesArchiveBeforeAnyBodyIsRead(t *testing.T) {
+	sock := newFakeSocket(t)
+	sock.answers = map[string]string{"/containers/web-1/json": containerAnswer(false, composeLabels)}
+	var reasons []string
+	h := Handler(sock.path, Policy{ReadOnly: true, AllowPrivilegedServices: true}, func(_, _, reason string) { reasons = append(reasons, reason) })
+	for _, raw := range [][]byte{sdkArchive(t, "/run/secrets/tok", "x", 0o444), []byte("not a tar")} {
+		resp := do(t, h, putTar(archivePath, raw))
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("status %d, want 403", resp.StatusCode)
 		}
 	}
 	if !slices.Equal(reasons, []string{"read_only_flag", "read_only_flag"}) {

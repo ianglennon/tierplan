@@ -4,8 +4,12 @@
 package proxy
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/netip"
 	"net/url"
 	"path"
@@ -135,6 +139,11 @@ var oracle = []oracleEntry{
 			"name":     rx(`^/?[a-zA-Z0-9][a-zA-Z0-9_.-]{0,254}$`),
 			"platform": rx(`^[a-z0-9]{1,16}(/[A-Za-z0-9_.-]{1,32}){1,2}$`),
 		},
+	},
+	// An archive write: a tar body, at the root of the container, with no owner copied.
+	{
+		method: "PUT", path: rx(oVer + `containers/` + oID + `/archive$`), body: true,
+		keys: map[string]*regexp.Regexp{"path": rx(`^/$`), "noOverwriteDirNonDir": oBool, "copyUIDGID": rx(`^(0|false)$`)},
 	},
 	// Secrets: the list and the inspect take no key at all, the create takes a SecretSpec body, and the
 	// remove takes no key either.
@@ -315,6 +324,14 @@ func FuzzAllowed(f *testing.F) {
 		{"POST", "/containers/create/", "", true, false, false},
 		{"POST", "/containers/abc/attach", "", false, true, false},
 		{"GET", "/containers/abc/archive", "", false, false, false},
+		{"PUT", "/containers/abc/archive", "noOverwriteDirNonDir=true&path=%2F", true, false, false},
+		{"PUT", "/v1.52/containers/abc/archive", "path=/&copyUIDGID=false", true, false, false},
+		{"PUT", "/containers/abc/archive", "path=%2F&copyUIDGID=true", true, false, false},
+		{"PUT", "/containers/abc/archive", "path=%2Fetc", true, false, false},
+		{"PUT", "/containers/abc/archive", "path=%2F", false, false, false},
+		{"PUT", "/containers/abc/archive", "path=%2F", true, true, false},
+		{"PUT", "/containers/abc/archive", "path=%2F", true, false, true},
+		{"HEAD", "/containers/abc/archive", "path=%2F", false, false, false},
 		{"GET", "//info", "", false, false, false},
 		{"GET", "/./info", "", false, false, false},
 		{"GET", "/%2e%2e/info", "", false, false, false},
@@ -660,7 +677,8 @@ func FuzzBody(f *testing.F) {
 		f.Add(s.kind, s.body)
 	}
 	f.Fuzz(func(t *testing.T, kind uint8, body string) {
-		k := BodyKind(kind % 12) // BodyNone and the eleven kinds
+		// BodyNone and the eleven JSON kinds. BodyArchive is a tar and not JSON; FuzzArchive drives it.
+		k := BodyKind(kind % 12)
 		out, err := validateBody(k, strings.NewReader(body), bodyEnv{})
 		if err != nil {
 			return
@@ -831,6 +849,69 @@ func FuzzBody(f *testing.F) {
 						t.Fatalf("a service spec with host access in the inline volume of mount %d (%s) was forwarded for an absent volume: %.200s", i, reason, again)
 					}
 				}
+			}
+		}
+	})
+}
+
+// FuzzArchive drives the archive validator with arbitrary bytes. Whatever it is given, a tar it
+// accepts is, read again here by the raw header bytes and by archive/tar, exactly one entry: a
+// regular file with a clean name (relative, or with one leading slash) that has no .. segment
+// and no NUL, a mode with no bit above rwxrwxrwx, no link target, device or extended record, at
+// most 1,000 KB of content, and nothing after the end of the archive but zero padding. A crasher
+// is fixed in validateArchive, never here.
+func FuzzArchive(f *testing.F) {
+	f.Add(sdkArchive(f, "/run/secrets/tok", "s3cret-value", 0o444))
+	f.Add(sdkArchive(f, "run/secrets/tok", "", 0o444))
+	f.Add(sdkArchive(f, "../etc/passwd", "x", 0o444))
+	f.Add(sdkArchive(f, "/bin/x", "x", 0o4755))
+	f.Add(tarOf(f, tarEntry{hdr: tar.Header{Typeflag: tar.TypeSymlink, Name: "/run/secrets/tok", Linkname: "/etc/shadow", Mode: 0o777, ModTime: archiveModTime}}))
+	f.Add(append(sdkArchive(f, "/a", "x", 0o444), sdkArchive(f, "/b", "y", 0o444)...))
+	f.Add(append(sdkArchive(f, "/a", "x", 0o444), 0, 0, 0, 1))
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		if validateArchive(raw) != nil {
+			return
+		}
+		if len(raw) < 512 {
+			t.Fatalf("an archive of %d bytes was accepted, shorter than one header block", len(raw))
+		}
+		if tf := raw[156]; tf != '0' && tf != 0 {
+			t.Fatalf("an archive whose first entry has the type byte %q was accepted", tf)
+		}
+		rd := bytes.NewReader(raw)
+		tr := tar.NewReader(rd)
+		hdr, err := tr.Next()
+		if err != nil {
+			t.Fatalf("an accepted archive has no first entry: %v", err)
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			t.Fatalf("an accepted archive holds an entry of type %q", hdr.Typeflag)
+		}
+		name := strings.TrimPrefix(hdr.Name, "/")
+		if name == "" || name == "." || strings.HasPrefix(name, "/") || path.Clean(hdr.Name) != hdr.Name || strings.ContainsRune(hdr.Name, 0) {
+			t.Fatalf("an accepted archive names %q, not a clean path", hdr.Name)
+		}
+		for _, seg := range strings.Split(name, "/") {
+			if seg == ".." || seg == "" {
+				t.Fatalf("an accepted archive names %q, which has the segment %q", hdr.Name, seg)
+			}
+		}
+		if hdr.Mode&^0o777 != 0 || hdr.Mode < 0 {
+			t.Fatalf("an accepted archive has the mode %o", hdr.Mode)
+		}
+		if hdr.Linkname != "" || hdr.Devmajor != 0 || hdr.Devminor != 0 || len(hdr.PAXRecords) != 0 {
+			t.Fatalf("an accepted archive has a link, a device or an extended record: %+v", hdr)
+		}
+		n, err := io.Copy(io.Discard, io.LimitReader(tr, maxArchiveContent+1))
+		if err != nil || n != hdr.Size || n > maxArchiveContent {
+			t.Fatalf("an accepted archive has %d bytes of content (header %d, cap %d): %v", n, hdr.Size, maxArchiveContent, err)
+		}
+		if _, err := tr.Next(); !errors.Is(err, io.EOF) {
+			t.Fatalf("an accepted archive has more than one entry (%v)", err)
+		}
+		for _, c := range raw[len(raw)-rd.Len():] {
+			if c != 0 {
+				t.Fatalf("an accepted archive has data after its end")
 			}
 		}
 	})
