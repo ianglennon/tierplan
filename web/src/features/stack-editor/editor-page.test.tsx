@@ -1216,6 +1216,35 @@ describe("the Variables pane", () => {
     expect(puts()[0]?.body?.vars).toEqual([{ name: "WEB_PORT", value: "9090", secret: false }]);
   });
 
+  it("imports a pasted .env into the table, marks it secret, and saves it only on Save draft", async () => {
+    server.draft = () =>
+      Response.json(
+        draftBody({ files: [{ path: "compose.yaml", content: STARTER, secret: false }] }),
+      );
+    server.check = () => Response.json({ problems: [], unusedFiles: [], variables: [webPort()] });
+    mount(undefined, undefined, undefined, "variables");
+    await screen.findByLabelText("Value of WEB_PORT");
+    fireEvent.click(screen.getByRole("button", { name: "Import .env" }));
+    fireEvent.change(await screen.findByLabelText("Paste .env text"), {
+      target: { value: "WEB_PORT=9090\nDB_PASS=hunter22\n# c\nbad line" },
+    });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Mark every imported value as secret" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import variables" }));
+
+    expect(
+      await screen.findByText("Imported 2 variables. Mark the secrets, then save the draft."),
+    ).toBeTruthy();
+    expect(await screen.findByText("Unsaved changes")).toBeTruthy();
+    // The import edits the working copy; nothing was sent until Save draft.
+    expect(puts()).toHaveLength(0);
+    fireEvent.click(saveButton());
+    await screen.findByText("Saved the draft of tracer.");
+    expect(puts()[0]?.body?.vars).toEqual([
+      { name: "DB_PASS", value: "hunter22", secret: true },
+      { name: "WEB_PORT", value: "9090", secret: true },
+    ]);
+  });
+
   it("moves between the panes through the address", async () => {
     const onPaneChange = vi.fn();
     mount(undefined, undefined, undefined, "files", onPaneChange);

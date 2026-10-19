@@ -25,6 +25,37 @@ export interface WorkingVar {
   hidden: boolean;
 }
 
+// One variable read from a .env file, and how the import treats the table already there.
+export interface ImportedVar {
+  name: string;
+  value: string;
+}
+export type ImportMode = "merge" | "replace";
+
+// importVars is the table after an import. A name the table already has keeps a Secret flag it
+// has (an import never makes a secret plain); "secret" turns the flag on for every imported
+// name. The value of an imported name is plain text, so a row that was hidden stops being hidden.
+// Replace drops the rows the import does not name; a variable the compose file refers to stays
+// in the pane without a row, as a detected one with no value.
+export function importVars(
+  vars: readonly WorkingVar[],
+  imported: readonly ImportedVar[],
+  mode: ImportMode,
+  secret: boolean,
+): WorkingVar[] {
+  const have = new Map(vars.map((v) => [v.name, v]));
+  const next = new Map<string, WorkingVar>(mode === "merge" ? have : []);
+  for (const v of imported) {
+    next.set(v.name, {
+      name: v.name,
+      value: v.value,
+      secret: secret || (have.get(v.name)?.secret ?? false),
+      hidden: false,
+    });
+  }
+  return orderedVars([...next.values()]);
+}
+
 // WorkingCopy is what the editor holds between the saved draft and the next save: every file and
 // variable of the draft as the person has it now, and the file open in the editor. It lives in
 // memory only; no text of it is ever written to storage (UI-SPEC "Storage").
@@ -63,6 +94,10 @@ export type WorkingCopyAction =
   | { type: "setSecret"; name: string; secret: boolean }
   // Puts a hidden secret that was typed over back to the value the server holds.
   | { type: "resetVar"; name: string }
+  // Bring in the variables of a .env file (Import .env, D-04). Merge adds the names the table
+  // does not have and replaces the value of those it does; Replace makes the table exactly the
+  // imported names. It edits the working copy only: nothing is saved until Save draft.
+  | { type: "importVars"; vars: ImportedVar[]; mode: ImportMode; secret: boolean }
   // A save of `sent` succeeded. The server holds every secret variable now and answers <hidden> for
   // it, so the browser lets go of the text it typed: each secret variable that still has the value
   // that was sent becomes hidden again (UI-SPEC "Secret values never leave the browser").
@@ -179,6 +214,8 @@ export function workingCopyReducer(state: WorkingCopy, action: WorkingCopyAction
           hidden: false,
         })),
       };
+    case "importVars":
+      return { ...state, vars: importVars(state.vars, action.vars, action.mode, action.secret) };
     case "removeVar":
       return { ...state, vars: state.vars.filter((v) => v.name !== action.name) };
     case "setSecret":

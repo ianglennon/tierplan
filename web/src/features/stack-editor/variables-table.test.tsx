@@ -45,6 +45,7 @@ function mount(over: Partial<VariablesTableProps> = {}) {
     onRemove: vi.fn(),
     onReset: vi.fn(),
     onOpen: vi.fn(),
+    onImport: vi.fn(),
   };
   const props: VariablesTableProps = {
     vars: [],
@@ -246,9 +247,25 @@ describe("the states", () => {
     expect(r.queryByTestId("resolved-skeleton")).toBeNull();
   });
 
-  it("says there are no variables when there are none", () => {
+  it("says there are no variables when there are none, with Add variable and Import .env", () => {
     mount({ resolved: [] });
     expect(screen.getByText("No variables")).toBeTruthy();
+    expect(screen.getByText(/none are added\. Add one, or import a \.env file\./)).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Add variable" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Import .env" })).toHaveLength(1);
+  });
+
+  it("opens Import .env from the toolbar, and hands the variables over without saving", async () => {
+    const { onImport } = mount();
+    fireEvent.click(screen.getByRole("button", { name: "Import .env" }));
+    fireEvent.change(await screen.findByLabelText("Paste .env text"), { target: { value: "A=1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Import variables" }));
+    expect(onImport).toHaveBeenCalledWith([{ name: "A", value: "1" }], "merge", false);
+  });
+
+  it("offers no Import .env to a Viewer", () => {
+    mount({ readOnly: true });
+    expect(screen.queryByRole("button", { name: "Import .env" })).toBeNull();
   });
 
   it("renders one row for one variable and a row for each of many, naming the count with a plural", () => {

@@ -409,4 +409,58 @@ describe("the variables table", () => {
       hidden: false,
     });
   });
+
+  describe("importVars", () => {
+    const imported = [
+      { name: "PORT", value: "9090" },
+      { name: "NEW_ONE", value: "x" },
+    ];
+
+    it("merges: adds the new names and replaces the value of a name that clashes", () => {
+      const copy = workingCopyReducer(withHidden(), {
+        type: "importVars",
+        vars: imported,
+        mode: "merge",
+        secret: false,
+      });
+      expect(copy.vars).toEqual([
+        { name: "NEW_ONE", value: "x", secret: false, hidden: false },
+        { name: "PORT", value: "9090", secret: false, hidden: false },
+        { name: "TOKEN", value: "", secret: true, hidden: true },
+      ]);
+      expect(isDirty(withHidden(), copy)).toBe(true);
+    });
+
+    it("replaces: the table is exactly the imported names", () => {
+      const copy = workingCopyReducer(withHidden(), {
+        type: "importVars",
+        vars: imported,
+        mode: "replace",
+        secret: false,
+      });
+      expect(copy.vars.map((v) => v.name)).toEqual(["NEW_ONE", "PORT"]);
+    });
+
+    it("marks every imported value as secret when asked, and never turns a secret plain", () => {
+      const marked = workingCopyReducer(loaded(), {
+        type: "importVars",
+        vars: imported,
+        mode: "merge",
+        secret: true,
+      });
+      expect(marked.vars.every((v) => v.secret)).toBe(true);
+      const kept = workingCopyReducer(withHidden(), {
+        type: "importVars",
+        vars: [{ name: "TOKEN", value: "from-the-file" }],
+        mode: "merge",
+        secret: false,
+      });
+      expect(kept.vars.find((v) => v.name === "TOKEN")).toEqual({
+        name: "TOKEN",
+        value: "from-the-file",
+        secret: true,
+        hidden: false,
+      });
+    });
+  });
 });

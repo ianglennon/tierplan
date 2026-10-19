@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { Plus } from "lucide-react";
+import { Plus, Upload } from "lucide-react";
 import { type FormEvent, useId, useMemo, useState } from "react";
 
 import type { StackVariable } from "@/api/stacks";
@@ -18,8 +18,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ImportEnvDialog } from "@/features/stack-editor/import-env-dialog";
 import { type ResolveState, VariableRow } from "@/features/stack-editor/variable-row";
-import type { WorkingVar } from "@/features/stack-editor/working-copy";
+import type { ImportedVar, ImportMode, WorkingVar } from "@/features/stack-editor/working-copy";
 import { useT } from "@/i18n/use-t";
 
 // The rule for a variable name, the server's: letters, digits and underscore, not starting with a
@@ -54,6 +55,9 @@ export interface VariablesTableProps {
   onSet: (name: string, value: string) => void;
   onSecret: (name: string, secret: boolean) => void;
   onRemove: (name: string) => void;
+  // Import .env brings variables into the working copy; it saves nothing. Without it the pane has
+  // no Import button.
+  onImport?: (vars: ImportedVar[], mode: ImportMode, secret: boolean) => void | Promise<void>;
 }
 
 interface Row {
@@ -90,12 +94,14 @@ export function VariablesTable({
   onSet,
   onSecret,
   onRemove,
+  onImport,
 }: VariablesTableProps) {
   const t = useT();
   const formId = useId();
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
   const rows = useMemo(() => rowsOf(vars, resolved), [vars, resolved]);
   const state: ResolveState = failed ? "failed" : resolved ? "ok" : "pending";
 
@@ -122,65 +128,92 @@ export function VariablesTable({
     setAdding(false);
   }
 
-  return (
-    <div className="flex flex-col gap-3">
-      {readOnly ? null : (
-        <div className="flex flex-col gap-2">
-          <div>
+  const empty = !loading && rows.length === 0;
+
+  // Add variable and Import .env, with the name form of Add. They sit above the table, or in the
+  // empty state when there is no row to put them above.
+  const addControls = readOnly ? null : (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="max-md:h-11"
+          disabled={loading || adding}
+          onClick={() => setAdding(true)}
+        >
+          <Plus aria-hidden="true" />
+          {t("stackVars.add.button")}
+        </Button>
+        {onImport ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="max-md:h-11"
+            disabled={loading}
+            onClick={() => setImporting(true)}
+          >
+            <Upload aria-hidden="true" />
+            {t("stackImport.button")}
+          </Button>
+        ) : null}
+      </div>
+      {adding ? (
+        <form onSubmit={submit} className="flex flex-col gap-1" noValidate>
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              id={`${formId}-name`}
+              autoFocus
+              aria-label={t("stackVars.add.label")}
+              aria-invalid={error ? true : undefined}
+              aria-describedby={error ? `${formId}-error` : undefined}
+              value={name}
+              onChange={(e) => {
+                setName(e.target.value);
+                setError(null);
+              }}
+              autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              className="w-64 font-mono max-md:h-11 md:h-8"
+            />
+            <Button type="submit" size="sm" variant="outline" className="max-md:h-11">
+              {t("stackVars.add.submit")}
+            </Button>
             <Button
               type="button"
-              variant="outline"
               size="sm"
+              variant="ghost"
               className="max-md:h-11"
-              disabled={loading || adding}
-              onClick={() => setAdding(true)}
+              onClick={cancel}
             >
-              <Plus aria-hidden="true" />
-              {t("stackVars.add.button")}
+              {t("stackVars.add.cancel")}
             </Button>
           </div>
-          {adding ? (
-            <form onSubmit={submit} className="flex flex-col gap-1" noValidate>
-              <div className="flex flex-wrap items-center gap-2">
-                <Input
-                  id={`${formId}-name`}
-                  autoFocus
-                  aria-label={t("stackVars.add.label")}
-                  aria-invalid={error ? true : undefined}
-                  aria-describedby={error ? `${formId}-error` : undefined}
-                  value={name}
-                  onChange={(e) => {
-                    setName(e.target.value);
-                    setError(null);
-                  }}
-                  autoComplete="off"
-                  autoCapitalize="off"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  className="w-64 font-mono max-md:h-11 md:h-8"
-                />
-                <Button type="submit" size="sm" variant="outline" className="max-md:h-11">
-                  {t("stackVars.add.submit")}
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  className="max-md:h-11"
-                  onClick={cancel}
-                >
-                  {t("stackVars.add.cancel")}
-                </Button>
-              </div>
-              {error ? (
-                <p id={`${formId}-error`} className="text-xs text-destructive">
-                  {error}
-                </p>
-              ) : null}
-            </form>
+          {error ? (
+            <p id={`${formId}-error`} className="text-xs text-destructive">
+              {error}
+            </p>
           ) : null}
-        </div>
-      )}
+        </form>
+      ) : null}
+    </div>
+  );
+
+  return (
+    <div className="flex flex-col gap-3">
+      {empty ? null : addControls}
+      {onImport ? (
+        <ImportEnvDialog
+          open={importing}
+          onOpenChange={setImporting}
+          existing={vars.map((v) => v.name)}
+          onImport={onImport}
+        />
+      ) : null}
       <Table>
         <TableCaption className="mt-0 mb-3 caption-top text-left text-sm text-muted-foreground">
           {t("stackVars.caption")}
@@ -241,10 +274,13 @@ export function VariablesTable({
               ))}
         </TableBody>
       </Table>
-      {!loading && rows.length === 0 ? (
-        <div className="rounded-lg border p-4">
-          <p className="font-medium">{t("stackVars.empty.title")}</p>
-          <p className="text-sm text-muted-foreground">{t("stackVars.empty.body")}</p>
+      {empty ? (
+        <div className="flex flex-col gap-3 rounded-lg border p-4">
+          <div>
+            <p className="font-medium">{t("stackVars.empty.title")}</p>
+            <p className="text-sm text-muted-foreground">{t("stackVars.empty.body")}</p>
+          </div>
+          {addControls}
         </div>
       ) : null}
     </div>

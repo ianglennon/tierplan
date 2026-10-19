@@ -415,6 +415,10 @@ export function StackEditorPage({
           onSet={(varName, value) => dispatch({ type: "setVar", name: varName, value })}
           onSecret={(varName, secret) => dispatch({ type: "setSecret", name: varName, secret })}
           onRemove={(varName) => dispatch({ type: "removeVar", name: varName })}
+          onImport={(imported, mode, secret) => {
+            dispatch({ type: "importVars", vars: imported, mode, secret });
+            toastSuccess(t("stackImport.toast", { count: imported.length }));
+          }}
         />
       ) : (
         <div className="grid gap-4 md:grid-cols-[16rem_minmax(0,1fr)]">

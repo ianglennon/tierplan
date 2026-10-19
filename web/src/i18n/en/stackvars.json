@@ -4,7 +4,7 @@
     "loading": "Loading the variables",
     "empty": {
       "title": "No variables",
-      "body": "The compose file doesn't use any ${VARIABLES}, and none are added. Add one."
+      "body": "The compose file doesn't use any ${VARIABLES}, and none are added. Add one, or import a .env file."
     },
     "columns": {
       "name": "Name",
