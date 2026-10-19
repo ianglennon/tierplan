@@ -74,7 +74,8 @@
       },
       "tabs": {
         "label": "Stack",
-        "overview": "Overview"
+        "overview": "Overview",
+        "editor": "Editor"
       },
       "error": {
         "loadFailed": "Couldn't load {{name}}.",

@@ -35,14 +35,20 @@ interface StackDetailLayoutProps {
 }
 
 // The tabs of the page, in the order they show. Each is a child route of the page under
-// stacks_.$stackId.*; the Overview is the page's own address. Later plans add Editor, Resources
-// and Logs to this list.
+// stacks_.$stackId.*; the Overview is the page's own address. Later plans add Resources and Logs
+// to this list.
 const TABS = [
   {
     id: "overview",
     to: "/env/$envId/stacks/$stackId",
     labelKey: "stacks.detail.tabs.overview",
     exact: true,
+  },
+  {
+    id: "editor",
+    to: "/env/$envId/stacks/$stackId/editor",
+    labelKey: "stacks.detail.tabs.editor",
+    exact: false,
   },
 ] as const;
 

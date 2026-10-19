@@ -1,0 +1,43 @@
+{
+  "stackEditor": {
+    "panes": {
+      "label": "Editor panes",
+      "files": "Files"
+    },
+    "loading": "Loading the draft",
+    "error": {
+      "loadFailed": "Couldn't load the draft of {{name}}.",
+      "body": "Check the connection and try again.",
+      "retry": "Retry loading the draft of {{name}}"
+    },
+    "editor": {
+      "name": "{{file}}, {{kind}}",
+      "kind": {
+        "yaml": "YAML",
+        "text": "text"
+      },
+      "helper": "Tab leaves the editor. Use <kbd>{{indent}}</kbd> to indent and <kbd>{{outdent}}</kbd> to outdent. <kbd>{{save}}</kbd> saves the draft."
+    },
+    "status": {
+      "unsaved": "Unsaved changes",
+      "saved": "Saved",
+      "savedBy": "by {{user}}",
+      "none": "No draft yet"
+    },
+    "save": {
+      "button": "Save draft",
+      "pending": "Saving…",
+      "toast": "Saved the draft of {{name}}.",
+      "errors": {
+        "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening.",
+        "lost": "The server didn't answer. The draft may have been saved: reload it before you save again.",
+        "permission": "You can't save this stack's draft."
+      }
+    },
+    "secretFile": {
+      "title": "The content of {{file}} is hidden.",
+      "body": "Secret files are stored encrypted and never shown again."
+    },
+    "readOnly": "You can read this stack's files but not change them."
+  }
+}

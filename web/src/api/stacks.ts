@@ -4,13 +4,15 @@
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
-import { readProblem } from "@/api/problem";
+import { type ProblemField, readProblem } from "@/api/problem";
 import { LIST_REFETCH_MS, listKey } from "@/api/resources";
 import type { components } from "@/api/schema";
 
 export type StackItem = components["schemas"]["StackItem"];
 export type StackDetail = components["schemas"]["StackDetail"];
 export type StackDraft = components["schemas"]["StackDraftBody"];
+export type StackDraftSaveInput = components["schemas"]["StackDraftSaveRequest"];
+export type StackDraftSaved = components["schemas"]["StackDraftSaveBody"];
 export type StackCreateInput = components["schemas"]["StackCreateRequest"];
 export type StackState = StackItem["state"];
 
@@ -119,5 +121,96 @@ export function useCreateStack(envId: string) {
     mutationFn: (body) => postStack(envId, body),
     retry: false,
     onSettled: () => void queryClient.invalidateQueries({ queryKey: stacksKey(envId) }),
+  });
+}
+
+// The query key of one stack's draft. It is deliberately not under stackKey: a refresh of the list
+// or the page (the events feed, a poll) must not read the draft again behind an editor that holds
+// the version it loaded.
+export function draftKey(envId: string, stackId: string) {
+  return ["stack-draft", envId, stackId] as const;
+}
+
+// A stack's draft: its files and variables with the version to send back, who saved it last and
+// when. The value of a secret is <hidden>. The editor reads it once; it is read again only when
+// the person asks (Reload draft), and not kept when the editor closes, so opening the editor
+// again always shows what is saved now.
+export function draftQuery(envId: string, stackId: string) {
+  return queryOptions({
+    queryKey: draftKey(envId, stackId),
+    queryFn: async () => {
+      const res = await api.GET("/api/env/{envId}/stacks/{stackId}/draft", {
+        params: { path: { envId, stackId } },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new StacksLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    retry: (count, error) => !isStackGone(error) && count < 3,
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+}
+
+// DraftRequestError is a draft save or discard the server refused or that got no answer. The
+// status is 0 when the server could not be reached; the type is the problem type it named; the
+// fields are its per-item codes (the path of a refused file, who saved a draft that moved).
+export class DraftRequestError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  readonly fields: ProblemField[];
+  constructor(method: string, status: number, type?: string, fields: ProblemField[] = []) {
+    super(`${method} draft failed (${status})`);
+    this.name = "DraftRequestError";
+    this.status = status;
+    this.type = type;
+    this.fields = fields;
+  }
+}
+
+// useSaveDraft saves the working copy as the stack's draft. It never retries: a save whose answer
+// was lost may have happened, and the editor, told so, reads the draft again before it saves
+// (P2 D-42). On success the draft in the cache follows what was saved, and the list and the page
+// are read again.
+export function useSaveDraft(envId: string, stackId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<StackDraftSaved, DraftRequestError, StackDraftSaveInput>({
+    mutationFn: async (body) => {
+      try {
+        const res = await api.PUT("/api/env/{envId}/stacks/{stackId}/draft", {
+          params: { path: { envId, stackId } },
+          body,
+        });
+        if (!res.data) {
+          const problem = readProblem(res.error, res.response);
+          throw new DraftRequestError("PUT", problem.status, problem.type, problem.fields);
+        }
+        return res.data;
+      } catch (e) {
+        // A network failure has no status.
+        throw e instanceof DraftRequestError ? e : new DraftRequestError("PUT", 0);
+      }
+    },
+    retry: false,
+    onSuccess: (answer, body) => {
+      queryClient.setQueryData(draftKey(envId, stackId), (old: StackDraft | undefined) =>
+        old
+          ? {
+              ...old,
+              version: answer.version,
+              savedBy: answer.savedBy,
+              savedAt: answer.savedAt,
+              files: body.files,
+              vars: body.vars,
+            }
+          : old,
+      );
+      // The page and the list show the Draft badge: stacksKey is the prefix of both.
+      void queryClient.invalidateQueries({ queryKey: stacksKey(envId) });
+    },
   });
 }

@@ -92,6 +92,7 @@ import { Route as AppEnvEnvIdServicesServiceIdStatsRouteImport } from './routes/
 import { Route as AppEnvEnvIdServicesServiceIdTasksRouteImport } from './routes/_app/env/$envId/services_.$serviceId.tasks'
 import { Route as AppEnvEnvIdServicesServiceIdEditRouteImport } from './routes/_app/env/$envId/services_.$serviceId_.edit'
 import { Route as AppEnvEnvIdStacksStackIdIndexRouteImport } from './routes/_app/env/$envId/stacks_.$stackId.index'
+import { Route as AppEnvEnvIdStacksStackIdEditorRouteImport } from './routes/_app/env/$envId/stacks_.$stackId.editor'
 import { Route as AppEnvEnvIdVolumesVolumeNameIndexRouteImport } from './routes/_app/env/$envId/volumes_.$volumeName.index'
 import { Route as AppEnvEnvIdVolumesVolumeNameInspectRouteImport } from './routes/_app/env/$envId/volumes_.$volumeName.inspect'
 
@@ -557,6 +558,12 @@ const AppEnvEnvIdStacksStackIdIndexRoute =
     path: '/',
     getParentRoute: () => AppEnvEnvIdStacksStackIdRoute,
   } as any)
+const AppEnvEnvIdStacksStackIdEditorRoute =
+  AppEnvEnvIdStacksStackIdEditorRouteImport.update({
+    id: '/editor',
+    path: '/editor',
+    getParentRoute: () => AppEnvEnvIdStacksStackIdRoute,
+  } as any)
 const AppEnvEnvIdVolumesVolumeNameIndexRoute =
   AppEnvEnvIdVolumesVolumeNameIndexRouteImport.update({
     id: '/',
@@ -645,6 +652,7 @@ export interface FileRoutesByFullPath {
   '/env/$envId/services/$serviceId/stats': typeof AppEnvEnvIdServicesServiceIdStatsRoute
   '/env/$envId/services/$serviceId/tasks': typeof AppEnvEnvIdServicesServiceIdTasksRoute
   '/env/$envId/services/$serviceId/edit': typeof AppEnvEnvIdServicesServiceIdEditRoute
+  '/env/$envId/stacks/$stackId/editor': typeof AppEnvEnvIdStacksStackIdEditorRoute
   '/env/$envId/volumes/$volumeName/inspect': typeof AppEnvEnvIdVolumesVolumeNameInspectRoute
   '/env/$envId/configs/$configId/': typeof AppEnvEnvIdConfigsConfigIdIndexRoute
   '/env/$envId/containers/$containerId/': typeof AppEnvEnvIdContainersContainerIdIndexRoute
@@ -718,6 +726,7 @@ export interface FileRoutesByTo {
   '/env/$envId/services/$serviceId/stats': typeof AppEnvEnvIdServicesServiceIdStatsRoute
   '/env/$envId/services/$serviceId/tasks': typeof AppEnvEnvIdServicesServiceIdTasksRoute
   '/env/$envId/services/$serviceId/edit': typeof AppEnvEnvIdServicesServiceIdEditRoute
+  '/env/$envId/stacks/$stackId/editor': typeof AppEnvEnvIdStacksStackIdEditorRoute
   '/env/$envId/volumes/$volumeName/inspect': typeof AppEnvEnvIdVolumesVolumeNameInspectRoute
   '/env/$envId/configs/$configId': typeof AppEnvEnvIdConfigsConfigIdIndexRoute
   '/env/$envId/containers/$containerId': typeof AppEnvEnvIdContainersContainerIdIndexRoute
@@ -806,6 +815,7 @@ export interface FileRoutesById {
   '/_app/env/$envId/services_/$serviceId/stats': typeof AppEnvEnvIdServicesServiceIdStatsRoute
   '/_app/env/$envId/services_/$serviceId/tasks': typeof AppEnvEnvIdServicesServiceIdTasksRoute
   '/_app/env/$envId/services_/$serviceId_/edit': typeof AppEnvEnvIdServicesServiceIdEditRoute
+  '/_app/env/$envId/stacks_/$stackId/editor': typeof AppEnvEnvIdStacksStackIdEditorRoute
   '/_app/env/$envId/volumes_/$volumeName/inspect': typeof AppEnvEnvIdVolumesVolumeNameInspectRoute
   '/_app/env/$envId/configs_/$configId/': typeof AppEnvEnvIdConfigsConfigIdIndexRoute
   '/_app/env/$envId/containers_/$containerId/': typeof AppEnvEnvIdContainersContainerIdIndexRoute
@@ -894,6 +904,7 @@ export interface FileRouteTypes {
     | '/env/$envId/services/$serviceId/stats'
     | '/env/$envId/services/$serviceId/tasks'
     | '/env/$envId/services/$serviceId/edit'
+    | '/env/$envId/stacks/$stackId/editor'
     | '/env/$envId/volumes/$volumeName/inspect'
     | '/env/$envId/configs/$configId/'
     | '/env/$envId/containers/$containerId/'
@@ -967,6 +978,7 @@ export interface FileRouteTypes {
     | '/env/$envId/services/$serviceId/stats'
     | '/env/$envId/services/$serviceId/tasks'
     | '/env/$envId/services/$serviceId/edit'
+    | '/env/$envId/stacks/$stackId/editor'
     | '/env/$envId/volumes/$volumeName/inspect'
     | '/env/$envId/configs/$configId'
     | '/env/$envId/containers/$containerId'
@@ -1054,6 +1066,7 @@ export interface FileRouteTypes {
     | '/_app/env/$envId/services_/$serviceId/stats'
     | '/_app/env/$envId/services_/$serviceId/tasks'
     | '/_app/env/$envId/services_/$serviceId_/edit'
+    | '/_app/env/$envId/stacks_/$stackId/editor'
     | '/_app/env/$envId/volumes_/$volumeName/inspect'
     | '/_app/env/$envId/configs_/$configId/'
     | '/_app/env/$envId/containers_/$containerId/'
@@ -1660,6 +1673,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppEnvEnvIdStacksStackIdIndexRouteImport
       parentRoute: typeof AppEnvEnvIdStacksStackIdRoute
     }
+    '/_app/env/$envId/stacks_/$stackId/editor': {
+      id: '/_app/env/$envId/stacks_/$stackId/editor'
+      path: '/editor'
+      fullPath: '/env/$envId/stacks/$stackId/editor'
+      preLoaderRoute: typeof AppEnvEnvIdStacksStackIdEditorRouteImport
+      parentRoute: typeof AppEnvEnvIdStacksStackIdRoute
+    }
     '/_app/env/$envId/volumes_/$volumeName/': {
       id: '/_app/env/$envId/volumes_/$volumeName/'
       path: '/'
@@ -1903,11 +1923,13 @@ const AppEnvEnvIdServicesServiceIdRouteWithChildren =
   )
 
 interface AppEnvEnvIdStacksStackIdRouteChildren {
+  AppEnvEnvIdStacksStackIdEditorRoute: typeof AppEnvEnvIdStacksStackIdEditorRoute
   AppEnvEnvIdStacksStackIdIndexRoute: typeof AppEnvEnvIdStacksStackIdIndexRoute
 }
 
 const AppEnvEnvIdStacksStackIdRouteChildren: AppEnvEnvIdStacksStackIdRouteChildren =
   {
+    AppEnvEnvIdStacksStackIdEditorRoute: AppEnvEnvIdStacksStackIdEditorRoute,
     AppEnvEnvIdStacksStackIdIndexRoute: AppEnvEnvIdStacksStackIdIndexRoute,
   }
 

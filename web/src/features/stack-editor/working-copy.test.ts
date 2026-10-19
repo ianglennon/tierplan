@@ -1,0 +1,237 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+import { describe, expect, it } from "vitest";
+
+import type { StackDraft } from "@/api/stacks";
+import {
+  COMPOSE_FILE,
+  emptyWorkingCopy,
+  isDirty,
+  toSaveBody,
+  type WorkingCopy,
+  workingCopyReducer,
+} from "@/features/stack-editor/working-copy";
+
+function draft(over: Partial<StackDraft> = {}): StackDraft {
+  return {
+    version: 3,
+    savedBy: "ada",
+    savedAt: "2026-10-19T10:00:00Z",
+    baseSeq: 0,
+    files: [
+      { path: "nginx.conf", content: "events {}", secret: false },
+      { path: COMPOSE_FILE, content: "services: {}\n", secret: false },
+    ],
+    vars: [{ name: "PORT", value: "8080", secret: false }],
+    ...over,
+  };
+}
+
+const loaded = (d: StackDraft = draft()): WorkingCopy =>
+  workingCopyReducer(emptyWorkingCopy, { type: "load", draft: d });
+
+describe("load", () => {
+  it("holds every file with compose.yaml first and opens compose.yaml", () => {
+    const copy = loaded();
+    expect(copy.loaded).toBe(true);
+    expect(copy.files.map((f) => f.path)).toEqual([COMPOSE_FILE, "nginx.conf"]);
+    expect(copy.selected).toBe(COMPOSE_FILE);
+    expect(copy.vars).toEqual([{ name: "PORT", value: "8080", secret: false, hidden: false }]);
+  });
+
+  it("keeps the open file open when it is still in the draft, and falls back to compose.yaml when not", () => {
+    const open = workingCopyReducer(loaded(), { type: "select", path: "nginx.conf" });
+    expect(workingCopyReducer(open, { type: "load", draft: draft() }).selected).toBe("nginx.conf");
+    const gone = draft({ files: [{ path: COMPOSE_FILE, content: "x", secret: false }] });
+    expect(workingCopyReducer(open, { type: "load", draft: gone }).selected).toBe(COMPOSE_FILE);
+  });
+
+  it("marks a secret that arrives as <hidden> hidden, with no text", () => {
+    const copy = loaded(
+      draft({
+        files: [
+          { path: COMPOSE_FILE, content: "x", secret: false },
+          { path: "key.pem", content: "<hidden>", secret: true },
+        ],
+        vars: [{ name: "TOKEN", value: "<hidden>", secret: true }],
+      }),
+    );
+    expect(copy.files[1]).toEqual({ path: "key.pem", content: "", secret: true, hidden: true });
+    expect(copy.vars[0]).toEqual({ name: "TOKEN", value: "", secret: true, hidden: true });
+  });
+
+  it("copes with a draft that has no variables", () => {
+    expect(loaded(draft({ vars: null })).vars).toEqual([]);
+  });
+});
+
+describe("edit", () => {
+  it("replaces the text of one file only", () => {
+    const next = workingCopyReducer(loaded(), { type: "edit", path: COMPOSE_FILE, content: "new" });
+    expect(next.files.map((f) => f.content)).toEqual(["new", "events {}"]);
+  });
+
+  it("takes a hidden secret file out of hiding: the person is replacing it", () => {
+    const start = loaded(
+      draft({
+        files: [
+          { path: COMPOSE_FILE, content: "x", secret: false },
+          { path: "key.pem", content: "<hidden>", secret: true },
+        ],
+      }),
+    );
+    const next = workingCopyReducer(start, { type: "edit", path: "key.pem", content: "-----" });
+    expect(next.files[1]).toMatchObject({ content: "-----", hidden: false, secret: true });
+  });
+});
+
+describe("addFile, renameFile, deleteFile and select", () => {
+  it("adds a file in path order and opens it", () => {
+    const next = workingCopyReducer(loaded(), { type: "addFile", path: ".env" });
+    expect(next.files.map((f) => f.path)).toEqual([COMPOSE_FILE, ".env", "nginx.conf"]);
+    expect(next.selected).toBe(".env");
+  });
+
+  it("adds a file with the text it is given", () => {
+    const next = workingCopyReducer(loaded(), { type: "addFile", path: "a.txt", content: "hi" });
+    expect(next.files.find((f) => f.path === "a.txt")?.content).toBe("hi");
+  });
+
+  it("does not add a path that is already there", () => {
+    const start = loaded();
+    expect(workingCopyReducer(start, { type: "addFile", path: "nginx.conf" })).toBe(start);
+  });
+
+  it("renames a file and follows it when it is the open one", () => {
+    const open = workingCopyReducer(loaded(), { type: "select", path: "nginx.conf" });
+    const next = workingCopyReducer(open, {
+      type: "renameFile",
+      from: "nginx.conf",
+      to: "web.conf",
+    });
+    expect(next.files.map((f) => f.path)).toEqual([COMPOSE_FILE, "web.conf"]);
+    expect(next.selected).toBe("web.conf");
+  });
+
+  it("refuses to rename compose.yaml or onto a path that is taken", () => {
+    const start = loaded();
+    expect(
+      workingCopyReducer(start, { type: "renameFile", from: COMPOSE_FILE, to: "x.yaml" }),
+    ).toBe(start);
+    expect(
+      workingCopyReducer(start, { type: "renameFile", from: "nginx.conf", to: COMPOSE_FILE }),
+    ).toBe(start);
+  });
+
+  it("deletes a file, and opens compose.yaml when it was the open one", () => {
+    const open = workingCopyReducer(loaded(), { type: "select", path: "nginx.conf" });
+    const next = workingCopyReducer(open, { type: "deleteFile", path: "nginx.conf" });
+    expect(next.files.map((f) => f.path)).toEqual([COMPOSE_FILE]);
+    expect(next.selected).toBe(COMPOSE_FILE);
+  });
+
+  it("refuses to delete compose.yaml", () => {
+    const start = loaded();
+    expect(workingCopyReducer(start, { type: "deleteFile", path: COMPOSE_FILE })).toBe(start);
+  });
+
+  it("selects only a file that exists", () => {
+    const start = loaded();
+    expect(workingCopyReducer(start, { type: "select", path: "nope" })).toBe(start);
+  });
+});
+
+describe("isDirty", () => {
+  it("is false for the copy as loaded, whichever file is open", () => {
+    const saved = loaded();
+    expect(isDirty(saved, saved)).toBe(false);
+    expect(isDirty(saved, workingCopyReducer(saved, { type: "select", path: "nginx.conf" }))).toBe(
+      false,
+    );
+  });
+
+  it("is true after an edit, and false again when the edit is undone", () => {
+    const saved = loaded();
+    const edited = workingCopyReducer(saved, { type: "edit", path: COMPOSE_FILE, content: "x" });
+    expect(isDirty(saved, edited)).toBe(true);
+    const undone = workingCopyReducer(edited, {
+      type: "edit",
+      path: COMPOSE_FILE,
+      content: "services: {}\n",
+    });
+    expect(isDirty(saved, undone)).toBe(false);
+  });
+
+  it("is true after a file is added, renamed or deleted", () => {
+    const saved = loaded();
+    expect(isDirty(saved, workingCopyReducer(saved, { type: "addFile", path: "a" }))).toBe(true);
+    expect(
+      isDirty(
+        saved,
+        workingCopyReducer(saved, { type: "renameFile", from: "nginx.conf", to: "b" }),
+      ),
+    ).toBe(true);
+    expect(
+      isDirty(saved, workingCopyReducer(saved, { type: "deleteFile", path: "nginx.conf" })),
+    ).toBe(true);
+  });
+
+  it("is true when a variable differs", () => {
+    const saved = loaded();
+    const changed: WorkingCopy = {
+      ...saved,
+      vars: [{ name: "PORT", value: "9", secret: false, hidden: false }],
+    };
+    expect(isDirty(saved, changed)).toBe(true);
+  });
+});
+
+describe("toSaveBody", () => {
+  it("sends every file and variable with the version it was read at", () => {
+    expect(toSaveBody(loaded(), 3)).toEqual({
+      version: 3,
+      files: [
+        { path: COMPOSE_FILE, content: "services: {}\n", secret: false },
+        { path: "nginx.conf", content: "events {}", secret: false },
+      ],
+      vars: [{ name: "PORT", value: "8080", secret: false }],
+    });
+  });
+
+  it("keeps a hidden secret the person did not touch: it goes as the server's keep marker, never as text of its own", () => {
+    const start = loaded(
+      draft({
+        files: [
+          { path: COMPOSE_FILE, content: "x", secret: false },
+          { path: "key.pem", content: "<hidden>", secret: true },
+        ],
+        vars: [{ name: "TOKEN", value: "<hidden>", secret: true }],
+      }),
+    );
+    const body = toSaveBody(start, 1);
+    expect(body.files?.[1]).toEqual({ path: "key.pem", content: "<hidden>", secret: true });
+    expect(body.vars?.[0]).toEqual({ name: "TOKEN", value: "<hidden>", secret: true });
+  });
+
+  it("sends the new text of a secret the person replaced", () => {
+    const start = loaded(
+      draft({
+        files: [
+          { path: COMPOSE_FILE, content: "x", secret: false },
+          { path: "key.pem", content: "<hidden>", secret: true },
+        ],
+      }),
+    );
+    const next = workingCopyReducer(start, {
+      type: "edit",
+      path: "key.pem",
+      content: "new secret",
+    });
+    expect(toSaveBody(next, 1).files?.[1]).toEqual({
+      path: "key.pem",
+      content: "new secret",
+      secret: true,
+    });
+  });
+});
