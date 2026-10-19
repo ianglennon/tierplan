@@ -567,6 +567,228 @@ describe("a service coming up (plan 07-18, D-13)", () => {
   });
 });
 
+describe("a standalone deploy (plan 07-20, D-13)", () => {
+  // The items a standalone deploy has: a volumes group beside the networks, containers under a service,
+  // and a step per container the file no longer declares under the cleanup step.
+  const standalone = (over: Partial<Record<string, Partial<Item>>> = {}): Item[] => {
+    const items: Item[] = [
+      check,
+      { ...lookup, state: "done" },
+      { id: "networks", label: "Networks", state: "done", kind: "group" },
+      { id: "volumes", label: "Volumes", state: "running", kind: "group" },
+      { ...services, state: "running" },
+      { id: "cleanup", label: "Remove services no longer in the stack", state: "waiting" },
+      {
+        id: "network:demo_default",
+        label: "Create network demo_default",
+        state: "done",
+        parent: "networks",
+      },
+      {
+        id: "volume:demo_data",
+        label: "Create volume demo_data",
+        state: "running",
+        parent: "volumes",
+      },
+      {
+        id: "service:web",
+        label: "web",
+        state: "running",
+        parent: "services",
+        kind: "service",
+        unit: "containers",
+        current: 1,
+        total: 2,
+        result: { phase: "starting" },
+      },
+      {
+        id: "container:demo-web-1",
+        label: "demo-web-1",
+        state: "running",
+        parent: "service:web",
+        kind: "container",
+        result: { state: "running" },
+      },
+      {
+        id: "container:demo-web-2",
+        label: "demo-web-2",
+        state: "running",
+        parent: "service:web",
+        kind: "container",
+        result: { state: "starting" },
+      },
+      {
+        id: "remove-container:demo-old-1",
+        label: "Remove container demo-old-1",
+        state: "waiting",
+        parent: "cleanup",
+      },
+    ];
+    return items.map((i) => ({ ...i, ...over[i.id] }));
+  };
+
+  it("lists the standalone steps in the standalone words, whatever label the server gave the cleanup step", async () => {
+    job = { state: "running", items: standalone() };
+    await mountLive(jobBody());
+    expect(stepLines()).toEqual([
+      "Check the stackDone",
+      "Look up imagesDone",
+      "Create network demo_defaultDone",
+      "Create volume demo_dataWorking",
+      "Deploy servicesWorking",
+      "Remove containers no longer in the stackWaiting",
+      "Remove container demo-old-1Waiting",
+    ]);
+  });
+
+  it("reads a service by its containers: the phase in words, a bar named for it and the count of containers", async () => {
+    job = { state: "running", items: standalone() };
+    await mountLive(jobBody());
+    const list = within(screen.getByRole("list", { name: "Services" }));
+    expect(list.getByText("Starting")).toBeTruthy();
+    const bar = list.getByRole("progressbar", { name: "Containers of web" });
+    expect(bar.getAttribute("aria-valuenow")).toBe("50");
+    expect(list.getByText("1/2 containers")).toBeTruthy();
+    expect(list.queryByText(/^Converging/)).toBeNull();
+  });
+
+  it.each([
+    ["pulling", "Pulling image"],
+    ["creating", "Creating"],
+    ["starting", "Starting"],
+    ["running", "Running"],
+    ["healthy", "Healthy"],
+  ])("reads the phase %s of a service as %s", async (phase, word) => {
+    job = {
+      state: "running",
+      items: standalone({ "service:web": { result: { phase }, current: 0, total: 2 } }),
+    };
+    await mountLive(jobBody());
+    expect(within(screen.getByRole("list", { name: "Services" })).getByText(word)).toBeTruthy();
+  });
+
+  it("reads a service that is done by the phase it ended in, Running or Healthy", async () => {
+    job = {
+      state: "done",
+      items: standalone({
+        "service:web": {
+          state: "done",
+          result: { phase: "healthy", action: "created", settled: "true" },
+        },
+      }),
+    };
+    mount();
+    expect(await screen.findByText("Healthy")).toBeTruthy();
+  });
+
+  it("lists the containers under the service, with their state and message, when the row opens", async () => {
+    job = { state: "running", items: standalone() };
+    await mountLive(jobBody());
+    expect(screen.queryByRole("table", { name: "Containers of web" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Show what happened to web/ }));
+    const table = within(screen.getByRole("table", { name: "Containers of web" }));
+    expect(table.getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
+      "Container",
+      "State",
+      "Message",
+    ]);
+    expect(
+      table
+        .getAllByRole("row")
+        .slice(1)
+        .map((r) => r.textContent),
+    ).toEqual(["demo-web-1Running", "demo-web-2Starting"]);
+  });
+
+  it("follows a container from Creating to Healthy over the stream", async () => {
+    job = {
+      state: "running",
+      items: standalone({ "container:demo-web-2": { result: { state: "creating" } } }),
+    };
+    await mountLive(jobBody());
+    fireEvent.click(screen.getByRole("button", { name: /Show what happened to web/ }));
+    const table = () => within(screen.getByRole("table", { name: "Containers of web" }));
+    expect(table().getByText("Creating")).toBeTruthy();
+    act(() => {
+      source().sendFrame(
+        "item",
+        item({
+          id: "container:demo-web-2",
+          label: "demo-web-2",
+          state: "running",
+          parent: "service:web",
+          kind: "container",
+          result: { state: "healthy" },
+        }),
+        "9",
+      );
+    });
+    expect(table().queryByText("Creating")).toBeNull();
+    expect(table().getByText("Healthy")).toBeTruthy();
+  });
+
+  it("opens a failed service to the container that failed and the words the SDK gave", async () => {
+    job = {
+      state: "failed",
+      items: standalone({
+        services: { state: "failed" },
+        "service:web": {
+          state: "failed",
+          code: "engine_error",
+          message: "The engine could not complete the request.",
+        },
+        "container:demo-web-2": {
+          state: "failed",
+          code: "engine_error",
+          detail: "port is already allocated",
+          result: { state: "failed" },
+        },
+      }),
+    };
+    mount();
+    const table = within(await screen.findByRole("table", { name: "Containers of web" }));
+    expect(table.getByText("demo-web-2")).toBeTruthy();
+    expect(table.getByText("Failed")).toBeTruthy();
+    expect(table.getByText("port is already allocated")).toBeTruthy();
+  });
+
+  it("draws a container's name and message as text", async () => {
+    job = {
+      state: "failed",
+      items: standalone({
+        services: { state: "failed" },
+        "service:web": { state: "failed" },
+        "container:demo-web-2": {
+          label: "<b>c</b>",
+          state: "failed",
+          detail: "<i>bad</i>",
+          result: { state: "failed" },
+        },
+      }),
+    };
+    mount();
+    await screen.findByRole("table", { name: "Containers of web" });
+    for (const markup of ["<b>c</b>", "<i>bad</i>"]) {
+      expect(screen.getByText(markup).children).toHaveLength(0);
+    }
+  });
+
+  it("leaves a swarm job alone: its steps keep the server's words", async () => {
+    job = {
+      state: "running",
+      items: [
+        check,
+        lookup,
+        { ...services, state: "running" },
+        { id: "cleanup", label: "Remove services no longer in the stack", state: "waiting" },
+      ],
+    };
+    await mountLive(jobBody());
+    expect(stepLines()).toContain("Remove services no longer in the stackWaiting");
+    expect(screen.queryByText("Remove containers no longer in the stack")).toBeNull();
+  });
+});
+
 describe("following the stream", () => {
   it("shows Live, takes the stream's snapshot at once and updates a row from an event", async () => {
     job = { state: "running", items: [check, services, row("api", "waiting")] };
