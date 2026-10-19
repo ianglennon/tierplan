@@ -273,7 +273,7 @@ func (w *walker) document(root *yaml.Node) {
 			for _, obj := range w.entries(top.val, 0) {
 				for _, f := range w.entries(obj.val, 0) {
 					if f.name == "file" {
-						w.fileRef(top.name+"."+obj.name+".file", f.val)
+						w.fileRef(top.name+"."+obj.name+".file", f.val, false)
 					}
 				}
 			}
@@ -313,7 +313,7 @@ func (w *walker) envFile(v val) {
 	v = w.resolve(v)
 	switch v.n.Kind {
 	case yaml.ScalarNode:
-		w.fileRef("env_file", v)
+		w.fileRef("env_file", v, false)
 	case yaml.SequenceNode:
 		for _, item := range v.n.Content {
 			if !w.spend() {
@@ -322,7 +322,7 @@ func (w *walker) envFile(v val) {
 			it := w.resolve(val{n: item, at: v.at})
 			switch it.n.Kind {
 			case yaml.ScalarNode:
-				w.fileRef("env_file", it)
+				w.fileRef("env_file", it, false)
 			case yaml.MappingNode:
 				w.envFileMap(it)
 			}
@@ -332,17 +332,29 @@ func (w *walker) envFile(v val) {
 	}
 }
 
+// envFileMap checks the path of a long-form entry. With required: false the file may be absent
+// (Bayplan skips it when it resolves the env_file), so a missing one is not an error; a path that
+// is not allowed still is.
 func (w *walker) envFileMap(v val) {
-	for _, f := range w.entries(v, 0) {
+	entries := w.entries(v, 0)
+	optional := false
+	for _, f := range entries {
+		if f.name == "required" {
+			r := w.resolve(f.val).n
+			optional = r.Kind == yaml.ScalarNode && r.ShortTag() == "!!bool" && strings.EqualFold(r.Value, "false")
+		}
+	}
+	for _, f := range entries {
 		if f.name == "path" {
-			w.fileRef("env_file", f.val)
+			w.fileRef("env_file", f.val, optional)
 		}
 	}
 }
 
 // fileRef checks one value that names a stack file. Only a plain string can: anything else is the
-// load's to refuse.
-func (w *walker) fileRef(key string, v val) {
+// load's to refuse. An optional reference (an env_file with required: false) is not an error when
+// the file is absent, and is not counted as used.
+func (w *walker) fileRef(key string, v val, optional bool) {
 	v = w.resolve(v)
 	if v.n.Kind != yaml.ScalarNode || v.n.ShortTag() != "!!str" {
 		return
@@ -361,6 +373,9 @@ func (w *walker) fileRef(key string, v val) {
 		problem.Message = fmt.Sprintf("“%s” isn't allowed. Stack files use a path inside the stack, without “..” or a leading /.", ref)
 	default:
 		if _, ok := w.files[path]; !ok {
+			if optional {
+				return
+			}
 			problem.Code = CodeFileMissing
 			problem.Message = fmt.Sprintf("%s “%s” isn't one of this stack's files. Add it under Files.", key, ref)
 			break

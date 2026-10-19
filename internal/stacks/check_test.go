@@ -267,7 +267,7 @@ func TestAssertSandboxedAcceptsWhatTheStackOwns(t *testing.T) {
 	project := &types.Project{
 		Services: types.Services{"web": {
 			Name:     "web",
-			EnvFiles: []types.EnvFile{{Path: "app.env"}, {Path: "./app.env"}},
+			EnvFiles: []types.EnvFile{{Path: "app.env"}, {Path: "./app.env"}, {Path: "optional.env", Required: false}},
 			Volumes:  []types.ServiceVolumeConfig{{Type: "bind", Source: "/srv/data", Target: "/data"}, {Type: "volume", Source: "data", Target: "/d"}},
 		}},
 		Secrets: types.Secrets{"s": {File: "./secret.txt"}, "e": {Environment: "X"}},
@@ -291,8 +291,11 @@ func TestAssertSandboxedRefusesWhatShouldHaveBeenRefusedEarlier(t *testing.T) {
 		"a relative bind": web(func(s *types.ServiceConfig) {
 			s.Volumes = []types.ServiceVolumeConfig{{Type: "bind", Source: "./x", Target: "/x"}}
 		}),
-		"an env file outside":    web(func(s *types.ServiceConfig) { s.EnvFiles = []types.EnvFile{{Path: "/proc/self/environ"}} }),
-		"an env file not ours":   web(func(s *types.ServiceConfig) { s.EnvFiles = []types.EnvFile{{Path: "gone.env"}} }),
+		"an env file outside":  web(func(s *types.ServiceConfig) { s.EnvFiles = []types.EnvFile{{Path: "/proc/self/environ"}} }),
+		"an env file not ours": web(func(s *types.ServiceConfig) { s.EnvFiles = []types.EnvFile{{Path: "gone.env", Required: true}} }),
+		"an optional env file outside": web(func(s *types.ServiceConfig) {
+			s.EnvFiles = []types.EnvFile{{Path: "../gone.env", Required: false}}
+		}),
 		"a label file":           web(func(s *types.ServiceConfig) { s.LabelFiles = []string{"labels.env"} }),
 		"a secret file":          {Secrets: types.Secrets{"s": {File: "/etc/shadow"}}},
 		"a secret file not ours": {Secrets: types.Secrets{"s": {File: "gone.txt"}}},

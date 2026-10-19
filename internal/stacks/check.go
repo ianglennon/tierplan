@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -93,6 +94,9 @@ func check(ctx context.Context, in CheckInput) CheckResult {
 			return res
 		}
 		res.Problems = found
+		if slices.Contains(res.UnusedFiles, dotenvFile) {
+			res.Problems = append(res.Problems, dotenvNotRead())
+		}
 		res.Variables = ResolveVars(Refs(in.Copy), in.Copy.Vars)
 		res.Problems = append(res.Problems, variableProblems(res.Variables)...)
 	}
@@ -121,6 +125,12 @@ func check(ctx context.Context, in CheckInput) CheckResult {
 		return res
 	}
 	res.Problems = append(res.Problems, unsetProblems(loaded.Unset, res.Variables, res.Problems)...)
+	// env_file is read here, once, from the stack's own files (D-05, Pitfall 4): after this the
+	// project has none, so no engine, SDK or converter reads one a second way. An unreadable file
+	// is a blocking error at its key; the rest of the check goes on without it.
+	if err := ResolveEnvFiles(loaded.Project, NewFileSet(in.Copy.Files), tableValues(in.Copy.Vars)); err != nil {
+		res.Problems = append(res.Problems, envFileProblem(err, idx))
+	}
 	// What the target will ignore or refuse is judged on the project as loaded, with build still
 	// in it: that is how a build key is seen.
 	found := lint.Lint(lint.Input{Target: lint.Target(in.Target), Project: loaded.Project, Index: idx})
@@ -131,6 +141,65 @@ func check(ctx context.Context, in CheckInput) CheckResult {
 	res.Loaded = loaded
 	res.Problems = append(append(res.Problems, binds...), lintProblems(found)...).Sorted()
 	return res
+}
+
+// dotenvFile is the name of the file a Compose project directory reads on its own, and Bayplan
+// does not.
+const dotenvFile = ".env"
+
+// dotenvNotRead is the warning for a stack file called .env that nothing uses. Compose reads a .env
+// beside the compose file by itself; Bayplan reads variables from the table only (D-01), so a
+// person who brought one over should know it does nothing as it stands.
+func dotenvNotRead() Problem {
+	return Problem{
+		Severity: SeverityWarning, Code: CodeDotenvNotRead, File: dotenvFile, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
+		Message: ".env isn't read automatically. Import it into Variables, or use it as an env_file.",
+	}
+}
+
+// tableValues is the lookup an env_file's ${NAME} uses: the table's values, a blank one being no
+// value, as in Load.
+func tableValues(vars []Var) func(string) (string, bool) {
+	table := make(map[string]string, len(vars))
+	for _, v := range vars {
+		if v.Value != "" {
+			table[v.Name] = v.Value
+		}
+	}
+	return func(name string) (string, bool) {
+		v, ok := table[name]
+		return v, ok
+	}
+}
+
+// envFileProblem is the blocking error for an env_file ResolveEnvFiles could not resolve, marked at
+// the service's env_file key. It names the file and, for an unreadable line, its number, and never
+// quotes the file.
+func envFileProblem(err error, ix *PositionIndex) Problem {
+	var ef *EnvFileError
+	if !errors.As(err, &ef) {
+		return Problem{
+			Severity: SeverityError, Code: CodeEnvFileInvalid, File: ComposeFile, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
+			Message: "An env_file can't be read. Write each line as NAME=value.",
+		}
+	}
+	line, col, endLine, endCol := at(ix.findAny("services."+ef.Service+".env_file", "services."+ef.Service))
+	p := Problem{
+		Severity: SeverityError, Code: CodeEnvFileInvalid, File: ComposeFile, Key: "services." + ef.Service + ".env_file",
+		Line: line, Col: col, EndLine: endLine, EndCol: endCol,
+	}
+	switch {
+	case errors.Is(err, ErrEnvFileMissing):
+		p.Code = CodeFileMissing
+		p.Message = fmt.Sprintf("env_file “%s” isn't one of this stack's files. Add it under Files.", ef.Path)
+	case ef.Format != "":
+		p.Message = fmt.Sprintf("env_file “%s” asks for the “%s” format, which Bayplan can't read. Remove format to use the .env format.", ef.Path, ef.Format)
+	case ef.Line > 0:
+		p.Message = fmt.Sprintf("env_file “%s” has a line Bayplan can't read (line %d). Write each line as NAME=value.", ef.Path, ef.Line)
+	default:
+		p.Message = fmt.Sprintf("env_file “%s” can't be read. Write each line as NAME=value.", ef.Path)
+	}
+	return p
 }
 
 // variableProblems are what the rows of the Variables pane say is wrong with the files. A variable
@@ -279,7 +348,10 @@ func assertSandboxed(project *types.Project, files FileSet) error {
 			return fmt.Errorf("%w: service %s has a label_file", ErrNotSandboxed, name)
 		}
 		for _, f := range svc.EnvFiles {
-			if !ours(f.Path) {
+			// A required env_file must be one of the stack's files. An optional one may be absent
+			// (ResolveEnvFiles skips it and opens nothing), but its path must still be a path
+			// inside the stack.
+			if !ours(f.Path) && (bool(f.Required) || ValidPath(strings.TrimPrefix(f.Path, "./")) != nil) {
 				return fmt.Errorf("%w: service %s has an env_file that is not a file of the stack", ErrNotSandboxed, name)
 			}
 		}

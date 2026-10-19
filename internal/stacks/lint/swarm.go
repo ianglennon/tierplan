@@ -86,10 +86,12 @@ var swarmActions = map[string]string{
 }
 
 // handledElsewhere are keys the table classes Blocking that lint leaves to another step. env_file
-// is checked by the prescan (it must name a file of the stack) and is read by Bayplan from the
-// stack's own files in plan 07-12, which then reclassifies it in package fieldclass and removes
-// it here; until then a deploy still refuses it, as the converter says. TestEnvFileIsLeftToThePrescan
-// pins the exemption so it cannot outlive that change unnoticed.
+// is checked by the prescan (it must name a file of the stack, unless it is optional) and is read
+// by Bayplan from the stack's own files in stacks.ResolveEnvFiles, which empties EnvFiles before
+// any deploy sees the project. It stays Blocking in the converter's table on purpose: a project
+// that reaches the converter with an env_file still on it was not resolved, and is refused rather
+// than deployed with the file ignored. TestEnvFileIsLeftToThePrescanUntilItIsClassedConverted pins
+// the exemption so that, if the key is ever reclassified, it cannot outlive that change unnoticed.
 var handledElsewhere = map[string]bool{"env_file": true}
 
 // swarmFindings reports, for each service, every key the file sets that fieldclass.Table says
