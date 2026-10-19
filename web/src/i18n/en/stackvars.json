@@ -40,7 +40,8 @@
       "hiddenAgain": "{{name}} hidden again",
       "turnedOff": "The saved value stays hidden, so type it again to make it plain text.",
       "revealDenied": "Needs the reveal secrets permission to show this value.",
-      "revealFailed": "Couldn't load the value. Try again."
+      "revealFailed": "Couldn't load the value. Try again.",
+      "usedInTitle": "Where {{name}} is used"
     },
     "resolved": {
       "empty": "(empty)",
@@ -52,6 +53,11 @@
         "default": "From the compose file's default",
         "unset": "Not set"
       }
+    },
+    "completion": {
+      "table": "from the table",
+      "default": "default in the file",
+      "unset": "not set"
     }
   }
 }

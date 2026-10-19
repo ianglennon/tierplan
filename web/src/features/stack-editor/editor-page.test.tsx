@@ -20,6 +20,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { StackEditorPage } from "@/features/stack-editor/editor-page";
 import "@/i18n";
+import { completionStatus, currentCompletions, startCompletion } from "@codemirror/autocomplete";
 import { editorText, editorView, typeIntoEditor } from "@/test-editor";
 import { makeMe } from "@/test-me";
 import { settled } from "@/test-settle";
@@ -1343,5 +1344,66 @@ describe("secret variables in the Variables pane", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Secret: PIN" }));
     fireEvent.click(saveButton());
     expect(await screen.findByText(/A secret value needs at least 4 characters.*PIN/)).toBeTruthy();
+  });
+});
+
+// Completion and the places a variable is used (plan 07-10, STK-04, D-03).
+describe("variables and the editor", () => {
+  const STARTER =
+    'services:\n  web:\n    image: nginx:1.27-alpine\n    ports:\n      - "$' +
+    '{WEB_PORT:-8080}:80"\n';
+  const resolvedPort = {
+    name: "WEB_PORT",
+    value: "8080",
+    secret: false,
+    source: "default",
+    default: "8080",
+    hasDefault: true,
+    required: false,
+    unused: false,
+    places: [{ file: "compose.yaml", line: 5 }],
+  };
+
+  it("offers the names of the table and the variables the file refers to after ${, with where each comes from", async () => {
+    server.draft = () =>
+      Response.json(
+        draftBody({
+          files: [{ path: "compose.yaml", content: STARTER, secret: false }],
+          vars: [{ name: "DB_NAME", value: "app", secret: false }],
+        }),
+      );
+    server.check = () =>
+      Response.json({ problems: [], unusedFiles: [], variables: [resolvedPort] });
+    mount();
+    await ready();
+    // The first check must have answered, so the names the file refers to are known.
+    await waitFor(() =>
+      expect(server.sent.some((x) => x.path.endsWith("/check") && x.method === "POST")).toBe(true),
+    );
+    await settled(client);
+    const view = editorView();
+    const text = "${";
+    typeIntoEditor(text);
+    act(() => view.dispatch({ selection: { anchor: text.length } }));
+    act(() => {
+      startCompletion(view);
+    });
+    await waitFor(() => expect(completionStatus(view.state)).toBe("active"));
+    const found = currentCompletions(view.state).map((c) => `${c.label}: ${c.detail}`);
+    expect(found).toEqual(["DB_NAME: from the table", "WEB_PORT: default in the file"]);
+  });
+
+  it("opens the Files pane at the line of a place a variable is used", async () => {
+    server.draft = () =>
+      Response.json(
+        draftBody({ files: [{ path: "compose.yaml", content: STARTER, secret: false }] }),
+      );
+    server.check = () =>
+      Response.json({ problems: [], unusedFiles: [], variables: [resolvedPort] });
+    const onPaneChange = vi.fn();
+    mount(undefined, undefined, undefined, "variables", onPaneChange);
+    fireEvent.click(await screen.findByRole("button", { name: "Used in 1 place" }));
+    fireEvent.click(screen.getByRole("link", { name: "compose.yaml:5" }));
+    expect(onPaneChange).toHaveBeenCalledWith("files", "compose.yaml");
   });
 });

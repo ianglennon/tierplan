@@ -84,6 +84,7 @@ export function VariablesTable({
   canReveal = false,
   reveal,
   savedHidden,
+  onOpen,
   onAdd,
   onReset,
   onSet,
@@ -230,6 +231,7 @@ export function VariablesTable({
                   canReveal={canReveal}
                   reveal={reveal}
                   savedHidden={savedHidden?.has(r.name) ?? false}
+                  onOpen={onOpen}
                   onReset={onReset ? () => onReset(r.name) : undefined}
                   onSet={(value) => onSet(r.name, value)}
                   onSecret={(secret) => onSecret(r.name, secret)}

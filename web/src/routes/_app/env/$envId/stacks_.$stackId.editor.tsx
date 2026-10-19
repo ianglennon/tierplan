@@ -32,8 +32,18 @@ function StackEditorRoute() {
         envId={envId}
         stackId={stackId}
         pane={pane ?? "files"}
-        onPaneChange={(next) =>
-          void navigate({ search: (prev) => ({ ...prev, pane: next }), replace: true })
+        onPaneChange={(next, opened) =>
+          void navigate({
+            search: (prev) => ({
+              ...prev,
+              pane: next,
+              // A file opened with the pane is the address's file; compose.yaml is no file.
+              ...(opened === undefined
+                ? {}
+                : { file: opened === "compose.yaml" ? undefined : opened }),
+            }),
+            replace: true,
+          })
         }
         file={file}
         onFileChange={(next) =>

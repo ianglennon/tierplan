@@ -40,6 +40,7 @@ import { FileRail } from "@/features/stack-editor/file-rail";
 import { ProblemsPanel } from "@/features/stack-editor/problems-panel";
 import { SaveStatus } from "@/features/stack-editor/save-status";
 import { useStackCheck } from "@/features/stack-editor/use-stack-check";
+import type { VarName } from "@/features/stack-editor/var-completion";
 import { VariablesTable } from "@/features/stack-editor/variables-table";
 import {
   COMPOSE_FILE,
@@ -63,8 +64,9 @@ interface StackEditorPageProps {
   // The pane the address names. Files and Variables exist so far; Rendered arrives with its plan,
   // and until then it opens Files.
   pane?: EditorPane;
-  // What to do to change the pane in the address.
-  onPaneChange?: (pane: EditorPane) => void;
+  // What to do to change the pane in the address, and with it the file when the change opens one
+  // (a "Used in" link): both in one move, so neither undoes the other.
+  onPaneChange?: (pane: EditorPane, file?: string) => void;
   // The file the address names, or none for compose.yaml.
   file?: string;
   // What to do to change the file in the address.
@@ -124,6 +126,24 @@ export function StackEditorPage({
   copyRef.current = copy;
   const check = useStackCheck(envId, stackId, copy);
   const unused = useMemo(() => new Set(check.unusedFiles), [check.unusedFiles]);
+  // The names typing "${" offers: every variable of the table and every one the files refer to,
+  // each with where its value comes from.
+  const completionNames = useMemo(() => {
+    const names = new Map<string, VarName>();
+    const detail = (kind: "table" | "default" | "unset") => t(`stackVars.completion.${kind}`);
+    for (const r of check.variables ?? []) {
+      names.set(r.name, { name: r.name, detail: detail(r.hasDefault ? "default" : "unset") });
+    }
+    for (const v of copy.vars) {
+      const has = v.value !== "" || v.hidden;
+      const was = names.get(v.name);
+      names.set(v.name, {
+        name: v.name,
+        detail: has ? detail("table") : (was?.detail ?? detail("unset")),
+      });
+    }
+    return [...names.values()];
+  }, [check.variables, copy.vars, t]);
   // The variables whose saved value the server holds hidden: the ones that can be revealed and, once
   // typed over, reset.
   const savedHidden = useMemo(
@@ -192,10 +212,10 @@ export function StackEditorPage({
   // The jump waits for its file to be the open one, then moves the cursor and takes the focus. A
   // file with no editor (a hidden secret) has nowhere to put a cursor, so the jump ends there.
   useEffect(() => {
-    if (!jump || copy.selected !== jump.file) return;
+    if (!jump || copy.selected !== jump.file || activePane !== "files") return;
     if (editor.current) editor.current.cursorTo(jump.line, jump.col);
     setJump(null);
-  }, [jump, copy.selected]);
+  }, [jump, copy.selected, activePane]);
   const hasSaved = (stack.data?.hasDraft ?? false) || savedChange;
 
   // Moving to a file, or off one that is gone, moves the address with it. compose.yaml is the
@@ -213,6 +233,15 @@ export function StackEditorPage({
     if (!copyRef.current.files.some((f) => f.path === p.file)) return;
     if (copyRef.current.selected !== p.file) selectFile(p.file);
     setJump({ file: p.file, line: p.line, col: p.col });
+  }
+
+  // Opening a place a variable is used: the Files pane with that file open and the cursor on the
+  // line. The jump waits for the editor of the pane to be there.
+  function openAt(path: string, line: number) {
+    if (!copyRef.current.files.some((f) => f.path === path)) return;
+    dispatch({ type: "select", path });
+    onPaneChange?.("files", path);
+    setJump({ file: path, line, col: 1 });
   }
 
   function addFile(path: string, content?: string) {
@@ -380,6 +409,7 @@ export function StackEditorPage({
           canReveal={canReveal}
           reveal={(varName) => revealVariable(envId, stackId, varName)}
           savedHidden={savedHidden}
+          onOpen={openAt}
           onReset={(varName) => dispatch({ type: "resetVar", name: varName })}
           onAdd={(varName) => dispatch({ type: "addVar", name: varName })}
           onSet={(varName, value) => dispatch({ type: "setVar", name: varName, value })}
@@ -424,6 +454,7 @@ export function StackEditorPage({
                   file={open}
                   readOnly={!canEdit}
                   problems={markers}
+                  variableNames={completionNames}
                   onChange={(content) => dispatch({ type: "edit", path: open.path, content })}
                 />
               )

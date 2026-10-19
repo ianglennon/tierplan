@@ -9,6 +9,7 @@ import { MaskedValue } from "@/components/masked-value";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { TableCell, TableRow } from "@/components/ui/table";
@@ -43,6 +44,8 @@ export interface VariableRowProps {
   reveal?: (name: string) => Promise<string>;
   // The server holds this variable's value hidden, as the draft was last loaded or saved.
   savedHidden?: boolean;
+  // Opens a file of the stack at a line. Without it "Used in n places" is plain text.
+  onOpen?: (file: string, line: number) => void;
   onSet: (value: string) => void;
   onSecret: (secret: boolean) => void;
   onRemove: () => void;
@@ -112,6 +115,7 @@ export function VariableRow({
   canReveal = false,
   reveal,
   savedHidden = false,
+  onOpen,
   onSet,
   onSecret,
   onRemove,
@@ -128,6 +132,7 @@ export function VariableRow({
   const [pending, setPending] = useState(false);
   const [revealError, setRevealError] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
+  const [placesOpen, setPlacesOpen] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const mounted = useRef(true);
   useEffect(() => {
@@ -218,9 +223,46 @@ export function VariableRow({
             {t("stackVars.row.unused")}
           </Badge>
         ) : places > 0 ? (
-          <span className="block text-xs text-muted-foreground">
-            {t("stackVars.row.usedIn", { count: places })}
-          </span>
+          onOpen ? (
+            <Popover open={placesOpen} onOpenChange={setPlacesOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  variant="link"
+                  size="xs"
+                  className="h-auto p-0 text-xs text-muted-foreground max-md:min-h-11"
+                >
+                  {t("stackVars.row.usedIn", { count: places })}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-80">
+                <p className="text-xs font-medium break-all">
+                  {t("stackVars.row.usedInTitle", { name })}
+                </p>
+                <ul className="flex flex-col gap-1">
+                  {(resolved?.places ?? []).map((p) => (
+                    <li key={`${p.file}:${p.line}`}>
+                      <a
+                        href={`?pane=files&file=${encodeURIComponent(p.file)}`}
+                        className="font-mono text-xs break-all underline underline-offset-2 max-md:inline-block max-md:py-2"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setPlacesOpen(false);
+                          onOpen(p.file, p.line);
+                        }}
+                      >
+                        {`${p.file}:${p.line}`}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </PopoverContent>
+            </Popover>
+          ) : (
+            <span className="block text-xs text-muted-foreground">
+              {t("stackVars.row.usedIn", { count: places })}
+            </span>
+          )
         ) : null}
       </TableCell>
       <TableCell className="py-2 align-middle">

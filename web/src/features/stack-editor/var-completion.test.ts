@@ -14,9 +14,9 @@ import { waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  completeVariableNames,
   type VarName,
   varCompletion,
-  varCompletionSource,
 } from "@/features/stack-editor/var-completion";
 
 // Typing ${ in a stack file offers the names of the variables the stack has (plan 07-10, STK-04,
@@ -37,7 +37,7 @@ function stateAt(text: string) {
 
 function resultOf(text: string, explicit = false): CompletionResult | null {
   const { state, pos } = stateAt(text);
-  const source = varCompletionSource(() => NAMES);
+  const source = completeVariableNames(() => NAMES);
   const out = source(new CompletionContext(state, pos, explicit));
   if (out instanceof Promise) throw new Error("the source answers at once");
   return out;
@@ -77,13 +77,13 @@ describe("when completion opens", () => {
 
   it("offers nothing when the stack has no variables yet", () => {
     const { state, pos } = stateAt(`\${|`);
-    const out = varCompletionSource(() => [])(new CompletionContext(state, pos, false));
+    const out = completeVariableNames(() => [])(new CompletionContext(state, pos, false));
     expect(out === null || (out as CompletionResult).options.length === 0).toBe(true);
   });
 
   it("reads the names when it opens, so a new variable is offered without recreating the editor", () => {
     let names: VarName[] = [];
-    const source = varCompletionSource(() => names);
+    const source = completeVariableNames(() => names);
     const { state, pos } = stateAt(`\${|`);
     names = [{ name: "LATE", detail: "from the table" }];
     const out = source(new CompletionContext(state, pos, false)) as CompletionResult;
@@ -144,7 +144,8 @@ describe("the extension", () => {
     try {
       startCompletion(view);
       await waitFor(() => expect(completionStatus(view.state)).toBe("active"));
-      expect(currentCompletions(view.state).map((c) => c.label)).toEqual(["WEB_PORT", "DB_PASS"]);
+      // The editor lists the names by name once nothing narrows them.
+      expect(currentCompletions(view.state).map((c) => c.label)).toEqual(["DB_PASS", "WEB_PORT"]);
     } finally {
       view.destroy();
     }

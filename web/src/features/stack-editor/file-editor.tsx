@@ -11,8 +11,9 @@ import {
   lintMarkers,
   setLintProblems,
 } from "@/features/stack-editor/lint-markers";
+import { type VarName, varCompletion } from "@/features/stack-editor/var-completion";
 import { varHighlight } from "@/features/stack-editor/var-highlight";
-import type { WorkingFile } from "@/features/stack-editor/working-copy";
+import { COMPOSE_FILE, type WorkingFile } from "@/features/stack-editor/working-copy";
 import { useT } from "@/i18n/use-t";
 
 // What a parent can ask of the editor: put the cursor at a place and take the focus there.
@@ -35,6 +36,7 @@ function moveTo(view: EditorView, line: number, col: number) {
 }
 
 const NO_PROBLEMS: readonly LintProblem[] = [];
+const NO_NAMES: readonly VarName[] = [];
 
 interface FileEditorProps {
   file: WorkingFile;
@@ -42,6 +44,10 @@ interface FileEditorProps {
   // The problems of this file, drawn in the gutter and on the lines (plan 07-08). A new list
   // replaces the old without recreating the editor.
   problems?: readonly LintProblem[];
+  // The variables typing "${" offers (plan 07-10). Only compose.yaml has them: it is the one file
+  // Bayplan interpolates. A new list is used the next time the list opens; the editor is not
+  // recreated.
+  variableNames?: readonly VarName[];
   onChange: (content: string) => void;
   ref?: Ref<FileEditorHandle>;
 }
@@ -55,6 +61,7 @@ export function FileEditor({
   file,
   readOnly,
   problems = NO_PROBLEMS,
+  variableNames = NO_NAMES,
   onChange,
   ref,
 }: FileEditorProps) {
@@ -65,13 +72,17 @@ export function FileEditor({
     file: file.path,
     kind: t(`stackEditor.editor.kind.${language}`),
   });
+  const names = useRef(variableNames);
+  names.current = variableNames;
+  const completes = file.path === COMPOSE_FILE && !readOnly;
   const extensions = useMemo(
     () => [
       ...editorExtensions({ label, language, wrap: false, readOnly }),
       ...(language === "yaml" ? [varHighlight()] : []),
+      ...(completes ? [varCompletion(() => names.current)] : []),
       lintMarkers(),
     ],
-    [label, language, readOnly],
+    [label, language, readOnly, completes],
   );
   // The problems drawn now, and the ones to draw when the surface is created.
   const shown = useRef(problems);
