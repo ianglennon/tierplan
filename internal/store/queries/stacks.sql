@@ -66,6 +66,23 @@ SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, crea
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good'
 ORDER BY seq DESC LIMIT 1;
 
+-- name: LatestAttemptSeq :one
+-- The number of the stack's newest revision whatever became of it (0 when it has none): the deploy the
+-- stack stands at, good or not.
+SELECT CAST(COALESCE(MAX(seq), 0) AS INTEGER) AS seq FROM stack_snapshots
+WHERE stack_id = ? AND kind = 'revision';
+
+-- name: GoodRevisionBefore :one
+-- The newest good revision numbered below seq: what a roll back restores when the newest revision is
+-- itself good.
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at
+FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good' AND seq < ?
+ORDER BY seq DESC LIMIT 1;
+
+-- name: GetSnapshotPinsAndRendered :one
+-- What a revision ran and rendered, for the copy a roll back takes of it.
+SELECT rendered, pins FROM stack_snapshots WHERE id = ? AND kind = 'revision';
+
 -- name: SetRevisionOutcome :execrows
 -- An empty pins keeps the pins a deploy stored on the revision while it ran, and an empty rendered
 -- the rendering the deploy stored when it started.
@@ -98,14 +115,14 @@ UPDATE stack_deploys SET state = ?, ended_at = ?, failed_service = ?, code = ?
 WHERE id = ? AND state = 'running';
 
 -- name: MarkRunningRevisionsFailed :execrows
--- A deploy or an update that was running when the server stopped did not finish: the revision it took
--- is failed. Only a revision still pending is touched, and only one a deploy or an update made (a roll
--- back redeploys a revision that was already good).
+-- A deploy, an update or a roll back that was running when the server stopped did not finish: the
+-- revision it took is failed. Only a revision still pending is touched. A roll back takes a revision of
+-- its own (a copy of the one it restores), so it is failed the same way.
 UPDATE stack_snapshots SET outcome = 'failed'
 WHERE kind = 'revision' AND outcome = 'pending'
   AND EXISTS (SELECT 1 FROM stack_deploys d
               WHERE d.stack_id = stack_snapshots.stack_id AND d.revision_seq = stack_snapshots.seq
-                AND d.state = 'running' AND d.kind IN ('deploy', 'update'));
+                AND d.state = 'running' AND d.kind IN ('deploy', 'update', 'rollback'));
 
 -- name: MarkRunningDeploysInterrupted :execrows
 -- Every operation still running at startup was running in a process that is gone: it ends interrupted.

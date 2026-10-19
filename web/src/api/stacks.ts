@@ -36,6 +36,7 @@ export type StackDeployed = components["schemas"]["StackDeployBody"];
 export type StackJob = components["schemas"]["StackJobBody"];
 export type StackJobItem = components["schemas"]["StackJobItemBody"];
 export type StackLock = components["schemas"]["StackLockBody"];
+export type StackRollback = components["schemas"]["StackRollbackBody"];
 export type StackJobOutputLine = components["schemas"]["StackJobOutputLine"];
 
 // The query key of an environment's stacks list, and of every read that extends it: one stack's
@@ -523,6 +524,35 @@ export function useDeployStack(envId: string, stackId: string) {
       }
     },
     retry: false,
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: stacksKey(envId) }),
+  });
+}
+
+// useRollbackStack starts a roll back to the last version that ran well. It sends nothing the person
+// chose: the server decides what it restores, with that version's own images, and the answer is the
+// job to open. It is never retried: a roll back whose answer was lost may have started, and the stack's
+// page, read again, shows whether it did. The stack's page and the list are read again whatever the
+// answer.
+export function useRollbackStack(envId: string, stackId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<StackDeployed, DeployRequestError, void>({
+    mutationFn: async () => {
+      try {
+        const res = await api.POST("/api/env/{envId}/stacks/{stackId}/rollback", {
+          params: { path: { envId, stackId } },
+        });
+        if (!res.data) {
+          const problem = readProblem(res.error, res.response);
+          throw new DeployRequestError(problem.status, problem.type, problem.fields);
+        }
+        return res.data;
+      } catch (e) {
+        // A network failure has no status.
+        throw e instanceof DeployRequestError ? e : new DeployRequestError(0);
+      }
+    },
+    retry: false,
+    // One stack's page is under the list's key, so this reads both again.
     onSettled: () => void queryClient.invalidateQueries({ queryKey: stacksKey(envId) }),
   });
 }

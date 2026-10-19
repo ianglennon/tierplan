@@ -120,6 +120,23 @@ func (q *Queries) GetRevision(ctx context.Context, arg GetRevisionParams) (Stack
 	return i, err
 }
 
+const getSnapshotPinsAndRendered = `-- name: GetSnapshotPinsAndRendered :one
+SELECT rendered, pins FROM stack_snapshots WHERE id = ? AND kind = 'revision'
+`
+
+type GetSnapshotPinsAndRenderedRow struct {
+	Rendered string
+	Pins     string
+}
+
+// What a revision ran and rendered, for the copy a roll back takes of it.
+func (q *Queries) GetSnapshotPinsAndRendered(ctx context.Context, id string) (GetSnapshotPinsAndRenderedRow, error) {
+	row := q.db.QueryRowContext(ctx, getSnapshotPinsAndRendered, id)
+	var i GetSnapshotPinsAndRenderedRow
+	err := row.Scan(&i.Rendered, &i.Pins)
+	return i, err
+}
+
 const getStack = `-- name: GetStack :one
 SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped
 FROM stacks WHERE env_id = ? AND id = ?
@@ -171,6 +188,38 @@ func (q *Queries) GetStackByName(ctx context.Context, arg GetStackByNameParams) 
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.Stopped,
+	)
+	return i, err
+}
+
+const goodRevisionBefore = `-- name: GoodRevisionBefore :one
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at
+FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good' AND seq < ?
+ORDER BY seq DESC LIMIT 1
+`
+
+type GoodRevisionBeforeParams struct {
+	StackID string
+	Seq     int64
+}
+
+// The newest good revision numbered below seq: what a roll back restores when the newest revision is
+// itself good.
+func (q *Queries) GoodRevisionBefore(ctx context.Context, arg GoodRevisionBeforeParams) (StackSnapshot, error) {
+	row := q.db.QueryRowContext(ctx, goodRevisionBefore, arg.StackID, arg.Seq)
+	var i StackSnapshot
+	err := row.Scan(
+		&i.ID,
+		&i.StackID,
+		&i.Kind,
+		&i.Seq,
+		&i.BaseSeq,
+		&i.Version,
+		&i.Outcome,
+		&i.Rendered,
+		&i.Pins,
+		&i.CreatedBy,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -320,6 +369,20 @@ func (q *Queries) InsertStackDeploy(ctx context.Context, arg InsertStackDeployPa
 		arg.StartedAt,
 	)
 	return err
+}
+
+const latestAttemptSeq = `-- name: LatestAttemptSeq :one
+SELECT CAST(COALESCE(MAX(seq), 0) AS INTEGER) AS seq FROM stack_snapshots
+WHERE stack_id = ? AND kind = 'revision'
+`
+
+// The number of the stack's newest revision whatever became of it (0 when it has none): the deploy the
+// stack stands at, good or not.
+func (q *Queries) LatestAttemptSeq(ctx context.Context, stackID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, latestAttemptSeq, stackID)
+	var seq int64
+	err := row.Scan(&seq)
+	return seq, err
 }
 
 const latestDoneStackDeploysByEnv = `-- name: LatestDoneStackDeploysByEnv :many
@@ -664,12 +727,12 @@ UPDATE stack_snapshots SET outcome = 'failed'
 WHERE kind = 'revision' AND outcome = 'pending'
   AND EXISTS (SELECT 1 FROM stack_deploys d
               WHERE d.stack_id = stack_snapshots.stack_id AND d.revision_seq = stack_snapshots.seq
-                AND d.state = 'running' AND d.kind IN ('deploy', 'update'))
+                AND d.state = 'running' AND d.kind IN ('deploy', 'update', 'rollback'))
 `
 
-// A deploy or an update that was running when the server stopped did not finish: the revision it took
-// is failed. Only a revision still pending is touched, and only one a deploy or an update made (a roll
-// back redeploys a revision that was already good).
+// A deploy, an update or a roll back that was running when the server stopped did not finish: the
+// revision it took is failed. Only a revision still pending is touched. A roll back takes a revision of
+// its own (a copy of the one it restores), so it is failed the same way.
 func (q *Queries) MarkRunningRevisionsFailed(ctx context.Context) (int64, error) {
 	result, err := q.db.ExecContext(ctx, markRunningRevisionsFailed)
 	if err != nil {

@@ -2136,6 +2136,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks/{stackId}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Roll a stack back to the version that ran before
+         * @description Redeploys the last version of the stack that ran well, as a job, answering 202 with the job ID at once. That is the newest revision whose deploy succeeded, or, when the newest revision is itself the one that runs, the good one before it. It takes a revision of its own from it (the files, the variables and the images it ran) and runs the same swarm deploy on it, so it is audited as stack.deployed with the mode rollback. It uses exactly the images that revision ran and looks nothing up: a tag that has moved since is not followed. The draft is not touched. A stack with no earlier version that ran well is 409 no_previous_version. Everything a deploy is judged on is judged again: a revision that uses host access is refused 403 privileged_compose below env Admin, a stack that no longer loads is 422, and while another stack operation runs on the environment the answer is 409 operation_locked and nothing is stored. A roll back is only ever sent by a person; nothing rolls a stack back by itself. Needs stacks.deploy (Operator).
+         */
+        post: operations["rollbackStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/stacks/{stackId}/variables/{name}/reveal": {
         parameters: {
             query?: never;
@@ -8235,6 +8255,8 @@ export interface components {
             lock?: components["schemas"]["StackLockBody"];
             /** @description The stack name, also its swarm namespace or compose project */
             name: string;
+            /** @description Whether a roll back has a version to restore: the newest version that ran well, or, when the newest version is the one that runs, the one before it */
+            rollback: components["schemas"]["StackRollbackBody"];
             /**
              * @description Where the stack's definition lives. Only inline exists today
              * @enum {string}
@@ -8411,10 +8433,10 @@ export interface components {
             /** @description The steps and services, in the order they were added. Read the steps in run order by following parent: a top-level step, then its children */
             items: components["schemas"]["StackJobItemBody"][] | null;
             /**
-             * @description What the operation is
+             * @description What the operation is: a deploy of the draft, an update of images, or a roll back to the last version that ran well
              * @enum {string}
              */
-            mode: "deploy" | "update";
+            mode: "deploy" | "update" | "rollback";
             /** @description The output log, oldest first: the newest 2,000 lines */
             output: components["schemas"]["StackJobOutputLine"][] | null;
             /** @description The stack being deployed */
@@ -8701,6 +8723,14 @@ export interface components {
             services: components["schemas"]["StackReviewCountsBody"];
             /** @description Always zero on a swarm: the engine of each node makes a named volume when a task first uses it */
             volumes: components["schemas"]["StackReviewCountsBody"];
+        };
+        StackRollbackBody: {
+            /** @description True when there is an earlier version that ran well to roll back to */
+            available: boolean;
+            /** @description When that version's deploy was started, RFC 3339 UTC; empty when there is none */
+            deployedAt: string;
+            /** @description Who started it, as a name; empty when there is none */
+            deployedBy: string;
         };
         StackTextDiffBody: {
             /**
@@ -13973,6 +14003,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackReviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    rollbackStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackDeployBody"];
                 };
             };
             /** @description Error */

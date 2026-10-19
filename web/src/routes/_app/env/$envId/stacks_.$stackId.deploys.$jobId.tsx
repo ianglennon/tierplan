@@ -9,7 +9,8 @@ import { DeployConsole } from "@/features/stack-deploy/deploy-console";
 // page does not stop the deploy and opening it again shows where it is (UI-SPEC "Deploy console").
 function StackDeployRoute() {
   const { envId, stackId, jobId } = Route.useParams();
-  return <DeployConsole envId={envId} stackId={stackId} jobId={jobId} />;
+  // Keyed by the job: a roll back replaces this console with the next job's, which starts afresh.
+  return <DeployConsole key={jobId} envId={envId} stackId={stackId} jobId={jobId} />;
 }
 
 export const Route = createFileRoute("/_app/env/$envId/stacks_/$stackId/deploys/$jobId")({

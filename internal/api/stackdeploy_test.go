@@ -740,3 +740,364 @@ func TestAnOversizeSecretFileIsRefusedByTheReviewAndTheDeploy(t *testing.T) {
 		t.Errorf("writes = %v, want none", w)
 	}
 }
+
+// Roll back (plan 07-19, STK-07, D-14): one click redeploys exactly what last ran well, with its own
+// images, and asks no registry.
+
+const (
+	composeWeb127 = "services:\n  web:\n    image: nginx:1.27-alpine\n"
+	composeWeb128 = "services:\n  web:\n    image: nginx:1.28-alpine\n"
+	composeWeb129 = "services:\n  web:\n    image: nginx:1.29-alpine\n"
+)
+
+func rollbackPath(stackID string) string { return "stacks/" + stackID + "/rollback" }
+
+// deployDraft saves compose over the draft and deploys it as c, returning the job.
+func (f *envFix) deployDraft(t *testing.T, c *roleCaller, stackID, composeText string) string {
+	t.Helper()
+	v := saveCompose(t, c, stackID, composeText, `[]`)
+	rec := c.deploy(stackID, `{"draftVersion":`+itoaT(v)+`}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("deploy: %d %s", rec.Code, rec.Body)
+	}
+	return answerOf[struct {
+		JobID string `json:"jobId"`
+	}](t, rec).JobID
+}
+
+// deployGood deploys compose and waits for it to end good.
+func (f *envFix) deployGood(t *testing.T, c *roleCaller, stackID, composeText string) {
+	t.Helper()
+	if job := f.awaitDeploy(t, f.deployDraft(t, c, stackID, composeText)); job.State != "done" {
+		t.Fatalf("deploy = %+v, want it done", job)
+	}
+}
+
+// deployThenCancel deploys compose to a service that never settles and cancels it, so the revision ends failed.
+func (f *envFix) deployThenCancel(t *testing.T, c *roleCaller, st stackAnswer, composeText string) {
+	t.Helper()
+	f.fake.SetTaskState(st.Name+"_web", "preparing", "")
+	jobID := f.deployDraft(t, c, st.ID, composeText)
+	awaitStackJobItem(t, f, jobID, func(it jobs.Item) bool { return it.ID == "service:"+st.Name+"_web" && it.Unit == "tasks" })
+	if rec := c.do(http.MethodPost, cancelPath(st.ID, jobID), ""); rec.Code != http.StatusAccepted {
+		t.Fatalf("cancel: %d %s", rec.Code, rec.Body)
+	}
+	if job := f.awaitDeploy(t, jobID); job.State == "done" {
+		t.Fatalf("job = %+v, want it stopped", job)
+	}
+	f.fake.SetTaskState(st.Name+"_web", "", "") // the service settles again from here on
+}
+
+type revisionRow struct {
+	Seq     int64
+	Outcome string
+	Pins    string
+}
+
+func (f *envFix) revisions(t *testing.T, stackID string) []revisionRow {
+	t.Helper()
+	rows, err := f.st.Read.Query(`SELECT seq, outcome, pins FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' ORDER BY seq`, stackID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []revisionRow
+	for rows.Next() {
+		var r revisionRow
+		if err := rows.Scan(&r.Seq, &r.Outcome, &r.Pins); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+type rollbackStackAnswer struct {
+	State    string `json:"state"`
+	Rollback struct {
+		Available  bool   `json:"available"`
+		DeployedAt string `json:"deployedAt"`
+		DeployedBy string `json:"deployedBy"`
+	} `json:"rollback"`
+	LastOperation *struct {
+		Kind, State string
+	} `json:"lastOperation"`
+}
+
+func TestRollbackRedeploysTheLastGoodRevisionWithoutTheRegistry(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rb")
+
+	// Revision 1 and 2 are good, 3 is stopped: what last ran well is 2.
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.deployGood(t, operator, st.ID, composeWeb128)
+	f.deployThenCancel(t, operator, st, composeWeb129)
+	revs := f.revisions(t, st.ID)
+	if len(revs) != 3 || revs[0].Outcome != "good" || revs[1].Outcome != "good" || revs[2].Outcome != "failed" {
+		t.Fatalf("revisions = %+v, want good, good, failed", revs)
+	}
+	pin128 := revs[1].Pins
+	if !strings.Contains(pin128, "nginx:1.28-alpine@sha256:") {
+		t.Fatalf("revision 2 pins = %s, want the 1.28 image pinned to a digest", pin128)
+	}
+
+	// The tag has moved on the registry since: a roll back must not follow it.
+	f.fake.SetDistributionDigest("docker.io/library/nginx:1.28-alpine", "sha256:"+strings.Repeat("b", 64))
+	before := readStack(t, operator, st.ID)
+	if !before.Rollback.Available || before.Rollback.DeployedBy != "operator-1" || before.Rollback.DeployedAt == "" || before.State != "deploy_failed" {
+		t.Fatalf("stack before = %+v, want a failed deploy with a roll back to operator-1's version", before)
+	}
+	lookups := len(f.fake.DistributionRefs())
+	updates := len(f.fake.ServiceUpdates())
+
+	rec := operator.do(http.MethodPost, rollbackPath(st.ID), "")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("roll back: %d %s", rec.Code, rec.Body)
+	}
+	started := answerOf[struct {
+		JobID    string `json:"jobId"`
+		Revision int64  `json:"revision"`
+	}](t, rec)
+	if started.Revision != 4 {
+		t.Errorf("revision = %d, want 4: the roll back is a revision of its own", started.Revision)
+	}
+	if job := f.awaitDeploy(t, started.JobID); job.State != "done" {
+		t.Fatalf("roll back job = %+v, want it done", job)
+	}
+
+	// No registry was asked, and the service went back to the digest revision 2 ran.
+	if n := len(f.fake.DistributionRefs()); n != lookups {
+		t.Errorf("distribution checks went from %d to %d, a roll back asks no registry", lookups, n)
+	}
+	ups := f.fake.ServiceUpdates()
+	if len(ups) != updates+1 {
+		t.Fatalf("service updates = %d, want one more than %d", len(ups), updates)
+	}
+	var pins map[string]string
+	if err := json.Unmarshal([]byte(pin128), &pins); err != nil {
+		t.Fatal(err)
+	}
+	if image := ups[len(ups)-1].Spec.TaskTemplate.ContainerSpec.Image; image != pins["rb_web"] {
+		t.Errorf("image = %q, want exactly what revision 2 ran, %q", image, pins["rb_web"])
+	}
+
+	// The roll back is revision 4, a good copy of 2, and the stack reads deployed.
+	revs = f.revisions(t, st.ID)
+	if len(revs) != 4 || revs[3].Outcome != "good" || revs[3].Pins != pin128 {
+		t.Errorf("revisions = %+v, want a good revision 4 with revision 2's pins", revs)
+	}
+	after := readStack(t, operator, st.ID)
+	if after.State != "deployed" || after.LastOperation == nil || after.LastOperation.Kind != "rollback" || after.LastOperation.State != "done" {
+		t.Errorf("stack after = %+v %+v, want deployed by a roll back", after, after.LastOperation)
+	}
+	job := answerOf[struct {
+		Mode  string `json:"mode"`
+		State string `json:"state"`
+	}](t, operator.do(http.MethodGet, "stacks/"+st.ID+"/deploys/"+started.JobID, ""))
+	if job.Mode != "rollback" || job.State != "done" {
+		t.Errorf("job = %+v, want mode rollback", job)
+	}
+	var row *auditRowFull
+	for _, r := range f.stackAudits(t) {
+		if r.Action == "stack.deployed" {
+			row = &r
+		}
+	}
+	if row == nil || row.Details["mode"] != "rollback" || row.Result != "success" || row.Details["revision"] != "4" || row.TargetID != st.ID {
+		t.Errorf("stack.deployed = %+v, want a successful rollback of revision 4", row)
+	}
+}
+
+func readStack(t *testing.T, c *roleCaller, stackID string) rollbackStackAnswer {
+	t.Helper()
+	rec := c.do(http.MethodGet, "stacks/"+stackID, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get stack: %d %s", rec.Code, rec.Body)
+	}
+	return answerOf[rollbackStackAnswer](t, rec)
+}
+
+func TestRollbackWithNoEarlierVersionIsRefusedAndStoresNothing(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rb")
+
+	// Never deployed, and then deployed once: neither has a version before the one that runs.
+	for step, setup := range []func(){func() {}, func() { f.deployGood(t, operator, st.ID, composeWeb127) }} {
+		setup()
+		if a := readStack(t, operator, st.ID); a.Rollback.Available || a.Rollback.DeployedAt != "" {
+			t.Fatalf("step %d: rollback = %+v, want none", step, a.Rollback)
+		}
+		revisions, writes := len(f.revisions(t, st.ID)), len(f.fake.Writes())
+		rec := operator.do(http.MethodPost, rollbackPath(st.ID), "")
+		if rec.Code != http.StatusConflict || problemType(t, rec) != "no_previous_version" {
+			t.Fatalf("step %d: roll back: %d %s, want 409 no_previous_version", step, rec.Code, rec.Body)
+		}
+		if !strings.Contains(rec.Body.String(), "There's no earlier deployed version to roll back to.") {
+			t.Errorf("step %d: body = %s, want the sentence", step, rec.Body)
+		}
+		if n := len(f.revisions(t, st.ID)); n != revisions {
+			t.Errorf("step %d: revisions went from %d to %d", step, revisions, n)
+		}
+		if n := len(f.fake.Writes()); n != writes {
+			t.Errorf("step %d: writes went from %d to %d", step, writes, n)
+		}
+	}
+}
+
+func TestRollbackNeedsOperatorAndStartsOnlyOnARequest(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	st := newStack(t, admin, "rb")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.deployThenCancel(t, operator, st, composeWeb128)
+
+	// A failed deploy only offers the way back: nothing rolls the stack back by itself (T-07-89).
+	if a := readStack(t, viewer, st.ID); !a.Rollback.Available || a.State != "deploy_failed" {
+		t.Fatalf("stack = %+v", a)
+	}
+	revisions := len(f.revisions(t, st.ID))
+	if rec := viewer.do(http.MethodPost, rollbackPath(st.ID), ""); rec.Code != http.StatusForbidden {
+		t.Errorf("a viewer's roll back: %d %s, want 403", rec.Code, rec.Body)
+	}
+	if n := len(f.revisions(t, st.ID)); n != revisions {
+		t.Errorf("revisions went from %d to %d, a refused roll back stores nothing", revisions, n)
+	}
+}
+
+func TestRollbackTakesTheOperationLockAndIsRefusedWhileAnotherOperationRuns(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	alpha, beta := newStack(t, admin, "alpha"), newStack(t, admin, "beta")
+	f.deployGood(t, operator, alpha.ID, composeWeb127)
+	f.deployThenCancel(t, operator, alpha, composeWeb128)
+	jobID := startStuckDeploy(t, f, operator, beta)
+
+	revisions, writes := len(f.revisions(t, alpha.ID)), len(f.fake.Writes())
+	rec := operator.do(http.MethodPost, rollbackPath(alpha.ID), "")
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "operation_locked" {
+		t.Fatalf("roll back during another operation: %d %s, want 409 operation_locked", rec.Code, rec.Body)
+	}
+	if n := len(f.revisions(t, alpha.ID)); n != revisions {
+		t.Errorf("revisions went from %d to %d, a refused operation leaves none behind", revisions, n)
+	}
+	if n := len(f.fake.Writes()); n != writes {
+		t.Errorf("writes went from %d to %d", writes, n)
+	}
+
+	// The roll back holds the lock itself while it runs, and says so.
+	if rec := operator.do(http.MethodPost, cancelPath(beta.ID, jobID), ""); rec.Code != http.StatusAccepted {
+		t.Fatalf("cancel: %d %s", rec.Code, rec.Body)
+	}
+	f.awaitDeploy(t, jobID)
+	f.fake.SetTaskState(alpha.Name+"_web", "preparing", "")
+	rec = operator.do(http.MethodPost, rollbackPath(alpha.ID), "")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("roll back: %d %s", rec.Code, rec.Body)
+	}
+	rbJob := answerOf[struct {
+		JobID string `json:"jobId"`
+	}](t, rec).JobID
+	awaitStackJobItem(t, f, rbJob, func(it jobs.Item) bool { return it.ID == "service:"+alpha.Name+"_web" && it.Unit == "tasks" })
+	if lock := lockOf(t, operator, beta.ID); lock == nil || lock.Kind != "rollback" || lock.StackName != "alpha" || lock.JobID != rbJob {
+		t.Errorf("lock = %+v, want alpha's roll back %s", lock, rbJob)
+	}
+	if rec := operator.deploy(beta.ID, `{"draftVersion":1}`); rec.Code != http.StatusConflict || problemType(t, rec) != "operation_locked" {
+		t.Errorf("a deploy during the roll back: %d %s, want 409 operation_locked", rec.Code, rec.Body)
+	}
+	_ = operator.do(http.MethodPost, cancelPath(alpha.ID, rbJob), "")
+	f.awaitDeploy(t, rbJob)
+}
+
+func TestRollbackToARevisionOnlyAnAdminMayDeployIsRefusedForAnOperator(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "esc")
+
+	// The Admin deployed host access; the Operator's later deploy was stopped. What last ran well is
+	// the Admin's, and the Operator may not put it back (T-07-91).
+	f.deployGood(t, admin, st.ID, hostAccessCompose)
+	f.deployThenCancel(t, operator, st, composeWeb128)
+	revisions := len(f.revisions(t, st.ID))
+	rec := operator.do(http.MethodPost, rollbackPath(st.ID), "")
+	if rec.Code != http.StatusForbidden || problemType(t, rec) != "privileged_compose" {
+		t.Fatalf("an operator's roll back: %d %s, want 403 privileged_compose", rec.Code, rec.Body)
+	}
+	if n := len(f.revisions(t, st.ID)); n != revisions {
+		t.Errorf("revisions went from %d to %d, a refused roll back stores nothing", revisions, n)
+	}
+	rec = admin.do(http.MethodPost, rollbackPath(st.ID), "")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("an admin's roll back: %d %s, want 202", rec.Code, rec.Body)
+	}
+	if job := f.awaitDeploy(t, answerOf[struct {
+		JobID string `json:"jobId"`
+	}](t, rec).JobID); job.State != "done" {
+		t.Errorf("job = %+v, want done", job)
+	}
+}
+
+func TestAFailedRollbackLeavesTheWayBackOpen(t *testing.T) {
+	t.Parallel()
+	// While armed, the swarm rolls back the update of a service the moment it is written, as it does
+	// when the new tasks fail.
+	var armed atomic.Bool
+	var fake atomic.Pointer[dockertest.Fake]
+	f, e := stackEnv(t, func(c *dockertest.FakeConfig) {
+		c.OnWrite = func(w string) {
+			if fk := fake.Load(); fk != nil && armed.Load() && strings.Contains(w, "/update") {
+				fk.SetUpdateState("rb_web", "rollback_completed", "update rolled back: task failed")
+			}
+		}
+	})
+	fake.Store(f.fake)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rb")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.deployThenCancel(t, operator, st, composeWeb128)
+
+	// The roll back itself fails: the swarm rolls the update back.
+	armed.Store(true)
+	rec := operator.do(http.MethodPost, rollbackPath(st.ID), "")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("roll back: %d %s", rec.Code, rec.Body)
+	}
+	if job := f.awaitDeploy(t, answerOf[struct {
+		JobID string `json:"jobId"`
+	}](t, rec).JobID); job.State == "done" {
+		t.Fatalf("job = %+v, want it failed", job)
+	}
+	revs := f.revisions(t, st.ID)
+	if len(revs) != 3 || revs[2].Outcome != "failed" {
+		t.Fatalf("revisions = %+v, want the roll back's revision failed", revs)
+	}
+	a := readStack(t, operator, st.ID)
+	if a.State != "deploy_failed" || a.LastOperation == nil || a.LastOperation.Kind != "rollback" || !a.Rollback.Available {
+		t.Errorf("stack = %+v %+v, want a failed roll back that can be retried", a, a.LastOperation)
+	}
+	// Retry: it restores the same good revision (1), not the failed copy.
+	armed.Store(false)
+	f.fake.SetUpdateState("rb_web", "", "")
+	rec = operator.do(http.MethodPost, rollbackPath(st.ID), "")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("retry: %d %s", rec.Code, rec.Body)
+	}
+	if job := f.awaitDeploy(t, answerOf[struct {
+		JobID string `json:"jobId"`
+	}](t, rec).JobID); job.State != "done" {
+		t.Errorf("retry job = %+v, want done", job)
+	}
+}

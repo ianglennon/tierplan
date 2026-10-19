@@ -1,15 +1,29 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { Link } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { CircleX, Info } from "lucide-react";
+import { useRef } from "react";
 
-import type { StackJob, StackJobItem } from "@/api/stacks";
+import {
+  type DeployRequestError,
+  type StackJob,
+  type StackJobItem,
+  stackQuery,
+  useRollbackStack,
+} from "@/api/stacks";
+import { NeedsTooltip } from "@/components/needs-tooltip";
+import { useNow } from "@/components/relative-time";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { CONVERGE_TIMEOUT } from "@/features/stack-deploy/deploy-service-row";
+import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { withBase } from "@/lib/base-path";
+import { formatRelative } from "@/lib/format";
+import { toastError, toastInfo } from "@/lib/toast";
 
 const isService = (i: StackJobItem): boolean => i.kind === "service";
 
@@ -65,6 +79,114 @@ export function cleanupOf(job: StackJob): Cleanup {
   return out;
 }
 
+type Translate = (key: string, options?: Record<string, unknown>) => string;
+
+// rollbackRefusal words a roll back the server refused. The server decides every refusal; this only
+// says what it means in the page's words.
+function rollbackRefusal(t: Translate, err: DeployRequestError, envName: string): string {
+  switch (err.type) {
+    case "operation_locked":
+      return t("stackConverge.lock.refused", { env: envName });
+    case "no_previous_version":
+      return t("stackDeploy.rollback.errors.noPrevious");
+    case "privileged_compose":
+      return t("stackDeploy.rollback.errors.needsAdmin");
+    case "compose_invalid":
+    case "compose_unsupported":
+    case "stack_invalid":
+    case "pins_invalid":
+      return t("stackDeploy.rollback.errors.invalid");
+    case "too_many_deploys":
+      return t("stackDeploy.rollback.errors.tooMany");
+    case "target_changed":
+    case "target_engine_missing":
+      return t("stackDeploy.rollback.errors.target");
+    case "stack_name_clash":
+      return t("stackDeploy.rollback.errors.clash");
+  }
+  if (err.status === 0) return t("stackDeploy.rollback.errors.lost");
+  return t("stackDeploy.rollback.errors.generic");
+}
+
+// RollbackAction is the one-click way back after a deploy that stopped (UI-SPEC "Deploy console", D-14):
+// the accent button names what it does and, under it, when that version was deployed and by whom. One
+// click starts the roll back as a new job and the console is replaced by that job's. There is no
+// dialog: the button already says which version it restores. With no earlier version, or for a person
+// who may not deploy, it is off and says why. After a roll back that failed it reads Retry roll back.
+// Nothing here rolls back by itself, and a mutation is never retried.
+function RollbackAction({
+  envId,
+  stackId,
+  envName,
+  retry,
+}: {
+  envId: string;
+  stackId: string;
+  envName: string;
+  retry: boolean;
+}) {
+  const t = useT();
+  const navigate = useNavigate();
+  const stack = useQuery(stackQuery(envId, stackId));
+  const needs = useNeeds("stacks.deploy", envId);
+  const rollback = useRollbackStack(envId, stackId);
+  const now = useNow();
+  const back = stack.data?.rollback;
+  const available = Boolean(back?.available);
+  // The permission is the first reason; a person who may not deploy is not told about versions.
+  const reason = !needs.allowed
+    ? needs.reason
+    : available
+      ? undefined
+      : t("stackDeploy.rollback.noPrevious");
+  const label = t(retry ? "stackDeploy.rollback.retry" : "stackDeploy.rollback.action");
+
+  // A second click that lands before the page has drawn the first one's pending state sends nothing.
+  const sending = useRef(false);
+  function start() {
+    if (sending.current) return;
+    sending.current = true;
+    rollback.mutate(undefined, {
+      onSettled: () => {
+        sending.current = false;
+      },
+      onSuccess: ({ jobId }) =>
+        // Replace, so Back leaves the console and does not return to the one that failed.
+        void navigate({
+          to: "/env/$envId/stacks/$stackId/deploys/$jobId",
+          params: { envId, stackId, jobId },
+          replace: true,
+        }),
+      onError: (err) => {
+        const message = rollbackRefusal(t, err, envName);
+        if (err.type === "no_previous_version") toastInfo(message);
+        else toastError(message);
+      },
+    });
+  }
+
+  const button = (
+    <Button type="button" className="max-md:h-11" disabled={rollback.isPending} onClick={start}>
+      {rollback.isPending ? <Spinner aria-hidden="true" /> : null}
+      {label}
+    </Button>
+  );
+  const when =
+    back?.deployedAt && available ? formatRelative(back.deployedAt, new Date(now), t) : "";
+  return (
+    <div className="flex flex-col items-start gap-1">
+      <NeedsTooltip reason={reason}>{button}</NeedsTooltip>
+      {when ? (
+        <span className="text-xs text-muted-foreground">
+          {back?.deployedBy
+            ? t("stackDeploy.rollback.lastDeployed", { time: when, user: back.deployedBy })
+            : t("stackDeploy.rollback.lastDeployedAnon", { time: when })}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 interface DeployResultProps {
   job: StackJob;
   envId: string;
@@ -114,10 +236,13 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
       </Link>
     </Button>
   );
+  const rolledBack = job.mode === "rollback";
   if (job.state === "done") {
     return (
       <section className="flex flex-col gap-3">
-        <h4 className="text-base font-semibold">{t("stackDeploy.complete.title")}</h4>
+        <h4 className="text-base font-semibold">
+          {t(rolledBack ? "stackDeploy.rollback.complete.title" : "stackDeploy.complete.title")}
+        </h4>
         <p className="text-sm break-words">
           {t("stackDeploy.complete.body", { name, env: envName, count: runningServices(job) })}
         </p>
@@ -158,7 +283,9 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
     return (
       <Alert variant="destructive">
         <CircleX aria-hidden="true" />
-        <AlertTitle>{t("stackDeploy.failed.title")}</AlertTitle>
+        <AlertTitle>
+          {t(rolledBack ? "stackDeploy.rollback.failed.title" : "stackDeploy.failed.title")}
+        </AlertTitle>
         <AlertDescription className="flex flex-col gap-3">
           {timedOut ? (
             <p className="break-words">
@@ -170,7 +297,8 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
           ) : null}
           <p className="break-words">{sentence}</p>
           <CleanupReport cleanup={cleanup} />
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-start gap-2">
+            <RollbackAction envId={envId} stackId={stackId} envName={envName} retry={rolledBack} />
             <Button asChild variant="outline" className="max-md:h-11">
               <Link to="/env/$envId/stacks/$stackId/editor" params={{ envId, stackId }}>
                 {t("stackDeploy.backToEditing")}
@@ -189,7 +317,9 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
     return (
       <Alert>
         <Info aria-hidden="true" />
-        <AlertTitle>{t("stackDeploy.cancelled.title")}</AlertTitle>
+        <AlertTitle>
+          {t(rolledBack ? "stackDeploy.rollback.cancelled.title" : "stackDeploy.cancelled.title")}
+        </AlertTitle>
         <AlertDescription className="flex flex-col gap-3">
           {rows.length > 0 ? (
             <p className="break-words">
@@ -204,7 +334,8 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
             <p>{t("stackDeploy.cancelled.body")}</p>
           )}
           <CleanupReport cleanup={cleanup} stuckOnly />
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-start gap-2">
+            <RollbackAction envId={envId} stackId={stackId} envName={envName} retry={rolledBack} />
             <Button asChild variant="outline" className="max-md:h-11">
               <Link to="/env/$envId/stacks/$stackId/editor" params={{ envId, stackId }}>
                 {t("stackDeploy.backToEditing")}

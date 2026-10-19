@@ -32,12 +32,16 @@ const (
 	metaMode      = "mode"
 	metaStartedBy = "startedBy"
 
-	deployModeDeploy = "deploy"
-	deployModeUpdate = "update"
+	deployModeDeploy   = "deploy"
+	deployModeUpdate   = "update"
+	deployModeRollback = "rollback"
+
+	metaEnvNameKey = "envName"
 
 	problemDraftChanged             = "draft_changed"
 	problemPinsInvalid              = "pins_invalid"
 	problemConcurrentUnacknowledged = "concurrent_unacknowledged"
+	problemNoPreviousVersion        = "no_previous_version"
 )
 
 // StackDeployRequest is the body of POST .../deploys.
@@ -56,6 +60,16 @@ type StackDeployInput struct {
 	UserAgent string `header:"User-Agent" hidden:"true"`
 	Body      StackDeployRequest
 }
+
+// StackRollbackInput is the path of the roll back route. It has no body: a roll back is never given
+// anything to restore, it restores the last version that ran well.
+type StackRollbackInput struct {
+	StackPathInput
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
+// noPreviousVersion is the sentence for a stack with no earlier version that ran well.
+const noPreviousVersion = "There's no earlier deployed version to roll back to."
 
 // StackDeployBody is a deploy that has started.
 type StackDeployBody struct {
@@ -102,7 +116,7 @@ type StackJobOutputLine struct {
 type StackJobBody struct {
 	ID         string               `json:"id" doc:"The job ID"`
 	StackID    string               `json:"stackId" doc:"The stack being deployed"`
-	Mode       string               `json:"mode" enum:"deploy,update" doc:"What the operation is"`
+	Mode       string               `json:"mode" enum:"deploy,update,rollback" doc:"What the operation is: a deploy of the draft, an update of images, or a roll back to the last version that ran well"`
 	StartedBy  string               `json:"startedBy" doc:"Who started the deploy, as a name"`
 	State      string               `json:"state" enum:"running,done,partial,failed,cancelled" doc:"running until every step has ended, then done when every step is"`
 	CreatedAt  string               `json:"createdAt" doc:"When the job started, RFC 3339 UTC"`
@@ -177,6 +191,22 @@ func registerStackDeploy(r *httpx.Router, d StacksDeps) {
 	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackDeployInput) (*StackDeployOutput, error) {
 			return deployStack(ctx, d, in)
+		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "rollbackStack", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/rollback",
+		Summary: "Roll a stack back to the version that ran before",
+		Description: "Redeploys the last version of the stack that ran well, as a job, answering 202 with the job ID at once. " +
+			"That is the newest revision whose deploy succeeded, or, when the newest revision is itself the one that runs, the good one before it. " +
+			"It takes a revision of its own from it (the files, the variables and the images it ran) and runs the same swarm deploy on it, so it is audited as stack.deployed with the mode rollback. " +
+			"It uses exactly the images that revision ran and looks nothing up: a tag that has moved since is not followed. The draft is not touched. " +
+			"A stack with no earlier version that ran well is 409 no_previous_version. " +
+			"Everything a deploy is judged on is judged again: a revision that uses host access is refused 403 privileged_compose below env Admin, a stack that no longer loads is 422, and while another stack operation runs on the environment the answer is 409 operation_locked and nothing is stored. " +
+			"A roll back is only ever sent by a person; nothing rolls a stack back by itself. Needs stacks.deploy (Operator).",
+		Tags: []string{"stacks"}, DefaultStatus: http.StatusAccepted,
+	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *StackRollbackInput) (*StackDeployOutput, error) {
+			return rollbackStack(ctx, d, in)
 		})
 
 	httpx.Register(r, huma.Operation{
@@ -420,33 +450,159 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 		d.Log.Warn("could not store the rendering of a revision", "stack", st.ID, "revision", rev.Seq, "error", err)
 	}
 
-	// The job needs the deploy row's ID and the row needs the job's ID, so the run waits on
-	// ready until the row is written.
+	out, err := launchStackDeploy(ctx, d, launch{
+		p: p, env: env, st: st, rev: rev, mode: mode, kind: stackops.DeployKindDeploy, userAgent: in.UserAgent,
+		in: stackops.SwarmDeployInput{
+			EnvID: env.ID, Stack: st, Project: loaded.Project, Files: files, Vars: vars, Copy: draft.Copy,
+			Caller: caller, Masker: rendering.masker,
+			Pins: repo, RevisionID: rev.ID, Update: update, Reviewed: in.Body.Pins,
+		},
+		rendering: rendering, release: release, owned: &jobOwnsLock,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// rollbackStack redeploys the last version of a stack that ran well. It is judged like a deploy and runs
+// the same engine, on a revision copied from the one it restores, with that revision's own images: it
+// asks no registry (STK-07, D-14).
+func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*StackDeployOutput, error) {
+	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+	if p == nil || env == nil {
+		return nil, huma.Error500InternalServerError("internal error")
+	}
+	if d.Jobs == nil {
+		return nil, httpx.Problem(http.StatusServiceUnavailable, problemJobsUnavail, "Deploys are not available right now.")
+	}
+	repo := d.repo()
+	st, err := repo.Stack(ctx, env.ID, in.StackID)
+	if err != nil {
+		return nil, stackLookupProblem(d, env.ID, err)
+	}
+	if err := d.ops().CheckTarget(ctx, env.ID, st); err != nil {
+		return nil, targetProblem(d, env.ID, err)
+	}
+	target, ok, err := repo.RollbackTarget(ctx, st.ID)
+	if err != nil {
+		return nil, stackInternal(d, "roll back target", env.ID, err)
+	}
+	if !ok {
+		return nil, httpx.Problem(http.StatusConflict, problemNoPreviousVersion, noPreviousVersion)
+	}
+	pins, err := repo.RevisionPins(ctx, target.ID)
+	if err != nil {
+		return nil, stackInternal(d, "roll back pins", env.ID, err)
+	}
+
+	// The revision is loaded and converted before anything is stored: one that cannot be redeployed as it
+	// stands is refused here, with the reason, and leaves no revision behind.
+	prep, err := d.ops().PrepareRollback(ctx, st, target, pins)
+	if err != nil {
+		return nil, rollbackPrepareProblem(err)
+	}
+	checked := stacks.Check(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: target.Copy})
+	if checked.Problems.Errors() > 0 || checked.Loaded == nil {
+		return nil, stackInvalid(checked.Problems, "That version has errors now, so it can't be deployed again.")
+	}
+	// What a deploy of this revision would need is judged for the caller, as a deploy is: an Operator
+	// cannot roll back to a version only an Admin may deploy (T-07-91). The job judges it again.
+	caller := stackops.Caller{Principal: p, Actor: p.Name}
+	pol, err := d.ops().Policy(ctx, caller, env.ID, target.Copy, prep.Plan)
+	if err != nil {
+		return nil, stackInternal(d, "policy", env.ID, err)
+	}
+	if pol.Refused {
+		return nil, policyProblem(pol)
+	}
+	foreign, err := d.ops().ForeignStack(ctx, env.ID, st.Target, st.Name, st.ID)
+	if err != nil {
+		return nil, snapshotProblem(d.Log, env.ID, err)
+	}
+	if foreign {
+		return nil, nameClashProblem(st.Name)
+	}
+
+	release, held, ok := d.Locks.TryAcquire(env.ID, stackops.Holder{
+		StackID: st.ID, StackName: st.Name, Kind: deployModeRollback, By: p.Name, Started: time.Now().UTC(),
+	})
+	if !ok {
+		return nil, operationLocked(env.Name, held)
+	}
+	jobOwnsLock := false
+	defer func() {
+		if !jobOwnsLock {
+			release()
+		}
+	}()
+
+	// The roll back is a revision of its own: a copy of the one it restores, with its images and its
+	// rendering. The draft is not rebased: it still starts from the revision it began at, so the next
+	// review shows the roll back as a deploy made since.
+	rev, err := repo.CopyRevision(ctx, target, p.Name)
+	if err != nil {
+		return nil, stackInternal(d, "revision", env.ID, err)
+	}
+	rendering := revisionRendering{repo: repo, loaded: checked.Loaded, masker: stacks.NewMasker(target.Copy.Vars, target.Copy.Files)}
+	if err := rendering.store(ctx, rev.ID, stackops.LivePins(pins)); err != nil {
+		d.Log.Warn("could not store the rendering of a revision", "stack", st.ID, "revision", rev.Seq, "error", err)
+	}
+	return launchStackDeploy(ctx, d, launch{
+		p: p, env: env, st: st, rev: rev, mode: deployModeRollback, kind: stackops.DeployKindRollback, userAgent: in.UserAgent,
+		in: stackops.SwarmDeployInput{
+			EnvID: env.ID, Stack: st, Project: prep.Loaded.Project, Files: prep.Files, Vars: prep.Vars, Copy: target.Copy,
+			Caller: caller, Masker: rendering.masker,
+			Pins: repo, RevisionID: rev.ID, Reviewed: pins, Rollback: true,
+		},
+		rendering: rendering, release: release, owned: &jobOwnsLock,
+	})
+}
+
+// launch is a stack operation that has been judged, locked and given its revision, and now becomes a job.
+type launch struct {
+	p         *rbac.Principal
+	env       *httpx.Env
+	st        stackops.Stack
+	rev       stackops.Snapshot
+	mode      string
+	kind      string // the kind of the row in stack_deploys
+	userAgent string
+	in        stackops.SwarmDeployInput
+	rendering revisionRendering
+	// release frees the environment's operation lock; owned is set once the job holds it.
+	release func()
+	owned   *bool
+}
+
+// launchStackDeploy starts the job of a deploy or a roll back and records it, answering 202 with the
+// job. The job needs the deploy row's ID and the row needs the job's ID, so the run waits on ready until
+// the row is written. The job frees the lock when the operation ends, before the job reads as finished.
+func launchStackDeploy(ctx context.Context, d StacksDeps, l launch) (*StackDeployOutput, error) {
+	repo := d.repo()
 	ready := make(chan struct{})
 	var deploy stackops.DeployRow
 	reqCtx := context.WithoutCancel(ctx)
-	actor, userAgent := p.AuditActor(), in.UserAgent
-	in2 := stackops.SwarmDeployInput{
-		EnvID: env.ID, Stack: st, Project: loaded.Project, Files: files, Vars: vars, Copy: draft.Copy,
-		Caller: caller, Masker: rendering.masker,
-		Pins: repo, RevisionID: rev.ID, Update: update, Reviewed: in.Body.Pins,
-	}
-	in2.OnDone = func(res stackops.DeployResult) {
-		recordDeployEnd(reqCtx, d, actor, userAgent, st, rev, deploy, mode, res, rendering)
+	actor, userAgent := l.p.AuditActor(), l.userAgent
+	in := l.in
+	in.OnDone = func(res stackops.DeployResult) {
+		recordDeployEnd(reqCtx, d, actor, userAgent, l.st, l.rev, deploy, l.mode, res, l.rendering)
 		// The lock is free before the job reads as finished, so whoever sees it end can start the next
 		// operation at once. Freeing it again when the run returns changes nothing.
-		release()
+		l.release()
 	}
 	spec := jobs.Spec{
-		Kind: stackDeployJobKind, EnvID: env.ID, Owner: stackJobOwner(p),
-		Meta:  map[string]string{metaStackID: st.ID, metaStackName: st.Name, metaMode: mode, metaStartedBy: p.Name},
+		Kind: stackDeployJobKind, EnvID: l.env.ID, Owner: stackJobOwner(l.p),
+		Meta: map[string]string{
+			metaStackID: l.st.ID, metaStackName: l.st.Name, metaMode: l.mode, metaStartedBy: l.p.Name, metaEnvNameKey: l.env.Name,
+		},
 		Items: stackops.DeployItemSpecs(),
 	}
 	if d.BeforeJob != nil {
 		d.BeforeJob(ctx)
 	}
 	job, err := d.Jobs.Start(spec, func(jctx context.Context, r *jobs.Reporter) {
-		defer release()
+		defer l.release()
 		select {
 		case <-ready:
 		case <-jctx.Done():
@@ -455,29 +611,29 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 		if deploy.ID == "" {
 			return // the row could not be written: the handler cancelled the job
 		}
-		d.ops().DeploySwarm(jctx, in2, r)
+		d.ops().DeploySwarm(jctx, in, r)
 	})
 	if errors.Is(err, jobs.ErrTooMany) {
-		_ = repo.SetOutcome(reqCtx, rev.ID, stackops.OutcomeFailed, "", "")
+		_ = repo.SetOutcome(reqCtx, l.rev.ID, stackops.OutcomeFailed, "", "")
 		return nil, httpx.Problem(http.StatusTooManyRequests, problemTooManyDeploys, "You already have 5 jobs running. Wait for one to finish.")
 	}
 	if err != nil {
-		_ = repo.SetOutcome(reqCtx, rev.ID, stackops.OutcomeFailed, "", "")
-		return nil, stackInternal(d, "start the deploy job", env.ID, err)
+		_ = repo.SetOutcome(reqCtx, l.rev.ID, stackops.OutcomeFailed, "", "")
+		return nil, stackInternal(d, "start the deploy job", l.env.ID, err)
 	}
 	// The job owns the lock now, and the holder can name it.
-	jobOwnsLock = true
-	d.Locks.Attach(env.ID, job.ID)
-	row, err := repo.StartDeploy(reqCtx, st.ID, env.ID, stackops.DeployKindDeploy, rev.Seq, job.ID, p.Name)
+	*l.owned = true
+	d.Locks.Attach(l.env.ID, job.ID)
+	row, err := repo.StartDeploy(reqCtx, l.st.ID, l.env.ID, l.kind, l.rev.Seq, job.ID, l.p.Name)
 	if err != nil {
 		_ = d.Jobs.Cancel(job.ID)
 		close(ready)
-		_ = repo.SetOutcome(reqCtx, rev.ID, stackops.OutcomeFailed, "", "")
-		return nil, stackInternal(d, "record the deploy", env.ID, err)
+		_ = repo.SetOutcome(reqCtx, l.rev.ID, stackops.OutcomeFailed, "", "")
+		return nil, stackInternal(d, "record the deploy", l.env.ID, err)
 	}
 	deploy = row
 	close(ready)
-	return &StackDeployOutput{CacheControl: "no-store", Body: StackDeployBody{JobID: job.ID, Revision: rev.Seq}}, nil
+	return &StackDeployOutput{CacheControl: "no-store", Body: StackDeployBody{JobID: job.ID, Revision: l.rev.Seq}}, nil
 }
 
 // revisionRendering stores the masked rendering of a revision: the stack as the deploy sent it, with
@@ -589,6 +745,32 @@ func operationLocked(envName string, h stackops.Holder) error {
 			{Location: "job", Message: h.JobID},
 			{Location: "started", Message: started},
 		},
+	}
+}
+
+// rollbackPrepareProblem is the answer to a revision that cannot be redeployed as it stands.
+func rollbackPrepareProblem(err error) error {
+	var pe *stackops.PrepareError
+	if !errors.As(err, &pe) {
+		return huma.Error500InternalServerError("internal error")
+	}
+	switch pe.Stage {
+	case stackops.PrepareLoad:
+		return composeProblem(pe.Err)
+	case stackops.PrepareObjects:
+		return objectProblem(pe.Err)
+	case stackops.PrepareConvert:
+		return convertProblem(pe.Err)
+	}
+	var invalid *stackops.PinsInvalidError
+	service := ""
+	if errors.As(pe.Err, &invalid) {
+		service = invalid.Service
+	}
+	return &huma.ErrorModel{
+		Type: problemPinsInvalid, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
+		Detail: "That version has no recorded image for " + service + ", so it can't be rolled back to. Deploy the stack again instead.",
+		Errors: []*huma.ErrorDetail{{Location: "pins", Message: service}},
 	}
 }
 

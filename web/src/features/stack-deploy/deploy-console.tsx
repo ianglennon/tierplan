@@ -132,8 +132,15 @@ export function outcomesOf(
       out.push(t("stackDeploy.announce.failed", { service: row.label, reason }));
     }
   }
-  if (before.state === "running" && job.state === "done")
-    out.push(t("stackDeploy.announce.complete"));
+  if (before.state === "running" && job.state === "done") {
+    out.push(
+      t(
+        job.mode === "rollback"
+          ? "stackDeploy.rollback.announce.complete"
+          : "stackDeploy.announce.complete",
+      ),
+    );
+  }
   if (before.state === "running" && job.state === "cancelled") {
     out.push(t("stackDeploy.announce.cancelled"));
   }
@@ -320,7 +327,9 @@ export function DeployConsole({ envId, stackId, jobId }: DeployConsoleProps) {
       <div className="flex flex-col gap-1">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h3 ref={title} tabIndex={-1} className="text-xl font-semibold break-all outline-none">
-            {t("stackDeploy.title", { name })}
+            {t(job.mode === "rollback" ? "stackDeploy.rollback.title" : "stackDeploy.title", {
+              name,
+            })}
           </h3>
           <div className="flex items-center gap-3">
             {ended ? null : (

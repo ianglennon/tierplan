@@ -127,6 +127,10 @@ type SwarmDeployInput struct {
 	// exactly these, after checking each against what it would decide itself (ReviewedPins), and
 	// makes no registry lookup. Nil means the deploy looks the images up itself.
 	Reviewed map[string]string
+	// Rollback says the deploy restores a revision that ran: Reviewed are that revision's own pins, by
+	// swarm service name, and are used as they are. They are not compared with what the swarm runs now
+	// (the point is to move it back), and no registry is asked for anything (STK-07, T-07-93).
+	Rollback bool
 	// OnDone, when set, is called once with the result before the job's last item is finished,
 	// so a job that reads as finished has already been recorded by the caller.
 	OnDone func(DeployResult)
@@ -349,7 +353,14 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		}
 	}
 	var pinned PinOutcome
-	if in.Reviewed != nil {
+	if in.Rollback {
+		pins, err := RestoredPins(planned.Services, in.Reviewed)
+		var invalid *PinsInvalidError
+		if errors.As(err, &invalid) {
+			return fail(ItemLookup, CodePinsInvalid, invalid.Service)
+		}
+		pinned = PinOutcome{Pins: pins}
+	} else if in.Reviewed != nil {
 		pins, err := d.ReviewedPins(ctx, in.EnvID, planned.Services, byName, stored, in.Update, in.Reviewed)
 		var invalid *PinsInvalidError
 		switch {

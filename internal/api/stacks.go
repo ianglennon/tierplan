@@ -158,6 +158,8 @@ type StackDetail struct {
 	Stopped   bool   `json:"stopped" doc:"True while the stack is stopped"`
 	// Lock is set while a stack operation runs on the environment, whichever stack it is on.
 	Lock *StackLockBody `json:"lock,omitempty" doc:"Left out unless set: set while a stack operation runs on this environment, on any of its stacks, and names it. Only one runs at a time: a second is refused 409 operation_locked"`
+	// Rollback is whether a roll back has a version to restore, and which.
+	Rollback StackRollbackBody `json:"rollback" doc:"Whether a roll back has a version to restore: the newest version that ran well, or, when the newest version is the one that runs, the one before it"`
 	// LastOperation is the newest operation, left out for a stack never deployed.
 	LastOperation *StackOperationBody `json:"lastOperation,omitempty" doc:"Left out for a stack that has had no operation: the newest one, which the state is read from"`
 }
@@ -170,6 +172,13 @@ type StackLockBody struct {
 	Kind      string `json:"kind" enum:"deploy,update,rollback,start,stop,remove" doc:"What the operation is"`
 	StartedAt string `json:"startedAt" doc:"When it started, RFC 3339 UTC"`
 	StartedBy string `json:"startedBy" doc:"Who started it, as a name"`
+}
+
+// StackRollbackBody is the version a roll back would restore.
+type StackRollbackBody struct {
+	Available  bool   `json:"available" doc:"True when there is an earlier version that ran well to roll back to"`
+	DeployedAt string `json:"deployedAt" doc:"When that version's deploy was started, RFC 3339 UTC; empty when there is none"`
+	DeployedBy string `json:"deployedBy" doc:"Who started it, as a name; empty when there is none"`
 }
 
 // StackOperationBody is the newest operation on a stack: the one the state comes from.
@@ -376,6 +385,13 @@ func stackDetailOf(ctx context.Context, d StacksDeps, st stackops.Stack) (StackD
 	detail := StackDetail{
 		StackItem: stackItemOf(st, latest, hasLatest, g, hasG, drafts[st.ID]),
 		EnvID:     st.EnvID, SourceRef: st.Source.Ref, CreatedBy: st.CreatedBy, CreatedAt: rfc3339(st.CreatedAt), Stopped: st.Stopped,
+	}
+	back, hasBack, err := repo.RollbackInfo(ctx, st.ID)
+	if err != nil {
+		return StackDetail{}, err
+	}
+	if hasBack {
+		detail.Rollback = StackRollbackBody{Available: true, DeployedAt: rfc3339(back.At), DeployedBy: back.By}
 	}
 	if hasLatest {
 		detail.LastOperation = &StackOperationBody{

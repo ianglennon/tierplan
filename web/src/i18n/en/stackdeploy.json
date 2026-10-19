@@ -104,6 +104,36 @@
       "left": "Bayplan couldn't remove {{list}}. Remove them under Networks, Secrets or Configs.",
       "object": "{{kind}} {{name}}",
       "label": "Cleaned up"
+    },
+    "rollback": {
+      "title": "Rolling back {{name}}",
+      "action": "Roll back to previous version",
+      "retry": "Retry roll back",
+      "lastDeployed": "Last deployed {{time}} by {{user}}",
+      "lastDeployedAnon": "Last deployed {{time}}",
+      "noPrevious": "There's no earlier deployed version to roll back to.",
+      "complete": {
+        "title": "Roll back complete"
+      },
+      "failed": {
+        "title": "Roll back failed"
+      },
+      "cancelled": {
+        "title": "Roll back cancelled"
+      },
+      "announce": {
+        "complete": "Roll back complete"
+      },
+      "errors": {
+        "needsAdmin": "The version to roll back to uses host access, which needs Admin. Ask an administrator to roll it back.",
+        "noPrevious": "There's no earlier deployed version to roll back to.",
+        "invalid": "That version can't be deployed again as it is. Open the editor to fix it, then deploy.",
+        "tooMany": "You already have 5 jobs running. Wait for one to finish.",
+        "target": "This environment is no longer the kind of target this stack was created for.",
+        "clash": "Something Bayplan does not manage already uses this stack's name on this environment.",
+        "lost": "Bayplan couldn't tell whether the roll back started. Open the stack to see where it stands.",
+        "generic": "Couldn't start the roll back. Try again."
+      }
     }
   }
 }

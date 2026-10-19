@@ -33,7 +33,8 @@ const (
 
 // The kinds of a stack operation and the states of its row in stack_deploys.
 const (
-	DeployKindDeploy = "deploy"
+	DeployKindDeploy   = "deploy"
+	DeployKindRollback = "rollback"
 
 	DeployRunning     = "running"
 	DeployDone        = "done"
@@ -429,6 +430,117 @@ func (r Repo) NewRevision(ctx context.Context, stackID, actor string) (Snapshot,
 		ID: id.String(), StackID: stackID, Kind: KindRevision, Seq: seq, BaseSeq: draft.BaseSeq, Version: 1,
 		Outcome: OutcomePending, CreatedBy: actor, CreatedAt: now, Copy: draft.Copy,
 	}, nil
+}
+
+// RollbackTarget is the revision a roll back restores: the newest revision that ended good, or, when
+// the stack's newest revision is itself the good one that runs, the good one before it. A stack with
+// only one good revision, or none, has no target (false). Its files and variables are opened.
+func (r Repo) RollbackTarget(ctx context.Context, stackID string) (Snapshot, bool, error) {
+	row, ok, err := r.rollbackRow(ctx, stackID)
+	if err != nil || !ok {
+		return Snapshot{}, false, err
+	}
+	snap := snapshotOf(row)
+	if snap.Copy, err = r.readContent(ctx, r.Store.RQ, snap.ID); err != nil {
+		return Snapshot{}, false, err
+	}
+	return snap, true, nil
+}
+
+// RollbackInfo is who started the deploy of the revision a roll back would restore, when, and its
+// number, without opening its content. It reports false when there is none.
+func (r Repo) RollbackInfo(ctx context.Context, stackID string) (DeployedRevision, bool, error) {
+	row, ok, err := r.rollbackRow(ctx, stackID)
+	if err != nil || !ok {
+		return DeployedRevision{}, false, err
+	}
+	return DeployedRevision{Seq: row.Seq, By: row.CreatedBy, At: time.Unix(0, row.CreatedAt).UTC()}, true, nil
+}
+
+func (r Repo) rollbackRow(ctx context.Context, stackID string) (sqlc.StackSnapshot, bool, error) {
+	latest, err := r.Store.RQ.LatestAttemptSeq(ctx, stackID)
+	if err != nil {
+		return sqlc.StackSnapshot{}, false, fmt.Errorf("read the newest revision: %w", err)
+	}
+	row, err := r.Store.RQ.LatestGoodRevision(ctx, stackID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return sqlc.StackSnapshot{}, false, nil
+	}
+	if err != nil {
+		return sqlc.StackSnapshot{}, false, fmt.Errorf("read revision: %w", err)
+	}
+	if row.Seq < latest {
+		// The newest attempt did not end good, so the newest good one is what last ran well.
+		return row, true, nil
+	}
+	// The newest revision is the good one that runs: the way back is the good one before it.
+	prev, err := r.Store.RQ.GoodRevisionBefore(ctx, sqlc.GoodRevisionBeforeParams{StackID: stackID, Seq: latest})
+	if errors.Is(err, sql.ErrNoRows) {
+		return sqlc.StackSnapshot{}, false, nil
+	}
+	if err != nil {
+		return sqlc.StackSnapshot{}, false, fmt.Errorf("read revision: %w", err)
+	}
+	return prev, true, nil
+}
+
+// CopyRevision makes a new revision, numbered after the stack's last one and pending until its
+// operation ends, from the content, pins and rendering of from: a roll back redeploys exactly what
+// from ran, and the history keeps it as a revision of its own. Each sealed value is opened with from
+// and sealed again under the new snapshot's ID. The draft is not touched.
+func (r Repo) CopyRevision(ctx context.Context, from Snapshot, actor string) (Snapshot, error) {
+	id, err := uuid.NewV7()
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("new snapshot id: %w", err)
+	}
+	tx, err := r.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := r.Store.Q.WithTx(tx)
+
+	ran, err := q.GetSnapshotPinsAndRendered(ctx, from.ID)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("read the revision to copy: %w", err)
+	}
+	seq, err := q.NextRevisionSeq(ctx, from.StackID)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("next revision: %w", err)
+	}
+	now := r.now()
+	if err := q.InsertSnapshot(ctx, sqlc.InsertSnapshotParams{
+		ID: id.String(), StackID: from.StackID, Kind: KindRevision, Seq: seq, BaseSeq: from.Seq, Version: 1,
+		Outcome: OutcomePending, Rendered: ran.Rendered, Pins: ran.Pins, CreatedBy: actor, CreatedAt: now.UnixNano(),
+	}); err != nil {
+		return Snapshot{}, fmt.Errorf("insert revision: %w", err)
+	}
+	if err := r.writeContent(ctx, q, id.String(), from.Copy); err != nil {
+		return Snapshot{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Snapshot{}, fmt.Errorf("commit: %w", err)
+	}
+	return Snapshot{
+		ID: id.String(), StackID: from.StackID, Kind: KindRevision, Seq: seq, BaseSeq: from.Seq, Version: 1,
+		Outcome: OutcomePending, CreatedBy: actor, CreatedAt: now, Copy: from.Copy,
+	}, nil
+}
+
+// RevisionPins are the images a revision was deployed with, by swarm service name, as it stored them.
+func (r Repo) RevisionPins(ctx context.Context, snapshotID string) (map[string]string, error) {
+	ran, err := r.Store.RQ.GetSnapshotPinsAndRendered(ctx, snapshotID)
+	if err != nil {
+		return nil, fmt.Errorf("read revision: %w", err)
+	}
+	var pins map[string]string
+	if err := json.Unmarshal([]byte(ran.Pins), &pins); err != nil {
+		return nil, fmt.Errorf("read the pins of revision %s: %w", snapshotID, err)
+	}
+	if pins == nil {
+		pins = map[string]string{}
+	}
+	return pins, nil
 }
 
 // SetOutcome marks a revision good or failed and stores what it rendered and the digests it ran

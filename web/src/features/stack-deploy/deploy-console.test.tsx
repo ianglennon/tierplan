@@ -2,11 +2,20 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  RouterProvider,
+  useParams,
+} from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
 import { stackJobQuery } from "@/api/stacks";
+import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { DeployConsole } from "@/features/stack-deploy/deploy-console";
@@ -52,6 +61,13 @@ let client: QueryClient;
 let role: "viewer" | "operator";
 let cancelStatus: number;
 let cancels: Request[];
+// What the stack's page says of the way back, what the server answers a roll back with (202 starts
+// job j2; any other status is a problem of that type), and the rolls back that were sent.
+let rollbackInfo: { available: boolean; deployedAt: string; deployedBy: string };
+let rollbackAnswer: { status: number; type?: string };
+let rollbacks: Request[];
+// The mode and state of the job j2 a roll back starts.
+let rollbackJob: { state: string; items: Item[] };
 
 const item = (over: Item): Record<string, unknown> => ({
   code: "",
@@ -66,12 +82,12 @@ const item = (over: Item): Record<string, unknown> => ({
   ...over,
 });
 
-function jobBody(over: Partial<{ state: string; items: Item[] }> = {}) {
+function jobBody(over: Partial<{ state: string; items: Item[]; id: string; mode: string }> = {}) {
   const j = { ...job, ...over };
   return {
-    id: "j1",
+    id: over.id ?? "j1",
     stackId: STACK,
-    mode: "deploy",
+    mode: over.mode ?? "deploy",
     startedBy: "ada",
     state: j.state,
     createdAt: "2026-10-19T12:00:00Z",
@@ -101,6 +117,10 @@ beforeEach(() => {
   role = "viewer";
   cancelStatus = 202;
   cancels = [];
+  rollbackInfo = { available: true, deployedAt: "2026-01-02T10:00:00Z", deployedBy: "ada" };
+  rollbackAnswer = { status: 202 };
+  rollbacks = [];
+  rollbackJob = { state: "running", items: [check, services] };
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
   // The job query keeps its own retry rule; a zero delay makes its three tries instant.
@@ -129,7 +149,26 @@ beforeEach(() => {
           createdBy: "ada",
           createdAt: "2026-10-19T10:00:00Z",
           stopped: false,
+          rollback: rollbackInfo,
         });
+      }
+      if (path === `/api/env/${ENV}/stacks/${STACK}/rollback` && req.method === "POST") {
+        rollbacks.push(req);
+        if (rollbackAnswer.status === 202) {
+          return Response.json({ jobId: "j2", revision: 4 }, { status: 202 });
+        }
+        return Response.json(
+          {
+            type: rollbackAnswer.type,
+            title: "x",
+            status: rollbackAnswer.status,
+            detail: "d",
+          },
+          { status: rollbackAnswer.status },
+        );
+      }
+      if (path === `/api/env/${ENV}/stacks/${STACK}/deploys/j2`) {
+        return Response.json(jobBody({ ...rollbackJob, id: "j2", mode: "rollback" }));
       }
       if (path === `/api/env/${ENV}/stacks/${STACK}/deploys/j1/cancel` && req.method === "POST") {
         cancels.push(req);
@@ -1369,4 +1408,206 @@ describe("the announcements", () => {
     });
     expect(document.activeElement).toBe(title);
   });
+});
+
+// Rolling back (plan 07-19, STK-07, D-14): after a deploy that stopped, one click redeploys what last
+// ran well, and the console becomes the console of the new job.
+describe("rolling back", () => {
+  const stopped: Item[] = [
+    check,
+    { ...services, state: "failed" },
+    row("web", "failed", { code: "service_rejected", detail: "no such image" }),
+  ];
+
+  // The console in a router that can follow the roll back to its job, as the app's route does.
+  function mountRouted() {
+    function ConsoleRoute() {
+      const { envId, stackId, jobId } = useParams({ strict: false }) as {
+        envId: string;
+        stackId: string;
+        jobId: string;
+      };
+      return <DeployConsole key={jobId} envId={envId} stackId={stackId} jobId={jobId} />;
+    }
+    const root = createRootRoute();
+    const router = createRouter({
+      routeTree: root.addChildren([
+        createRoute({
+          getParentRoute: () => root,
+          path: "/env/$envId/stacks/$stackId/deploys/$jobId",
+          component: ConsoleRoute,
+        }),
+        createRoute({ getParentRoute: () => root, path: "/env/$envId/stacks/$stackId/editor" }),
+        createRoute({ getParentRoute: () => root, path: "/env/$envId/stacks/$stackId" }),
+      ]),
+      history: createMemoryHistory({ initialEntries: [`/env/${ENV}/stacks/${STACK}/deploys/j1`] }),
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <TooltipProvider>
+          <RouterProvider router={router} />
+          <Toaster />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    return router;
+  }
+
+  it("offers Roll back to previous version after a failed deploy, naming when it was deployed and by whom", async () => {
+    role = "operator";
+    job = { state: "failed", items: stopped };
+    mount();
+    const alert = await screen.findByRole("alert");
+    const button = await within(alert).findByRole("button", {
+      name: "Roll back to previous version",
+    });
+    expect(button.getAttribute("aria-disabled")).toBeNull();
+    expect(within(alert).getByText(/^Last deployed .+ by ada$/)).toBeTruthy();
+    // It is the accent of the surface, ahead of the ways out.
+    expect(button.getAttribute("data-variant")).toBe("default");
+    const names = within(alert)
+      .getAllByRole("button")
+      .concat(within(alert).getAllByRole("link"))
+      .map((el) => el.textContent);
+    expect(names).toEqual(["Roll back to previous version", "Back to editing", "Open stack"]);
+    // Nothing is sent until it is clicked.
+    expect(rollbacks).toHaveLength(0);
+  });
+
+  it("offers it after a cancelled deploy too", async () => {
+    role = "operator";
+    job = { state: "cancelled", items: [check, { ...services, state: "cancelled" }] };
+    mount();
+    expect(
+      await screen.findByRole("button", { name: "Roll back to previous version" }),
+    ).toBeTruthy();
+  });
+
+  it("is off with the reason when there is no earlier deployed version", async () => {
+    role = "operator";
+    rollbackInfo = { available: false, deployedAt: "", deployedBy: "" };
+    job = { state: "failed", items: stopped };
+    mount();
+    const button = await screen.findByRole("button", { name: "Roll back to previous version" });
+    await waitFor(() => expect(button.getAttribute("aria-disabled")).toBe("true"));
+    const id = button.getAttribute("aria-describedby");
+    expect(document.getElementById(id as string)?.textContent).toBe(
+      "There's no earlier deployed version to roll back to.",
+    );
+    expect(screen.queryByText(/^Last deployed/)).toBeNull();
+    fireEvent.click(button);
+    expect(rollbacks).toHaveLength(0);
+  });
+
+  it("is off with Needs Operator for a Viewer", async () => {
+    job = { state: "failed", items: stopped };
+    mount();
+    const button = await screen.findByRole("button", { name: "Roll back to previous version" });
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    const id = button.getAttribute("aria-describedby");
+    expect(document.getElementById(id as string)?.textContent).toBe("Needs Operator");
+    fireEvent.click(button);
+    expect(rollbacks).toHaveLength(0);
+  });
+
+  it("is not offered after a deploy that completed", async () => {
+    role = "operator";
+    job = { state: "done", items: [check, { ...services, state: "done" }, row("web", "done")] };
+    mount();
+    await screen.findByText("Deploy complete");
+    expect(screen.queryByRole("button", { name: "Roll back to previous version" })).toBeNull();
+  });
+
+  it("starts one roll back on a click and replaces the console with the new job's, titled Rolling back", async () => {
+    role = "operator";
+    job = { state: "failed", items: stopped };
+    const router = mountRouted();
+    const button = await screen.findByRole("button", { name: "Roll back to previous version" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(await screen.findByRole("heading", { name: "Rolling back web" })).toBeTruthy();
+    // One request, with nothing chosen by the browser.
+    expect(rollbacks).toHaveLength(1);
+    expect(rollbacks[0]?.method).toBe("POST");
+    expect(await rollbacks[0]?.text()).toBe("");
+    expect(router.state.location.pathname).toBe("/env/e1/stacks/s1/deploys/j2");
+    // Replaced, not pushed: Back leaves the console.
+    expect(router.history.canGoBack()).toBe(false);
+    // The old job's result is gone with its console.
+    expect(screen.queryByText("Deploy failed")).toBeNull();
+  });
+
+  it("says Roll back failed with Retry roll back when the roll back itself failed", async () => {
+    role = "operator";
+    rollbackJob = { state: "failed", items: stopped };
+    job = { state: "failed", items: stopped };
+    const router = mountRouted();
+    fireEvent.click(await screen.findByRole("button", { name: "Roll back to previous version" }));
+    await screen.findByRole("heading", { name: "Rolling back web" });
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("Roll back failed")).toBeTruthy();
+    expect(within(alert).queryByText("Deploy failed")).toBeNull();
+    expect(
+      within(alert).queryByRole("button", { name: "Roll back to previous version" }),
+    ).toBeNull();
+    const retry = within(alert).getByRole("button", { name: "Retry roll back" });
+    // Retrying sends a new request and moves to its job, which is a console like any other.
+    fireEvent.click(retry);
+    await waitFor(() => expect(rollbacks).toHaveLength(2));
+    expect(router.state.location.pathname).toBe("/env/e1/stacks/s1/deploys/j2");
+  });
+
+  it("says Roll back complete when it worked", async () => {
+    role = "operator";
+    rollbackJob = {
+      state: "done",
+      items: [check, { ...services, state: "done" }, row("web", "done")],
+    };
+    job = { state: "failed", items: stopped };
+    mountRouted();
+    fireEvent.click(await screen.findByRole("button", { name: "Roll back to previous version" }));
+    await screen.findByRole("heading", { name: "Rolling back web" });
+    expect(await screen.findByText("Roll back complete")).toBeTruthy();
+    expect(screen.queryByText("Deploy complete")).toBeNull();
+  });
+
+  it.each([
+    [
+      "operation_locked",
+      409,
+      "Another stack operation started on Prod just now. Try again when it finishes.",
+    ],
+    [
+      "privileged_compose",
+      403,
+      "The version to roll back to uses host access, which needs Admin. Ask an administrator to roll it back.",
+    ],
+    ["no_previous_version", 409, "There's no earlier deployed version to roll back to."],
+    [
+      "pins_invalid",
+      422,
+      "That version can't be deployed again as it is. Open the editor to fix it, then deploy.",
+    ],
+    ["something_else", 500, "Couldn't start the roll back. Try again."],
+  ])(
+    "stays on the console and says why when the server refuses with %s",
+    async (type, status, message) => {
+      role = "operator";
+      rollbackAnswer = { status, type };
+      job = { state: "failed", items: stopped };
+      const router = mountRouted();
+      fireEvent.click(await screen.findByRole("button", { name: "Roll back to previous version" }));
+      expect(await screen.findByText(message)).toBeTruthy();
+      expect(router.state.location.pathname).toBe("/env/e1/stacks/s1/deploys/j1");
+      // The person can ask again: nothing was retried for them.
+      expect(rollbacks).toHaveLength(1);
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole("button", { name: "Roll back to previous version" })
+            .hasAttribute("disabled"),
+        ).toBe(false),
+      );
+    },
+  );
 });

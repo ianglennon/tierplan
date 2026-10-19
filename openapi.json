@@ -11467,6 +11467,10 @@
             "description": "The stack name, also its swarm namespace or compose project",
             "type": "string"
           },
+          "rollback": {
+            "$ref": "#/components/schemas/StackRollbackBody",
+            "description": "Whether a roll back has a version to restore: the newest version that ran well, or, when the newest version is the one that runs, the one before it"
+          },
           "source": {
             "description": "Where the stack's definition lives. Only inline exists today",
             "enum": [
@@ -11509,6 +11513,7 @@
           "createdBy",
           "createdAt",
           "stopped",
+          "rollback",
           "id",
           "name",
           "target",
@@ -11904,10 +11909,11 @@
             ]
           },
           "mode": {
-            "description": "What the operation is",
+            "description": "What the operation is: a deploy of the draft, an update of images, or a roll back to the last version that ran well",
             "enum": [
               "deploy",
-              "update"
+              "update",
+              "rollback"
             ],
             "type": "string"
           },
@@ -12613,6 +12619,29 @@
           "configs",
           "imagesPinned",
           "imagesNew"
+        ],
+        "type": "object"
+      },
+      "StackRollbackBody": {
+        "additionalProperties": false,
+        "properties": {
+          "available": {
+            "description": "True when there is an earlier version that ran well to roll back to",
+            "type": "boolean"
+          },
+          "deployedAt": {
+            "description": "When that version's deploy was started, RFC 3339 UTC; empty when there is none",
+            "type": "string"
+          },
+          "deployedBy": {
+            "description": "Who started it, as a name; empty when there is none",
+            "type": "string"
+          }
+        },
+        "required": [
+          "available",
+          "deployedAt",
+          "deployedBy"
         ],
         "type": "object"
       },
@@ -22409,6 +22438,67 @@
           }
         },
         "summary": "Review what a deploy of a stack would do",
+        "tags": [
+          "stacks"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/rollback": {
+      "post": {
+        "description": "Redeploys the last version of the stack that ran well, as a job, answering 202 with the job ID at once. That is the newest revision whose deploy succeeded, or, when the newest revision is itself the one that runs, the good one before it. It takes a revision of its own from it (the files, the variables and the images it ran) and runs the same swarm deploy on it, so it is audited as stack.deployed with the mode rollback. It uses exactly the images that revision ran and looks nothing up: a tag that has moved since is not followed. The draft is not touched. A stack with no earlier version that ran well is 409 no_previous_version. Everything a deploy is judged on is judged again: a revision that uses host access is refused 403 privileged_compose below env Admin, a stack that no longer loads is 422, and while another stack operation runs on the environment the answer is 409 operation_locked and nothing is stored. A roll back is only ever sent by a person; nothing rolls a stack back by itself. Needs stacks.deploy (Operator).",
+        "operationId": "rollbackStack",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackDeployBody"
+                }
+              }
+            },
+            "description": "Accepted",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Roll a stack back to the version that ran before",
         "tags": [
           "stacks"
         ]

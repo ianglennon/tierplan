@@ -933,3 +933,157 @@ func TestMarkInterruptedEndsRunningDeploysAndFailsTheirPendingRevisions(t *testi
 		t.Errorf("MarkInterrupted again = %d, %v, want 0", n, err)
 	}
 }
+
+// Roll back (plan 07-19, STK-07, D-14): the revision it restores, and the copy it takes.
+
+func TestRollbackTargetIsTheLastRevisionThatRanWell(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		outcomes []string // one per revision, in order
+		want     int64    // the target's number, 0 for none
+	}{
+		{"a good one, a good one, a failed one", []string{"good", "good", "failed"}, 2},
+		{"two good ones", []string{"good", "good"}, 1},
+		{"a good one then a failed one", []string{"good", "failed"}, 1},
+		{"only a failed one", []string{"failed"}, 0},
+		{"only a good one", []string{"good"}, 0},
+		{"a good one, a failed one, a good one", []string{"good", "failed", "good"}, 1},
+		{"a good one, a failed one, another failed one", []string{"good", "failed", "failed"}, 1},
+		{"none", nil, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newRepo(t)
+			ctx := context.Background()
+			st, _, err := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("services: {}\n")}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, outcome := range tc.outcomes {
+				rev, err := f.repo.NewRevision(ctx, st.ID, "ada")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := f.repo.SetOutcome(ctx, rev.ID, outcome, "", ""); err != nil {
+					t.Fatal(err)
+				}
+			}
+			target, ok, err := f.repo.RollbackTarget(ctx, st.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == 0 {
+				if ok {
+					t.Fatalf("target = %+v, want none", target)
+				}
+			} else if !ok || target.Seq != tc.want {
+				t.Fatalf("target = %+v (%v), want revision %d", target, ok, tc.want)
+			}
+			info, has, err := f.repo.RollbackInfo(ctx, st.ID)
+			if err != nil || has != ok || (ok && info.Seq != tc.want) {
+				t.Errorf("RollbackInfo = %+v, %v, %v, want it to agree with the target", info, has, err)
+			}
+		})
+	}
+}
+
+func TestCopyRevisionTakesTheContentPinsAndRenderingAsANewRevision(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	wc := stacks.WorkingCopy{
+		Files: []stacks.File{compose("services: {a: {image: x}}\n"), {Path: "tok.txt", Content: []byte("s3cret"), Secret: true}},
+		Vars:  []stacks.Var{{Name: "K", Value: "plain"}, {Name: "S", Value: "sealed-value", Secret: true}},
+	}
+	st, _, err := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", wc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	good := goodRevision(t, f, st.ID, "ada")
+	if err := f.repo.SetPins(ctx, good.ID, map[string]string{"web_a": "x:1@sha256:" + strings.Repeat("a", 64)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetRendered(ctx, good.ID, []byte("rendered: yes\n")); err != nil {
+		t.Fatal(err)
+	}
+	bad, err := f.repo.NewRevision(ctx, st.ID, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetOutcome(ctx, bad.ID, stackops.OutcomeFailed, "", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	target, ok, err := f.repo.RollbackTarget(ctx, st.ID)
+	if err != nil || !ok || target.ID != good.ID {
+		t.Fatalf("target = %+v, %v, %v", target, ok, err)
+	}
+	cp, err := f.repo.CopyRevision(ctx, target, "cyd")
+	if err != nil {
+		t.Fatalf("CopyRevision: %v", err)
+	}
+	if cp.Seq != 3 || cp.ID == good.ID || cp.Kind != stackops.KindRevision || cp.Outcome != stackops.OutcomePending || cp.CreatedBy != "cyd" || cp.BaseSeq != good.Seq {
+		t.Errorf("copy = %+v, want revision 3, pending, by cyd, started from revision %d", cp, good.Seq)
+	}
+	read, err := f.repo.Revision(ctx, st.ID, cp.Seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(read.Copy.Compose()) != "services: {a: {image: x}}\n" {
+		t.Errorf("compose = %q", read.Copy.Compose())
+	}
+	var sawFile, sawVar bool
+	for _, file := range read.Copy.Files {
+		sawFile = sawFile || (file.Path == "tok.txt" && string(file.Content) == "s3cret" && file.Secret)
+	}
+	for _, v := range read.Copy.Vars {
+		sawVar = sawVar || (v.Name == "S" && v.Value == "sealed-value" && v.Secret)
+	}
+	if !sawFile || !sawVar {
+		t.Errorf("copy = %+v, want the secret file and variable opened under the copy's own row", read.Copy)
+	}
+	// The sealed values are bound to the new row: a copy of the sealed bytes would not open.
+	if _, sealed, secret := storedFile(t, f, cp.ID, "tok.txt"); !secret || sealed == "" {
+		t.Errorf("secret file is not stored sealed on the copy")
+	}
+	pins, err := f.repo.RevisionPins(ctx, cp.ID)
+	if err != nil || pins["web_a"] != "x:1@sha256:"+strings.Repeat("a", 64) {
+		t.Errorf("pins = %v, %v, want the original's", pins, err)
+	}
+	var rendered string
+	if err := f.repo.Store.Read.QueryRow(`SELECT rendered FROM stack_snapshots WHERE id = ?`, cp.ID).Scan(&rendered); err != nil || rendered != "rendered: yes\n" {
+		t.Errorf("rendered = %q, %v", rendered, err)
+	}
+	// The original is untouched, and so is the draft.
+	if orig, _ := f.repo.Revision(ctx, st.ID, good.Seq); orig.Outcome != stackops.OutcomeGood {
+		t.Errorf("original = %+v", orig)
+	}
+}
+
+func TestMarkInterruptedFailsTheRevisionOfARollBackToo(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, err := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("services: {}\n")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	good := goodRevision(t, f, st.ID, "ada")
+	cp, err := f.repo.CopyRevision(ctx, good, "ada")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.repo.StartDeploy(ctx, st.ID, f.envID, stackops.DeployKindRollback, cp.Seq, "job-rb", "ada"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := f.repo.MarkInterrupted(ctx); err != nil || n != 1 {
+		t.Fatalf("MarkInterrupted = %d, %v", n, err)
+	}
+	if rev, err := f.repo.Revision(ctx, st.ID, cp.Seq); err != nil || rev.Outcome != stackops.OutcomeFailed {
+		t.Errorf("roll back revision = %+v, %v, want failed: it would otherwise stay pending for ever", rev, err)
+	}
+	if rev, _ := f.repo.Revision(ctx, st.ID, good.Seq); rev.Outcome != stackops.OutcomeGood {
+		t.Errorf("the restored revision = %+v, must stay good", rev)
+	}
+}
