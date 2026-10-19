@@ -4,8 +4,10 @@
 import { Check, CircleX, Minus } from "lucide-react";
 
 import type { StackJobItem } from "@/api/stacks";
+import { AgentUpdateNotice } from "@/components/agent-update-notice";
 import { Spinner } from "@/components/ui/spinner";
 import { failureCopy } from "@/features/pulls/failure-copy";
+import { useEnvName } from "@/features/resources/use-env-name";
 import { CONVERGE_TIMEOUT, DeployServiceRow } from "@/features/stack-deploy/deploy-service-row";
 import { useT } from "@/i18n/use-t";
 import { formatBytes } from "@/lib/format";
@@ -15,8 +17,28 @@ type Translate = (key: string, options?: Record<string, unknown>) => string;
 // The ID prefix of the step that pulls an image (plan 07-21), and the words it is shown in.
 const PULL_PREFIX = "pull:";
 
+// The codes of a host whose agent refuses a request by its own policy and of a host its owner made
+// read-only: both are the host's, not the stack's, so the console words them as the actions do.
+export const AGENT_POLICY_DENIED = "agent_policy_denied";
+const HOST_READ_ONLY = "host_read_only";
+
+// refusedRequest is the request an agent refused, read from the engine's words ("... agent_policy_denied:
+// POST /v1.52/containers/create"): the method and the path, without the API version.
+function refusedRequest(detail: string): string {
+  const after = detail.split(`${AGENT_POLICY_DENIED}:`)[1]?.trim().split("\n")[0] ?? "";
+  const match = /^([A-Z]+) (\/\S*)/.exec(after);
+  return match ? `${match[1]} ${(match[2] ?? "").replace(/^\/v\d+\.\d+(?=\/)/, "")}` : "";
+}
+
 // The server's code for a service whose update the swarm paused or rolled back.
 const UPDATE_STOPPED = "update_stopped";
+
+// FailureContext is where an item failed: the environment's name, and whether it is a standalone host,
+// whose agent refusals are worded with the host's and the service's names.
+export interface FailureContext {
+  envName?: string;
+  standalone?: boolean;
+}
 
 // failureOf is why an item failed, as the console words it: the sentence for the code, and Docker's
 // own words under it. Docker's rejection of a service reads as one sentence naming the service. Both
@@ -24,8 +46,9 @@ const UPDATE_STOPPED = "update_stopped";
 export function failureOf(
   t: Translate,
   item: StackJobItem,
-  envName?: string,
+  ctx: FailureContext = {},
 ): { sentence: string; words: string } | undefined {
+  const { envName, standalone } = ctx;
   // A pull the registry or the host refused reads as the pull dialog words it, naming the credential
   // the pull used. The sentence is the SPA's own; the server's words and the code are not shown.
   if (item.id.startsWith(PULL_PREFIX) && item.code && item.code !== "not_run") {
@@ -43,6 +66,20 @@ export function failureOf(
     return {
       sentence: failureCopy(t, item.code, { credential, envName, ref, node: t("stackPull.host") })
         .text,
+      words: "",
+    };
+  }
+  if (item.code === HOST_READ_ONLY && standalone) {
+    return { sentence: t("actions.readOnlyHost"), words: "" };
+  }
+  // An agent that refuses a request: which host's agent, which service and what it would not take.
+  if (item.code === AGENT_POLICY_DENIED && standalone && envName !== undefined) {
+    return {
+      sentence: t("stackPull.refusal.sentence", {
+        host: envName,
+        service: item.label,
+        reason: refusedRequest(item.detail) || t("stackPull.refusal.generic"),
+      }),
       words: "",
     };
   }
@@ -73,14 +110,29 @@ export function failureOf(
 }
 
 // FailureText is the reason under a failed step or service, in offline text, wrapped.
-export function FailureText({ item, envName }: { item: StackJobItem; envName?: string }) {
+export function FailureText({
+  item,
+  envId,
+  envName,
+  standalone,
+}: {
+  item: StackJobItem;
+  envId?: string;
+  envName?: string;
+  standalone?: boolean;
+}) {
   const t = useT();
-  const why = failureOf(t, item, envName);
+  const why = failureOf(t, item, { envName, standalone });
   if (!why) return null;
   return (
-    <div className="flex flex-col gap-1 text-sm text-status-offline-text">
-      {why.sentence ? <p className="break-all">{why.sentence}</p> : null}
-      {why.words ? <p className="font-mono text-xs break-all">{why.words}</p> : null}
+    <div className="flex flex-col gap-2 text-sm">
+      <div className="flex flex-col gap-1 text-status-offline-text">
+        {why.sentence ? <p className="break-all">{why.sentence}</p> : null}
+        {why.words ? <p className="font-mono text-xs break-all">{why.words}</p> : null}
+      </div>
+      {item.code === AGENT_POLICY_DENIED && standalone && envId ? (
+        <AgentUpdateNotice envId={envId} />
+      ) : null}
     </div>
   );
 }
@@ -167,16 +219,18 @@ export function stepsOf(items: readonly StackJobItem[]): DeployStep[] {
 
 interface DeployStepListProps {
   items: readonly StackJobItem[];
-  // The environment's name, said as the scope of an environment credential in a pull's failure.
-  envName?: string;
+  // The environment the deploy is on: its name is said as the host of an agent that refuses a request and
+  // as the scope of an environment credential in a pull's failure.
+  envId: string;
 }
 
 // DeployStepList is the ordered list of the steps of a deploy (UI-SPEC "Deploy console"): each with a
 // mark and its state in words, and the services as rows inside Deploy services. The list is an ol
 // and every step exposes its state as text; nothing in it announces itself, the console announces
 // outcomes. Every label is text.
-export function DeployStepList({ items, envName }: DeployStepListProps) {
+export function DeployStepList({ items, envId }: DeployStepListProps) {
   const t = useT();
+  const envName = useEnvName(envId);
   const steps = stepsOf(items);
   const standalone = isStandalone(items);
   return (
@@ -204,7 +258,7 @@ export function DeployStepList({ items, envName }: DeployStepListProps) {
           </span>
           {item.state === "failed" && rows.every((r) => r.state !== "failed") ? (
             <div className="ms-6">
-              <FailureText item={item} envName={envName} />
+              <FailureText item={item} envId={envId} envName={envName} standalone={standalone} />
             </div>
           ) : null}
           {rows.length > 0 ? (
@@ -217,7 +271,14 @@ export function DeployStepList({ items, envName }: DeployStepListProps) {
                   containers={containersOf(items, row)}
                   defaultOpen={row.state === "failed"}
                 >
-                  {row.state === "failed" ? <FailureText item={row} /> : undefined}
+                  {row.state === "failed" ? (
+                    <FailureText
+                      item={row}
+                      envId={envId}
+                      envName={envName}
+                      standalone={standalone}
+                    />
+                  ) : undefined}
                 </DeployServiceRow>
               ))}
             </ul>

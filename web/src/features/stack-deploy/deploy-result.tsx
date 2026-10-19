@@ -13,6 +13,7 @@ import {
   stackQuery,
   useRollbackStack,
 } from "@/api/stacks";
+import { AgentUpdateNotice } from "@/components/agent-update-notice";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { useNow } from "@/components/relative-time";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -20,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { CONVERGE_TIMEOUT } from "@/features/stack-deploy/deploy-service-row";
+import { isStandalone } from "@/features/stack-deploy/deploy-step-list";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { withBase } from "@/lib/base-path";
@@ -281,8 +283,12 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
     const rows = servicesOf(job);
     // With a row for each service the sentence says how far it got; without, it is the server's
     // own sentence for the step.
-    const sentence =
-      rows.length > 0
+    const standalone = isStandalone(job.items ?? []);
+    // A host its owner made read-only is the whole story: nothing was asked of it.
+    const readOnly = standalone && failed?.code === "host_read_only";
+    const sentence = readOnly
+      ? t("actions.readOnlyHost")
+      : rows.length > 0
         ? t("stackDeploy.failed.stopped", {
             step: failed?.label ?? name,
             done: updatedServices(job),
@@ -311,6 +317,9 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
           ) : null}
           <p className="break-words">{sentence}</p>
           <CleanupReport cleanup={cleanup} />
+          {standalone && failed?.code === "agent_policy_denied" ? (
+            <AgentUpdateNotice envId={envId} />
+          ) : null}
           <div className="flex flex-wrap items-start gap-2">
             <RollbackAction envId={envId} stackId={stackId} retry={rolledBack} />
             <Button asChild variant="outline" className="max-md:h-11">

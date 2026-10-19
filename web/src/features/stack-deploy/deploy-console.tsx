@@ -352,7 +352,7 @@ export function DeployConsole({ envId, stackId, jobId }: DeployConsoleProps) {
       </div>
       <CancelDeployDialog open={asking} onOpenChange={setAsking} onConfirm={confirmCancel} />
       <DeployProgress job={job} />
-      <DeployStepList items={job.items ?? []} envName={envName} />
+      <DeployStepList items={job.items ?? []} envId={envId} />
       <DeployOutput
         lines={follow.output}
         failed={job.state === "failed" || job.state === "partial"}
