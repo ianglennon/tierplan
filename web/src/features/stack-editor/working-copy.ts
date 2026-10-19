@@ -62,7 +62,11 @@ export type WorkingCopyAction =
   // holds is never in the browser, so it cannot become plain text without being typed again.
   | { type: "setSecret"; name: string; secret: boolean }
   // Puts a hidden secret that was typed over back to the value the server holds.
-  | { type: "resetVar"; name: string };
+  | { type: "resetVar"; name: string }
+  // A save of `sent` succeeded. The server holds every secret variable now and answers <hidden> for
+  // it, so the browser lets go of the text it typed: each secret variable that still has the value
+  // that was sent becomes hidden again (UI-SPEC "Secret values never leave the browser").
+  | { type: "saved"; sent: WorkingCopy };
 
 // compose.yaml first, then the rest in path order, so the rail and the save body are stable.
 function ordered(files: WorkingFile[]): WorkingFile[] {
@@ -109,6 +113,14 @@ function fromDraft(draft: StackDraft, selected: string): WorkingCopy {
     files,
     vars,
     selected: files.some((f) => f.path === selected) ? selected : COMPOSE_FILE,
+  };
+}
+
+// withSecretsHidden is a copy as the server holds it after a save: every secret variable hidden.
+export function withSecretsHidden(copy: WorkingCopy): WorkingCopy {
+  return {
+    ...copy,
+    vars: copy.vars.map((v) => (v.secret ? { ...v, value: "", hidden: true } : v)),
   };
 }
 
@@ -178,6 +190,18 @@ export function workingCopyReducer(state: WorkingCopy, action: WorkingCopyAction
             : { ...v, secret: action.secret },
         ),
       };
+    case "saved": {
+      const sent = new Map(action.sent.vars.map((v) => [v.name, v]));
+      return {
+        ...state,
+        vars: state.vars.map((v) => {
+          const was = sent.get(v.name);
+          return v.secret && was?.secret && was.value === v.value && was.hidden === v.hidden
+            ? { ...v, value: "", hidden: true }
+            : v;
+        }),
+      };
+    }
     case "resetVar":
       return {
         ...state,

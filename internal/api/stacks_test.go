@@ -440,8 +440,8 @@ func TestSavingADraftRefusesAPathOrNameThatCouldEscapeTheStack(t *testing.T) {
 		"a backslash":           {`[` + compose + `,{"path":"a\\b","content":"x","secret":false}]`, `[]`, "file_path_invalid"},
 		"a repeated path":       {`[` + compose + `,` + compose + `]`, `[]`, "file_name_taken"},
 		"no compose file":       {`[{"path":"app.env","content":"x","secret":false}]`, `[]`, "compose_missing"},
-		"a variable with a dot": {`[` + compose + `]`, `[{"name":"A.B","value":"x","secret":false}]`, "stack_var_invalid"},
-		"a repeated variable":   {`[` + compose + `]`, `[{"name":"A","value":"1","secret":false},{"name":"A","value":"2","secret":false}]`, "stack_var_invalid"},
+		"a variable with a dot": {`[` + compose + `]`, `[{"name":"A.B","value":"x","secret":false}]`, "variable_name_invalid"},
+		"a repeated variable":   {`[` + compose + `]`, `[{"name":"A","value":"1","secret":false},{"name":"A","value":"2","secret":false}]`, "variable_name_taken"},
 	} {
 		rec := operator.saveDraft(st.ID, `{"version":1,"files":`+tc.files+`,"vars":`+tc.vars+`}`)
 		if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != tc.problem {

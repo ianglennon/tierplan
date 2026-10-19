@@ -79,7 +79,11 @@ export function VariablesTable({
   loading = false,
   failed,
   readOnly,
+  canReveal = false,
+  reveal,
+  savedHidden,
   onAdd,
+  onReset,
   onSet,
   onSecret,
   onRemove,
@@ -221,6 +225,10 @@ export function VariablesTable({
                   resolveState={state}
                   unused={resolved !== null && (r.resolved ? r.resolved.unused : true)}
                   readOnly={readOnly}
+                  canReveal={canReveal}
+                  reveal={reveal}
+                  savedHidden={savedHidden?.has(r.name) ?? false}
+                  onReset={onReset ? () => onReset(r.name) : undefined}
                   onSet={(value) => onSet(r.name, value)}
                   onSecret={(secret) => onSecret(r.name, secret)}
                   onRemove={() => onRemove(r.name)}

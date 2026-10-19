@@ -7,6 +7,7 @@ import { api } from "@/api/client";
 import { type ProblemField, readProblem } from "@/api/problem";
 import { LIST_REFETCH_MS, listKey } from "@/api/resources";
 import type { components } from "@/api/schema";
+import { HIDDEN } from "@/features/spec-editor/diff";
 
 export type StackItem = components["schemas"]["StackItem"];
 export type StackDetail = components["schemas"]["StackDetail"];
@@ -208,8 +209,10 @@ export function useSaveDraft(envId: string, stackId: string) {
               version: answer.version,
               savedBy: answer.savedBy,
               savedAt: answer.savedAt,
-              files: body.files,
-              vars: body.vars,
+              // The cache holds what the server would answer, not what was typed: a secret's
+              // text never enters it (UI-SPEC "Design System").
+              files: (body.files ?? []).map((f) => (f.secret ? { ...f, content: HIDDEN } : f)),
+              vars: (body.vars ?? []).map((v) => (v.secret ? { ...v, value: HIDDEN } : v)),
             }
           : old,
       );
@@ -285,5 +288,42 @@ export async function postStackCheck(
   } catch (e) {
     // A network failure has no status.
     throw e instanceof CheckRequestError ? e : new CheckRequestError(0);
+  }
+}
+
+// RevealRequestError is a reveal the server refused or that got no answer. The status is 0 when
+// the server could not be reached; 403 means the caller does not hold secrets.reveal.
+export class RevealRequestError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  constructor(status: number, type?: string) {
+    super(`POST reveal failed (${status})`);
+    this.name = "RevealRequestError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+// revealVariable asks for the saved value of a secret variable. It is a plain function and not a
+// query on purpose: the value must never enter the query cache (UI-SPEC "Design System"). The
+// caller holds it in component state for a minute and drops it. Each call is audited by the
+// server, so it is never retried and never made ahead of a click.
+export async function revealVariable(
+  envId: string,
+  stackId: string,
+  name: string,
+): Promise<string> {
+  try {
+    const res = await api.POST("/api/env/{envId}/stacks/{stackId}/variables/{name}/reveal", {
+      params: { path: { envId, stackId, name } },
+    });
+    if (!res.data) {
+      const problem = readProblem(res.error, res.response);
+      throw new RevealRequestError(problem.status, problem.type);
+    }
+    return res.data.value;
+  } catch (e) {
+    // A network failure has no status.
+    throw e instanceof RevealRequestError ? e : new RevealRequestError(0);
   }
 }

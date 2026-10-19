@@ -10,6 +10,7 @@ import { Trans } from "react-i18next";
 import {
   type DraftRequestError,
   draftQuery,
+  revealVariable,
   type StackDraft,
   type StackDraftSaved,
   type StackProblem,
@@ -46,6 +47,7 @@ import {
   isDirty,
   toSaveBody,
   type WorkingCopy,
+  withSecretsHidden,
   workingCopyReducer,
 } from "@/features/stack-editor/working-copy";
 import { usePermission } from "@/hooks/use-me";
@@ -101,6 +103,7 @@ export function StackEditorPage({
   const activePane: EditorPane = pane === "variables" ? "variables" : "files";
   const mac = isMacPlatform();
   const canEdit = usePermission("stacks.update", envId);
+  const canReveal = usePermission("secrets.reveal", envId);
   const stack = useQuery(stackQuery(envId, stackId));
   const draft = useQuery(draftQuery(envId, stackId));
   const save$ = useSaveDraft(envId, stackId);
@@ -121,6 +124,12 @@ export function StackEditorPage({
   copyRef.current = copy;
   const check = useStackCheck(envId, stackId, copy);
   const unused = useMemo(() => new Set(check.unusedFiles), [check.unusedFiles]);
+  // The variables whose saved value the server holds hidden: the ones that can be revealed and, once
+  // typed over, reset.
+  const savedHidden = useMemo(
+    () => new Set(saved.vars.filter((v) => v.hidden).map((v) => v.name)),
+    [saved.vars],
+  );
   const editor = useRef<FileEditorHandle>(null);
   // A click on a problem: the file to open and where to put the cursor once its editor is there.
   const [jump, setJump] = useState<{ file: string; line: number; col: number } | null>(null);
@@ -236,6 +245,12 @@ export function StackEditorPage({
         return t("stackEditor.save.errors.tooLarge");
       case "compose_missing":
         return t("stackEditor.save.errors.composeMissing");
+      case "variable_name_invalid":
+        return t("stackEditor.save.errors.variableName");
+      case "variable_name_taken":
+        return t("stackEditor.save.errors.variableTaken", { name: err.fields[0]?.message ?? "" });
+      case "secret_too_short":
+        return t("stackEditor.save.errors.secretTooShort", { name: err.fields[0]?.message ?? "" });
     }
     if (err.status === 0) return t("stackEditor.save.errors.lost");
     if (err.status === 403) return t("stackEditor.save.errors.permission");
@@ -243,7 +258,9 @@ export function StackEditorPage({
   }
 
   function onSaved(sent: WorkingCopy, answer: StackDraftSaved) {
-    setSaved(sent);
+    // The server holds the secrets now: the browser lets go of the text it typed for them.
+    setSaved(withSecretsHidden(sent));
+    dispatch({ type: "saved", sent });
     setBase({ version: answer.version, savedAt: answer.savedAt, savedBy: answer.savedBy });
     if (answer.changed) setSavedChange(true);
     setSaveError(null);
@@ -360,6 +377,10 @@ export function StackEditorPage({
           loading={!copy.loaded}
           failed={check.failed}
           readOnly={!canEdit}
+          canReveal={canReveal}
+          reveal={(varName) => revealVariable(envId, stackId, varName)}
+          savedHidden={savedHidden}
+          onReset={(varName) => dispatch({ type: "resetVar", name: varName })}
           onAdd={(varName) => dispatch({ type: "addVar", name: varName })}
           onSet={(varName, value) => dispatch({ type: "setVar", name: varName, value })}
           onSecret={(varName, secret) => dispatch({ type: "setSecret", name: varName, secret })}

@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"regexp"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -22,8 +21,7 @@ import (
 const (
 	// maxStackVars bounds the variables of one draft. The files are bounded by stacks.CheckFiles.
 	maxStackVars = 500
-	// maxStackVarName and maxStackVarValue bound one variable.
-	maxStackVarName  = 128
+	// maxStackVarValue bounds the value of one variable; the name is bounded by stacks.MaxVarName.
 	maxStackVarValue = 64 << 10
 	// maxStackSaveBody is the largest body of a save. A save may hold stacks.MaxTotalBytes of
 	// file content, and JSON writes some of it as escapes (a newline is two bytes, a control
@@ -31,8 +29,6 @@ const (
 	// by CheckFiles as 422 stack_too_large, not cut off by the body limit as a bare 413.
 	maxStackSaveBody = 2 * stacks.MaxTotalBytes
 )
-
-var varNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // DraftFileBody is one file of a stack's draft.
 type DraftFileBody struct {
@@ -130,7 +126,8 @@ func registerStackDraft(r *httpx.Router, d StacksDeps) {
 			"Saving content equal to the saved draft changes nothing: changed is false, the version does not move and no audit row is written. " +
 			"A save never sends anything to an engine: only a deploy does. " +
 			"The files are held to the stack's file rules, each refused with 422 and the path in errors[].location: a path that is absolute, has .., a backslash or a colon (file_path_invalid), a path used twice (file_name_taken), a file over 1 MiB (file_too_large), more than 50 files or 8 MiB in all (stack_too_large), no compose.yaml (compose_missing). " +
-			"A variable name must be letters, digits and underscore (422 stack_var_invalid). " +
+			"A variable name must be letters, digits and underscore, not start with a digit and be at most 128 characters (422 variable_name_invalid), and be used once (422 variable_name_taken); " +
+			"a secret variable's value must be at least 4 characters (422 secret_too_short), because shorter values cannot be hidden reliably; more than 500 variables, or a value over 64 KiB, is 422 stack_var_invalid. " +
 			"A secret file or variable sent as <hidden> keeps its saved value; with none saved it is 422 stack_placeholder_without_value. Audited as stack.draft_saved when it changed. Needs stacks.update (Operator).",
 		Tags: []string{"stacks"}, MaxBodyBytes: maxStackSaveBody,
 	}, rbac.Requirement{Perm: rbac.PermStacksUpdate, Scope: rbac.ScopeEnvironment},
@@ -224,15 +221,7 @@ func draftCopy(body StackDraftSaveRequest, saved stacks.WorkingCopy) (stacks.Wor
 		return wc, fileRuleProblem(err)
 	}
 	wc.Files = files
-	seenVar := map[string]bool{}
 	for _, v := range body.Vars {
-		if len(v.Name) > maxStackVarName || !varNameRe.MatchString(v.Name) {
-			return wc, varProblem(v.Name, "A variable name is letters, digits and underscore, and does not start with a digit.")
-		}
-		if seenVar[v.Name] {
-			return wc, varProblem(v.Name, "A variable name is used twice.")
-		}
-		seenVar[v.Name] = true
 		if len(v.Value) > maxStackVarValue {
 			return wc, varProblem(v.Name, "A variable value is at most 64 KiB.")
 		}
@@ -245,6 +234,12 @@ func draftCopy(body StackDraftSaveRequest, saved stacks.WorkingCopy) (stacks.Wor
 			value = old.Value
 		}
 		wc.Vars = append(wc.Vars, stacks.Var{Name: v.Name, Value: value, Secret: v.Secret})
+	}
+	// The names are judged on what will be stored. A secret that is too short is judged only when
+	// the draft is saved: the check runs as a person types, and a half-typed secret is not yet a
+	// mistake.
+	if err := stacks.CheckVarNames(wc.Vars); err != nil {
+		return wc, varRuleProblem(err)
 	}
 	return wc, nil
 }
@@ -278,6 +273,27 @@ func fileRuleProblem(err error) error {
 	return &huma.ErrorModel{
 		Type: typ, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
 		Detail: detail, Errors: []*huma.ErrorDetail{{Location: loc, Message: detail}},
+	}
+}
+
+// varRuleProblem is the 422 for a rule the variable table breaks: its own problem type, and the
+// name of the variable at fault in errors[].location "variable".
+func varRuleProblem(err error) error {
+	var ve *stacks.VarError
+	name := ""
+	if errors.As(err, &ve) {
+		name = ve.Name
+	}
+	typ, detail := problemVariableNameInvalid, "A variable name is letters, digits and underscore, does not start with a digit and is at most 128 characters."
+	switch {
+	case errors.Is(err, stacks.ErrVarNameTaken):
+		typ, detail = problemVariableNameTaken, "A variable name is used twice."
+	case errors.Is(err, stacks.ErrSecretTooShort):
+		typ, detail = problemSecretTooShort, "A secret value is at least 4 characters, so that hiding it can't hide ordinary words. Use a longer value, or turn Secret off."
+	}
+	return &huma.ErrorModel{
+		Type: typ, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
+		Detail: detail, Errors: []*huma.ErrorDetail{{Location: "variable", Message: name}},
 	}
 }
 
@@ -331,6 +347,9 @@ func saveStackDraft(ctx context.Context, d StacksDeps, in *StackDraftSaveInput) 
 	wc, err := draftCopy(in.Body, current.Copy)
 	if err != nil {
 		return nil, err
+	}
+	if err := stacks.CheckVars(wc.Vars); err != nil {
+		return nil, varRuleProblem(err)
 	}
 	saved, changed, err := repo.SaveDraft(ctx, st.ID, in.Body.Version, p.Name, wc)
 	var conflict *stackops.DraftConflictError

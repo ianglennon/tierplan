@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/compose-spec/compose-go/v2/template"
 	"go.yaml.in/yaml/v3"
@@ -30,6 +31,8 @@ const (
 type Place struct {
 	File string
 	Line int
+	// Col is the 1-based column the reference's value (or a bare environment name) starts at.
+	Col int
 	// Plain is true when the reference at this place has no default and no ":?" message, so a
 	// variable with no value is an error here and only here.
 	Plain bool
@@ -81,7 +84,7 @@ func Refs(c WorkingCopy) []VarRef {
 	}
 	acc := map[string]*VarRef{}
 	for _, root := range ix.docs {
-		collectRefs(root, acc, 0)
+		collectRefs(root, acc, nil, 0)
 	}
 	out := make([]VarRef, 0, len(acc))
 	for _, r := range acc {
@@ -95,21 +98,31 @@ func Refs(c WorkingCopy) []VarRef {
 // maxRefDepth bounds the walk of a YAML tree.
 const maxRefDepth = 64
 
-// collectRefs adds the references of every value under n to acc. Keys are not interpolated by
-// compose-go, so they are not read; an alias is not followed, because the anchor it names is
-// walked where it is written.
-func collectRefs(n *yaml.Node, acc map[string]*VarRef, depth int) {
+// collectRefs adds the references of every value under n to acc. path is the keys from the top of
+// the document to n, so the environment of a service can be told from any other map. Keys are not
+// interpolated by compose-go, so they are not read; an alias is not followed, because the anchor
+// it names is walked where it is written.
+func collectRefs(n *yaml.Node, acc map[string]*VarRef, path []string, depth int) {
 	if n == nil || depth > maxRefDepth {
 		return
 	}
 	switch n.Kind {
-	case yaml.DocumentNode, yaml.SequenceNode:
+	case yaml.DocumentNode:
 		for _, c := range n.Content {
-			collectRefs(c, acc, depth+1)
+			collectRefs(c, acc, path, depth+1)
+		}
+	case yaml.SequenceNode:
+		for _, c := range n.Content {
+			collectRefs(c, acc, append(path, "[]"), depth+1)
 		}
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(n.Content); i += 2 {
-			collectRefs(n.Content[i+1], acc, depth+1)
+			key, val := n.Content[i].Value, n.Content[i+1]
+			if len(path) == 2 && path[0] == "services" && key == "environment" {
+				collectEnvironment(val, acc, depth+1)
+				continue
+			}
+			collectRefs(val, acc, append(path, key), depth+1)
 		}
 	case yaml.ScalarNode:
 		if strings.Contains(n.Value, "$") {
@@ -118,9 +131,61 @@ func collectRefs(n *yaml.Node, acc map[string]*VarRef, depth int) {
 	}
 }
 
+// collectEnvironment reads the environment of a service. Besides the references in its values, a
+// bare entry ("- FOO", or "FOO:" with nothing after it) is a reference to the variable FOO: the
+// Compose spec passes it through from the environment of the host, and Bayplan takes it from the
+// table instead.
+func collectEnvironment(n *yaml.Node, acc map[string]*VarRef, depth int) {
+	switch n.Kind {
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			key, val := n.Content[i], n.Content[i+1]
+			if val.Kind == yaml.ScalarNode && val.Tag == "!!null" {
+				addBare(acc, key.Value, key.Line, key.Column)
+				continue
+			}
+			collectRefs(val, acc, nil, depth+1)
+		}
+	case yaml.SequenceNode:
+		for _, item := range n.Content {
+			if item.Kind == yaml.ScalarNode && !strings.ContainsAny(item.Value, "=$") {
+				addBare(acc, item.Value, item.Line, item.Column)
+				continue
+			}
+			collectRefs(item, acc, nil, depth+1)
+		}
+	}
+}
+
+// addBare records a bare environment entry as a plain reference to name.
+func addBare(acc map[string]*VarRef, name string, line, col int) {
+	if !varNameFormRe.MatchString(name) {
+		return
+	}
+	r := acc[name]
+	if r == nil {
+		r = &VarRef{Name: name}
+		acc[name] = r
+	}
+	r.Places = append(r.Places, Place{File: ComposeFile, Line: line, Col: col, Plain: true})
+}
+
 // addScalarRefs reads the references of one scalar value into acc.
 func addScalarRefs(n *yaml.Node, acc map[string]*VarRef) {
 	found := template.ExtractVariables(map[string]any{"v": n.Value}, nil)
+	// A name that stands inside the default of another is read only when that one is empty, so an
+	// unset value there is not an error where the name stands.
+	nested := map[string]bool{}
+	for _, v := range found {
+		for _, text := range []string{v.DefaultValue, v.PresenceValue} {
+			if text == "" {
+				continue
+			}
+			for inner := range template.ExtractVariables(map[string]any{"v": text}, nil) {
+				nested[inner] = true
+			}
+		}
+	}
 	for name, v := range found {
 		if !varNameFormRe.MatchString(name) {
 			continue
@@ -140,7 +205,10 @@ func addScalarRefs(n *yaml.Node, acc map[string]*VarRef) {
 			}
 		}
 		r.Required = r.Required || required
-		r.Places = append(r.Places, Place{File: ComposeFile, Line: lineOf(n, name), Plain: !hasDefault && !required})
+		r.Places = append(r.Places, Place{
+			File: ComposeFile, Line: lineOf(n, name), Col: n.Column,
+			Plain: !hasDefault && !required && !nested[name],
+		})
 	}
 }
 
@@ -268,7 +336,32 @@ func (e *VarError) Error() string { return "stacks: variable " + e.Name + ": " +
 // Unwrap returns the reason.
 func (e *VarError) Unwrap() error { return e.Err }
 
-// CheckVars holds a variable table to its rules: every name is letters, digits and underscore and
-// does not start with a digit, no name is used twice, and a secret value is at least MinSecretLen
-// characters long. It returns a *VarError for the first variable that breaks one.
-func CheckVars(vars []Var) error { return nil }
+// MaxVarName is the longest variable name, in bytes.
+const MaxVarName = 128
+
+// CheckVars holds a variable table to its rules: every name is letters, digits and underscore, does
+// not start with a digit and is at most MaxVarName long, no name is used twice, and a secret value
+// is at least MinSecretLen characters long. It returns a *VarError for the first variable that
+// breaks one.
+func CheckVars(vars []Var) error { return checkVars(vars, true) }
+
+// CheckVarNames is CheckVars without the rule about the length of a secret. The check that runs as
+// a person types uses it: a secret that is half typed is not yet a mistake.
+func CheckVarNames(vars []Var) error { return checkVars(vars, false) }
+
+func checkVars(vars []Var, secrets bool) error {
+	seen := make(map[string]struct{}, len(vars))
+	for _, v := range vars {
+		if len(v.Name) > MaxVarName || !varNameFormRe.MatchString(v.Name) {
+			return &VarError{Name: v.Name, Err: ErrVarNameInvalid}
+		}
+		if _, dup := seen[v.Name]; dup {
+			return &VarError{Name: v.Name, Err: ErrVarNameTaken}
+		}
+		seen[v.Name] = struct{}{}
+		if secrets && v.Secret && v.Value != "" && utf8.RuneCountInString(v.Value) < MinSecretLen {
+			return &VarError{Name: v.Name, Err: ErrSecretTooShort}
+		}
+	}
+	return nil
+}

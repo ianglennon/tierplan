@@ -11,6 +11,7 @@ import {
   isDirty,
   toSaveBody,
   type WorkingCopy,
+  withSecretsHidden,
   workingCopyReducer,
 } from "@/features/stack-editor/working-copy";
 
@@ -385,5 +386,27 @@ describe("the variables table", () => {
       value: "abcd",
     });
     expect(toSaveBody(typed, 3).vars?.[1]).toEqual({ name: "TOKEN", value: "abcd", secret: true });
+  });
+
+  it("lets go of a secret's text once a save of it succeeded, and keeps what was typed since", () => {
+    const typed = workingCopyReducer(withHidden(), {
+      type: "setVar",
+      name: "TOKEN",
+      value: "abcd1",
+    });
+    const afterSave = workingCopyReducer(typed, { type: "saved", sent: typed });
+    expect(afterSave.vars.find((v) => v.name === "TOKEN")).toMatchObject({
+      value: "",
+      hidden: true,
+    });
+    expect(afterSave.vars.find((v) => v.name === "PORT")?.value).toBe("8080");
+    expect(isDirty(withSecretsHidden(typed), afterSave)).toBe(false);
+
+    const typedMore = workingCopyReducer(typed, { type: "setVar", name: "TOKEN", value: "abcd12" });
+    const stillTyped = workingCopyReducer(typedMore, { type: "saved", sent: typed });
+    expect(stillTyped.vars.find((v) => v.name === "TOKEN")).toMatchObject({
+      value: "abcd12",
+      hidden: false,
+    });
   });
 });

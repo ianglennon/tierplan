@@ -34,7 +34,10 @@
         "lost": "The server didn't answer. The draft may have been saved: reload it before you save again.",
         "permission": "You can't save this stack's draft.",
         "tooLarge": "A stack can hold at most 50 files and 8 MB in all.",
-        "composeMissing": "A stack needs a compose.yaml."
+        "composeMissing": "A stack needs a compose.yaml.",
+        "variableName": "A variable name is letters, numbers and underscores, and doesn't start with a number.",
+        "variableTaken": "Two variables are named {{name}}. Remove one.",
+        "secretTooShort": "A secret value needs at least 4 characters, so that hiding it can't hide ordinary words. Use a longer value, or turn Secret off for {{name}}."
       }
     },
     "secretFile": {

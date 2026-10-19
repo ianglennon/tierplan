@@ -49,6 +49,25 @@ type CheckResult struct {
 // the deploy all call it, so what a person sees while they type is what the deploy will hold them
 // to. It is pure: it reads only the bytes it is given, opens no file and calls no engine.
 func Check(ctx context.Context, in CheckInput) CheckResult {
+	res := check(ctx, in)
+	// No secret reaches an answer: the sentences of the problems and the values of the rows are
+	// passed through the stack's masker whatever produced them (RESEARCH Pitfall 10). The loaded
+	// project is not an answer; it is what a deploy reads, and it keeps the real values.
+	m := NewMasker(in.Copy.Vars, in.Copy.Files)
+	for i := range res.Problems {
+		res.Problems[i].Message = m.Mask(res.Problems[i].Message)
+		res.Problems[i].Key = m.Mask(res.Problems[i].Key)
+	}
+	for i := range res.Variables {
+		res.Variables[i].Default = m.Mask(res.Variables[i].Default)
+		if !res.Variables[i].Secret {
+			res.Variables[i].Value = m.Mask(res.Variables[i].Value)
+		}
+	}
+	return res
+}
+
+func check(ctx context.Context, in CheckInput) CheckResult {
 	var res CheckResult
 	if in.Deadline <= 0 {
 		in.Deadline = checkTimeout
@@ -75,6 +94,7 @@ func Check(ctx context.Context, in CheckInput) CheckResult {
 		}
 		res.Problems = found
 		res.Variables = ResolveVars(Refs(in.Copy), in.Copy.Vars)
+		res.Problems = append(res.Problems, variableProblems(res.Variables)...)
 	}
 	loaded, err := Load(ctx, LoadInput(in))
 	if err != nil {
@@ -100,6 +120,7 @@ func Check(ctx context.Context, in CheckInput) CheckResult {
 		}}
 		return res
 	}
+	res.Problems = append(res.Problems, unsetProblems(loaded.Unset, res.Variables, res.Problems)...)
 	// What the target will ignore or refuse is judged on the project as loaded, with build still
 	// in it: that is how a build key is seen.
 	found := lint.Lint(lint.Input{Target: lint.Target(in.Target), Project: loaded.Project, Index: idx})
@@ -110,6 +131,72 @@ func Check(ctx context.Context, in CheckInput) CheckResult {
 	res.Loaded = loaded
 	res.Problems = append(append(res.Problems, binds...), lintProblems(found)...).Sorted()
 	return res
+}
+
+// variableProblems are what the rows of the Variables pane say is wrong with the files. A variable
+// that has no value in the table and no default is a blocking error at every place it is used
+// plainly (STK-03, Pitfall 3); a reference with a default or a ":?" message has its own answer. A
+// variable of the table that no file refers to is a warning that never blocks (D-03).
+func variableProblems(vars []ResolvedVar) Problems {
+	var out Problems
+	for _, v := range vars {
+		switch {
+		case v.Unused:
+			out = append(out, Problem{
+				Severity: SeverityWarning, Code: CodeUnusedVariable, File: ComposeFile, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
+				Message: v.Name + " is in Variables but the compose file doesn't use it.",
+			})
+		case v.Required:
+			for _, pl := range v.Places {
+				if pl.Plain {
+					out = append(out, unsetProblem(v.Name, pl))
+				}
+			}
+		}
+	}
+	return out
+}
+
+// unsetProblem is the blocking error for a variable with no value and no default used at pl.
+func unsetProblem(name string, pl Place) Problem {
+	col := pl.Col
+	if col < 1 {
+		col = 1
+	}
+	return Problem{
+		Severity: SeverityError, Code: CodeUnsetVariable, File: pl.File, Line: pl.Line, Col: col, EndLine: pl.Line, EndCol: col + 1,
+		Message: name + " has no value and no default. Add a value in Variables.",
+	}
+}
+
+// unsetProblems adds an error for each name the load found unset that the rows did not already
+// flag, so a plain reference the position scan could not place is still refused. It is placed at
+// the first place the name is used, or at line 1.
+func unsetProblems(unset []string, vars []ResolvedVar, have Problems) Problems {
+	flagged := map[string]bool{}
+	for _, p := range have {
+		if p.Code == CodeUnsetVariable {
+			if name, _, ok := strings.Cut(p.Message, " has no value"); ok {
+				flagged[name] = true
+			}
+		}
+	}
+	places := map[string][]Place{}
+	for _, v := range vars {
+		places[v.Name] = v.Places
+	}
+	var out Problems
+	for _, name := range unset {
+		if flagged[name] {
+			continue
+		}
+		pl := Place{File: ComposeFile, Line: 1, Col: 1}
+		if list := places[name]; len(list) > 0 {
+			pl = list[0]
+		}
+		out = append(out, unsetProblem(name, pl))
+	}
+	return out
 }
 
 // stripBuild removes the build section of every service of the project.

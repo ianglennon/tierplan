@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { CircleX, Trash2, X } from "lucide-react";
+import { CircleX, Eye, EyeOff, RotateCcw, Trash2, X } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import type { StackVariable } from "@/api/stacks";
 import { MaskedValue } from "@/components/masked-value";
@@ -20,6 +21,9 @@ import { cn } from "@/lib/utils";
 // A name longer than this is cut off with a tooltip that carries the whole of it.
 const LONG_NAME = 24;
 
+// How long a revealed value stays in the input before it is hidden again (UI-SPEC "Design System").
+export const REVEAL_MS = 60_000;
+
 // Whether the server has said how the variables resolve: not yet, it could not, or it has.
 export type ResolveState = "pending" | "failed" | "ok";
 
@@ -34,10 +38,16 @@ export interface VariableRowProps {
   // to it. False until it answers, so a row is not called unused before anyone has looked.
   unused: boolean;
   readOnly: boolean;
+  // The caller may show a secret's saved value, and how to fetch it.
+  canReveal?: boolean;
+  reveal?: (name: string) => Promise<string>;
+  // The server holds this variable's value hidden, as the draft was last loaded or saved.
+  savedHidden?: boolean;
   onSet: (value: string) => void;
   onSecret: (secret: boolean) => void;
   onRemove: () => void;
   onClear: () => void;
+  onReset?: () => void;
 }
 
 // ResolvedCell is the value the deploy will use for a variable and where it comes from. It is the
@@ -99,14 +109,81 @@ export function VariableRow({
   resolveState,
   unused,
   readOnly,
+  canReveal = false,
+  reveal,
+  savedHidden = false,
   onSet,
   onSecret,
   onRemove,
   onClear,
+  onReset,
 }: VariableRowProps) {
   const t = useT();
+  const helperId = useId();
   const secret = variable?.secret ?? false;
   const hidden = variable?.hidden ?? false;
+  // The revealed value lives here and nowhere else: not in the working copy, not in a query, not
+  // in storage. It goes when the minute is up, when it is edited, and with the row.
+  const [revealed, setRevealed] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const [revealError, setRevealError] = useState<string | null>(null);
+  const [notice, setNotice] = useState("");
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      clearTimeout(timer.current);
+    };
+  }, []);
+
+  function hide(announce: boolean) {
+    clearTimeout(timer.current);
+    setRevealed(null);
+    if (announce) setNotice(t("stackVars.row.hiddenAgain", { name }));
+  }
+
+  // A value the server holds hidden that is no longer hidden in the working copy (typed over, reset,
+  // reloaded) is not shown from the reveal any more.
+  useEffect(() => {
+    if (revealed !== null && !hidden) {
+      clearTimeout(timer.current);
+      setRevealed(null);
+    }
+  }, [revealed, hidden]);
+
+  async function toggleReveal() {
+    if (revealed !== null) {
+      hide(true);
+      return;
+    }
+    if (!reveal || pending) return;
+    setPending(true);
+    setRevealError(null);
+    setNotice("");
+    try {
+      const value = await reveal(name);
+      if (!mounted.current) return;
+      setRevealed(value);
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => hide(true), REVEAL_MS);
+    } catch (e) {
+      if (!mounted.current) return;
+      const status = (e as { status?: number }).status;
+      setRevealError(
+        status === 403 ? t("stackVars.row.revealDenied") : t("stackVars.row.revealFailed"),
+      );
+    } finally {
+      if (mounted.current) setPending(false);
+    }
+  }
+
+  const showButton = canReveal && reveal !== undefined && secret && (hidden || revealed !== null);
+  // A hidden secret that was typed over can be put back to what the server holds.
+  const resetButton = !readOnly && savedHidden && secret && !hidden && revealed === null && onReset;
+  // Secret turned off on a value the server holds hidden: the text is not here to become plain.
+  const typeAgain = savedHidden && !secret && variable !== undefined && variable.value === "";
   const places = resolved?.places?.length ?? 0;
   const placeholder = hidden
     ? t("stackVars.row.hiddenPlaceholder")
@@ -147,19 +224,64 @@ export function VariableRow({
         ) : null}
       </TableCell>
       <TableCell className="py-2 align-middle">
-        <Input
-          aria-label={t("stackVars.row.valueOf", { name })}
-          type={secret ? "password" : "text"}
-          autoComplete={secret ? "new-password" : "off"}
-          autoCapitalize="off"
-          autoCorrect="off"
-          spellCheck={false}
-          disabled={readOnly}
-          value={variable?.value ?? ""}
-          placeholder={placeholder}
-          onChange={(e) => onSet(e.target.value)}
-          className="min-w-40 font-mono max-md:h-11 md:h-8"
-        />
+        <div className="flex items-center gap-1">
+          <Input
+            aria-label={t("stackVars.row.valueOf", { name })}
+            aria-describedby={typeAgain ? helperId : undefined}
+            type={secret && revealed === null ? "password" : "text"}
+            autoComplete={secret ? "new-password" : "off"}
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            disabled={readOnly && revealed === null}
+            readOnly={readOnly}
+            value={revealed ?? variable?.value ?? ""}
+            placeholder={placeholder}
+            onChange={(e) => {
+              if (revealed !== null) {
+                clearTimeout(timer.current);
+                setRevealed(null);
+              }
+              onSet(e.target.value);
+            }}
+            className="min-w-40 font-mono max-md:h-11 md:h-8"
+          />
+          {showButton ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="shrink-0 max-md:size-11"
+              aria-pressed={revealed !== null}
+              aria-label={t("stackVars.row.show", { name })}
+              disabled={pending}
+              onClick={() => void toggleReveal()}
+            >
+              {revealed !== null ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+            </Button>
+          ) : null}
+          {resetButton ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="shrink-0 max-md:size-11"
+              aria-label={t("stackVars.row.reset", { name })}
+              onClick={onReset}
+            >
+              <RotateCcw aria-hidden="true" />
+            </Button>
+          ) : null}
+        </div>
+        {typeAgain ? (
+          <p id={helperId} className="mt-1 text-xs text-muted-foreground">
+            {t("stackVars.row.turnedOff")}
+          </p>
+        ) : null}
+        {revealError ? <p className="mt-1 text-xs text-destructive">{revealError}</p> : null}
+        <span role="status" aria-live="polite" className="sr-only">
+          {notice}
+        </span>
       </TableCell>
       <TableCell className="py-2 align-middle">
         <Switch

@@ -109,7 +109,26 @@ func Load(ctx context.Context, in LoadInput) (*Loaded, error) {
 	if err != nil {
 		return nil, &LoadError{Err: err}
 	}
+	fillBareEnvironment(project, env, unset)
 	return &Loaded{Project: project, Unset: unset.sorted()}, nil
+}
+
+// fillBareEnvironment gives a bare environment entry ("- FOO", "FOO:") the value the table holds for
+// it. The Compose spec would pass the host's own value through; Bayplan never reads the server's
+// environment, so an entry the table has no value for stays unset and is named in unset.
+func fillBareEnvironment(project *types.Project, table types.Mapping, unset *unsetNames) {
+	for _, svc := range project.Services {
+		for name, v := range svc.Environment {
+			if v != nil {
+				continue
+			}
+			if value, ok := table[name]; ok {
+				svc.Environment[name] = &value
+				continue
+			}
+			unset.add(name)
+		}
+	}
 }
 
 // unsetNames collects the plain references that found no value while a file was interpolated.

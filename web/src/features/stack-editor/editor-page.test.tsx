@@ -41,6 +41,10 @@ interface Sent {
 interface Server {
   sent: Sent[];
   role: "viewer" | "operator";
+  // The user holds secrets.reveal as an extra on the environment.
+  canReveal: boolean;
+  // The answer to a reveal of a secret variable's value (plan 07-10).
+  reveal: (name: string) => Response | Promise<Response>;
   hasDraft: boolean;
   draft: () => Response | Promise<Response>;
   save: (body: Record<string, unknown>) => Response | Promise<Response>;
@@ -71,6 +75,8 @@ beforeEach(() => {
   server = {
     sent: [],
     role: "operator",
+    canReveal: false,
+    reveal: () => Response.json({ value: "the-saved-value" }),
     hasDraft: false,
     draft: () => Response.json(draftBody()),
     save: (body) =>
@@ -92,10 +98,26 @@ beforeEach(() => {
       const entry: Sent = {
         method: req.method,
         path,
-        body: req.method === "PUT" || req.method === "POST" ? await req.clone().json() : undefined,
+        body:
+          req.method === "PUT" || req.method === "POST"
+            ? await req
+                .clone()
+                .json()
+                .catch(() => undefined)
+            : undefined,
       };
       server.sent.push(entry);
-      if (path === "/api/me") return Response.json(makeMe({ envs: { [ENV]: server.role } }));
+      if (path === "/api/me") {
+        return Response.json(
+          makeMe({
+            envs: { [ENV]: server.role },
+            extras: server.canReveal ? { [ENV]: ["secrets.reveal"] } : undefined,
+          }),
+        );
+      }
+      if (req.method === "POST" && path.startsWith(`/api/env/${ENV}/stacks/${STACK}/variables/`)) {
+        return server.reveal(path.split("/")[7] ?? "");
+      }
       if (path === "/api/environments") {
         return Response.json({ items: [{ id: ENV, name: "Prod", envType: "swarm" }] });
       }
@@ -1201,5 +1223,125 @@ describe("the Variables pane", () => {
     fireEvent.mouseDown(tab);
     fireEvent.click(tab);
     expect(onPaneChange).toHaveBeenCalledWith("variables");
+  });
+});
+
+describe("secret variables in the Variables pane", () => {
+  const withToken = () => draftBody({ vars: [{ name: "TOKEN", value: "<hidden>", secret: true }] });
+  const usesToken = (over: Record<string, unknown> = {}) => ({
+    name: "TOKEN",
+    value: "<hidden>",
+    secret: true,
+    source: "table",
+    default: "",
+    hasDefault: false,
+    required: false,
+    unused: true,
+    places: [],
+    ...over,
+  });
+
+  it("shows a saved secret as hidden, and an operator without secrets.reveal has no Show button", async () => {
+    server.draft = () => Response.json(withToken());
+    server.check = () => Response.json({ problems: [], unusedFiles: [], variables: [usesToken()] });
+    mount(undefined, undefined, undefined, "variables");
+    const input = (await screen.findByLabelText("Value of TOKEN")) as HTMLInputElement;
+    expect(input.placeholder).toBe("Hidden. Type to replace.");
+    expect(input.type).toBe("password");
+    expect(screen.queryByRole("button", { name: "Show TOKEN" })).toBeNull();
+  });
+
+  it("lets a holder of secrets.reveal show the value, which comes from the reveal route and is not kept", async () => {
+    server.canReveal = true;
+    server.draft = () => Response.json(withToken());
+    server.check = () => Response.json({ problems: [], unusedFiles: [], variables: [usesToken()] });
+    mount(undefined, undefined, undefined, "variables");
+    const show = await screen.findByRole("button", { name: "Show TOKEN" });
+    fireEvent.click(show);
+    await waitFor(() =>
+      expect((screen.getByLabelText("Value of TOKEN") as HTMLInputElement).value).toBe(
+        "the-saved-value",
+      ),
+    );
+    expect(
+      server.sent.some((x) => x.method === "POST" && x.path.endsWith("/variables/TOKEN/reveal")),
+    ).toBe(true);
+    // A reveal changes nothing in the draft: the page is not dirty and nothing is cached.
+    expect(screen.queryByText("Unsaved changes")).toBeNull();
+    expect(
+      JSON.stringify(
+        client
+          .getQueryCache()
+          .getAll()
+          .map((q) => q.state.data),
+      ),
+    ).not.toContain("the-saved-value");
+  });
+
+  it("sends a typed secret once, then lets go of it: the row is hidden again and the cache holds <hidden>", async () => {
+    server.draft = () => Response.json(withToken());
+    server.check = () => Response.json({ problems: [], unusedFiles: [], variables: [usesToken()] });
+    mount(undefined, undefined, undefined, "variables");
+    const input = (await screen.findByLabelText("Value of TOKEN")) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "a-new-secret" } });
+    expect(await screen.findByText("Unsaved changes")).toBeTruthy();
+    fireEvent.click(saveButton());
+    await screen.findByText("Saved the draft of tracer.");
+    expect(puts()[0]?.body?.vars).toEqual([{ name: "TOKEN", value: "a-new-secret", secret: true }]);
+    await waitFor(() =>
+      expect((screen.getByLabelText("Value of TOKEN") as HTMLInputElement).placeholder).toBe(
+        "Hidden. Type to replace.",
+      ),
+    );
+    expect((screen.getByLabelText("Value of TOKEN") as HTMLInputElement).value).toBe("");
+    expect(screen.queryByText("Unsaved changes")).toBeNull();
+    expect(
+      JSON.stringify(
+        client
+          .getQueryCache()
+          .getAll()
+          .map((q) => q.state.data),
+      ),
+    ).not.toContain("a-new-secret");
+  });
+
+  it("keeps a hidden secret that was not touched as <hidden> in the save", async () => {
+    server.draft = () => Response.json(withToken());
+    server.check = () => Response.json({ problems: [], unusedFiles: [], variables: [usesToken()] });
+    mount(undefined, undefined, undefined, "variables");
+    await screen.findByLabelText("Value of TOKEN");
+    fireEvent.click(await screen.findByRole("button", { name: "Add variable" }));
+    fireEvent.change(screen.getByLabelText("Variable name"), { target: { value: "ZED" } });
+    fireEvent.submit(screen.getByLabelText("Variable name").closest("form") as HTMLFormElement);
+    fireEvent.click(saveButton());
+    await screen.findByText("Saved the draft of tracer.");
+    expect(puts()[0]?.body?.vars).toEqual([
+      { name: "TOKEN", value: "<hidden>", secret: true },
+      { name: "ZED", value: "", secret: false },
+    ]);
+  });
+
+  it("names the variable when the server refuses a secret that is too short", async () => {
+    server.draft = () => Response.json(draftBody());
+    server.save = () =>
+      Response.json(
+        {
+          type: "secret_too_short",
+          title: "x",
+          status: 422,
+          detail: "d",
+          errors: [{ location: "variable", message: "PIN" }],
+        },
+        { status: 422 },
+      );
+    mount(undefined, undefined, undefined, "variables");
+    await screen.findByRole("button", { name: "Add variable" });
+    fireEvent.click(screen.getByRole("button", { name: "Add variable" }));
+    fireEvent.change(screen.getByLabelText("Variable name"), { target: { value: "PIN" } });
+    fireEvent.submit(screen.getByLabelText("Variable name").closest("form") as HTMLFormElement);
+    fireEvent.change(await screen.findByLabelText("Value of PIN"), { target: { value: "123" } });
+    fireEvent.click(screen.getByRole("switch", { name: "Secret: PIN" }));
+    fireEvent.click(saveButton());
+    expect(await screen.findByText(/A secret value needs at least 4 characters.*PIN/)).toBeTruthy();
   });
 });

@@ -34,7 +34,13 @@
       "secretOf": "Secret: {{name}}",
       "remove": "Remove {{name}}",
       "clear": "Clear value of {{name}}",
-      "actions": "Actions for {{name}}"
+      "actions": "Actions for {{name}}",
+      "show": "Show {{name}}",
+      "reset": "Reset {{name}}",
+      "hiddenAgain": "{{name}} hidden again",
+      "turnedOff": "The saved value stays hidden, so type it again to make it plain text.",
+      "revealDenied": "Needs the reveal secrets permission to show this value.",
+      "revealFailed": "Couldn't load the value. Try again."
     },
     "resolved": {
       "empty": "(empty)",

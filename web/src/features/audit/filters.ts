@@ -135,6 +135,7 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "stack.draft_saved",
   "stack.draft_discarded",
   "stack.deployed",
+  "stack.value_revealed",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped

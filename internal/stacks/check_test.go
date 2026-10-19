@@ -541,8 +541,8 @@ func TestCheckTakesABareEnvironmentEntryFromTheTable(t *testing.T) {
 `
 	res := withVars(t, compose, stacks.Var{Name: "FOO", Value: "from-table"})
 	got := problemsOf(res, stacks.CodeUnsetVariable)
-	if len(got) != 1 || got[0].Line != 11 || got[0].Message != "QUX has no value and no default. Add a value in Variables." {
-		t.Fatalf("unset_variable = %+v, want only QUX, at line 11", got)
+	if len(got) != 1 || got[0].Line != 12 || got[0].Message != "QUX has no value and no default. Add a value in Variables." {
+		t.Fatalf("unset_variable = %+v, want only QUX, at line 12", got)
 	}
 	if res.Loaded == nil {
 		t.Fatalf("the file did not load: %+v", res.Problems)

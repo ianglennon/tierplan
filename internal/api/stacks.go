@@ -28,24 +28,28 @@ import (
 const (
 	stackTargetType = "stack"
 
-	problemStackNameInvalid   = "stack_name_invalid"
-	problemStackNameTaken     = "stack_name_taken"
-	problemStackNotFound      = "stack_not_found"
-	problemStackStartInvalid  = "stack_start_invalid"
-	problemStackFileInvalid   = "stack_file_invalid"
-	problemStackVarInvalid    = "stack_var_invalid"
-	problemStackPlaceholder   = "stack_placeholder_without_value"
-	problemFilePathInvalid    = "file_path_invalid"
-	problemFileNameTaken      = "file_name_taken"
-	problemFileTooLarge       = "file_too_large"
-	problemStackTooLarge      = "stack_too_large"
-	problemComposeMissing     = "compose_missing"
-	problemDraftConflict      = "draft_conflict"
-	problemTargetEngineAbsent = "target_engine_missing"
-	problemComposeInvalid     = "compose_invalid"
-	problemComposeUnsupported = "compose_unsupported"
-	problemTooManyDeploys     = "too_many_deploys"
-	problemStackJobNotFound   = "stack_job_not_found"
+	problemStackNameInvalid    = "stack_name_invalid"
+	problemStackNameTaken      = "stack_name_taken"
+	problemStackNotFound       = "stack_not_found"
+	problemStackStartInvalid   = "stack_start_invalid"
+	problemStackFileInvalid    = "stack_file_invalid"
+	problemStackVarInvalid     = "stack_var_invalid"
+	problemVariableNameInvalid = "variable_name_invalid"
+	problemVariableNameTaken   = "variable_name_taken"
+	problemSecretTooShort      = "secret_too_short"
+	problemVariableNotFound    = "variable_not_found"
+	problemStackPlaceholder    = "stack_placeholder_without_value"
+	problemFilePathInvalid     = "file_path_invalid"
+	problemFileNameTaken       = "file_name_taken"
+	problemFileTooLarge        = "file_too_large"
+	problemStackTooLarge       = "stack_too_large"
+	problemComposeMissing      = "compose_missing"
+	problemDraftConflict       = "draft_conflict"
+	problemTargetEngineAbsent  = "target_engine_missing"
+	problemComposeInvalid      = "compose_invalid"
+	problemComposeUnsupported  = "compose_unsupported"
+	problemTooManyDeploys      = "too_many_deploys"
+	problemStackJobNotFound    = "stack_job_not_found"
 
 	// The states a stack is listed in, from its newest operation.
 	stackNotDeployed  = "not_deployed"
@@ -192,6 +196,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 
 	registerStackDraft(r, d)
 	registerStackCheck(r, d)
+	registerStackVariables(r, d)
 	registerStackDeploy(r, d)
 }
 

@@ -11881,6 +11881,19 @@
         ],
         "type": "object"
       },
+      "StackVariableRevealBody": {
+        "additionalProperties": false,
+        "properties": {
+          "value": {
+            "description": "The variable's saved value, in clear",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
       "StatusCountsBody": {
         "additionalProperties": false,
         "properties": {
@@ -21213,7 +21226,7 @@
         ]
       },
       "put": {
-        "description": "Replaces the draft's files and variables when the draft is still at the version you read; if someone saved in between the answer is 409 draft_conflict, naming who saved and when, and nothing is written. Saving content equal to the saved draft changes nothing: changed is false, the version does not move and no audit row is written. A save never sends anything to an engine: only a deploy does. The files are held to the stack's file rules, each refused with 422 and the path in errors[].location: a path that is absolute, has .., a backslash or a colon (file_path_invalid), a path used twice (file_name_taken), a file over 1 MiB (file_too_large), more than 50 files or 8 MiB in all (stack_too_large), no compose.yaml (compose_missing). A variable name must be letters, digits and underscore (422 stack_var_invalid). A secret file or variable sent as \u003chidden\u003e keeps its saved value; with none saved it is 422 stack_placeholder_without_value. Audited as stack.draft_saved when it changed. Needs stacks.update (Operator).",
+        "description": "Replaces the draft's files and variables when the draft is still at the version you read; if someone saved in between the answer is 409 draft_conflict, naming who saved and when, and nothing is written. Saving content equal to the saved draft changes nothing: changed is false, the version does not move and no audit row is written. A save never sends anything to an engine: only a deploy does. The files are held to the stack's file rules, each refused with 422 and the path in errors[].location: a path that is absolute, has .., a backslash or a colon (file_path_invalid), a path used twice (file_name_taken), a file over 1 MiB (file_too_large), more than 50 files or 8 MiB in all (stack_too_large), no compose.yaml (compose_missing). A variable name must be letters, digits and underscore, not start with a digit and be at most 128 characters (422 variable_name_invalid), and be used once (422 variable_name_taken); a secret variable's value must be at least 4 characters (422 secret_too_short), because shorter values cannot be hidden reliably; more than 500 variables, or a value over 64 KiB, is 422 stack_var_invalid. A secret file or variable sent as \u003chidden\u003e keeps its saved value; with none saved it is 422 stack_placeholder_without_value. Audited as stack.draft_saved when it changed. Needs stacks.update (Operator).",
         "operationId": "saveStackDraft",
         "parameters": [
           {
@@ -21277,6 +21290,77 @@
           }
         },
         "summary": "Save a stack's draft",
+        "tags": [
+          "stacks"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/variables/{name}/reveal": {
+      "post": {
+        "description": "Answers the saved value of a secret variable of the stack, in clear: the one way back to a value every other answer shows as \u003chidden\u003e. The value is read from the saved draft, or from the last deployed definition when there is no draft. A variable that is not in it, is not secret or has no value is 404 variable_not_found. The answer is never cached. Every reveal is audited as stack.value_revealed with the stack, the kind (variable) and the name, never the value; if the audit row cannot be written the value is not sent. A refusal is audited as permission.denied. Needs secrets.reveal (Admin, or an Operator granted the extra).",
+        "operationId": "revealStackVariable",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The variable name. A name that is not a valid variable name is 404 variable_not_found",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "The variable name. A name that is not a valid variable name is 404 variable_not_found",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackVariableRevealBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Reveal a secret variable's saved value",
         "tags": [
           "stacks"
         ]

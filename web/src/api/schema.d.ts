@@ -2042,7 +2042,7 @@ export interface paths {
         get: operations["getStackDraft"];
         /**
          * Save a stack's draft
-         * @description Replaces the draft's files and variables when the draft is still at the version you read; if someone saved in between the answer is 409 draft_conflict, naming who saved and when, and nothing is written. Saving content equal to the saved draft changes nothing: changed is false, the version does not move and no audit row is written. A save never sends anything to an engine: only a deploy does. The files are held to the stack's file rules, each refused with 422 and the path in errors[].location: a path that is absolute, has .., a backslash or a colon (file_path_invalid), a path used twice (file_name_taken), a file over 1 MiB (file_too_large), more than 50 files or 8 MiB in all (stack_too_large), no compose.yaml (compose_missing). A variable name must be letters, digits and underscore (422 stack_var_invalid). A secret file or variable sent as <hidden> keeps its saved value; with none saved it is 422 stack_placeholder_without_value. Audited as stack.draft_saved when it changed. Needs stacks.update (Operator).
+         * @description Replaces the draft's files and variables when the draft is still at the version you read; if someone saved in between the answer is 409 draft_conflict, naming who saved and when, and nothing is written. Saving content equal to the saved draft changes nothing: changed is false, the version does not move and no audit row is written. A save never sends anything to an engine: only a deploy does. The files are held to the stack's file rules, each refused with 422 and the path in errors[].location: a path that is absolute, has .., a backslash or a colon (file_path_invalid), a path used twice (file_name_taken), a file over 1 MiB (file_too_large), more than 50 files or 8 MiB in all (stack_too_large), no compose.yaml (compose_missing). A variable name must be letters, digits and underscore, not start with a digit and be at most 128 characters (422 variable_name_invalid), and be used once (422 variable_name_taken); a secret variable's value must be at least 4 characters (422 secret_too_short), because shorter values cannot be hidden reliably; more than 500 variables, or a value over 64 KiB, is 422 stack_var_invalid. A secret file or variable sent as <hidden> keeps its saved value; with none saved it is 422 stack_placeholder_without_value. Audited as stack.draft_saved when it changed. Needs stacks.update (Operator).
          */
         put: operations["saveStackDraft"];
         post?: never;
@@ -2051,6 +2051,26 @@ export interface paths {
          * @description Deletes the saved draft with its files and variables; the editor then shows the last deployed definition, or the starter example for a stack never deployed. Discarding when there is no draft is the same as discarding once: 204, nothing written, no audit row. A discard never sends anything to an engine. Audited as stack.draft_discarded, with the version it deleted, when there was a draft. Needs stacks.update (Operator).
          */
         delete: operations["discardStackDraft"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/variables/{name}/reveal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reveal a secret variable's saved value
+         * @description Answers the saved value of a secret variable of the stack, in clear: the one way back to a value every other answer shows as <hidden>. The value is read from the saved draft, or from the last deployed definition when there is no draft. A variable that is not in it, is not secret or has no value is 404 variable_not_found. The answer is never cached. Every reveal is audited as stack.value_revealed with the stack, the kind (variable) and the name, never the value; if the audit row cannot be written the value is not sent. A refusal is audited as permission.denied. Needs secrets.reveal (Admin, or an Operator granted the extra).
+         */
+        post: operations["revealStackVariable"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -8312,6 +8332,10 @@ export interface components {
             /** @description The value a deploy will use: the table's value, else the default written in the compose file, else empty. A secret variable's value is <hidden> */
             value: string;
         };
+        StackVariableRevealBody: {
+            /** @description The variable's saved value, in clear */
+            value: string;
+        };
         StatusCountsBody: {
             /**
              * Format: int64
@@ -13392,6 +13416,43 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    revealStackVariable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+                /** @description The variable name. A name that is not a valid variable name is 404 variable_not_found */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackVariableRevealBody"];
+                };
             };
             /** @description Error */
             default: {
