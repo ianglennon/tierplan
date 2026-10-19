@@ -143,27 +143,54 @@ type standaloneDiff struct {
 	// from the service's now, Unchanged the ones whose containers all match, and Removed the services
 	// the containers belong to that the project no longer declares (the deploy removes them).
 	Added, Changed, Unchanged, Removed []string
+	// Forced are the services whose containers carry the hash the service has now but whose running
+	// configuration differs from it (a change made by hand on the host): the SDK compares labels only and
+	// would leave them as they are, so the deploy has them recreated (standaloneChanges).
+	Forced []string
 	// Hashes are the desired hash of each service.
 	Hashes map[string]string
 	// Counts is how many containers each removed service has.
 	Orphans map[string]int
 }
 
-// diffStandalone classifies the services of a prepared project against the containers of its Compose
-// project.
-func diffStandalone(p *types.Project, containers []dockerx.ComposeContainer) (standaloneDiff, error) {
-	diff := standaloneDiff{Hashes: map[string]string{}, Orphans: map[string]int{}}
+// containersByService groups the containers of a project by service, each group in the order of the
+// containers' names, which is the order the SDK takes the first container of a service in.
+func containersByService(containers []dockerx.ComposeContainer) map[string][]dockerx.ComposeContainer {
 	byService := map[string][]dockerx.ComposeContainer{}
 	for _, c := range containers {
 		byService[c.Service] = append(byService[c.Service], c)
 	}
+	for _, list := range byService {
+		slices.SortFunc(list, func(a, b dockerx.ComposeContainer) int { return strings.Compare(a.Name, b.Name) })
+	}
+	return byService
+}
+
+// containerIDs are the IDs of each service's containers in the order of their names.
+func containerIDs(byService map[string][]dockerx.ComposeContainer) map[string][]string {
+	out := make(map[string][]string, len(byService))
+	for svc, list := range byService {
+		for _, c := range list {
+			out[svc] = append(out[svc], c.ID)
+		}
+	}
+	return out
+}
+
+// diffStandalone classifies the services of a prepared project against the containers of its Compose
+// project. A service that shares another's namespace or volumes is hashed with the reference resolved to
+// the other's container, as the SDK hashes it when it creates the container (stacks.ResolveServiceRefs).
+func diffStandalone(p *types.Project, containers []dockerx.ComposeContainer) (standaloneDiff, error) {
+	diff := standaloneDiff{Hashes: map[string]string{}, Orphans: map[string]int{}}
+	byService := containersByService(containers)
+	ids := containerIDs(byService)
 	names := make([]string, 0, len(p.Services))
 	for n := range p.Services {
 		names = append(names, n)
 	}
 	sort.Strings(names)
 	for _, n := range names {
-		h, err := dockerx.ServiceHash(p.Services[n])
+		h, err := dockerx.ServiceHash(stacks.ResolveServiceRefs(p.Services[n], ids))
 		if err != nil {
 			return diff, err
 		}

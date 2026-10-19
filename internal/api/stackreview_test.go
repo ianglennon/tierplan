@@ -10,8 +10,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/moby/moby/api/types/container"
+
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/bayplan/internal/stackops/stackopstest"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
@@ -829,5 +832,99 @@ func TestADraftOfAStackNeverDeployedIsNeverConcurrent(t *testing.T) {
 	}
 	if rec := operator.deploy(st.ID, `{"draftVersion":`+itoaT(version)+`}`); rec.Code != http.StatusAccepted {
 		t.Errorf("deploy of a first deploy: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// A standalone stack deployed through the API (the Compose SDK is a stand-in that creates nothing), then
+// stood on the fake host as a deploy leaves it: one container for each service, made from the prepared service.
+const standaloneReviewCompose = "services:\n  web:\n    image: nginx:1.27-alpine\n    ports:\n      - \"8080:80\"\n    restart: unless-stopped\n"
+
+// deployedStandalone creates the stack solo, deploys compose to the standalone host and then puts the stack's
+// containers on the fake, as the real Compose SDK would have left them. It returns what the host holds.
+func deployedStandalone(t *testing.T, f *envFix, e envBody, compose string) (*roleCaller, stackAnswer, *stackopstest.Hosted) {
+	t.Helper()
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "solo")
+	version := saveCompose(t, operator, st.ID, compose, `[]`)
+	if job := f.deployAndWait(t, operator, st.ID, `{"draftVersion":`+itoaT(version)+`}`); job.State != "done" {
+		t.Fatalf("deploy: %+v", job)
+	}
+	// The pins the deploy recorded are the images the containers run.
+	rv, code, raw := operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, raw)
+	}
+	h := stackopstest.HostPinned(t, "solo", st.ID, compose, nil, rv.Pins)
+	return operator, st, h
+}
+
+// standOnHost makes the fake report the stack's containers, images, networks and volumes.
+func standOnHost(f *envFix, h *stackopstest.Hosted) {
+	cfg := swarmManagerEngine()
+	cfg.SwarmState, cfg.SwarmControl, cfg.NodeRows = "", false, nil
+	h.Apply(&cfg)
+	f.fake.Reconfigure(cfg)
+}
+
+func TestStandaloneReviewShowsFieldChanges(t *testing.T) {
+	t.Parallel()
+	f, e, _ := standaloneEnv(t, nil)
+	operator, st, h := deployedStandalone(t, f, e, standaloneReviewCompose)
+	standOnHost(f, h)
+
+	// Right after the deploy there is nothing to do.
+	rv, code, raw := operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, raw)
+	}
+	if len(rv.Services) != 0 || len(rv.Objects) != 0 {
+		t.Fatalf("a review right after a deploy: services = %+v objects = %+v, want none", rv.Services, rv.Objects)
+	}
+
+	// The port moves: web is changed at its published port alone, and the image reads pinned (running).
+	saveCompose(t, operator, st.ID, strings.Replace(standaloneReviewCompose, "8080:80", "9090:80", 1), `[]`)
+	rv, code, raw = operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, raw)
+	}
+	if len(rv.Services) != 1 || rv.Services[0].Short != "web" || rv.Services[0].Change != "changed" || rv.Services[0].Settings != 1 {
+		t.Fatalf("services = %+v, want web changed at one setting", rv.Services)
+	}
+	cur, _ := json.Marshal(rv.Services[0].Current)
+	next, _ := json.Marshal(rv.Services[0].Next)
+	if !strings.Contains(string(cur), `"published":"8080"`) || !strings.Contains(string(next), `"published":"9090"`) {
+		t.Errorf("current = %s\nnext = %s", cur, next)
+	}
+	if len(rv.Images) != 1 || rv.Images[0].State != "pinned" {
+		t.Errorf("images = %+v, want web pinned (running)", rv.Images)
+	}
+	if w := f.fake.Writes(); len(w) != 1 {
+		t.Errorf("engine writes = %v, want only the deploy's pull of the image", w)
+	}
+}
+
+func TestStandaloneReviewShowsAHandChangedContainer(t *testing.T) {
+	t.Parallel()
+	f, e, _ := standaloneEnv(t, nil)
+	operator, st, h := deployedStandalone(t, f, e, standaloneReviewCompose)
+	// docker update --restart always: the compose labels and the config hash stay.
+	h.Docs["web"].HostConfig.RestartPolicy = container.RestartPolicy{Name: "always"}
+	standOnHost(f, h)
+
+	rv, code, raw := operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, raw)
+	}
+	if len(rv.Services) != 1 || rv.Services[0].Short != "web" || rv.Services[0].Change != "changed" || rv.Services[0].Settings != 1 {
+		t.Fatalf("services = %+v, want web changed at its restart policy though the file is as deployed", rv.Services)
+	}
+	cur, _ := json.Marshal(rv.Services[0].Current)
+	next, _ := json.Marshal(rv.Services[0].Next)
+	if !strings.Contains(string(cur), `"restart":"always"`) || !strings.Contains(string(next), `"restart":"unless-stopped"`) {
+		t.Errorf("current = %s\nnext = %s", cur, next)
+	}
+	if rv.Summary.Services.Changed != 1 {
+		t.Errorf("summary = %+v", rv.Summary.Services)
 	}
 }

@@ -447,6 +447,10 @@ type FakeImage struct {
 	Env []string
 	// Cmd and Entrypoint are the image config's command, carried in Config when set.
 	Cmd, Entrypoint []string
+	// User, WorkingDir and StopSignal are the image config's, carried in Config when set, and
+	// ExposedPorts are its EXPOSE lines ("80/tcp" each).
+	User, WorkingDir, StopSignal string
+	ExposedPorts                 []string
 	// History is the layers /images/{name}/history answers, newest first. Empty gives one
 	// layer.
 	History []FakeLayer

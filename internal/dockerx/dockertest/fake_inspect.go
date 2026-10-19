@@ -51,6 +51,14 @@ type FakeInspect struct {
 	// MountTargets maps a Mounts entry to where it appears in the container; the default
 	// is /mnt.
 	MountTargets map[string]string
+	// ImageID is the ID of the image the container was created from, as the inspect shows it in Image.
+	// The default is a made-up ID that no image of the fake has.
+	ImageID string
+	// Document, when set, is the inspect document the container answers, as the engine would document a
+	// container made from a compose service (a test builds it from the prepared service). The ID, the
+	// state and the container's own labels, which the FakeContainer carries, are put into it when it
+	// leaves them empty, so one fake container can stand for a whole stack.
+	Document *container.InspectResponse
 }
 
 // serveInspect answers GET /containers/{id}/json with the restart policy, the
@@ -90,6 +98,9 @@ func (f *Fake) serveInspect(w http.ResponseWriter, r *http.Request, p string, cf
 	if known {
 		in := found.Inspect
 		resp.Image = "sha256:" + strings.Repeat("0", 12) + found.ID
+		if in.ImageID != "" {
+			resp.Image = in.ImageID
+		}
 		resp.Config.Image = found.Image
 		resp.Config.Labels = found.Labels
 		resp.Config.StopTimeout = found.StopTimeout
@@ -155,6 +166,42 @@ func (f *Fake) serveInspect(w http.ResponseWriter, r *http.Request, p string, cf
 			resp.NetworkSettings.Networks[netName] = es
 		}
 	}
+	if known && found.Inspect.Document != nil {
+		resp = found.Inspect.documentFor(resp)
+	}
 	writeJSON(w, http.StatusOK, resp)
 	return true
+}
+
+// documentFor is the document a FakeInspect.Document stands for, with what the document leaves out taken
+// from base (the ID, the name, the image ID, the state and the labels of the container).
+func (in FakeInspect) documentFor(base container.InspectResponse) container.InspectResponse {
+	doc := *in.Document
+	doc.ID = base.ID
+	if doc.Name == "" {
+		doc.Name = base.Name
+	}
+	if doc.Image == "" {
+		doc.Image = base.Image
+	}
+	if in.ImageID != "" {
+		doc.Image = in.ImageID
+	}
+	if doc.State == nil {
+		doc.State = base.State
+	}
+	cfg := container.Config{}
+	if doc.Config != nil {
+		cfg = *doc.Config
+	}
+	labels := map[string]string{}
+	for k, v := range cfg.Labels {
+		labels[k] = v
+	}
+	for k, v := range base.Config.Labels {
+		labels[k] = v
+	}
+	cfg.Labels = labels
+	doc.Config = &cfg
+	return doc
 }

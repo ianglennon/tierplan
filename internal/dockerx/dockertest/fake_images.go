@@ -84,6 +84,18 @@ func (f *Fake) serveImageInspect(w http.ResponseWriter, r *http.Request, p strin
 	if len(fi.Entrypoint) > 0 {
 		config["Entrypoint"] = fi.Entrypoint
 	}
+	for k, v := range map[string]string{"User": fi.User, "WorkingDir": fi.WorkingDir, "StopSignal": fi.StopSignal} {
+		if v != "" {
+			config[k] = v
+		}
+	}
+	if len(fi.ExposedPorts) > 0 {
+		exposed := map[string]struct{}{}
+		for _, p := range fi.ExposedPorts {
+			exposed[p] = struct{}{}
+		}
+		config["ExposedPorts"] = exposed
+	}
 	doc := map[string]any{
 		"Id": fi.ID, "RepoTags": orEmpty(fi.RepoTags), "RepoDigests": orEmpty(fi.RepoDigests),
 		"Os": os, "Architecture": arch, "Size": fi.Size,

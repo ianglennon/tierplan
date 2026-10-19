@@ -88,8 +88,11 @@ type ReviewInput struct {
 	BaseSeq  int64
 	Base     *stacks.WorkingCopy
 	// Pins is where the pins of the stack's last good revision are read from. Nil means none.
-	Pins   PinStore
-	Caller Caller
+	Pins PinStore
+	// Revisions is where a standalone review reads the stored revisions from, to find what the engine does
+	// not record about a running container. Nil means none.
+	Revisions RevisionStore
+	Caller    Caller
 }
 
 // DeployedRevision is the stack's last good revision: its number, who started its deploy and

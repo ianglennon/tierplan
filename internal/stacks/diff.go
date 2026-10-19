@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/moby/moby/api/types/swarm"
 )
 
@@ -155,10 +156,58 @@ func DiffServices(desired map[string]swarm.ServiceSpec, live map[string]swarm.Se
 	return append(out, removed...)
 }
 
-func sortedKeys(m map[string]swarm.ServiceSpec) []string {
+func sortedKeys[V any](m map[string]V) []string {
 	keys := slices.Collect(maps.Keys(m))
 	sort.Strings(keys)
 	return keys
+}
+
+// DiffComposeServices compares the services a standalone deploy would send with the services the host runs,
+// both already through NormalizeComposeService (the desired ones from the prepared project, the running ones
+// rebuilt from the containers' inspect documents by RunningService). It is DiffServices for compose
+// services: equality is decided on the normalised raw values before anything is masked, so a changed secret
+// is a change though both sides read Hidden. It lists added and changed services in name order, then the
+// removed ones, in name order. A service that is equal is not listed. A removed service needs no spec: its
+// entry in running can be a service with only a name.
+func DiffComposeServices(desired, running map[string]types.ServiceConfig, m Masker) []ServiceChange {
+	var out, removed []ServiceChange
+	for _, name := range sortedKeys(desired) {
+		next := desired[name]
+		cur, ok := running[name]
+		if !ok {
+			tree, _ := toTree(next)
+			masked, _ := MaskSpec(tree, m)
+			out = append(out, ServiceChange{Name: name, Short: name, Change: ChangeAdded, Next: mustJSON(masked)})
+			continue
+		}
+		if SameComposeService(cur, next) {
+			continue
+		}
+		out = append(out, ChangedComposeService(name, cur, next, m))
+	}
+	for _, name := range sortedKeys(running) {
+		if _, ok := desired[name]; !ok {
+			removed = append(removed, ServiceChange{Name: name, Short: name, Change: ChangeRemoved})
+		}
+	}
+	return append(out, removed...)
+}
+
+// SameComposeService reports whether two normalised services are equal in everything they carry.
+func SameComposeService(a, b types.ServiceConfig) bool {
+	ja, err1 := ServiceJSON(a)
+	jb, err2 := ServiceJSON(b)
+	return err1 == nil && err2 == nil && bytes.Equal(ja, jb)
+}
+
+// ChangedComposeService is the change row of a service listed as changed whether or not its normalised
+// settings differ (a service whose hash differs from the one on its containers can differ in nothing that is
+// listed, such as the content of a secret): Current and Next are the masked settings, Settings counts what
+// differs, and HiddenChanges names the settings that changed to or from a value the masker hides.
+func ChangedComposeService(name string, cur, next types.ServiceConfig, m Masker) ServiceChange {
+	curTree, _ := toTree(cur)
+	nextTree, _ := toTree(next)
+	return changedTrees(name, name, curTree, nextTree, m)
 }
 
 // shortName is the service's name in the compose file: its swarm name without the stack's
@@ -185,7 +234,11 @@ func sameSpec(a, b swarm.ServiceSpec) bool {
 func changedService(name string, cur, next swarm.ServiceSpec, m Masker) ServiceChange {
 	curTree, _ := toTree(cur)
 	nextTree, _ := toTree(next)
+	return changedTrees(name, shortName(name, next), curTree, nextTree, m)
+}
 
+// changedTrees builds the change for a service whose two specs, as JSON trees, are listed as different.
+func changedTrees(name, short string, curTree, nextTree any, m Masker) ServiceChange {
 	pc := &maskPass{m: m, hidden: map[string]string{}, leaves: map[string]string{}}
 	pc.walk("", curTree)
 	pn := &maskPass{m: m, hidden: map[string]string{}, leaves: map[string]string{}}
@@ -221,7 +274,7 @@ func changedService(name string, cur, next swarm.ServiceSpec, m Masker) ServiceC
 	fc := &maskPass{m: m, hidden: map[string]string{}, leaves: map[string]string{}, override: curForce}
 	fn := &maskPass{m: m, hidden: map[string]string{}, leaves: map[string]string{}, override: nextForce}
 	return ServiceChange{
-		Name: name, Short: shortName(name, next), Change: ChangeChanged,
+		Name: name, Short: short, Change: ChangeChanged,
 		Current: mustJSON(fc.walk("", curTree)), Next: mustJSON(fn.walk("", nextTree)),
 		HiddenChanges: hiddenPaths, Settings: countChanges("", curTree, nextTree),
 	}

@@ -4,8 +4,10 @@
 package stacks
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -241,4 +243,54 @@ func sortedNames[V any](m map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// ServiceJSON is the service as JSON in a stable key order (the fields of the struct in their order, the keys
+// of a map sorted), without its custom labels, which the configuration hash leaves out too.
+func ServiceJSON(svc types.ServiceConfig) (json.RawMessage, error) {
+	svc.CustomLabels = nil
+	raw, err := json.Marshal(svc)
+	if err != nil {
+		return nil, fmt.Errorf("encode service %s: %w", svc.Name, err)
+	}
+	return raw, nil
+}
+
+// ResolveServiceRefs is the service as the Compose SDK hashes it when it creates a container for it: a
+// reference to another service of the project is replaced by the ID of that service's first container, by
+// container name (resolveServiceReferences in the SDK, as serviceHashWithResolvedRefs applies it). ids holds
+// each service's container IDs in the order of the containers' names. network_mode, ipc and pid
+// "service:X" become "container:<ID>", and each volumes_from entry becomes the bare ID of X's container (the
+// access mode is dropped, as the SDK drops it); "container:<name>" in volumes_from loses its prefix. A
+// reference that cannot be resolved stays as written, and a failing volumes_from stops the resolution of
+// the rest, as in the SDK. The result shares nothing with svc.
+func ResolveServiceRefs(svc types.ServiceConfig, ids map[string][]string) types.ServiceConfig {
+	out := svc
+	out.VolumesFrom = slices.Clone(svc.VolumesFrom)
+	for i, vol := range out.VolumesFrom {
+		spec := strings.Split(vol, ":")
+		if spec[0] == "container" {
+			if len(spec) > 1 {
+				out.VolumesFrom[i] = spec[1]
+			}
+			continue
+		}
+		first := ids[spec[0]]
+		if len(first) == 0 {
+			return out
+		}
+		out.VolumesFrom[i] = first[0]
+	}
+	for _, mode := range []*string{&out.NetworkMode, &out.Ipc, &out.Pid} {
+		name, ok := strings.CutPrefix(*mode, types.NetworkModeServicePrefix)
+		if !ok {
+			continue
+		}
+		first := ids[name]
+		if len(first) == 0 {
+			return out
+		}
+		*mode = types.ContainerPrefix + first[0]
+	}
+	return out
 }

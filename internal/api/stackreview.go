@@ -150,7 +150,7 @@ func registerStackReview(r *httpx.Router, d StacksDeps) {
 			"concurrent is set when someone deployed after the draft was started, with what that deployment changed and what the draft changed, file by file; the deploy then needs acknowledgeConcurrent. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. " +
 			"For a caller below env Admin, host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables, is a blocking needs_admin problem at its line, and needsAdmin names the kinds. " +
 			"A name that something Bayplan does not manage holds is a blocking stack_name_clash problem, and another stack operation running on the environment is a blocking operation_locked problem. " +
-			"On a standalone host the review pins the images the same way and compares the config hash of each service, as the Compose SDK computes it from the project a deploy would send, with the hash on each running container: a service with no container is added, one whose hash differs is changed (a changed secret or config is a changed service), and a service of the host's Compose project that the file no longer declares is removed; the changed services carry no field-level difference. An environment that is no longer the kind of target the stack was created for is 409 target_changed. Needs stacks.deploy (Operator).",
+			"On a standalone host the review pins the images the same way and compares each service with the containers that run it: the service a deploy would send, and the service rebuilt from each running container's inspect document, both with what the image or the engine fills in taken out, so that right after a deploy nothing differs. A service with no container is added; one whose containers carry another config hash than the service has now, or whose running configuration is not what the file says (a container changed by hand on the host, which keeps its labels and its hash), is changed, with the masked current and next settings as compose settings (restart, ports, environment, volumes ...); a changed secret or config is a changed service; and a service of the host's Compose project that the file no longer declares is removed. Settings the engine does not record (depends_on, secrets, configs, profiles, pull_policy) are read from the stored revision that made the container, and are the file's own when none did. An environment that is no longer the kind of target the stack was created for is 409 target_changed. Needs stacks.deploy (Operator).",
 		Tags: []string{"stacks"},
 	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackReviewInput) (*StackReviewOutput, error) {
@@ -174,7 +174,7 @@ func reviewStack(ctx context.Context, d StacksDeps, in *StackReviewInput) (*Stac
 	}
 	ri := stackops.ReviewInput{
 		EnvID: env.ID, Stack: st, Copy: draft.Copy, DraftVersion: draft.Version,
-		Mode: in.Body.Mode, Services: in.Body.Services, Pins: repo,
+		Mode: in.Body.Mode, Services: in.Body.Services, Pins: repo, Revisions: repo,
 		Caller: stackops.Caller{Principal: p, Actor: p.Name},
 	}
 	if good, ok, err := repo.LatestGoodRevision(ctx, st.ID); err != nil {
