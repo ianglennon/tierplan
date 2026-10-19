@@ -356,13 +356,19 @@ describe("the secret.rotated and config.rotated actions (06-28)", () => {
 
 describe("the stack actions (07-01)", () => {
   it("are in the Action filter, scoped to an environment, with their own labels", () => {
-    for (const key of ["stack.created", "stack.draft_saved", "stack.deployed"]) {
+    for (const key of [
+      "stack.created",
+      "stack.draft_saved",
+      "stack.draft_discarded",
+      "stack.deployed",
+    ]) {
       expect(KNOWN_ACTIONS, key).toContain(key);
       expect(ENV_SCOPED_ACTIONS, key).toContain(key);
     }
     const labels = audit.audit.actions as Record<string, Record<string, string>>;
     expect(labels.stack?.created).toBe("Stack created");
     expect(labels.stack?.draft_saved).toBe("Stack draft saved");
+    expect(labels.stack?.draft_discarded).toBe("Stack draft discarded");
     expect(labels.stack?.deployed).toBe("Stack deployed");
   });
 });

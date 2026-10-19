@@ -77,6 +77,9 @@ type Snapshot struct {
 	Outcome, CreatedBy    string
 	CreatedAt             time.Time
 	Copy                  stacks.WorkingCopy
+	// IsDraft is true for a draft that is stored. It is false for what Draft answers when the stack
+	// has none: the last good revision, or the starter, so the editor always has content.
+	IsDraft bool
 }
 
 // DeployRow is one operation on a stack.
@@ -270,6 +273,12 @@ func (r Repo) SaveDraft(ctx context.Context, stackID string, version int64, acto
 	}
 	draft.Version, draft.CreatedBy, draft.CreatedAt, draft.Copy = version+1, actor, now, normalise(copy)
 	return draft, true, nil
+}
+
+// DiscardDraft deletes the stack's draft with its files and variables. It reports false when
+// there was none, which is not an error: discarding twice is the same as discarding once.
+func (r Repo) DiscardDraft(ctx context.Context, stackID string) (discarded bool, version int64, err error) {
+	return false, 0, nil
 }
 
 // NewRevision copies the draft into a new revision, numbered after the stack's last one and

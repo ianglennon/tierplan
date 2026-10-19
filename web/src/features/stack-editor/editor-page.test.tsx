@@ -7,6 +7,7 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  Outlet,
   RouterProvider,
 } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -42,6 +43,7 @@ interface Server {
   hasDraft: boolean;
   draft: () => Response | Promise<Response>;
   save: (body: Record<string, unknown>) => Response | Promise<Response>;
+  discard: () => Response | Promise<Response>;
 }
 
 let server: Server;
@@ -75,6 +77,7 @@ beforeEach(() => {
         savedBy: "grace",
         savedAt: new Date().toISOString(),
       }),
+    discard: () => new Response(null, { status: 204 }),
   };
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
@@ -110,7 +113,9 @@ beforeEach(() => {
         });
       }
       if (path === `/api/env/${ENV}/stacks/${STACK}/draft`) {
-        return req.method === "PUT" ? server.save(entry.body ?? {}) : server.draft();
+        if (req.method === "PUT") return server.save(entry.body ?? {});
+        if (req.method === "DELETE") return server.discard();
+        return server.draft();
       }
       return Response.json({}, { status: 404 });
     }),
@@ -130,13 +135,22 @@ function mount(file?: string, onFileChange?: (path: string | undefined) => void)
   const root = createRootRoute({
     component: () => (
       <TooltipProvider>
-        <StackEditorPage envId={ENV} stackId={STACK} file={file} onFileChange={onFileChange} />
+        <Outlet />
         <Toaster />
       </TooltipProvider>
     ),
   });
   const router = createRouter({
-    routeTree: root.addChildren([createRoute({ getParentRoute: () => root, path: "/" })]),
+    routeTree: root.addChildren([
+      createRoute({
+        getParentRoute: () => root,
+        path: "/",
+        component: () => (
+          <StackEditorPage envId={ENV} stackId={STACK} file={file} onFileChange={onFileChange} />
+        ),
+      }),
+      createRoute({ getParentRoute: () => root, path: "/away", component: () => <p>Away</p> }),
+    ]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
   render(
@@ -537,5 +551,347 @@ describe("a save the server refuses over a file", () => {
     await refused("file_path_invalid", "../x");
     expect(editorText()).toBe("x");
     expect(screen.getByText("Unsaved changes")).toBeTruthy();
+  });
+});
+
+const deletes = () => server.sent.filter((s) => s.method === "DELETE");
+
+describe("Discard draft", () => {
+  const discardButton = () => screen.queryByRole("button", { name: "Discard draft" });
+
+  it("is not offered for a stack with no saved draft and no edits", async () => {
+    mount();
+    await ready();
+    expect(discardButton()).toBeNull();
+  });
+
+  it("is offered while a saved draft exists", async () => {
+    server.hasDraft = true;
+    mount();
+    await ready();
+    expect(await screen.findByRole("button", { name: "Discard draft" })).toBeTruthy();
+  });
+
+  it("is offered once there are unsaved edits", async () => {
+    mount();
+    await ready();
+    typeIntoEditor("x");
+    expect(await screen.findByRole("button", { name: "Discard draft" })).toBeTruthy();
+  });
+
+  it("asks first, with the focus on Cancel, and sends nothing when cancelled", async () => {
+    server.hasDraft = true;
+    mount();
+    await ready();
+    fireEvent.click(await screen.findByRole("button", { name: "Discard draft" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Discard the draft?" });
+    expect(
+      within(dialog).getByText(
+        "This deletes the saved draft, including files and variables, and the editor goes back to what is deployed. It can't be undone.",
+      ),
+    ).toBeTruthy();
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(deletes()).toHaveLength(0);
+  });
+
+  it("deletes the draft, shows what is deployed, drops unsaved edits and toasts", async () => {
+    server.hasDraft = true;
+    const deployed = "services:\n  web:\n    image: nginx:1.26\n";
+    server.discard = () => {
+      server.hasDraft = false;
+      server.draft = () =>
+        Response.json(
+          draftBody({
+            version: 0,
+            isDraft: false,
+            files: [{ path: "compose.yaml", content: deployed, secret: false }],
+          }),
+        );
+      return new Response(null, { status: 204 });
+    };
+    mount();
+    await ready();
+    typeIntoEditor("unsaved work");
+    fireEvent.click(await screen.findByRole("button", { name: "Discard draft" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Discard the draft?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Discard draft" }));
+
+    expect(await screen.findByText("Discarded the draft of tracer.")).toBeTruthy();
+    expect(deletes()).toHaveLength(1);
+    expect(deletes()[0]?.path).toBe(`/api/env/${ENV}/stacks/${STACK}/draft`);
+    await waitFor(() => expect(editorText()).toBe(deployed));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(await screen.findByText("No draft yet")).toBeTruthy();
+    expect(screen.queryByText("Unsaved changes")).toBeNull();
+    await waitFor(() => expect(discardButton()).toBeNull());
+  });
+
+  it("saves from the deployed definition at version 0 after a discard", async () => {
+    server.hasDraft = true;
+    server.discard = () => {
+      server.hasDraft = false;
+      server.draft = () => Response.json(draftBody({ version: 0, isDraft: false }));
+      return new Response(null, { status: 204 });
+    };
+    mount();
+    await ready();
+    fireEvent.click(await screen.findByRole("button", { name: "Discard draft" }));
+    fireEvent.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Discard draft" }),
+    );
+    await screen.findByText("Discarded the draft of tracer.");
+    await waitFor(() => expect(discardButton()).toBeNull());
+    typeIntoEditor("fresh");
+    fireEvent.click(saveButton());
+    await screen.findByText("Saved the draft of tracer.");
+    expect(puts()[0]?.body?.version).toBe(0);
+  });
+
+  it("keeps the dialog open and says so when the discard fails", async () => {
+    server.hasDraft = true;
+    server.discard = () => problem(500, "internal");
+    mount();
+    await ready();
+    fireEvent.click(await screen.findByRole("button", { name: "Discard draft" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Discard the draft?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Discard draft" }));
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert.textContent).toContain("Something went wrong on the server.");
+    expect(screen.getByRole("alertdialog", { name: "Discard the draft?" })).toBeTruthy();
+  });
+
+  it("is not offered to a Viewer", async () => {
+    server.role = "viewer";
+    server.hasDraft = true;
+    mount();
+    await ready();
+    expect(discardButton()).toBeNull();
+  });
+});
+
+describe("a draft someone else saved meanwhile", () => {
+  const conflict = (user: string, version: string) => () =>
+    Response.json(
+      {
+        type: "draft_conflict",
+        title: "Conflict",
+        status: 409,
+        detail: "d",
+        errors: [
+          { location: "savedBy", message: user },
+          { location: "savedAt", message: "2026-10-19T11:00:00Z" },
+          { location: "version", message: version },
+        ],
+      },
+      { status: 409 },
+    );
+  const sentence = (user: string) =>
+    `${user} saved this draft while you were editing. Reloading shows their version and drops your unsaved changes.`;
+
+  it("shows who saved it above the footer, with Reload draft and Save over it, and keeps the edits", async () => {
+    server.save = conflict("grace", "5");
+    mount();
+    await ready();
+    typeIntoEditor("mine");
+    fireEvent.click(saveButton());
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(sentence("grace"));
+    expect(within(alert).getByRole("button", { name: "Reload draft" })).toBeTruthy();
+    expect(within(alert).getByRole("button", { name: "Save over it" })).toBeTruthy();
+    expect(editorText()).toBe("mine");
+    expect(screen.getByText("Unsaved changes")).toBeTruthy();
+  });
+
+  it("reloads their version on Reload draft, dropping the edits, and saves from it", async () => {
+    server.save = conflict("grace", "5");
+    mount();
+    await ready();
+    typeIntoEditor("mine");
+    fireEvent.click(saveButton());
+    const alert = await screen.findByRole("alert");
+    server.draft = () =>
+      Response.json(
+        draftBody({
+          version: 5,
+          savedBy: "grace",
+          files: [{ path: "compose.yaml", content: "theirs", secret: false }],
+        }),
+      );
+    server.save = (body) =>
+      Response.json({
+        changed: true,
+        version: (body.version as number) + 1,
+        savedBy: "ada",
+        savedAt: "2026-10-19T12:00:00Z",
+      });
+    fireEvent.click(within(alert).getByRole("button", { name: "Reload draft" }));
+
+    await waitFor(() => expect(editorText()).toBe("theirs"));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(screen.queryByText("Unsaved changes")).toBeNull();
+    typeIntoEditor("theirs, then mine");
+    fireEvent.click(saveButton());
+    await screen.findByText("Saved the draft of tracer.");
+    expect(puts().at(-1)?.body?.version).toBe(5);
+  });
+
+  it("sends the working copy again with the server's version on Save over it", async () => {
+    server.save = conflict("grace", "5");
+    mount();
+    await ready();
+    typeIntoEditor("mine");
+    fireEvent.click(saveButton());
+    const alert = await screen.findByRole("alert");
+    server.save = (body) =>
+      Response.json({
+        changed: true,
+        version: (body.version as number) + 1,
+        savedBy: "ada",
+        savedAt: "2026-10-19T12:00:00Z",
+      });
+    fireEvent.click(within(alert).getByRole("button", { name: "Save over it" }));
+
+    expect(await screen.findByText("Saved the draft of tracer.")).toBeTruthy();
+    expect(puts()).toHaveLength(2);
+    expect(puts()[1]?.body).toEqual({
+      version: 5,
+      files: [{ path: "compose.yaml", content: "mine", secret: false }],
+      vars: [],
+    });
+    expect(screen.queryByText(sentence("grace"))).toBeNull();
+    expect(editorText()).toBe("mine");
+  });
+
+  it("asks again when someone saved yet again, naming them", async () => {
+    server.save = conflict("grace", "5");
+    mount();
+    await ready();
+    typeIntoEditor("mine");
+    fireEvent.click(saveButton());
+    const alert = await screen.findByRole("alert");
+    server.save = conflict("linus", "6");
+    fireEvent.click(within(alert).getByRole("button", { name: "Save over it" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain(sentence("linus")));
+    server.save = (body) =>
+      Response.json({
+        changed: true,
+        version: (body.version as number) + 1,
+        savedBy: "ada",
+        savedAt: "2026-10-19T12:00:00Z",
+      });
+    fireEvent.click(screen.getByRole("button", { name: "Save over it" }));
+    await screen.findByText("Saved the draft of tracer.");
+    expect(puts().at(-1)?.body?.version).toBe(6);
+  });
+
+  it("says the draft was discarded when nobody saved it", async () => {
+    server.save = conflict("", "0");
+    mount();
+    await ready();
+    typeIntoEditor("mine");
+    fireEvent.click(saveButton());
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(
+      "The draft was discarded while you were editing. Reloading shows what is deployed now and drops your unsaved changes.",
+    );
+  });
+
+  it("clears the alert when a later save succeeds", async () => {
+    server.save = conflict("grace", "5");
+    mount();
+    await ready();
+    typeIntoEditor("mine");
+    fireEvent.click(saveButton());
+    await screen.findByRole("alert");
+    server.save = (body) =>
+      Response.json({
+        changed: true,
+        version: (body.version as number) + 1,
+        savedBy: "ada",
+        savedAt: "2026-10-19T12:00:00Z",
+      });
+    fireEvent.click(screen.getByRole("button", { name: "Save over it" }));
+    await screen.findByText("Saved the draft of tracer.");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("leaving with unsaved edits", () => {
+  async function dirtyPage() {
+    const router = mount();
+    await ready();
+    typeIntoEditor("mine");
+    await screen.findByText("Unsaved changes");
+    return router;
+  }
+
+  it("asks Discard changes? and stays, with the edits, on Keep editing", async () => {
+    const router = await dirtyPage();
+    void router.navigate({ to: "/away" as never });
+    const dialog = await screen.findByRole("alertdialog", { name: "Discard changes?" });
+    expect(within(dialog).getByText("Your edits to tracer haven't been saved.")).toBeTruthy();
+    expect(document.activeElement).toBe(
+      within(dialog).getByRole("button", { name: "Keep editing" }),
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keep editing" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(router.state.location.pathname).toBe("/");
+    expect(editorText()).toBe("mine");
+  });
+
+  it("leaves on Discard changes", async () => {
+    const router = await dirtyPage();
+    void router.navigate({ to: "/away" as never });
+    const dialog = await screen.findByRole("alertdialog", { name: "Discard changes?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Discard changes" }));
+    expect(await screen.findByText("Away")).toBeTruthy();
+    expect(router.state.location.pathname).toBe("/away");
+  });
+
+  it("leaves a clean editor without asking", async () => {
+    const router = mount();
+    await ready();
+    await router.navigate({ to: "/away" as never });
+    expect(await screen.findByText("Away")).toBeTruthy();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("leaves without asking once the edits are saved", async () => {
+    const router = await dirtyPage();
+    fireEvent.click(saveButton());
+    await screen.findByText("Saved the draft of tracer.");
+    await router.navigate({ to: "/away" as never });
+    expect(await screen.findByText("Away")).toBeTruthy();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("does not ask when only the open file changes", async () => {
+    server.draft = () =>
+      Response.json(
+        draftBody({
+          files: [
+            { path: "compose.yaml", content: COMPOSE, secret: false },
+            { path: "a.env", content: "A=1", secret: false },
+          ],
+        }),
+      );
+    const router = await dirtyPage();
+    await router.navigate({ to: "/", search: { file: "a.env" } as never });
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("makes the browser ask before the tab closes only while there are unsaved edits", async () => {
+    mount();
+    await ready();
+    const clean = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(clean);
+    expect(clean.defaultPrevented).toBe(false);
+    typeIntoEditor("mine");
+    await screen.findByText("Unsaved changes");
+    const dirty = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(dirty);
+    expect(dirty.defaultPrevented).toBe(true);
   });
 });
