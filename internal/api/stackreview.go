@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -180,8 +181,21 @@ func reviewStack(ctx context.Context, d StacksDeps, in *StackReviewInput) (*Stac
 		return nil, stackInternal(d, "read the running revision", env.ID, err)
 	} else if ok {
 		ri.Previous = &good.Copy
+		ri.Deployed = &stackops.DeployedRevision{Seq: good.Seq, By: good.CreatedBy, At: good.CreatedAt}
+		ri.BaseSeq = draft.BaseSeq
 		if ri.Rendering, err = repo.GoodRendering(ctx, st.ID); err != nil {
 			return nil, stackInternal(d, "read the last rendering", env.ID, err)
+		}
+		if good.Seq > draft.BaseSeq && draft.BaseSeq > 0 {
+			base, err := repo.Revision(ctx, st.ID, draft.BaseSeq)
+			switch {
+			case errors.Is(err, stackops.ErrRevisionNotFound):
+				// The revision the draft started from is gone: the draft is compared with nothing.
+			case err != nil:
+				return nil, stackInternal(d, "read the revision the draft started from", env.ID, err)
+			default:
+				ri.Base = &base.Copy
+			}
 		}
 	}
 	rv, err := d.ops().Review(ctx, ri)

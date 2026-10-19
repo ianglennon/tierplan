@@ -532,20 +532,41 @@ func (r Repo) GoodRendering(ctx context.Context, stackID string) ([]byte, error)
 // Revision reads one revision of a stack by its number, with its files and variables opened. A
 // number the stack has no revision for is ErrRevisionNotFound.
 func (r Repo) Revision(ctx context.Context, stackID string, seq int64) (Snapshot, error) {
-	return Snapshot{}, ErrRevisionNotFound
+	row, err := r.Store.RQ.GetRevision(ctx, sqlc.GetRevisionParams{StackID: stackID, Seq: seq})
+	if errors.Is(err, sql.ErrNoRows) {
+		return Snapshot{}, ErrRevisionNotFound
+	}
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("read revision: %w", err)
+	}
+	snap := snapshotOf(row)
+	if snap.Copy, err = r.readContent(ctx, r.Store.RQ, snap.ID); err != nil {
+		return Snapshot{}, err
+	}
+	return snap, nil
 }
 
 // RebaseDraft says the stack's draft now starts from revision seq. A deploy of the draft calls it
 // once it has taken the revision, so the draft is not later taken for one made before a newer
 // deployment. A stack with no draft has nothing to rebase.
 func (r Repo) RebaseDraft(ctx context.Context, stackID string, seq int64) error {
+	if _, err := r.Store.Q.SetDraftBaseSeq(ctx, sqlc.SetDraftBaseSeqParams{BaseSeq: seq, StackID: stackID}); err != nil {
+		return fmt.Errorf("rebase draft: %w", err)
+	}
 	return nil
 }
 
 // GoodRevisionInfo is who started the deploy of the stack's newest good revision, when, and its
 // number, without opening its content. It reports false when the stack has none.
 func (r Repo) GoodRevisionInfo(ctx context.Context, stackID string) (DeployedRevision, bool, error) {
-	return DeployedRevision{}, false, nil
+	row, err := r.Store.RQ.LatestGoodRevision(ctx, stackID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return DeployedRevision{}, false, nil
+	}
+	if err != nil {
+		return DeployedRevision{}, false, fmt.Errorf("read revision: %w", err)
+	}
+	return DeployedRevision{Seq: row.Seq, By: row.CreatedBy, At: time.Unix(0, row.CreatedAt).UTC()}, true, nil
 }
 
 // LatestGoodRevision is the newest revision whose deploy succeeded, with its files and

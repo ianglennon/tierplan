@@ -779,7 +779,7 @@ func TestConcurrentDraftNeedsAcknowledgement(t *testing.T) {
 	}
 
 	// The draft now starts from revision 3, so it is no longer concurrent.
-	if rv, code, raw = operator.reviewStack(st.ID, `{}`); code != http.StatusOK || rv.Concurrent != nil {
+	if rv, code, _ = operator.reviewStack(st.ID, `{}`); code != http.StatusOK || rv.Concurrent != nil {
 		t.Errorf("review after the acknowledged deploy: %d, concurrent %+v; want none", code, rv.Concurrent)
 	}
 }

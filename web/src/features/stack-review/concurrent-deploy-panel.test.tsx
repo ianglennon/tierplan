@@ -145,13 +145,13 @@ describe("the dialog", () => {
       within(dialog).getByRole("tab", { name: "Deployed since" }).getAttribute("aria-selected"),
     ).toBe("true");
     expect(within(dialog).getByRole("row", { name: "Added line 2" })).toBeTruthy();
-    expect(within(dialog).getByText("  new: line")).toBeTruthy();
+    expect(within(dialog).getByText("new: line")).toBeTruthy();
 
     const mine = within(dialog).getByRole("tab", { name: "Your changes" });
     fireEvent.mouseDown(mine);
     fireEvent.click(mine);
-    expect(await within(dialog).findByText("  replicas: 3")).toBeTruthy();
-    expect(within(dialog).queryByText("  new: line")).toBeNull();
+    expect(await within(dialog).findByText("replicas: 3")).toBeTruthy();
+    expect(within(dialog).queryByText("new: line")).toBeNull();
   });
 
   it("names each file in a group row above its diff, and the diff is a table captioned with it", async () => {

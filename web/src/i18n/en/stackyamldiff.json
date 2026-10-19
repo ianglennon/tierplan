@@ -16,6 +16,25 @@
       "added": "Added line {{n}}",
       "removed": "Removed line {{n}}",
       "context": "Unchanged line {{n}}"
+    },
+    "concurrent": {
+      "title": "This stack was deployed after you started editing",
+      "body": "{{user}} deployed <time/>. Check what changed before you deploy over it.",
+      "see": "See what changed",
+      "ack": "I've seen what changed and want to deploy my draft over it.",
+      "reason": "Tick the box to confirm you've seen what changed.",
+      "refused": "Someone deployed this stack after you started editing. Reload the page and check what changed.",
+      "dialog": {
+        "title": "Changed since you started",
+        "body": "The version your draft started from, what is deployed now, and your draft.",
+        "deployed": "Deployed since",
+        "mine": "Your changes",
+        "close": "Close",
+        "none": "Nothing in the stack's files or variables changed.",
+        "hidden": "Changed (hidden)",
+        "variables": "Variables",
+        "diff": "Changes to {{path}}"
+      }
     }
   }
 }

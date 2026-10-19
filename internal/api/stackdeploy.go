@@ -31,8 +31,9 @@ const (
 	deployModeDeploy = "deploy"
 	deployModeUpdate = "update"
 
-	problemDraftChanged = "draft_changed"
-	problemPinsInvalid  = "pins_invalid"
+	problemDraftChanged             = "draft_changed"
+	problemPinsInvalid              = "pins_invalid"
+	problemConcurrentUnacknowledged = "concurrent_unacknowledged"
 )
 
 // StackDeployRequest is the body of POST .../deploys.
@@ -166,6 +167,9 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 	if draft.Version != in.Body.DraftVersion {
 		return nil, draftChanged(&stackops.DraftConflictError{SavedBy: draft.CreatedBy, SavedAt: draft.CreatedAt, Version: draft.Version})
 	}
+	if err := concurrentGate(ctx, d, repo, st.ID, env.ID, draft.BaseSeq, in.Body.AcknowledgeConcurrent); err != nil {
+		return nil, err
+	}
 	mode, update := deployModeOf(in.Body)
 
 	// Load and convert before anything is stored or started: a compose file that cannot be
@@ -220,6 +224,12 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 	rev, err := repo.NewRevision(ctx, st.ID, p.Name)
 	if err != nil {
 		return nil, stackInternal(d, "revision", env.ID, err)
+	}
+	// The draft is now the content of this revision, so it starts from it: the next review does not
+	// take this deploy for one made by someone else.
+	if err := repo.RebaseDraft(ctx, st.ID, rev.Seq); err != nil {
+		_ = repo.SetOutcome(context.WithoutCancel(ctx), rev.ID, stackops.OutcomeFailed, "", "")
+		return nil, stackInternal(d, "rebase the draft", env.ID, err)
 	}
 	// The masked rendering is what the next review compares its own with. It is stored before the
 	// job starts, with the images this deploy was told to use, and again when the deploy ends good,
@@ -299,6 +309,25 @@ func (r revisionRendering) store(ctx context.Context, snapshotID string, pins ma
 		return err
 	}
 	return r.repo.SetRendered(ctx, snapshotID, out)
+}
+
+// concurrentGate refuses a deploy of a draft that started before the newest good revision was
+// deployed, unless the person has said they saw what changed. The browser asks for the
+// acknowledgement too, but a deploy is never an overwrite of a newer one unseen because of a
+// checkbox alone (D-09).
+func concurrentGate(ctx context.Context, d StacksDeps, repo stackops.Repo, stackID, envID string, baseSeq int64, acknowledged bool) error {
+	good, ok, err := repo.GoodRevisionInfo(ctx, stackID)
+	if err != nil {
+		return stackInternal(d, "read the running revision", envID, err)
+	}
+	if !ok || good.Seq <= baseSeq || acknowledged {
+		return nil
+	}
+	return &huma.ErrorModel{
+		Type: problemConcurrentUnacknowledged, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
+		Detail: good.By + " deployed this stack after you started editing. Review what changed and confirm that you want to deploy your draft over it.",
+		Errors: []*huma.ErrorDetail{{Location: "acknowledgeConcurrent", Message: "revision " + itoa(good.Seq)}},
+	}
 }
 
 // recordDeployEnd stores how a deploy ended: the revision's outcome, the deploy row and the

@@ -25,6 +25,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useEnvName } from "@/features/resources/use-env-name";
 import { EditorFooter } from "@/features/service-editor/editor-footer";
 import { BlockingList } from "@/features/stack-review/blocking-list";
+import { ConcurrentDeployPanel } from "@/features/stack-review/concurrent-deploy-panel";
 import { ImagePinTable } from "@/features/stack-review/image-pin-table";
 import { OtherResourcesTable } from "@/features/stack-review/other-resources-table";
 import { ReviewSummary } from "@/features/stack-review/review-summary";
@@ -56,6 +57,8 @@ function deployRefusal(t: Translate, err: DeployRequestError): string {
       return t("stackReview.deployErrors.draftChanged");
     case "pins_invalid":
       return t("stackReview.deployErrors.pinsInvalid");
+    case "concurrent_unacknowledged":
+      return t("stackYamlDiff.concurrent.refused");
     case "privileged_compose":
       return t("stackReview.deployErrors.needsAdmin");
     case "stack_name_clash":
@@ -85,10 +88,11 @@ function noChange(data: StackReview): boolean {
 }
 
 // deployReason is why Deploy stack is off, in the order that matters: host access the caller may
-// not deploy, an image the registry cannot be asked about, errors, and a stack with nothing to
-// change. Warnings are never a reason (D-10). Absent when a deploy may start. The server refuses
+// not deploy, an image the registry cannot be asked about, errors, a stack with nothing to change,
+// and a deployment made after the draft was started that the person has not acknowledged.
+// Warnings are never a reason (D-10). Absent when a deploy may start. The server refuses
 // every one of these again at the deploy; this only says why the button waits.
-function deployReason(t: Translate, data: StackReview): string | undefined {
+function deployReason(t: Translate, data: StackReview, acknowledged: boolean): string | undefined {
   const kinds = data.needsAdmin ?? [];
   if (kinds.length > 0) return t("stackReview.reasons.needsAdmin", { kinds: listOf(kinds) });
   const lost = (data.images ?? []).find(
@@ -98,6 +102,8 @@ function deployReason(t: Translate, data: StackReview): string | undefined {
   const errors = (data.problems ?? []).filter((p) => p.severity === "error").length;
   if (errors > 0) return t("stackReview.reasons.errors", { count: errors });
   if (noChange(data)) return t("stackReview.reasons.nothing");
+  // A deployment made since the draft was started needs the person to say they saw it (D-09).
+  if (data.concurrent && !acknowledged) return t("stackYamlDiff.concurrent.reason");
   return undefined;
 }
 
@@ -129,6 +135,7 @@ export function ReviewPage({
   const deploy$ = useDeployStack(envId, stackId);
   const [deployError, setDeployError] = useState<string | null>(null);
   const [tab, setTab] = useState<string | null>(null);
+  const [acknowledged, setAcknowledged] = useState(false);
   const name = stack.data?.name;
   const data = review.data;
   const update = mode === "update";
@@ -144,6 +151,8 @@ export function ReviewPage({
         pins: data.pins,
         mode,
         ...(update ? { services } : {}),
+        // Sent only when the review said a deployment was made since, and the box was ticked.
+        ...(data.concurrent && acknowledged ? { acknowledgeConcurrent: true } : {}),
       },
       {
         onSuccess: (answer) => onDeployed(answer.jobId),
@@ -152,7 +161,7 @@ export function ReviewPage({
     );
   }
 
-  const reason = data ? deployReason(t, data) : undefined;
+  const reason = data ? deployReason(t, data, acknowledged) : undefined;
   const blocked = !data || reason !== undefined;
   const starting = deploy$.isPending || deploy$.isSuccess;
   const reasonId = useId();
@@ -230,6 +239,13 @@ export function ReviewPage({
         </Alert>
       ) : (
         <>
+          {data?.concurrent ? (
+            <ConcurrentDeployPanel
+              concurrent={data.concurrent}
+              acknowledged={acknowledged}
+              onAcknowledge={setAcknowledged}
+            />
+          ) : null}
           <BlockingList problems={problems} envId={envId} stackId={stackId} />
           <WarningsList problems={problems} envId={envId} stackId={stackId} />
           {firstDeploy ? (

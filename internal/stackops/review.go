@@ -204,6 +204,7 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 		if err != nil {
 			return
 		}
+		rv.Concurrent = concurrentOf(in)
 		if res.Loaded != nil {
 			rv.YAML = d.renderedChange(in, res.Loaded, rv.Pins)
 		}
@@ -699,6 +700,10 @@ func ConvertProblem(err error) stacks.Problem {
 // diffContext is how many unchanged lines a hunk keeps on either side of a change.
 const diffContext = 3
 
+// variablesPath names the variables in the list of changed files; it is never a file of the stack,
+// FileHunks.Variables says so.
+const variablesPath = "variables"
+
 // textDiffOf compares two texts; there is nothing to show when they are the same.
 func textDiffOf(old, next string) TextDiff {
 	hunks := stacks.LineDiff(old, next, diffContext)
@@ -722,4 +727,115 @@ func (d Deps) renderedChange(in ReviewInput, loaded *stacks.Loaded, pins map[str
 		return TextDiff{}
 	}
 	return textDiffOf(string(in.Rendering), string(out))
+}
+
+// concurrentOf says what happened to a stack since the draft started, or nil when nothing did: no
+// revision has been deployed, or the draft started from the newest one.
+func concurrentOf(in ReviewInput) *Concurrent {
+	if in.Deployed == nil || in.Previous == nil || in.Deployed.Seq <= in.BaseSeq {
+		return nil
+	}
+	var base stacks.WorkingCopy
+	if in.Base != nil {
+		base = *in.Base
+	}
+	// One masker for the three versions: a secret of any of them is hidden in all of them.
+	all := []stacks.WorkingCopy{base, *in.Previous, in.Copy}
+	var vars []stacks.Var
+	var files []stacks.File
+	for _, c := range all {
+		vars, files = append(vars, c.Vars...), append(files, c.Files...)
+	}
+	m := stacks.NewMasker(vars, files)
+	return &Concurrent{
+		Revision: in.Deployed.Seq, DeployedBy: in.Deployed.By, DeployedAt: in.Deployed.At,
+		BaseToDeployed: changedFiles(base, *in.Previous, m),
+		BaseToDraft:    changedFiles(base, in.Copy, m),
+	}
+}
+
+// changedFiles lists the files whose masked content differs between two working copies, the
+// compose file first, then the others by path, then the variables. A secret file or variable is
+// never shown: a difference in one is Hidden.
+func changedFiles(old, next stacks.WorkingCopy, m stacks.Masker) []FileHunks {
+	oldFiles, nextFiles := fileTable(old.Files), fileTable(next.Files)
+	paths := make([]string, 0, len(oldFiles)+len(nextFiles))
+	for p := range oldFiles {
+		paths = append(paths, p)
+	}
+	for p := range nextFiles {
+		if _, both := oldFiles[p]; !both {
+			paths = append(paths, p)
+		}
+	}
+	slices.SortFunc(paths, func(a, b string) int {
+		rank := func(p string) int {
+			if p == stacks.ComposeFile {
+				return 0
+			}
+			return 1
+		}
+		return cmp.Or(cmp.Compare(rank(a), rank(b)), cmp.Compare(a, b))
+	})
+	var out []FileHunks
+	for _, p := range paths {
+		o, oldHas := oldFiles[p]
+		n, nextHas := nextFiles[p]
+		switch {
+		case o.Secret || n.Secret:
+			if oldHas != nextHas || string(o.Content) != string(n.Content) {
+				out = append(out, FileHunks{Path: p, Hidden: true})
+			}
+		default:
+			if td := textDiffOf(m.Mask(string(o.Content)), m.Mask(string(n.Content))); len(td.Hunks) > 0 {
+				out = append(out, FileHunks{Path: p, TextDiff: td})
+			}
+		}
+	}
+	if v := changedVariables(old.Vars, next.Vars, m); v != nil {
+		out = append(out, *v)
+	}
+	return out
+}
+
+func fileTable(files []stacks.File) map[string]stacks.File {
+	out := make(map[string]stacks.File, len(files))
+	for _, f := range files {
+		out[f.Path] = f
+	}
+	return out
+}
+
+// changedVariables compares the variables of two working copies as NAME=value lines by name. A
+// secret's value is Hidden, so a secret whose value changed shows no line of its own; that is
+// Hidden on the result.
+func changedVariables(old, next []stacks.Var, m stacks.Masker) *FileHunks {
+	text := func(vars []stacks.Var) string {
+		sorted := slices.Clone(vars)
+		slices.SortFunc(sorted, func(a, b stacks.Var) int { return cmp.Compare(a.Name, b.Name) })
+		var b strings.Builder
+		for _, v := range sorted {
+			value := m.Mask(v.Value)
+			if v.Secret {
+				value = m.MaskValue(v.Value)
+			}
+			b.WriteString(v.Name + "=" + value + "\n")
+		}
+		return b.String()
+	}
+	oldByName := make(map[string]stacks.Var, len(old))
+	for _, v := range old {
+		oldByName[v.Name] = v
+	}
+	hidden := false
+	for _, v := range next {
+		if o, ok := oldByName[v.Name]; ok && (v.Secret || o.Secret) && v.Value != o.Value {
+			hidden = true
+		}
+	}
+	td := textDiffOf(text(old), text(next))
+	if len(td.Hunks) == 0 && !hidden {
+		return nil
+	}
+	return &FileHunks{Path: variablesPath, Variables: true, Hidden: hidden, TextDiff: td}
 }
