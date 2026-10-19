@@ -5,7 +5,10 @@ package lint_test
 
 import (
 	"context"
+	"strings"
 	"testing"
+
+	"github.com/compose-spec/compose-go/v2/types"
 
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/stacks/lint"
@@ -164,5 +167,132 @@ services:
 	got := byCode(res, stacks.CodeIgnoredOnTarget)
 	if len(got) != 1 || got[0].Line != 3 {
 		t.Fatalf("problems = %+v, want one warning at line 3, where the key is written", res.Problems)
+	}
+}
+
+func TestAMovingImageIsAWarningAtItsLineOnBothTargets(t *testing.T) {
+	t.Parallel()
+	for name, image := range map[string]string{"no tag": "nginx", "latest": "nginx:latest", "a registry with a port": "registry:5000/app"} {
+		for _, target := range []stacks.Target{stacks.TargetSwarm, stacks.TargetStandalone} {
+			t.Run(name+" on "+string(target), func(t *testing.T) {
+				t.Parallel()
+				res := checkOf(t, target, "services:\n  web:\n    image: "+image+"\n")
+				if len(res.Problems) != 1 {
+					t.Fatalf("problems = %+v, want exactly one", res.Problems)
+				}
+				p := res.Problems[0]
+				want := "“" + image + "” can move: it has no tag or uses :latest. Bayplan keeps the running digest on redeploys, but picks one when the service is new or the reference changes."
+				if p.Severity != stacks.SeverityWarning || p.Code != stacks.CodeMovingTag || p.Line != 3 || p.Message != want {
+					t.Errorf("problem = %+v, want a moving_tag warning at line 3 saying %q", p, want)
+				}
+				if res.Problems.Errors() != 0 || res.Loaded == nil {
+					t.Error("a moving tag must not block")
+				}
+			})
+		}
+	}
+}
+
+func TestAPinnedImageHasNoMovingTagWarning(t *testing.T) {
+	t.Parallel()
+	for _, image := range []string{"nginx:1.27", "nginx@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"} {
+		res := checkOf(t, stacks.TargetSwarm, "services:\n  web:\n    image: "+image+"\n")
+		if len(res.Problems) != 0 {
+			t.Errorf("%s: problems = %+v, want none", image, res.Problems)
+		}
+	}
+}
+
+func TestAnImageBuiltFromVariablesIsJudgedOnItsValue(t *testing.T) {
+	t.Parallel()
+	res := stacks.Check(context.Background(), stacks.CheckInput{
+		Name: "probe", Target: stacks.TargetSwarm,
+		Copy: stacks.WorkingCopy{
+			Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte("services:\n  web:\n    image: ${IMAGE}\n")}},
+			Vars:  []stacks.Var{{Name: "IMAGE", Value: "nginx"}},
+		},
+	})
+	if got := byCode(res, stacks.CodeMovingTag); len(got) != 1 || got[0].Line != 3 {
+		t.Errorf("problems = %+v, want a moving_tag warning at line 3", res.Problems)
+	}
+}
+
+func TestAServiceWithBuildAndAMovingImageGetsBothWarnings(t *testing.T) {
+	t.Parallel()
+	res := checkOf(t, stacks.TargetSwarm, "services:\n  web:\n    image: nginx\n    build: .\n")
+	if len(byCode(res, stacks.CodeMovingTag)) != 1 || len(byCode(res, stacks.CodeIgnoredOnTarget)) != 1 || res.Problems.Errors() != 0 {
+		t.Errorf("problems = %+v, want the moving tag and the build warning", res.Problems)
+	}
+}
+
+// indexed lints a compose file the schema would refuse, by indexing the bytes directly.
+func indexed(t *testing.T, target lint.Target, compose string, networks ...string) []lint.Finding {
+	t.Helper()
+	ix, err := stacks.NewPositionIndex([]byte(compose))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &types.Project{Services: types.Services{}, Networks: types.Networks{}}
+	for _, n := range networks {
+		p.Networks[n] = types.NetworkConfig{Name: n}
+	}
+	return lint.Lint(lint.Input{Target: target, Project: p, Index: ix})
+}
+
+func TestANetworkTheAgentRefusesIsAnErrorNamingTheKeyOnBothTargets(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		compose string
+		key     string
+		line    int
+	}{
+		"ipam options":  {"networks:\n  n:\n    ipam:\n      options:\n        a: b\n", "networks.n.ipam.options", 4},
+		"aux addresses": {"networks:\n  n:\n    ipam:\n      config:\n        - subnet: 10.1.0.0/24\n          aux_addresses:\n            h: 10.1.0.5\n", "networks.n.ipam.config.0.aux_addresses", 6},
+		"config_from":   {"networks:\n  n:\n    config_from:\n      network: base\n", "networks.n.config_from", 3},
+		"ingress":       {"networks:\n  n:\n    ingress: true\n", "networks.n.ingress", 3},
+	} {
+		for _, target := range []lint.Target{lint.TargetSwarm, lint.TargetStandalone} {
+			t.Run(name+" on "+string(target), func(t *testing.T) {
+				t.Parallel()
+				got := indexed(t, target, tc.compose, "n")
+				if len(got) != 1 {
+					t.Fatalf("findings = %+v, want exactly one", got)
+				}
+				f := got[0]
+				if f.Severity != lint.SeverityError || f.Code != lint.CodeNetworkOptionUnsupported || f.Key != tc.key || f.Pos.Line != tc.line {
+					t.Errorf("finding = %+v, want an error network_option_unsupported on %s at line %d", f, tc.key, tc.line)
+				}
+				if !strings.Contains(f.Message, "`"+tc.key+"`") {
+					t.Errorf("message %q must name the key", f.Message)
+				}
+			})
+		}
+	}
+}
+
+func TestANetworkTheAgentAcceptsHasNoFinding(t *testing.T) {
+	t.Parallel()
+	for name, compose := range map[string]string{
+		"empty options":  "networks:\n  n:\n    ipam:\n      options: {}\n",
+		"a plain pool":   "networks:\n  n:\n    ipam:\n      config:\n        - subnet: 10.1.0.0/24\n          gateway: 10.1.0.1\n          ip_range: 10.1.0.0/25\n",
+		"ingress false":  "networks:\n  n:\n    ingress: false\n",
+		"empty aux":      "networks:\n  n:\n    ipam:\n      config:\n        - subnet: 10.1.0.0/24\n          aux_addresses: {}\n",
+		"no ipam at all": "networks:\n  n:\n    driver: overlay\n",
+	} {
+		if got := indexed(t, lint.TargetSwarm, compose, "n"); len(got) != 0 {
+			t.Errorf("%s: findings = %+v, want none", name, got)
+		}
+	}
+}
+
+func TestAnExternalNetworkIsNotJudgedBecauseBayplanNeverCreatesIt(t *testing.T) {
+	t.Parallel()
+	ix, err := stacks.NewPositionIndex([]byte("networks:\n  n:\n    ipam:\n      options:\n        a: b\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &types.Project{Networks: types.Networks{"n": {Name: "n", External: true}}}
+	if got := lint.Lint(lint.Input{Target: lint.TargetSwarm, Project: p, Index: ix}); len(got) != 0 {
+		t.Errorf("findings = %+v, want none", got)
 	}
 }

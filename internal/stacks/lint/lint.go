@@ -129,7 +129,11 @@ func Lint(in Input) []Finding {
 	switch in.Target {
 	case TargetSwarm:
 		out = append(out, swarmFindings(in)...)
+	case TargetStandalone:
+		out = append(out, standaloneFindings(in)...)
 	}
+	out = append(out, imageFindings(in)...)
+	out = append(out, networkFindings(in)...)
 	return out
 }
 
@@ -161,4 +165,9 @@ func serviceNames(p *types.Project) []string {
 // Swarm. {what to do}".
 func blockingMessage(key string) string {
 	return fmt.Sprintf(messages[CodeBlockingKey], key, swarmActions[key])
+}
+
+// networkFindings reports a stack network the agent would refuse to create.
+func networkFindings(in Input) []Finding {
+	return nil
 }

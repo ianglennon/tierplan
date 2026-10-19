@@ -33,3 +33,14 @@ func buildRules(in Input) []Finding {
 	}
 	return out
 }
+
+// movingTag reports whether an image reference can name a different image tomorrow: it has no
+// tag or its tag is latest, and no digest pins it.
+func movingTag(ref string) bool {
+	return false
+}
+
+// imageFindings warns about every service whose image can move.
+func imageFindings(in Input) []Finding {
+	return nil
+}
