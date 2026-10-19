@@ -104,35 +104,60 @@ func (c *Client) NetworkCreate(ctx context.Context, spec NetworkCreateSpec) (id,
 	return res.ID, strings.Join(res.Warning, "; "), nil
 }
 
-// ipamOf builds the address management of a create from its CIDR fields, or nil
-// when none is set.
+// ipamOf builds the address management of a create from its pools and IPAM driver, or nil when
+// none is set. The single Subnet, Gateway and IPRange fields are one pool; they cannot be
+// combined with Pools. A pool with nothing in it is left out.
 func ipamOf(spec NetworkCreateSpec) (*network.IPAM, error) {
-	if spec.Subnet == "" && spec.Gateway == "" && spec.IPRange == "" {
+	single := spec.Subnet != "" || spec.Gateway != "" || spec.IPRange != ""
+	pools := spec.Pools
+	switch {
+	case single && len(pools) > 0:
+		return nil, fmt.Errorf("%w: pools together with a single subnet, gateway or IP range", ErrAddressing)
+	case single:
+		pools = []NetworkPool{{Subnet: spec.Subnet, Gateway: spec.Gateway, IPRange: spec.IPRange}}
+	}
+	ipam := &network.IPAM{Driver: spec.IPAMDriver}
+	for _, p := range pools {
+		if p == (NetworkPool{}) {
+			continue
+		}
+		cfg, err := ipamConfig(p)
+		if err != nil {
+			return nil, err
+		}
+		ipam.Config = append(ipam.Config, cfg)
+	}
+	if ipam.Driver == "" && len(ipam.Config) == 0 {
 		return nil, nil
 	}
+	return ipam, nil
+}
+
+// ipamConfig parses one pool. Empty fields leave the choice to the engine.
+func ipamConfig(p NetworkPool) (network.IPAMConfig, error) {
 	var cfg network.IPAMConfig
-	if spec.Subnet != "" {
-		p, err := netip.ParsePrefix(spec.Subnet)
+	if p.Subnet != "" {
+		prefix, err := netip.ParsePrefix(p.Subnet)
 		if err != nil {
-			return nil, fmt.Errorf("%w: subnet %q", ErrAddressing, spec.Subnet)
+			return cfg, fmt.Errorf("%w: subnet %q", ErrAddressing, p.Subnet)
 		}
-		cfg.Subnet = p.Masked()
+		cfg.Subnet = prefix.Masked()
 	}
-	if spec.Gateway != "" {
-		a, err := netip.ParseAddr(spec.Gateway)
+	if p.Gateway != "" {
+		a, err := netip.ParseAddr(p.Gateway)
 		if err != nil {
-			return nil, fmt.Errorf("%w: gateway %q", ErrAddressing, spec.Gateway)
+			return cfg, fmt.Errorf("%w: gateway %q", ErrAddressing, p.Gateway)
 		}
 		cfg.Gateway = a
 	}
-	if spec.IPRange != "" {
-		p, err := netip.ParsePrefix(spec.IPRange)
+	if p.IPRange != "" {
+		prefix, err := netip.ParsePrefix(p.IPRange)
 		if err != nil {
-			return nil, fmt.Errorf("%w: IP range %q", ErrAddressing, spec.IPRange)
+			return cfg, fmt.Errorf("%w: IP range %q", ErrAddressing, p.IPRange)
 		}
-		cfg.IPRange = p.Masked()
+		cfg.IPRange = prefix.Masked()
 	}
-	return &network.IPAM{Config: []network.IPAMConfig{cfg}}, nil
+	return cfg, nil
 }
 
 // builtinNetworks are the networks the engine and the swarm make themselves. Their

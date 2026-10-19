@@ -115,10 +115,16 @@ func (r *swarmRig) deploy(t *testing.T, in stackops.SwarmDeployInput) (stackops.
 	t.Helper()
 	in.EnvID = r.envID
 	var res stackops.DeployResult
+	// The job reads as ended when its last item is finished, which DeploySwarm does before it
+	// returns; res is therefore read only after the job function has closed done.
+	done := make(chan struct{})
 	job, err := r.hub.Start(jobs.Spec{
 		Kind: "stack_deploy", EnvID: r.envID, Owner: "user:test",
 		Items: deployItems(),
-	}, func(ctx context.Context, rep *jobs.Reporter) { res = r.deps.DeploySwarm(ctx, in, rep) })
+	}, func(ctx context.Context, rep *jobs.Reporter) {
+		defer close(done)
+		res = r.deps.DeploySwarm(ctx, in, rep)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,6 +132,7 @@ func (r *swarmRig) deploy(t *testing.T, in stackops.SwarmDeployInput) (stackops.
 	if err != nil {
 		t.Fatal(err)
 	}
+	testsupport.Await(t, "the deploy function to return", done)
 	return res, ended
 }
 
@@ -299,10 +306,14 @@ func TestDeploySwarmOfACancelledContextWritesNothingAndSaysCancelled(t *testing.
 	cancel()
 	in.EnvID = rig.envID
 	var res stackops.DeployResult
+	done := make(chan struct{})
 	job, err := rig.hub.Start(jobs.Spec{
 		Kind: "stack_deploy", EnvID: rig.envID, Owner: "user:test",
 		Items: deployItems(),
-	}, func(_ context.Context, r *jobs.Reporter) { res = rig.deps.DeploySwarm(ctx, in, r) })
+	}, func(_ context.Context, r *jobs.Reporter) {
+		defer close(done)
+		res = rig.deps.DeploySwarm(ctx, in, r)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,6 +321,7 @@ func TestDeploySwarmOfACancelledContextWritesNothingAndSaysCancelled(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	testsupport.Await(t, "the deploy function to return", done)
 	if res.Code != stackops.CodeCancelled {
 		t.Errorf("result = %+v, want cancelled", res)
 	}
@@ -545,22 +557,20 @@ func TestExternalNetworkMustExist(t *testing.T) {
 		{"local scope", []dockertest.FakeNetwork{{ID: "n9", Name: "org_shared", Driver: "bridge", Scope: "local"}}, stackops.CodeExternalNotSwarm},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			rig := newSwarmRig(t, func(c *dockertest.FakeConfig) { c.Networks = tc.networks })
-			_, in := stackInput(t, "web", externalNetworkCompose, nil)
-			res, job := rig.deploy(t, in)
-			if res.Code != tc.code || res.FailedService != "org_shared" {
-				t.Fatalf("result = %+v, want %s naming org_shared", res, tc.code)
-			}
-			got := itemStates(job)
-			if got[stackops.ItemCheck] != "done" || got[stackops.ItemNetworks] != "failed:"+tc.code || got[stackops.ItemObjects] != "cancelled:not_run" {
-				t.Errorf("items = %v, want the networks step to stop the deploy", got)
-			}
-			if w := rig.fake.Writes(); len(w) != 0 {
-				t.Errorf("writes = %v, nothing may be created for a stack whose external network is missing", w)
-			}
-		})
+		rig := newSwarmRig(t, func(c *dockertest.FakeConfig) { c.Networks = tc.networks })
+		_, in := stackInput(t, "web", externalNetworkCompose, nil)
+		res, job := rig.deploy(t, in)
+		if res.Code != tc.code || res.FailedService != "org_shared" {
+			t.Errorf("%s: result = %+v, want %s naming org_shared", tc.name, res, tc.code)
+			continue
+		}
+		got := itemStates(job)
+		if got[stackops.ItemCheck] != "done" || got[stackops.ItemNetworks] != "failed:"+tc.code || got[stackops.ItemObjects] != "cancelled:not_run" {
+			t.Errorf("%s: items = %v, want the networks step to stop the deploy", tc.name, got)
+		}
+		if w := rig.fake.Writes(); len(w) != 0 {
+			t.Errorf("%s: writes = %v, nothing may be created for a stack whose external network is missing", tc.name, w)
+		}
 	}
 }
 

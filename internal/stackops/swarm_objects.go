@@ -37,6 +37,121 @@ func stepOf(ctx context.Context, err error) (code, name string) {
 	return codeOf(ctx, err), ""
 }
 
+// ensureNetworks makes the networks of the stack exist on the swarm, once each. plans are the
+// planned networks; live holds the networks already on the swarm: the stack's own, and every
+// network when the stack names an external one. An external network is only looked up by name and
+// must be a swarm network (external_missing when it is absent, external_not_swarm when only an
+// engine-local one has the name); it is never created, changed or removed (T-07-31). A network the
+// stack owns is left alone even if its options differ from the file's: the review (plan 07-14)
+// reports the difference, and a network cannot be changed in place. A name another owner holds is
+// network_conflict. Every other network is created with all its pools, its IPAM driver, its driver
+// options, its flags and the stack's labels, through WriteOnManager, once. The first failure ends
+// the call with a *stepError; the networks created before it stay in created.
+func (d Deps) ensureNetworks(ctx context.Context, envID string, stack Stack, plans []convert.NetworkPlan, live []dockerx.NetworkRow) (created []string, err error) {
+	for _, n := range plans {
+		if n.External {
+			found, swarmScope := externalNetwork(live, n.Name)
+			switch {
+			case !found:
+				return created, &stepError{code: CodeExternalMissing, name: n.Name, err: errors.New("the external network does not exist")}
+			case !swarmScope:
+				return created, &stepError{code: CodeExternalNotSwarm, name: n.Name, err: errors.New("the external network is not a swarm network")}
+			}
+			continue
+		}
+		if row, ok := findNetwork(live, n.Name); ok {
+			if row.Labels[stacks.LabelStackID] != stack.ID {
+				return created, &stepError{code: CodeNetworkConflict, name: n.Name, err: errors.New("the network belongs to another owner")}
+			}
+			continue
+		}
+		if ctx.Err() != nil {
+			return created, &stepError{code: CodeCancelled, name: n.Name, err: ctx.Err()}
+		}
+		spec := networkSpec(n)
+		werr := d.Aggregator.WriteOnManager(ctx, envID, func(c *dockerx.Client) error {
+			_, _, e := c.NetworkCreate(ctx, spec)
+			return e
+		})
+		if werr != nil {
+			d.log().Warn("could not create a stack network", "environment", envID, "stack", stack.Name, "network", n.Name, "error", werr)
+			code := codeOf(ctx, werr)
+			if code == CodeEngineError {
+				code = CodeNetworkFailed
+				if isConflict(werr) {
+					code = CodeNetworkConflict
+				}
+			}
+			return created, &stepError{code: code, name: n.Name, err: werr}
+		}
+		created = append(created, n.Name)
+	}
+	return created, nil
+}
+
+// externalNetwork reports whether a network of that name exists and whether one of them has swarm
+// scope.
+func externalNetwork(live []dockerx.NetworkRow, name string) (found, swarmScope bool) {
+	for _, n := range live {
+		if n.Name == name {
+			found = true
+			swarmScope = swarmScope || n.Scope == dockerx.ScopeSwarm
+		}
+	}
+	return found, swarmScope
+}
+
+func findNetwork(live []dockerx.NetworkRow, name string) (dockerx.NetworkRow, bool) {
+	for _, n := range live {
+		if n.Name == name {
+			return n, true
+		}
+	}
+	return dockerx.NetworkRow{}, false
+}
+
+// networkSpec turns a planned network into the spec dockerx creates it from: all its pools, its
+// IPAM driver, driver options, flags and labels.
+func networkSpec(n convert.NetworkPlan) dockerx.NetworkCreateSpec {
+	spec := dockerx.NetworkCreateSpec{
+		Name: n.Name, Driver: n.Driver, Scope: dockerx.NetworkScope(n.Driver),
+		Attachable: n.Attachable, Internal: n.Internal, Labels: n.Labels, Options: n.DriverOpts,
+		IPAMDriver: n.IPAMDriver,
+	}
+	for _, p := range n.Pools {
+		spec.Pools = append(spec.Pools, dockerx.NetworkPool{Subnet: p.Subnet, Gateway: p.Gateway, IPRange: p.IPRange})
+	}
+	return spec
+}
+
+// pruneServices removes the services the swarm has under this stack that the file no longer
+// declares, once each. live are the services read before the deploy and declared the full names of
+// the services the file declares. Only a service that carries this stack's namespace and this
+// stack's ID is removed, whatever live holds, so a service of another stack, or of nobody's, is
+// never touched. The caller runs it only after every declared service was created or updated. The
+// first failure ends the call with a *stepError; removed names the services removed before it.
+func (d Deps) pruneServices(ctx context.Context, envID string, stack Stack, declared map[string]bool, live []dockerx.ServiceDetail) (removed []string, err error) {
+	for _, s := range live {
+		if declared[s.Name] || s.Labels[stacks.LabelSwarmNamespace] != stack.Name || s.Labels[stacks.LabelStackID] != stack.ID {
+			continue
+		}
+		if ctx.Err() != nil {
+			return removed, &stepError{code: CodeCancelled, name: s.Name, err: ctx.Err()}
+		}
+		werr := d.Aggregator.WriteOnManager(ctx, envID, func(c *dockerx.Client) error { return c.ServiceRemove(ctx, s.ID) })
+		switch {
+		case werr == nil:
+			removed = append(removed, s.Name)
+		case errors.Is(werr, dockerx.ErrServiceNotFound):
+			// Already gone: nothing was left behind.
+		default:
+			d.log().Warn("could not remove a service the stack no longer declares", "environment", envID, "stack", stack.Name, "service", s.Name, "error", werr)
+			return removed, &stepError{code: codeOf(ctx, werr), name: s.Name, err: werr}
+		}
+	}
+	return removed, nil
+}
+
 // objectRow is a swarm secret or config as the deploy sees it. The manager never returns a
 // secret's value and the config's content is dropped at the dockerx edge, so a row holds neither.
 type objectRow struct {

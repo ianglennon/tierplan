@@ -124,13 +124,14 @@ func (r DeployResult) OK() bool { return r.Code == "" }
 // and in order, reporting through r on the items of DeployItems. It reads what the stack already
 // owns from a manager (one read), creates each missing network, creates the secrets and configs
 // whose content is new, then creates or updates each service with the registry credential chosen
-// for its image, and last removes what the deploy replaced. It stops at the first failure and ends
-// the item that failed with a code; items after it end cancelled with CodeNotRun. Every write goes
-// through Aggregator.WriteOnManager and is never retried (P2 D-42).
+// for its image, and last removes the services the file no longer declares and the secrets and
+// configs the deploy replaced. It stops at the first failure and ends the item that failed with a
+// code; items after it end cancelled with CodeNotRun. Every write goes through
+// Aggregator.WriteOnManager and is never retried (P2 D-42).
 //
-// A secret or config that is replaced is removed only in the last item, after every service
-// update succeeded, so a deploy that stops earlier leaves the old objects where the services still
-// use them (D-07).
+// An external network, secret or config must already exist and is never created, changed or
+// removed. Nothing is removed before the last item, after every service was created or updated, so
+// a deploy that stops earlier leaves the old services and objects where they are (D-07).
 //
 // The last item is finished only after in.OnDone returns.
 func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Reporter) (res DeployResult) {
@@ -237,43 +238,19 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	if clash(in.Stack.ID, in.Stack.Name, existingNets, existingSvcs, live) {
 		return fail(ItemCheck, CodeNameClash, "")
 	}
-	for _, n := range planned.Networks {
-		if n.External && !hasNetwork(allNets, n.Name) {
-			return fail(ItemCheck, CodeExternalMissing, n.Name)
-		}
-	}
 	r.Finish(ItemCheck, jobs.ItemDone, "", "", nil)
 
-	// 2. Networks: create each one the stack uses that does not exist yet.
+	// 2. Networks: create each one the stack uses that does not exist yet, and check that the
+	// external ones are there.
 	r.Update(ItemNetworks, func(it *jobs.Item) { it.State = jobs.ItemRunning })
-	for _, n := range planned.Networks {
-		if n.External || hasNetwork(existingNets, n.Name) {
-			continue
-		}
-		if ctx.Err() != nil {
-			return fail(ItemNetworks, CodeCancelled, "")
-		}
-		spec, specErr := networkSpec(n)
-		if specErr != nil {
-			return fail(ItemNetworks, CodeNetworkFailed, n.Name)
-		}
-		err := d.Aggregator.WriteOnManager(ctx, in.EnvID, func(c *dockerx.Client) error {
-			_, _, e := c.NetworkCreate(ctx, spec)
-			return e
-		})
-		if err != nil {
-			d.log().Warn("could not create a stack network", "environment", in.EnvID, "stack", in.Stack.Name, "network", n.Name, "error", err)
-			code := codeOf(ctx, err)
-			if code == CodeEngineError {
-				code = CodeNetworkFailed
-				if isConflict(err) {
-					code = CodeNetworkConflict
-				}
-			}
-			return fail(ItemNetworks, code, n.Name)
-		}
-		res.Networks++
-		res.CreatedNetworks = append(res.CreatedNetworks, n.Name)
+	liveNets := existingNets
+	if hasExternal(planned) {
+		liveNets = allNets
+	}
+	createdNets, err := d.ensureNetworks(ctx, in.EnvID, in.Stack, planned.Networks, liveNets)
+	res.Networks, res.CreatedNetworks = len(createdNets), createdNets
+	if err != nil {
+		return failStep(ItemNetworks, err)
 	}
 	r.Finish(ItemNetworks, jobs.ItemDone, "", "", nil)
 
@@ -341,6 +318,14 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	if ctx.Err() != nil {
 		return fail(ItemCleanup, CodeCancelled, "")
 	}
+	declared := make(map[string]bool, len(plan.Services))
+	for _, sp := range plan.Services {
+		declared[sp.Name] = true
+	}
+	res.RemovedServices, err = d.pruneServices(ctx, in.EnvID, in.Stack, declared, existingSvcs)
+	if err != nil {
+		return failStep(ItemCleanup, err)
+	}
 	removed, left, err := d.removeReplacedObjects(ctx, in.EnvID, in.Stack, refs)
 	res.RemovedObjects, res.LeftInPlace = removed, left
 	if err != nil {
@@ -348,7 +333,8 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	}
 	final = itemEnd{state: jobs.ItemDone, result: map[string]string{
 		"networks": strconv.Itoa(res.Networks), "objects": strconv.Itoa(len(res.CreatedObjects)),
-		"removedObjects": strconv.Itoa(len(res.RemovedObjects)), "leftInPlace": strconv.Itoa(len(res.LeftInPlace)),
+		"removedServices": strconv.Itoa(len(res.RemovedServices)),
+		"removedObjects":  strconv.Itoa(len(res.RemovedObjects)), "leftInPlace": strconv.Itoa(len(res.LeftInPlace)),
 	}}
 	return res
 }
@@ -405,15 +391,6 @@ func clash(stackID, stackName string, nets []dockerx.NetworkRow, svcs []dockerx.
 	return false
 }
 
-func hasNetwork(nets []dockerx.NetworkRow, name string) bool {
-	for _, n := range nets {
-		if n.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
 func hasExternal(p convert.Plan) bool {
 	for _, n := range p.Networks {
 		if n.External {
@@ -421,23 +398,6 @@ func hasExternal(p convert.Plan) bool {
 		}
 	}
 	return false
-}
-
-// networkSpec turns a planned network into the spec dockerx creates it from. dockerx expresses
-// one address pool, so a plan with more is refused.
-func networkSpec(n convert.NetworkPlan) (dockerx.NetworkCreateSpec, error) {
-	spec := dockerx.NetworkCreateSpec{
-		Name: n.Name, Driver: n.Driver, Scope: dockerx.NetworkScope(n.Driver),
-		Attachable: n.Attachable, Internal: n.Internal, Labels: n.Labels, Options: n.DriverOpts,
-	}
-	switch len(n.Pools) {
-	case 0:
-	case 1:
-		spec.Subnet, spec.Gateway, spec.IPRange = n.Pools[0].Subnet, n.Pools[0].Gateway, n.Pools[0].IPRange
-	default:
-		return dockerx.NetworkCreateSpec{}, errors.New("a network with more than one address pool")
-	}
-	return spec, nil
 }
 
 // codeOf classifies the error of one engine call into a deploy code.
