@@ -17,6 +17,7 @@ import {
   ScrollText,
   Server,
   Settings,
+  SquareStack,
   X,
 } from "lucide-react";
 import { useEffect } from "react";
@@ -59,6 +60,8 @@ import { useT } from "@/i18n/use-t";
 // lists of the selected environment and its event feed, each shown only to a user
 // who may read it.
 const RESOURCE_ITEMS = [
+  // Stacks (Phase 7, UI-SPEC "Sidebar"): the first item, on swarm and standalone environments alike.
+  { key: "stacks", perm: "stacks.read", to: "/env/$envId/stacks", icon: SquareStack },
   { key: "containers", perm: "containers.read", to: "/env/$envId/containers", icon: Container },
   { key: "images", perm: "images.read", to: "/env/$envId/images", icon: Layers },
   { key: "volumes", perm: "volumes.read", to: "/env/$envId/volumes", icon: HardDrive },

@@ -1,0 +1,214 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+import { useQuery } from "@tanstack/react-query";
+import { Link, Outlet } from "@tanstack/react-router";
+import { SquareStack } from "lucide-react";
+import type { ReactNode } from "react";
+
+import { isStackGone, stackQuery } from "@/api/stacks";
+import { RelativeTime } from "@/components/relative-time";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useEnvName } from "@/features/resources/use-env-name";
+import { StackStateCell } from "@/features/stacks/stack-state-cell";
+import { useDocumentTitle } from "@/hooks/use-me";
+import { useT } from "@/i18n/use-t";
+
+interface StackDetailLayoutProps {
+  envId: string;
+  stackId: string;
+  // The tab under the header. The route passes its Outlet; a test passes its own.
+  children?: ReactNode;
+}
+
+// The tabs of the page, in the order they show. Each is a child route of the page under
+// stacks_.$stackId.*; the Overview is the page's own address. Later plans add Editor, Resources
+// and Logs to this list.
+const TABS = [
+  {
+    id: "overview",
+    to: "/env/$envId/stacks/$stackId",
+    labelKey: "stacks.detail.tabs.overview",
+    exact: true,
+  },
+] as const;
+
+function Breadcrumb({ envId, name }: { envId: string; name: string | undefined }) {
+  const t = useT();
+  return (
+    <nav aria-label={t("stacks.detail.breadcrumb.label")}>
+      <ol className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground [&>li:not(:last-child)]:after:ms-2 [&>li:not(:last-child)]:after:content-['/']">
+        <li>
+          <Link
+            to="/env/$envId/stacks"
+            params={{ envId }}
+            className="rounded-sm text-accent-ink hover:underline"
+          >
+            {t("stacks.detail.breadcrumb.root")}
+          </Link>
+        </li>
+        <li className="min-w-0">
+          {name === undefined ? (
+            <Skeleton className="h-3 w-24" />
+          ) : (
+            <span aria-current="page" className="break-all">
+              {name}
+            </span>
+          )}
+        </li>
+      </ol>
+    </nav>
+  );
+}
+
+// Gone is what a stack's page becomes when the stack no longer exists. It replaces the page,
+// tabs included.
+function Gone({ envId }: { envId: string }) {
+  const t = useT();
+  return (
+    <div className="flex flex-col gap-6">
+      <header>
+        <Breadcrumb envId={envId} name={undefined} />
+      </header>
+      <Empty>
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <SquareStack aria-hidden="true" />
+          </EmptyMedia>
+          <EmptyTitle role="heading" aria-level={2}>
+            {t("stacks.detail.gone.heading")}
+          </EmptyTitle>
+          <EmptyDescription>{t("stacks.detail.gone.body")}</EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <Button asChild variant="outline" className="max-md:h-11">
+            <Link to="/env/$envId/stacks" params={{ envId }}>
+              {t("stacks.detail.gone.back")}
+            </Link>
+          </Button>
+        </EmptyContent>
+      </Empty>
+    </div>
+  );
+}
+
+// StackDetailLayout is the frame of a stack's page: the breadcrumb, the header (the name, its
+// state, the target and source badges, and the line naming the environment and the last
+// deploy), the tab bar (Link triggers, the active tab follows the URL) and the tab under it.
+// The tabs render at once, before the stack has loaded (UI-SPEC "Loading"). A stack that is
+// gone replaces the page.
+export function StackDetailLayout({ envId, stackId, children }: StackDetailLayoutProps) {
+  const t = useT();
+  const envName = useEnvName(envId);
+  const query = useQuery(stackQuery(envId, stackId));
+  const { data } = query;
+  const gone = isStackGone(query.error);
+  useDocumentTitle(gone ? t("stacks.detail.gone.heading") : data?.name);
+
+  if (gone) return <Gone envId={envId} />;
+
+  if (query.isError && !data) {
+    return (
+      <div className="flex flex-col gap-6">
+        <header>
+          <Breadcrumb envId={envId} name={stackId} />
+        </header>
+        <Alert variant="destructive">
+          <AlertDescription className="flex flex-wrap items-center gap-3">
+            <span>{t("stacks.detail.error.loadFailed", { name: stackId })}</span>
+            <span>{t("stacks.detail.error.body")}</span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="max-md:h-11"
+              disabled={query.isFetching}
+              onClick={() => void query.refetch()}
+            >
+              {t("stacks.detail.error.retry", { name: stackId })}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      <header className="flex flex-col gap-2">
+        <Breadcrumb envId={envId} name={data?.name} />
+        {data ? (
+          <div className="flex min-w-0 flex-col gap-1">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <h2 className="line-clamp-2 max-w-full min-w-0 break-all text-2xl font-semibold">
+                    {data.name}
+                  </h2>
+                </TooltipTrigger>
+                <TooltipContent className="break-all">{data.name}</TooltipContent>
+              </Tooltip>
+              <StackStateCell state={data.state} />
+              <Badge variant="outline">{t(`stacks.target.${data.target}`)}</Badge>
+              <Badge variant="outline">{t(`stacks.source.${data.source}`)}</Badge>
+              {data.hasDraft ? <Badge variant="outline">{t("stacks.draft")}</Badge> : null}
+            </div>
+            <p className="text-sm text-muted-foreground">
+              {data.lastDeployedAt ? (
+                <>
+                  {t("stacks.detail.meta.deployedPrefix", { env: envName })}{" "}
+                  <RelativeTime value={data.lastDeployedAt} />{" "}
+                  {t("stacks.list.lastDeployedBy", { user: data.lastDeployedBy })}
+                </>
+              ) : (
+                t("stacks.detail.meta.neverDeployed", { env: envName })
+              )}
+            </p>
+          </div>
+        ) : (
+          <Skeleton className="h-8 w-64" />
+        )}
+      </header>
+      <Tabs value="" className="gap-4">
+        <TabsList
+          variant="line"
+          aria-label={t("stacks.detail.tabs.label")}
+          className="h-9 max-md:h-11"
+        >
+          {TABS.map((tab) => (
+            <TabsTrigger
+              key={tab.id}
+              value={tab.id}
+              asChild
+              className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
+            >
+              <Link
+                to={tab.to}
+                params={{ envId, stackId }}
+                activeOptions={{ exact: tab.exact }}
+                activeProps={{ "data-active": true }}
+                inactiveProps={{ "data-active": undefined }}
+              >
+                {t(tab.labelKey)}
+              </Link>
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
+      {children ?? <Outlet />}
+    </div>
+  );
+}

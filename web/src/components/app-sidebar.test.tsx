@@ -79,6 +79,7 @@ function mount(width: number, path = "/") {
       createRoute({ getParentRoute: () => root, path: "/registries" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/containers" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/stacks" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/services" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/placement" }),
     ]),
@@ -234,5 +235,39 @@ describe("the Swarm group", () => {
     await settled(client);
     expect(screen.queryByRole("link", { name: "Services" })).toBeNull();
     expect(screen.queryByText("Swarm")).toBeNull();
+  });
+});
+
+describe("the Stacks item", () => {
+  it("is the first item of the Resources group, above Containers, for a user who can read stacks", async () => {
+    mount(1280, "/env/e1");
+    const link = await screen.findByRole("link", { name: "Stacks" });
+    expect(link.getAttribute("href")).toBe("/env/e1/stacks");
+    const names = screen.getAllByRole("link").map((l) => l.textContent);
+    const containers = names.indexOf("Containers");
+    expect(containers).toBeGreaterThan(-1);
+    expect(names.indexOf("Stacks")).toBe(containers - 1);
+    // The Resources label comes before it: nothing else sits between the label and Stacks.
+    const label = screen.getByText("Resources");
+    expect(label.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("is there on a standalone environment too", async () => {
+    envType = "standalone";
+    mount(1280, "/env/e1");
+    expect(await screen.findByRole("link", { name: "Stacks" })).toBeTruthy();
+    await settled(client);
+    expect(screen.getByRole("link", { name: "Stacks" })).toBeTruthy();
+  });
+
+  it("is left out for a user without stacks.read", async () => {
+    me = makeMe({
+      envs: { e1: "viewer" },
+      permissions: splitPermissions(["containers.read", "environments.read"]),
+    });
+    mount(1280, "/env/e1");
+    expect(await screen.findByRole("link", { name: "Containers" })).toBeTruthy();
+    await settled(client);
+    expect(screen.queryByRole("link", { name: "Stacks" })).toBeNull();
   });
 });

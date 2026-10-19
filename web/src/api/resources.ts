@@ -29,7 +29,8 @@ type Resource =
   | "services"
   | "nodes"
   | "secrets"
-  | "configs";
+  | "configs"
+  | "stacks";
 
 // The query keys of the lists, so the events feed can invalidate them.
 export function listKey(envId: string, resource: Resource) {

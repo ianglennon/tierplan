@@ -36,7 +36,8 @@ export type ResourceKind =
   | "services"
   | "nodes"
   | "secrets"
-  | "configs";
+  | "configs"
+  | "stacks";
 
 // One column of a list. The cell renders from the row; the header is the
 // translated label.

@@ -265,7 +265,8 @@ describe("the header line and the swarm task banner", () => {
     answer = () => Response.json(detail({ service: "api" }));
     renderAt();
     expect(await screen.findByText("Task of service api")).toBeTruthy();
-    expect(screen.queryByRole("link", { name: /Task of service|Stack|Project/ })).toBeNull();
+    // The sidebar's Stacks item is a link too; the header line's words are followed by the name.
+    expect(screen.queryByRole("link", { name: /^(Task of service|Stack|Project) \S/ })).toBeNull();
   });
 
   it("shows the info banner for a task of a service, and none otherwise", async () => {
