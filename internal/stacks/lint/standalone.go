@@ -3,6 +3,13 @@
 
 package lint
 
+import (
+	"fmt"
+	"strings"
+
+	"github.com/compose-spec/compose-go/v2/types"
+)
+
 // StandaloneUnsupported is the compose attributes a standalone host ignores. It is Bayplan's copy
 // of the list in docker/compose's pkg/compose/unsupported_attributes.go (Apache-2.0), version
 // v5.6.0, where it is unexported: presenceUnsupportedAttributes (an attribute that is ignored
@@ -60,7 +67,98 @@ var standaloneAdvice = map[string]struct{ key, action string }{
 	"services.*.secrets.[].mode":         {"secrets[].mode", "A standalone host copies the file in as it is. Remove the key."},
 }
 
-// standaloneFindings reports what a standalone host ignores or refuses.
+// standaloneFindings reports what a standalone host ignores or refuses: every attribute of
+// StandaloneUnsupported the file sets is a warning at its line, and a read-only service that
+// needs a file written into it is an error.
 func standaloneFindings(in Input) []Finding {
-	return nil
+	var out []Finding
+	for _, pattern := range StandaloneUnsupported {
+		advice, ok := standaloneAdvice[pattern]
+		if !ok {
+			continue
+		}
+		for _, path := range expand(in.Index, strings.Split(pattern, "."), "") {
+			pos, key := in.at(path)
+			out = append(out, Finding{
+				Severity: SeverityWarning, Code: CodeIgnoredOnTarget, Key: key, Pos: pos,
+				Message: ignoredMessage(advice.key, TargetStandalone, advice.action),
+			})
+		}
+	}
+	return append(out, readOnlyFindings(in)...)
+}
+
+// expand lists the concrete dotted paths a pattern names in the file. "*" and "[]" take each key or
+// item at that level; a last segment key=value names the path only when its scalar is value.
+func expand(ix Index, segs []string, prefix string) []string {
+	if len(segs) == 0 {
+		return nil
+	}
+	seg, rest := segs[0], segs[1:]
+	join := func(k string) string {
+		if prefix == "" {
+			return k
+		}
+		return prefix + "." + k
+	}
+	switch {
+	case seg == "*" || seg == "[]":
+		var out []string
+		for _, k := range ix.Keys(prefix) {
+			out = append(out, expand(ix, rest, join(k))...)
+		}
+		return out
+	case len(rest) == 0:
+		key, want, valued := strings.Cut(seg, "=")
+		path := join(key)
+		if valued {
+			if v, ok := ix.Scalar(path); ok && v == want {
+				return []string{path}
+			}
+			return nil
+		}
+		if _, ok := ix.Lookup(path); ok {
+			return []string{path}
+		}
+		return nil
+	default:
+		return expand(ix, rest, join(seg))
+	}
+}
+
+// readOnlyFindings reports a read_only service that uses a secret or config of the stack. A
+// standalone host cannot mount those the way a swarm does: Compose copies the content into the
+// container, which a read-only container refuses (the SDK's injectFileReferences, secrets.go in
+// docker/compose v5.6.0, Apache-2.0). An external object has no content to copy, so it is fine.
+func readOnlyFindings(in Input) []Finding {
+	var out []Finding
+	for _, name := range serviceNames(in.Project) {
+		svc := in.Project.Services[name]
+		if !svc.ReadOnly {
+			continue
+		}
+		pos, path := in.at("services."+name+".read_only", "services."+name)
+		flag := func(kind, object string) {
+			out = append(out, Finding{
+				Severity: SeverityError, Code: CodeReadOnlyFileObject, Key: path, Pos: pos,
+				Message: fmt.Sprintf(messages[CodeReadOnlyFileObject], name, kind, object),
+			})
+		}
+		for _, ref := range svc.Secrets {
+			if o, ok := in.Project.Secrets[ref.Source]; ok && writtenIn(types.FileObjectConfig(o)) {
+				flag("secret", ref.Source)
+			}
+		}
+		for _, ref := range svc.Configs {
+			if o, ok := in.Project.Configs[ref.Source]; ok && writtenIn(types.FileObjectConfig(o)) {
+				flag("config", ref.Source)
+			}
+		}
+	}
+	return out
+}
+
+// writtenIn reports whether an object's content is something Bayplan has to put into the container.
+func writtenIn(o types.FileObjectConfig) bool {
+	return !bool(o.External) && (o.File != "" || o.Content != "" || o.Environment != "")
 }

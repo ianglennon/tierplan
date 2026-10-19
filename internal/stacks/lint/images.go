@@ -3,7 +3,11 @@
 
 package lint
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/distribution/reference"
+)
 
 // buildRules reports a service that sets build (A5). Bayplan deploys images and does not build
 // them, and stacks.Check strips build from the project before any engine sees it, so a build key
@@ -35,12 +39,33 @@ func buildRules(in Input) []Finding {
 }
 
 // movingTag reports whether an image reference can name a different image tomorrow: it has no
-// tag or its tag is latest, and no digest pins it.
+// tag or its tag is latest, and no digest pins it. A reference that does not parse is not for this
+// rule to judge.
 func movingTag(ref string) bool {
-	return false
+	named, err := reference.ParseNormalizedNamed(ref)
+	if err != nil {
+		return false
+	}
+	if _, pinned := named.(reference.Digested); pinned {
+		return false
+	}
+	tagged, ok := reference.TagNameOnly(named).(reference.Tagged)
+	return ok && tagged.Tag() == "latest"
 }
 
-// imageFindings warns about every service whose image can move.
+// imageFindings warns, at the image's line, about every service whose image can move.
 func imageFindings(in Input) []Finding {
-	return nil
+	var out []Finding
+	for _, name := range serviceNames(in.Project) {
+		image := in.Project.Services[name].Image
+		if image == "" || !movingTag(image) {
+			continue
+		}
+		pos, path := in.at("services."+name+".image", "services."+name)
+		out = append(out, Finding{
+			Severity: SeverityWarning, Code: CodeMovingTag, Key: path, Pos: pos,
+			Message: fmt.Sprintf(messages[CodeMovingTag], image),
+		})
+	}
+	return out
 }

@@ -143,7 +143,7 @@ func TestProblemsCountSortAndDoNotAlias(t *testing.T) {
 func TestCheckListsTheFilesNobodyRefersTo(t *testing.T) {
 	t.Parallel()
 	in := stacks.CheckInput{Name: "probe", Target: stacks.TargetSwarm, Copy: stacks.WorkingCopy{Files: []stacks.File{
-		{Path: "compose.yaml", Content: []byte("services:\n  web:\n    image: x\n    env_file: app.env\n")},
+		{Path: "compose.yaml", Content: []byte("services:\n  web:\n    image: x:1\n    env_file: app.env\n")},
 		{Path: "app.env"},
 		{Path: "notes.txt"},
 		{Path: "config/old.conf"},
@@ -171,7 +171,7 @@ func TestCheckStopsBeforeTheLoadOnABlockingPrescanProblem(t *testing.T) {
 func TestCheckFilesStillListedUnusedWhenTheLoadWasStopped(t *testing.T) {
 	t.Parallel()
 	in := stacks.CheckInput{Name: "probe", Target: stacks.TargetSwarm, Copy: stacks.WorkingCopy{Files: []stacks.File{
-		{Path: "compose.yaml", Content: []byte("services:\n  web:\n    image: x\n    env_file: gone.env\n")},
+		{Path: "compose.yaml", Content: []byte("services:\n  web:\n    image: x:1\n    env_file: gone.env\n")},
 		{Path: "other.env"},
 	}}}
 	res := stacks.Check(context.Background(), in)
@@ -189,7 +189,7 @@ func TestCheckFilesStillListedUnusedWhenTheLoadWasStopped(t *testing.T) {
 const relativeBindWording = "“%s” is a relative bind mount. Use a named volume, or an absolute path on the host (which needs Admin)."
 
 func withVolumes(entries string, top string) string {
-	return "services:\n  web:\n    image: x\n    volumes:\n      " + entries + "\n" + top
+	return "services:\n  web:\n    image: x:1\n    volumes:\n      " + entries + "\n" + top
 }
 
 func TestCheckBlocksARelativeBindMountOnBothTargets(t *testing.T) {
@@ -244,7 +244,7 @@ func TestCheckAllowsAnAbsoluteBindAndNamedVolumes(t *testing.T) {
 
 func TestCheckNamesEveryRelativeBindOfEveryService(t *testing.T) {
 	t.Parallel()
-	const compose = "services:\n  a:\n    image: x\n    volumes:\n      - ./one:/one\n      - /srv/ok:/ok\n      - ./two:/two\n  b:\n    image: y\n    volumes:\n      - ./three:/three\n"
+	const compose = "services:\n  a:\n    image: x:1\n    volumes:\n      - ./one:/one\n      - /srv/ok:/ok\n      - ./two:/two\n  b:\n    image: y:1\n    volumes:\n      - ./three:/three\n"
 	res := checkOf(t, compose)
 	var lines []int
 	for _, p := range res.Problems {
@@ -321,7 +321,7 @@ func TestCheckEndsWithCheckTimeoutPastItsDeadline(t *testing.T) {
 
 func TestCheckPassesTheFilesAComposeFileOwns(t *testing.T) {
 	t.Parallel()
-	const compose = "services:\n  web:\n    image: x\n    env_file:\n      - ./app.env\n      - path: config/db.env\n        required: false\n    secrets: [db]\n    configs: [app]\nsecrets:\n  db:\n    file: ./secret.txt\nconfigs:\n  app:\n    file: app.conf\n"
+	const compose = "services:\n  web:\n    image: x:1\n    env_file:\n      - ./app.env\n      - path: config/db.env\n        required: false\n    secrets: [db]\n    configs: [app]\nsecrets:\n  db:\n    file: ./secret.txt\nconfigs:\n  app:\n    file: app.conf\n"
 	in := stacks.CheckInput{Name: "probe", Target: stacks.TargetSwarm, Copy: stacks.WorkingCopy{Files: []stacks.File{
 		{Path: "compose.yaml", Content: []byte(compose)}, {Path: "app.env"}, {Path: "config/db.env"}, {Path: "secret.txt", Secret: true}, {Path: "app.conf"},
 	}}}

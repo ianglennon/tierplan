@@ -17,6 +17,7 @@ package lint
 import (
 	"fmt"
 	"sort"
+	"strconv"
 
 	"github.com/compose-spec/compose-go/v2/types"
 )
@@ -167,7 +168,62 @@ func blockingMessage(key string) string {
 	return fmt.Sprintf(messages[CodeBlockingKey], key, swarmActions[key])
 }
 
-// networkFindings reports a stack network the agent would refuse to create.
+// networkFindings reports a stack network the agent would refuse to create: the agent copies the
+// driver, scope, options, labels and IPAM subnet, gateway and ip_range of a network create and
+// refuses one that sets IPAM options, auxiliary addresses, config_from or ingress (T-04-09), so
+// the deploy would fail at the networks step. The rules read the stored YAML, because an empty
+// options map says the same as none. An external network is never created, so it is left alone.
 func networkFindings(in Input) []Finding {
-	return nil
+	names := make([]string, 0, len(in.Project.Networks))
+	for name := range in.Project.Networks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var out []Finding
+	flag := func(path string) {
+		pos, key := in.at(path)
+		out = append(out, Finding{
+			Severity: SeverityError, Code: CodeNetworkOptionUnsupported, Key: key, Pos: pos,
+			Message: fmt.Sprintf(messages[CodeNetworkOptionUnsupported], key),
+		})
+	}
+	for _, name := range names {
+		if in.Project.Networks[name].External {
+			continue
+		}
+		base := "networks." + name
+		if len(in.Index.Keys(base+".ipam.options")) > 0 {
+			flag(base + ".ipam.options")
+		}
+		for _, i := range in.Index.Keys(base + ".ipam.config") {
+			if _, err := strconv.Atoi(i); err != nil {
+				continue
+			}
+			if p := base + ".ipam.config." + i + ".aux_addresses"; len(in.Index.Keys(p)) > 0 {
+				flag(p)
+			}
+		}
+		if p := base + ".config_from"; set(in.Index, p) {
+			flag(p)
+		}
+		if p := base + ".ingress"; set(in.Index, p) {
+			flag(p)
+		}
+	}
+	return out
+}
+
+// set reports whether the file gives the path a value that is not empty, null or false.
+func set(ix Index, path string) bool {
+	if len(ix.Keys(path)) > 0 {
+		return true
+	}
+	if v, ok := ix.Scalar(path); ok {
+		switch v {
+		case "", "null", "~", "false":
+			return false
+		}
+		return true
+	}
+	return false
 }

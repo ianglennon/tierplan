@@ -96,3 +96,37 @@ func TestMessagesNameTheKeyThenSayWhatToDo(t *testing.T) {
 		t.Errorf("blocking = %q, want %q", got, want)
 	}
 }
+
+func TestEveryStandalonePathIsWordedWithAKeyAndASentence(t *testing.T) {
+	t.Parallel()
+	for _, path := range StandaloneUnsupported {
+		a, ok := standaloneAdvice[path]
+		if !ok || a.key == "" || !strings.HasSuffix(a.action, ".") {
+			t.Errorf("%s has no wording (got %+v)", path, a)
+		}
+	}
+	for path := range standaloneAdvice {
+		found := false
+		for _, p := range StandaloneUnsupported {
+			found = found || p == path
+		}
+		if !found {
+			t.Errorf("wording for %s, which is not in StandaloneUnsupported", path)
+		}
+	}
+}
+
+func TestExpandNamesEachKeyAndItemAPatternMatches(t *testing.T) {
+	t.Parallel()
+	ix := fakeIndex{
+		"services": "", "services.a": "", "services.a.ports": "", "services.a.ports.0": "", "services.a.ports.0.mode": "host",
+		"services.a.ports.1": "", "services.a.ports.1.mode": "ingress", "services.b": "", "services.b.ports": "",
+	}
+	got := expand(ix, strings.Split("services.*.ports.[].mode=host", "."), "")
+	if len(got) != 1 || got[0] != "services.a.ports.0.mode" {
+		t.Errorf("expand = %v, want only the host-mode port", got)
+	}
+	if got := expand(ix, strings.Split("services.*.deploy.mode", "."), ""); len(got) != 0 {
+		t.Errorf("expand = %v, want none for a key the file lacks", got)
+	}
+}

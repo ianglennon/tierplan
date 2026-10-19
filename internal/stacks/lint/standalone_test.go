@@ -48,33 +48,35 @@ func TestEveryStandaloneUnsupportedPathIsReported(t *testing.T) {
 	if len(lint.StandaloneUnsupported) < 18 {
 		t.Fatalf("the copied table has %d paths, want the SDK's 18", len(lint.StandaloneUnsupported))
 	}
+	// One loop, not a subtest per path: every failure names its path, and the test reads as one
+	// check of the whole copied table.
 	for _, path := range lint.StandaloneUnsupported {
-		t.Run(path, func(t *testing.T) {
-			t.Parallel()
-			fx, ok := fixtures[path]
-			if !ok {
-				t.Fatalf("%s has no fixture: add one to the test", path)
-			}
-			res := checkOf(t, stacks.TargetStandalone, fx.compose)
-			if res.Loaded == nil {
-				t.Fatalf("the fixture does not load: %+v", res.Problems)
-			}
-			got := byCode(res, stacks.CodeIgnoredOnTarget)
-			if len(got) != 1 || len(res.Problems) != 1 {
-				t.Fatalf("problems = %+v, want exactly one ignored_on_target", res.Problems)
-			}
-			p := got[0]
-			if p.Severity != stacks.SeverityWarning || p.Line != fx.line {
-				t.Errorf("problem = %+v, want a warning at line %d", p, fx.line)
-			}
-			if want := "`" + fx.key + "` is ignored on a standalone host. "; !strings.HasPrefix(p.Message, want) || len(p.Message) <= len(want) {
-				t.Errorf("message = %q, want %q followed by what to do", p.Message, want)
-			}
-			// The same file on a swarm is not told that.
-			if swarm := byCode(checkOf(t, stacks.TargetSwarm, fx.compose), stacks.CodeIgnoredOnTarget); len(swarm) != 0 {
-				t.Errorf("swarm problems = %+v, want none: a swarm applies %s", swarm, path)
-			}
-		})
+		fx, ok := fixtures[path]
+		if !ok {
+			t.Errorf("%s has no fixture: add one to the test", path)
+			continue
+		}
+		res := checkOf(t, stacks.TargetStandalone, fx.compose)
+		if res.Loaded == nil {
+			t.Errorf("%s: the fixture does not load: %+v", path, res.Problems)
+			continue
+		}
+		got := byCode(res, stacks.CodeIgnoredOnTarget)
+		if len(got) != 1 || len(res.Problems) != 1 {
+			t.Errorf("%s: problems = %+v, want exactly one ignored_on_target", path, res.Problems)
+			continue
+		}
+		p := got[0]
+		if p.Severity != stacks.SeverityWarning || p.Line != fx.line {
+			t.Errorf("%s: problem = %+v, want a warning at line %d", path, p, fx.line)
+		}
+		if want := "`" + fx.key + "` is ignored on a standalone host. "; !strings.HasPrefix(p.Message, want) || len(p.Message) <= len(want) {
+			t.Errorf("%s: message = %q, want %q followed by what to do", path, p.Message, want)
+		}
+		// The same file on a swarm is not told that.
+		if swarm := byCode(checkOf(t, stacks.TargetSwarm, fx.compose), stacks.CodeIgnoredOnTarget); len(swarm) != 0 {
+			t.Errorf("%s: swarm problems = %+v, want none: a swarm applies it", path, swarm)
+		}
 	}
 	for path := range fixtures {
 		if !slices.Contains(lint.StandaloneUnsupported, path) {

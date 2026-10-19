@@ -171,13 +171,39 @@ func TestCheckRefusesWhatNamesAFileOfTheServerAndListsUnusedFiles(t *testing.T) 
 	}
 
 	// A file the compose file refers to is used; one it never mentions is listed.
-	answer, code, raw = admin.check(st.ID, checkBody("services:\n  web:\n    image: nginx\n    env_file: app.env\n",
+	answer, code, raw = admin.check(st.ID, checkBody("services:\n  web:\n    image: nginx:1.27\n    env_file: app.env\n",
 		draftFile{Path: "app.env", Content: "A=1\n"}, draftFile{Path: "notes.txt"}))
 	if code != http.StatusOK || len(answer.Problems) != 0 {
 		t.Fatalf("check: %d %s", code, raw)
 	}
 	if len(answer.UnusedFiles) != 1 || answer.UnusedFiles[0] != "notes.txt" {
 		t.Errorf("unusedFiles = %v, want [notes.txt]", answer.UnusedFiles)
+	}
+}
+
+func TestCheckAnswersWhatTheTargetIgnoresAsWarningsAtTheirLines(t *testing.T) {
+	t.Parallel()
+	f, e := actionsEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "target-lint")
+
+	// build with an image is a warning; a service with no tag is another; both are 200 answers
+	// that block nothing, and the error for a build with no image is the only one that blocks.
+	answer, code, raw := admin.check(st.ID, checkBody("services:\n  web:\n    image: nginx\n    build: .\n  job:\n    build: ./job\n"))
+	if code != http.StatusOK {
+		t.Fatalf("check: %d %s", code, raw)
+	}
+	type at struct {
+		severity, code string
+		line           int
+	}
+	var got []at
+	for _, p := range answer.Problems {
+		got = append(got, at{p.Severity, p.Code, p.Line})
+	}
+	want := []at{{"warning", "moving_tag", 3}, {"warning", "ignored_on_target", 4}, {"error", "build_without_image", 6}}
+	if !slices.Equal(got, want) {
+		t.Errorf("problems = %v, want %v", got, want)
 	}
 }
 
