@@ -756,3 +756,122 @@ func TestSetRenderedRefusesARevisionThatDoesNotExistAndADraft(t *testing.T) {
 		t.Error("SetRendered of the draft succeeded: only a revision has a rendering")
 	}
 }
+
+// Where a draft started (plan 07-16, D-09): the revision it began from, so a deploy made since can
+// be told from the draft's own.
+
+// goodRevision takes a revision of the stack's draft and marks it good, as a deploy that succeeded.
+func goodRevision(t *testing.T, f repoFixture, stackID, actor string) stackops.Snapshot {
+	t.Helper()
+	ctx := context.Background()
+	rev, err := f.repo.NewRevision(ctx, stackID, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetOutcome(ctx, rev.ID, stackops.OutcomeGood, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	return rev
+}
+
+func TestADraftStartedAfterADiscardRecordsTheNewestGoodRevision(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("v1")}})
+	for range 3 {
+		goodRevision(t, f, st.ID, "ada")
+	}
+	if _, _, err := f.repo.DiscardDraft(ctx, st.ID); err != nil {
+		t.Fatal(err)
+	}
+	saved, _, err := f.repo.SaveDraft(ctx, st.ID, 0, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("v2")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.BaseSeq != 3 {
+		t.Errorf("base seq = %d, want 3: the draft started when revision 3 was the good one", saved.BaseSeq)
+	}
+	got, err := f.repo.Draft(ctx, st.ID)
+	if err != nil || got.BaseSeq != 3 {
+		t.Errorf("Draft = base %d, %v; want 3", got.BaseSeq, err)
+	}
+}
+
+func TestRevisionReadsOneRevisionByItsNumberWithItsContent(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("one")}})
+	goodRevision(t, f, st.ID, "ada")
+	if _, _, err := f.repo.SaveDraft(ctx, st.ID, 1, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("two")}}); err != nil {
+		t.Fatal(err)
+	}
+	goodRevision(t, f, st.ID, "bob")
+
+	one, err := f.repo.Revision(ctx, st.ID, 1)
+	if err != nil || one.Seq != 1 || string(one.Copy.Compose()) != "one" || one.Kind != stackops.KindRevision {
+		t.Errorf("revision 1 = %+v, %v; want its own content", one, err)
+	}
+	two, err := f.repo.Revision(ctx, st.ID, 2)
+	if err != nil || string(two.Copy.Compose()) != "two" || two.CreatedBy != "bob" {
+		t.Errorf("revision 2 = %+v, %v; want bob's, with its content", two, err)
+	}
+	if _, err := f.repo.Revision(ctx, st.ID, 9); !errors.Is(err, stackops.ErrRevisionNotFound) {
+		t.Errorf("revision 9 err = %v, want ErrRevisionNotFound", err)
+	}
+	other, _, _ := f.repo.CreateStack(ctx, f.envID, "api", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("x")}})
+	if _, err := f.repo.Revision(ctx, other.ID, 1); !errors.Is(err, stackops.ErrRevisionNotFound) {
+		t.Errorf("revision 1 of another stack err = %v, want ErrRevisionNotFound", err)
+	}
+}
+
+func TestRebaseDraftMovesWhereTheDraftStartedAndTouchesNothingElse(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("one")}})
+	goodRevision(t, f, st.ID, "ada")
+	before, _ := f.repo.Draft(ctx, st.ID)
+
+	if err := f.repo.RebaseDraft(ctx, st.ID, 1); err != nil {
+		t.Fatalf("RebaseDraft: %v", err)
+	}
+	after, err := f.repo.Draft(ctx, st.ID)
+	if err != nil || after.BaseSeq != 1 {
+		t.Fatalf("draft = base %d, %v; want 1", after.BaseSeq, err)
+	}
+	if after.Version != before.Version || string(after.Copy.Compose()) != string(before.Copy.Compose()) {
+		t.Errorf("a rebase changed the draft's version or content: %+v -> %+v", before, after)
+	}
+	// A stack with no draft has nothing to rebase, which is not an error.
+	if _, _, err := f.repo.DiscardDraft(ctx, st.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.RebaseDraft(ctx, st.ID, 1); err != nil {
+		t.Errorf("RebaseDraft with no draft: %v", err)
+	}
+}
+
+func TestGoodRevisionInfoNamesWhoDeployedTheNewestGoodRevision(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("one")}})
+	if _, ok, err := f.repo.GoodRevisionInfo(ctx, st.ID); ok || err != nil {
+		t.Fatalf("a stack never deployed = %v, %v; want none", ok, err)
+	}
+	goodRevision(t, f, st.ID, "ada")
+	second := goodRevision(t, f, st.ID, "bob")
+	failed, _ := f.repo.NewRevision(ctx, st.ID, "cy")
+	if err := f.repo.SetOutcome(ctx, failed.ID, stackops.OutcomeFailed, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	info, ok, err := f.repo.GoodRevisionInfo(ctx, st.ID)
+	if err != nil || !ok {
+		t.Fatalf("GoodRevisionInfo = %v, %v", ok, err)
+	}
+	if info.Seq != 2 || info.By != "bob" || !info.At.Equal(second.CreatedAt) {
+		t.Errorf("info = %+v, want revision 2 by bob at %v, not the failed one", info, second.CreatedAt)
+	}
+}

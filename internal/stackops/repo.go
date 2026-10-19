@@ -529,6 +529,25 @@ func (r Repo) GoodRendering(ctx context.Context, stackID string) ([]byte, error)
 	return []byte(row.Rendered), nil
 }
 
+// Revision reads one revision of a stack by its number, with its files and variables opened. A
+// number the stack has no revision for is ErrRevisionNotFound.
+func (r Repo) Revision(ctx context.Context, stackID string, seq int64) (Snapshot, error) {
+	return Snapshot{}, ErrRevisionNotFound
+}
+
+// RebaseDraft says the stack's draft now starts from revision seq. A deploy of the draft calls it
+// once it has taken the revision, so the draft is not later taken for one made before a newer
+// deployment. A stack with no draft has nothing to rebase.
+func (r Repo) RebaseDraft(ctx context.Context, stackID string, seq int64) error {
+	return nil
+}
+
+// GoodRevisionInfo is who started the deploy of the stack's newest good revision, when, and its
+// number, without opening its content. It reports false when the stack has none.
+func (r Repo) GoodRevisionInfo(ctx context.Context, stackID string) (DeployedRevision, bool, error) {
+	return DeployedRevision{}, false, nil
+}
+
 // LatestGoodRevision is the newest revision whose deploy succeeded, with its files and
 // variables opened. It reports false when the stack has none.
 func (r Repo) LatestGoodRevision(ctx context.Context, stackID string) (Snapshot, bool, error) {

@@ -57,6 +57,40 @@ type stackReviewAnswer struct {
 		}
 		Lines []string
 	} `json:"yaml"`
+	Concurrent *struct {
+		Revision       int64
+		DeployedBy     string           `json:"deployedBy"`
+		DeployedAt     string           `json:"deployedAt"`
+		BaseToDeployed []concurrentFile `json:"baseToDeployed"`
+		BaseToDraft    []concurrentFile `json:"baseToDraft"`
+	} `json:"concurrent"`
+}
+
+// concurrentFile is one file of a concurrent diff, as the review answers it.
+type concurrentFile struct {
+	Path, Kind   string
+	Hidden       bool
+	ChangedLines int `json:"changedLines"`
+	Hunks        []struct {
+		Lines []struct {
+			Kind string
+			Text string
+		}
+	}
+	Lines []string
+}
+
+// added is the text of the lines the file's hunks add.
+func (f concurrentFile) added() []string {
+	var out []string
+	for _, h := range f.Hunks {
+		for _, l := range h.Lines {
+			if l.Kind == "added" {
+				out = append(out, strings.TrimSpace(l.Text))
+			}
+		}
+	}
+	return out
 }
 
 func (c *roleCaller) reviewStack(stackID, body string) (stackReviewAnswer, int, string) {
@@ -640,5 +674,144 @@ func TestReviewNeverSendsASecretInTheRenderedYAML(t *testing.T) {
 	}
 	if strings.Contains(stored, "secret-value") || !strings.Contains(stored, "<hidden>") {
 		t.Errorf("stored rendering = %q, want it masked", stored)
+	}
+}
+
+// A deploy never overwrites a newer one unseen (plan 07-16, STK-05, D-09). Someone else deploys a
+// revision while the operator's draft is open; the review says so, and the server refuses the
+// deploy until it is told the person saw what changed.
+
+const concurrentCompose = "services:\n  web:\n    image: nginx:1.27-alpine\n    environment:\n      API_KEY: ${API_KEY}\n      MODE: %s\n"
+
+func concurrentFixture(mode string) string { return strings.Replace(concurrentCompose, "%s", mode, 1) }
+
+func revisionCount(t *testing.T, f *envFix, stackID string) int {
+	t.Helper()
+	var n int
+	if err := f.st.Write.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision'`, stackID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestConcurrentDraftNeedsAcknowledgement(t *testing.T) {
+	t.Parallel()
+	f, e := actionsEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "shop")
+	secret := func(v string) string { return `[{"name":"API_KEY","value":"` + v + `","secret":true}]` }
+
+	// The operator deploys revision 1. Their own deploy is not a concurrent one.
+	version := saveCompose(t, operator, st.ID, concurrentFixture("prod"), secret("first-secret-value"))
+	if job := f.deployAndWait(t, operator, st.ID, `{"draftVersion":`+itoaT(version)+`}`); job.State != "done" {
+		t.Fatalf("job = %+v", job)
+	}
+	if rv, code, raw := operator.reviewStack(st.ID, `{}`); code != http.StatusOK || rv.Concurrent != nil {
+		t.Fatalf("review after one's own deploy: %d, concurrent %+v, %s; want none", code, rv.Concurrent, raw)
+	}
+
+	// Bob deploys revision 2 behind the draft's back (through the store, as a deploy that did not
+	// start from this draft would), with another mode and another secret.
+	repo := stackops.Repo{Store: f.st, Vault: f.v}
+	saveCompose(t, operator, st.ID, concurrentFixture("staging"), secret("second-secret-value"))
+	ctx := testsupport.Context(t)
+	rev, err := repo.NewRevision(ctx, st.ID, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetOutcome(ctx, rev.ID, stackops.OutcomeGood, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	// Then the operator's own edit, still from revision 1: three replicas.
+	grown := strings.Replace(concurrentFixture("prod"), "    environment:", "    deploy:\n      replicas: 3\n    environment:", 1)
+	version = saveCompose(t, operator, st.ID, grown, secret("third-secret-value"))
+
+	rv, code, raw := operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, raw)
+	}
+	c := rv.Concurrent
+	if c == nil {
+		t.Fatalf("the review does not say a deployment was made after the draft started: %s", raw)
+	}
+	if c.Revision != 2 || c.DeployedBy != "bob" || c.DeployedAt == "" {
+		t.Errorf("concurrent = %+v, want revision 2 by bob", c)
+	}
+	if len(c.BaseToDeployed) == 0 || c.BaseToDeployed[0].Path != "compose.yaml" || strings.Join(c.BaseToDeployed[0].added(), "|") != "MODE: staging" {
+		t.Errorf("base to deployed = %+v, want compose.yaml with MODE: staging added", c.BaseToDeployed)
+	}
+	if len(c.BaseToDraft) == 0 || c.BaseToDraft[0].Path != "compose.yaml" || strings.Join(c.BaseToDraft[0].added(), "|") != "deploy:|replicas: 3" {
+		t.Errorf("base to draft = %+v, want compose.yaml with the replicas added", c.BaseToDraft)
+	}
+	for _, v := range []string{"first-secret-value", "second-secret-value", "third-secret-value"} {
+		if strings.Contains(raw, v) {
+			t.Fatalf("the secret %q reached the review: %s", v, raw)
+		}
+	}
+
+	// The server refuses the deploy on its own, whatever the browser did.
+	rec := operator.deploy(st.ID, `{"draftVersion":`+itoaT(version)+`}`)
+	if rec.Code != http.StatusConflict || problemOf(t, rec).Type != "concurrent_unacknowledged" {
+		t.Fatalf("deploy without the acknowledgement: %d %s, want 409 concurrent_unacknowledged", rec.Code, rec.Body)
+	}
+	if n := revisionCount(t, f, st.ID); n != 2 {
+		t.Fatalf("a refused deploy left %d revisions, want 2", n)
+	}
+
+	// With it, the deploy runs and takes revision 3.
+	rec = operator.deploy(st.ID, `{"draftVersion":`+itoaT(version)+`,"acknowledgeConcurrent":true}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("deploy with the acknowledgement: %d %s", rec.Code, rec.Body)
+	}
+	var started struct {
+		JobID    string `json:"jobId"`
+		Revision int64  `json:"revision"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &started); err != nil {
+		t.Fatal(err)
+	}
+	if started.Revision != 3 {
+		t.Errorf("revision = %d, want 3", started.Revision)
+	}
+	if job := f.awaitDeploy(t, started.JobID); job.State != "done" {
+		t.Fatalf("job = %+v", job)
+	}
+
+	// The draft now starts from revision 3, so it is no longer concurrent.
+	if rv, code, raw = operator.reviewStack(st.ID, `{}`); code != http.StatusOK || rv.Concurrent != nil {
+		t.Errorf("review after the acknowledged deploy: %d, concurrent %+v; want none", code, rv.Concurrent)
+	}
+}
+
+func TestASecondDeployOfTheSameDraftNeedsNoAcknowledgement(t *testing.T) {
+	t.Parallel()
+	f, e := actionsEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "shop")
+	version := saveCompose(t, operator, st.ID, reviewCompose, `[]`)
+	if job := f.deployAndWait(t, operator, st.ID, `{"draftVersion":`+itoaT(version)+`}`); job.State != "done" {
+		t.Fatalf("job = %+v", job)
+	}
+	grown := strings.Replace(reviewCompose, "    ports:", "    deploy:\n      replicas: 2\n    ports:", 1)
+	version = saveCompose(t, operator, st.ID, grown, `[]`)
+	if job := f.deployAndWait(t, operator, st.ID, `{"draftVersion":`+itoaT(version)+`}`); job.State != "done" {
+		t.Fatalf("the second deploy of one's own draft was refused or failed: %+v", job)
+	}
+}
+
+func TestADraftOfAStackNeverDeployedIsNeverConcurrent(t *testing.T) {
+	t.Parallel()
+	f, e := actionsEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "shop")
+	version := saveCompose(t, operator, st.ID, reviewCompose, `[]`)
+	if rv, code, _ := operator.reviewStack(st.ID, `{}`); code != http.StatusOK || rv.Concurrent != nil {
+		t.Errorf("review of a first deploy: %d, concurrent %+v; want none", code, rv.Concurrent)
+	}
+	if rec := operator.deploy(st.ID, `{"draftVersion":`+itoaT(version)+`}`); rec.Code != http.StatusAccepted {
+		t.Errorf("deploy of a first deploy: %d %s", rec.Code, rec.Body)
 	}
 }

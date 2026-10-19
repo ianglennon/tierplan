@@ -91,6 +91,35 @@ func (q *Queries) GetDraft(ctx context.Context, stackID string) (StackSnapshot, 
 	return i, err
 }
 
+const getRevision = `-- name: GetRevision :one
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at
+FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND seq = ?
+`
+
+type GetRevisionParams struct {
+	StackID string
+	Seq     int64
+}
+
+func (q *Queries) GetRevision(ctx context.Context, arg GetRevisionParams) (StackSnapshot, error) {
+	row := q.db.QueryRowContext(ctx, getRevision, arg.StackID, arg.Seq)
+	var i StackSnapshot
+	err := row.Scan(
+		&i.ID,
+		&i.StackID,
+		&i.Kind,
+		&i.Seq,
+		&i.BaseSeq,
+		&i.Version,
+		&i.Outcome,
+		&i.Rendered,
+		&i.Pins,
+		&i.CreatedBy,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getStack = `-- name: GetStack :one
 SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped
 FROM stacks WHERE env_id = ? AND id = ?
@@ -627,6 +656,24 @@ func (q *Queries) NextRevisionSeq(ctx context.Context, stackID string) (int64, e
 	var seq int64
 	err := row.Scan(&seq)
 	return seq, err
+}
+
+const setDraftBaseSeq = `-- name: SetDraftBaseSeq :execrows
+UPDATE stack_snapshots SET base_seq = ? WHERE stack_id = ? AND kind = 'draft'
+`
+
+type SetDraftBaseSeqParams struct {
+	BaseSeq int64
+	StackID string
+}
+
+// A deploy of the draft makes the draft the content of the new revision, so the draft now starts from it.
+func (q *Queries) SetDraftBaseSeq(ctx context.Context, arg SetDraftBaseSeqParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setDraftBaseSeq, arg.BaseSeq, arg.StackID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const setRevisionOutcome = `-- name: SetRevisionOutcome :execrows

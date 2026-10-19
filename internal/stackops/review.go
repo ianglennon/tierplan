@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/distribution/reference"
 	"github.com/moby/moby/api/types/swarm"
@@ -79,9 +80,24 @@ type ReviewInput struct {
 	// Rendered YAML tab compares the draft's rendering with. Empty means none: the draft is
 	// compared with an empty document.
 	Rendering []byte
+	// Deployed is the stack's last good revision, when it has one, and BaseSeq the revision the
+	// draft started from. A deployed revision newer than BaseSeq was made after the draft began,
+	// and the review says so (Concurrent). Base is the content of revision BaseSeq: nil when the
+	// draft started from no revision, or from one that is gone.
+	Deployed *DeployedRevision
+	BaseSeq  int64
+	Base     *stacks.WorkingCopy
 	// Pins is where the pins of the stack's last good revision are read from. Nil means none.
 	Pins   PinStore
 	Caller Caller
+}
+
+// DeployedRevision is the stack's last good revision: its number, who started its deploy and
+// when.
+type DeployedRevision struct {
+	Seq int64
+	By  string
+	At  time.Time
 }
 
 // TextDiff is a text compared with an older one: the hunks with 3 lines of context, how many
@@ -92,6 +108,26 @@ type TextDiff struct {
 	Hunks        []stacks.Hunk
 	ChangedLines int
 	Lines        []string
+}
+
+// FileHunks is the change of one file of the stack, or of its variables, between two versions of
+// the working copy. Hidden says the file or a variable is secret and its content differs, which
+// the hunks cannot show.
+type FileHunks struct {
+	Path      string
+	Variables bool
+	Hidden    bool
+	TextDiff
+}
+
+// Concurrent is a deployment made after the draft was started: who deployed and when, what the
+// deployment changed since the draft's base, and what the draft changed since it. Every text is
+// masked.
+type Concurrent struct {
+	Revision                    int64
+	DeployedBy                  string
+	DeployedAt                  time.Time
+	BaseToDeployed, BaseToDraft []FileHunks
 }
 
 // Counts is how many of a kind a deploy would add, change and remove.
@@ -138,6 +174,8 @@ type Review struct {
 	// YAML is the rendered stack against the rendering stored with the last good revision (an empty
 	// document for a first deploy).
 	YAML TextDiff
+	// Concurrent is set when the last good revision is newer than the one the draft started from.
+	Concurrent *Concurrent
 }
 
 // Review reads what a deploy of the saved draft would do. It runs the check, reads what the swarm
@@ -159,8 +197,9 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 	}
 	res := stacks.Check(ctx, stacks.CheckInput{Name: in.Stack.Name, Target: in.Stack.Target, Copy: in.Copy})
 	rv.Problems = res.Problems
-	// The rendered view is made from what is known when the review ends, whichever way it ends
-	// without an error: a stack that has problems still shows its rendering.
+	// The two text views are made from what is known when the review ends, whichever way it ends
+	// without an error: a stack that has problems still shows its rendering, and a deployment
+	// made since the draft started is shown whatever else is wrong.
 	defer func() {
 		if err != nil {
 			return

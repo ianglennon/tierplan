@@ -1999,7 +1999,7 @@ export interface paths {
         put?: never;
         /**
          * Deploy a stack's draft
-         * @description Takes a revision from the draft and deploys it as a job, answering 202 with the job ID at once; the deploy goes on if the browser closes. draftVersion must be the version of the draft you reviewed, or the answer is 409 draft_changed. pins, when sent, are the review's: the deploy uses exactly those digests and makes no registry lookup (422 pins_invalid for one the server would not have chosen). On a swarm the job creates the stack's networks, then its secrets and configs under names that end in a short hash of their content, then its services, through one manager, each once and never retried; each carries com.docker.stack.namespace and bayplan.stack.id, and each service com.docker.stack.image with the image as written. A secret or config that content changes replaces is removed at the end, once every service uses the new one. A compose file that does not load is 422 compose_invalid; one that uses a setting not converted yet is 422 compose_unsupported; one whose check finds an error is 422 stack_invalid. A caller below env Admin is refused 403 privileged_compose, with each setting and its line in errors, when the stack asks for host access (a bind of the Docker socket or a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables. A name that something Bayplan does not manage holds is 409 stack_name_clash. An environment that is no longer the kind of target the stack was created for is 409 target_changed, and a standalone stack is 409 target_engine_missing. At most 5 jobs of one user run at once (429 too_many_deploys). Writes one stack.deployed audit row, with the result, when the job ends. Needs stacks.deploy (Operator).
+         * @description Takes a revision from the draft and deploys it as a job, answering 202 with the job ID at once; the deploy goes on if the browser closes. draftVersion must be the version of the draft you reviewed, or the answer is 409 draft_changed. A draft that started from an older revision than the newest good one (someone deployed since) is 409 concurrent_unacknowledged unless acknowledgeConcurrent is true; a deploy never overwrites a newer one unseen. pins, when sent, are the review's: the deploy uses exactly those digests and makes no registry lookup (422 pins_invalid for one the server would not have chosen). On a swarm the job creates the stack's networks, then its secrets and configs under names that end in a short hash of their content, then its services, through one manager, each once and never retried; each carries com.docker.stack.namespace and bayplan.stack.id, and each service com.docker.stack.image with the image as written. A secret or config that content changes replaces is removed at the end, once every service uses the new one. A compose file that does not load is 422 compose_invalid; one that uses a setting not converted yet is 422 compose_unsupported; one whose check finds an error is 422 stack_invalid. A caller below env Admin is refused 403 privileged_compose, with each setting and its line in errors, when the stack asks for host access (a bind of the Docker socket or a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables. A name that something Bayplan does not manage holds is 409 stack_name_clash. An environment that is no longer the kind of target the stack was created for is 409 target_changed, and a standalone stack is 409 target_engine_missing. At most 5 jobs of one user run at once (429 too_many_deploys). Writes one stack.deployed audit row, with the result, when the job ends. Needs stacks.deploy (Operator).
          */
         post: operations["deployStack"];
         delete?: never;
@@ -2107,7 +2107,7 @@ export interface paths {
         put?: never;
         /**
          * Review what a deploy of a stack would do
-         * @description Reviews the stack's saved draft (the latest good revision when there is no draft) against what is running and saves nothing. It runs the same check as the editor, looks up the digests of the images that need one, converts the stack the way a deploy does, reads what the swarm holds under the stack's namespace and answers the problems, a summary, an image table, each service's change with its masked current and next spec, and the other resources. A value derived from a secret of the stack is <hidden> on both sides; whether it changed is decided before it is hidden and listed in hiddenChanges as a path. Right after a deploy, a review shows no change. yaml is the one comparison with the last deploy and not with what is running: the rendered stack against the masked rendering stored with the last good revision, as hunks computed here with 3 lines of context. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. For a caller below env Admin, host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables, is a blocking needs_admin problem at its line, and needsAdmin names the kinds. A name that something Bayplan does not manage holds is a blocking stack_name_clash problem. An environment that is no longer the kind of target the stack was created for is 409 target_changed, and a standalone stack is 409 target_engine_missing. Needs stacks.deploy (Operator).
+         * @description Reviews the stack's saved draft (the latest good revision when there is no draft) against what is running and saves nothing. It runs the same check as the editor, looks up the digests of the images that need one, converts the stack the way a deploy does, reads what the swarm holds under the stack's namespace and answers the problems, a summary, an image table, each service's change with its masked current and next spec, and the other resources. A value derived from a secret of the stack is <hidden> on both sides; whether it changed is decided before it is hidden and listed in hiddenChanges as a path. Right after a deploy, a review shows no change. yaml is the one comparison with the last deploy and not with what is running: the rendered stack against the masked rendering stored with the last good revision, as hunks computed here with 3 lines of context. concurrent is set when someone deployed after the draft was started, with what that deployment changed and what the draft changed, file by file; the deploy then needs acknowledgeConcurrent. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. For a caller below env Admin, host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables, is a blocking needs_admin problem at its line, and needsAdmin names the kinds. A name that something Bayplan does not manage holds is a blocking stack_name_clash problem. An environment that is no longer the kind of target the stack was created for is 409 target_changed, and a standalone stack is 409 target_engine_missing. Needs stacks.deploy (Operator).
          */
         post: operations["reviewStack"];
         delete?: never;
@@ -8138,6 +8138,21 @@ export interface components {
             /** @description Every variable of the working copy. A secret variable sent as <hidden> is filled from the saved draft */
             vars: components["schemas"]["DraftVarBody"][] | null;
         };
+        StackConcurrentBody: {
+            /** @description What that deployment changed since the version the draft started from, file by file, masked */
+            baseToDeployed: components["schemas"]["StackFileDiffBody"][] | null;
+            /** @description What the draft changed since the version it started from, file by file, masked */
+            baseToDraft: components["schemas"]["StackFileDiffBody"][] | null;
+            /** @description When it was started, RFC 3339 UTC */
+            deployedAt: string;
+            /** @description Who started that deploy */
+            deployedBy: string;
+            /**
+             * Format: int64
+             * @description The number of the revision that was deployed
+             */
+            revision: number;
+        };
         StackCreateRequest: {
             /** @description The text of the first compose.yaml. When it is given, start is ignored */
             compose?: string;
@@ -8156,6 +8171,8 @@ export interface components {
             revision: number;
         };
         StackDeployRequest: {
+            /** @description Set when the review answered concurrent and the person has seen what changed and wants to deploy the draft over it. Without it, a draft that started from an older revision than the newest good one is 409 concurrent_unacknowledged and nothing is deployed */
+            acknowledgeConcurrent?: boolean;
             /**
              * Format: int64
              * @description The version of the draft you reviewed and mean to deploy. If the draft moved since, the answer is 409 draft_changed and nothing is deployed
@@ -8301,6 +8318,26 @@ export interface components {
              */
             version: number;
         };
+        StackFileDiffBody: {
+            /**
+             * Format: int64
+             * @description How many lines the hunks add and remove
+             */
+            changedLines: number;
+            /** @description True when the file or a variable is secret and differs: its content is never sent, so the hunks do not show it */
+            hidden: boolean;
+            /** @description The changes, as in the rendered YAML */
+            hunks: components["schemas"]["StackDiffHunkBody"][] | null;
+            /**
+             * @description file, or variables for the stack's variables shown as NAME=value lines
+             * @enum {string}
+             */
+            kind: "file" | "variables";
+            /** @description The lines of the newer text, masked; empty when there are no hunks */
+            lines: string[] | null;
+            /** @description The file's path in the stack; for the variables, variables */
+            path: string;
+        };
         StackFileRevealBody: {
             /** @description The file's saved content, in clear */
             content: string;
@@ -8442,6 +8479,8 @@ export interface components {
             yaml: string;
         };
         StackReviewBody: {
+            /** @description Left out unless set: set when the last good revision is newer than the revision the draft started from: someone deployed after the draft began. A deploy of the draft then needs acknowledgeConcurrent */
+            concurrent?: components["schemas"]["StackConcurrentBody"];
             /**
              * Format: int64
              * @description The version of the draft the review was made of: send it with the deploy

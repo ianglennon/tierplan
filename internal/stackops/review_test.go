@@ -5,9 +5,11 @@ package stackops_test
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/jobs"
@@ -552,5 +554,170 @@ func TestReviewMasksASecretInTheRenderedYAML(t *testing.T) {
 	all := strings.Join(rv.YAML.Lines, "\n")
 	if strings.Contains(all, "supersecret-value") || !strings.Contains(all, "<hidden>") {
 		t.Errorf("rendering = %q, want the secret hidden", all)
+	}
+}
+
+// A deployment made after the draft was started (plan 07-16, STK-05, D-09): what it changed and
+// what the draft changed, from the version the draft began with, file by file and masked.
+
+const concurrentBase = "services:\n  web:\n    image: nginx:1.27-alpine\n    environment:\n      MODE: prod\n"
+
+func copyOf(compose string, files []stacks.File, vars ...stacks.Var) stacks.WorkingCopy {
+	return stacks.WorkingCopy{Files: append([]stacks.File{{Path: stacks.ComposeFile, Content: []byte(compose)}}, files...), Vars: vars}
+}
+
+// concurrentInput is a review of draft whose base was revision 1 and whose newest good revision is
+// deployed, deployed by bob.
+func (r *swarmRig) concurrentInput(t *testing.T, base, deployed, draft stacks.WorkingCopy, deployedSeq int64) stackops.ReviewInput {
+	t.Helper()
+	in := r.reviewInput(t, "shop", string(draft.Compose()), draft.Files[1:], draft.Vars...)
+	in.BaseSeq, in.Base = 1, &base
+	in.Previous = &deployed
+	in.Deployed = &stackops.DeployedRevision{Seq: deployedSeq, By: "bob", At: time.Date(2026, 10, 19, 13, 0, 0, 0, time.UTC)}
+	return in
+}
+
+func hunkLines(f stackops.FileHunks, kind byte) []string {
+	var out []string
+	for _, h := range f.Hunks {
+		for _, l := range h.Lines {
+			if l.Kind == kind {
+				out = append(out, strings.TrimSpace(l.Text))
+			}
+		}
+	}
+	return out
+}
+
+func TestReviewOfADraftStartedBeforeANewerDeployShowsWhatEachSideChanged(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	base := copyOf(concurrentBase, nil)
+	deployed := copyOf(strings.Replace(concurrentBase, "MODE: prod", "MODE: staging", 1), nil)
+	draft := copyOf(strings.Replace(concurrentBase, "image: nginx:1.27-alpine", "image: nginx:1.28-alpine", 1), nil)
+
+	rv, err := rig.deps.Review(testsupport.Context(t), rig.concurrentInput(t, base, deployed, draft, 2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := rv.Concurrent
+	if c == nil {
+		t.Fatal("concurrent = nil, want the deployment made after the draft started")
+	}
+	if c.Revision != 2 || c.DeployedBy != "bob" || !c.DeployedAt.Equal(time.Date(2026, 10, 19, 13, 0, 0, 0, time.UTC)) {
+		t.Errorf("concurrent = revision %d by %q at %v", c.Revision, c.DeployedBy, c.DeployedAt)
+	}
+	if len(c.BaseToDeployed) != 1 || c.BaseToDeployed[0].Path != stacks.ComposeFile {
+		t.Fatalf("base to deployed = %+v, want compose.yaml only", c.BaseToDeployed)
+	}
+	if got := hunkLines(c.BaseToDeployed[0], stacks.DiffAdded); len(got) != 1 || got[0] != "MODE: staging" {
+		t.Errorf("deployed since added %q, want MODE: staging", got)
+	}
+	if got := hunkLines(c.BaseToDeployed[0], stacks.DiffRemoved); len(got) != 1 || got[0] != "MODE: prod" {
+		t.Errorf("deployed since removed %q, want MODE: prod", got)
+	}
+	if len(c.BaseToDraft) != 1 {
+		t.Fatalf("base to draft = %+v, want compose.yaml only", c.BaseToDraft)
+	}
+	if got := hunkLines(c.BaseToDraft[0], stacks.DiffAdded); len(got) != 1 || got[0] != "image: nginx:1.28-alpine" {
+		t.Errorf("the draft added %q, want the new image", got)
+	}
+	if c.BaseToDeployed[0].ChangedLines != 2 || len(c.BaseToDeployed[0].Lines) == 0 {
+		t.Errorf("changed lines %d and the newer lines %d, want 2 and the text for the unchanged lines", c.BaseToDeployed[0].ChangedLines, len(c.BaseToDeployed[0].Lines))
+	}
+}
+
+func TestReviewOfADraftStartedFromTheNewestRevisionIsNotConcurrent(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	same := copyOf(concurrentBase, nil)
+	in := rig.concurrentInput(t, same, same, same, 1) // revision 1 is both the base and the newest
+	rv, err := rig.deps.Review(testsupport.Context(t), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rv.Concurrent != nil {
+		t.Errorf("concurrent = %+v, want none: the draft started from the newest revision", rv.Concurrent)
+	}
+
+	in = rig.reviewInput(t, "shop", concurrentBase, nil)
+	if rv, err = rig.deps.Review(testsupport.Context(t), in); err != nil || rv.Concurrent != nil {
+		t.Errorf("a stack that was never deployed: concurrent = %+v, %v; want none", rv.Concurrent, err)
+	}
+}
+
+func TestReviewNeverShowsASecretFileOrVariableInTheConcurrentDiffs(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	compose := concurrentBase + "    secrets:\n      - tok\nsecrets:\n  tok:\n    file: tok.txt\n"
+	secretFile := func(content string) []stacks.File {
+		return []stacks.File{{Path: "tok.txt", Content: []byte(content), Secret: true}}
+	}
+	base := copyOf(compose, secretFile("token-one-value"), stacks.Var{Name: "API_KEY", Value: "key-one-value", Secret: true}, stacks.Var{Name: "REGION", Value: "eu"})
+	deployed := copyOf(compose, secretFile("token-two-value"), stacks.Var{Name: "API_KEY", Value: "key-two-value", Secret: true}, stacks.Var{Name: "REGION", Value: "us"})
+	draft := copyOf(compose, secretFile("token-three-value"), stacks.Var{Name: "API_KEY", Value: "key-three-value", Secret: true}, stacks.Var{Name: "REGION", Value: "eu"})
+
+	rv, err := rig.deps.Review(testsupport.Context(t), rig.concurrentInput(t, base, deployed, draft, 2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rv.Concurrent == nil {
+		t.Fatal("concurrent = nil")
+	}
+	everything := fmt.Sprintf("%+v", *rv.Concurrent)
+	for _, secret := range []string{"token-one-value", "token-two-value", "token-three-value", "key-one-value", "key-two-value", "key-three-value"} {
+		if strings.Contains(everything, secret) {
+			t.Errorf("the secret %q reached the concurrent diffs: %s", secret, everything)
+		}
+	}
+	find := func(files []stackops.FileHunks, path string) (stackops.FileHunks, bool) {
+		for _, f := range files {
+			if f.Path == path {
+				return f, true
+			}
+		}
+		return stackops.FileHunks{}, false
+	}
+	tok, ok := find(rv.Concurrent.BaseToDeployed, "tok.txt")
+	if !ok || !tok.Hidden || len(tok.Hunks) != 0 || tok.Variables {
+		t.Errorf("tok.txt = %+v, %v; want a hidden change with nothing to show", tok, ok)
+	}
+	vars, ok := find(rv.Concurrent.BaseToDeployed, "variables")
+	if !ok || !vars.Variables || !vars.Hidden {
+		t.Fatalf("variables = %+v, %v; want a change, partly hidden", vars, ok)
+	}
+	if got := hunkLines(vars, stacks.DiffAdded); len(got) != 1 || got[0] != "REGION=us" {
+		t.Errorf("variables added %q, want the plain variable's new value", got)
+	}
+	// The draft changed the secrets and left REGION alone: hidden, and no plain line.
+	mine, ok := find(rv.Concurrent.BaseToDraft, "variables")
+	if !ok || !mine.Hidden || len(mine.Hunks) != 0 {
+		t.Errorf("draft variables = %+v, %v; want a hidden change and no lines", mine, ok)
+	}
+}
+
+func TestReviewListsTheComposeFileFirstAndAFileTheOtherSideAddedOrRemoved(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	base := copyOf(concurrentBase, []stacks.File{{Path: "b.env", Content: []byte("A=1\n")}})
+	deployed := copyOf(concurrentBase, []stacks.File{{Path: "a.env", Content: []byte("A=2\n")}})
+	draft := copyOf(strings.Replace(concurrentBase, "prod", "dev", 1), []stacks.File{{Path: "b.env", Content: []byte("A=1\n")}})
+	rv, err := rig.deps.Review(testsupport.Context(t), rig.concurrentInput(t, base, deployed, draft, 2))
+	if err != nil || rv.Concurrent == nil {
+		t.Fatalf("review = %+v, %v", rv.Concurrent, err)
+	}
+	var paths []string
+	for _, f := range rv.Concurrent.BaseToDeployed {
+		paths = append(paths, f.Path)
+	}
+	if !slices.Equal(paths, []string{"a.env", "b.env"}) {
+		t.Errorf("base to deployed files = %v, want the one the deployment added, then the one it removed", paths)
+	}
+	var mine []string
+	for _, f := range rv.Concurrent.BaseToDraft {
+		mine = append(mine, f.Path)
+	}
+	if !slices.Equal(mine, []string{stacks.ComposeFile}) {
+		t.Errorf("base to draft files = %v, want compose.yaml only", mine)
 	}
 }

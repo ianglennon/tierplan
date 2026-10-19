@@ -41,6 +41,8 @@ type StackDeployRequest struct {
 	Pins         map[string]string `json:"pins,omitempty" doc:"The images the review chose, by swarm service name (the review's pins). The deploy uses exactly these digests and asks no registry. Each is checked against what the server decides itself: a service that keeps its running digest must be sent that digest, and a looked-up one a sha256 digest of the repository its reference names; anything else is 422 pins_invalid. Left out, the deploy looks the images up itself"`
 	Mode         string            `json:"mode,omitempty" enum:"deploy,update" doc:"deploy (the default), or update to move the services named in services to a newly looked-up digest"`
 	Services     []string          `json:"services,omitempty" maxItems:"200" doc:"For mode update: the services to move, by the name in the compose file or by the swarm name"`
+	// AcknowledgeConcurrent says the person saw what changed since the draft was started.
+	AcknowledgeConcurrent bool `json:"acknowledgeConcurrent,omitempty" doc:"Set when the review answered concurrent and the person has seen what changed and wants to deploy the draft over it. Without it, a draft that started from an older revision than the newest good one is 409 concurrent_unacknowledged and nothing is deployed"`
 }
 
 // StackDeployInput is the path and body of the deploy route.
@@ -103,7 +105,7 @@ func registerStackDeploy(r *httpx.Router, d StacksDeps) {
 		OperationID: "deployStack", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/deploys",
 		Summary: "Deploy a stack's draft",
 		Description: "Takes a revision from the draft and deploys it as a job, answering 202 with the job ID at once; the deploy goes on if the browser closes. " +
-			"draftVersion must be the version of the draft you reviewed, or the answer is 409 draft_changed. pins, when sent, are the review's: the deploy uses exactly those digests and makes no registry lookup (422 pins_invalid for one the server would not have chosen). " +
+			"draftVersion must be the version of the draft you reviewed, or the answer is 409 draft_changed. A draft that started from an older revision than the newest good one (someone deployed since) is 409 concurrent_unacknowledged unless acknowledgeConcurrent is true; a deploy never overwrites a newer one unseen. pins, when sent, are the review's: the deploy uses exactly those digests and makes no registry lookup (422 pins_invalid for one the server would not have chosen). " +
 			"On a swarm the job creates the stack's networks, then its secrets and configs under names that end in a short hash of their content, then its services, through one manager, each once and never retried; each carries com.docker.stack.namespace and bayplan.stack.id, and each service com.docker.stack.image with the image as written. " +
 			"A secret or config that content changes replaces is removed at the end, once every service uses the new one. " +
 			"A compose file that does not load is 422 compose_invalid; one that uses a setting not converted yet is 422 compose_unsupported; one whose check finds an error is 422 stack_invalid. " +

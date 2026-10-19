@@ -832,3 +832,114 @@ describe("the Rendered YAML tab", () => {
     expect(await screen.findByRole("tab", { name: "Rendered YAML" })).toBeTruthy();
   });
 });
+
+// The concurrent-deploy guard on the page (plan 07-16, STK-05, D-09): a deployment made after the
+// draft was started is shown first, and Deploy stack waits for the person to say they saw it.
+
+const concurrentBody = () => ({
+  revision: 4,
+  deployedBy: "bob",
+  deployedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+  baseToDeployed: [],
+  baseToDraft: [],
+});
+
+const ackBox = () =>
+  screen.getByRole("checkbox", {
+    name: "I've seen what changed and want to deploy my draft over it.",
+  });
+
+describe("a deployment made after the draft was started", () => {
+  it("is the first thing on the page, above the errors that stop a deploy", async () => {
+    review = () =>
+      Response.json(
+        reviewBody({
+          concurrent: concurrentBody(),
+          problems: [
+            {
+              severity: "error",
+              code: "x",
+              message: "Boom",
+              file: "compose.yaml",
+              line: 2,
+              col: 1,
+              endLine: 2,
+              endCol: 2,
+            },
+          ],
+        }),
+      );
+    mount();
+    const warning = await screen.findByText("This stack was deployed after you started editing");
+    const blocking = await screen.findByText("Boom");
+    expect(
+      warning.compareDocumentPosition(blocking) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("keeps Deploy stack off, with the reason in aria-describedby, until the box is ticked", async () => {
+    review = () => Response.json(reviewBody({ concurrent: concurrentBody() }));
+    mount();
+    await screen.findByText("This stack was deployed after you started editing");
+    const button = deployButton();
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    const reason = document.getElementById(button.getAttribute("aria-describedby") ?? "");
+    expect(reason?.textContent).toBe("Tick the box to confirm you've seen what changed.");
+    fireEvent.click(button);
+    expect(posts("/deploys")).toHaveLength(0);
+
+    fireEvent.click(ackBox());
+    await waitFor(() => expect(deployButton().getAttribute("aria-disabled")).toBeNull());
+    expect(deployButton().getAttribute("aria-describedby")).toBeNull();
+  });
+
+  it("sends that it was acknowledged with the deploy, and only then", async () => {
+    review = () => Response.json(reviewBody({ concurrent: concurrentBody() }));
+    const { onDeployed } = mount();
+    await screen.findByText("This stack was deployed after you started editing");
+    fireEvent.click(ackBox());
+    await waitFor(() => expect(deployButton().getAttribute("aria-disabled")).toBeNull());
+    fireEvent.click(deployButton());
+    await waitFor(() => expect(onDeployed).toHaveBeenCalledWith("j1"));
+    expect(posts("/deploys")[0]?.body).toEqual({
+      draftVersion: 7,
+      pins: { s1_web: `nginx:1.27@${D1}` },
+      mode: "deploy",
+      acknowledgeConcurrent: true,
+    });
+  });
+
+  it("is not on the page, and not in the deploy, when nothing was deployed since", async () => {
+    mount();
+    await screen.findByRole("tab", { name: "Changes" });
+    expect(screen.queryByText("This stack was deployed after you started editing")).toBeNull();
+    fireEvent.click(deployButton());
+    await waitFor(() => expect(posts("/deploys")).toHaveLength(1));
+    expect(posts("/deploys")[0]?.body).not.toHaveProperty("acknowledgeConcurrent");
+  });
+
+  it("is a reason that waits behind the others: errors and nothing-to-deploy come first", async () => {
+    review = () =>
+      Response.json(reviewBody({ concurrent: concurrentBody(), services: [], objects: [] }));
+    mount();
+    await screen.findByText("This stack was deployed after you started editing");
+    const button = deployButton();
+    const reason = document.getElementById(button.getAttribute("aria-describedby") ?? "");
+    expect(reason?.textContent).toBe("There's nothing to deploy.");
+  });
+
+  it("is worded when the server refuses a deploy that was not acknowledged", async () => {
+    review = () => Response.json(reviewBody({ concurrent: concurrentBody() }));
+    deploy = () => problem(409, "concurrent_unacknowledged");
+    mount();
+    await screen.findByText("This stack was deployed after you started editing");
+    fireEvent.click(ackBox());
+    await waitFor(() => expect(deployButton().getAttribute("aria-disabled")).toBeNull());
+    fireEvent.click(deployButton());
+    expect(
+      await screen.findByText(
+        "Someone deployed this stack after you started editing. Reload the page and check what changed.",
+      ),
+    ).toBeTruthy();
+  });
+});

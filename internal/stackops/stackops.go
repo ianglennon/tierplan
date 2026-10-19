@@ -28,6 +28,8 @@ var (
 	ErrNameTaken = errors.New("stackops: a stack of that name already exists on this environment")
 	// ErrNoDraft means the stack has no draft: it is not found, or it was never written.
 	ErrNoDraft = errors.New("stackops: the stack has no draft")
+	// ErrRevisionNotFound means the stack has no revision with that number.
+	ErrRevisionNotFound = errors.New("stackops: no such revision")
 	// ErrStackNotFound means the environment has no stack of that ID.
 	ErrStackNotFound = errors.New("stackops: no such stack")
 	// ErrDraftConflict means the draft moved since the caller read it. The error is a

@@ -78,6 +78,14 @@ WHERE id = sqlc.arg(id) AND kind = 'revision';
 -- The masked rendering of a revision: what the next review compares the draft's rendering with.
 UPDATE stack_snapshots SET rendered = ? WHERE id = ? AND kind = 'revision';
 
+-- name: GetRevision :one
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at
+FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND seq = ?;
+
+-- name: SetDraftBaseSeq :execrows
+-- A deploy of the draft makes the draft the content of the new revision, so the draft now starts from it.
+UPDATE stack_snapshots SET base_seq = ? WHERE stack_id = ? AND kind = 'draft';
+
 -- name: SetSnapshotPins :execrows
 UPDATE stack_snapshots SET pins = ? WHERE id = ? AND kind = 'revision';
 

@@ -99,6 +99,25 @@ type StackTextDiffBody struct {
 	Lines        []string            `json:"lines" doc:"The lines of the newer text, masked, so that the unchanged lines between hunks can be shown; empty when there are no hunks"`
 }
 
+// StackFileDiffBody is the change of one file of the stack, or of its variables.
+type StackFileDiffBody struct {
+	Path         string              `json:"path" doc:"The file's path in the stack; for the variables, variables"`
+	Kind         string              `json:"kind" enum:"file,variables" doc:"file, or variables for the stack's variables shown as NAME=value lines"`
+	Hidden       bool                `json:"hidden" doc:"True when the file or a variable is secret and differs: its content is never sent, so the hunks do not show it"`
+	ChangedLines int                 `json:"changedLines" doc:"How many lines the hunks add and remove"`
+	Hunks        []StackDiffHunkBody `json:"hunks" doc:"The changes, as in the rendered YAML"`
+	Lines        []string            `json:"lines" doc:"The lines of the newer text, masked; empty when there are no hunks"`
+}
+
+// StackConcurrentBody is a deployment made after the draft was started.
+type StackConcurrentBody struct {
+	Revision       int64               `json:"revision" doc:"The number of the revision that was deployed"`
+	DeployedBy     string              `json:"deployedBy" doc:"Who started that deploy"`
+	DeployedAt     string              `json:"deployedAt" doc:"When it was started, RFC 3339 UTC"`
+	BaseToDeployed []StackFileDiffBody `json:"baseToDeployed" doc:"What that deployment changed since the version the draft started from, file by file, masked"`
+	BaseToDraft    []StackFileDiffBody `json:"baseToDraft" doc:"What the draft changed since the version it started from, file by file, masked"`
+}
+
 // StackReviewBody is what a deploy of the saved draft would do.
 type StackReviewBody struct {
 	Problems     []StackProblemBody       `json:"problems" doc:"What the check found and the review added: host access that needs Admin, a name clash, an image that cannot be looked up, an external object that does not exist. An error stops a deploy"`
@@ -110,6 +129,7 @@ type StackReviewBody struct {
 	Pins         map[string]string        `json:"pins" doc:"The image each service will be deployed with, by swarm service name: send it with the deploy and the deploy uses exactly these digests"`
 	NeedsAdmin   []string                 `json:"needsAdmin" doc:"The kinds of host access the stack uses that the caller may not deploy (bind mounts, extra privileges, host networking, device mounts). Empty when the caller may deploy it"`
 	YAML         StackTextDiffBody        `json:"yaml" doc:"The rendered stack of the draft, with the images the review chose, against the rendering stored with the last good deploy, masked, as hunks with 3 lines of context. A stack never deployed is compared with an empty document. This is the one comparison that is with the last deploy and not with what is running"`
+	Concurrent   *StackConcurrentBody     `json:"concurrent,omitempty" doc:"Left out unless set: set when the last good revision is newer than the revision the draft started from: someone deployed after the draft began. A deploy of the draft then needs acknowledgeConcurrent"`
 }
 
 // StackReviewOutput wraps StackReviewBody for huma.
@@ -126,7 +146,7 @@ func registerStackReview(r *httpx.Router, d StacksDeps) {
 			"It runs the same check as the editor, looks up the digests of the images that need one, converts the stack the way a deploy does, reads what the swarm holds under the stack's namespace and answers the problems, a summary, an image table, each service's change with its masked current and next spec, and the other resources. " +
 			"A value derived from a secret of the stack is <hidden> on both sides; whether it changed is decided before it is hidden and listed in hiddenChanges as a path. " +
 			"Right after a deploy, a review shows no change. yaml is the one comparison with the last deploy and not with what is running: the rendered stack against the masked rendering stored with the last good revision, as hunks computed here with 3 lines of context. " +
-			"Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. " +
+			"concurrent is set when someone deployed after the draft was started, with what that deployment changed and what the draft changed, file by file; the deploy then needs acknowledgeConcurrent. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. " +
 			"For a caller below env Admin, host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables, is a blocking needs_admin problem at its line, and needsAdmin names the kinds. " +
 			"A name that something Bayplan does not manage holds is a blocking stack_name_clash problem. " +
 			"An environment that is no longer the kind of target the stack was created for is 409 target_changed, and a standalone stack is 409 target_engine_missing. Needs stacks.deploy (Operator).",
@@ -186,7 +206,12 @@ func stackReviewBody(rv stackops.Review) StackReviewBody {
 		DraftVersion: rv.DraftVersion, Pins: rv.Pins, NeedsAdmin: rv.NeedsAdmin,
 		YAML: textDiffBody(rv.YAML),
 	}
-
+	if c := rv.Concurrent; c != nil {
+		b.Concurrent = &StackConcurrentBody{
+			Revision: c.Revision, DeployedBy: c.DeployedBy, DeployedAt: rfc3339(c.DeployedAt),
+			BaseToDeployed: fileDiffBodies(c.BaseToDeployed), BaseToDraft: fileDiffBodies(c.BaseToDraft),
+		}
+	}
 	if b.Pins == nil {
 		b.Pins = map[string]string{}
 	}
@@ -255,4 +280,17 @@ func textDiffBody(td stackops.TextDiff) StackTextDiffBody {
 		lines = []string{}
 	}
 	return StackTextDiffBody{ChangedLines: td.ChangedLines, Hunks: hunkBodies(td.Hunks), Lines: lines}
+}
+
+func fileDiffBodies(files []stackops.FileHunks) []StackFileDiffBody {
+	out := make([]StackFileDiffBody, 0, len(files))
+	for _, f := range files {
+		td := textDiffBody(f.TextDiff)
+		kind := "file"
+		if f.Variables {
+			kind = "variables"
+		}
+		out = append(out, StackFileDiffBody{Path: f.Path, Kind: kind, Hidden: f.Hidden, ChangedLines: td.ChangedLines, Hunks: td.Hunks, Lines: td.Lines})
+	}
+	return out
 }
