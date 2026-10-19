@@ -206,7 +206,7 @@ func TestStackJobStreamIsOnlyOfItsOwnStackAndEnvironment(t *testing.T) {
 // secret variable in its refusal, as a real one can.
 func TestConsoleNeverShowsASecret(t *testing.T) {
 	t.Parallel()
-	const secret = "tok-9f8e7d6c5b4a"
+	const secret = "tok-9f8e7d6c5b4a" //nolint:gosec // a made-up value the test must never find in an answer
 	f, e := actionsEnv(t, func(c *dockertest.FakeConfig) {
 		c.ServiceCreateError = "rpc error: code = InvalidArgument desc = env TOKEN=" + secret + " is not allowed"
 	})
