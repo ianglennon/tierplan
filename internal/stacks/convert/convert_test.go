@@ -11,7 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+
+	composetypes "github.com/compose-spec/compose-go/v2/types"
 
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/stacks/convert"
@@ -29,6 +32,49 @@ func plan(t *testing.T, name, compose string, vars ...stacks.Var) (convert.Plan,
 		t.Fatalf("Load: %v", err)
 	}
 	return convert.Convert(loaded.Project, convert.Options{StackName: name, StackID: "id-" + name})
+}
+
+// TestGolden converts every compose file under testdata/compose and compares the plan with the
+// file of the same name under testdata/golden. Run with -update to rewrite the goldens, and
+// review the diff before committing it.
+func TestGolden(t *testing.T) {
+	t.Parallel()
+	files, err := filepath.Glob(filepath.Join("testdata", "compose", "*.yaml"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no compose corpora under testdata/compose (%v)", err)
+	}
+	for _, file := range files {
+		name := strings.TrimSuffix(filepath.Base(file), ".yaml")
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			content, err := os.ReadFile(file) //nolint:gosec // a corpus file in the repository
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := plan(t, name, string(content))
+			if err != nil {
+				t.Fatalf("Convert: %v", err)
+			}
+			raw, err := json.MarshalIndent(got, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw = append(raw, '\n')
+			path := filepath.Join("testdata", "golden", name+".json")
+			if *update {
+				if err := os.WriteFile(path, raw, 0o644); err != nil { //nolint:gosec // a golden file in the repository
+					t.Fatal(err)
+				}
+			}
+			want, err := os.ReadFile(path) //nolint:gosec // a golden file in the repository
+			if err != nil {
+				t.Fatalf("read golden (run with -update to write it): %v", err)
+			}
+			if string(want) != string(raw) {
+				t.Errorf("plan differs from %s (run with -update to rewrite it)\n got: %s\nwant: %s", path, raw, want)
+			}
+		})
+	}
 }
 
 func TestConvertTheStarterStackMatchesTheGolden(t *testing.T) {
@@ -169,8 +215,8 @@ networks:
 			aliases = a.Aliases
 		}
 	}
-	if !slices.Equal(aliases, []string{"api", "backend"}) {
-		t.Errorf("aliases on back = %v, want api and backend", aliases)
+	if !slices.Equal(aliases, []string{"backend", "api"}) {
+		t.Errorf("aliases on back = %v, want the file's alias then the service name, as docker stack deploy writes them", aliases)
 	}
 }
 
@@ -194,7 +240,7 @@ volumes:
 	if !errors.Is(err, convert.ErrNotConverted) || !errors.As(err, &nc) {
 		t.Fatalf("err = %v, want ErrNotConverted", err)
 	}
-	if nc.Service != "web" || !slices.Equal(nc.Fields, []string{"Command", "Volumes", "deploy.Resources"}) {
+	if nc.Service != "web" || !slices.Equal(nc.Fields, []string{"Volumes", "deploy.Resources"}) {
 		t.Errorf("not converted = %+v", nc)
 	}
 }
@@ -271,5 +317,53 @@ networks:
 		if ns, ok := labels["com.docker.stack.namespace"]; ok && ns != "mine" {
 			t.Errorf("%s label com.docker.stack.namespace = %q, want mine", name, ns)
 		}
+	}
+}
+
+func TestConvertAddsTheServiceNameAsAliasOnUserDefinedNetworksOnly(t *testing.T) {
+	t.Parallel()
+	const compose = `services:
+  web:
+    image: nginx:1
+    networks:
+      zeta: {}
+      onhost:
+        aliases: [front]
+networks:
+  zeta: {}
+  onhost:
+    external: true
+    name: host
+`
+	got, err := plan(t, "s", compose)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	att := got.Services[0].Spec.TaskTemplate.Networks
+	if len(att) != 2 || att[0].Target != "host" || att[1].Target != "s_zeta" {
+		t.Fatalf("attachments = %+v, want host then s_zeta (sorted by target)", att)
+	}
+	if !slices.Equal(att[0].Aliases, []string{"front"}) {
+		t.Errorf("aliases on the built-in host network = %v, want only the file's alias", att[0].Aliases)
+	}
+	if !slices.Equal(att[1].Aliases, []string{"web"}) {
+		t.Errorf("aliases on the user network = %v, want the service name", att[1].Aliases)
+	}
+}
+
+func TestConvertRefusesAServiceOnANetworkTheFileDoesNotDeclare(t *testing.T) {
+	t.Parallel()
+	loaded, err := stacks.Load(context.Background(), stacks.LoadInput{
+		Name: "s", Target: stacks.TargetSwarm,
+		Copy: stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte("services:\n  web:\n    image: nginx:1\n")}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := loaded.Project.Services["web"]
+	svc.Networks = map[string]*composetypes.ServiceNetworkConfig{"ghost": nil}
+	loaded.Project.Services["web"] = svc
+	if _, err := convert.Convert(loaded.Project, convert.Options{StackName: "s", StackID: "id"}); err == nil {
+		t.Fatal("Convert accepted a network the file does not declare")
 	}
 }

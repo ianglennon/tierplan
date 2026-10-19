@@ -1,0 +1,226 @@
+{
+  "Networks": [
+    {
+      "Key": "default",
+      "Name": "full_default",
+      "Driver": "overlay",
+      "Attachable": true,
+      "Internal": false,
+      "External": false,
+      "Labels": {
+        "bayplan.stack.id": "id-full",
+        "com.docker.stack.namespace": "full"
+      },
+      "DriverOpts": null,
+      "IPAMDriver": "",
+      "Pools": null
+    },
+    {
+      "Key": "front",
+      "Name": "full_front",
+      "Driver": "overlay",
+      "Attachable": false,
+      "Internal": false,
+      "External": false,
+      "Labels": {
+        "bayplan.stack.id": "id-full",
+        "com.docker.stack.namespace": "full"
+      },
+      "DriverOpts": null,
+      "IPAMDriver": "",
+      "Pools": null
+    },
+    {
+      "Key": "shared",
+      "Name": "shared-net",
+      "Driver": "overlay",
+      "Attachable": false,
+      "Internal": false,
+      "External": true,
+      "Labels": null,
+      "DriverOpts": null,
+      "IPAMDriver": "",
+      "Pools": null
+    }
+  ],
+  "Services": [
+    {
+      "Name": "full_plain",
+      "Short": "plain",
+      "ImageAsWritten": "busybox:1",
+      "Spec": {
+        "Name": "full_plain",
+        "Labels": {
+          "bayplan.stack.id": "id-full",
+          "com.docker.stack.image": "busybox:1",
+          "com.docker.stack.namespace": "full"
+        },
+        "TaskTemplate": {
+          "ContainerSpec": {
+            "Image": "busybox:1",
+            "Labels": {
+              "bayplan.stack.id": "id-full",
+              "com.docker.stack.namespace": "full"
+            }
+          },
+          "Networks": [
+            {
+              "Target": "full_default",
+              "Aliases": [
+                "plain"
+              ]
+            }
+          ],
+          "ForceUpdate": 0
+        },
+        "Mode": {
+          "Replicated": {
+            "Replicas": 1
+          }
+        },
+        "EndpointSpec": {}
+      }
+    },
+    {
+      "Name": "full_web",
+      "Short": "web",
+      "ImageAsWritten": "nginx:1.27-alpine",
+      "Spec": {
+        "Name": "full_web",
+        "Labels": {
+          "bayplan.stack.id": "id-full",
+          "com.docker.stack.image": "nginx:1.27-alpine",
+          "com.docker.stack.namespace": "full",
+          "team": "web"
+        },
+        "TaskTemplate": {
+          "ContainerSpec": {
+            "Image": "nginx:1.27-alpine",
+            "Labels": {
+              "bayplan.stack.id": "id-full",
+              "com.docker.stack.namespace": "full",
+              "tier": "front"
+            },
+            "Command": [
+              "/docker-entrypoint.sh"
+            ],
+            "Args": [
+              "nginx",
+              "-g",
+              "daemon off;"
+            ],
+            "Env": [
+              "ALPHA=first",
+              "ZED=last"
+            ],
+            "Healthcheck": {
+              "Test": [
+                "CMD",
+                "curl",
+                "-f",
+                "http://localhost/"
+              ],
+              "Interval": 30000000000,
+              "Timeout": 5000000000,
+              "StartPeriod": 10000000000,
+              "Retries": 3
+            }
+          },
+          "Networks": [
+            {
+              "Target": "full_front",
+              "Aliases": [
+                "site",
+                "web"
+              ]
+            },
+            {
+              "Target": "shared-net",
+              "Aliases": [
+                "web"
+              ]
+            }
+          ],
+          "ForceUpdate": 0
+        },
+        "Mode": {
+          "Replicated": {
+            "Replicas": 2
+          }
+        },
+        "EndpointSpec": {
+          "Ports": [
+            {
+              "Protocol": "tcp",
+              "TargetPort": 80,
+              "PublishedPort": 8080,
+              "PublishMode": "ingress"
+            },
+            {
+              "Protocol": "tcp",
+              "TargetPort": 443,
+              "PublishedPort": 8443,
+              "PublishMode": "host"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "Name": "full_worker",
+      "Short": "worker",
+      "ImageAsWritten": "registry.example.com/worker:3",
+      "Spec": {
+        "Name": "full_worker",
+        "Labels": {
+          "bayplan.stack.id": "id-full",
+          "com.docker.stack.image": "registry.example.com/worker:3",
+          "com.docker.stack.namespace": "full"
+        },
+        "TaskTemplate": {
+          "ContainerSpec": {
+            "Image": "registry.example.com/worker:3",
+            "Labels": {
+              "bayplan.stack.id": "id-full",
+              "com.docker.stack.namespace": "full"
+            },
+            "Env": [
+              "KEEP=1",
+              "MODE=batch"
+            ],
+            "Healthcheck": {
+              "Test": [
+                "NONE"
+              ]
+            }
+          },
+          "Networks": [
+            {
+              "Target": "full_front",
+              "Aliases": [
+                "worker"
+              ]
+            }
+          ],
+          "ForceUpdate": 0
+        },
+        "Mode": {
+          "Replicated": {
+            "Replicas": 1
+          }
+        },
+        "EndpointSpec": {
+          "Mode": "dnsrr",
+          "Ports": [
+            {
+              "Protocol": "udp",
+              "TargetPort": 9000,
+              "PublishedPort": 9000,
+              "PublishMode": "host"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
