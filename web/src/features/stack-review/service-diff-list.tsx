@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { ArrowRight, ChevronRight } from "lucide-react";
+import { ArrowRight, ChevronRight, RotateCcw, RotateCw } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
 
 import type { StackReviewService } from "@/api/stacks";
@@ -28,13 +28,7 @@ interface ServiceDiffListProps {
 }
 
 // The glyph beside a change's word. The word carries the meaning; the glyph is for scanning.
-const GLYPH: Record<StackReviewService["change"], string> = {
-  added: "+",
-  changed: "~",
-  removed: "−",
-  recreated: "↻",
-  restarted: "↻",
-};
+const GLYPH = { added: "+", changed: "~", removed: "−" } as const;
 
 // The reference without its digest: the digest is what the Images card shows.
 const withoutDigest = (ref: string) => ref.split("@")[0] ?? ref;
@@ -111,11 +105,48 @@ interface RowProps {
   defaultOpen: boolean;
 }
 
+// A change the file did not make: a standalone deploy recreates this service because the one it
+// shares its network, processes or volumes with is recreated, or stops it and starts it again
+// because it depends on that one with restart: true (plan 07-22).
+const isCarried = (s: StackReviewService) => s.change === "recreated" || s.change === "restarted";
+
+// CarriedRow is such a service: the glyph, the word, the name in mono and the reason, with nothing to
+// expand and no count of settings, because nothing about the service itself changes. The service
+// that carries it is drawn as text.
+function CarriedRow({ service }: { service: StackReviewService }) {
+  const t = useT();
+  const recreated = service.change === "recreated";
+  const Glyph = recreated ? RotateCcw : RotateCw;
+  const because = service.because ?? "";
+  return (
+    <li className="rounded-lg ring-1 ring-foreground/10">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm">
+        <span className="flex shrink-0 items-center gap-1 font-medium">
+          <Glyph aria-hidden="true" className="size-3.5" />
+          {t(recreated ? "stackReview.changes.recreated" : "stackReview.changes.restarted")}
+        </span>
+        <span data-slot="service-name" className="font-mono text-sm font-medium break-all">
+          {service.short}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          {t(
+            recreated
+              ? "stackReview.changes.recreatedBecause"
+              : "stackReview.changes.restartedBecause",
+            { because },
+          )}
+        </span>
+      </div>
+    </li>
+  );
+}
+
 // ServiceRow is one service: the change in words with its glyph, the name in mono, how many
 // settings changed and the image change. A changed or added service expands to the field-level
 // difference; a removed one is its summary row and nothing more.
 function ServiceRow({ service, defaultOpen }: RowProps) {
   const t = useT();
+  const change = service.change as keyof typeof GLYPH;
   const [open, setOpen] = useState(defaultOpen);
   const removed = service.change === "removed";
   const hidden = service.hiddenChanges ?? [];
@@ -128,9 +159,9 @@ function ServiceRow({ service, defaultOpen }: RowProps) {
     <>
       <span className="flex shrink-0 items-center gap-1 font-medium">
         <span aria-hidden="true" className="font-mono">
-          {GLYPH[service.change]}
+          {GLYPH[change]}
         </span>
-        {t(`stackReview.serviceDiff.${service.change}`)}
+        {t(`stackReview.serviceDiff.${change}`)}
       </span>
       <span data-slot="service-name" className="font-mono text-sm font-medium break-all">
         {service.short}
@@ -192,25 +223,34 @@ function ServiceRow({ service, defaultOpen }: RowProps) {
 }
 
 // ServiceDiffList is the Changes tab's list of services (STK-06, D-11): one collapsible row for
-// each service a deploy would add, change or remove, the removed ones last. A first deploy lists
+// each service a deploy would add, change or remove, the removed ones last, and between them the
+// services a standalone deploy recreates or restarts because another is recreated. A first deploy lists
 // every service as Added. Masked values never appear on either side: the server sends them
 // hidden, and a change to a hidden one is only a path.
 export function ServiceDiffList({ services }: ServiceDiffListProps) {
-  // The server lists added and changed services by name and then the removed ones; the order is
-  // kept here too, so a list that came in another order still ends with what goes away.
+  // The server lists added and changed services by name, then the ones a recreate carries, then
+  // the removed ones; the order is kept here too, so a list that came in another order still ends
+  // with what goes away.
   const ordered = useMemo(
     () => [
-      ...services.filter((s) => s.change !== "removed"),
+      ...services.filter((s) => s.change !== "removed" && !isCarried(s)),
+      ...services.filter(isCarried),
       ...services.filter((s) => s.change === "removed"),
     ],
     [services],
   );
   if (ordered.length === 0) return null;
+  // Only a row that can open counts for whether they open: a carried one has nothing to show.
+  const open = ordered.filter((s) => s.change === "added" || s.change === "changed").length;
   return (
     <ul className="flex flex-col gap-2">
-      {ordered.map((s) => (
-        <ServiceRow key={s.name} service={s} defaultOpen={ordered.length <= OPEN_BY_DEFAULT} />
-      ))}
+      {ordered.map((s) =>
+        isCarried(s) ? (
+          <CarriedRow key={s.name} service={s} />
+        ) : (
+          <ServiceRow key={s.name} service={s} defaultOpen={open <= OPEN_BY_DEFAULT} />
+        ),
+      )}
     </ul>
   );
 }

@@ -77,7 +77,11 @@
     },
     "changes": {
       "tab": "Changes",
-      "label": "What the review shows"
+      "label": "What the review shows",
+      "recreated": "Recreated",
+      "restarted": "Restarted",
+      "recreatedBecause": "Recreated with {{because}}, whose network, processes or volumes it shares. Settings and pinned image stay the same.",
+      "restartedBecause": "Restarted because {{because}} is recreated (depends_on with restart: true). Same container, settings and image."
     },
     "serviceDiff": {
       "added": "Added",
