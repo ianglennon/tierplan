@@ -809,6 +809,7 @@ describe("the pull steps of a standalone deploy (plan 07-21, D-27)", () => {
     { id: "volumes", label: "Volumes", state: "waiting", kind: "group" },
     { ...services, state: "waiting" },
     { id: "cleanup", label: "Remove services no longer in the stack", state: "waiting" },
+    { id: "service:web", label: "web", state: "waiting", parent: "services", kind: "service" },
   ];
 
   it("lists a Pull step for each image between Look up images and what comes after, in the standalone words", async () => {

@@ -5,10 +5,15 @@ import { Check, CircleX, Minus } from "lucide-react";
 
 import type { StackJobItem } from "@/api/stacks";
 import { Spinner } from "@/components/ui/spinner";
+import { failureCopy } from "@/features/pulls/failure-copy";
 import { CONVERGE_TIMEOUT, DeployServiceRow } from "@/features/stack-deploy/deploy-service-row";
 import { useT } from "@/i18n/use-t";
+import { formatBytes } from "@/lib/format";
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
+
+// The ID prefix of the step that pulls an image (plan 07-21), and the words it is shown in.
+const PULL_PREFIX = "pull:";
 
 // The server's code for a service whose update the swarm paused or rolled back.
 const UPDATE_STOPPED = "update_stopped";
@@ -19,7 +24,28 @@ const UPDATE_STOPPED = "update_stopped";
 export function failureOf(
   t: Translate,
   item: StackJobItem,
+  envName?: string,
 ): { sentence: string; words: string } | undefined {
+  // A pull the registry or the host refused reads as the pull dialog words it, naming the credential
+  // the pull used. The sentence is the SPA's own; the server's words and the code are not shown.
+  if (item.id.startsWith(PULL_PREFIX) && item.code && item.code !== "not_run") {
+    const credential = item.result?.credentialId
+      ? {
+          id: item.result.credentialId,
+          name: item.result.credential ?? "",
+          layer:
+            item.result.credentialLayer === "instance"
+              ? ("instance" as const)
+              : ("environment" as const),
+        }
+      : null;
+    const ref = item.result?.ref || item.result?.image || item.label;
+    return {
+      sentence: failureCopy(t, item.code, { credential, envName, ref, node: t("stackPull.host") })
+        .text,
+      words: "",
+    };
+  }
   if (item.code === "service_rejected" && item.detail) {
     return {
       sentence: t("stackDeploy.failure.rejected", { service: item.label, message: item.detail }),
@@ -47,9 +73,9 @@ export function failureOf(
 }
 
 // FailureText is the reason under a failed step or service, in offline text, wrapped.
-export function FailureText({ item }: { item: StackJobItem }) {
+export function FailureText({ item, envName }: { item: StackJobItem; envName?: string }) {
   const t = useT();
-  const why = failureOf(t, item);
+  const why = failureOf(t, item, envName);
   if (!why) return null;
   return (
     <div className="flex flex-col gap-1 text-sm text-status-offline-text">
@@ -100,6 +126,9 @@ export function isStandalone(items: readonly StackJobItem[]): boolean {
 // variant, from the step they are; every other step reads as the server labelled it.
 function stepLabel(t: Translate, item: StackJobItem, standalone: boolean): string {
   if (!standalone) return item.label;
+  if (item.id.startsWith(PULL_PREFIX)) {
+    return t("stackPull.steps.pull", { image: item.result?.image || item.label });
+  }
   if (["check", "lookup", "services", "cleanup"].includes(item.id)) {
     return t(`stackStandalone.steps.${item.id}`);
   }
@@ -138,13 +167,15 @@ export function stepsOf(items: readonly StackJobItem[]): DeployStep[] {
 
 interface DeployStepListProps {
   items: readonly StackJobItem[];
+  // The environment's name, said as the scope of an environment credential in a pull's failure.
+  envName?: string;
 }
 
 // DeployStepList is the ordered list of the steps of a deploy (UI-SPEC "Deploy console"): each with a
 // mark and its state in words, and the services as rows inside Deploy services. The list is an ol
 // and every step exposes its state as text; nothing in it announces itself, the console announces
 // outcomes. Every label is text.
-export function DeployStepList({ items }: DeployStepListProps) {
+export function DeployStepList({ items, envName }: DeployStepListProps) {
   const t = useT();
   const steps = stepsOf(items);
   const standalone = isStandalone(items);
@@ -158,12 +189,22 @@ export function DeployStepList({ items }: DeployStepListProps) {
             <span className="text-muted-foreground">
               {item.result?.cleaned === "true"
                 ? t("stackDeploy.cleanup.label")
-                : t(`stackDeploy.state.${item.state}`)}
+                : item.id.startsWith(PULL_PREFIX) && item.state === "running"
+                  ? t("stackPull.phase.pulling")
+                  : t(`stackDeploy.state.${item.state}`)}
             </span>
+            {item.id.startsWith(PULL_PREFIX) && item.total > 0 ? (
+              <span className="text-muted-foreground tabular-nums">
+                {t("stackPull.progress", {
+                  done: formatBytes(item.current),
+                  total: formatBytes(item.total),
+                })}
+              </span>
+            ) : null}
           </span>
           {item.state === "failed" && rows.every((r) => r.state !== "failed") ? (
             <div className="ms-6">
-              <FailureText item={item} />
+              <FailureText item={item} envName={envName} />
             </div>
           ) : null}
           {rows.length > 0 ? (

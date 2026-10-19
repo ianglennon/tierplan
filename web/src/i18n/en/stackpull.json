@@ -1,0 +1,12 @@
+{
+  "stackPull": {
+    "steps": {
+      "pull": "Pull {{image}}"
+    },
+    "phase": {
+      "pulling": "Pulling image"
+    },
+    "progress": "{{done}} of {{total}}",
+    "host": "This host"
+  }
+}
