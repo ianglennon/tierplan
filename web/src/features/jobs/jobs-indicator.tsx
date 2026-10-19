@@ -46,12 +46,12 @@ function pullStateKey(p: PullSummary): { key: string; values: Record<string, num
   }
 }
 
-// PullsIndicator is the header button for pulls (D-26): it lists the pulls the person can
+// JobsIndicator (the Pulls indicator of Phase 5, now of every kind of job) is the header button for pulls (D-26): it lists the pulls the person can
 // follow, running ones and those that ended in the last ten minutes, newest first, and a
 // click on one reopens its progress panel, which reconnects to the stream and shows where
 // the pull stands at once. It is hidden while there is nothing to list, and it never
 // changes colour: the count badge is neutral.
-export function PullsIndicator() {
+export function JobsIndicator() {
   const t = useT();
   const { data } = useQuery(pullsListQuery);
   const pulls = data ?? [];

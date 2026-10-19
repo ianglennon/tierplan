@@ -50,6 +50,9 @@ export function stackKey(envId: string, stackId: string) {
   return [...stacksKey(envId), stackId] as const;
 }
 
+// The query key of the list of stack jobs the header's jobs indicator shows.
+export const stackJobsKey = ["stack-jobs"] as const;
+
 // StacksLoadError is a stacks read the server refused or could not answer. The status and the
 // problem type tell a stack that is gone (404 stack_not_found) from every other failure.
 export class StacksLoadError extends Error {

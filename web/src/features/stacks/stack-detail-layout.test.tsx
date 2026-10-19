@@ -221,6 +221,74 @@ describe("the Deploy… action", () => {
   });
 });
 
+describe("the failed deploy alert", () => {
+  const failed = () => ({
+    ...detail,
+    state: "deploy_failed",
+    rollback: { available: true, deployedAt: "2026-10-19T11:00:00Z", deployedBy: "bob" },
+    lastOperation: {
+      kind: "deploy",
+      state: "failed",
+      code: "service_rejected",
+      failedService: "tracer_web",
+      jobId: "j1",
+      startedBy: "ada",
+      startedAt: "2026-10-19T12:00:00Z",
+      endedAt: "2026-10-19T12:00:09Z",
+    },
+  });
+
+  it("is shown above the tabs while the last deploy has failed, until a deploy succeeds", async () => {
+    detail = failed();
+    mount();
+    const alert = await screen.findByText("The last deploy failed");
+    const tabs = screen.getByRole("tablist");
+    // Above the tabs, in the page's order.
+    expect(alert.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      screen.getByText("Bayplan stopped at tracer_web: Docker rejected the service."),
+    ).toBeTruthy();
+  });
+
+  it("is not shown once the stack is deployed", async () => {
+    detail = { ...failed(), state: "deployed" };
+    mount();
+    await screen.findByRole("heading", { name: "tracer", level: 2 });
+    expect(screen.queryByText("The last deploy failed")).toBeNull();
+  });
+
+  it("is shown on the review, where the person is about to deploy again", async () => {
+    detail = failed();
+    mount("review");
+    expect(await screen.findByText("The last deploy failed")).toBeTruthy();
+  });
+
+  it("is left out of the console, which is that deploy's own page", async () => {
+    detail = failed();
+    mount("deploy");
+    await screen.findByRole("heading", { name: "tracer", level: 2 });
+    expect(screen.queryByText("The last deploy failed")).toBeNull();
+  });
+
+  it("comes before the operation lock when both are there", async () => {
+    detail = {
+      ...failed(),
+      lock: {
+        stackId: "s2",
+        stackName: "other",
+        jobId: "j9",
+        kind: "deploy",
+        startedAt: "2026-10-19T12:00:00Z",
+        startedBy: "bob",
+      },
+    };
+    mount();
+    const alert = await screen.findByText("The last deploy failed");
+    const lock = await screen.findByText(/Another stack operation is running/);
+    expect(alert.compareDocumentPosition(lock) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
 describe("the operation lock", () => {
   const held = () => ({
     stackId: "s9",
