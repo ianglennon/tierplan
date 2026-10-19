@@ -925,6 +925,109 @@ describe("the pull steps of a standalone deploy (plan 07-21, D-27)", () => {
   });
 });
 
+describe("a standalone deploy that stops (plan 07-21, D-14)", () => {
+  const stopped = (over: Partial<Record<string, Partial<Item>>> = {}): Item[] => {
+    const items: Item[] = [
+      check,
+      { ...lookup, state: "done" },
+      { id: "networks", label: "Networks", state: "skipped", kind: "group", code: "not_run" },
+      { id: "volumes", label: "Volumes", state: "done", kind: "group" },
+      { ...services, state: "failed" },
+      { id: "cleanup", label: "Remove services no longer in the stack", state: "skipped" },
+      {
+        id: "service:web",
+        label: "web",
+        state: "failed",
+        parent: "services",
+        kind: "service",
+        code: "engine_error",
+        message: "The engine could not complete the request.",
+      },
+    ];
+    return items.map((i) => ({ ...i, ...over[i.id] }));
+  };
+
+  it("names the agent that refuses the service, with the update notice, in the row and in the result", async () => {
+    job = {
+      state: "failed",
+      items: stopped({
+        "service:web": {
+          code: "agent_policy_denied",
+          message: "The agent refused the request.",
+          detail: "Error response from daemon: agent_policy_denied: POST /v1.52/containers/create",
+        },
+        services: { code: "agent_policy_denied" },
+      }),
+    };
+    mount();
+    expect(
+      await screen.findAllByText("Prod's agent refuses web: POST /containers/create"),
+    ).toBeTruthy();
+    // The notice is in the opened row and in the result.
+    expect(screen.getAllByText("This host's agent needs an update")).toHaveLength(2);
+    expect(screen.queryByText("agent_policy_denied")).toBeNull();
+  });
+
+  it("reads a host that is read-only as the check step failing, in the words of the actions", async () => {
+    job = {
+      state: "failed",
+      items: [
+        {
+          ...check,
+          state: "failed",
+          code: "host_read_only",
+          message: "This host is read-only, so Bayplan cannot change it.",
+        },
+        {
+          ...lookup,
+          state: "skipped",
+          code: "not_run",
+          message: "Not run because an earlier step failed.",
+        },
+        { id: "networks", label: "Networks", state: "skipped", kind: "group", code: "not_run" },
+        { id: "volumes", label: "Volumes", state: "skipped", kind: "group", code: "not_run" },
+        { ...services, state: "skipped", code: "not_run" },
+        { id: "cleanup", label: "Remove services no longer in the stack", state: "skipped" },
+      ],
+    };
+    mount();
+    expect(
+      (await screen.findAllByText("This host is read-only (set on the host)")).length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText("This host is read-only, so Bayplan cannot change it.")).toBeNull();
+    // Nothing was asked of the host, so the notice about an old agent is not shown.
+    expect(screen.queryByText("This host's agent needs an update")).toBeNull();
+  });
+
+  it("lists what the deploy removed again under the cleanup step, labelled Cleaned up, and what stays", async () => {
+    job = {
+      state: "failed",
+      items: [
+        ...stopped(),
+        {
+          id: "clean-container:demo-web-1",
+          label: "Remove container demo-web-1",
+          state: "done",
+          parent: "cleanup",
+          result: { cleaned: "true", kind: "container", name: "demo-web-1" },
+        },
+        {
+          id: "clean-network:demo_default",
+          label: "Remove network demo_default",
+          state: "done",
+          parent: "cleanup",
+          result: { cleaned: "false", left: "in_use", kind: "network", name: "demo_default" },
+        },
+      ],
+    };
+    mount();
+    await screen.findByText("Deploy failed");
+    const lines = stepLines();
+    expect(lines).toContain("Remove container demo-web-1Cleaned up");
+    expect(lines).toContain("Remove network demo_defaultDone");
+  });
+});
+
 describe("following the stream", () => {
   it("shows Live, takes the stream's snapshot at once and updates a row from an event", async () => {
     job = { state: "running", items: [check, services, row("api", "waiting")] };
