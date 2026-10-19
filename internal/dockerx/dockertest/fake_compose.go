@@ -165,6 +165,10 @@ func ComposeInspect(svc types.ServiceConfig, o ComposeOptions) container.Inspect
 			host.NanoCPUs = int64(d.Resources.Limits.NanoCPUs * 1e9)
 		}
 	}
+	host.MemorySwap = int64(svc.MemSwapLimit)
+	if host.Memory > 0 && host.MemorySwap == 0 {
+		host.MemorySwap = 2 * host.Memory // the engine sets the swap limit to twice the memory limit
+	}
 	for _, d := range svc.Devices {
 		host.Devices = append(host.Devices, container.DeviceMapping{PathOnHost: d.Source, PathInContainer: d.Target, CgroupPermissions: d.Permissions})
 	}
