@@ -85,6 +85,36 @@ function tasksOf(items: readonly StackJobItem[], row: StackJobItem): StackJobIte
   return items.filter((i) => i.parent === row.id && i.kind === "task");
 }
 
+// containersOf are the container items under a service row of a standalone host, in the order they
+// appeared.
+function containersOf(items: readonly StackJobItem[], row: StackJobItem): StackJobItem[] {
+  return items.filter((i) => i.parent === row.id && i.kind === "container");
+}
+
+// isStandalone says whether a job is a deploy to a standalone host: only it has a volumes group.
+export function isStandalone(items: readonly StackJobItem[]): boolean {
+  return items.some((i) => i.id === "volumes");
+}
+
+// stepLabel is the words of a step. A standalone deploy's steps are worded here, in the standalone
+// variant, from the step they are; every other step reads as the server labelled it.
+function stepLabel(t: Translate, item: StackJobItem, standalone: boolean): string {
+  if (!standalone) return item.label;
+  if (["check", "lookup", "services", "cleanup"].includes(item.id)) {
+    return t(`stackStandalone.steps.${item.id}`);
+  }
+  for (const [prefix, key] of [
+    ["network:", "network"],
+    ["volume:", "volume"],
+    ["remove-container:", "removeContainer"],
+  ] as const) {
+    if (item.id.startsWith(prefix)) {
+      return t(`stackStandalone.steps.${key}`, { name: item.id.slice(prefix.length) });
+    }
+  }
+  return item.label;
+}
+
 // stepsOf arranges a job's items into the lines of the step list, in run order. The server adds the
 // networks, secrets and configs, the services and the old objects it removes while the deploy runs,
 // so the order of the items is the order they were added in, not the order of the steps: a step is
@@ -117,13 +147,14 @@ interface DeployStepListProps {
 export function DeployStepList({ items }: DeployStepListProps) {
   const t = useT();
   const steps = stepsOf(items);
+  const standalone = isStandalone(items);
   return (
     <ol aria-label={t("stackDeploy.steps.label")} className="flex flex-col gap-2">
       {steps.map(({ item, rows }) => (
         <li key={item.id} className="flex flex-col gap-1 text-sm">
           <span className="flex items-center gap-2">
             <StepMark state={item.state} />
-            <span className="min-w-0 break-words">{item.label}</span>
+            <span className="min-w-0 break-words">{stepLabel(t, item, standalone)}</span>
             <span className="text-muted-foreground">
               {item.result?.cleaned === "true"
                 ? t("stackDeploy.cleanup.label")
@@ -142,6 +173,7 @@ export function DeployStepList({ items }: DeployStepListProps) {
                   key={row.id}
                   item={row}
                   tasks={tasksOf(items, row)}
+                  containers={containersOf(items, row)}
                   defaultOpen={row.state === "failed"}
                 >
                   {row.state === "failed" ? <FailureText item={row} /> : undefined}

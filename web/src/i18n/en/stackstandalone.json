@@ -1,0 +1,53 @@
+{
+  "stackStandalone": {
+    "steps": {
+      "check": "Check the stack",
+      "lookup": "Look up images",
+      "network": "Create network {{name}}",
+      "volume": "Create volume {{name}}",
+      "services": "Deploy services",
+      "cleanup": "Remove containers no longer in the stack",
+      "removeContainer": "Remove container {{name}}"
+    },
+    "service": {
+      "phase": {
+        "pulling": "Pulling image",
+        "creating": "Creating",
+        "starting": "Starting",
+        "running": "Running",
+        "healthy": "Healthy"
+      },
+      "progress": {
+        "label": "Containers of {{service}}",
+        "containers_one": "{{running}}/{{count}} container",
+        "containers_other": "{{running}}/{{count}} containers"
+      }
+    },
+    "containers": {
+      "caption": "Containers of {{service}}",
+      "container": "Container",
+      "state": "State",
+      "message": "Message"
+    },
+    "container": {
+      "state": {
+        "waiting": "Waiting",
+        "creating": "Creating",
+        "created": "Created",
+        "starting": "Starting",
+        "started": "Started",
+        "running": "Running",
+        "healthy": "Healthy",
+        "recreating": "Recreating",
+        "recreated": "Recreated",
+        "restarted": "Restarted",
+        "failed": "Failed",
+        "exited": "Exited",
+        "stopping": "Stopping",
+        "stopped": "Stopped",
+        "removing": "Removing",
+        "removed": "Removed"
+      }
+    }
+  }
+}

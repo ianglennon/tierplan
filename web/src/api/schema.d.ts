@@ -8479,7 +8479,7 @@ export interface components {
             current: number;
             /** @description The engine's own words about a failed item, cleaned of control characters, clipped to 2,048 characters and with the stack's secret values hidden. Empty when there are none */
             detail: string;
-            /** @description The item: check, lookup, networks, objects, services or cleanup, or one made for an object, service or task of the deploy, like service:web or task:<task id> */
+            /** @description The item: check, lookup, networks, objects (volumes on a standalone host), services or cleanup, or one made for an object, service, task or container of the deploy, like service:web, task:<task id> or container:<name> */
             id: string;
             /** @description step for a line of the step list, service for a service row, task for a swarm task listed under its service while the deploy waits for the service to settle, group for an item that only holds steps and is not shown itself */
             kind: string;
@@ -8487,9 +8487,9 @@ export interface components {
             label: string;
             /** @description A sentence for the code. The SPA words the code itself */
             message: string;
-            /** @description The ID of the item this one belongs to, empty for a top-level step. A service is under services; a network is under networks, a secret or config under objects, an old secret or config under cleanup, and a task under its service */
+            /** @description The ID of the item this one belongs to, empty for a top-level step. A service is under services; a network is under networks, a volume under volumes, a secret or config under objects, an old secret or config or a container the file no longer declares under cleanup, a task or a container under its service */
             parent: string;
-            /** @description What a step, service or task produced or shows. A service row: action (created or updated), settled (true once its tasks run, false when the deploy did not wait for it), running and desired at the end, phase pulling while a task prepares its image, minutes on a timeout. A task: state (the swarm's) and node (the host name). The steps: the counts of services created and updated */
+            /** @description What a step, service or task produced or shows. A service row: action (created or updated), settled (true once its tasks run, false when the deploy did not wait for it), running and desired at the end, phase pulling while a task prepares its image, minutes on a timeout. A task: state (the swarm's) and node (the host name). On a standalone host, a service row: action (created, updated or unchanged), phase (pulling, creating, starting, running or healthy, or failed) and, once done, running and desired; a container row: state, the last word the Compose SDK gave it (creating, starting, running, healthy ...). The steps: the counts of services created and updated */
             result: {
                 [key: string]: string;
             };
@@ -8503,7 +8503,7 @@ export interface components {
              * @description How many there are to do, 0 until known. On a service row, how many tasks must run for it to settle
              */
             total: number;
-            /** @description What current and total count, or empty: services for the services step, tasks for a service row */
+            /** @description What current and total count, or empty: services for the services step, tasks for a service row of a swarm, containers for one of a standalone host */
             unit: string;
         };
         StackJobListBody: {

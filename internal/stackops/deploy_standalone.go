@@ -6,6 +6,8 @@ package stackops
 import (
 	"context"
 	"errors"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,7 +25,9 @@ const (
 	// ItemVolumes is the group of the volumes a standalone deploy creates.
 	ItemVolumes = "volumes"
 
-	idVolume = "volume:"
+	idVolume          = "volume:"
+	idContainer       = "container:"
+	idRemoveContainer = "remove-container:"
 )
 
 // StandaloneDeployItems are the items of a standalone deploy job in the order they run.
@@ -100,6 +104,7 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 	prog := newProgress(r, in.Masker)
 	final := itemEnd{state: jobs.ItemDone}
 	var detail string
+	var events *composeEvents
 	defer func() {
 		if in.OnDone != nil {
 			in.OnDone(res)
@@ -120,6 +125,9 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 		if cancelled {
 			state = jobs.ItemCancelled
 			detail = ""
+		}
+		if events != nil && !cancelled {
+			events.endFailedRows()
 		}
 		matched := item != ItemCheck && item != ItemLookup && prog.failed(item, name, state, code, message, detail)
 		if !matched && detail != "" {
@@ -263,8 +271,24 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 	for _, v := range volNames {
 		prog.addVolume(v)
 	}
+	expected := map[string]int{}
+	images := map[string][]string{}
 	for _, name := range project.ServiceNames() {
+		svc := project.Services[name]
+		expected[name] = max(1, svc.GetScale())
+		images[svc.Image] = append(images[svc.Image], name)
 		prog.addStandaloneService(name)
+	}
+	// The containers of services the file no longer declares are removed by the up: each is a step under
+	// the cleanup step, waiting until the SDK says it is removing it.
+	orphans := map[string]bool{}
+	for _, c := range live.Containers {
+		if slices.Contains(diff.Removed, c.Service) {
+			orphans[c.Name] = true
+		}
+	}
+	for _, name := range sortedKeys(orphans) {
+		prog.addRemoveContainer(name)
 	}
 	r.Finish(ItemLookup, jobs.ItemDone, "", "", map[string]string{"images": strconv.Itoa(len(pinned.Pins))})
 
@@ -278,10 +302,10 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 	r.Update(ItemServices, func(it *jobs.Item) {
 		it.State, it.Unit, it.Total = jobs.ItemRunning, "services", int64(len(project.Services))
 	})
+	events = newComposeEvents(prog, expected, images, orphans)
 	for _, name := range project.ServiceNames() {
-		prog.start(idService + name)
+		events.startService(name)
 	}
-	events := &composeEvents{prog: prog}
 	timeout := d.ConvergeTimeout
 	if timeout <= 0 {
 		timeout = DefaultConvergeTimeout
@@ -323,7 +347,10 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 	r.Finish(ItemNetworks, jobs.ItemDone, "", "", nil)
 	r.Finish(ItemVolumes, jobs.ItemDone, "", "", nil)
 	for _, name := range project.ServiceNames() {
-		prog.serviceDone(name, standaloneAction(diff, name), after.Containers)
+		events.finishService(name, standaloneAction(diff, name), after.Containers)
+	}
+	for _, name := range sortedKeys(orphans) {
+		prog.done(idRemoveContainer+name, nil)
 	}
 	r.Finish(ItemServices, jobs.ItemDone, "", "", map[string]string{
 		"services": strconv.Itoa(res.Services), "updated": strconv.Itoa(res.Updated),
@@ -373,15 +400,44 @@ func foreignLive(live standaloneLive, stackID string) bool {
 	return false
 }
 
-// composeEvents receives the Compose SDK's progress events of one deploy, one at a time, and puts them in the
-// job's output. It remembers the first event that failed, which names the service, network or volume a failed
-// up was about (the SDK's error does not).
+// composeEvents receives the Compose SDK's progress events of one deploy, one at a time, and turns them into
+// the rows of the job: the network and volume steps, the rows of the containers under their service, the
+// service row that summarises its containers, and the steps that remove a container the file no longer
+// declares. It remembers the first event that failed, which names the service, network or volume a failed up
+// was about (the SDK's error does not). The events are for display: nothing here decides whether the deploy
+// worked.
 type composeEvents struct {
 	prog *progress
+	// expected is how many containers each service must have, images the services that use each image
+	// reference (to show a pull), orphans the containers the up removes.
+	expected map[string]int
+	images   map[string][]string
+	orphans  map[string]bool
 
 	mu         sync.Mutex
 	failedKind string
 	failedName string
+	// states is the last state word of each container of each service, by service then container name.
+	states map[string]map[string]string
+	// pulling are the services an image they use is being pulled for.
+	pulling map[string]bool
+}
+
+func newComposeEvents(prog *progress, expected map[string]int, images map[string][]string, orphans map[string]bool) *composeEvents {
+	return &composeEvents{
+		prog: prog, expected: expected, images: images, orphans: orphans,
+		states: map[string]map[string]string{}, pulling: map[string]bool{},
+	}
+}
+
+// startService marks a service row as working, counting its containers.
+func (e *composeEvents) startService(name string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	total := int64(max(1, e.expected[name]))
+	e.prog.r.Update(idService+name, func(it *jobs.Item) {
+		it.State, it.Unit, it.Total = jobs.ItemRunning, "containers", total
+	})
 }
 
 func (e *composeEvents) on(ev dockerx.ComposeEvent) {
@@ -393,6 +449,23 @@ func (e *composeEvents) on(ev dockerx.ComposeEvent) {
 			e.failedName = ev.Service
 		}
 	}
+	switch ev.Kind {
+	case dockerx.ComposeKindNetwork:
+		e.simple(idNetwork+ev.Name, ev)
+	case dockerx.ComposeKindVolume:
+		e.simple(idVolume+ev.Name, ev)
+	case dockerx.ComposeKindImage:
+		for _, svc := range e.images[ev.Name] {
+			e.pulling[svc] = !ev.Done && !ev.Failed
+			e.publish(svc)
+		}
+	case dockerx.ComposeKindContainer:
+		if e.orphans[ev.Name] {
+			e.simple(idRemoveContainer+ev.Name, ev)
+		} else if ev.Service != "" && e.expected[ev.Service] > 0 {
+			e.container(ev)
+		}
+	}
 	e.prog.line(composeLine(ev))
 }
 
@@ -400,6 +473,170 @@ func (e *composeEvents) firstFailure() (kind, name string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.failedKind, e.failedName
+}
+
+// simple moves a network, volume or removal step with an event: working while the SDK is at it, done when it
+// says the step is done (a removal is done only when it says Removed, since it stops the container first).
+// A step the event is not for (a network that already exists has none) is left alone, as the reporter does
+// for an item it does not have. Its failure is put on the step by the deploy that stops.
+func (e *composeEvents) simple(id string, ev dockerx.ComposeEvent) {
+	switch {
+	case ev.Failed:
+	case ev.Done && (!strings.HasPrefix(id, idRemoveContainer) || ev.Status == "Removed"):
+		e.prog.done(id, nil)
+	default:
+		e.prog.start(id)
+	}
+}
+
+// container moves the row of a container with an event and then publishes its service.
+func (e *composeEvents) container(ev dockerx.ComposeEvent) {
+	id, word := idContainer+ev.Name, stateWord(ev.Status)
+	e.prog.addContainer(id, ev.Name, ev.Service)
+	row := e.states[ev.Service]
+	if row == nil {
+		row = map[string]string{}
+		e.states[ev.Service] = row
+	}
+	if ev.Failed {
+		row[ev.Name] = "failed"
+		detail := jobs.Clean(ev.Text, e.prog.mask)
+		// The row keeps working until the deploy ends: an event is not the answer, and a deploy the SDK
+		// reports as done is not failed because one of its events was worded as an error.
+		e.prog.r.Update(id, func(it *jobs.Item) {
+			it.State, it.Result, it.Detail = jobs.ItemRunning, map[string]string{"state": "failed"}, detail
+		})
+	} else {
+		row[ev.Name] = word
+		e.prog.r.Update(id, func(it *jobs.Item) { it.State, it.Result = jobs.ItemRunning, map[string]string{"state": word} })
+	}
+	e.publish(ev.Service)
+}
+
+// endFailedRows ends the rows of the containers an event reported as failed, failed, for a deploy that the
+// SDK's answer says failed.
+func (e *composeEvents) endFailedRows() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, row := range e.states {
+		for name, word := range row {
+			if word == "failed" {
+				id := idContainer + name
+				e.prog.r.Finish(id, jobs.ItemFailed, CodeEngineError, CodeMessage(CodeEngineError), map[string]string{"state": "failed"})
+				e.prog.setEnded(id, jobs.ItemFailed)
+			}
+		}
+	}
+}
+
+// stateWord is the word a container row shows for the SDK's status: the status in lower case, with the two
+// group events of a recreate worded as an action.
+func stateWord(status string) string {
+	w := strings.ToLower(strings.TrimSpace(status))
+	if w == "recreate" {
+		return "recreating"
+	}
+	return w
+}
+
+// stage ranks a state word by how far a container has come: 0 for a word that is not part of coming up (a
+// container removed or stopped on the way), 1 creating, 2 starting, 3 running, 4 healthy. A failed container
+// is -1.
+func stage(word string) int {
+	switch word {
+	case "creating", "created", "recreating", "waiting":
+		return 1
+	case "starting":
+		return 2
+	case "started", "running", "recreated", "restarted":
+		return 3
+	case "healthy":
+		return 4
+	case "failed":
+		return -1
+	}
+	return 0
+}
+
+// summary is the phase of a service, how many of its containers run and how many it has or must have, from
+// the last words of its containers.
+func (e *composeEvents) summary(svc string) (phase string, running, total int) {
+	lowest := 99
+	for _, word := range e.states[svc] {
+		st := stage(word)
+		switch st {
+		case -1:
+			phase = "failed"
+			total++
+		case 0:
+		default:
+			total++
+			lowest = min(lowest, st)
+			if st >= 3 {
+				running++
+			}
+		}
+	}
+	total = max(total, e.expected[svc])
+	if phase == "" {
+		phase = map[int]string{1: "creating", 2: "starting", 3: "running", 4: "healthy"}[lowest]
+	}
+	if phase == "" {
+		phase = "creating"
+	}
+	return phase, running, total
+}
+
+// publish puts the summary of a service on its row.
+func (e *composeEvents) publish(svc string) {
+	phase, running, total := e.summary(svc)
+	if e.pulling[svc] && phase == "creating" {
+		phase = "pulling"
+	}
+	e.prog.r.Update(idService+svc, func(it *jobs.Item) {
+		it.Current, it.Total, it.Unit = int64(running), int64(total), "containers"
+		it.Result = map[string]string{"phase": phase}
+	})
+}
+
+// finishService ends the row of a service the SDK brought up, and the rows of its containers. What the host
+// holds now (final) is the truth about each container it lists; a container the host does not list keeps the
+// last word the SDK gave it. A service the SDK left alone has no events, so its rows come from the host.
+func (e *composeEvents) finishService(name, action string, final []dockerx.ComposeContainer) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	row := e.states[name]
+	if row == nil {
+		row = map[string]string{}
+		e.states[name] = row
+	}
+	for _, c := range final {
+		if c.Service != name {
+			continue
+		}
+		word := c.State
+		if c.Health == "healthy" {
+			word = "healthy"
+		}
+		row[c.Name] = word
+	}
+	names := make([]string, 0, len(row))
+	for n, word := range row {
+		// A container whose last word is not part of coming up is not shown, except one an event
+		// reported as failed that the host does not hold: the deploy worked, and the row says what the
+		// SDK said.
+		if stage(word) != 0 {
+			names = append(names, n)
+		}
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		e.prog.addContainer(idContainer+n, n, name)
+		e.prog.r.Finish(idContainer+n, jobs.ItemDone, "", "", map[string]string{"state": row[n]})
+		e.prog.setEnded(idContainer+n, jobs.ItemDone)
+	}
+	phase, running, total := e.summary(name)
+	e.prog.serviceDone(name, action, phase, running, total)
 }
 
 // composeLine is one line of the output for an SDK event: its status and what it is about, and the SDK's
@@ -428,24 +665,49 @@ func (p *progress) addStandaloneService(name string) {
 	p.add(jobs.ItemSpec{ID: idService + name, Label: name, Parent: ItemServices, Kind: KindService}, name, "service")
 }
 
-// serviceDone ends the row of a service that the SDK brought up: done, with what was done to it and how many
-// of its containers run.
-func (p *progress) serviceDone(name, action string, containers []dockerx.ComposeContainer) {
+// addRemoveContainer adds the step that removes a container of a service the file no longer declares.
+func (p *progress) addRemoveContainer(name string) {
+	p.add(jobs.ItemSpec{ID: idRemoveContainer + name, Label: "Remove container " + name, Parent: ItemCleanup, Kind: KindStep}, name, "container")
+}
+
+// addContainer adds the row of a container under its service, once. A container the SDK names that the job
+// has no row for yet gets one when the first event about it arrives.
+func (p *progress) addContainer(id, name, service string) {
 	if p == nil {
 		return
 	}
-	running, total := 0, 0
-	for _, c := range containers {
-		if c.Service != name {
-			continue
-		}
-		total++
-		if c.State == "running" {
-			running++
-		}
+	p.mu.Lock()
+	known := slices.ContainsFunc(p.added, func(a addedItem) bool { return a.id == id })
+	p.mu.Unlock()
+	if known {
+		return
 	}
-	p.r.Finish(idService+name, jobs.ItemDone, "", "", map[string]string{
-		"action": action, "settled": "true", "running": strconv.Itoa(running), "desired": strconv.Itoa(total),
+	p.add(jobs.ItemSpec{ID: id, Label: name, Parent: idService + service, Kind: KindContainer}, name, "container")
+}
+
+// serviceDone ends the row of a service that the SDK brought up: done, with what was done to it, the phase
+// its containers ended in and how many of them run.
+func (p *progress) serviceDone(name, action, phase string, running, total int) {
+	if p == nil {
+		return
+	}
+	id := idService + name
+	p.r.Update(id, func(it *jobs.Item) {
+		it.Current, it.Total, it.Unit = int64(running), int64(total), "containers"
 	})
+	p.r.Finish(id, jobs.ItemDone, "", "", map[string]string{
+		"action": action, "settled": "true", "phase": phase,
+		"running": strconv.Itoa(running), "desired": strconv.Itoa(total),
+	})
+	p.setEnded(id, jobs.ItemDone)
 	p.line("Service " + name + " is running")
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
