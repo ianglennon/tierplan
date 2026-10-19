@@ -1,0 +1,67 @@
+{
+  "stackDeploy": {
+    "title": "Deploying {{name}}",
+    "started": "Started {{time}} by {{user}}.",
+    "startedAnon": "Started {{time}}.",
+    "elapsedRunning": "Running for {{elapsed}}.",
+    "elapsedDone": "Took {{elapsed}}.",
+    "elapsed": {
+      "seconds": "{{count}} s",
+      "minutes": "{{minutes}} min {{seconds}} s",
+      "hours": "{{hours}} h {{minutes}} min"
+    },
+    "loading": "Loading the deploy…",
+    "progress": {
+      "label": "Deploy progress",
+      "text_one": "{{done}} of {{count}} service done",
+      "text_other": "{{done}} of {{count}} services done"
+    },
+    "steps": {
+      "label": "Steps of the deploy",
+      "services": "Services"
+    },
+    "state": {
+      "waiting": "Waiting",
+      "running": "Working",
+      "done": "Done",
+      "failed": "Failed",
+      "skipped": "Skipped",
+      "cancelled": "Cancelled"
+    },
+    "service": {
+      "state": {
+        "waiting": "Waiting",
+        "running": "Working",
+        "done": "Running",
+        "failed": "Failed",
+        "skipped": "Skipped",
+        "cancelled": "Cancelled"
+      },
+      "details": "Show what happened to {{name}}"
+    },
+    "gone": {
+      "title": "This deploy is no longer listed",
+      "body": "Finished deploys stay here for a short while. Open the stack to see what is running now."
+    },
+    "error": {
+      "title": "Couldn't load the deploy.",
+      "body": "Check the connection and try again.",
+      "retry": "Retry loading the deploy"
+    },
+    "complete": {
+      "title": "Deploy complete",
+      "body_one": "{{name}} is running {{count}} service on {{env}}.",
+      "body_other": "{{name}} is running {{count}} services on {{env}}."
+    },
+    "failed": {
+      "title": "Deploy failed",
+      "fallback": "Bayplan stopped at {{step}}."
+    },
+    "cancelled": {
+      "title": "Deploy cancelled",
+      "body": "Bayplan stopped at the step it had reached."
+    },
+    "openStack": "Open stack",
+    "backToEditing": "Back to editing"
+  }
+}

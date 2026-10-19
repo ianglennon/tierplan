@@ -8380,7 +8380,7 @@ export interface components {
             finishedAt: string;
             /** @description The job ID */
             id: string;
-            /** @description The steps, in order */
+            /** @description The steps and services, in the order they were added. Read the steps in run order by following parent: a top-level step, then its children */
             items: components["schemas"]["StackJobItemBody"][] | null;
             /**
              * @description What the operation is
@@ -8389,6 +8389,8 @@ export interface components {
             mode: "deploy" | "update";
             /** @description The stack being deployed */
             stackId: string;
+            /** @description Who started the deploy, as a name */
+            startedBy: string;
             /**
              * @description running until every step has ended, then done when every step is
              * @enum {string}
@@ -8396,28 +8398,34 @@ export interface components {
             state: "running" | "done" | "partial" | "failed" | "cancelled";
         };
         StackJobItemBody: {
-            /** @description A stable word for how a step failed or was not run, empty otherwise */
+            /** @description A stable word for how an item failed or was not run, empty otherwise */
             code: string;
             /**
              * Format: int64
              * @description How many of total were done
              */
             current: number;
-            /** @description The step: check, networks, objects, services or cleanup */
+            /** @description The engine's own words about a failed item, cleaned of control characters, clipped to 2,048 characters and with the stack's secret values hidden. Empty when there are none */
+            detail: string;
+            /** @description The item: check, lookup, networks, objects, services or cleanup, or one made for an object or service of the deploy, like service:web */
             id: string;
-            /** @description The step's name */
+            /** @description step for a line of the step list, service for a service row, group for an item that only holds steps and is not shown itself */
+            kind: string;
+            /** @description The item's name: a step's words, or a service's name */
             label: string;
             /** @description A sentence for the code. The SPA words the code itself */
             message: string;
+            /** @description The ID of the item this one belongs to, empty for a top-level step. A service is under services; a network is under networks, a secret or config under objects, and an old secret or config under cleanup */
+            parent: string;
             /** @description What a finished step produced, like the counts of services created and updated */
             result: {
                 [key: string]: string;
             };
             /**
-             * @description Where the step is
+             * @description Where the item is. skipped is an item that was not run because an earlier one failed
              * @enum {string}
              */
-            state: "waiting" | "running" | "done" | "failed" | "cancelled";
+            state: "waiting" | "running" | "done" | "failed" | "skipped" | "cancelled";
             /**
              * Format: int64
              * @description How many there are to do, 0 until known

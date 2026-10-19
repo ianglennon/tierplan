@@ -89,6 +89,12 @@ var (
 // ItemSpec names one item of a job.
 type ItemSpec struct {
 	ID, Label string
+	// Parent is the ID of the item this one belongs to, empty for a top-level item. The hub
+	// keeps it as it was given and checks nothing: a reader groups by it.
+	Parent string
+	// Kind says what sort of item this is, free-form and empty for none ("step" and "service"
+	// for a stack deploy). The hub never reads it.
+	Kind string
 }
 
 // Spec is a job to start.
@@ -122,6 +128,13 @@ type Item struct {
 	Code string `json:"code"`
 	// Message is a sentence built from Code, never the raw answer of a remote system.
 	Message string `json:"message"`
+	// Parent and Kind are the item's ItemSpec.Parent and ItemSpec.Kind.
+	Parent string `json:"parent"`
+	Kind   string `json:"kind"`
+	// Detail is a remote system's own words about the item, like Docker's error text for a
+	// service it rejected. It is the one place a remote text may enter an item, and only after
+	// the caller cleaned it (Clean) and masked it, which Reporter.Detail does.
+	Detail string `json:"detail"`
 	// Current and Total count Unit ("bytes") across the item; Total is 0 until known.
 	Current int64  `json:"current"`
 	Total   int64  `json:"total"`
@@ -291,7 +304,7 @@ func (h *Hub) Start(spec Spec, run func(ctx context.Context, r *Reporter)) (Job,
 		e.job.Meta = map[string]string{}
 	}
 	for _, it := range spec.Items {
-		e.job.Items = append(e.job.Items, Item{ID: it.ID, Label: it.Label, State: ItemWaiting, Subs: []Sub{}, Result: map[string]string{}})
+		e.job.Items = append(e.job.Items, newItem(it))
 	}
 	if len(e.job.Items) == 0 {
 		e.job.Items = []Item{}
@@ -330,6 +343,29 @@ type Reporter struct {
 // JobID is the ID of the job the reporter reports on, known to the run as soon as it
 // starts.
 func (r *Reporter) JobID() string { return r.e.job.ID }
+
+func newItem(spec ItemSpec) Item {
+	return Item{
+		ID: spec.ID, Label: spec.Label, Parent: spec.Parent, Kind: spec.Kind,
+		State: ItemWaiting, Subs: []Sub{}, Result: map[string]string{},
+	}
+}
+
+// Add adds an item to the job while it runs, waiting, and publishes it, so a reader that is
+// watching sees it appear and one that comes later finds it in the snapshot. It changes nothing
+// for an ID the job already has, or for a job that has ended. An item added when every other
+// item has ended does not stop the job from having ended: add the items of a stage before the
+// last item that is already running finishes.
+func (r *Reporter) Add(spec ItemSpec) {
+	h, e := r.h, r.e
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if e.job.Finished() || e.item(spec.ID) != nil {
+		return
+	}
+	e.job.Items = append(e.job.Items, newItem(spec))
+	h.publishItemLocked(e, spec.ID)
+}
 
 // Update changes one item under the hub's lock and publishes it, at most once per
 // Options.Coalesce: updates in between are folded into the one published when the gap

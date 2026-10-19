@@ -6,9 +6,7 @@ package api
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -896,15 +894,9 @@ func pullJobBody(j jobs.Job) PullJobBody {
 	return b
 }
 
-// servePullStream follows one pull: the job as it stands as a snapshot frame, then an item
-// frame for each change and a done frame at the end, each with the hub's event ID. A
-// browser that reconnects sends the last ID it saw in Last-Event-ID (or lastEventId in the
-// query) and is sent a new
-// snapshot and what it missed after that ID. An idle stream gets a comment line every
-// Heartbeat, and each one re-checks that the caller is still allowed in.
-//
-// The pull does not depend on this stream: it runs on the server, and closing the stream
-// does not stop it.
+// servePullStream follows one pull through the shared job stream (jobstream.go): the job as it
+// stands as a snapshot frame, then an item frame for each change and a done frame at the end. The
+// pull does not depend on the stream: it runs on the server, and closing the stream does not stop it.
 func servePullStream(w http.ResponseWriter, req *http.Request, d PullsDeps, lim *streamLimiter) {
 	ctx := req.Context()
 	p := httpx.PrincipalFrom(ctx)
@@ -917,106 +909,24 @@ func servePullStream(w http.ResponseWriter, req *http.Request, d PullsDeps, lim 
 		return
 	}
 	id := chi.URLParam(req, "jobId")
+	const gone = "This pull is no longer here. Pulls are kept for 10 minutes after they end."
 	if job, ok := d.Jobs.Get(id); !ok || !d.pullVisible(ctx, p, job) {
-		writeJSONProblem(w, http.StatusNotFound, problemPullNotFound, "This pull is no longer here. Pulls are kept for 10 minutes after they end.")
+		writeJSONProblem(w, http.StatusNotFound, problemPullNotFound, gone)
 		return
 	}
-	release, ok := lim.acquire(string(p.Type) + ":" + p.ID)
-	if !ok {
-		writeJSONProblem(w, http.StatusTooManyRequests, problemTooManyStreams,
-			fmt.Sprintf("You already have %d pull streams open. Close one and try again.", lim.max))
-		return
-	}
-	defer release()
-
-	// A browser's EventSource sends Last-Event-ID itself when it reconnects on its own. The
-	// SPA reopens the stream by hand, which cannot set a header, so it says the same in
-	// the query.
-	var after uint64
-	last := req.Header.Get("Last-Event-ID")
-	if last == "" {
-		last = req.URL.Query().Get("lastEventId")
-	}
-	if last != "" {
-		if n, err := strconv.ParseUint(last, 10, 64); err == nil {
-			after = n
-		}
-	}
-	snap, ch, cancel, err := d.Jobs.Subscribe(ctx, id, after)
-	if err != nil {
-		writeJSONProblem(w, http.StatusNotFound, problemPullNotFound, "This pull is no longer here. Pulls are kept for 10 minutes after they end.")
-		return
-	}
-	defer cancel()
-
-	rc := http.NewResponseController(w)
-	_ = rc.SetWriteDeadline(time.Time{})
-	h := w.Header()
-	h.Set("Content-Type", "text/event-stream")
-	h.Set("Cache-Control", "no-cache")
-	h.Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	if rc.Flush() != nil {
-		return
-	}
-	write := func(format string, args ...any) bool {
-		if _, err := fmt.Fprintf(w, format, args...); err != nil {
-			return false
-		}
-		return rc.Flush() == nil
-	}
-	frame := func(id, event string, v any) bool {
-		data, err := json.Marshal(v)
-		if err != nil {
-			d.Log.Error("encode a pull frame", "error", err)
-			return false
-		}
-		if id == "" {
-			return write("event: %s\ndata: %s\n\n", event, data)
-		}
-		return write("id: %s\nevent: %s\ndata: %s\n\n", id, event, data)
-	}
-	// The snapshot has no id: it is not an event.
-	if !frame("", "snapshot", pullJobBody(snap)) {
-		return
-	}
-
-	beat := time.NewTicker(d.Heartbeat)
-	defer beat.Stop()
-	life := time.NewTimer(d.MaxLifetime)
-	defer life.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-life.C:
-			return
-		case ev, open := <-ch:
-			if !open {
-				// The channel closed without a done event: the job had already finished when
-				// the stream opened and nothing newer than Last-Event-ID was left to replay.
-				if job, ok := d.Jobs.Get(id); ok && job.Finished() {
-					_ = frame("", "done", pullJobBody(job))
-				}
-				return
-			}
-			evID := strconv.FormatUint(ev.ID, 10)
+	serveJobStream(w, req, jobStream{
+		Hub: d.Jobs, JobID: id, Key: string(p.Type) + ":" + p.ID, Limiter: lim, What: "pull",
+		GoneType: problemPullNotFound, GoneDetail: gone, TooManyType: problemTooManyStreams,
+		Heartbeat: d.Heartbeat, MaxLifetime: d.MaxLifetime, Log: d.Log,
+		Snapshot: func(j jobs.Job) any { return pullJobBody(j) },
+		Encode: func(ev jobs.Event) (any, bool) {
 			switch {
 			case ev.Type == jobs.EventItem && ev.Item != nil:
-				if !frame(evID, "item", pullItemBody(*ev.Item)) {
-					return
-				}
+				return pullItemBody(*ev.Item), true
 			case ev.Type == jobs.EventDone && ev.Job != nil:
-				_ = frame(evID, "done", pullJobBody(*ev.Job))
-				return
+				return pullJobBody(*ev.Job), true
 			}
-		case <-beat.C:
-			if !httpx.StillAuthorized(ctx) {
-				return
-			}
-			if !write(": ping\n\n") {
-				return
-			}
-		}
-	}
+			return nil, false
+		},
+	})
 }

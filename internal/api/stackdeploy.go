@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/go-chi/chi/v5"
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/httpx"
@@ -27,6 +28,7 @@ const (
 	metaStackID   = "stackId"
 	metaStackName = "stackName"
 	metaMode      = "mode"
+	metaStartedBy = "startedBy"
 
 	deployModeDeploy = "deploy"
 	deployModeUpdate = "update"
@@ -71,13 +73,16 @@ type StackJobPathInput struct {
 	JobID string `path:"jobId" doc:"The job ID the deploy answered with"`
 }
 
-// StackJobItemBody is one step of a deploy.
+// StackJobItemBody is one step or service of a deploy.
 type StackJobItemBody struct {
-	ID      string            `json:"id" doc:"The step: check, networks, objects, services or cleanup"`
-	Label   string            `json:"label" doc:"The step's name"`
-	State   string            `json:"state" enum:"waiting,running,done,failed,cancelled" doc:"Where the step is"`
-	Code    string            `json:"code" doc:"A stable word for how a step failed or was not run, empty otherwise"`
+	ID      string            `json:"id" doc:"The item: check, lookup, networks, objects, services or cleanup, or one made for an object or service of the deploy, like service:web"`
+	Label   string            `json:"label" doc:"The item's name: a step's words, or a service's name"`
+	Parent  string            `json:"parent" doc:"The ID of the item this one belongs to, empty for a top-level step. A service is under services; a network is under networks, a secret or config under objects, and an old secret or config under cleanup"`
+	Kind    string            `json:"kind" doc:"step for a line of the step list, service for a service row, group for an item that only holds steps and is not shown itself"`
+	State   string            `json:"state" enum:"waiting,running,done,failed,skipped,cancelled" doc:"Where the item is. skipped is an item that was not run because an earlier one failed"`
+	Code    string            `json:"code" doc:"A stable word for how an item failed or was not run, empty otherwise"`
 	Message string            `json:"message" doc:"A sentence for the code. The SPA words the code itself"`
+	Detail  string            `json:"detail" doc:"The engine's own words about a failed item, cleaned of control characters, clipped to 2,048 characters and with the stack's secret values hidden. Empty when there are none"`
 	Current int64             `json:"current" doc:"How many of total were done"`
 	Total   int64             `json:"total" doc:"How many there are to do, 0 until known"`
 	Unit    string            `json:"unit" doc:"What current and total count, or empty"`
@@ -89,10 +94,11 @@ type StackJobBody struct {
 	ID         string             `json:"id" doc:"The job ID"`
 	StackID    string             `json:"stackId" doc:"The stack being deployed"`
 	Mode       string             `json:"mode" enum:"deploy,update" doc:"What the operation is"`
+	StartedBy  string             `json:"startedBy" doc:"Who started the deploy, as a name"`
 	State      string             `json:"state" enum:"running,done,partial,failed,cancelled" doc:"running until every step has ended, then done when every step is"`
 	CreatedAt  string             `json:"createdAt" doc:"When the job started, RFC 3339 UTC"`
 	FinishedAt string             `json:"finishedAt" doc:"When the job ended, RFC 3339 UTC, empty while it runs"`
-	Items      []StackJobItemBody `json:"items" doc:"The steps, in order"`
+	Items      []StackJobItemBody `json:"items" doc:"The steps and services, in the order they were added. Read the steps in run order by following parent: a top-level step, then its children"`
 }
 
 // StackJobOutput wraps StackJobBody for huma.
@@ -129,20 +135,67 @@ func registerStackDeploy(r *httpx.Router, d StacksDeps) {
 		func(ctx context.Context, in *StackJobPathInput) (*StackJobOutput, error) {
 			return getStackJob(ctx, d, in)
 		})
+
+	lim := &streamLimiter{max: d.MaxStreamsPerUser, open: map[string]int{}}
+	r.Guarded(http.MethodGet, "/api/env/{envId}/stacks/{stackId}/deploys/{jobId}/stream",
+		rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment},
+		http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			serveStackJobStream(w, req, d, lim)
+		}))
+}
+
+const (
+	stackJobGone = "This deploy is no longer here. Deploys are kept for 10 minutes after they end."
+)
+
+// serveStackJobStream follows one deploy through the shared job stream: the job as it stands, an
+// item frame for each change and a done frame at the end, resumed from Last-Event-ID. Only a job of
+// this stack on this environment can be followed; any other is the same 404 as one that is gone.
+// The deploy does not depend on the stream: closing it stops nothing.
+func serveStackJobStream(w http.ResponseWriter, req *http.Request, d StacksDeps, lim *streamLimiter) {
+	ctx := req.Context()
+	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+	if p == nil || env == nil {
+		writeJSONProblem(w, http.StatusInternalServerError, "", "internal error")
+		return
+	}
+	if d.Jobs == nil {
+		writeJSONProblem(w, http.StatusServiceUnavailable, problemJobsUnavail, "Deploys are not available right now.")
+		return
+	}
+	stackID, jobID := chi.URLParam(req, "stackId"), chi.URLParam(req, "jobId")
+	if _, err := d.repo().Stack(ctx, env.ID, stackID); err != nil {
+		writeJSONProblem(w, http.StatusNotFound, problemStackJobNotFound, stackJobGone)
+		return
+	}
+	if job, ok := d.Jobs.Get(jobID); !ok || !stackJobOf(job, env.ID, stackID) {
+		writeJSONProblem(w, http.StatusNotFound, problemStackJobNotFound, stackJobGone)
+		return
+	}
+	serveJobStream(w, req, jobStream{
+		Hub: d.Jobs, JobID: jobID, Key: string(p.Type) + ":" + p.ID, Limiter: lim, What: "deploy",
+		GoneType: problemStackJobNotFound, GoneDetail: stackJobGone, TooManyType: problemTooManyStreams,
+		Heartbeat: d.Heartbeat, MaxLifetime: d.MaxLifetime, Log: d.Log,
+		Snapshot: func(j jobs.Job) any { return stackJobBody(j) },
+		Encode: func(ev jobs.Event) (any, bool) {
+			switch {
+			case ev.Type == jobs.EventItem && ev.Item != nil:
+				return stackJobItemBody(*ev.Item), true
+			case ev.Type == jobs.EventDone && ev.Job != nil:
+				return stackJobBody(*ev.Job), true
+			}
+			return nil, false
+		},
+	})
+}
+
+// stackJobOf reports whether a job in the hub is a deploy of that stack on that environment.
+func stackJobOf(j jobs.Job, envID, stackID string) bool {
+	return j.Kind == stackDeployJobKind && j.EnvID == envID && j.Meta[metaStackID] == stackID
 }
 
 // stackJobOwner is who a stack job is attributed to in the hub, as an audit actor.
 func stackJobOwner(p *rbac.Principal) string { return string(p.Type) + ":" + p.ID }
-
-// jobStepLabels name the steps of a swarm deploy.
-var jobStepLabels = []jobs.ItemSpec{
-	{ID: stackops.ItemCheck, Label: "Check the stack"},
-	{ID: stackops.ItemLookup, Label: "Look up images"},
-	{ID: stackops.ItemNetworks, Label: "Networks"},
-	{ID: stackops.ItemObjects, Label: "Secrets and configs"},
-	{ID: stackops.ItemServices, Label: "Services"},
-	{ID: stackops.ItemCleanup, Label: "Clean up"},
-}
 
 func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*StackDeployOutput, error) {
 	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
@@ -261,8 +314,8 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 	}
 	spec := jobs.Spec{
 		Kind: stackDeployJobKind, EnvID: env.ID, Owner: stackJobOwner(p),
-		Meta:  map[string]string{metaStackID: st.ID, metaStackName: st.Name, metaMode: mode},
-		Items: jobStepLabels,
+		Meta:  map[string]string{metaStackID: st.ID, metaStackName: st.Name, metaMode: mode, metaStartedBy: p.Name},
+		Items: stackops.DeployItemSpecs(),
 	}
 	job, err := d.Jobs.Start(spec, func(jctx context.Context, r *jobs.Reporter) {
 		select {
@@ -505,7 +558,7 @@ func getStackJob(ctx context.Context, d StacksDeps, in *StackJobPathInput) (*Sta
 		return nil, stackLookupProblem(d, in.EnvID, err)
 	}
 	job, ok := d.Jobs.Get(in.JobID)
-	if !ok || job.Kind != stackDeployJobKind || job.EnvID != in.EnvID || job.Meta[metaStackID] != in.StackID {
+	if !ok || !stackJobOf(job, in.EnvID, in.StackID) {
 		return nil, httpx.Problem(http.StatusNotFound, problemStackJobNotFound, "This deploy is no longer here. Deploys are kept for 10 minutes after they end.")
 	}
 	return &StackJobOutput{CacheControl: "no-store", Body: stackJobBody(job)}, nil
@@ -513,18 +566,22 @@ func getStackJob(ctx context.Context, d StacksDeps, in *StackJobPathInput) (*Sta
 
 func stackJobBody(j jobs.Job) StackJobBody {
 	b := StackJobBody{
-		ID: j.ID, StackID: j.Meta[metaStackID], Mode: j.Meta[metaMode], State: j.State,
+		ID: j.ID, StackID: j.Meta[metaStackID], Mode: j.Meta[metaMode], StartedBy: j.Meta[metaStartedBy], State: j.State,
 		CreatedAt: rfc3339(j.CreatedAt), FinishedAt: rfc3339(j.FinishedAt), Items: make([]StackJobItemBody, 0, len(j.Items)),
 	}
 	for _, it := range j.Items {
-		res := it.Result
-		if res == nil {
-			res = map[string]string{}
-		}
-		b.Items = append(b.Items, StackJobItemBody{
-			ID: it.ID, Label: it.Label, State: it.State, Code: it.Code, Message: it.Message,
-			Current: it.Current, Total: it.Total, Unit: it.Unit, Result: res,
-		})
+		b.Items = append(b.Items, stackJobItemBody(it))
 	}
 	return b
+}
+
+func stackJobItemBody(it jobs.Item) StackJobItemBody {
+	res := it.Result
+	if res == nil {
+		res = map[string]string{}
+	}
+	return StackJobItemBody{
+		ID: it.ID, Label: it.Label, Parent: it.Parent, Kind: it.Kind, State: it.State, Code: it.Code, Message: it.Message,
+		Detail: it.Detail, Current: it.Current, Total: it.Total, Unit: it.Unit, Result: res,
+	}
 }

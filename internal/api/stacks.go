@@ -90,6 +90,12 @@ type StacksDeps struct {
 	OnCheck func(ctx context.Context)
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
+	// Heartbeat is how often an idle deploy stream gets a ping. Zero means 15 seconds.
+	Heartbeat time.Duration
+	// MaxLifetime is the longest one deploy stream stays open. Zero means one hour.
+	MaxLifetime time.Duration
+	// MaxStreamsPerUser caps concurrent deploy streams per user. Zero means 4.
+	MaxStreamsPerUser int
 }
 
 func (d StacksDeps) repo() stackops.Repo { return stackops.Repo{Store: d.Store, Vault: d.Vault} }
@@ -163,6 +169,15 @@ type StackCreateInput struct {
 func RegisterStacks(r *httpx.Router, d StacksDeps) {
 	if d.Log == nil {
 		d.Log = slog.Default()
+	}
+	if d.Heartbeat <= 0 {
+		d.Heartbeat = defaultHeartbeat
+	}
+	if d.MaxLifetime <= 0 {
+		d.MaxLifetime = defaultMaxStreamLifetime
+	}
+	if d.MaxStreamsPerUser <= 0 {
+		d.MaxStreamsPerUser = defaultMaxStreams
 	}
 	httpx.Register(r, huma.Operation{
 		OperationID: "listStacks", Method: http.MethodGet, Path: "/api/env/{envId}/stacks",

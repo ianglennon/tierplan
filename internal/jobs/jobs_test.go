@@ -473,3 +473,118 @@ func TestWaitReturnsTheJobOnceItHasEnded(t *testing.T) {
 		t.Fatalf("Wait of a running job = %+v, %v", got, err)
 	}
 }
+
+func TestAddPutsAnItemInAJobWhileItRunsAndSubscribersSeeIt(t *testing.T) {
+	h := jobs.New(jobs.Options{})
+	t.Cleanup(h.Close)
+	begin := make(chan struct{})
+	release := make(chan struct{})
+	job, err := h.Start(jobs.Spec{
+		Kind: "stack_deploy", Owner: "u",
+		Items: []jobs.ItemSpec{{ID: "services", Label: "Deploy services", Kind: "step"}},
+	}, func(ctx context.Context, r *jobs.Reporter) {
+		<-begin
+		r.Add(jobs.ItemSpec{ID: "service:web", Label: "web", Parent: "services", Kind: "service"})
+		// Adding an ID the job has changes nothing, and nothing new is published for it.
+		r.Add(jobs.ItemSpec{ID: "service:web", Label: "changed", Parent: "other", Kind: "other"})
+		<-release
+		r.Finish("service:web", jobs.ItemDone, "", "", nil)
+		r.Finish("services", jobs.ItemDone, "", "", nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, ch, cancel, err := h.Subscribe(context.Background(), job.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	if len(snap.Items) != 1 {
+		t.Fatalf("snapshot items = %+v, want the one the job started with", snap.Items)
+	}
+	close(begin)
+	close(release)
+	evs := drain(t, ch)
+
+	var addedEvents int
+	for _, ev := range evs {
+		if ev.Type == jobs.EventItem && ev.Item.ID == "service:web" && ev.Item.State == jobs.ItemWaiting {
+			addedEvents++
+			if ev.Item.Parent != "services" || ev.Item.Kind != "service" || ev.Item.Label != "web" {
+				t.Errorf("added item = %+v, want its parent, kind and label as given", ev.Item)
+			}
+		}
+	}
+	if addedEvents != 1 {
+		t.Errorf("the added item was published %d times, want once", addedEvents)
+	}
+	got, ok := h.Get(job.ID)
+	if !ok || got.State != jobs.JobDone || len(got.Items) != 2 || got.Items[1].ID != "service:web" || got.Items[1].Parent != "services" || got.Items[1].Kind != "service" {
+		t.Fatalf("job = %+v, want done with the added item after the first", got)
+	}
+	if got.Items[0].Kind != "step" || got.Items[0].Parent != "" {
+		t.Errorf("first item = %+v, want the kind it started with", got.Items[0])
+	}
+}
+
+func TestAddToAFinishedJobChangesNothing(t *testing.T) {
+	h := jobs.New(jobs.Options{})
+	t.Cleanup(h.Close)
+	var rep *jobs.Reporter
+	job, err := h.Start(twoItems("u"), func(ctx context.Context, r *jobs.Reporter) {
+		rep = r
+		r.Finish("n1", jobs.ItemDone, "", "", nil)
+		r.Finish("n2", jobs.ItemDone, "", "", nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Wait(testsupport.Context(t), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	rep.Add(jobs.ItemSpec{ID: "late", Label: "late"})
+	got, _ := h.Get(job.ID)
+	if len(got.Items) != 2 || got.State != jobs.JobDone {
+		t.Errorf("job = %+v, want the two items it ended with", got)
+	}
+}
+
+func TestAnAddedItemIsInTheReplayAfterAnEventAndNothingIsRepeated(t *testing.T) {
+	h := jobs.New(jobs.Options{})
+	t.Cleanup(h.Close)
+	step := make(chan struct{})
+	release := make(chan struct{})
+	job, err := h.Start(jobs.Spec{Kind: "k", Owner: "u", Items: []jobs.ItemSpec{{ID: "a", Label: "a"}}}, func(ctx context.Context, r *jobs.Reporter) {
+		r.Add(jobs.ItemSpec{ID: "b", Label: "b", Parent: "a"})
+		close(step)
+		<-release
+		r.Finish("b", jobs.ItemDone, "", "", nil)
+		r.Finish("a", jobs.ItemDone, "", "", nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-step
+	// A first reader saw the add (event 1); a reader that resumes after 1 sees 2 onwards, and the
+	// snapshot it is sent holds the added item.
+	snap, ch, cancel, err := h.Subscribe(context.Background(), job.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	if len(snap.Items) != 2 {
+		t.Fatalf("snapshot = %+v, want both items", snap.Items)
+	}
+	close(release)
+	evs := drain(t, ch)
+	var last uint64 = 1
+	for _, ev := range evs {
+		if ev.ID <= last {
+			t.Fatalf("event %d after %d: a resumed reader must see only newer events, once each (%+v)", ev.ID, last, evs)
+		}
+		last = ev.ID
+	}
+	if evs[0].Item == nil || evs[0].Item.ID != "b" || evs[0].Item.State != jobs.ItemDone {
+		t.Errorf("first replayed event = %+v, want the finish of the added item, the first event after 1", evs[0])
+	}
+}

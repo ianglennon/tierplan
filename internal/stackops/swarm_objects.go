@@ -12,6 +12,7 @@ import (
 	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
+	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/stacks/convert"
 )
@@ -47,7 +48,7 @@ func stepOf(ctx context.Context, err error) (code, name string) {
 // network_conflict. Every other network is created with all its pools, its IPAM driver, its driver
 // options, its flags and the stack's labels, through WriteOnManager, once. The first failure ends
 // the call with a *stepError; the networks created before it stay in created.
-func (d Deps) ensureNetworks(ctx context.Context, envID string, stack Stack, plans []convert.NetworkPlan, live []dockerx.NetworkRow) (created []string, err error) {
+func (d Deps) ensureNetworks(ctx context.Context, envID string, stack Stack, plans []convert.NetworkPlan, live []dockerx.NetworkRow, prog *progress) (created []string, err error) {
 	for _, n := range plans {
 		if n.External {
 			found, swarmScope := externalNetwork(live, n.Name)
@@ -69,6 +70,7 @@ func (d Deps) ensureNetworks(ctx context.Context, envID string, stack Stack, pla
 			return created, &stepError{code: CodeCancelled, name: n.Name, err: ctx.Err()}
 		}
 		spec := networkSpec(n)
+		prog.start(idNetwork + n.Name)
 		werr := d.Aggregator.WriteOnManager(ctx, envID, func(c *dockerx.Client) error {
 			_, _, e := c.NetworkCreate(ctx, spec)
 			return e
@@ -85,6 +87,7 @@ func (d Deps) ensureNetworks(ctx context.Context, envID string, stack Stack, pla
 			return created, &stepError{code: code, name: n.Name, err: werr}
 		}
 		created = append(created, n.Name)
+		prog.done(idNetwork+n.Name, nil)
 	}
 	return created, nil
 }
@@ -282,7 +285,7 @@ func hasExternalObject(objs []stacks.ObjectContent, kind stacks.ObjectKind) bool
 // own class for a create that failed. Objects created before it stay in created, so the caller can
 // count them. Every create goes through WriteOnManager, once, and the content goes only into that
 // create (T-07-33).
-func (d Deps) ensureObjects(ctx context.Context, envID string, stack Stack, objs []stacks.ObjectContent, live []objectRow) (refs objectRefs, created []string, err error) {
+func (d Deps) ensureObjects(ctx context.Context, envID string, stack Stack, objs []stacks.ObjectContent, live []objectRow, prog *progress) (refs objectRefs, created []string, err error) {
 	refs = newObjectRefs()
 	for _, o := range objs {
 		if o.External {
@@ -313,6 +316,11 @@ func (d Deps) ensureObjects(ctx context.Context, envID string, stack Stack, objs
 		labels[stacks.LabelObject] = o.Name
 		labels[stacks.LabelObjectHash] = hash
 
+		itemID := idConfig + full
+		if o.Kind == stacks.KindSecret {
+			itemID = idSecret + full
+		}
+		prog.start(itemID)
 		var id string
 		werr := d.Aggregator.WriteOnManager(ctx, envID, func(c *dockerx.Client) error {
 			var e error
@@ -335,6 +343,7 @@ func (d Deps) ensureObjects(ctx context.Context, envID string, stack Stack, objs
 			return refs, created, &stepError{code: code, name: full, err: werr}
 		}
 		created = append(created, full)
+		prog.done(itemID, nil)
 		refs.set(o.Kind, o.Name, objectRef{ID: id, Name: full})
 	}
 	return refs, created, nil
@@ -349,7 +358,7 @@ func (d Deps) ensureObjects(ctx context.Context, envID string, stack Stack, objs
 // referenced, refused or failed. A removal that fails is not an error of the deploy, because the
 // next deploy finds the same objects by their labels; err is only a read that failed, when
 // nothing could be judged.
-func (d Deps) removeReplacedObjects(ctx context.Context, envID string, stack Stack, keep objectRefs) (removed, leftInPlace []string, err error) {
+func (d Deps) removeReplacedObjects(ctx context.Context, envID string, stack Stack, keep objectRefs, prog *progress) (removed, leftInPlace []string, err error) {
 	var svcs []dockerx.ServiceDetail
 	var secrets, configs []objectRow
 	err = d.Clusters.ClusterRead(ctx, envID, func(c *dockerx.Client) error {
@@ -381,17 +390,24 @@ func (d Deps) removeReplacedObjects(ctx context.Context, envID string, stack Sta
 		}
 		candidates = append(candidates, r)
 	}
+	for _, r := range candidates {
+		label := r.Labels[stacks.LabelObject]
+		prog.addRemoval(r.Kind, label, r.Name)
+	}
 	for i, r := range candidates {
 		switch {
 		case ctx.Err() != nil:
 			for _, rest := range candidates[i:] {
 				leftInPlace = append(leftInPlace, rest.Name)
+				prog.failed(ItemCleanup, rest.Name, jobs.ItemCancelled, CodeCancelled, CodeMessage(CodeCancelled))
 			}
 			return removed, leftInPlace, nil
 		case used.has(r):
 			leftInPlace = append(leftInPlace, r.Name)
+			prog.done(removalID(r), map[string]string{"left": "true"})
 			continue
 		}
+		prog.start(removalID(r))
 		rerr := d.Aggregator.WriteOnManager(ctx, envID, func(c *dockerx.Client) error {
 			if r.Kind == stacks.KindSecret {
 				return c.SecretRemove(ctx, r.ID)
@@ -401,13 +417,16 @@ func (d Deps) removeReplacedObjects(ctx context.Context, envID string, stack Sta
 		switch {
 		case rerr == nil:
 			removed = append(removed, r.Name)
+			prog.done(removalID(r), nil)
 		case errors.Is(rerr, dockerx.ErrObjectNotFound):
 			// Already gone: nothing was left behind.
+			prog.done(removalID(r), nil)
 		default:
 			if !errors.Is(rerr, dockerx.ErrObjectInUse) {
 				d.log().Warn("could not remove a replaced stack object", "environment", envID, "stack", stack.Name, "kind", r.Kind, "object", r.Name, "error", rerr)
 			}
 			leftInPlace = append(leftInPlace, r.Name)
+			prog.done(removalID(r), map[string]string{"left": "true"})
 		}
 	}
 	return removed, leftInPlace, nil
@@ -454,4 +473,12 @@ func referencedObjects(svcs []dockerx.ServiceDetail) objectUse {
 		}
 	}
 	return u
+}
+
+// removalID is the ID of the item that removes an old secret or config.
+func removalID(r objectRow) string {
+	if r.Kind == stacks.KindSecret {
+		return idRemoveSecret + r.Name
+	}
+	return idRemoveConfig + r.Name
 }

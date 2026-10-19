@@ -167,6 +167,7 @@ func (r DeployResult) OK() bool { return r.Code == "" }
 //
 // The last item is finished only after in.OnDone returns.
 func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Reporter) (res DeployResult) {
+	prog := newProgress(r)
 	final := itemEnd{state: jobs.ItemDone}
 	defer func() {
 		if in.OnDone != nil {
@@ -201,6 +202,13 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 				r.Finish(id, end.state, end.code, end.message, nil)
 			}
 		}
+		// The network, secret, config or service the failure is about ends with its code, and the
+		// ones that were still waiting were not run. The lookup names a service it could not pin,
+		// which no step of the swarm has yet.
+		if item != ItemCheck && item != ItemLookup {
+			prog.failed(item, name, state, code, message)
+		}
+		prog.rest(jobs.ItemCancelled, CodeNotRun, CodeMessage(CodeNotRun))
 		return res
 	}
 	fail := func(item, code, name string) DeployResult { return failWith(item, code, name, "") }
@@ -237,6 +245,29 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	existingNets, allNets, existingSvcs, live := owned.Networks, owned.AllNetworks, owned.Services, owned.Objects
 	if clash(in.Stack.ID, in.Stack.Name, existingNets, existingSvcs, live) {
 		return fail(ItemCheck, CodeNameClash, "")
+	}
+	// The whole picture of what is about to happen goes into the job now: the networks and objects
+	// that will be created and the services that will be deployed, all waiting, so the console
+	// shows them before the first one starts.
+	liveNets := existingNets
+	if hasExternal(planned) {
+		liveNets = allNets
+	}
+	for _, n := range planned.Networks {
+		if _, found := findNetwork(liveNets, n.Name); !n.External && !found {
+			prog.addNetwork(n.Name)
+		}
+	}
+	for _, o := range objs {
+		if o.External {
+			continue
+		}
+		if full, _ := stacks.ObjectName(in.Stack.Name, o.Name, o.Content); !hasObject(live, o.Kind, full) {
+			prog.addObject(o.Kind, o.Name, full)
+		}
+	}
+	for _, sp := range planned.Services {
+		prog.addService(sp)
 	}
 	r.Finish(ItemCheck, jobs.ItemDone, "", "", nil)
 
@@ -292,11 +323,7 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	// 3. Networks: create each one the stack uses that does not exist yet, and check that the
 	// external ones are there.
 	r.Update(ItemNetworks, func(it *jobs.Item) { it.State = jobs.ItemRunning })
-	liveNets := existingNets
-	if hasExternal(planned) {
-		liveNets = allNets
-	}
-	createdNets, err := d.ensureNetworks(ctx, in.EnvID, in.Stack, planned.Networks, liveNets)
+	createdNets, err := d.ensureNetworks(ctx, in.EnvID, in.Stack, planned.Networks, liveNets, prog)
 	res.Networks, res.CreatedNetworks = len(createdNets), createdNets
 	if err != nil {
 		return failStep(ItemNetworks, err)
@@ -305,7 +332,7 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 
 	// 4. Objects: the secrets and configs, created under their hashed names or found.
 	r.Update(ItemObjects, func(it *jobs.Item) { it.State = jobs.ItemRunning })
-	refs, created, err := d.ensureObjects(ctx, in.EnvID, in.Stack, objs, live)
+	refs, created, err := d.ensureObjects(ctx, in.EnvID, in.Stack, objs, live, prog)
 	res.CreatedObjects = created
 	if err != nil {
 		return failStep(ItemObjects, err)
@@ -326,6 +353,7 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 			return fail(ItemServices, CodeCancelled, sp.Name)
 		}
 		existing, update := byName[sp.Name]
+		prog.start(idService + sp.Name)
 		// The image is the pinned one, never the text; an update keeps the counter that makes
 		// the swarm replace tasks, so a redeploy that changed nothing replaces nothing.
 		if p, ok := pinned.Pins[sp.Name]; ok && sp.Spec.TaskTemplate.ContainerSpec != nil {
@@ -355,11 +383,14 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 			d.log().Warn("could not write a stack service", "environment", in.EnvID, "stack", in.Stack.Name, "service", sp.Name, "update", update, "error", err)
 			return fail(ItemServices, codeOf(ctx, err), sp.Name)
 		}
+		action := "created"
 		if update {
 			res.Updated++
+			action = "updated"
 		} else {
 			res.Services++
 		}
+		prog.done(idService+sp.Name, map[string]string{"action": action})
 		r.Update(ItemServices, func(it *jobs.Item) { it.Current = int64(i + 1) })
 	}
 	r.Finish(ItemServices, jobs.ItemDone, "", "", map[string]string{
@@ -379,7 +410,7 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	if err != nil {
 		return failStep(ItemCleanup, err)
 	}
-	removed, left, err := d.removeReplacedObjects(ctx, in.EnvID, in.Stack, refs)
+	removed, left, err := d.removeReplacedObjects(ctx, in.EnvID, in.Stack, refs, prog)
 	res.RemovedObjects, res.LeftInPlace = removed, left
 	if err != nil {
 		return fail(ItemCleanup, codeOf(ctx, err), "")
@@ -464,6 +495,12 @@ func clash(stackID, stackName string, nets []dockerx.NetworkRow, svcs []dockerx.
 		}
 	}
 	return false
+}
+
+// hasObject reports whether the swarm already holds a secret or config of the kind under that name.
+func hasObject(rows []objectRow, kind stacks.ObjectKind, name string) bool {
+	_, ok := findObject(rows, kind, name)
+	return ok
 }
 
 func hasExternal(p convert.Plan) bool {

@@ -108,13 +108,19 @@ func starterPlan(t *testing.T, name string) (stackops.Stack, stackops.SwarmDeplo
 	return stackInput(t, name, stacks.StarterCompose, nil)
 }
 
-// deployItems is the items of a deploy job.
-func deployItems() []jobs.ItemSpec {
-	var items []jobs.ItemSpec
-	for _, id := range stackops.DeployItems() {
-		items = append(items, jobs.ItemSpec{ID: id})
+// deployItems is the items a deploy job starts with, as the API starts it.
+func deployItems() []jobs.ItemSpec { return stackops.DeployItemSpecs() }
+
+// itemByID finds an item of a job.
+func itemByID(t *testing.T, j jobs.Job, id string) jobs.Item {
+	t.Helper()
+	for _, it := range j.Items {
+		if it.ID == id {
+			return it
+		}
 	}
-	return items
+	t.Fatalf("job has no item %q: %v", id, itemStates(j))
+	return jobs.Item{}
 }
 
 // deploy runs DeploySwarm as a job and returns its result and the job as it ended.
@@ -1015,5 +1021,94 @@ func TestPinAChangedTextIgnoresTheStoredPinOfAServiceTheSwarmLost(t *testing.T) 
 	}
 	if got := rig.fake.ServiceCreates()[0].Spec.TaskTemplate.ContainerSpec.Image; got != "nginx:1.28@"+digestOf("c") {
 		t.Errorf("image = %q, want the new text looked up", got)
+	}
+}
+
+const consoleCompose = `services:
+  web:
+    image: nginx:1.27-alpine
+    configs:
+      - source: conf
+        target: /etc/nginx/conf.d/site.conf
+  api:
+    image: busybox:1.36
+configs:
+  conf:
+    content: "listen 80;"
+`
+
+func TestDeploySwarmAddsAnItemForEachNetworkObjectAndServiceWithTheConsoleLabels(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	_, in := stackInput(t, "web", consoleCompose, nil)
+	res, job := rig.deploy(t, in)
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("result = %+v, job = %s %v", res, job.State, itemStates(job))
+	}
+	full := hashedName("web", "conf", "listen 80;")
+	for _, want := range []struct{ id, label, parent, kind string }{
+		{"network:web_default", "Create network web_default", stackops.ItemNetworks, stackops.KindStep},
+		{"config:" + full, "Create config conf", stackops.ItemObjects, stackops.KindStep},
+		{"service:web_api", "api", stackops.ItemServices, stackops.KindService},
+		{"service:web_web", "web", stackops.ItemServices, stackops.KindService},
+	} {
+		it := itemByID(t, job, want.id)
+		if it.Label != want.label || it.Parent != want.parent || it.Kind != want.kind || it.State != jobs.ItemDone {
+			t.Errorf("item %s = %+v, want label %q under %s as a %s, done", want.id, it, want.label, want.parent, want.kind)
+		}
+	}
+	if got := itemByID(t, job, "service:web_web").Result["action"]; got != "created" {
+		t.Errorf("service result = %v, want created", got)
+	}
+	// The spine keeps its words and kinds: groups are not lines of the step list.
+	for id, want := range map[string]string{
+		stackops.ItemCheck: "Check the stack", stackops.ItemLookup: "Look up images", stackops.ItemServices: "Deploy services",
+		stackops.ItemCleanup: "Remove services no longer in the stack",
+	} {
+		if it := itemByID(t, job, id); it.Label != want || it.Kind != stackops.KindStep {
+			t.Errorf("item %s = %q (%s), want the step %q", id, it.Label, it.Kind, want)
+		}
+	}
+	if it := itemByID(t, job, stackops.ItemNetworks); it.Kind != stackops.KindGroup {
+		t.Errorf("networks kind = %q, want a group", it.Kind)
+	}
+}
+
+func TestDeploySwarmAddsNoStepForANetworkThatExistsAndCallsAnOwnedServiceUpdated(t *testing.T) {
+	t.Parallel()
+	owned := map[string]string{"com.docker.stack.namespace": "tracer", "bayplan.stack.id": "stack-tracer"}
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		c.Networks = []dockertest.FakeNetwork{{ID: "n1", Name: "tracer_default", Driver: "overlay", Scope: "swarm", Labels: owned}}
+	}, dockertest.FakeService{ID: "svc-web", Name: "tracer_web", Mode: "replicated", Image: "nginx:1.26", Version: 7, Labels: owned})
+	_, in := starterPlan(t, "tracer")
+	_, job := rig.deploy(t, in)
+	for _, it := range job.Items {
+		if strings.HasPrefix(it.ID, "network:") {
+			t.Errorf("item %s was added for a network that already exists", it.ID)
+		}
+	}
+	if got := itemByID(t, job, "service:tracer_web").Result["action"]; got != "updated" {
+		t.Errorf("service result = %v, want updated", got)
+	}
+}
+
+func TestDeploySwarmEndsTheServiceThatFailedAndLeavesTheRestNotRun(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) { c.ServiceCreateError = "no such image" })
+	_, in := stackInput(t, "web", consoleCompose, nil)
+	res, job := rig.deploy(t, in)
+	if res.Code != stackops.CodeServiceRejected {
+		t.Fatalf("result = %+v, want service_rejected", res)
+	}
+	got := itemStates(job)
+	first, second := res.FailedService, "service:web_web"
+	if first == "web_web" {
+		second = "service:web_api"
+	}
+	if got["service:"+first] != "failed:service_rejected" || got[second] != "cancelled:not_run" {
+		t.Errorf("service rows = %v, want %s failed and %s not run", got, first, second)
+	}
+	if got["network:web_default"] != "done" {
+		t.Errorf("network step = %q, want done: it was created before the failure", got["network:web_default"])
 	}
 }

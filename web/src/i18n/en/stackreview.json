@@ -75,42 +75,6 @@
       "lost": "The server didn't answer. The deploy may have started: check the stack before you try again.",
       "generic": "Couldn't start the deploy. Check the connection and try again."
     },
-    "job": {
-      "title": "Deploying {{name}}",
-      "steps": "Steps of the deploy",
-      "state": {
-        "waiting": "Waiting",
-        "running": "Working",
-        "done": "Done",
-        "failed": "Failed",
-        "cancelled": "Cancelled"
-      },
-      "loading": "Loading the deploy…",
-      "gone": {
-        "title": "This deploy is no longer listed",
-        "body": "Finished deploys stay here for a short while. Open the stack to see what is running now."
-      },
-      "error": {
-        "title": "Couldn't load the deploy.",
-        "body": "Check the connection and try again.",
-        "retry": "Retry loading the deploy"
-      },
-      "complete": {
-        "title": "Deploy complete",
-        "body_one": "{{name}} is running {{count}} service on {{env}}.",
-        "body_other": "{{name}} is running {{count}} services on {{env}}."
-      },
-      "failed": {
-        "title": "Deploy failed",
-        "fallback": "Bayplan stopped at {{step}}."
-      },
-      "cancelled": {
-        "title": "Deploy cancelled",
-        "body": "Bayplan stopped at the step it had reached."
-      },
-      "openStack": "Open stack",
-      "backToEditing": "Back to editing"
-    },
     "changes": {
       "tab": "Changes",
       "label": "What the review shows"
