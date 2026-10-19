@@ -36,6 +36,8 @@ const (
 	CodeCheckTimeout         = "check_timeout"
 	CodeUnsetVariable        = "unset_variable"
 	CodeUnusedVariable       = "unused_variable"
+	CodeEnvFileInvalid       = "env_file_invalid"
+	CodeDotenvNotRead        = "dotenv_not_read"
 
 	// The target-aware lint (STK-03); see package lint.
 	CodeIgnoredOnTarget          = lint.CodeIgnoredOnTarget
