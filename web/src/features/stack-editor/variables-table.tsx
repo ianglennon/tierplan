@@ -47,6 +47,8 @@ export interface VariablesTableProps {
   reveal?: (name: string) => Promise<string>;
   // The names whose saved value the server holds hidden, as the draft was last loaded or saved.
   savedHidden?: ReadonlySet<string>;
+  // Open a file of the stack at a line: the links of "Used in n places" call it.
+  onOpen?: (file: string, line: number) => void;
   onAdd: (name: string) => void;
   onReset?: (name: string) => void;
   onSet: (name: string, value: string) => void;

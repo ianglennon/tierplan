@@ -44,6 +44,7 @@ function mount(over: Partial<VariablesTableProps> = {}) {
     onSecret: vi.fn(),
     onRemove: vi.fn(),
     onReset: vi.fn(),
+    onOpen: vi.fn(),
   };
   const props: VariablesTableProps = {
     vars: [],
@@ -456,5 +457,51 @@ describe("revealing a secret value", () => {
   it("does not show that sentence on a row that was never secret", () => {
     secretTable({ vars: [workingVar({ name: "TOKEN" })], savedHidden: new Set() });
     expect(screen.queryByText(/The saved value stays hidden/)).toBeNull();
+  });
+});
+
+// The places a variable is used (plan 07-10, D-03): "Used in n places" opens a popover of file:line
+// links, each of which opens the file at that line.
+describe("where a variable is used", () => {
+  const twoPlaces = () =>
+    resolvedVar({
+      places: [
+        { file: "compose.yaml", line: 9 },
+        { file: "config/app.yaml", line: 14 },
+      ],
+    });
+
+  it("opens a popover of file:line links from the Used in button", () => {
+    mount({ resolved: [twoPlaces()] });
+    fireEvent.click(screen.getByRole("button", { name: "Used in 2 places" }));
+    const links = screen.getAllByRole("link");
+    expect(links.map((l) => l.textContent)).toEqual(["compose.yaml:9", "config/app.yaml:14"]);
+  });
+
+  it("opens the file at the line of a link and closes the popover", () => {
+    const { onOpen } = mount({ resolved: [twoPlaces()] });
+    fireEvent.click(screen.getByRole("button", { name: "Used in 2 places" }));
+    fireEvent.click(screen.getByRole("link", { name: "config/app.yaml:14" }));
+    expect(onOpen).toHaveBeenCalledWith("config/app.yaml", 14);
+    expect(screen.queryByRole("link", { name: "config/app.yaml:14" })).toBeNull();
+  });
+
+  it("is a w-80 popover and its links wrap a long path instead of widening it", () => {
+    mount({ resolved: [twoPlaces()] });
+    fireEvent.click(screen.getByRole("button", { name: "Used in 2 places" }));
+    const content = document.querySelector("[data-slot='popover-content']");
+    expect(content?.className).toContain("w-80");
+    expect(screen.getAllByRole("link")[0]?.className).toContain("break-all");
+  });
+
+  it("reads Used in 1 place as a button too", () => {
+    mount();
+    expect(screen.getByRole("button", { name: "Used in 1 place" })).toBeTruthy();
+  });
+
+  it("is plain text when the page cannot open files", () => {
+    mount({ onOpen: undefined });
+    expect(screen.queryByRole("button", { name: "Used in 1 place" })).toBeNull();
+    expect(screen.getByText("Used in 1 place")).toBeTruthy();
   });
 });
