@@ -48,12 +48,18 @@ var (
 	ErrObjectUnsupported = errors.New("stacks: a secret or config sets a driver, which a stack deploy does not apply")
 )
 
+// MaxStandaloneFileBytes is the most a secret or config may hold on a standalone host: the agent's
+// archive route takes at most 1,000,000 bytes of content for the one file it writes into a container
+// (plan 07-04), for a secret and a config alike.
+const MaxStandaloneFileBytes = 1000000
+
 // ObjectError is a secret or config that cannot be resolved: its kind, the name the compose file
-// uses and the reason.
+// uses and the reason. Target is the target it was judged for; the zero value is a swarm.
 type ObjectError struct {
-	Kind ObjectKind
-	Name string
-	Err  error
+	Kind   ObjectKind
+	Name   string
+	Target Target
+	Err    error
 }
 
 func (e *ObjectError) Error() string { return fmt.Sprintf("%s %q: %v", e.Kind, e.Name, e.Err) }
@@ -87,6 +93,13 @@ type ObjectContent struct {
 // or MaxConfigBytes and a driver the deploy does not apply are each an *ObjectError that names the
 // object, and nothing has been sent anywhere by then.
 func ResolveObjects(p *types.Project, files FileSet, vars map[string]string) ([]ObjectContent, error) {
+	return ResolveObjectsFor(TargetSwarm, p, files, vars)
+}
+
+// ResolveObjectsFor is ResolveObjects judged for a target: the content is resolved the same way, and
+// the size limit is the target's (the swarm's 500 KB and 1000 KB, or MaxStandaloneFileBytes for a
+// standalone host, where a secret or config is written into the container as one file).
+func ResolveObjectsFor(target Target, p *types.Project, files FileSet, vars map[string]string) ([]ObjectContent, error) {
 	usedSecrets, usedConfigs := map[string]bool{}, map[string]bool{}
 	for _, svc := range p.Services {
 		for _, s := range svc.Secrets {
@@ -106,7 +119,7 @@ func ResolveObjects(p *types.Project, files FileSet, vars map[string]string) ([]
 		if !ok {
 			continue // compose-go refuses an undeclared reference; the converter says so by name
 		}
-		oc, err := resolveOne(KindSecret, name, types.FileObjectConfig(decl), files, vars)
+		oc, err := resolveOne(target, KindSecret, name, types.FileObjectConfig(decl), files, vars)
 		if err != nil {
 			return nil, err
 		}
@@ -117,7 +130,7 @@ func ResolveObjects(p *types.Project, files FileSet, vars map[string]string) ([]
 		if !ok {
 			continue
 		}
-		oc, err := resolveOne(KindConfig, name, types.FileObjectConfig(decl), files, vars)
+		oc, err := resolveOne(target, KindConfig, name, types.FileObjectConfig(decl), files, vars)
 		if err != nil {
 			return nil, err
 		}
@@ -135,9 +148,9 @@ func sortedUsed(used map[string]bool) []string {
 	return names
 }
 
-func resolveOne(kind ObjectKind, name string, decl types.FileObjectConfig, files FileSet, vars map[string]string) (ObjectContent, error) {
+func resolveOne(target Target, kind ObjectKind, name string, decl types.FileObjectConfig, files FileSet, vars map[string]string) (ObjectContent, error) {
 	fail := func(err error) (ObjectContent, error) {
-		return ObjectContent{}, &ObjectError{Kind: kind, Name: name, Err: err}
+		return ObjectContent{}, &ObjectError{Kind: kind, Name: name, Target: target, Err: err}
 	}
 	if decl.External {
 		return ObjectContent{Kind: kind, Name: name, External: true, ExternalName: cmp.Or(decl.Name, name)}, nil
@@ -174,7 +187,10 @@ func resolveOne(kind ObjectKind, name string, decl types.FileObjectConfig, files
 	}
 
 	limit := MaxSecretBytes
-	if kind == KindConfig {
+	switch {
+	case target == TargetStandalone:
+		limit = MaxStandaloneFileBytes
+	case kind == KindConfig:
 		limit = MaxConfigBytes
 	}
 	switch {

@@ -136,6 +136,9 @@ func check(ctx context.Context, in CheckInput) CheckResult {
 	if err := ResolveEnvFiles(loaded.Project, NewFileSet(in.Copy.Files), tableValues(in.Copy.Vars)); err != nil {
 		res.Problems = append(res.Problems, envFileProblem(err, idx))
 	}
+	if in.Target == TargetStandalone {
+		res.Problems = append(res.Problems, oversizeObjects(loaded.Project, NewFileSet(in.Copy.Files), in.Copy.Vars, idx)...)
+	}
 	// What the target will ignore or refuse is judged on the project as loaded, with build still
 	// in it: that is how a build key is seen.
 	found := lint.Lint(lint.Input{Target: lint.Target(in.Target), Project: loaded.Project, Index: idx})
@@ -293,6 +296,51 @@ func stripBuild(project *types.Project) {
 			project.Services[name] = svc
 		}
 	}
+}
+
+// oversizeObjects reports a secret or config of a standalone stack whose content is over what the agent's
+// archive route writes into a container (MaxStandaloneFileBytes), at the object's key in the file. It
+// reports no other trouble with an object: the prescan and the review do.
+func oversizeObjects(p *types.Project, files FileSet, vars []Var, ix *PositionIndex) Problems {
+	table := make(map[string]string, len(vars))
+	for _, v := range vars {
+		table[v.Name] = v.Value
+	}
+	var out Problems
+	for _, section := range []struct {
+		word  string
+		names []string
+		kind  ObjectKind
+	}{{"secrets", sortedNames(p.Secrets), KindSecret}, {"configs", sortedNames(p.Configs), KindConfig}} {
+		used := map[string]bool{}
+		for _, svc := range p.Services {
+			if section.kind == KindSecret {
+				for _, s := range svc.Secrets {
+					used[s.Source] = true
+				}
+			} else {
+				for _, c := range svc.Configs {
+					used[c.Source] = true
+				}
+			}
+		}
+		for _, name := range section.names {
+			if !used[name] {
+				continue
+			}
+			one := &types.Project{Name: p.Name, Services: p.Services}
+			if section.kind == KindSecret {
+				one.Secrets = types.Secrets{name: p.Secrets[name]}
+			} else {
+				one.Configs = types.Configs{name: p.Configs[name]}
+			}
+			if _, err := ResolveObjectsFor(TargetStandalone, one, files, table); err != nil && errors.Is(err, ErrObjectTooLarge) {
+				out = append(out, keyProblem(ix, CodeObjectTooLarge, section.word+"."+name, fmt.Sprintf(
+					"The %s %s is over 1,000 KB, the most a standalone host can write into a container. Use a smaller file.", section.kind, name)))
+			}
+		}
+	}
+	return out
 }
 
 // lintProblems turns lint's findings into problems of compose.yaml.
@@ -573,6 +621,12 @@ var (
 	// zero (a scanner error and a construct error count from one), so the line it names is the one
 	// before the line the parser stopped on.
 	yamlParserRe = regexp.MustCompile(`at line \d+, column \d+: line (\d+)(?:, column (\d+))?: (.*)$`)
+	// yamlLoadRe is the form go-yaml v4 (since rc.6) gives every error of its scanner and parser:
+	// "go-yaml load error in parser (while parsing a block mapping) at L2.C3-L4.C4: did not find
+	// expected key". Lines and columns count from one. A range is where the construct began and where
+	// the parser stopped, and the stop is the line a person looks at; a single position is the place
+	// the scanner stopped.
+	yamlLoadRe = regexp.MustCompile(`go-yaml load error in \w+ \([^)]*\) at L(\d+)\.C(\d+)(?:-L(\d+)\.C(\d+))?: (.*)$`)
 )
 
 // yamlProblems turns the text of a YAML syntax error into problems at their lines: "Line {n}:
@@ -581,6 +635,20 @@ func yamlProblems(text string) Problems {
 	text = strings.TrimSpace(text)
 	var out Problems
 	for _, l := range strings.Split(text, "\n") {
+		if m := yamlLoadRe.FindStringSubmatch(l); m != nil {
+			line, _ := strconv.Atoi(m[1])
+			col, _ := strconv.Atoi(m[2])
+			if m[3] != "" {
+				line, _ = strconv.Atoi(m[3])
+				col, _ = strconv.Atoi(m[4])
+			}
+			out = append(out, Problem{
+				Severity: SeverityError, Code: CodeYAMLInvalid, File: ComposeFile,
+				Line: line, Col: col, EndLine: line, EndCol: col + 1,
+				Message: fmt.Sprintf("Line %d: %s", line, strings.TrimSpace(m[5])),
+			})
+			continue
+		}
 		if m := yamlParserRe.FindStringSubmatch(l); m != nil {
 			zero, _ := strconv.Atoi(m[1])
 			line, col := zero+1, 1

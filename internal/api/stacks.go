@@ -12,9 +12,11 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/ianglennon/bayplan/internal/audit"
+	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/jobs"
@@ -110,6 +112,9 @@ type StacksDeps struct {
 	// BeforeJob, when set, is called in a deploy after it has been judged and recorded and just before its job
 	// starts. Tests use it to change the world between the check and the job.
 	BeforeJob func(ctx context.Context)
+	// Up, when set, replaces the Compose SDK's up in a standalone deploy (stackops.Deps.Up). Tests use it:
+	// the SDK needs a real engine and is proved against one.
+	Up func(ctx context.Context, c *dockerx.Client, p *types.Project, o dockerx.ComposeUpOptions, on func(dockerx.ComposeEvent)) error
 
 	// cancels remembers who cancelled which deploy until the deploy ends and is audited. RegisterStacks
 	// makes it; every copy of the deps shares it.
@@ -121,7 +126,7 @@ func (d StacksDeps) repo() stackops.Repo { return stackops.Repo{Store: d.Store, 
 func (d StacksDeps) ops() stackops.Deps {
 	return stackops.Deps{
 		Aggregator: d.Aggregator, Clusters: d.Clusters, Resolver: d.Resolver, Checker: d.Checker,
-		Clock: d.Clock, ConvergeTimeout: d.ConvergeTimeout, Log: d.Log,
+		Clock: d.Clock, ConvergeTimeout: d.ConvergeTimeout, Up: d.Up, Log: d.Log,
 	}
 }
 

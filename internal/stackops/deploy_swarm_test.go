@@ -58,6 +58,15 @@ func newSwarmRig(t *testing.T, tune func(*dockertest.FakeConfig), services ...do
 		tune(&cfg)
 	}
 	fake := dockertest.NewFake(t, cfg)
+	r := newRigOver(t, fake.SocketPath())
+	r.fake = fake
+	return r
+}
+
+// newRigOver is the rig over the engine behind a unix socket: the environment is the server's own local
+// socket, as the product only ever builds one. fake is left nil; newSwarmRig sets it.
+func newRigOver(t *testing.T, socket string) *swarmRig {
+	t.Helper()
 	st := storetest.New(t)
 	v, err := vault.New(bytes.Repeat([]byte{5}, 32), "test")
 	if err != nil {
@@ -66,7 +75,7 @@ func newSwarmRig(t *testing.T, tune func(*dockertest.FakeConfig), services ...do
 	aud := audit.NewWriter(st, v, slog.New(slog.DiscardHandler), nil)
 	mon := envs.NewMonitor(slog.New(slog.DiscardHandler), nil, nil)
 	t.Cleanup(mon.StopAll)
-	svc := envs.NewService(st, aud, mon, "unix://"+fake.SocketPath(), "0123456789ab", time.Now)
+	svc := envs.NewService(st, aud, mon, "unix://"+socket, "0123456789ab", time.Now)
 	snaps := envs.NewSnapshots(mon, 5*time.Second, time.Now)
 	agg := envs.NewAggregator(svc, snaps, nil, time.Now)
 	t.Cleanup(agg.Close)
@@ -82,7 +91,7 @@ func newSwarmRig(t *testing.T, tune func(*dockertest.FakeConfig), services ...do
 	hub := jobs.New(jobs.Options{})
 	t.Cleanup(hub.Close)
 	return &swarmRig{
-		fake: fake, envID: env.ID, hub: hub, store: st,
+		envID: env.ID, hub: hub, store: st,
 		deps: stackops.Deps{Aggregator: agg, Clusters: clusters, Checker: rbac.NewChecker(st), Log: slog.New(slog.DiscardHandler)},
 	}
 }

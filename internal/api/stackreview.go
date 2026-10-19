@@ -40,7 +40,7 @@ type StackReviewCountsBody struct {
 type StackReviewSummaryBody struct {
 	Services     StackReviewCountsBody `json:"services" doc:"Services"`
 	Networks     StackReviewCountsBody `json:"networks" doc:"Networks the stack owns"`
-	Volumes      StackReviewCountsBody `json:"volumes" doc:"Always zero on a swarm: the engine of each node makes a named volume when a task first uses it"`
+	Volumes      StackReviewCountsBody `json:"volumes" doc:"Volumes the stack's deploy would create on a standalone host. Always zero on a swarm: the engine of each node makes a named volume when a task first uses it"`
 	Secrets      StackReviewCountsBody `json:"secrets" doc:"Secrets Bayplan makes from the stack's files; a changed file counts as changed"`
 	Configs      StackReviewCountsBody `json:"configs" doc:"Configs Bayplan makes from the stack's files; a changed file counts as changed"`
 	ImagesPinned int                   `json:"imagesPinned" doc:"Services that keep or carry a digest"`
@@ -71,7 +71,7 @@ type StackReviewServiceBody struct {
 // StackReviewObjectBody is a network, secret or config a deploy would add, change or remove.
 type StackReviewObjectBody struct {
 	Change string `json:"change" enum:"added,changed,removed,external" doc:"What a deploy would do; external is an object the stack only names and Bayplan never touches"`
-	Kind   string `json:"kind" enum:"network,secret,config" doc:"What it is"`
+	Kind   string `json:"kind" enum:"network,volume,secret,config" doc:"What it is. A volume is listed for a standalone host only: a swarm creates its volumes on the node that first uses one"`
 	Name   string `json:"name" doc:"Its name in the compose file (the swarm name for an external one)"`
 	Detail string `json:"detail" doc:"A sentence for the row, or empty"`
 }
@@ -150,7 +150,7 @@ func registerStackReview(r *httpx.Router, d StacksDeps) {
 			"concurrent is set when someone deployed after the draft was started, with what that deployment changed and what the draft changed, file by file; the deploy then needs acknowledgeConcurrent. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. " +
 			"For a caller below env Admin, host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables, is a blocking needs_admin problem at its line, and needsAdmin names the kinds. " +
 			"A name that something Bayplan does not manage holds is a blocking stack_name_clash problem, and another stack operation running on the environment is a blocking operation_locked problem. " +
-			"An environment that is no longer the kind of target the stack was created for is 409 target_changed, and a standalone stack is 409 target_engine_missing. Needs stacks.deploy (Operator).",
+			"On a standalone host the review pins the images the same way and compares the config hash of each service, as the Compose SDK computes it from the project a deploy would send, with the hash on each running container: a service with no container is added, one whose hash differs is changed (a changed secret or config is a changed service), and a service of the host's Compose project that the file no longer declares is removed; the changed services carry no field-level difference. An environment that is no longer the kind of target the stack was created for is 409 target_changed. Needs stacks.deploy (Operator).",
 		Tags: []string{"stacks"},
 	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackReviewInput) (*StackReviewOutput, error) {

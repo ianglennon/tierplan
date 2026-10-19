@@ -4,7 +4,10 @@
 package lint
 
 import (
+	"archive/tar"
+	"bytes"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -74,8 +77,8 @@ func standaloneFindings(in Input) []Finding {
 	var out []Finding
 	for _, pattern := range StandaloneUnsupported {
 		advice, ok := standaloneAdvice[pattern]
-		if !ok {
-			continue
+		if !ok || ownerRefused[pattern] {
+			continue // the owner of a secret or config is an error of its own, below
 		}
 		for _, path := range expand(in.Index, strings.Split(pattern, "."), "") {
 			pos, key := in.at(path)
@@ -85,7 +88,101 @@ func standaloneFindings(in Input) []Finding {
 			})
 		}
 	}
-	return append(out, readOnlyFindings(in)...)
+	out = append(out, readOnlyFindings(in)...)
+	return append(out, fileObjectFindings(in)...)
+}
+
+// ownerRefused are the patterns of StandaloneUnsupported that are an error and not a warning here. The SDK
+// ignores a uid or gid outside a swarm (its unsupported_attributes.go), but it also sends them to the engine
+// with CopyUIDGID when they are set, and the agent's archive route refuses that request (plan 07-04, T-07-16),
+// so a deploy through an agent would fail where the warning said it only had no effect.
+var ownerRefused = map[string]bool{
+	"services.*.configs.[].uid": true, "services.*.configs.[].gid": true,
+	"services.*.secrets.[].uid": true, "services.*.secrets.[].gid": true,
+}
+
+// fileObjectFindings reports what the agent's archive route would refuse to write into a container for a
+// secret or config a service uses (plan 07-04): an owner (uid or gid), a target the tar header cannot hold
+// (an extended record is refused), and an external object, which has no content to write (the SDK itself
+// refuses it). They are errors: a deploy would stop at the services step.
+func fileObjectFindings(in Input) []Finding {
+	var out []Finding
+	for _, name := range serviceNames(in.Project) {
+		svc := in.Project.Services[name]
+		for i, ref := range svc.Secrets {
+			out = append(out, fileRefFindings(in, name, "secrets", "secret", i, types.FileReferenceConfig(ref), in.Project.Secrets[ref.Source].External)...)
+		}
+		for i, ref := range svc.Configs {
+			out = append(out, fileRefFindings(in, name, "configs", "config", i, types.FileReferenceConfig(ref), in.Project.Configs[ref.Source].External)...)
+		}
+	}
+	return out
+}
+
+func fileRefFindings(in Input, service, section, kind string, i int, ref types.FileReferenceConfig, external types.External) []Finding {
+	var out []Finding
+	base := "services." + service + "." + section
+	pos, path := in.at(base+"."+strconv.Itoa(i), base, "services."+service)
+	for _, field := range []struct{ name, value string }{{"uid", ref.UID}, {"gid", ref.GID}} {
+		if field.value == "" {
+			continue
+		}
+		key := section + "[]." + field.name
+		fpos, fpath := in.at(base+"."+strconv.Itoa(i)+"."+field.name, base+"."+strconv.Itoa(i), base)
+		out = append(out, Finding{
+			Severity: SeverityError, Code: CodeFileObjectOwner, Key: fpath, Pos: fpos,
+			Message: fmt.Sprintf(messages[CodeFileObjectOwner], key, kind),
+		})
+	}
+	if bool(external) {
+		out = append(out, Finding{
+			Severity: SeverityError, Code: CodeExternalFileObject, Key: path, Pos: pos,
+			Message: fmt.Sprintf(messages[CodeExternalFileObject], kind, ref.Source),
+		})
+		return out
+	}
+	if target := fileObjectTarget(kind, ref); !tarNameFits(target) {
+		out = append(out, Finding{
+			Severity: SeverityError, Code: CodeFileObjectName, Key: path, Pos: pos,
+			Message: fmt.Sprintf(messages[CodeFileObjectName], service, kind, ref.Source, target),
+		})
+	}
+	return out
+}
+
+// fileObjectTarget is the path the Compose SDK writes a secret or config to: the name of the entry in the
+// tar it sends (secrets.go in docker/compose v5.6.0, Apache-2.0). A secret defaults to /run/secrets/<source>
+// and a relative target is put under /run/secrets/; a config defaults to /<source>, and a relative target is
+// put under /.
+func fileObjectTarget(kind string, ref types.FileReferenceConfig) string {
+	base := "/"
+	if kind == "secret" {
+		base = "/run/secrets/"
+	}
+	switch {
+	case ref.Target == "":
+		return base + ref.Source
+	case !strings.HasPrefix(ref.Target, "/"):
+		return base + ref.Target
+	}
+	return ref.Target
+}
+
+// tarNameFits reports whether a tar header can hold name without an extended record. The SDK writes the
+// header with Go's archive/tar, which uses the plain USTAR form while the name fits it and an extended (PAX)
+// record when it does not, and the agent refuses any extended record; the same writer and reader decide
+// here, so the answer is the agent's.
+func tarNameFits(name string) bool {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{Name: name, Size: 1, Mode: 0o444}); err != nil {
+		return false
+	}
+	if _, err := tw.Write([]byte{0}); err != nil || tw.Close() != nil {
+		return false
+	}
+	h, err := tar.NewReader(&buf).Next()
+	return err == nil && len(h.PAXRecords) == 0
 }
 
 // expand lists the concrete dotted paths a pattern names in the file. "*" and "[]" take each key or

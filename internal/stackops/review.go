@@ -178,8 +178,9 @@ type Review struct {
 	Concurrent *Concurrent
 }
 
-// Review reads what a deploy of the saved draft would do. It runs the check, reads what the swarm
-// holds under the stack's namespace (one read of a manager), looks up the digests of the images
+// Review reads what a deploy of the saved draft would do. A stack of a standalone host is reviewed by
+// reviewStandalone (config hashes against the host's containers); the rest is for a swarm. It runs the
+// check, reads what the swarm holds under the stack's namespace (one read of a manager), looks up the digests of the images
 // that need one, converts the stack the way a deploy does and compares each service with the one
 // running. It never writes: not to an engine, and not to the store.
 //
@@ -211,6 +212,10 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 	}()
 	if res.Loaded == nil {
 		return rv, nil
+	}
+	if in.Stack.Target == stacks.TargetStandalone {
+		err = d.reviewStandalone(ctx, in, res, &rv)
+		return rv, err
 	}
 	files, vars := stacks.NewFileSet(in.Copy.Files), varTable(in.Copy.Vars)
 	project := res.Loaded.Project
@@ -275,7 +280,11 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 		})
 	}
 	rv.Pins = pinned.Refs()
-	rv.Images = imageRows(plan.Services, pinned, byName, update != nil)
+	current := make(map[string]string, len(byName))
+	for name, det := range byName {
+		current[name] = det.Image
+	}
+	rv.Images = imageRows(swarmItems(plan.Services), pinned, current, update != nil)
 	for _, r := range rv.Images {
 		switch r.State {
 		case ImageNew:
@@ -481,15 +490,15 @@ func untagged(text string) bool {
 }
 
 // imageRows is one row for each service with an image, ordered by the name in the compose file.
-func imageRows(services []convert.ServicePlan, pinned PinOutcome, live map[string]dockerx.ServiceDetail, updating bool) []ImageRow {
+func imageRows(items []pinItem, pinned PinOutcome, current map[string]string, updating bool) []ImageRow {
 	var rows []ImageRow
-	for _, sp := range services {
-		if sp.ImageAsWritten == "" {
+	for _, sp := range items {
+		if sp.AsWritten == "" {
 			continue
 		}
-		row := ImageRow{Service: sp.Short, Image: sp.ImageAsWritten}
-		if det, ok := live[sp.Name]; ok {
-			row.Current = digestOf(det.Image)
+		row := ImageRow{Service: sp.Short, Image: sp.AsWritten}
+		if ref, ok := current[sp.Name]; ok {
+			row.Current = digestOf(ref)
 		}
 		p, ok := pinned.Pins[sp.Name]
 		if !ok {
@@ -516,7 +525,7 @@ func imageRows(services []convert.ServicePlan, pinned PinOutcome, live map[strin
 				row.State, row.Note = ImagePinned, "Already up to date"
 			}
 		}
-		if row.Note == "" && (row.State == ImageNew || row.State == ImagePinned) && untagged(sp.ImageAsWritten) {
+		if row.Note == "" && (row.State == ImageNew || row.State == ImagePinned) && untagged(sp.AsWritten) {
 			row.Note = "No tag, so it can move."
 		}
 		rows = append(rows, row)
@@ -659,9 +668,12 @@ func ObjectErrorDetail(err error) string {
 	case errors.Is(err, stacks.ErrObjectTooLarge):
 		reason = "it is over the size the swarm takes"
 		var oe *stacks.ObjectError
-		if errors.As(err, &oe) && oe.Kind == stacks.KindSecret {
+		switch {
+		case errors.As(err, &oe) && oe.Target == stacks.TargetStandalone:
+			reason = "it is over 1,000 KB, the most a standalone host can write into a container"
+		case oe != nil && oe.Kind == stacks.KindSecret:
 			reason = "it is over 500 KB, the most a swarm secret holds"
-		} else if oe != nil {
+		case oe != nil:
 			reason = "it is over 1000 KB, the most a swarm config holds"
 		}
 	case errors.Is(err, stacks.ErrObjectUnsupported):

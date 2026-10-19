@@ -70,6 +70,8 @@ type progress struct {
 	shown map[string]taskLine
 	// rows is what each service row last published.
 	rows map[string]rowShown
+	// ended is the state each added item ended in, by item ID, for a group to be ended by its children.
+	ended map[string]string
 }
 
 // taskLine is one task of a service as the console shows it.
@@ -94,7 +96,7 @@ type addedItem struct {
 func newProgress(r *jobs.Reporter, m stacks.Masker) *progress {
 	return &progress{
 		r: r, mask: m.Mask, accepted: map[string]map[string]string{}, tasks: map[string][]string{},
-		shown: map[string]taskLine{}, rows: map[string]rowShown{},
+		shown: map[string]taskLine{}, rows: map[string]rowShown{}, ended: map[string]string{},
 	}
 }
 
@@ -172,6 +174,30 @@ func (p *progress) done(id string, result map[string]string) {
 		return
 	}
 	p.r.Finish(id, jobs.ItemDone, "", "", result)
+	p.setEnded(id, jobs.ItemDone)
+}
+
+// setEnded records the state an item ended in.
+func (p *progress) setEnded(id, state string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.ended[id] = state
+}
+
+// groupState is the state a group item ends in once its children have: done when it has none or every one
+// ended done, skipped otherwise.
+func (p *progress) groupState(parent string) string {
+	if p == nil {
+		return jobs.ItemDone
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, a := range p.added {
+		if a.parent == parent && p.ended[a.id] != jobs.ItemDone {
+			return jobs.ItemSkipped
+		}
+	}
+	return jobs.ItemDone
 }
 
 // failed ends the item of the step (networks, objects, services or cleanup) whose name is the one a
@@ -213,6 +239,9 @@ func (p *progress) rest(state, code, message string) {
 			continue
 		}
 		p.r.Finish(a.id, state, code, message, nil)
+		if p.ended[a.id] == "" {
+			p.ended[a.id] = state
+		}
 	}
 }
 

@@ -13,11 +13,15 @@
 package stackops
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/compose-spec/compose-go/v2/types"
+
+	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/registry"
@@ -35,8 +39,9 @@ var (
 	// ErrDraftConflict means the draft moved since the caller read it. The error is a
 	// *DraftConflictError.
 	ErrDraftConflict = errors.New("stackops: the draft was saved by someone else")
-	// ErrTargetEngineMissing means the stack's target has no deploy engine in this version: a
-	// standalone stack waits for the Compose engine (plan 07-20).
+	// ErrTargetEngineMissing means the stack's target has no engine for the operation asked for in this
+	// version: a standalone stack deploys with the Compose SDK, but rolling one back, and the other
+	// operations of the later plans, wait for their plans.
 	ErrTargetEngineMissing = errors.New("stackops: this version cannot deploy to that kind of environment yet")
 	// ErrTargetChanged means the environment is no longer the kind of target the stack was created
 	// for: the stack deploys to a swarm and the environment is a standalone host, or the reverse.
@@ -76,8 +81,20 @@ type Deps struct {
 	// ConvergeTimeout is how long a deploy waits for each service to settle. Zero is
 	// DefaultConvergeTimeout.
 	ConvergeTimeout time.Duration
+	// Up runs the Compose SDK's up for a standalone deploy. Nil is (*dockerx.Client).ComposeUp, which needs a
+	// real engine and is proved against one; a test sets it to feed a deploy a stream of events and an
+	// outcome.
+	Up func(ctx context.Context, c *dockerx.Client, p *types.Project, o dockerx.ComposeUpOptions, on func(dockerx.ComposeEvent)) error
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
+}
+
+// up runs the Compose SDK's up on c, or the test's stand-in for it.
+func (d Deps) up(ctx context.Context, c *dockerx.Client, p *types.Project, o dockerx.ComposeUpOptions, on func(dockerx.ComposeEvent)) error {
+	if d.Up != nil {
+		return d.Up(ctx, c, p, o, on)
+	}
+	return c.ComposeUp(ctx, p, o, on)
 }
 
 func (d Deps) log() *slog.Logger {

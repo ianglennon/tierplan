@@ -121,7 +121,7 @@ func TestCheckTargetRefusesAnEnvironmentThatIsNoLongerTheKindTheStackWasCreatedF
 	if err := onHost.deps.CheckTarget(testsupport.Context(t), onHost.envID, swarmStack); !errors.Is(err, stackops.ErrTargetChanged) {
 		t.Errorf("a swarm stack on a standalone host: %v, want ErrTargetChanged", err)
 	}
-	if err := onHost.deps.CheckTarget(testsupport.Context(t), onHost.envID, soloStack); !errors.Is(err, stackops.ErrTargetEngineMissing) {
-		t.Errorf("a standalone stack on a standalone host: %v, want ErrTargetEngineMissing until the Compose engine exists", err)
+	if err := onHost.deps.CheckTarget(testsupport.Context(t), onHost.envID, soloStack); err != nil {
+		t.Errorf("a standalone stack on a standalone host: %v, want it accepted (the Compose engine exists since plan 07-20)", err)
 	}
 }

@@ -291,11 +291,9 @@ func TestReviewHidesASecretThatChangedAndNamesItsPath(t *testing.T) {
 	}
 }
 
-func TestReviewOfAStandaloneStackIsRefusedUntilTheComposeEngineExists(t *testing.T) {
+func TestReviewOfAStandaloneStackComparesItWithTheHostsContainers(t *testing.T) {
 	t.Parallel()
-	f, e := stackEnv(t, func(c *dockertest.FakeConfig) {
-		c.SwarmState, c.SwarmControl, c.NodeRows = "", false, nil
-	})
+	f, e, _ := standaloneEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "solo")
@@ -303,8 +301,26 @@ func TestReviewOfAStandaloneStackIsRefusedUntilTheComposeEngineExists(t *testing
 		t.Fatalf("target = %q", st.Target)
 	}
 	rec := operator.do(http.MethodPost, "stacks/"+st.ID+"/review", `{}`)
-	if rec.Code != http.StatusConflict || problemType(t, rec) != "target_engine_missing" {
-		t.Errorf("review: %d %s, want 409 target_engine_missing", rec.Code, rec.Body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("review: %d %s, want 200", rec.Code, rec.Body)
+	}
+	rv := answerOf[struct {
+		Services []struct{ Short, Change string }      `json:"services"`
+		Images   []struct{ Service, State string }     `json:"images"`
+		Objects  []struct{ Change, Kind, Name string } `json:"objects"`
+		Pins     map[string]string                     `json:"pins"`
+	}](t, rec)
+	if len(rv.Services) != 1 || rv.Services[0].Short != "web" || rv.Services[0].Change != "added" {
+		t.Errorf("services = %+v, want web added", rv.Services)
+	}
+	if len(rv.Images) != 1 || rv.Images[0].State != "new" || !strings.Contains(rv.Pins["web"], "@sha256:") {
+		t.Errorf("images = %+v pins = %v, want a new digest", rv.Images, rv.Pins)
+	}
+	if len(rv.Objects) != 1 || rv.Objects[0].Kind != "network" || rv.Objects[0].Name != "solo_default" {
+		t.Errorf("objects = %+v, want the default network added", rv.Objects)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("a review wrote to the engine: %v", w)
 	}
 }
 

@@ -4,14 +4,20 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/compose-spec/compose-go/v2/types"
+
 	"github.com/ianglennon/bayplan/internal/audit"
+	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/stacks"
@@ -564,11 +570,41 @@ func TestADeployFailureIsRecordedAndShownAsDeployFailed(t *testing.T) {
 	}
 }
 
-func TestADeployToAStandaloneHostIsRefusedUntilTheComposeEngineExists(t *testing.T) {
+// standaloneEnv is an environment that is the server's own standalone host, with the Compose SDK's up replaced
+// by a stand-in that records the project it is given and plays the outcome err.
+func standaloneEnv(t *testing.T, err error) (*envFix, envBody, *standaloneUp) {
+	t.Helper()
+	up := &standaloneUp{err: err}
+	cfg := swarmManagerEngine()
+	cfg.SwarmState, cfg.SwarmControl, cfg.NodeRows = "", false, nil
+	f := newEnvFix(t, cfg)
+	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
+	f.svc.WithClusters(f.clusters)
+	f.stackUp = up.run
+	f.h = f.build(t)
+	e := f.add(t)
+	awaitOnline(t, f.mon, e.ID)
+	return f, e, up
+}
+
+type standaloneUp struct {
+	mu      sync.Mutex
+	err     error
+	project *types.Project
+	calls   int
+}
+
+func (u *standaloneUp) run(_ context.Context, _ *dockerx.Client, p *types.Project, _ dockerx.ComposeUpOptions, on func(dockerx.ComposeEvent)) error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.project, u.calls = p, u.calls+1
+	on(dockerx.ComposeEvent{Kind: dockerx.ComposeKindContainer, Name: "solo-web-1", Container: "solo-web-1", Service: "web", Status: "Running", Done: true})
+	return u.err
+}
+
+func TestADeployToAStandaloneHostRunsTheComposeEngineAndIsAudited(t *testing.T) {
 	t.Parallel()
-	f, e := stackEnv(t, func(c *dockertest.FakeConfig) {
-		c.SwarmState, c.SwarmControl, c.NodeRows = "", false, nil
-	})
+	f, e, up := standaloneEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "solo")
@@ -576,8 +612,70 @@ func TestADeployToAStandaloneHostIsRefusedUntilTheComposeEngineExists(t *testing
 		t.Fatalf("target = %q, want standalone", st.Target)
 	}
 	rec := operator.deploy(st.ID, `{"draftVersion":1}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("deploy: %d %s, want 202", rec.Code, rec.Body)
+	}
+	body := answerOf[struct {
+		JobID    string `json:"jobId"`
+		Revision int64  `json:"revision"`
+	}](t, rec)
+	job := f.awaitDeploy(t, body.JobID)
+	if job.State != "done" {
+		t.Fatalf("job = %+v, want done", job)
+	}
+	if up.calls != 1 || up.project == nil || !strings.Contains(up.project.Services["web"].Image, "@sha256:") {
+		t.Errorf("the Compose engine ran %d times with %+v, want once with a pinned image", up.calls, up.project)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("engine writes = %v, want none from the stand-in", w)
+	}
+	rec = operator.do(http.MethodGet, "stacks/"+st.ID, "")
+	if got := answerOf[stackAnswer](t, rec); got.State != "deployed" || got.LastDeployedBy == "" {
+		t.Errorf("stack = %+v, want deployed", got)
+	}
+	var deployed []auditRowFull
+	for _, a := range f.stackAudits(t) {
+		if a.Action == "stack.deployed" {
+			deployed = append(deployed, a)
+		}
+	}
+	if len(deployed) != 1 || deployed[0].Result != "success" || deployed[0].Details["mode"] != "deploy" {
+		t.Errorf("audit = %+v, want one successful stack.deployed", deployed)
+	}
+}
+
+func TestAFailedStandaloneDeployIsRecordedAsFailed(t *testing.T) {
+	t.Parallel()
+	f, e, _ := standaloneEnv(t, errors.New("Error response from daemon: port is already allocated"))
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "solo")
+	rec := operator.deploy(st.ID, `{"draftVersion":1}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("deploy: %d %s", rec.Code, rec.Body)
+	}
+	body := answerOf[struct {
+		JobID string `json:"jobId"`
+	}](t, rec)
+	job := f.awaitDeploy(t, body.JobID)
+	if job.State == "done" {
+		t.Fatalf("job = %+v, want it failed", job)
+	}
+	rec = operator.do(http.MethodGet, "stacks/"+st.ID, "")
+	if got := answerOf[stackAnswer](t, rec); got.State != "deploy_failed" {
+		t.Errorf("stack = %+v, want deploy_failed", got)
+	}
+}
+
+func TestARollBackOfAStandaloneStackIsRefusedUntilItsEngineExists(t *testing.T) {
+	t.Parallel()
+	f, e, _ := standaloneEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "solo")
+	rec := operator.do(http.MethodPost, "stacks/"+st.ID+"/rollback", "")
 	if rec.Code != http.StatusConflict || problemType(t, rec) != "target_engine_missing" {
-		t.Errorf("deploy: %d %s, want 409 target_engine_missing", rec.Code, rec.Body)
+		t.Errorf("rollback: %d %s, want 409 target_engine_missing", rec.Code, rec.Body)
 	}
 	if w := f.fake.Writes(); len(w) != 0 {
 		t.Errorf("writes = %v", w)

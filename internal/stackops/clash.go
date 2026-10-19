@@ -86,9 +86,8 @@ func (d Deps) foreignProject(ctx context.Context, envID, name, stackID string) (
 
 // CheckTarget says whether the stack can be deployed to the environment as it is now. A stack is
 // made for the kind of environment it was created on (swarm or standalone host), and the kind
-// can change under it: it is ErrTargetChanged when it has, and ErrTargetEngineMissing when the
-// kind is right but this version cannot deploy to it yet (a standalone host, until the Compose
-// engine exists). A failure to tell what the environment is, is that error.
+// can change under it: it is ErrTargetChanged when it has. A failure to tell what the environment
+// is, is that error.
 func (d Deps) CheckTarget(ctx context.Context, envID string, stack Stack) error {
 	if d.Clusters == nil {
 		return errors.New("stackops: no cluster reader to tell what the environment is")
@@ -99,9 +98,6 @@ func (d Deps) CheckTarget(ctx context.Context, envID string, stack Stack) error 
 	}
 	if isSwarm != (stack.Target == stacks.TargetSwarm) {
 		return ErrTargetChanged
-	}
-	if stack.Target != stacks.TargetSwarm {
-		return ErrTargetEngineMissing
 	}
 	return nil
 }

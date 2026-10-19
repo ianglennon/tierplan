@@ -176,12 +176,13 @@ func registerStackDeploy(r *httpx.Router, d StacksDeps) {
 		Summary: "Deploy a stack's draft",
 		Description: "Takes a revision from the draft and deploys it as a job, answering 202 with the job ID at once; the deploy goes on if the browser closes. " +
 			"draftVersion must be the version of the draft you reviewed, or the answer is 409 draft_changed. A draft that started from an older revision than the newest good one (someone deployed since) is 409 concurrent_unacknowledged unless acknowledgeConcurrent is true; a deploy never overwrites a newer one unseen. pins, when sent, are the review's: the deploy uses exactly those digests and makes no registry lookup (422 pins_invalid for one the server would not have chosen). " +
+			"On a standalone host the job checks the stack, pins each image the same way (a service that runs the text it is deployed with keeps its digest; a new or changed one is looked up on the host with the stored credential), and runs the Compose SDK's up over a guarded client: containers created, those whose configuration changed recreated, the others left alone, those of services the file no longer declares removed, and a wait until they run; they carry com.docker.compose.project and bayplan.stack.id, and bayplan.stack.image holds the image as written. A stack secret or config is written into the container, not mounted from a file. " +
 			"On a swarm the job checks the stack, looks up each image and pins it to a digest (the one the service runs, or a fresh lookup through a manager), creates the stack's networks, then its secrets and configs under names that end in a short hash of their content, then its services, through one manager, each once and never retried; each carries com.docker.stack.namespace and bayplan.stack.id, and each service com.docker.stack.image with the image as written. " +
 			"A service is done when it converges, not when the swarm took it: the job polls each service every 2 seconds, up to BAYPLAN_STACK_CONVERGE_TIMEOUT (10 minutes by default), until its tasks run on its current spec and its update completed. " +
 			"A secret or config that content changes replaces is removed at the end, once every service uses the new one. " +
 			"A compose file that does not load is 422 compose_invalid; one that uses a setting a swarm can't deploy at all is 422 compose_unsupported; one whose check finds an error is 422 stack_invalid. " +
 			"A caller below env Admin is refused 403 privileged_compose, with each setting and its line in errors, when the stack asks for host access (a bind of the Docker socket or a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables. " +
-			"A name that something Bayplan does not manage holds is 409 stack_name_clash. An environment that is no longer the kind of target the stack was created for is 409 target_changed, and a standalone stack is 409 target_engine_missing. At most 5 jobs of one user run at once (429 too_many_deploys). " +
+			"A name that something Bayplan does not manage holds (a swarm namespace or a Compose project) is 409 stack_name_clash. An environment that is no longer the kind of target the stack was created for is 409 target_changed. At most 5 jobs of one user run at once (429 too_many_deploys). " +
 			"Only one stack operation at a time runs on an environment: while one does, on any stack, a deploy is refused 409 operation_locked with errors naming the stack, the job and when it started, and nothing is stored. " +
 			"Just before it writes anything the job judges the host access of the stack again for the caller, so a grant removed since the request still stops it (the check step fails needs_admin). " +
 			"Writes one stack.deployed audit row, with the result, when the job ends. Needs stacks.deploy (Operator).",
@@ -200,7 +201,7 @@ func registerStackDeploy(r *httpx.Router, d StacksDeps) {
 			"It uses exactly the images that revision ran and looks nothing up: a tag that has moved since is not followed. The draft is not touched. " +
 			"A stack with no earlier version that ran well is 409 no_previous_version. " +
 			"Everything a deploy is judged on is judged again: a revision that uses host access is refused 403 privileged_compose below env Admin, a stack that no longer loads is 422, and while another stack operation runs on the environment the answer is 409 operation_locked and nothing is stored. " +
-			"A roll back is only ever sent by a person; nothing rolls a stack back by itself. Needs stacks.deploy (Operator).",
+			"Rolling back a stack of a standalone host is 409 target_engine_missing: its engine is not in this version. A roll back is only ever sent by a person; nothing rolls a stack back by itself. Needs stacks.deploy (Operator).",
 		Tags: []string{"stacks"}, DefaultStatus: http.StatusAccepted,
 	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackRollbackInput) (*StackDeployOutput, error) {
@@ -358,6 +359,9 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 		return nil, err
 	}
 	mode, update := deployModeOf(in.Body)
+	if st.Target == stacks.TargetStandalone {
+		return deployStandaloneStack(ctx, d, p, env, st, draft, in, mode, update)
+	}
 
 	// Load and convert before anything is stored or started: a compose file that cannot be
 	// deployed is refused here, with the reason, and leaves no revision behind.
@@ -448,12 +452,17 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 		d.Log.Warn("could not store the rendering of a revision", "stack", st.ID, "revision", rev.Seq, "error", err)
 	}
 
+	swarmIn := stackops.SwarmDeployInput{
+		EnvID: env.ID, Stack: st, Project: loaded.Project, Files: files, Vars: vars, Copy: draft.Copy,
+		Caller: caller, Masker: rendering.masker,
+		Pins: repo, RevisionID: rev.ID, Update: update, Reviewed: in.Body.Pins,
+	}
 	out, err := launchStackDeploy(ctx, d, launch{
 		p: p, env: env, st: st, rev: rev, mode: mode, kind: stackops.DeployKindDeploy, userAgent: in.UserAgent,
-		in: stackops.SwarmDeployInput{
-			EnvID: env.ID, Stack: st, Project: loaded.Project, Files: files, Vars: vars, Copy: draft.Copy,
-			Caller: caller, Masker: rendering.masker,
-			Pins: repo, RevisionID: rev.ID, Update: update, Reviewed: in.Body.Pins,
+		items: stackops.DeployItemSpecs(),
+		run: func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {
+			swarmIn.OnDone = onDone
+			d.ops().DeploySwarm(jctx, swarmIn, r)
 		},
 		rendering: rendering, release: release, owned: &jobOwnsLock,
 	})
@@ -461,6 +470,108 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 		return nil, err
 	}
 	return out, nil
+}
+
+// deployStandaloneStack is deployStack for a stack of a standalone host (STK-02): the draft is judged the
+// same way, and the job runs the Compose SDK instead of the swarm engine. Every step before the lock is a
+// read or a check; nothing is stored or started until the draft, the objects, the pins, the host-access
+// policy and the name have all passed.
+func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal, env *httpx.Env, st stackops.Stack, draft stackops.Snapshot, in *StackDeployInput, mode string, update map[string]bool) (*StackDeployOutput, error) {
+	repo := d.repo()
+	if _, err := stacks.Load(ctx, stacks.LoadInput{Name: st.Name, Target: st.Target, Copy: draft.Copy}); err != nil {
+		return nil, composeProblem(err)
+	}
+	checked := stacks.Check(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy})
+	if checked.Loaded == nil {
+		return nil, stackInvalid(checked.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
+	}
+	if _, err := stacks.ResolveObjectsFor(stacks.TargetStandalone, checked.Loaded.Project, stacks.NewFileSet(draft.Copy.Files), varMap(draft.Copy.Vars)); err != nil {
+		return nil, objectProblem(err)
+	}
+	if checked.Problems.Errors() > 0 {
+		return nil, stackInvalid(checked.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
+	}
+	node, err := d.ops().StandaloneNode(ctx, env.ID)
+	if err != nil {
+		return nil, snapshotProblem(d.Log, env.ID, err)
+	}
+	// The images the review chose are checked now, before anything is stored, against what the server decides
+	// itself: a pin it would not have chosen is refused and nothing starts.
+	if in.Body.Pins != nil {
+		if err := d.ops().ValidateStandalonePins(ctx, env.ID, node, st, checked.Loaded.Project, repo, update, in.Body.Pins); err != nil {
+			return nil, pinsProblem(d, env.ID, err)
+		}
+	}
+	caller := stackops.Caller{Principal: p, Actor: p.Name}
+	pol, err := d.ops().Policy(ctx, caller, env.ID, draft.Copy, convert.Plan{})
+	if err != nil {
+		return nil, stackInternal(d, "policy", env.ID, err)
+	}
+	if pol.Refused {
+		return nil, policyProblem(pol)
+	}
+	foreign, err := d.ops().ForeignStack(ctx, env.ID, st.Target, st.Name, st.ID)
+	if err != nil {
+		return nil, snapshotProblem(d.Log, env.ID, err)
+	}
+	if foreign {
+		return nil, nameClashProblem(st.Name)
+	}
+
+	release, held, ok := d.Locks.TryAcquire(env.ID, stackops.Holder{
+		StackID: st.ID, StackName: st.Name, Kind: mode, By: p.Name, Started: time.Now().UTC(),
+	})
+	if !ok {
+		return nil, operationLocked(env.Name, held)
+	}
+	jobOwnsLock := false
+	defer func() {
+		if !jobOwnsLock {
+			release()
+		}
+	}()
+
+	rev, err := repo.NewRevision(ctx, st.ID, p.Name)
+	if err != nil {
+		return nil, stackInternal(d, "revision", env.ID, err)
+	}
+	if err := repo.RebaseDraft(ctx, st.ID, rev.Seq); err != nil {
+		_ = repo.SetOutcome(context.WithoutCancel(ctx), rev.ID, stackops.OutcomeFailed, "", "")
+		return nil, stackInternal(d, "rebase the draft", env.ID, err)
+	}
+	rendering := revisionRendering{repo: repo, loaded: checked.Loaded, masker: stacks.NewMasker(draft.Copy.Vars, draft.Copy.Files)}
+	var startPins map[string]stacks.LivePin
+	if in.Body.Pins != nil {
+		startPins = stackops.LivePins(in.Body.Pins)
+	} else if startPins, err = repo.GoodPins(ctx, st.ID); err != nil {
+		d.Log.Warn("could not read the pins of a stack for its rendering", "stack", st.ID, "error", err)
+	}
+	if err := rendering.store(ctx, rev.ID, startPins); err != nil {
+		d.Log.Warn("could not store the rendering of a revision", "stack", st.ID, "revision", rev.Seq, "error", err)
+	}
+
+	standaloneIn := stackops.StandaloneDeployInput{
+		EnvID: env.ID, NodeID: node, Stack: st, Copy: draft.Copy, Reviewed: in.Body.Pins, Update: update,
+		Pins: repo, RevisionID: rev.ID, Caller: caller, Masker: rendering.masker,
+	}
+	return launchStackDeploy(ctx, d, launch{
+		p: p, env: env, st: st, rev: rev, mode: mode, kind: stackops.DeployKindDeploy, userAgent: in.UserAgent,
+		items: stackops.StandaloneItemSpecs(),
+		run: func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {
+			standaloneIn.OnDone = onDone
+			d.ops().DeployStandalone(jctx, standaloneIn, r)
+		},
+		rendering: rendering, release: release, owned: &jobOwnsLock,
+	})
+}
+
+// varMap is the stack's variable table by name.
+func varMap(vars []stacks.Var) map[string]string {
+	out := make(map[string]string, len(vars))
+	for _, v := range vars {
+		out[v.Name] = v.Value
+	}
+	return out
 }
 
 // rollbackStack redeploys the last version of a stack that ran well. It is judged like a deploy and runs
@@ -481,6 +592,10 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 	}
 	if err := d.ops().CheckTarget(ctx, env.ID, st); err != nil {
 		return nil, targetProblem(d, env.ID, err)
+	}
+	if st.Target == stacks.TargetStandalone {
+		// Rolling a standalone stack back is a later plan's: the engine for it is not here yet.
+		return nil, targetProblem(d, env.ID, stackops.ErrTargetEngineMissing)
 	}
 	target, ok, err := repo.RollbackTarget(ctx, st.ID)
 	if err != nil {
@@ -546,12 +661,17 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 	if err := rendering.store(ctx, rev.ID, stackops.LivePins(pins)); err != nil {
 		d.Log.Warn("could not store the rendering of a revision", "stack", st.ID, "revision", rev.Seq, "error", err)
 	}
+	swarmIn := stackops.SwarmDeployInput{
+		EnvID: env.ID, Stack: st, Project: prep.Loaded.Project, Files: prep.Files, Vars: prep.Vars, Copy: target.Copy,
+		Caller: caller, Masker: rendering.masker,
+		Pins: repo, RevisionID: rev.ID, Reviewed: pins, Rollback: true,
+	}
 	return launchStackDeploy(ctx, d, launch{
 		p: p, env: env, st: st, rev: rev, mode: deployModeRollback, kind: stackops.DeployKindRollback, userAgent: in.UserAgent,
-		in: stackops.SwarmDeployInput{
-			EnvID: env.ID, Stack: st, Project: prep.Loaded.Project, Files: prep.Files, Vars: prep.Vars, Copy: target.Copy,
-			Caller: caller, Masker: rendering.masker,
-			Pins: repo, RevisionID: rev.ID, Reviewed: pins, Rollback: true,
+		items: stackops.DeployItemSpecs(),
+		run: func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {
+			swarmIn.OnDone = onDone
+			d.ops().DeploySwarm(jctx, swarmIn, r)
 		},
 		rendering: rendering, release: release, owned: &jobOwnsLock,
 	})
@@ -566,7 +686,10 @@ type launch struct {
 	mode      string
 	kind      string // the kind of the row in stack_deploys
 	userAgent string
-	in        stackops.SwarmDeployInput
+	// items are the items the job starts with and run is the engine: it does the operation on the job's
+	// context, reporting on r, and calls onDone once with the result before the job's last item ends.
+	items     []jobs.ItemSpec
+	run       func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult))
 	rendering revisionRendering
 	// release frees the environment's operation lock; owned is set once the job holds it.
 	release func()
@@ -582,8 +705,7 @@ func launchStackDeploy(ctx context.Context, d StacksDeps, l launch) (*StackDeplo
 	var deploy stackops.DeployRow
 	reqCtx := context.WithoutCancel(ctx)
 	actor, userAgent := l.p.AuditActor(), l.userAgent
-	in := l.in
-	in.OnDone = func(res stackops.DeployResult) {
+	onDone := func(res stackops.DeployResult) {
 		recordDeployEnd(reqCtx, d, actor, userAgent, l.st, l.rev, deploy, l.mode, res, l.rendering)
 		// The lock is free before the job reads as finished, so whoever sees it end can start the next
 		// operation at once. Freeing it again when the run returns changes nothing.
@@ -594,7 +716,7 @@ func launchStackDeploy(ctx context.Context, d StacksDeps, l launch) (*StackDeplo
 		Meta: map[string]string{
 			metaStackID: l.st.ID, metaStackName: l.st.Name, metaMode: l.mode, metaStartedBy: l.p.Name, metaEnvName: l.env.Name,
 		},
-		Items: stackops.DeployItemSpecs(),
+		Items: l.items,
 	}
 	if d.BeforeJob != nil {
 		d.BeforeJob(ctx)
@@ -609,7 +731,7 @@ func launchStackDeploy(ctx context.Context, d StacksDeps, l launch) (*StackDeplo
 		if deploy.ID == "" {
 			return // the row could not be written: the handler cancelled the job
 		}
-		d.ops().DeploySwarm(jctx, in, r)
+		l.run(jctx, r, onDone)
 	})
 	if errors.Is(err, jobs.ErrTooMany) {
 		_ = repo.SetOutcome(reqCtx, l.rev.ID, stackops.OutcomeFailed, "", "")

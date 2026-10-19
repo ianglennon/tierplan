@@ -38,6 +38,8 @@ const (
 	CodeUnusedVariable       = "unused_variable"
 	CodeEnvFileInvalid       = "env_file_invalid"
 	CodeDotenvNotRead        = "dotenv_not_read"
+	// CodeObjectTooLarge is a secret or config with more content than the target takes.
+	CodeObjectTooLarge = "object_too_large"
 
 	// The target-aware lint (STK-03); see package lint.
 	CodeIgnoredOnTarget          = lint.CodeIgnoredOnTarget
@@ -45,6 +47,9 @@ const (
 	CodeBuildWithoutImage        = lint.CodeBuildWithoutImage
 	CodeMovingTag                = lint.CodeMovingTag
 	CodeReadOnlyFileObject       = lint.CodeReadOnlyFileObject
+	CodeFileObjectOwner          = lint.CodeFileObjectOwner
+	CodeFileObjectName           = lint.CodeFileObjectName
+	CodeExternalFileObject       = lint.CodeExternalFileObject
 	CodeNetworkOptionUnsupported = lint.CodeNetworkOptionUnsupported
 )
 

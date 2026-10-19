@@ -108,6 +108,7 @@
       },
       "kind": {
         "network": "Network",
+        "volume": "Volume",
         "secret": "Secret",
         "config": "Config"
       },

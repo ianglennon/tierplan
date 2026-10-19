@@ -27,6 +27,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/buildinfo"
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/datadir"
+	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/engine"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
@@ -484,6 +485,14 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	}
 	if interrupted > 0 {
 		log.Warn("stack operations that were running when the server stopped were marked interrupted", "count", interrupted)
+	}
+
+	// The Compose SDK that deploys a standalone stack keeps process-wide state (its Docker CLI
+	// configuration directory and its logging), set once here and never per deploy. The directory is
+	// private to the SDK and always empty, under the data directory.
+	if err = dockerx.InitCompose(info.Path, log); err != nil {
+		_ = st.Close()
+		return nil, fmt.Errorf("prepare the Compose SDK: %w", err)
 	}
 
 	// /readyz needs a usable data directory and a database at this binary's

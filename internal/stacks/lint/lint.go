@@ -50,6 +50,11 @@ const (
 	CodeMovingTag                = "moving_tag"
 	CodeReadOnlyFileObject       = "read_only_file_object"
 	CodeNetworkOptionUnsupported = "network_option_unsupported"
+	// What the agent's archive route refuses to write into a container (plan 07-04): an owner, a name a
+	// ustar header cannot hold, and an object with nothing to write.
+	CodeFileObjectOwner    = "file_object_owner"
+	CodeFileObjectName     = "file_object_name"
+	CodeExternalFileObject = "external_file_object"
 )
 
 // Pos is a range in a stack file: 1-based line and column of its start, and the end.
@@ -102,6 +107,12 @@ var messages = map[string]string{
 	CodeMovingTag: "“%s” can move: it has no tag or uses :latest. Bayplan keeps the running digest on redeploys, but picks one when the service is new or the reference changes.",
 	// service, kind ("secret" or "config"), name
 	CodeReadOnlyFileObject: "%s is read_only, but a standalone host has to write the %s “%s” into the container. Remove read_only from the service.",
+	// key, kind ("secret" or "config")
+	CodeFileObjectOwner: "`%s` can't be set on a standalone host. Bayplan writes the %s into the container as the user the container starts as, and its owner can't be changed. Remove the key, or deploy this stack to a Swarm.",
+	// service, kind, name, path
+	CodeFileObjectName: "The path %[4]s of the %[2]s “%[3]s” in %[1]s is too long to write into a container. Use a shorter target.",
+	// kind, name
+	CodeExternalFileObject: "The %s “%s” is external, and a standalone host writes the content of each secret and config into the container. Declare it with a file, an environment variable or content instead.",
 	// key
 	CodeNetworkOptionUnsupported: "`%s` isn't supported on a stack network. Bayplan creates networks without it. Remove it, or create the network yourself and use it as an external network.",
 	// A build key that is ignored because the image is set (A5); the swarm table words it for Swarm.

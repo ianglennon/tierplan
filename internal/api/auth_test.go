@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/compose-spec/compose-go/v2/types"
+
 	"github.com/ianglennon/bayplan/internal/access"
 	"github.com/ianglennon/bayplan/internal/agents"
 	"github.com/ianglennon/bayplan/internal/api"
@@ -25,6 +27,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/datadir"
+	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
@@ -129,6 +132,8 @@ type authFixture struct {
 	stackOnCheck       func(context.Context)
 	// stackBeforeJob is called in a deploy just before its job starts (plan 07-18).
 	stackBeforeJob func(context.Context)
+	// stackUp replaces the Compose SDK's up in a standalone deploy (plan 07-20).
+	stackUp func(context.Context, *dockerx.Client, *types.Project, dockerx.ComposeUpOptions, func(dockerx.ComposeEvent)) error
 	// pullsHeartbeat, pullsMaxStreams and pullsMaxLifetime tune the pull stream, and
 	// pullsNodeTimeout the longest one node may pull; zero is the default.
 	jobHub           *jobs.Hub
@@ -345,7 +350,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		api.RegisterStacks(r, api.StacksDeps{
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
 			Audit: f.aud, Checker: checker, Jobs: f.jobHub, Store: f.st, Vault: f.v, Log: log,
-			CheckDeadline: f.stackCheckDeadline, OnCheck: f.stackOnCheck, BeforeJob: f.stackBeforeJob,
+			CheckDeadline: f.stackCheckDeadline, OnCheck: f.stackOnCheck, BeforeJob: f.stackBeforeJob, Up: f.stackUp,
 		})
 		var logsSrc api.LogsSource = f.agg
 		if f.logsWrap != nil {
