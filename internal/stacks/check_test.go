@@ -5,9 +5,14 @@ package stacks_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/compose-spec/compose-go/v2/types"
 
 	"github.com/ianglennon/bayplan/internal/stacks"
 )
@@ -175,5 +180,141 @@ func TestCheckFilesStillListedUnusedWhenTheLoadWasStopped(t *testing.T) {
 	}
 	if !slices.Equal(res.UnusedFiles, []string{"other.env"}) {
 		t.Errorf("unused = %v, want [other.env]", res.UnusedFiles)
+	}
+}
+
+// Relative bind mounts (plan 07-06, D-06): a bind source that is not an absolute path is blocked on
+// both targets, with the volume's line.
+
+const relativeBindWording = "“%s” is a relative bind mount. Use a named volume, or an absolute path on the host (which needs Admin)."
+
+func withVolumes(entries string, top string) string {
+	return "services:\n  web:\n    image: x\n    volumes:\n      " + entries + "\n" + top
+}
+
+func TestCheckBlocksARelativeBindMountOnBothTargets(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		volume string
+		source string
+		line   int
+	}{
+		"a dot-slash path":                     {"- ./data:/data", "./data", 5},
+		"a parent path":                        {"- ../shared:/shared:ro", "../shared", 5},
+		"a home path":                          {"- ~/data:/data", "~/data", 5},
+		"a name that is not a declared volume": {"- data:/data", "data", 5},
+		"a long form bind":                     {"- type: bind\n        source: ./x\n        target: /x", "./x", 5},
+		"a long form bind with a bare name":    {"- type: bind\n        source: x\n        target: /x", "x", 5},
+	} {
+		for _, target := range []stacks.Target{stacks.TargetSwarm, stacks.TargetStandalone} {
+			t.Run(name+" on "+string(target), func(t *testing.T) {
+				t.Parallel()
+				res := stacks.Check(context.Background(), stacks.CheckInput{Name: "probe", Target: target, Copy: copyOf(withVolumes(tc.volume, ""))})
+				p := onlyProblem(t, res)
+				if p.Severity != stacks.SeverityError || p.Code != stacks.CodeRelativeBind || p.File != stacks.ComposeFile || p.Line != tc.line {
+					t.Errorf("problem = %+v, want an error relative_bind at line %d", p, tc.line)
+				}
+				if want := fmt.Sprintf(relativeBindWording, tc.source); p.Message != want {
+					t.Errorf("message = %q, want %q", p.Message, want)
+				}
+			})
+		}
+	}
+}
+
+func TestCheckAllowsAnAbsoluteBindAndNamedVolumes(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct{ volume, top string }{
+		"an absolute bind":          {"- /srv/data:/data", ""},
+		"an anonymous volume":       {"- /data", ""},
+		"a declared named volume":   {"- data:/data", "volumes:\n  data: {}\n"},
+		"a long form named volume":  {"- type: volume\n        source: data\n        target: /data", "volumes:\n  data: {}\n"},
+		"a long form absolute bind": {"- type: bind\n        source: /srv/x\n        target: /x", ""},
+		"a tmpfs":                   {"- type: tmpfs\n        target: /tmp", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			res := checkOf(t, withVolumes(tc.volume, tc.top))
+			if len(res.Problems) != 0 || res.Loaded == nil {
+				t.Errorf("problems = %+v loaded = %v, want none and a loaded project", res.Problems, res.Loaded)
+			}
+		})
+	}
+}
+
+func TestCheckNamesEveryRelativeBindOfEveryService(t *testing.T) {
+	t.Parallel()
+	const compose = "services:\n  a:\n    image: x\n    volumes:\n      - ./one:/one\n      - /srv/ok:/ok\n      - ./two:/two\n  b:\n    image: y\n    volumes:\n      - ./three:/three\n"
+	res := checkOf(t, compose)
+	var lines []int
+	for _, p := range res.Problems {
+		if p.Code != stacks.CodeRelativeBind {
+			t.Errorf("problem = %+v, want only relative_bind", p)
+		}
+		lines = append(lines, p.Line)
+	}
+	if !slices.Equal(lines, []int{5, 7, 11}) {
+		t.Errorf("lines = %v, want [5 7 11]", lines)
+	}
+}
+
+// What is asserted after the load, as defence in depth: none of this should ever fire, because the
+// prescan refuses it first.
+
+func TestAssertSandboxedAcceptsWhatTheStackOwns(t *testing.T) {
+	t.Parallel()
+	files := stacks.NewFileSet([]stacks.File{{Path: "compose.yaml"}, {Path: "app.env"}, {Path: "secret.txt"}, {Path: "app.conf"}})
+	project := &types.Project{
+		Services: types.Services{"web": {
+			Name:     "web",
+			EnvFiles: []types.EnvFile{{Path: "app.env"}, {Path: "./app.env"}},
+			Volumes:  []types.ServiceVolumeConfig{{Type: "bind", Source: "/srv/data", Target: "/data"}, {Type: "volume", Source: "data", Target: "/d"}},
+		}},
+		Secrets: types.Secrets{"s": {File: "./secret.txt"}, "e": {Environment: "X"}},
+		Configs: types.Configs{"c": {File: "app.conf"}, "i": {Content: "hello"}},
+	}
+	if err := stacks.AssertSandboxed(project, files); err != nil {
+		t.Errorf("AssertSandboxed = %v, want nil", err)
+	}
+}
+
+func TestAssertSandboxedRefusesWhatShouldHaveBeenRefusedEarlier(t *testing.T) {
+	t.Parallel()
+	files := stacks.NewFileSet([]stacks.File{{Path: "compose.yaml"}, {Path: "app.env"}})
+	web := func(mut func(*types.ServiceConfig)) *types.Project {
+		svc := types.ServiceConfig{Name: "web"}
+		mut(&svc)
+		return &types.Project{Services: types.Services{"web": svc}}
+	}
+	for name, project := range map[string]*types.Project{
+		"extends": web(func(s *types.ServiceConfig) { s.Extends = &types.ExtendsConfig{File: "x.yaml", Service: "y"} }),
+		"a relative bind": web(func(s *types.ServiceConfig) {
+			s.Volumes = []types.ServiceVolumeConfig{{Type: "bind", Source: "./x", Target: "/x"}}
+		}),
+		"an env file outside":    web(func(s *types.ServiceConfig) { s.EnvFiles = []types.EnvFile{{Path: "/proc/self/environ"}} }),
+		"an env file not ours":   web(func(s *types.ServiceConfig) { s.EnvFiles = []types.EnvFile{{Path: "gone.env"}} }),
+		"a label file":           web(func(s *types.ServiceConfig) { s.LabelFiles = []string{"labels.env"} }),
+		"a secret file":          {Secrets: types.Secrets{"s": {File: "/etc/shadow"}}},
+		"a secret file not ours": {Secrets: types.Secrets{"s": {File: "gone.txt"}}},
+		"a config file":          {Configs: types.Configs{"c": {File: "../app.conf"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if err := stacks.AssertSandboxed(project, files); !errors.Is(err, stacks.ErrNotSandboxed) {
+				t.Errorf("AssertSandboxed = %v, want ErrNotSandboxed", err)
+			}
+		})
+	}
+}
+
+func TestCheckEndsWithCheckTimeoutPastItsDeadline(t *testing.T) {
+	t.Parallel()
+	// A deadline that has passed before the check starts: no sleep, no race.
+	res := stacks.Check(context.Background(), stacks.CheckInput{
+		Name: "probe", Target: stacks.TargetSwarm, Copy: copyOf(stacks.StarterCompose), Deadline: time.Nanosecond,
+	})
+	p := onlyProblem(t, res)
+	if p.Severity != stacks.SeverityError || p.Code != stacks.CodeCheckTimeout || res.Loaded != nil {
+		t.Errorf("problem = %+v loaded = %v, want one error check_timeout and no project", p, res.Loaded)
 	}
 }

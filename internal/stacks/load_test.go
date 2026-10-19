@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/bayplan/internal/stacks"
 )
@@ -151,5 +152,21 @@ func TestNameValid(t *testing.T) {
 		if got := stacks.NameValid(name); got != want {
 			t.Errorf("NameValid(%q) = %v, want %v", name, got, want)
 		}
+	}
+}
+
+func TestLoadHonoursItsDeadline(t *testing.T) {
+	t.Parallel()
+	// A deadline that is over before the load starts ends it with the context's error, whether or not
+	// the library looks at the context in time.
+	_, err := stacks.Load(context.Background(), stacks.LoadInput{
+		Name: "late", Target: stacks.TargetSwarm, Copy: copyOf(stacks.StarterCompose), Deadline: time.Nanosecond,
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
+	}
+	// No deadline is the default, which is ample for a small file.
+	if _, err := stacks.Load(context.Background(), stacks.LoadInput{Name: "ok", Target: stacks.TargetSwarm, Copy: copyOf(stacks.StarterCompose)}); err != nil {
+		t.Fatalf("Load with the default deadline: %v", err)
 	}
 }

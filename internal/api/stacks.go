@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -74,6 +75,11 @@ type StacksDeps struct {
 	// Store and Vault hold the stored stacks and seal their secret values.
 	Store *store.Store
 	Vault *vault.Vault
+	// CheckDeadline bounds one check of a stack's working copy. Zero is five seconds.
+	CheckDeadline time.Duration
+	// OnCheck, when set, is called once a check holds its slot and before it runs. Tests use it to
+	// hold a check in flight.
+	OnCheck func(ctx context.Context)
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }

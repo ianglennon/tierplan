@@ -86,6 +86,9 @@ func checkStack(ctx context.Context, d StacksDeps, in *StackCheckInput) (*StackC
 	if err != nil {
 		return nil, err
 	}
+	if d.OnCheck != nil {
+		d.OnCheck(ctx)
+	}
 	res := stacks.Check(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: wc})
 
 	body := StackCheckBody{Problems: make([]StackProblemBody, 0, len(res.Problems)), UnusedFiles: res.UnusedFiles}

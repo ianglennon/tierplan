@@ -4,11 +4,18 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+
+	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/internal/httpx"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // Checking a stack's working copy (plan 07-06, STK-01): the editor sends what it holds, the server
@@ -174,3 +181,90 @@ func TestCheckRefusesWhatNamesAFileOfTheServerAndListsUnusedFiles(t *testing.T) 
 		t.Errorf("unusedFiles = %v, want [notes.txt]", answer.UnusedFiles)
 	}
 }
+
+// checkEnvTuned is actionsEnv with the stack check tuned before the routes are built.
+func checkEnvTuned(t *testing.T, tune func(*envFix)) (*envFix, envBody) {
+	t.Helper()
+	f := newEnvFix(t, swarmManagerEngine())
+	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
+	f.svc.WithClusters(f.clusters)
+	tune(f)
+	f.h = f.build(t)
+	e := f.add(t)
+	awaitOnline(t, f.mon, e.ID)
+	return f, e
+}
+
+func TestCheckIsLimitedPerUser(t *testing.T) {
+	t.Parallel()
+	entered := make(chan struct{}, 4)
+	release := make(chan struct{})
+	var calls atomic.Int32
+	f, e := checkEnvTuned(t, func(f *envFix) {
+		// The first two checks are held in flight; the others pass through.
+		f.stackOnCheck = func(ctx context.Context) {
+			if calls.Add(1) <= 2 {
+				entered <- struct{}{}
+				<-release
+			}
+			_ = httpx.PrincipalFrom(ctx)
+		}
+	})
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	holder := f.caller(t, e, "holder-1", "operator")
+	other := f.caller(t, e, "other-1", "operator")
+	st := newStack(t, admin, "limited")
+
+	var wg sync.WaitGroup
+	codes := make(chan int, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, code, _ := holder.check(st.ID, checkBody(stacksStarter))
+			codes <- code
+		}()
+	}
+	testsupport.Await(t, "the first check to be in flight", entered)
+	testsupport.Await(t, "the second check to be in flight", entered)
+
+	// Two are in flight for this user: the third is refused, and says why.
+	_, code, raw := holder.check(st.ID, checkBody(stacksStarter))
+	if code != http.StatusTooManyRequests || !strings.Contains(raw, "check_busy") {
+		t.Errorf("a third check: %d %s, want 429 check_busy", code, raw)
+	}
+	// Another user is unaffected.
+	if _, code, raw := other.check(st.ID, checkBody(stacksStarter)); code != http.StatusOK {
+		t.Errorf("another user's check: %d %s, want 200", code, raw)
+	}
+
+	close(release)
+	wg.Wait()
+	close(codes)
+	for code := range codes {
+		if code != http.StatusOK {
+			t.Errorf("a held check ended with %d, want 200", code)
+		}
+	}
+	// The slots are given back.
+	if _, code, raw := holder.check(st.ID, checkBody(stacksStarter)); code != http.StatusOK {
+		t.Errorf("a check after the others finished: %d %s, want 200", code, raw)
+	}
+}
+
+func TestCheckPastItsDeadlineAnswersAProblemNotAnError(t *testing.T) {
+	t.Parallel()
+	f, e := checkEnvTuned(t, func(f *envFix) { f.stackCheckDeadline = 1 }) // 1 ns: over before it starts
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "slow")
+
+	answer, code, raw := admin.check(st.ID, checkBody(stacksStarter))
+	if code != http.StatusOK || len(answer.Problems) != 1 {
+		t.Fatalf("check: %d %s, want 200 with one problem", code, raw)
+	}
+	if p := answer.Problems[0]; p.Code != "check_timeout" || p.Severity != "error" || p.File != "compose.yaml" {
+		t.Errorf("problem = %+v, want an error check_timeout in compose.yaml", p)
+	}
+}
+
+const stacksStarter = "services:\n  web:\n    image: nginx:1.27-alpine\n"

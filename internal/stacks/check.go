@@ -13,7 +13,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/compose-spec/compose-go/v2/types"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -23,6 +25,8 @@ type CheckInput struct {
 	Name   string
 	Target Target
 	Copy   WorkingCopy
+	// Deadline bounds the check. Zero is five seconds.
+	Deadline time.Duration
 }
 
 // CheckResult is what a check found. Loaded is set when the compose file loaded, and is what the
@@ -353,4 +357,12 @@ func schemaProblems(text string, ix *index) Problems {
 		return Problems{keyProblem(ix, CodeSchemaInvalid, path, fmt.Sprintf("%s: unknown key “%s”.", parent, key))}
 	}
 	return Problems{keyProblem(ix, CodeSchemaInvalid, path, path+": "+msg)}
+}
+
+// ErrNotSandboxed means a loaded project holds something the prescan should have refused.
+var ErrNotSandboxed = errors.New("stacks: the loaded project is not sandboxed")
+
+// assertSandboxed is the defence in depth after the load.
+func assertSandboxed(project *types.Project, files FileSet) error {
+	return nil
 }

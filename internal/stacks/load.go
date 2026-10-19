@@ -38,6 +38,8 @@ type LoadInput struct {
 	Name   string
 	Target Target
 	Copy   WorkingCopy
+	// Deadline bounds the load. Zero is loadTimeout.
+	Deadline time.Duration
 }
 
 // Loaded is a compose file read by compose-go, with its variables interpolated.
