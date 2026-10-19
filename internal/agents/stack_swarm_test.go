@@ -81,18 +81,19 @@ func sharedStackDeployParity(t *testing.T, f *swarmFix) {
 			t.Cleanup(func() { removeStackCLI(t, f, bayplanStack) })
 			t.Cleanup(func() { removeStackCLI(t, f, parityCLIStack) })
 			src := paritySource{Compose: readCorpus(t, c.file, values), Files: c.files}
+			askedPools := strings.Contains(src.Compose, "subnet:")
 
 			if err := deployWithCLI(execCtx(t, 5*time.Minute), mgr, parityCLIStack, src); err != nil {
 				t.Fatal(err)
 			}
-			cli, err := snapshotStack(execCtx(t, time.Minute), mgr, parityCLIStack)
+			cli, err := snapshotStack(execCtx(t, time.Minute), mgr, parityCLIStack, askedPools)
 			if err != nil {
 				t.Fatal(err)
 			}
 			removeStackCLI(t, f, parityCLIStack)
 
 			deployWithBayplan(t, f, bayplanStack, src)
-			bp, err := snapshotStack(execCtx(t, time.Minute), mgr, bayplanStack)
+			bp, err := snapshotStack(execCtx(t, time.Minute), mgr, bayplanStack, askedPools)
 			if err != nil {
 				t.Fatal(err)
 			}

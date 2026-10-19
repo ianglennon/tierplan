@@ -86,7 +86,8 @@ func deployWithCLI(ctx context.Context, node *dockertest.Node, name string, src 
 	if err := node.WriteFile(ctx, dir+"/compose.yaml", []byte(src.Compose)); err != nil {
 		return err
 	}
-	out, err := node.Sh(ctx, "cd "+dir+" && docker stack deploy -c compose.yaml --resolve-image=never --detach=true "+name+" 2>&1")
+	// --detach arrived after Engine 24, whose stack deploy never waits anyway.
+	out, err := node.Sh(ctx, "cd "+dir+" && detach=; docker stack deploy --help | grep -q -e --detach && detach=--detach=true; docker stack deploy -c compose.yaml --resolve-image=never $detach "+name+" 2>&1")
 	if err != nil {
 		return fmt.Errorf("docker stack deploy %s: %w\n%s", name, err, out)
 	}
@@ -394,8 +395,10 @@ const vxlanOption = "com.docker.network.driver.overlay.vxlanid_list"
 // normaliseNetwork is `docker network inspect` of a network the stack made, with what the engine
 // fills in as it runs removed (runtimeNetworkKeys), the overlay's own VXLAN number removed from its
 // options (it is numbered by the engine, not asked for) and the stack's name, Bayplan's labels
-// replaced as normaliseSpec does.
-func normaliseNetwork(raw json.RawMessage, stack string, ids map[string]string) map[string]any {
+// replaced as normaliseSpec does. When the file asks for no address pool (askedPools false) the
+// subnet and gateway are the engine's choice, which follows what other networks it holds or has just
+// freed, so they are replaced by a word.
+func normaliseNetwork(raw json.RawMessage, stack string, ids map[string]string, askedPools bool) map[string]any {
 	var net map[string]any
 	if err := json.Unmarshal(raw, &net); err != nil {
 		return map[string]any{"unreadable": string(raw)}
@@ -405,6 +408,19 @@ func normaliseNetwork(raw json.RawMessage, stack string, ids map[string]string) 
 	}
 	if opts, ok := net["Options"].(map[string]any); ok {
 		delete(opts, vxlanOption)
+	}
+	if ipam, ok := net["IPAM"].(map[string]any); ok && !askedPools {
+		if cfgs, ok := ipam["Config"].([]any); ok {
+			for _, c := range cfgs {
+				if m, ok := c.(map[string]any); ok {
+					for _, k := range []string{"Subnet", "Gateway"} {
+						if _, has := m[k]; has {
+							m[k] = "engine-chosen"
+						}
+					}
+				}
+			}
+		}
 	}
 	out, _ := normaliser{stack: stack, ids: ids}.walk("", net).(map[string]any)
 	return out
@@ -468,7 +484,9 @@ func stackObjects(ctx context.Context, node *dockertest.Node, noun, stack string
 }
 
 // snapshotStack reads and normalises what the engine holds for the stack, from a manager.
-func snapshotStack(ctx context.Context, node *dockertest.Node, stack string) (stackSnapshot, error) {
+//
+// askedPools says whether the compose file gives the address pool of its networks; see normaliseNetwork.
+func snapshotStack(ctx context.Context, node *dockertest.Node, stack string, askedPools bool) (stackSnapshot, error) {
 	specs, err := serviceSpecs(ctx, node, stack)
 	if err != nil {
 		return stackSnapshot{}, err
@@ -481,7 +499,10 @@ func snapshotStack(ctx context.Context, node *dockertest.Node, stack string) (st
 	for name, raw := range specs {
 		snap.Services[strings.TrimPrefix(name, stack+"_")] = normaliseSpec(raw, stack, ids)
 	}
-	if snap.Networks, err = stackObjects(ctx, node, "network", stack, ids, normaliseNetwork); err != nil {
+	asked := func(raw json.RawMessage, stack string, ids map[string]string) map[string]any {
+		return normaliseNetwork(raw, stack, ids, askedPools)
+	}
+	if snap.Networks, err = stackObjects(ctx, node, "network", stack, ids, asked); err != nil {
 		return stackSnapshot{}, err
 	}
 	if snap.Secrets, err = stackObjects(ctx, node, "secret", stack, ids, normaliseObject); err != nil {
