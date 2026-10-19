@@ -21,6 +21,8 @@ const (
 	KindGroup   = "group"
 	// KindTask is a swarm task of a service, under the service's row while the deploy waits for it.
 	KindTask = "task"
+	// KindContainer is a container of a service of a standalone host, under the service's row.
+	KindContainer = "container"
 )
 
 // DeployItemSpecs are the items a swarm deploy job starts with, in run order, with the words the
