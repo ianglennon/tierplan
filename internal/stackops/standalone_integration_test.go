@@ -348,14 +348,16 @@ func TestRecordComposeRequests(t *testing.T) {
 
 	rig := newRigOver(t, dockertest.UnixProxy(t, node.Host()))
 	rig.deps.ConvergeTimeout = 3 * time.Minute
-	// The SDK's up goes over the recording client. The first one finds the image gone from the host, so the
-	// pull is recorded too (a deploy pulls first, so the SDK itself normally finds the image).
+	// The SDK's up goes over the recording client. The first one finds the image gone from the host (a deploy
+	// has pulled it by then, so the SDK itself normally finds it), so the SDK's own pull is recorded too.
 	var project *types.Project
 	pulledOnce := false
 	rig.deps.Up = func(ctx context.Context, _ *dockerx.Client, p *types.Project, o dockerx.ComposeUpOptions, on func(dockerx.ComposeEvent)) error {
 		if !pulledOnce {
 			pulledOnce = true
-			if out, err := node.Sh(ctx, "docker image rm "+image); err != nil {
+			// Every image of the repository, by ID: the pull by digest made one beside the one the push left,
+			// and a tag alone would leave the digest.
+			if out, err := node.Sh(ctx, "docker image rm -f $(docker image ls -aq --no-trunc "+strings.TrimSuffix(image, ":1")+" | sort -u)"); err != nil {
 				t.Fatalf("remove the image so the SDK has to pull it: %v\n%s", err, out)
 			}
 		}
