@@ -468,3 +468,298 @@ describe("leaving the page", () => {
     );
   });
 });
+
+// The Changes tab, the lists of errors and warnings, the reasons Deploy stack is off (plan 07-15
+// task 2).
+
+const problemOf = (over: Record<string, unknown> = {}) => ({
+  code: "x",
+  col: 1,
+  endCol: 2,
+  endLine: 1,
+  file: "compose.yaml",
+  line: 3,
+  message: "Something is wrong.",
+  severity: "error",
+  ...over,
+});
+
+const specOf = (replicas: number, env: string[] = []) => ({
+  Name: "s1_web",
+  Mode: { Replicated: { Replicas: replicas } },
+  TaskTemplate: { ContainerSpec: { Image: "nginx:1.27", Env: env } },
+});
+
+const changedWeb = (over: Record<string, unknown> = {}) => ({
+  name: "s1_web",
+  short: "web",
+  change: "changed",
+  current: specOf(2),
+  next: specOf(3),
+  hiddenChanges: [],
+  settings: 1,
+  ...over,
+});
+
+const reasonText = () => {
+  const button = deployButton();
+  const id = button.getAttribute("aria-describedby");
+  return id ? document.getElementById(id)?.textContent : undefined;
+};
+
+describe("the Changes tab", () => {
+  it("has a Changes tab holding one row for each changed service and the diff of an open one", async () => {
+    review = () => Response.json(reviewBody({ services: [changedWeb()] }));
+    mount();
+    expect(await screen.findByRole("tab", { name: "Changes" })).toBeTruthy();
+    const table = await screen.findByRole("table", { name: "Changes to web" });
+    const replicas = within(table).getByText("Replicas").closest("tr") as HTMLElement;
+    expect(within(replicas).getByText("3")).toBeTruthy();
+  });
+
+  it("shows the hidden change of a secret by its path and never the value", async () => {
+    review = () =>
+      Response.json(
+        reviewBody({
+          services: [
+            changedWeb({
+              current: specOf(2, ["API_KEY=<hidden>"]),
+              next: specOf(3, ["API_KEY=<hidden>"]),
+              hiddenChanges: ["TaskTemplate.ContainerSpec.Env[API_KEY]"],
+              settings: 2,
+            }),
+          ],
+        }),
+      );
+    mount();
+    expect(await screen.findByText("Changed (hidden)")).toBeTruthy();
+    expect(screen.getByText("TaskTemplate.ContainerSpec.Env[API_KEY]")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("s3cr3t");
+  });
+
+  it("lists the other resources under the services", async () => {
+    review = () =>
+      Response.json(
+        reviewBody({
+          services: [changedWeb()],
+          objects: [
+            {
+              change: "changed",
+              kind: "secret",
+              name: "db_pass",
+              detail: "New version. The old one is removed after the deploy.",
+            },
+          ],
+        }),
+      );
+    mount();
+    expect(await screen.findByRole("heading", { name: "Other resources" })).toBeTruthy();
+    expect(screen.getByText("db_pass")).toBeTruthy();
+  });
+
+  it("lists every service as Added on a first deploy and says nothing from the stack is running", async () => {
+    review = () =>
+      Response.json(
+        reviewBody({
+          services: [
+            changedWeb({ change: "added", current: null }),
+            changedWeb({ name: "s1_db", short: "db", change: "added", current: null }),
+          ],
+        }),
+      );
+    mount();
+    expect(await screen.findByText("First deploy")).toBeTruthy();
+    expect(
+      screen.getByText("Nothing from this stack is running yet, so everything below is new."),
+    ).toBeTruthy();
+    expect(screen.getAllByText("Added")).toHaveLength(2);
+  });
+
+  it("does not call a deploy of a stack that is partly running a first deploy", async () => {
+    review = () => Response.json(reviewBody({ services: [changedWeb()] }));
+    mount();
+    await screen.findByRole("tab", { name: "Changes" });
+    expect(screen.queryByText("First deploy")).toBeNull();
+  });
+});
+
+describe("what stops a deploy", () => {
+  it("lists the errors with file:line links to the editor and turns Deploy stack off with the count", async () => {
+    review = () =>
+      Response.json(
+        reviewBody({
+          services: [changedWeb()],
+          problems: [
+            problemOf({ message: "Image is missing.", line: 4 }),
+            problemOf({ message: "Port is wrong.", line: 9 }),
+          ],
+        }),
+      );
+    mount();
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("2 errors stop this deploy")).toBeTruthy();
+    expect(within(alert).getByRole("link", { name: "compose.yaml:4" }).getAttribute("href")).toBe(
+      "/env/e1/stacks/s1/editor?file=compose.yaml&line=4",
+    );
+    expect(deployButton().getAttribute("aria-disabled")).toBe("true");
+    expect(reasonText()).toBe("Fix 2 errors first.");
+    fireEvent.click(deployButton());
+    expect(posts("/deploys")).toHaveLength(0);
+  });
+
+  it("says Fix 1 error first for one", async () => {
+    review = () =>
+      Response.json(reviewBody({ services: [changedWeb()], problems: [problemOf({})] }));
+    mount();
+    await screen.findByRole("alert");
+    expect(reasonText()).toBe("Fix 1 error first.");
+  });
+
+  it("lists warnings and never lets them turn Deploy stack off", async () => {
+    review = () =>
+      Response.json(
+        reviewBody({
+          services: [changedWeb()],
+          problems: [problemOf({ severity: "warning", message: "Unused variable." })],
+        }),
+      );
+    mount();
+    expect(await screen.findByText("1 warning")).toBeTruthy();
+    expect(screen.getByText("Unused variable.")).toBeTruthy();
+    expect(deployButton().getAttribute("aria-disabled")).toBeNull();
+    expect(reasonText()).toBeUndefined();
+  });
+
+  it("names the host access an Operator may not deploy", async () => {
+    review = () =>
+      Response.json(
+        reviewBody({
+          services: [changedWeb()],
+          needsAdmin: ["extra privileges"],
+          problems: [problemOf({ message: "This needs Admin: privileged: true.", line: 6 })],
+        }),
+      );
+    mount();
+    await screen.findByText("This needs Admin: privileged: true.");
+    expect(reasonText()).toBe("Needs Admin to use extra privileges");
+    expect(deployButton().getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("joins several kinds of host access into one sentence", async () => {
+    review = () =>
+      Response.json(
+        reviewBody({
+          services: [changedWeb()],
+          needsAdmin: ["bind mounts", "host networking"],
+          problems: [problemOf({})],
+        }),
+      );
+    mount();
+    await screen.findByRole("alert");
+    expect(reasonText()).toBe("Needs Admin to use bind mounts and host networking");
+  });
+
+  it("names the image the registry cannot be asked about", async () => {
+    review = () =>
+      Response.json(
+        reviewBody({
+          services: [changedWeb()],
+          images: [
+            {
+              service: "web",
+              image: "ghcr.io/acme/web:2",
+              digest: "",
+              current: "",
+              state: "unreachable",
+              note: "Can't reach the registry",
+            },
+          ],
+        }),
+      );
+    mount();
+    await screen.findByText("Can't reach the registry");
+    expect(reasonText()).toBe("Bayplan can't look up ghcr.io/acme/web:2 right now.");
+    expect(deployButton().getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("puts the reason in the description of the button, so a screen reader hears it", async () => {
+    review = () =>
+      Response.json(reviewBody({ services: [changedWeb()], problems: [problemOf({})] }));
+    mount();
+    await screen.findByRole("alert");
+    const id = deployButton().getAttribute("aria-describedby");
+    expect(id).toBeTruthy();
+    expect(document.getElementById(id as string)?.textContent).toBe("Fix 1 error first.");
+  });
+});
+
+describe("nothing to deploy", () => {
+  it("says No changes and turns Deploy stack off with that reason", async () => {
+    review = () => Response.json(reviewBody({ services: [] }));
+    mount();
+    expect(await screen.findByText("No changes")).toBeTruthy();
+    expect(
+      screen.getByText("The stack is the same as what's running. There's nothing to deploy."),
+    ).toBeTruthy();
+    expect(deployButton().getAttribute("aria-disabled")).toBe("true");
+    expect(reasonText()).toBe("There's nothing to deploy.");
+    fireEvent.click(deployButton());
+    expect(posts("/deploys")).toHaveLength(0);
+  });
+
+  it("says every selected image is up to date in update mode", async () => {
+    review = () => Response.json(reviewBody({ services: [] }));
+    mount({ mode: "update", services: ["web"] });
+    expect(await screen.findByText("No changes")).toBeTruthy();
+    expect(screen.getByText("Every selected image is already up to date.")).toBeTruthy();
+  });
+
+  it("does not call a stack with only a changed network unchanged", async () => {
+    review = () =>
+      Response.json(
+        reviewBody({
+          services: [],
+          objects: [{ change: "added", kind: "network", name: "front", detail: "" }],
+        }),
+      );
+    mount();
+    await screen.findByRole("heading", { name: "Other resources" });
+    expect(screen.queryByText("No changes")).toBeNull();
+    expect(deployButton().getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("does not call a stack with only an external network a change", async () => {
+    review = () =>
+      Response.json(
+        reviewBody({
+          services: [],
+          objects: [{ change: "external", kind: "network", name: "proxy", detail: "" }],
+        }),
+      );
+    mount();
+    expect(await screen.findByText("No changes")).toBeTruthy();
+  });
+});
+
+describe("when the review cannot be loaded", () => {
+  it("says so with a way to try again, and keeps Deploy stack off", async () => {
+    review = () => problem(500, "internal");
+    mount();
+    expect(await screen.findByText("Couldn't load the review.")).toBeTruthy();
+    expect(deployButton().getAttribute("aria-disabled")).toBe("true");
+    review = () => Response.json(reviewBody({ services: [changedWeb()] }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading the review" }));
+    expect(await screen.findByRole("tab", { name: "Changes" })).toBeTruthy();
+    expect(posts("/review")).toHaveLength(2);
+  });
+
+  it("says the environment changed when the server says so", async () => {
+    review = () => problem(409, "target_changed");
+    mount();
+    expect(
+      await screen.findByText(
+        "This environment is no longer the kind of target the stack was made for.",
+      ),
+    ).toBeTruthy();
+  });
+});

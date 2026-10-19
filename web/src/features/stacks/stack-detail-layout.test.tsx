@@ -15,11 +15,13 @@ import { TestRouter } from "@/test-router";
 
 const ENV = "e1";
 
+let role: "viewer" | "operator" = "viewer";
 let detail: Record<string, unknown>;
 let status: number;
 let client: QueryClient;
 
 beforeEach(() => {
+  role = "viewer";
   detail = {
     id: "s1",
     name: "tracer",
@@ -42,7 +44,7 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (req: Request) => {
       const path = new URL(req.url).pathname;
-      if (path === "/api/me") return Response.json(makeMe({ envs: { [ENV]: "viewer" } }));
+      if (path === "/api/me") return Response.json(makeMe({ envs: { [ENV]: role } }));
       if (path === "/api/environments") {
         return Response.json({ items: [{ id: ENV, name: "Prod", envType: "swarm" }] });
       }
@@ -178,5 +180,43 @@ describe("the flow caption", () => {
     mount();
     expect(await screen.findByRole("tab", { name: "Overview" })).toBeTruthy();
     expect(screen.queryByRole("navigation", { name: "Deploy steps" })).toBeNull();
+  });
+});
+
+describe("the Deploy… action", () => {
+  it("is a link to the review for a user who may deploy", async () => {
+    role = "operator";
+    mount();
+    const link = await screen.findByRole("link", { name: "Deploy…" });
+    expect(link.getAttribute("href")).toBe("/env/e1/stacks/s1/review");
+  });
+
+  it("is off with Needs Operator for a Viewer, and the reason is in its description", async () => {
+    mount();
+    const button = await screen.findByRole("button", { name: "Deploy…" });
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    const id = button.getAttribute("aria-describedby");
+    expect(document.getElementById(id as string)?.textContent).toBe("Needs Operator");
+    expect(screen.queryByRole("link", { name: "Deploy…" })).toBeNull();
+  });
+
+  it("is left out on the review and the console, where the flow caption is", async () => {
+    role = "operator";
+    mount("review");
+    await screen.findByRole("heading", { name: "tracer", level: 2 });
+    expect(screen.queryByRole("link", { name: "Deploy…" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Deploy…" })).toBeNull();
+    cleanup();
+    mount("deploy");
+    await screen.findByRole("heading", { name: "tracer", level: 2 });
+    expect(screen.queryByRole("link", { name: "Deploy…" })).toBeNull();
+  });
+
+  it("waits for the stack, so it is not offered for a stack that is gone", async () => {
+    role = "operator";
+    status = 404;
+    mount();
+    await screen.findByRole("heading", { name: "This stack is gone", level: 2 });
+    expect(screen.queryByRole("link", { name: "Deploy…" })).toBeNull();
   });
 });

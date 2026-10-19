@@ -194,4 +194,26 @@ describe("StackList", () => {
     expect(await screen.findByText("Couldn't load stacks.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry loading stacks" })).toBeTruthy();
   });
+
+  it("has a row menu with Open stack and Deploy… for a user who may deploy", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    mount();
+    const trigger = await screen.findByRole("button", { name: "Actions for web" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    const open = await screen.findByRole("menuitem", { name: "Open stack" });
+    expect(open.getAttribute("href")).toBe("/env/e1/stacks/s1");
+    const deploy = screen.getByRole("menuitem", { name: "Deploy…" });
+    expect(deploy.getAttribute("href")).toBe("/env/e1/stacks/s1/review");
+  });
+
+  it("shows Deploy… off with Needs Operator to a Viewer, and does not follow it", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    mount();
+    const trigger = await screen.findByRole("button", { name: "Actions for web" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    const deploy = await screen.findByRole("menuitem", { name: "Deploy…" });
+    expect(deploy.getAttribute("aria-disabled")).toBe("true");
+    expect(deploy.getAttribute("href")).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Open stack" })).toBeTruthy();
+  });
 });
