@@ -28,7 +28,13 @@ interface ServiceDiffListProps {
 }
 
 // The glyph beside a change's word. The word carries the meaning; the glyph is for scanning.
-const GLYPH = { added: "+", changed: "~", removed: "−" } as const;
+const GLYPH: Record<StackReviewService["change"], string> = {
+  added: "+",
+  changed: "~",
+  removed: "−",
+  recreated: "↻",
+  restarted: "↻",
+};
 
 // The reference without its digest: the digest is what the Images card shows.
 const withoutDigest = (ref: string) => ref.split("@")[0] ?? ref;

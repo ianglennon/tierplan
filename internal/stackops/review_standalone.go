@@ -31,7 +31,8 @@ const CodeExternalFileObject = stacks.CodeExternalFileObject
 // added; one whose containers carry another config hash, or whose running configuration is not what the file
 // says, is changed, with the field-level difference of the prepared service against the service rebuilt from
 // the container's inspect document; a service of the host's project that the file no longer declares is
-// removed. It never writes.
+// removed. The services a recreate carries with it (RecreateCascade) follow as Recreated and Restarted rows.
+// It never writes.
 //
 // res is the check of the draft, which loaded.
 func (d Deps) reviewStandalone(ctx context.Context, in ReviewInput, res stacks.CheckResult, rv *Review) error {
@@ -119,6 +120,8 @@ func (d Deps) reviewStandalone(ctx context.Context, in ReviewInput, res stacks.C
 		rv.Services = append(rv.Services, c.Row)
 		bump(&rv.Summary.Services, c.Row.Change)
 	}
+	// What a recreate carries with it follows the changed services; it is not counted as changed.
+	rv.Services = append(rv.Services, cmp.Carried...)
 	for _, name := range diff.Removed {
 		rv.Services = append(rv.Services, stacks.ServiceChange{Name: name, Short: name, Change: stacks.ChangeRemoved})
 		rv.Summary.Services.Removed++
@@ -227,9 +230,22 @@ type standaloneChange struct {
 }
 
 // standaloneComparison is what a standalone deploy would do to the services, read once: the added and
-// changed services in name order.
+// changed services in name order, and the services a recreate carries with it.
 type standaloneComparison struct {
 	Changes []standaloneChange
+	Carried []stacks.ServiceChange
+}
+
+// forced are the changed services the SDK would leave as they are: their hash matches and their running
+// configuration does not.
+func (c standaloneComparison) forced() []string {
+	var out []string
+	for _, ch := range c.Changes {
+		if ch.Forced {
+			out = append(out, ch.Name)
+		}
+	}
+	return out
 }
 
 // preparedRevisions are the services of the stored revisions as a deploy of each would have prepared them,
@@ -352,8 +368,8 @@ func (h *hostReader) read(ctx context.Context, c dockerx.ComposeContainer) (cont
 // engine does not record is read from the stored revision whose prepared hash is the container's label
 // (stored, newest good revision first); with none, it is taken to be the file's own, because a matching hash
 // says the file and the container agree on all that the hash covers, and for a hash that differs there is no
-// source of what the container was made from: the review does not invent a difference it cannot know. It
-// reads only.
+// source of what the container was made from: the review does not invent a difference it cannot know. The
+// services a recreate carries with it come last. It reads only.
 func compareStandalone(ctx context.Context, host *dockerx.Client, project *types.Project, containers []dockerx.ComposeContainer, stored []map[string]types.ServiceConfig, m stacks.Masker) (standaloneComparison, error) {
 	byService := containersByService(containers)
 	ids := containerIDs(byService)
@@ -366,6 +382,8 @@ func compareStandalone(ctx context.Context, host *dockerx.Client, project *types
 	rc := stacks.RunningContextOf(project, peers)
 	reader := &hostReader{host: host, images: map[string]*image.InspectResponse{}}
 	var out standaloneComparison
+	has := map[string]bool{}
+	var recreated []string
 	names := make([]string, 0, len(project.Services))
 	for n := range project.Services {
 		names = append(names, n)
@@ -380,6 +398,7 @@ func compareStandalone(ctx context.Context, host *dockerx.Client, project *types
 			out.Changes = append(out.Changes, standaloneChange{Name: name, Added: true, Row: rows[0]})
 			continue
 		}
+		has[name] = true
 		resolved := stacks.ResolveServiceRefs(svc, ids)
 		hash, err := dockerx.ServiceHash(resolved)
 		if err != nil {
@@ -433,7 +452,11 @@ func compareStandalone(ctx context.Context, host *dockerx.Client, project *types
 			continue
 		}
 		out.Changes = append(out.Changes, standaloneChange{Name: name, HashDiffers: hashDiffers, Forced: forced, Row: row})
+		if hashDiffers || forced {
+			recreated = append(recreated, name)
+		}
 	}
+	out.Carried = stacks.RecreateCascade(project, recreated, has)
 	return out, nil
 }
 

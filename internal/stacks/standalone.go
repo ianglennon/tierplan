@@ -295,8 +295,77 @@ func ResolveServiceRefs(svc types.ServiceConfig, ids map[string][]string) types.
 	return out
 }
 
-// RecreateCascade lists the services a deploy carries along when it recreates the services in recreated
-// (see the doc of the full version).
+// RecreateCascade lists the services a deploy carries along when it recreates the services in recreated,
+// as the Compose SDK's reconciler does (v5.6.0, parentNamespaceRecreated and planStopDependents), so that
+// the review can name them before the deploy (STK-06). running says which services have a container. Under
+// the diverged policy the unchanged services follow:
+//
+//   - a service with a container whose network_mode, ipc or pid is service:X, or whose volumes_from names X,
+//     with X recreated, is recreated too, and the same goes for a service that shares what that one shares,
+//     until nothing more joins; it keeps its pinned image;
+//   - a service with a container that depends_on X with restart: true, X recreated and the service not
+//     itself recreated, keeps its container and is stopped and started again;
+//   - a plain depends_on carries nothing: the SDK derives the cascade from what is shared, not from depends_on.
+//
+// The rows are the recreated services in name order and then the restarted ones; Because is the recreated
+// service that carries it (the first by name), and no row has a Current, a Next or a count of settings.
 func RecreateCascade(p *types.Project, recreated []string, running map[string]bool) []ServiceChange {
-	return nil
+	recreatedSet := map[string]bool{}
+	for _, n := range recreated {
+		recreatedSet[n] = true
+	}
+	names := sortedServices(p)
+	because := map[string]string{}
+	for changed := true; changed; {
+		changed = false
+		for _, name := range names {
+			if recreatedSet[name] || !running[name] {
+				continue
+			}
+			for _, parent := range sharedParents(p.Services[name]) {
+				if recreatedSet[parent] {
+					recreatedSet[name], because[name], changed = true, parent, true
+					break
+				}
+			}
+		}
+	}
+	var out []ServiceChange
+	for _, name := range names {
+		if c, ok := because[name]; ok {
+			out = append(out, ServiceChange{Name: name, Short: name, Change: ChangeRecreated, Because: c})
+		}
+	}
+	for _, name := range names {
+		if recreatedSet[name] || !running[name] {
+			continue
+		}
+		deps := p.Services[name].DependsOn
+		for _, parent := range sortedNames(deps) {
+			if deps[parent].Restart && recreatedSet[parent] {
+				out = append(out, ServiceChange{Name: name, Short: name, Change: ChangeRestarted, Because: parent})
+				break
+			}
+		}
+	}
+	return out
+}
+
+// sharedParents are the services whose namespaces or volumes a service shares, by name in order.
+func sharedParents(svc types.ServiceConfig) []string {
+	var out []string
+	for _, mode := range []string{svc.NetworkMode, svc.Ipc, svc.Pid} {
+		if name, ok := strings.CutPrefix(mode, types.NetworkModeServicePrefix); ok && name != "" {
+			out = append(out, name)
+		}
+	}
+	for _, vol := range svc.VolumesFrom {
+		if strings.HasPrefix(vol, types.ContainerPrefix) {
+			continue
+		}
+		name, _, _ := strings.Cut(vol, ":")
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return slices.Compact(out)
 }

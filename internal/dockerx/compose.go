@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -299,12 +300,23 @@ func (c *Client) ComposeUp(ctx context.Context, p *types.Project, o ComposeUpOpt
 
 // composeUpOptions are the SDK's options for an up: orphans removed, every service recreated when its
 // configuration diverged, and the wait for the containers to run.
+//
+// With services to force, the SDK is told they are the ones the user targeted and that the targeted ones are
+// recreated whatever their labels say (Recreate force), while the others keep the diverged policy
+// (RecreateDependencies): CreateOptions.Services does not narrow what converges, it only says which policy
+// each service follows. A container changed by hand keeps every label, including the config hash, and the
+// SDK's check (mustRecreate) reads labels, networks and volumes only, so without this it stays as it is.
 func composeUpOptions(p *types.Project, o ComposeUpOptions) api.UpOptions {
+	create := api.CreateOptions{
+		RemoveOrphans: true, Recreate: api.RecreateDiverged, RecreateDependencies: api.RecreateDiverged, QuietPull: true,
+	}
+	if len(o.ForceRecreate) > 0 {
+		create.Services = slices.Clone(o.ForceRecreate)
+		create.Recreate = api.RecreateForce
+	}
 	return api.UpOptions{
-		Create: api.CreateOptions{
-			RemoveOrphans: true, Recreate: api.RecreateDiverged, RecreateDependencies: api.RecreateDiverged, QuietPull: true,
-		},
-		Start: api.StartOptions{Project: p, Wait: true, WaitTimeout: o.WaitTimeout},
+		Create: create,
+		Start:  api.StartOptions{Project: p, Wait: true, WaitTimeout: o.WaitTimeout},
 	}
 }
 

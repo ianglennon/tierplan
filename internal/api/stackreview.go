@@ -57,15 +57,17 @@ type StackReviewImageBody struct {
 	Note    string `json:"note" doc:"A short sentence for the row, or empty"`
 }
 
-// StackReviewServiceBody is one service a deploy would add, change or remove.
+// StackReviewServiceBody is one service a deploy would add, change or remove, or, on a standalone host, one
+// it recreates or restarts because another service is recreated.
 type StackReviewServiceBody struct {
 	Name          string         `json:"name" doc:"The swarm service name"`
 	Short         string         `json:"short" doc:"The service's name in the compose file"`
-	Change        string         `json:"change" enum:"added,changed,removed" doc:"What a deploy would do"`
+	Change        string         `json:"change" enum:"added,changed,removed,recreated,restarted" doc:"What a deploy would do. recreated and restarted are listed for a standalone host only: the service is not changed, and the deploy recreates it because it shares the network, IPC, PID namespace or volumes of the service in because, which is recreated, or stops it and starts it again (keeping its container) because it depends on that service with restart: true. They carry no spec and no settings"`
 	Current       map[string]any `json:"current" nullable:"true" doc:"The running service's spec, masked: a value derived from a secret of the stack is <hidden>. Null for an added or removed service"`
 	Next          map[string]any `json:"next" nullable:"true" doc:"The spec a deploy would send, masked the same way. Null for a removed service"`
 	HiddenChanges []string       `json:"hiddenChanges" doc:"Paths of settings whose value changed to or from one that is hidden, such as TaskTemplate.ContainerSpec.Env[API_KEY]. The values are never sent"`
 	Settings      int            `json:"settings" doc:"How many settings differ between current and next, hidden ones included"`
+	Because       string         `json:"because,omitempty" doc:"Left out unless set: for a recreated or restarted service, the name of the recreated service that carries it"`
 }
 
 // StackReviewObjectBody is a network, secret or config a deploy would add, change or remove.
@@ -150,7 +152,7 @@ func registerStackReview(r *httpx.Router, d StacksDeps) {
 			"concurrent is set when someone deployed after the draft was started, with what that deployment changed and what the draft changed, file by file; the deploy then needs acknowledgeConcurrent. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. " +
 			"For a caller below env Admin, host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables, is a blocking needs_admin problem at its line, and needsAdmin names the kinds. " +
 			"A name that something Bayplan does not manage holds is a blocking stack_name_clash problem, and another stack operation running on the environment is a blocking operation_locked problem. " +
-			"On a standalone host the review pins the images the same way and compares each service with the containers that run it: the service a deploy would send, and the service rebuilt from each running container's inspect document, both with what the image or the engine fills in taken out, so that right after a deploy nothing differs. A service with no container is added; one whose containers carry another config hash than the service has now, or whose running configuration is not what the file says (a container changed by hand on the host, which keeps its labels and its hash), is changed, with the masked current and next settings as compose settings (restart, ports, environment, volumes ...); a changed secret or config is a changed service; and a service of the host's Compose project that the file no longer declares is removed. Settings the engine does not record (depends_on, secrets, configs, profiles, pull_policy) are read from the stored revision that made the container, and are the file's own when none did. An environment that is no longer the kind of target the stack was created for is 409 target_changed. Needs stacks.deploy (Operator).",
+			"On a standalone host the review pins the images the same way and compares each service with the containers that run it: the service a deploy would send, and the service rebuilt from each running container's inspect document, both with what the image or the engine fills in taken out, so that right after a deploy nothing differs. A service with no container is added; one whose containers carry another config hash than the service has now, or whose running configuration is not what the file says (a container changed by hand on the host, which keeps its labels and its hash), is changed, with the masked current and next settings as compose settings (restart, ports, environment, volumes ...); a changed secret or config is a changed service; and a service of the host's Compose project that the file no longer declares is removed. Settings the engine does not record (depends_on, secrets, configs, profiles, pull_policy) are read from the stored revision that made the container, and are the file's own when none did. A deploy that recreates a service carries others with it, as docker compose does: a service that shares its network, IPC or PID namespace or its volumes is recreated and keeps its pinned image, and one that depends on it with restart: true is stopped and started again; they follow as recreated and restarted rows with because naming the service, carry no spec, and are not counted in the summary. A container changed by hand is put right by a deploy of an unedited file. An environment that is no longer the kind of target the stack was created for is 409 target_changed. Needs stacks.deploy (Operator).",
 		Tags: []string{"stacks"},
 	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackReviewInput) (*StackReviewOutput, error) {
@@ -256,7 +258,7 @@ func stackReviewBody(rv stackops.Review) StackReviewBody {
 		}
 		b.Services = append(b.Services, StackReviewServiceBody{
 			Name: c.Name, Short: c.Short, Change: c.Change, Current: specTree(c.Current), Next: specTree(c.Next),
-			HiddenChanges: hidden, Settings: c.Settings,
+			HiddenChanges: hidden, Settings: c.Settings, Because: c.Because,
 		})
 	}
 	for _, o := range rv.Objects {

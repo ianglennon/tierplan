@@ -284,6 +284,25 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 		d.log().Warn("could not hash a standalone stack's services", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
 		return fail(ItemLookup, CodeStackInvalid, "")
 	}
+	// The SDK compares labels, and a container changed by hand keeps them: the services the review lists as
+	// changed with a hash that matches are the ones the up is told to recreate, and the services a recreate
+	// carries with it are named from the same comparison.
+	if len(live.Containers) > 0 {
+		err = d.Aggregator.OnNode(ctx, in.EnvID, in.NodeID, func(c *dockerx.Client) error {
+			cmp, e := compareStandalone(ctx, c, project, live.Containers, nil, stacks.NewMasker(nil, nil))
+			diff.Forced = cmp.forced()
+			for _, row := range cmp.Carried {
+				if row.Change == stacks.ChangeRecreated {
+					diff.Carried = append(diff.Carried, row.Name)
+				}
+			}
+			return e
+		})
+		if err != nil {
+			d.log().Warn("could not compare a standalone stack with its host before a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
+			return failErr(ItemLookup, codeOf(ctx, err), "", err)
+		}
+	}
 	netNames, volNames := missingNetworks(project, live.Networks), missingVolumes(project, live.Volumes)
 	for _, n := range netNames {
 		prog.addNetwork(n)
@@ -345,7 +364,7 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 		d.cleanupStandalone(ctx, in.EnvID, in.NodeID, in.Stack, live.Containers, netNames, &res, prog)
 	}
 	err = d.Aggregator.WriteOnNode(ctx, in.EnvID, in.NodeID, func(c *dockerx.Client) error {
-		return d.up(ctx, c, project, dockerx.ComposeUpOptions{WaitTimeout: timeout}, events.on)
+		return d.up(ctx, c, project, dockerx.ComposeUpOptions{WaitTimeout: timeout, ForceRecreate: diff.Forced}, events.on)
 	})
 	if err != nil {
 		d.log().Warn("the Compose SDK's up failed", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
@@ -368,7 +387,7 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 	// 4. Done: the networks and volumes exist, every service was brought to what the file says. What the
 	// SDK changed is known from the hashes read before it ran.
 	res.Networks, res.CreatedNetworks = len(netNames), netNames
-	res.Services, res.Updated = len(diff.Added), len(diff.Changed)
+	res.Services, res.Updated = len(diff.Added), len(diff.recreated())
 	res.RemovedServices = diff.Removed
 	after, aerr := d.readStandalone(ctx, in.EnvID, in.NodeID, in.Stack.Name)
 	if aerr != nil {
@@ -411,17 +430,14 @@ func pullPins(p *types.Project, diff standaloneDiff, pins map[string]string) map
 }
 
 // standaloneAction is what a deploy did to a service: created when it had no container, updated when its
-// containers were recreated, unchanged when the SDK left them alone.
+// containers were recreated (its hash differed, it was forced, or a service it shares a namespace or volumes
+// with was recreated), unchanged when the SDK left them alone.
 func standaloneAction(diff standaloneDiff, name string) string {
-	for _, n := range diff.Added {
-		if n == name {
-			return "created"
-		}
+	if slices.Contains(diff.Added, name) {
+		return "created"
 	}
-	for _, n := range diff.Changed {
-		if n == name {
-			return "updated"
-		}
+	if slices.Contains(diff.Changed, name) || slices.Contains(diff.Forced, name) || slices.Contains(diff.Carried, name) {
+		return "updated"
 	}
 	return "unchanged"
 }

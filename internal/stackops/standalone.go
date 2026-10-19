@@ -145,8 +145,11 @@ type standaloneDiff struct {
 	Added, Changed, Unchanged, Removed []string
 	// Forced are the services whose containers carry the hash the service has now but whose running
 	// configuration differs from it (a change made by hand on the host): the SDK compares labels only and
-	// would leave them as they are, so the deploy has them recreated (standaloneChanges).
+	// would leave them as they are, so the deploy has them recreated (compareStandalone).
 	Forced []string
+	// Carried are the services the SDK recreates because a service they share a namespace or volumes with
+	// is recreated (stacks.RecreateCascade).
+	Carried []string
 	// Hashes are the desired hash of each service.
 	Hashes map[string]string
 	// Counts is how many containers each removed service has.
@@ -175,6 +178,14 @@ func containerIDs(byService map[string][]dockerx.ComposeContainer) map[string][]
 		}
 	}
 	return out
+}
+
+// recreated are the services whose containers the SDK recreates for their own sake, by their hash or by force
+// (not the ones it recreates because another service is), each once, in name order.
+func (d standaloneDiff) recreated() []string {
+	out := slices.Concat(d.Changed, d.Forced)
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // diffStandalone classifies the services of a prepared project against the containers of its Compose
