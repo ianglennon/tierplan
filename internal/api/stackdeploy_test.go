@@ -10,10 +10,12 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/jobs"
+	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
@@ -506,5 +508,191 @@ func TestCancelDeployNeedsOperator(t *testing.T) {
 	}
 	if j, ok := f.jobHub.Get(jobID); !ok || j.Finished() {
 		t.Errorf("job = %+v, a refused cancel must leave it running", j)
+	}
+}
+
+// One stack operation at a time on an environment (plan 07-18, STK-09 concurrency, T-07-87).
+
+type lockAnswer struct {
+	StackID   string `json:"stackId"`
+	StackName string `json:"stackName"`
+	JobID     string `json:"jobId"`
+	Kind      string `json:"kind"`
+	StartedAt string `json:"startedAt"`
+	StartedBy string `json:"startedBy"`
+}
+
+// lockOf reads the operation lock a stack's page shows, nil while nothing holds the environment.
+func lockOf(t *testing.T, c *roleCaller, stackID string) *lockAnswer {
+	t.Helper()
+	rec := c.do(http.MethodGet, "stacks/"+stackID, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get stack: %d %s", rec.Code, rec.Body)
+	}
+	return answerOf[struct {
+		Lock *lockAnswer `json:"lock"`
+	}](t, rec).Lock
+}
+
+func TestSecondOperationIsRefusedWhileOneRuns(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	alpha, beta := newStack(t, admin, "alpha"), newStack(t, admin, "beta")
+	jobID := startStuckDeploy(t, f, operator, alpha)
+
+	// Every stack page of the environment says who holds it.
+	for _, id := range []string{alpha.ID, beta.ID} {
+		lock := lockOf(t, operator, id)
+		if lock == nil || lock.StackID != alpha.ID || lock.StackName != "alpha" || lock.JobID != jobID || lock.Kind != "deploy" || lock.StartedBy != "operator-1" || lock.StartedAt == "" {
+			t.Fatalf("lock on %s = %+v, want alpha's deploy %s started by operator-1", id, lock, jobID)
+		}
+	}
+
+	// Another stack's deploy, and the same stack's, are refused naming the holder.
+	writes := len(f.fake.Writes())
+	for name, id := range map[string]string{"another stack": beta.ID, "the same stack": alpha.ID} {
+		rec := operator.deploy(id, `{"draftVersion":1}`)
+		if rec.Code != http.StatusConflict || problemType(t, rec) != "operation_locked" {
+			t.Fatalf("a deploy of %s: %d %s, want 409 operation_locked", name, rec.Code, rec.Body)
+		}
+		pr := problemOf(t, rec)
+		var named []string
+		for _, er := range pr.Errors {
+			named = append(named, er.Location+"="+er.Message)
+		}
+		if !slices.Contains(named, "stack=alpha") || !slices.Contains(named, "job="+jobID) || !slices.ContainsFunc(named, func(s string) bool { return strings.HasPrefix(s, "started=20") }) {
+			t.Errorf("errors = %v, want the stack, the job and when it started", named)
+		}
+	}
+	var revisions int
+	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision'`, beta.ID).Scan(&revisions); err != nil || revisions != 0 {
+		t.Errorf("revisions of the refused deploy = %d (%v), want none", revisions, err)
+	}
+	if got := len(f.fake.Writes()); got != writes {
+		t.Errorf("writes went from %d to %d, a refused operation writes nothing", writes, got)
+	}
+
+	// The review says it too, as a problem, so Deploy waits.
+	rv, code, raw := operator.reviewStack(beta.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, raw)
+	}
+	if p, ok := rv.problem("operation_locked"); !ok || p.Severity != "error" {
+		t.Errorf("problems = %+v, want a blocking operation_locked", rv.Problems)
+	}
+
+	// The lock goes with the job, whatever state it ends in, and the next operation can run.
+	if rec := operator.do(http.MethodPost, cancelPath(alpha.ID, jobID), ""); rec.Code != http.StatusAccepted {
+		t.Fatalf("cancel: %d %s", rec.Code, rec.Body)
+	}
+	f.awaitDeploy(t, jobID)
+	if lock := lockOf(t, operator, beta.ID); lock != nil {
+		t.Errorf("lock = %+v after the job ended, want none", lock)
+	}
+	rec := operator.deploy(beta.ID, `{"draftVersion":1}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("deploy after the lock was released: %d %s", rec.Code, rec.Body)
+	}
+	f.awaitDeploy(t, answerOf[struct {
+		JobID string `json:"jobId"`
+	}](t, rec).JobID)
+}
+
+func TestRunningDeploysAreMarkedInterruptedAtStartup(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "crash")
+	ctx := testsupport.Context(t)
+	repo := stackops.Repo{Store: f.st, Vault: f.v}
+	rev, err := repo.NewRevision(ctx, st.ID, "ada")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.StartDeploy(ctx, st.ID, e.ID, stackops.DeployKindDeploy, rev.Seq, "job-gone-with-the-process", "ada"); err != nil {
+		t.Fatal(err)
+	}
+	if got := answerOf[stackAnswer](t, admin.do(http.MethodGet, "stacks/"+st.ID, "")).State; got != "deploying" {
+		t.Fatalf("state before the restart = %q, want deploying", got)
+	}
+
+	// The server does this once the store is open.
+	if n, err := repo.MarkInterrupted(ctx); err != nil || n != 1 {
+		t.Fatalf("MarkInterrupted = %d, %v, want 1", n, err)
+	}
+	got := answerOf[struct {
+		stackAnswer
+		LastOperation *struct {
+			Kind, State, Code string
+		} `json:"lastOperation"`
+	}](t, admin.do(http.MethodGet, "stacks/"+st.ID, ""))
+	if got.State != "deploy_failed" || got.LastOperation == nil || got.LastOperation.State != "interrupted" || got.LastOperation.Code != "interrupted" || got.LastOperation.Kind != "deploy" {
+		t.Errorf("stack = %+v %+v, want deploy_failed from an interrupted deploy", got.stackAnswer, got.LastOperation)
+	}
+	if r, err := repo.Revision(ctx, st.ID, rev.Seq); err != nil || r.Outcome != stackops.OutcomeFailed {
+		t.Errorf("revision = %+v, %v, want failed", r, err)
+	}
+	list := answerOf[struct {
+		Items []stackAnswer `json:"items"`
+	}](t, admin.do(http.MethodGet, "stacks", ""))
+	if len(list.Items) != 1 || list.Items[0].State != "deploy_failed" {
+		t.Errorf("list = %+v", list.Items)
+	}
+}
+
+const hostAccessCompose = "services:\n  web:\n    image: nginx:1.27-alpine\n    privileged: true\n"
+
+func TestPolicyIsCheckedAgainUnderTheLock(t *testing.T) {
+	t.Parallel()
+	var between atomic.Pointer[func()]
+	f, e := stackEnvTuned(t, func(f *envFix) {
+		f.stackBeforeJob = func(context.Context) {
+			if fn := between.Load(); fn != nil {
+				(*fn)()
+			}
+		}
+	})
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	holder := f.caller(t, e, "envadmin-2", "admin")
+	st := newStack(t, admin, "esc")
+	version := saveCompose(t, holder, st.ID, hostAccessCompose, `[]`)
+
+	// holder is an env Admin when the deploy is judged, and an Operator by the time the job runs:
+	// the grant is gone, so the job must not write what the request was allowed to ask for.
+	demote := func() {
+		if _, err := f.st.Write.Exec(`UPDATE role_assignments SET role_id = 'operator' WHERE principal_id = 'id-envadmin-2'`); err != nil {
+			t.Error(err)
+		}
+	}
+	between.Store(&demote)
+	rec := holder.deploy(st.ID, `{"draftVersion":`+itoaT(version)+`}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("deploy: %d %s, want 202: the request itself was allowed", rec.Code, rec.Body)
+	}
+	jobID := answerOf[struct {
+		JobID string `json:"jobId"`
+	}](t, rec).JobID
+	job := f.awaitDeploy(t, jobID)
+
+	byID := map[string]string{}
+	for _, it := range job.Items {
+		byID[it.ID] = it.State + ":" + it.Code
+	}
+	if byID["check"] != "failed:needs_admin" {
+		t.Errorf("items = %v, want the check step failed because the policy now refuses it", byID)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, a refused policy re-check writes nothing", w)
+	}
+	var row *auditRowFull
+	for _, r := range f.stackAudits(t) {
+		if r.Action == "stack.deployed" {
+			row = &r
+		}
+	}
+	if row == nil || row.Result != "failure" || row.Details["code"] != "needs_admin" {
+		t.Errorf("stack.deployed = %+v, want a failure with needs_admin", row)
 	}
 }

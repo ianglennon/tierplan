@@ -220,3 +220,48 @@ describe("the Deploy… action", () => {
     expect(screen.queryByRole("link", { name: "Deploy…" })).toBeNull();
   });
 });
+
+describe("the operation lock", () => {
+  const held = () => ({
+    stackId: "s9",
+    stackName: "other",
+    jobId: "j9",
+    kind: "deploy",
+    startedAt: new Date(Date.now() - 2 * 60_000).toISOString(),
+    startedBy: "ada",
+  });
+
+  it("is shown above the tabs on every page of the environment while an operation runs", async () => {
+    detail = { ...detail, lock: held() };
+    mount();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(
+      /^Another stack operation is running on Prod: other, started/,
+    );
+    expect(within(alert).getByRole("link", { name: "Open it" }).getAttribute("href")).toBe(
+      "/env/e1/stacks/s9/deploys/j9",
+    );
+    // Above the tab bar.
+    const tabs = screen.getByRole("tablist");
+    expect(alert.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("is shown on the review, which is where Deploy waits for it", async () => {
+    detail = { ...detail, lock: held() };
+    mount("review");
+    expect(await screen.findByRole("alert")).toBeTruthy();
+  });
+
+  it("is left out of the console: that page is the operation", async () => {
+    detail = { ...detail, lock: held() };
+    mount("deploy");
+    await screen.findByRole("heading", { name: "tracer", level: 2 });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("is not there when nothing holds the environment", async () => {
+    mount();
+    await screen.findByRole("heading", { name: "tracer", level: 2 });
+    expect(screen.queryByText(/Another stack operation/)).toBeNull();
+  });
+});

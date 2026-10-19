@@ -11455,6 +11455,14 @@
             "description": "Who started it; empty when there is none",
             "type": "string"
           },
+          "lastOperation": {
+            "$ref": "#/components/schemas/StackOperationBody",
+            "description": "Left out for a stack that has had no operation: the newest one, which the state is read from"
+          },
+          "lock": {
+            "$ref": "#/components/schemas/StackLockBody",
+            "description": "Left out unless set: set while a stack operation runs on this environment, on any of its stacks, and names it. Only one runs at a time: a second is refused 409 operation_locked"
+          },
           "name": {
             "description": "The stack name, also its swarm namespace or compose project",
             "type": "string"
@@ -12068,6 +12076,115 @@
         },
         "required": [
           "items"
+        ],
+        "type": "object"
+      },
+      "StackLockBody": {
+        "additionalProperties": false,
+        "properties": {
+          "jobId": {
+            "description": "The job that runs the operation: open its console at .../stacks/{stackId}/deploys/{jobId}. Empty for the instant between the lock being taken and the job starting",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What the operation is",
+            "enum": [
+              "deploy",
+              "update",
+              "rollback",
+              "start",
+              "stop",
+              "remove"
+            ],
+            "type": "string"
+          },
+          "stackId": {
+            "description": "The stack the running operation is on",
+            "type": "string"
+          },
+          "stackName": {
+            "description": "Its name",
+            "type": "string"
+          },
+          "startedAt": {
+            "description": "When it started, RFC 3339 UTC",
+            "type": "string"
+          },
+          "startedBy": {
+            "description": "Who started it, as a name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stackId",
+          "stackName",
+          "jobId",
+          "kind",
+          "startedAt",
+          "startedBy"
+        ],
+        "type": "object"
+      },
+      "StackOperationBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "A stable word for how a failed operation failed, such as service_rejected, converge_timeout or interrupted; empty otherwise",
+            "type": "string"
+          },
+          "endedAt": {
+            "description": "When it ended, RFC 3339 UTC; empty while it runs",
+            "type": "string"
+          },
+          "failedService": {
+            "description": "The service, network, secret or config a failed operation stopped at; empty otherwise",
+            "type": "string"
+          },
+          "jobId": {
+            "description": "The job that ran it, open at .../deploys/{jobId} while the hub still has it",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What the operation was",
+            "enum": [
+              "deploy",
+              "update",
+              "rollback",
+              "start",
+              "stop",
+              "remove"
+            ],
+            "type": "string"
+          },
+          "startedAt": {
+            "description": "When it started, RFC 3339 UTC",
+            "type": "string"
+          },
+          "startedBy": {
+            "description": "Who started it, as a name",
+            "type": "string"
+          },
+          "state": {
+            "description": "Where it is. interrupted is a deploy that was running when the server stopped: the swarm may be partly updated",
+            "enum": [
+              "running",
+              "done",
+              "failed",
+              "cancelled",
+              "interrupted"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "state",
+          "code",
+          "failedService",
+          "jobId",
+          "startedBy",
+          "startedAt",
+          "endedAt"
         ],
         "type": "object"
       },

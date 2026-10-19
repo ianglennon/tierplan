@@ -103,7 +103,21 @@ func stackInput(t *testing.T, name, compose string, files []stacks.File, vars ..
 		values[v.Name] = v.Value
 	}
 	st := stackops.Stack{ID: "stack-" + name, Name: name, Target: stacks.TargetSwarm}
-	return st, stackops.SwarmDeployInput{Stack: st, Project: loaded.Project, Files: stacks.NewFileSet(all), Vars: values}
+	return st, stackops.SwarmDeployInput{
+		Stack: st, Project: loaded.Project, Files: stacks.NewFileSet(all), Vars: values,
+		Copy: stacks.WorkingCopy{Files: all, Vars: vars},
+	}
+}
+
+// asCaller gives a deploy a caller when the test did not name one: an instance admin, who may deploy
+// anything, so the policy check the deploy makes before it writes passes.
+func (r *swarmRig) asCaller(t *testing.T, in stackops.SwarmDeployInput) stackops.SwarmDeployInput {
+	t.Helper()
+	if in.Caller.Principal == nil {
+		in.Caller = stackops.Caller{Principal: r.principal(t, "root", ""), Actor: "root"}
+	}
+	in.EnvID = r.envID
+	return in
 }
 
 // starterPlan is the starter compose file as a stack and the input of its deploy.
@@ -130,7 +144,7 @@ func itemByID(t *testing.T, j jobs.Job, id string) jobs.Item {
 // deploy runs DeploySwarm as a job and returns its result and the job as it ended.
 func (r *swarmRig) deploy(t *testing.T, in stackops.SwarmDeployInput) (stackops.DeployResult, jobs.Job) {
 	t.Helper()
-	in.EnvID = r.envID
+	in = r.asCaller(t, in)
 	var res stackops.DeployResult
 	// The job reads as ended when its last item is finished, which DeploySwarm does before it
 	// returns; res is therefore read only after the job function has closed done.
@@ -281,7 +295,7 @@ func TestDeploySwarmCallsOnDoneBeforeTheJobReadsAsFinished(t *testing.T) {
 	_, in := starterPlan(t, "tracer")
 	var seen atomic.Pointer[stackops.DeployResult]
 	var stateInDone atomic.Value
-	in.EnvID = rig.envID
+	in = rig.asCaller(t, in)
 	var jobID atomic.Value
 	in.OnDone = func(res stackops.DeployResult) {
 		seen.Store(&res)
@@ -321,7 +335,7 @@ func TestDeploySwarmOfACancelledContextWritesNothingAndSaysCancelled(t *testing.
 	_, in := starterPlan(t, "tracer")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	in.EnvID = rig.envID
+	in = rig.asCaller(t, in)
 	var res stackops.DeployResult
 	done := make(chan struct{})
 	job, err := rig.hub.Start(jobs.Spec{
@@ -1265,5 +1279,69 @@ func TestDeploySwarmSkipsTheStepsAndServicesAfterAFailure(t *testing.T) {
 	}
 	if job.State != jobs.JobPartial {
 		t.Errorf("job = %s, want partial: the check and the network were done", job.State)
+	}
+}
+
+// Just before a deploy writes anything it judges the host access of the stack again, for the person
+// who asked, on the values it will send (plan 07-18, T-07-86): the review was made earlier, and a
+// grant can be gone by now.
+
+func TestDeploySwarmChecksTheHostAccessPolicyAgainBeforeItWritesAnything(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	admin := rig.principal(t, "adm", "admin")
+	_, in := stackInput(t, "web", privilegedCompose, nil)
+	in.Caller = stackops.Caller{Principal: admin, Actor: "adm"}
+
+	// The review passes for an env Admin...
+	plan := rig.review(t, "web", privilegedCompose, nil)
+	if got := needsAdmin(plan); len(got) != 0 {
+		t.Fatalf("an env Admin was refused at the review: %+v", got)
+	}
+	// ...and the grant is gone before the job runs.
+	if _, err := rig.store.Write.ExecContext(testsupport.Context(t), `UPDATE role_assignments SET role_id = 'operator' WHERE principal_id = 'adm'`); err != nil {
+		t.Fatal(err)
+	}
+	res, job := rig.deploy(t, in)
+
+	if res.Code != stackops.CodeNeedsAdmin {
+		t.Fatalf("result = %+v, want the policy to refuse it with needs_admin", res)
+	}
+	check := itemByID(t, job, stackops.ItemCheck)
+	if check.State != jobs.ItemFailed || check.Code != stackops.CodeNeedsAdmin || !strings.Contains(check.Detail, "privileged: true") {
+		t.Errorf("check = %+v, want it failed with the setting named", check)
+	}
+	if w := rig.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, want none", w)
+	}
+	if got := itemStates(job); got[stackops.ItemLookup] != "skipped:not_run" || got[stackops.ItemServices] != "skipped:not_run" {
+		t.Errorf("items = %v", got)
+	}
+}
+
+func TestDeploySwarmAllowsWhatTheCallerMayDeployAndNothingElse(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	_, clean := stackInput(t, "web", pinCompose("nginx:1.27-alpine"), nil)
+	clean.Caller = stackops.Caller{Principal: rig.principal(t, "op", "operator"), Actor: "op"}
+	if res, job := rig.deploy(t, clean); !res.OK() {
+		t.Fatalf("an Operator's clean stack: %+v %v", res, itemStates(job))
+	}
+}
+
+func TestDeploySwarmFailsClosedWhenThePolicyCannotBeApplied(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	rig.deps.Checker = nil
+	_, in := starterPlan(t, "tracer")
+	res, job := rig.deploy(t, in)
+	if res.Code != stackops.CodePolicyUnavailable {
+		t.Fatalf("result = %+v, want policy_unavailable: an unjudged stack is not an allowed one", res)
+	}
+	if w := rig.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v", w)
+	}
+	if got := itemStates(job)[stackops.ItemCheck]; got != "failed:policy_unavailable" {
+		t.Errorf("check = %q", got)
 	}
 }

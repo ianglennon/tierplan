@@ -29,7 +29,7 @@ type runningDeploy struct {
 // and reads the job with until, and ends with finish.
 func (r *swarmRig) startDeploy(t *testing.T, in stackops.SwarmDeployInput) *runningDeploy {
 	t.Helper()
-	in.EnvID = r.envID
+	in = r.asCaller(t, in)
 	d := &runningDeploy{rig: r, done: make(chan struct{}), res: new(stackops.DeployResult), items: map[string]jobs.Item{}}
 	job, err := r.hub.Start(jobs.Spec{
 		Kind: "stack_deploy", EnvID: r.envID, Owner: "user:test", Items: deployItems(),

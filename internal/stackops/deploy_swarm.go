@@ -60,6 +60,7 @@ const (
 	CodeNotRun             = "not_run"
 	CodeConvergeTimeout    = "converge_timeout"
 	CodeUpdateStopped      = "update_stopped"
+	CodePolicyUnavailable  = "policy_unavailable"
 )
 
 var codeMessages = map[string]string{
@@ -102,8 +103,11 @@ type SwarmDeployInput struct {
 	// secrets and configs exist, so that they name the objects it created.
 	Project *composetypes.Project
 	// Files and Vars are the stack's working copy: where a secret or config reads its content.
-	Files  stacks.FileSet
-	Vars   map[string]string
+	Files stacks.FileSet
+	Vars  map[string]string
+	// Copy is the working copy the project was loaded from. The host-access policy is judged on it
+	// again, for Caller, before the deploy writes anything.
+	Copy   stacks.WorkingCopy
 	Caller Caller
 	// Masker hides the stack's secret values in every text a remote system sent that the deploy puts
 	// in its job: an item's Detail and the output log. The zero Masker hides nothing.

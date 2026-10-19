@@ -875,3 +875,61 @@ func TestGoodRevisionInfoNamesWhoDeployedTheNewestGoodRevision(t *testing.T) {
 		t.Errorf("info = %+v, want revision 2 by bob at %v, not the failed one", info, second.CreatedAt)
 	}
 }
+
+// A server that stops mid-deploy leaves rows that say running (plan 07-18, Open Q5).
+func TestMarkInterruptedEndsRunningDeploysAndFailsTheirPendingRevisions(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	mk := func(name string) stackops.Stack {
+		st, _, err := f.repo.CreateStack(ctx, f.envID, name, stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("services: {}\n")}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+	// run: a deploy that was running with its revision pending. finished: one that ended good.
+	run, finished := mk("run"), mk("finished")
+	revRun, err := f.repo.NewRevision(ctx, run.ID, "ada")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.repo.StartDeploy(ctx, run.ID, f.envID, stackops.DeployKindDeploy, revRun.Seq, "job-1", "ada"); err != nil {
+		t.Fatal(err)
+	}
+	revDone, err := f.repo.NewRevision(ctx, finished.ID, "ada")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := f.repo.StartDeploy(ctx, finished.ID, f.envID, stackops.DeployKindDeploy, revDone.Seq, "job-2", "ada")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetOutcome(ctx, revDone.ID, stackops.OutcomeGood, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.FinishDeploy(ctx, row.ID, stackops.DeployDone, "", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := f.repo.MarkInterrupted(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("MarkInterrupted = %d, %v, want 1: only the running deploy", n, err)
+	}
+	got, ok, err := f.repo.LatestDeploy(ctx, run.ID)
+	if err != nil || !ok || got.State != stackops.DeployInterrupted || got.Code != "interrupted" || got.EndedAt.IsZero() {
+		t.Errorf("deploy = %+v, %v, %v, want interrupted with its end time and code", got, ok, err)
+	}
+	if rev, err := f.repo.Revision(ctx, run.ID, revRun.Seq); err != nil || rev.Outcome != stackops.OutcomeFailed {
+		t.Errorf("revision = %+v, %v, want failed", rev, err)
+	}
+	if done, _, _ := f.repo.LatestDeploy(ctx, finished.ID); done.State != stackops.DeployDone {
+		t.Errorf("a finished deploy = %+v, must not be touched", done)
+	}
+	if rev, _ := f.repo.Revision(ctx, finished.ID, revDone.Seq); rev.Outcome != stackops.OutcomeGood {
+		t.Errorf("a good revision = %+v, must stay good", rev)
+	}
+	if n, err := f.repo.MarkInterrupted(ctx); err != nil || n != 0 {
+		t.Errorf("MarkInterrupted again = %d, %v, want 0", n, err)
+	}
+}

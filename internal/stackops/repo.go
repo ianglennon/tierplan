@@ -620,6 +620,9 @@ func (r Repo) FinishDeploy(ctx context.Context, id, state, failedService, code s
 	return nil
 }
 
+// MarkInterrupted is filled in by the next commit.
+func (r Repo) MarkInterrupted(_ context.Context) (int, error) { return 0, nil }
+
 // LatestDeploys is the newest operation of each stack of an environment, by stack ID.
 func (r Repo) LatestDeploys(ctx context.Context, envID string) (map[string]DeployRow, error) {
 	rows, err := r.Store.RQ.LatestStackDeploysByEnv(ctx, envID)

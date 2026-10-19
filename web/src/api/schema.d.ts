@@ -8229,6 +8229,10 @@ export interface components {
             lastDeployedAt: string;
             /** @description Who started it; empty when there is none */
             lastDeployedBy: string;
+            /** @description Left out for a stack that has had no operation: the newest one, which the state is read from */
+            lastOperation?: components["schemas"]["StackOperationBody"];
+            /** @description Left out unless set: set while a stack operation runs on this environment, on any of its stacks, and names it. Only one runs at a time: a second is refused 409 operation_locked */
+            lock?: components["schemas"]["StackLockBody"];
             /** @description The stack name, also its swarm namespace or compose project */
             name: string;
             /**
@@ -8474,6 +8478,47 @@ export interface components {
         StackListBody: {
             /** @description The environment's stacks by name */
             items: components["schemas"]["StackItem"][] | null;
+        };
+        StackLockBody: {
+            /** @description The job that runs the operation: open its console at .../stacks/{stackId}/deploys/{jobId}. Empty for the instant between the lock being taken and the job starting */
+            jobId: string;
+            /**
+             * @description What the operation is
+             * @enum {string}
+             */
+            kind: "deploy" | "update" | "rollback" | "start" | "stop" | "remove";
+            /** @description The stack the running operation is on */
+            stackId: string;
+            /** @description Its name */
+            stackName: string;
+            /** @description When it started, RFC 3339 UTC */
+            startedAt: string;
+            /** @description Who started it, as a name */
+            startedBy: string;
+        };
+        StackOperationBody: {
+            /** @description A stable word for how a failed operation failed, such as service_rejected, converge_timeout or interrupted; empty otherwise */
+            code: string;
+            /** @description When it ended, RFC 3339 UTC; empty while it runs */
+            endedAt: string;
+            /** @description The service, network, secret or config a failed operation stopped at; empty otherwise */
+            failedService: string;
+            /** @description The job that ran it, open at .../deploys/{jobId} while the hub still has it */
+            jobId: string;
+            /**
+             * @description What the operation was
+             * @enum {string}
+             */
+            kind: "deploy" | "update" | "rollback" | "start" | "stop" | "remove";
+            /** @description When it started, RFC 3339 UTC */
+            startedAt: string;
+            /** @description Who started it, as a name */
+            startedBy: string;
+            /**
+             * @description Where it is. interrupted is a deploy that was running when the server stopped: the swarm may be partly updated
+             * @enum {string}
+             */
+            state: "running" | "done" | "failed" | "cancelled" | "interrupted";
         };
         StackPlaceBody: {
             /** @description The stack file */

@@ -32,6 +32,8 @@ let me: ReturnType<typeof makeMe>;
 let review: () => Response | Promise<Response>;
 let deploy: () => Response | Promise<Response>;
 let client: QueryClient;
+// The operation lock the stack's page reports, when one is held.
+let lock: Record<string, string> | undefined;
 
 const specOf = (replicas: number, env: string[] = []) => ({
   Name: "s1_web",
@@ -81,6 +83,7 @@ const problem = (status: number, type: string) =>
 
 beforeEach(() => {
   sent = [];
+  lock = undefined;
   me = makeMe({ envs: { [ENV]: "operator" } });
   review = () => Response.json(reviewBody());
   deploy = () => Response.json({ jobId: "j1", revision: 3 }, { status: 202 });
@@ -120,6 +123,7 @@ beforeEach(() => {
           createdBy: "ada",
           createdAt: "2026-10-19T10:00:00Z",
           stopped: false,
+          ...(lock ? { lock } : {}),
         });
       }
       if (path === `/api/env/${ENV}/stacks/${STACK}/review`) return review();
@@ -939,6 +943,69 @@ describe("a deployment made after the draft was started", () => {
     expect(
       await screen.findByText(
         "Someone deployed this stack after you started editing. Reload the page and check what changed.",
+      ),
+    ).toBeTruthy();
+  });
+});
+
+describe("the operation lock", () => {
+  const holder = {
+    stackId: "s9",
+    stackName: "other",
+    jobId: "j9",
+    kind: "deploy",
+    startedAt: "2026-10-19T11:58:00Z",
+    startedBy: "ada",
+  };
+  const locked = {
+    severity: "error",
+    code: "operation_locked",
+    message: "Another stack operation is running on this environment.",
+    file: "",
+    line: 0,
+    col: 0,
+    endLine: 0,
+    endCol: 0,
+  };
+
+  it("turns Deploy stack off with the reason while another operation holds the environment", async () => {
+    lock = holder;
+    review = () => Response.json(reviewBody({ problems: [locked] }));
+    mount();
+    await screen.findByRole("table", { name: "Summary of changes" });
+    const button = deployButton();
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    const id = button.getAttribute("aria-describedby");
+    expect(document.getElementById(id as string)?.textContent).toBe(
+      "Another stack operation is running on Prod. Try again when it finishes.",
+    );
+    fireEvent.click(button);
+    expect(posts("/deploys")).toHaveLength(0);
+  });
+
+  it("is not listed among the errors that stop a deploy: there is nothing to fix", async () => {
+    lock = holder;
+    review = () => Response.json(reviewBody({ problems: [locked] }));
+    mount();
+    await screen.findByRole("table", { name: "Summary of changes" });
+    expect(screen.queryByText(/errors? stop(s)? this deploy/)).toBeNull();
+    expect(screen.queryByText("Fix 1 errors first.")).toBeNull();
+  });
+
+  it("lets a deploy through when nothing holds the environment", async () => {
+    mount();
+    await screen.findByRole("table", { name: "Summary of changes" });
+    expect(deployButton().getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("says the environment was busy when the server refuses the deploy with operation_locked", async () => {
+    deploy = () => problem(409, "operation_locked");
+    mount();
+    await screen.findByRole("table", { name: "Summary of changes" });
+    fireEvent.click(deployButton());
+    expect(
+      await screen.findByText(
+        "Another stack operation started on Prod just now. Try again when it finishes.",
       ),
     ).toBeTruthy();
   });

@@ -13,6 +13,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
@@ -31,6 +32,21 @@ func stackEnv(t *testing.T, tune func(*dockertest.FakeConfig), services ...docke
 			tune(c)
 		}
 	}, services...)
+}
+
+// stackEnvTuned is stackEnv for a test that sets a field of the fixture before the router is built.
+func stackEnvTuned(t *testing.T, tune func(*envFix)) (*envFix, envBody) {
+	t.Helper()
+	cfg := swarmManagerEngine()
+	cfg.TasksFollowWrites = true
+	f := newEnvFix(t, cfg)
+	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
+	f.svc.WithClusters(f.clusters)
+	tune(f)
+	f.h = f.build(t)
+	e := f.add(t)
+	awaitOnline(t, f.mon, e.ID)
+	return f, e
 }
 
 type stackAnswer struct {

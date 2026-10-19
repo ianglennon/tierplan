@@ -127,6 +127,8 @@ type authFixture struct {
 	// (plan 07-06); zero and nil are the defaults.
 	stackCheckDeadline time.Duration
 	stackOnCheck       func(context.Context)
+	// stackBeforeJob is called in a deploy just before its job starts (plan 07-18).
+	stackBeforeJob func(context.Context)
 	// pullsHeartbeat, pullsMaxStreams and pullsMaxLifetime tune the pull stream, and
 	// pullsNodeTimeout the longest one node may pull; zero is the default.
 	jobHub           *jobs.Hub
@@ -343,7 +345,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		api.RegisterStacks(r, api.StacksDeps{
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
 			Audit: f.aud, Checker: checker, Jobs: f.jobHub, Store: f.st, Vault: f.v, Log: log,
-			CheckDeadline: f.stackCheckDeadline, OnCheck: f.stackOnCheck,
+			CheckDeadline: f.stackCheckDeadline, OnCheck: f.stackOnCheck, BeforeJob: f.stackBeforeJob,
 		})
 		var logsSrc api.LogsSource = f.agg
 		if f.logsWrap != nil {

@@ -103,6 +103,10 @@ type StacksDeps struct {
 	// MaxStreamsPerUser caps concurrent deploy streams per user. Zero means 4.
 	MaxStreamsPerUser int
 
+	// BeforeJob, when set, is called in a deploy after it has been judged and recorded and just before its job
+	// starts. Tests use it to change the world between the check and the job.
+	BeforeJob func(ctx context.Context)
+
 	// cancels remembers who cancelled which deploy until the deploy ends and is audited. RegisterStacks
 	// makes it; every copy of the deps shares it.
 	cancels *deployCancels
@@ -148,6 +152,32 @@ type StackDetail struct {
 	CreatedBy string `json:"createdBy" doc:"Who created the stack"`
 	CreatedAt string `json:"createdAt" doc:"When it was created, RFC 3339 UTC"`
 	Stopped   bool   `json:"stopped" doc:"True while the stack is stopped"`
+	// Lock is set while a stack operation runs on the environment, whichever stack it is on.
+	Lock *StackLockBody `json:"lock,omitempty" doc:"Left out unless set: set while a stack operation runs on this environment, on any of its stacks, and names it. Only one runs at a time: a second is refused 409 operation_locked"`
+	// LastOperation is the newest operation, left out for a stack never deployed.
+	LastOperation *StackOperationBody `json:"lastOperation,omitempty" doc:"Left out for a stack that has had no operation: the newest one, which the state is read from"`
+}
+
+// StackLockBody is who holds the environment's stack operation lock.
+type StackLockBody struct {
+	StackID   string `json:"stackId" doc:"The stack the running operation is on"`
+	StackName string `json:"stackName" doc:"Its name"`
+	JobID     string `json:"jobId" doc:"The job that runs the operation: open its console at .../stacks/{stackId}/deploys/{jobId}. Empty for the instant between the lock being taken and the job starting"`
+	Kind      string `json:"kind" enum:"deploy,update,rollback,start,stop,remove" doc:"What the operation is"`
+	StartedAt string `json:"startedAt" doc:"When it started, RFC 3339 UTC"`
+	StartedBy string `json:"startedBy" doc:"Who started it, as a name"`
+}
+
+// StackOperationBody is the newest operation on a stack: the one the state comes from.
+type StackOperationBody struct {
+	Kind          string `json:"kind" enum:"deploy,update,rollback,start,stop,remove" doc:"What the operation was"`
+	State         string `json:"state" enum:"running,done,failed,cancelled,interrupted" doc:"Where it is. interrupted is a deploy that was running when the server stopped: the swarm may be partly updated"`
+	Code          string `json:"code" doc:"A stable word for how a failed operation failed, such as service_rejected, converge_timeout or interrupted; empty otherwise"`
+	FailedService string `json:"failedService" doc:"The service, network, secret or config a failed operation stopped at; empty otherwise"`
+	JobID         string `json:"jobId" doc:"The job that ran it, open at .../deploys/{jobId} while the hub still has it"`
+	StartedBy     string `json:"startedBy" doc:"Who started it, as a name"`
+	StartedAt     string `json:"startedAt" doc:"When it started, RFC 3339 UTC"`
+	EndedAt       string `json:"endedAt" doc:"When it ended, RFC 3339 UTC; empty while it runs"`
 }
 
 // StackDetailOutput wraps StackDetail for huma.
