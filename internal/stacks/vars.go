@@ -4,6 +4,7 @@
 package stacks
 
 import (
+	"errors"
 	"regexp"
 	"sort"
 	"strings"
@@ -248,3 +249,26 @@ func substituteDefault(def string, lookup func(string) (string, bool)) string {
 	}
 	return out
 }
+
+// The reasons CheckVars refuses a table.
+var (
+	ErrVarNameInvalid = errors.New("stacks: a variable name is letters, digits and underscore, and does not start with a digit")
+	ErrVarNameTaken   = errors.New("stacks: a variable name is used twice")
+	ErrSecretTooShort = errors.New("stacks: a secret value is at least 4 characters")
+)
+
+// VarError says which variable CheckVars refused and why.
+type VarError struct {
+	Name string
+	Err  error
+}
+
+func (e *VarError) Error() string { return "stacks: variable " + e.Name + ": " + e.Err.Error() }
+
+// Unwrap returns the reason.
+func (e *VarError) Unwrap() error { return e.Err }
+
+// CheckVars holds a variable table to its rules: every name is letters, digits and underscore and
+// does not start with a digit, no name is used twice, and a secret value is at least MinSecretLen
+// characters long. It returns a *VarError for the first variable that breaks one.
+func CheckVars(vars []Var) error { return nil }

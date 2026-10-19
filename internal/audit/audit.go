@@ -183,6 +183,7 @@ const (
 	ActionStackDraftSaved            = "stack.draft_saved"
 	ActionStackDraftDiscarded        = "stack.draft_discarded"
 	ActionStackDeployed              = "stack.deployed"
+	ActionStackValueRevealed         = "stack.value_revealed"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

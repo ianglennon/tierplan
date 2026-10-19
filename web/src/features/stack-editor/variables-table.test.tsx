@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { StackVariable } from "@/api/stacks";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -43,6 +43,7 @@ function mount(over: Partial<VariablesTableProps> = {}) {
     onSet: vi.fn(),
     onSecret: vi.fn(),
     onRemove: vi.fn(),
+    onReset: vi.fn(),
   };
   const props: VariablesTableProps = {
     vars: [],
@@ -290,5 +291,170 @@ describe("a viewer", () => {
     expect((screen.getByLabelText("Value of WEB_PORT") as HTMLInputElement).disabled).toBe(true);
     expect(screen.queryByRole("button", { name: "Add variable" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Clear value of WEB_PORT" })).toBeNull();
+  });
+});
+
+// The reveal of a secret value (plan 07-10, STK-04, D-02): the one way back to a value the server
+// holds hidden. It needs secrets.reveal, the value lives in the row for 60 seconds and nowhere
+// else, and each reveal is audited by the server.
+describe("revealing a secret value", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const hiddenToken = (over: Partial<WorkingVar> = {}) =>
+    workingVar({ name: "TOKEN", secret: true, hidden: true, ...over });
+  const tokenRow = () =>
+    resolvedVar({
+      name: "TOKEN",
+      value: "<hidden>",
+      secret: true,
+      source: "table",
+      hasDefault: false,
+      default: "",
+    });
+
+  function secretTable(over: Partial<VariablesTableProps> = {}) {
+    const reveal = vi.fn(async () => "the-saved-value");
+    const handlers = mount({
+      vars: [hiddenToken()],
+      resolved: [tokenRow()],
+      canReveal: true,
+      reveal,
+      savedHidden: new Set(["TOKEN"]),
+      ...over,
+    });
+    return { ...handlers, reveal };
+  }
+
+  const show = () => screen.getByRole("button", { name: "Show TOKEN" });
+  const input = () => screen.getByLabelText("Value of TOKEN") as HTMLInputElement;
+
+  it("offers Show only to a user with secrets.reveal, and only for a secret whose value is saved", () => {
+    secretTable({ canReveal: false });
+    expect(screen.queryByRole("button", { name: "Show TOKEN" })).toBeNull();
+    cleanup();
+    secretTable({
+      vars: [workingVar({ name: "TOKEN", secret: true, value: "typed" })],
+      savedHidden: new Set(),
+    });
+    expect(screen.queryByRole("button", { name: "Show TOKEN" })).toBeNull();
+    cleanup();
+    secretTable();
+    expect(show().getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("fills the input with the value, as text, and marks the button pressed", async () => {
+    const { reveal } = secretTable();
+    expect(input().type).toBe("password");
+    await act(async () => {
+      fireEvent.click(show());
+    });
+    expect(reveal).toHaveBeenCalledWith("TOKEN");
+    expect(input().value).toBe("the-saved-value");
+    expect(input().type).toBe("text");
+    expect(show().getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("hides the value again after 60 seconds and announces it politely", async () => {
+    secretTable();
+    await act(async () => {
+      fireEvent.click(show());
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(59_999);
+    });
+    expect(input().value).toBe("the-saved-value");
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(input().value).toBe("");
+    expect(input().type).toBe("password");
+    expect(show().getAttribute("aria-pressed")).toBe("false");
+    const live = screen.getByText("TOKEN hidden again");
+    expect(live.closest("[aria-live]")?.getAttribute("aria-live")).toBe("polite");
+  });
+
+  it("hides the value at once when Show is pressed again", async () => {
+    secretTable();
+    await act(async () => {
+      fireEvent.click(show());
+    });
+    await act(async () => {
+      fireEvent.click(show());
+    });
+    expect(input().value).toBe("");
+    expect(screen.getByText("TOKEN hidden again")).toBeTruthy();
+  });
+
+  it("lets a revealed value be edited", async () => {
+    const { onSet } = secretTable();
+    await act(async () => {
+      fireEvent.click(show());
+    });
+    fireEvent.change(input(), { target: { value: "edited" } });
+    expect(onSet).toHaveBeenCalledWith("TOKEN", "edited");
+  });
+
+  it("never lets the value outlive the row", async () => {
+    const { rerender } = secretTable();
+    await act(async () => {
+      fireEvent.click(show());
+    });
+    rerender({ vars: [], resolved: [] });
+    rerender({ vars: [hiddenToken()], resolved: [tokenRow()] });
+    expect(input().value).toBe("");
+  });
+
+  it("says what is missing when the server refuses with 403 or fails", async () => {
+    const denied = Object.assign(new Error("denied"), { status: 403 });
+    const { reveal } = secretTable();
+    reveal.mockRejectedValueOnce(denied);
+    await act(async () => {
+      fireEvent.click(show());
+    });
+    expect(
+      screen.getByText("Needs the reveal secrets permission to show this value."),
+    ).toBeTruthy();
+    reveal.mockRejectedValueOnce(Object.assign(new Error("boom"), { status: 500 }));
+    await act(async () => {
+      fireEvent.click(show());
+    });
+    expect(screen.getByText("Couldn't load the value. Try again.")).toBeTruthy();
+    expect(input().value).toBe("");
+  });
+
+  it("puts a hidden secret that was typed over back with Reset", () => {
+    const { onReset } = secretTable({ vars: [hiddenToken({ hidden: false, value: "typed" })] });
+    fireEvent.click(screen.getByRole("button", { name: "Reset TOKEN" }));
+    expect(onReset).toHaveBeenCalledWith("TOKEN");
+  });
+
+  it("offers no Reset on a row that is untouched or was never saved", () => {
+    secretTable();
+    expect(screen.queryByRole("button", { name: "Reset TOKEN" })).toBeNull();
+    cleanup();
+    secretTable({
+      vars: [workingVar({ name: "TOKEN", secret: true, value: "typed" })],
+      savedHidden: new Set(),
+    });
+    expect(screen.queryByRole("button", { name: "Reset TOKEN" })).toBeNull();
+  });
+
+  it("tells the person to type the value again when Secret is turned off on a hidden one", () => {
+    secretTable({ vars: [workingVar({ name: "TOKEN", secret: false, value: "", hidden: false })] });
+    expect(
+      screen.getByText("The saved value stays hidden, so type it again to make it plain text."),
+    ).toBeTruthy();
+    expect(input().value).toBe("");
+    expect(input().type).toBe("text");
+  });
+
+  it("does not show that sentence on a row that was never secret", () => {
+    secretTable({ vars: [workingVar({ name: "TOKEN" })], savedHidden: new Set() });
+    expect(screen.queryByText(/The saved value stays hidden/)).toBeNull();
   });
 });

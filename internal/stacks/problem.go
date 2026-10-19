@@ -34,6 +34,8 @@ const (
 	CodeRelativeBind         = "relative_bind"
 	CodeInternalCheckFailed  = "internal_check_failed"
 	CodeCheckTimeout         = "check_timeout"
+	CodeUnsetVariable        = "unset_variable"
+	CodeUnusedVariable       = "unused_variable"
 
 	// The target-aware lint (STK-03); see package lint.
 	CodeIgnoredOnTarget          = lint.CodeIgnoredOnTarget

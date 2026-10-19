@@ -40,7 +40,15 @@ export interface VariablesTableProps {
   // The last check got no answer.
   failed: boolean;
   readOnly: boolean;
+  // The caller holds secrets.reveal on the environment: a hidden secret gets a Show button.
+  canReveal?: boolean;
+  // Fetches the saved value of a secret variable. A plain call, never a query: the answer is held
+  // in the row for a minute and nowhere else.
+  reveal?: (name: string) => Promise<string>;
+  // The names whose saved value the server holds hidden, as the draft was last loaded or saved.
+  savedHidden?: ReadonlySet<string>;
   onAdd: (name: string) => void;
+  onReset?: (name: string) => void;
   onSet: (name: string, value: string) => void;
   onSecret: (name: string, secret: boolean) => void;
   onRemove: (name: string) => void;

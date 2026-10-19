@@ -431,3 +431,184 @@ func TestCheckAnswersVariablesEvenWhenTheFileIsRefusedLater(t *testing.T) {
 		t.Errorf("variables = %+v, want none for a file that is not YAML", res.Variables)
 	}
 }
+
+func withVars(t *testing.T, compose string, vars ...stacks.Var) stacks.CheckResult {
+	t.Helper()
+	return stacks.Check(context.Background(), stacks.CheckInput{Name: "probe", Target: stacks.TargetSwarm, Copy: copyOf(compose, vars...)})
+}
+
+// problemsOf are the problems of a result with this code, in the order Check lists them.
+func problemsOf(res stacks.CheckResult, code string) []stacks.Problem {
+	var out []stacks.Problem
+	for _, p := range res.Problems {
+		if p.Code == code {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func TestCheckBlocksAPlainVariableWithNoValueAtEachPlaceItIsUsed(t *testing.T) {
+	t.Parallel()
+	const compose = `services:
+  web:
+    image: nginx:1.27
+    environment:
+      PASS: ${DB_PASS}
+    labels:
+      again: ${DB_PASS}
+      other: ${REGION}
+`
+	res := withVars(t, compose, stacks.Var{Name: "REGION", Value: "eu"})
+	got := problemsOf(res, stacks.CodeUnsetVariable)
+	if len(got) != 2 {
+		t.Fatalf("unset_variable problems = %+v, want one at each of the two places", got)
+	}
+	for i, line := range []int{5, 7} {
+		p := got[i]
+		if p.Severity != stacks.SeverityError || p.File != stacks.ComposeFile || p.Line != line ||
+			p.Message != "DB_PASS has no value and no default. Add a value in Variables." {
+			t.Errorf("problem %d = %+v, want the Variables error at line %d", i, p, line)
+		}
+	}
+	if res.Problems.Errors() < 2 {
+		t.Errorf("errors = %d: an undefined variable must block", res.Problems.Errors())
+	}
+	for _, v := range res.Variables {
+		if v.Name == "DB_PASS" && (!v.Required || v.Source != stacks.SourceUnset) {
+			t.Errorf("DB_PASS = %+v, want required and unset", v)
+		}
+	}
+}
+
+func TestCheckDoesNotBlockWhatHasADefaultOrAValue(t *testing.T) {
+	t.Parallel()
+	const compose = `services:
+  web:
+    image: nginx:1.27
+    environment:
+      A: ${A_VAR:-}
+      B: ${B_VAR-x}
+      C: ${C_VAR:-y}
+      D: ${D_VAR}
+      E: ${E_VAR:-${F_VAR}}
+`
+	res := withVars(t, compose, stacks.Var{Name: "D_VAR", Value: "d"}, stacks.Var{Name: "E_VAR", Value: "e"})
+	if got := problemsOf(res, stacks.CodeUnsetVariable); len(got) != 0 {
+		t.Errorf("unset_variable = %+v, want none: a default, an empty default, a value and a nested default that is not read do not block", got)
+	}
+	if res.Problems.Errors() != 0 {
+		t.Errorf("problems = %+v, want no error", res.Problems)
+	}
+}
+
+func TestCheckBlocksAnUndefinedVariableEvenWhenTheRestOfTheFileDoesNotLoad(t *testing.T) {
+	t.Parallel()
+	// ${IMAGE} fills the image with nothing: compose-go refuses the service, and the person still
+	// needs to be told which variable is missing.
+	res := withVars(t, "services:\n  web:\n    image: ${IMAGE}\n")
+	if got := problemsOf(res, stacks.CodeUnsetVariable); len(got) != 1 || got[0].Line != 3 {
+		t.Errorf("unset_variable = %+v, want one at line 3", got)
+	}
+}
+
+func TestCheckKeepsComposeGosOwnTextForARequiredVariable(t *testing.T) {
+	t.Parallel()
+	res := withVars(t, "services:\n  web:\n    image: nginx:1.27\n    environment:\n      PASS: ${DB_PASS:?set it}\n")
+	p := onlyProblem(t, res)
+	if p.Severity != stacks.SeverityError || p.Code != stacks.CodeComposeInvalid || !strings.Contains(p.Message, "set it") {
+		t.Errorf("problem = %+v, want compose-go's own blocking error with its message", p)
+	}
+	if got := problemsOf(res, stacks.CodeUnsetVariable); len(got) != 0 {
+		t.Errorf("unset_variable = %+v: a ${NAME:?message} has its own error and is not reported twice", got)
+	}
+}
+
+func TestCheckTakesABareEnvironmentEntryFromTheTable(t *testing.T) {
+	t.Parallel()
+	const compose = `services:
+  web:
+    image: nginx:1.27
+    environment:
+      - FOO
+      - BAR=x
+    labels:
+      k: v
+  api:
+    image: nginx:1.27
+    environment:
+      QUX:
+`
+	res := withVars(t, compose, stacks.Var{Name: "FOO", Value: "from-table"})
+	got := problemsOf(res, stacks.CodeUnsetVariable)
+	if len(got) != 1 || got[0].Line != 11 || got[0].Message != "QUX has no value and no default. Add a value in Variables." {
+		t.Fatalf("unset_variable = %+v, want only QUX, at line 11", got)
+	}
+	if res.Loaded == nil {
+		t.Fatalf("the file did not load: %+v", res.Problems)
+	}
+	env := res.Loaded.Project.Services["web"].Environment
+	if v := env["FOO"]; v == nil || *v != "from-table" {
+		t.Errorf("FOO = %v, want from-table: a bare entry is filled from the table", v)
+	}
+	if v := env["BAR"]; v == nil || *v != "x" {
+		t.Errorf("BAR = %v, want x", v)
+	}
+	if v := res.Loaded.Project.Services["api"].Environment["QUX"]; v != nil {
+		t.Errorf("QUX = %q, want it left unset", *v)
+	}
+	if !slices.Contains(res.Loaded.Unset, "QUX") || slices.Contains(res.Loaded.Unset, "FOO") {
+		t.Errorf("Unset = %v, want QUX and not FOO", res.Loaded.Unset)
+	}
+}
+
+func TestCheckWarnsOfATableVariableNoFileUsesAndDoesNotBlock(t *testing.T) {
+	t.Parallel()
+	res := withVars(t, stacks.StarterCompose, stacks.Var{Name: "OLD_THING", Value: "x"})
+	got := problemsOf(res, stacks.CodeUnusedVariable)
+	if len(got) != 1 || got[0].Severity != stacks.SeverityWarning || got[0].File != stacks.ComposeFile ||
+		got[0].Message != "OLD_THING is in Variables but the compose file doesn't use it." {
+		t.Fatalf("unused_variable = %+v, want one warning with the Variables wording", got)
+	}
+	if res.Problems.Errors() != 0 {
+		t.Errorf("problems = %+v: an unused variable never blocks", res.Problems)
+	}
+	var unused bool
+	for _, v := range res.Variables {
+		if v.Name == "OLD_THING" {
+			unused = v.Unused
+		}
+	}
+	if !unused {
+		t.Errorf("variables = %+v, want OLD_THING marked unused", res.Variables)
+	}
+	// A variable the file uses is not unused, whatever is in the table.
+	res = withVars(t, stacks.StarterCompose, stacks.Var{Name: "WEB_PORT", Value: "9090"})
+	if got := problemsOf(res, stacks.CodeUnusedVariable); len(got) != 0 {
+		t.Errorf("unused_variable = %+v, want none", got)
+	}
+}
+
+func TestCheckNeverCarriesASecretValueInAnAnswer(t *testing.T) {
+	t.Parallel()
+	const secret = "registry.example/very-secret-image"
+	// The moving-tag warning quotes the image after variables: a secret that is the image is the
+	// case the masker exists for.
+	res := withVars(t, "services:\n  web:\n    image: ${IMG}\n", stacks.Var{Name: "IMG", Value: secret, Secret: true})
+	if got := problemsOf(res, stacks.CodeMovingTag); len(got) != 1 {
+		t.Fatalf("moving_tag = %+v, want the warning that quotes the image", got)
+	}
+	for _, p := range res.Problems {
+		if strings.Contains(p.Message, secret) || strings.Contains(p.Key, secret) {
+			t.Errorf("problem %+v carries the secret", p)
+		}
+	}
+	if got := problemsOf(res, stacks.CodeMovingTag)[0].Message; !strings.Contains(got, stacks.Hidden) {
+		t.Errorf("message = %q, want the secret shown as %s", got, stacks.Hidden)
+	}
+	for _, v := range res.Variables {
+		if strings.Contains(v.Value, secret) || strings.Contains(v.Default, secret) {
+			t.Errorf("variable %+v carries the secret", v)
+		}
+	}
+}

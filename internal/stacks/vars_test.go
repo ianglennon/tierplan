@@ -4,6 +4,7 @@
 package stacks_test
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -199,5 +200,82 @@ func TestResolveVarsHidesASecretValueThatIsUsed(t *testing.T) {
 	v := stacks.ResolveVars(refs, []stacks.Var{{Name: "DB_PASS", Value: "s3cret-value", Secret: true}})[0]
 	if v.Value != stacks.Hidden || !v.Secret || v.Source != stacks.SourceTable {
 		t.Errorf("DB_PASS = %+v, want <hidden> from the table", v)
+	}
+}
+
+func TestCheckVarsHoldsATableToItsRules(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		vars []stacks.Var
+		want error
+		on   string
+	}{
+		"a good table":            {[]stacks.Var{{Name: "A", Value: "x"}, {Name: "_B2", Value: "abcd", Secret: true}}, nil, ""},
+		"a name with a dot":       {[]stacks.Var{{Name: "A.B", Value: "x"}}, stacks.ErrVarNameInvalid, "A.B"},
+		"a name starting with 1":  {[]stacks.Var{{Name: "1A", Value: "x"}}, stacks.ErrVarNameInvalid, "1A"},
+		"an empty name":           {[]stacks.Var{{Name: "", Value: "x"}}, stacks.ErrVarNameInvalid, ""},
+		"a name with a dash":      {[]stacks.Var{{Name: "A-B", Value: "x"}}, stacks.ErrVarNameInvalid, "A-B"},
+		"a name used twice":       {[]stacks.Var{{Name: "A", Value: "1"}, {Name: "A", Value: "2"}}, stacks.ErrVarNameTaken, "A"},
+		"a short secret":          {[]stacks.Var{{Name: "PIN", Value: "123", Secret: true}}, stacks.ErrSecretTooShort, "PIN"},
+		"an empty secret":         {[]stacks.Var{{Name: "PIN", Value: "", Secret: true}}, nil, ""},
+		"a short plain value":     {[]stacks.Var{{Name: "PIN", Value: "1"}}, nil, ""},
+		"a secret of four":        {[]stacks.Var{{Name: "PIN", Value: "1234", Secret: true}}, nil, ""},
+		"one four-byte character": {[]stacks.Var{{Name: "E", Value: "😀", Secret: true}}, stacks.ErrSecretTooShort, "E"},
+		"the first fault is told": {[]stacks.Var{{Name: "1A", Value: "x"}, {Name: "B", Value: "1", Secret: true}}, stacks.ErrVarNameInvalid, "1A"},
+	} {
+		err := stacks.CheckVars(tc.vars)
+		if tc.want == nil {
+			if err != nil {
+				t.Errorf("%s: CheckVars = %v, want nil", name, err)
+			}
+			continue
+		}
+		var ve *stacks.VarError
+		if !errors.Is(err, tc.want) || !errors.As(err, &ve) || ve.Name != tc.on {
+			t.Errorf("%s: CheckVars = %v, want %v on %q", name, err, tc.want, tc.on)
+		}
+	}
+}
+
+func TestRefsReadsABareEnvironmentEntryInBothForms(t *testing.T) {
+	t.Parallel()
+	const compose = `services:
+  web:
+    image: x:1
+    environment:
+      - FOO
+      - BAR=literal
+      - BAZ=${BAZ_VALUE:-z}
+  api:
+    image: x:1
+    environment:
+      QUX:
+      QUUX: set
+      CORGE: null
+`
+	refs := stacks.Refs(copyOf(compose))
+	for name, line := range map[string]int{"FOO": 5, "QUX": 11, "CORGE": 13} {
+		r := refOf(t, refs, name)
+		if r.HasDefault || r.Required || len(r.Places) != 1 || r.Places[0].Line != line || !r.Places[0].Plain {
+			t.Errorf("%s = %+v, want a plain reference on line %d", name, r, line)
+		}
+	}
+	for _, name := range []string{"BAR", "QUUX"} {
+		for _, r := range refs {
+			if r.Name == name {
+				t.Errorf("%s is given a value in the file, so it is not a reference: %+v", name, r)
+			}
+		}
+	}
+	if r := refOf(t, refs, "BAZ_VALUE"); !r.HasDefault {
+		t.Errorf("BAZ_VALUE = %+v, want its default", r)
+	}
+}
+
+func TestRefsDoesNotCountANestedDefaultAsPlain(t *testing.T) {
+	t.Parallel()
+	r := refOf(t, stacks.Refs(copyOf("services:\n  web:\n    image: x:1\n    hostname: ${HOST:-${DOMAIN}}\n")), "DOMAIN")
+	if len(r.Places) != 1 || r.Places[0].Plain {
+		t.Errorf("DOMAIN = %+v: it is read only when HOST is empty, so it is not an error where it stands", r)
 	}
 }
