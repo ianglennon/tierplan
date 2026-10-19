@@ -1,0 +1,24 @@
+# Service modes: a replicated job, a global job, a global service and a plain replicated service.
+services:
+  migrate:
+    image: app:1
+    command: ["migrate", "--all"]
+    deploy:
+      mode: replicated-job
+      replicas: 3
+      restart_policy:
+        condition: none
+  scan:
+    image: scanner:1
+    deploy:
+      mode: global-job
+      restart_policy:
+        condition: none
+  agent:
+    image: agent:2
+    deploy:
+      mode: global
+  web:
+    image: web:3
+    deploy:
+      mode: replicated

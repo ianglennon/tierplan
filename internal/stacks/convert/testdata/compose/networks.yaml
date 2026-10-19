@@ -1,0 +1,40 @@
+# Networks: a declared overlay with driver options, an address pool and labels, an external one
+# referenced by key and one by its declared name, the default network next to a named one, and
+# the aliases a service gets on each.
+services:
+  app:
+    image: app:1
+    networks:
+      backend:
+        aliases: [api, app-backend]
+        driver_opts:
+          com.docker.network.endpoint.mtu: "1400"
+      legacy: {}
+  db:
+    image: postgres:16
+    networks: [backend]
+  edge:
+    image: edge:1
+    networks:
+      - default
+      - public
+networks:
+  backend:
+    driver: overlay
+    driver_opts:
+      com.docker.network.driver.mtu: "1400"
+    internal: true
+    attachable: true
+    labels:
+      tier: data
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.20.0.0/24
+          gateway: 10.20.0.1
+          ip_range: 10.20.0.128/25
+  legacy:
+    external: true
+  public:
+    external: true
+    name: edge-public

@@ -43,6 +43,13 @@ func (e *NotConvertedError) Error() string {
 // Is makes errors.Is(err, ErrNotConverted) true.
 func (e *NotConvertedError) Is(target error) bool { return target == ErrNotConverted }
 
+// ErrRelativeBind means a bind mount's source is not an absolute path. Bayplan never resolves a
+// path against its own directory, so a relative source could only mean a path on the server.
+var ErrRelativeBind = errors.New("convert: a bind mount source must be an absolute path on the swarm nodes")
+
+// ErrUnknownObject means a service references a secret or config the resolver does not know.
+var ErrUnknownObject = errors.New("convert: the service references a secret or config that does not exist")
+
 // ErrNoImage means a service names no image: a stack deploys images, it does not build them.
 var ErrNoImage = errors.New("convert: the service has no image")
 
@@ -77,6 +84,9 @@ type Plan struct {
 type ServicePlan struct {
 	Name, Short, ImageAsWritten string
 	Spec                        swarm.ServiceSpec
+	// Ignored lists the compose keys the service sets that have no swarm equivalent, sorted. The
+	// converter does not apply them; the lint turns each into a warning.
+	Ignored []string `json:",omitempty"`
 }
 
 // NetworkPlan is one network the services use. An external network is only referenced: Name is
