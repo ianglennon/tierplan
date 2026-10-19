@@ -998,6 +998,54 @@ describe("the Problems panel", () => {
     expect(header.getAttribute("aria-expanded")).toBe("false");
   });
 
+  it("draws a warning of the check at its line in the gutter, with the message the panel lists", async () => {
+    const message = "`build` is ignored on Swarm. Build and push the image, then set `image`.";
+    server.check = () =>
+      Response.json({
+        problems: [
+          problemOf({
+            severity: "warning",
+            code: "ignored_on_target",
+            message,
+            line: 2,
+            col: 1,
+            endLine: 2,
+            endCol: 6,
+          }),
+        ],
+        unusedFiles: [],
+      });
+    mount();
+    await ready();
+    const mark = await waitFor(() => {
+      const el = document.querySelector(".cm-lint-marker-warning");
+      if (!el) throw new Error("no marker yet");
+      return el;
+    });
+    expect(mark.getAttribute("aria-label")).toBe(`Warning: ${message}`);
+    expect(document.querySelectorAll(".cm-line.cm-lint-line-warning")).toHaveLength(1);
+    // The same message is a row of the panel (a warning does not open it by itself), so nothing
+    // lives only on the marker.
+    fireEvent.click(await screen.findByRole("button", { name: /Problems/ }));
+    expect(
+      await screen.findByRole("button", { name: `Warning: ${message}, compose.yaml line 2` }),
+    ).toBeTruthy();
+    // The editor was not recreated to draw it, and the text is what was loaded.
+    expect(editorView().state.doc.toString()).toBe(COMPOSE);
+  });
+
+  it("draws only the problems of the open file in its gutter", async () => {
+    server.check = () =>
+      Response.json({
+        problems: [problemOf({ file: "other.env", line: 1, message: "Elsewhere" })],
+        unusedFiles: [],
+      });
+    mount();
+    await ready();
+    await screen.findByRole("button", { name: "Error: Elsewhere, other.env line 1" });
+    expect(document.querySelector(".cm-lint-marker")).toBeNull();
+  });
+
   it("labels a file the compose file does not use as Not used in the rail", async () => {
     server.draft = () =>
       Response.json(

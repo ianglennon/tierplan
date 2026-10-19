@@ -163,6 +163,12 @@ export function StackEditorPage({ envId, stackId, file, onFileChange }: StackEdi
     withResolver: true,
   });
   const open = copy.files.find((f) => f.path === copy.selected);
+  // The problems of the open file, for the markers in its gutter; the panel lists them all.
+  const openPath = open?.path;
+  const markers = useMemo(
+    () => check.problems.filter((p) => p.file === openPath),
+    [check.problems, openPath],
+  );
   // The jump waits for its file to be the open one, then moves the cursor and takes the focus. A
   // file with no editor (a hidden secret) has nowhere to put a cursor, so the jump ends there.
   useEffect(() => {
@@ -367,6 +373,7 @@ export function StackEditorPage({ envId, stackId, file, onFileChange }: StackEdi
                 ref={editor}
                 file={open}
                 readOnly={!canEdit}
+                problems={markers}
                 onChange={(content) => dispatch({ type: "edit", path: open.path, content })}
               />
             )

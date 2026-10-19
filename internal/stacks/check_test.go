@@ -330,3 +330,68 @@ func TestCheckPassesTheFilesAComposeFileOwns(t *testing.T) {
 		t.Errorf("problems %+v loaded %v unused %v, want a clean project that uses every file", res.Problems, res.Loaded, res.UnusedFiles)
 	}
 }
+
+func TestCheckStripsBuildFromTheProjectItReturns(t *testing.T) {
+	t.Parallel()
+	const compose = `services:
+  web:
+    image: registry.example/web:1.2
+    build:
+      context: .
+      dockerfile: Dockerfile
+  worker:
+    image: registry.example/worker:3
+`
+	for _, target := range []stacks.Target{stacks.TargetSwarm, stacks.TargetStandalone} {
+		res := stacks.Check(context.Background(), stacks.CheckInput{Name: "probe", Target: target, Copy: copyOf(compose)})
+		if res.Loaded == nil {
+			t.Fatalf("%s: no project; problems %+v", target, res.Problems)
+		}
+		for name, svc := range res.Loaded.Project.Services {
+			if svc.Build != nil {
+				t.Errorf("%s: service %s still has a build: the engine must never see one", target, name)
+			}
+			if svc.Image == "" {
+				t.Errorf("%s: service %s lost its image", target, name)
+			}
+		}
+		if res.Problems.Errors() != 0 || res.Problems.Warnings() != 1 {
+			t.Errorf("%s: problems = %+v, want one warning and no error", target, res.Problems)
+		}
+	}
+}
+
+func TestCheckAWarningDoesNotBlockButAnErrorDoes(t *testing.T) {
+	t.Parallel()
+	warn := checkOf(t, "services:\n  web:\n    image: registry.example/web:1\n    container_name: front\n")
+	if warn.Problems.Warnings() != 1 || warn.Problems.Errors() != 0 || warn.Loaded == nil {
+		t.Errorf("warning only: problems %+v loaded %v", warn.Problems, warn.Loaded)
+	}
+	blocked := checkOf(t, "services:\n  web:\n    build: .\n")
+	if blocked.Problems.Errors() != 1 {
+		t.Errorf("build without image: problems %+v, want one error", blocked.Problems)
+	}
+}
+
+func TestPositionIndexAnswersExactPathsOnly(t *testing.T) {
+	t.Parallel()
+	ix, err := stacks.NewPositionIndex([]byte("services:\n  web:\n    image: nginx\n    ports:\n      - target: 80\n        mode: host\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pos, ok := ix.Lookup("services.web.ports.0.mode"); !ok || pos.Line != 6 || pos.Col != 9 {
+		t.Errorf("Lookup(mode) = %+v, %v, want line 6 col 9", pos, ok)
+	}
+	if _, ok := ix.Lookup("services.web.ports.0.protocol"); ok {
+		t.Error("Lookup of a key the file does not have must be false, not the nearest key")
+	}
+	if got := ix.Keys("services.web"); !slices.Equal(got, []string{"image", "ports"}) {
+		t.Errorf("Keys(web) = %v", got)
+	}
+	if got := ix.Keys("services.web.ports"); !slices.Equal(got, []string{"0"}) {
+		t.Errorf("Keys(ports) = %v, want the item indexes", got)
+	}
+	if v, ok := ix.Scalar("services.web.ports.0.mode"); !ok || v != "host" {
+		t.Errorf("Scalar(mode) = %q, %v", v, ok)
+	}
+}

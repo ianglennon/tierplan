@@ -15,6 +15,7 @@
       "error": "Error",
       "warning": "Warning"
     },
+    "marker": "{{severity}}: {{message}}",
     "row": {
       "name": "{{severity}}: {{message}}, {{file}} line {{line}}",
       "where": "{{file}}:{{line}}"

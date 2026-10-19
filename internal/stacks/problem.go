@@ -3,7 +3,11 @@
 
 package stacks
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/ianglennon/bayplan/internal/stacks/lint"
+)
 
 // Severity says how a Problem stops a stack: an error blocks the deploy, a warning only informs.
 type Severity string
@@ -30,6 +34,14 @@ const (
 	CodeRelativeBind         = "relative_bind"
 	CodeInternalCheckFailed  = "internal_check_failed"
 	CodeCheckTimeout         = "check_timeout"
+
+	// The target-aware lint (STK-03); see package lint.
+	CodeIgnoredOnTarget          = lint.CodeIgnoredOnTarget
+	CodeBlockingKey              = lint.CodeBlockingKey
+	CodeBuildWithoutImage        = lint.CodeBuildWithoutImage
+	CodeMovingTag                = lint.CodeMovingTag
+	CodeReadOnlyFileObject       = lint.CodeReadOnlyFileObject
+	CodeNetworkOptionUnsupported = lint.CodeNetworkOptionUnsupported
 )
 
 // Problem is one thing the check found wrong with a stack: where (a file and a 1-based line and

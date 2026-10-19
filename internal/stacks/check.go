@@ -17,6 +17,8 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"go.yaml.in/yaml/v3"
+
+	"github.com/ianglennon/bayplan/internal/stacks/lint"
 )
 
 // CheckInput is what Check needs: the stack's name and target, and the working copy to check. It
@@ -93,9 +95,38 @@ func Check(ctx context.Context, in CheckInput) CheckResult {
 		}}
 		return res
 	}
+	// What the target will ignore or refuse is judged on the project as loaded, with build still
+	// in it: that is how a build key is seen.
+	found := lint.Lint(lint.Input{Target: lint.Target(in.Target), Project: loaded.Project, Index: idx})
+	// Bayplan deploys images and never builds one (A5): build leaves the project here, before any
+	// engine or any later step can see it. A service with a build and no image is a blocking error
+	// above, so what is left to deploy always names an image.
+	stripBuild(loaded.Project)
 	res.Loaded = loaded
-	res.Problems = append(res.Problems, binds...).Sorted()
+	res.Problems = append(append(res.Problems, binds...), lintProblems(found)...).Sorted()
 	return res
+}
+
+// stripBuild removes the build section of every service of the project.
+func stripBuild(project *types.Project) {
+	for name, svc := range project.Services {
+		if svc.Build != nil {
+			svc.Build = nil
+			project.Services[name] = svc
+		}
+	}
+}
+
+// lintProblems turns lint's findings into problems of compose.yaml.
+func lintProblems(found []lint.Finding) Problems {
+	out := make(Problems, 0, len(found))
+	for _, f := range found {
+		out = append(out, Problem{
+			Severity: Severity(f.Severity), Code: f.Code, File: ComposeFile, Key: f.Key, Message: f.Message,
+			Line: f.Pos.Line, Col: f.Pos.Col, EndLine: f.Pos.EndLine, EndCol: f.Pos.EndCol,
+		})
+	}
+	return out
 }
 
 // checkTimeout bounds one check when the caller names no deadline.
@@ -107,7 +138,7 @@ var relativeBindWording = "“%s” is a relative bind mount. Use a named volume
 // no directory for a relative path to be relative to, so it would resolve against the host the
 // engine runs on. compose-go's short-syntax parse tells a bind from a named volume, so "./data" is
 // found and "data" with a volume of that name is not. Both targets are held to it.
-func relativeBinds(project *types.Project, ix *index) Problems {
+func relativeBinds(project *types.Project, ix *PositionIndex) Problems {
 	var out Problems
 	for name, svc := range project.Services {
 		for i, v := range svc.Volumes {
@@ -200,17 +231,17 @@ func unusedFiles(files []File, refs []string) []string {
 	return out
 }
 
-// index is the positions of a compose file's keys, read from the stored bytes. It is the only
+// PositionIndex is the positions of a compose file's keys, read from the stored bytes. It is the only
 // place a line number comes from: a position is never taken from a file on the server.
-type index struct {
+type PositionIndex struct {
 	docs []*yaml.Node
 }
 
 // parseIndex reads every YAML document of src. compose-go merges every document of a file, so
 // every document is indexed.
-func parseIndex(src []byte) (*index, error) {
+func parseIndex(src []byte) (*PositionIndex, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(src))
-	ix := &index{}
+	ix := &PositionIndex{}
 	for {
 		var doc yaml.Node
 		err := dec.Decode(&doc)
@@ -227,7 +258,7 @@ func parseIndex(src []byte) (*index, error) {
 }
 
 // findAny is the first node any of the paths names.
-func (ix *index) findAny(paths ...string) *yaml.Node {
+func (ix *PositionIndex) findAny(paths ...string) *yaml.Node {
 	for _, p := range paths {
 		if n := ix.find(p); n != nil {
 			return n
@@ -238,7 +269,7 @@ func (ix *index) findAny(paths ...string) *yaml.Node {
 
 // shortVolume finds the short-syntax entry ("name:/target") of a service's volumes that uses a
 // named volume source, or nil.
-func (ix *index) shortVolume(service, source string) *yaml.Node {
+func (ix *PositionIndex) shortVolume(service, source string) *yaml.Node {
 	if ix == nil {
 		return nil
 	}
@@ -276,7 +307,7 @@ const maxPathDepth = 64
 // find returns the node a dotted path names: the key node of the deepest key the path reaches,
 // so a path with a missing tail is reported at the last key that is there. A key with a dot in it
 // (a label such as com.example.tier) is matched whole.
-func (ix *index) find(path string) *yaml.Node {
+func (ix *PositionIndex) find(path string) *yaml.Node {
 	if ix == nil {
 		return nil
 	}
@@ -340,6 +371,11 @@ func at(n *yaml.Node) (line, col, endLine, endCol int) {
 	if n == nil {
 		return 1, 1, 1, 2
 	}
+	return posOf(n)
+}
+
+// posOf is the range of a node that is there; see at.
+func posOf(n *yaml.Node) (line, col, endLine, endCol int) {
 	width := 1
 	if n.Kind == yaml.ScalarNode && n.Style&(yaml.LiteralStyle|yaml.FoldedStyle) == 0 && !strings.Contains(n.Value, "\n") {
 		if w := len([]rune(n.Value)); w > 0 {
@@ -412,7 +448,7 @@ var (
 
 // loadProblems turns the error compose-go refused a file with into positioned problems. The
 // position of a schema error comes from walking the stored YAML to the key path the error names.
-func loadProblems(err error, ix *index) Problems {
+func loadProblems(err error, ix *PositionIndex) Problems {
 	switch {
 	case errors.Is(err, ErrTooLarge):
 		return Problems{{
@@ -477,7 +513,7 @@ func timeoutProblem() Problem {
 }
 
 // keyProblem is an error at the key a path names, or at line 1 when the path is not in the file.
-func keyProblem(ix *index, code, path, message string) Problem {
+func keyProblem(ix *PositionIndex, code, path, message string) Problem {
 	line, col, endLine, endCol := at(ix.find(path))
 	return Problem{
 		Severity: SeverityError, Code: code, File: ComposeFile, Key: path, Message: message,
@@ -487,7 +523,7 @@ func keyProblem(ix *index, code, path, message string) Problem {
 
 // schemaProblems reads a compose-go schema error: "{path} {message}", with an empty path for the
 // top level. An unknown key reads "{parent}: unknown key “{key}”." at the key.
-func schemaProblems(text string, ix *index) Problems {
+func schemaProblems(text string, ix *PositionIndex) Problems {
 	path, msg, _ := strings.Cut(text, " ")
 	msg = strings.TrimSpace(msg)
 	for _, sw := range [][2]string{{"a array", "an array"}, {"a object", "an object"}, {"a integer", "an integer"}} {

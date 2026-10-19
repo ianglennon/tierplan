@@ -3,9 +3,15 @@
 
 import { EditorView } from "@codemirror/view";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
-import { type Ref, useImperativeHandle, useMemo, useRef } from "react";
+import { type Ref, useEffect, useImperativeHandle, useMemo, useRef } from "react";
 
 import { editorExtensions, editorProps, languageOf } from "@/features/spec-editor/editor-setup";
+import {
+  type LintProblem,
+  lintMarkers,
+  setLintProblems,
+} from "@/features/stack-editor/lint-markers";
+import { varHighlight } from "@/features/stack-editor/var-highlight";
 import type { WorkingFile } from "@/features/stack-editor/working-copy";
 import { useT } from "@/i18n/use-t";
 
@@ -28,9 +34,14 @@ function moveTo(view: EditorView, line: number, col: number) {
   view.focus();
 }
 
+const NO_PROBLEMS: readonly LintProblem[] = [];
+
 interface FileEditorProps {
   file: WorkingFile;
   readOnly: boolean;
+  // The problems of this file, drawn in the gutter and on the lines (plan 07-08). A new list
+  // replaces the old without recreating the editor.
+  problems?: readonly LintProblem[];
   onChange: (content: string) => void;
   ref?: Ref<FileEditorHandle>;
 }
@@ -40,7 +51,13 @@ interface FileEditorProps {
 // line scrolls inside the surface (UI-SPEC "Overflow"), and the surface renders only what is in
 // view, which keeps a 5,000-line compose file editable. Tab leaves the editor (editorProps).
 // The editor is keyed by the path by its parent, so each file has its own undo history.
-export function FileEditor({ file, readOnly, onChange, ref }: FileEditorProps) {
+export function FileEditor({
+  file,
+  readOnly,
+  problems = NO_PROBLEMS,
+  onChange,
+  ref,
+}: FileEditorProps) {
   const t = useT();
   const cm = useRef<ReactCodeMirrorRef>(null);
   const language = languageOf(undefined, file.path) === "yaml" ? "yaml" : "text";
@@ -49,9 +66,19 @@ export function FileEditor({ file, readOnly, onChange, ref }: FileEditorProps) {
     kind: t(`stackEditor.editor.kind.${language}`),
   });
   const extensions = useMemo(
-    () => editorExtensions({ label, language, wrap: false, readOnly }),
+    () => [
+      ...editorExtensions({ label, language, wrap: false, readOnly }),
+      ...(language === "yaml" ? [varHighlight()] : []),
+      lintMarkers(),
+    ],
     [label, language, readOnly],
   );
+  // The problems drawn now, and the ones to draw when the surface is created.
+  const shown = useRef(problems);
+  shown.current = problems;
+  useEffect(() => {
+    cm.current?.view?.dispatch({ effects: setLintProblems.of(problems) });
+  }, [problems]);
   // A jump asked for before the surface exists (the file was only just opened) waits for it.
   const pending = useRef<{ line: number; col: number } | null>(null);
   useImperativeHandle(
@@ -71,6 +98,7 @@ export function FileEditor({ file, readOnly, onChange, ref }: FileEditorProps) {
         {...editorProps}
         ref={cm}
         onCreateEditor={(view) => {
+          view.dispatch({ effects: setLintProblems.of(shown.current) });
           const jump = pending.current;
           pending.current = null;
           if (jump) moveTo(view, jump.line, jump.col);
