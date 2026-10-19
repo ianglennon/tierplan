@@ -65,6 +65,12 @@ type stackAnswer struct {
 	LastDeployedBy string `json:"lastDeployedBy"`
 	HasDraft       bool   `json:"hasDraft"`
 	CreatedBy      string `json:"createdBy"`
+	// The services the stack runs of those it has; absent for a stack not deployed and one that cannot be read.
+	ServicesRunning *int   `json:"servicesRunning"`
+	ServicesTotal   *int   `json:"servicesTotal"`
+	Stopped         bool   `json:"stopped"`
+	DraftSavedAt    string `json:"draftSavedAt"`
+	DraftSavedBy    string `json:"draftSavedBy"`
 }
 
 type draftAnswer struct {
@@ -261,7 +267,7 @@ func TestDeployAOneServiceStackToALocalSwarmManagerEndToEnd(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil || len(list.Items) != 1 {
 		t.Fatalf("list = %s (%v)", rec.Body, err)
 	}
-	if got := list.Items[0]; got.State != "deployed" || got.LastDeployedBy != "operator-1" || got.LastDeployedAt == "" || got.HasDraft {
+	if got := list.Items[0]; got.State != "running" || got.LastDeployedBy != "operator-1" || got.LastDeployedAt == "" || got.HasDraft {
 		t.Errorf("listed stack = %+v", got)
 	}
 
@@ -632,8 +638,9 @@ func TestADeployToAStandaloneHostRunsTheComposeEngineAndIsAudited(t *testing.T) 
 		t.Errorf("engine writes = %v, want the pull of the image alone", w)
 	}
 	rec = operator.do(http.MethodGet, "stacks/"+st.ID, "")
-	if got := answerOf[stackAnswer](t, rec); got.State != "deployed" || got.LastDeployedBy == "" {
-		t.Errorf("stack = %+v, want deployed", got)
+	// The Compose stand-in made no container, so nothing runs: the stack was deployed and is not running.
+	if got := answerOf[stackAnswer](t, rec); got.State != "not_running" || got.LastDeployedBy == "" {
+		t.Errorf("stack = %+v, want deployed and not running", got)
 	}
 	var deployed []auditRowFull
 	for _, a := range f.stackAudits(t) {
@@ -716,5 +723,239 @@ func TestTheStackListShowsADraftThatWasSavedAfterTheLastDeploy(t *testing.T) {
 	f.awaitDeploy(t, started.JobID)
 	if hasDraft() {
 		t.Error("a deployed draft still lists as a draft")
+	}
+}
+
+// The state of a stack (plan 07-23, STK-10, UI-SPEC Defaults 11): derived from Bayplan's records of the stack's
+// operations and from what the engine runs, the same way on the list and on the page.
+
+func readStackAnswer(t *testing.T, c *roleCaller, id string) stackAnswer {
+	t.Helper()
+	rec := c.do(http.MethodGet, "stacks/"+id, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get stack: %d %s", rec.Code, rec.Body)
+	}
+	return answerOf[stackAnswer](t, rec)
+}
+
+func listedStack(t *testing.T, c *roleCaller, id string) stackAnswer {
+	t.Helper()
+	rec := c.do(http.MethodGet, "stacks", "")
+	var list struct {
+		Items []stackAnswer `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("list = %s (%v)", rec.Body, err)
+	}
+	for _, it := range list.Items {
+		if it.ID == id {
+			return it
+		}
+	}
+	t.Fatalf("stack %s is not in %s", id, rec.Body)
+	return stackAnswer{}
+}
+
+func wantCounts(t *testing.T, got stackAnswer, running, total int) {
+	t.Helper()
+	if got.ServicesRunning == nil || got.ServicesTotal == nil || *got.ServicesRunning != running || *got.ServicesTotal != total {
+		t.Errorf("services = %v of %v, want %d of %d", deref(got.ServicesRunning), deref(got.ServicesTotal), running, total)
+	}
+}
+
+func deref(p *int) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+func TestAStackReadsRunningWithItsServiceCountsOnTheListAndThePage(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "tracer")
+	if job := f.deployAndWait(t, operator, st.ID, `{"draftVersion":1}`); job.State != "done" {
+		t.Fatalf("deploy: %+v", job)
+	}
+
+	page, listed := readStackAnswer(t, operator, st.ID), listedStack(t, operator, st.ID)
+
+	for name, got := range map[string]stackAnswer{"page": page, "list": listed} {
+		if got.State != "running" {
+			t.Errorf("%s state = %q, want running", name, got.State)
+		}
+		wantCounts(t, got, 1, 1)
+	}
+}
+
+func TestAStackNeverDeployedHasNoServiceCounts(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "fresh")
+
+	for name, got := range map[string]stackAnswer{"page": readStackAnswer(t, admin, st.ID), "list": listedStack(t, admin, st.ID)} {
+		if got.State != "not_deployed" || got.ServicesRunning != nil || got.ServicesTotal != nil {
+			t.Errorf("%s = %+v, want not_deployed with no counts", name, got)
+		}
+	}
+}
+
+// ownedService is a service the stack st owns on the fake swarm, with the task counts given.
+func ownedService(st stackAnswer, short string, running, desired uint64) dockertest.FakeService {
+	return dockertest.FakeService{
+		ID: "svc-" + short, Name: st.Name + "_" + short, Mode: "replicated", Running: running, Desired: desired,
+		Image:  "nginx:1.27-alpine@sha256:" + strings.Repeat("a", 64),
+		Labels: map[string]string{"com.docker.stack.namespace": st.Name, "bayplan.stack.id": st.ID, "bayplan.stack.image": "nginx:1.27-alpine"},
+	}
+}
+
+// reconfigureSwarm sets the services the fake swarm holds and reads the cluster again.
+func reconfigureSwarm(t *testing.T, f *envFix, e envBody, services ...dockertest.FakeService) {
+	t.Helper()
+	f.fake.Reconfigure(swarmManagerEngine(services...))
+	if err := f.clusters.Refresh(testsupport.Context(t), e.ID); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+}
+
+func TestADeployedStackReadsDegradedWhenSomeServicesRunAndNotRunningWhenNoneDo(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "tracer")
+	if job := f.deployAndWait(t, operator, st.ID, `{"draftVersion":1}`); job.State != "done" {
+		t.Fatalf("deploy: %+v", job)
+	}
+
+	reconfigureSwarm(t, f, e, ownedService(st, "a", 2, 2), ownedService(st, "b", 1, 3))
+	for name, got := range map[string]stackAnswer{"page": readStackAnswer(t, operator, st.ID), "list": listedStack(t, operator, st.ID)} {
+		if got.State != "degraded" {
+			t.Errorf("%s state = %q, want degraded", name, got.State)
+		}
+		wantCounts(t, got, 1, 2)
+	}
+
+	reconfigureSwarm(t, f, e, ownedService(st, "a", 0, 2), ownedService(st, "b", 0, 3))
+	for name, got := range map[string]stackAnswer{"page": readStackAnswer(t, operator, st.ID), "list": listedStack(t, operator, st.ID)} {
+		if got.State != "not_running" {
+			t.Errorf("%s state = %q, want not_running", name, got.State)
+		}
+		wantCounts(t, got, 0, 2)
+	}
+}
+
+func TestAServiceOfTheSameNamespaceThatAnotherStackOwnsIsNotCountedForThisOne(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "tracer")
+	if job := f.deployAndWait(t, operator, st.ID, `{"draftVersion":1}`); job.State != "done" {
+		t.Fatalf("deploy: %+v", job)
+	}
+	foreign := ownedService(st, "foreign", 0, 1)
+	foreign.Labels = map[string]string{"com.docker.stack.namespace": st.Name}
+
+	reconfigureSwarm(t, f, e, ownedService(st, "a", 1, 1), foreign)
+
+	got := readStackAnswer(t, operator, st.ID)
+	if got.State != "running" {
+		t.Errorf("state = %q, want running", got.State)
+	}
+	wantCounts(t, got, 1, 1)
+}
+
+func TestAStackWithADeployUnderWayReadsDeployingWhateverRuns(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "tracer")
+	jobID := startStuckDeploy(t, f, operator, st)
+
+	for name, got := range map[string]stackAnswer{"page": readStackAnswer(t, operator, st.ID), "list": listedStack(t, operator, st.ID)} {
+		if got.State != "deploying" {
+			t.Errorf("%s state = %q, want deploying", name, got.State)
+		}
+	}
+
+	if rec := operator.do(http.MethodPost, cancelPath(st.ID, jobID), ""); rec.Code != http.StatusAccepted {
+		t.Fatalf("cancel: %d %s", rec.Code, rec.Body)
+	}
+	f.awaitDeploy(t, jobID)
+	if got := readStackAnswer(t, operator, st.ID); got.State != "deploy_failed" {
+		t.Errorf("state after a cancel = %q, want deploy_failed", got.State)
+	}
+}
+
+func TestAStoppedStackReadsStoppedAndAFailedDeployDoesNotHideIt(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "tracer")
+	if job := f.deployAndWait(t, operator, st.ID, `{"draftVersion":1}`); job.State != "done" {
+		t.Fatalf("deploy: %+v", job)
+	}
+	if _, err := f.st.Write.Exec(`UPDATE stacks SET stopped = 1 WHERE id = ?`, st.ID); err != nil {
+		t.Fatal(err)
+	}
+	reconfigureSwarm(t, f, e, ownedService(st, "web", 0, 0))
+
+	for name, got := range map[string]stackAnswer{"page": readStackAnswer(t, operator, st.ID), "list": listedStack(t, operator, st.ID)} {
+		if got.State != "stopped" {
+			t.Errorf("%s state = %q, want stopped", name, got.State)
+		}
+	}
+	if got := readStackAnswer(t, operator, st.ID); !got.Stopped {
+		t.Errorf("stopped = false on the page of a stopped stack")
+	}
+}
+
+func TestADeployedStackWhoseEngineCannotBeReadReadsUnknownNotRunning(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "tracer")
+	if job := f.deployAndWait(t, operator, st.ID, `{"draftVersion":1}`); job.State != "done" {
+		t.Fatalf("deploy: %+v", job)
+	}
+	// A cluster that was never read and cannot be: forget what the deploy's own read left.
+	f.clusters.Forget(e.ID)
+	f.fake.LoseQuorum()
+
+	for name, got := range map[string]stackAnswer{"page": readStackAnswer(t, operator, st.ID), "list": listedStack(t, operator, st.ID)} {
+		if got.State != "unknown" || got.ServicesRunning != nil || got.ServicesTotal != nil {
+			t.Errorf("%s = %+v, want unknown with no counts: the stack is not claimed to run or not to run", name, got)
+		}
+	}
+}
+
+func TestADraftSavedAfterTheLastDeployIsNamedOnThePage(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "tracer")
+	if got := readStackAnswer(t, operator, st.ID); got.DraftSavedAt != "" || got.DraftSavedBy != "" {
+		t.Fatalf("a stack with no draft pending names a save: %+v", got)
+	}
+	if job := f.deployAndWait(t, operator, st.ID, `{"draftVersion":1}`); job.State != "done" {
+		t.Fatalf("deploy: %+v", job)
+	}
+	if got := readStackAnswer(t, operator, st.ID); got.HasDraft || got.DraftSavedAt != "" {
+		t.Fatalf("right after a deploy there is no draft: %+v", got)
+	}
+
+	saveCompose(t, operator, st.ID, stacks.StarterCompose+"# tuned\n", `[]`)
+
+	got := readStackAnswer(t, operator, st.ID)
+	if !got.HasDraft || got.DraftSavedBy != "operator-1" || got.DraftSavedAt == "" {
+		t.Errorf("stack = %+v, want a draft saved by operator-1", got)
 	}
 }

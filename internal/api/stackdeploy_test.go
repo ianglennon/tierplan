@@ -884,13 +884,13 @@ func TestRollbackRedeploysTheLastGoodRevisionWithoutTheRegistry(t *testing.T) {
 		t.Errorf("image = %q, want exactly what revision 2 ran, %q", image, pins["rb_web"])
 	}
 
-	// The roll back is revision 4, a good copy of 2, and the stack reads deployed.
+	// The roll back is revision 4, a good copy of 2, and the stack reads running.
 	revs = f.revisions(t, st.ID)
 	if len(revs) != 4 || revs[3].Outcome != "good" || revs[3].Pins != pin128 {
 		t.Errorf("revisions = %+v, want a good revision 4 with revision 2's pins", revs)
 	}
 	after := readStack(t, operator, st.ID)
-	if after.State != "deployed" || after.LastOperation == nil || after.LastOperation.Kind != "rollback" || after.LastOperation.State != "done" {
+	if after.State != "running" || after.LastOperation == nil || after.LastOperation.Kind != "rollback" || after.LastOperation.State != "done" {
 		t.Errorf("stack after = %+v %+v, want deployed by a roll back", after, after.LastOperation)
 	}
 	job := answerOf[struct {
