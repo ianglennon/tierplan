@@ -99,7 +99,7 @@ func Allowed(method, rawPath, rawQuery string, hasBody, hasUpgrade bool, p Polic
 }
 
 // queryAllowed reports whether every key of the query is one the route takes and
-// every value of it matches the key's pattern. It parses the query the way the
+// every value of it matches the key's pattern, and every key the route requires is there. It parses the query the way the
 // engine does, so a key or value spelled with escapes is judged as the engine will
 // read it.
 func queryAllowed(rt route, rawQuery string) bool {
@@ -119,6 +119,11 @@ func queryAllowed(rt route, rawQuery string) bool {
 			if !pattern.MatchString(v) {
 				return false
 			}
+		}
+	}
+	for _, key := range rt.required {
+		if len(q[key]) == 0 {
+			return false
 		}
 	}
 	return true

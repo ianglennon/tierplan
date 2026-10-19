@@ -54,6 +54,9 @@ type route struct {
 	// query is the closed set of query keys; a key not in it, or a value that
 	// does not match its pattern, refuses the request. Ignored when anyQuery.
 	query map[string]*regexp.Regexp
+	// required are the keys a request must carry, where the engine would answer a request
+	// without one with an error: a rename without a name, an archive without a path.
+	required []string
 	// anyQuery is true for the read surface of earlier phases, whose query is
 	// only bounded in size.
 	anyQuery bool
@@ -125,6 +128,12 @@ var (
 	// falseValue is the one value copyUIDGID may have: the owner in the tar is not applied, so a
 	// file lands owned by root.
 	falseValue = regexp.MustCompile(`^(0|false)$`)
+	// inspectPlatformValue is the platform of an image inspect. The moby client sends the JSON of
+	// an OCI platform (architecture, os, then os.version and variant when set), which is the form
+	// the engine takes; os/arch and os/arch/variant are the same platform in the shorter spelling
+	// the other image routes use.
+	inspectPlatformValue = regexp.MustCompile(`^(` + platformValue.String()[1:len(platformValue.String())-1] +
+		`|\{"architecture":"[a-z0-9_]{1,16}","os":"[a-z0-9]{1,16}"(,"os\.version":"[A-Za-z0-9_.+-]{1,64}")?(,"variant":"[A-Za-z0-9_.-]{1,32}")?\})$`)
 )
 
 // pathOf anchors tail and allows the optional /vX.Y prefix, which is the API
@@ -247,8 +256,16 @@ var routes = []route{
 	// container's files stays absent.
 	{
 		name: "container archive", method: http.MethodPut, path: pathOf(`containers/` + idShape + `/archive`),
-		query: map[string]*regexp.Regexp{"path": rootPathValue, "noOverwriteDirNonDir": boolValue, "copyUIDGID": falseValue},
-		body:  BodyArchive,
+		query:    map[string]*regexp.Regexp{"path": rootPathValue, "noOverwriteDirNonDir": boolValue, "copyUIDGID": falseValue},
+		required: []string{"path"},
+		body:     BodyArchive,
+	},
+
+	// Container rename: the Compose SDK names a recreated container after it has created it. The
+	// only key is the new name, in the shape a container create takes, and the request has no body.
+	{
+		name: "container rename", method: http.MethodPost, path: pathOf(`containers/` + idShape + `/rename`),
+		query: map[string]*regexp.Regexp{"name": containerNameValue}, required: []string{"name"},
 	},
 
 	// Container lifecycle.
@@ -343,7 +360,12 @@ var routes = []route{
 	},
 	// The list ("images list", above) is matched first, so GET /images/json is
 	// never read as the inspect of an image whose name has no slash.
-	{name: "image inspect", method: http.MethodGet, path: pathOf(`images/` + imageNameShape + `/json`)},
+	// The inspect takes the two keys the Compose SDK sends: manifests, to read the manifests of a
+	// multi-platform image, and platform, to pick one of them.
+	{
+		name: "image inspect", method: http.MethodGet, path: pathOf(`images/` + imageNameShape + `/json`),
+		query: map[string]*regexp.Regexp{"manifests": boolValue, "platform": inspectPlatformValue},
+	},
 	{name: "image history", method: http.MethodGet, path: pathOf(`images/` + imageNameShape + `/history`)},
 	{
 		// force is absent on purpose: without it the engine itself refuses to

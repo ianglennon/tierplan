@@ -907,6 +907,8 @@ func TestRouteContainerArchiveTakesOnlyThreeKeysAndOnlyAPut(t *testing.T) {
 		{"a relative path", "PUT", "/containers/web-1/archive", "path=run", true, ""},
 		{"a path with a dot-dot", "PUT", "/containers/web-1/archive", "path=%2F..", true, ""},
 		{"an empty path", "PUT", "/containers/web-1/archive", "path=", true, ""},
+		{"no path", "PUT", "/containers/web-1/archive", "noOverwriteDirNonDir=true", true, ""},
+		{"no query", "PUT", "/containers/web-1/archive", "", true, ""},
 		{"a second path that is not the root", "PUT", "/containers/web-1/archive", "path=%2F&path=%2Fetc", true, ""},
 		{"an unknown key", "PUT", "/containers/web-1/archive", "path=%2F&overwrite=1", true, ""},
 		{"a bad boolean", "PUT", "/containers/web-1/archive", "path=%2F&noOverwriteDirNonDir=yes", true, ""},
@@ -951,8 +953,8 @@ func TestRouteContainerArchiveIsRefusedOnAReadOnlyHost(t *testing.T) {
 }
 
 func TestRouteContainerRenameTakesOnlyANameAndNoBody(t *testing.T) {
-	long254 := "a" + strings.Repeat("b", 253)
 	long255 := "a" + strings.Repeat("b", 254)
+	long256 := "a" + strings.Repeat("b", 255)
 	for _, tc := range []struct {
 		name, method, path, query string
 		body                      bool
@@ -962,9 +964,9 @@ func TestRouteContainerRenameTakesOnlyANameAndNoBody(t *testing.T) {
 		{"the version prefix", "POST", "/v1.52/containers/web-1/rename", "name=shop-web-1", false, "container rename"},
 		{"a name with a leading slash", "POST", "/containers/web-1/rename", "name=%2Fweb-1", false, "container rename"},
 		{"a name with dots and underscores", "POST", "/containers/web-1/rename", "name=a.b_c-d", false, "container rename"},
-		{"a name of 255 characters", "POST", "/containers/web-1/rename", "name=" + long254, false, "container rename"},
+		{"a name of 255 characters", "POST", "/containers/web-1/rename", "name=" + long255, false, "container rename"},
 
-		{"a name of 256 characters", "POST", "/containers/web-1/rename", "name=" + long255, false, ""},
+		{"a name of 256 characters", "POST", "/containers/web-1/rename", "name=" + long256, false, ""},
 		{"no name", "POST", "/containers/web-1/rename", "", false, ""},
 		{"an empty name", "POST", "/containers/web-1/rename", "name=", false, ""},
 		{"a slash after the first character", "POST", "/containers/web-1/rename", "name=a%2Fb", false, ""},

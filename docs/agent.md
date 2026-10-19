@@ -44,7 +44,7 @@ The agent is the security boundary between Bayplan and the host's Docker socket.
 - On a swarm manager, the logs of a service (`GET /services/{id}/logs`) and of one task (`GET /tasks/{id}/logs`), with `stdout`, `stderr`, `timestamps`, `follow`, `details`, `since` and `tail` only. There is no `until`: the engine ignores it on these routes. Both are long streams like a container's logs and take one of the agent's interactive slots.
 - Disk usage for volumes (`system/df` with `type=volume`).
 - Images, by repository, `repository:tag`, `repository@digest` or image ID:
-  - `GET /images/{name}/json` (inspect) and `GET /images/{name}/history`, with no query keys.
+  - `GET /images/{name}/json` (inspect), with only the `manifests` and `platform` keys the Compose SDK sends (`manifests=1`, and `platform` as the JSON of an OCI platform such as `{"architecture":"amd64","os":"linux"}`, or as `os/arch[/variant]`), and `GET /images/{name}/history`, with no query keys.
   - `GET /distribution/{name}/json`, with no query keys. It asks the registry whether this host may pull the image, using the credential in `X-Registry-Auth` if one is sent.
 
 **Changes** (a read-only host refuses every one of these):
@@ -54,6 +54,8 @@ The agent is the security boundary between Bayplan and the host's Docker socket.
 | Container lifecycle | start, stop, restart, kill, pause and unpause (only the `t` timeout and `signal` keys), and remove (only `force` and `v`) |
 | A shell in a container | create an exec, start it, resize its terminal. Start is the only call that may be upgraded to a raw two-way stream |
 | Container create | `POST /containers/create`, only the `name` and `platform` keys. The body is the container spec the Compose SDK sends for a standalone stack (the `Config`, `HostConfig` and `NetworkingConfig` fields it fills), capped at 256 KiB; any other field is refused. A create that gives the container host access is refused unless the host set `BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true` (see [Container creates and host access](#container-creates-and-host-access)) |
+| Container rename | `POST /containers/{id}/rename`, only the `name` key (required, in the shape a container name has, at most 255 characters, no slash after the first character) and no body. The Compose SDK renames a container it has just created when it replaces one |
+| Container archive | `PUT /containers/{id}/archive`, only the `path` (required, and only `/`), `noOverwriteDirNonDir` and `copyUIDGID` (only `0` or `false`) keys. The body must be a tar of exactly one regular file of at most 1,000 KB, written into a Compose container that is not running (see [Writing a stack file into a container](#writing-a-stack-file-into-a-container)). The Compose SDK injects a stack file secret or config this way, just before it starts the container |
 | Networks | create, connect a container, disconnect a container, delete |
 | Volumes | create, delete. A create of a `local` volume that binds a relative host path or one outside `/srv`, `/mnt` and `/media`, or that mounts a filesystem type other than `tmpfs` or a network share, and of any volume with a driver other than `local` (a volume plugin), is refused unless the host set `BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true` (see [Service specs and host access](#service-specs-and-host-access)) |
 | Images | pull (`POST /images/create`, only the `fromImage`, `tag` and `platform` keys, no body) and remove (`DELETE /images/{name}`, only the `noprune` key) |
@@ -82,24 +84,27 @@ The agent is the security boundary between Bayplan and the host's Docker socket.
 | `DELETE /configs/{id}` | none | none | |
 | `GET /containers/{id}/stats` | `stream` (only `0` or `false`), `one-shot` | none | |
 | `POST /containers/create` | `name`, `platform` | container spec (Config, HostConfig, NetworkingConfig fields the Compose SDK sets) | 256 KiB |
+| `POST /containers/{id}/rename` | `name` (required) | none | |
+| `PUT /containers/{id}/archive` | `path` (required, `/` only), `noOverwriteDirNonDir`, `copyUIDGID` (`0` or `false` only) | a tar of one regular file, not JSON | 1,000 KB of content, plus 64 KiB for the whole body |
+| `GET /images/{name}/json` | `manifests`, `platform` | none | |
 
-There is no route to update a secret or a config (they are replaced by a new one), to read the swarm join tokens, or to change, attach to or export a container. A container can be created, through the route and the host policy above.
+There is no route to update a secret or a config (they are replaced by a new one), to read the swarm join tokens, or to attach to, export or read the files of a container. A container can be created and renamed, through the routes and the host policy above, and one file can be written into a stopped compose container.
 
-For every call that carries a body (exec create and start, network create, connect and disconnect, volume create, container create, service create and update, node update, secret create, config create) the agent reads the JSON into Docker's own request type, refuses any field it does not know, builds a fresh request from the fields it allows, and forwards that fresh request. Whatever else the sender put in the body does not arrive.
+For every call that carries a JSON body (exec create and start, network create, connect and disconnect, volume create, container create, service create and update, node update, secret create, config create) the agent reads the JSON into Docker's own request type, refuses any field it does not know, builds a fresh request from the fields it allows, and forwards that fresh request. Whatever else the sender put in the body does not arrive. The one body that is not JSON, the tar of a container archive write, is checked as described below and forwarded as received.
 
 **A registry credential crosses on four calls only.** `X-Registry-Auth` carries the credential Bayplan holds for a registry. The agent accepts it on an image pull, on the distribution check and on a service create and update, and deletes it from every other request before the request reaches Docker; `X-Registry-Config` is deleted from every request. On those calls the header must be absent or a single value of at most 16 KiB made only of base64url characters, otherwise the request is refused as `agent_policy_denied`. The agent never decodes, logs or keeps the value: a refusal is reported with the method, the path and the reason, without the query or any header.
 
 **Refused, whatever Bayplan asks:**
 
 - A **privileged** exec, an exec with **environment variables** or **detach keys**, an exec without a terminal, and a detached exec start.
-- Any HTTP **upgrade** other than starting an exec. `attach` and the file `archive` of a container are refused.
+- Any HTTP **upgrade** other than starting an exec. `attach` is refused, and so is reading a container's files (`GET` or `HEAD` on `archive`).
 - A network that is an **ingress**, **config-only** or **config-from** network, a network driver other than bridge, overlay, macvlan or ipvlan, and IPAM options.
 - A **forced** network disconnect.
 - A **cluster volume** (a volume with a cluster spec).
 - The legacy **`link`** key on a container remove, and **`force`** on a volume delete.
 - Importing an image (`fromSrc`, `repo`, `message` and `changes` on a pull), **`force`** on an image remove, and tagging, pushing, saving, loading, building and pruning images.
-- Changing a container, and creating one that gives the container host access, unless the host opted in (below); creating or changing a **service whose spec gives tasks host access**, or that mounts a host-access or volume plugin volume by name or inline, and creating a **volume** that mounts the host or names a volume plugin, unless the host opted in (below); the export and file contents of a container, and a stats stream that is left open (`stream=true`); the swarm join tokens (`GET /swarm`).
-- A body larger than 64 KiB (256 KiB for a service spec or a container create, 1 MiB for a secret and 2 MiB for a config), and a query larger than 4 KiB.
+- Changing a container, and creating one that gives the container host access, unless the host opted in (below); creating or changing a **service whose spec gives tasks host access**, or that mounts a host-access or volume plugin volume by name or inline, and creating a **volume** that mounts the host or names a volume plugin, unless the host opted in (below); writing into a running container, or into one Compose did not create, or anything but one regular file; the export and file contents of a container, and a stats stream that is left open (`stream=true`); the swarm join tokens (`GET /swarm`).
+- A body larger than 64 KiB (256 KiB for a service spec or a container create, 1 MiB for a secret, 2 MiB for a config and 1,000 KB of content plus 64 KiB for a container archive), and a query larger than 4 KiB.
 
 ## Service specs and host access
 
@@ -133,7 +138,22 @@ The Compose SDK that deploys a standalone stack creates containers, so every age
 
 The shared vectors in `proto/hostpath/testdata/container-specs.json` pin these rules, and the agent's fuzz test judges every forwarded body against a second, independent rule. A read-only host refuses the create before the body is read.
 
+## Writing a stack file into a container
+
+A standalone stack can hand a container a secret or config that comes from a stack file. The Compose SDK does it between creating the container and starting it, with `PUT /containers/{id}/archive?path=/&noOverwriteDirNonDir=true`, and a body that is a tar of one file named for the path inside the container (`/run/secrets/db-password`). Every agent forwards that call, and only that call:
+
+- The body is a tar of **exactly one entry, a regular file**. A symlink, hard link, device, FIFO or directory entry, a second entry, and anything but zero padding after the end-of-archive blocks are refused.
+- The file's name is a **clean path**: relative, or with one leading slash as the SDK writes it, with no `..` or `.` segment, no `//`, no trailing slash and no NUL byte, and at most 4,096 bytes. The write is made at `/`, so the name is where the file lands in the container.
+- The mode may use only the permission bits (`rwxrwxrwx`): **no setuid, setgid or sticky bit**. The entry has no link target, device number or extended (PAX) record, so it cannot carry file capabilities or extended attributes either.
+- The content is **at most 1,000 KB** (the larger of the secret and config limits), and the whole body at most 1,000 KB plus 64 KiB.
+- `copyUIDGID` may only be `0` or `false`, so the file is owned by root whatever the tar says. A secret or config that asks for another owner (`uid`, `gid`) is therefore refused on a standalone host.
+- The container must exist, carry the `com.docker.compose.project` label and **not be running**. The agent asks its own engine (`GET /containers/{id}/json`) once, after the tar has passed; a container that is running, one without the label and one that does not exist are refused as `agent_policy_denied`, and an engine that does not answer is `agent_engine_unreachable` (502), never permission.
+
+A read-only host refuses the call before the body is read. The bind mounts of a container are still judged by the container create rule above, so a file written below a bind lands where that bind was allowed to point. The container is checked once, so one that is started between that check and the write is not caught. The rule keeps the route from being a general way to write into live containers; it is not a boundary against a compromised Bayplan, which can stop a compose container and then write to it. What it cannot do is write a link, a device, a setuid file or a second file, or write into a container Compose did not create.
+
 **The read-only flag comes first.** On a host with `BAYPLAN_AGENT_READ_ONLY=true` the agent refuses every request that is not a `GET` or `HEAD` before it looks at the table, so no table entry can reach a change, no shell can be opened (creating an exec is a `POST`), and no image can be pulled or removed. Image inspect, history and the distribution check are reads and still answer. The distribution check is a read for the agent but not for the network: it has the host's Docker engine connect to a registry host that Bayplan names, using the credential Bayplan sends, and the engine treats loopback and its `insecure-registries` hosts as plain HTTP. A read-only host therefore still lets the Bayplan server make that host's network position issue requests to registries, so "read-only" does not mean "makes no outbound connections". If that matters, firewall the host's egress. See [Settings on the host](#settings-on-the-host-read-only-and-self-update).
+
+**An older agent refuses a standalone stack deploy.** An agent from before plans 07-02 and 07-04 answers `agent_policy_denied` to the container create, the container rename, the image inspect keys `manifests` and `platform`, and the archive write of a standalone stack deploy, so Bayplan cannot deploy a compose stack to a standalone host through it until it updates; Bayplan then says the agent needs an update (the same notice as below), and updates it itself unless the host set `BAYPLAN_AGENT_SELF_UPDATE=false` (see [Updates](#updates)).
 
 **An older agent refuses the newer calls.** The table ships with the agent. An agent from before this list grew refuses container actions, logs, shells, networks, volumes, image pulls, removes, inspects and distribution checks, and service, node, secret and config calls, service and task logs and container stats with `agent_policy_denied` until it updates; Bayplan then says the agent needs an update, and updates it itself unless the host set `BAYPLAN_AGENT_SELF_UPDATE=false` (see [Updates](#updates)).
 

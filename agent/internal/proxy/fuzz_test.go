@@ -114,7 +114,14 @@ var oracle = []oracleEntry{
 		"tag":       rx(`^([A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|sha256:[a-f0-9]{64}|sha512:[a-f0-9]{128})$`),
 		"platform":  rx(`^[a-z0-9]{1,16}(/[A-Za-z0-9_.-]{1,32}){1,2}$`),
 	}),
-	oEntry("GET", `images/`+oImg+`/json`, nil),
+	// The inspect takes manifests and a platform, as os/arch[/variant] or the JSON of an OCI platform.
+	oEntry("GET", `images/`+oImg+`/json`, map[string]*regexp.Regexp{
+		"manifests": oBool,
+		"platform": rx(`^([a-z0-9]{1,16}(/[A-Za-z0-9_.-]{1,32}){1,2}|` +
+			`\{"architecture":"[a-z0-9_]{1,16}","os":"[a-z0-9]{1,16}"(,"os\.version":"[A-Za-z0-9_.+-]{1,64}")?(,"variant":"[A-Za-z0-9_.-]{1,32}")?\})$`),
+	}),
+	// A rename: the new name, in the shape a create takes, and no body.
+	oEntry("POST", `containers/`+oID+`/rename`, map[string]*regexp.Regexp{"name": rx(`^/?[a-zA-Z0-9][a-zA-Z0-9_.-]{0,254}$`)}),
 	oEntry("GET", `images/`+oImg+`/history`, nil),
 	oEntry("DELETE", `images/`+oImg, map[string]*regexp.Regexp{"noprune": oBool}),
 	oEntry("GET", `distribution/`+oImg+`/json`, nil),
@@ -305,6 +312,17 @@ func FuzzAllowed(f *testing.F) {
 		{"GET", "/images/json", "", false, false, false},
 		{"HEAD", "/images/json", "all=1", false, false, true},
 		{"GET", "/images/a/json", "manifests=1", false, false, false},
+		{"GET", "/v1.52/images/nginx:1.27/json", "manifests=1&platform=%7B%22architecture%22%3A%22amd64%22%2C%22os%22%3A%22linux%22%7D", false, false, false},
+		{"GET", "/images/a/json", "platform=linux%2Famd64", false, false, false},
+		{"GET", "/images/a/json", "platform=%7B%22architecture%22%3A%22amd64%22%2C%22os%22%3A%22linux%22%2C%22x%22%3A%22y%22%7D", false, false, false},
+		{"GET", "/images/a/json", "manifests=yes", false, false, false},
+		{"GET", "/images/a/history", "manifests=1", false, false, false},
+		{"POST", "/containers/abc/rename", "name=web-1", false, false, false},
+		{"POST", "/v1.52/containers/abc/rename", "name=%2Fweb-1", false, false, false},
+		{"POST", "/containers/abc/rename", "", false, false, false},
+		{"POST", "/containers/abc/rename", "name=a%2Fb", false, false, false},
+		{"POST", "/containers/abc/rename", "name=web-1", true, false, false},
+		{"POST", "/containers/abc/rename", "name=web-1", false, false, true},
 		{"GET", "/distribution/a:1/json", "", false, false, false},
 		{"GET", "/images/sha256:0000000000000000000000000000000000000000000000000000000000000000/json", "", false, false, false},
 		{"GET", "/images/../x/json", "", false, false, false},
