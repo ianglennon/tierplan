@@ -569,8 +569,10 @@ func validateNodeSpec(raw []byte) (swarm.NodeSpec, error) {
 // SDK fills (getCreateConfigs). A field the SDK does not set is not copied, so any of
 // ContainerIDFile, VolumeDriver, ConsoleSize, Cgroup, PublishAllPorts, Umask, ArgsEscaped,
 // NetworkDisabled, OnBuild and the state fields of an endpoint set is a refusal (STK-02). The
-// image must be named. What is forwarded is the rebuilt value encoded again.
-func validateContainerCreate(raw []byte, _ bodyEnv) (container.CreateRequest, error) {
+// image must be named. Unless the host owner opted in, a container create that gives the container
+// host access is refused with errHostPolicy (checkContainerHostPolicy). What is forwarded is the
+// rebuilt value encoded again.
+func validateContainerCreate(raw []byte, env bodyEnv) (container.CreateRequest, error) {
 	var in container.CreateRequest
 	if err := decodeStrict(raw, &in); err != nil {
 		return in, err
@@ -597,6 +599,12 @@ func validateContainerCreate(raw []byte, _ bodyEnv) (container.CreateRequest, er
 	}
 	if clean.Config == nil || clean.Image == "" {
 		return in, refuse("a container create names no image")
+	}
+	// Host access: a container create that gives the container the host's privileges, namespaces,
+	// devices or paths is refused unless the host owner allowed it with
+	// BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES (STK-02, D-36).
+	if err := checkContainerHostPolicy(clean, env); err != nil {
+		return in, err
 	}
 	return clean, nil
 }

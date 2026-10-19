@@ -444,6 +444,18 @@
     "refused": []
   },
   {
+    "name": "no-new-privileges as a boolean",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "SecurityOpt": [
+          "no-new-privileges=true"
+        ]
+      }
+    },
+    "refused": []
+  },
+  {
     "name": "the default seccomp profile by name",
     "body": {
       "Image": "nginx:1.27",
@@ -1377,6 +1389,35 @@
       "HostConfig": {
         "SecurityOpt": [
           "Label=Type:SPC_T"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.SecurityOpt[0]"
+    ]
+  },
+  {
+    "name": "a security option the agent does not know",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "SecurityOpt": [
+          "no-new-privileges=true",
+          "credentialspec=file://spec.json"
+        ]
+      }
+    },
+    "refused": [
+      "HostConfig.SecurityOpt[1]"
+    ]
+  },
+  {
+    "name": "a security option with no value",
+    "body": {
+      "Image": "nginx:1.27",
+      "HostConfig": {
+        "SecurityOpt": [
+          "seccomp"
         ]
       }
     },

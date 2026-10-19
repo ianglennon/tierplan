@@ -647,6 +647,13 @@ func FuzzBody(f *testing.F) {
 		{uint8(BodyConfigCreate), enc(swarm.ConfigSpec{Annotations: swarm.Annotations{Name: "nginx.conf"}, Data: []byte("v"), Templating: &swarm.Driver{Name: "vault"}})},
 		{uint8(BodyConfigCreate), enc(swarm.ConfigSpec{Annotations: swarm.Annotations{Name: "nginx.conf"}, Data: []byte("v"), Templating: &swarm.Driver{Name: "golang", Options: map[string]string{"a": "b"}}})},
 		{uint8(BodyConfigCreate), `{"Name":"nginx.conf","Data":"","Driver":{"Name":"vault"}}`},
+		{uint8(BodyContainerCreate), enc(sdkContainerCreate())},
+		{uint8(BodyContainerCreate), enc(container.CreateRequest{Config: &container.Config{Image: "x"}, HostConfig: &container.HostConfig{Privileged: true}})},
+		{uint8(BodyContainerCreate), enc(container.CreateRequest{Config: &container.Config{Image: "x"}, HostConfig: &container.HostConfig{Binds: []string{"/var/run/docker.sock:/s"}}})},
+		{uint8(BodyContainerCreate), enc(container.CreateRequest{Config: &container.Config{Image: "x"}, HostConfig: &container.HostConfig{PidMode: "host", NetworkMode: "host"}})},
+		{uint8(BodyContainerCreate), enc(container.CreateRequest{Config: &container.Config{Image: "x"}, HostConfig: &container.HostConfig{MaskedPaths: []string{}, SecurityOpt: []string{"seccomp=unconfined"}}})},
+		{uint8(BodyContainerCreate), enc(container.CreateRequest{Config: &container.Config{Image: "x"}, HostConfig: &container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: "v", Target: "/v", VolumeOptions: &mount.VolumeOptions{DriverConfig: &mount.Driver{Name: "local", Options: map[string]string{"type": "none", "o": "bind", "device": "/"}}}}}}})},
+		{uint8(BodyContainerCreate), `{"Image":"x","HostConfig":{"ContainerIDFile":"/tmp/cid"}}`},
 		{uint8(BodyNone), `{}`},
 	}
 	for _, s := range seeds {
@@ -689,6 +696,26 @@ func FuzzBody(f *testing.F) {
 			}
 			if reason := volumeOracle(req.Driver, req.DriverOpts); reason != "" {
 				t.Fatalf("a volume create with host access (%s) was forwarded: %.200s", reason, out)
+			}
+		}
+		if k == BodyContainerCreate {
+			// A container create with host access must never be forwarded when the host did not
+			// allow it. The judge is containerOracle, which shares no code with the rule, so a gap in
+			// the rule is not also a gap here; and what is forwarded is what a second encoding of the
+			// decoded value gives.
+			var req container.CreateRequest
+			if err := json.Unmarshal(out, &req); err != nil {
+				t.Fatalf("the forwarded container create does not decode: %v: %.200s", err, out)
+			}
+			if req.Config == nil || req.Image == "" {
+				t.Fatalf("a container create with no image was forwarded: %.200s", out)
+			}
+			if reasons := containerOracle(req); len(reasons) > 0 {
+				t.Fatalf("a container create with host access (%v) was forwarded: %.200s", reasons, out)
+			}
+			again, err := json.Marshal(req)
+			if err != nil || string(again) != string(out) {
+				t.Fatalf("the forwarded container create does not re-encode to itself (%v):\n %.300s\n %.300s", err, out, again)
 			}
 		}
 		if k == BodyNodeSpec {

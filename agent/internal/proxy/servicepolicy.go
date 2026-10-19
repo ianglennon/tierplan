@@ -16,12 +16,13 @@ import (
 	"github.com/ianglennon/bayplan/proto/hostpath"
 )
 
-// errHostPolicy is the refusal of a service spec that gives tasks host access, or of a
-// volume create that would mount the host or name a volume plugin, on a host whose
-// owner did not set BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES (D-36, and D-36/D-38 as
-// amended). The handler answers it 403 with the host_policy message, not as a plain
-// allowlist refusal, so the server can tell the user which setting lifts it.
-var errHostPolicy = errors.New("the service spec gives tasks host access")
+// errHostPolicy is the refusal of a service spec that gives tasks host access, of a
+// container create that gives the container host access, or of a volume create that would
+// mount the host or name a volume plugin, on a host whose owner did not set
+// BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES (D-36, and D-36/D-38 as amended). The handler
+// answers it 403 with the host_policy message, not as a plain allowlist refusal, so the
+// server can tell the user which setting lifts it.
+var errHostPolicy = errors.New("the request gives host access")
 
 // errVolumeLookup is the engine not answering the lookup of a named volume. It is an
 // engine fault and not host access: the handler answers it 502 agent_engine_unreachable,

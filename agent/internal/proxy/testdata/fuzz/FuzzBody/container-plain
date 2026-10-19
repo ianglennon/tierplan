@@ -1,0 +1,3 @@
+go test fuzz v1
+uint8(11)
+string("{\"Image\":\"nginx:1.27\",\"Env\":[\"A=1\"],\"Cmd\":[\"nginx\"],\"HostConfig\":{\"Binds\":[\"/srv/data:/data\"],\"NetworkMode\":\"bridge\",\"RestartPolicy\":{\"Name\":\"unless-stopped\"}}}")
