@@ -5,8 +5,11 @@
 package agents_test
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -275,4 +278,139 @@ func sharedStackPin(t *testing.T, f *swarmFix) {
 		}
 		waitStackConverged(t, f, "pin2")
 	})
+}
+
+// reviewBody is the part of the answer of POST .../review these tests read.
+type reviewBody struct {
+	Problems []struct {
+		Severity, Code, Message string
+		Line                    int
+	} `json:"problems"`
+	Summary struct {
+		Services, Networks, Volumes, Secrets, Configs struct{ Added, Changed, Removed int }
+	} `json:"summary"`
+	Services []struct {
+		Name, Change  string
+		Current, Next map[string]any
+		HiddenChanges []string `json:"hiddenChanges"`
+	} `json:"services"`
+	Objects []struct {
+		Change, Kind, Name, Detail string
+	} `json:"objects"`
+}
+
+// reviewStackBayplan reviews the stack's saved draft through the API.
+func (f *swarmFix) reviewStackBayplan(t *testing.T, stackID string) reviewBody {
+	t.Helper()
+	code, body := f.srv.Do(http.MethodPost, f.stackAPI()+"/"+stackID+"/review", map[string]any{})
+	var rv reviewBody
+	if code != http.StatusOK || json.Unmarshal(body, &rv) != nil {
+		t.Fatalf("POST the review of stack %s = %d %s", stackID, code, body)
+	}
+	return rv
+}
+
+// leafDiff lists the leaves of two decoded JSON values that differ, as "path: a != b", sorted. A
+// leaf on one side only reads "(absent)" on the other.
+func leafDiff(path string, a, b any, out *[]string) {
+	switch av := a.(type) {
+	case map[string]any:
+		bv, _ := b.(map[string]any)
+		keys := map[string]bool{}
+		for k := range av {
+			keys[k] = true
+		}
+		for k := range bv {
+			keys[k] = true
+		}
+		for k := range keys {
+			leafDiff(path+"."+k, av[k], bv[k], out)
+		}
+		return
+	case []any:
+		bv, _ := b.([]any)
+		for i := 0; i < max(len(av), len(bv)); i++ {
+			var x, y any
+			if i < len(av) {
+				x = av[i]
+			}
+			if i < len(bv) {
+				y = bv[i]
+			}
+			leafDiff(fmt.Sprintf("%s[%d]", path, i), x, y, out)
+		}
+		return
+	}
+	if b != nil {
+		switch b.(type) {
+		case map[string]any, []any:
+			leafDiff(path, nil, b, out)
+			return
+		}
+	}
+	if fmt.Sprint(a) != fmt.Sprint(b) {
+		show := func(v any) string {
+			if v == nil {
+				return "(absent)"
+			}
+			return fmt.Sprintf("%v", v)
+		}
+		*out = append(*out, fmt.Sprintf("%s: %s != %s", path, show(a), show(b)))
+	}
+	sort.Strings(*out)
+}
+
+// sharedStackReviewEmptyAfterDeploy is the idempotence oracle of the review (STK-06): each file of
+// the parity corpus is deployed through Bayplan, and a review of the same draft right afterwards
+// lists no service, network, secret, config or volume change. The engine stores a service with
+// defaults of its own (a runtime, an isolation, a virtual IP endpoint, network IDs for names), and
+// the review has to read the running spec and the one a deploy would send as the same thing. When
+// a field differs the failure prints its path and both values, so the default can be added to
+// stacks.NormalizeSpec with a row of its unit test. The image is named by tag, so the review also
+// shows that a pinned image stays pinned.
+func sharedStackReviewEmptyAfterDeploy(t *testing.T, f *swarmFix) {
+	f.installPrivileged(t)
+	f.waitSwarmOnline(t, 4)
+	mgr := f.sw.Managers[0]
+	addr := dockertest.StartSwarmRegistry(t, f.sw, dockertest.RegistryOptions{})
+	dockertest.PushImage(t, mgr, dockertest.ServiceTestImage, addr+"/rev/app:1", nil)
+
+	for i, c := range parityCorpus {
+		stack := fmt.Sprintf("rev%d", i+1)
+		t.Run(c.file, func(t *testing.T) {
+			values := map[string]string{"IMAGE": addr + "/rev/app:1", "EXTERNAL_NETWORK": c.external}
+			if c.external != "" {
+				sh(t, mgr, "docker network create --driver overlay --attachable "+c.external)
+				t.Cleanup(func() { removeNetwork(t, f, c.external) })
+			}
+			t.Cleanup(func() { removeStackCLI(t, f, stack) })
+			src := paritySource{Compose: readCorpus(t, c.file, values), Files: c.files}
+			id := deployWithBayplan(t, f, stack, src)
+
+			rv := f.reviewStackBayplan(t, id)
+			for _, p := range rv.Problems {
+				if p.Severity == "error" {
+					t.Errorf("the review of %s found an error: %s (%s, line %d)", c.file, p.Message, p.Code, p.Line)
+				}
+			}
+			for _, sc := range rv.Services {
+				var diffs []string
+				leafDiff("", sc.Current, sc.Next, &diffs)
+				t.Errorf("the review right after a deploy lists %s %s:\n  %s\n  hidden changes: %v", sc.Change, sc.Name, strings.Join(diffs, "\n  "), sc.HiddenChanges)
+			}
+			for _, o := range rv.Objects {
+				if o.Change != "external" {
+					t.Errorf("the review right after a deploy lists %s %s %s: %s", o.Change, o.Kind, o.Name, o.Detail)
+				}
+			}
+			for kind, n := range map[string]struct{ Added, Changed, Removed int }{
+				"services": rv.Summary.Services, "networks": rv.Summary.Networks, "volumes": rv.Summary.Volumes,
+				"secrets": rv.Summary.Secrets, "configs": rv.Summary.Configs,
+			} {
+				if n.Added+n.Changed+n.Removed != 0 {
+					t.Errorf("the summary right after a deploy counts %s %+v", kind, n)
+				}
+			}
+		})
+	}
 }

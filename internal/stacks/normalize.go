@@ -53,9 +53,17 @@ func NormalizeSpec(s swarm.ServiceSpec) swarm.ServiceSpec {
 	if s.TaskTemplate.Placement == nil {
 		s.TaskTemplate.Placement = &swarm.Placement{}
 	}
-	// A restart policy with no condition reads back as "any" (restartPolicyToGRPC).
-	if rp := s.TaskTemplate.RestartPolicy; rp != nil && rp.Condition == "" {
-		rp.Condition = swarm.RestartPolicyConditionAny
+	// A restart policy with no condition reads back as "any" (restartPolicyToGRPC), and one with no
+	// attempt limit reads back with a limit of 0, which is unlimited (the manager keeps the count as
+	// a plain number and hands it back as a pointer; seen on Engine 29, StackReviewEmptyAfterDeploy).
+	if rp := s.TaskTemplate.RestartPolicy; rp != nil {
+		if rp.Condition == "" {
+			rp.Condition = swarm.RestartPolicyConditionAny
+		}
+		if rp.MaxAttempts == nil {
+			unlimited := uint64(0)
+			rp.MaxAttempts = &unlimited
+		}
 	}
 
 	// Networks are compared as a set: the manager returns them by network ID, the converter
