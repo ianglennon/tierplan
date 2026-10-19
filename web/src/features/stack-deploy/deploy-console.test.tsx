@@ -789,6 +789,141 @@ describe("a standalone deploy (plan 07-20, D-13)", () => {
   });
 });
 
+describe("the pull steps of a standalone deploy (plan 07-21, D-27)", () => {
+  // A standalone deploy that pulls its images itself: a step under the lookup for each image the host lacks.
+  const digest = `sha256:${"a".repeat(64)}`;
+  const pull = (image: string, over: Partial<Item> = {}): Item => ({
+    id: `pull:${image}@${digest}`,
+    label: `Pull ${image}`,
+    state: "waiting",
+    parent: "lookup",
+    kind: "step",
+    result: { image, ref: `docker.io/library/${image}` },
+    ...over,
+  });
+  const base = (pulls: Item[]): Item[] => [
+    check,
+    { ...lookup, state: "done" },
+    ...pulls,
+    { id: "networks", label: "Networks", state: "waiting", kind: "group" },
+    { id: "volumes", label: "Volumes", state: "waiting", kind: "group" },
+    { ...services, state: "waiting" },
+    { id: "cleanup", label: "Remove services no longer in the stack", state: "waiting" },
+  ];
+
+  it("lists a Pull step for each image between Look up images and what comes after, in the standalone words", async () => {
+    job = {
+      state: "running",
+      items: base([
+        pull("nginx:1.27-alpine", { state: "done" }),
+        pull("redis:7", { state: "running" }),
+      ]),
+    };
+    await mountLive(jobBody());
+    expect(stepLines()).toEqual([
+      "Check the stackDone",
+      "Look up imagesDone",
+      "Pull nginx:1.27-alpineDone",
+      "Pull redis:7Pulling image",
+      "Deploy servicesWaiting",
+      "Remove containers no longer in the stackWaiting",
+    ]);
+  });
+
+  it("shows the bytes done of the total beside a pull in progress and a pull that is done", async () => {
+    job = {
+      state: "running",
+      items: base([
+        pull("nginx:1.27-alpine", { state: "done", unit: "bytes", current: 2048, total: 2048 }),
+        pull("redis:7", { state: "running", unit: "bytes", current: 512, total: 2048 }),
+      ]),
+    };
+    await mountLive(jobBody());
+    expect(stepLines().slice(2, 4)).toEqual([
+      "Pull nginx:1.27-alpineDone2 KiB of 2 KiB",
+      "Pull redis:7Pulling image512 B of 2 KiB",
+    ]);
+  });
+
+  it("follows a pull over the stream", async () => {
+    job = { state: "running", items: base([pull("redis:7", { state: "waiting" })]) };
+    await mountLive(jobBody());
+    expect(stepLines()[2]).toBe("Pull redis:7Waiting");
+    act(() => {
+      source().sendFrame(
+        "item",
+        item(pull("redis:7", { state: "running", unit: "bytes", current: 1024, total: 4096 })),
+        "9",
+      );
+    });
+    expect(stepLines()[2]).toBe("Pull redis:7Pulling image1 KiB of 4 KiB");
+  });
+
+  it("words a pull the registry refused with the Phase 5 sentence naming the credential", async () => {
+    job = {
+      state: "failed",
+      items: base([
+        pull("redis:7", {
+          state: "failed",
+          code: "pull_denied",
+          message: "The registry refused the pull.",
+          result: {
+            image: "redis:7",
+            ref: "docker.io/library/redis:7",
+            credential: "hub-bot",
+            credentialId: "c1",
+            credentialLayer: "environment",
+          },
+        }),
+      ]),
+    };
+    mount();
+    expect(
+      await screen.findAllByText(
+        "Pull denied using credential “hub-bot” (Prod). Check its scopes or test it.",
+      ),
+    ).toBeTruthy();
+    // The sentence is the SPA's own: neither the server's sentence nor a code is shown.
+    expect(screen.queryByText("The registry refused the pull.")).toBeNull();
+    expect(screen.queryByText("pull_denied")).toBeNull();
+  });
+
+  it.each([
+    [
+      "pull_denied",
+      "No stored credential matches docker.io/library/redis:7, so it was pulled anonymously. Add one.",
+    ],
+    [
+      "image_not_found",
+      "docker.io/library/redis:7 wasn't found on docker.io. Check the name and the tag.",
+    ],
+    [
+      "rate_limited",
+      "Docker Hub's pull limit was reached. Add a Docker Hub credential and tick “Use for all Docker Hub pulls”, or try again later.",
+    ],
+    [
+      "registry_tls",
+      "This host doesn't trust the certificate from docker.io. Its Docker daemon needs the registry's CA (certs.d) or an insecure-registries entry. See the docs.",
+    ],
+  ])("words the failed pull %s in the words of the pull dialog", async (code, sentence) => {
+    job = {
+      state: "failed",
+      items: base([pull("redis:7", { state: "failed", code, message: "server words" })]),
+    };
+    mount();
+    expect((await screen.findAllByText(sentence)).length).toBeGreaterThan(0);
+  });
+
+  it("draws the image of a pull step as text", async () => {
+    job = {
+      state: "running",
+      items: base([pull("<b>x</b>:1", { state: "running", result: { image: "<b>x</b>:1" } })]),
+    };
+    await mountLive(jobBody());
+    expect(screen.getByText(/<b>x<\/b>:1/).children).toHaveLength(0);
+  });
+});
+
 describe("following the stream", () => {
   it("shows Live, takes the stream's snapshot at once and updates a row from an event", async () => {
     job = { state: "running", items: [check, services, row("api", "waiting")] };
