@@ -47,6 +47,7 @@ const (
 	CodeNetworkConflict    = "network_conflict"
 	CodeNetworkFailed      = "network_failed"
 	CodeExternalMissing    = "external_missing"
+	CodeExternalNotSwarm   = "external_not_swarm"
 	CodeObjectInvalid      = "object_invalid"
 	CodeObjectFailed       = "object_failed"
 	CodeObjectNameTaken    = "object_name_taken"
@@ -68,6 +69,7 @@ var codeMessages = map[string]string{
 	CodeNetworkConflict:    "The swarm already has a network of that name that this stack does not own.",
 	CodeNetworkFailed:      "The swarm could not create the network.",
 	CodeExternalMissing:    "A network, secret or config the stack names as external does not exist.",
+	CodeExternalNotSwarm:   "A network the stack names as external is not a swarm network.",
 	CodeObjectInvalid:      "A secret or config of the stack has no usable content.",
 	CodeObjectFailed:       "The swarm could not create a secret or config.",
 	CodeObjectNameTaken:    "The swarm already has a secret or config of that name that this stack does not own.",

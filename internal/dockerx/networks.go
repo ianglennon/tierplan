@@ -64,7 +64,16 @@ type NetworkCreateSpec struct {
 	// Subnet and IPRange are in CIDR form and Gateway is an address. Empty leaves
 	// the choice to the engine.
 	Subnet, Gateway, IPRange string
+	// Pools are several address pools, for a stack network that declares more than one. It
+	// replaces Subnet, Gateway and IPRange: setting both is ErrAddressing.
+	Pools []NetworkPool
+	// IPAMDriver is the IPAM driver, empty for the engine's default.
+	IPAMDriver string
 }
+
+// NetworkPool is one address pool of a network, in the same forms as the single fields of
+// NetworkCreateSpec.
+type NetworkPool struct{ Subnet, Gateway, IPRange string }
 
 // NetworkCreate creates the network once and never retries: a create whose answer
 // was lost may have happened (P2 D-42). It returns the ID and the engine's warning,

@@ -452,3 +452,209 @@ func TestChangedSecretRotatesAndRemovesTheOldOne(t *testing.T) {
 		t.Errorf("secrets on the swarm = %v, want only %s: nothing left behind", got, newName)
 	}
 }
+
+// poolsCompose is a stack whose network declares every setting a network create can carry.
+const poolsCompose = `services:
+  web:
+    image: nginx:1.27-alpine
+    networks: [backend]
+networks:
+  backend:
+    driver: overlay
+    attachable: true
+    internal: true
+    driver_opts:
+      encrypted: "true"
+    labels:
+      team: web
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.50.0.0/24
+          gateway: 10.50.0.1
+          ip_range: 10.50.0.128/25
+        - subnet: 10.51.0.0/24
+`
+
+func TestStackNetworkKeepsEveryPool(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	_, in := stackInput(t, "web", poolsCompose, nil)
+	res, job := rig.deploy(t, in)
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("result = %+v, job = %s %v", res, job.State, itemStates(job))
+	}
+	nets := rig.fake.NetworkCreates()
+	if len(nets) != 1 {
+		t.Fatalf("network creates = %+v, want one", nets)
+	}
+	n := nets[0]
+	if n.Name != "web_backend" || n.Driver != "overlay" || !n.Internal || !n.Attachable || n.Options["encrypted"] != "true" {
+		t.Errorf("network = %+v", n)
+	}
+	if n.Labels["team"] != "web" || n.Labels["com.docker.stack.namespace"] != "web" || n.Labels["bayplan.stack.id"] != "stack-web" {
+		t.Errorf("labels = %v, want the file's own and the stack's", n.Labels)
+	}
+	if n.IPAM == nil || n.IPAM.Driver != "default" || len(n.IPAM.Config) != 2 {
+		t.Fatalf("IPAM = %+v, want the default driver and both pools", n.IPAM)
+	}
+	first, second := n.IPAM.Config[0], n.IPAM.Config[1]
+	if first.Subnet.String() != "10.50.0.0/24" || first.Gateway.String() != "10.50.0.1" || first.IPRange.String() != "10.50.0.128/25" || second.Subnet.String() != "10.51.0.0/24" {
+		t.Errorf("pools = %+v and %+v", first, second)
+	}
+	if !slices.Equal(res.CreatedNetworks, []string{"web_backend"}) {
+		t.Errorf("CreatedNetworks = %v", res.CreatedNetworks)
+	}
+}
+
+func TestAnExistingStackNetworkIsNeverRecreatedEvenIfItsOptionsDiffer(t *testing.T) {
+	t.Parallel()
+	owned := map[string]string{"com.docker.stack.namespace": "web", "bayplan.stack.id": "stack-web"}
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		// The file now asks for two pools and an internal network; the one on the swarm has neither.
+		c.Networks = []dockertest.FakeNetwork{{ID: "n1", Name: "web_backend", Driver: "overlay", Scope: "swarm", Labels: owned, Subnets: []string{"10.99.0.0/24"}}}
+	})
+	_, in := stackInput(t, "web", poolsCompose, nil)
+	res, _ := rig.deploy(t, in)
+	if !res.OK() || len(res.CreatedNetworks) != 0 {
+		t.Fatalf("result = %+v", res)
+	}
+	if got := countWrites(rig.fake.Writes(), "POST /networks/create") + countWrites(rig.fake.Writes(), "DELETE /networks"); got != 0 {
+		t.Errorf("writes = %v, an existing network must not be recreated or removed", rig.fake.Writes())
+	}
+}
+
+const externalNetworkCompose = `services:
+  web:
+    image: nginx:1.27-alpine
+    networks: [shared]
+networks:
+  shared:
+    external: true
+    name: org_shared
+`
+
+func TestExternalNetworkMustExist(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		networks []dockertest.FakeNetwork
+		code     string
+	}{
+		{"missing", nil, stackops.CodeExternalMissing},
+		{"local scope", []dockertest.FakeNetwork{{ID: "n9", Name: "org_shared", Driver: "bridge", Scope: "local"}}, stackops.CodeExternalNotSwarm},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newSwarmRig(t, func(c *dockertest.FakeConfig) { c.Networks = tc.networks })
+			_, in := stackInput(t, "web", externalNetworkCompose, nil)
+			res, job := rig.deploy(t, in)
+			if res.Code != tc.code || res.FailedService != "org_shared" {
+				t.Fatalf("result = %+v, want %s naming org_shared", res, tc.code)
+			}
+			got := itemStates(job)
+			if got[stackops.ItemCheck] != "done" || got[stackops.ItemNetworks] != "failed:"+tc.code || got[stackops.ItemObjects] != "cancelled:not_run" {
+				t.Errorf("items = %v, want the networks step to stop the deploy", got)
+			}
+			if w := rig.fake.Writes(); len(w) != 0 {
+				t.Errorf("writes = %v, nothing may be created for a stack whose external network is missing", w)
+			}
+		})
+	}
+}
+
+func TestExternalNetworkOfSwarmScopeIsUsedAndNeverCreatedOrRemoved(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		c.Networks = []dockertest.FakeNetwork{{ID: "n9", Name: "org_shared", Driver: "overlay", Scope: "swarm"}}
+	})
+	_, in := stackInput(t, "web", externalNetworkCompose, nil)
+	res, _ := rig.deploy(t, in)
+	if !res.OK() || res.Networks != 0 {
+		t.Fatalf("result = %+v", res)
+	}
+	if n := countWrites(rig.fake.Writes(), "POST /networks") + countWrites(rig.fake.Writes(), "DELETE /networks"); n != 0 {
+		t.Errorf("writes = %v, an external network is never created or removed", rig.fake.Writes())
+	}
+	atts := rig.fake.ServiceCreates()[0].Spec.TaskTemplate.Networks
+	if len(atts) != 1 || atts[0].Target != "org_shared" {
+		t.Errorf("service networks = %+v, want org_shared", atts)
+	}
+}
+
+// pruneRig is a swarm with the stack "web" already deployed with an old service the file no
+// longer declares, a second stack and a service of nobody's stack.
+func pruneRig(t *testing.T, updateError string) *swarmRig {
+	t.Helper()
+	owned := map[string]string{"com.docker.stack.namespace": "web", "bayplan.stack.id": "stack-web"}
+	blog := map[string]string{"com.docker.stack.namespace": "blog", "bayplan.stack.id": "stack-blog"}
+	return newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		c.Networks = []dockertest.FakeNetwork{
+			{ID: "n1", Name: "web_default", Driver: "overlay", Scope: "swarm", Labels: owned},
+			{ID: "n2", Name: "blog_default", Driver: "overlay", Scope: "swarm", Labels: blog},
+		}
+		c.Secrets = []dockertest.FakeSecret{{ID: "blogsec", Name: hashedName("blog", "tok", "x"), Labels: ownedLabels("blog", "stack-blog", "tok", "x")}}
+	},
+		dockertest.FakeService{ID: "svc-web", Name: "web_web", Mode: "replicated", Image: "nginx:1.26", Version: 7, Labels: owned, UpdateError: updateError},
+		dockertest.FakeService{ID: "svc-old", Name: "web_old", Mode: "replicated", Image: "busybox", Version: 2, Labels: owned},
+		dockertest.FakeService{ID: "svc-blog", Name: "blog_web", Mode: "replicated", Image: "nginx:1", Version: 3, Labels: blog},
+		dockertest.FakeService{ID: "svc-loner", Name: "loner", Mode: "replicated", Image: "busybox", Version: 1},
+	)
+}
+
+func TestUndeclaredServiceIsPrunedAfterUpdates(t *testing.T) {
+	t.Parallel()
+	rig := pruneRig(t, "")
+	_, in := starterPlan(t, "web")
+	res, job := rig.deploy(t, in)
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("result = %+v, job = %s %v", res, job.State, itemStates(job))
+	}
+	if !slices.Equal(res.RemovedServices, []string{"web_old"}) {
+		t.Errorf("RemovedServices = %v, want [web_old]", res.RemovedServices)
+	}
+	writes := rig.fake.Writes()
+	if len(writes) != 2 || !strings.HasPrefix(writes[0], "POST /services/svc-web/update") || writes[1] != "DELETE /services/svc-old" {
+		t.Errorf("writes = %v, want the declared service updated and then the old one removed", writes)
+	}
+}
+
+func TestUndeclaredServiceIsKeptWhenAnUpdateFails(t *testing.T) {
+	t.Parallel()
+	rig := pruneRig(t, "the swarm rejected the update")
+	_, in := starterPlan(t, "web")
+	res, job := rig.deploy(t, in)
+	if res.OK() {
+		t.Fatalf("result = %+v, want the update to fail", res)
+	}
+	if n := countWrites(rig.fake.Writes(), "DELETE"); n != 0 {
+		t.Errorf("writes = %v, nothing may be removed after a failed update", rig.fake.Writes())
+	}
+	if got := itemStates(job); got[stackops.ItemCleanup] != "cancelled:not_run" {
+		t.Errorf("items = %v", got)
+	}
+}
+
+func TestOtherStacksAreNeverTouched(t *testing.T) {
+	t.Parallel()
+	rig := pruneRig(t, "")
+	_, in := stackInput(t, "web", tokCompose, tokFile("one"))
+	res, job := rig.deploy(t, in)
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("result = %+v, job = %s %v", res, job.State, itemStates(job))
+	}
+	for _, w := range rig.fake.Writes() {
+		for _, other := range []string{"svc-blog", "svc-loner", "blogsec", "n2"} {
+			if strings.Contains(w, other) {
+				t.Errorf("write %q touches %s, which another stack or nobody owns", w, other)
+			}
+		}
+	}
+	if got := rig.secretNames(t); !slices.Contains(got, hashedName("blog", "tok", "x")) {
+		t.Errorf("secrets = %v, the other stack's secret is gone", got)
+	}
+	if !slices.Equal(res.RemovedServices, []string{"web_old"}) {
+		t.Errorf("RemovedServices = %v, want only this stack's undeclared service", res.RemovedServices)
+	}
+}

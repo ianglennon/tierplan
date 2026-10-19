@@ -508,3 +508,68 @@ func TestAnOlderEnginesAddressRefusalSentAsAServerErrorIsARefusal(t *testing.T) 
 		t.Error("IsRefusal(nil) = true")
 	}
 }
+
+func TestNetworkCreateSendsEveryPoolAndTheIPAMDriver(t *testing.T) {
+	c, fake := networkFake(t)
+	_, _, err := c.NetworkCreate(context.Background(), dockerx.NetworkCreateSpec{
+		Name: "stack_backend", Driver: "overlay", Scope: dockerx.ScopeSwarm, IPAMDriver: "default",
+		Pools: []dockerx.NetworkPool{
+			{Subnet: "10.50.0.0/24", Gateway: "10.50.0.1", IPRange: "10.50.0.128/25"},
+			{Subnet: "10.51.0.0/24"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NetworkCreate: %v", err)
+	}
+	req := fake.NetworkCreates()[0]
+	if req.IPAM == nil || req.IPAM.Driver != "default" || len(req.IPAM.Config) != 2 {
+		t.Fatalf("IPAM = %+v, want the default driver and two pools", req.IPAM)
+	}
+	first, second := req.IPAM.Config[0], req.IPAM.Config[1]
+	if first.Subnet.String() != "10.50.0.0/24" || first.Gateway.String() != "10.50.0.1" || first.IPRange.String() != "10.50.0.128/25" {
+		t.Errorf("first pool = %+v", first)
+	}
+	if second.Subnet.String() != "10.51.0.0/24" || second.Gateway.IsValid() || second.IPRange.IsValid() {
+		t.Errorf("second pool = %+v, want only its subnet", second)
+	}
+}
+
+func TestNetworkCreateRefusesPoolsTogetherWithTheSingleAddressFieldsBeforeAnyCall(t *testing.T) {
+	c, fake := networkFake(t)
+	for _, spec := range []dockerx.NetworkCreateSpec{
+		{Name: "x", Driver: "bridge", Subnet: "10.1.0.0/24", Pools: []dockerx.NetworkPool{{Subnet: "10.2.0.0/24"}}},
+		{Name: "x", Driver: "bridge", Gateway: "10.1.0.1", Pools: []dockerx.NetworkPool{{Subnet: "10.2.0.0/24"}}},
+		{Name: "x", Driver: "bridge", IPRange: "10.1.0.0/25", Pools: []dockerx.NetworkPool{{Subnet: "10.2.0.0/24"}}},
+	} {
+		if _, _, err := c.NetworkCreate(context.Background(), spec); !errors.Is(err, dockerx.ErrAddressing) {
+			t.Errorf("NetworkCreate(%+v) err = %v, want ErrAddressing", spec, err)
+		}
+	}
+	if w := fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, a refused spec must send nothing", w)
+	}
+}
+
+func TestNetworkCreateRefusesAnUnparsablePoolBeforeAnyCall(t *testing.T) {
+	c, fake := networkFake(t)
+	for _, pool := range []dockerx.NetworkPool{{Subnet: "not-a-cidr"}, {Subnet: "10.2.0.0/24", Gateway: "x"}, {Subnet: "10.2.0.0/24", IPRange: "y"}} {
+		spec := dockerx.NetworkCreateSpec{Name: "x", Driver: "bridge", Pools: []dockerx.NetworkPool{{Subnet: "10.9.0.0/24"}, pool}}
+		if _, _, err := c.NetworkCreate(context.Background(), spec); !errors.Is(err, dockerx.ErrAddressing) {
+			t.Errorf("NetworkCreate(pool %+v) err = %v, want ErrAddressing", pool, err)
+		}
+	}
+	if w := fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, want none", w)
+	}
+}
+
+func TestNetworkCreateKeepsTheSingleAddressFieldsWorkingWithoutPools(t *testing.T) {
+	c, fake := networkFake(t)
+	if _, _, err := c.NetworkCreate(context.Background(), dockerx.NetworkCreateSpec{Name: "one", Driver: "bridge", Subnet: "10.3.0.0/24"}); err != nil {
+		t.Fatal(err)
+	}
+	req := fake.NetworkCreates()[0]
+	if req.IPAM == nil || len(req.IPAM.Config) != 1 || req.IPAM.Config[0].Subnet.String() != "10.3.0.0/24" || req.IPAM.Driver != "" {
+		t.Errorf("IPAM = %+v, want one pool and no driver", req.IPAM)
+	}
+}
