@@ -89,7 +89,23 @@ func standaloneFindings(in Input) []Finding {
 		}
 	}
 	out = append(out, readOnlyFindings(in)...)
+	out = append(out, apiSocketFindings(in)...)
 	return append(out, fileObjectFindings(in)...)
+}
+
+// apiSocketFindings reports use_api_socket: the Compose SDK turns it into a bind mount of the host's Docker
+// socket with the registry logins of its configuration beside it, which no host-access rule sees, because
+// the rules judge a socket written as a bind volume. It is an error whatever the person's role is.
+func apiSocketFindings(in Input) []Finding {
+	var out []Finding
+	for _, name := range serviceNames(in.Project) {
+		if !in.Project.Services[name].UseAPISocket {
+			continue
+		}
+		pos, key := in.at("services."+name+".use_api_socket", "services."+name)
+		out = append(out, Finding{Severity: SeverityError, Code: CodeUseAPISocket, Key: key, Pos: pos, Message: messages[CodeUseAPISocket]})
+	}
+	return out
 }
 
 // ownerRefused are the patterns of StandaloneUnsupported that are an error and not a warning here. The SDK

@@ -50,6 +50,7 @@ const (
 	CodeFileObjectOwner          = lint.CodeFileObjectOwner
 	CodeFileObjectName           = lint.CodeFileObjectName
 	CodeExternalFileObject       = lint.CodeExternalFileObject
+	CodeUseAPISocket             = lint.CodeUseAPISocket
 	CodeNetworkOptionUnsupported = lint.CodeNetworkOptionUnsupported
 )
 

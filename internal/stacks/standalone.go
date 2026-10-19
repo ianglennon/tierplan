@@ -22,6 +22,10 @@ var (
 	// ErrPinMissing means a service that has an image was given no pin: a standalone deploy never sends
 	// an image tag that nobody decided on.
 	ErrPinMissing = errors.New("stacks: a service has no pinned image")
+	// ErrUseAPISocket means a service asks for use_api_socket. The SDK would bind-mount the Docker socket
+	// of the host into the container and put the registry logins of its configuration beside it, past the
+	// host-access rules, which judge a socket that is written as a bind.
+	ErrUseAPISocket = errors.New("stacks: use_api_socket is not supported on a standalone host")
 	// ErrExternalFileObject means a service uses an external secret or config. A standalone host writes
 	// the content of a secret or config into the container, and an external one has none to write.
 	ErrExternalFileObject = errors.New("stacks: an external secret or config cannot be used on a standalone host")
@@ -47,7 +51,8 @@ var (
 // nobody edited builds the same services and the SDK recreates nothing (Pitfall 5).
 //
 // It refuses what the SDK cannot deliver or what would read the server: a service with an image and no
-// pin (ErrPinMissing), an external secret or config (ErrExternalFileObject), and, after the work, a
+// pin (ErrPinMissing), a service with use_api_socket (ErrUseAPISocket), an external secret or config
+// (ErrExternalFileObject), and, after the work, a
 // build, a file-backed secret or config, an env_file or a relative bind mount that is still there
 // (ErrNotSandboxed). The first error is returned.
 func PrepareStandalone(p *types.Project, stackID string, pins map[string]string, objects []ObjectContent) error {
@@ -61,6 +66,9 @@ func PrepareStandalone(p *types.Project, stackID string, pins map[string]string,
 
 	for _, name := range sortedServices(p) {
 		svc := p.Services[name]
+		if svc.UseAPISocket {
+			return fmt.Errorf("%w: service %s", ErrUseAPISocket, name)
+		}
 		if svc.Image != "" {
 			ref, ok := pins[name]
 			if !ok || ref == "" {

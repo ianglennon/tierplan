@@ -190,3 +190,16 @@ func TestAStandaloneExternalSecretOrConfigIsAnErrorAtItsReference(t *testing.T) 
 		}
 	}
 }
+
+func TestAStandaloneServiceThatUsesTheAPISocketIsAnError(t *testing.T) {
+	t.Parallel()
+	const compose = head + "    use_api_socket: true\n"
+	res := checkOf(t, stacks.TargetStandalone, compose)
+	got := byCode(res, stacks.CodeUseAPISocket)
+	if len(got) != 1 || got[0].Severity != stacks.SeverityError || got[0].Line != 4 || !strings.Contains(got[0].Message, "Docker socket") {
+		t.Fatalf("problems = %+v, want one blocking use_api_socket_unsupported at line 4", res.Problems)
+	}
+	if swarm := byCode(checkOf(t, stacks.TargetSwarm, compose), stacks.CodeUseAPISocket); len(swarm) != 0 {
+		t.Errorf("swarm problems = %+v, want none: a swarm ignores the key", swarm)
+	}
+}

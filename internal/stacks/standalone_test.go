@@ -208,6 +208,15 @@ func TestPrepareStandaloneRefusesAnExternalSecretOrConfig(t *testing.T) {
 	}
 }
 
+func TestPrepareStandaloneRefusesUseAPISocketWhichWouldMountTheHostsDockerSocket(t *testing.T) {
+	t.Parallel()
+	p := loadProject(t, "services:\n  web:\n    image: nginx:1.27\n    use_api_socket: true\n")
+	err := stacks.PrepareStandalone(p, "stack-1", map[string]string{"web": "nginx:1.27@sha256:" + hex64('a')}, nil)
+	if !errors.Is(err, stacks.ErrUseAPISocket) {
+		t.Fatalf("err = %v, want ErrUseAPISocket", err)
+	}
+}
+
 func TestPrepareStandaloneRefusesWhatWouldReadTheServer(t *testing.T) {
 	t.Parallel()
 	pins := map[string]string{"web": "nginx:1.27@sha256:" + hex64('a')}
