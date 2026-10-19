@@ -50,7 +50,15 @@ type StackCheckOutput struct {
 	Body         StackCheckBody
 }
 
+// maxChecksPerUser is how many checks one user may have running: the editor sends one as a person
+// types, and a second can still be finishing, so two are served and a third waits for the next edit.
+const maxChecksPerUser = 2
+
+// problemCheckBusy is the 429 for a third check of one user.
+const problemCheckBusy = "check_busy"
+
 func registerStackCheck(r *httpx.Router, d StacksDeps) {
+	checkLimiter := &streamLimiter{max: maxChecksPerUser, open: map[string]int{}}
 	httpx.Register(r, huma.Operation{
 		OperationID: "checkStack", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/check",
 		Summary: "Check a stack's working copy",
@@ -58,21 +66,28 @@ func registerStackCheck(r *httpx.Router, d StacksDeps) {
 			"The check works only on the bytes it is sent: it reads no file from the Bayplan server, fetches nothing, writes nothing and sends nothing to an engine. " +
 			"include, extends and label_file are refused, and every env_file and file: reference must name one of the stack's own files. " +
 			"The editor calls it while a person types and on Save, and the review and the deploy run the same check. " +
+			"One user may have two checks running; a third is 429 check_busy. A check stops after 5 seconds and answers 200 with one error problem, check_timeout. " +
 			"Needs stacks.read (Viewer).",
 		Tags: []string{"stacks"}, MaxBodyBytes: maxStackSaveBody,
 	}, rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackCheckInput) (*StackCheckOutput, error) {
-			return checkStack(ctx, d, in)
+			return checkStack(ctx, d, checkLimiter, in)
 		})
 }
 
 // checkStack runs stacks.Check over the working copy in the request. It is pure: the only reads
 // are the stack and its saved draft, the second to fill a secret the browser never held.
-func checkStack(ctx context.Context, d StacksDeps, in *StackCheckInput) (*StackCheckOutput, error) {
-	env := httpx.EnvFrom(ctx)
-	if env == nil {
+func checkStack(ctx context.Context, d StacksDeps, lim *streamLimiter, in *StackCheckInput) (*StackCheckOutput, error) {
+	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+	if p == nil || env == nil {
 		return nil, huma.Error500InternalServerError("internal error")
 	}
+	release, ok := lim.acquire(string(p.Type) + ":" + p.ID)
+	if !ok {
+		return nil, httpx.Problem(http.StatusTooManyRequests, problemCheckBusy,
+			"You already have two checks running. The editor checks again when you stop typing.")
+	}
+	defer release()
 	repo := d.repo()
 	st, err := repo.Stack(ctx, env.ID, in.StackID)
 	if err != nil {
@@ -89,7 +104,7 @@ func checkStack(ctx context.Context, d StacksDeps, in *StackCheckInput) (*StackC
 	if d.OnCheck != nil {
 		d.OnCheck(ctx)
 	}
-	res := stacks.Check(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: wc})
+	res := stacks.Check(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: wc, Deadline: d.CheckDeadline})
 
 	body := StackCheckBody{Problems: make([]StackProblemBody, 0, len(res.Problems)), UnusedFiles: res.UnusedFiles}
 	if body.UnusedFiles == nil {

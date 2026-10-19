@@ -1979,7 +1979,7 @@ export interface paths {
         put?: never;
         /**
          * Check a stack's working copy
-         * @description Checks the files and variables in the body, as the editor holds them, and answers every problem with its file, line and column. The check works only on the bytes it is sent: it reads no file from the Bayplan server, fetches nothing, writes nothing and sends nothing to an engine. include, extends and label_file are refused, and every env_file and file: reference must name one of the stack's own files. The editor calls it while a person types and on Save, and the review and the deploy run the same check. Needs stacks.read (Viewer).
+         * @description Checks the files and variables in the body, as the editor holds them, and answers every problem with its file, line and column. The check works only on the bytes it is sent: it reads no file from the Bayplan server, fetches nothing, writes nothing and sends nothing to an engine. include, extends and label_file are refused, and every env_file and file: reference must name one of the stack's own files. The editor calls it while a person types and on Save, and the review and the deploy run the same check. One user may have two checks running; a third is 429 check_busy. A check stops after 5 seconds and answers 200 with one error problem, check_timeout. Needs stacks.read (Viewer).
          */
         post: operations["checkStack"];
         delete?: never;

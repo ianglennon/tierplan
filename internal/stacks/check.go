@@ -44,6 +44,11 @@ type CheckResult struct {
 // to. It is pure: it reads only the bytes it is given, opens no file and calls no engine.
 func Check(ctx context.Context, in CheckInput) CheckResult {
 	var res CheckResult
+	if in.Deadline <= 0 {
+		in.Deadline = checkTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, in.Deadline)
+	defer cancel()
 	content := in.Copy.Compose()
 	if len(content) > MaxFileBytes {
 		res.Problems = Problems{{
@@ -78,9 +83,103 @@ func Check(ctx context.Context, in CheckInput) CheckResult {
 		res.Problems = yamlProblems(parseErr.Error()).Sorted()
 		return res
 	}
+	binds := relativeBinds(loaded.Project, idx)
+	if err := assertSandboxed(loaded.Project, NewFileSet(in.Copy.Files)); err != nil && (!errors.Is(err, errRelativeBind) || len(binds) == 0) {
+		// Nothing the prescan lets through should fail here. If something does, the project is
+		// withheld and the person is told it is a Bayplan bug, not their file.
+		res.Problems = Problems{{
+			Severity: SeverityError, Code: CodeInternalCheckFailed, File: ComposeFile, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
+			Message: "The check found something it should have refused. This is a bug in Bayplan: please report it.",
+		}}
+		return res
+	}
 	res.Loaded = loaded
-	res.Problems = res.Problems.Sorted()
+	res.Problems = append(res.Problems, binds...).Sorted()
 	return res
+}
+
+// checkTimeout bounds one check when the caller names no deadline.
+const checkTimeout = 5 * time.Second
+
+var relativeBindWording = "“%s” is a relative bind mount. Use a named volume, or an absolute path on the host (which needs Admin)."
+
+// relativeBinds reports every bind mount whose source is not an absolute path (D-06): the stack has
+// no directory for a relative path to be relative to, so it would resolve against the host the
+// engine runs on. compose-go's short-syntax parse tells a bind from a named volume, so "./data" is
+// found and "data" with a volume of that name is not. Both targets are held to it.
+func relativeBinds(project *types.Project, ix *index) Problems {
+	var out Problems
+	for name, svc := range project.Services {
+		for i, v := range svc.Volumes {
+			if v.Type != types.VolumeTypeBind || v.Source == "" || strings.HasPrefix(v.Source, "/") {
+				continue
+			}
+			n := ix.findAny("services."+name+".volumes."+strconv.Itoa(i), "services."+name+".volumes", "services."+name)
+			out = append(out, relativeBindAt(n, "services."+name+".volumes", v.Source))
+		}
+	}
+	return out
+}
+
+// relativeBindAt is the D-06 error for a bind with this source, marked at n (line 1 when n is nil).
+func relativeBindAt(n *yaml.Node, key, source string) Problem {
+	line, col, endLine, endCol := at(n)
+	return Problem{
+		Severity: SeverityError, Code: CodeRelativeBind, File: ComposeFile, Key: key, Message: fmt.Sprintf(relativeBindWording, source),
+		Line: line, Col: col, EndLine: endLine, EndCol: endCol,
+	}
+}
+
+// ErrNotSandboxed means a loaded project holds something the prescan should have refused.
+var ErrNotSandboxed = errors.New("stacks: the loaded project is not sandboxed")
+
+// errRelativeBind is the violation of a relative bind mount, which Check reports with its own
+// wording at its line.
+var errRelativeBind = fmt.Errorf("%w: a relative bind mount", ErrNotSandboxed)
+
+// assertSandboxed is the defence in depth after the load (RESEARCH Q5, layer 3): the prescan has
+// already refused every one of these, so a violation here means the prescan has a gap. It returns
+// an error wrapping ErrNotSandboxed for a service that extends another, one with a label file, an
+// env_file that is not a file of the stack, a secret or config whose file is not one, and, last, a
+// relative bind mount.
+func assertSandboxed(project *types.Project, files FileSet) error {
+	ours := func(path string) bool {
+		_, ok := files[strings.TrimPrefix(path, "./")]
+		return ok && ValidPath(strings.TrimPrefix(path, "./")) == nil
+	}
+	var binds bool
+	for name, svc := range project.Services {
+		if svc.Extends != nil {
+			return fmt.Errorf("%w: service %s extends another", ErrNotSandboxed, name)
+		}
+		if len(svc.LabelFiles) > 0 {
+			return fmt.Errorf("%w: service %s has a label_file", ErrNotSandboxed, name)
+		}
+		for _, f := range svc.EnvFiles {
+			if !ours(f.Path) {
+				return fmt.Errorf("%w: service %s has an env_file that is not a file of the stack", ErrNotSandboxed, name)
+			}
+		}
+		for _, v := range svc.Volumes {
+			if v.Type == types.VolumeTypeBind && v.Source != "" && !strings.HasPrefix(v.Source, "/") {
+				binds = true
+			}
+		}
+	}
+	for name, s := range project.Secrets {
+		if s.File != "" && !ours(s.File) {
+			return fmt.Errorf("%w: secret %s has a file that is not a file of the stack", ErrNotSandboxed, name)
+		}
+	}
+	for name, c := range project.Configs {
+		if c.File != "" && !ours(c.File) {
+			return fmt.Errorf("%w: config %s has a file that is not a file of the stack", ErrNotSandboxed, name)
+		}
+	}
+	if binds {
+		return errRelativeBind
+	}
+	return nil
 }
 
 // unusedFiles are the paths of files that refs does not name, sorted. compose.yaml is the file
@@ -125,6 +224,50 @@ func parseIndex(src []byte) (*index, error) {
 			ix.docs = append(ix.docs, doc.Content[0])
 		}
 	}
+}
+
+// findAny is the first node any of the paths names.
+func (ix *index) findAny(paths ...string) *yaml.Node {
+	for _, p := range paths {
+		if n := ix.find(p); n != nil {
+			return n
+		}
+	}
+	return nil
+}
+
+// shortVolume finds the short-syntax entry ("name:/target") of a service's volumes that uses a
+// named volume source, or nil.
+func (ix *index) shortVolume(service, source string) *yaml.Node {
+	if ix == nil {
+		return nil
+	}
+	for _, root := range ix.docs {
+		svc := mapValue(mapValue(root, "services"), service)
+		list := mapValue(svc, "volumes")
+		if list == nil || list.Kind != yaml.SequenceNode {
+			continue
+		}
+		for _, item := range list.Content {
+			if item.Kind == yaml.ScalarNode && strings.HasPrefix(item.Value, source+":") {
+				return item
+			}
+		}
+	}
+	return nil
+}
+
+// mapValue is the value of a key of a mapping node, or nil.
+func mapValue(n *yaml.Node, key string) *yaml.Node {
+	if n == nil || n.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == key {
+			return n.Content[i+1]
+		}
+	}
+	return nil
 }
 
 // maxPathDepth bounds how far a path lookup follows aliases.
@@ -297,6 +440,13 @@ func loadProblems(err error, ix *index) Problems {
 		return Problems{keyProblem(ix, CodeComposeInvalid, m[1], m[1]+": "+m[2])}
 	}
 	if m := undefinedRe.FindStringSubmatch(text); m != nil {
+		if m[2] == "volume" {
+			// "data:/data" with no volume called data: compose-go reads it as a named volume and
+			// refuses it. What a person meant by it is a path, so it is the relative bind mount.
+			if n := ix.shortVolume(m[1], m[3]); n != nil {
+				return Problems{relativeBindAt(n, "services."+m[1]+".volumes", m[3])}
+			}
+		}
 		path := "services." + m[1] + "." + m[2] + "s"
 		return Problems{keyProblem(ix, CodeComposeInvalid, path, fmt.Sprintf("%s: %s %s isn't defined. Declare it at the top level, or remove it.", path, m[2], m[3]))}
 	}
@@ -357,12 +507,4 @@ func schemaProblems(text string, ix *index) Problems {
 		return Problems{keyProblem(ix, CodeSchemaInvalid, path, fmt.Sprintf("%s: unknown key “%s”.", parent, key))}
 	}
 	return Problems{keyProblem(ix, CodeSchemaInvalid, path, path+": "+msg)}
-}
-
-// ErrNotSandboxed means a loaded project holds something the prescan should have refused.
-var ErrNotSandboxed = errors.New("stacks: the loaded project is not sandboxed")
-
-// assertSandboxed is the defence in depth after the load.
-func assertSandboxed(project *types.Project, files FileSet) error {
-	return nil
 }

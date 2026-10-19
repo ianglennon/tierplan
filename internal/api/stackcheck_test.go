@@ -14,7 +14,6 @@ import (
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
@@ -202,12 +201,11 @@ func TestCheckIsLimitedPerUser(t *testing.T) {
 	var calls atomic.Int32
 	f, e := checkEnvTuned(t, func(f *envFix) {
 		// The first two checks are held in flight; the others pass through.
-		f.stackOnCheck = func(ctx context.Context) {
+		f.stackOnCheck = func(context.Context) {
 			if calls.Add(1) <= 2 {
 				entered <- struct{}{}
 				<-release
 			}
-			_ = httpx.PrincipalFrom(ctx)
 		}
 	})
 	admin := f.caller(t, e, "envadmin-1", "admin")

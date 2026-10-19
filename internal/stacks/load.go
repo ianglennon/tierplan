@@ -65,7 +65,11 @@ func Load(ctx context.Context, in LoadInput) (*Loaded, error) {
 	for _, v := range in.Copy.Vars {
 		env[v.Name] = v.Value
 	}
-	ctx, cancel := context.WithTimeout(ctx, loadTimeout)
+	deadline := in.Deadline
+	if deadline <= 0 {
+		deadline = loadTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, deadline)
 	defer cancel()
 	details := types.ConfigDetails{
 		WorkingDir:  sandboxDir,
@@ -80,6 +84,11 @@ func Load(ctx context.Context, in LoadInput) (*Loaded, error) {
 		o.SkipResolveLabels = true
 		o.ResolvePaths = false
 	})
+	// compose-go looks at the context only at some points, so a load that ran out of time is
+	// ended here whether or not it noticed: the result is then the same on every machine.
+	if cerr := ctx.Err(); cerr != nil {
+		return nil, &LoadError{Err: cerr}
+	}
 	if err != nil {
 		return nil, &LoadError{Err: err}
 	}

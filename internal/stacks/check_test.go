@@ -318,3 +318,15 @@ func TestCheckEndsWithCheckTimeoutPastItsDeadline(t *testing.T) {
 		t.Errorf("problem = %+v loaded = %v, want one error check_timeout and no project", p, res.Loaded)
 	}
 }
+
+func TestCheckPassesTheFilesAComposeFileOwns(t *testing.T) {
+	t.Parallel()
+	const compose = "services:\n  web:\n    image: x\n    env_file:\n      - ./app.env\n      - path: config/db.env\n        required: false\n    secrets: [db]\n    configs: [app]\nsecrets:\n  db:\n    file: ./secret.txt\nconfigs:\n  app:\n    file: app.conf\n"
+	in := stacks.CheckInput{Name: "probe", Target: stacks.TargetSwarm, Copy: stacks.WorkingCopy{Files: []stacks.File{
+		{Path: "compose.yaml", Content: []byte(compose)}, {Path: "app.env"}, {Path: "config/db.env"}, {Path: "secret.txt", Secret: true}, {Path: "app.conf"},
+	}}}
+	res := stacks.Check(context.Background(), in)
+	if len(res.Problems) != 0 || res.Loaded == nil || len(res.UnusedFiles) != 0 {
+		t.Errorf("problems %+v loaded %v unused %v, want a clean project that uses every file", res.Problems, res.Loaded, res.UnusedFiles)
+	}
+}
