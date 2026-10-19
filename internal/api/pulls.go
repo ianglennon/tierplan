@@ -26,7 +26,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/registry"
-	"github.com/ianglennon/bayplan/internal/tunnel"
+	"github.com/ianglennon/bayplan/internal/stackops"
 )
 
 const (
@@ -64,32 +64,7 @@ const (
 	metaCredID    = "credentialId"    //nolint:gosec // G101: a job field name, not a credential
 	metaCredLayer = "credentialLayer" //nolint:gosec // G101: a job field name, not a credential
 
-	// maxPullLayers bounds the layers one item lists; an image has a few dozen.
-	maxPullLayers = 256
-	// maxPullText bounds a layer ID or status taken from the engine's progress.
-	maxPullText = 80
 )
-
-// pullMessages are the sentences an item carries for a failure code. They are built here
-// from the code, never from the engine's or the registry's answer, so nothing a remote
-// system said reaches a browser through a job (T-05-02, T-05-06). The SPA words a code
-// itself and uses these only as a fallback.
-var pullMessages = map[string]string{
-	dockerx.PullCodeDenied:               "The registry refused the pull.",
-	dockerx.PullCodeUnauthorized:         "The registry asked for a sign-in the pull did not have.",
-	dockerx.PullCodeNotFound:             "The registry has no such image.",
-	dockerx.PullCodeInvalidReference:     "The engine did not accept this image reference.",
-	dockerx.PullCodeRateLimited:          "The registry is limiting pulls. Try again later.",
-	dockerx.PullCodeRegistryUnreachable:  "The registry could not be reached from this node.",
-	dockerx.PullCodeRegistryTLS:          "The registry's certificate was not accepted by this node.",
-	dockerx.PullCodeRegistryHTTP:         "The registry does not speak HTTPS and this node requires it.",
-	dockerx.PullCodeRegistryHTTPFallback: "The registry's real answer was hidden by a retry over plain HTTP. Check the name, the tag and the sign-in.",
-	dockerx.PullCodeCancelled:            "The pull was cancelled.",
-	dockerx.PullCodeFailed:               "The pull failed.",
-	codeNodeUnreachable:                  "The node is not connected to Bayplan.",
-	codeHostReadOnly:                     "This host is read-only, so Bayplan cannot pull on it.",
-	codeAgentPolicyDeny:                  "The node's agent refused the request.",
-}
 
 // PullsDeps are the dependencies of the pull routes.
 type PullsDeps struct {
@@ -692,12 +667,12 @@ func (pr *pullRun) pullOnNode(ctx context.Context, r *jobs.Reporter, n envs.Node
 	err := pr.d.Aggregator.WriteOnNode(nctx, pr.envID, n.ID, func(c *dockerx.Client) error {
 		var e error
 		res, e = c.ImagePull(nctx, pr.ref.String(), dockerx.PullOptions{EncodedAuth: pr.header}, func(ev dockerx.PullEvent) {
-			r.Update(n.ID, func(it *jobs.Item) { applyPullEvent(it, index, ev) })
+			r.Update(n.ID, func(it *jobs.Item) { stackops.ApplyPullEvent(it, index, ev) })
 		})
 		return e
 	})
 	if err != nil {
-		code := pullErrorCode(err)
+		code := stackops.PullErrorCode(err)
 		if code == dockerx.PullCodeFailed || code == codeNodeUnreachable {
 			// The text stays in the server log; the job carries the code only.
 			pr.d.Log.Warn("a pull failed", "environment", pr.envID, "node", n.ID, "ref", pr.ref.String(), "code", code, "error", err)
@@ -755,7 +730,7 @@ func (pr *pullRun) finish(r *jobs.Reporter, n envs.NodeRef, res dockerx.PullResu
 	if code == dockerx.PullCodeCancelled {
 		state = jobs.ItemCancelled
 	}
-	r.Finish(n.ID, state, code, pullMessages[code], nil)
+	r.Finish(n.ID, state, code, stackops.PullMessages[code], nil)
 }
 
 // noteCredential keeps the credential's bookkeeping (D-07): a node the registry refused to sign
@@ -790,80 +765,6 @@ func (pr *pullRun) noteCredential(code string) {
 	if err != nil {
 		pr.d.Log.Error("could not update a credential's last failure", "credential", pr.used.ID, "error", err)
 	}
-}
-
-// pullErrorCode maps the error of one node's pull to an item code.
-func pullErrorCode(err error) string {
-	var denied *envs.AgentPolicyDeniedError
-	switch {
-	case errors.Is(err, envs.ErrHostReadOnly):
-		return codeHostReadOnly
-	case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound), errors.Is(err, envs.ErrOffline),
-		errors.Is(err, envs.ErrUnsupported), errors.Is(err, tunnel.ErrAgentGone):
-		return codeNodeUnreachable
-	case errors.As(envs.ClassifyDockerError(err), &denied):
-		return codeAgentPolicyDeny
-	}
-	return dockerx.PullFailure(err)
-}
-
-// applyPullEvent folds one line of the engine's progress into the item: the layer it is
-// about, and the totals across the layers. The item is the hub's own, held under its lock.
-func applyPullEvent(it *jobs.Item, index map[string]int, ev dockerx.PullEvent) {
-	it.State = jobs.ItemRunning
-	if ev.Layer == "" {
-		return
-	}
-	id := clipPullText(ev.Layer)
-	i, ok := index[id]
-	if !ok {
-		if len(it.Subs) >= maxPullLayers {
-			return
-		}
-		it.Subs = append(it.Subs, jobs.Sub{ID: id})
-		i = len(it.Subs) - 1
-		index[id] = i
-	}
-	s := &it.Subs[i]
-	s.Status = clipPullText(ev.Status)
-	if ev.Bytes {
-		s.Current, s.Total = ev.Current, ev.Total
-	}
-	if layerFinished(s.Status) && s.Total > 0 {
-		s.Current = s.Total
-	}
-	it.Count = len(it.Subs)
-	it.Done, it.Current, it.Total = 0, 0, 0
-	for _, l := range it.Subs {
-		if layerFinished(l.Status) {
-			it.Done++
-		}
-		it.Current += l.Current
-		it.Total += l.Total
-	}
-	it.Unit = ""
-	if it.Total > 0 {
-		it.Unit = "bytes"
-	}
-}
-
-func layerFinished(status string) bool {
-	return status == "Pull complete" || status == "Already exists"
-}
-
-// clipPullText cuts a layer ID or status to maxPullText bytes on a rune boundary and drops
-// control characters: it is shown to a browser as text.
-func clipPullText(s string) string {
-	s = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
-			return -1
-		}
-		return r
-	}, s)
-	if len(s) > maxPullText {
-		s = strings.ToValidUTF8(s[:maxPullText], "")
-	}
-	return s
 }
 
 // pullItemBody maps a job item to the body the routes send.
