@@ -5,6 +5,7 @@ package stackops_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stacks"
@@ -290,5 +292,54 @@ func TestStandaloneDeployAddsRowsForContainersTheSDKLeftAloneFromWhatTheHostHold
 	svc := itemByID(t, job, "service:web")
 	if svc.Result["action"] != "unchanged" || svc.Current != 1 || svc.Total != 1 {
 		t.Errorf("service row = %+v, want unchanged with 1 of 1 containers", svc)
+	}
+}
+
+// ---- an agent that refuses, a host that is read-only (plan 07-21, D-27)
+
+func TestStandaloneDeployNamesTheServiceAnAgentRefusedAndKeepsTheRefusalAsItsCode(t *testing.T) {
+	t.Parallel()
+	rig := newStandaloneRig(t)
+	refused := container("demo-web-1", "web", "Error", false)
+	refused.Failed = true
+	refused.Text = "Error response from daemon: agent_policy_denied: POST /v1.52/containers/create"
+	rig.deps.Up = newScriptedUp(
+		errString("Error response from daemon: agent_policy_denied: POST /v1.52/containers/create"),
+		[]dockerx.ComposeEvent{container("demo-web-1", "web", "Creating", false), refused}).up
+
+	res, job := rig.deployStandalone(t, standaloneInput("demo", webStandalone))
+
+	if res.OK() || res.Code != stackops.CodeAgentPolicyDenied || res.FailedService != "web" {
+		t.Fatalf("result = %+v, want agent_policy_denied at web", res)
+	}
+	svc := itemByID(t, job, "service:web")
+	if svc.State != jobs.ItemFailed || svc.Code != stackops.CodeAgentPolicyDenied {
+		t.Errorf("service row = %s %s, want failed with agent_policy_denied", svc.State, svc.Code)
+	}
+	// The agent's own words, the request it refused, are on the row for the console to show.
+	if !strings.Contains(svc.Detail, "agent_policy_denied") || !strings.Contains(svc.Detail, "POST /v1.52/containers/create") {
+		t.Errorf("service detail = %q, want the refused request", svc.Detail)
+	}
+}
+
+func TestStandaloneDeployOnAReadOnlyHostFailsTheCheckStepAndRunsNothing(t *testing.T) {
+	t.Parallel()
+	rig := newStandaloneRig(t)
+	stand := &upStandIn{}
+	rig.deps.Up = stand.up
+	rig.deps.Writable = func(context.Context, string, string) error {
+		return fmt.Errorf("environment e1: %w", envs.ErrHostReadOnly)
+	}
+
+	res, job := rig.deployStandalone(t, standaloneInput("demo", webStandalone))
+
+	if res.OK() || res.Code != stackops.CodeHostReadOnly {
+		t.Fatalf("result = %+v, want host_read_only", res)
+	}
+	if got := itemStates(job); got["check"] != "failed:host_read_only" || got["lookup"] != "skipped:not_run" || got["services"] != "skipped:not_run" {
+		t.Errorf("items = %v, want the check step failed with host_read_only and the rest not run", got)
+	}
+	if stand.calls != 0 || len(rig.fake.Writes()) != 0 || len(rig.fake.DistributionRefs()) != 0 {
+		t.Errorf("SDK calls %d, writes %v, lookups %v, want nothing asked of the host", stand.calls, rig.fake.Writes(), rig.fake.DistributionRefs())
 	}
 }

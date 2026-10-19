@@ -4,14 +4,20 @@
 package stackops_test
 
 import (
+	"context"
+	"errors"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/compose-spec/compose-go/v2/types"
+
+	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // A deploy that stops (plan 07-18, D-14, STK-07): it stops where it is, removes what it created that
@@ -304,5 +310,192 @@ func TestNoAutomaticRollBack(t *testing.T) {
 	}
 	if ups := rig.fake.ServiceUpdates(); len(ups) != 1 || ups[0].ServiceID != "svc-api" {
 		t.Errorf("accepted updates = %+v, want only api's", ups)
+	}
+}
+
+// ---- a standalone deploy that stops (plan 07-21, D-14, D-20)
+
+const cleanupCompose = "services:\n  db:\n    image: nginx:1.27-alpine\n    volumes:\n      - data:/data\n  web:\n    image: nginx:1.27-alpine\nvolumes:\n  data: {}\n"
+
+// stackLabels are the labels of what the stack "demo" owns on a standalone host.
+func stackLabels(service string) map[string]string {
+	l := map[string]string{
+		"com.docker.compose.project": "demo", "com.docker.compose.oneoff": "False", stacksStackID: "stack-demo",
+	}
+	if service != "" {
+		l["com.docker.compose.service"] = service
+	}
+	return l
+}
+
+const stacksStackID = "bayplan.stack.id"
+
+// cleanupRig is a standalone host that already runs db (an old container of the stack, so db is changed and
+// recreated) and holds the stack's volume. It returns the configuration the fake engine was started with.
+func cleanupRig(t *testing.T) (*swarmRig, dockertest.FakeConfig) {
+	t.Helper()
+	var base dockertest.FakeConfig
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		standalone(c)
+		c.TasksFollowWrites = false
+		c.Containers = []dockertest.FakeContainer{{
+			ID: "c-db-old", Names: []string{"/demo-db-1"}, Image: "nginx:1.26", State: "running", Labels: stackLabels("db"),
+		}}
+		c.Volumes = []dockertest.FakeVolume{{Name: "demo_data", Driver: "local", Labels: stackLabels("")}}
+		base = *c
+	})
+	return rig, base
+}
+
+// grown is base with what created adds to it: the engine as the SDK left it.
+func grown(base dockertest.FakeConfig, created func(*dockertest.FakeConfig)) dockertest.FakeConfig {
+	cfg := base
+	cfg.Containers = slices.Clone(base.Containers)
+	cfg.Networks = slices.Clone(base.Networks)
+	cfg.Volumes = slices.Clone(base.Volumes)
+	created(&cfg)
+	return cfg
+}
+
+// failingUp plays an SDK that creates what created says on the host and then fails, as one whose second
+// service did not start.
+func failingUp(rig *swarmRig, base dockertest.FakeConfig, created func(*dockertest.FakeConfig), err error) func(context.Context, *dockerx.Client, *types.Project, dockerx.ComposeUpOptions, func(dockerx.ComposeEvent)) error {
+	return func(_ context.Context, _ *dockerx.Client, _ *types.Project, _ dockerx.ComposeUpOptions, _ func(dockerx.ComposeEvent)) error {
+		rig.fake.Reconfigure(grown(base, created))
+		return err
+	}
+}
+
+func deletes(rig *swarmRig) []string {
+	var out []string
+	for _, w := range rig.fake.Writes() {
+		if strings.HasPrefix(w, "DELETE ") {
+			out = append(out, strings.SplitN(w, "?", 2)[0])
+		}
+	}
+	return out
+}
+
+func TestAFailedStandaloneDeployRemovesWhatItCreatedThatNeverStartedAndKeepsTheRest(t *testing.T) {
+	t.Parallel()
+	rig, base := cleanupRig(t)
+	rig.deps.Up = failingUp(rig, base, func(c *dockertest.FakeConfig) {
+		c.Networks = append(c.Networks, dockertest.FakeNetwork{ID: "n-default", Name: "demo_default", Driver: "bridge", Scope: "local", Labels: stackLabels("")})
+		c.Containers = append(c.Containers,
+			// web never started, and the SDK's temporary container of db's recreate (a <12 hex>_<name> name).
+			dockertest.FakeContainer{ID: "c-web-new", Names: []string{"/demo-web-1"}, Image: "nginx:1.27", State: "created", Labels: stackLabels("web")},
+			dockertest.FakeContainer{ID: "c-db-tmp", Names: []string{"/c0ffee012345_demo-db-1"}, Image: "nginx:1.27", State: "created", Labels: stackLabels("db")},
+			// A container the deploy started and that then exited stays: it ran.
+			dockertest.FakeContainer{ID: "c-job", Names: []string{"/demo-job-1"}, Image: "nginx:1.27", State: "exited", Labels: stackLabels("job")},
+			// A container of another project is not the stack's.
+			dockertest.FakeContainer{ID: "c-other", Names: []string{"/other-web-1"}, Image: "nginx:1.27", State: "created", Labels: map[string]string{"com.docker.compose.project": "other"}},
+		)
+	}, errors.New("Error response from daemon: driver failed programming external connectivity"))
+
+	res, job := rig.deployStandalone(t, standaloneInput("demo", cleanupCompose))
+
+	if res.OK() || res.Code != stackops.CodeEngineError {
+		t.Fatalf("result = %+v, want engine_error", res)
+	}
+	got := deletes(rig)
+	slices.Sort(got)
+	if want := []string{"DELETE /containers/c-db-tmp", "DELETE /containers/c-web-new", "DELETE /networks/n-default"}; !slices.Equal(got, want) {
+		t.Errorf("removals = %v, want %v: the containers never started and the network nothing uses, no volume, no running or exited container, nothing of another project", got, want)
+	}
+	if want := []string{"demo-web-1", "c0ffee012345_demo-db-1", "demo_default"}; !sameSet(res.CleanedUp, want) {
+		t.Errorf("cleaned up = %v, want %v", res.CleanedUp, want)
+	}
+	if len(res.LeftInPlace) != 0 {
+		t.Errorf("left in place = %v, want nothing", res.LeftInPlace)
+	}
+	for _, id := range []string{"clean-container:demo-web-1", "clean-container:c0ffee012345_demo-db-1", "clean-network:demo_default"} {
+		it := itemByID(t, job, id)
+		if it.Parent != stackops.ItemCleanup || it.State != jobs.ItemDone || it.Result["cleaned"] != "true" {
+			t.Errorf("%s = %+v, want a done step under cleanup, cleaned", id, it)
+		}
+	}
+}
+
+func sameSet(a, b []string) bool {
+	x, y := slices.Clone(a), slices.Clone(b)
+	slices.Sort(x)
+	slices.Sort(y)
+	return slices.Equal(x, y)
+}
+
+func TestAFailedStandaloneDeployKeepsANetworkARemainingContainerUsesAndSaysSo(t *testing.T) {
+	t.Parallel()
+	rig, base := cleanupRig(t)
+	rig.deps.Up = failingUp(rig, base, func(c *dockertest.FakeConfig) {
+		c.Networks = append(c.Networks, dockertest.FakeNetwork{ID: "n-default", Name: "demo_default", Driver: "bridge", Scope: "local", Labels: stackLabels("")})
+		// The recreated db started on the new network before the deploy stopped.
+		c.Containers = append(c.Containers, dockertest.FakeContainer{
+			ID: "c-db-new", Names: []string{"/demo-db-2"}, Image: "nginx:1.27", State: "running", Labels: stackLabels("db"),
+			Networks: map[string]dockertest.FakeEndpoint{"demo_default": {NetworkID: "n-default"}},
+		})
+	}, errors.New("Error response from daemon: start failed"))
+
+	res, job := rig.deployStandalone(t, standaloneInput("demo", cleanupCompose))
+
+	if res.OK() {
+		t.Fatalf("result = %+v, want a failed deploy", res)
+	}
+	if !slices.Equal(res.LeftInPlace, []string{"demo_default"}) || len(res.CleanedUp) != 0 {
+		t.Errorf("cleaned up %v, left in place %v, want the network named as left in place", res.CleanedUp, res.LeftInPlace)
+	}
+	if it := itemByID(t, job, "clean-network:demo_default"); it.State != jobs.ItemDone || it.Result["left"] != "in_use" {
+		t.Errorf("network step = %+v, want done, left in use", it)
+	}
+	if got := deletes(rig); slices.Contains(got, "DELETE /containers/c-db-new") || slices.ContainsFunc(got, func(w string) bool { return strings.HasPrefix(w, "DELETE /volumes") }) {
+		t.Errorf("removals = %v, want no running container and no volume removed", got)
+	}
+}
+
+func TestACancelledStandaloneDeployCleansUpOnAContextTheCancelCannotReach(t *testing.T) {
+	t.Parallel()
+	rig, base := cleanupRig(t)
+	reached := make(chan struct{})
+	rig.deps.Up = func(ctx context.Context, _ *dockerx.Client, _ *types.Project, _ dockerx.ComposeUpOptions, _ func(dockerx.ComposeEvent)) error {
+		rig.fake.Reconfigure(grown(base, func(c *dockertest.FakeConfig) {
+			c.Containers = append(c.Containers, dockertest.FakeContainer{ID: "c-web-new", Names: []string{"/demo-web-1"}, Image: "nginx:1.27", State: "created", Labels: stackLabels("web")})
+		}))
+		close(reached)
+		<-ctx.Done() // the SDK is stopped where it is by the cancel
+		return ctx.Err()
+	}
+	id, done := rig.startStandalone(t, standaloneInput("demo", cleanupCompose))
+	testsupport.Await(t, "the SDK to be running", reached)
+	if err := rig.hub.Cancel(id); err != nil {
+		t.Fatal(err)
+	}
+	res := testsupport.Await(t, "the deploy to end", done)
+
+	if res.Code != stackops.CodeCancelled {
+		t.Fatalf("result = %+v, want cancelled", res)
+	}
+	if got := deletes(rig); !slices.Equal(got, []string{"DELETE /containers/c-web-new"}) {
+		t.Errorf("removals = %v, want the container that never started", got)
+	}
+	if !slices.Equal(res.CleanedUp, []string{"demo-web-1"}) {
+		t.Errorf("cleaned up = %v", res.CleanedUp)
+	}
+}
+
+func TestAStandaloneDeployThatNeverReachedTheSDKRemovesNothing(t *testing.T) {
+	t.Parallel()
+	rig, base := cleanupRig(t)
+	base.PullStatus = dockertest.FakePullStatus{Code: 404, Message: "manifest unknown"}
+	rig.fake.Reconfigure(base)
+	rig.deps.Up = (&upStandIn{}).up
+	in := standaloneInput("demo", cleanupCompose)
+	in.Reviewed = map[string]string{"db": "nginx:1.27-alpine@" + digestOf("a"), "web": "nginx:1.27-alpine@" + digestOf("a")}
+
+	res, _ := rig.deployStandalone(t, in)
+
+	if res.OK() || res.Code != "image_not_found" {
+		t.Fatalf("result = %+v, want a failed pull", res)
+	}
+	if got := deletes(rig); len(got) != 0 {
+		t.Errorf("removals = %v, want none: nothing was created", got)
 	}
 }

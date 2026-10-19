@@ -85,6 +85,12 @@ type Deps struct {
 	// real engine and is proved against one; a test sets it to feed a deploy a stream of events and an
 	// outcome.
 	Up func(ctx context.Context, c *dockerx.Client, p *types.Project, o dockerx.ComposeUpOptions, on func(dockerx.ComposeEvent)) error
+	// Writable asks whether the node of a standalone host can be written to: it is the check step's first
+	// question, so a host whose owner made it read-only (envs.ErrHostReadOnly) fails the deploy before it
+	// asks the host or a registry for anything. Nil asks the aggregator with a write that does nothing
+	// (WriteOnNode refuses a read-only host before it takes a client); a test sets it to play a host that
+	// answers otherwise, which the aggregator proves for itself.
+	Writable func(ctx context.Context, envID, nodeID string) error
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
