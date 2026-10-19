@@ -8,11 +8,15 @@ import (
 	"context"
 	"log/slog"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx"
@@ -170,7 +174,7 @@ func TestDeploySwarmCreatesTheNetworkAndTheServiceWithTheOwnershipLabels(t *test
 	}
 	spec := svcs[0].Spec
 	if spec.Name != "tracer_web" || spec.Labels["com.docker.stack.namespace"] != "tracer" || spec.Labels["bayplan.stack.id"] != "stack-tracer" ||
-		spec.Labels["com.docker.stack.image"] != "nginx:1.27-alpine" || spec.TaskTemplate.ContainerSpec.Image != "nginx:1.27-alpine" {
+		spec.Labels["com.docker.stack.image"] != "nginx:1.27-alpine" || spec.TaskTemplate.ContainerSpec.Image != "nginx:1.27-alpine@"+dockertest.FakeDigestOf("docker.io/library/nginx:1.27-alpine") {
 		t.Errorf("service spec = %+v", spec)
 	}
 	if got := rig.fake.Writes(); !slices.Equal(got, []string{"POST /networks/create", "POST /services/create"}) {
@@ -194,8 +198,8 @@ func TestDeploySwarmUpdatesAnOwnedServiceAtTheVersionItRead(t *testing.T) {
 		t.Errorf("job = %s %v", job.State, itemStates(job))
 	}
 	ups := rig.fake.ServiceUpdates()
-	if len(ups) != 1 || ups[0].ServiceID != "svc-web" || ups[0].Version != "7" || ups[0].Spec.TaskTemplate.ContainerSpec.Image != "nginx:1.27-alpine" {
-		t.Errorf("updates = %+v, want one at version 7 with the new image", ups)
+	if len(ups) != 1 || ups[0].ServiceID != "svc-web" || ups[0].Version != "7" || ups[0].Spec.TaskTemplate.ContainerSpec.Image != "nginx:1.27-alpine@"+dockertest.FakeDigestOf("docker.io/library/nginx:1.27-alpine") {
+		t.Errorf("updates = %+v, want one at version 7 with the new image pinned to its digest", ups)
 	}
 	if got := rig.fake.Writes(); len(got) != 1 || !strings.HasPrefix(got[0], "POST /services/svc-web/update") {
 		t.Errorf("writes = %v, want only the service update (the network exists)", got)
@@ -666,5 +670,199 @@ func TestOtherStacksAreNeverTouched(t *testing.T) {
 	}
 	if !slices.Equal(res.RemovedServices, []string{"web_old"}) {
 		t.Errorf("RemovedServices = %v, want only this stack's undeclared service", res.RemovedServices)
+	}
+}
+
+// The pins of a deploy (D-15, STK-09).
+
+// pinCompose is a stack of one service, web, running image.
+func pinCompose(image string) string { return "services:\n  web:\n    image: " + image + "\n" }
+
+// digestOf is a valid digest made of one hex character.
+func digestOf(c string) string { return "sha256:" + strings.Repeat(c, 64) }
+
+// memPins is a PinStore that keeps its pins in memory, for tests of the deploy that do not need
+// a database: the stored pins it holds read back as the last good revision's.
+type memPins struct {
+	mu     sync.Mutex
+	good   map[string]stacks.LivePin
+	stored map[string]map[string]string
+}
+
+func (m *memPins) GoodPins(_ context.Context, _ string) (map[string]stacks.LivePin, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return maps.Clone(m.good), nil
+}
+
+func (m *memPins) SetPins(_ context.Context, snapshotID string, pins map[string]string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stored == nil {
+		m.stored = map[string]map[string]string{}
+	}
+	m.stored[snapshotID] = maps.Clone(pins)
+	return nil
+}
+
+func (m *memPins) pinsOf(snapshotID string) map[string]string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.stored[snapshotID]
+}
+
+func TestRedeployKeepsTheRunningDigestAfterTheTagMoved(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	rig.fake.SetDistributionDigest("docker.io/library/nginx:1.27", digestOf("a"))
+	store := &memPins{}
+	_, in := stackInput(t, "site", pinCompose("nginx:1.27"), nil)
+	in.Pins, in.RevisionID = store, "rev-1"
+
+	first, job := rig.deploy(t, in)
+	if !first.OK() || job.State != jobs.JobDone {
+		t.Fatalf("first deploy = %+v, job = %s %v", first, job.State, itemStates(job))
+	}
+	creates := rig.fake.ServiceCreates()
+	if len(creates) != 1 || creates[0].Spec.TaskTemplate.ContainerSpec.Image != "nginx:1.27@"+digestOf("a") {
+		t.Fatalf("service creates = %+v, want one at nginx:1.27@sha256:aaa", creates)
+	}
+	if got := store.pinsOf("rev-1"); !maps.Equal(got, map[string]string{"site_web": "nginx:1.27@" + digestOf("a")}) {
+		t.Errorf("stored pins = %v, want the pinned reference of site_web", got)
+	}
+	if pin := first.Pins["site_web"]; pin.Action != stacks.PinResolve || pin.Ref != "nginx:1.27@"+digestOf("a") {
+		t.Errorf("first pin = %+v, want a resolve", pin)
+	}
+	lookups := len(rig.fake.DistributionRefs())
+
+	// The tag moves in the registry; nothing in the file changes.
+	rig.fake.SetDistributionDigest("docker.io/library/nginx:1.27", digestOf("b"))
+	in.RevisionID = "rev-2"
+	second, job := rig.deploy(t, in)
+	if !second.OK() || job.State != jobs.JobDone {
+		t.Fatalf("second deploy = %+v, job = %s %v", second, job.State, itemStates(job))
+	}
+	if n := len(rig.fake.ServiceCreates()); n != 1 {
+		t.Errorf("service creates = %d, want still one: an unchanged stack sends no ServiceCreate", n)
+	}
+	ups := rig.fake.ServiceUpdates()
+	if len(ups) != 1 {
+		t.Fatalf("service updates = %+v, want one", ups)
+	}
+	if got := ups[0].Spec.TaskTemplate.ContainerSpec.Image; got != "nginx:1.27@"+digestOf("a") {
+		t.Errorf("update image = %q, want the running digest nginx:1.27@sha256:aaa, not the moved tag", got)
+	}
+	if !reflect.DeepEqual(creates[0].Spec.TaskTemplate, ups[0].Spec.TaskTemplate) {
+		t.Errorf("the redeploy's task template differs from the first deploy's:\n create %+v\n update %+v", creates[0].Spec.TaskTemplate, ups[0].Spec.TaskTemplate)
+	}
+	if pin := second.Pins["site_web"]; pin.Action != stacks.PinKeep {
+		t.Errorf("second pin = %+v, want keep", pin)
+	}
+	if n := len(rig.fake.DistributionRefs()); n != lookups {
+		t.Errorf("distribution lookups = %d, want still %d: a kept digest needs no registry", n, lookups)
+	}
+	if got := store.pinsOf("rev-2"); !maps.Equal(got, map[string]string{"site_web": "nginx:1.27@" + digestOf("a")}) {
+		t.Errorf("second revision's pins = %v", got)
+	}
+}
+
+func TestChangedReferenceResolvesANewDigest(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	rig.fake.SetDistributionDigest("docker.io/library/nginx:1.27", digestOf("a"))
+	rig.fake.SetDistributionDigest("docker.io/library/nginx:1.28", digestOf("c"))
+	_, first := stackInput(t, "site", pinCompose("nginx:1.27"), nil)
+	if res, _ := rig.deploy(t, first); !res.OK() {
+		t.Fatalf("first deploy = %+v", res)
+	}
+	lookups := len(rig.fake.DistributionRefs())
+
+	_, second := stackInput(t, "site", pinCompose("nginx:1.28"), nil)
+	res, job := rig.deploy(t, second)
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("second deploy = %+v, job = %s %v", res, job.State, itemStates(job))
+	}
+	ups := rig.fake.ServiceUpdates()
+	if len(ups) != 1 || ups[0].Spec.TaskTemplate.ContainerSpec.Image != "nginx:1.28@"+digestOf("c") {
+		t.Fatalf("service updates = %+v, want one at nginx:1.28@sha256:ccc", ups)
+	}
+	if got := ups[0].Spec.Labels["com.docker.stack.image"]; got != "nginx:1.28" {
+		t.Errorf("image label = %q, want the text as written", got)
+	}
+	if refs := rig.fake.DistributionRefs()[lookups:]; !slices.Equal(refs, []string{"docker.io/library/nginx:1.28"}) {
+		t.Errorf("lookups of the second deploy = %v, want only the new reference", refs)
+	}
+}
+
+func TestADeployKeepsTheForceUpdateCounterOfARunningService(t *testing.T) {
+	t.Parallel()
+	owned := map[string]string{"com.docker.stack.namespace": "site", "bayplan.stack.id": "stack-site", "com.docker.stack.image": "nginx:1.27"}
+	live := swarm.ServiceSpec{
+		Annotations: swarm.Annotations{Name: "site_web", Labels: owned},
+		TaskTemplate: swarm.TaskSpec{
+			ContainerSpec: &swarm.ContainerSpec{Image: "nginx:1.27@" + digestOf("a")}, ForceUpdate: 3,
+		},
+	}
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		c.Networks = []dockertest.FakeNetwork{{ID: "n1", Name: "site_default", Driver: "overlay", Scope: "swarm", Labels: owned}}
+	}, dockertest.FakeService{ID: "svc-web", Name: "site_web", Mode: "replicated", Version: 4, Labels: owned, Spec: &live})
+	_, in := stackInput(t, "site", pinCompose("nginx:1.27"), nil)
+	res, _ := rig.deploy(t, in)
+	if !res.OK() {
+		t.Fatalf("deploy = %+v", res)
+	}
+	ups := rig.fake.ServiceUpdates()
+	if len(ups) != 1 {
+		t.Fatalf("updates = %+v", ups)
+	}
+	if got := ups[0].Spec.TaskTemplate.ForceUpdate; got != 3 {
+		t.Errorf("ForceUpdate = %d, want the running counter 3: sending 0 would replace every task", got)
+	}
+	if got := ups[0].Spec.TaskTemplate.ContainerSpec.Image; got != "nginx:1.27@"+digestOf("a") {
+		t.Errorf("image = %q, want the running digest", got)
+	}
+	if n := len(rig.fake.DistributionRefs()); n != 0 {
+		t.Errorf("distribution lookups = %d, want none for a kept digest", n)
+	}
+}
+
+func TestADigestInTheFileIsDeployedAsWrittenWithoutALookup(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	text := "nginx:1.27@" + digestOf("d")
+	_, in := stackInput(t, "site", pinCompose(text), nil)
+	res, _ := rig.deploy(t, in)
+	if !res.OK() {
+		t.Fatalf("deploy = %+v", res)
+	}
+	if got := rig.fake.ServiceCreates()[0].Spec.TaskTemplate.ContainerSpec.Image; got != text {
+		t.Errorf("image = %q, want %q as written", got, text)
+	}
+	if n := len(rig.fake.DistributionRefs()); n != 0 {
+		t.Errorf("distribution lookups = %d, want none", n)
+	}
+}
+
+func TestADeployStopsAtTheLookupWhenAnImageCannotBePinned(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		c.PullStatus = dockertest.FakePullStatus{Code: 404, Message: "manifest unknown"}
+	})
+	_, in := stackInput(t, "site", pinCompose("nginx:1.27"), nil)
+	res, job := rig.deploy(t, in)
+	if res.Code != stackops.CodeImageUnresolved || res.FailedService != "site_web" {
+		t.Fatalf("result = %+v, want image_unresolved at site_web", res)
+	}
+	got := itemStates(job)
+	if got[stackops.ItemCheck] != "done" || got[stackops.ItemLookup] != "failed:image_unresolved" || got[stackops.ItemNetworks] != "cancelled:not_run" {
+		t.Errorf("items = %v", got)
+	}
+	if w := rig.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, a deploy that cannot pin an image writes nothing", w)
+	}
+	for _, it := range job.Items {
+		if it.ID == stackops.ItemLookup && !strings.Contains(it.Message, "docker.io") {
+			t.Errorf("lookup message = %q, want it to name the registry", it.Message)
+		}
 	}
 }

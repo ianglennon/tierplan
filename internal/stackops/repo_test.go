@@ -519,3 +519,55 @@ func TestSavingAtVersionZeroWhenADraftExistsIsAConflict(t *testing.T) {
 		t.Fatalf("err = %v, want a conflict naming ada at version 1", err)
 	}
 }
+
+func TestPinsAreStoredOnARevisionAndTheLastGoodOnesReadBack(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("x")}})
+	if got, err := f.repo.GoodPins(ctx, st.ID); err != nil || got != nil {
+		t.Fatalf("GoodPins of a stack with no good revision = %v, %v; want none", got, err)
+	}
+
+	good, _ := f.repo.NewRevision(ctx, st.ID, "ada")
+	if err := f.repo.SetPins(ctx, good.ID, map[string]string{"web_app": "nginx:1.27@sha256:aaa", "web_db": "registry.example:5000/db:2@sha256:bbb"}); err != nil {
+		t.Fatalf("SetPins: %v", err)
+	}
+	// The outcome of the deploy does not wipe what the deploy stored.
+	if err := f.repo.SetOutcome(ctx, good.ID, stackops.OutcomeGood, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	// A later revision that failed, with its own pins, is not what runs.
+	failed, _ := f.repo.NewRevision(ctx, st.ID, "ada")
+	if err := f.repo.SetPins(ctx, failed.ID, map[string]string{"web_app": "nginx:1.28@sha256:ccc"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetOutcome(ctx, failed.ID, stackops.OutcomeFailed, "", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := f.repo.GoodPins(ctx, st.ID)
+	if err != nil {
+		t.Fatalf("GoodPins: %v", err)
+	}
+	want := map[string]stacks.LivePin{
+		"web_app": {AsWritten: "nginx:1.27", Image: "nginx:1.27@sha256:aaa"},
+		"web_db":  {AsWritten: "registry.example:5000/db:2", Image: "registry.example:5000/db:2@sha256:bbb"},
+	}
+	if len(got) != len(want) || got["web_app"] != want["web_app"] || got["web_db"] != want["web_db"] {
+		t.Errorf("GoodPins = %+v, want %+v", got, want)
+	}
+}
+
+func TestSetPinsRefusesARevisionThatDoesNotExistAndADraft(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, draft, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("x")}})
+	if err := f.repo.SetPins(ctx, "nope", map[string]string{}); err == nil {
+		t.Error("SetPins of an unknown snapshot succeeded")
+	}
+	if err := f.repo.SetPins(ctx, draft.ID, map[string]string{"web_app": "nginx@sha256:aaa"}); err == nil {
+		t.Errorf("SetPins of the draft of %s succeeded: only a revision has pins", st.ID)
+	}
+}

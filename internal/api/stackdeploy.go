@@ -125,6 +125,7 @@ func stackJobOwner(p *rbac.Principal) string { return string(p.Type) + ":" + p.I
 // jobStepLabels name the steps of a swarm deploy.
 var jobStepLabels = []jobs.ItemSpec{
 	{ID: stackops.ItemCheck, Label: "Check the stack"},
+	{ID: stackops.ItemLookup, Label: "Look up images"},
 	{ID: stackops.ItemNetworks, Label: "Networks"},
 	{ID: stackops.ItemObjects, Label: "Secrets and configs"},
 	{ID: stackops.ItemServices, Label: "Services"},
@@ -187,6 +188,7 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 	in2 := stackops.SwarmDeployInput{
 		EnvID: env.ID, Stack: st, Project: loaded.Project, Files: files, Vars: vars,
 		Caller: stackops.Caller{Principal: p, Actor: p.Name},
+		Pins:   repo, RevisionID: rev.ID,
 	}
 	in2.OnDone = func(res stackops.DeployResult) {
 		recordDeployEnd(reqCtx, d, actor, userAgent, st, rev, deploy, res)

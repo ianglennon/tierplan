@@ -67,7 +67,12 @@ FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'goo
 ORDER BY seq DESC LIMIT 1;
 
 -- name: SetRevisionOutcome :execrows
-UPDATE stack_snapshots SET outcome = ?, rendered = ?, pins = ? WHERE id = ? AND kind = 'revision';
+-- An empty pins keeps the pins a deploy stored on the revision while it ran.
+UPDATE stack_snapshots SET outcome = ?, rendered = ?, pins = COALESCE(NULLIF(CAST(sqlc.arg(pins) AS TEXT), ''), pins)
+WHERE id = sqlc.arg(id) AND kind = 'revision';
+
+-- name: SetSnapshotPins :execrows
+UPDATE stack_snapshots SET pins = ? WHERE id = ? AND kind = 'revision';
 
 -- name: InsertStackDeploy :exec
 INSERT INTO stack_deploys (id, stack_id, env_id, kind, state, revision_seq, job_id, started_by, started_at)

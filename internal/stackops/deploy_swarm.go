@@ -23,6 +23,7 @@ import (
 // The items of a swarm deploy job, in order.
 const (
 	ItemCheck    = "check"
+	ItemLookup   = "lookup"
 	ItemNetworks = "networks"
 	ItemObjects  = "objects"
 	ItemServices = "services"
@@ -32,7 +33,7 @@ const (
 // DeployItems returns the items of a swarm deploy job in the order they run, for the caller that
 // starts the job.
 func DeployItems() []string {
-	return []string{ItemCheck, ItemNetworks, ItemObjects, ItemServices, ItemCleanup}
+	return []string{ItemCheck, ItemLookup, ItemNetworks, ItemObjects, ItemServices, ItemCleanup}
 }
 
 // The codes a swarm deploy ends a failed item with. Each has a sentence in codeMessages; the
@@ -76,6 +77,7 @@ var codeMessages = map[string]string{
 	CodeStackInvalid:       "The stack could not be converted for the swarm.",
 	CodeNameClash:          "A stack of that name already exists on this environment that Bayplan does not manage.",
 	CodeRegistryUnresolved: "The registry credential for an image could not be read.",
+	CodeImageUnresolved:    "An image could not be looked up to pin it to a digest.",
 	CodeEngineError:        "The engine could not complete the request.",
 	CodeCancelled:          "The deploy was cancelled.",
 	CodeNotRun:             "Not run because an earlier step failed.",
@@ -97,6 +99,11 @@ type SwarmDeployInput struct {
 	Files  stacks.FileSet
 	Vars   map[string]string
 	Caller Caller
+	// Pins is where the pins of the stack's last good revision are read from and where this
+	// deploy's are stored, on the revision RevisionID. Nil means neither: the images are still
+	// pinned, and a service the engine lacks is looked up again.
+	Pins       PinStore
+	RevisionID string
 	// OnDone, when set, is called once with the result before the job's last item is finished,
 	// so a job that reads as finished has already been recorded by the caller.
 	OnDone func(DeployResult)
@@ -115,7 +122,22 @@ type DeployResult struct {
 	CreatedNetworks, CreatedObjects, RemovedServices, RemovedObjects, LeftInPlace []string
 	// FailedService names the service, network, secret or config the failure is about.
 	FailedService, Code string
+	// Pins are the images the services were deployed with, by swarm service name, and Problems
+	// what the lookup found: a blocking problem for each image it could not pin, a warning for
+	// each local image.
+	Pins     map[string]Pin
+	Problems stacks.Problems
 }
+
+// PinStore keeps the digests a stack ran with. Repo is the one implementation.
+type PinStore interface {
+	// GoodPins is what the stack's newest good revision ran, by swarm service name.
+	GoodPins(ctx context.Context, stackID string) (map[string]stacks.LivePin, error)
+	// SetPins stores the pinned reference of each service on a revision.
+	SetPins(ctx context.Context, snapshotID string, pins map[string]string) error
+}
+
+var _ PinStore = Repo{}
 
 // OK reports whether the deploy ended without a failure.
 func (r DeployResult) OK() bool { return r.Code == "" }
@@ -144,7 +166,10 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	}()
 	// fail ends the item that failed with its code and the items after it as not run. The last
 	// item is held in final, to be finished after OnDone.
-	fail := func(item, code, name string) DeployResult {
+	failWith := func(item, code, name, message string) DeployResult {
+		if message == "" {
+			message = CodeMessage(code)
+		}
 		res.Code, res.FailedService = code, name
 		state := jobs.ItemFailed
 		if code == CodeCancelled {
@@ -154,7 +179,7 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 			var end itemEnd
 			switch {
 			case id == item:
-				end = itemEnd{state: state, code: code, message: CodeMessage(code)}
+				end = itemEnd{state: state, code: code, message: message}
 			case order(id) > order(item):
 				end = itemEnd{state: jobs.ItemCancelled, code: CodeNotRun, message: CodeMessage(CodeNotRun)}
 			default:
@@ -168,6 +193,7 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		}
 		return res
 	}
+	fail := func(item, code, name string) DeployResult { return failWith(item, code, name, "") }
 	// failStep ends the item that failed with the code and name a step reported.
 	failStep := func(item string, err error) DeployResult {
 		code, name := stepOf(ctx, err)
@@ -240,7 +266,34 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	}
 	r.Finish(ItemCheck, jobs.ItemDone, "", "", nil)
 
-	// 2. Networks: create each one the stack uses that does not exist yet, and check that the
+	// 2. Look up images: decide which image each service is sent with. A service that runs the
+	// text it is deployed with keeps the digest it runs and needs no registry; a new service or
+	// a changed text is looked up through a manager and deployed as tag@sha256 (D-15).
+	r.Update(ItemLookup, func(it *jobs.Item) { it.State = jobs.ItemRunning })
+	byName := make(map[string]dockerx.ServiceDetail, len(existingSvcs))
+	for _, s := range existingSvcs {
+		byName[s.Name] = s
+	}
+	pinned := d.ResolvePins(ctx, in.EnvID, planned.Services, byName, nil, nil)
+	res.Pins, res.Problems = pinned.Pins, pinned.Problems
+	if pinned.Blocked() {
+		msg := ""
+		if isImageFailure(pinned.Code) {
+			// The sentence names the registry and the service; it holds nothing the registry said.
+			if first, ok := firstError(pinned.Problems); ok {
+				msg = first.Message
+			}
+		}
+		return failWith(ItemLookup, pinned.Code, pinned.FailedService, msg)
+	}
+	if in.Pins != nil && in.RevisionID != "" {
+		if err := in.Pins.SetPins(ctx, in.RevisionID, pinned.Refs()); err != nil {
+			d.log().Error("could not store the pins of a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
+		}
+	}
+	r.Finish(ItemLookup, jobs.ItemDone, "", "", map[string]string{"images": strconv.Itoa(len(pinned.Pins))})
+
+	// 3. Networks: create each one the stack uses that does not exist yet, and check that the
 	// external ones are there.
 	r.Update(ItemNetworks, func(it *jobs.Item) { it.State = jobs.ItemRunning })
 	liveNets := existingNets
@@ -254,7 +307,7 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	}
 	r.Finish(ItemNetworks, jobs.ItemDone, "", "", nil)
 
-	// 3. Objects: the secrets and configs, created under their hashed names or found.
+	// 4. Objects: the secrets and configs, created under their hashed names or found.
 	r.Update(ItemObjects, func(it *jobs.Item) { it.State = jobs.ItemRunning })
 	refs, created, err := d.ensureObjects(ctx, in.EnvID, in.Stack, objs, live)
 	res.CreatedObjects = created
@@ -263,7 +316,7 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	}
 	r.Finish(ItemObjects, jobs.ItemDone, "", "", nil)
 
-	// 4. Services: convert again with the objects that now exist, update the services that exist at
+	// 5. Services: convert again with the objects that now exist, update the services that exist at
 	// the version just read and create the rest.
 	r.Update(ItemServices, func(it *jobs.Item) { it.State = jobs.ItemRunning })
 	plan, err := convert.Convert(in.Project, convert.Options{StackName: in.Stack.Name, StackID: in.Stack.ID, Objects: refs})
@@ -272,13 +325,18 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		return fail(ItemServices, CodeStackInvalid, "")
 	}
 	r.Update(ItemServices, func(it *jobs.Item) { it.Unit, it.Total = "services", int64(len(plan.Services)) })
-	byName := make(map[string]dockerx.ServiceDetail, len(existingSvcs))
-	for _, s := range existingSvcs {
-		byName[s.Name] = s
-	}
 	for i, sp := range plan.Services {
 		if ctx.Err() != nil {
 			return fail(ItemServices, CodeCancelled, sp.Name)
+		}
+		existing, update := byName[sp.Name]
+		// The image is the pinned one, never the text; an update keeps the counter that makes
+		// the swarm replace tasks, so a redeploy that changed nothing replaces nothing.
+		if p, ok := pinned.Pins[sp.Name]; ok && sp.Spec.TaskTemplate.ContainerSpec != nil {
+			sp.Spec.TaskTemplate.ContainerSpec.Image = p.Ref
+		}
+		if update {
+			sp.Spec.TaskTemplate.ForceUpdate = liveForceUpdate(existing.Spec)
 		}
 		raw, err := json.Marshal(sp.Spec)
 		if err != nil {
@@ -289,7 +347,6 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 			d.log().Error("could not resolve the registry credential of a stack service", "environment", in.EnvID, "stack", in.Stack.Name, "service", sp.Name, "error", err)
 			return fail(ItemServices, CodeRegistryUnresolved, sp.Name)
 		}
-		existing, update := byName[sp.Name]
 		err = d.Aggregator.WriteOnManager(ctx, in.EnvID, func(c *dockerx.Client) error {
 			if update {
 				_, e := c.ServiceUpdate(ctx, existing.ID, existing.Version, raw, auth)
@@ -313,7 +370,7 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		"services": strconv.Itoa(res.Services), "updated": strconv.Itoa(res.Updated),
 	})
 
-	// 5. Cleanup: every service now uses the new objects, so the ones they replaced can go.
+	// 6. Cleanup: every service now uses the new objects, so the ones they replaced can go.
 	r.Update(ItemCleanup, func(it *jobs.Item) { it.State = jobs.ItemRunning })
 	if ctx.Err() != nil {
 		return fail(ItemCleanup, CodeCancelled, "")
@@ -337,6 +394,28 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		"removedObjects":  strconv.Itoa(len(res.RemovedObjects)), "leftInPlace": strconv.Itoa(len(res.LeftInPlace)),
 	}}
 	return res
+}
+
+// firstError is the first blocking problem of a list.
+func firstError(ps stacks.Problems) (stacks.Problem, bool) {
+	for _, p := range ps {
+		if p.Severity == stacks.SeverityError {
+			return p, true
+		}
+	}
+	return stacks.Problem{}, false
+}
+
+// liveForceUpdate is the force-update counter of a service's spec as the swarm holds it, zero
+// when the spec does not say.
+func liveForceUpdate(spec json.RawMessage) uint64 {
+	var s struct {
+		TaskTemplate struct{ ForceUpdate uint64 }
+	}
+	if json.Unmarshal(spec, &s) != nil {
+		return 0
+	}
+	return s.TaskTemplate.ForceUpdate
 }
 
 // itemEnd is how an item will be finished.

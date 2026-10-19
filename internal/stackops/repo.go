@@ -6,6 +6,7 @@ package stackops
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -427,11 +428,9 @@ func (r Repo) NewRevision(ctx context.Context, stackID, actor string) (Snapshot,
 }
 
 // SetOutcome marks a revision good or failed and stores what it rendered and the digests it ran
-// with (empty rendered and "{}" pins until the plans that fill them).
+// with. Empty pins keep the pins SetPins stored while the deploy ran (a revision starts with
+// "{}").
 func (r Repo) SetOutcome(ctx context.Context, snapshotID, outcome, rendered, pins string) error {
-	if pins == "" {
-		pins = "{}"
-	}
 	n, err := r.Store.Q.SetRevisionOutcome(ctx, sqlc.SetRevisionOutcomeParams{Outcome: outcome, Rendered: rendered, Pins: pins, ID: snapshotID})
 	if err != nil {
 		return fmt.Errorf("set revision outcome: %w", err)
@@ -440,6 +439,55 @@ func (r Repo) SetOutcome(ctx context.Context, snapshotID, outcome, rendered, pin
 		return fmt.Errorf("set revision outcome: no revision %s", snapshotID)
 	}
 	return nil
+}
+
+// SetPins stores on a revision the image each service of it was deployed with, by swarm service
+// name: the pinned reference, tag@sha256 (or the image ID of a local image). A deploy stores
+// them as soon as it has looked its images up, so a deploy that stops later still records what
+// it meant to run; only the pins of a revision that ended good are read back (GoodPins).
+func (r Repo) SetPins(ctx context.Context, snapshotID string, pins map[string]string) error {
+	if pins == nil {
+		pins = map[string]string{}
+	}
+	raw, err := json.Marshal(pins)
+	if err != nil {
+		return fmt.Errorf("encode pins: %w", err)
+	}
+	n, err := r.Store.Q.SetSnapshotPins(ctx, sqlc.SetSnapshotPinsParams{Pins: string(raw), ID: snapshotID})
+	if err != nil {
+		return fmt.Errorf("set pins: %w", err)
+	}
+	if n != 1 {
+		return fmt.Errorf("set pins: no revision %s", snapshotID)
+	}
+	return nil
+}
+
+// GoodPins is what the stack's newest good revision ran, by swarm service name. AsWritten is the
+// stored reference without its digest, which is the text it was deployed from up to how
+// docker spells it; a caller compares it with the current text through sameImageText. A stack
+// with no good revision has none.
+func (r Repo) GoodPins(ctx context.Context, stackID string) (map[string]stacks.LivePin, error) {
+	row, err := r.Store.RQ.LatestGoodRevision(ctx, stackID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read revision: %w", err)
+	}
+	var pins map[string]string
+	if err := json.Unmarshal([]byte(row.Pins), &pins); err != nil {
+		return nil, fmt.Errorf("read the pins of revision %d: %w", row.Seq, err)
+	}
+	out := make(map[string]stacks.LivePin, len(pins))
+	for service, ref := range pins {
+		text := ref
+		if i := strings.LastIndex(ref, "@"); i > 0 {
+			text = ref[:i]
+		}
+		out[service] = stacks.LivePin{AsWritten: text, Image: ref}
+	}
+	return out, nil
 }
 
 // LatestGoodRevision is the newest revision whose deploy succeeded, with its files and
