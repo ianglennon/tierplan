@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/moby/moby/client"
@@ -100,12 +101,47 @@ func (c *Client) ConfigsWithLabel(ctx context.Context, key, value string) ([]Con
 	return rows, nil
 }
 
-// ContainersWithLabel lists the containers, stopped ones too, that carry the label key=value.
+// ContainersWithLabel lists the containers, stopped ones too, that carry the label key=value,
+// sorted by name then ID. The filter is built with the engine client's Filters type, so key and
+// value are encoded for the query and never joined into it by hand; the label is checked again
+// on each row. It is read-only and works on any engine, a swarm node's or a standalone host's.
 func (c *Client) ContainersWithLabel(ctx context.Context, key, value string) ([]ContainerRow, error) {
-	return nil, nil
+	cs, err := c.cur().ContainerList(ctx, client.ContainerListOptions{
+		All:     true,
+		Filters: make(client.Filters).Add("label", key+"="+value),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list containers on %s: %w", c.t.Describe(), err)
+	}
+	rows := containerRows(cs.Items)
+	out := rows[:0]
+	for _, r := range rows {
+		if r.Labels[key] == value {
+			out = append(out, r)
+		}
+	}
+	return out, nil
 }
 
-// VolumesWithLabel lists the volumes that carry the label key=value.
+// VolumesWithLabel lists the volumes that carry the label key=value, sorted by name, built the
+// same way as ContainersWithLabel. It is read-only.
 func (c *Client) VolumesWithLabel(ctx context.Context, key, value string) ([]VolumeRow, error) {
-	return nil, nil
+	vs, err := c.cur().VolumeList(ctx, client.VolumeListOptions{
+		Filters: make(client.Filters).Add("label", key+"="+value),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list volumes on %s: %w", c.t.Describe(), err)
+	}
+	out := make([]VolumeRow, 0, len(vs.Items))
+	for _, v := range vs.Items {
+		if v.Labels[key] != value {
+			continue
+		}
+		out = append(out, VolumeRow{
+			Name: v.Name, Driver: v.Driver, Created: parseTime(v.CreatedAt),
+			Labels: maps.Clone(v.Labels), Anonymous: IsAnonymousVolume(v.Name, v.Labels),
+		})
+	}
+	slices.SortFunc(out, func(a, b VolumeRow) int { return cmp.Compare(a.Name, b.Name) })
+	return out, nil
 }

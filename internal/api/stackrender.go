@@ -80,6 +80,11 @@ func renderStack(ctx context.Context, d StacksDeps, lim *streamLimiter, in *Stac
 
 // invalidStackProblem is the 422 for a working copy with errors: every error with its place.
 func invalidStackProblem(ps stacks.Problems) error {
+	return stackInvalid(ps, "The stack has errors, so there is nothing to render yet. Fix the problems the check lists.")
+}
+
+// stackInvalid is the 422 stack_invalid with every error of ps at its file and line.
+func stackInvalid(ps stacks.Problems, detail string) error {
 	details := make([]*huma.ErrorDetail, 0, ps.Errors())
 	for _, p := range ps {
 		if p.Severity != stacks.SeverityError {
@@ -89,7 +94,6 @@ func invalidStackProblem(ps stacks.Problems) error {
 	}
 	return &huma.ErrorModel{
 		Type: problemStackInvalid, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
-		Detail: "The stack has errors, so there is nothing to render yet. Fix the problems the check lists.",
-		Errors: details,
+		Detail: detail, Errors: details,
 	}
 }

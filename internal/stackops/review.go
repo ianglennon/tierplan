@@ -133,6 +133,13 @@ type Review struct {
 // sees the change beside the reason. A failure to read the swarm is the error returned.
 func (d Deps) Review(ctx context.Context, in ReviewInput) (Review, error) {
 	rv := Review{DraftVersion: in.DraftVersion, Pins: map[string]string{}, NeedsAdmin: []string{}}
+	// A review judges what the caller may deploy, so it cannot be made without a way to judge it.
+	if d.Checker == nil || in.Caller.Principal == nil {
+		return rv, ErrNoPolicy
+	}
+	if err := d.CheckTarget(ctx, in.EnvID, in.Stack); err != nil {
+		return rv, err
+	}
 	res := stacks.Check(ctx, stacks.CheckInput{Name: in.Stack.Name, Target: in.Stack.Target, Copy: in.Copy})
 	rv.Problems = res.Problems
 	if res.Loaded == nil {
@@ -154,10 +161,24 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (Review, error) {
 	if err != nil {
 		return rv, err
 	}
+	if clash(in.Stack.ID, in.Stack.Name, live.Networks, live.Services, live.Objects) {
+		rv.Problems = append(rv.Problems, stacks.Problem{
+			Severity: stacks.SeverityError, Code: CodeNameClash, Message: NameClashMessage(in.Stack.Name), File: stacks.ComposeFile,
+			Line: 1, Col: 1, EndLine: 1, EndCol: 2,
+		})
+	}
 	plan, err := convert.Convert(project, convert.Options{StackName: in.Stack.Name, StackID: in.Stack.ID, Objects: reviewRefs(in.Stack, objs, live.Objects)})
 	if err != nil {
 		rv.Problems = append(rv.Problems, ConvertProblem(err)).Sorted()
 		return rv, nil
+	}
+	pol, err := d.Policy(ctx, in.Caller, in.EnvID, in.Copy, plan)
+	if err != nil {
+		return rv, err
+	}
+	rv.Problems = append(rv.Problems, pol.Problems...)
+	if pol.Kinds != nil {
+		rv.NeedsAdmin = pol.Kinds
 	}
 
 	byName := make(map[string]dockerx.ServiceDetail, len(live.Services))

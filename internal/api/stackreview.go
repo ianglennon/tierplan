@@ -13,7 +13,6 @@ import (
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
 )
 
 // StackReviewRequest is the body of POST .../review.
@@ -101,7 +100,9 @@ func registerStackReview(r *httpx.Router, d StacksDeps) {
 			"It runs the same check as the editor, looks up the digests of the images that need one, converts the stack the way a deploy does, reads what the swarm holds under the stack's namespace and answers the problems, a summary, an image table, each service's change with its masked current and next spec, and the other resources. " +
 			"A value derived from a secret of the stack is <hidden> on both sides; whether it changed is decided before it is hidden and listed in hiddenChanges as a path. " +
 			"Right after a deploy, a review shows no change. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. " +
-			"A standalone stack is 409 target_engine_missing. Needs stacks.deploy (Operator).",
+			"For a caller below env Admin, host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables, is a blocking needs_admin problem at its line, and needsAdmin names the kinds. " +
+			"A name that something Bayplan does not manage holds is a blocking stack_name_clash problem. " +
+			"An environment that is no longer the kind of target the stack was created for is 409 target_changed, and a standalone stack is 409 target_engine_missing. Needs stacks.deploy (Operator).",
 		Tags: []string{"stacks"},
 	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackReviewInput) (*StackReviewOutput, error) {
@@ -119,9 +120,6 @@ func reviewStack(ctx context.Context, d StacksDeps, in *StackReviewInput) (*Stac
 	if err != nil {
 		return nil, stackLookupProblem(d, env.ID, err)
 	}
-	if st.Target != stacks.TargetSwarm {
-		return nil, httpx.Problem(http.StatusConflict, problemTargetEngineAbsent, "This version cannot deploy to a standalone Docker host yet.")
-	}
 	draft, err := repo.Draft(ctx, st.ID)
 	if err != nil {
 		return nil, stackLookupProblem(d, env.ID, err)
@@ -138,7 +136,7 @@ func reviewStack(ctx context.Context, d StacksDeps, in *StackReviewInput) (*Stac
 	}
 	rv, err := d.ops().Review(ctx, ri)
 	if err != nil {
-		return nil, snapshotProblem(d.Log, env.ID, err)
+		return nil, targetProblem(d, env.ID, err)
 	}
 	return &StackReviewOutput{CacheControl: "no-store", Body: stackReviewBody(rv)}, nil
 }

@@ -25,6 +25,11 @@ type leaf struct {
 	text      string
 	line, col int
 	key       string
+	// short is set on the whole entry of a short-syntax volume that holds an
+	// interpolation in its source: once filled in, its source is what is judged.
+	short bool
+	// forced is set on a leaf the rule has already judged to be dangerous.
+	forced bool
 }
 
 // rule is one row of the host-escalation table. Key is the service attribute
@@ -304,14 +309,17 @@ func volumeLeaves(c *checker, v val) []leaf {
 			switch {
 			case !ok:
 			case interpolated(src):
-				out = append(out, at(it, s))
+				l := at(it, s)
+				l.short = true
+				out = append(out, l)
 			default:
 				out = append(out, at(it, src))
 			}
 		case yaml.MappingNode:
 			fields := c.entries(it, 0)
 			if t, ok := c.scalarField(fields, "type"); ok {
-				switch strings.ToLower(strings.TrimSpace(t.n.Value)) {
+				typ, _ := c.expand(t.n.Value)
+				switch strings.ToLower(strings.TrimSpace(typ)) {
 				case "volume", "tmpfs", "image", "cluster":
 					continue
 				}
@@ -400,21 +408,24 @@ func fileSourceLeaves(c *checker, v val) []leaf {
 }
 
 // driverOptsLeaves checks one top-level volume definition. Only the local
-// driver mounts a device, and it does so for type none with o bind (a bind of
-// a host path) and for any filesystem type (a host block device such as
-// /dev/sda1). So the device is checked when o contains bind, when type is none,
-// when type is any filesystem other than a network one, and when o or type
-// cannot be read (interpolation). With no type and no bind option nothing is
-// mounted and the device is not checked.
+// driver mounts a device, and hostpath.LocalVolumeHostAccess says when the
+// options give a task host access the way dockerd uses them, the rule the
+// service and the agent paths apply: a bind (o contains bind, or type none) of
+// a device that is not an absolute path under the data roots is a finding at the
+// device, and a filesystem type that is not tmpfs, a network share or absent
+// mounts a host device or filesystem whatever the device says, a finding at the
+// type. When o or type cannot be read (an interpolation with no value) the
+// options cannot be judged, so the device is checked as a path as well, with
+// the interpolation itself a finding.
 func driverOptsLeaves(c *checker, v val) []leaf {
 	fields := c.entries(v, 0)
 	var out []leaf
 	if d, ok := c.scalarField(fields, "driver"); ok {
-		name := strings.ToLower(strings.TrimSpace(d.n.Value))
+		name, known := c.expand(d.n.Value)
 		switch {
-		case interpolated(d.n.Value):
+		case !known:
 			out = append(out, leaf{text: d.n.Value, line: d.line(), col: d.column(), key: "driver"})
-		case name != "local":
+		case strings.ToLower(strings.TrimSpace(name)) != "local":
 			return nil
 		}
 	}
@@ -426,24 +437,53 @@ func driverOptsLeaves(c *checker, v val) []leaf {
 	}
 	unknown := false
 	var oVal, tVal string
+	var tNode val
+	var haveType bool
 	if o, ok := c.scalarField(opts, "o"); ok {
-		if interpolated(o.n.Value) {
+		if text, known := c.expand(o.n.Value); known {
+			oVal = text
+		} else {
 			unknown = true
 			out = append(out, leaf{text: o.n.Value, line: o.line(), col: o.column(), key: "driver_opts.o"})
-		} else {
-			oVal = o.n.Value
 		}
 	}
 	if t, ok := c.scalarField(opts, "type"); ok {
-		if interpolated(t.n.Value) {
+		if text, known := c.expand(t.n.Value); known {
+			tVal = text
+		} else {
 			unknown = true
 			out = append(out, leaf{text: t.n.Value, line: t.line(), col: t.column(), key: "driver_opts.type"})
-		} else {
-			tVal = t.n.Value
 		}
+		tNode, haveType = t, true
 	}
-	if d, ok := c.scalarField(opts, "device"); ok && (unknown || hostpath.MountsDevice(oVal, tVal)) {
+	d, ok := c.scalarField(opts, "device")
+	if !ok {
+		return out
+	}
+	device, deviceKnown := c.expand(d.n.Value)
+	if unknown {
+		// Nothing can be said about what is mounted: the device is judged as a path.
 		out = append(out, leaf{text: d.n.Value, line: d.line(), col: d.column(), key: "driver_opts.device"})
+		return out
+	}
+	kind := strings.ToLower(strings.TrimSpace(tVal))
+	binds := strings.Contains(strings.ToLower(oVal), "bind") || kind == "none"
+	if !deviceKnown {
+		// The device is a value that cannot be filled in. It matters when it is bound; a
+		// filesystem type that gives host access does so whatever it is.
+		if binds {
+			out = append(out, leaf{text: d.n.Value, line: d.line(), col: d.column(), key: "driver_opts.device"})
+			return out
+		}
+		device = "/srv/device"
+	}
+	switch hostpath.LocalVolumeHostAccess(map[string]string{"o": oVal, "type": tVal, "device": device}) {
+	case "device":
+		out = append(out, leaf{text: device, line: d.line(), col: d.column(), key: "driver_opts.device", forced: true})
+	case "type":
+		if haveType {
+			out = append(out, leaf{text: tVal, line: tNode.line(), col: tNode.column(), key: "driver_opts.type", forced: true})
+		}
 	}
 	return out
 }

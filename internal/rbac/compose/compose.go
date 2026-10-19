@@ -11,12 +11,15 @@
 // column, so a deploy by anyone below env Admin can be refused with the
 // offending keys named (AUTH-10).
 //
-// This is a first pass over the raw YAML. It resolves anchors, aliases and <<
+// Check is a first pass over the raw YAML. It resolves anchors, aliases and <<
 // merge keys, but it cannot see include: or extends: targets or the values
 // environment interpolation would produce. A checked field that contains an
 // interpolation is therefore its own finding (rule "unresolvable") and the
-// check fails closed. The stack phases must run the same rules again over the
-// resolved compose-go project before a deploy.
+// check fails closed. CheckResolved is the second pass the stack phases run: it
+// takes the variables of the stack and judges a value by what interpolation
+// gives, at the line and column the value was written, so a bind source written
+// as ${DATA} is judged by DATA's value. A name that has no value and no default
+// stays "unresolvable".
 //
 // The package is pure: it reads bytes and returns findings. It deliberately
 // does not import internal/rbac; the policy hook in package rbac imports this
@@ -30,6 +33,7 @@ import (
 	"io"
 	"sort"
 
+	"github.com/compose-spec/compose-go/v2/template"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -76,12 +80,23 @@ type Finding struct {
 // column, then rule. A file with no services returns no findings and no error.
 // A file over MaxSize returns ErrTooLarge; YAML that does not parse returns an
 // error wrapping ErrInvalid.
-func Check(src []byte) ([]Finding, error) {
+func Check(src []byte) ([]Finding, error) { return check(src, nil) }
+
+// CheckResolved returns every host-escalation finding in src, judging each
+// interpolated value by what lookup gives for its variables. lookup answers a
+// variable's value and whether it has one; a blank value counts as none when
+// the caller says so, as the stack's table does. A nil lookup is Check. The
+// findings, their order and their errors are Check's.
+func CheckResolved(src []byte, lookup func(name string) (string, bool)) ([]Finding, error) {
+	return check(src, lookup)
+}
+
+func check(src []byte, lookup func(name string) (string, bool)) ([]Finding, error) {
 	if len(src) > MaxSize {
 		return nil, ErrTooLarge
 	}
 	dec := yaml.NewDecoder(bytes.NewReader(src))
-	c := &checker{budget: maxBudget}
+	c := &checker{budget: maxBudget, lookup: lookup}
 	// compose-go merges every document of a multi-document file, so every
 	// document is checked.
 	for {
@@ -99,11 +114,6 @@ func Check(src []byte) ([]Finding, error) {
 		}
 	}
 	return finish(c.found), nil
-}
-
-// CheckResolved is Check for a caller that knows the variables of the file.
-func CheckResolved(src []byte, lookup func(name string) (string, bool)) ([]Finding, error) {
-	return Check(src)
 }
 
 // finish orders findings by (line, column, rule) with a stable sort and drops
@@ -151,6 +161,8 @@ type checker struct {
 	budget int
 	err    error
 	found  []Finding
+	// lookup gives the value of a variable, or nil when the caller has no table.
+	lookup func(name string) (string, bool)
 }
 
 // pos is a reporting position that overrides a node's own.
@@ -339,17 +351,61 @@ func (c *checker) fileSource(r rule, section string, e entry) {
 }
 
 // report turns a checked leaf into a finding: unresolvable when the value
-// holds an interpolation, the rule's own finding when the value is dangerous,
-// and nothing otherwise.
+// holds an interpolation that cannot be filled in, the rule's own finding when
+// the value (as filled in) is dangerous, and nothing otherwise. A value that
+// was filled in is reported as the value it became, at the place it was
+// written.
 func (c *checker) report(r rule, service, key string, l leaf) {
 	f := Finding{Service: service, Key: key, Value: l.text, Line: l.line, Column: l.col}
+	text := l.text
+	if resolved, ok := c.expand(l.text); ok && resolved != l.text {
+		text = resolved
+		if l.short {
+			// A short-syntax volume entry was read whole; its source is what is judged.
+			src, has := shortSource(text)
+			if !has {
+				return
+			}
+			text = src
+		}
+		f.Value = text
+	}
 	switch {
-	case interpolated(l.text):
+	case interpolated(text):
 		f.Rule, f.Why = ruleUnresolvable, whyUnresolvable
-	case r.Bad(l.text):
+		f.Value = l.text
+	case l.forced:
+		f.Rule, f.Why = r.Name, r.Why
+	case r.Bad(text):
 		f.Rule, f.Why = r.Name, r.Why
 	default:
 		return
 	}
 	c.found = append(c.found, f)
+}
+
+// expand fills in the interpolations of text from the caller's table. ok is
+// false when there is no table, or a name has no value and no default, or a
+// required name is missing: the text cannot be verified. A text with no
+// interpolation is returned as it is.
+func (c *checker) expand(text string) (string, bool) {
+	if !interpolated(text) {
+		return text, true
+	}
+	if c.lookup == nil {
+		return text, false
+	}
+	missing := false
+	out, err := template.SubstituteWithOptions(text, template.Mapping(c.lookup), template.WithoutLogging,
+		template.WithReplacementFunction(func(sub string, m template.Mapping, cfg *template.Config) (string, error) {
+			value, applied, err := template.DefaultReplacementAppliedFunc(sub, m, cfg)
+			if err == nil && !applied {
+				missing = true
+			}
+			return value, err
+		}))
+	if err != nil || missing {
+		return text, false
+	}
+	return out, true
 }

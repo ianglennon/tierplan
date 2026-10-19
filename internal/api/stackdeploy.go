@@ -106,7 +106,9 @@ func registerStackDeploy(r *httpx.Router, d StacksDeps) {
 			"draftVersion must be the version of the draft you reviewed, or the answer is 409 draft_changed. pins, when sent, are the review's: the deploy uses exactly those digests and makes no registry lookup (422 pins_invalid for one the server would not have chosen). " +
 			"On a swarm the job creates the stack's networks, then its secrets and configs under names that end in a short hash of their content, then its services, through one manager, each once and never retried; each carries com.docker.stack.namespace and bayplan.stack.id, and each service com.docker.stack.image with the image as written. " +
 			"A secret or config that content changes replaces is removed at the end, once every service uses the new one. " +
-			"A compose file that does not load is 422 compose_invalid; one that uses a setting not converted yet is 422 compose_unsupported. A standalone stack is 409 target_engine_missing. At most 5 jobs of one user run at once (429 too_many_deploys). " +
+			"A compose file that does not load is 422 compose_invalid; one that uses a setting not converted yet is 422 compose_unsupported; one whose check finds an error is 422 stack_invalid. " +
+			"A caller below env Admin is refused 403 privileged_compose, with each setting and its line in errors, when the stack asks for host access (a bind of the Docker socket or a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables. " +
+			"A name that something Bayplan does not manage holds is 409 stack_name_clash. An environment that is no longer the kind of target the stack was created for is 409 target_changed, and a standalone stack is 409 target_engine_missing. At most 5 jobs of one user run at once (429 too_many_deploys). " +
 			"Writes one stack.deployed audit row, with the result, when the job ends. Needs stacks.deploy (Operator).",
 		Tags: []string{"stacks"}, DefaultStatus: http.StatusAccepted,
 	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
@@ -152,8 +154,8 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 	if err != nil {
 		return nil, stackLookupProblem(d, env.ID, err)
 	}
-	if st.Target != stacks.TargetSwarm {
-		return nil, httpx.Problem(http.StatusConflict, problemTargetEngineAbsent, "This version cannot deploy to a standalone Docker host yet.")
+	if err := d.ops().CheckTarget(ctx, env.ID, st); err != nil {
+		return nil, targetProblem(d, env.ID, err)
 	}
 	draft, err := repo.Draft(ctx, st.ID)
 	if err != nil {
@@ -190,6 +192,29 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 		}
 	}
 
+	// The review's checks are made again on what is about to be deployed (07-18 makes them once
+	// more under the lock): the errors of the check, what the caller may not deploy, and a name
+	// that something Bayplan does not manage holds. Nothing is stored or sent until they pass.
+	checked := stacks.Check(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy})
+	if checked.Problems.Errors() > 0 || checked.Loaded == nil {
+		return nil, stackInvalid(checked.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
+	}
+	caller := stackops.Caller{Principal: p, Actor: p.Name}
+	pol, err := d.ops().Policy(ctx, caller, env.ID, draft.Copy, plan)
+	if err != nil {
+		return nil, stackInternal(d, "policy", env.ID, err)
+	}
+	if pol.Refused {
+		return nil, policyProblem(pol)
+	}
+	foreign, err := d.ops().ForeignStack(ctx, env.ID, st.Target, st.Name, st.ID)
+	if err != nil {
+		return nil, snapshotProblem(d.Log, env.ID, err)
+	}
+	if foreign {
+		return nil, nameClashProblem(st.Name)
+	}
+
 	rev, err := repo.NewRevision(ctx, st.ID, p.Name)
 	if err != nil {
 		return nil, stackInternal(d, "revision", env.ID, err)
@@ -203,7 +228,7 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 	actor, userAgent := p.AuditActor(), in.UserAgent
 	in2 := stackops.SwarmDeployInput{
 		EnvID: env.ID, Stack: st, Project: loaded.Project, Files: files, Vars: vars,
-		Caller: stackops.Caller{Principal: p, Actor: p.Name},
+		Caller: caller,
 		Pins:   repo, RevisionID: rev.ID, Update: update, Reviewed: in.Body.Pins,
 	}
 	in2.OnDone = func(res stackops.DeployResult) {
@@ -275,6 +300,53 @@ func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userA
 		},
 	}); err != nil {
 		d.Log.Error("could not audit a stack deploy", "stack", st.ID, "error", err)
+	}
+}
+
+// targetProblem is the answer to an environment that is no longer what the stack was made for, or
+// that this version cannot deploy to; any other error is a failure to read the environment.
+func targetProblem(d StacksDeps, envID string, err error) error {
+	switch {
+	case errors.Is(err, stackops.ErrTargetChanged):
+		return httpx.Problem(http.StatusConflict, problemTargetChanged,
+			"This environment is no longer the kind of target this stack was created for, so it can't be reviewed or deployed here. Create a new stack for it.")
+	case errors.Is(err, stackops.ErrTargetEngineMissing):
+		return httpx.Problem(http.StatusConflict, problemTargetEngineAbsent, "This version cannot deploy to a standalone Docker host yet.")
+	case errors.Is(err, stackops.ErrNoPolicy):
+		return stackInternal(d, "policy", envID, err)
+	}
+	return snapshotProblem(d.Log, envID, err)
+}
+
+// nameClashProblem is the 409 for a name that something Bayplan does not manage holds.
+func nameClashProblem(name string) error {
+	return &huma.ErrorModel{
+		Type: problemNameClash, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
+		Detail: stackops.NameClashMessage(name),
+		Errors: []*huma.ErrorDetail{{Location: "name", Message: name}},
+	}
+}
+
+// policyProblem is the 403 for a stack that uses host access the caller may not deploy, with each
+// setting and its place (UI-SPEC, "Host escalation in the rendered stack").
+func policyProblem(pol stackops.PolicyResult) error {
+	if len(pol.Entries) == 0 {
+		return &huma.ErrorModel{
+			Type: problemComposeInvalid, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
+			Detail: "The compose file can't be checked for host access, so it can't be deployed.",
+		}
+	}
+	lines := make([]string, 0, len(pol.Entries))
+	details := make([]*huma.ErrorDetail, 0, len(pol.Entries))
+	for _, e := range pol.Entries {
+		at := e.File + ":" + itoa(int64(e.Line))
+		lines = append(lines, e.Text+" at "+at)
+		details = append(details, &huma.ErrorDetail{Location: at, Message: e.Text})
+	}
+	return &huma.ErrorModel{
+		Type: rbac.ReasonPrivilegedCompose, Title: http.StatusText(http.StatusForbidden), Status: http.StatusForbidden,
+		Detail: "This stack uses settings that need Admin: " + strings.Join(lines, "; ") + ". Ask an administrator to deploy it.",
+		Errors: details,
 	}
 }
 

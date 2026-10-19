@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -51,6 +52,8 @@ const (
 	problemComposeUnsupported  = "compose_unsupported"
 	problemTooManyDeploys      = "too_many_deploys"
 	problemStackJobNotFound    = "stack_job_not_found"
+	problemNameClash           = "stack_name_clash"
+	problemTargetChanged       = "target_changed"
 
 	// The states a stack is listed in, from its newest operation.
 	stackNotDeployed  = "not_deployed"
@@ -178,6 +181,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 		Description: "Creates a stack and its first draft. Nothing is sent to any engine: the stack is Not deployed until it is deployed. " +
 			"The target is fixed here from the environment: swarm when the environment is a swarm, standalone otherwise. " +
 			"The name must match ^[a-z0-9][a-z0-9_-]{0,62}$ (422 stack_name_invalid) and be new on the environment (409 stack_name_taken). " +
+			"A name that something Bayplan does not manage already uses on the environment (a swarm namespace or a Compose project with that name, without this stack's bayplan.stack.id) is 409 stack_name_clash. " +
 			"start chooses the first compose.yaml: example (a starter with one service) or empty; compose overrides it. Audited as stack.created. Needs stacks.create (Admin).",
 		Tags: []string{"stacks"}, DefaultStatus: http.StatusCreated, MaxBodyBytes: maxStackBody,
 	}, rbac.Requirement{Perm: rbac.PermStacksCreate, Scope: rbac.ScopeEnvironment},
@@ -341,6 +345,27 @@ func createStack(ctx context.Context, d StacksDeps, in *StackCreateInput) (*Stac
 	target := stacks.TargetStandalone
 	if swarm {
 		target = stacks.TargetSwarm
+	}
+
+	// A name the environment already uses for something Bayplan does not manage is refused (D-12):
+	// Bayplan never deploys into, takes over or changes such a stack. A name one of Bayplan's own
+	// stacks holds is the create's own refusal below, and its objects are never a clash.
+	own, err := d.repo().Stacks(ctx, env.ID)
+	if err != nil {
+		return nil, stackInternal(d, "list", env.ID, err)
+	}
+	if !slices.ContainsFunc(own, func(s stackops.Stack) bool { return s.Name == name }) {
+		foreign, err := d.ops().ForeignStack(ctx, env.ID, target, name, "")
+		if err != nil {
+			return nil, snapshotProblem(d.Log, env.ID, err)
+		}
+		if foreign {
+			return nil, &huma.ErrorModel{
+				Type: problemNameClash, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
+				Detail: stackops.NameClashMessage(name),
+				Errors: []*huma.ErrorDetail{{Location: "name", Message: name}},
+			}
+		}
 	}
 
 	st, _, err := d.repo().CreateStack(ctx, env.ID, name, target, p.Name, stacks.WorkingCopy{
