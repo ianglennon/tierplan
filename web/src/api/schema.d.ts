@@ -3087,6 +3087,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/stack-jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The stack operations you can follow
+         * @description The deploys, updates and roll backs of stacks that are running or ended in the last 10 minutes, newest first, for the header's jobs list. Every job on an environment where you may read stacks (stacks.read) is listed, whoever started it; a job on any other environment is left out, as if it did not exist. A job that has left the server's history is not listed, and its console answers 404 stack_job_not_found.
+         */
+        get: operations["listStackJobs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/teams": {
         parameters: {
             query?: never;
@@ -8486,6 +8506,10 @@ export interface components {
             /** @description What current and total count, or empty: services for the services step, tasks for a service row */
             unit: string;
         };
+        StackJobListBody: {
+            /** @description The stack operations running or ended in the last 10 minutes on the environments the caller may read stacks on, newest first */
+            jobs: components["schemas"]["StackJobSummary"][] | null;
+        };
         StackJobOutputLine: {
             /** @description When the line was written, RFC 3339 UTC */
             at: string;
@@ -8496,6 +8520,34 @@ export interface components {
             seq: number;
             /** @description What the deploy did, or what the engine said, cleaned of control characters and clipped, with the stack's secret values hidden */
             text: string;
+        };
+        StackJobSummary: {
+            /** @description The environment the operation runs on */
+            envId: string;
+            /** @description The environment's name when the operation started */
+            envName: string;
+            /** @description When the job ended, RFC 3339 UTC, empty while it runs */
+            finishedAt: string;
+            /** @description The job ID: open its console at /env/{envId}/stacks/{stackId}/deploys/{id} */
+            id: string;
+            /**
+             * @description What the operation is
+             * @enum {string}
+             */
+            kind: "deploy" | "update" | "rollback" | "start" | "stop" | "remove";
+            /** @description The stack the operation is on */
+            stackId: string;
+            /** @description The stack's name when the operation started */
+            stackName: string;
+            /** @description When the job started, RFC 3339 UTC */
+            startedAt: string;
+            /** @description Who started it, as a name */
+            startedBy: string;
+            /**
+             * @description Where it is. A job that ended with some of its work done and some not reads failed
+             * @enum {string}
+             */
+            state: "running" | "done" | "failed" | "cancelled";
         };
         StackListBody: {
             /** @description The environment's stacks by name */
@@ -15897,6 +15949,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SetupDefaultsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listStackJobs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackJobListBody"];
                 };
             };
             /** @description Error */

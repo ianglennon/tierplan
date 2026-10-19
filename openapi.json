@@ -12041,6 +12041,25 @@
         ],
         "type": "object"
       },
+      "StackJobListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "jobs": {
+            "description": "The stack operations running or ended in the last 10 minutes on the environments the caller may read stacks on, newest first",
+            "items": {
+              "$ref": "#/components/schemas/StackJobSummary"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "jobs"
+        ],
+        "type": "object"
+      },
       "StackJobOutputLine": {
         "additionalProperties": false,
         "properties": {
@@ -12063,6 +12082,78 @@
           "seq",
           "at",
           "text"
+        ],
+        "type": "object"
+      },
+      "StackJobSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "envId": {
+            "description": "The environment the operation runs on",
+            "type": "string"
+          },
+          "envName": {
+            "description": "The environment's name when the operation started",
+            "type": "string"
+          },
+          "finishedAt": {
+            "description": "When the job ended, RFC 3339 UTC, empty while it runs",
+            "type": "string"
+          },
+          "id": {
+            "description": "The job ID: open its console at /env/{envId}/stacks/{stackId}/deploys/{id}",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What the operation is",
+            "enum": [
+              "deploy",
+              "update",
+              "rollback",
+              "start",
+              "stop",
+              "remove"
+            ],
+            "type": "string"
+          },
+          "stackId": {
+            "description": "The stack the operation is on",
+            "type": "string"
+          },
+          "stackName": {
+            "description": "The stack's name when the operation started",
+            "type": "string"
+          },
+          "startedAt": {
+            "description": "When the job started, RFC 3339 UTC",
+            "type": "string"
+          },
+          "startedBy": {
+            "description": "Who started it, as a name",
+            "type": "string"
+          },
+          "state": {
+            "description": "Where it is. A job that ended with some of its work done and some not reads failed",
+            "enum": [
+              "running",
+              "done",
+              "failed",
+              "cancelled"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "envId",
+          "envName",
+          "stackId",
+          "stackName",
+          "kind",
+          "state",
+          "startedAt",
+          "finishedAt",
+          "startedBy"
         ],
         "type": "object"
       },
@@ -25290,6 +25381,45 @@
         "summary": "Check the setup token and return the step 3 defaults",
         "tags": [
           "setup"
+        ]
+      }
+    },
+    "/api/stack-jobs": {
+      "get": {
+        "description": "The deploys, updates and roll backs of stacks that are running or ended in the last 10 minutes, newest first, for the header's jobs list. Every job on an environment where you may read stacks (stacks.read) is listed, whoever started it; a job on any other environment is left out, as if it did not exist. A job that has left the server's history is not listed, and its console answers 404 stack_job_not_found.",
+        "operationId": "listStackJobs",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackJobListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The stack operations you can follow",
+        "tags": [
+          "stacks"
         ]
       }
     },

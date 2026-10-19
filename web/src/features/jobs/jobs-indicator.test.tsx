@@ -318,7 +318,7 @@ describe("JobsIndicator stack jobs", () => {
     fireEvent.click(await screen.findByRole("button", { name }));
 
   it("lists a running deploy and a finished pull together, running first, and counts both kinds", async () => {
-    stackJobs = [stackJob()];
+    stackJobs = [stackJob({ startedAt: "2026-10-11T10:01:00Z" })];
     pulls = [
       summary({
         id: "j9",

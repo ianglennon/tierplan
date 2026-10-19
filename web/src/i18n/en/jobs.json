@@ -1,0 +1,76 @@
+{
+  "jobs": {
+    "indicator": {
+      "button": "Jobs",
+      "buttonCount_one": "Jobs, {{count}} in progress",
+      "buttonCount_other": "Jobs, {{count}} in progress",
+      "title": "Jobs",
+      "empty": "No jobs running.",
+      "by": "by {{name}}",
+      "reconnecting": "Reconnecting…",
+      "loading": "Loading jobs",
+      "error": {
+        "pulls": "Couldn't load the pulls.",
+        "stack": "Couldn't load the stack jobs.",
+        "retry": "Retry"
+      },
+      "state": {
+        "running_one": "Pulling on {{running}} of {{count}} node",
+        "running_other": "Pulling on {{running}} of {{count}} nodes",
+        "done": "Done",
+        "partialFailed": "Done, {{failed}} failed",
+        "partial": "Partly done",
+        "failed": "Failed",
+        "cancelled": "Cancelled"
+      },
+      "cancel": "Cancel",
+      "cancelLabel": "Cancel pull of {{ref}}",
+      "open": {
+        "action": "Open",
+        "label": "Open console of {{name}}"
+      },
+      "stack": {
+        "deploy": {
+          "running": "Deploying",
+          "done": "Deployed",
+          "failed": "Failed",
+          "cancelled": "Cancelled"
+        },
+        "update": {
+          "running": "Updating images",
+          "done": "Images updated",
+          "failed": "Failed",
+          "cancelled": "Cancelled"
+        },
+        "rollback": {
+          "running": "Rolling back",
+          "done": "Rolled back",
+          "failed": "Failed",
+          "cancelled": "Cancelled"
+        },
+        "other": {
+          "running": "Running",
+          "done": "Done",
+          "failed": "Failed",
+          "cancelled": "Cancelled"
+        }
+      }
+    },
+    "toast": {
+      "open": "Open",
+      "openConsole": "Open console",
+      "deploy": {
+        "done": "Deployed {{name}}.",
+        "failed": "Deploy of {{name}} failed."
+      },
+      "update": {
+        "done": "Updated the images of {{name}}.",
+        "failed": "Update of {{name}} failed."
+      },
+      "rollback": {
+        "done": "Rolled back {{name}}.",
+        "failed": "Roll back of {{name}} failed."
+      }
+    }
+  }
+}

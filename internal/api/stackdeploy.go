@@ -36,8 +36,6 @@ const (
 	deployModeUpdate   = "update"
 	deployModeRollback = "rollback"
 
-	metaEnvNameKey = "envName"
-
 	problemDraftChanged             = "draft_changed"
 	problemPinsInvalid              = "pins_invalid"
 	problemConcurrentUnacknowledged = "concurrent_unacknowledged"
@@ -594,7 +592,7 @@ func launchStackDeploy(ctx context.Context, d StacksDeps, l launch) (*StackDeplo
 	spec := jobs.Spec{
 		Kind: stackDeployJobKind, EnvID: l.env.ID, Owner: stackJobOwner(l.p),
 		Meta: map[string]string{
-			metaStackID: l.st.ID, metaStackName: l.st.Name, metaMode: l.mode, metaStartedBy: l.p.Name, metaEnvNameKey: l.env.Name,
+			metaStackID: l.st.ID, metaStackName: l.st.Name, metaMode: l.mode, metaStartedBy: l.p.Name, metaEnvName: l.env.Name,
 		},
 		Items: stackops.DeployItemSpecs(),
 	}

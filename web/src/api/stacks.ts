@@ -37,6 +37,7 @@ export type StackJob = components["schemas"]["StackJobBody"];
 export type StackJobItem = components["schemas"]["StackJobItemBody"];
 export type StackLock = components["schemas"]["StackLockBody"];
 export type StackRollback = components["schemas"]["StackRollbackBody"];
+export type StackJobSummary = components["schemas"]["StackJobSummary"];
 export type StackJobOutputLine = components["schemas"]["StackJobOutputLine"];
 
 // The query key of an environment's stacks list, and of every read that extends it: one stack's
@@ -52,6 +53,30 @@ export function stackKey(envId: string, stackId: string) {
 
 // The query key of the list of stack jobs the header's jobs indicator shows.
 export const stackJobsKey = ["stack-jobs"] as const;
+
+// Polled every 3 seconds while a stack job runs and every 30 otherwise, as the Pulls list is.
+export const STACK_JOBS_POLL_RUNNING_MS = 3_000;
+export const STACK_JOBS_POLL_IDLE_MS = 30_000;
+
+// stackJobsListQuery lists the stack operations the caller may follow: those running or ended in the
+// last ten minutes, on the environments they may read stacks on. A poll that fails keeps the last list,
+// so the indicator shows no error chrome for it (the query keeps its data when a refetch fails).
+export const stackJobsListQuery = queryOptions({
+  queryKey: [...stackJobsKey, "list"] as const,
+  queryFn: async (): Promise<StackJobSummary[]> => {
+    const res = await api.GET("/api/stack-jobs");
+    if (!res.data) {
+      const problem = readProblem(res.error, res.response);
+      throw new StacksLoadError(problem.status, problem.type);
+    }
+    return res.data.jobs ?? [];
+  },
+  refetchInterval: (query) =>
+    query.state.data?.some((j) => j.state === "running")
+      ? STACK_JOBS_POLL_RUNNING_MS
+      : STACK_JOBS_POLL_IDLE_MS,
+  retry: false,
+});
 
 // StacksLoadError is a stacks read the server refused or could not answer. The status and the
 // problem type tell a stack that is gone (404 stack_not_found) from every other failure.
@@ -527,7 +552,11 @@ export function useDeployStack(envId: string, stackId: string) {
       }
     },
     retry: false,
-    onSettled: () => void queryClient.invalidateQueries({ queryKey: stacksKey(envId) }),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: stacksKey(envId) });
+      // The jobs indicator learns of the new job at once, not on its next poll.
+      void queryClient.invalidateQueries({ queryKey: stackJobsKey });
+    },
   });
 }
 
@@ -555,8 +584,11 @@ export function useRollbackStack(envId: string, stackId: string) {
       }
     },
     retry: false,
-    // One stack's page is under the list's key, so this reads both again.
-    onSettled: () => void queryClient.invalidateQueries({ queryKey: stacksKey(envId) }),
+    onSettled: () => {
+      // One stack's page is under the list's key, so this reads both again.
+      void queryClient.invalidateQueries({ queryKey: stacksKey(envId) });
+      void queryClient.invalidateQueries({ queryKey: stackJobsKey });
+    },
   });
 }
 
@@ -594,8 +626,10 @@ export function useCancelStackJob(envId: string, stackId: string, jobId: string)
       }
     },
     retry: false,
-    onSettled: () =>
-      void queryClient.invalidateQueries({ queryKey: stackJobKey(envId, stackId, jobId) }),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: stackJobKey(envId, stackId, jobId) });
+      void queryClient.invalidateQueries({ queryKey: stackJobsKey });
+    },
   });
 }
 

@@ -285,6 +285,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 	registerStackVariables(r, d)
 	registerStackReview(r, d)
 	registerStackDeploy(r, d)
+	registerStackJobs(r, d)
 }
 
 // stackNotFound is the 404 for a stack the environment does not have.

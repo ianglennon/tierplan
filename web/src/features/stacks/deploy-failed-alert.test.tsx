@@ -112,7 +112,8 @@ describe("DeployFailedAlert", () => {
   it("is a warning, not an error", async () => {
     mount(stackOf());
     const alert = await screen.findByRole("alert");
-    expect(alert.getAttribute("data-variant")).toBe("warning");
+    expect(alert.className).toContain("border-status-warning");
+    expect(alert.className).not.toContain("text-destructive");
   });
 
   it("offers Open console and Roll back to previous version, both outline", async () => {
@@ -137,22 +138,27 @@ describe("DeployFailedAlert", () => {
   it("turns the roll back off, with the reason, when there is no earlier version", async () => {
     rollbackInfo = { available: false, deployedAt: "", deployedBy: "" };
     mount(stackOf({ rollback: rollbackInfo }));
-    const button = await screen.findByRole("button", { name: "Roll back to previous version" });
-    await waitFor(() => expect(button.getAttribute("aria-disabled")).toBe("true"));
-    const id = button.getAttribute("aria-describedby");
+    // The button is drawn again when its reason arrives, so it is looked for again each time.
+    const rollbackButton = () =>
+      screen.getByRole("button", { name: "Roll back to previous version" });
+    await screen.findByRole("button", { name: "Roll back to previous version" });
+    await waitFor(() => expect(rollbackButton().getAttribute("aria-disabled")).toBe("true"));
+    const id = rollbackButton().getAttribute("aria-describedby");
     expect(document.getElementById(id as string)?.textContent).toBe(
       "There's no earlier deployed version to roll back to.",
     );
-    fireEvent.click(button);
+    fireEvent.click(rollbackButton());
     expect(rollbacks).toBe(0);
   });
 
   it("turns the roll back off with Needs Operator for a Viewer", async () => {
     role = "viewer";
     mount(stackOf());
-    const button = await screen.findByRole("button", { name: "Roll back to previous version" });
-    await waitFor(() => expect(button.getAttribute("aria-disabled")).toBe("true"));
-    const id = button.getAttribute("aria-describedby");
+    const rollbackButton = () =>
+      screen.getByRole("button", { name: "Roll back to previous version" });
+    await screen.findByRole("button", { name: "Roll back to previous version" });
+    await waitFor(() => expect(rollbackButton().getAttribute("aria-disabled")).toBe("true"));
+    const id = rollbackButton().getAttribute("aria-describedby");
     expect(document.getElementById(id as string)?.textContent).toBe("Needs Operator");
   });
 
@@ -191,9 +197,7 @@ describe("DeployFailedAlert", () => {
   it("names no service when the deploy stopped before any", async () => {
     mount(withOperation({ code: "needs_admin", failedService: "" }));
     expect(
-      await screen.findByText(
-        "Bayplan stopped before it changed anything: The stack uses host access that needs Admin.",
-      ),
+      await screen.findByText("Bayplan stopped: The stack uses host access that needs Admin."),
     ).toBeTruthy();
   });
 

@@ -24,6 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEnvName } from "@/features/resources/use-env-name";
+import { DeployFailedAlert } from "@/features/stacks/deploy-failed-alert";
 import { OperationLockAlert } from "@/features/stacks/operation-lock-alert";
 import { StackStateCell } from "@/features/stacks/stack-state-cell";
 import { useDocumentTitle } from "@/hooks/use-me";
@@ -261,6 +262,9 @@ export function StackDetailLayout({ envId, stackId, children, flow }: StackDetai
           <Skeleton className="h-8 w-64" />
         )}
       </header>
+      {/* The last deploy stopped (UI-SPEC alert order: before the lock). The console is that deploy's
+          own page, so it does not warn about itself. */}
+      {data && flow !== "deploy" ? <DeployFailedAlert stack={data} /> : null}
       {/* Another operation holds the environment. The console is that operation's own page, so it
           does not warn about itself. */}
       {data?.lock && flow !== "deploy" ? (

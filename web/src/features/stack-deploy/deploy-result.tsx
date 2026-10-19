@@ -18,6 +18,7 @@ import { useNow } from "@/components/relative-time";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { useEnvName } from "@/features/resources/use-env-name";
 import { CONVERGE_TIMEOUT } from "@/features/stack-deploy/deploy-service-row";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -114,18 +115,25 @@ function rollbackRefusal(t: Translate, err: DeployRequestError, envName: string)
 // dialog: the button already says which version it restores. With no earlier version, or for a person
 // who may not deploy, it is off and says why. After a roll back that failed it reads Retry roll back.
 // Nothing here rolls back by itself, and a mutation is never retried.
-function RollbackAction({
+export function RollbackAction({
   envId,
   stackId,
-  envName,
   retry,
+  variant = "default",
+  caption = true,
 }: {
   envId: string;
   stackId: string;
-  envName: string;
+  // After a roll back that failed, the button reads Retry roll back.
   retry: boolean;
+  // The accent on the console, where it is the way forward; an outline beside the other actions of the
+  // stack's page.
+  variant?: "default" | "outline";
+  // Whether to say, under the button, when the version it restores was deployed and by whom.
+  caption?: boolean;
 }) {
   const t = useT();
+  const envName = useEnvName(envId);
   const navigate = useNavigate();
   const stack = useQuery(stackQuery(envId, stackId));
   const needs = useNeeds("stacks.deploy", envId);
@@ -166,7 +174,13 @@ function RollbackAction({
   }
 
   const button = (
-    <Button type="button" className="max-md:h-11" disabled={rollback.isPending} onClick={start}>
+    <Button
+      type="button"
+      variant={variant}
+      className="max-md:h-11"
+      disabled={rollback.isPending}
+      onClick={start}
+    >
       {rollback.isPending ? <Spinner aria-hidden="true" /> : null}
       {label}
     </Button>
@@ -176,7 +190,7 @@ function RollbackAction({
   return (
     <div className="flex flex-col items-start gap-1">
       <NeedsTooltip reason={reason}>{button}</NeedsTooltip>
-      {when ? (
+      {caption && when ? (
         <span className="text-xs text-muted-foreground">
           {back?.deployedBy
             ? t("stackDeploy.rollback.lastDeployed", { time: when, user: back.deployedBy })
@@ -298,7 +312,7 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
           <p className="break-words">{sentence}</p>
           <CleanupReport cleanup={cleanup} />
           <div className="flex flex-wrap items-start gap-2">
-            <RollbackAction envId={envId} stackId={stackId} envName={envName} retry={rolledBack} />
+            <RollbackAction envId={envId} stackId={stackId} retry={rolledBack} />
             <Button asChild variant="outline" className="max-md:h-11">
               <Link to="/env/$envId/stacks/$stackId/editor" params={{ envId, stackId }}>
                 {t("stackDeploy.backToEditing")}
@@ -335,7 +349,7 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
           )}
           <CleanupReport cleanup={cleanup} stuckOnly />
           <div className="flex flex-wrap items-start gap-2">
-            <RollbackAction envId={envId} stackId={stackId} envName={envName} retry={rolledBack} />
+            <RollbackAction envId={envId} stackId={stackId} retry={rolledBack} />
             <Button asChild variant="outline" className="max-md:h-11">
               <Link to="/env/$envId/stacks/$stackId/editor" params={{ envId, stackId }}>
                 {t("stackDeploy.backToEditing")}
