@@ -1999,7 +1999,7 @@ export interface paths {
         put?: never;
         /**
          * Deploy a stack's draft
-         * @description Takes a revision from the draft and deploys it as a job, answering 202 with the job ID at once; the deploy goes on if the browser closes. draftVersion must be the version of the draft you mean to deploy, or the answer is 409 draft_conflict. On a swarm the job creates the stack's networks, then its secrets and configs under names that end in a short hash of their content, then its services, through one manager, each once and never retried; each carries com.docker.stack.namespace and bayplan.stack.id, and each service com.docker.stack.image with the image as written. A secret or config that content changes replaces is removed at the end, once every service uses the new one. A compose file that does not load is 422 compose_invalid; one that uses a setting not converted yet is 422 compose_unsupported. A standalone stack is 409 target_engine_missing. At most 5 jobs of one user run at once (429 too_many_deploys). Writes one stack.deployed audit row, with the result, when the job ends. Needs stacks.deploy (Operator).
+         * @description Takes a revision from the draft and deploys it as a job, answering 202 with the job ID at once; the deploy goes on if the browser closes. draftVersion must be the version of the draft you reviewed, or the answer is 409 draft_changed. pins, when sent, are the review's: the deploy uses exactly those digests and makes no registry lookup (422 pins_invalid for one the server would not have chosen). On a swarm the job creates the stack's networks, then its secrets and configs under names that end in a short hash of their content, then its services, through one manager, each once and never retried; each carries com.docker.stack.namespace and bayplan.stack.id, and each service com.docker.stack.image with the image as written. A secret or config that content changes replaces is removed at the end, once every service uses the new one. A compose file that does not load is 422 compose_invalid; one that uses a setting not converted yet is 422 compose_unsupported. A standalone stack is 409 target_engine_missing. At most 5 jobs of one user run at once (429 too_many_deploys). Writes one stack.deployed audit row, with the result, when the job ends. Needs stacks.deploy (Operator).
          */
         post: operations["deployStack"];
         delete?: never;
@@ -2090,6 +2090,26 @@ export interface paths {
          * @description Answers the stack as it will be deployed: the files and variables in the body, as the editor holds them, with every variable and env_file filled in and each service's image shown as the digest it will run. A service whose image text is unchanged since the last successful deploy shows its pinned tag@sha256 reference; any other image is shown as written with a trailing comment, since the deploy looks it up. Every secret variable value and secret file content is <hidden>. The render is a view: it never changes the stack's files, and writes nothing and sends nothing to an engine. It runs the same check as POST .../check, shares its limit of two running per user (429 check_busy), and answers 422 stack_invalid, with each error in errors[], when the check found an error. The answer is never cached. Needs stacks.read (Viewer).
          */
         post: operations["renderStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Review what a deploy of a stack would do
+         * @description Reviews the stack's saved draft (the latest good revision when there is no draft) against what is running and saves nothing. It runs the same check as the editor, looks up the digests of the images that need one, converts the stack the way a deploy does, reads what the swarm holds under the stack's namespace and answers the problems, a summary, an image table, each service's change with its masked current and next spec, and the other resources. A value derived from a secret of the stack is <hidden> on both sides; whether it changed is decided before it is hidden and listed in hiddenChanges as a path. Right after a deploy, a review shows no change. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. A standalone stack is 409 target_engine_missing. Needs stacks.deploy (Operator).
+         */
+        post: operations["reviewStack"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8138,9 +8158,20 @@ export interface components {
         StackDeployRequest: {
             /**
              * Format: int64
-             * @description The version of the draft you mean to deploy. If the draft moved since, the answer is 409 draft_conflict and nothing is deployed
+             * @description The version of the draft you reviewed and mean to deploy. If the draft moved since, the answer is 409 draft_changed and nothing is deployed
              */
             draftVersion: number;
+            /**
+             * @description deploy (the default), or update to move the services named in services to a newly looked-up digest
+             * @enum {string}
+             */
+            mode?: "deploy" | "update";
+            /** @description The images the review chose, by swarm service name (the review's pins). The deploy uses exactly these digests and asks no registry. Each is checked against what the server decides itself: a service that keeps its running digest must be sent that digest, and a looked-up one a sha256 digest of the repository its reference names; anything else is 422 pins_invalid. Left out, the deploy looks the images up itself */
+            pins?: {
+                [key: string]: string;
+            };
+            /** @description For mode update: the services to move, by the name in the compose file or by the swarm name */
+            services?: string[] | null;
         };
         StackDetail: {
             /** @description When it was created, RFC 3339 UTC */
@@ -8275,7 +8306,7 @@ export interface components {
              * @description What the operation is
              * @enum {string}
              */
-            mode: "deploy";
+            mode: "deploy" | "update";
             /** @description The stack being deployed */
             stackId: string;
             /**
@@ -8366,6 +8397,136 @@ export interface components {
             name: string;
             /** @description The compose file after variables and env_file are filled in, each service's image shown as the pin it will run (tag@sha256:..., or the plain reference with a trailing comment when it will be looked up at the next deploy). Every secret value is <hidden> */
             yaml: string;
+        };
+        StackReviewBody: {
+            /**
+             * Format: int64
+             * @description The version of the draft the review was made of: send it with the deploy
+             */
+            draftVersion: number;
+            /** @description One row for each service with an image, by name */
+            images: components["schemas"]["StackReviewImageBody"][] | null;
+            /** @description The kinds of host access the stack uses that the caller may not deploy (bind mounts, extra privileges, host networking, device mounts). Empty when the caller may deploy it */
+            needsAdmin: string[] | null;
+            /** @description The other resources: networks, secrets and configs */
+            objects: components["schemas"]["StackReviewObjectBody"][] | null;
+            /** @description The image each service will be deployed with, by swarm service name: send it with the deploy and the deploy uses exactly these digests */
+            pins: {
+                [key: string]: string;
+            };
+            /** @description What the check found and the review added: host access that needs Admin, a name clash, an image that cannot be looked up, an external object that does not exist. An error stops a deploy */
+            problems: components["schemas"]["StackProblemBody"][] | null;
+            /** @description The services a deploy would add or change, by name, then the ones it would remove */
+            services: components["schemas"]["StackReviewServiceBody"][] | null;
+            /** @description The counts of what would change */
+            summary: components["schemas"]["StackReviewSummaryBody"];
+        };
+        StackReviewCountsBody: {
+            /**
+             * Format: int64
+             * @description How many a deploy would create
+             */
+            added: number;
+            /**
+             * Format: int64
+             * @description How many it would change
+             */
+            changed: number;
+            /**
+             * Format: int64
+             * @description How many it would remove
+             */
+            removed: number;
+        };
+        StackReviewImageBody: {
+            /** @description The digest the service runs with now; empty for a new service */
+            current: string;
+            /** @description The digest the service will run with (an image ID for a local image); empty when the image could not be looked up */
+            digest: string;
+            /** @description The image reference as written */
+            image: string;
+            /** @description A short sentence for the row, or empty */
+            note: string;
+            /** @description The service's name in the compose file */
+            service: string;
+            /**
+             * @description pinned (keeps the running digest), new (just looked up), as_written (the reference carries its digest), local (no registry has it; pinned to the image ID), unreachable (the registry could not be reached; blocks) or unresolved (the registry did not give it; blocks)
+             * @enum {string}
+             */
+            state: "pinned" | "new" | "as_written" | "local" | "unreachable" | "unresolved";
+        };
+        StackReviewObjectBody: {
+            /**
+             * @description What a deploy would do; external is an object the stack only names and Bayplan never touches
+             * @enum {string}
+             */
+            change: "added" | "changed" | "removed" | "external";
+            /** @description A sentence for the row, or empty */
+            detail: string;
+            /**
+             * @description What it is
+             * @enum {string}
+             */
+            kind: "network" | "secret" | "config";
+            /** @description Its name in the compose file (the swarm name for an external one) */
+            name: string;
+        };
+        StackReviewRequest: {
+            /**
+             * @description deploy (the default) reviews the draft; update reviews a newly looked-up digest for the services named in services, with every other service keeping the image it runs
+             * @enum {string}
+             */
+            mode?: "deploy" | "update";
+            /** @description For mode update: the services to look up again, by the name in the compose file or by the swarm name */
+            services?: string[] | null;
+        };
+        StackReviewServiceBody: {
+            /**
+             * @description What a deploy would do
+             * @enum {string}
+             */
+            change: "added" | "changed" | "removed";
+            /** @description The running service's spec, masked: a value derived from a secret of the stack is <hidden>. Null for an added or removed service */
+            current: {
+                [key: string]: unknown;
+            } | null;
+            /** @description Paths of settings whose value changed to or from one that is hidden, such as TaskTemplate.ContainerSpec.Env[API_KEY]. The values are never sent */
+            hiddenChanges: string[] | null;
+            /** @description The swarm service name */
+            name: string;
+            /** @description The spec a deploy would send, masked the same way. Null for a removed service */
+            next: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Format: int64
+             * @description How many settings differ between current and next, hidden ones included
+             */
+            settings: number;
+            /** @description The service's name in the compose file */
+            short: string;
+        };
+        StackReviewSummaryBody: {
+            /** @description Configs Bayplan makes from the stack's files; a changed file counts as changed */
+            configs: components["schemas"]["StackReviewCountsBody"];
+            /**
+             * Format: int64
+             * @description Services whose digest the review just looked up
+             */
+            imagesNew: number;
+            /**
+             * Format: int64
+             * @description Services that keep or carry a digest
+             */
+            imagesPinned: number;
+            /** @description Networks the stack owns */
+            networks: components["schemas"]["StackReviewCountsBody"];
+            /** @description Secrets Bayplan makes from the stack's files; a changed file counts as changed */
+            secrets: components["schemas"]["StackReviewCountsBody"];
+            /** @description Services */
+            services: components["schemas"]["StackReviewCountsBody"];
+            /** @description Always zero on a swarm: the engine of each node makes a named volume when a task first uses it */
+            volumes: components["schemas"]["StackReviewCountsBody"];
         };
         StackVariableBody: {
             /** @description The default written in the compose file, when hasDefault is true */
@@ -13551,6 +13712,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackRenderBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    reviewStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackReviewBody"];
                 };
             };
             /** @description Error */

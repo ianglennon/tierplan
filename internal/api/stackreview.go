@@ -1,0 +1,205 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+
+	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/ianglennon/bayplan/internal/httpx"
+	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/bayplan/internal/stacks"
+)
+
+// StackReviewRequest is the body of POST .../review.
+type StackReviewRequest struct {
+	Mode     string   `json:"mode,omitempty" enum:"deploy,update" doc:"deploy (the default) reviews the draft; update reviews a newly looked-up digest for the services named in services, with every other service keeping the image it runs"`
+	Services []string `json:"services,omitempty" maxItems:"200" doc:"For mode update: the services to look up again, by the name in the compose file or by the swarm name"`
+}
+
+// StackReviewInput is the path and body of the review route.
+type StackReviewInput struct {
+	StackPathInput
+	Body StackReviewRequest
+}
+
+// StackReviewCountsBody is how many of a kind a deploy would add, change and remove.
+type StackReviewCountsBody struct {
+	Added   int `json:"added" doc:"How many a deploy would create"`
+	Changed int `json:"changed" doc:"How many it would change"`
+	Removed int `json:"removed" doc:"How many it would remove"`
+}
+
+// StackReviewSummaryBody is the counts the review opens with.
+type StackReviewSummaryBody struct {
+	Services     StackReviewCountsBody `json:"services" doc:"Services"`
+	Networks     StackReviewCountsBody `json:"networks" doc:"Networks the stack owns"`
+	Volumes      StackReviewCountsBody `json:"volumes" doc:"Always zero on a swarm: the engine of each node makes a named volume when a task first uses it"`
+	Secrets      StackReviewCountsBody `json:"secrets" doc:"Secrets Bayplan makes from the stack's files; a changed file counts as changed"`
+	Configs      StackReviewCountsBody `json:"configs" doc:"Configs Bayplan makes from the stack's files; a changed file counts as changed"`
+	ImagesPinned int                   `json:"imagesPinned" doc:"Services that keep or carry a digest"`
+	ImagesNew    int                   `json:"imagesNew" doc:"Services whose digest the review just looked up"`
+}
+
+// StackReviewImageBody is one service's image.
+type StackReviewImageBody struct {
+	Service string `json:"service" doc:"The service's name in the compose file"`
+	Image   string `json:"image" doc:"The image reference as written"`
+	Digest  string `json:"digest" doc:"The digest the service will run with (an image ID for a local image); empty when the image could not be looked up"`
+	Current string `json:"current" doc:"The digest the service runs with now; empty for a new service"`
+	State   string `json:"state" enum:"pinned,new,as_written,local,unreachable,unresolved" doc:"pinned (keeps the running digest), new (just looked up), as_written (the reference carries its digest), local (no registry has it; pinned to the image ID), unreachable (the registry could not be reached; blocks) or unresolved (the registry did not give it; blocks)"`
+	Note    string `json:"note" doc:"A short sentence for the row, or empty"`
+}
+
+// StackReviewServiceBody is one service a deploy would add, change or remove.
+type StackReviewServiceBody struct {
+	Name          string         `json:"name" doc:"The swarm service name"`
+	Short         string         `json:"short" doc:"The service's name in the compose file"`
+	Change        string         `json:"change" enum:"added,changed,removed" doc:"What a deploy would do"`
+	Current       map[string]any `json:"current" nullable:"true" doc:"The running service's spec, masked: a value derived from a secret of the stack is <hidden>. Null for an added or removed service"`
+	Next          map[string]any `json:"next" nullable:"true" doc:"The spec a deploy would send, masked the same way. Null for a removed service"`
+	HiddenChanges []string       `json:"hiddenChanges" doc:"Paths of settings whose value changed to or from one that is hidden, such as TaskTemplate.ContainerSpec.Env[API_KEY]. The values are never sent"`
+	Settings      int            `json:"settings" doc:"How many settings differ between current and next, hidden ones included"`
+}
+
+// StackReviewObjectBody is a network, secret or config a deploy would add, change or remove.
+type StackReviewObjectBody struct {
+	Change string `json:"change" enum:"added,changed,removed,external" doc:"What a deploy would do; external is an object the stack only names and Bayplan never touches"`
+	Kind   string `json:"kind" enum:"network,secret,config" doc:"What it is"`
+	Name   string `json:"name" doc:"Its name in the compose file (the swarm name for an external one)"`
+	Detail string `json:"detail" doc:"A sentence for the row, or empty"`
+}
+
+// StackReviewBody is what a deploy of the saved draft would do.
+type StackReviewBody struct {
+	Problems     []StackProblemBody       `json:"problems" doc:"What the check found and the review added: host access that needs Admin, a name clash, an image that cannot be looked up, an external object that does not exist. An error stops a deploy"`
+	Summary      StackReviewSummaryBody   `json:"summary" doc:"The counts of what would change"`
+	Images       []StackReviewImageBody   `json:"images" doc:"One row for each service with an image, by name"`
+	Services     []StackReviewServiceBody `json:"services" doc:"The services a deploy would add or change, by name, then the ones it would remove"`
+	Objects      []StackReviewObjectBody  `json:"objects" doc:"The other resources: networks, secrets and configs"`
+	DraftVersion int64                    `json:"draftVersion" doc:"The version of the draft the review was made of: send it with the deploy"`
+	Pins         map[string]string        `json:"pins" doc:"The image each service will be deployed with, by swarm service name: send it with the deploy and the deploy uses exactly these digests"`
+	NeedsAdmin   []string                 `json:"needsAdmin" doc:"The kinds of host access the stack uses that the caller may not deploy (bind mounts, extra privileges, host networking, device mounts). Empty when the caller may deploy it"`
+}
+
+// StackReviewOutput wraps StackReviewBody for huma.
+type StackReviewOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         StackReviewBody
+}
+
+func registerStackReview(r *httpx.Router, d StacksDeps) {
+	httpx.Register(r, huma.Operation{
+		OperationID: "reviewStack", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/review",
+		Summary: "Review what a deploy of a stack would do",
+		Description: "Reviews the stack's saved draft (the latest good revision when there is no draft) against what is running and saves nothing. " +
+			"It runs the same check as the editor, looks up the digests of the images that need one, converts the stack the way a deploy does, reads what the swarm holds under the stack's namespace and answers the problems, a summary, an image table, each service's change with its masked current and next spec, and the other resources. " +
+			"A value derived from a secret of the stack is <hidden> on both sides; whether it changed is decided before it is hidden and listed in hiddenChanges as a path. " +
+			"Right after a deploy, a review shows no change. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. " +
+			"A standalone stack is 409 target_engine_missing. Needs stacks.deploy (Operator).",
+		Tags: []string{"stacks"},
+	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *StackReviewInput) (*StackReviewOutput, error) {
+			return reviewStack(ctx, d, in)
+		})
+}
+
+func reviewStack(ctx context.Context, d StacksDeps, in *StackReviewInput) (*StackReviewOutput, error) {
+	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+	if p == nil || env == nil {
+		return nil, huma.Error500InternalServerError("internal error")
+	}
+	repo := d.repo()
+	st, err := repo.Stack(ctx, env.ID, in.StackID)
+	if err != nil {
+		return nil, stackLookupProblem(d, env.ID, err)
+	}
+	if st.Target != stacks.TargetSwarm {
+		return nil, httpx.Problem(http.StatusConflict, problemTargetEngineAbsent, "This version cannot deploy to a standalone Docker host yet.")
+	}
+	draft, err := repo.Draft(ctx, st.ID)
+	if err != nil {
+		return nil, stackLookupProblem(d, env.ID, err)
+	}
+	ri := stackops.ReviewInput{
+		EnvID: env.ID, Stack: st, Copy: draft.Copy, DraftVersion: draft.Version,
+		Mode: in.Body.Mode, Services: in.Body.Services, Pins: repo,
+		Caller: stackops.Caller{Principal: p, Actor: p.Name},
+	}
+	if good, ok, err := repo.LatestGoodRevision(ctx, st.ID); err != nil {
+		return nil, stackInternal(d, "read the running revision", env.ID, err)
+	} else if ok {
+		ri.Previous = &good.Copy
+	}
+	rv, err := d.ops().Review(ctx, ri)
+	if err != nil {
+		return nil, snapshotProblem(d.Log, env.ID, err)
+	}
+	return &StackReviewOutput{CacheControl: "no-store", Body: stackReviewBody(rv)}, nil
+}
+
+// stackReviewBody turns a review into its answer. Every list is present, empty when there is nothing.
+func stackReviewBody(rv stackops.Review) StackReviewBody {
+	b := StackReviewBody{
+		Problems: make([]StackProblemBody, 0, len(rv.Problems)),
+		Summary: StackReviewSummaryBody{
+			Services: countsBody(rv.Summary.Services), Networks: countsBody(rv.Summary.Networks), Volumes: countsBody(rv.Summary.Volumes),
+			Secrets: countsBody(rv.Summary.Secrets), Configs: countsBody(rv.Summary.Configs),
+			ImagesPinned: rv.Summary.ImagesPinned, ImagesNew: rv.Summary.ImagesNew,
+		},
+		Images:       make([]StackReviewImageBody, 0, len(rv.Images)),
+		Services:     make([]StackReviewServiceBody, 0, len(rv.Services)),
+		Objects:      make([]StackReviewObjectBody, 0, len(rv.Objects)),
+		DraftVersion: rv.DraftVersion, Pins: rv.Pins, NeedsAdmin: rv.NeedsAdmin,
+	}
+	if b.Pins == nil {
+		b.Pins = map[string]string{}
+	}
+	if b.NeedsAdmin == nil {
+		b.NeedsAdmin = []string{}
+	}
+	for _, p := range rv.Problems {
+		b.Problems = append(b.Problems, StackProblemBody{
+			Severity: string(p.Severity), Code: p.Code, Message: p.Message, File: p.File,
+			Line: p.Line, Col: p.Col, EndLine: p.EndLine, EndCol: p.EndCol,
+		})
+	}
+	for _, r := range rv.Images {
+		b.Images = append(b.Images, StackReviewImageBody{Service: r.Service, Image: r.Image, Digest: r.Digest, Current: r.Current, State: r.State, Note: r.Note})
+	}
+	for _, c := range rv.Services {
+		hidden := c.HiddenChanges
+		if hidden == nil {
+			hidden = []string{}
+		}
+		b.Services = append(b.Services, StackReviewServiceBody{
+			Name: c.Name, Short: c.Short, Change: c.Change, Current: specTree(c.Current), Next: specTree(c.Next),
+			HiddenChanges: hidden, Settings: c.Settings,
+		})
+	}
+	for _, o := range rv.Objects {
+		b.Objects = append(b.Objects, StackReviewObjectBody{Change: o.Change, Kind: o.Kind, Name: o.Name, Detail: o.Detail})
+	}
+	return b
+}
+
+func countsBody(c stackops.Counts) StackReviewCountsBody {
+	return StackReviewCountsBody{Added: c.Added, Changed: c.Changed, Removed: c.Removed}
+}
+
+// specTree reads a masked spec back into the tree the answer carries, nil for none.
+func specTree(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil
+	}
+	return out
+}

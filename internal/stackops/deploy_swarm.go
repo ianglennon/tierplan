@@ -82,6 +82,7 @@ var codeMessages = map[string]string{
 	CodeEngineError:         "The engine could not complete the request.",
 	CodeCancelled:           "The deploy was cancelled.",
 	CodeNotRun:              "Not run because an earlier step failed.",
+	CodePinsInvalid:         "The images in the request don't match what the deploy would use. Review the stack again.",
 }
 
 // CodeMessage is the sentence for a deploy code, empty for a code it does not know.
@@ -109,6 +110,10 @@ type SwarmDeployInput struct {
 	// name or swarm name, are looked up again even though their text did not change, and every
 	// other service keeps the digest it runs.
 	Update map[string]bool
+	// Reviewed, when not nil, are the images a review chose, by swarm service name: the deploy uses
+	// exactly these, after checking each against what it would decide itself (ReviewedPins), and
+	// makes no registry lookup. Nil means the deploy looks the images up itself.
+	Reviewed map[string]string
 	// OnDone, when set, is called once with the result before the job's last item is finished,
 	// so a job that reads as finished has already been recorded by the caller.
 	OnDone func(DeployResult)
@@ -223,49 +228,13 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		d.log().Warn("a stack could not be converted for a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
 		return fail(ItemCheck, CodeStackInvalid, "")
 	}
-	var existingNets, allNets []dockerx.NetworkRow
-	var existingSvcs []dockerx.ServiceDetail
-	var live []objectRow
 	extSecrets, extConfigs := hasExternalObject(objs, stacks.KindSecret), hasExternalObject(objs, stacks.KindConfig)
-	err = d.Clusters.ClusterRead(ctx, in.EnvID, func(c *dockerx.Client) error {
-		var e error
-		if existingNets, e = c.NetworksWithLabel(ctx, stacks.LabelSwarmNamespace, in.Stack.Name); e != nil {
-			return e
-		}
-		if existingSvcs, e = c.ServicesWithLabel(ctx, stacks.LabelSwarmNamespace, in.Stack.Name); e != nil {
-			return e
-		}
-		if hasExternal(planned) {
-			if allNets, e = c.Networks(ctx); e != nil {
-				return e
-			}
-		}
-		// The stack's own objects, or every object of a kind that has an external one to find.
-		var secrets []dockerx.SecretRow
-		if extSecrets {
-			secrets, e = c.SecretList(ctx)
-		} else {
-			secrets, e = c.SecretsWithLabel(ctx, stacks.LabelSwarmNamespace, in.Stack.Name)
-		}
-		if e != nil {
-			return e
-		}
-		var configs []dockerx.ConfigRow
-		if extConfigs {
-			configs, e = c.ConfigList(ctx)
-		} else {
-			configs, e = c.ConfigsWithLabel(ctx, stacks.LabelSwarmNamespace, in.Stack.Name)
-		}
-		if e != nil {
-			return e
-		}
-		live = append(secretRows(secrets), configRows(configs)...)
-		return nil
-	})
+	owned, err := d.readLive(ctx, in.EnvID, in.Stack.Name, liveWant{allNetworks: hasExternal(planned), allSecrets: extSecrets, allConfigs: extConfigs})
 	if err != nil {
 		d.log().Warn("could not read a stack's objects before a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
 		return fail(ItemCheck, codeOf(ctx, err), "")
 	}
+	existingNets, allNets, existingSvcs, live := owned.Networks, owned.AllNetworks, owned.Services, owned.Objects
 	if clash(in.Stack.ID, in.Stack.Name, existingNets, existingSvcs, live) {
 		return fail(ItemCheck, CodeNameClash, "")
 	}
@@ -288,7 +257,20 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 			d.log().Warn("could not read the pins of a stack's last good revision", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
 		}
 	}
-	pinned := d.ResolvePins(ctx, in.EnvID, planned.Services, byName, stored, in.Update)
+	var pinned PinOutcome
+	if in.Reviewed != nil {
+		pins, err := d.ReviewedPins(ctx, in.EnvID, planned.Services, byName, stored, in.Update, in.Reviewed)
+		var invalid *PinsInvalidError
+		switch {
+		case errors.As(err, &invalid):
+			return fail(ItemLookup, CodePinsInvalid, invalid.Service)
+		case err != nil:
+			return fail(ItemLookup, codeOf(ctx, err), "")
+		}
+		pinned = PinOutcome{Pins: pins}
+	} else {
+		pinned = d.ResolvePins(ctx, in.EnvID, planned.Services, byName, stored, in.Update)
+	}
 	res.Pins, res.Problems = pinned.Pins, placeProblems(in.Files, pinned.Problems)
 	if pinned.Blocked() {
 		msg := ""

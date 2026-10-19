@@ -8,6 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"regexp"
+
+	"github.com/distribution/reference"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/registry"
@@ -76,16 +79,7 @@ func (d Deps) ResolvePins(ctx context.Context, envID string, services []convert.
 		if text == "" {
 			continue // a service with no image has nothing to pin
 		}
-		in := stacks.PinInput{Service: sp.Name, AsWritten: text, Update: update[sp.Short] || update[sp.Name]}
-		if det, ok := live[sp.Name]; ok {
-			if written := det.Labels[stacks.LabelSwarmImage]; written != "" && det.Image != "" {
-				in.Live = &stacks.LivePin{AsWritten: written, Image: det.Image}
-			}
-		}
-		if st, ok := stored[sp.Name]; ok && sameImageText(st.AsWritten, text) {
-			in.Stored = &stacks.LivePin{AsWritten: text, Image: st.Image}
-		}
-		dec := stacks.DecidePin(in)
+		dec := stacks.DecidePin(pinInputFor(sp, live, stored, update))
 		pin := Pin{Service: sp.Name, AsWritten: text, Ref: dec.Ref, Action: dec.Action}
 		if dec.Action == stacks.PinResolve {
 			res, done := looked[text]
@@ -117,6 +111,23 @@ func (d Deps) ResolvePins(ctx context.Context, envID string, services []convert.
 		out.Pins[sp.Name] = pin
 	}
 	return out
+}
+
+// pinInputFor is what DecidePin is asked about one service: the text of its image, the image it
+// runs now (when the swarm has the service and it records what was written), the image its last
+// good revision ran for the same text, and whether the person asked for it to move.
+func pinInputFor(sp convert.ServicePlan, live map[string]dockerx.ServiceDetail, stored map[string]stacks.LivePin, update map[string]bool) stacks.PinInput {
+	text := sp.ImageAsWritten
+	in := stacks.PinInput{Service: sp.Name, AsWritten: text, Update: update[sp.Short] || update[sp.Name]}
+	if det, ok := live[sp.Name]; ok {
+		if written := det.Labels[stacks.LabelSwarmImage]; written != "" && det.Image != "" {
+			in.Live = &stacks.LivePin{AsWritten: written, Image: det.Image}
+		}
+	}
+	if st, ok := stored[sp.Name]; ok && sameImageText(st.AsWritten, text) {
+		in.Stored = &stacks.LivePin{AsWritten: text, Image: st.Image}
+	}
+	return in
 }
 
 // lookupResult is the answer of one lookup: the reference to send and whether it is a local
@@ -244,4 +255,134 @@ func placeProblems(files stacks.FileSet, ps stacks.Problems) stacks.Problems {
 		}
 	}
 	return out
+}
+
+// CodePinsInvalid is the code of a deploy whose reviewed images do not fit what the server
+// decides for the stack: a pin the review could not have produced.
+const CodePinsInvalid = "pins_invalid"
+
+// PinsInvalidError is a reviewed pin that does not fit the decision: Service is the swarm service
+// it is about, Reason a short word for why (missing, unknown, differs, outside_repository,
+// not_local).
+type PinsInvalidError struct{ Service, Reason string }
+
+func (e *PinsInvalidError) Error() string {
+	return "stackops: the reviewed image of " + e.Service + " is not acceptable: " + e.Reason
+}
+
+var (
+	digestRe  = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+	pinRefTag = regexp.MustCompile(`@sha256:[a-f0-9]{64}$`)
+)
+
+// ReviewedPins checks the images a deploy was asked to use, which a review chose, against what the
+// server decides now (stacks.DecidePin), and returns them as the pins to deploy with. A service
+// that keeps the digest it runs must be sent that digest; a reference that carries its own is sent
+// as written; a service that is looked up must be sent a sha256 digest of the repository the
+// reference names, or the image ID of an image that is on the manager and was never given by a
+// registry. A pin for a service the stack does not have, or none for one that has an image, is
+// refused. Nothing here asks a registry: the deploy that follows a review makes no lookup.
+func (d Deps) ReviewedPins(ctx context.Context, envID string, services []convert.ServicePlan, live map[string]dockerx.ServiceDetail, stored map[string]stacks.LivePin, update map[string]bool, reviewed map[string]string) (map[string]Pin, error) {
+	out := make(map[string]Pin, len(services))
+	named := make(map[string]bool, len(services))
+	for _, sp := range services {
+		text := sp.ImageAsWritten
+		if text == "" {
+			continue
+		}
+		named[sp.Name] = true
+		ref, ok := reviewed[sp.Name]
+		if !ok {
+			return nil, &PinsInvalidError{Service: sp.Name, Reason: "missing"}
+		}
+		dec := stacks.DecidePin(pinInputFor(sp, live, stored, update))
+		pin := Pin{Service: sp.Name, AsWritten: text, Ref: ref, Action: dec.Action}
+		switch dec.Action {
+		case stacks.PinKeep, stacks.PinAsWritten:
+			if ref != dec.Ref {
+				return nil, &PinsInvalidError{Service: sp.Name, Reason: "differs"}
+			}
+		default:
+			switch {
+			case digestRe.MatchString(ref):
+				local, err := d.isLocalImage(ctx, envID, text, ref)
+				if err != nil {
+					return nil, err
+				}
+				if !local {
+					return nil, &PinsInvalidError{Service: sp.Name, Reason: "not_local"}
+				}
+				pin.Action, pin.Note = stacks.PinLocal, localImageMessage(text)
+			case sameRepository(text, ref):
+			default:
+				return nil, &PinsInvalidError{Service: sp.Name, Reason: "outside_repository"}
+			}
+		}
+		out[sp.Name] = pin
+	}
+	for name := range reviewed {
+		if !named[name] {
+			return nil, &PinsInvalidError{Service: name, Reason: "unknown"}
+		}
+	}
+	return out, nil
+}
+
+// sameRepository reports whether ref is a reference to the repository text names, pinned to a
+// sha256 digest of 64 hexadecimal characters.
+func sameRepository(text, ref string) bool {
+	if !pinRefTag.MatchString(ref) {
+		return false
+	}
+	want, err := reference.ParseNormalizedNamed(text)
+	if err != nil {
+		return false
+	}
+	got, err := reference.ParseNormalizedNamed(ref)
+	if err != nil {
+		return false
+	}
+	return reference.TrimNamed(want).Name() == reference.TrimNamed(got).Name()
+}
+
+// isLocalImage reports whether the manager holds an image of that name whose ID is id and that no
+// registry ever gave it: the image a deploy pins by its ID.
+func (d Deps) isLocalImage(ctx context.Context, envID, text, id string) (bool, error) {
+	local := false
+	err := d.Clusters.ClusterRead(ctx, envID, func(c *dockerx.Client) error {
+		det, _, e := c.ImageDetail(ctx, text)
+		if e != nil {
+			return nil //nolint:nilerr // an image the manager does not hold is not a local image
+		}
+		local = det.ID == id && len(det.RepoDigests) == 0
+		return nil
+	})
+	return local, err
+}
+
+// ValidatePins checks the reviewed pins of a deploy before the deploy starts, so a request whose
+// pins do not fit is refused with nothing stored: it reads the services the stack has and the
+// pins of its last good revision, and applies ReviewedPins.
+func (d Deps) ValidatePins(ctx context.Context, envID string, stack Stack, services []convert.ServicePlan, store PinStore, update map[string]bool, reviewed map[string]string) error {
+	var svcs []dockerx.ServiceDetail
+	if err := d.Clusters.ClusterRead(ctx, envID, func(c *dockerx.Client) error {
+		var e error
+		svcs, e = c.ServicesWithLabel(ctx, stacks.LabelSwarmNamespace, stack.Name)
+		return e
+	}); err != nil {
+		return err
+	}
+	live := make(map[string]dockerx.ServiceDetail, len(svcs))
+	for _, s := range svcs {
+		live[s.Name] = s
+	}
+	var stored map[string]stacks.LivePin
+	if store != nil {
+		var err error
+		if stored, err = store.GoodPins(ctx, stack.ID); err != nil {
+			d.log().Warn("could not read the pins of a stack's last good revision", "environment", envID, "stack", stack.Name, "error", err)
+		}
+	}
+	_, err := d.ReviewedPins(ctx, envID, services, live, stored, update, reviewed)
+	return err
 }

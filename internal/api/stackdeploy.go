@@ -29,11 +29,18 @@ const (
 	metaMode      = "mode"
 
 	deployModeDeploy = "deploy"
+	deployModeUpdate = "update"
+
+	problemDraftChanged = "draft_changed"
+	problemPinsInvalid  = "pins_invalid"
 )
 
 // StackDeployRequest is the body of POST .../deploys.
 type StackDeployRequest struct {
-	DraftVersion int64 `json:"draftVersion" minimum:"1" doc:"The version of the draft you mean to deploy. If the draft moved since, the answer is 409 draft_conflict and nothing is deployed"`
+	DraftVersion int64             `json:"draftVersion" minimum:"1" doc:"The version of the draft you reviewed and mean to deploy. If the draft moved since, the answer is 409 draft_changed and nothing is deployed"`
+	Pins         map[string]string `json:"pins,omitempty" doc:"The images the review chose, by swarm service name (the review's pins). The deploy uses exactly these digests and asks no registry. Each is checked against what the server decides itself: a service that keeps its running digest must be sent that digest, and a looked-up one a sha256 digest of the repository its reference names; anything else is 422 pins_invalid. Left out, the deploy looks the images up itself"`
+	Mode         string            `json:"mode,omitempty" enum:"deploy,update" doc:"deploy (the default), or update to move the services named in services to a newly looked-up digest"`
+	Services     []string          `json:"services,omitempty" maxItems:"200" doc:"For mode update: the services to move, by the name in the compose file or by the swarm name"`
 }
 
 // StackDeployInput is the path and body of the deploy route.
@@ -78,7 +85,7 @@ type StackJobItemBody struct {
 type StackJobBody struct {
 	ID         string             `json:"id" doc:"The job ID"`
 	StackID    string             `json:"stackId" doc:"The stack being deployed"`
-	Mode       string             `json:"mode" enum:"deploy" doc:"What the operation is"`
+	Mode       string             `json:"mode" enum:"deploy,update" doc:"What the operation is"`
 	State      string             `json:"state" enum:"running,done,partial,failed,cancelled" doc:"running until every step has ended, then done when every step is"`
 	CreatedAt  string             `json:"createdAt" doc:"When the job started, RFC 3339 UTC"`
 	FinishedAt string             `json:"finishedAt" doc:"When the job ended, RFC 3339 UTC, empty while it runs"`
@@ -96,7 +103,7 @@ func registerStackDeploy(r *httpx.Router, d StacksDeps) {
 		OperationID: "deployStack", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/deploys",
 		Summary: "Deploy a stack's draft",
 		Description: "Takes a revision from the draft and deploys it as a job, answering 202 with the job ID at once; the deploy goes on if the browser closes. " +
-			"draftVersion must be the version of the draft you mean to deploy, or the answer is 409 draft_conflict. " +
+			"draftVersion must be the version of the draft you reviewed, or the answer is 409 draft_changed. pins, when sent, are the review's: the deploy uses exactly those digests and makes no registry lookup (422 pins_invalid for one the server would not have chosen). " +
 			"On a swarm the job creates the stack's networks, then its secrets and configs under names that end in a short hash of their content, then its services, through one manager, each once and never retried; each carries com.docker.stack.namespace and bayplan.stack.id, and each service com.docker.stack.image with the image as written. " +
 			"A secret or config that content changes replaces is removed at the end, once every service uses the new one. " +
 			"A compose file that does not load is 422 compose_invalid; one that uses a setting not converted yet is 422 compose_unsupported. A standalone stack is 409 target_engine_missing. At most 5 jobs of one user run at once (429 too_many_deploys). " +
@@ -153,8 +160,9 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 		return nil, stackLookupProblem(d, env.ID, err)
 	}
 	if draft.Version != in.Body.DraftVersion {
-		return nil, draftConflict(&stackops.DraftConflictError{SavedBy: draft.CreatedBy, SavedAt: draft.CreatedAt, Version: draft.Version})
+		return nil, draftChanged(&stackops.DraftConflictError{SavedBy: draft.CreatedBy, SavedAt: draft.CreatedAt, Version: draft.Version})
 	}
+	mode, update := deployModeOf(in.Body)
 
 	// Load and convert before anything is stored or started: a compose file that cannot be
 	// deployed is refused here, with the reason, and leaves no revision behind.
@@ -170,8 +178,16 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 	if err != nil {
 		return nil, objectProblem(err)
 	}
-	if _, err := convert.Convert(loaded.Project, convert.Options{StackName: st.Name, StackID: st.ID, Objects: stackops.PlannedObjects(st.Name, objs)}); err != nil {
+	plan, err := convert.Convert(loaded.Project, convert.Options{StackName: st.Name, StackID: st.ID, Objects: stackops.PlannedObjects(st.Name, objs)})
+	if err != nil {
 		return nil, convertProblem(err)
+	}
+	// The images the review chose are checked now, before anything is stored, against what the
+	// server decides itself: a pin it would not have chosen is refused and nothing starts.
+	if in.Body.Pins != nil {
+		if err := d.ops().ValidatePins(ctx, env.ID, st, plan.Services, repo, update, in.Body.Pins); err != nil {
+			return nil, pinsProblem(d, env.ID, err)
+		}
 	}
 
 	rev, err := repo.NewRevision(ctx, st.ID, p.Name)
@@ -188,14 +204,14 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 	in2 := stackops.SwarmDeployInput{
 		EnvID: env.ID, Stack: st, Project: loaded.Project, Files: files, Vars: vars,
 		Caller: stackops.Caller{Principal: p, Actor: p.Name},
-		Pins:   repo, RevisionID: rev.ID,
+		Pins:   repo, RevisionID: rev.ID, Update: update, Reviewed: in.Body.Pins,
 	}
 	in2.OnDone = func(res stackops.DeployResult) {
-		recordDeployEnd(reqCtx, d, actor, userAgent, st, rev, deploy, res)
+		recordDeployEnd(reqCtx, d, actor, userAgent, st, rev, deploy, mode, res)
 	}
 	spec := jobs.Spec{
 		Kind: stackDeployJobKind, EnvID: env.ID, Owner: stackJobOwner(p),
-		Meta:  map[string]string{metaStackID: st.ID, metaStackName: st.Name, metaMode: deployModeDeploy},
+		Meta:  map[string]string{metaStackID: st.ID, metaStackName: st.Name, metaMode: mode},
 		Items: jobStepLabels,
 	}
 	job, err := d.Jobs.Start(spec, func(jctx context.Context, r *jobs.Reporter) {
@@ -232,7 +248,7 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 // recordDeployEnd stores how a deploy ended: the revision's outcome, the deploy row and the
 // audit row. It runs before the job's last step is finished, so a job that reads as finished has
 // already been recorded.
-func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userAgent string, st stackops.Stack, rev stackops.Snapshot, deploy stackops.DeployRow, res stackops.DeployResult) {
+func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userAgent string, st stackops.Stack, rev stackops.Snapshot, deploy stackops.DeployRow, mode string, res stackops.DeployResult) {
 	state, outcome, result := stackops.DeployDone, stackops.OutcomeGood, audit.ResultSuccess
 	resultWord := "done"
 	switch {
@@ -254,7 +270,7 @@ func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userA
 		Actor: actor, Action: audit.ActionStackDeployed, TargetType: stackTargetType, TargetID: st.ID, EnvID: st.EnvID,
 		Result: result, Reason: res.Code, IP: httpx.ClientIP(ctx), UserAgent: userAgent,
 		Details: map[string]string{
-			"stack": st.Name, "mode": deployModeDeploy, "result": resultWord, "revision": itoa(rev.Seq), "job": deploy.JobID,
+			"stack": st.Name, "mode": mode, "result": resultWord, "revision": itoa(rev.Seq), "job": deploy.JobID,
 			"services": itoa(int64(res.Services + res.Updated)), "code": res.Code,
 		},
 	}); err != nil {
@@ -262,31 +278,45 @@ func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userA
 	}
 }
 
+// deployModeOf reads the mode of a deploy request and the services an update names.
+func deployModeOf(b StackDeployRequest) (mode string, update map[string]bool) {
+	if b.Mode != deployModeUpdate {
+		return deployModeDeploy, nil
+	}
+	update = make(map[string]bool, len(b.Services))
+	for _, s := range b.Services {
+		update[s] = true
+	}
+	return deployModeUpdate, update
+}
+
+// draftChanged is the 409 for a deploy of a draft that moved since the review.
+func draftChanged(c *stackops.DraftConflictError) error {
+	e, _ := draftConflict(c).(*huma.ErrorModel)
+	e.Type = problemDraftChanged
+	e.Detail = "The draft changed after you reviewed it. Review it again before you deploy."
+	return e
+}
+
+// pinsProblem is the answer to reviewed pins that did not check out: 422 pins_invalid for a pin
+// the server would not have chosen, the engine's own class for a read that failed.
+func pinsProblem(d StacksDeps, envID string, err error) error {
+	var invalid *stackops.PinsInvalidError
+	if errors.As(err, &invalid) {
+		return &huma.ErrorModel{
+			Type: problemPinsInvalid, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
+			Detail: "The images in this request don't match what the deploy would use for " + invalid.Service + ". Review the stack again.",
+			Errors: []*huma.ErrorDetail{{Location: "pins", Message: invalid.Service}},
+		}
+	}
+	return snapshotProblem(d.Log, envID, err)
+}
+
 // objectProblem is the 422 for a secret or config that has no usable content.
 func objectProblem(err error) error {
-	reason := "it cannot be read"
-	switch {
-	case errors.Is(err, stacks.ErrObjectSource):
-		reason = "it needs exactly one of file, environment or content"
-	case errors.Is(err, stacks.ErrObjectFileMissing):
-		reason = "its file is not a file of the stack"
-	case errors.Is(err, stacks.ErrObjectVarMissing):
-		reason = "its variable is not in the stack's table"
-	case errors.Is(err, stacks.ErrObjectEmpty):
-		reason = "it has no content"
-	case errors.Is(err, stacks.ErrObjectTooLarge):
-		reason = "it is over the size the swarm takes"
-	case errors.Is(err, stacks.ErrObjectUnsupported):
-		reason = "it sets a driver, which a stack deploy does not apply"
-	}
-	detail := "A secret or config cannot be created: " + reason + "."
-	var oe *stacks.ObjectError
-	if errors.As(err, &oe) {
-		detail = "The " + string(oe.Kind) + " " + oe.Name + " cannot be created: " + reason + "."
-	}
 	return &huma.ErrorModel{
 		Type: problemComposeInvalid, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
-		Detail: detail,
+		Detail: stackops.ObjectErrorDetail(err),
 	}
 }
 

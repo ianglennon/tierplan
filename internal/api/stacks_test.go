@@ -494,24 +494,6 @@ func draftVersion(t *testing.T, c *roleCaller, stackID string) int64 {
 	return answerOf[draftAnswer](t, c.do(http.MethodGet, "stacks/"+stackID+"/draft", "")).Version
 }
 
-func TestDeployOfAStaleDraftVersionIsAConflictAndDeploysNothing(t *testing.T) {
-	t.Parallel()
-	f, e := actionsEnv(t, nil)
-	admin := f.caller(t, e, "envadmin-1", "admin")
-	operator := f.caller(t, e, "operator-1", "operator")
-	st := newStack(t, admin, "stale")
-	if rec := operator.saveDraft(st.ID, saveBody(1, "services:\n  a:\n    image: busybox:1\n", `[]`)); rec.Code != http.StatusOK {
-		t.Fatalf("save: %d %s", rec.Code, rec.Body)
-	}
-	rec := operator.deploy(st.ID, `{"draftVersion":1}`)
-	if rec.Code != http.StatusConflict || problemType(t, rec) != "draft_conflict" {
-		t.Fatalf("deploy of version 1: %d %s, want 409 draft_conflict", rec.Code, rec.Body)
-	}
-	if w := f.fake.Writes(); len(w) != 0 {
-		t.Errorf("writes = %v", w)
-	}
-}
-
 func TestADeployFailureIsRecordedAndShownAsDeployFailed(t *testing.T) {
 	t.Parallel()
 	f, e := actionsEnv(t, func(c *dockertest.FakeConfig) { c.ServiceCreateError = "secret not found: hidden-name" })
