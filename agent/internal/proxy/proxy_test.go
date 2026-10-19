@@ -227,7 +227,7 @@ func TestEverythingElseIsRefusedWithATypedAnswerAndNeverReachesTheEngine(t *test
 	for _, tc := range []struct {
 		name, raw, wantMessage string
 	}{
-		{"create a container", request("POST", "/containers/create", "Content-Length: 2\r\n") + "{}", "agent_policy_denied: POST /containers/create"},
+		{"create a container with no image", request("POST", "/containers/create", "Content-Length: 2\r\n") + "{}", "agent_policy_denied: POST /containers/create"},
 		{"the archive of a container", get("/containers/abc/archive"), "agent_policy_denied: GET /containers/abc/archive"},
 		{"the stats of a container with a key the one-shot read does not send", get("/containers/abc/stats?decode=1"), "agent_policy_denied: GET /containers/abc/stats"},
 		{"inspect a container with a POST", request("POST", "/containers/abc/json"), "agent_policy_denied: POST /containers/abc/json"},
@@ -357,7 +357,8 @@ func TestReadOnlyRefusesEveryChangeWhateverTheAllowlistSays(t *testing.T) {
 		{name: "a POST on an allowlisted path with the flag set", method: "POST", path: "/info", policy: Policy{ReadOnly: true}, wantReason: "read_only_flag"},
 		{name: "a POST on any other path with the flag set", method: "POST", path: "/containers/create", policy: Policy{ReadOnly: true}, hasBody: true, wantReason: "read_only_flag"},
 		{name: "a DELETE with the flag set", method: "DELETE", path: "/containers/abc", policy: Policy{ReadOnly: true}, wantReason: "read_only_flag"},
-		{name: "a POST on a non-allowlisted path without the flag", method: "POST", path: "/containers/create", hasBody: true, wantReason: "allowlist"},
+		{name: "a POST on a non-allowlisted path without the flag", method: "POST", path: "/containers/abc/attach", hasBody: true, wantReason: "allowlist"},
+		{name: "a container create without the flag", method: "POST", path: "/containers/create", hasBody: true, wantOK: true},
 		{name: "a POST on an allowlisted path without the flag", method: "POST", path: "/info", wantReason: "allowlist"},
 		{name: "a GET off the allowlist without the flag", method: "GET", path: "/swarm", wantReason: "allowlist"},
 		{name: "a GET off the allowlist with the flag", method: "GET", path: "/swarm", policy: Policy{ReadOnly: true}, wantReason: "allowlist"},
@@ -1153,6 +1154,68 @@ func TestAReadOnlyHostRefusesServiceCreateAndRemoveBeforeAnyValidator(t *testing
 		}
 	}
 	if !slices.Equal(reasons, []string{"read_only_flag", "read_only_flag", "read_only_flag", "read_only_flag"}) {
+		t.Errorf("reasons = %v", reasons)
+	}
+	if got := sock.requests(); len(got) != 0 {
+		t.Fatalf("the engine saw %v", got)
+	}
+}
+
+// writesSeen is the requests the engine got that change something, in order; the lookups a
+// policy check makes before a write are reads and are left out.
+func (f *fakeSocket) writesSeen() []string {
+	var out []string
+	for _, r := range f.requests() {
+		if !strings.HasPrefix(r, "GET ") {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func TestAContainerCreateReachesTheEngine(t *testing.T) {
+	sock := newFakeSocket(t)
+	h := Handler(sock.path, Policy{}, nil)
+	body := enc(t, sdkContainerCreate())
+	resp := do(t, h, postJSON("POST", "/v1.52/containers/create?name=shop-web-1&platform=linux%2Famd64", body,
+		"X-Registry-Auth: eyJ1c2VybmFtZSI6InUifQ==\r\n"))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", resp.StatusCode)
+	}
+	if got := sock.writesSeen(); !slices.Equal(got, []string{"POST /v1.52/containers/create?name=shop-web-1&platform=linux%2Famd64"}) {
+		t.Fatalf("the engine saw %v", got)
+	}
+	bodies := sock.bodiesSeen()
+	if len(bodies) == 0 || string(bodies[len(bodies)-1]) != body {
+		t.Fatalf("the engine received %s, want the rebuilt body %s", bodies, body)
+	}
+	sock.mu.Lock()
+	defer sock.mu.Unlock()
+	last := sock.headers[len(sock.headers)-1]
+	if ct := last.Get("Content-Type"); ct != "application/json" {
+		t.Errorf("the engine saw the content type %q", ct)
+	}
+	if got := last.Get("X-Registry-Auth"); got != "" {
+		t.Errorf("a container create carried a registry credential to the engine: %q", got)
+	}
+}
+
+func TestAReadOnlyHostRefusesContainerCreate(t *testing.T) {
+	sock := newFakeSocket(t)
+	var reasons []string
+	h := Handler(sock.path, Policy{ReadOnly: true, AllowPrivilegedServices: true}, func(_, _, reason string) { reasons = append(reasons, reason) })
+	for _, raw := range []string{
+		postJSON("POST", "/containers/create?name=web", enc(t, sdkContainerCreate())),
+		postJSON("POST", "/containers/create", `{not json`),
+	} {
+		resp := do(t, h, raw)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("status %d, want 403 for %.40q", resp.StatusCode, raw)
+		}
+	}
+	if !slices.Equal(reasons, []string{"read_only_flag", "read_only_flag"}) {
 		t.Errorf("reasons = %v", reasons)
 	}
 	if got := sock.requests(); len(got) != 0 {

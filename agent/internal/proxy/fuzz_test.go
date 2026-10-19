@@ -128,6 +128,14 @@ var oracle = []oracleEntry{
 	{method: "POST", path: rx(oVer + `nodes/` + oID + `/update$`), body: true, keys: map[string]*regexp.Regexp{"version": rx(`^[0-9]{1,20}$`)}},
 	{method: "POST", path: rx(oVer + `services/create$`), body: true},
 	oEntry("DELETE", `services/`+oID, nil),
+	// A container create: a name and a platform, and the container spec as the body.
+	{
+		method: "POST", path: rx(oVer + `containers/create$`), body: true,
+		keys: map[string]*regexp.Regexp{
+			"name":     rx(`^/?[a-zA-Z0-9][a-zA-Z0-9_.-]{0,254}$`),
+			"platform": rx(`^[a-z0-9]{1,16}(/[A-Za-z0-9_.-]{1,32}){1,2}$`),
+		},
+	},
 	// Secrets: the list and the inspect take no key at all, the create takes a SecretSpec body, and the
 	// remove takes no key either.
 	oEntry("GET", `secrets`, nil),
@@ -296,6 +304,15 @@ func FuzzAllowed(f *testing.F) {
 		{"POST", "/images/load", "", true, false, false},
 		{"GET", "/images/get", "names=x", false, false, false},
 		{"POST", "/containers/create", "", true, false, false},
+		{"POST", "/containers/create", "name=web&platform=linux/amd64", true, false, false},
+		{"POST", "/v1.56/containers/create", "name=%2Fshop-web-1", true, false, false},
+		{"POST", "/containers/create", "name=web&pull=always", true, false, false},
+		{"POST", "/containers/create", "name=a%2Fb", true, false, false},
+		{"POST", "/containers/create", "platform=linux", true, false, false},
+		{"POST", "/containers/create", "", false, false, false},
+		{"POST", "/containers/create", "", true, true, false},
+		{"POST", "/containers/create", "name=web", true, false, true},
+		{"POST", "/containers/create/", "", true, false, false},
 		{"POST", "/containers/abc/attach", "", false, true, false},
 		{"GET", "/containers/abc/archive", "", false, false, false},
 		{"GET", "//info", "", false, false, false},
@@ -460,6 +477,41 @@ var bodyShapes = map[BodyKind]bodyShape{
 	BodyConfigCreate: {
 		keys: map[string]*bodyShape{"Name": nil, "Labels": nil, "Data": nil, "Templating": {keys: map[string]*bodyShape{"Name": nil}}},
 	},
+	// A container create is the container config fields the Compose SDK sets, the host config and the
+	// networking config. The fields the SDK does not set are always encoded or omitted as zero values and
+	// are listed in zero; the host-access ones are listed there too, because no body is forwarded with
+	// one set when the host did not allow it (containerOracle judges those in FuzzBody).
+	BodyContainerCreate: {
+		keys: map[string]*bodyShape{
+			"Hostname": nil, "Domainname": nil, "User": nil, "AttachStdin": nil, "AttachStdout": nil, "AttachStderr": nil,
+			"ExposedPorts": nil, "Tty": nil, "OpenStdin": nil, "StdinOnce": nil, "Env": nil, "Cmd": nil, "Healthcheck": nil,
+			"Image": nil, "Volumes": nil, "WorkingDir": nil, "Entrypoint": nil, "Labels": nil, "StopSignal": nil,
+			"StopTimeout": nil, "Shell": nil, "ArgsEscaped": nil, "NetworkDisabled": nil, "OnBuild": nil,
+			"NetworkingConfig": {keys: map[string]*bodyShape{"EndpointsConfig": nil}},
+			"HostConfig": {keys: map[string]*bodyShape{
+				"Binds": nil, "ContainerIDFile": nil, "LogConfig": nil, "NetworkMode": nil, "PortBindings": nil,
+				"RestartPolicy": nil, "AutoRemove": nil, "VolumeDriver": nil, "VolumesFrom": nil, "ConsoleSize": nil,
+				"Annotations": nil, "CapAdd": nil, "CapDrop": nil, "CgroupnsMode": nil, "Dns": nil, "DnsOptions": nil,
+				"DnsSearch": nil, "ExtraHosts": nil, "GroupAdd": nil, "IpcMode": nil, "Cgroup": nil, "Links": nil,
+				"OomScoreAdj": nil, "PidMode": nil, "Privileged": nil, "PublishAllPorts": nil, "ReadonlyRootfs": nil,
+				"SecurityOpt": nil, "StorageOpt": nil, "Tmpfs": nil, "UTSMode": nil, "UsernsMode": nil, "ShmSize": nil,
+				"Sysctls": nil, "Runtime": nil, "Umask": nil, "Isolation": nil, "Mounts": nil, "MaskedPaths": nil,
+				"ReadonlyPaths": nil, "Init": nil,
+				// Resources, which the host config embeds.
+				"CpuShares": nil, "Memory": nil, "NanoCpus": nil, "CgroupParent": nil, "BlkioWeight": nil,
+				"BlkioWeightDevice": nil, "BlkioDeviceReadBps": nil, "BlkioDeviceWriteBps": nil,
+				"BlkioDeviceReadIOps": nil, "BlkioDeviceWriteIOps": nil, "CpuPeriod": nil, "CpuQuota": nil,
+				"CpuRealtimePeriod": nil, "CpuRealtimeRuntime": nil, "CpusetCpus": nil, "CpusetMems": nil,
+				"Devices": nil, "DeviceCgroupRules": nil, "DeviceRequests": nil, "MemoryReservation": nil,
+				"MemorySwap": nil, "MemorySwappiness": nil, "OomKillDisable": nil, "PidsLimit": nil, "Ulimits": nil,
+				"CpuCount": nil, "CpuPercent": nil, "IOMaximumIOps": nil, "IOMaximumBandwidth": nil,
+			}},
+		},
+		zero: []string{
+			"ArgsEscaped", "NetworkDisabled", "OnBuild",
+			"HostConfig.ContainerIDFile", "HostConfig.VolumeDriver", "HostConfig.Cgroup", "HostConfig.PublishAllPorts", "HostConfig.Umask",
+		},
+	},
 	// A service spec is the user's whole service, so the shape is its top-level keys.
 	// What it must not hold is a plugin or a network attachment task, and a runtime
 	// other than container (checked in FuzzBody).
@@ -601,7 +653,7 @@ func FuzzBody(f *testing.F) {
 		f.Add(s.kind, s.body)
 	}
 	f.Fuzz(func(t *testing.T, kind uint8, body string) {
-		k := BodyKind(kind % 11) // BodyNone and the ten kinds
+		k := BodyKind(kind % 12) // BodyNone and the eleven kinds
 		out, err := validateBody(k, strings.NewReader(body), bodyEnv{})
 		if err != nil {
 			return

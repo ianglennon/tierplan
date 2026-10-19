@@ -37,6 +37,8 @@ const (
 	BodySecretCreate
 	// BodyConfigCreate is POST /configs/create.
 	BodyConfigCreate
+	// BodyContainerCreate is POST /containers/create.
+	BodyContainerCreate
 )
 
 // route is one thing the agent forwards: a method, an anchored path, the query
@@ -111,6 +113,9 @@ var (
 	rollbackValue = regexp.MustCompile(`^(previous|none)$`)
 	// platformValue is os/arch or os/arch/variant.
 	platformValue = regexp.MustCompile(`^[a-z0-9]{1,16}(/[A-Za-z0-9_.-]{1,32}){1,2}$`)
+	// containerNameValue is the name a container create may ask for: the engine's own
+	// rule, with the optional leading slash, and at most 255 characters.
+	containerNameValue = regexp.MustCompile(`^/?[a-zA-Z0-9][a-zA-Z0-9_.-]{0,254}$`)
 )
 
 // pathOf anchors tail and allows the optional /vX.Y prefix, which is the API
@@ -137,7 +142,9 @@ var serviceLogKeys = map[string]*regexp.Regexp{
 //
 // GET /swarm is deliberately absent: its answer carries the swarm join tokens,
 // which are credentials to add nodes. The cluster ID is read from /info on a
-// manager instead. Container create, attach, archive and export are absent too. The stats
+// manager instead. A container create is forwarded through a closed-shape body validator and
+// the container host policy (containerpolicy.go), because the Compose SDK that deploys a
+// standalone stack creates containers; attach, archive and export stay absent. The stats
 // of a container are forwarded for one sample at a time only (RES-11): the two keys a
 // one-shot read sends, and never a stream the agent would have to hold open.
 var routes = []route{
@@ -210,6 +217,16 @@ var routes = []route{
 	{name: "config inspect", method: http.MethodGet, path: pathOf(`configs/` + idShape)},
 	{name: "config create", method: http.MethodPost, path: pathOf(`configs/create`), body: BodyConfigCreate},
 	{name: "config remove", method: http.MethodDelete, path: pathOf(`configs/` + idShape)},
+
+	// Container create: the name and the platform are the only keys, and the body is the
+	// container spec the Compose SDK sends, rebuilt from an allowlist and judged by the host
+	// policy (STK-02). It sits before every containers/{id} pattern, so "create" is never read as
+	// an ID.
+	{
+		name: "container create", method: http.MethodPost, path: pathOf(`containers/create`),
+		query: map[string]*regexp.Regexp{"name": containerNameValue, "platform": platformValue},
+		body:  BodyContainerCreate,
+	},
 
 	// Container lifecycle.
 	{name: "container start", method: http.MethodPost, path: pathOf(`containers/` + idShape + `/start`)},

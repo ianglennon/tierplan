@@ -826,3 +826,61 @@ func TestServiceUpdateRefusalsNeverReachTheEngine(t *testing.T) {
 		t.Errorf("onDenied ran %d times, want 5", len(reasons))
 	}
 }
+
+func TestRouteContainerCreateTakesOnlyANameAndAPlatformAndABody(t *testing.T) {
+	long254 := "a" + strings.Repeat("b", 254)
+	long255 := "a" + strings.Repeat("b", 255)
+	for _, tc := range []struct {
+		name, method, path, query string
+		body                      bool
+		wantRoute                 string // "" means refused
+	}{
+		{"no key", "POST", "/containers/create", "", true, "container create"},
+		{"the version prefix", "POST", "/v1.52/containers/create", "", true, "container create"},
+		{"a name", "POST", "/containers/create", "name=shop-web-1", true, "container create"},
+		{"a name with a leading slash", "POST", "/containers/create", "name=%2Fweb", true, "container create"},
+		{"a name with dots and underscores", "POST", "/containers/create", "name=a.b_c-d", true, "container create"},
+		{"a name of 255 characters", "POST", "/containers/create", "name=" + long254, true, "container create"},
+		{"a platform", "POST", "/containers/create", "platform=linux%2Famd64", true, "container create"},
+		{"a platform with a variant", "POST", "/containers/create", "name=web&platform=linux%2Farm%2Fv7", true, "container create"},
+		{"a name of 256 characters", "POST", "/containers/create", "name=" + long255, true, ""},
+		{"an empty name", "POST", "/containers/create", "name=", true, ""},
+		{"a name with a slash after the first character", "POST", "/containers/create", "name=a%2Fb", true, ""},
+		{"a name starting with a dash", "POST", "/containers/create", "name=-web", true, ""},
+		{"a name starting with a dot", "POST", "/containers/create", "name=.web", true, ""},
+		{"a name with a space", "POST", "/containers/create", "name=a%20b", true, ""},
+		{"a second name that is not allowed", "POST", "/containers/create", "name=a&name=-b", true, ""},
+		{"a platform without an architecture", "POST", "/containers/create", "platform=linux", true, ""},
+		{"an upper-case operating system", "POST", "/containers/create", "platform=Linux%2Famd64", true, ""},
+		{"an unknown key", "POST", "/containers/create", "name=web&pull=always", true, ""},
+		{"fromImage", "POST", "/containers/create", "fromImage=x", true, ""},
+		{"no body", "POST", "/containers/create", "", false, ""},
+		{"a GET", "GET", "/containers/create", "", false, ""},
+		{"a PUT", "PUT", "/containers/create", "", true, ""},
+		{"a DELETE", "DELETE", "/containers/create", "", false, "container remove"},
+		{"a trailing slash", "POST", "/containers/create/", "", true, ""},
+		{"an exec of a container called create", "POST", "/containers/create/exec", "", true, "exec create"},
+		{"a start of a container called create", "POST", "/containers/create/start", "", false, "container start"},
+		{"attach stays absent", "POST", "/containers/create/attach", "", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, _, kind := Allowed(tc.method, tc.path, tc.query, tc.body, false, Policy{})
+			if ok != (tc.wantRoute != "") {
+				t.Fatalf("Allowed(%s %s?%s) = %v, want %v", tc.method, tc.path, tc.query, ok, tc.wantRoute != "")
+			}
+			if !ok {
+				return
+			}
+			rt, found := Match(tc.method, tc.path)
+			if !found || rt.name != tc.wantRoute {
+				t.Fatalf("Match(%s %s) = %q, want %q", tc.method, tc.path, rt.name, tc.wantRoute)
+			}
+			if (tc.wantRoute == "container create") != (kind == BodyContainerCreate) {
+				t.Errorf("the body kind of %q is %d", tc.wantRoute, kind)
+			}
+			if rt.registryAuth || rt.upgrade {
+				t.Errorf("route %q may carry a registry credential or an upgrade", rt.name)
+			}
+		})
+	}
+}

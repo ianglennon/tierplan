@@ -24,6 +24,57 @@ import (
 	"github.com/moby/moby/api/types/volume"
 )
 
+// sdkContainerCreate is the container create the Compose SDK builds in getCreateConfigs for a
+// service with a published port, an environment, a named volume, a healthcheck and two
+// networks, with the zero values the moby client encodes beside them.
+func sdkContainerCreate() container.CreateRequest {
+	retries := 3
+	stop := 10
+	return container.CreateRequest{
+		Config: &container.Config{
+			Hostname:     "web",
+			AttachStderr: true,
+			AttachStdout: true,
+			ExposedPorts: network.PortSet{network.MustParsePort("80/tcp"): {}},
+			Env:          []string{"MODE=prod", "SECRET_REF=x"},
+			Cmd:          []string{"nginx", "-g", "daemon off;"},
+			Healthcheck: &container.HealthConfig{
+				Test: []string{"CMD", "curl", "-f", "http://localhost/"}, Interval: 30 * time.Second,
+				Timeout: 30 * time.Second, Retries: retries,
+			},
+			Image:       "nginx:1.27",
+			WorkingDir:  "/app",
+			StopTimeout: &stop,
+			StopSignal:  "SIGQUIT",
+			Labels: map[string]string{
+				"com.docker.compose.project": "shop", "com.docker.compose.service": "web",
+				"com.docker.compose.config-hash": "abc123", "com.docker.compose.container-number": "1",
+				"com.docker.compose.depends_on": "",
+			},
+		},
+		HostConfig: &container.HostConfig{
+			Binds:         []string{"shop_data:/data:rw"},
+			NetworkMode:   "shop_default",
+			PortBindings:  network.PortMap{network.MustParsePort("80/tcp"): {{HostPort: "8080"}}},
+			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
+			CapDrop:       []string{"CAP_NET_RAW"},
+			Sysctls:       map[string]string{"net.core.somaxconn": "1024"},
+			Resources: container.Resources{
+				Memory: 256 << 20, NanoCPUs: 500_000_000,
+				Ulimits: []*container.Ulimit{{Name: "nofile", Soft: 1024, Hard: 2048}},
+			},
+			ExtraHosts: []string{"db:10.0.0.9"},
+			DNS:        []netip.Addr{netip.MustParseAddr("1.1.1.1")},
+			Tmpfs:      map[string]string{"/run": "size=16m"},
+			Init:       new(true),
+		},
+		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
+			"shop_default": {Aliases: []string{"web"}, IPAMConfig: &network.EndpointIPAMConfig{IPv4Address: netip.MustParseAddr("10.5.0.4")}, IPAddress: netip.MustParseAddr("10.5.0.4")},
+			"shop_backend": {Aliases: []string{"web", "api"}, GwPriority: 5, DriverOpts: map[string]string{"k": "v"}},
+		}},
+	}
+}
+
 // enc encodes a value the way the server's Docker client does, every field
 // present and zero values included.
 func enc(t *testing.T, v any) string {
@@ -790,5 +841,93 @@ func TestBodyConfigCreateCapIs2MiBAndRefusesAnythingOverIt(t *testing.T) {
 	over := `{"Name":"a","Data":"` + strings.Repeat("A", 2<<20) + `"}`
 	if _, err := validateBody(BodyConfigCreate, strings.NewReader(over), bodyEnv{}); err == nil {
 		t.Error("a config create body over 2 MiB was accepted")
+	}
+}
+
+// The Compose SDK's container create is forwarded as the same bytes the SDK sent: the rebuild
+// copies every field it sets, so nothing it needs is lost on the way to the engine.
+func TestContainerCreateTheSDKSendsIsRebuiltByteForByte(t *testing.T) {
+	in := enc(t, sdkContainerCreate())
+	// The allowlisted policy is judged elsewhere; this bytes check runs with the host's opt-in so
+	// it stands on the closed shape alone.
+	out, err := validateBody(BodyContainerCreate, strings.NewReader(in), bodyEnv{policy: Policy{AllowPrivilegedServices: true}})
+	if err != nil {
+		t.Fatalf("the SDK's container create was refused: %v", err)
+	}
+	if string(out) != in {
+		t.Fatalf("the rebuilt body differs from the SDK's:\n got %s\nwant %s", out, in)
+	}
+}
+
+func TestContainerCreateRefusesAnUnknownField(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		build func(*container.CreateRequest)
+	}{
+		{"ContainerIDFile", func(r *container.CreateRequest) { r.HostConfig.ContainerIDFile = "/tmp/cid" }},
+		{"VolumeDriver", func(r *container.CreateRequest) { r.HostConfig.VolumeDriver = "rexray/ebs" }},
+		{"PublishAllPorts", func(r *container.CreateRequest) { r.HostConfig.PublishAllPorts = true }},
+		{"Cgroup", func(r *container.CreateRequest) { r.HostConfig.Cgroup = "container:other" }},
+		{"Umask", func(r *container.CreateRequest) { r.HostConfig.Umask = new(uint32) }},
+		{"ConsoleSize", func(r *container.CreateRequest) { r.HostConfig.ConsoleSize = [2]uint{24, 80} }},
+		{"OnBuild", func(r *container.CreateRequest) { r.OnBuild = []string{"RUN x"} }},
+		{"ArgsEscaped", func(r *container.CreateRequest) { r.ArgsEscaped = true }},
+		{"NetworkDisabled", func(r *container.CreateRequest) { r.NetworkDisabled = true }},
+		{"an endpoint's NetworkID", func(r *container.CreateRequest) { r.NetworkingConfig.EndpointsConfig["shop_default"].NetworkID = "n1" }},
+		{"an endpoint's EndpointID", func(r *container.CreateRequest) { r.NetworkingConfig.EndpointsConfig["shop_default"].EndpointID = "e1" }},
+		{"an endpoint's DNSNames", func(r *container.CreateRequest) {
+			r.NetworkingConfig.EndpointsConfig["shop_default"].DNSNames = []string{"x"}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := sdkContainerCreate()
+			tc.build(&req)
+			_, err := validateBody(BodyContainerCreate, strings.NewReader(enc(t, req)), bodyEnv{policy: Policy{AllowPrivilegedServices: true}})
+			if !errors.Is(err, errBodyRefused) {
+				t.Fatalf("err = %v, want a refusal", err)
+			}
+		})
+	}
+	t.Run("a key that is no field at all", func(t *testing.T) {
+		body := strings.Replace(enc(t, sdkContainerCreate()), `{"Hostname"`, `{"Bogus":1,"Hostname"`, 1)
+		if _, err := validateBody(BodyContainerCreate, strings.NewReader(body), bodyEnv{}); !errors.Is(err, errBodyRefused) {
+			t.Fatalf("err = %v, want a refusal", err)
+		}
+	})
+}
+
+func TestContainerCreateNeedsAnImage(t *testing.T) {
+	noImage := sdkContainerCreate()
+	noImage.Image = ""
+	noConfig := container.CreateRequest{HostConfig: &container.HostConfig{}}
+	for name, body := range map[string]string{
+		"an empty image":  enc(t, noImage),
+		"no config":       enc(t, noConfig),
+		"an empty object": `{}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := validateBody(BodyContainerCreate, strings.NewReader(body), bodyEnv{}); !errors.Is(err, errBodyRefused) {
+				t.Fatalf("err = %v, want a refusal", err)
+			}
+		})
+	}
+}
+
+func TestContainerCreateOverTheCapIsRefused(t *testing.T) {
+	if got := bodyCap(BodyContainerCreate); got != 256<<10 {
+		t.Fatalf("the container create cap is %d, want 256 KiB", got)
+	}
+	req := sdkContainerCreate()
+	req.Env = []string{"BIG=" + strings.Repeat("a", 250<<10)}
+	underCap := enc(t, req)
+	if len(underCap) >= 256<<10 {
+		t.Fatalf("test body is %d bytes, want it under the cap", len(underCap))
+	}
+	if _, err := validateBody(BodyContainerCreate, strings.NewReader(underCap), bodyEnv{policy: Policy{AllowPrivilegedServices: true}}); err != nil {
+		t.Fatalf("a body under the cap was refused: %v", err)
+	}
+	req.Env = []string{"BIG=" + strings.Repeat("a", 256<<10)}
+	if _, err := validateBody(BodyContainerCreate, strings.NewReader(enc(t, req)), bodyEnv{policy: Policy{AllowPrivilegedServices: true}}); !errors.Is(err, errBodyRefused) {
+		t.Fatalf("err = %v, want the cap refusal", err)
 	}
 }
