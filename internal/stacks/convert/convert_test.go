@@ -244,31 +244,6 @@ networks:
 	}
 }
 
-func TestConvertRefusesASettingItDoesNotConvertYet(t *testing.T) {
-	t.Parallel()
-	const compose = `services:
-  web:
-    image: nginx:1
-    command: ["nginx", "-g", "daemon off;"]
-    volumes:
-      - data:/data
-    deploy:
-      resources:
-        limits:
-          memory: 64M
-volumes:
-  data: {}
-`
-	_, err := plan(t, "s", compose)
-	var nc *convert.NotConvertedError
-	if !errors.Is(err, convert.ErrNotConverted) || !errors.As(err, &nc) {
-		t.Fatalf("err = %v, want ErrNotConverted", err)
-	}
-	if nc.Service != "web" || !slices.Equal(nc.Fields, []string{"Volumes", "deploy.Resources"}) {
-		t.Errorf("not converted = %+v", nc)
-	}
-}
-
 func TestConvertRefusesAServiceWithNoImage(t *testing.T) {
 	t.Parallel()
 	_, err := plan(t, "s", "services:\n  web:\n    build: .\n")

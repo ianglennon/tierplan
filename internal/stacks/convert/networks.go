@@ -5,6 +5,7 @@ package convert
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -16,6 +17,9 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/stacks"
 )
+
+// errNoSuchNetwork is wrapped with the service and the network key.
+var errNoSuchNetwork = errors.New("convert: the service uses a network the file does not declare")
 
 // defaultNetwork is the key of the network a service joins when it names none.
 const defaultNetwork = "default"

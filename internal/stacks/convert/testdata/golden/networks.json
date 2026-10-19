@@ -1,0 +1,218 @@
+{
+  "Networks": [
+    {
+      "Key": "backend",
+      "Name": "networks_backend",
+      "Driver": "overlay",
+      "Attachable": true,
+      "Internal": true,
+      "External": false,
+      "Labels": {
+        "bayplan.stack.id": "id-networks",
+        "com.docker.stack.namespace": "networks",
+        "tier": "data"
+      },
+      "DriverOpts": {
+        "com.docker.network.driver.mtu": "1400"
+      },
+      "IPAMDriver": "default",
+      "Pools": [
+        {
+          "Subnet": "10.20.0.0/24",
+          "Gateway": "10.20.0.1",
+          "IPRange": "10.20.0.128/25"
+        }
+      ]
+    },
+    {
+      "Key": "default",
+      "Name": "networks_default",
+      "Driver": "overlay",
+      "Attachable": true,
+      "Internal": false,
+      "External": false,
+      "Labels": {
+        "bayplan.stack.id": "id-networks",
+        "com.docker.stack.namespace": "networks"
+      },
+      "DriverOpts": null,
+      "IPAMDriver": "",
+      "Pools": null
+    },
+    {
+      "Key": "legacy",
+      "Name": "legacy",
+      "Driver": "overlay",
+      "Attachable": false,
+      "Internal": false,
+      "External": true,
+      "Labels": null,
+      "DriverOpts": null,
+      "IPAMDriver": "",
+      "Pools": null
+    },
+    {
+      "Key": "public",
+      "Name": "edge-public",
+      "Driver": "overlay",
+      "Attachable": false,
+      "Internal": false,
+      "External": true,
+      "Labels": null,
+      "DriverOpts": null,
+      "IPAMDriver": "",
+      "Pools": null
+    }
+  ],
+  "Services": [
+    {
+      "Name": "networks_app",
+      "Short": "app",
+      "ImageAsWritten": "app:1",
+      "Spec": {
+        "Name": "networks_app",
+        "Labels": {
+          "bayplan.stack.id": "id-networks",
+          "com.docker.stack.image": "app:1",
+          "com.docker.stack.namespace": "networks"
+        },
+        "TaskTemplate": {
+          "ContainerSpec": {
+            "Image": "app:1",
+            "Labels": {
+              "bayplan.stack.id": "id-networks",
+              "com.docker.stack.namespace": "networks"
+            },
+            "Privileges": {
+              "CredentialSpec": null,
+              "SELinuxContext": null,
+              "NoNewPrivileges": false
+            }
+          },
+          "Resources": {},
+          "Placement": {},
+          "Networks": [
+            {
+              "Target": "legacy",
+              "Aliases": [
+                "app"
+              ]
+            },
+            {
+              "Target": "networks_backend",
+              "Aliases": [
+                "api",
+                "app-backend",
+                "app"
+              ],
+              "DriverOpts": {
+                "com.docker.network.endpoint.mtu": "1400"
+              }
+            }
+          ],
+          "ForceUpdate": 0
+        },
+        "Mode": {
+          "Replicated": {
+            "Replicas": 1
+          }
+        },
+        "EndpointSpec": {}
+      }
+    },
+    {
+      "Name": "networks_db",
+      "Short": "db",
+      "ImageAsWritten": "postgres:16",
+      "Spec": {
+        "Name": "networks_db",
+        "Labels": {
+          "bayplan.stack.id": "id-networks",
+          "com.docker.stack.image": "postgres:16",
+          "com.docker.stack.namespace": "networks"
+        },
+        "TaskTemplate": {
+          "ContainerSpec": {
+            "Image": "postgres:16",
+            "Labels": {
+              "bayplan.stack.id": "id-networks",
+              "com.docker.stack.namespace": "networks"
+            },
+            "Privileges": {
+              "CredentialSpec": null,
+              "SELinuxContext": null,
+              "NoNewPrivileges": false
+            }
+          },
+          "Resources": {},
+          "Placement": {},
+          "Networks": [
+            {
+              "Target": "networks_backend",
+              "Aliases": [
+                "db"
+              ]
+            }
+          ],
+          "ForceUpdate": 0
+        },
+        "Mode": {
+          "Replicated": {
+            "Replicas": 1
+          }
+        },
+        "EndpointSpec": {}
+      }
+    },
+    {
+      "Name": "networks_edge",
+      "Short": "edge",
+      "ImageAsWritten": "edge:1",
+      "Spec": {
+        "Name": "networks_edge",
+        "Labels": {
+          "bayplan.stack.id": "id-networks",
+          "com.docker.stack.image": "edge:1",
+          "com.docker.stack.namespace": "networks"
+        },
+        "TaskTemplate": {
+          "ContainerSpec": {
+            "Image": "edge:1",
+            "Labels": {
+              "bayplan.stack.id": "id-networks",
+              "com.docker.stack.namespace": "networks"
+            },
+            "Privileges": {
+              "CredentialSpec": null,
+              "SELinuxContext": null,
+              "NoNewPrivileges": false
+            }
+          },
+          "Resources": {},
+          "Placement": {},
+          "Networks": [
+            {
+              "Target": "edge-public",
+              "Aliases": [
+                "edge"
+              ]
+            },
+            {
+              "Target": "networks_default",
+              "Aliases": [
+                "edge"
+              ]
+            }
+          ],
+          "ForceUpdate": 0
+        },
+        "Mode": {
+          "Replicated": {
+            "Replicas": 1
+          }
+        },
+        "EndpointSpec": {}
+      }
+    }
+  ]
+}

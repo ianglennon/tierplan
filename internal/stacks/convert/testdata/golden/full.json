@@ -61,8 +61,15 @@
             "Labels": {
               "bayplan.stack.id": "id-full",
               "com.docker.stack.namespace": "full"
+            },
+            "Privileges": {
+              "CredentialSpec": null,
+              "SELinuxContext": null,
+              "NoNewPrivileges": false
             }
           },
+          "Resources": {},
+          "Placement": {},
           "Networks": [
             {
               "Target": "full_default",
@@ -113,6 +120,11 @@
               "ALPHA=first",
               "ZED=last"
             ],
+            "Privileges": {
+              "CredentialSpec": null,
+              "SELinuxContext": null,
+              "NoNewPrivileges": false
+            },
             "Healthcheck": {
               "Test": [
                 "CMD",
@@ -126,6 +138,8 @@
               "Retries": 3
             }
           },
+          "Resources": {},
+          "Placement": {},
           "Networks": [
             {
               "Target": "full_front",
@@ -188,12 +202,19 @@
               "KEEP=1",
               "MODE=batch"
             ],
+            "Privileges": {
+              "CredentialSpec": null,
+              "SELinuxContext": null,
+              "NoNewPrivileges": false
+            },
             "Healthcheck": {
               "Test": [
                 "NONE"
               ]
             }
           },
+          "Resources": {},
+          "Placement": {},
           "Networks": [
             {
               "Target": "full_front",

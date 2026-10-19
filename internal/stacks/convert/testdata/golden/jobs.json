@@ -1,0 +1,204 @@
+{
+  "Networks": [
+    {
+      "Key": "default",
+      "Name": "jobs_default",
+      "Driver": "overlay",
+      "Attachable": true,
+      "Internal": false,
+      "External": false,
+      "Labels": {
+        "bayplan.stack.id": "id-jobs",
+        "com.docker.stack.namespace": "jobs"
+      },
+      "DriverOpts": null,
+      "IPAMDriver": "",
+      "Pools": null
+    }
+  ],
+  "Services": [
+    {
+      "Name": "jobs_agent",
+      "Short": "agent",
+      "ImageAsWritten": "agent:2",
+      "Spec": {
+        "Name": "jobs_agent",
+        "Labels": {
+          "bayplan.stack.id": "id-jobs",
+          "com.docker.stack.image": "agent:2",
+          "com.docker.stack.namespace": "jobs"
+        },
+        "TaskTemplate": {
+          "ContainerSpec": {
+            "Image": "agent:2",
+            "Labels": {
+              "bayplan.stack.id": "id-jobs",
+              "com.docker.stack.namespace": "jobs"
+            },
+            "Privileges": {
+              "CredentialSpec": null,
+              "SELinuxContext": null,
+              "NoNewPrivileges": false
+            }
+          },
+          "Resources": {},
+          "Placement": {},
+          "Networks": [
+            {
+              "Target": "jobs_default",
+              "Aliases": [
+                "agent"
+              ]
+            }
+          ],
+          "ForceUpdate": 0
+        },
+        "Mode": {
+          "Global": {}
+        },
+        "EndpointSpec": {}
+      }
+    },
+    {
+      "Name": "jobs_migrate",
+      "Short": "migrate",
+      "ImageAsWritten": "app:1",
+      "Spec": {
+        "Name": "jobs_migrate",
+        "Labels": {
+          "bayplan.stack.id": "id-jobs",
+          "com.docker.stack.image": "app:1",
+          "com.docker.stack.namespace": "jobs"
+        },
+        "TaskTemplate": {
+          "ContainerSpec": {
+            "Image": "app:1",
+            "Labels": {
+              "bayplan.stack.id": "id-jobs",
+              "com.docker.stack.namespace": "jobs"
+            },
+            "Args": [
+              "migrate",
+              "--all"
+            ],
+            "Privileges": {
+              "CredentialSpec": null,
+              "SELinuxContext": null,
+              "NoNewPrivileges": false
+            }
+          },
+          "Resources": {},
+          "RestartPolicy": {
+            "Condition": "none"
+          },
+          "Placement": {},
+          "Networks": [
+            {
+              "Target": "jobs_default",
+              "Aliases": [
+                "migrate"
+              ]
+            }
+          ],
+          "ForceUpdate": 0
+        },
+        "Mode": {
+          "ReplicatedJob": {
+            "MaxConcurrent": 3,
+            "TotalCompletions": 3
+          }
+        },
+        "EndpointSpec": {}
+      }
+    },
+    {
+      "Name": "jobs_scan",
+      "Short": "scan",
+      "ImageAsWritten": "scanner:1",
+      "Spec": {
+        "Name": "jobs_scan",
+        "Labels": {
+          "bayplan.stack.id": "id-jobs",
+          "com.docker.stack.image": "scanner:1",
+          "com.docker.stack.namespace": "jobs"
+        },
+        "TaskTemplate": {
+          "ContainerSpec": {
+            "Image": "scanner:1",
+            "Labels": {
+              "bayplan.stack.id": "id-jobs",
+              "com.docker.stack.namespace": "jobs"
+            },
+            "Privileges": {
+              "CredentialSpec": null,
+              "SELinuxContext": null,
+              "NoNewPrivileges": false
+            }
+          },
+          "Resources": {},
+          "RestartPolicy": {
+            "Condition": "none"
+          },
+          "Placement": {},
+          "Networks": [
+            {
+              "Target": "jobs_default",
+              "Aliases": [
+                "scan"
+              ]
+            }
+          ],
+          "ForceUpdate": 0
+        },
+        "Mode": {
+          "GlobalJob": {}
+        },
+        "EndpointSpec": {}
+      }
+    },
+    {
+      "Name": "jobs_web",
+      "Short": "web",
+      "ImageAsWritten": "web:3",
+      "Spec": {
+        "Name": "jobs_web",
+        "Labels": {
+          "bayplan.stack.id": "id-jobs",
+          "com.docker.stack.image": "web:3",
+          "com.docker.stack.namespace": "jobs"
+        },
+        "TaskTemplate": {
+          "ContainerSpec": {
+            "Image": "web:3",
+            "Labels": {
+              "bayplan.stack.id": "id-jobs",
+              "com.docker.stack.namespace": "jobs"
+            },
+            "Privileges": {
+              "CredentialSpec": null,
+              "SELinuxContext": null,
+              "NoNewPrivileges": false
+            }
+          },
+          "Resources": {},
+          "Placement": {},
+          "Networks": [
+            {
+              "Target": "jobs_default",
+              "Aliases": [
+                "web"
+              ]
+            }
+          ],
+          "ForceUpdate": 0
+        },
+        "Mode": {
+          "Replicated": {
+            "Replicas": 1
+          }
+        },
+        "EndpointSpec": {}
+      }
+    }
+  ]
+}

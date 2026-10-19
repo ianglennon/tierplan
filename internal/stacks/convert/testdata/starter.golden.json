@@ -34,8 +34,15 @@
             "Labels": {
               "bayplan.stack.id": "id-tracer",
               "com.docker.stack.namespace": "tracer"
+            },
+            "Privileges": {
+              "CredentialSpec": null,
+              "SELinuxContext": null,
+              "NoNewPrivileges": false
             }
           },
+          "Resources": {},
+          "Placement": {},
           "Networks": [
             {
               "Target": "tracer_default",

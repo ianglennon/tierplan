@@ -465,7 +465,7 @@ func TestDeployRefusesAComposeFileItCannotLoadOrConvertAndStoresNothing(t *testi
 		"invalid yaml":           {"services: [", "compose_invalid"},
 		"a schema error":         {"services:\n  a:\n    image: busybox\n    ports: 5\n", "compose_invalid"},
 		"a service with a build": {"services:\n  a:\n    build: .\n", "compose_unsupported"},
-		"a volume mount":         {"services:\n  a:\n    image: busybox:1\n    volumes:\n      - data:/data\nvolumes:\n  data: {}\n", "compose_unsupported"},
+		"a legacy memory limit":  {"services:\n  a:\n    image: busybox:1\n    mem_limit: 64m\n", "compose_unsupported"},
 	} {
 		rec := operator.saveDraft(st.ID, saveBody(draftVersion(t, operator, st.ID), tc.compose, `[]`))
 		if rec.Code != http.StatusOK {

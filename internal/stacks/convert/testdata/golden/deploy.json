@@ -1,0 +1,305 @@
+{
+  "Networks": [
+    {
+      "Key": "default",
+      "Name": "deploy_default",
+      "Driver": "overlay",
+      "Attachable": true,
+      "Internal": false,
+      "External": false,
+      "Labels": {
+        "bayplan.stack.id": "id-deploy",
+        "com.docker.stack.namespace": "deploy"
+      },
+      "DriverOpts": null,
+      "IPAMDriver": "",
+      "Pools": null
+    }
+  ],
+  "Services": [
+    {
+      "Name": "deploy_api",
+      "Short": "api",
+      "ImageAsWritten": "registry.example.com/api:2.1",
+      "Spec": {
+        "Name": "deploy_api",
+        "Labels": {
+          "bayplan.stack.id": "id-deploy",
+          "com.docker.stack.image": "registry.example.com/api:2.1",
+          "com.docker.stack.namespace": "deploy",
+          "team": "platform"
+        },
+        "TaskTemplate": {
+          "ContainerSpec": {
+            "Image": "registry.example.com/api:2.1",
+            "Labels": {
+              "bayplan.stack.id": "id-deploy",
+              "com.docker.stack.namespace": "deploy"
+            },
+            "Hostname": "api-host",
+            "Dir": "/srv",
+            "User": "1000:1000",
+            "Groups": [
+              "audio",
+              "1001"
+            ],
+            "Privileges": {
+              "CredentialSpec": null,
+              "SELinuxContext": null,
+              "NoNewPrivileges": false
+            },
+            "Init": true,
+            "StopSignal": "SIGINT",
+            "TTY": true,
+            "OpenStdin": true,
+            "ReadOnly": true,
+            "StopGracePeriod": 45000000000,
+            "Hosts": [
+              "10.0.0.8 cache.local",
+              "10.0.0.9 db.local"
+            ],
+            "DNSConfig": {
+              "Nameservers": [
+                "1.1.1.1",
+                "9.9.9.9"
+              ],
+              "Search": [
+                "example.com"
+              ],
+              "Options": [
+                "ndots:2"
+              ]
+            },
+            "Secrets": [
+              {
+                "File": {
+                  "Name": "db_password",
+                  "UID": "0",
+                  "GID": "0",
+                  "Mode": 292
+                },
+                "SecretID": "sid_db_password",
+                "SecretName": "db_password.h1"
+              },
+              {
+                "File": {
+                  "Name": "/etc/ssl/key.pem",
+                  "UID": "100",
+                  "GID": "100",
+                  "Mode": 256
+                },
+                "SecretID": "sid_tls_key",
+                "SecretName": "tls_key.h1"
+              }
+            ],
+            "Configs": [
+              {
+                "File": {
+                  "Name": "app_config",
+                  "UID": "0",
+                  "GID": "0",
+                  "Mode": 292
+                },
+                "ConfigID": "cid_app_config",
+                "ConfigName": "app_config.h2"
+              },
+              {
+                "File": {
+                  "Name": "/etc/nginx/nginx.conf",
+                  "UID": "0",
+                  "GID": "0",
+                  "Mode": 288
+                },
+                "ConfigID": "cid_nginx_conf",
+                "ConfigName": "nginx_conf.h2"
+              }
+            ],
+            "Sysctls": {
+              "net.core.somaxconn": "1024"
+            },
+            "CapabilityAdd": [
+              "ALL"
+            ],
+            "CapabilityDrop": [
+              "CAP_NET_ADMIN",
+              "CAP_NET_RAW"
+            ],
+            "Ulimits": [
+              {
+                "Name": "nofile",
+                "Hard": 40000,
+                "Soft": 20000
+              },
+              {
+                "Name": "nproc",
+                "Hard": 65535,
+                "Soft": 65535
+              }
+            ],
+            "OomScoreAdj": -100
+          },
+          "Resources": {
+            "Limits": {
+              "NanoCPUs": 500000000,
+              "MemoryBytes": 536870912,
+              "Pids": 200
+            },
+            "Reservations": {
+              "NanoCPUs": 250000000,
+              "MemoryBytes": 134217728
+            }
+          },
+          "RestartPolicy": {
+            "Condition": "on-failure",
+            "Delay": 5000000000,
+            "MaxAttempts": 3,
+            "Window": 120000000000
+          },
+          "Placement": {
+            "Constraints": [
+              "node.role == worker",
+              "node.labels.zone == a"
+            ],
+            "Preferences": [
+              {
+                "Spread": {
+                  "SpreadDescriptor": "node.labels.zone"
+                }
+              }
+            ],
+            "MaxReplicas": 2
+          },
+          "Networks": [
+            {
+              "Target": "deploy_default",
+              "Aliases": [
+                "api"
+              ]
+            }
+          ],
+          "LogDriver": {
+            "Name": "json-file",
+            "Options": {
+              "max-size": "10m"
+            }
+          },
+          "ForceUpdate": 0
+        },
+        "Mode": {
+          "Replicated": {
+            "Replicas": 4
+          }
+        },
+        "UpdateConfig": {
+          "Parallelism": 2,
+          "Delay": 10000000000,
+          "FailureAction": "rollback",
+          "Monitor": 30000000000,
+          "MaxFailureRatio": 0.25,
+          "Order": "start-first"
+        },
+        "RollbackConfig": {
+          "Parallelism": 1,
+          "FailureAction": "pause",
+          "MaxFailureRatio": 0,
+          "Order": "stop-first"
+        },
+        "EndpointSpec": {
+          "Mode": "vip"
+        }
+      }
+    },
+    {
+      "Name": "deploy_bare",
+      "Short": "bare",
+      "ImageAsWritten": "busybox:1",
+      "Spec": {
+        "Name": "deploy_bare",
+        "Labels": {
+          "bayplan.stack.id": "id-deploy",
+          "com.docker.stack.image": "busybox:1",
+          "com.docker.stack.namespace": "deploy"
+        },
+        "TaskTemplate": {
+          "ContainerSpec": {
+            "Image": "busybox:1",
+            "Labels": {
+              "bayplan.stack.id": "id-deploy",
+              "com.docker.stack.namespace": "deploy"
+            },
+            "Privileges": {
+              "CredentialSpec": null,
+              "SELinuxContext": null,
+              "NoNewPrivileges": false
+            }
+          },
+          "Resources": {},
+          "Placement": {},
+          "Networks": [
+            {
+              "Target": "deploy_default",
+              "Aliases": [
+                "bare"
+              ]
+            }
+          ],
+          "ForceUpdate": 0
+        },
+        "Mode": {
+          "Replicated": {
+            "Replicas": 1
+          }
+        },
+        "EndpointSpec": {}
+      }
+    },
+    {
+      "Name": "deploy_legacy",
+      "Short": "legacy",
+      "ImageAsWritten": "img:1",
+      "Spec": {
+        "Name": "deploy_legacy",
+        "Labels": {
+          "bayplan.stack.id": "id-deploy",
+          "com.docker.stack.image": "img:1",
+          "com.docker.stack.namespace": "deploy"
+        },
+        "TaskTemplate": {
+          "ContainerSpec": {
+            "Image": "img:1",
+            "Labels": {
+              "bayplan.stack.id": "id-deploy",
+              "com.docker.stack.namespace": "deploy"
+            },
+            "Privileges": {
+              "CredentialSpec": null,
+              "SELinuxContext": null,
+              "NoNewPrivileges": false
+            }
+          },
+          "Resources": {},
+          "RestartPolicy": {
+            "Condition": "on-failure",
+            "MaxAttempts": 5
+          },
+          "Placement": {},
+          "Networks": [
+            {
+              "Target": "deploy_default",
+              "Aliases": [
+                "legacy"
+              ]
+            }
+          ],
+          "ForceUpdate": 0
+        },
+        "Mode": {
+          "Replicated": {
+            "Replicas": 1
+          }
+        },
+        "EndpointSpec": {}
+      }
+    }
+  ]
+}
