@@ -20,6 +20,7 @@ export type StackCheck = components["schemas"]["StackCheckBody"];
 export type StackProblem = components["schemas"]["StackProblemBody"];
 export type StackCheckInput = components["schemas"]["StackCheckRequest"];
 export type StackVariable = components["schemas"]["StackVariableBody"];
+export type StackRender = components["schemas"]["StackRenderBody"];
 
 // The query key of an environment's stacks list, and of every read that extends it: one stack's
 // page is under it, so a change to the list refreshes the page too.
@@ -325,5 +326,48 @@ export async function revealVariable(
   } catch (e) {
     // A network failure has no status.
     throw e instanceof RevealRequestError ? e : new RevealRequestError(0);
+  }
+}
+
+// RenderRequestError is a render the server refused or that got no answer. The status is 0 when
+// the server could not be reached; 422 with the type stack_invalid means the working copy has
+// errors, so there is no stack to render yet; 429 check_busy means two checks are already running.
+export class RenderRequestError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  constructor(status: number, type?: string) {
+    super(`POST render failed (${status})`);
+    this.name = "RenderRequestError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+// renderStack asks for the stack as it will be deployed: the working copy with its variables
+// filled in and its images shown as the pins they will run, every secret as <hidden>. It is a
+// plain function and not a query: the answer is the first full view of the resolved values, so it
+// is held in component state and never enters the query cache. It reads and writes nothing on the
+// server, so it is safe to repeat; it is never retried, because the pane asks again when the copy
+// changes.
+export async function renderStack(
+  envId: string,
+  stackId: string,
+  copy: StackCheckInput,
+  signal?: AbortSignal,
+): Promise<StackRender> {
+  try {
+    const res = await api.POST("/api/env/{envId}/stacks/{stackId}/render", {
+      params: { path: { envId, stackId } },
+      body: copy,
+      signal,
+    });
+    if (!res.data) {
+      const problem = readProblem(res.error, res.response);
+      throw new RenderRequestError(problem.status, problem.type);
+    }
+    return res.data;
+  } catch (e) {
+    // A network failure has no status.
+    throw e instanceof RenderRequestError ? e : new RenderRequestError(0);
   }
 }

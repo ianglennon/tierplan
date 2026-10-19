@@ -12,6 +12,7 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -52,6 +53,8 @@ interface Server {
   discard: () => Response | Promise<Response>;
   // The answer to a check of the working copy (plan 07-06).
   check: (body: Record<string, unknown>) => Response | Promise<Response>;
+  // The answer to a render of the working copy (plan 07-13).
+  render: (body: Record<string, unknown>) => Response | Promise<Response>;
 }
 
 let server: Server;
@@ -89,6 +92,7 @@ beforeEach(() => {
       }),
     discard: () => new Response(null, { status: 204 }),
     check: () => Response.json({ problems: [], unusedFiles: [] }),
+    render: () => Response.json({ name: "tracer", yaml: "name: tracer\nservices: {}\n" }),
   };
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
@@ -147,6 +151,9 @@ beforeEach(() => {
       if (path === `/api/env/${ENV}/stacks/${STACK}/check` && req.method === "POST") {
         return server.check(entry.body ?? {});
       }
+      if (path === `/api/env/${ENV}/stacks/${STACK}/render` && req.method === "POST") {
+        return server.render(entry.body ?? {});
+      }
       return Response.json({}, { status: 404 });
     }),
   );
@@ -165,7 +172,7 @@ function mount(
   file?: string,
   onFileChange?: (path: string | undefined) => void,
   history = createMemoryHistory({ initialEntries: ["/"] }),
-  pane?: "files" | "variables",
+  pane?: "files" | "variables" | "rendered",
   onPaneChange?: (pane: "files" | "variables" | "rendered") => void,
 ) {
   const root = createRootRoute({
@@ -1462,5 +1469,133 @@ describe("variables and the editor", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Used in 1 place" }));
     fireEvent.click(screen.getByRole("link", { name: "compose.yaml:5" }));
     expect(onPaneChange).toHaveBeenCalledWith("files", "compose.yaml");
+  });
+});
+
+// The Rendered pane (plan 07-13, STK-04, D-18): the stack as it will be deployed, from the working
+// copy as it stands, beside the Files and Variables panes of the same page.
+describe("the Rendered pane", () => {
+  type PaneName = "files" | "variables" | "rendered";
+
+  // A page whose panes follow the tabs, as the address does in the app.
+  function mountHosted(initial: PaneName) {
+    function Host() {
+      const [pane, setPane] = useState<PaneName>(initial);
+      return <StackEditorPage envId={ENV} stackId={STACK} pane={pane} onPaneChange={setPane} />;
+    }
+    const root = createRootRoute({
+      component: () => (
+        <TooltipProvider>
+          <Outlet />
+          <Toaster />
+        </TooltipProvider>
+      ),
+    });
+    const router = createRouter({
+      routeTree: root.addChildren([
+        createRoute({ getParentRoute: () => root, path: "/", component: Host }),
+      ]),
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+  }
+
+  const renders = () => server.sent.filter((s) => s.path.endsWith("/render"));
+  const tab = (name: string) => screen.getByRole("tab", { name });
+  const goTo = (name: string) => {
+    fireEvent.mouseDown(tab(name));
+    fireEvent.click(tab(name));
+  };
+
+  it("is a third pane, and renders nothing until it is opened", async () => {
+    mountHosted("files");
+    await ready();
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
+      "Files",
+      "Variables",
+      "Rendered",
+    ]);
+    expect(renders()).toHaveLength(0);
+
+    goTo("Rendered");
+    const box = await screen.findByRole("textbox", { name: "Rendered stack, read only" });
+    expect(box.getAttribute("aria-readonly")).toBe("true");
+    expect(editorText()).toBe("name: tracer\nservices: {}\n");
+    expect(renders()).toHaveLength(1);
+    expect(screen.queryByTestId("stack-file-editor")).toBeNull();
+  });
+
+  it("renders the working copy as it stands, unsaved edits and all", async () => {
+    mountHosted("files");
+    await ready();
+    typeIntoEditor(`${COMPOSE}# edited\n`);
+    goTo("Rendered");
+    await screen.findByRole("textbox", { name: "Rendered stack, read only" });
+    expect(renders()[0]?.body).toEqual({
+      files: [{ path: "compose.yaml", content: `${COMPOSE}# edited\n`, secret: false }],
+      vars: [],
+    });
+    // The render is a view: the page sent no save for it.
+    expect(puts()).toHaveLength(0);
+  });
+
+  it("renders again after a save", async () => {
+    mountHosted("rendered");
+    await screen.findByRole("textbox", { name: "Rendered stack, read only" });
+    expect(renders()).toHaveLength(1);
+    server.render = () => Response.json({ name: "tracer", yaml: "name: tracer\n# after save\n" });
+    fireEvent.click(saveButton());
+    await screen.findByText("Saved the draft of tracer.");
+    await waitFor(() => expect(renders()).toHaveLength(2));
+    await waitFor(() => expect(editorText()).toBe("name: tracer\n# after save\n"));
+  });
+
+  it("is read only, and open to a Viewer", async () => {
+    server.role = "viewer";
+    mountHosted("rendered");
+    expect(await screen.findByRole("textbox", { name: "Rendered stack, read only" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Save draft" })).toBeNull();
+    expect(screen.getByText("You can read this stack's files but not change them.")).toBeTruthy();
+  });
+
+  it("says the stack can't be rendered yet, and Show problems opens the Files pane with the Problems panel open", async () => {
+    server.render = () =>
+      Response.json(
+        { type: "stack_invalid", title: "x", status: 422, detail: "d" },
+        { status: 422 },
+      );
+    // Only a warning: the panel does not open by itself, so what opens it is the button.
+    server.check = () =>
+      Response.json({
+        problems: [
+          {
+            severity: "warning",
+            code: "moving_tag",
+            message: "web uses a moving tag.",
+            file: "compose.yaml",
+            line: 3,
+            col: 12,
+            endLine: 3,
+            endCol: 20,
+          },
+        ],
+        unusedFiles: [],
+      });
+    mountHosted("rendered");
+    expect(await screen.findByText("Can't render the stack yet")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Show problems" }));
+
+    await ready();
+    const header = await screen.findByRole("button", { name: /Problems/ });
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      screen.getByRole("button", {
+        name: "Warning: web uses a moving tag., compose.yaml line 3",
+      }),
+    ).toBeTruthy();
   });
 });

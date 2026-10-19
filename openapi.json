@@ -11817,6 +11817,24 @@
         ],
         "type": "object"
       },
+      "StackRenderBody": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "The stack's name, which names the downloaded file",
+            "type": "string"
+          },
+          "yaml": {
+            "description": "The compose file after variables and env_file are filled in, each service's image shown as the pin it will run (tag@sha256:..., or the plain reference with a trailing comment when it will be looked up at the next deploy). Every secret value is \u003chidden\u003e",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "yaml"
+        ],
+        "type": "object"
+      },
       "StackVariableBody": {
         "additionalProperties": false,
         "properties": {
@@ -21290,6 +21308,77 @@
           }
         },
         "summary": "Save a stack's draft",
+        "tags": [
+          "stacks"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/render": {
+      "post": {
+        "description": "Answers the stack as it will be deployed: the files and variables in the body, as the editor holds them, with every variable and env_file filled in and each service's image shown as the digest it will run. A service whose image text is unchanged since the last successful deploy shows its pinned tag@sha256 reference; any other image is shown as written with a trailing comment, since the deploy looks it up. Every secret variable value and secret file content is \u003chidden\u003e. The render is a view: it never changes the stack's files, and writes nothing and sends nothing to an engine. It runs the same check as POST .../check, shares its limit of two running per user (429 check_busy), and answers 422 stack_invalid, with each error in errors[], when the check found an error. The answer is never cached. Needs stacks.read (Viewer).",
+        "operationId": "renderStack",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StackCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackRenderBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Render a stack's working copy",
         "tags": [
           "stacks"
         ]

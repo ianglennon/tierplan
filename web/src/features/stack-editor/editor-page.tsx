@@ -38,6 +38,7 @@ import { EditorFooter } from "@/features/service-editor/editor-footer";
 import { FileEditor, type FileEditorHandle } from "@/features/stack-editor/file-editor";
 import { FileRail } from "@/features/stack-editor/file-rail";
 import { ProblemsPanel } from "@/features/stack-editor/problems-panel";
+import { RenderedView } from "@/features/stack-editor/rendered-view";
 import { SaveStatus } from "@/features/stack-editor/save-status";
 import { useStackCheck } from "@/features/stack-editor/use-stack-check";
 import type { VarName } from "@/features/stack-editor/var-completion";
@@ -61,8 +62,7 @@ export type EditorPane = "files" | "variables" | "rendered";
 interface StackEditorPageProps {
   envId: string;
   stackId: string;
-  // The pane the address names. Files and Variables exist so far; Rendered arrives with its plan,
-  // and until then it opens Files.
+  // The pane the address names: Files (the default), Variables or Rendered.
   pane?: EditorPane;
   // What to do to change the pane in the address, and with it the file when the change opens one
   // (a "Used in" link): both in one move, so neither undoes the other.
@@ -102,7 +102,7 @@ export function StackEditorPage({
   onFileChange,
 }: StackEditorPageProps) {
   const t = useT();
-  const activePane: EditorPane = pane === "variables" ? "variables" : "files";
+  const activePane: EditorPane = pane === "variables" || pane === "rendered" ? pane : "files";
   const mac = isMacPlatform();
   const canEdit = usePermission("stacks.update", envId);
   const canReveal = usePermission("secrets.reveal", envId);
@@ -121,6 +121,10 @@ export function StackEditorPage({
   const [conflict, setConflict] = useState<Conflict | null>(null);
   const [discardOpen, setDiscardOpen] = useState(false);
   const [discardError, setDiscardError] = useState<string | null>(null);
+  // Saves in this visit: the Rendered pane renders again after each one.
+  const [saveCount, setSaveCount] = useState(0);
+  // "Show problems" in the Rendered pane opens the Problems panel of the Files pane it moves to.
+  const [showProblems, setShowProblems] = useState(false);
   const loaded = useRef(false);
   const copyRef = useRef(copy);
   copyRef.current = copy;
@@ -191,6 +195,12 @@ export function StackEditorPage({
       dispatch({ type: "select", path: urlFile });
     }
   }, [urlFile, copyLoaded]);
+
+  // The panel is opened for the one visit to the Files pane that "Show problems" asked for; after
+  // that it stays as the person leaves it.
+  useEffect(() => {
+    if (activePane === "files") setShowProblems(false);
+  }, [activePane]);
 
   const dirty = copy.loaded && isDirty(saved, copy);
   const dirtyRef = useRef(dirty);
@@ -294,6 +304,7 @@ export function StackEditorPage({
     setBase({ version: answer.version, savedAt: answer.savedAt, savedBy: answer.savedBy });
     if (answer.changed) setSavedChange(true);
     setSaveError(null);
+    setSaveCount((n) => n + 1);
     check.runNow();
     toastSuccess(t("stackEditor.save.toast", { name }));
   }
@@ -405,9 +416,23 @@ export function StackEditorPage({
           <TabsTrigger value="variables" className="max-md:h-11">
             {t("stackEditor.panes.variables")}
           </TabsTrigger>
+          <TabsTrigger value="rendered" className="max-md:h-11">
+            {t("stackEditor.panes.rendered")}
+          </TabsTrigger>
         </TabsList>
       </Tabs>
-      {activePane === "variables" ? (
+      {activePane === "rendered" ? (
+        <RenderedView
+          envId={envId}
+          stackId={stackId}
+          copy={copy}
+          saveCount={saveCount}
+          onShowProblems={() => {
+            setShowProblems(true);
+            onPaneChange?.("files");
+          }}
+        />
+      ) : activePane === "variables" ? (
         <VariablesTable
           ref={variablesPane}
           vars={copy.vars}
@@ -483,6 +508,7 @@ export function StackEditorPage({
                 checking={check.checking}
                 failed={check.failed}
                 checked={check.checked}
+                initiallyOpen={showProblems}
                 onOpen={openProblem}
               />
             ) : null}

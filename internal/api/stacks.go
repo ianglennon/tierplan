@@ -195,7 +195,11 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 		})
 
 	registerStackDraft(r, d)
-	registerStackCheck(r, d)
+	// A render is a check of the working copy followed by a view of what it loaded, so the two
+	// share one limit of checks running per user.
+	checkLimiter := &streamLimiter{max: maxChecksPerUser, open: map[string]int{}}
+	registerStackCheck(r, d, checkLimiter)
+	registerStackRender(r, d, checkLimiter)
 	registerStackVariables(r, d)
 	registerStackDeploy(r, d)
 }

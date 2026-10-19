@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/distribution/reference"
-
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/registry"
 	"github.com/ianglennon/bayplan/internal/stacks"
@@ -224,20 +222,7 @@ func registryHost(text string) string {
 // equal, or they are the same after docker's normalisation (docker.io/library/ and an omitted
 // :latest). A stored pin is spelled the way docker spells a reference, a compose file as its
 // author wrote it.
-func sameImageText(a, b string) bool {
-	if a == b {
-		return true
-	}
-	na, err := reference.ParseNormalizedNamed(a)
-	if err != nil {
-		return false
-	}
-	nb, err := reference.ParseNormalizedNamed(b)
-	if err != nil {
-		return false
-	}
-	return reference.TagNameOnly(na).String() == reference.TagNameOnly(nb).String()
-}
+func sameImageText(a, b string) bool { return stacks.SameImageText(a, b) }
 
 // placeProblems gives each problem about a key of the compose file the line and column of that
 // key, so the editor and the review can mark it. A problem whose key the file does not have, or a

@@ -3,7 +3,11 @@
 
 package stacks
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/distribution/reference"
+)
 
 // PinAction is what a deploy does about the image of one service (D-15).
 type PinAction string
@@ -78,4 +82,23 @@ func DecidePin(in PinInput) PinDecision {
 		return PinDecision{Action: PinKeep, Ref: in.Stored.Image}
 	}
 	return PinDecision{Action: PinResolve}
+}
+
+// SameImageText reports whether two image references name the same thing as text: they are equal,
+// or they are the same normalised reference once an untagged name gets its implicit :latest, so
+// docker.io/library/nginx:1.27 and nginx:1.27 are one text. A digest is part of the text, and a
+// reference that does not parse is only ever equal to itself.
+func SameImageText(a, b string) bool {
+	if a == b {
+		return true
+	}
+	na, err := reference.ParseNormalizedNamed(a)
+	if err != nil {
+		return false
+	}
+	nb, err := reference.ParseNormalizedNamed(b)
+	if err != nil {
+		return false
+	}
+	return reference.TagNameOnly(na).String() == reference.TagNameOnly(nb).String()
 }

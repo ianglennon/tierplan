@@ -1,0 +1,24 @@
+{
+  "stackRendered": {
+    "title": "Rendered stack",
+    "helper": "The compose file after variables are filled in and images are pinned, as it will be deployed. Hidden values show as <hidden>. Bayplan never changes your compose file.",
+    "label": "Rendered stack, read only",
+    "loading": "Rendering…",
+    "refreshing": "Updating…",
+    "copy": "Copy",
+    "copied": "Copied",
+    "download": "Download",
+    "invalid": {
+      "title": "Can't render the stack yet",
+      "body": "Fix the errors in the compose file first. The rendered stack shows here once it is valid.",
+      "show": "Show problems"
+    },
+    "failed": {
+      "title": "Couldn't render the stack",
+      "body": "Check the connection and try again.",
+      "busy": "Too many checks are running. Try again in a moment.",
+      "retry": "Retry"
+    },
+    "stale": "Couldn't update the rendered stack. This is the last one that rendered."
+  }
+}

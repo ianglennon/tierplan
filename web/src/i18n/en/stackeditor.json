@@ -3,7 +3,8 @@
     "panes": {
       "label": "Editor panes",
       "files": "Files",
-      "variables": "Variables"
+      "variables": "Variables",
+      "rendered": "Rendered"
     },
     "loading": "Loading the draft",
     "error": {

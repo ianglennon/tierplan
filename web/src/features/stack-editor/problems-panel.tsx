@@ -21,6 +21,8 @@ interface ProblemsPanelProps {
   failed: boolean;
   // The server has answered at least once. Until then the header has nothing to count.
   checked?: boolean;
+  // Open when it first appears, as when a person asked to see the problems.
+  initiallyOpen?: boolean;
   // Open the file at the problem's line and put the cursor there.
   onOpen: (problem: StackProblem) => void;
 }
@@ -35,12 +37,13 @@ export function ProblemsPanel({
   checking,
   failed,
   checked = true,
+  initiallyOpen = false,
   onOpen,
 }: ProblemsPanelProps) {
   const t = useT();
   const errors = problems.filter((p) => p.severity === "error").length;
   const warnings = problems.length - errors;
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initiallyOpen);
   const autoOpened = useRef(false);
 
   // The first error opens the panel once. After that the person's choice stands.

@@ -11,6 +11,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stacks"
 )
 
@@ -78,8 +79,7 @@ const maxChecksPerUser = 2
 // problemCheckBusy is the 429 for a third check of one user.
 const problemCheckBusy = "check_busy"
 
-func registerStackCheck(r *httpx.Router, d StacksDeps) {
-	checkLimiter := &streamLimiter{max: maxChecksPerUser, open: map[string]int{}}
+func registerStackCheck(r *httpx.Router, d StacksDeps, checkLimiter *streamLimiter) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "checkStack", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/check",
 		Summary: "Check a stack's working copy",
@@ -96,36 +96,62 @@ func registerStackCheck(r *httpx.Router, d StacksDeps) {
 		})
 }
 
-// checkStack runs stacks.Check over the working copy in the request. It is pure: the only reads
-// are the stack and its saved draft, the second to fill a secret the browser never held.
-func checkStack(ctx context.Context, d StacksDeps, lim *streamLimiter, in *StackCheckInput) (*StackCheckOutput, error) {
+// checkedCopy is a stack's working copy after the check: the stack, the working copy built from
+// the request and the saved draft, and what stacks.Check found in it.
+type checkedCopy struct {
+	stack stackops.Stack
+	copy  stacks.WorkingCopy
+	res   stacks.CheckResult
+}
+
+// runStackCheck takes one of the user's check slots, reads the stack and its saved draft (to fill
+// a secret the browser never held), builds the working copy from the request and runs
+// stacks.Check over it. The slot is held until release is called, which the caller must do once
+// it has finished with the result. It is pure: nothing is written and no engine is called. The
+// check route and the render route share it, and so share the two-checks-per-user limit.
+func runStackCheck(ctx context.Context, d StacksDeps, lim *streamLimiter, stackID string, body StackCheckRequest) (c checkedCopy, release func(), err error) {
 	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
 	if p == nil || env == nil {
-		return nil, huma.Error500InternalServerError("internal error")
+		return c, nil, huma.Error500InternalServerError("internal error")
 	}
 	release, ok := lim.acquire(string(p.Type) + ":" + p.ID)
 	if !ok {
-		return nil, httpx.Problem(http.StatusTooManyRequests, problemCheckBusy,
+		return c, nil, httpx.Problem(http.StatusTooManyRequests, problemCheckBusy,
 			"You already have two checks running. The editor checks again when you stop typing.")
 	}
-	defer release()
+	fail := func(err error) (checkedCopy, func(), error) {
+		release()
+		return checkedCopy{}, nil, err
+	}
 	repo := d.repo()
-	st, err := repo.Stack(ctx, env.ID, in.StackID)
+	st, err := repo.Stack(ctx, env.ID, stackID)
 	if err != nil {
-		return nil, stackLookupProblem(d, env.ID, err)
+		return fail(stackLookupProblem(d, env.ID, err))
 	}
 	saved, err := repo.Draft(ctx, st.ID)
 	if err != nil {
-		return nil, stackLookupProblem(d, env.ID, err)
+		return fail(stackLookupProblem(d, env.ID, err))
 	}
-	wc, err := draftCopy(StackDraftSaveRequest{Files: in.Body.Files, Vars: in.Body.Vars}, saved.Copy)
+	wc, err := draftCopy(StackDraftSaveRequest{Files: body.Files, Vars: body.Vars}, saved.Copy)
 	if err != nil {
-		return nil, err
+		return fail(err)
 	}
 	if d.OnCheck != nil {
 		d.OnCheck(ctx)
 	}
 	res := stacks.Check(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: wc, Deadline: d.CheckDeadline})
+	return checkedCopy{stack: st, copy: wc, res: res}, release, nil
+}
+
+// checkStack runs stacks.Check over the working copy in the request. It is pure: the only reads
+// are the stack and its saved draft, the second to fill a secret the browser never held.
+func checkStack(ctx context.Context, d StacksDeps, lim *streamLimiter, in *StackCheckInput) (*StackCheckOutput, error) {
+	c, release, err := runStackCheck(ctx, d, lim, in.StackID, in.Body)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	res := c.res
 
 	body := StackCheckBody{Problems: make([]StackProblemBody, 0, len(res.Problems)), UnusedFiles: res.UnusedFiles}
 	if body.UnusedFiles == nil {
