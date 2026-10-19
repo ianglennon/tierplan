@@ -5,6 +5,7 @@ package stacks_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -131,5 +132,48 @@ func TestProblemsCountSortAndDoNotAlias(t *testing.T) {
 	}
 	if in[0].File != "b.env" || in[1].Line != 9 {
 		t.Error("Sorted changed its receiver")
+	}
+}
+
+func TestCheckListsTheFilesNobodyRefersTo(t *testing.T) {
+	t.Parallel()
+	in := stacks.CheckInput{Name: "probe", Target: stacks.TargetSwarm, Copy: stacks.WorkingCopy{Files: []stacks.File{
+		{Path: "compose.yaml", Content: []byte("services:\n  web:\n    image: x\n    env_file: app.env\n")},
+		{Path: "app.env"},
+		{Path: "notes.txt"},
+		{Path: "config/old.conf"},
+	}}}
+	res := stacks.Check(context.Background(), in)
+	if len(res.Problems) != 0 {
+		t.Fatalf("problems = %+v", res.Problems)
+	}
+	if want := []string{"config/old.conf", "notes.txt"}; !slices.Equal(res.UnusedFiles, want) {
+		t.Errorf("unused = %v, want %v (compose.yaml and a referenced file are never listed)", res.UnusedFiles, want)
+	}
+}
+
+func TestCheckStopsBeforeTheLoadOnABlockingPrescanProblem(t *testing.T) {
+	t.Parallel()
+	// The file also has a schema error. A file that names a file of the server is refused for that
+	// alone: the loader is not given it, so nothing else about it is reported.
+	res := checkOf(t, "include: [/etc/hostname]\nservices:\n  web:\n    imag: x\n")
+	p := onlyProblem(t, res)
+	if p.Code != stacks.CodeIncludeUnsupported || res.Loaded != nil {
+		t.Errorf("problem = %+v loaded = %v, want only include_unsupported and no load", p, res.Loaded)
+	}
+}
+
+func TestCheckFilesStillListedUnusedWhenTheLoadWasStopped(t *testing.T) {
+	t.Parallel()
+	in := stacks.CheckInput{Name: "probe", Target: stacks.TargetSwarm, Copy: stacks.WorkingCopy{Files: []stacks.File{
+		{Path: "compose.yaml", Content: []byte("services:\n  web:\n    image: x\n    env_file: gone.env\n")},
+		{Path: "other.env"},
+	}}}
+	res := stacks.Check(context.Background(), in)
+	if len(res.Problems) != 1 || res.Problems[0].Code != stacks.CodeFileMissing {
+		t.Fatalf("problems = %+v", res.Problems)
+	}
+	if !slices.Equal(res.UnusedFiles, []string{"other.env"}) {
+		t.Errorf("unused = %v, want [other.env]", res.UnusedFiles)
 	}
 }
