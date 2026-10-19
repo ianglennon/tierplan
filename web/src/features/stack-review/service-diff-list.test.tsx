@@ -176,3 +176,77 @@ describe("expanding a row", () => {
     expect(screen.queryByText("No changes")).toBeNull();
   });
 });
+
+// The services a recreate carries with it (plan 07-22, STK-06): a standalone deploy that recreates a service
+// recreates what shares its network, processes or volumes and restarts what depends on it with restart: true.
+// Their rows say so and why; they are not changes, so they expand to nothing and count no settings.
+
+describe("the services a recreate carries with it", () => {
+  const carried = (name: string, change: "recreated" | "restarted", because: string) =>
+    service({ name, change, because, current: null, next: null, settings: 0 });
+
+  it("shows a recreated service with the glyph, the word, the name in mono and why", () => {
+    mount([service({ name: "web" }), carried("sidecar", "recreated", "web")]);
+    const row = rowOf("sidecar");
+    expect(within(row).getByText("Recreated")).toBeTruthy();
+    expect(screen.getByText("sidecar").className).toContain("font-mono");
+    expect(
+      within(row).getByText(
+        "Recreated with web, whose network, processes or volumes it shares. Settings and pinned image stay the same.",
+      ),
+    ).toBeTruthy();
+    expect(row.querySelector("svg.lucide-rotate-ccw")).not.toBeNull();
+  });
+
+  it("shows a restarted service with the word, the name and why", () => {
+    mount([service({ name: "web" }), carried("restarter", "restarted", "web")]);
+    const row = rowOf("restarter");
+    expect(within(row).getByText("Restarted")).toBeTruthy();
+    expect(
+      within(row).getByText(
+        "Restarted because web is recreated (depends_on with restart: true). Same container, settings and image.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("expands to nothing and counts no settings", () => {
+    mount([service({ name: "web" }), carried("sidecar", "recreated", "web")]);
+    const row = rowOf("sidecar");
+    expect(within(row).queryByRole("button")).toBeNull();
+    expect(within(row).queryByText(/settings? changed/)).toBeNull();
+    expect(screen.queryByRole("table", { name: "Changes to sidecar" })).toBeNull();
+  });
+
+  it("follows the changed services and comes before the removed ones, whatever order it arrived in", () => {
+    mount([
+      service({ name: "old", change: "removed", next: null }),
+      carried("restarter", "restarted", "web"),
+      carried("sidecar", "recreated", "web"),
+      service({ name: "web" }),
+    ]);
+    const names = within(screen.getByRole("list")).getAllByRole("listitem");
+    expect(names.map((li) => li.querySelector("[data-slot=service-name]")?.textContent)).toEqual([
+      "web",
+      "restarter",
+      "sidecar",
+      "old",
+    ]);
+  });
+
+  it("is not counted when it decides whether the changed rows open", () => {
+    mount([
+      service({ name: "a" }),
+      service({ name: "b" }),
+      service({ name: "c" }),
+      carried("d", "recreated", "a"),
+      carried("e", "restarted", "a"),
+    ]);
+    expect(within(rowOf("a")).getByRole("button").getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("draws the name that carries it as text", () => {
+    mount([carried("sidecar", "recreated", "<b>web</b>")]);
+    expect(rowOf("sidecar").querySelector("b")).toBeNull();
+    expect(within(rowOf("sidecar")).getByText(/<b>web<\/b>/)).toBeTruthy();
+  });
+});
