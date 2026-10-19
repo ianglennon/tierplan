@@ -15,6 +15,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
+	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/stacks/convert"
@@ -109,6 +110,8 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 	final := itemEnd{state: jobs.ItemDone}
 	var detail string
 	var events *composeEvents
+	// cleanup, once the SDK's up has begun, removes what it left behind when the deploy stops.
+	var cleanup func()
 	defer func() {
 		if in.OnDone != nil {
 			in.OnDone(res)
@@ -167,6 +170,11 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 			}
 		}
 		prog.rest(later.state, later.code, later.message)
+		// What this deploy created and never started, and the networks nothing uses, go again; nothing else
+		// is touched, no volume is removed and nothing is put back (D-14, D-20).
+		if cleanup != nil {
+			cleanup()
+		}
 		return res
 	}
 	fail := func(item, code, name string) DeployResult { return failWith(item, code, name, "") }
@@ -177,6 +185,14 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 
 	// 1. Check: the stack again, the host-access policy for the caller, the objects, and what the host holds.
 	r.Update(ItemCheck, func(it *jobs.Item) { it.State = jobs.ItemRunning })
+	// A host its owner made read-only is the first thing to learn: nothing is asked of it or of a registry.
+	if err := d.writable(ctx, in.EnvID, in.NodeID); err != nil {
+		if errors.Is(err, envs.ErrHostReadOnly) {
+			return fail(ItemCheck, CodeHostReadOnly, "")
+		}
+		d.log().Warn("a standalone host could not be written to before a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
+		return failErr(ItemCheck, codeOf(ctx, err), "", err)
+	}
 	checked := stacks.Check(ctx, stacks.CheckInput{Name: in.Stack.Name, Target: stacks.TargetStandalone, Copy: in.Copy})
 	if checked.Loaded == nil || checked.Problems.Errors() > 0 {
 		d.log().Warn("a standalone stack no longer passes its check at deploy time", "environment", in.EnvID, "stack", in.Stack.Name)
@@ -325,6 +341,9 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 	if timeout <= 0 {
 		timeout = DefaultConvergeTimeout
 	}
+	cleanup = func() {
+		d.cleanupStandalone(ctx, in.EnvID, in.NodeID, in.Stack, live.Containers, netNames, &res, prog)
+	}
 	err = d.Aggregator.WriteOnNode(ctx, in.EnvID, in.NodeID, func(c *dockerx.Client) error {
 		return d.up(ctx, c, project, dockerx.ComposeUpOptions{WaitTimeout: timeout}, events.on)
 	})
@@ -343,6 +362,8 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 		}
 		return failErr(item, codeOf(ctx, err), name, err)
 	}
+
+	cleanup = nil
 
 	// 4. Done: the networks and volumes exist, every service was brought to what the file says. What the
 	// SDK changed is known from the hashes read before it ran.

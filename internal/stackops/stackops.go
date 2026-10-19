@@ -103,6 +103,14 @@ func (d Deps) up(ctx context.Context, c *dockerx.Client, p *types.Project, o doc
 	return c.ComposeUp(ctx, p, o, on)
 }
 
+// writable asks whether the node can be written to (Deps.Writable).
+func (d Deps) writable(ctx context.Context, envID, nodeID string) error {
+	if d.Writable != nil {
+		return d.Writable(ctx, envID, nodeID)
+	}
+	return d.Aggregator.WriteOnNode(ctx, envID, nodeID, func(*dockerx.Client) error { return nil })
+}
+
 func (d Deps) log() *slog.Logger {
 	if d.Log == nil {
 		return slog.Default()

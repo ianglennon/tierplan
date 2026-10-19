@@ -626,8 +626,10 @@ func TestADeployToAStandaloneHostRunsTheComposeEngineAndIsAudited(t *testing.T) 
 	if up.calls != 1 || up.project == nil || !strings.Contains(up.project.Services["web"].Image, "@sha256:") {
 		t.Errorf("the Compose engine ran %d times with %+v, want once with a pinned image", up.calls, up.project)
 	}
-	if w := f.fake.Writes(); len(w) != 0 {
-		t.Errorf("engine writes = %v, want none from the stand-in", w)
+	// The only write the engine saw is Bayplan's own pull of the pinned image (plan 07-21); the Compose
+	// engine's own writes are the stand-in's and none reached it.
+	if w := f.fake.Writes(); len(w) != 1 || !strings.HasPrefix(w[0], "POST /images/create?") {
+		t.Errorf("engine writes = %v, want the pull of the image alone", w)
 	}
 	rec = operator.do(http.MethodGet, "stacks/"+st.ID, "")
 	if got := answerOf[stackAnswer](t, rec); got.State != "deployed" || got.LastDeployedBy == "" {

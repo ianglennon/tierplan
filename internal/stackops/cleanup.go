@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"sort"
 	"time"
 
 	"github.com/moby/moby/api/types/swarm"
@@ -29,7 +30,7 @@ const (
 const CodeRemoveFailed = "remove_failed"
 
 func init() {
-	codeMessages[CodeRemoveFailed] = "Bayplan couldn't remove this. It is still on the swarm."
+	codeMessages[CodeRemoveFailed] = "Bayplan couldn't remove this. It is still there."
 }
 
 // write runs one write on a manager, once, on a context the job's cancel cannot reach: the deploy
@@ -183,6 +184,8 @@ const (
 	idCleanNetwork = "clean-network:"
 	idCleanSecret  = "clean-secret:"
 	idCleanConfig  = "clean-config:"
+	// idCleanContainer is a container a standalone deploy that stopped had created and removes again.
+	idCleanContainer = "clean-container:"
 )
 
 // addCleanup adds the step that removes an object this deploy created, under the cleanup step.
@@ -196,6 +199,8 @@ func (p *progress) addCleanup(kind, name string) string {
 		id = idCleanNetwork + name
 	case "secret":
 		id = idCleanSecret + name
+	case "container":
+		id = idCleanContainer + name
 	}
 	p.r.Add(jobs.ItemSpec{ID: id, Label: "Remove " + kind + " " + name, Parent: ItemCleanup, Kind: KindStep})
 	return id
@@ -245,4 +250,69 @@ func (p *progress) objectNoun(name string) string {
 		}
 	}
 	return "secret"
+}
+
+// cleanupStandalone removes what a standalone deploy that stopped (a failure or a cancel in the middle of
+// the SDK's up) created and left behind, and nothing else (D-14, D-20, leave nothing behind). It reads the
+// stack's project again, because the deploy's picture is from before the SDK wrote anything, and removes:
+//
+//   - a container of the stack that was not there before the up and never started (state created): the
+//     container of a service that did not get as far as its start, and the SDK's temporary container of a
+//     recreate, which it names <12 hex>_<name> until the old one is gone;
+//   - a network the deploy meant to create (createdNetworks) that now exists, carries the stack's ID and
+//     nothing is attached to: the engine itself refuses a network that has an endpoint, and that refusal is
+//     the network left in place, named as such.
+//
+// Containers that run, or ran and ended, the containers that were there before, every volume (a volume
+// holds data, and anonymous ones of a container that never started are left with it), and anything of
+// another project stay. It runs on a context the cancel cannot reach, adds a step under the cleanup step for
+// each thing it removes or keeps ("Remove container web-1", labelled Cleaned up), and records them in
+// res.CleanedUp and res.LeftInPlace. A host that cannot be read again is left as it is and the output says
+// so. Nothing is retried.
+func (d Deps) cleanupStandalone(ctx context.Context, envID, nodeID string, stack Stack, before []dockerx.ComposeContainer, createdNetworks []string, res *DeployResult, prog *progress) {
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+	after, err := d.readStandalone(cctx, envID, nodeID, stack.Name)
+	if err != nil {
+		d.log().Warn("could not read a standalone host again to clean up after a deploy that stopped", "environment", envID, "stack", stack.Name, "error", err)
+		prog.line("Could not read the host again, so nothing the deploy created was cleaned up")
+		return
+	}
+	had := make(map[string]bool, len(before))
+	for _, c := range before {
+		had[c.ID] = true
+	}
+	var stray []dockerx.ComposeContainer
+	for _, c := range after.Containers {
+		if !had[c.ID] && c.State == "created" && c.Labels[stacks.LabelStackID] == stack.ID {
+			stray = append(stray, c)
+		}
+	}
+	sort.Slice(stray, func(i, j int) bool { return stray[i].Name < stray[j].Name })
+	write := func(fn func(wctx context.Context, c *dockerx.Client) error) error {
+		wctx, wcancel := context.WithTimeout(cctx, writeTimeout)
+		defer wcancel()
+		return d.Aggregator.WriteOnNode(wctx, envID, nodeID, func(c *dockerx.Client) error { return fn(wctx, c) })
+	}
+	for _, c := range stray {
+		item := prog.addCleanup("container", c.Name)
+		prog.startCleanup(item)
+		// No force, and the container's anonymous volumes stay: it never ran, and a volume is never removed.
+		err := write(func(wctx context.Context, cl *dockerx.Client) error {
+			return cl.ContainerRemove(wctx, c.ID, dockerx.RemoveOptions{})
+		})
+		d.afterRemoval(res, prog, item, "container", c.Name, err, false, dockerx.IsNotFound(err))
+	}
+	names := slices.Clone(createdNetworks)
+	sort.Strings(names)
+	for _, name := range names {
+		row, ok := findNetwork(after.Networks, name)
+		if !ok || row.Labels[stacks.LabelStackID] != stack.ID {
+			continue // the up never got as far as this network, or it is not the stack's
+		}
+		item := prog.addCleanup("network", name)
+		prog.startCleanup(item)
+		err := write(func(wctx context.Context, cl *dockerx.Client) error { return cl.NetworkRemove(wctx, row.ID) })
+		d.afterRemoval(res, prog, item, "network", name, err, dockerx.IsNetworkInUse(err), dockerx.IsNotFound(err))
+	}
 }
