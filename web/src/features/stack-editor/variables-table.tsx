@@ -2,7 +2,15 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { Plus, Upload } from "lucide-react";
-import { type FormEvent, type Ref, useId, useMemo, useState } from "react";
+import {
+  type FormEvent,
+  type Ref,
+  useId,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import type { StackVariable } from "@/api/stacks";
 import { Button } from "@/components/ui/button";
@@ -17,7 +25,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Toggle } from "@/components/ui/toggle";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  BulkVariableText,
+  type BulkVariableTextHandle,
+} from "@/features/stack-editor/bulk-variable-text";
 import { ImportEnvDialog } from "@/features/stack-editor/import-env-dialog";
 import { type ResolveState, VariableRow } from "@/features/stack-editor/variable-row";
 import type { ImportedVar, ImportMode, WorkingVar } from "@/features/stack-editor/working-copy";
@@ -88,6 +101,7 @@ function rowsOf(vars: readonly WorkingVar[], resolved: readonly StackVariable[] 
 // Secret switch and the value a deploy will use, which the server computes. A variable the files
 // use has a read-only name; one they do not carries "Unused" and can be removed.
 export function VariablesTable({
+  ref,
   vars,
   resolved,
   loading = false,
@@ -103,6 +117,7 @@ export function VariablesTable({
   onSecret,
   onRemove,
   onImport,
+  onBulk,
 }: VariablesTableProps) {
   const t = useT();
   const formId = useId();
@@ -110,6 +125,8 @@ export function VariablesTable({
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+  const [bulk, setBulk] = useState(false);
+  const bulkText = useRef<BulkVariableTextHandle>(null);
   const rows = useMemo(() => rowsOf(vars, resolved), [vars, resolved]);
   const state: ResolveState = failed ? "failed" : resolved ? "ok" : "pending";
 
@@ -136,7 +153,31 @@ export function VariablesTable({
     setAdding(false);
   }
 
-  const empty = !loading && rows.length === 0;
+  const empty = !loading && !bulk && rows.length === 0;
+
+  // Back to the table, or off the pane, from the text: the text has to parse first (D-04).
+  useImperativeHandle(ref, () => ({
+    leave: () => !bulk || (bulkText.current?.leave() ?? true),
+  }));
+
+  function toggleBulk(next: boolean) {
+    if (!next && bulkText.current?.leave() === false) return;
+    setBulk(next);
+  }
+
+  const bulkToggle =
+    readOnly || !onBulk ? null : (
+      <Toggle
+        variant="outline"
+        size="sm"
+        pressed={bulk}
+        disabled={loading}
+        onPressedChange={toggleBulk}
+        className="aria-pressed:border-accent-ink aria-pressed:text-accent-ink max-md:h-11"
+      >
+        {t("stackImport.bulk.toggle")}
+      </Toggle>
+    );
 
   // Add variable and Import .env, with the name form of Add. They sit above the table, or in the
   // empty state when there is no row to put them above.
@@ -213,7 +254,12 @@ export function VariablesTable({
 
   return (
     <div className="flex flex-col gap-3">
-      {empty ? null : addControls}
+      {readOnly ? null : (
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          {empty || bulk ? <div /> : addControls}
+          {bulkToggle}
+        </div>
+      )}
       {onImport ? (
         <ImportEnvDialog
           open={importing}
@@ -222,66 +268,70 @@ export function VariablesTable({
           onImport={onImport}
         />
       ) : null}
-      <Table>
-        <TableCaption className="mt-0 mb-3 caption-top text-left text-sm text-muted-foreground">
-          {t("stackVars.caption")}
-        </TableCaption>
-        <TableHeader>
-          <TableRow>
-            <TableHead scope="col">{t("stackVars.columns.name")}</TableHead>
-            <TableHead scope="col">{t("stackVars.columns.value")}</TableHead>
-            <TableHead scope="col">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span
-                    // biome-ignore lint/a11y/noNoninteractiveTabindex: the tooltip must open on keyboard focus (UI-SPEC D-66)
-                    tabIndex={0}
-                    className="rounded-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-                  >
-                    {t("stackVars.columns.secret")}
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent className="max-w-sm">{t("stackVars.secretHelp")}</TooltipContent>
-              </Tooltip>
-            </TableHead>
-            <TableHead scope="col">{t("stackVars.columns.resolved")}</TableHead>
-            <TableHead scope="col">
-              <span className="sr-only">{t("stackVars.columns.actions")}</span>
-            </TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {loading
-            ? Array.from({ length: SKELETON_ROWS }, (_, i) => (
-                // biome-ignore lint/suspicious/noArrayIndexKey: placeholder rows have no identity
-                <TableRow key={i} data-testid="variable-skeleton-row" className="h-12">
-                  <TableCell colSpan={5} className="py-2">
-                    <Skeleton className="h-8 w-full" />
-                  </TableCell>
-                </TableRow>
-              ))
-            : rows.map((r) => (
-                <VariableRow
-                  key={r.name}
-                  name={r.name}
-                  variable={r.variable}
-                  resolved={r.resolved}
-                  resolveState={state}
-                  unused={resolved !== null && (r.resolved ? r.resolved.unused : true)}
-                  readOnly={readOnly}
-                  canReveal={canReveal}
-                  reveal={reveal}
-                  savedHidden={savedHidden?.has(r.name) ?? false}
-                  onOpen={onOpen}
-                  onReset={onReset ? () => onReset(r.name) : undefined}
-                  onSet={(value) => onSet(r.name, value)}
-                  onSecret={(secret) => onSecret(r.name, secret)}
-                  onRemove={() => onRemove(r.name)}
-                  onClear={() => onRemove(r.name)}
-                />
-              ))}
-        </TableBody>
-      </Table>
+      {bulk && onBulk ? (
+        <BulkVariableText ref={bulkText} rows={vars} onApply={onBulk} />
+      ) : (
+        <Table>
+          <TableCaption className="mt-0 mb-3 caption-top text-left text-sm text-muted-foreground">
+            {t("stackVars.caption")}
+          </TableCaption>
+          <TableHeader>
+            <TableRow>
+              <TableHead scope="col">{t("stackVars.columns.name")}</TableHead>
+              <TableHead scope="col">{t("stackVars.columns.value")}</TableHead>
+              <TableHead scope="col">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span
+                      // biome-ignore lint/a11y/noNoninteractiveTabindex: the tooltip must open on keyboard focus (UI-SPEC D-66)
+                      tabIndex={0}
+                      className="rounded-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                    >
+                      {t("stackVars.columns.secret")}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-sm">{t("stackVars.secretHelp")}</TooltipContent>
+                </Tooltip>
+              </TableHead>
+              <TableHead scope="col">{t("stackVars.columns.resolved")}</TableHead>
+              <TableHead scope="col">
+                <span className="sr-only">{t("stackVars.columns.actions")}</span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {loading
+              ? Array.from({ length: SKELETON_ROWS }, (_, i) => (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: placeholder rows have no identity
+                  <TableRow key={i} data-testid="variable-skeleton-row" className="h-12">
+                    <TableCell colSpan={5} className="py-2">
+                      <Skeleton className="h-8 w-full" />
+                    </TableCell>
+                  </TableRow>
+                ))
+              : rows.map((r) => (
+                  <VariableRow
+                    key={r.name}
+                    name={r.name}
+                    variable={r.variable}
+                    resolved={r.resolved}
+                    resolveState={state}
+                    unused={resolved !== null && (r.resolved ? r.resolved.unused : true)}
+                    readOnly={readOnly}
+                    canReveal={canReveal}
+                    reveal={reveal}
+                    savedHidden={savedHidden?.has(r.name) ?? false}
+                    onOpen={onOpen}
+                    onReset={onReset ? () => onReset(r.name) : undefined}
+                    onSet={(value) => onSet(r.name, value)}
+                    onSecret={(secret) => onSecret(r.name, secret)}
+                    onRemove={() => onRemove(r.name)}
+                    onClear={() => onRemove(r.name)}
+                  />
+                ))}
+          </TableBody>
+        </Table>
+      )}
       {empty ? (
         <div className="flex flex-col gap-3 rounded-lg border p-4">
           <div>

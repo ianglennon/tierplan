@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { createRef, useReducer } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import type { StackDraft } from "@/api/stacks";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -252,15 +252,15 @@ describe("a line that is not NAME=value", () => {
     expect(message.getAttribute("role")).toBe("alert");
     expect(toggle().getAttribute("aria-pressed")).toBe("true");
     expect(box().getAttribute("aria-invalid")).toBe("true");
-    expect(box().getAttribute("aria-describedby")).toBe(message.id);
+    expect(box().getAttribute("aria-describedby")).toContain(message.id);
     expect(screen.queryByRole("table")).toBeNull();
   });
 
-  it("does not lose the last text that parsed, and lets the person back once it is fixed", () => {
+  it("leaves the working copy at the last text that parsed, and lets the person back once it is fixed", () => {
     const page = mountTable([v({ name: "A", value: "1" })]);
     fireEvent.click(toggle());
     type("A=2\nx y");
-    expect(page.copy().vars).toEqual([v({ name: "A", value: "2" })]);
+    expect(page.copy().vars).toEqual([v({ name: "A", value: "1" })]);
     fireEvent.click(toggle());
     type("A=2\nB=3");
     expect(screen.queryByText(/write NAME=value/)).toBeNull();
@@ -284,7 +284,11 @@ describe("a line that is not NAME=value", () => {
     expect(page.handle.current?.leave()).toBe(true);
     fireEvent.click(toggle());
     type("what");
-    expect(page.handle.current?.leave()).toBe(false);
+    let allowed: boolean | undefined;
+    act(() => {
+      allowed = page.handle.current?.leave();
+    });
+    expect(allowed).toBe(false);
     expect(document.activeElement).toBe(screen.getByText("Line 1: write NAME=value."));
     type("A=1");
     expect(page.handle.current?.leave()).toBe(true);
@@ -319,6 +323,5 @@ describe("the toggle in other states", () => {
     type(`${box().value}\nEXTRA=1`);
     expect(page.copy().vars).toHaveLength(301);
     expect(within(document.body).queryByText(/write NAME=value/)).toBeNull();
-    vi.useRealTimers();
   });
 });

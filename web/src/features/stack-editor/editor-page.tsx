@@ -41,7 +41,7 @@ import { ProblemsPanel } from "@/features/stack-editor/problems-panel";
 import { SaveStatus } from "@/features/stack-editor/save-status";
 import { useStackCheck } from "@/features/stack-editor/use-stack-check";
 import type { VarName } from "@/features/stack-editor/var-completion";
-import { VariablesTable } from "@/features/stack-editor/variables-table";
+import { VariablesTable, type VariablesTableHandle } from "@/features/stack-editor/variables-table";
 import {
   COMPOSE_FILE,
   emptyWorkingCopy,
@@ -151,6 +151,7 @@ export function StackEditorPage({
     [saved.vars],
   );
   const editor = useRef<FileEditorHandle>(null);
+  const variablesPane = useRef<VariablesTableHandle>(null);
   // A click on a problem: the file to open and where to put the cursor once its editor is there.
   const [jump, setJump] = useState<{ file: string; line: number; col: number } | null>(null);
 
@@ -385,7 +386,14 @@ export function StackEditorPage({
     // The key handler is on the page so it hears the editor's keys as they bubble.
     // biome-ignore lint/a11y/noStaticElementInteractions: a shortcut handler on the container of the editor, which is the focusable element
     <div className="flex flex-col gap-4" onKeyDown={onKeyDown}>
-      <Tabs value={activePane} onValueChange={(next) => onPaneChange?.(next as EditorPane)}>
+      <Tabs
+        value={activePane}
+        onValueChange={(next) => {
+          // Bulk-edited text that does not parse keeps the person on the Variables pane (D-04).
+          if (activePane === "variables" && variablesPane.current?.leave() === false) return;
+          onPaneChange?.(next as EditorPane);
+        }}
+      >
         <TabsList
           variant="line"
           aria-label={t("stackEditor.panes.label")}
@@ -401,6 +409,7 @@ export function StackEditorPage({
       </Tabs>
       {activePane === "variables" ? (
         <VariablesTable
+          ref={variablesPane}
           vars={copy.vars}
           resolved={check.variables}
           loading={!copy.loaded}
@@ -415,6 +424,7 @@ export function StackEditorPage({
           onSet={(varName, value) => dispatch({ type: "setVar", name: varName, value })}
           onSecret={(varName, secret) => dispatch({ type: "setSecret", name: varName, secret })}
           onRemove={(varName) => dispatch({ type: "removeVar", name: varName })}
+          onBulk={(rows) => dispatch({ type: "setVars", vars: rows })}
           onImport={(imported, mode, secret) => {
             dispatch({ type: "importVars", vars: imported, mode, secret });
             toastSuccess(t("stackImport.toast", { count: imported.length }));

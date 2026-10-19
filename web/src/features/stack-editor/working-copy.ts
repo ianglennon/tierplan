@@ -219,7 +219,7 @@ export function workingCopyReducer(state: WorkingCopy, action: WorkingCopyAction
     case "importVars":
       return { ...state, vars: importVars(state.vars, action.vars, action.mode, action.secret) };
     case "setVars":
-      return state;
+      return { ...state, vars: orderedVars(action.vars) };
     case "removeVar":
       return { ...state, vars: state.vars.filter((v) => v.name !== action.name) };
     case "setSecret":

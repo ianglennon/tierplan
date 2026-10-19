@@ -38,6 +38,12 @@
       "submit": "Import variables",
       "pending": "Importing…"
     },
+    "bulk": {
+      "toggle": "Bulk edit as text",
+      "label": "Variables as text",
+      "helper": "Names and values only. Secret values show as <hidden> and stay as they are unless you replace them. Switch back to set which rows are secret.",
+      "error": "Line {{line}}: write NAME=value."
+    },
     "toast_one": "Imported {{count}} variable. Mark the secrets, then save the draft.",
     "toast_other": "Imported {{count}} variables. Mark the secrets, then save the draft."
   }
