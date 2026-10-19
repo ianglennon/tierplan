@@ -658,6 +658,12 @@ func ObjectErrorDetail(err error) string {
 		reason = "it has no content"
 	case errors.Is(err, stacks.ErrObjectTooLarge):
 		reason = "it is over the size the swarm takes"
+		var oe *stacks.ObjectError
+		if errors.As(err, &oe) && oe.Kind == stacks.KindSecret {
+			reason = "it is over 500 KB, the most a swarm secret holds"
+		} else if oe != nil {
+			reason = "it is over 1000 KB, the most a swarm config holds"
+		}
 	case errors.Is(err, stacks.ErrObjectUnsupported):
 		reason = "it sets a driver, which a stack deploy does not apply"
 	}

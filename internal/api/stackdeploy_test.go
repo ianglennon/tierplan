@@ -6,6 +6,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"math/rand/v2"
 	"net/http"
 	"slices"
 	"strconv"
@@ -694,5 +695,48 @@ func TestPolicyIsCheckedAgainUnderTheLock(t *testing.T) {
 	}
 	if row == nil || row.Result != "failure" || row.Details["code"] != "needs_admin" {
 		t.Errorf("stack.deployed = %+v, want a failure with needs_admin", row)
+	}
+}
+
+// A secret a swarm would refuse is refused by the server before anything is sent (plan 07-13 carry-over,
+// D-40): the browser's Upload checks the size too, but a file typed into the editor or sent by another
+// client reaches the same place.
+func TestAnOversizeSecretFileIsRefusedByTheReviewAndTheDeploy(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "big")
+	compose := "services:\n  web:\n    image: nginx:1.27-alpine\n    secrets: [tok]\nsecrets:\n  tok:\n    file: tok.txt\n"
+	// The content is varied: a file of one repeated character is slow to mask (deferred-items.md).
+	body := func(size int) string {
+		cb, _ := json.Marshal(compose)
+		rng := rand.New(rand.NewPCG(7, 11)) //nolint:gosec // a fixed seed gives the same file every run; the content is not a secret
+		content := make([]byte, size)
+		for i := range content {
+			content[i] = "abcdefghijklmnopqrstuvwxyz0123456789"[rng.IntN(36)]
+		}
+		return `{"version":` + itoaT(draftVersion(t, operator, st.ID)) + `,"files":[{"path":"compose.yaml","content":` + string(cb) + `,"secret":false},` +
+			`{"path":"tok.txt","content":"` + string(content) + `","secret":true}],"vars":[]}`
+	}
+	if rec := operator.saveDraft(st.ID, body(520_000)); rec.Code != http.StatusOK {
+		t.Fatalf("save: %d %.200s", rec.Code, rec.Body)
+	}
+	version := draftVersion(t, operator, st.ID)
+
+	rv, code, raw := operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, raw)
+	}
+	p, ok := rv.problem("object_invalid")
+	if !ok || p.Severity != "error" || !strings.Contains(p.Message, "The secret tok cannot be created: it is over 500 KB, the most a swarm secret holds.") {
+		t.Fatalf("problems = %+v, want a blocking object_invalid naming the 500 KB limit", rv.Problems)
+	}
+	rec := operator.deploy(st.ID, `{"draftVersion":`+itoaT(version)+`}`)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "it is over 500 KB, the most a swarm secret holds") {
+		t.Fatalf("deploy: %d %.300s, want 422 naming the limit", rec.Code, rec.Body)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, want none", w)
 	}
 }
