@@ -1396,3 +1396,58 @@ func TestAReadOnlyHostRefusesArchiveBeforeAnyBodyIsRead(t *testing.T) {
 		t.Fatalf("the engine saw %v", got)
 	}
 }
+
+func TestAContainerRenameReachesTheEngineWithNoBody(t *testing.T) {
+	sock := newFakeSocket(t)
+	h := Handler(sock.path, Policy{}, nil)
+	resp := do(t, h, request("POST", "/v1.52/containers/0123456789ab/rename?name=shop-web-1"))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", resp.StatusCode)
+	}
+	if got := sock.writesSeen(); !slices.Equal(got, []string{"POST /v1.52/containers/0123456789ab/rename?name=shop-web-1"}) {
+		t.Fatalf("the engine saw %v", got)
+	}
+	for _, raw := range []string{
+		request("POST", "/containers/0123456789ab/rename"),
+		request("POST", "/containers/0123456789ab/rename?name=a%2Fb"),
+		postJSON("POST", "/containers/0123456789ab/rename?name=web", `{"name":"x"}`),
+	} {
+		resp := do(t, h, raw)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("status %d, want 403 for %.60q", resp.StatusCode, raw)
+		}
+	}
+	if got := sock.writesSeen(); len(got) != 1 {
+		t.Fatalf("a refused rename reached the engine: %v", got)
+	}
+}
+
+func TestAnImageInspectWithTheSDKsKeysReachesTheEngine(t *testing.T) {
+	sock := newFakeSocket(t)
+	h := Handler(sock.path, Policy{}, nil)
+	target := "/v1.52/images/nginx:1.27/json?manifests=1&platform=%7B%22architecture%22%3A%22amd64%22%2C%22os%22%3A%22linux%22%7D"
+	resp := do(t, h, get(target))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", resp.StatusCode)
+	}
+	if got := sock.requests(); !slices.Equal(got, []string{"GET " + target}) {
+		t.Fatalf("the engine saw %v", got)
+	}
+}
+
+func TestAReadOnlyHostRefusesContainerRename(t *testing.T) {
+	sock := newFakeSocket(t)
+	var reasons []string
+	h := Handler(sock.path, Policy{ReadOnly: true}, func(_, _, reason string) { reasons = append(reasons, reason) })
+	resp := do(t, h, request("POST", "/containers/web-1/rename?name=web-2"))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden || !slices.Equal(reasons, []string{"read_only_flag"}) {
+		t.Fatalf("status %d reasons %v, want 403 read_only_flag", resp.StatusCode, reasons)
+	}
+	if got := sock.requests(); len(got) != 0 {
+		t.Fatalf("the engine saw %v", got)
+	}
+}
