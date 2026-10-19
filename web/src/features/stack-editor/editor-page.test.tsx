@@ -466,10 +466,8 @@ describe("the file rail in the page", () => {
 
     fireEvent.click(saveButton());
     await screen.findByText("Saved the draft of tracer.");
-    expect((puts()[0]?.body?.files as { path: string }[]).map((f) => f.path)).toEqual([
-      "compose.yaml",
-      "web.conf",
-    ]);
+    const sentFiles = (puts()[0]?.body?.files ?? []) as { path: string }[];
+    expect(sentFiles.map((f) => f.path)).toEqual(["compose.yaml", "web.conf"]);
   });
 
   it("opens compose.yaml when the open file is deleted", async () => {

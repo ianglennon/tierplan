@@ -7,10 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"path"
 	"regexp"
-	"strings"
-	"unicode"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -23,21 +20,23 @@ import (
 )
 
 const (
-	// maxStackFiles and maxStackVars bound one draft.
-	maxStackFiles = 100
-	maxStackVars  = 500
-	// maxStackPath is the longest file path of a stack, in bytes.
-	maxStackPath = 255
+	// maxStackVars bounds the variables of one draft. The files are bounded by stacks.CheckFiles.
+	maxStackVars = 500
 	// maxStackVarName and maxStackVarValue bound one variable.
 	maxStackVarName  = 128
 	maxStackVarValue = 64 << 10
+	// maxStackSaveBody is the largest body of a save. A save may hold stacks.MaxTotalBytes of
+	// file content, and JSON writes some of it as escapes (a newline is two bytes, a control
+	// character six), so the body is allowed twice that. A stack over the limit is then refused
+	// by CheckFiles as 422 stack_too_large, not cut off by the body limit as a bare 413.
+	maxStackSaveBody = 2 * stacks.MaxTotalBytes
 )
 
 var varNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // DraftFileBody is one file of a stack's draft.
 type DraftFileBody struct {
-	Path    string `json:"path" maxLength:"255" doc:"The file's path inside the stack: relative, with no .. and no leading slash. compose.yaml is the stack's compose file"`
+	Path    string `json:"path" doc:"The file's path inside the stack: relative, at most 255 characters, no .. or . name, no leading or doubled slash, no backslash or colon, no control character. compose.yaml is the stack's compose file. A path that breaks the rule is 422 file_path_invalid"`
 	Content string `json:"content" doc:"The file's text. A secret file's content is <hidden> on a read; sending <hidden> back for a secret file that is already saved keeps the saved content"`
 	Secret  bool   `json:"secret" doc:"True when the file is stored sealed and never shown"`
 }
@@ -68,7 +67,7 @@ type StackDraftOutput struct {
 // StackDraftSaveRequest is the body of PUT .../draft.
 type StackDraftSaveRequest struct {
 	Version int64           `json:"version" minimum:"1" doc:"The version of the draft you read"`
-	Files   []DraftFileBody `json:"files" maxItems:"100" doc:"Every file of the draft. compose.yaml must be one of them"`
+	Files   []DraftFileBody `json:"files" doc:"Every file of the draft. compose.yaml must be one of them. At most 50 files, 1 MiB each and 8 MiB in all"`
 	Vars    []DraftVarBody  `json:"vars" maxItems:"500" doc:"Every variable of the draft"`
 }
 
@@ -111,9 +110,10 @@ func registerStackDraft(r *httpx.Router, d StacksDeps) {
 		Description: "Replaces the draft's files and variables when the draft is still at the version you read; if someone saved in between the answer is 409 draft_conflict, naming who saved and when, and nothing is written. " +
 			"Saving content equal to the saved draft changes nothing: changed is false, the version does not move and no audit row is written. " +
 			"A save never sends anything to an engine: only a deploy does. " +
-			"compose.yaml must be among the files (422 stack_file_invalid, as for a path that is absolute, has .., is repeated, or a file over 1 MiB); a variable name must be letters, digits and underscore (422 stack_var_invalid). " +
+			"The files are held to the stack's file rules, each refused with 422 and the path in errors[].location: a path that is absolute, has .., a backslash or a colon (file_path_invalid), a path used twice (file_name_taken), a file over 1 MiB (file_too_large), more than 50 files or 8 MiB in all (stack_too_large), no compose.yaml (compose_missing). " +
+			"A variable name must be letters, digits and underscore (422 stack_var_invalid). " +
 			"A secret file or variable sent as <hidden> keeps its saved value; with none saved it is 422 stack_placeholder_without_value. Audited as stack.draft_saved when it changed. Needs stacks.update (Operator).",
-		Tags: []string{"stacks"}, MaxBodyBytes: maxStackBody,
+		Tags: []string{"stacks"}, MaxBodyBytes: maxStackSaveBody,
 	}, rbac.Requirement{Perm: rbac.PermStacksUpdate, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackDraftSaveInput) (*StackDraftSaveOutput, error) {
 			return saveStackDraft(ctx, d, in)
@@ -163,35 +163,11 @@ func stackLookupProblem(d StacksDeps, envID string, err error) error {
 	return stackInternal(d, "read", envID, err)
 }
 
-// validStackPath reports whether p can name a file of a stack: relative, clean, no ".." and no
-// control characters or backslashes. Nothing a stack stores is ever read from the server's
-// own filesystem (D-05), but the path is still held to the rule so a later plan that resolves
-// env_file or a secret file against it can trust it.
-func validStackPath(p string) bool {
-	if p == "" || len(p) > maxStackPath || strings.HasPrefix(p, "/") || strings.ContainsRune(p, '\\') {
-		return false
-	}
-	for _, r := range p {
-		if unicode.IsControl(r) {
-			return false
-		}
-	}
-	if path.Clean(p) != p {
-		return false
-	}
-	for seg := range strings.SplitSeq(p, "/") {
-		if seg == "" || seg == "." || seg == ".." {
-			return false
-		}
-	}
-	return true
-}
-
 // draftCopy turns a save request into a working copy, keeping the saved value of every secret
 // the request sent as the placeholder. It returns a problem for anything it refuses.
 func draftCopy(body StackDraftSaveRequest, saved stacks.WorkingCopy) (stacks.WorkingCopy, error) {
-	if len(body.Files) > maxStackFiles {
-		return stacks.WorkingCopy{}, httpx.Problem(http.StatusUnprocessableEntity, problemStackFileInvalid, "A stack holds at most 100 files.")
+	if len(body.Files) > stacks.MaxFiles {
+		return stacks.WorkingCopy{}, fileRuleProblem(&stacks.FileError{Err: stacks.ErrStackTooLarge})
 	}
 	if len(body.Vars) > maxStackVars {
 		return stacks.WorkingCopy{}, httpx.Problem(http.StatusUnprocessableEntity, problemStackVarInvalid, "A stack holds at most 500 variables.")
@@ -206,17 +182,12 @@ func draftCopy(body StackDraftSaveRequest, saved stacks.WorkingCopy) (stacks.Wor
 	}
 
 	var wc stacks.WorkingCopy
-	seen := map[string]bool{}
+	files := make([]stacks.File, 0, len(body.Files))
 	for _, f := range body.Files {
-		if !validStackPath(f.Path) {
-			return wc, fileProblem(f.Path, "A file path must be relative, with no .. and no leading slash.")
-		}
-		if seen[f.Path] {
-			return wc, fileProblem(f.Path, "A file path is used twice.")
-		}
-		seen[f.Path] = true
-		if len(f.Content) > stacks.MaxFileBytes {
-			return wc, fileProblem(f.Path, "A file is at most 1 MiB.")
+		// The path is judged before it is used to find a saved secret, so a bad path is named as
+		// one and not as a secret with no value to keep.
+		if err := stacks.ValidPath(f.Path); err != nil {
+			return wc, fileRuleProblem(err)
 		}
 		content := []byte(f.Content)
 		if f.Secret && f.Content == redact.Placeholder {
@@ -226,11 +197,13 @@ func draftCopy(body StackDraftSaveRequest, saved stacks.WorkingCopy) (stacks.Wor
 			}
 			content = old.Content
 		}
-		wc.Files = append(wc.Files, stacks.File{Path: f.Path, Content: content, Secret: f.Secret})
+		files = append(files, stacks.File{Path: f.Path, Content: content, Secret: f.Secret})
 	}
-	if !seen[stacks.ComposeFile] {
-		return wc, fileProblem(stacks.ComposeFile, "A stack needs a compose.yaml.")
+	// The whole set is judged on what will be stored, a kept secret at its real size.
+	if err := stacks.CheckFiles(files); err != nil {
+		return wc, fileRuleProblem(err)
 	}
+	wc.Files = files
 	seenVar := map[string]bool{}
 	for _, v := range body.Vars {
 		if len(v.Name) > maxStackVarName || !varNameRe.MatchString(v.Name) {
@@ -256,10 +229,35 @@ func draftCopy(body StackDraftSaveRequest, saved stacks.WorkingCopy) (stacks.Wor
 	return wc, nil
 }
 
-func fileProblem(p, detail string) error {
+// fileRuleProblem is the 422 for a rule the files of a stack break: its own problem type, and the
+// path of the file at fault in errors[].location ("files" when the rule is about the whole set,
+// "file" when the path itself is empty).
+func fileRuleProblem(err error) error {
+	var fe *stacks.FileError
+	loc := ""
+	if errors.As(err, &fe) {
+		loc = fe.Path
+	}
+	typ, detail := problemFilePathInvalid, "A file path must be relative and inside the stack: no .. or . name, no leading or doubled slash, no backslash or colon, no control character, at most 255 characters and 100 in a name."
+	switch {
+	case errors.Is(err, stacks.ErrPathTaken):
+		typ, detail = problemFileNameTaken, "Two files have the same path."
+	case errors.Is(err, stacks.ErrFileTooLarge):
+		typ, detail = problemFileTooLarge, "A file is at most 1 MiB."
+	case errors.Is(err, stacks.ErrStackTooLarge):
+		typ, detail = problemStackTooLarge, "A stack holds at most 50 files and 8 MiB in all."
+		if loc == "" {
+			loc = "files"
+		}
+	case errors.Is(err, stacks.ErrComposeMissing):
+		typ, detail = problemComposeMissing, "A stack needs a compose.yaml."
+	}
+	if loc == "" {
+		loc = "file"
+	}
 	return &huma.ErrorModel{
-		Type: problemStackFileInvalid, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
-		Detail: detail, Errors: []*huma.ErrorDetail{{Location: "file", Message: p}},
+		Type: typ, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
+		Detail: detail, Errors: []*huma.ErrorDetail{{Location: loc, Message: detail}},
 	}
 }
 

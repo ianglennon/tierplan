@@ -5,6 +5,12 @@
 // copy (its files and variables), the ownership labels, and the sandboxed compose-go load. It
 // imports no HTTP type, no store and no Docker client: a stack's content comes in as values and
 // leaves as values, so every rule about it is testable without an engine.
+//
+// Nothing in this package opens a file on the server: a stack's files are rows in the store, so
+// there is no directory to join a path to and no symlink to follow. The path rules in files.go
+// (ValidPath, FileSet.Lookup) still hold every name to "a plain path inside the stack", so a
+// later layer that does hand a stack file to something that reads one can trust the name
+// (RESEARCH Q5, layers 2 and 4; T-07-11).
 package stacks
 
 import (

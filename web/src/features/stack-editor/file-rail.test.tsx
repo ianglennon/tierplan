@@ -3,7 +3,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { type ComponentProps, useState } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FileRail } from "@/features/stack-editor/file-rail";
@@ -104,9 +104,14 @@ describe("the list", () => {
       files: [file("compose.yaml"), file("key.pem", { secret: true, hidden: true }), file(".env")],
       unused: new Set([".env"]),
     });
-    const secret = within(nav()).getByRole("button", { name: /key\.pem/ });
+    const row = (path: string) => {
+      const el = nav().querySelector<HTMLElement>(`[data-file="${path}"]`);
+      if (!el) throw new Error(`no row for ${path}`);
+      return el;
+    };
+    const secret = row("key.pem");
     expect(within(secret).getByText("Secret")).toBeTruthy();
-    const env = within(nav()).getByRole("button", { name: /\.env/ });
+    const env = row(".env");
     expect(within(env).getByText("Not used")).toBeTruthy();
     expect(within(secret).queryByText("Not used")).toBeNull();
   });
@@ -351,6 +356,20 @@ describe("a Viewer", () => {
 });
 
 describe("under 768px", () => {
+  beforeEach(() => {
+    vi.stubGlobal("innerWidth", 375);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("shows no list of buttons, only the select", () => {
+    setup();
+    expect(screen.getByRole("combobox", { name: "File" })).toBeTruthy();
+    expect(within(nav()).queryByRole("button", { name: "config/nginx.conf" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Add file" })).toBeTruthy();
+  });
+
   it("offers a labelled select of the files that opens the one chosen", () => {
     const { onSelect } = setup({ selected: ".env" });
     const select = screen.getByRole("combobox", { name: "File" }) as HTMLSelectElement;

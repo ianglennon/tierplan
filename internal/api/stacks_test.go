@@ -434,12 +434,12 @@ func TestSavingADraftRefusesAPathOrNameThatCouldEscapeTheStack(t *testing.T) {
 	st := newStack(t, admin, "paths")
 	compose := `{"path":"compose.yaml","content":"services: {}\n","secret":false}`
 	for name, tc := range map[string]struct{ files, vars, problem string }{
-		"an absolute path":      {`[` + compose + `,{"path":"/etc/passwd","content":"x","secret":false}]`, `[]`, "stack_file_invalid"},
-		"a parent directory":    {`[` + compose + `,{"path":"../x","content":"x","secret":false}]`, `[]`, "stack_file_invalid"},
-		"a dot segment":         {`[` + compose + `,{"path":"a/./b","content":"x","secret":false}]`, `[]`, "stack_file_invalid"},
-		"a backslash":           {`[` + compose + `,{"path":"a\\b","content":"x","secret":false}]`, `[]`, "stack_file_invalid"},
-		"a repeated path":       {`[` + compose + `,` + compose + `]`, `[]`, "stack_file_invalid"},
-		"no compose file":       {`[{"path":"app.env","content":"x","secret":false}]`, `[]`, "stack_file_invalid"},
+		"an absolute path":      {`[` + compose + `,{"path":"/etc/passwd","content":"x","secret":false}]`, `[]`, "file_path_invalid"},
+		"a parent directory":    {`[` + compose + `,{"path":"../x","content":"x","secret":false}]`, `[]`, "file_path_invalid"},
+		"a dot segment":         {`[` + compose + `,{"path":"a/./b","content":"x","secret":false}]`, `[]`, "file_path_invalid"},
+		"a backslash":           {`[` + compose + `,{"path":"a\\b","content":"x","secret":false}]`, `[]`, "file_path_invalid"},
+		"a repeated path":       {`[` + compose + `,` + compose + `]`, `[]`, "file_name_taken"},
+		"no compose file":       {`[{"path":"app.env","content":"x","secret":false}]`, `[]`, "compose_missing"},
 		"a variable with a dot": {`[` + compose + `]`, `[{"name":"A.B","value":"x","secret":false}]`, "stack_var_invalid"},
 		"a repeated variable":   {`[` + compose + `]`, `[{"name":"A","value":"1","secret":false},{"name":"A","value":"2","secret":false}]`, "stack_var_invalid"},
 	} {

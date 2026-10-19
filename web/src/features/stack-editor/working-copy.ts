@@ -175,12 +175,34 @@ export function toSaveBody(copy: WorkingCopy, version: number): StackDraftSaveIn
 
 export type FilePathProblem = "invalid" | "taken";
 
+// The characters no path may hold: a backslash (a Windows separator), a colon (a drive, or the
+// separator of a bind mount) and the control, format, line-separator and unpaired-surrogate
+// characters that make one name look like another or break a line.
+const BAD_PATH_CHAR = /[\\:\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}]/u;
+
+// The most characters in a path and in one name of it, counted as code points like the server.
+export const MAX_PATH_CHARS = 255;
+export const MAX_SEGMENT_CHARS = 100;
+
+// The most a stack file holds, in bytes (stacks.MaxFileBytes).
+export const MAX_FILE_BYTES = 1 << 20;
+
+function validFilePath(path: string): boolean {
+  if (path === "" || path.startsWith("/") || BAD_PATH_CHAR.test(path)) return false;
+  if ([...path].length > MAX_PATH_CHARS) return false;
+  return path
+    .split("/")
+    .every(
+      (name) =>
+        name !== "" && name !== "." && name !== ".." && [...name].length <= MAX_SEGMENT_CHARS,
+    );
+}
+
 // filePathProblem says why a name cannot be added as a file of the stack, or null. It is the
 // browser's copy of the server's rule (stacks.ValidPath), so a bad name is caught before it
-// appears; the server holds every save to the rule whatever the browser did.
-export function filePathProblem(
-  _path: string,
-  _existing: readonly string[],
-): FilePathProblem | null {
-  return null;
+// appears; the server holds every save to the rule whatever the browser did. A path that breaks
+// the rule is invalid even if it is also taken.
+export function filePathProblem(path: string, existing: readonly string[]): FilePathProblem | null {
+  if (!validFilePath(path)) return "invalid";
+  return existing.includes(path) ? "taken" : null;
 }

@@ -6,7 +6,13 @@ import { CircleX } from "lucide-react";
 import { type KeyboardEvent, useEffect, useReducer, useRef, useState } from "react";
 import { Trans } from "react-i18next";
 
-import { draftQuery, type StackDraftSaved, stackQuery, useSaveDraft } from "@/api/stacks";
+import {
+  type DraftRequestError,
+  draftQuery,
+  type StackDraftSaved,
+  stackQuery,
+  useSaveDraft,
+} from "@/api/stacks";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
@@ -15,6 +21,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EditorFooter } from "@/features/service-editor/editor-footer";
 import { FileEditor } from "@/features/stack-editor/file-editor";
+import { FileRail } from "@/features/stack-editor/file-rail";
 import { SaveStatus } from "@/features/stack-editor/save-status";
 import {
   COMPOSE_FILE,
@@ -56,7 +63,7 @@ interface Base {
 // one shared draft in a CodeMirror surface. Edits stay in the browser until Save draft, with no
 // autosave; the saved draft is shared and shows who saved it and when. A Viewer reads the files
 // and cannot change them. Saving sends nothing to any engine: only a deploy does.
-export function StackEditorPage({ envId, stackId, file }: StackEditorPageProps) {
+export function StackEditorPage({ envId, stackId, file, onFileChange }: StackEditorPageProps) {
   const t = useT();
   const mac = isMacPlatform();
   const canEdit = usePermission("stacks.update", envId);
@@ -69,7 +76,8 @@ export function StackEditorPage({ envId, stackId, file }: StackEditorPageProps) 
   const [base, setBase] = useState<Base | null>(null);
   // A save in this visit changed the draft, so it is a draft now even before the list says so.
   const [savedChange, setSavedChange] = useState(false);
-  const [saveError, setSaveError] = useState<"generic" | "lost" | "permission" | null>(null);
+  // The sentence for the last refused save, shown above the footer until the next save.
+  const [saveError, setSaveError] = useState<string | null>(null);
   const loaded = useRef(false);
   const copyRef = useRef(copy);
   copyRef.current = copy;
@@ -109,6 +117,51 @@ export function StackEditorPage({ envId, stackId, file }: StackEditorPageProps) 
   const open = copy.files.find((f) => f.path === copy.selected);
   const hasSaved = (stack.data?.hasDraft ?? false) || savedChange;
 
+  // Moving to a file, or off one that is gone, moves the address with it. compose.yaml is the
+  // address with no file.
+  const showInAddress = (path: string) => onFileChange?.(path === COMPOSE_FILE ? undefined : path);
+
+  function selectFile(path: string) {
+    dispatch({ type: "select", path });
+    showInAddress(path);
+  }
+
+  function addFile(path: string, content?: string) {
+    dispatch({ type: "addFile", path, content });
+    showInAddress(path);
+  }
+
+  function renameFile(from: string, to: string) {
+    dispatch({ type: "renameFile", from, to });
+    if (copy.selected === from) showInAddress(to);
+  }
+
+  function deleteFile(path: string) {
+    dispatch({ type: "deleteFile", path });
+    if (copy.selected === path) showInAddress(COMPOSE_FILE);
+  }
+
+  // The sentence for a save the server refused: a file the stack's rules refuse is named, as the
+  // rail names a name it refuses; nothing the person typed is lost.
+  function refusal(err: DraftRequestError): string {
+    const where = err.fields[0]?.location ?? "";
+    switch (err.type) {
+      case "file_path_invalid":
+        return t("stackEditor.rail.errors.path");
+      case "file_name_taken":
+        return t("stackEditor.rail.errors.taken", { name: where });
+      case "file_too_large":
+        return t("stackEditor.rail.errors.large");
+      case "stack_too_large":
+        return t("stackEditor.save.errors.tooLarge");
+      case "compose_missing":
+        return t("stackEditor.save.errors.composeMissing");
+    }
+    if (err.status === 0) return t("stackEditor.save.errors.lost");
+    if (err.status === 403) return t("stackEditor.save.errors.permission");
+    return t("stackEditor.save.errors.generic");
+  }
+
   function onSaved(sent: WorkingCopy, answer: StackDraftSaved) {
     setSaved(sent);
     setBase({ version: answer.version, savedAt: answer.savedAt, savedBy: answer.savedBy });
@@ -123,11 +176,7 @@ export function StackEditorPage({ envId, stackId, file }: StackEditorPageProps) 
     setSaveError(null);
     save$.mutate(toSaveBody(sent, base.version), {
       onSuccess: (answer) => onSaved(sent, answer),
-      onError: (err) => {
-        if (err.status === 0) setSaveError("lost");
-        else if (err.status === 403) setSaveError("permission");
-        else setSaveError("generic");
-      },
+      onError: (err) => setSaveError(refusal(err)),
     });
   }
 
@@ -185,43 +234,60 @@ export function StackEditorPage({ envId, stackId, file }: StackEditorPageProps) 
           </TabsTrigger>
         </TabsList>
       </Tabs>
-      <div className="flex min-w-0 flex-col gap-2">
-        {ready && open ? (
-          open.hidden ? (
-            <div className="rounded-lg border p-4">
-              <p className="font-medium break-all">
-                {t("stackEditor.secretFile.title", { file: open.path })}
-              </p>
-              <p className="text-sm text-muted-foreground">{t("stackEditor.secretFile.body")}</p>
-            </div>
-          ) : (
-            <FileEditor
-              key={open.path}
-              file={open}
-              readOnly={!canEdit}
-              onChange={(content) => dispatch({ type: "edit", path: open.path, content })}
-            />
-          )
+      <div className="grid gap-4 md:grid-cols-[16rem_minmax(0,1fr)]">
+        {ready ? (
+          <FileRail
+            files={copy.files}
+            selected={copy.selected}
+            readOnly={!canEdit}
+            onSelect={selectFile}
+            onAdd={addFile}
+            onRename={renameFile}
+            onDelete={deleteFile}
+          />
         ) : (
-          <div role="status" aria-label={t("stackEditor.loading")}>
-            <Skeleton className="h-100 w-full" />
+          <div data-testid="rail-skeleton" className="flex flex-col gap-2" aria-hidden="true">
+            <Skeleton className="h-6 w-20" />
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-8 w-full" />
           </div>
         )}
-        <p className="text-sm text-muted-foreground">
-          <Trans
-            i18nKey="stackEditor.editor.helper"
-            ns="stackEditor"
-            values={keys}
-            components={{ kbd: <Kbd /> }}
-          />
-        </p>
+        <div className="flex min-w-0 flex-col gap-2">
+          {ready && open ? (
+            open.hidden ? (
+              <div className="rounded-lg border p-4">
+                <p className="font-medium break-all">
+                  {t("stackEditor.secretFile.title", { file: open.path })}
+                </p>
+                <p className="text-sm text-muted-foreground">{t("stackEditor.secretFile.body")}</p>
+              </div>
+            ) : (
+              <FileEditor
+                key={open.path}
+                file={open}
+                readOnly={!canEdit}
+                onChange={(content) => dispatch({ type: "edit", path: open.path, content })}
+              />
+            )
+          ) : (
+            <div role="status" aria-label={t("stackEditor.loading")}>
+              <Skeleton className="h-100 w-full" />
+            </div>
+          )}
+          <p className="text-sm text-muted-foreground">
+            <Trans
+              i18nKey="stackEditor.editor.helper"
+              ns="stackEditor"
+              values={keys}
+              components={{ kbd: <Kbd /> }}
+            />
+          </p>
+        </div>
       </div>
       {saveError ? (
         <Alert variant="destructive">
           <CircleX aria-hidden="true" />
-          <AlertDescription className="break-words">
-            {t(`stackEditor.save.errors.${saveError}`)}
-          </AlertDescription>
+          <AlertDescription className="break-words">{saveError}</AlertDescription>
         </Alert>
       ) : null}
       {canEdit ? (

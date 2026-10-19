@@ -2022,7 +2022,7 @@ export interface paths {
         get: operations["getStackDraft"];
         /**
          * Save a stack's draft
-         * @description Replaces the draft's files and variables when the draft is still at the version you read; if someone saved in between the answer is 409 draft_conflict, naming who saved and when, and nothing is written. Saving content equal to the saved draft changes nothing: changed is false, the version does not move and no audit row is written. A save never sends anything to an engine: only a deploy does. compose.yaml must be among the files (422 stack_file_invalid, as for a path that is absolute, has .., is repeated, or a file over 1 MiB); a variable name must be letters, digits and underscore (422 stack_var_invalid). A secret file or variable sent as <hidden> keeps its saved value; with none saved it is 422 stack_placeholder_without_value. Audited as stack.draft_saved when it changed. Needs stacks.update (Operator).
+         * @description Replaces the draft's files and variables when the draft is still at the version you read; if someone saved in between the answer is 409 draft_conflict, naming who saved and when, and nothing is written. Saving content equal to the saved draft changes nothing: changed is false, the version does not move and no audit row is written. A save never sends anything to an engine: only a deploy does. The files are held to the stack's file rules, each refused with 422 and the path in errors[].location: a path that is absolute, has .., a backslash or a colon (file_path_invalid), a path used twice (file_name_taken), a file over 1 MiB (file_too_large), more than 50 files or 8 MiB in all (stack_too_large), no compose.yaml (compose_missing). A variable name must be letters, digits and underscore (422 stack_var_invalid). A secret file or variable sent as <hidden> keeps its saved value; with none saved it is 422 stack_placeholder_without_value. Audited as stack.draft_saved when it changed. Needs stacks.update (Operator).
          */
         put: operations["saveStackDraft"];
         post?: never;
@@ -4590,7 +4590,7 @@ export interface components {
         DraftFileBody: {
             /** @description The file's text. A secret file's content is <hidden> on a read; sending <hidden> back for a secret file that is already saved keeps the saved content */
             content: string;
-            /** @description The file's path inside the stack: relative, with no .. and no leading slash. compose.yaml is the stack's compose file */
+            /** @description The file's path inside the stack: relative, at most 255 characters, no .. or . name, no leading or doubled slash, no backslash or colon, no control character. compose.yaml is the stack's compose file. A path that breaks the rule is 422 file_path_invalid */
             path: string;
             /** @description True when the file is stored sealed and never shown */
             secret: boolean;
@@ -8113,7 +8113,7 @@ export interface components {
             version: number;
         };
         StackDraftSaveRequest: {
-            /** @description Every file of the draft. compose.yaml must be one of them */
+            /** @description Every file of the draft. compose.yaml must be one of them. At most 50 files, 1 MiB each and 8 MiB in all */
             files: components["schemas"]["DraftFileBody"][] | null;
             /** @description Every variable of the draft */
             vars: components["schemas"]["DraftVarBody"][] | null;

@@ -66,7 +66,7 @@ func TestSaveDraftRefusesBadFiles(t *testing.T) {
 		"a backslash":          {[]draftFile{composeFile, {Path: `a\b`}}, "file_path_invalid", `a\b`},
 		"a drive path":         {[]draftFile{composeFile, {Path: "C:/x"}}, "file_path_invalid", "C:/x"},
 		"a control character":  {[]draftFile{composeFile, {Path: "x\u0000y"}}, "file_path_invalid", "x\u0000y"},
-		"an empty path":        {[]draftFile{composeFile, {Path: ""}}, "file_path_invalid", ""},
+		"an empty path":        {[]draftFile{composeFile, {Path: ""}}, "file_path_invalid", "file"},
 		"a path of 256":        {[]draftFile{composeFile, {Path: strings.Repeat("a", 100) + "/" + strings.Repeat("b", 100) + "/" + strings.Repeat("c", 54)}}, "file_path_invalid", strings.Repeat("a", 100) + "/" + strings.Repeat("b", 100) + "/" + strings.Repeat("c", 54)},
 		"a repeated path":      {[]draftFile{composeFile, {Path: "a.env"}, {Path: "a.env"}}, "file_name_taken", "a.env"},
 		"a repeated compose":   {[]draftFile{composeFile, composeFile}, "file_name_taken", "compose.yaml"},
