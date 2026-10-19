@@ -170,8 +170,11 @@ func (r DeployResult) OK() bool { return r.Code == "" }
 //
 // The last item is finished only after in.OnDone returns.
 func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Reporter) (res DeployResult) {
-	prog := newProgress(r)
+	prog := newProgress(r, in.Masker)
 	final := itemEnd{state: jobs.ItemDone}
+	// detail is the engine's own words about the failure, set by the step that has them before it
+	// fails; failWith puts them on the item that failed and in the output.
+	var detail string
 	defer func() {
 		if in.OnDone != nil {
 			in.OnDone(res)
@@ -186,8 +189,23 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		}
 		res.Code, res.FailedService = code, name
 		state := jobs.ItemFailed
-		if code == CodeCancelled {
+		cancelled := code == CodeCancelled
+		if cancelled {
 			state = jobs.ItemCancelled
+			detail = ""
+		}
+		// The network, secret, config or service the failure is about ends with its code and the
+		// engine's words; with none of those to name, the words go on the step. The lookup names a
+		// service it could not pin, which no step of the swarm has yet.
+		matched := item != ItemCheck && item != ItemLookup && prog.failed(item, name, state, code, message, detail)
+		if !matched && detail != "" {
+			prog.detail(item, detail)
+			prog.line("Failed: " + detail)
+		}
+		// Whatever follows was not run: skipped after a failure, cancelled after a cancel.
+		later := itemEnd{state: jobs.ItemSkipped, code: CodeNotRun, message: CodeMessage(CodeNotRun)}
+		if cancelled {
+			later.state = jobs.ItemCancelled
 		}
 		for _, id := range DeployItems() {
 			var end itemEnd
@@ -195,7 +213,7 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 			case id == item:
 				end = itemEnd{state: state, code: code, message: message}
 			case order(id) > order(item):
-				end = itemEnd{state: jobs.ItemCancelled, code: CodeNotRun, message: CodeMessage(CodeNotRun)}
+				end = later
 			default:
 				continue // finished before the failure
 			}
@@ -205,20 +223,19 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 				r.Finish(id, end.state, end.code, end.message, nil)
 			}
 		}
-		// The network, secret, config or service the failure is about ends with its code, and the
-		// ones that were still waiting were not run. The lookup names a service it could not pin,
-		// which no step of the swarm has yet.
-		if item != ItemCheck && item != ItemLookup {
-			prog.failed(item, name, state, code, message)
-		}
-		prog.rest(jobs.ItemCancelled, CodeNotRun, CodeMessage(CodeNotRun))
+		prog.rest(later.state, later.code, later.message)
 		return res
 	}
 	fail := func(item, code, name string) DeployResult { return failWith(item, code, name, "") }
+	// failErr fails an item whose cause is an error from the engine, whose words the item keeps.
+	failErr := func(item, code, name string, err error) DeployResult {
+		detail = engineWords(err)
+		return fail(item, code, name)
+	}
 	// failStep ends the item that failed with the code and name a step reported.
 	failStep := func(item string, err error) DeployResult {
 		code, name := stepOf(ctx, err)
-		return fail(item, code, name)
+		return failErr(item, code, name, err)
 	}
 
 	// 1. Check: resolve the secrets and configs, plan the conversion and read what the stack
@@ -243,7 +260,7 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	owned, err := d.readLive(ctx, in.EnvID, in.Stack.Name, liveWant{allNetworks: hasExternal(planned), allSecrets: extSecrets, allConfigs: extConfigs})
 	if err != nil {
 		d.log().Warn("could not read a stack's objects before a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
-		return fail(ItemCheck, codeOf(ctx, err), "")
+		return failErr(ItemCheck, codeOf(ctx, err), "", err)
 	}
 	existingNets, allNets, existingSvcs, live := owned.Networks, owned.AllNetworks, owned.Services, owned.Objects
 	if clash(in.Stack.ID, in.Stack.Name, existingNets, existingSvcs, live) {
@@ -384,7 +401,7 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		})
 		if err != nil {
 			d.log().Warn("could not write a stack service", "environment", in.EnvID, "stack", in.Stack.Name, "service", sp.Name, "update", update, "error", err)
-			return fail(ItemServices, codeOf(ctx, err), sp.Name)
+			return failErr(ItemServices, codeOf(ctx, err), sp.Name, err)
 		}
 		action := "created"
 		if update {
@@ -393,6 +410,7 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		} else {
 			res.Services++
 		}
+		prog.line(strings.ToUpper(action[:1]) + action[1:] + " service " + sp.Name)
 		prog.done(idService+sp.Name, map[string]string{"action": action})
 		r.Update(ItemServices, func(it *jobs.Item) { it.Current = int64(i + 1) })
 	}
@@ -409,14 +427,14 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	for _, sp := range plan.Services {
 		declared[sp.Name] = true
 	}
-	res.RemovedServices, err = d.pruneServices(ctx, in.EnvID, in.Stack, declared, existingSvcs)
+	res.RemovedServices, err = d.pruneServices(ctx, in.EnvID, in.Stack, declared, existingSvcs, prog)
 	if err != nil {
 		return failStep(ItemCleanup, err)
 	}
 	removed, left, err := d.removeReplacedObjects(ctx, in.EnvID, in.Stack, refs, prog)
 	res.RemovedObjects, res.LeftInPlace = removed, left
 	if err != nil {
-		return fail(ItemCleanup, codeOf(ctx, err), "")
+		return failErr(ItemCleanup, codeOf(ctx, err), "", err)
 	}
 	final = itemEnd{state: jobs.ItemDone, result: map[string]string{
 		"networks": strconv.Itoa(res.Networks), "objects": strconv.Itoa(len(res.CreatedObjects)),
@@ -425,6 +443,35 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	}}
 	return res
 }
+
+// engineWords are the words of an error from the engine, for the item that failed: what the manager
+// said when it refused a spec, else the error's own text. They are masked and cleaned by the job before
+// anyone sees them, never put in a log line of the server's and never in an item's Message.
+func engineWords(err error) string {
+	if err == nil {
+		return ""
+	}
+	var se *stepError
+	if errors.As(err, &se) {
+		err = se.err
+	}
+	var rejected *dockerx.SpecRejectedError
+	if errors.As(err, &rejected) {
+		return trimDaemon(rejected.Message)
+	}
+	// The wrapping says which host the call went to; the browser is told what the engine said.
+	for {
+		inner := errors.Unwrap(err)
+		if inner == nil {
+			return trimDaemon(err.Error())
+		}
+		err = inner
+	}
+}
+
+// trimDaemon drops the prefix the engine's client puts before a daemon's answer: the console says
+// Docker said it already.
+func trimDaemon(s string) string { return strings.TrimPrefix(s, "Error response from daemon: ") }
 
 // firstError is the first blocking problem of a list.
 func firstError(ps stacks.Problems) (stacks.Problem, bool) {

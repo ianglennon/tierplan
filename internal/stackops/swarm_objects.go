@@ -87,6 +87,7 @@ func (d Deps) ensureNetworks(ctx context.Context, envID string, stack Stack, pla
 			return created, &stepError{code: code, name: n.Name, err: werr}
 		}
 		created = append(created, n.Name)
+		prog.line("Created network " + n.Name)
 		prog.done(idNetwork+n.Name, nil)
 	}
 	return created, nil
@@ -133,7 +134,7 @@ func networkSpec(n convert.NetworkPlan) dockerx.NetworkCreateSpec {
 // stack's ID is removed, whatever live holds, so a service of another stack, or of nobody's, is
 // never touched. The caller runs it only after every declared service was created or updated. The
 // first failure ends the call with a *stepError; removed names the services removed before it.
-func (d Deps) pruneServices(ctx context.Context, envID string, stack Stack, declared map[string]bool, live []dockerx.ServiceDetail) (removed []string, err error) {
+func (d Deps) pruneServices(ctx context.Context, envID string, stack Stack, declared map[string]bool, live []dockerx.ServiceDetail, prog *progress) (removed []string, err error) {
 	for _, s := range live {
 		if declared[s.Name] || s.Labels[stacks.LabelSwarmNamespace] != stack.Name || s.Labels[stacks.LabelStackID] != stack.ID {
 			continue
@@ -145,6 +146,7 @@ func (d Deps) pruneServices(ctx context.Context, envID string, stack Stack, decl
 		switch {
 		case werr == nil:
 			removed = append(removed, s.Name)
+			prog.line("Removed service " + s.Name)
 		case errors.Is(werr, dockerx.ErrServiceNotFound):
 			// Already gone: nothing was left behind.
 		default:
@@ -343,6 +345,7 @@ func (d Deps) ensureObjects(ctx context.Context, envID string, stack Stack, objs
 			return refs, created, &stepError{code: code, name: full, err: werr}
 		}
 		created = append(created, full)
+		prog.line("Created " + string(o.Kind) + " " + full)
 		prog.done(itemID, nil)
 		refs.set(o.Kind, o.Name, objectRef{ID: id, Name: full})
 	}
@@ -399,7 +402,7 @@ func (d Deps) removeReplacedObjects(ctx context.Context, envID string, stack Sta
 		case ctx.Err() != nil:
 			for _, rest := range candidates[i:] {
 				leftInPlace = append(leftInPlace, rest.Name)
-				prog.failed(ItemCleanup, rest.Name, jobs.ItemCancelled, CodeCancelled, CodeMessage(CodeCancelled))
+				prog.failed(ItemCleanup, rest.Name, jobs.ItemCancelled, CodeCancelled, CodeMessage(CodeCancelled), "")
 			}
 			return removed, leftInPlace, nil
 		case used.has(r):
@@ -417,6 +420,7 @@ func (d Deps) removeReplacedObjects(ctx context.Context, envID string, stack Sta
 		switch {
 		case rerr == nil:
 			removed = append(removed, r.Name)
+			prog.line("Removed old " + string(r.Kind) + " " + r.Name)
 			prog.done(removalID(r), nil)
 		case errors.Is(rerr, dockerx.ErrObjectNotFound):
 			// Already gone: nothing was left behind.

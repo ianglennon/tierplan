@@ -56,6 +56,32 @@ export type StackFrame =
 
 const isFinished = (job: StackJob): boolean => job.state !== "running";
 
+// How many lines of output the console keeps, as many as the server keeps for a job.
+export const MAX_OUTPUT_LINES = 2000;
+
+// keepNewest cuts a log to the newest MAX_OUTPUT_LINES lines.
+function keepNewest(lines: StackJobOutputLine[]): StackJobOutputLine[] {
+  return lines.length > MAX_OUTPUT_LINES ? lines.slice(lines.length - MAX_OUTPUT_LINES) : lines;
+}
+
+// appendOutput adds a line to a log unless the log already has it or a newer one: the sequence
+// number of a line only grows, so a line at or before the newest one is a repeat (a replay after a
+// reconnect re-sends what the snapshot held).
+function appendOutput(log: StackJobOutputLine[], line: StackJobOutputLine): StackJobOutputLine[] {
+  const newest = log.at(-1)?.seq ?? 0;
+  return line.seq > newest ? keepNewest([...log, line]) : log;
+}
+
+// mergeOutput adds the lines of a log the state does not have yet.
+function mergeOutput(
+  log: StackJobOutputLine[],
+  incoming: readonly StackJobOutputLine[] | null | undefined,
+): StackJobOutputLine[] {
+  let out = log;
+  for (const line of incoming ?? []) out = appendOutput(out, line);
+  return out;
+}
+
 // reduceStackStream folds one frame into the state. A snapshot replaces the job, an item replaces
 // the item of its ID (or adds it, for an item the deploy added while it ran), done ends the job and
 // the stream. A finished job never goes back to live, whatever the connection does after. A job read
@@ -69,6 +95,8 @@ export function reduceStackStream(state: StackStreamState, frame: StackFrame): S
       return {
         ...state,
         job: frame.job,
+        // A snapshot holds the whole log the server keeps: it replaces what was here.
+        output: keepNewest([...(frame.job.output ?? [])]),
         status: state.finished && !isFinished(frame.job) ? state.status : "live",
         finished: state.finished || isFinished(frame.job),
       };
@@ -87,12 +115,23 @@ export function reduceStackStream(state: StackStreamState, frame: StackFrame): S
       };
     }
     case "output":
-      return state;
+      return { ...state, output: appendOutput(state.output, frame.line) };
     case "done":
-      return { ...state, job: frame.job, status: "closed", finished: true };
+      return {
+        ...state,
+        job: frame.job,
+        output: mergeOutput(state.output, frame.job.output),
+        status: "closed",
+        finished: true,
+      };
     case "polled":
       if (state.finished || state.status === "live") return state;
-      return { ...state, job: frame.job, finished: isFinished(frame.job) };
+      return {
+        ...state,
+        job: frame.job,
+        output: keepNewest([...(frame.job.output ?? [])]),
+        finished: isFinished(frame.job),
+      };
     case "status":
       if (state.finished) return state;
       return {
@@ -224,6 +263,12 @@ export function openStackJobStream(options: StackJobStreamOptions): StackJobStre
       if (!item) return;
       remember(event);
       report({ type: "item", item });
+    });
+    mine.addEventListener("output", (event) => {
+      const line = live() ? parse<StackJobOutputLine>(event) : undefined;
+      if (!line) return;
+      remember(event);
+      report({ type: "output", line });
     });
     mine.addEventListener("done", (event) => {
       const job = live() ? parse<StackJob>(event) : undefined;

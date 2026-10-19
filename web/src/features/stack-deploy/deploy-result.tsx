@@ -8,6 +8,7 @@ import type { StackJob, StackJobItem } from "@/api/stacks";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/use-t";
+import { withBase } from "@/lib/base-path";
 
 const isService = (i: StackJobItem): boolean => i.kind === "service";
 
@@ -72,22 +73,43 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
         <p className="text-sm break-words">
           {t("stackDeploy.complete.body", { name, env: envName, count: runningServices(job) })}
         </p>
-        <div className="flex flex-wrap gap-2">{stack}</div>
+        <div className="flex flex-wrap gap-2">
+          {stack}
+          {/* The stack's Logs tab is a page of its own; until it exists this is a plain address. */}
+          <Button asChild variant="outline" className="max-md:h-11">
+            <a
+              href={withBase(
+                `/env/${encodeURIComponent(envId)}/stacks/${encodeURIComponent(stackId)}/logs`,
+              )}
+            >
+              {t("stackDeploy.openLogs")}
+            </a>
+          </Button>
+        </div>
       </section>
     );
   }
   if (job.state === "failed" || job.state === "partial") {
     const failed = failureOf(job);
+    const rows = servicesOf(job);
+    // With a row for each service the sentence says how far it got; without, it is the server's
+    // own sentence for the step.
+    const sentence =
+      rows.length > 0
+        ? t("stackDeploy.failed.stopped", {
+            step: failed?.label ?? name,
+            done: rows.filter((r) => r.state === "done").length,
+            count: rows.length,
+          })
+        : failed?.message
+          ? failed.message
+          : t("stackDeploy.failed.fallback", { step: failed?.label ?? name });
     return (
       <Alert variant="destructive">
         <CircleX aria-hidden="true" />
         <AlertTitle>{t("stackDeploy.failed.title")}</AlertTitle>
         <AlertDescription className="flex flex-col gap-3">
-          <p className="break-words">
-            {failed?.message
-              ? failed.message
-              : t("stackDeploy.failed.fallback", { step: failed?.label ?? name })}
-          </p>
+          <p className="break-words">{sentence}</p>
           <div className="flex flex-wrap gap-2">
             <Button asChild variant="outline" className="max-md:h-11">
               <Link to="/env/$envId/stacks/$stackId/editor" params={{ envId, stackId }}>

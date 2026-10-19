@@ -94,6 +94,59 @@ function DeployProgress({ job }: { job: StackJob }) {
   );
 }
 
+// outcomesOf are the words the console speaks when a job moves from one state to the next: a service
+// that runs, a service that failed and why, and a deploy that completed or was cancelled. Working
+// and waiting are not outcomes and are never spoken. A deploy that failed is not spoken here: its
+// alert announces itself, once.
+export function outcomesOf(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  before: { items: ReadonlyMap<string, string>; state: string },
+  job: StackJob,
+): string[] {
+  const out: string[] = [];
+  for (const row of servicesOf(job)) {
+    if (before.items.get(row.id) === row.state) continue;
+    if (row.state === "done") out.push(t("stackDeploy.announce.running", { service: row.label }));
+    else if (row.state === "failed") {
+      const reason = row.detail || row.message;
+      out.push(t("stackDeploy.announce.failed", { service: row.label, reason }));
+    }
+  }
+  if (before.state === "running" && job.state === "done")
+    out.push(t("stackDeploy.announce.complete"));
+  if (before.state === "running" && job.state === "cancelled") {
+    out.push(t("stackDeploy.announce.cancelled"));
+  }
+  return out;
+}
+
+// Announcer is the one polite region of the console. It speaks outcomes only, each once, as the job
+// changes in front of the person; it says nothing about a job as it was when the console opened, and
+// it never moves the focus. The bar, the elapsed time and every intermediate state are aria-live off.
+function Announcer({ job }: { job: StackJob }) {
+  const t = useT();
+  const seen = useRef<{ items: Map<string, string>; state: string } | null>(null);
+  const [spoken, setSpoken] = useState<string[]>([]);
+  useEffect(() => {
+    const before = seen.current;
+    seen.current = {
+      items: new Map((job.items ?? []).map((i) => [i.id, i.state])),
+      state: job.state,
+    };
+    if (!before) return;
+    const next = outcomesOf(t, before, job);
+    if (next.length > 0) setSpoken((s) => [...s, ...next].slice(-50));
+  }, [job, t]);
+  return (
+    <div data-slot="deploy-announcer" aria-live="polite" className="sr-only">
+      {spoken.map((message, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: a message is only ever added at the end
+        <p key={i}>{message}</p>
+      ))}
+    </div>
+  );
+}
+
 // DeployConsole is the live view of a deploy (STK-07, D-13): the title and how long it has run, the
 // connection, the overall progress, the steps with a row for each service, and the result. It is a
 // view of a job on the server, so leaving never stops the deploy: opening it again shows the job as
@@ -200,6 +253,7 @@ export function DeployConsole({ envId, stackId, jobId }: DeployConsoleProps) {
         lines={follow.output}
         failed={job.state === "failed" || job.state === "partial"}
       />
+      <Announcer job={job} />
       <div className="flex flex-col gap-3">
         <DeployResult job={job} envId={envId} stackId={stackId} name={name} envName={envName} />
       </div>

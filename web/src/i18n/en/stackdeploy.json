@@ -55,13 +55,35 @@
     },
     "failed": {
       "title": "Deploy failed",
-      "fallback": "Bayplan stopped at {{step}}."
+      "fallback": "Bayplan stopped at {{step}}.",
+      "stopped_one": "Bayplan stopped at {{step}}. {{done}} of {{count}} service was updated before it stopped, and nothing was rolled back.",
+      "stopped_other": "Bayplan stopped at {{step}}. {{done}} of {{count}} services were updated before it stopped, and nothing was rolled back."
     },
     "cancelled": {
       "title": "Deploy cancelled",
       "body": "Bayplan stopped at the step it had reached."
     },
     "openStack": "Open stack",
-    "backToEditing": "Back to editing"
+    "backToEditing": "Back to editing",
+    "output": {
+      "title": "Output",
+      "wrap": "Wrap",
+      "copy": "Copy output",
+      "copied": "Output copied.",
+      "copyFailed": "Couldn't copy the output.",
+      "empty": "No output yet.",
+      "lines_one": "{{count}} line",
+      "lines_other": "{{count}} lines"
+    },
+    "failure": {
+      "rejected": "Docker rejected {{service}}: {{message}}"
+    },
+    "openLogs": "Open logs",
+    "announce": {
+      "running": "{{service}} is running",
+      "failed": "{{service}} failed: {{reason}}",
+      "complete": "Deploy complete",
+      "cancelled": "Deploy cancelled"
+    }
   }
 }

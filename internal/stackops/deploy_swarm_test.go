@@ -1217,8 +1217,14 @@ func TestDeploySwarmMasksTheWordsOfAFailedSecretToo(t *testing.T) {
 	if strings.Contains(out+string(raw), secret) {
 		t.Errorf("the secret reached the job or its output: %s\n%s", raw, out)
 	}
-	if !strings.Contains(string(raw), "engine said: <hidden>") {
-		t.Errorf("job = %s, want the engine's words with the secret hidden in a detail", raw)
+	var detail string
+	for _, it := range job.Items {
+		if strings.HasPrefix(it.ID, "secret:") {
+			detail = it.Detail
+		}
+	}
+	if !strings.Contains(detail, "engine said: <hidden>") || strings.Contains(detail, "unix://") {
+		t.Errorf("secret detail = %q, want the engine's words with the secret hidden and no address of ours", detail)
 	}
 }
 

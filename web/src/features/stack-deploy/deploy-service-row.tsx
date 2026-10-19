@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { ChevronRight } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 
 import type { HealthState } from "@/api/environments";
 import type { StackJobItem } from "@/api/stacks";
@@ -36,6 +36,12 @@ interface DeployServiceRowProps {
 export function DeployServiceRow({ item, children, defaultOpen = false }: DeployServiceRowProps) {
   const t = useT();
   const [open, setOpen] = useState(defaultOpen);
+  // A service that fails opens its row, whether it was open to begin with or it failed in front of
+  // the person; one they close stays closed.
+  const failed = item.state === "failed";
+  useEffect(() => {
+    if (failed) setOpen(true);
+  }, [failed]);
   const head = (
     <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
       <StatusDot state={TONE[item.state]} label={t(`stackDeploy.service.state.${item.state}`)} />

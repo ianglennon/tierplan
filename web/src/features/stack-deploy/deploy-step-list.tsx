@@ -8,6 +8,38 @@ import { Spinner } from "@/components/ui/spinner";
 import { DeployServiceRow } from "@/features/stack-deploy/deploy-service-row";
 import { useT } from "@/i18n/use-t";
 
+type Translate = (key: string, options?: Record<string, unknown>) => string;
+
+// failureOf is why an item failed, as the console words it: the sentence for the code, and Docker's
+// own words under it. Docker's rejection of a service reads as one sentence naming the service. Both
+// are text from outside Bayplan and are drawn as text.
+export function failureOf(
+  t: Translate,
+  item: StackJobItem,
+): { sentence: string; words: string } | undefined {
+  if (item.code === "service_rejected" && item.detail) {
+    return {
+      sentence: t("stackDeploy.failure.rejected", { service: item.label, message: item.detail }),
+      words: "",
+    };
+  }
+  if (!item.message && !item.detail) return undefined;
+  return { sentence: item.message, words: item.detail };
+}
+
+// FailureText is the reason under a failed step or service, in offline text, wrapped.
+export function FailureText({ item }: { item: StackJobItem }) {
+  const t = useT();
+  const why = failureOf(t, item);
+  if (!why) return null;
+  return (
+    <div className="flex flex-col gap-1 text-sm text-status-offline-text">
+      {why.sentence ? <p className="break-all">{why.sentence}</p> : null}
+      {why.words ? <p className="font-mono text-xs break-all">{why.words}</p> : null}
+    </div>
+  );
+}
+
 type State = StackJobItem["state"];
 
 function StepMark({ state }: { state: State }) {
@@ -70,10 +102,17 @@ export function DeployStepList({ items }: DeployStepListProps) {
             <span className="min-w-0 break-words">{item.label}</span>
             <span className="text-muted-foreground">{t(`stackDeploy.state.${item.state}`)}</span>
           </span>
+          {item.state === "failed" && rows.every((r) => r.state !== "failed") ? (
+            <div className="ms-6">
+              <FailureText item={item} />
+            </div>
+          ) : null}
           {rows.length > 0 ? (
             <ul aria-label={t("stackDeploy.steps.services")} className="ms-6 flex flex-col">
               {rows.map((row) => (
-                <DeployServiceRow key={row.id} item={row} />
+                <DeployServiceRow key={row.id} item={row} defaultOpen={row.state === "failed"}>
+                  {row.state === "failed" ? <FailureText item={row} /> : undefined}
+                </DeployServiceRow>
               ))}
             </ul>
           ) : null}

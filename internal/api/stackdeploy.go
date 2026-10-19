@@ -189,6 +189,8 @@ func serveStackJobStream(w http.ResponseWriter, req *http.Request, d StacksDeps,
 			switch {
 			case ev.Type == jobs.EventItem && ev.Item != nil:
 				return stackJobItemBody(*ev.Item), true
+			case ev.Type == jobs.EventOutput && ev.Output != nil:
+				return stackJobOutputLine(*ev.Output), true
 			case ev.Type == jobs.EventDone && ev.Job != nil:
 				return stackJobBody(*ev.Job, outputOf(d.Jobs, ev.Job.ID)), true
 			}
@@ -314,8 +316,8 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 	actor, userAgent := p.AuditActor(), in.UserAgent
 	in2 := stackops.SwarmDeployInput{
 		EnvID: env.ID, Stack: st, Project: loaded.Project, Files: files, Vars: vars,
-		Caller: caller,
-		Pins:   repo, RevisionID: rev.ID, Update: update, Reviewed: in.Body.Pins,
+		Caller: caller, Masker: rendering.masker,
+		Pins: repo, RevisionID: rev.ID, Update: update, Reviewed: in.Body.Pins,
 	}
 	in2.OnDone = func(res stackops.DeployResult) {
 		recordDeployEnd(reqCtx, d, actor, userAgent, st, rev, deploy, mode, res, rendering)
@@ -582,9 +584,13 @@ func stackJobBody(j jobs.Job, output []jobs.Output) StackJobBody {
 		b.Items = append(b.Items, stackJobItemBody(it))
 	}
 	for _, o := range output {
-		b.Output = append(b.Output, StackJobOutputLine{Seq: o.Seq, At: rfc3339(o.At), Text: o.Text})
+		b.Output = append(b.Output, stackJobOutputLine(o))
 	}
 	return b
+}
+
+func stackJobOutputLine(o jobs.Output) StackJobOutputLine {
+	return StackJobOutputLine{Seq: o.Seq, At: rfc3339(o.At), Text: o.Text}
 }
 
 // outputOf is the output log of a job, empty when the hub no longer has it.

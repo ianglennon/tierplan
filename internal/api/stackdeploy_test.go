@@ -235,15 +235,7 @@ func TestConsoleNeverShowsASecret(t *testing.T) {
 	// The stream's snapshot, and its done frame.
 	c := openSSE(t, f.authFixture, "/api/env/"+e.ID+"/stacks/"+st.ID+"/deploys/"+started.JobID+"/stream", operator.cookie, "")
 	snapshot := nextFrame(t, c).data
-	for _, body := range []string{read, snapshot} {
-		if strings.Contains(body, secret) {
-			t.Fatalf("a secret reached the console: %s", body)
-		}
-		if !strings.Contains(body, "TOKEN=<hidden> is not allowed") {
-			t.Errorf("body = %s, want Docker's words with the secret hidden, in a detail and in the output", body)
-		}
-	}
-	var job struct {
+	type consoleView struct {
 		Items []struct {
 			ID, Detail, Message, Code string
 		} `json:"items"`
@@ -252,20 +244,33 @@ func TestConsoleNeverShowsASecret(t *testing.T) {
 			Text string `json:"text"`
 		} `json:"output"`
 	}
-	if err := json.Unmarshal([]byte(read), &job); err != nil {
-		t.Fatal(err)
-	}
-	var failed bool
-	for _, it := range job.Items {
-		if it.ID == "service:shop_web" && it.Code == "service_rejected" && strings.Contains(it.Detail, "TOKEN=<hidden>") {
-			failed = true
+	var job consoleView
+	for name, body := range map[string]string{"the read": read, "the stream's snapshot": snapshot} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("a secret reached %s: %s", name, body)
 		}
-		if strings.Contains(it.Message, "TOKEN") {
-			t.Errorf("item %s message %q holds Docker's words", it.ID, it.Message)
+		var v consoleView
+		if err := json.Unmarshal([]byte(body), &v); err != nil {
+			t.Fatalf("%s: %v", name, err)
 		}
-	}
-	if !failed {
-		t.Errorf("items = %+v, want the service row failed with Docker's words in its detail", job.Items)
+		job = v
+		var failed, logged bool
+		for _, it := range v.Items {
+			if it.ID == "service:shop_web" && it.Code == "service_rejected" && strings.Contains(it.Detail, "TOKEN=<hidden> is not allowed") {
+				failed = true
+			}
+			if strings.Contains(it.Message, "TOKEN") {
+				t.Errorf("%s: item %s message %q holds Docker's words", name, it.ID, it.Message)
+			}
+		}
+		for _, l := range v.Output {
+			if strings.Contains(l.Text, "TOKEN=<hidden> is not allowed") {
+				logged = true
+			}
+		}
+		if !failed || !logged {
+			t.Errorf("%s: want the service row failed with Docker's words (secret hidden) in its detail and in the output; items %+v, output %+v", name, v.Items, v.Output)
+		}
 	}
 	if len(job.Output) == 0 || job.Output[0].Seq == 0 {
 		t.Errorf("output = %+v, want the lines the deploy wrote, each with its sequence", job.Output)

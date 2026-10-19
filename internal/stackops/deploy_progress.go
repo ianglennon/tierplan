@@ -43,33 +43,54 @@ const (
 	idRemoveConfig = "remove-config:"
 )
 
-// progress reports the items a deploy adds to its job. A nil *progress reports nothing, so the
-// steps that take one work unchanged for a caller that has no job.
+// progress reports the items a deploy adds to its job, and the words it writes in the job's output.
+// A nil *progress reports nothing, so the steps that take one work unchanged for a caller that has no
+// job. Every remote text goes through mask before it is stored: Docker's own words can echo a secret.
 type progress struct {
-	r *jobs.Reporter
-	// added are the items this deploy added that have not ended, in the order they were added.
+	r    *jobs.Reporter
+	mask func(string) string
+	// added are the items this deploy added, in the order they were added.
 	added []addedItem
 }
 
 type addedItem struct {
-	id, parent, name string
+	id, parent, name, noun string
 }
 
-func newProgress(r *jobs.Reporter) *progress { return &progress{r: r} }
+func newProgress(r *jobs.Reporter, m stacks.Masker) *progress {
+	return &progress{r: r, mask: m.Mask}
+}
+
+// line writes one line of the job's output.
+func (p *progress) line(text string) {
+	if p == nil {
+		return
+	}
+	p.r.Output(p.mask(text))
+}
+
+// detail puts the engine's own words on an item.
+func (p *progress) detail(id, text string) {
+	if p == nil || text == "" {
+		return
+	}
+	p.r.Detail(id, p.mask(text))
+}
 
 // add puts a waiting item in the job and remembers it under name, the name the engine knows the
-// network, object or service by, which is also what a failed step reports.
-func (p *progress) add(spec jobs.ItemSpec, name string) {
+// network, object or service by, which is also what a failed step reports, and noun, the word the
+// output uses for it.
+func (p *progress) add(spec jobs.ItemSpec, name, noun string) {
 	if p == nil {
 		return
 	}
 	p.r.Add(spec)
-	p.added = append(p.added, addedItem{id: spec.ID, parent: spec.Parent, name: name})
+	p.added = append(p.added, addedItem{id: spec.ID, parent: spec.Parent, name: name, noun: noun})
 }
 
 // addNetwork adds the step that creates a network.
 func (p *progress) addNetwork(name string) {
-	p.add(jobs.ItemSpec{ID: idNetwork + name, Label: "Create network " + name, Parent: ItemNetworks, Kind: KindStep}, name)
+	p.add(jobs.ItemSpec{ID: idNetwork + name, Label: "Create network " + name, Parent: ItemNetworks, Kind: KindStep}, name, "network")
 }
 
 // addObject adds the step that creates a secret or config. name is the compose name, full the
@@ -79,7 +100,7 @@ func (p *progress) addObject(kind stacks.ObjectKind, name, full string) {
 	if kind == stacks.KindSecret {
 		id, word = idSecret+full, "secret"
 	}
-	p.add(jobs.ItemSpec{ID: id, Label: "Create " + word + " " + name, Parent: ItemObjects, Kind: KindStep}, full)
+	p.add(jobs.ItemSpec{ID: id, Label: "Create " + word + " " + name, Parent: ItemObjects, Kind: KindStep}, full, word)
 }
 
 // addService adds the row of a service.
@@ -88,7 +109,7 @@ func (p *progress) addService(sp convert.ServicePlan) {
 	if label == "" {
 		label = sp.Name
 	}
-	p.add(jobs.ItemSpec{ID: idService + sp.Name, Label: label, Parent: ItemServices, Kind: KindService}, sp.Name)
+	p.add(jobs.ItemSpec{ID: idService + sp.Name, Label: label, Parent: ItemServices, Kind: KindService}, sp.Name, "service")
 }
 
 // addRemoval adds the step that removes an old secret or config the deploy replaced.
@@ -97,7 +118,7 @@ func (p *progress) addRemoval(kind stacks.ObjectKind, label, full string) {
 	if kind == stacks.KindSecret {
 		id, word = idRemoveSecret+full, "secret"
 	}
-	p.add(jobs.ItemSpec{ID: id, Label: "Remove old " + word + " " + label, Parent: ItemCleanup, Kind: KindStep}, full)
+	p.add(jobs.ItemSpec{ID: id, Label: "Remove old " + word + " " + label, Parent: ItemCleanup, Kind: KindStep}, full, word)
 }
 
 // start marks an added item as working.
@@ -117,18 +138,24 @@ func (p *progress) done(id string, result map[string]string) {
 }
 
 // failed ends the item of the step (networks, objects, services or cleanup) whose name is the one a
-// failed step reported, with its code, and leaves the others as they are. A step that names
-// nothing, or names an item this deploy did not add (an external object), ends no item.
-func (p *progress) failed(step, name, state, code, message string) {
+// failed step reported, with its code and the engine's words, and writes them to the output. The
+// other items are left as they are. A step that names nothing, or names an item this deploy did not
+// add (an external object), ends no item, and failed says so.
+func (p *progress) failed(step, name, state, code, message, detail string) bool {
 	if p == nil || name == "" {
-		return
+		return false
 	}
 	for _, a := range p.added {
 		if a.parent == step && a.name == name {
+			p.detail(a.id, detail)
+			if detail != "" {
+				p.line("Failed " + a.noun + " " + a.name + ": " + detail)
+			}
 			p.r.Finish(a.id, state, code, message, nil)
-			return
+			return true
 		}
 	}
+	return false
 }
 
 // rest ends every added item that has not ended: the ones after a failure were not run.

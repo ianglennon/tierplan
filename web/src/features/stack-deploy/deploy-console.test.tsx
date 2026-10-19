@@ -365,7 +365,7 @@ describe("following the stream", () => {
       items: [{ ...check }, { ...services, state: "done" }, row("api", "done")],
     });
     act(() => source().sendFrame("done", done, "9"));
-    expect(screen.getByText("Deploy complete")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Deploy complete" })).toBeTruthy();
     expect(screen.getByText("web is running 1 service on Prod.")).toBeTruthy();
     expect(screen.queryByText("Live")).toBeNull();
     expect(source().closed).toBe(true);
@@ -807,7 +807,7 @@ describe("the announcements", () => {
     expect(spoken()).toEqual([]);
   });
 
-  it("announces a service that runs, a service that fails and the end, once each", async () => {
+  it("announces a service that runs and a service that fails once each, and leaves the failed deploy to its alert", async () => {
     await mountLive(
       jobBody({ items: [check, services, row("api", "waiting"), row("web", "waiting")] }),
     );
@@ -841,7 +841,9 @@ describe("the announcements", () => {
         "7",
       ),
     );
-    expect(spoken()).toEqual(["api is running", "web failed: no such image", "Deploy failed"]);
+    // The end of a failed deploy is announced by its alert, once; the polite region does not say it again.
+    expect(spoken()).toEqual(["api is running", "web failed: no such image"]);
+    expect(screen.getByRole("alert")).toBeTruthy();
   });
 
   it("announces Deploy complete and Deploy cancelled", async () => {

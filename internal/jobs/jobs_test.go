@@ -672,17 +672,10 @@ func TestOutputLinesAreEventsAndAreCleaned(t *testing.T) {
 func TestOutputKeepsTheNewestLinesInItsOwnRingAndNeverEvictsItemEvents(t *testing.T) {
 	h := jobs.New(jobs.Options{Ring: 8, OutputRing: 50})
 	t.Cleanup(h.Close)
-	begin, release := make(chan struct{}), make(chan struct{})
 	job, err := h.Start(jobs.Spec{Kind: "k", Owner: "u", Items: []jobs.ItemSpec{{ID: "a", Label: "a"}}}, func(ctx context.Context, r *jobs.Reporter) {
-		if !gate(ctx, begin) {
-			return
-		}
 		r.Add(jobs.ItemSpec{ID: "b", Label: "b"}) // event 1
 		for i := range 500 {
 			r.Output("line " + strconv.Itoa(i))
-		}
-		if !gate(ctx, release) {
-			return
 		}
 		r.Finish("b", jobs.ItemDone, "", "", nil)
 		r.Finish("a", jobs.ItemDone, "", "", nil)
@@ -690,10 +683,12 @@ func TestOutputKeepsTheNewestLinesInItsOwnRingAndNeverEvictsItemEvents(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	close(begin)
-	out := waitOutput(t, h, job.ID, 50)
+	if _, err := h.Wait(testsupport.Context(t), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := h.Output(job.ID)
 	if len(out) != 50 || out[0].Text != "line 450" || out[49].Text != "line 499" {
-		t.Fatalf("output = %d lines from %q to %q, want the newest 50", len(out), out[0].Text, out[len(out)-1].Text)
+		t.Fatalf("output = %d lines from %q to %q, want the newest 50", len(out), head(out[0].Text, 20), head(out[len(out)-1].Text, 20))
 	}
 	if !slices.IsSortedFunc(out, func(a, b jobs.Output) int { return cmp.Compare(a.Seq, b.Seq) }) {
 		t.Error("output is not in order")
@@ -705,7 +700,6 @@ func TestOutputKeepsTheNewestLinesInItsOwnRingAndNeverEvictsItemEvents(t *testin
 		t.Fatal(err)
 	}
 	defer cancel()
-	close(release)
 	evs := drain(t, ch)
 	var ids []uint64
 	var items, lines int
@@ -718,36 +712,11 @@ func TestOutputKeepsTheNewestLinesInItsOwnRingAndNeverEvictsItemEvents(t *testin
 			lines++
 		}
 	}
-	if items != 2 || lines < 50 {
+	if items != 2 || lines != 50 {
 		t.Errorf("replay holds %d item events and %d output events, want both item finishes and the retained 50 lines", items, lines)
 	}
 	if !slices.IsSorted(ids) || len(slices.Compact(slices.Clone(ids))) != len(ids) || ids[0] <= 1 {
 		t.Errorf("replay ids = %v, want only events after 1, in order, once each", ids)
-	}
-}
-
-// waitOutput waits until the job has written n lines and returns the log.
-func waitOutput(t *testing.T, h *jobs.Hub, id string, n int) []jobs.Output {
-	t.Helper()
-	_, ch, cancel, err := h.Subscribe(context.Background(), id, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cancel()
-	timeout := testsupport.Context(t).Done()
-	for {
-		if out, _ := h.Output(id); len(out) >= n {
-			return out
-		}
-		select {
-		case _, ok := <-ch:
-			if !ok {
-				out, _ := h.Output(id)
-				return out
-			}
-		case <-timeout:
-			t.Fatal("the job never wrote its output")
-		}
 	}
 }
 

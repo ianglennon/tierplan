@@ -265,7 +265,10 @@ type entry struct {
 	cancelRequested bool
 	nextID          uint64
 	ring            []Event
-	subs            map[*sub]struct{}
+	// outRing holds the output events, apart from ring, so a job that writes many lines never
+	// pushes the item events a resuming reader needs out of the ring.
+	outRing []Event
+	subs    map[*sub]struct{}
 	// last is when each item last published an event; pending are the items whose latest
 	// state is not published yet, and timers the flush scheduled for them.
 	last    map[string]time.Time
@@ -448,20 +451,47 @@ func (r *Reporter) Finish(itemID, state, code, message string, result map[string
 }
 
 func terminal(state string) bool {
-	return state == ItemDone || state == ItemFailed || state == ItemCancelled
+	return state == ItemDone || state == ItemFailed || state == ItemCancelled || state == ItemSkipped
 }
 
-// Output adds one line to the job's output log and publishes it. The text is cleaned (Clean) and
-// stamped with the time. A line for a job that has ended is dropped.
-func (r *Reporter) Output(text string) {}
+// Output adds one line to the job's output log and publishes it. The text is cleaned (Clean, with no
+// mask: a caller that can hold a secret masks it before it calls) and stamped with the time. A line
+// for a job that has ended is dropped.
+func (r *Reporter) Output(text string) {
+	h, e := r.h, r.e
+	clean := Clean(text, nil)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if e.job.Finished() {
+		return
+	}
+	h.emitLocked(e, Event{Type: EventOutput, Output: &Output{At: h.opt.Now(), Text: clean}})
+}
 
 // Detail sets the remote system's own words on an item that has not ended, cleaned (Clean), and
-// publishes it with the item's next change. The caller masks secrets before it calls.
-func (r *Reporter) Detail(itemID, text string) {}
+// publishes it as an update, so it is sent with the item. The caller masks secrets before it calls.
+// An item that has ended is not changed.
+func (r *Reporter) Detail(itemID, text string) {
+	clean := Clean(text, nil)
+	r.Update(itemID, func(it *Item) { it.Detail = clean })
+}
 
 // Output returns a copy of the job's output log, oldest first, and false when the hub has no such
 // job. It holds at most Options.OutputRing lines.
-func (h *Hub) Output(id string) ([]Output, bool) { return nil, false }
+func (h *Hub) Output(id string) ([]Output, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.sweepLocked(h.opt.Now())
+	e, ok := h.jobs[id]
+	if !ok {
+		return nil, false
+	}
+	out := make([]Output, 0, len(e.outRing))
+	for _, ev := range e.outRing {
+		out = append(out, *ev.Output)
+	}
+	return out, true
+}
 
 func (e *entry) item(id string) *Item {
 	for i := range e.job.Items {
@@ -493,9 +523,20 @@ func (h *Hub) publishItemLocked(e *entry, itemID string) {
 func (h *Hub) emitLocked(e *entry, ev Event) {
 	e.nextID++
 	ev.ID, ev.JobID = e.nextID, e.job.ID
-	e.ring = append(e.ring, ev)
-	if over := len(e.ring) - h.opt.Ring; over > 0 {
-		e.ring = slices.Delete(e.ring, 0, over)
+	if ev.Type == EventOutput && ev.Output != nil {
+		// A line's sequence is the ID of the event that carries it.
+		line := *ev.Output
+		line.Seq = ev.ID
+		ev.Output = &line
+		e.outRing = append(e.outRing, ev)
+		if over := len(e.outRing) - h.opt.OutputRing; over > 0 {
+			e.outRing = slices.Delete(e.outRing, 0, over)
+		}
+	} else {
+		e.ring = append(e.ring, ev)
+		if over := len(e.ring) - h.opt.Ring; over > 0 {
+			e.ring = slices.Delete(e.ring, 0, over)
+		}
 	}
 	for s := range e.subs {
 		select {
@@ -526,7 +567,7 @@ func (h *Hub) finishIfAllLocked(e *entry) {
 			done++
 		case ItemFailed:
 			failed++
-		case ItemCancelled:
+		case ItemCancelled, ItemSkipped:
 		default:
 			return
 		}
@@ -642,6 +683,16 @@ func (h *Hub) List(keep func(Job) bool) []Job {
 	return out
 }
 
+func cmpUint(a, b uint64) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	}
+	return 0
+}
+
 func cmpString(a, b string) int {
 	switch {
 	case a < b:
@@ -675,6 +726,13 @@ func (h *Hub) Subscribe(ctx context.Context, id string, after uint64) (Job, <-ch
 				replay = append(replay, ev)
 			}
 		}
+		for _, ev := range e.outRing {
+			if ev.ID > after {
+				replay = append(replay, ev)
+			}
+		}
+		// The two rings are each in order; the reader needs one order.
+		slices.SortFunc(replay, func(a, b Event) int { return cmpUint(a.ID, b.ID) })
 	}
 	s := &sub{ch: make(chan Event, len(replay)+h.opt.Ring)}
 	for _, ev := range replay {
