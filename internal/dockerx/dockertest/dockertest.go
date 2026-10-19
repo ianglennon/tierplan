@@ -587,6 +587,9 @@ type Fake struct {
 	// distDigest is the digest the distribution route answers a full reference with, where a
 	// test has moved a tag (SetDistributionDigest); a reference not in it gets fakeDigest.
 	distDigest map[string]string
+	// distFail is the status and message the distribution route answers one full reference
+	// with (SetDistributionFailure), where a test makes a single registry fail.
+	distFail map[string]FakePullStatus
 	// distAuth and distRefs are the header and reference of each distribution check.
 	distAuth, distRefs []string
 

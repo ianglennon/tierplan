@@ -104,6 +104,10 @@ type SwarmDeployInput struct {
 	// pinned, and a service the engine lacks is looked up again.
 	Pins       PinStore
 	RevisionID string
+	// Update, when not nil, is an update of the images (D-16): the services in it, by compose
+	// name or swarm name, are looked up again even though their text did not change, and every
+	// other service keeps the digest it runs.
+	Update map[string]bool
 	// OnDone, when set, is called once with the result before the job's last item is finished,
 	// so a job that reads as finished has already been recorded by the caller.
 	OnDone func(DeployResult)

@@ -158,8 +158,13 @@ func (f *Fake) serveDistribution(w http.ResponseWriter, r *http.Request, p strin
 		return true
 	}
 	f.mu.Lock()
+	failure, failing := f.distFail[name]
 	dgst, moved := f.distDigest[name]
 	f.mu.Unlock()
+	if failing {
+		writeJSON(w, failure.Code, map[string]string{"message": failure.Message})
+		return true
+	}
 	if !moved {
 		dgst = fakeDigest(name)
 	}
@@ -189,6 +194,19 @@ func (f *Fake) SetDistributionDigest(fullRef, digest string) {
 		f.distDigest = map[string]string{}
 	}
 	f.distDigest[fullRef] = digest
+}
+
+// SetDistributionFailure makes the distribution route answer the full reference (for example
+// "registry.example:5000/app:1") with the status and message from now on, as one registry that
+// is down, refuses a credential or does not know the image does, while every other reference is
+// answered as before. The check is still recorded in DistributionRefs.
+func (f *Fake) SetDistributionFailure(fullRef string, status int, message string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.distFail == nil {
+		f.distFail = map[string]FakePullStatus{}
+	}
+	f.distFail[fullRef] = FakePullStatus{Code: status, Message: message}
 }
 
 // DistributionAuth returns the X-Registry-Auth header of every distribution check the

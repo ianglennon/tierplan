@@ -866,3 +866,148 @@ func TestADeployStopsAtTheLookupWhenAnImageCannotBePinned(t *testing.T) {
 		}
 	}
 }
+
+// A deploy that cannot pin an image, a local image, an update of chosen services and a service
+// the swarm lost (D-16, D-18, A7).
+
+const twoServiceCompose = "services:\n  web:\n    image: nginx:1.27\n  cache:\n    image: redis:7\n"
+
+// updatesByService is the specs the fake received as updates, by service name.
+func updatesByService(f *dockertest.Fake) map[string]string {
+	out := map[string]string{}
+	for _, u := range f.ServiceUpdates() {
+		out[u.Spec.Name] = u.Spec.TaskTemplate.ContainerSpec.Image
+	}
+	return out
+}
+
+func TestPinDeployStopsAtTheLookupNamingTheHostAndTheServiceAndWritesNothing(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	rig.fake.SetDistributionDigest("docker.io/library/nginx:1.27", digestOf("a"))
+	_, first := stackInput(t, "site", pinCompose("nginx:1.27"), nil)
+	if res, _ := rig.deploy(t, first); !res.OK() {
+		t.Fatalf("first deploy = %+v", res)
+	}
+	rig.fake.SetDistributionFailure("registry.example:5000/app:1", 500, `dial tcp: lookup registry.example: no such host`)
+	writes := len(rig.fake.Writes())
+
+	// The file now also names a new service on the registry that is down.
+	_, second := stackInput(t, "site", "services:\n  web:\n    image: nginx:1.27\n  app:\n    image: registry.example:5000/app:1\n", nil)
+	res, job := rig.deploy(t, second)
+
+	if res.Code != stackops.CodeRegistryUnreachable || res.FailedService != "site_app" {
+		t.Fatalf("result = %+v, want registry_unreachable at site_app", res)
+	}
+	got := itemStates(job)
+	if got[stackops.ItemCheck] != "done" || got[stackops.ItemLookup] != "failed:registry_unreachable" || got[stackops.ItemNetworks] != "cancelled:not_run" {
+		t.Errorf("items = %v, want the deploy to stop at the lookup", got)
+	}
+	for _, it := range job.Items {
+		if it.ID == stackops.ItemLookup && it.Message != "Bayplan can't reach registry.example:5000, and app needs a fresh lookup. Services that are already pinned don't need the registry." {
+			t.Errorf("lookup message = %q", it.Message)
+		}
+	}
+	if n := len(rig.fake.Writes()); n != writes {
+		t.Errorf("writes grew from %d to %d, a deploy that cannot pin writes nothing", writes, n)
+	}
+	if res.Pins["site_web"].Action != stacks.PinKeep {
+		t.Errorf("pins = %+v, the pinned service needs no registry", res.Pins)
+	}
+}
+
+func TestPinDeployOfALocalOnlyImageSendsItsImageIDAndWarns(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		c.Images = []dockertest.FakeImage{{ID: localImageID, RepoTags: []string{localImageRef}}}
+	})
+	rig.fake.SetDistributionFailure("docker.io/library/myapp:1", 404, "pull access denied for myapp")
+	store := &memPins{}
+	_, in := stackInput(t, "site", "services:\n  app:\n    image: myapp:1\n", nil)
+	in.Pins, in.RevisionID = store, "rev-1"
+	res, job := rig.deploy(t, in)
+
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("result = %+v, job = %s %v", res, job.State, itemStates(job))
+	}
+	creates := rig.fake.ServiceCreates()
+	if len(creates) != 1 || creates[0].Spec.TaskTemplate.ContainerSpec.Image != localImageID || creates[0].Spec.Labels["com.docker.stack.image"] != localImageRef {
+		t.Fatalf("service creates = %+v, want the image ID with the text as the label", creates)
+	}
+	if len(res.Problems) != 1 || res.Problems[0].Code != stackops.CodeLocalImage || res.Problems[0].Severity != stacks.SeverityWarning {
+		t.Errorf("problems = %+v, want one local-image warning", res.Problems)
+	}
+	if got := store.pinsOf("rev-1"); !maps.Equal(got, map[string]string{"site_app": localImageID}) {
+		t.Errorf("stored pins = %v", got)
+	}
+}
+
+func TestPinUpdateModeLooksUpOnlyTheSelectedServices(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	rig.fake.SetDistributionDigest("docker.io/library/nginx:1.27", digestOf("a"))
+	rig.fake.SetDistributionDigest("docker.io/library/redis:7", digestOf("c"))
+	_, in := stackInput(t, "site", twoServiceCompose, nil)
+	if res, _ := rig.deploy(t, in); !res.OK() {
+		t.Fatalf("first deploy = %+v", res)
+	}
+	rig.fake.SetDistributionDigest("docker.io/library/nginx:1.27", digestOf("b"))
+	rig.fake.SetDistributionDigest("docker.io/library/redis:7", digestOf("d"))
+	lookups := len(rig.fake.DistributionRefs())
+
+	in.Update = map[string]bool{"web": true}
+	res, job := rig.deploy(t, in)
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("update = %+v, job = %s %v", res, job.State, itemStates(job))
+	}
+	got := updatesByService(rig.fake)
+	if got["site_web"] != "nginx:1.27@"+digestOf("b") || got["site_cache"] != "redis:7@"+digestOf("c") {
+		t.Errorf("updates = %v, want web moved to the newest digest and cache kept on its own", got)
+	}
+	if refs := rig.fake.DistributionRefs()[lookups:]; !slices.Equal(refs, []string{"docker.io/library/nginx:1.27"}) {
+		t.Errorf("lookups of the update = %v, want only the selected service", refs)
+	}
+}
+
+func TestPinAServiceTheSwarmLostKeepsTheLastGoodRevisionsDigestWithoutARegistryCall(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	rig.fake.SetDistributionDigest("docker.io/library/nginx:1.27", digestOf("b")) // the tag has moved since
+	store := &memPins{good: map[string]stacks.LivePin{
+		"site_web": {AsWritten: "nginx:1.27", Image: "nginx:1.27@" + digestOf("a")},
+	}}
+	_, in := stackInput(t, "site", pinCompose("nginx:1.27"), nil)
+	in.Pins, in.RevisionID = store, "rev-2"
+
+	res, job := rig.deploy(t, in)
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("result = %+v, job = %s %v", res, job.State, itemStates(job))
+	}
+	creates := rig.fake.ServiceCreates()
+	if len(creates) != 1 || creates[0].Spec.TaskTemplate.ContainerSpec.Image != "nginx:1.27@"+digestOf("a") {
+		t.Fatalf("service creates = %+v, want the digest the last good revision ran", creates)
+	}
+	if n := len(rig.fake.DistributionRefs()); n != 0 {
+		t.Errorf("distribution lookups = %d, want none", n)
+	}
+	if got := store.pinsOf("rev-2"); !maps.Equal(got, map[string]string{"site_web": "nginx:1.27@" + digestOf("a")}) {
+		t.Errorf("stored pins = %v", got)
+	}
+}
+
+func TestPinAChangedTextIgnoresTheStoredPinOfAServiceTheSwarmLost(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	rig.fake.SetDistributionDigest("docker.io/library/nginx:1.28", digestOf("c"))
+	store := &memPins{good: map[string]stacks.LivePin{
+		"site_web": {AsWritten: "nginx:1.27", Image: "nginx:1.27@" + digestOf("a")},
+	}}
+	_, in := stackInput(t, "site", pinCompose("nginx:1.28"), nil)
+	in.Pins, in.RevisionID = store, "rev-2"
+	if res, _ := rig.deploy(t, in); !res.OK() {
+		t.Fatalf("deploy = %+v", res)
+	}
+	if got := rig.fake.ServiceCreates()[0].Spec.TaskTemplate.ContainerSpec.Image; got != "nginx:1.28@"+digestOf("c") {
+		t.Errorf("image = %q, want the new text looked up", got)
+	}
+}

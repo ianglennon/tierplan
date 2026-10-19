@@ -15,8 +15,13 @@ import (
 	"github.com/ianglennon/bayplan/internal/stacks/convert"
 )
 
-// CodeImageUnresolved ends the lookup item of a deploy when an image could not be looked up.
-const CodeImageUnresolved = "image_unresolved"
+// The codes of the image lookup. CodeRegistryUnreachable and CodeImageUnresolved end the lookup
+// item of a deploy; CodeLocalImage is the code of the warning for an image no registry has.
+const (
+	CodeRegistryUnreachable = "registry_unreachable"
+	CodeImageUnresolved     = "image_unresolved"
+	CodeLocalImage          = "local_image"
+)
 
 // Pin is how one service's image is pinned: the reference as written, the reference to send and
 // what decided it. Note is the sentence for a warning (a local image), empty otherwise.
