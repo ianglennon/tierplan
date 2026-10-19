@@ -13,6 +13,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/bayplan/internal/stacks"
 )
 
 // StackReviewRequest is the body of POST .../review.
@@ -74,6 +75,30 @@ type StackReviewObjectBody struct {
 	Detail string `json:"detail" doc:"A sentence for the row, or empty"`
 }
 
+// StackDiffLineBody is one line of a hunk.
+type StackDiffLineBody struct {
+	Kind string `json:"kind" enum:"context,added,removed" doc:"context (in both texts), added (only in the newer) or removed (only in the older)"`
+	Old  int    `json:"old" doc:"The line's number in the older text, 0 for an added line"`
+	New  int    `json:"new" doc:"The line's number in the newer text, 0 for a removed line"`
+	Text string `json:"text" doc:"The line, without its line break. A secret value is <hidden>"`
+}
+
+// StackDiffHunkBody is a run of changed lines with 3 unchanged lines on either side.
+type StackDiffHunkBody struct {
+	OldStart int                 `json:"oldStart" doc:"The number of the hunk's first line in the older text; for a hunk with no older line, the number of the line that would come next"`
+	OldLines int                 `json:"oldLines" doc:"How many lines of the older text the hunk covers"`
+	NewStart int                 `json:"newStart" doc:"The number of the hunk's first line in the newer text, as oldStart is for the older"`
+	NewLines int                 `json:"newLines" doc:"How many lines of the newer text the hunk covers"`
+	Lines    []StackDiffLineBody `json:"lines" doc:"The hunk's lines in order"`
+}
+
+// StackTextDiffBody is a text compared with an older one, computed by the server.
+type StackTextDiffBody struct {
+	ChangedLines int                 `json:"changedLines" doc:"How many lines the hunks add and remove"`
+	Hunks        []StackDiffHunkBody `json:"hunks" doc:"The changes, in order, each with 3 lines of context. Empty when the texts are the same. Over 20,000 lines, or when it takes more than 4,000 added and removed lines to turn one into the other, there is one hunk that removes the whole older text and adds the whole newer"`
+	Lines        []string            `json:"lines" doc:"The lines of the newer text, masked, so that the unchanged lines between hunks can be shown; empty when there are no hunks"`
+}
+
 // StackReviewBody is what a deploy of the saved draft would do.
 type StackReviewBody struct {
 	Problems     []StackProblemBody       `json:"problems" doc:"What the check found and the review added: host access that needs Admin, a name clash, an image that cannot be looked up, an external object that does not exist. An error stops a deploy"`
@@ -84,6 +109,7 @@ type StackReviewBody struct {
 	DraftVersion int64                    `json:"draftVersion" doc:"The version of the draft the review was made of: send it with the deploy"`
 	Pins         map[string]string        `json:"pins" doc:"The image each service will be deployed with, by swarm service name: send it with the deploy and the deploy uses exactly these digests"`
 	NeedsAdmin   []string                 `json:"needsAdmin" doc:"The kinds of host access the stack uses that the caller may not deploy (bind mounts, extra privileges, host networking, device mounts). Empty when the caller may deploy it"`
+	YAML         StackTextDiffBody        `json:"yaml" doc:"The rendered stack of the draft, with the images the review chose, against the rendering stored with the last good deploy, masked, as hunks with 3 lines of context. A stack never deployed is compared with an empty document. This is the one comparison that is with the last deploy and not with what is running"`
 }
 
 // StackReviewOutput wraps StackReviewBody for huma.
@@ -99,7 +125,8 @@ func registerStackReview(r *httpx.Router, d StacksDeps) {
 		Description: "Reviews the stack's saved draft (the latest good revision when there is no draft) against what is running and saves nothing. " +
 			"It runs the same check as the editor, looks up the digests of the images that need one, converts the stack the way a deploy does, reads what the swarm holds under the stack's namespace and answers the problems, a summary, an image table, each service's change with its masked current and next spec, and the other resources. " +
 			"A value derived from a secret of the stack is <hidden> on both sides; whether it changed is decided before it is hidden and listed in hiddenChanges as a path. " +
-			"Right after a deploy, a review shows no change. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. " +
+			"Right after a deploy, a review shows no change. yaml is the one comparison with the last deploy and not with what is running: the rendered stack against the masked rendering stored with the last good revision, as hunks computed here with 3 lines of context. " +
+			"Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. " +
 			"For a caller below env Admin, host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables, is a blocking needs_admin problem at its line, and needsAdmin names the kinds. " +
 			"A name that something Bayplan does not manage holds is a blocking stack_name_clash problem. " +
 			"An environment that is no longer the kind of target the stack was created for is 409 target_changed, and a standalone stack is 409 target_engine_missing. Needs stacks.deploy (Operator).",
@@ -133,6 +160,9 @@ func reviewStack(ctx context.Context, d StacksDeps, in *StackReviewInput) (*Stac
 		return nil, stackInternal(d, "read the running revision", env.ID, err)
 	} else if ok {
 		ri.Previous = &good.Copy
+		if ri.Rendering, err = repo.GoodRendering(ctx, st.ID); err != nil {
+			return nil, stackInternal(d, "read the last rendering", env.ID, err)
+		}
 	}
 	rv, err := d.ops().Review(ctx, ri)
 	if err != nil {
@@ -154,7 +184,9 @@ func stackReviewBody(rv stackops.Review) StackReviewBody {
 		Services:     make([]StackReviewServiceBody, 0, len(rv.Services)),
 		Objects:      make([]StackReviewObjectBody, 0, len(rv.Objects)),
 		DraftVersion: rv.DraftVersion, Pins: rv.Pins, NeedsAdmin: rv.NeedsAdmin,
+		YAML: textDiffBody(rv.YAML),
 	}
+
 	if b.Pins == nil {
 		b.Pins = map[string]string{}
 	}
@@ -200,4 +232,27 @@ func specTree(raw json.RawMessage) map[string]any {
 		return nil
 	}
 	return out
+}
+
+// diffKinds names the kinds of a diff line as the answer spells them.
+var diffKinds = map[byte]string{stacks.DiffContext: "context", stacks.DiffAdded: "added", stacks.DiffRemoved: "removed"}
+
+func hunkBodies(hunks []stacks.Hunk) []StackDiffHunkBody {
+	out := make([]StackDiffHunkBody, 0, len(hunks))
+	for _, h := range hunks {
+		lines := make([]StackDiffLineBody, 0, len(h.Lines))
+		for _, l := range h.Lines {
+			lines = append(lines, StackDiffLineBody{Kind: diffKinds[l.Kind], Old: l.Old, New: l.New, Text: l.Text})
+		}
+		out = append(out, StackDiffHunkBody{OldStart: h.OldStart, OldLines: h.OldLines, NewStart: h.NewStart, NewLines: h.NewLines, Lines: lines})
+	}
+	return out
+}
+
+func textDiffBody(td stackops.TextDiff) StackTextDiffBody {
+	lines := td.Lines
+	if lines == nil {
+		lines = []string{}
+	}
+	return StackTextDiffBody{ChangedLines: td.ChangedLines, Hunks: hunkBodies(td.Hunks), Lines: lines}
 }

@@ -2107,7 +2107,7 @@ export interface paths {
         put?: never;
         /**
          * Review what a deploy of a stack would do
-         * @description Reviews the stack's saved draft (the latest good revision when there is no draft) against what is running and saves nothing. It runs the same check as the editor, looks up the digests of the images that need one, converts the stack the way a deploy does, reads what the swarm holds under the stack's namespace and answers the problems, a summary, an image table, each service's change with its masked current and next spec, and the other resources. A value derived from a secret of the stack is <hidden> on both sides; whether it changed is decided before it is hidden and listed in hiddenChanges as a path. Right after a deploy, a review shows no change. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. For a caller below env Admin, host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables, is a blocking needs_admin problem at its line, and needsAdmin names the kinds. A name that something Bayplan does not manage holds is a blocking stack_name_clash problem. An environment that is no longer the kind of target the stack was created for is 409 target_changed, and a standalone stack is 409 target_engine_missing. Needs stacks.deploy (Operator).
+         * @description Reviews the stack's saved draft (the latest good revision when there is no draft) against what is running and saves nothing. It runs the same check as the editor, looks up the digests of the images that need one, converts the stack the way a deploy does, reads what the swarm holds under the stack's namespace and answers the problems, a summary, an image table, each service's change with its masked current and next spec, and the other resources. A value derived from a secret of the stack is <hidden> on both sides; whether it changed is decided before it is hidden and listed in hiddenChanges as a path. Right after a deploy, a review shows no change. yaml is the one comparison with the last deploy and not with what is running: the rendered stack against the masked rendering stored with the last good revision, as hunks computed here with 3 lines of context. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. For a caller below env Admin, host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables, is a blocking needs_admin problem at its line, and needsAdmin names the kinds. A name that something Bayplan does not manage holds is a blocking stack_name_clash problem. An environment that is no longer the kind of target the stack was created for is 409 target_changed, and a standalone stack is 409 target_engine_missing. Needs stacks.deploy (Operator).
          */
         post: operations["reviewStack"];
         delete?: never;
@@ -8210,6 +8210,49 @@ export interface components {
              */
             target: "swarm" | "standalone";
         };
+        StackDiffHunkBody: {
+            /** @description The hunk's lines in order */
+            lines: components["schemas"]["StackDiffLineBody"][] | null;
+            /**
+             * Format: int64
+             * @description How many lines of the newer text the hunk covers
+             */
+            newLines: number;
+            /**
+             * Format: int64
+             * @description The number of the hunk's first line in the newer text, as oldStart is for the older
+             */
+            newStart: number;
+            /**
+             * Format: int64
+             * @description How many lines of the older text the hunk covers
+             */
+            oldLines: number;
+            /**
+             * Format: int64
+             * @description The number of the hunk's first line in the older text; for a hunk with no older line, the number of the line that would come next
+             */
+            oldStart: number;
+        };
+        StackDiffLineBody: {
+            /**
+             * @description context (in both texts), added (only in the newer) or removed (only in the older)
+             * @enum {string}
+             */
+            kind: "context" | "added" | "removed";
+            /**
+             * Format: int64
+             * @description The line's number in the newer text, 0 for a removed line
+             */
+            new: number;
+            /**
+             * Format: int64
+             * @description The line's number in the older text, 0 for an added line
+             */
+            old: number;
+            /** @description The line, without its line break. A secret value is <hidden> */
+            text: string;
+        };
         StackDraftBody: {
             /**
              * Format: int64
@@ -8420,6 +8463,8 @@ export interface components {
             services: components["schemas"]["StackReviewServiceBody"][] | null;
             /** @description The counts of what would change */
             summary: components["schemas"]["StackReviewSummaryBody"];
+            /** @description The rendered stack of the draft, with the images the review chose, against the rendering stored with the last good deploy, masked, as hunks with 3 lines of context. A stack never deployed is compared with an empty document. This is the one comparison that is with the last deploy and not with what is running */
+            yaml: components["schemas"]["StackTextDiffBody"];
         };
         StackReviewCountsBody: {
             /**
@@ -8527,6 +8572,17 @@ export interface components {
             services: components["schemas"]["StackReviewCountsBody"];
             /** @description Always zero on a swarm: the engine of each node makes a named volume when a task first uses it */
             volumes: components["schemas"]["StackReviewCountsBody"];
+        };
+        StackTextDiffBody: {
+            /**
+             * Format: int64
+             * @description How many lines the hunks add and remove
+             */
+            changedLines: number;
+            /** @description The changes, in order, each with 3 lines of context. Empty when the texts are the same. Over 20,000 lines, or when it takes more than 4,000 added and removed lines to turn one into the other, there is one hunk that removes the whole older text and adds the whole newer */
+            hunks: components["schemas"]["StackDiffHunkBody"][] | null;
+            /** @description The lines of the newer text, masked, so that the unchanged lines between hunks can be shown; empty when there are no hunks */
+            lines: string[] | null;
         };
         StackVariableBody: {
             /** @description The default written in the compose file, when hasDefault is true */

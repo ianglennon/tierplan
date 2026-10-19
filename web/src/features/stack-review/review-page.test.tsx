@@ -763,3 +763,72 @@ describe("when the review cannot be loaded", () => {
     ).toBeTruthy();
   });
 });
+
+// The Rendered YAML tab (plan 07-16, STK-06, D-11): the rendered stack against the last deploy, as
+// the hunks the server computed.
+
+const yamlDiff = () => ({
+  changedLines: 2,
+  hunks: [
+    {
+      oldStart: 3,
+      oldLines: 3,
+      newStart: 3,
+      newLines: 3,
+      lines: [
+        { kind: "context", old: 3, new: 3, text: "    deploy:" },
+        { kind: "removed", old: 4, new: 0, text: "      replicas: 2" },
+        { kind: "added", old: 0, new: 4, text: "      replicas: 3" },
+        { kind: "context", old: 5, new: 5, text: "    ports:" },
+      ],
+    },
+  ],
+  lines: ["services:", "  web:", "    deploy:", "      replicas: 3", "    ports:", "      - 80"],
+});
+
+describe("the Rendered YAML tab", () => {
+  it("shows the number of changed lines in its label, beside Changes", async () => {
+    review = () => Response.json(reviewBody({ yaml: yamlDiff() }));
+    mount();
+    expect(await screen.findByRole("tab", { name: "Changes" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Rendered YAML (2)" })).toBeTruthy();
+  });
+
+  it("shows the hunk with its glyphs and its folded unchanged lines when opened", async () => {
+    review = () => Response.json(reviewBody({ yaml: yamlDiff() }));
+    mount();
+    const tab = await screen.findByRole("tab", { name: "Rendered YAML (2)" });
+    expect(screen.queryByRole("table", { name: "Rendered YAML, changes" })).toBeNull();
+    fireEvent.mouseDown(tab);
+    fireEvent.click(tab);
+    const table = await screen.findByRole("table", { name: "Rendered YAML, changes" });
+    expect(within(table).getByRole("row", { name: "Removed line 4" })).toBeTruthy();
+    expect(within(table).getByRole("row", { name: "Added line 4" })).toBeTruthy();
+    expect(within(table).getByRole("button", { name: "Show 2 unchanged lines" })).toBeTruthy();
+    expect(within(table).getByRole("button", { name: "Show 1 unchanged line" })).toBeTruthy();
+  });
+
+  it("has no number when the rendering is what was deployed, and says so", async () => {
+    review = () => Response.json(reviewBody({ yaml: { changedLines: 0, hunks: [], lines: [] } }));
+    mount();
+    const tab = await screen.findByRole("tab", { name: "Rendered YAML" });
+    fireEvent.mouseDown(tab);
+    fireEvent.click(tab);
+    expect(
+      await screen.findByText("The rendered YAML is the same as at the last deploy."),
+    ).toBeTruthy();
+  });
+
+  it("opens on its own when only the text differs and there is nothing to change in the Changes tab", async () => {
+    review = () =>
+      Response.json(reviewBody({ services: [], summary: reviewBody().summary, yaml: yamlDiff() }));
+    mount();
+    expect(await screen.findByRole("table", { name: "Rendered YAML, changes" })).toBeTruthy();
+    expect(screen.getByText("No changes")).toBeTruthy();
+  });
+
+  it("is a review that still works when the answer has no yaml", async () => {
+    mount();
+    expect(await screen.findByRole("tab", { name: "Rendered YAML" })).toBeTruthy();
+  });
+});

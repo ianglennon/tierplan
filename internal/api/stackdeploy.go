@@ -219,6 +219,19 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 	if err != nil {
 		return nil, stackInternal(d, "revision", env.ID, err)
 	}
+	// The masked rendering is what the next review compares its own with. It is stored before the
+	// job starts, with the images this deploy was told to use, and again when the deploy ends good,
+	// with the images it ran with.
+	rendering := revisionRendering{repo: repo, loaded: checked.Loaded, masker: stacks.NewMasker(draft.Copy.Vars, draft.Copy.Files)}
+	var startPins map[string]stacks.LivePin
+	if in.Body.Pins != nil {
+		startPins = stackops.LivePins(in.Body.Pins)
+	} else if startPins, err = repo.GoodPins(ctx, st.ID); err != nil {
+		d.Log.Warn("could not read the pins of a stack for its rendering", "stack", st.ID, "error", err)
+	}
+	if err := rendering.store(ctx, rev.ID, startPins); err != nil {
+		d.Log.Warn("could not store the rendering of a revision", "stack", st.ID, "revision", rev.Seq, "error", err)
+	}
 
 	// The job needs the deploy row's ID and the row needs the job's ID, so the run waits on
 	// ready until the row is written.
@@ -232,7 +245,7 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 		Pins:   repo, RevisionID: rev.ID, Update: update, Reviewed: in.Body.Pins,
 	}
 	in2.OnDone = func(res stackops.DeployResult) {
-		recordDeployEnd(reqCtx, d, actor, userAgent, st, rev, deploy, mode, res)
+		recordDeployEnd(reqCtx, d, actor, userAgent, st, rev, deploy, mode, res, rendering)
 	}
 	spec := jobs.Spec{
 		Kind: stackDeployJobKind, EnvID: env.ID, Owner: stackJobOwner(p),
@@ -270,10 +283,26 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 	return &StackDeployOutput{CacheControl: "no-store", Body: StackDeployBody{JobID: job.ID, Revision: rev.Seq}}, nil
 }
 
+// revisionRendering stores the masked rendering of a revision: the stack as the deploy sent it, with
+// each image shown as the pin it ran with.
+type revisionRendering struct {
+	repo   stackops.Repo
+	loaded *stacks.Loaded
+	masker stacks.Masker
+}
+
+func (r revisionRendering) store(ctx context.Context, snapshotID string, pins map[string]stacks.LivePin) error {
+	out, err := stacks.Render(stacks.RenderInput{Loaded: r.loaded, Pins: pins, Masker: r.masker})
+	if err != nil {
+		return err
+	}
+	return r.repo.SetRendered(ctx, snapshotID, out)
+}
+
 // recordDeployEnd stores how a deploy ended: the revision's outcome, the deploy row and the
 // audit row. It runs before the job's last step is finished, so a job that reads as finished has
 // already been recorded.
-func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userAgent string, st stackops.Stack, rev stackops.Snapshot, deploy stackops.DeployRow, mode string, res stackops.DeployResult) {
+func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userAgent string, st stackops.Stack, rev stackops.Snapshot, deploy stackops.DeployRow, mode string, res stackops.DeployResult, rendering revisionRendering) {
 	state, outcome, result := stackops.DeployDone, stackops.OutcomeGood, audit.ResultSuccess
 	resultWord := "done"
 	switch {
@@ -287,6 +316,15 @@ func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userA
 	repo := d.repo()
 	if err := repo.SetOutcome(wctx, rev.ID, outcome, "", ""); err != nil {
 		d.Log.Error("could not mark a revision", "stack", st.ID, "revision", rev.Seq, "error", err)
+	} else if outcome == stackops.OutcomeGood {
+		// The revision is the newest good one now, so its pins are the images it ran with.
+		pins, perr := repo.GoodPins(wctx, st.ID)
+		if perr == nil {
+			perr = rendering.store(wctx, rev.ID, pins)
+		}
+		if perr != nil {
+			d.Log.Warn("could not store the rendering of a revision", "stack", st.ID, "revision", rev.Seq, "error", perr)
+		}
 	}
 	if err := repo.FinishDeploy(wctx, deploy.ID, state, res.FailedService, res.Code); err != nil {
 		d.Log.Error("could not finish a deploy row", "stack", st.ID, "deploy", deploy.ID, "error", err)

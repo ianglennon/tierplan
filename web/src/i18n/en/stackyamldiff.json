@@ -1,0 +1,21 @@
+{
+  "stackYamlDiff": {
+    "tab": "Rendered YAML",
+    "tabCount": "Rendered YAML ({{count}})",
+    "caption": "Rendered YAML, changes",
+    "none": "The rendered YAML is the same as at the last deploy.",
+    "show_one": "Show {{count}} unchanged line",
+    "show_other": "Show {{count}} unchanged lines",
+    "columns": {
+      "old": "Line in the last deploy",
+      "new": "Line in the draft",
+      "change": "Change",
+      "text": "Text"
+    },
+    "line": {
+      "added": "Added line {{n}}",
+      "removed": "Removed line {{n}}",
+      "context": "Unchanged line {{n}}"
+    }
+  }
+}

@@ -480,3 +480,77 @@ func TestReviewWithNoCheckerRefusesRatherThanSkipTheCheck(t *testing.T) {
 		t.Errorf("review with no checker: %v, want ErrNoPolicy", err)
 	}
 }
+
+// The Rendered YAML tab (plan 07-16, D-11, A11): the draft's rendering against the one stored with
+// the last good revision.
+
+func TestReviewOfAFirstDeployDiffsTheRenderingAgainstAnEmptyDocument(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	rv := rig.review(t, "tracer", stacks.StarterCompose, nil)
+	if len(rv.YAML.Hunks) != 1 || rv.YAML.Hunks[0].OldLines != 0 || rv.YAML.Hunks[0].NewLines == 0 {
+		t.Fatalf("yaml = %+v, want one hunk that adds the whole rendering", rv.YAML)
+	}
+	if rv.YAML.ChangedLines != rv.YAML.Hunks[0].NewLines || len(rv.YAML.Lines) != rv.YAML.Hunks[0].NewLines {
+		t.Errorf("changed lines %d, lines %d, hunk %+v", rv.YAML.ChangedLines, len(rv.YAML.Lines), rv.YAML.Hunks[0])
+	}
+	if !strings.Contains(strings.Join(rv.YAML.Lines, "\n"), "image: nginx:1.27-alpine@"+dockertest.FakeDigestOf("docker.io/library/nginx:1.27-alpine")) {
+		t.Errorf("the rendering shows the image the review chose: %q", rv.YAML.Lines)
+	}
+}
+
+func TestReviewOfADraftEqualToTheLastDeployHasNoYAMLChange(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	first := rig.review(t, "tracer", stacks.StarterCompose, nil)
+	in := rig.reviewInput(t, "tracer", stacks.StarterCompose, nil)
+	in.Rendering = []byte(strings.Join(first.YAML.Lines, "\n") + "\n")
+	rv, err := rig.deps.Review(testsupport.Context(t), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rv.YAML.Hunks) != 0 || rv.YAML.ChangedLines != 0 || len(rv.YAML.Lines) != 0 {
+		t.Errorf("yaml = %+v, want no change against its own rendering", rv.YAML)
+	}
+}
+
+func TestReviewOfOneChangedReplicaLineIsTwoChangedLinesInOneHunk(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	first := rig.review(t, "tracer", stacks.StarterCompose, nil)
+	stored := strings.Join(first.YAML.Lines, "\n") + "\n"
+
+	grown := strings.Replace(stacks.StarterCompose, "    image:", "    deploy:\n      replicas: 3\n    image:", 1)
+	in := rig.reviewInput(t, "tracer", grown, nil)
+	in.Rendering = []byte(stored)
+	rv, err := rig.deps.Review(testsupport.Context(t), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rv.Problems) != 0 {
+		t.Fatalf("problems = %+v", rv.Problems)
+	}
+	if len(rv.YAML.Hunks) != 1 || rv.YAML.ChangedLines < 1 {
+		t.Fatalf("yaml = %+v, want one hunk", rv.YAML)
+	}
+	var added []string
+	for _, l := range rv.YAML.Hunks[0].Lines {
+		if l.Kind == stacks.DiffAdded {
+			added = append(added, strings.TrimSpace(l.Text))
+		}
+	}
+	if !slices.Contains(added, "replicas: 3") {
+		t.Errorf("added lines = %q, want replicas: 3", added)
+	}
+}
+
+func TestReviewMasksASecretInTheRenderedYAML(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	compose := "services:\n  web:\n    image: nginx:1.27-alpine\n    environment:\n      API_KEY: ${API_KEY}\n"
+	rv := rig.review(t, "shop", compose, nil, stacks.Var{Name: "API_KEY", Value: "supersecret-value", Secret: true})
+	all := strings.Join(rv.YAML.Lines, "\n")
+	if strings.Contains(all, "supersecret-value") || !strings.Contains(all, "<hidden>") {
+		t.Errorf("rendering = %q, want the secret hidden", all)
+	}
+}

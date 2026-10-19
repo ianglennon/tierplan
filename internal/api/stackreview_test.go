@@ -45,6 +45,18 @@ type stackReviewAnswer struct {
 	DraftVersion int64             `json:"draftVersion"`
 	Pins         map[string]string `json:"pins"`
 	NeedsAdmin   []string          `json:"needsAdmin"`
+	YAML         struct {
+		ChangedLines int `json:"changedLines"`
+		Hunks        []struct {
+			OldStart, OldLines, NewStart, NewLines int
+			Lines                                  []struct {
+				Kind     string
+				Old, New int
+				Text     string
+			}
+		}
+		Lines []string
+	} `json:"yaml"`
 }
 
 func (c *roleCaller) reviewStack(stackID, body string) (stackReviewAnswer, int, string) {
@@ -540,5 +552,93 @@ func TestTargetChangedIsRefused(t *testing.T) {
 	}
 	if w := f2.fake.Writes(); len(w) != 0 {
 		t.Errorf("writes = %v", w)
+	}
+}
+
+// The Rendered YAML tab (plan 07-16, D-11): a deploy stores the masked rendering on its revision,
+// and the next review diffs the draft's rendering against it.
+
+func TestReviewDiffsTheRenderingAgainstTheLastDeploy(t *testing.T) {
+	t.Parallel()
+	f, e := actionsEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "shop")
+	version := saveCompose(t, operator, st.ID, reviewCompose, `[]`)
+
+	// A first deploy is compared with an empty document: every line is added.
+	rv, code, raw := operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, raw)
+	}
+	if len(rv.YAML.Hunks) != 1 || rv.YAML.Hunks[0].OldLines != 0 || rv.YAML.ChangedLines != rv.YAML.Hunks[0].NewLines {
+		t.Fatalf("first review yaml = %+v, want one hunk that adds the whole rendering", rv.YAML)
+	}
+	if job := f.deployAndWait(t, operator, st.ID, `{"draftVersion":`+itoaT(version)+`,"pins":`+pinsJSON(t, rv.Pins)+`}`); job.State != "done" {
+		t.Fatalf("job = %+v", job)
+	}
+
+	// Right after the deploy the rendering is what was stored: nothing changed.
+	rv, code, raw = operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review after the deploy: %d %s", code, raw)
+	}
+	if rv.YAML.ChangedLines != 0 || len(rv.YAML.Hunks) != 0 {
+		t.Fatalf("yaml after the deploy = %+v, want no change", rv.YAML)
+	}
+
+	// One replica line more is two changed lines (the deploy: key and the replicas: value) in one hunk.
+	grown := strings.Replace(reviewCompose, "    ports:", "    deploy:\n      replicas: 2\n    ports:", 1)
+	saveCompose(t, operator, st.ID, grown, `[]`)
+	rv, code, raw = operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review of the change: %d %s", code, raw)
+	}
+	if len(rv.YAML.Hunks) != 1 || rv.YAML.ChangedLines != 2 {
+		t.Fatalf("yaml = %+v, want one hunk of 2 changed lines", rv.YAML)
+	}
+	var added []string
+	for _, l := range rv.YAML.Hunks[0].Lines {
+		if l.Kind == "added" {
+			added = append(added, strings.TrimSpace(l.Text))
+		}
+	}
+	if len(added) != 2 || added[0] != "deploy:" || added[1] != "replicas: 2" {
+		t.Errorf("added lines = %q", added)
+	}
+	if len(rv.YAML.Lines) == 0 {
+		t.Error("the answer carries no lines of the new text, so a page cannot show the unchanged lines")
+	}
+}
+
+func TestReviewNeverSendsASecretInTheRenderedYAML(t *testing.T) {
+	t.Parallel()
+	f, e := actionsEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "shop")
+	compose := "services:\n  web:\n    image: nginx:1.27-alpine\n    environment:\n      API_KEY: ${API_KEY}\n      MODE: prod\n"
+	version := saveCompose(t, operator, st.ID, compose, `[{"name":"API_KEY","value":"oldsecret-value","secret":true}]`)
+	if job := f.deployAndWait(t, operator, st.ID, `{"draftVersion":`+itoaT(version)+`}`); job.State != "done" {
+		t.Fatalf("job = %+v", job)
+	}
+	saveCompose(t, operator, st.ID, strings.Replace(compose, "MODE: prod", "MODE: test", 1), `[{"name":"API_KEY","value":"newsecret-value","secret":true}]`)
+	rv, code, raw := operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, raw)
+	}
+	if strings.Contains(raw, "secret-value") {
+		t.Fatalf("a secret reached the answer: %s", raw)
+	}
+	if rv.YAML.ChangedLines != 2 {
+		t.Errorf("yaml = %+v, want the MODE line changed and the secret line unchanged (hidden against hidden)", rv.YAML)
+	}
+	// The rendering stored with the revision is masked too.
+	var stored string
+	if err := f.st.Write.QueryRowContext(t.Context(), `SELECT rendered FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision'`, st.ID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stored, "secret-value") || !strings.Contains(stored, "<hidden>") {
+		t.Errorf("stored rendering = %q, want it masked", stored)
 	}
 }

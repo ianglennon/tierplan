@@ -710,3 +710,49 @@ func TestARevisionKeepsASecretFileSealedUnderItsOwnRow(t *testing.T) {
 		}
 	}
 }
+
+// The rendering of a revision (plan 07-16, D-11): what the next review compares the draft's own
+// rendering with.
+
+func TestARevisionKeepsItsRenderingThroughItsOutcomeAndOnlyAGoodOneIsTheBase(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("x")}})
+	if got, err := f.repo.GoodRendering(ctx, st.ID); err != nil || got != nil {
+		t.Fatalf("GoodRendering of a stack with no good revision = %q, %v; want none", got, err)
+	}
+
+	good, _ := f.repo.NewRevision(ctx, st.ID, "ada")
+	if err := f.repo.SetRendered(ctx, good.ID, []byte("services:\n  web: {}\n")); err != nil {
+		t.Fatalf("SetRendered: %v", err)
+	}
+	// Ending the deploy does not wipe the rendering the deploy stored when it started.
+	if err := f.repo.SetOutcome(ctx, good.ID, stackops.OutcomeGood, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	failed, _ := f.repo.NewRevision(ctx, st.ID, "ada")
+	if err := f.repo.SetRendered(ctx, failed.ID, []byte("services:\n  other: {}\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetOutcome(ctx, failed.ID, stackops.OutcomeFailed, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.repo.GoodRendering(ctx, st.ID)
+	if err != nil || string(got) != "services:\n  web: {}\n" {
+		t.Errorf("GoodRendering = %q, %v; want the good revision's, not the failed one's", got, err)
+	}
+}
+
+func TestSetRenderedRefusesARevisionThatDoesNotExistAndADraft(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	_, draft, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("x")}})
+	if err := f.repo.SetRendered(ctx, "nope", []byte("x")); err == nil {
+		t.Error("SetRendered of an unknown snapshot succeeded")
+	}
+	if err := f.repo.SetRendered(ctx, draft.ID, []byte("x")); err == nil {
+		t.Error("SetRendered of the draft succeeded: only a revision has a rendering")
+	}
+}

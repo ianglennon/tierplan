@@ -630,7 +630,9 @@ func (q *Queries) NextRevisionSeq(ctx context.Context, stackID string) (int64, e
 }
 
 const setRevisionOutcome = `-- name: SetRevisionOutcome :execrows
-UPDATE stack_snapshots SET outcome = ?, rendered = ?, pins = COALESCE(NULLIF(CAST(?3 AS TEXT), ''), pins)
+UPDATE stack_snapshots SET outcome = ?1,
+    rendered = COALESCE(NULLIF(CAST(?2 AS TEXT), ''), rendered),
+    pins = COALESCE(NULLIF(CAST(?3 AS TEXT), ''), pins)
 WHERE id = ?4 AND kind = 'revision'
 `
 
@@ -641,7 +643,8 @@ type SetRevisionOutcomeParams struct {
 	ID       string
 }
 
-// An empty pins keeps the pins a deploy stored on the revision while it ran.
+// An empty pins keeps the pins a deploy stored on the revision while it ran, and an empty rendered
+// the rendering the deploy stored when it started.
 func (q *Queries) SetRevisionOutcome(ctx context.Context, arg SetRevisionOutcomeParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setRevisionOutcome,
 		arg.Outcome,
@@ -666,6 +669,24 @@ type SetSnapshotPinsParams struct {
 
 func (q *Queries) SetSnapshotPins(ctx context.Context, arg SetSnapshotPinsParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setSnapshotPins, arg.Pins, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setSnapshotRendered = `-- name: SetSnapshotRendered :execrows
+UPDATE stack_snapshots SET rendered = ? WHERE id = ? AND kind = 'revision'
+`
+
+type SetSnapshotRenderedParams struct {
+	Rendered string
+	ID       string
+}
+
+// The masked rendering of a revision: what the next review compares the draft's rendering with.
+func (q *Queries) SetSnapshotRendered(ctx context.Context, arg SetSnapshotRenderedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSnapshotRendered, arg.Rendered, arg.ID)
 	if err != nil {
 		return 0, err
 	}

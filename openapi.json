@@ -11449,6 +11449,84 @@
         ],
         "type": "object"
       },
+      "StackDiffHunkBody": {
+        "additionalProperties": false,
+        "properties": {
+          "lines": {
+            "description": "The hunk's lines in order",
+            "items": {
+              "$ref": "#/components/schemas/StackDiffLineBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "newLines": {
+            "description": "How many lines of the newer text the hunk covers",
+            "format": "int64",
+            "type": "integer"
+          },
+          "newStart": {
+            "description": "The number of the hunk's first line in the newer text, as oldStart is for the older",
+            "format": "int64",
+            "type": "integer"
+          },
+          "oldLines": {
+            "description": "How many lines of the older text the hunk covers",
+            "format": "int64",
+            "type": "integer"
+          },
+          "oldStart": {
+            "description": "The number of the hunk's first line in the older text; for a hunk with no older line, the number of the line that would come next",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "oldStart",
+          "oldLines",
+          "newStart",
+          "newLines",
+          "lines"
+        ],
+        "type": "object"
+      },
+      "StackDiffLineBody": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "description": "context (in both texts), added (only in the newer) or removed (only in the older)",
+            "enum": [
+              "context",
+              "added",
+              "removed"
+            ],
+            "type": "string"
+          },
+          "new": {
+            "description": "The line's number in the newer text, 0 for a removed line",
+            "format": "int64",
+            "type": "integer"
+          },
+          "old": {
+            "description": "The line's number in the older text, 0 for an added line",
+            "format": "int64",
+            "type": "integer"
+          },
+          "text": {
+            "description": "The line, without its line break. A secret value is \u003chidden\u003e",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "old",
+          "new",
+          "text"
+        ],
+        "type": "object"
+      },
       "StackDraftBody": {
         "additionalProperties": false,
         "properties": {
@@ -11979,6 +12057,10 @@
           "summary": {
             "$ref": "#/components/schemas/StackReviewSummaryBody",
             "description": "The counts of what would change"
+          },
+          "yaml": {
+            "$ref": "#/components/schemas/StackTextDiffBody",
+            "description": "The rendered stack of the draft, with the images the review chose, against the rendering stored with the last good deploy, masked, as hunks with 3 lines of context. A stack never deployed is compared with an empty document. This is the one comparison that is with the last deploy and not with what is running"
           }
         },
         "required": [
@@ -11989,7 +12071,8 @@
           "objects",
           "draftVersion",
           "pins",
-          "needsAdmin"
+          "needsAdmin",
+          "yaml"
         ],
         "type": "object"
       },
@@ -12234,6 +12317,42 @@
           "configs",
           "imagesPinned",
           "imagesNew"
+        ],
+        "type": "object"
+      },
+      "StackTextDiffBody": {
+        "additionalProperties": false,
+        "properties": {
+          "changedLines": {
+            "description": "How many lines the hunks add and remove",
+            "format": "int64",
+            "type": "integer"
+          },
+          "hunks": {
+            "description": "The changes, in order, each with 3 lines of context. Empty when the texts are the same. Over 20,000 lines, or when it takes more than 4,000 added and removed lines to turn one into the other, there is one hunk that removes the whole older text and adds the whole newer",
+            "items": {
+              "$ref": "#/components/schemas/StackDiffHunkBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "lines": {
+            "description": "The lines of the newer text, masked, so that the unchanged lines between hunks can be shown; empty when there are no hunks",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "changedLines",
+          "hunks",
+          "lines"
         ],
         "type": "object"
       },
@@ -21859,7 +21978,7 @@
     },
     "/api/env/{envId}/stacks/{stackId}/review": {
       "post": {
-        "description": "Reviews the stack's saved draft (the latest good revision when there is no draft) against what is running and saves nothing. It runs the same check as the editor, looks up the digests of the images that need one, converts the stack the way a deploy does, reads what the swarm holds under the stack's namespace and answers the problems, a summary, an image table, each service's change with its masked current and next spec, and the other resources. A value derived from a secret of the stack is \u003chidden\u003e on both sides; whether it changed is decided before it is hidden and listed in hiddenChanges as a path. Right after a deploy, a review shows no change. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. For a caller below env Admin, host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables, is a blocking needs_admin problem at its line, and needsAdmin names the kinds. A name that something Bayplan does not manage holds is a blocking stack_name_clash problem. An environment that is no longer the kind of target the stack was created for is 409 target_changed, and a standalone stack is 409 target_engine_missing. Needs stacks.deploy (Operator).",
+        "description": "Reviews the stack's saved draft (the latest good revision when there is no draft) against what is running and saves nothing. It runs the same check as the editor, looks up the digests of the images that need one, converts the stack the way a deploy does, reads what the swarm holds under the stack's namespace and answers the problems, a summary, an image table, each service's change with its masked current and next spec, and the other resources. A value derived from a secret of the stack is \u003chidden\u003e on both sides; whether it changed is decided before it is hidden and listed in hiddenChanges as a path. Right after a deploy, a review shows no change. yaml is the one comparison with the last deploy and not with what is running: the rendered stack against the masked rendering stored with the last good revision, as hunks computed here with 3 lines of context. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. For a caller below env Admin, host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables, is a blocking needs_admin problem at its line, and needsAdmin names the kinds. A name that something Bayplan does not manage holds is a blocking stack_name_clash problem. An environment that is no longer the kind of target the stack was created for is 409 target_changed, and a standalone stack is 409 target_engine_missing. Needs stacks.deploy (Operator).",
         "operationId": "reviewStack",
         "parameters": [
           {

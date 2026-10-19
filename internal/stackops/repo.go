@@ -483,6 +483,12 @@ func (r Repo) GoodPins(ctx context.Context, stackID string) (map[string]stacks.L
 	if err := json.Unmarshal([]byte(row.Pins), &pins); err != nil {
 		return nil, fmt.Errorf("read the pins of revision %d: %w", row.Seq, err)
 	}
+	return LivePins(pins), nil
+}
+
+// LivePins reads pins by swarm service name, tag@sha256 each, as stacks.Render and the review take
+// them: AsWritten is the reference without its digest.
+func LivePins(pins map[string]string) map[string]stacks.LivePin {
 	out := make(map[string]stacks.LivePin, len(pins))
 	for service, ref := range pins {
 		text := ref
@@ -491,7 +497,36 @@ func (r Repo) GoodPins(ctx context.Context, stackID string) (map[string]stacks.L
 		}
 		out[service] = stacks.LivePin{AsWritten: text, Image: ref}
 	}
-	return out, nil
+	return out
+}
+
+// SetRendered stores the masked rendering (stacks.Render) of what a revision deploys. The next
+// review compares the draft's rendering with the newest good revision's, so a deploy stores it.
+func (r Repo) SetRendered(ctx context.Context, snapshotID string, rendered []byte) error {
+	n, err := r.Store.Q.SetSnapshotRendered(ctx, sqlc.SetSnapshotRenderedParams{Rendered: string(rendered), ID: snapshotID})
+	if err != nil {
+		return fmt.Errorf("set rendering: %w", err)
+	}
+	if n != 1 {
+		return fmt.Errorf("set rendering: no revision %s", snapshotID)
+	}
+	return nil
+}
+
+// GoodRendering is the masked rendering stored with the stack's newest good revision. A stack with
+// no good revision, or one deployed before renderings were stored, has none (nil).
+func (r Repo) GoodRendering(ctx context.Context, stackID string) ([]byte, error) {
+	row, err := r.Store.RQ.LatestGoodRevision(ctx, stackID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read revision: %w", err)
+	}
+	if row.Rendered == "" {
+		return nil, nil
+	}
+	return []byte(row.Rendered), nil
 }
 
 // LatestGoodRevision is the newest revision whose deploy succeeded, with its files and

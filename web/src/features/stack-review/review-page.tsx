@@ -30,6 +30,7 @@ import { OtherResourcesTable } from "@/features/stack-review/other-resources-tab
 import { ReviewSummary } from "@/features/stack-review/review-summary";
 import { ServiceDiffList } from "@/features/stack-review/service-diff-list";
 import { WarningsList } from "@/features/stack-review/warnings-list";
+import { YamlDiff } from "@/features/stack-review/yaml-diff";
 import { useT } from "@/i18n/use-t";
 import { toastInfo } from "@/lib/toast";
 
@@ -127,6 +128,7 @@ export function ReviewPage({
   const review = useQuery(reviewQuery(envId, stackId, mode, services));
   const deploy$ = useDeployStack(envId, stackId);
   const [deployError, setDeployError] = useState<string | null>(null);
+  const [tab, setTab] = useState<string | null>(null);
   const name = stack.data?.name;
   const data = review.data;
   const update = mode === "update";
@@ -157,6 +159,11 @@ export function ReviewPage({
   const problems = data?.problems ?? [];
   const changed = data?.services ?? [];
   const unchanged = data !== undefined && noChange(data);
+  const yaml = data?.yaml;
+  const yamlChanged = yaml?.changedLines ?? 0;
+  // Changes (against what is running) is the page's first tab, unless there is nothing to show
+  // there and the text still differs from the last deploy.
+  const shown = tab ?? (unchanged && yamlChanged > 0 ? "yaml" : "changes");
   const firstDeploy = changed.length > 0 && changed.every((s) => s.change === "added");
   const failed = review.isError && !data;
 
@@ -246,16 +253,28 @@ export function ReviewPage({
               </EmptyHeader>
             </Empty>
           ) : null}
-          {data && !unchanged ? (
-            <Tabs value="changes" className="gap-4">
+          {data && (!unchanged || yamlChanged > 0) ? (
+            <Tabs value={shown} onValueChange={setTab} className="gap-4">
               <TabsList variant="line" aria-label={t("stackReview.changes.label")} className="h-9">
                 <TabsTrigger value="changes" className="max-md:h-11">
                   {t("stackReview.changes.tab")}
+                </TabsTrigger>
+                <TabsTrigger value="yaml" className="max-md:h-11">
+                  {yamlChanged > 0
+                    ? t("stackYamlDiff.tabCount", { count: yamlChanged })
+                    : t("stackYamlDiff.tab")}
                 </TabsTrigger>
               </TabsList>
               <TabsContent value="changes" className="flex flex-col gap-4">
                 <ServiceDiffList services={changed} />
                 <OtherResourcesTable objects={data.objects ?? []} />
+              </TabsContent>
+              <TabsContent value="yaml">
+                <YamlDiff
+                  hunks={yaml?.hunks}
+                  lines={yaml?.lines}
+                  caption={t("stackYamlDiff.caption")}
+                />
               </TabsContent>
             </Tabs>
           ) : null}

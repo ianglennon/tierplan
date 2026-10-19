@@ -67,9 +67,16 @@ FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'goo
 ORDER BY seq DESC LIMIT 1;
 
 -- name: SetRevisionOutcome :execrows
--- An empty pins keeps the pins a deploy stored on the revision while it ran.
-UPDATE stack_snapshots SET outcome = ?, rendered = ?, pins = COALESCE(NULLIF(CAST(sqlc.arg(pins) AS TEXT), ''), pins)
+-- An empty pins keeps the pins a deploy stored on the revision while it ran, and an empty rendered
+-- the rendering the deploy stored when it started.
+UPDATE stack_snapshots SET outcome = sqlc.arg(outcome),
+    rendered = COALESCE(NULLIF(CAST(sqlc.arg(rendered) AS TEXT), ''), rendered),
+    pins = COALESCE(NULLIF(CAST(sqlc.arg(pins) AS TEXT), ''), pins)
 WHERE id = sqlc.arg(id) AND kind = 'revision';
+
+-- name: SetSnapshotRendered :execrows
+-- The masked rendering of a revision: what the next review compares the draft's rendering with.
+UPDATE stack_snapshots SET rendered = ? WHERE id = ? AND kind = 'revision';
 
 -- name: SetSnapshotPins :execrows
 UPDATE stack_snapshots SET pins = ? WHERE id = ? AND kind = 'revision';

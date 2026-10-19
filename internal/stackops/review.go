@@ -75,9 +75,23 @@ type ReviewInput struct {
 	DraftVersion int64
 	Mode         string
 	Services     []string
+	// Rendering is the masked rendering stored with the stack's last good revision, which the
+	// Rendered YAML tab compares the draft's rendering with. Empty means none: the draft is
+	// compared with an empty document.
+	Rendering []byte
 	// Pins is where the pins of the stack's last good revision are read from. Nil means none.
 	Pins   PinStore
 	Caller Caller
+}
+
+// TextDiff is a text compared with an older one: the hunks with 3 lines of context, how many
+// lines they add and remove, and the lines of the newer text, from which a reader fills in the
+// unchanged lines between hunks (the hunks carry only the 3 next to a change). Lines is empty when
+// there are no hunks.
+type TextDiff struct {
+	Hunks        []stacks.Hunk
+	ChangedLines int
+	Lines        []string
 }
 
 // Counts is how many of a kind a deploy would add, change and remove.
@@ -121,6 +135,9 @@ type Review struct {
 	Pins map[string]string
 	// NeedsAdmin names the kinds of host access the stack uses that the caller may not deploy.
 	NeedsAdmin []string
+	// YAML is the rendered stack against the rendering stored with the last good revision (an empty
+	// document for a first deploy).
+	YAML TextDiff
 }
 
 // Review reads what a deploy of the saved draft would do. It runs the check, reads what the swarm
@@ -131,17 +148,27 @@ type Review struct {
 // A stack that does not load is answered with the check's problems and nothing else. A problem
 // that blocks a deploy is an error in Problems; the review still lists what it can, so the person
 // sees the change beside the reason. A failure to read the swarm is the error returned.
-func (d Deps) Review(ctx context.Context, in ReviewInput) (Review, error) {
-	rv := Review{DraftVersion: in.DraftVersion, Pins: map[string]string{}, NeedsAdmin: []string{}}
+func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error) {
+	rv = Review{DraftVersion: in.DraftVersion, Pins: map[string]string{}, NeedsAdmin: []string{}}
 	// A review judges what the caller may deploy, so it cannot be made without a way to judge it.
 	if d.Checker == nil || in.Caller.Principal == nil {
 		return rv, ErrNoPolicy
 	}
-	if err := d.CheckTarget(ctx, in.EnvID, in.Stack); err != nil {
+	if err = d.CheckTarget(ctx, in.EnvID, in.Stack); err != nil {
 		return rv, err
 	}
 	res := stacks.Check(ctx, stacks.CheckInput{Name: in.Stack.Name, Target: in.Stack.Target, Copy: in.Copy})
 	rv.Problems = res.Problems
+	// The rendered view is made from what is known when the review ends, whichever way it ends
+	// without an error: a stack that has problems still shows its rendering.
+	defer func() {
+		if err != nil {
+			return
+		}
+		if res.Loaded != nil {
+			rv.YAML = d.renderedChange(in, res.Loaded, rv.Pins)
+		}
+	}()
 	if res.Loaded == nil {
 		return rv, nil
 	}
@@ -628,4 +655,32 @@ func ConvertProblem(err error) stacks.Problem {
 		Severity: stacks.SeverityError, Code: CodeConvertProblem, Message: ConvertDetail(err), File: stacks.ComposeFile,
 		Line: 1, Col: 1, EndLine: 1, EndCol: 2,
 	}
+}
+
+// diffContext is how many unchanged lines a hunk keeps on either side of a change.
+const diffContext = 3
+
+// textDiffOf compares two texts; there is nothing to show when they are the same.
+func textDiffOf(old, next string) TextDiff {
+	hunks := stacks.LineDiff(old, next, diffContext)
+	if len(hunks) == 0 {
+		return TextDiff{}
+	}
+	return TextDiff{Hunks: hunks, ChangedLines: stacks.ChangedLines(hunks), Lines: stacks.SplitLines(next)}
+}
+
+// renderedChange is the rendered stack of the draft, with the images the review chose, against the
+// rendering stored with the last good revision. Both are masked: the stored one when it was taken,
+// this one by the draft's own secrets. A rendering that cannot be made is no change shown (the
+// Problems of the review say why the stack does not load); it is logged because it is not expected
+// of a stack that loaded.
+func (d Deps) renderedChange(in ReviewInput, loaded *stacks.Loaded, pins map[string]string) TextDiff {
+	out, err := stacks.Render(stacks.RenderInput{
+		Loaded: loaded, Pins: LivePins(pins), Masker: stacks.NewMasker(in.Copy.Vars, in.Copy.Files),
+	})
+	if err != nil {
+		d.log().Warn("could not render a stack for its review", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
+		return TextDiff{}
+	}
+	return textDiffOf(string(in.Rendering), string(out))
 }
