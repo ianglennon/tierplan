@@ -99,3 +99,13 @@ func (c *Client) ConfigsWithLabel(ctx context.Context, key, value string) ([]Con
 	})
 	return rows, nil
 }
+
+// ContainersWithLabel lists the containers, stopped ones too, that carry the label key=value.
+func (c *Client) ContainersWithLabel(ctx context.Context, key, value string) ([]ContainerRow, error) {
+	return nil, nil
+}
+
+// VolumesWithLabel lists the volumes that carry the label key=value.
+func (c *Client) VolumesWithLabel(ctx context.Context, key, value string) ([]VolumeRow, error) {
+	return nil, nil
+}

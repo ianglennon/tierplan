@@ -410,3 +410,107 @@ func TestHostileAliasesAreRefusedNotExpanded(t *testing.T) {
 		_ = fs
 	}
 }
+
+// table is the lookup of a stack's variables: a name with no entry has no value.
+func table(vars map[string]string) func(string) (string, bool) {
+	return func(name string) (string, bool) {
+		v, ok := vars[name]
+		return v, ok
+	}
+}
+
+// resolvedValues renders the findings of CheckResolved as "rule:value" in order.
+func resolvedValues(t *testing.T, src string, vars map[string]string) []string {
+	t.Helper()
+	fs, err := compose.CheckResolved([]byte(src), table(vars))
+	if err != nil {
+		t.Fatalf("CheckResolved: %v\n%s", err, src)
+	}
+	var out []string
+	for _, f := range fs {
+		out = append(out, f.Rule+":"+f.Value)
+	}
+	return out
+}
+
+// Plan 07-14: the stack phases run the rules again over the values a deploy will use, so a bind
+// source written as ${DATA} is judged by what the stack's table says DATA is.
+func TestCheckResolvedJudgesAnInterpolatedValueByWhatTheTableGives(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		vars map[string]string
+		want []string
+	}{
+		{"the socket through a variable", `volumes: ["${DATA}:/data"]`, map[string]string{"DATA": "/var/run/docker.sock"}, []string{"volumes:/var/run/docker.sock"}},
+		{"a data root through a variable", `volumes: ["${DATA}:/data"]`, map[string]string{"DATA": "/srv/data"}, nil},
+		{"a named volume through a variable", `volumes: ["${DATA}:/data"]`, map[string]string{"DATA": "dbdata"}, nil},
+		{"a default that is fine", `volumes: ["${DATA:-/srv/data}:/data"]`, nil, nil},
+		{"a default that is not", `volumes: ["${DATA:-/etc}:/data"]`, nil, []string{"volumes:/etc"}},
+		{"the table wins over the default", `volumes: ["${DATA:-/etc}:/data"]`, map[string]string{"DATA": "/srv/x"}, nil},
+		{"a source built from two variables", `volumes: ["${ROOT}/${SUB}:/data"]`, map[string]string{"ROOT": "/var/run", "SUB": "docker.sock"}, []string{"volumes:/var/run/docker.sock"}},
+		{"long syntax source", "volumes:\n  - type: bind\n    source: ${SRC}\n    target: /x", map[string]string{"SRC": "/etc"}, []string{"volumes:/etc"}},
+		{"privileged through a variable", `privileged: "${PRIV}"`, map[string]string{"PRIV": "true"}, []string{"privileged:true"}},
+		{"privileged switched off through a variable", `privileged: "${PRIV}"`, map[string]string{"PRIV": "false"}, nil},
+		{"host networking through a variable", `network_mode: ${MODE}`, map[string]string{"MODE": "host"}, []string{"network_mode:host"}},
+		{"a bridge through a variable", `network_mode: ${MODE}`, map[string]string{"MODE": "bridge"}, nil},
+		{"a capability through a variable", `cap_add: ["${CAP}"]`, map[string]string{"CAP": "SYS_ADMIN"}, []string{"cap_add:SYS_ADMIN"}},
+		{"an unset name with no default stays unresolvable", `volumes: ["${DATA}:/data"]`, nil, []string{"unresolvable:${DATA}:/data"}},
+		{"an unset name in privileged stays unresolvable", `privileged: "${PRIV}"`, nil, []string{"unresolvable:${PRIV}"}},
+		{"a required name that is unset stays unresolvable", `pid: "${PID:?set it}"`, nil, []string{"unresolvable:${PID:?set it}"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolvedValues(t, service(tc.body), tc.vars); !sameStrings(got, tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCheckResolvedReportsAtTheLineAndColumnOfTheInterpolatedValue(t *testing.T) {
+	src := "services:\n  web:\n    image: x\n    volumes:\n      - \"${DATA}:/data\"\n    privileged: ${PRIV}\n"
+	fs, err := compose.CheckResolved([]byte(src), table(map[string]string{"DATA": "/var/run/docker.sock", "PRIV": "true"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fs) != 2 {
+		t.Fatalf("findings = %+v, want the bind and privileged", fs)
+	}
+	if fs[0].Line != 5 || fs[0].Key != "volumes" || fs[0].Value != "/var/run/docker.sock" || fs[0].Service != "web" {
+		t.Errorf("bind finding = %+v, want line 5 with the resolved source", fs[0])
+	}
+	if fs[1].Line != 6 || fs[1].Key != "privileged" || fs[1].Value != "true" {
+		t.Errorf("privileged finding = %+v, want line 6", fs[1])
+	}
+	if got, want := compose.Format(fs[0]), "services.web.volumes (line 5): /var/run/docker.sock"; got != want {
+		t.Errorf("Format = %q, want %q", got, want)
+	}
+}
+
+func TestCheckResolvedJudgesTheOptionsOfAVolumeByTheirValues(t *testing.T) {
+	src := "volumes:\n  v: {driver_opts: {type: none, o: bind, device: \"${DEV}\"}}\n"
+	if got := resolvedValues(t, src, map[string]string{"DEV": "/etc"}); !slices.Equal(got, []string{"volume_driver_opts:/etc"}) {
+		t.Errorf("a device through a variable: %v", got)
+	}
+	if got := resolvedValues(t, src, map[string]string{"DEV": "/srv/data"}); len(got) != 0 {
+		t.Errorf("a device in a data root: %v", got)
+	}
+	src = "volumes:\n  v: {driver_opts: {type: \"${FS}\", device: /srv/img}}\n"
+	if got := resolvedValues(t, src, map[string]string{"FS": "ext4"}); !slices.Equal(got, []string{"volume_driver_opts:ext4"}) {
+		t.Errorf("a block device type through a variable: %v", got)
+	}
+	if got := resolvedValues(t, src, map[string]string{"FS": "nfs"}); len(got) != 0 {
+		t.Errorf("a network type through a variable: %v", got)
+	}
+}
+
+func TestCheckStillReportsAnInterpolationAsUnresolvableForACallerWithNoTable(t *testing.T) {
+	if got := ruleValues(t, service(`volumes: ["${DATA}:/data"]`)); !slices.Equal(got, []string{"unresolvable:${DATA}:/data"}) {
+		t.Fatalf("Check of an interpolated bind = %v", got)
+	}
+	fs, err := compose.CheckResolved([]byte(service(`volumes: ["${DATA}:/data"]`)), nil)
+	if err != nil || len(fs) != 1 || fs[0].Rule != "unresolvable" {
+		t.Fatalf("CheckResolved with no lookup = %+v, %v, want what Check says", fs, err)
+	}
+}

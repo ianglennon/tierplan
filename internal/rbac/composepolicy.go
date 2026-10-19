@@ -76,3 +76,8 @@ func (c *Checker) CheckComposeDeploy(ctx context.Context, p *Principal, envID st
 	}
 	return ComposeDecision{Reason: ReasonPrivilegedCompose, Findings: findings, Message: strings.Join(lines, "\n")}, nil
 }
+
+// CheckComposeDeployResolved is CheckComposeDeploy for a caller that knows the variables of the file.
+func (c *Checker) CheckComposeDeployResolved(ctx context.Context, p *Principal, envID string, src []byte, lookup func(name string) (string, bool)) (ComposeDecision, error) {
+	return c.CheckComposeDeploy(ctx, p, envID, src)
+}

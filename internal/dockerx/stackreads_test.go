@@ -122,3 +122,61 @@ func TestObjectLabelReadsEncodeTheValueRatherThanJoiningItIntoTheQuery(t *testin
 		t.Errorf("ConfigsWithLabel = %v, %v; want none and no error", got, err)
 	}
 }
+
+func standaloneReadsFake(t *testing.T) *dockertest.Fake {
+	t.Helper()
+	return dockertest.NewFake(t, dockertest.FakeConfig{
+		Containers: []dockertest.FakeContainer{
+			{ID: "c1", Names: []string{"/shop-web-1"}, Image: "nginx:1", State: "running", Labels: map[string]string{"com.docker.compose.project": "shop", "bayplan.stack.id": "s1"}},
+			{ID: "c2", Names: []string{"/shop-job-1"}, Image: "busybox", State: "exited", Labels: map[string]string{"com.docker.compose.project": "shop"}},
+			{ID: "c3", Names: []string{"/blog-web-1"}, Image: "nginx:1", State: "running", Labels: map[string]string{"com.docker.compose.project": "blog"}},
+			{ID: "c4", Names: []string{"/lonely"}, Image: "busybox", State: "running"},
+		},
+		Volumes: []dockertest.FakeVolume{
+			{Name: "shop_data", Driver: "local", Labels: map[string]string{"com.docker.compose.project": "shop"}},
+			{Name: "blog_data", Driver: "local", Labels: map[string]string{"com.docker.compose.project": "blog"}},
+			{Name: "plain", Driver: "local"},
+		},
+	})
+}
+
+func TestContainersWithLabelListsStoppedContainersToo(t *testing.T) {
+	c := newClient(t, standaloneReadsFake(t))
+	got, err := c.ContainersWithLabel(context.Background(), "com.docker.compose.project", "shop")
+	if err != nil {
+		t.Fatalf("ContainersWithLabel: %v", err)
+	}
+	var names []string
+	for _, r := range got {
+		names = append(names, r.Name)
+	}
+	slices.Sort(names)
+	if !slices.Equal(names, []string{"shop-job-1", "shop-web-1"}) {
+		t.Errorf("containers = %v, want both containers of the project, the exited one too", names)
+	}
+	if none, err := c.ContainersWithLabel(context.Background(), "com.docker.compose.project", "nope"); err != nil || len(none) != 0 {
+		t.Errorf("ContainersWithLabel(nope) = %v, %v; want none", none, err)
+	}
+}
+
+func TestVolumesWithLabelListsOnlyTheVolumesThatCarryIt(t *testing.T) {
+	c := newClient(t, standaloneReadsFake(t))
+	got, err := c.VolumesWithLabel(context.Background(), "com.docker.compose.project", "shop")
+	if err != nil {
+		t.Fatalf("VolumesWithLabel: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "shop_data" {
+		t.Errorf("volumes = %+v, want shop_data only", got)
+	}
+}
+
+func TestStandaloneLabelReadsEncodeTheValueRatherThanJoiningItIntoTheQuery(t *testing.T) {
+	c := newClient(t, standaloneReadsFake(t))
+	hostile := `shop","x":{"y":true`
+	if got, err := c.ContainersWithLabel(context.Background(), "com.docker.compose.project", hostile); err != nil || len(got) != 0 {
+		t.Errorf("ContainersWithLabel = %v, %v; want none and no error", got, err)
+	}
+	if got, err := c.VolumesWithLabel(context.Background(), "com.docker.compose.project", hostile); err != nil || len(got) != 0 {
+		t.Errorf("VolumesWithLabel = %v, %v; want none and no error", got, err)
+	}
+}

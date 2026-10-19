@@ -6,11 +6,14 @@ package api_test
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // Reviewing a stack (plan 07-14, STK-06, D-11): what a deploy would change against what is
@@ -309,10 +312,10 @@ func TestDeployRefusesAPinTheServerWouldNotHaveChosen(t *testing.T) {
 	other := "docker.io/library/busybox:1@sha256:" + strings.Repeat("a", 64)
 
 	for name, tc := range map[string]map[string]string{
-		"another repository": {"shop_web": other},
-		"a bad digest":       {"shop_web": "docker.io/library/nginx:1.27-alpine@sha256:abc"},
-		"a missing service":  {},
-		"an unknown service": {"shop_web": good, "shop_ghost": good},
+		"another repository":                     {"shop_web": other},
+		"a bad digest":                           {"shop_web": "docker.io/library/nginx:1.27-alpine@sha256:abc"},
+		"a missing service":                      {},
+		"an unknown service":                     {"shop_web": good, "shop_ghost": good},
 		"an image ID that is not on the manager": {"shop_web": "sha256:" + strings.Repeat("c", 64)},
 	} {
 		rec := operator.deploy(st.ID, `{"draftVersion":`+itoaT(version)+`,"pins":`+pinsJSON(t, tc)+`}`)
@@ -339,4 +342,203 @@ func TestDeployRefusesAPinTheServerWouldNotHaveChosen(t *testing.T) {
 	}
 }
 
-var _ = stacks.StarterCompose
+// seedStack stores a stack for an environment without the checks the create route makes, as a
+// stack that was created before the environment changed or before an object appeared.
+func (f *envFix) seedStack(t *testing.T, envID, name string, target stacks.Target) string {
+	t.Helper()
+	repo := stackops.Repo{Store: f.st, Vault: f.v}
+	st, _, err := repo.CreateStack(testsupport.Context(t), envID, name, target, "seed", stacks.WorkingCopy{
+		Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte(stacks.StarterCompose)}},
+	})
+	if err != nil {
+		t.Fatalf("seed stack %s: %v", name, err)
+	}
+	return st.ID
+}
+
+type problemAnswer struct {
+	Type   string                               `json:"type"`
+	Detail string                               `json:"detail"`
+	Errors []struct{ Message, Location string } `json:"errors"`
+}
+
+func problemOf(t *testing.T, rec *httptest.ResponseRecorder) problemAnswer {
+	t.Helper()
+	var p problemAnswer
+	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+		t.Fatalf("not a problem body: %v: %s", err, rec.Body)
+	}
+	return p
+}
+
+func (a stackReviewAnswer) problem(code string) (struct {
+	Severity, Code, Message, File string
+	Line                          int
+}, bool) {
+	for _, p := range a.Problems {
+		if p.Code == code {
+			return p, true
+		}
+	}
+	return struct {
+		Severity, Code, Message, File string
+		Line                          int
+	}{}, false
+}
+
+func TestOperatorCannotDeployHostEscalation(t *testing.T) {
+	t.Parallel()
+	f, e := actionsEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "esc")
+	privileged := "services:\n  web:\n    image: nginx:1.27-alpine\n    privileged: true\n"
+	version := saveCompose(t, operator, st.ID, privileged, `[]`)
+
+	// The review says what needs Admin, with the line, and names the kinds for the Deploy tooltip.
+	rv, code, raw := operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, raw)
+	}
+	p, ok := rv.problem("needs_admin")
+	if !ok || p.Severity != "error" || p.Message != "This needs Admin: privileged: true." || p.File != "compose.yaml" || p.Line != 4 {
+		t.Fatalf("problems = %+v, want a blocking \"This needs Admin: privileged: true.\" at compose.yaml:4", rv.Problems)
+	}
+	if len(rv.NeedsAdmin) != 1 || rv.NeedsAdmin[0] != "extra privileges" {
+		t.Errorf("needsAdmin = %v", rv.NeedsAdmin)
+	}
+
+	// The deploy refuses it before anything is stored or sent.
+	rec := operator.deploy(st.ID, `{"draftVersion":`+itoaT(version)+`}`)
+	if rec.Code != http.StatusForbidden || problemType(t, rec) != "privileged_compose" {
+		t.Fatalf("an Operator's deploy: %d %s, want 403 privileged_compose", rec.Code, rec.Body)
+	}
+	if pr := problemOf(t, rec); !strings.Contains(pr.Detail, "privileged: true at compose.yaml:4") || len(pr.Errors) != 1 {
+		t.Errorf("problem = %+v, want the setting and its place named", pr)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v", w)
+	}
+	var revisions int
+	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM stack_snapshots WHERE kind = 'revision'`).Scan(&revisions); err != nil || revisions != 0 {
+		t.Errorf("revisions = %d (%v), a refused deploy must leave none", revisions, err)
+	}
+
+	// An env Admin sees no problem and deploys it.
+	rv, _, _ = admin.reviewStack(st.ID, `{}`)
+	if _, ok := rv.problem("needs_admin"); ok || len(rv.NeedsAdmin) != 0 {
+		t.Errorf("an Admin's review = %+v", rv.Problems)
+	}
+	if job := f.deployAndWait(t, admin, st.ID, `{"draftVersion":`+itoaT(version)+`}`); job.State != "done" {
+		t.Errorf("an Admin's deploy = %+v, want done", job)
+	}
+}
+
+func TestOperatorCannotDeployAHostPathHiddenBehindAVariable(t *testing.T) {
+	t.Parallel()
+	f, e := actionsEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "hidden")
+	compose := "services:\n  web:\n    image: nginx:1.27-alpine\n    volumes:\n      - \"${DATA}:/data\"\n"
+
+	version := saveCompose(t, operator, st.ID, compose, `[{"name":"DATA","value":"/var/run/docker.sock","secret":false}]`)
+	rec := operator.deploy(st.ID, `{"draftVersion":`+itoaT(version)+`}`)
+	if rec.Code != http.StatusForbidden || problemType(t, rec) != "privileged_compose" || !strings.Contains(rec.Body.String(), "a bind mount of /var/run/docker.sock at compose.yaml:5") {
+		t.Fatalf("the socket through a variable: %d %s, want 403 privileged_compose naming the bind", rec.Code, rec.Body)
+	}
+	version = saveCompose(t, operator, st.ID, compose, `[{"name":"DATA","value":"/srv/data","secret":false}]`)
+	if job := f.deployAndWait(t, operator, st.ID, `{"draftVersion":`+itoaT(version)+`}`); job.State != "done" {
+		t.Errorf("a data root through a variable: %+v, want an Operator's deploy to go through", job)
+	}
+}
+
+func TestNameClashIsRefusedAtCreateAndReview(t *testing.T) {
+	t.Parallel()
+	foreign := dockertest.FakeService{ID: "s1", Name: "taken_app", Mode: "replicated", Image: "x", Labels: map[string]string{"com.docker.stack.namespace": "taken"}}
+	f, e := actionsEnv(t, nil, foreign)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+
+	rec := admin.createStack(`{"name":"taken"}`)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "stack_name_clash" || problemOf(t, rec).Detail != "A stack named taken already exists on this environment, not managed by Bayplan." {
+		t.Fatalf("create of a name a foreign stack holds: %d %s, want 409 stack_name_clash", rec.Code, rec.Body)
+	}
+	list := answerOf[struct {
+		Items []stackAnswer `json:"items"`
+	}](t, admin.do(http.MethodGet, "stacks", ""))
+	if len(list.Items) != 0 {
+		t.Errorf("stacks = %+v, a refused create stores nothing", list.Items)
+	}
+	if rec := admin.createStack(`{"name":"free"}`); rec.Code != http.StatusCreated {
+		t.Errorf("create of a free name: %d %s", rec.Code, rec.Body)
+	}
+
+	// A stack that Bayplan already holds under that name is a stack_name_taken, not a clash, and the
+	// objects it made itself never count as one.
+	own := newStack(t, admin, "mine")
+	version := saveCompose(t, operator, own.ID, reviewCompose, `[]`)
+	if job := f.deployAndWait(t, operator, own.ID, `{"draftVersion":`+itoaT(version)+`}`); job.State != "done" {
+		t.Fatalf("job = %+v", job)
+	}
+	if rec := admin.createStack(`{"name":"mine"}`); rec.Code != http.StatusConflict || problemType(t, rec) != "stack_name_taken" {
+		t.Errorf("create of a name Bayplan holds: %d %s, want 409 stack_name_taken", rec.Code, rec.Body)
+	}
+	rv, _, _ := operator.reviewStack(own.ID, `{}`)
+	if _, ok := rv.problem("stack_name_clash"); ok {
+		t.Errorf("a stack's own objects were read as a clash: %+v", rv.Problems)
+	}
+
+	// A stack record that exists next to a foreign stack of its name: review shows it, deploy refuses.
+	taken := f.seedStack(t, e.ID, "taken", stacks.TargetSwarm)
+	rv, code, raw := operator.reviewStack(taken, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, raw)
+	}
+	p, ok := rv.problem("stack_name_clash")
+	if !ok || p.Severity != "error" || p.Message != "A stack named taken already exists on this environment, not managed by Bayplan." {
+		t.Fatalf("problems = %+v, want a blocking stack_name_clash", rv.Problems)
+	}
+	before := len(f.fake.Writes())
+	rec = operator.deploy(taken, `{"draftVersion":`+itoaT(draftVersion(t, operator, taken))+`}`)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "stack_name_clash" {
+		t.Errorf("deploy of a stack whose name a foreign stack holds: %d %s, want 409 stack_name_clash", rec.Code, rec.Body)
+	}
+	if got := len(f.fake.Writes()); got != before {
+		t.Errorf("a refused deploy wrote %v", f.fake.Writes()[before:])
+	}
+}
+
+func TestTargetChangedIsRefused(t *testing.T) {
+	t.Parallel()
+	// A stack made for a standalone host, on an environment that is a swarm now.
+	f, e := actionsEnv(t, nil)
+	operator := f.caller(t, e, "operator-1", "operator")
+	solo := f.seedStack(t, e.ID, "solo", stacks.TargetStandalone)
+	rec := operator.do(http.MethodPost, "stacks/"+solo+"/review", `{}`)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "target_changed" {
+		t.Errorf("review of a standalone stack on a swarm: %d %s, want 409 target_changed", rec.Code, rec.Body)
+	}
+	rec = operator.deploy(solo, `{"draftVersion":1}`)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "target_changed" {
+		t.Errorf("deploy of a standalone stack on a swarm: %d %s, want 409 target_changed", rec.Code, rec.Body)
+	}
+
+	// A stack made for a swarm, on an environment that is a standalone host now.
+	f2, e2 := actionsEnv(t, func(c *dockertest.FakeConfig) {
+		c.SwarmState, c.SwarmControl, c.NodeRows = "", false, nil
+	})
+	operator2 := f2.caller(t, e2, "operator-1", "operator")
+	swarmStack := f2.seedStack(t, e2.ID, "was-swarm", stacks.TargetSwarm)
+	rec = operator2.do(http.MethodPost, "stacks/"+swarmStack+"/review", `{}`)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "target_changed" {
+		t.Errorf("review of a swarm stack on a standalone host: %d %s, want 409 target_changed", rec.Code, rec.Body)
+	}
+	rec = operator2.deploy(swarmStack, `{"draftVersion":1}`)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "target_changed" {
+		t.Errorf("deploy of a swarm stack on a standalone host: %d %s, want 409 target_changed", rec.Code, rec.Body)
+	}
+	if w := f2.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v", w)
+	}
+}

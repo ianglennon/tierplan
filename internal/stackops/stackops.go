@@ -36,6 +36,12 @@ var (
 	// ErrTargetEngineMissing means the stack's target has no deploy engine in this version: a
 	// standalone stack waits for the Compose engine (plan 07-20).
 	ErrTargetEngineMissing = errors.New("stackops: this version cannot deploy to that kind of environment yet")
+	// ErrTargetChanged means the environment is no longer the kind of target the stack was created
+	// for: the stack deploys to a swarm and the environment is a standalone host, or the reverse.
+	ErrTargetChanged = errors.New("stackops: the environment is no longer the kind of target the stack was created for")
+	// ErrNoPolicy means the host-escalation policy could not be applied: there is no checker or no
+	// caller. It is never read as "allowed".
+	ErrNoPolicy = errors.New("stackops: the host-escalation policy cannot be applied")
 )
 
 // DraftConflictError is the refusal of a save made against a draft that has moved: who saved it

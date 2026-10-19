@@ -23,8 +23,10 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/jobs"
+	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/store/storetest"
 	"github.com/ianglennon/bayplan/internal/vault"
 	"github.com/ianglennon/bayplan/proto/testsupport"
@@ -38,6 +40,7 @@ type swarmRig struct {
 	deps  stackops.Deps
 	envID string
 	hub   *jobs.Hub
+	store *store.Store
 }
 
 func newSwarmRig(t *testing.T, tune func(*dockertest.FakeConfig), services ...dockertest.FakeService) *swarmRig {
@@ -75,8 +78,8 @@ func newSwarmRig(t *testing.T, tune func(*dockertest.FakeConfig), services ...do
 	hub := jobs.New(jobs.Options{})
 	t.Cleanup(hub.Close)
 	return &swarmRig{
-		fake: fake, envID: env.ID, hub: hub,
-		deps: stackops.Deps{Aggregator: agg, Clusters: clusters, Log: slog.New(slog.DiscardHandler)},
+		fake: fake, envID: env.ID, hub: hub, store: st,
+		deps: stackops.Deps{Aggregator: agg, Clusters: clusters, Checker: rbac.NewChecker(st), Log: slog.New(slog.DiscardHandler)},
 	}
 }
 

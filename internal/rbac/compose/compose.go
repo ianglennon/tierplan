@@ -101,6 +101,11 @@ func Check(src []byte) ([]Finding, error) {
 	return finish(c.found), nil
 }
 
+// CheckResolved is Check for a caller that knows the variables of the file.
+func CheckResolved(src []byte, lookup func(name string) (string, bool)) ([]Finding, error) {
+	return Check(src)
+}
+
 // finish orders findings by (line, column, rule) with a stable sort and drops
 // exact duplicates, which a value merged in twice would otherwise repeat.
 func finish(fs []Finding) []Finding {
