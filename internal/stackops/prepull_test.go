@@ -18,6 +18,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/store/storetest"
 	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // The pre-pull of a standalone deploy (plan 07-21, D-27, IMG-02, STK-09): every pinned image the host does not
@@ -25,9 +26,9 @@ import (
 // images locally and never needs a credential. Each pull is a step of the job with its progress.
 
 const (
-	prePullSecret = "ghp_0123456789abcdefghijklmnopqrstuvwxyz"
-	appImage      = "ghcr.io/acme/app:1"
-	prePullServices   = "services:\n  app:\n    image: " + appImage + "\n  worker:\n    image: " + appImage + "\n  web:\n    image: nginx:1.27-alpine\n"
+	prePullSecret   = "ghp_0123456789abcdefghijklmnopqrstuvwxyz"
+	appImage        = "ghcr.io/acme/app:1"
+	prePullServices = "services:\n  app:\n    image: " + appImage + "\n  worker:\n    image: " + appImage + "\n  web:\n    image: nginx:1.27-alpine\n"
 )
 
 // pulls are the pulls the fake engine served, in order.
@@ -96,6 +97,12 @@ func TestPrePullPullsEachImageTheHostLacksOnceWithTheStoredCredentialAndShowsIts
 	app := itemByID(t, job, "pull:ghcr.io/acme/app:1@"+digestOf("a"))
 	if app.Label != "Pull ghcr.io/acme/app:1" || app.Parent != stackops.ItemLookup || app.Kind != stackops.KindStep || app.State != jobs.ItemDone {
 		t.Errorf("the pull step = {label %q parent %q kind %q state %s}, want a done step 'Pull ghcr.io/acme/app:1' under the lookup", app.Label, app.Parent, app.Kind, app.State)
+	}
+	if app.Result["image"] != "ghcr.io/acme/app:1" || app.Result["ref"] != "ghcr.io/acme/app:1" {
+		t.Errorf("the pull's result = %v, want the image and the normalised reference without a digest", app.Result)
+	}
+	if got := itemByID(t, job, "pull:nginx:1.27-alpine@"+digestOf("b")).Result["ref"]; got != "docker.io/library/nginx:1.27-alpine" {
+		t.Errorf("the nginx pull's reference = %q, want docker.io/library/nginx:1.27-alpine", got)
 	}
 	if app.Unit != "bytes" || app.Total != 2048 || app.Current != 2048 || app.Count != 2 || app.Done != 2 {
 		t.Errorf("the pull's progress = %d of %d %s, %d of %d layers, want 2048 of 2048 bytes in 2 layers", app.Current, app.Total, app.Unit, app.Done, app.Count)
@@ -213,7 +220,7 @@ func TestPrePullStopsTheDeployAtTheFailedPullWithTheRegistryWordsAndCreatesNothi
 					pull = it
 				}
 			}
-			if !strings.HasPrefix(pull.ID, "pull:") || pull.State != jobs.ItemFailed || pull.Code != tc.code || pull.Message != stackops.PullMessages[tc.code] {
+			if !strings.HasPrefix(pull.ID, "pull:") || pull.State != jobs.ItemFailed || pull.Code != tc.code || pull.Message != stackops.CodeMessage(tc.code) || pull.Message == "" {
 				t.Errorf("pull step = %+v, want failed with %s and its sentence", pull, tc.code)
 			}
 			if raw, _ := json.Marshal(job); strings.Contains(string(raw), "secret-registry-body") {
@@ -269,4 +276,45 @@ func firstDigest(job jobs.Job) string {
 		}
 	}
 	return ""
+}
+
+func TestPrePullCancelledInTheMiddleOfAPullEndsThePullAndTheStepsAfterItCancelled(t *testing.T) {
+	t.Parallel()
+	gate := make(chan struct{})
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		standalone(c)
+		c.TasksFollowWrites = false
+		c.PullHold = gate
+	})
+	t.Cleanup(func() { close(gate) })
+	stand := &upStandIn{}
+	rig.deps.Up = stand.up
+	in := standaloneInput("demo", webStandalone)
+	in.Reviewed = map[string]string{"web": "nginx:1.27-alpine@" + digestOf("b")}
+	id, done := rig.startStandalone(t, in)
+
+	// The pull is on the engine, held; cancel the job there.
+	if err := rig.fake.Await(testsupport.Context(t), func() bool { return len(pulls(rig)) == 1 }); err != nil {
+		t.Fatalf("waiting for the pull to reach the engine: %v", err)
+	}
+	if err := rig.hub.Cancel(id); err != nil {
+		t.Fatal(err)
+	}
+	res := testsupport.Await(t, "the deploy to end", done)
+
+	if res.Code != stackops.CodeCancelled || stand.calls != 0 {
+		t.Fatalf("result %+v after %d SDK calls, want cancelled before the SDK", res, stand.calls)
+	}
+	job, err := rig.hub.Wait(testsupport.Context(t), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := itemByID(t, job, "pull:nginx:1.27-alpine@"+digestOf("b")); got.State != jobs.ItemCancelled || got.Code != stackops.CodeCancelled {
+		t.Errorf("pull step = %s %s, want cancelled", got.State, got.Code)
+	}
+	for _, step := range []string{"networks", "services", "cleanup"} {
+		if got := itemByID(t, job, step); got.State != jobs.ItemCancelled {
+			t.Errorf("%s = %s, want cancelled", step, got.State)
+		}
+	}
 }

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/compose-spec/compose-go/v2/types"
+
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/internal/stacks"
@@ -49,13 +51,15 @@ func StandaloneItemSpecs() []jobs.ItemSpec {
 	}
 }
 
+// standaloneOrder is where a step is in the run: ItemPull sits between the lookup and the networks.
 func standaloneOrder(item string) int {
-	for i, id := range StandaloneDeployItems() {
+	order := []string{ItemCheck, ItemLookup, ItemPull, ItemNetworks, ItemVolumes, ItemServices, ItemCleanup}
+	for i, id := range order {
 		if id == item {
 			return i
 		}
 	}
-	return len(StandaloneDeployItems())
+	return len(order)
 }
 
 // StandaloneDeployInput is a stack to deploy to a standalone host: the environment and the node of its one
@@ -292,6 +296,17 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 	}
 	r.Finish(ItemLookup, jobs.ItemDone, "", "", map[string]string{"images": strconv.Itoa(len(pinned.Pins))})
 
+	// 2b. Pull the images the services that will be created or recreated need and the host lacks, with the
+	// stored credential. A service whose container stays is not pulled for: its image text did not change,
+	// and a deploy never moves it (STK-09). The SDK finds the images on the host and needs no credential.
+	if err := d.prePull(ctx, in.EnvID, in.NodeID, pullPins(project, diff, standalonePins(items, pinned)), r); err != nil {
+		var pe *prePullError
+		if !errors.As(err, &pe) {
+			return failErr(ItemPull, codeOf(ctx, err), "", err)
+		}
+		return fail(ItemPull, pe.Code, pe.Service)
+	}
+
 	// 3. The SDK's up creates the networks and volumes, then the services, in one call. The networks and
 	// volumes items end with it, the services as the events and the containers left say.
 	if ctx.Err() != nil {
@@ -360,6 +375,18 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 		"removedServices": strconv.Itoa(len(diff.Removed)),
 	}}
 	return res
+}
+
+// pullPins are the references of the services whose containers the up creates or recreates: the added and
+// the changed ones, by service name.
+func pullPins(p *types.Project, diff standaloneDiff, pins map[string]string) map[string]string {
+	out := map[string]string{}
+	for _, n := range slices.Concat(diff.Added, diff.Changed) {
+		if ref, ok := pins[n]; ok && p.Services[n].Image != "" {
+			out[n] = ref
+		}
+	}
+	return out
 }
 
 // standaloneAction is what a deploy did to a service: created when it had no container, updated when its

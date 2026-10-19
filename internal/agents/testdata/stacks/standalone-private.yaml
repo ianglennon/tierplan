@@ -1,0 +1,7 @@
+# The private-image stack of plan 07-21: one service whose image is in a registry that requires a sign-in. The
+# host knows no credential; Bayplan pulls with the one it stores. {{IMAGE}} is where the test puts the image.
+services:
+  app:
+    image: {{IMAGE}}
+    command: ["sleep", "3600"]
+    stop_grace_period: 1s

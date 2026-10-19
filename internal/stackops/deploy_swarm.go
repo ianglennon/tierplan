@@ -92,8 +92,14 @@ var codeMessages = map[string]string{
 	CodePinsInvalid:         "The images in the request don't match what the deploy would use. Review the stack again.",
 }
 
-// CodeMessage is the sentence for a deploy code, empty for a code it does not know.
-func CodeMessage(code string) string { return codeMessages[code] }
+// CodeMessage is the sentence for a deploy code, empty for a code it does not know. A pull failure code
+// (pull_denied, image_not_found, rate_limited ...) has the sentence of Phase 5's pulls (PullMessages).
+func CodeMessage(code string) string {
+	if m, ok := codeMessages[code]; ok {
+		return m
+	}
+	return PullMessages[code]
+}
 
 // SwarmDeployInput is a stack to deploy to a swarm: the environment, the stack, the loaded compose
 // project with the files and variables its secrets and configs are read from, and who asks.

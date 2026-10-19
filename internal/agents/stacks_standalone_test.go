@@ -5,6 +5,7 @@
 package agents_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/internal/registry"
 	"github.com/ianglennon/bayplan/internal/server/servertest"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
@@ -101,6 +103,7 @@ type saJob struct {
 
 type saJobItem struct {
 	ID      string `json:"id"`
+	Label   string `json:"label"`
 	Parent  string `json:"parent"`
 	State   string `json:"state"`
 	Code    string `json:"code"`
@@ -151,10 +154,30 @@ func (f *saFix) draftVersion(t *testing.T, stackID string) int64 {
 	return d.Version
 }
 
-// deploy deploys the stack's draft and waits until the job ends. It returns the job as it ended.
-func (f *saFix) deploy(t *testing.T, stackID string) saJob {
+// review reviews the stack's draft and returns the images it chose, by service.
+func (f *saFix) review(t *testing.T, stackID string) map[string]string {
 	t.Helper()
-	code, body := f.srv.Do(http.MethodPost, f.api()+"/"+stackID+"/deploys", map[string]any{"draftVersion": f.draftVersion(t, stackID)})
+	code, body := f.srv.Do(http.MethodPost, f.api()+"/"+stackID+"/review", map[string]any{})
+	var rv struct {
+		Pins map[string]string `json:"pins"`
+	}
+	if code != http.StatusOK || json.Unmarshal(body, &rv) != nil || len(rv.Pins) == 0 {
+		t.Fatalf("POST the review of stack %s = %d %s", stackID, code, body)
+	}
+	return rv.Pins
+}
+
+// deploy deploys the stack's draft and waits until the job ends. It returns the job as it ended.
+func (f *saFix) deploy(t *testing.T, stackID string) saJob { return f.deployPins(t, stackID, nil) }
+
+// deployPins is deploy with the images a review chose, which the deploy then uses without a lookup.
+func (f *saFix) deployPins(t *testing.T, stackID string, pins map[string]string) saJob {
+	t.Helper()
+	body0 := map[string]any{"draftVersion": f.draftVersion(t, stackID)}
+	if pins != nil {
+		body0["pins"] = pins
+	}
+	code, body := f.srv.Do(http.MethodPost, f.api()+"/"+stackID+"/deploys", body0)
 	var started struct {
 		JobID string `json:"jobId"`
 	}
@@ -286,6 +309,98 @@ func TestStandaloneStackThroughAnAgent(t *testing.T) {
 	// Nothing of the recreate is left behind: the SDK's temporary container is gone.
 	if all := sh(t, f.host, "docker ps -aq --filter label=com.docker.compose.project="+name); len(strings.Fields(all)) != 2 {
 		t.Errorf("containers of the project after the edit = %q, want two", all)
+	}
+	f.noDenials(t)
+}
+
+// TestStandalonePrivateImageThroughAnAgent deploys a stack whose image is in a registry that requires a sign-in,
+// to a standalone host through a real agent (plan 07-21, IMG-02 for stacks, D-27): Bayplan pulls the image with
+// the credential it stores, as a step of the deploy, and the Compose SDK finds it on the host and needs no
+// credential. The host is never signed in and holds no Docker client configuration. A wrong password stops the
+// deploy at the pull step with pull_unauthorized, records the failure on the credential and creates nothing; a
+// corrected one deploys and clears it.
+func TestStandalonePrivateImageThroughAnAgent(t *testing.T) {
+	const user, password = "bot", "registry-pass-0123456789"
+	f := startSAFix(t, dockertest.RegistryOptions{Htpasswd: dockertest.HtpasswdFor(user, password)})
+	image := f.registry + "/private/app:1"
+	// Signed in for the push only. From here on the host knows no credential, and the deploy has to fetch.
+	pushed := f.pushBusybox(t, image, &dockertest.Login{User: user, Password: password})
+
+	creds := registry.NewStore(f.srv.Core().Store(), f.srv.Core().Vault(), nil)
+	ctx := context.Background()
+	cred, err := creds.Create(ctx, registry.CreateInput{
+		Name: "private-bot", Type: registry.TypeGeneric, Host: f.registry, Prefix: "private", Username: user, Secret: password,
+	}, "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failureOf := func() *registry.LastFailure {
+		c, err := creds.Get(ctx, cred.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c.LastFailure
+	}
+
+	const name = "spriv"
+	id := f.create(t, name, saCorpus(t, "standalone-private.yaml", map[string]string{"IMAGE": image}), nil)
+	setPassword := func(secret string) {
+		t.Helper()
+		if _, _, err := creds.Update(ctx, cred.ID, registry.UpdateInput{
+			Name: cred.Name, Type: cred.Type, Host: cred.Host, Prefix: cred.Prefix, Username: user, Secret: secret,
+		}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pullStep := func(job saJob) saJobItem {
+		for _, it := range job.Items {
+			if strings.HasPrefix(it.ID, "pull:") {
+				return it
+			}
+		}
+		return saJobItem{}
+	}
+
+	// The review pins the image with the right password; the password is then changed, so the deploy has to
+	// pull with a wrong one: the pull step fails with the code, the failure is recorded on the credential,
+	// and nothing is created.
+	pins := f.review(t, id)
+	setPassword("wrong-" + password)
+	job := f.deployPins(t, id, pins)
+	if job.State == "done" {
+		t.Fatalf("the deploy with a wrong password ended done: %+v", job)
+	}
+	if pull := pullStep(job); pull.State != "failed" || pull.Code != "pull_unauthorized" || pull.Parent != "lookup" {
+		t.Fatalf("pull step = %+v, want failed with pull_unauthorized under the lookup (items: %+v)", pull, job.Items)
+	}
+	if fl := failureOf(); fl == nil || fl.Code != "pull_unauthorized" {
+		t.Fatalf("credential failure = %+v, want pull_unauthorized", fl)
+	}
+	if got := f.containers(t, name); len(got) != 0 {
+		t.Errorf("containers after a failed pull = %v, want none", got)
+	}
+	if raw, _ := json.Marshal(job); strings.Contains(string(raw), password) {
+		t.Errorf("the job carries the password: %s", raw)
+	}
+
+	// The right password: the pull works, the service runs the pinned image, the failure is cleared.
+	setPassword(password)
+	job = f.deployOK(t, id)
+	if pull := pullStep(job); pull.State != "done" || pull.Label != "Pull "+image {
+		t.Errorf("pull step = %+v, want done, 'Pull %s'", pull, image)
+	}
+	got := f.containers(t, name)
+	if len(got["app"]) != 1 || !strings.HasSuffix(got["app"][0], " running") {
+		t.Fatalf("containers after the deploy = %v, want app running", got)
+	}
+	if ran := strings.TrimSpace(sh(t, f.host, "docker inspect -f '{{.Config.Image}}' "+name+"-app-1")); ran != image+"@"+pushed {
+		t.Errorf("the container runs %q, want the pin %q", ran, image+"@"+pushed)
+	}
+	if fl := failureOf(); fl != nil {
+		t.Errorf("credential failure = %+v, want it cleared by a pull that worked", fl)
+	}
+	if dockertest.HasClientConfig(t, f.host) {
+		t.Errorf("the host has a Docker client configuration after the deploy: Bayplan must not log in")
 	}
 	f.noDenials(t)
 }
