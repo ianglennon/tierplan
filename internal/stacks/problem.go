@@ -38,6 +38,10 @@ const (
 	CodeUnusedVariable       = "unused_variable"
 	CodeEnvFileInvalid       = "env_file_invalid"
 	CodeDotenvNotRead        = "dotenv_not_read"
+	// CodePortsTooMany is a file whose ports and expose ranges add up to more than MaxPorts.
+	CodePortsTooMany = "ports_too_many"
+	// CodePortRangeInvalid is a port range outside 0 to 65535, or one that runs backwards.
+	CodePortRangeInvalid = "port_range_invalid"
 	// CodeObjectTooLarge is a secret or config with more content than the target takes.
 	CodeObjectTooLarge = "object_too_large"
 

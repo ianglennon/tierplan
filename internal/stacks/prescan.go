@@ -414,3 +414,30 @@ func (w *walker) fileRef(key string, v val, optional bool) {
 	}
 	w.found = append(w.found, problem)
 }
+
+// MaxPorts is the most ports a compose file's ports: and expose: ranges may add up to.
+const MaxPorts = 20000
+
+// ErrPortsTooMany, ErrPortRangeInvalid and ErrComposeTooComplex are the refusals of PortBudget.
+var (
+	ErrPortsTooMany      = errors.New("stacks: the port ranges add up to too many ports")
+	ErrPortRangeInvalid  = errors.New("stacks: a port range is not valid")
+	ErrComposeTooComplex = errors.New("stacks: the compose file is too complex")
+)
+
+// PortsError is a refusal of PortBudget, located at the item that caused it.
+type PortsError struct {
+	Err       error
+	Key       string
+	Line, Col int
+}
+
+func (e *PortsError) Error() string {
+	return fmt.Sprintf("stacks: %s at line %d: %v", e.Key, e.Line, e.Err)
+}
+
+// Unwrap returns the refusal.
+func (e *PortsError) Unwrap() error { return e.Err }
+
+// PortBudget is a stub until the budget is implemented.
+func PortBudget(compose []byte, vars []Var) error { return nil }
