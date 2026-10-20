@@ -6,8 +6,10 @@ package api_test
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
@@ -197,7 +200,7 @@ func stackReadyOf(t *testing.T, c *sseConn) stackReady {
 }
 
 // auditRowsOf are the audit rows of one action, oldest first.
-func (f *stackLogsFix) auditRowsOf(t *testing.T, action string) []auditRowFull {
+func (f *envFix) auditRowsOf(t *testing.T, action string) []auditRowFull {
 	t.Helper()
 	rows, err := f.st.Read.Query(`SELECT action, target_type, target_id, COALESCE(env_id, ''), result, COALESCE(reason, ''), COALESCE(details, '{}')
 		FROM audit_log WHERE action = ? ORDER BY seq`, action)
@@ -416,5 +419,403 @@ func TestStackLogsHideTheKnownSecretValuesOfTheStackInEveryLine(t *testing.T) {
 	}
 	if strings.Contains(c.bodyString(), "s3cr3t-value") {
 		t.Errorf("the stream holds the secret value: %q", c.bodyString())
+	}
+}
+
+// ---- narrowing, the follow cap and the swarm cases the tracer left ----
+
+type stackLogCapEvent struct {
+	Count int    `json:"count"`
+	Cap   int    `json:"cap"`
+	Unit  string `json:"unit"`
+}
+
+func capOf(t *testing.T, c *sseConn) stackLogCapEvent {
+	t.Helper()
+	var ev stackLogCapEvent
+	if err := json.Unmarshal([]byte(nextEvent(t, c, "cap").data), &ev); err != nil {
+		t.Fatal(err)
+	}
+	return ev
+}
+
+func TestStackLogsNarrowToTheServicesNamedByTheirNameInTheComposeFile(t *testing.T) {
+	t.Parallel()
+	f := newStackLogsFix(t, stackLogsTasks(), stackLogsBurst(), nil)
+	c := f.open(t, "sid="+sidA+"&services=api", "")
+	rd := stackReadyOf(t, c)
+	if len(rd.Tasks) != 1 || rd.Tasks[0].Service != "api" {
+		t.Fatalf("ready tasks = %+v, want api's only", rd.Tasks)
+	}
+	got, _ := readStackLines(t, c, 2)
+	if want := []string{"api a", "api b"}; !slices.Equal(stackTexts(got), want) {
+		t.Fatalf("lines = %v, want %v", stackTexts(got), want)
+	}
+	// The fence: once the burst is over a live line of the service left out is not shown, and
+	// the one after it for the service kept is the next line.
+	f.awaitBurstEnd(t)
+	f.fake.PushServiceLog("svc-web", svcLine("tk-w1", "node-1", 300, "web live"))
+	f.fake.PushServiceLog("svc-api", svcLine("tk-a1", "node-1", 400, "api live"))
+	if more, _ := readStackLines(t, c, 1); more[0].M != "api live" {
+		t.Errorf("the next line = %+v, want api's: the service left out shows nothing", more)
+	}
+}
+
+func TestStackLogsNarrowToTheTasksAndNodesNamed(t *testing.T) {
+	t.Parallel()
+	f := newStackLogsFix(t, stackLogsTasks(), stackLogsBurst(), nil)
+
+	byTask := f.open(t, "sid="+sidA+"&tasks=tk-w2", "")
+	got, _ := readStackLines(t, byTask, 1)
+	if got[0].M != "web2 a" || got[0].Task != "tk-w2" {
+		t.Fatalf("lines = %+v, want web's tk-w2 alone", got)
+	}
+
+	byNode := f.open(t, "sid="+sidB+"&nodes=wrk-ready", "")
+	got, _ = readStackLines(t, byNode, 1)
+	if got[0].M != "web2 a" || got[0].Node != "wrk-ready" {
+		t.Fatalf("lines = %+v, want the one task on wrk-ready", got)
+	}
+}
+
+func TestStackLogsShowTheTasksThatEndedOnlyWhenStoppedIsSet(t *testing.T) {
+	t.Parallel()
+	f := newStackLogsFix(t, stackLogsTasks(), stackLogsBurst(), nil)
+	c := f.open(t, "sid="+sidA+"&stopped=1", "")
+	rd := stackReadyOf(t, c)
+	if len(rd.Tasks) != 4 {
+		t.Errorf("ready tasks = %+v, want all four with stopped=1", rd.Tasks)
+	}
+	lines, _ := readStackLines(t, c, 6)
+	if lines[0].M != "web0 old" || lines[0].Task != "tk-w0" || lines[0].Service != "web" {
+		t.Errorf("first line = %+v, want the failed task's line first", lines[0])
+	}
+}
+
+func TestStackLogsOfMoreServicesThanTheCapFollowTheCapAndSayHowManyTasksThereAre(t *testing.T) {
+	t.Parallel()
+	f := newStackLogsFix(t, stackLogsTasks(), stackLogsBurst(), func(f *envFix) { f.stackLogs.MaxFollow = 1 })
+	c := f.open(t, "sid="+sidA, "")
+	rd := stackReadyOf(t, c)
+	cp := capOf(t, c)
+	if cp.Count != 3 || cp.Cap != 1 || cp.Unit != "tasks" {
+		t.Errorf("cap = %+v, want 1 of the stack's 3 tasks", cp)
+	}
+	services := map[string]bool{}
+	for _, tk := range rd.Tasks {
+		services[tk.Service] = true
+	}
+	if len(services) != 1 {
+		t.Errorf("ready tasks = %+v, want the tasks of one service", rd.Tasks)
+	}
+	// One upstream stream was opened, not two.
+	got, _ := readStackLines(t, c, 2)
+	if got[0].Service != got[1].Service {
+		t.Errorf("lines = %+v, want one service's", got)
+	}
+}
+
+func TestStackLogsOfAStackWithinTheCapSendNoCapEvent(t *testing.T) {
+	t.Parallel()
+	f := newStackLogsFix(t, stackLogsTasks(), stackLogsBurst(), nil)
+	c := f.open(t, "sid="+sidA, "")
+	stackReadyOf(t, c)
+	readStackLines(t, c, 5)
+	if strings.Contains(c.bodyString(), "event: cap") {
+		t.Errorf("the stream told of a cap: %q", c.bodyString())
+	}
+}
+
+// ---- a standalone stack ----
+
+const soloCompose = "services:\n  web:\n    image: nginx:1.27-alpine\n  db:\n    image: postgres:17\n"
+
+var soloT0 = time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC)
+
+func soloLine(ms int, text string) dockertest.FakeLogLine {
+	return dockertest.FakeLogLine{Time: soloT0.Add(time.Duration(ms) * time.Millisecond), Text: text}
+}
+
+type soloFix struct {
+	*envFix
+	env        envBody
+	stack      stackAnswer
+	user       *roleCaller
+	burstEnded chan struct{}
+}
+
+func (f *soloFix) awaitBurstEnd(t *testing.T) {
+	t.Helper()
+	select {
+	case <-f.burstEnded:
+	case <-testsupport.Context(t).Done():
+		t.Fatal("the stack log stream never finished its opening burst")
+	}
+}
+
+// soloContainer is a container of the stack solo as the engine lists it.
+func soloContainer(stackID, id, service string, number int, state string, created int64) dockertest.FakeContainer {
+	return dockertest.FakeContainer{
+		ID: id, Names: []string{"/solo-" + service + "-" + strconv.Itoa(number)}, Image: "img", State: state, Created: created,
+		Labels: map[string]string{
+			"com.docker.compose.project": "solo", "com.docker.compose.service": service,
+			"com.docker.compose.container-number": strconv.Itoa(number), "bayplan.stack.id": stackID,
+		},
+	}
+}
+
+// newSoloFix builds the server's own standalone host with the stack solo, whose containers are
+// made by build from the stack's ID, and a router whose stack log stream is tuned by tune.
+func newSoloFix(t *testing.T, build func(stackID string) []dockertest.FakeContainer, tune func(*envFix)) *soloFix {
+	t.Helper()
+	cfg := swarmManagerEngine()
+	cfg.SwarmState, cfg.SwarmControl, cfg.NodeRows = "", false, nil
+	f := newEnvFix(t, cfg)
+	// The stream follows a container across its recreation through the events hub.
+	f.hub = envs.NewHub(f.mon, f.snaps, slog.New(slog.DiscardHandler), time.Now)
+	t.Cleanup(f.hub.Close)
+	f.agg = envs.NewAggregator(f.svc, f.snaps, f.hub, f.clk.now)
+	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
+	f.svc.WithClusters(f.clusters)
+	burstEnded := make(chan struct{}, 16)
+	f.stackLogs = api.StackLogsTuning{
+		BurstEnded: func() {
+			select {
+			case burstEnded <- struct{}{}:
+			default:
+			}
+		},
+	}
+	if tune != nil {
+		tune(f)
+	}
+	f.h = f.build(t)
+	e := f.add(t)
+	awaitOnline(t, f.mon, e.ID)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "solo")
+	if st.Target != "standalone" {
+		t.Fatalf("target = %q, want standalone", st.Target)
+	}
+	cfg.Containers = build(st.ID)
+	f.fake.Reconfigure(cfg)
+	return &soloFix{envFix: f, env: e, stack: st, user: f.caller(t, e, "viewer-1", "viewer"), burstEnded: burstEnded}
+}
+
+func (f *soloFix) reconfigure(containers []dockertest.FakeContainer) {
+	cfg := swarmManagerEngine()
+	cfg.SwarmState, cfg.SwarmControl, cfg.NodeRows = "", false, nil
+	cfg.Containers = containers
+	f.fake.Reconfigure(cfg)
+}
+
+func (f *soloFix) open(t *testing.T, query, lastEventID string) *sseConn {
+	t.Helper()
+	return openSSE(t, f.authFixture, "/api/env/"+f.env.ID+"/stacks/"+f.stack.ID+"/logs/stream?"+query, f.user.cookie, lastEventID)
+}
+
+// soloTwoServices are web's two containers and db's one, all running.
+func soloTwoServices(stackID string) []dockertest.FakeContainer {
+	return []dockertest.FakeContainer{
+		soloContainer(stackID, "cweb1", "web", 1, "running", 100),
+		soloContainer(stackID, "cweb2", "web", 2, "running", 110),
+		soloContainer(stackID, "cdb1", "db", 1, "running", 90),
+	}
+}
+
+func (f *soloFix) seed() {
+	f.fake.AppendLogs("cweb1", soloLine(10, "web1 a"), soloLine(60, "web1 b"))
+	f.fake.AppendLogs("cweb2", soloLine(30, "web2 a"))
+	f.fake.AppendLogs("cdb1", soloLine(20, "db a"), soloLine(40, "db b"))
+}
+
+func TestStackLogsOfAStandaloneStackFollowEachContainerAndMergeThemWithTheirServiceAndNumber(t *testing.T) {
+	t.Parallel()
+	f := newSoloFix(t, soloTwoServices, nil)
+	f.seed()
+	c := f.open(t, "sid="+sidA, "")
+	if c.status0() != http.StatusOK {
+		t.Fatalf("status = %d: %s", c.status0(), c.bodyString())
+	}
+	rd := stackReadyOf(t, c)
+	want := []stackReadyTask{
+		{"cdb1", "db", 1, "", "running"},
+		{"cweb1", "web", 1, "", "running"},
+		{"cweb2", "web", 2, "", "running"},
+	}
+	if rd.Target != "standalone" || !slices.Equal(rd.Tasks, want) {
+		t.Fatalf("ready = %+v, want a standalone stack whose containers are %+v", rd, want)
+	}
+	lines, _ := readStackLines(t, c, 5)
+	if got, want := stackTexts(lines), []string{"web1 a", "db a", "web2 a", "db b", "web1 b"}; !slices.Equal(got, want) {
+		t.Fatalf("lines = %v, want %v: the containers merged by time", got, want)
+	}
+	if l := lines[2]; l.Service != "web" || l.Slot != 2 || l.Task != "cweb2" || l.Node != "" {
+		t.Errorf("web2 a = %+v, want service web, number 2, the container's ID as task and no node", l)
+	}
+	if rows := f.auditRowsOf(t, audit.ActionLogsViewed); len(rows) != 1 || rows[0].TargetType != "stack" || rows[0].TargetID != f.stack.ID {
+		t.Errorf("logs.viewed rows = %+v, want one for the stack", rows)
+	}
+}
+
+func TestStackLogsOfAStandaloneStackOrderLinesAtTheSameTimeByServiceThenNumber(t *testing.T) {
+	t.Parallel()
+	f := newSoloFix(t, soloTwoServices, nil)
+	f.fake.AppendLogs("cweb2", soloLine(10, "web.2"))
+	f.fake.AppendLogs("cweb1", soloLine(10, "web.1"))
+	f.fake.AppendLogs("cdb1", soloLine(10, "db.1"))
+	c := f.open(t, "sid="+sidA, "")
+	got, _ := readStackLines(t, c, 3)
+	if want := []string{"db.1", "web.1", "web.2"}; !slices.Equal(stackTexts(got), want) {
+		t.Fatalf("lines = %v, want %v", stackTexts(got), want)
+	}
+}
+
+func TestStackLogsOfAStandaloneStackNarrowToServicesContainersAndStopped(t *testing.T) {
+	t.Parallel()
+	f := newSoloFix(t, func(id string) []dockertest.FakeContainer {
+		return append(soloTwoServices(id), soloContainer(id, "cweb3", "web", 3, "exited", 80))
+	}, nil)
+	f.seed()
+	f.fake.AppendLogs("cweb3", soloLine(5, "web3 old"))
+
+	// By service.
+	byService := f.open(t, "sid="+sidA+"&services=db", "")
+	rd := stackReadyOf(t, byService)
+	if len(rd.Tasks) != 1 || rd.Tasks[0].ID != "cdb1" {
+		t.Fatalf("ready tasks = %+v, want db's container", rd.Tasks)
+	}
+	if got, _ := readStackLines(t, byService, 2); !slices.Equal(stackTexts(got), []string{"db a", "db b"}) {
+		t.Fatalf("lines = %v", stackTexts(got))
+	}
+
+	// By container: a name and the start of an ID both name one.
+	byName := f.open(t, "sid="+sidB+"&containers=solo-web-2", "")
+	if got, _ := readStackLines(t, byName, 1); got[0].M != "web2 a" {
+		t.Fatalf("lines = %+v, want web's second container named by its name", got)
+	}
+
+	// A container that ended is left out unless stopped is set.
+	running := f.open(t, "sid=ZZZZZZZZZZZZZZZZZZZZZZ&services=web", "")
+	if rd := stackReadyOf(t, running); len(rd.Tasks) != 2 {
+		t.Errorf("ready tasks = %+v, want web's two running containers", rd.Tasks)
+	}
+	all := f.open(t, "sid=YYYYYYYYYYYYYYYYYYYYYY&services=web&stopped=1", "")
+	rd = stackReadyOf(t, all)
+	if len(rd.Tasks) != 3 {
+		t.Fatalf("ready tasks = %+v, want web's three containers with stopped=1", rd.Tasks)
+	}
+	if got, _ := readStackLines(t, all, 4); got[0].M != "web3 old" || got[0].Slot != 3 {
+		t.Errorf("first line = %+v, want the exited container's, number 3", got[0])
+	}
+}
+
+func TestStackLogsOfAStandaloneStackOverTheCapFollowTheNewestContainersAndSayHowManyThereAre(t *testing.T) {
+	t.Parallel()
+	f := newSoloFix(t, soloTwoServices, func(f *envFix) { f.stackLogs.MaxFollow = 2 })
+	f.seed()
+	c := f.open(t, "sid="+sidA, "")
+	rd := stackReadyOf(t, c)
+	cp := capOf(t, c)
+	if cp.Count != 3 || cp.Cap != 2 || cp.Unit != "containers" {
+		t.Errorf("cap = %+v, want 2 of the stack's 3 containers", cp)
+	}
+	var ids []string
+	for _, tk := range rd.Tasks {
+		ids = append(ids, tk.ID)
+	}
+	slices.Sort(ids)
+	if want := []string{"cweb1", "cweb2"}; !slices.Equal(ids, want) {
+		t.Errorf("followed = %v, want the newest two (web's, made later than db's) %v", ids, want)
+	}
+}
+
+func TestStackLogsOfAStandaloneStackHideTheKnownSecretValuesOfTheStack(t *testing.T) {
+	t.Parallel()
+	f := newSoloFix(t, soloTwoServices, nil)
+	f.fake.AppendLogs("cweb1", soloLine(10, "login with s3cr3t-value ok"))
+	f.fake.AppendLogs("cdb1", soloLine(20, "nothing to hide"))
+	operator := f.caller(t, f.env, "operator-1", "operator")
+	if rec := operator.saveDraft(f.stack.ID, saveBody(1, soloCompose, `[{"name":"DB_PASSWORD","value":"s3cr3t-value","secret":true}]`)); rec.Code != http.StatusOK {
+		t.Fatalf("save: %d %s", rec.Code, rec.Body)
+	}
+
+	c := f.open(t, "sid="+sidA, "")
+	got, _ := readStackLines(t, c, 2)
+
+	if want := []string{"login with <hidden> ok", "nothing to hide"}; !slices.Equal(stackTexts(got), want) {
+		t.Fatalf("lines = %v, want the value hidden", stackTexts(got))
+	}
+	if strings.Contains(c.bodyString(), "s3cr3t-value") {
+		t.Errorf("the stream holds the secret value: %q", c.bodyString())
+	}
+}
+
+func TestStackLogsOfAStandaloneStackReplaceARecreatedContainerWithAMarkerAndFollowTheNewOne(t *testing.T) {
+	t.Parallel()
+	f := newSoloFix(t, soloTwoServices, nil)
+	f.seed()
+	c := f.open(t, "sid="+sidA, "")
+	stackReadyOf(t, c)
+	readStackLines(t, c, 5)
+	f.awaitBurstEnd(t)
+
+	// A deploy recreates web's first container: the engine now lists the new one in its place, and
+	// the new one starts.
+	f.reconfigure([]dockertest.FakeContainer{
+		soloContainer(f.stack.ID, "cweb1n", "web", 1, "running", 200),
+		soloContainer(f.stack.ID, "cweb2", "web", 2, "running", 110),
+		soloContainer(f.stack.ID, "cdb1", "db", 1, "running", 90),
+	})
+	f.fake.AppendLogs("cweb1n", soloLine(500, "web1 again"))
+	f.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: "cweb1n",
+		Attributes: map[string]string{"name": "solo-web-1", "com.docker.compose.project": "solo"}})
+
+	var m stackLogMarker
+	var tasks stackReady
+	for m.Kind == "" {
+		fr := c.nextData(t, "the replacement marker")
+		switch fr.event {
+		case "tasks":
+			if err := json.Unmarshal([]byte(fr.data), &tasks); err != nil {
+				t.Fatal(err)
+			}
+		case "marker":
+			if err := json.Unmarshal([]byte(fr.data), &m); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if m.Kind != "replaced" || m.Service != "web" || m.Unit != "container" || m.Slot != 1 || m.Old != "cweb1" || m.New != "cweb1n" {
+		t.Errorf("marker = %+v, want web's container cweb1 replaced by cweb1n", m)
+	}
+	if !slices.ContainsFunc(tasks.Tasks, func(x stackReadyTask) bool { return x.ID == "cweb1n" && x.Service == "web" && x.Slot == 1 }) ||
+		slices.ContainsFunc(tasks.Tasks, func(x stackReadyTask) bool { return x.ID == "cweb1" }) {
+		t.Errorf("tasks event = %+v, want the new container in the old one's place", tasks.Tasks)
+	}
+	got, _ := readStackLines(t, c, 1)
+	if got[0].M != "web1 again" || got[0].Task != "cweb1n" || got[0].Slot != 1 {
+		t.Errorf("line = %+v, want the new container's first line", got[0])
+	}
+}
+
+func TestStackLogsOfAStandaloneStackFollowAContainerThatRestartedFromItsLastLine(t *testing.T) {
+	t.Parallel()
+	f := newSoloFix(t, soloTwoServices, nil)
+	f.fake.AppendLogs("cweb1", soloLine(10, "first run"))
+	c := f.open(t, "sid="+sidA+"&services=web&containers=cweb1", "")
+	stackReadyOf(t, c)
+	readStackLines(t, c, 1)
+	f.awaitBurstEnd(t)
+
+	f.fake.EndLogs("cweb1")
+	f.fake.StartLogs("cweb1")
+	f.fake.AppendLogs("cweb1", soloLine(10, "first run"), soloLine(900, "second run"))
+	f.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: "cweb1",
+		Attributes: map[string]string{"name": "solo-web-1", "com.docker.compose.project": "solo"}})
+
+	got, _ := readStackLines(t, c, 1)
+	if got[0].M != "second run" {
+		t.Errorf("line = %+v, want only the new run's line: the first is not repeated", got[0])
 	}
 }
