@@ -145,7 +145,17 @@ type StackItem struct {
 
 // StackListBody is the stacks of an environment.
 type StackListBody struct {
-	Items []StackItem `json:"items" doc:"The environment's stacks by name"`
+	Items           []StackItem           `json:"items" doc:"At most 500 stacks that match the search and the status filter, in the order asked for (by name unless sort says otherwise)"`
+	Total           int                   `json:"total" doc:"How many stacks match the search and the status filter, whatever the cap"`
+	UnfilteredTotal int                   `json:"unfilteredTotal" doc:"How many stacks the environment has before the search and the status filter, so a page can say 3 of 600"`
+	Capped          bool                  `json:"capped" doc:"True when total is more than the rows returned"`
+	StatusCounts    StackStatusCountsBody `json:"statusCounts" doc:"How many stacks each status chip counts, before the search and the status filter, so the numbers never shrink with what was typed"`
+}
+
+// StackListInput is the path of the stacks list with its search, status filter and sort.
+type StackListInput struct {
+	EnvironmentPathInput
+	StackQueryInput
 }
 
 // StackListOutput wraps StackListBody for huma.
@@ -254,10 +264,12 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 		OperationID: "listStacks", Method: http.MethodGet, Path: "/api/env/{envId}/stacks",
 		Summary: "The stacks Bayplan manages on an environment",
 		Description: "Every stack of the environment by name, with where it deploys, its state and when it was last deployed. " +
-			"The state comes from Bayplan's own records of the stack's deploys, never from a read of the engine. Needs stacks.read (Viewer).",
+			"The state comes from Bayplan's own records of the stack's deploys and the engine's cached rows, never from a read of the engine of its own. " +
+			"At most 500 stacks come back after the search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed) and the sort, " +
+			"with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Needs stacks.read (Viewer).",
 		Tags: []string{"stacks"},
 	}, rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment},
-		func(ctx context.Context, in *EnvironmentPathInput) (*StackListOutput, error) {
+		func(ctx context.Context, in *StackListInput) (*StackListOutput, error) {
 			return listStacks(ctx, d, in)
 		})
 
@@ -348,6 +360,13 @@ func (r *stackReads) rows(st stackops.Stack) ([]stackops.ServiceRow, bool) {
 
 // stackItemOf builds a stack's list entry from its stored rows and what the engine runs.
 func stackItemOf(reads *stackReads, st stackops.Stack, latest stackops.DeployRow, hasLatest bool, last stackops.DeployRow, hasLast, hasDraft bool) StackItem {
+	item, _ := stackItemWithServices(reads, st, latest, hasLatest, last, hasLast, hasDraft)
+	return item
+}
+
+// stackItemWithServices is stackItemOf with the services the stack owns on the engine, which a search
+// reads. They are nil for a stack that has had no operation and for one the engine could not be read for.
+func stackItemWithServices(reads *stackReads, st stackops.Stack, latest stackops.DeployRow, hasLatest bool, last stackops.DeployRow, hasLast, hasDraft bool) (StackItem, []stackops.ServiceRow) {
 	in := stackops.StateInput{Stopped: st.Stopped, Deployed: hasLast}
 	if hasLatest {
 		in.Latest = &latest
@@ -368,15 +387,27 @@ func stackItemOf(reads *stackReads, st stackops.Stack, latest stackops.DeployRow
 	if hasLast {
 		item.LastDeployedAt, item.LastDeployedBy = rfc3339(last.EndedAt), last.StartedBy
 	}
-	return item
+	return item, in.Services
 }
 
-func listStacks(ctx context.Context, d StacksDeps, in *EnvironmentPathInput) (*StackListOutput, error) {
-	items, err := d.stacksOf(ctx, in.EnvID)
+func listStacks(ctx context.Context, d StacksDeps, in *StackListInput) (*StackListOutput, error) {
+	q, err := newStackQuery(in.StackQueryInput)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := d.stackRowsOf(ctx, in.EnvID, "")
 	if err != nil {
 		return nil, stackInternal(d, "list", in.EnvID, err)
 	}
-	return &StackListOutput{CacheControl: "no-store", Body: StackListBody{Items: items}}, nil
+	shown, total := q.apply(rows)
+	body := StackListBody{
+		Items: make([]StackItem, 0, len(shown)), Total: total, UnfilteredTotal: len(rows),
+		Capped: total > len(shown), StatusCounts: stackStatusCounts(rows),
+	}
+	for _, r := range shown {
+		body.Items = append(body.Items, r.item)
+	}
+	return &StackListOutput{CacheControl: "no-store", Body: body}, nil
 }
 
 func getStack(ctx context.Context, d StacksDeps, in *StackPathInput) (*StackDetailOutput, error) {

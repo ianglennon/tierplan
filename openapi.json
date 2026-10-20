@@ -399,6 +399,10 @@
       "AllStacksBody": {
         "additionalProperties": false,
         "properties": {
+          "capped": {
+            "description": "True when total is more than the rows returned, counted over every group together",
+            "type": "boolean"
+          },
           "failedEnvironments": {
             "description": "Environments the caller may read stacks on whose stacks could not be read just now",
             "items": {
@@ -410,7 +414,7 @@
             ]
           },
           "groups": {
-            "description": "One group for each environment that has stacks the caller may read, by environment name. An environment the caller holds no stacks.read on is absent",
+            "description": "One group for each environment that has stacks among the rows returned, by environment name. An environment the caller holds no stacks.read on is absent",
             "items": {
               "$ref": "#/components/schemas/AllStacksGroup"
             },
@@ -418,17 +422,39 @@
               "array",
               "null"
             ]
+          },
+          "statusCounts": {
+            "$ref": "#/components/schemas/StackStatusCountsBody",
+            "description": "How many stacks each status chip counts, over the environments read and before the search and the status filter"
+          },
+          "total": {
+            "description": "How many stacks of the environments read match the search and the status filter, whatever the cap",
+            "format": "int64",
+            "type": "integer"
+          },
+          "unfilteredTotal": {
+            "description": "How many stacks the environments read have before the search and the status filter",
+            "format": "int64",
+            "type": "integer"
           }
         },
         "required": [
           "groups",
-          "failedEnvironments"
+          "failedEnvironments",
+          "total",
+          "unfilteredTotal",
+          "capped",
+          "statusCounts"
         ],
         "type": "object"
       },
       "AllStacksGroup": {
         "additionalProperties": false,
         "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/StackStatusCountsBody",
+            "description": "How many of the environment's stacks each status chip counts, before the search and the status filter"
+          },
           "envId": {
             "description": "The environment",
             "type": "string"
@@ -438,7 +464,7 @@
             "type": "string"
           },
           "stacks": {
-            "description": "The environment's stacks by name",
+            "description": "The environment's stacks among the rows returned, in the order asked for",
             "items": {
               "$ref": "#/components/schemas/StackItem"
             },
@@ -460,7 +486,8 @@
           "envId",
           "envName",
           "target",
-          "stacks"
+          "stacks",
+          "counts"
         ],
         "type": "object"
       },
@@ -12318,8 +12345,12 @@
       "StackListBody": {
         "additionalProperties": false,
         "properties": {
+          "capped": {
+            "description": "True when total is more than the rows returned",
+            "type": "boolean"
+          },
           "items": {
-            "description": "The environment's stacks by name",
+            "description": "At most 500 stacks that match the search and the status filter, in the order asked for (by name unless sort says otherwise)",
             "items": {
               "$ref": "#/components/schemas/StackItem"
             },
@@ -12327,10 +12358,28 @@
               "array",
               "null"
             ]
+          },
+          "statusCounts": {
+            "$ref": "#/components/schemas/StackStatusCountsBody",
+            "description": "How many stacks each status chip counts, before the search and the status filter, so the numbers never shrink with what was typed"
+          },
+          "total": {
+            "description": "How many stacks match the search and the status filter, whatever the cap",
+            "format": "int64",
+            "type": "integer"
+          },
+          "unfilteredTotal": {
+            "description": "How many stacks the environment has before the search and the status filter, so a page can say 3 of 600",
+            "format": "int64",
+            "type": "integer"
           }
         },
         "required": [
-          "items"
+          "items",
+          "total",
+          "unfilteredTotal",
+          "capped",
+          "statusCounts"
         ],
         "type": "object"
       },
@@ -13017,6 +13066,38 @@
         },
         "required": [
           "items"
+        ],
+        "type": "object"
+      },
+      "StackStatusCountsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "degraded": {
+            "description": "Stacks with some but not all of their services running",
+            "format": "int64",
+            "type": "integer"
+          },
+          "deployFailed": {
+            "description": "Stacks whose newest deploy, update or roll back failed, was cancelled or was interrupted",
+            "format": "int64",
+            "type": "integer"
+          },
+          "draft": {
+            "description": "Stacks whose draft holds changes that have not been deployed",
+            "format": "int64",
+            "type": "integer"
+          },
+          "stopped": {
+            "description": "Stacks a person stopped",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "degraded",
+          "stopped",
+          "draft",
+          "deployFailed"
         ],
         "type": "object"
       },
@@ -21977,7 +22058,7 @@
     },
     "/api/env/{envId}/stacks": {
       "get": {
-        "description": "Every stack of the environment by name, with where it deploys, its state and when it was last deployed. The state comes from Bayplan's own records of the stack's deploys, never from a read of the engine. Needs stacks.read (Viewer).",
+        "description": "Every stack of the environment by name, with where it deploys, its state and when it was last deployed. The state comes from Bayplan's own records of the stack's deploys and the engine's cached rows, never from a read of the engine of its own. At most 500 stacks come back after the search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed) and the sort, with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Needs stacks.read (Viewer).",
         "operationId": "listStacks",
         "parameters": [
           {
@@ -21987,6 +22068,56 @@
             "required": true,
             "schema": {
               "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Search: a case-insensitive substring of the stack name or of one of its service names, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap",
+            "explode": false,
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "description": "Search: a case-insensitive substring of the stack name or of one of its service names, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed) or deploy_failed. Applied before the 500-row cap; any other value is refused 422 status_invalid",
+            "explode": false,
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "description": "Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed) or deploy_failed. Applied before the 500-row cap; any other value is refused 422 status_invalid",
+              "maxLength": 64,
+              "type": "string"
+            }
+          },
+          {
+            "description": "What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name",
+            "explode": false,
+            "in": "query",
+            "name": "sort",
+            "schema": {
+              "description": "What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name",
+              "enum": [
+                "name",
+                "state",
+                "lastDeployed"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "asc (the default) or desc",
+            "explode": false,
+            "in": "query",
+            "name": "dir",
+            "schema": {
+              "description": "asc (the default) or desc",
+              "enum": [
+                "asc",
+                "desc"
+              ],
               "type": "string"
             }
           }
@@ -25770,7 +25901,7 @@
     },
     "/api/stacks": {
       "get": {
-        "description": "One group for each environment that has stacks, by environment name, each with its stacks by name, their state and when they were last deployed. An environment the caller does not hold stacks.read on is left out, and so is its name: the list never reveals what the caller cannot open. An environment whose stacks could not be read is named in failedEnvironments while the others are answered. env chooses environments by ID.",
+        "description": "One group for each environment that has stacks, by environment name, each with its stacks, their state and when they were last deployed. An environment the caller does not hold stacks.read on is left out, and so is its name: the list never reveals what the caller cannot open. An environment whose stacks could not be read is named in failedEnvironments while the others are answered. env chooses environments by ID. The search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed) and the sort run over every environment together, before the 500-row cap, so at most 500 stacks come back across all the groups, with total the number that matched, unfilteredTotal the number before the search and the status filter and statusCounts the chip numbers, counted before them too.",
         "operationId": "listAllStacks",
         "parameters": [
           {
@@ -25781,6 +25912,56 @@
             "schema": {
               "description": "Only these environments, by ID, comma separated. An ID the caller cannot read stacks on is ignored, as one that does not exist",
               "maxLength": 2048,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Search: a case-insensitive substring of the stack name or of one of its service names, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap",
+            "explode": false,
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "description": "Search: a case-insensitive substring of the stack name or of one of its service names, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed) or deploy_failed. Applied before the 500-row cap; any other value is refused 422 status_invalid",
+            "explode": false,
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "description": "Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed) or deploy_failed. Applied before the 500-row cap; any other value is refused 422 status_invalid",
+              "maxLength": 64,
+              "type": "string"
+            }
+          },
+          {
+            "description": "What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name",
+            "explode": false,
+            "in": "query",
+            "name": "sort",
+            "schema": {
+              "description": "What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name",
+              "enum": [
+                "name",
+                "state",
+                "lastDeployed"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "asc (the default) or desc",
+            "explode": false,
+            "in": "query",
+            "name": "dir",
+            "schema": {
+              "description": "asc (the default) or desc",
+              "enum": [
+                "asc",
+                "desc"
+              ],
               "type": "string"
             }
           }

@@ -1933,7 +1933,7 @@ export interface paths {
         };
         /**
          * The stacks Bayplan manages on an environment
-         * @description Every stack of the environment by name, with where it deploys, its state and when it was last deployed. The state comes from Bayplan's own records of the stack's deploys, never from a read of the engine. Needs stacks.read (Viewer).
+         * @description Every stack of the environment by name, with where it deploys, its state and when it was last deployed. The state comes from Bayplan's own records of the stack's deploys and the engine's cached rows, never from a read of the engine of its own. At most 500 stacks come back after the search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed) and the sort, with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Needs stacks.read (Viewer).
          */
         get: operations["listStacks"];
         put?: never;
@@ -3136,7 +3136,7 @@ export interface paths {
         };
         /**
          * The stacks Bayplan manages on every environment the caller may read them on
-         * @description One group for each environment that has stacks, by environment name, each with its stacks by name, their state and when they were last deployed. An environment the caller does not hold stacks.read on is left out, and so is its name: the list never reveals what the caller cannot open. An environment whose stacks could not be read is named in failedEnvironments while the others are answered. env chooses environments by ID.
+         * @description One group for each environment that has stacks, by environment name, each with its stacks, their state and when they were last deployed. An environment the caller does not hold stacks.read on is left out, and so is its name: the list never reveals what the caller cannot open. An environment whose stacks could not be read is named in failedEnvironments while the others are answered. env chooses environments by ID. The search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed) and the sort run over every environment together, before the 500-row cap, so at most 500 stacks come back across all the groups, with total the number that matched, unfilteredTotal the number before the search and the status filter and statusCounts the chip numbers, counted before them too.
          */
         get: operations["listAllStacks"];
         put?: never;
@@ -3854,17 +3854,33 @@ export interface components {
             manualCleanup: components["schemas"]["InstallCleanupBody"];
         };
         AllStacksBody: {
+            /** @description True when total is more than the rows returned, counted over every group together */
+            capped: boolean;
             /** @description Environments the caller may read stacks on whose stacks could not be read just now */
             failedEnvironments: components["schemas"]["FailedEnvironmentBody"][] | null;
-            /** @description One group for each environment that has stacks the caller may read, by environment name. An environment the caller holds no stacks.read on is absent */
+            /** @description One group for each environment that has stacks among the rows returned, by environment name. An environment the caller holds no stacks.read on is absent */
             groups: components["schemas"]["AllStacksGroup"][] | null;
+            /** @description How many stacks each status chip counts, over the environments read and before the search and the status filter */
+            statusCounts: components["schemas"]["StackStatusCountsBody"];
+            /**
+             * Format: int64
+             * @description How many stacks of the environments read match the search and the status filter, whatever the cap
+             */
+            total: number;
+            /**
+             * Format: int64
+             * @description How many stacks the environments read have before the search and the status filter
+             */
+            unfilteredTotal: number;
         };
         AllStacksGroup: {
+            /** @description How many of the environment's stacks each status chip counts, before the search and the status filter */
+            counts: components["schemas"]["StackStatusCountsBody"];
             /** @description The environment */
             envId: string;
             /** @description Its name */
             envName: string;
-            /** @description The environment's stacks by name */
+            /** @description The environment's stacks among the rows returned, in the order asked for */
             stacks: components["schemas"]["StackItem"][] | null;
             /**
              * @description Where the environment's stacks deploy: swarm or standalone
@@ -8649,8 +8665,22 @@ export interface components {
             state: "running" | "done" | "failed" | "cancelled";
         };
         StackListBody: {
-            /** @description The environment's stacks by name */
+            /** @description True when total is more than the rows returned */
+            capped: boolean;
+            /** @description At most 500 stacks that match the search and the status filter, in the order asked for (by name unless sort says otherwise) */
             items: components["schemas"]["StackItem"][] | null;
+            /** @description How many stacks each status chip counts, before the search and the status filter, so the numbers never shrink with what was typed */
+            statusCounts: components["schemas"]["StackStatusCountsBody"];
+            /**
+             * Format: int64
+             * @description How many stacks match the search and the status filter, whatever the cap
+             */
+            total: number;
+            /**
+             * Format: int64
+             * @description How many stacks the environment has before the search and the status filter, so a page can say 3 of 600
+             */
+            unfilteredTotal: number;
         };
         StackLockBody: {
             /** @description The job that runs the operation: open its console at .../stacks/{stackId}/deploys/{jobId}. Empty for the instant between the lock being taken and the job starting */
@@ -8928,6 +8958,28 @@ export interface components {
         StackServicesBody: {
             /** @description The stack's services by name; empty for a stack that has nothing running */
             items: components["schemas"]["StackServiceBody"][] | null;
+        };
+        StackStatusCountsBody: {
+            /**
+             * Format: int64
+             * @description Stacks with some but not all of their services running
+             */
+            degraded: number;
+            /**
+             * Format: int64
+             * @description Stacks whose newest deploy, update or roll back failed, was cancelled or was interrupted
+             */
+            deployFailed: number;
+            /**
+             * Format: int64
+             * @description Stacks whose draft holds changes that have not been deployed
+             */
+            draft: number;
+            /**
+             * Format: int64
+             * @description Stacks a person stopped
+             */
+            stopped: number;
         };
         StackTextDiffBody: {
             /**
@@ -13735,7 +13787,16 @@ export interface operations {
     };
     listStacks: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Search: a case-insensitive substring of the stack name or of one of its service names, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap */
+                q?: string;
+                /** @description Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed) or deploy_failed. Applied before the 500-row cap; any other value is refused 422 status_invalid */
+                status?: string;
+                /** @description What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name */
+                sort?: "name" | "state" | "lastDeployed";
+                /** @description asc (the default) or desc */
+                dir?: "asc" | "desc";
+            };
             header?: never;
             path: {
                 /** @description The environment ID */
@@ -16177,6 +16238,14 @@ export interface operations {
             query?: {
                 /** @description Only these environments, by ID, comma separated. An ID the caller cannot read stacks on is ignored, as one that does not exist */
                 env?: string;
+                /** @description Search: a case-insensitive substring of the stack name or of one of its service names, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap */
+                q?: string;
+                /** @description Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed) or deploy_failed. Applied before the 500-row cap; any other value is refused 422 status_invalid */
+                status?: string;
+                /** @description What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name */
+                sort?: "name" | "state" | "lastDeployed";
+                /** @description asc (the default) or desc */
+                dir?: "asc" | "desc";
             };
             header?: never;
             path?: never;
