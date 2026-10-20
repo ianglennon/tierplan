@@ -5,6 +5,7 @@ package stacks
 
 import (
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -163,6 +164,9 @@ func (s SecretUse) Any() bool { return s.any }
 // where the file writes a key (`Rate` for `rate`), so a path the file does not have word for word
 // is matched to its keys a second time, ignoring case and underscores. Only a path that no key
 // matches counts as using a secret variable whenever the file uses any (fail closed).
+//
+// A path with a segment that is exactly "[]" is the loader's way to say every item of a list
+// (services.web.ports.[].target). It cannot be pinned to one item, so it is judged by the list.
 func (s SecretUse) Uses(path string) bool {
 	if !s.any {
 		return false
@@ -170,13 +174,24 @@ func (s SecretUse) Uses(path string) bool {
 	if s.ix == nil {
 		return true
 	}
+	nodes := s.nodesAt(everyItemList(path))
+	if len(nodes) == 0 {
+		return true
+	}
+	return s.anyTouched(nodes)
+}
+
+// nodesAt are the nodes of the file that path names: word for word, then with keys matched loosely.
+func (s SecretUse) nodesAt(path string) []*yaml.Node {
 	nodes := s.ix.valuesAt(path)
 	if len(nodes) == 0 {
 		nodes = looseValuesAt(s.ix, path)
 	}
-	if len(nodes) == 0 {
-		return true
-	}
+	return nodes
+}
+
+// anyTouched reports whether the subtree under one of nodes holds a node that uses a secret variable.
+func (s SecretUse) anyTouched(nodes []*yaml.Node) bool {
 	seen := map[*yaml.Node]struct{}{}
 	for _, n := range nodes {
 		if s.touches(n, seen, 0) {
@@ -184,6 +199,15 @@ func (s SecretUse) Uses(path string) bool {
 		}
 	}
 	return false
+}
+
+// everyItemList is path up to its first "[]" segment, or path as it is when it has none.
+func everyItemList(path string) string {
+	segs := strings.Split(path, ".")
+	if i := slices.Index(segs, "[]"); i >= 0 {
+		return strings.Join(segs[:i], ".")
+	}
+	return path
 }
 
 // touches reports whether the subtree under n, aliases followed, holds a node that uses a secret
@@ -279,9 +303,21 @@ func (s SecretUse) Withholds(path string) bool {
 }
 
 // WithheldMessage is the sentence a withheld problem carries in place of the words of the loader or
-// the converter. Use it with Withholds.
+// the converter. Use it with Withholds. It says a value "comes from a secret variable" only when the
+// path names nodes of the file and one of them uses a secret variable. A path the check cannot find,
+// a file it cannot index, and an every-item path ("[]") get SecretFileMessage, which says only that
+// the file uses a secret variable, so a plain field is never told its value comes from one.
 func (s SecretUse) WithheldMessage(path string) string {
-	return SecretValueMessage(path)
+	if path == "" {
+		return SecretValueMessage("")
+	}
+	if s.ix == nil || everyItemList(path) != path {
+		return SecretFileMessage(path)
+	}
+	if nodes := s.nodesAt(path); len(nodes) > 0 && s.anyTouched(nodes) {
+		return SecretValueMessage(path)
+	}
+	return SecretFileMessage(path)
 }
 
 // SecretValueMessage is the sentence a problem carries in place of the loader's or the converter's
@@ -294,5 +330,12 @@ func SecretValueMessage(path string) string {
 	return path + ": this value isn't valid. It comes from a secret variable, so the details aren't shown here, because they could quote it."
 }
 
-// SecretFileMessage is a stub until the next commit gives it its own sentence.
-func SecretFileMessage(path string) string { return SecretValueMessage(path) }
+// SecretFileMessage is the sentence for a withheld value that the check cannot trace to a secret
+// variable: the path is not in the file, the file cannot be read, or the path means every item of a
+// list. It ends like the other two forms with "because they could quote it."
+func SecretFileMessage(path string) string {
+	if path == "" {
+		return SecretValueMessage("")
+	}
+	return path + ": this value isn't valid. The file uses a secret variable, so the details aren't shown here, because they could quote it."
+}
