@@ -533,8 +533,9 @@ func (x *removal) check(ctx context.Context) (ownedStack, bool) {
 	return owned, true
 }
 
-// removeWorkload removes the services of a swarm stack, or runs the Compose SDK's down on a standalone one, which
-// removes the containers and the networks of the project and never a volume. It reports false when it failed.
+// removeWorkload removes the services of a swarm stack, or runs the Compose SDK's down on a standalone one
+// (dockerx ComposeDown(ctx, project), through Deps.downProject), which removes the containers and the networks of
+// the project and never a volume or an external network. It reports false when it failed.
 func (x *removal) removeWorkload(ctx context.Context, owned ownedStack) bool {
 	d, in := x.d, x.in
 	x.begin(ItemServices)
