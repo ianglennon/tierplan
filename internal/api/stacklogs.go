@@ -4,10 +4,12 @@
 package api
 
 import (
+	"bufio"
 	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
 	"strconv"
@@ -219,9 +221,9 @@ type stackFollower struct {
 	stop func()
 }
 
-// registerStackLogs registers the live log stream of a stack's merged log. It is mounted through
-// Router.Guarded because the contract cannot describe a stream (D-47), and needs stacks.read on the
-// environment.
+// registerStackLogs registers the live log stream and the download of a stack's merged log. Both
+// are mounted through Router.Guarded because the contract cannot describe a stream (D-47), and
+// need stacks.read on the environment.
 func registerStackLogs(r *httpx.Router, d StacksDeps) {
 	t := d.Logs.withDefaults()
 	d.Logs = t
@@ -230,6 +232,11 @@ func registerStackLogs(r *httpx.Router, d StacksDeps) {
 	mem := newLogAuditMemory(logAuditTTL, logAuditMax, t.Now)
 	r.Guarded(http.MethodGet, "/api/env/{envId}/stacks/{stackId}/logs/stream", need, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		serveStackLogs(w, req, d, lim, mem)
+	}))
+	user := &streamLimiter{max: maxLogDownloads, open: map[string]int{}}
+	server := &streamLimiter{max: t.MaxServerDownloads, open: map[string]int{}}
+	r.Guarded(http.MethodGet, "/api/env/{envId}/stacks/{stackId}/logs/download", need, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		downloadStackLogs(w, req, d, user, server)
 	}))
 }
 
@@ -842,4 +849,249 @@ func taskIDs(announced map[string]StackLogTask) map[string]ServiceLogTask {
 		out[id] = ServiceLogTask{ID: t.ID, Slot: t.Slot, Node: t.Node, State: t.State}
 	}
 	return out
+}
+
+// ---- the download ----
+
+// downloadStackLogs streams a range of a stack's log, every service's lines merged in time order,
+// as a text file named {stack}-{YYYYMMDD-HHMM}.log in UTC. Each service is read from Docker once and
+// to its end, without following it; the lines are held by task or container up to a size (past it
+// the oldest are left out and the first line of the file says so), merged k ways and written
+// through one buffer. Each line is the name of its task or container as the viewer shows it, the
+// UTC time and the text with the stack's known secrets masked.
+//
+// One logs.downloaded row is written once the range has been read and before the file starts; the
+// text of the log is never audited or logged. A user runs at most two downloads at once and the
+// server four (T-06-91, T-06-92).
+func downloadStackLogs(w http.ResponseWriter, req *http.Request, d StacksDeps, userLim, serverLim *streamLimiter) {
+	ctx := req.Context()
+	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+	if p == nil || env == nil {
+		writeJSONProblem(w, http.StatusInternalServerError, "", "internal error")
+		return
+	}
+	dp, err := parseServiceLogDownloadParams(req)
+	if err != nil {
+		writeJSONProblem(w, http.StatusUnprocessableEntity, problemValidationFailed, err.Error())
+		return
+	}
+	release, ok := userLim.acquire(string(p.Type) + ":" + p.ID)
+	if !ok {
+		writeJSONProblem(w, http.StatusTooManyRequests, problemStreamBusy,
+			fmt.Sprintf("You already have %d log downloads running. Wait for one to finish and try again.", userLim.max))
+		return
+	}
+	defer release()
+	releaseServer, ok := serverLim.acquire("server")
+	if !ok {
+		writeJSONProblem(w, http.StatusTooManyRequests, problemStreamBusy,
+			"Bayplan is already preparing as many log downloads as it can. Try again in a moment.")
+		return
+	}
+	defer releaseServer()
+
+	st, err := d.repo().Stack(ctx, env.ID, chi.URLParam(req, "stackId"))
+	if err != nil {
+		writeProblemError(w, stackLookupProblem(d, env.ID, err))
+		return
+	}
+	masker, err := d.logMasker(ctx, st)
+	if err != nil {
+		writeProblemError(w, stackLogsMaskerProblem(d, env.ID, err))
+		return
+	}
+
+	// Reading a range can take longer than the server's write timeout, which started with the
+	// request, so it must not cut the response that follows.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	readCtx, cancel := context.WithTimeout(ctx, downloadReadTimeout)
+	defer cancel()
+	holder := newLineHolder(cmp.Or(d.Logs.MaxDownloadBytes, maxDownloadBytes))
+	sinceStamp, untilStamp := "", ""
+	if dp.hasSince {
+		sinceStamp = dp.since.Format(logTimeLayout)
+	}
+	if dp.hasUntil {
+		untilStamp = dp.until.Format(logTimeLayout)
+	}
+	var prefixOf func(r svcRec) string
+	switch st.Target {
+	case stacks.TargetSwarm:
+		prefixOf, err = d.readSwarmStackLog(readCtx, env.ID, st, sinceStamp, untilStamp, holder)
+	case stacks.TargetStandalone:
+		prefixOf, err = d.readStandaloneStackLog(readCtx, env.ID, st, sinceStamp, untilStamp, holder)
+	default:
+		err = errors.New("unknown stack target " + string(st.Target))
+	}
+	if err != nil {
+		writeProblemError(w, err)
+		return
+	}
+
+	now := d.Logs.Now()
+	until := now.UTC()
+	if dp.hasUntil {
+		until = dp.until
+	}
+	auditStackLogsDownloaded(ctx, d, p, env.ID, st, dp, until, req.UserAgent())
+
+	h := w.Header()
+	h.Set("Content-Type", "text/plain; charset=utf-8")
+	h.Set("Content-Disposition", `attachment; filename="`+logFileName(st.Name, now)+`"`)
+	h.Set("Cache-Control", "no-store")
+	h.Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+
+	out := bufio.NewWriterSize(w, downloadBuffer)
+	var werr error
+	put := func(s string) {
+		if werr == nil {
+			_, werr = io.WriteString(out, s)
+		}
+	}
+	if holder.cut() {
+		put(downloadCutNotice + noticeSize(holder.limit) + " of it.\n")
+	}
+	for r := range kWayMerge(holder.lists()) {
+		put(prefixOf(r))
+		put(" ")
+		put(r.T)
+		put(" ")
+		put(masker.Mask(r.M))
+		put("\n")
+		if werr != nil {
+			// The browser left: stop merging.
+			break
+		}
+	}
+	if werr == nil {
+		_ = out.Flush()
+	}
+}
+
+// readSwarmStackLog reads the log of each service of a swarm stack from a manager, one after the
+// other, into the holder, and returns the way a line of the file is named.
+func (d StacksDeps) readSwarmStackLog(ctx context.Context, envID string, st stackops.Stack, since, until string, holder *lineHolder) (func(svcRec) string, error) {
+	if d.Clusters == nil {
+		d.Log.Error("the stack log route has no cluster reader")
+		return nil, httpx.Problem(http.StatusInternalServerError, "", "internal error")
+	}
+	var read dockerx.ClusterRead
+	err := d.Clusters.ClusterRead(ctx, envID, func(c *dockerx.Client) error {
+		var e error
+		read, e = c.Cluster(ctx)
+		return e
+	})
+	if err != nil {
+		return nil, serviceLogProblem(d.Log, envID, err)
+	}
+	rows := stackops.SwarmRows(st, read.Services)
+	ids := make([]string, 0, len(rows))
+	names := make(map[string]string, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ID)
+		names[row.ID] = row.Short
+	}
+	meta := newTaskMeta(func(ctx context.Context) ([]taskInfo, error) {
+		if len(ids) == 0 {
+			return nil, nil
+		}
+		return readTaskInfos(ctx, d.Clusters, envID, ids, names)
+	}, time.Now)
+	meta.ttl = d.Logs.TaskRefresh
+	infos := map[string]taskInfo{}
+	known := map[string]bool{}
+	sd := ServiceLogsDeps{Clusters: d.Clusters}
+	for _, row := range rows {
+		err := sd.readServiceLog(ctx, envID, row.ID, since, func(r svcRec) {
+			if (since != "" && r.T < since) || (until != "" && r.T >= until) {
+				return
+			}
+			r.Svc = row.Short
+			ti, seen := infos[r.TaskID]
+			if !seen {
+				var ok bool
+				if ti, ok = meta.lookup(ctx, r.TaskID); ok {
+					known[r.TaskID] = true
+				}
+				infos[r.TaskID] = ti
+			}
+			holder.add(r, ti.Slot)
+		})
+		if err != nil {
+			return nil, serviceLogProblem(d.Log, envID, err)
+		}
+	}
+	return func(r svcRec) string { return downloadPrefix(r.Svc, r, infos[r.TaskID], known[r.TaskID]) }, nil
+}
+
+// readStandaloneStackLog reads the log of each container of a standalone stack, the ones that
+// ended included, into the holder, and returns the way a line of the file is named.
+func (d StacksDeps) readStandaloneStackLog(ctx context.Context, envID string, st stackops.Stack, since, until string, holder *lineHolder) (func(svcRec) string, error) {
+	if d.Aggregator == nil {
+		d.Log.Error("the stack log route has no aggregator")
+		return nil, httpx.Problem(http.StatusInternalServerError, "", "internal error")
+	}
+	node, err := d.ops().StandaloneNode(ctx, envID)
+	if err != nil {
+		return nil, snapshotProblem(d.Log, envID, err)
+	}
+	var rows []dockerx.ContainerRow
+	if err := d.Aggregator.OnNode(ctx, envID, node, func(c *dockerx.Client) error {
+		var e error
+		rows, e = c.ContainersWithLabel(ctx, stacks.LabelComposeProject, st.Name)
+		return e
+	}); err != nil {
+		return nil, snapshotProblem(d.Log, envID, err)
+	}
+	containers := containersOf(st, rows)
+	slices.SortFunc(containers, func(a, b stackContainer) int {
+		return cmp.Or(cmp.Compare(a.Service, b.Service), cmp.Compare(a.Number, b.Number), cmp.Compare(a.ID, b.ID))
+	})
+	numbers := make(map[string]int, len(containers))
+	logsDeps := LogsDeps{Aggregator: d.Aggregator, Log: d.Log}
+	for _, c := range containers {
+		numbers[c.ID] = c.Number
+		rc, tty, err := openLogs(ctx, logsDeps, envID, node, c.ID, logParams{nodeID: node, since: since, until: until})
+		if errors.Is(err, dockerx.ErrLogsUnreadable) {
+			// Docker has no log to give for this container; the others are still the stack's log.
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		var seq uint64
+		err = pumpLogs(ctx, rc, tty, func(l LogLine) {
+			seq++
+			holder.add(svcRec{T: l.T, S: l.S, M: l.M, TaskID: c.ID, Svc: c.Service, seq: seq}, c.Number)
+		})
+		_ = rc.Close()
+		if err != nil {
+			return nil, snapshotProblem(d.Log, envID, err)
+		}
+	}
+	return func(r svcRec) string { return r.Svc + "-" + strconv.Itoa(numbers[r.TaskID]) }, nil
+}
+
+// auditStackLogsDownloaded writes the logs.downloaded row of a download: what was asked for,
+// never what the log held.
+func auditStackLogsDownloaded(ctx context.Context, d StacksDeps, p *rbac.Principal, envID string, st stackops.Stack, dp serviceLogDownloadParams, until time.Time, userAgent string) {
+	if d.Audit == nil {
+		return
+	}
+	details := map[string]string{
+		"stack": st.Name,
+		"until": until.UTC().Format(time.RFC3339Nano),
+	}
+	if dp.hasSince {
+		details["since"] = dp.since.UTC().Format(time.RFC3339Nano)
+	}
+	if err := d.Audit.Record(ctx, audit.Entry{
+		Actor: p.AuditActor(), Action: audit.ActionLogsDownloaded, TargetType: stackTargetType, TargetID: st.ID,
+		EnvID: envID, Result: audit.ResultSuccess,
+		IP: httpx.ClientIP(ctx), UserAgent: userAgent,
+		Details: details,
+	}); err != nil {
+		d.Log.Error("could not audit a stack log download", "stack", st.ID, "error", err)
+	}
 }

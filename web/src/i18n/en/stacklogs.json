@@ -34,6 +34,11 @@
       "removeContainer": "Remove container filter {{name}}",
       "stopped": "Include stopped",
       "stoppedTooltip": "Off shows only what is running now, and new ones as they start."
+    },
+    "notRunning": {
+      "title": "{{name}} isn't running",
+      "stopped": "Start it to see its logs.",
+      "notDeployed": "Deploy it to see its logs."
     }
   }
 }

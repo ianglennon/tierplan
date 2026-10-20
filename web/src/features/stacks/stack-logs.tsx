@@ -2,15 +2,25 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
+import { ScrollText } from "lucide-react";
 import { useMemo } from "react";
 
 import {
+  isStackGone,
   type StackResources,
   type StackServices,
   stackQuery,
   stackResourcesQuery,
   stackServicesQuery,
 } from "@/api/stacks";
+import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { LogViewParams } from "@/features/logs/log-prefs";
 import { isEndedTaskState } from "@/features/logs/log-source";
@@ -21,6 +31,7 @@ import {
   TaskFilterBar,
 } from "@/features/logs/task-filter-bar";
 import { ServiceChips, ServiceFilter } from "@/features/stacks/service-filter";
+import { useT } from "@/i18n/use-t";
 
 // A list from the address: comma separated, empty parts dropped.
 const listOf = (v: string | undefined): string[] =>
@@ -74,6 +85,51 @@ function containerOptions(services: StackServices | undefined): FilterOptions {
   return { loaded: true, tasks, nodes: [] };
 }
 
+// NotRunning stands in the place of the log for a stack that has nothing to read: one that was
+// stopped, or that was never deployed. It opens no stream (UI-SPEC "Empty states").
+function NotRunning({ name, stopped }: { name: string; stopped: boolean }) {
+  const t = useT();
+  return (
+    <Empty className="h-fit border">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <ScrollText aria-hidden="true" />
+        </EmptyMedia>
+        <EmptyTitle role="heading" aria-level={2} className="break-words">
+          {t("stackLogs.notRunning.title", { name })}
+        </EmptyTitle>
+        <EmptyDescription>
+          {t(stopped ? "stackLogs.notRunning.stopped" : "stackLogs.notRunning.notDeployed")}
+        </EmptyDescription>
+      </EmptyHeader>
+    </Empty>
+  );
+}
+
+// Unreadable stands in the place of the log when the stack itself cannot be read: it is gone, or the
+// read failed (the window of a pop-out has no page around it to say so).
+function Unreadable({ gone, retry }: { gone: boolean; retry: () => void }) {
+  const t = useT();
+  return (
+    <div
+      role="alert"
+      className="flex flex-col items-center justify-center gap-2 rounded-lg border bg-card p-6 text-center"
+    >
+      <p className="font-medium">
+        {t(gone ? "stacks.detail.gone.heading" : "logs.loadError.title")}
+      </p>
+      <p className="text-sm text-muted-foreground">
+        {t(gone ? "stacks.detail.gone.body" : "logs.loadError.body")}
+      </p>
+      {gone ? null : (
+        <Button type="button" variant="outline" size="sm" onClick={retry}>
+          {t("logs.loadError.retry")}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 export interface StackLogsProps {
   envId: string;
   stackId: string;
@@ -111,6 +167,9 @@ export function StackLogs({ envId, stackId, params, onParamsChange, popout }: St
     [services.data],
   );
 
+  if (stack.isError && !stack.data) {
+    return <Unreadable gone={isStackGone(stack.error)} retry={() => void stack.refetch()} />;
+  }
   if (!stack.data || !target) {
     return (
       <div className="flex flex-col gap-1.5 rounded-lg border bg-card p-3" aria-hidden="true">
@@ -120,7 +179,10 @@ export function StackLogs({ envId, stackId, params, onParamsChange, popout }: St
       </div>
     );
   }
-  const { name } = stack.data;
+  const { name, state } = stack.data;
+  if (state === "stopped" || state === "not_deployed") {
+    return <NotRunning name={name} stopped={state === "stopped"} />;
+  }
   const change = (patch: Partial<LogViewParams>) => {
     const next: LogViewParams = { ...params, ...patch };
     for (const k of Object.keys(next) as Array<keyof LogViewParams>) {
