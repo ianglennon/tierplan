@@ -5,7 +5,6 @@ package stacks
 
 import (
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -23,6 +22,9 @@ import (
 // on it would tell them whether their input is part of a secret (07-REVIEW-gaps2 CR-01). The masker
 // stays as the second layer: it replaces whole values and their quoted and per-line forms in text,
 // and makes no decision.
+//
+// A list item is judged by its whole list across every document of the file, because compose-go moves
+// items between the file and its model (listPath).
 //
 // The zero SecretUse knows no secret. A SecretUse is a value, safe to share between goroutines once
 // built.
@@ -165,8 +167,9 @@ func (s SecretUse) Any() bool { return s.any }
 // is matched to its keys a second time, ignoring case and underscores. Only a path that no key
 // matches counts as using a secret variable whenever the file uses any (fail closed).
 //
-// A path with a segment that is exactly "[]" is the loader's way to say every item of a list
-// (services.web.ports.[].target). It cannot be pinned to one item, so it is judged by the list.
+// A list item, written "[]", "[n]" or a number in the path (services.web.ports.[].target,
+// services.web.volumes.1.tmpfs.size), is judged by its whole list across every document of the file
+// (listPath): the loader's index is a position in compose-go's merged list, not in one document.
 func (s SecretUse) Uses(path string) bool {
 	if !s.any {
 		return false
@@ -174,7 +177,7 @@ func (s SecretUse) Uses(path string) bool {
 	if s.ix == nil {
 		return true
 	}
-	nodes := s.nodesAt(everyItemList(path))
+	nodes := s.nodesAt(listPath(path))
 	if len(nodes) == 0 {
 		return true
 	}
@@ -201,13 +204,42 @@ func (s SecretUse) anyTouched(nodes []*yaml.Node) bool {
 	return false
 }
 
-// everyItemList is path up to its first "[]" segment, or path as it is when it has none.
-func everyItemList(path string) string {
+// listPath is path up to its first list segment, or path as it is when it has none. A list segment is
+// "[]", "[" digits "]", or a run of ASCII digits only.
+//
+// The loader's index is a position in compose-go's merged list, not an item of the file: the documents
+// of one file are concatenated, duplicate items are merged by EnforceUnicity even in a one-document
+// file (the last one takes effect at the first one's place), and port ranges are expanded. So an index
+// never pins one item of the file, and the item is judged by its whole list across every document. A
+// mapping key that is all digits (a service named "1") is cut too, which judges a wider part of the
+// file and fails closed. strconv.Atoi is not used, because it accepts a sign.
+func listPath(path string) string {
 	segs := strings.Split(path, ".")
-	if i := slices.Index(segs, "[]"); i >= 0 {
-		return strings.Join(segs[:i], ".")
+	for i, seg := range segs {
+		if isListSegment(seg) {
+			return strings.Join(segs[:i], ".")
+		}
 	}
 	return path
+}
+
+// isListSegment reports whether seg is "[]", "[n]" or n, where n is one or more ASCII digits.
+func isListSegment(seg string) bool {
+	if seg == "[]" {
+		return true
+	}
+	if len(seg) >= 2 && seg[0] == '[' && seg[len(seg)-1] == ']' {
+		seg = seg[1 : len(seg)-1]
+	}
+	if seg == "" {
+		return false
+	}
+	for i := 0; i < len(seg); i++ {
+		if seg[i] < '0' || seg[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // touches reports whether the subtree under n, aliases followed, holds a node that uses a secret
@@ -305,13 +337,14 @@ func (s SecretUse) Withholds(path string) bool {
 // WithheldMessage is the sentence a withheld problem carries in place of the words of the loader or
 // the converter. Use it with Withholds. It says a value "comes from a secret variable" only when the
 // path names nodes of the file and one of them uses a secret variable. A path the check cannot find,
-// a file it cannot index, and an every-item path ("[]") get SecretFileMessage, which says only that
-// the file uses a secret variable, so a plain field is never told its value comes from one.
+// a file it cannot index, and a list item ("[]", "[n]" or a number in the path) get SecretFileMessage,
+// which says only that the file uses a secret variable, so a plain item is never told its value comes
+// from one. A list item is judged by its whole list across every document of the file.
 func (s SecretUse) WithheldMessage(path string) string {
 	if path == "" {
 		return SecretValueMessage("")
 	}
-	if s.ix == nil || everyItemList(path) != path {
+	if s.ix == nil || listPath(path) != path {
 		return SecretFileMessage(path)
 	}
 	if nodes := s.nodesAt(path); len(nodes) > 0 && s.anyTouched(nodes) {
@@ -331,8 +364,8 @@ func SecretValueMessage(path string) string {
 }
 
 // SecretFileMessage is the sentence for a withheld value that the check cannot trace to a secret
-// variable: the path is not in the file, the file cannot be read, or the path means every item of a
-// list. It ends like the other two forms with "because they could quote it."
+// variable: the path is not in the file, the file cannot be read, or the path names an item of a list,
+// which is judged by its whole list across every document of the file. It ends like the other two forms with "because they could quote it."
 func SecretFileMessage(path string) string {
 	if path == "" {
 		return SecretValueMessage("")
