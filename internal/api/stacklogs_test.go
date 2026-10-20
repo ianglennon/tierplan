@@ -1012,3 +1012,42 @@ func TestStackLogsRefuseAUsersOverTheirStreamLimit(t *testing.T) {
 		t.Fatalf("second stream: status = %d: %s, want 429", second.status0(), second.bodyString())
 	}
 }
+
+func TestStackLogDownloadAllowsOnlyTheServersShareAtOnceWhoeverAsks(t *testing.T) {
+	t.Parallel()
+	text := strings.Repeat("y", 60<<10)
+	lines := map[string][]dockertest.FakeServiceLogLine{"svc-web": {svcLine("tk-w1", "node-1", 1, text), svcLine("tk-w1", "node-1", 2, text)}}
+	f := newStackLogsFix(t, stackLogsTasks(), lines, func(f *envFix) { f.stackLogs.MaxServerDownloads = 1 })
+	start := func(w http.ResponseWriter) <-chan struct{} {
+		req := httptest.NewRequest(http.MethodGet, "/api/env/"+f.env.ID+"/stacks/"+f.stack.ID+"/logs/download", nil)
+		req.Header.Set("User-Agent", authUA)
+		req.RemoteAddr = authIP + ":40000"
+		req.AddCookie(&http.Cookie{Name: auth.CookieName(f.inst.CookieScope()), Value: f.user.cookie}) //nolint:gosec // a request cookie as a browser sends it
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			f.h.ServeHTTP(w, req)
+		}()
+		return done
+	}
+
+	gate := make(chan struct{})
+	first := newDLWriter(false)
+	first.gate = gate
+	done := start(first)
+	testsupport.Await(t, "the first download to start writing", first.wrote)
+	second := newDLWriter(true)
+	testsupport.Await(t, "the second download to be answered", start(second))
+	if second.code() != http.StatusTooManyRequests || !strings.Contains(second.body.String(), `"type":"stream_busy"`) {
+		t.Fatalf("the second download = %d %s, want 429 stream_busy from the server's limit", second.code(), second.body.String())
+	}
+	close(gate)
+	<-done
+	// The slot is given back, and the user's own slot with it.
+	if w := f.download(t, ""); w.code() != http.StatusOK {
+		t.Errorf("a download after the first finished = %d, want 200", w.code())
+	}
+	if rows := f.auditRowsOf(t, audit.ActionLogsDownloaded); len(rows) != 2 {
+		t.Errorf("%d logs.downloaded rows, want 2: a refused download is not a download", len(rows))
+	}
+}
