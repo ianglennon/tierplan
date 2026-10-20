@@ -1082,6 +1082,14 @@ func TestGuardSecretsHidesOnlyWhatComesFromASecret(t *testing.T) {
 			}
 		}
 	})
+	t.Run("a field the file does not have gets the file's sentence", func(t *testing.T) {
+		t.Parallel()
+		got := convert.GuardSecrets(&convert.FieldError{Path: "services.web.no_such_key", Err: errors.New("convert: service web: odd")}, s)
+		var sf *convert.SecretFieldError
+		if !errors.As(got, &sf) || got.Error() != stacks.SecretFileMessage("services.web.no_such_key") {
+			t.Errorf("err = %v, want a SecretFieldError with %q", got, stacks.SecretFileMessage("services.web.no_such_key"))
+		}
+	})
 	t.Run("a file that uses no secret", func(t *testing.T) {
 		t.Parallel()
 		none := secretUseOf("services:\n  web:\n    image: nginx:1\n", secret)

@@ -118,3 +118,63 @@ func TestSecretUseZeroValueKnowsNothing(t *testing.T) {
 		t.Error("the zero SecretUse answered true, want false everywhere")
 	}
 }
+
+// "It comes from a secret variable" is said only where the check traced the field to one
+// (07-REVIEW-gaps2 WR-02). Anywhere else the sentence speaks of the file.
+func TestSecretUseSaysAValueComesFromASecretOnlyWhereItFindsOne(t *testing.T) {
+	t.Parallel()
+	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
+	pw := secretVar("PW", "Zq9xkwmpr")
+	t.Run("a file with a plain list and a secret elsewhere", func(t *testing.T) {
+		t.Parallel()
+		s := stacks.NewSecretUse(copyOf(head+"    mem_limit: ${PW}\n    ports: [{target: 80, published: 8080}]\n    environment: {DB: ${PW}}\n", pw))
+		if got, want := s.WithheldMessage("services.web.mem_limit"), stacks.SecretValueMessage("services.web.mem_limit"); got != want {
+			t.Errorf("WithheldMessage(mem_limit) = %q, want %q", got, want)
+		}
+		const missing = "services.web.no_such_key"
+		if !s.Withholds(missing) {
+			t.Errorf("Withholds(%q) = false, want true: a path no key matches fails closed", missing)
+		}
+		if got, want := s.WithheldMessage(missing), stacks.SecretFileMessage(missing); got != want {
+			t.Errorf("WithheldMessage(%q) = %q, want %q", missing, got, want)
+		}
+		if s.Withholds("services.web.ports.[].target") {
+			t.Error("Withholds(ports.[].target) = true, want false: the list holds no secret")
+		}
+		if got, want := s.WithheldMessage(""), stacks.SecretValueMessage(""); got != want {
+			t.Errorf("WithheldMessage(\"\") = %q, want %q", got, want)
+		}
+	})
+	t.Run("a list item that uses a secret cannot be pinned", func(t *testing.T) {
+		t.Parallel()
+		s := stacks.NewSecretUse(copyOf(head+"    ports: [{target: \"${PW}\"}]\n", pw))
+		const path = "services.web.ports.[].target"
+		if !s.Withholds(path) {
+			t.Errorf("Withholds(%q) = false, want true", path)
+		}
+		if got, want := s.WithheldMessage(path), stacks.SecretFileMessage(path); got != want {
+			t.Errorf("WithheldMessage(%q) = %q, want %q", path, got, want)
+		}
+	})
+	t.Run("a file that is not YAML", func(t *testing.T) {
+		t.Parallel()
+		s := stacks.NewSecretUse(copyOf("services: [", pw))
+		const path = "services.web.mem_limit"
+		if !s.Withholds(path) {
+			t.Errorf("Withholds(%q) = false, want true", path)
+		}
+		if got, want := s.WithheldMessage(path), stacks.SecretFileMessage(path); got != want {
+			t.Errorf("WithheldMessage(%q) = %q, want %q", path, got, want)
+		}
+	})
+	t.Run("the file's sentence", func(t *testing.T) {
+		t.Parallel()
+		const want = "x.y: this value isn't valid. The file uses a secret variable, so the details aren't shown here, because they could quote it."
+		if got := stacks.SecretFileMessage("x.y"); got != want {
+			t.Errorf("SecretFileMessage(x.y) = %q, want %q", got, want)
+		}
+		if got := stacks.SecretFileMessage(""); got != stacks.SecretValueMessage("") {
+			t.Errorf("SecretFileMessage(\"\") = %q, want the general sentence", got)
+		}
+	})
+}

@@ -991,3 +991,44 @@ func TestCheckAnswersAPlainFieldTheSameWhetherOrNotItsValueIsPartOfASecret(t *te
 		})
 	}
 }
+
+// A plain field is never told its value "comes from a secret variable", even when it is a list item
+// the loader names as every item (07-REVIEW-gaps2 WR-02).
+func TestCheckNeverSaysAPlainFieldComesFromASecret(t *testing.T) {
+	t.Parallel()
+	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n    environment: {DB: ${PW}}\n"
+	const key = "services.web.ports.[].target"
+	pw := stacks.Var{Name: "PW", Value: "Zq9xkwmpr", Secret: true}
+	t.Run("a plain port target keeps the loader's words", func(t *testing.T) {
+		t.Parallel()
+		res := withVars(t, head+"    ports: [{target: abc}]\n", pw)
+		found := false
+		for _, p := range res.Problems {
+			if strings.Contains(p.Message, "It comes from a secret variable") {
+				t.Errorf("problem %+v says a plain field comes from a secret variable", p)
+			}
+			if p.Severity == stacks.SeverityError && p.Key == key && strings.Contains(p.Message, `parsing "abc"`) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("problems = %+v, want an error at %s with parsing \"abc\"", res.Problems, key)
+		}
+	})
+	t.Run("a secret port target gets the file's sentence", func(t *testing.T) {
+		t.Parallel()
+		res := withVars(t, head+"    ports: [{target: \"${PW}\"}]\n", pw)
+		found := false
+		for _, p := range res.Problems {
+			if strings.Contains(p.Message, "kwmp") || strings.Contains(p.Message, "Zq9x") || strings.Contains(p.Key, "kwmp") || strings.Contains(p.Key, "Zq9x") {
+				t.Errorf("problem %+v carries part of the secret", p)
+			}
+			if p.Severity == stacks.SeverityError && p.Message == stacks.SecretFileMessage(key) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("problems = %+v, want an error with %q", res.Problems, stacks.SecretFileMessage(key))
+		}
+	})
+}

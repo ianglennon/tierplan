@@ -293,3 +293,6 @@ func SecretValueMessage(path string) string {
 	}
 	return path + ": this value isn't valid. It comes from a secret variable, so the details aren't shown here, because they could quote it."
 }
+
+// SecretFileMessage is a stub until the next commit gives it its own sentence.
+func SecretFileMessage(path string) string { return SecretValueMessage(path) }
