@@ -835,6 +835,9 @@ func TestCheckNeverQuotesPartOfASecretTheLoaderSplits(t *testing.T) {
 	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
 	type want struct{ code, message string }
 	fixed := func(code, path string) want { return want{code, stacks.SecretValueMessage(path)} }
+	// inList is the sentence for a list item: the loader's index is a position in the merged list, so the
+	// item is judged by its whole list and the sentence speaks of the file (07-45).
+	inList := func(code, path string) want { return want{code, stacks.SecretFileMessage(path)} }
 	const pw = "Password2024!"
 	cases := []struct {
 		name    string
@@ -858,17 +861,17 @@ func TestCheckNeverQuotesPartOfASecretTheLoaderSplits(t *testing.T) {
 		},
 		{
 			"a tmpfs size", "    volumes:\n      - type: tmpfs\n        target: /scratch\n        tmpfs:\n          size: ${PW}\n",
-			pw, []string{"Password2024"}, []want{fixed(stacks.CodeComposeInvalid, "services.web.volumes.0.tmpfs.size")}, "",
+			pw, []string{"Password2024"}, []want{inList(stacks.CodeComposeInvalid, "services.web.volumes.0.tmpfs.size")}, "",
 		},
 		{
 			"a blkio rate, named by the loader's Go field", "    blkio_config:\n      device_read_bps:\n        - path: /dev/sda\n          rate: ${PW}\n",
-			pw, []string{"Password2024"}, []want{fixed(stacks.CodeComposeInvalid, "services.web.blkio_config.device_read_bps.0.Rate")}, "",
+			pw, []string{"Password2024"}, []want{inList(stacks.CodeComposeInvalid, "services.web.blkio_config.device_read_bps.0.Rate")}, "",
 		},
 		{"stop_grace_period", "    stop_grace_period: ${PW}\n", pw, []string{"Password2024"}, []want{fixed(stacks.CodeComposeInvalid, "services.web.stop_grace_period")}, ""},
 		{"an anchor", "    mem_limit: *m\n", pw, []string{"Password2024"}, []want{fixed(stacks.CodeComposeInvalid, "services.web.mem_limit")}, ""},
 		{"an undefined volume", "    volumes: [\"${PW}:/data\"]\n", "abcd:efgh9", []string{"abcd"}, []want{fixed(stacks.CodeComposeInvalid, "services.web.volumes")}, ""},
 		{"a port spec", "    ports: [\"${PW}:80\"]\n", "abcd:efgh9", []string{"abcd"}, []want{fixed(stacks.CodeComposeInvalid, "")}, ""},
-		{"a relative bind", "    volumes: [\"${PW}:ro\"]\n", "./abcd:/efgh", []string{"abcd"}, []want{fixed(stacks.CodeRelativeBind, "services.web.volumes.0")}, "services.web.volumes"},
+		{"a relative bind", "    volumes: [\"${PW}:ro\"]\n", "./abcd:/efgh", []string{"abcd"}, []want{inList(stacks.CodeRelativeBind, "services.web.volumes.0")}, "services.web.volumes"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -920,6 +923,59 @@ func TestCheckNeverQuotesPartOfASecretTheLoaderSplits(t *testing.T) {
 		}
 		stackstest.NoSecretRun(t, pw, messagesOf(res.Problems)...)
 	})
+}
+
+// A list index in the loader's path is a position in compose-go's merged list, not an item of the file: the
+// documents of a file are concatenated, and duplicate items are merged even in one document. So an item of a
+// list is judged by its whole list, and no row may leave a run of its secret in a message (07-45, D-02,
+// 07-REVIEW-gaps3 CR-01, T-07-189). A new loader behaviour is one more row.
+func TestCheckNeverQuotesPartOfASecretInAListItemTheLoaderMoves(t *testing.T) {
+	t.Parallel()
+	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
+	type want struct{ code, key, message string }
+	file := func(code, key, path string) want { return want{code, key, stacks.SecretFileMessage(path)} }
+	cases := []struct {
+		name    string
+		compose string
+		secret  string
+		want    []want
+	}{
+		{
+			"two documents, a tmpfs size in the second",
+			head + "    volumes:\n      - {type: tmpfs, target: /a, tmpfs: {size: 1m}}\n---\nservices:\n  web:\n    volumes:\n      - {type: tmpfs, target: /b, tmpfs: {size: \"${PW}\"}}\n      - {type: tmpfs, target: /c, tmpfs: {size: 1m}}\n",
+			"Password2024!",
+			[]want{file(stacks.CodeComposeInvalid, "services.web.volumes.1.tmpfs.size", "services.web.volumes.1.tmpfs.size")},
+		},
+	}
+	for _, tc := range cases {
+		for _, target := range []stacks.Target{stacks.TargetSwarm, stacks.TargetStandalone} {
+			t.Run(tc.name+" on "+string(target), func(t *testing.T) {
+				t.Parallel()
+				res := stacks.Check(context.Background(), stacks.CheckInput{
+					Name: "probe", Target: target, Copy: copyOf(tc.compose, stacks.Var{Name: "PW", Value: tc.secret, Secret: true}),
+				})
+				var errs []want
+				for _, p := range res.Problems {
+					if p.Severity == stacks.SeverityError {
+						errs = append(errs, want{p.Code, p.Key, p.Message})
+					}
+					if strings.Contains(p.Key, ".volumes") || strings.Contains(p.Key, "device_read_bps") {
+						if strings.Contains(p.Message, "It comes from a secret variable") {
+							t.Errorf("problem %+v says a list item comes from a secret variable", p)
+						}
+					}
+				}
+				stackstest.NoSecretRun(t, tc.secret, messagesOf(res.Problems)...)
+				order := func(a, b want) int { return strings.Compare(a.key+"\x00"+a.message, b.key+"\x00"+b.message) }
+				slices.SortFunc(errs, order)
+				wantSorted := slices.Clone(tc.want)
+				slices.SortFunc(wantSorted, order)
+				if !slices.Equal(errs, wantSorted) {
+					t.Errorf("error problems = %+v, want %+v", errs, wantSorted)
+				}
+			})
+		}
+	}
 }
 
 func TestCheckKeepsTheLoaderWordsForAPlainFieldItCanFind(t *testing.T) {

@@ -178,3 +178,64 @@ func TestSecretUseSaysAValueComesFromASecretOnlyWhereItFindsOne(t *testing.T) {
 		}
 	})
 }
+
+// The loader's index in a path is a position in compose-go's merged list: the documents of a file are
+// concatenated, duplicate items are merged even in one document, and port ranges are expanded. So a list
+// item is judged by its whole list across every document, and its sentence speaks of the file
+// (07-45, D-02, 07-REVIEW-gaps3 CR-01, T-07-189).
+func TestSecretUseJudgesAListItemByItsWholeList(t *testing.T) {
+	t.Parallel()
+	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
+	const pw = "Password2024!"
+	const sizePath = "services.web.volumes.1.tmpfs.size"
+	t.Run("two documents, a tmpfs size in the second", func(t *testing.T) {
+		t.Parallel()
+		s := stacks.NewSecretUse(copyOf(head+
+			"    volumes:\n      - {type: tmpfs, target: /a, tmpfs: {size: 1m}}\n---\nservices:\n  web:\n    volumes:\n      - {type: tmpfs, target: /b, tmpfs: {size: \"${PW}\"}}\n      - {type: tmpfs, target: /c, tmpfs: {size: 1m}}\n",
+			secretVar("PW", pw)))
+		for _, path := range []string{sizePath, "services.web.volumes.0.tmpfs.size", "services.web.volumes.[1].tmpfs.size"} {
+			if !s.Withholds(path) {
+				t.Errorf("Withholds(%q) = false, want true: the list holds a secret-fed item", path)
+			}
+		}
+		if got, want := s.WithheldMessage(sizePath), stacks.SecretFileMessage(sizePath); got != want {
+			t.Errorf("WithheldMessage(%q) = %q, want %q", sizePath, got, want)
+		}
+		if s.Withholds("services.web.image") {
+			t.Error("Withholds(services.web.image) = true, want false")
+		}
+	})
+	t.Run("one document, the secret item repeats an earlier target", func(t *testing.T) {
+		t.Parallel()
+		const path = "services.web.volumes.0.tmpfs.size"
+		s := stacks.NewSecretUse(copyOf(head+
+			"    volumes:\n      - {type: tmpfs, target: /a, tmpfs: {size: 1m}}\n      - {type: tmpfs, target: /b, tmpfs: {size: 1m}}\n      - {type: tmpfs, target: /a, tmpfs: {size: \"${PW}\"}}\n",
+			secretVar("PW", pw)))
+		if !s.Withholds(path) {
+			t.Errorf("Withholds(%q) = false, want true", path)
+		}
+		if got, want := s.WithheldMessage(path), stacks.SecretFileMessage(path); got != want {
+			t.Errorf("WithheldMessage(%q) = %q, want %q", path, got, want)
+		}
+	})
+	t.Run("two documents, a plain list while the secret is elsewhere", func(t *testing.T) {
+		t.Parallel()
+		s := stacks.NewSecretUse(copyOf(head+
+			"    environment:\n      DB: ${PW}\n    volumes:\n      - {type: tmpfs, target: /a, tmpfs: {size: 1m}}\n---\nservices:\n  web:\n    volumes:\n      - {type: tmpfs, target: /b, tmpfs: {size: lots}}\n",
+			secretVar("PW", pw)))
+		if s.Withholds(sizePath) {
+			t.Errorf("Withholds(%q) = true, want false: the list holds no secret", sizePath)
+		}
+	})
+	t.Run("two documents set a field that is not in a list", func(t *testing.T) {
+		t.Parallel()
+		const path = "services.web.mem_limit"
+		s := stacks.NewSecretUse(copyOf(head+"    mem_limit: 1m\n---\nservices:\n  web:\n    mem_limit: ${PW}\n", secretVar("PW", pw)))
+		if !s.Withholds(path) {
+			t.Errorf("Withholds(%q) = false, want true", path)
+		}
+		if got, want := s.WithheldMessage(path), stacks.SecretValueMessage(path); got != want {
+			t.Errorf("WithheldMessage(%q) = %q, want %q", path, got, want)
+		}
+	})
+}

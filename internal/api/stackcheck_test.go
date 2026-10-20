@@ -388,6 +388,10 @@ func TestStackCheckAnswerNeverHoldsARunOfASecret(t *testing.T) {
 		"mem_limit":       {"    mem_limit: ${PW}\n", "Password2024!", stacks.SecretValueMessage("services.web.mem_limit")},
 		"deploy.replicas": {"    deploy:\n      replicas: ${PW}\n", "Password2024!", stacks.SecretValueMessage("services.web.deploy.replicas")},
 		"a port spec":     {"    ports: [\"${PW}:80\"]\n", "abcd:efgh9", stacks.SecretValueMessage("")},
+		"two documents, a tmpfs size in the second": {
+			"    volumes:\n      - {type: tmpfs, target: /a, tmpfs: {size: 1m}}\n---\nservices:\n  web:\n    volumes:\n      - {type: tmpfs, target: /b, tmpfs: {size: \"${PW}\"}}\n      - {type: tmpfs, target: /c, tmpfs: {size: 1m}}\n",
+			"Password2024!", stacks.SecretFileMessage("services.web.volumes.1.tmpfs.size"),
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
