@@ -249,10 +249,15 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 	// The two text views are made from what is known when the review ends, whichever way it ends
 	// without an error: a stack that has problems still shows its rendering, and a deployment
 	// made since the draft started is shown whatever else is wrong.
+	// Every problem leaves masked, whatever step added it: the conversion and object steps quote the values
+	// they refuse, and a value may be a secret variable's (review WR-04). The check's own are masked already
+	// and masking <hidden> again changes nothing. The masker is built once and also masks the service diff.
+	masker := reviewMasker(in)
 	defer func() {
 		if err != nil {
 			return
 		}
+		stacks.MaskProblems(rv.Problems, masker)
 		rv.Concurrent = concurrentOf(in)
 		if res.Loaded != nil {
 			rv.YAML = d.renderedChange(in, res.Loaded, rv.Pins)
@@ -365,7 +370,7 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 	if err != nil {
 		return rv, err
 	}
-	rv.Services = stacks.DiffServices(desired, running, reviewMasker(in))
+	rv.Services = stacks.DiffServices(desired, running, masker)
 	for _, c := range rv.Services {
 		bump(&rv.Summary.Services, c.Change)
 	}
