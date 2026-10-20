@@ -20,6 +20,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/stacks/convert"
+	"github.com/ianglennon/bayplan/internal/stacks/stackstest"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files")
@@ -1104,4 +1105,35 @@ func TestGuardSecretsHidesOnlyWhatComesFromASecret(t *testing.T) {
 			t.Errorf("err = %v, want nil", got)
 		}
 	})
+}
+
+// A converter refusal for a field fed by a secret variable holds no run of that secret, whatever the structure
+// of the file between the variable and the field: an anchor, a merge key, a nested default, or a plain
+// reference (07-44, D-02, T-07-187). Each value is one the loader accepts and the converter refuses.
+func TestAGuardedConverterRefusalHoldsNoRunOfItsSecret(t *testing.T) {
+	t.Parallel()
+	const head = "services:\n  web:\n    image: nginx:1\n"
+	cases := map[string]struct{ compose, secret string }{
+		"a restart policy through an anchor": {"x-r: &r ${PW}\n" + head + "    restart: *r\n", "sometimes:3"},
+		"a published port through a merge key": {
+			"x-p: &p\n  ports: [\"${PW}\"]\nservices:\n  web:\n    <<: *p\n    image: nginx:1\n", "127.0.0.1:8000-8001:80",
+		},
+		"a dns server through a nested default": {head + "    dns: [\"${A:-${PW}}\"]\n", "8.8.8.xkwm"},
+		"an endpoint mode":                      {head + "    deploy:\n      endpoint_mode: ${PW}\n", "hunter2secretvalue"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := plan(t, "s", tc.compose, stacks.Var{Name: "PW", Value: tc.secret, Secret: true})
+			if err == nil {
+				t.Fatalf("Convert accepted %q, want a refusal", tc.compose)
+			}
+			guarded := convert.GuardSecrets(err, secretUseOf(tc.compose, tc.secret))
+			var sf *convert.SecretFieldError
+			if !errors.As(guarded, &sf) {
+				t.Fatalf("GuardSecrets(%v) = %v, want a *SecretFieldError", err, guarded)
+			}
+			stackstest.NoSecretRun(t, tc.secret, guarded.Error())
+		})
+	}
 }
