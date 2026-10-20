@@ -5,6 +5,7 @@ package stacks
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -30,9 +31,22 @@ const (
 	maxMaskedLines     = 200
 )
 
-// NewMasker builds the masker of a working copy from its secrets: every secret variable value, and
-// the content of every secret file, of MinSecretLen characters or more, is hidden wherever it
-// appears, the longer values first so a secret that contains another is hidden whole.
+// NewMasker builds the masker of a working copy from its secrets (D-02): every secret variable
+// value, and the content of every secret file, of MinSecretLen characters or more, is hidden
+// wherever it appears, the longer values first so a secret that contains another is hidden whole.
+//
+// A value is hidden as stored and in the forms the texts that quote it write it in: with the
+// line break an editor adds trimmed (the loader trims its text), in Go's quoting (%q, strconv's
+// errors for an integer or float cast, and the converter), and in the quoting of the compose
+// schema validator (single quotes around the Go-quoted value, with \" turned back into " and ' into
+// \'). The ASCII-only and JSON forms are not added: no path in Bayplan or compose-go writes
+// them, and an answer is JSON-encoded after it is masked.
+//
+// A secret variable that holds several lines, such as a PEM key, is also hidden line by line, each
+// line of MinSecretLen characters or more, for the first maxMaskedLines lines of a value of at
+// most maxMaskedFileBytes, the cap a secret file has. Above the cap the value is still hidden whole
+// in every form above, which is how the messages probed quote it; only a line quoted on its own
+// would show. A variable is interpolated whole, so it is not split at "=".
 //
 // A secret file is one flagged secret, or one the compose file uses under secrets: even before a
 // save has flagged it, so what a person has just typed is hidden too. Its content is hidden as a
@@ -51,10 +65,22 @@ func NewMasker(vars []Var, files []File) Masker {
 		}
 		seen[v] = struct{}{}
 		values = append(values, v)
+		for _, q := range quotedForms(v) {
+			if utf8.RuneCountInString(q) < MinSecretLen || q == Hidden {
+				continue
+			}
+			if _, dup := seen[q]; dup {
+				continue
+			}
+			seen[q] = struct{}{}
+			values = append(values, q)
+		}
 	}
 	for _, v := range vars {
 		if v.Secret {
-			add(v.Value)
+			for _, m := range varMaskValues(v.Value) {
+				add(m)
+			}
 		}
 	}
 	for _, f := range MarkSecretFiles(files, nil) {
@@ -78,6 +104,45 @@ func NewMasker(vars []Var, files []File) Masker {
 		pairs = append(pairs, v, Hidden)
 	}
 	return Masker{replacer: strings.NewReplacer(pairs...)}
+}
+
+// quotedForms are the two ways an error text writes v inside quotes: Go's (%q, strconv) and the
+// compose schema validator's. The validator (jsonschema v6, kind.quote) takes strconv.Quote with
+// its outer quotes, turns every \" back into ", then every ' into \', and only then drops the
+// outer quotes; doing the replacements on the inner text gives another form for a value that ends
+// in a backslash.
+func quotedForms(v string) []string {
+	q := strconv.Quote(v)
+	goForm := q[1 : len(q)-1]
+	schema := strings.ReplaceAll(q, `\"`, `"`)
+	schema = strings.ReplaceAll(schema, `'`, `\'`)
+	schema = schema[1 : len(schema)-1]
+	return []string{goForm, schema}
+}
+
+// varMaskValues are the texts that stand for a secret variable's value: as stored, trimmed (the
+// loader trims its text, so a value that ends in a line break appears without it) and, for a value
+// of several lines up to maxMaskedFileBytes, each non-empty trimmed line, at most maxMaskedLines
+// of them. Above that cap the value is still hidden whole by the other forms.
+func varMaskValues(value string) []string {
+	out := []string{value}
+	trimmed := strings.TrimSpace(value)
+	if trimmed != value {
+		out = append(out, trimmed)
+	}
+	if len(value) > maxMaskedFileBytes || !strings.Contains(trimmed, "\n") {
+		return out
+	}
+	lines := strings.Split(trimmed, "\n")
+	if len(lines) > maxMaskedLines {
+		lines = lines[:maxMaskedLines]
+	}
+	for _, line := range lines {
+		if line = strings.TrimSpace(line); line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 // fileMaskValues are the texts that stand for a secret file's content: the whole of it, and for a
