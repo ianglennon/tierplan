@@ -74,7 +74,8 @@ function mount(flow?: "review" | "deploy") {
       <TestRouter>
         <TooltipProvider>
           <StackDetailLayout envId={ENV} stackId="s1" flow={flow}>
-            <StackOverview envId={ENV} stackId="s1" />
+            {/* On the review and the console the tab under the header is not the Overview. */}
+            {flow ? <div>The step</div> : <StackOverview envId={ENV} stackId="s1" />}
           </StackDetailLayout>
         </TooltipProvider>
       </TestRouter>
@@ -92,8 +93,9 @@ describe("StackDetailLayout", () => {
     );
     expect(within(crumb).getByText("tracer")).toBeTruthy();
     expect(screen.getByText("Not deployed")).toBeTruthy();
-    expect(screen.getByText("Swarm")).toBeTruthy();
-    expect(screen.getByText("Inline")).toBeTruthy();
+    // The badge in the header and the Target row of the Details beside the tabs.
+    expect(screen.getAllByText("Swarm")).toHaveLength(2);
+    expect(screen.getAllByText("Inline")).toHaveLength(2);
     expect(await screen.findByText("Prod · Never deployed")).toBeTruthy();
   });
 
@@ -118,7 +120,8 @@ describe("StackDetailLayout", () => {
     };
     mount();
     expect(await screen.findByText("Running")).toBeTruthy();
-    expect(screen.getByText("Draft")).toBeTruthy();
+    // The badge in the header and the Draft row of the Details.
+    expect(screen.getAllByText("Draft")).toHaveLength(2);
     expect(await screen.findByRole("heading", { name: "Details" })).toBeTruthy();
     expect(screen.queryByText("Not deployed yet")).toBeNull();
     expect(screen.getAllByText(/by bob/).length).toBeGreaterThan(0);

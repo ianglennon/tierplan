@@ -118,6 +118,9 @@ export function stacksQuery(envId: string) {
   });
 }
 
+// How often a stack's page reads itself again while an operation runs on it.
+export const STACK_BUSY_REFETCH_MS = 2_000;
+
 // One stack. A stack that is gone is not retried: it will not come back on a second try.
 export function stackQuery(envId: string, stackId: string) {
   return queryOptions({
@@ -133,7 +136,12 @@ export function stackQuery(envId: string, stackId: string) {
       return res.data;
     },
     retry: (count, error) => !isStackGone(error) && count < 3,
-    refetchInterval: LIST_REFETCH_MS,
+    // The page reads itself again every 2 s while an operation runs on the stack, so its state, its
+    // banner and its lock follow the operation, and at the lists' pace otherwise.
+    refetchInterval: (query) =>
+      query.state.data?.lastOperation?.state === "running"
+        ? STACK_BUSY_REFETCH_MS
+        : LIST_REFETCH_MS,
   });
 }
 

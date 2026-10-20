@@ -24,9 +24,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEnvName } from "@/features/resources/use-env-name";
+import { DeployBanner } from "@/features/stacks/deploy-banner";
 import { DeployFailedAlert } from "@/features/stacks/deploy-failed-alert";
+import { DraftBanner } from "@/features/stacks/draft-banner";
 import { OperationLockAlert } from "@/features/stacks/operation-lock-alert";
 import { StackStateCell } from "@/features/stacks/stack-state-cell";
+import { StoppedAlert } from "@/features/stacks/stopped-alert";
 import { useDocumentTitle } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -42,6 +45,8 @@ interface StackDetailLayoutProps {
   // Set on the Review and the console routes: the flow caption replaces the tab bar (UI-SPEC
   // "Review"). The header, the alerts and the breadcrumb stay.
   flow?: StackFlow;
+  // True on the Editor tab, which is where the draft banner's Open editor would lead.
+  editing?: boolean;
 }
 
 // The tabs of the page, in the order they show. Each is a child route of the page under
@@ -187,7 +192,13 @@ function Gone({ envId }: { envId: string }) {
 // deploy), the tab bar (Link triggers, the active tab follows the URL) and the tab under it.
 // The tabs render at once, before the stack has loaded (UI-SPEC "Loading"). A stack that is
 // gone replaces the page.
-export function StackDetailLayout({ envId, stackId, children, flow }: StackDetailLayoutProps) {
+export function StackDetailLayout({
+  envId,
+  stackId,
+  children,
+  flow,
+  editing,
+}: StackDetailLayoutProps) {
   const t = useT();
   const envName = useEnvName(envId);
   const query = useQuery(stackQuery(envId, stackId));
@@ -239,7 +250,12 @@ export function StackDetailLayout({ envId, stackId, children, flow }: StackDetai
                   </TooltipTrigger>
                   <TooltipContent className="break-all">{data.name}</TooltipContent>
                 </Tooltip>
-                <StackStateCell state={data.state} />
+                <StackStateCell
+                  state={data.state}
+                  running={data.servicesRunning}
+                  total={data.servicesTotal}
+                  failedService={data.lastOperation?.failedService}
+                />
                 <Badge variant="outline">{t(`stacks.target.${data.target}`)}</Badge>
                 <Badge variant="outline">{t(`stacks.source.${data.source}`)}</Badge>
                 {data.hasDraft ? <Badge variant="outline">{t("stacks.draft")}</Badge> : null}
@@ -262,14 +278,19 @@ export function StackDetailLayout({ envId, stackId, children, flow }: StackDetai
           <Skeleton className="h-8 w-64" />
         )}
       </header>
-      {/* The last deploy stopped (UI-SPEC alert order: before the lock). The console is that deploy's
-          own page, so it does not warn about itself. */}
+      {/* The alerts, in the order of UI-SPEC "Stack page": an operation under way, the last deploy that
+          stopped, another operation holding the environment, a stack that is stopped, a draft that waits.
+          The console is the operation's own page, so it does not warn about itself, and a stack that
+          is being deployed or removed is not also called stopped. */}
+      {data && flow !== "deploy" ? <DeployBanner stack={data} /> : null}
       {data && flow !== "deploy" ? <DeployFailedAlert stack={data} /> : null}
-      {/* Another operation holds the environment. The console is that operation's own page, so it
-          does not warn about itself. */}
       {data?.lock && flow !== "deploy" ? (
         <OperationLockAlert lock={data.lock} envId={envId} envName={envName} />
       ) : null}
+      {data && flow !== "deploy" && data.lastOperation?.state !== "running" ? (
+        <StoppedAlert stack={data} />
+      ) : null}
+      {data && !flow && !editing ? <DraftBanner stack={data} envName={envName} /> : null}
       {flow ? (
         <FlowCaption step={flow} />
       ) : (

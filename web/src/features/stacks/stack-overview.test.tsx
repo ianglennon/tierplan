@@ -437,7 +437,7 @@ describe("StackOverview details", () => {
 
     const card = await screen.findByRole("region", { name: "Details" });
     const row = (label: string) => within(card).getByText(label).nextElementSibling as HTMLElement;
-    expect(within(row("Environment")).getByRole("link", { name: "Prod" })).toBeTruthy();
+    expect(await within(row("Environment")).findByRole("link", { name: "Prod" })).toBeTruthy();
     expect(row("Target").textContent).toBe("Swarm");
     expect(row("Source").textContent).toBe("Inline");
     expect(row("Created").textContent).toContain("by ada");
@@ -494,7 +494,7 @@ describe("StackOverview of a stack that was never deployed", () => {
 
     expect(await screen.findByRole("heading", { name: "Not deployed yet" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Open editor" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Deploy…" }).getAttribute("href")).toBe(
+    expect((await screen.findByRole("link", { name: "Deploy…" })).getAttribute("href")).toBe(
       "/env/e1/stacks/s1/review",
     );
     expect(screen.getByRole("region", { name: "Details" })).toBeTruthy();
@@ -654,7 +654,9 @@ describe("DraftBanner", () => {
     render(
       <QueryClientProvider client={client}>
         <TestRouter>
-          <DraftBanner stack={stack} envName="Prod" />
+          <TooltipProvider>
+            <DraftBanner stack={stack} envName="Prod" />
+          </TooltipProvider>
         </TestRouter>
       </QueryClientProvider>,
     );

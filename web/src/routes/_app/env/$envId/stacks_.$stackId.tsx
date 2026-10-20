@@ -21,7 +21,8 @@ function StackDetailRoute() {
     : matchRoute({ to: "/env/$envId/stacks/$stackId/deploys/$jobId" })
       ? "deploy"
       : undefined;
-  return <StackDetailLayout envId={envId} stackId={stackId} flow={flow} />;
+  const editing = Boolean(matchRoute({ to: "/env/$envId/stacks/$stackId/editor" }));
+  return <StackDetailLayout envId={envId} stackId={stackId} flow={flow} editing={editing} />;
 }
 
 export const Route = createFileRoute("/_app/env/$envId/stacks_/$stackId")({

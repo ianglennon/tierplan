@@ -84,13 +84,17 @@
       },
       "starting": "Getting started…",
       "openConsole": "Open console",
-      "complete": "Deploy complete"
+      "complete": "Deploy complete",
+      "progress_one": "{{done}} of {{count}} service done.",
+      "progress_other": "{{done}} of {{count}} services done."
     },
     "draftBanner": {
       "title": "Draft saved, not deployed",
-      "body": "{{user}} saved changes {{time}}. Nothing has changed on {{env}} yet.",
       "openEditor": "Open editor",
-      "review": "Review and deploy"
+      "review": "Review and deploy",
+      "bodyUnknown": "The draft has changes that aren't deployed. Nothing has changed on {{env}} yet.",
+      "before": "{{user}} saved changes",
+      "after": ". Nothing has changed on {{env}} yet."
     },
     "stopped": {
       "title": "{{name}} is stopped",

@@ -92,7 +92,9 @@ export function StackList({ envId, creating, onCreatingChange }: StackListProps)
     {
       id: "state",
       header: t("stacks.list.columns.state"),
-      cell: (s) => <StackStateCell state={s.state} />,
+      cell: (s) => (
+        <StackStateCell state={s.state} running={s.servicesRunning} total={s.servicesTotal} />
+      ),
     },
     {
       id: "source",
