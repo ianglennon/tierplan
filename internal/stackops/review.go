@@ -299,7 +299,7 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 	}
 	plan, err := convert.Convert(project, convert.Options{StackName: in.Stack.Name, StackID: in.Stack.ID, Objects: reviewRefs(in.Stack, objs, live.Objects)})
 	if err != nil {
-		rv.Problems = append(rv.Problems, ConvertProblem(err)).Sorted()
+		rv.Problems = append(rv.Problems, ConvertProblem(convert.GuardSecrets(err, stacks.NewSecretUse(in.Copy)))).Sorted()
 		return rv, nil
 	}
 	pol, err := d.Policy(ctx, in.Caller, in.EnvID, in.Copy, plan)
@@ -744,7 +744,9 @@ func ObjectErrorDetail(err error) string {
 	return "A secret or config cannot be created: " + reason + "."
 }
 
-// ConvertDetail is the sentence for a compose file the converter cannot turn into swarm objects.
+// ConvertDetail is the sentence for a compose file the converter cannot turn into swarm objects. A refusal
+// of a field fed by a secret variable arrives guarded (convert.GuardSecrets), and its text is the fixed
+// sentence (07-42).
 func ConvertDetail(err error) string {
 	var nc *convert.NotConvertedError
 	switch {
