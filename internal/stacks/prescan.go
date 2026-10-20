@@ -596,7 +596,7 @@ func rangeSize(lo, hi uint64, st rangeState) (n int, valid bool) {
 	case rangeInvalid:
 		return 0, false
 	case rangeOK:
-		return int(hi-lo) + 1, true
+		return int(hi-lo) + 1, true //nolint:gosec // rangeOK means lo <= hi <= 65535, so the size fits an int
 	}
 	return 0, true
 }

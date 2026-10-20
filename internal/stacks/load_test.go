@@ -245,6 +245,7 @@ func TestLoadReturnsAtItsDeadlineWhileComposeGoIsStillRunning(t *testing.T) {
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("err = %v, want context.DeadlineExceeded while the loader is still running", err)
 		}
+		// wall-clock: synctest's fake clock, so time.Since is exact and no real time passes
 		if got := time.Since(begin); got != 2*time.Second {
 			t.Errorf("Load returned after %v, want exactly its 2s deadline", got)
 		}
