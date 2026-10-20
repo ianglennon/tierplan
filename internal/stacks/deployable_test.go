@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/bayplan/internal/stacks/stackstest"
 )
 
 func envFileCopy() stacks.WorkingCopy {
@@ -113,6 +114,7 @@ func TestDeployableRefusalQuotesNoEscapedSecret(t *testing.T) {
 			if !errors.As(err, &nd) {
 				t.Fatalf("err = %v, want a *NotDeployableError", err)
 			}
+			stackstest.NoSecretRun(t, escapedSecret, append(messagesOf(nd.Problems), err.Error())...)
 			fixed := false
 			for _, part := range escapedSecretParts {
 				if strings.Contains(err.Error(), part) {
@@ -154,6 +156,7 @@ func TestDeployableRefusalNeverQuotesPartOfASecret(t *testing.T) {
 			if strings.Contains(err.Error(), "Password2024") {
 				t.Errorf("error text %q quotes part of the secret", err.Error())
 			}
+			stackstest.NoSecretRun(t, "Password2024!", append(messagesOf(nd.Problems), err.Error())...)
 			fixed := false
 			for _, p := range nd.Problems {
 				if strings.Contains(p.Message, "Password2024") || strings.Contains(p.Key, "Password2024") {

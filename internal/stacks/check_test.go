@@ -15,6 +15,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 
 	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/bayplan/internal/stacks/stackstest"
 )
 
 func checkOf(t *testing.T, compose string) stacks.CheckResult {
@@ -441,6 +442,16 @@ func withVars(t *testing.T, compose string, vars ...stacks.Var) stacks.CheckResu
 }
 
 // problemsOf are the problems of a result with this code, in the order Check lists them.
+// messagesOf is the message of each problem: the words the check builds from the loader's or the converter's
+// text. Keys are the file's own key paths and are left to the tests' own assertions.
+func messagesOf(ps []stacks.Problem) []string {
+	out := make([]string, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, p.Message)
+	}
+	return out
+}
+
 func problemsOf(res stacks.CheckResult, code string) []stacks.Problem {
 	var out []stacks.Problem
 	for _, p := range res.Problems {
@@ -628,6 +639,12 @@ const trailingBackslashSecret = "hunter2-foxtrot'hunter2-golf\\"
 
 var trailingBackslashParts = []string{"hunter2-foxtrot", "hunter2-golf"}
 
+// distinctiveEscapedValue holds a double quote, a backslash and a single quote between letters and digits that
+// match no word of Bayplan's own text, so the leak check can scan every message for it.
+const distinctiveEscapedValue = "Zq9\"xkw\\mpr'Vb7"
+
+var distinctiveEscapedParts = []string{"Zq9", "xkw", "mpr", "Vb7"}
+
 // noField stands, in the table below, for a problem that names no field of the file.
 const noField = "-"
 
@@ -643,13 +660,18 @@ func TestCheckNeverCarriesAnEscapedSecretValue(t *testing.T) {
 		// for the general sentence of a text that names no field; an empty one means the loader's
 		// words are kept and the masker shows <hidden>.
 		fixed string
+		// scanned is false for a row whose fixed sentence starts with a key path that holds a run of the
+		// secret (healthcheck.interval holds "nter" of "hunter2"): the leak check rightly scans that
+		// prefix, so the row keeps its per-part assertions and a distinctive-secret row stands beside it.
+		scanned bool
 	}{
-		{"deploy.replicas, Go-escaped", "    deploy:\n      replicas: ${PW}\n", escapedSecret, escapedSecretParts, "services.web.deploy.replicas"},
-		{"cpus, Go-escaped", "    cpus: ${PW}\n", escapedSecret, escapedSecretParts, "services.web.cpus"},
-		{"pull_policy, schema-escaped", "    pull_policy: ${PW}\n", escapedSecret, escapedSecretParts, "services.web.pull_policy"},
-		{"pull_policy, trailing backslash", "    pull_policy: ${PW}\n", trailingBackslashSecret, trailingBackslashParts, "services.web.pull_policy"},
-		{"privileged, raw and trimmed", "    privileged: ${PW}\n", escapedSecret, escapedSecretParts, noField},
-		{"healthcheck.interval, raw in quotes", "    healthcheck:\n      test: [CMD, \"true\"]\n      interval: ${PW}\n", escapedSecret, escapedSecretParts, "services.web.healthcheck.interval"},
+		{"deploy.replicas, Go-escaped", "    deploy:\n      replicas: ${PW}\n", escapedSecret, escapedSecretParts, "services.web.deploy.replicas", true},
+		{"cpus, Go-escaped", "    cpus: ${PW}\n", escapedSecret, escapedSecretParts, "services.web.cpus", true},
+		{"pull_policy, schema-escaped", "    pull_policy: ${PW}\n", escapedSecret, escapedSecretParts, "services.web.pull_policy", true},
+		{"pull_policy, trailing backslash", "    pull_policy: ${PW}\n", trailingBackslashSecret, trailingBackslashParts, "services.web.pull_policy", true},
+		{"privileged, raw and trimmed", "    privileged: ${PW}\n", escapedSecret, escapedSecretParts, noField, true},
+		{"healthcheck.interval, raw in quotes", "    healthcheck:\n      test: [CMD, \"true\"]\n      interval: ${PW}\n", escapedSecret, escapedSecretParts, "services.web.healthcheck.interval", false},
+		{"healthcheck.interval, a distinctive escaped secret", "    healthcheck:\n      test: [CMD, \"true\"]\n      interval: ${PW}\n", distinctiveEscapedValue, distinctiveEscapedParts, "services.web.healthcheck.interval", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -672,6 +694,9 @@ func TestCheckNeverCarriesAnEscapedSecretValue(t *testing.T) {
 						t.Errorf("problem %+v carries %q of the secret", p, part)
 					}
 				}
+			}
+			if tc.scanned {
+				stackstest.NoSecretRun(t, tc.secret, messagesOf(res.Problems)...)
 			}
 			if !refused {
 				t.Fatalf("problems = %+v, want the position refused", res.Problems)
@@ -707,6 +732,7 @@ func TestCheckNeverQuotesPartOfASecretInASizeField(t *testing.T) {
 					}
 				}
 			}
+			stackstest.NoSecretRun(t, tc.secret, messagesOf(res.Problems)...)
 			if len(errs) != 1 {
 				t.Fatalf("error problems = %+v, want exactly one", errs)
 			}
@@ -779,6 +805,7 @@ func TestCheckNeverQuotesTheLoaderWordsForASecretField(t *testing.T) {
 					t.Errorf("problem %+v carries part of the secret", p)
 				}
 			}
+			stackstest.NoSecretRun(t, secret.Value, messagesOf(res.Problems)...)
 		})
 	}
 	// A value that is not secret keeps the loader's words, even where the file uses a secret.
@@ -865,6 +892,7 @@ func TestCheckNeverQuotesPartOfASecretTheLoaderSplits(t *testing.T) {
 					}
 				}
 			}
+			stackstest.NoSecretRun(t, tc.secret, messagesOf(res.Problems)...)
 			slices.SortFunc(errs, func(a, b want) int { return strings.Compare(a.message, b.message) })
 			slices.SortFunc(tc.want, func(a, b want) int { return strings.Compare(a.message, b.message) })
 			if !slices.Equal(errs, tc.want) {
@@ -890,6 +918,7 @@ func TestCheckNeverQuotesPartOfASecretTheLoaderSplits(t *testing.T) {
 		if !plain || !secret {
 			t.Errorf("problems = %+v, want mem_limit with its own words and shm_size with the fixed sentence", res.Problems)
 		}
+		stackstest.NoSecretRun(t, pw, messagesOf(res.Problems)...)
 	})
 }
 
@@ -931,6 +960,8 @@ func TestCheckKeepsTheLoaderWordsForAPlainFieldItCanFind(t *testing.T) {
 // shorter than the secret, and the secret is a single line with no quote character, so none equals
 // a form the masker hides. After the guess is replaced by GUESS, the error problems of a window of
 // the secret (xkwm, kwmp, wmpr) and of a guess that is not (xkwn, aaaa) must be identical.
+// The leak check (stackstest.NoSecretRun) is not applied here: the guesses are windows of the secret on purpose,
+// because they are the Operator's own input and the answer echoes them.
 func TestCheckAnswersAPlainFieldTheSameWhetherOrNotItsValueIsPartOfASecret(t *testing.T) {
 	t.Parallel()
 	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n    environment:\n      DB: ${PW}\n"
@@ -1030,5 +1061,6 @@ func TestCheckNeverSaysAPlainFieldComesFromASecret(t *testing.T) {
 		if !found {
 			t.Errorf("problems = %+v, want an error with %q", res.Problems, stacks.SecretFileMessage(key))
 		}
+		stackstest.NoSecretRun(t, pw.Value, messagesOf(res.Problems)...)
 	})
 }
