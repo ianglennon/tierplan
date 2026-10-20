@@ -34,7 +34,9 @@ interface StackOwnedStateProps {
 // StackOwnedState is what the edit page becomes for a service a stack owns (D-05): a stack's next
 // deploy would overwrite any change made here, so the page says to change it through the stack and
 // shows the spec read-only, in the format the person last chose. Scale, force update and roll
-// back stay on the service's own page.
+// back stay on the service's own page. For a stack Bayplan manages the state offers Open stack (the
+// accent button) beside the outline Back to {name}; a stack made some other way has no page, so no
+// button.
 export function StackOwnedState({
   envId,
   serviceId,
