@@ -1042,3 +1042,25 @@ func TestUpdateModeChangesOnlyTheChosenServices(t *testing.T) {
 		t.Errorf("after the update web runs %s and api %s, services %+v; want %s and %s and no change", after["web"], after["api"], rv.Services, webNew, apiOld)
 	}
 }
+
+// A review whose conversion step refuses a secret variable's value answers 200 without the value anywhere in
+// it (review WR-04, T-07-160).
+func TestReviewAnswerNeverQuotesASecretVariable(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "leaky")
+	saveCompose(t, operator, st.ID, "services:\n  web:\n    image: nginx:1.27-alpine\n    deploy:\n      endpoint_mode: ${PW}\n", leakyVars)
+
+	rv, code, raw := operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, raw)
+	}
+	if strings.Contains(raw, leakyValue) {
+		t.Fatalf("a secret reached the answer: %s", raw)
+	}
+	if _, ok := rv.problem("convert_failed"); !ok {
+		t.Errorf("problems = %+v, want a conversion problem (the premise of the test)", rv.Problems)
+	}
+}

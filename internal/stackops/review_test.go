@@ -559,6 +559,31 @@ func TestReviewMasksASecretInTheRenderedYAML(t *testing.T) {
 	}
 }
 
+// A problem the review adds after the check (a conversion refusal quotes the value it refuses) is masked
+// too, whatever step found it (review WR-04, T-07-160).
+func TestReviewNeverQuotesASecretInAProblem(t *testing.T) {
+	t.Parallel()
+	const secret = "hunter2secretvalue"
+	rig := newSwarmRig(t, nil)
+	compose := "services:\n  web:\n    image: nginx:1.27-alpine\n    deploy:\n      endpoint_mode: ${PW}\n"
+	rv := rig.review(t, "shop", compose, nil, stacks.Var{Name: "PW", Value: secret, Secret: true})
+	var found bool
+	for _, p := range rv.Problems {
+		if strings.Contains(p.Message, secret) || strings.Contains(p.Key, secret) {
+			t.Errorf("problem = %+v, want the value hidden", p)
+		}
+		if p.Code == stackops.CodeConvertProblem {
+			found = true
+			if !strings.Contains(p.Message, "<hidden>") {
+				t.Errorf("message = %q, want the converter's quoted value shown as <hidden>", p.Message)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("problems = %+v, want a conversion problem (the premise of the test)", rv.Problems)
+	}
+}
+
 // A deployment made after the draft was started (plan 07-16, STK-05, D-09): what it changed and
 // what the draft changed, from the version the draft began with, file by file and masked.
 
