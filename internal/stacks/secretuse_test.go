@@ -127,7 +127,7 @@ func TestSecretUseSaysAValueComesFromASecretOnlyWhereItFindsOne(t *testing.T) {
 	pw := secretVar("PW", "Zq9xkwmpr")
 	t.Run("a file with a plain list and a secret elsewhere", func(t *testing.T) {
 		t.Parallel()
-		s := stacks.NewSecretUse(copyOf(head+"    mem_limit: ${PW}\n    ports: [{target: 80, published: 8080}]\n    environment: {DB: ${PW}}\n", pw))
+		s := stacks.NewSecretUse(copyOf(head+"    mem_limit: ${PW}\n    ports: [{target: 80, published: 8080}]\n    environment:\n      DB: ${PW}\n", pw))
 		if got, want := s.WithheldMessage("services.web.mem_limit"), stacks.SecretValueMessage("services.web.mem_limit"); got != want {
 			t.Errorf("WithheldMessage(mem_limit) = %q, want %q", got, want)
 		}

@@ -996,7 +996,7 @@ func TestCheckAnswersAPlainFieldTheSameWhetherOrNotItsValueIsPartOfASecret(t *te
 // the loader names as every item (07-REVIEW-gaps2 WR-02).
 func TestCheckNeverSaysAPlainFieldComesFromASecret(t *testing.T) {
 	t.Parallel()
-	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n    environment: {DB: ${PW}}\n"
+	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n    environment:\n      DB: ${PW}\n"
 	const key = "services.web.ports.[].target"
 	pw := stacks.Var{Name: "PW", Value: "Zq9xkwmpr", Secret: true}
 	t.Run("a plain port target keeps the loader's words", func(t *testing.T) {
