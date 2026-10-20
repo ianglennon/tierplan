@@ -396,6 +396,74 @@
         ],
         "type": "object"
       },
+      "AllStacksBody": {
+        "additionalProperties": false,
+        "properties": {
+          "failedEnvironments": {
+            "description": "Environments the caller may read stacks on whose stacks could not be read just now",
+            "items": {
+              "$ref": "#/components/schemas/FailedEnvironmentBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "groups": {
+            "description": "One group for each environment that has stacks the caller may read, by environment name. An environment the caller holds no stacks.read on is absent",
+            "items": {
+              "$ref": "#/components/schemas/AllStacksGroup"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "groups",
+          "failedEnvironments"
+        ],
+        "type": "object"
+      },
+      "AllStacksGroup": {
+        "additionalProperties": false,
+        "properties": {
+          "envId": {
+            "description": "The environment",
+            "type": "string"
+          },
+          "envName": {
+            "description": "Its name",
+            "type": "string"
+          },
+          "stacks": {
+            "description": "The environment's stacks by name",
+            "items": {
+              "$ref": "#/components/schemas/StackItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "target": {
+            "description": "Where the environment's stacks deploy: swarm or standalone",
+            "enum": [
+              "swarm",
+              "standalone"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "envId",
+          "envName",
+          "target",
+          "stacks"
+        ],
+        "type": "object"
+      },
       "AuditActorDTO": {
         "additionalProperties": false,
         "properties": {
@@ -3996,6 +4064,24 @@
         },
         "required": [
           "passphrase"
+        ],
+        "type": "object"
+      },
+      "FailedEnvironmentBody": {
+        "additionalProperties": false,
+        "properties": {
+          "envId": {
+            "description": "The environment",
+            "type": "string"
+          },
+          "envName": {
+            "description": "Its name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "envId",
+          "envName"
         ],
         "type": "object"
       },
@@ -25677,6 +25763,58 @@
           }
         },
         "summary": "The stack operations you can follow",
+        "tags": [
+          "stacks"
+        ]
+      }
+    },
+    "/api/stacks": {
+      "get": {
+        "description": "One group for each environment that has stacks, by environment name, each with its stacks by name, their state and when they were last deployed. An environment the caller does not hold stacks.read on is left out, and so is its name: the list never reveals what the caller cannot open. An environment whose stacks could not be read is named in failedEnvironments while the others are answered. env chooses environments by ID.",
+        "operationId": "listAllStacks",
+        "parameters": [
+          {
+            "description": "Only these environments, by ID, comma separated. An ID the caller cannot read stacks on is ignored, as one that does not exist",
+            "explode": false,
+            "in": "query",
+            "name": "env",
+            "schema": {
+              "description": "Only these environments, by ID, comma separated. An ID the caller cannot read stacks on is ignored, as one that does not exist",
+              "maxLength": 2048,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AllStacksBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The stacks Bayplan manages on every environment the caller may read them on",
         "tags": [
           "stacks"
         ]

@@ -1,0 +1,56 @@
+{
+  "stackLists": {
+    "title": "Stacks",
+    "documentTitle": "All stacks",
+    "global": {
+      "caption": "Stacks Bayplan manages across your environments.",
+      "count_one": "{{count, number}} stack in {{environments}}",
+      "count_other": "{{count, number}} stacks in {{environments}}",
+      "environments_one": "{{count, number}} environment",
+      "environments_other": "{{count, number}} environments",
+      "empty": "No stacks yet",
+      "emptyBody": "Stacks you create on any environment show up here.",
+      "error": "Couldn't load stacks.",
+      "errorRetry": "Retry loading stacks",
+      "title": "Stacks"
+    },
+    "columns": {
+      "name": "Name",
+      "environment": "Environment",
+      "state": "State",
+      "services": "Services",
+      "source": "Source",
+      "lastDeployed": "Last deployed"
+    },
+    "services": "{{running, number}}/{{total, number}}",
+    "missing": "—",
+    "lastDeployedBy": "by {{user}}",
+    "never": "Never",
+    "group": {
+      "count_one": "{{count, number}} stack",
+      "count_other": "{{count, number}} stacks"
+    },
+    "groupBy": {
+      "label": "Group by",
+      "env": "Environment",
+      "none": "None"
+    },
+    "envFilter": {
+      "label": "Environment",
+      "all": "All environments",
+      "count_one": "{{count, number}} environment",
+      "count_other": "{{count, number}} environments",
+      "list": "Environments"
+    },
+    "envFailed": {
+      "text": "Couldn't load stacks on {{name}}.",
+      "retry": "Retry"
+    },
+    "collapseAll": "Collapse all groups",
+    "expandAll": "Expand all groups",
+    "target": {
+      "swarm": "Swarm",
+      "standalone": "Standalone"
+    }
+  }
+}

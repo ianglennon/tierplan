@@ -132,6 +132,8 @@ type authFixture struct {
 	stackOnCheck       func(context.Context)
 	// stackBeforeJob is called in a deploy just before its job starts (plan 07-18).
 	stackBeforeJob func(context.Context)
+	// stackReadEnv is called before the stacks of an environment are read for the All stacks list (plan 07-24).
+	stackReadEnv func(context.Context, string) error
 	// stackUp replaces the Compose SDK's up in a standalone deploy (plan 07-20).
 	stackUp func(context.Context, *dockerx.Client, *types.Project, dockerx.ComposeUpOptions, func(dockerx.ComposeEvent)) error
 	// pullsHeartbeat, pullsMaxStreams and pullsMaxLifetime tune the pull stream, and
@@ -350,7 +352,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		api.RegisterStacks(r, api.StacksDeps{
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
 			Audit: f.aud, Checker: checker, Jobs: f.jobHub, Store: f.st, Vault: f.v, Log: log,
-			CheckDeadline: f.stackCheckDeadline, OnCheck: f.stackOnCheck, BeforeJob: f.stackBeforeJob, Up: f.stackUp,
+			CheckDeadline: f.stackCheckDeadline, OnCheck: f.stackOnCheck, BeforeJob: f.stackBeforeJob, Up: f.stackUp, ReadEnv: f.stackReadEnv,
 		})
 		var logsSrc api.LogsSource = f.agg
 		if f.logsWrap != nil {

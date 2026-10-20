@@ -71,6 +71,9 @@ export interface TableGroup<T> {
     badge?: ReactNode;
     checkbox?: ReactNode;
   };
+  // A line across every column, drawn under the header while the group is open: what stands in the
+  // place of rows that could not be read.
+  notice?: ReactNode;
 }
 
 // How a row is drawn while the list changes under it (D-05, D-50).
@@ -550,6 +553,13 @@ export function ResourceTable<T>({
                       </TableBody>
                     ) : null}
                     <TableBody id={rowsId} hidden={!expanded}>
+                      {expanded && g.notice ? (
+                        <TableRow className="hover:bg-transparent">
+                          <TableCell colSpan={shownColumns.length} className="py-2">
+                            {g.notice}
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
                       {expanded ? g.rows.map(renderRow) : null}
                     </TableBody>
                   </Fragment>

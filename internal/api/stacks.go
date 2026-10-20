@@ -93,6 +93,9 @@ type StacksDeps struct {
 	OnCheck func(ctx context.Context)
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
+	// ReadEnv, when set, is called before the stacks of an environment are read for the All stacks list;
+	// an error makes that environment a failed one. Tests use it to fail one environment's read.
+	ReadEnv func(ctx context.Context, envID string) error
 	// Heartbeat is how often an idle deploy stream gets a ping. Zero means 15 seconds.
 	Heartbeat time.Duration
 	// MaxLifetime is the longest one deploy stream stays open. Zero means one hour.
@@ -282,6 +285,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 			return getStack(ctx, d, in)
 		})
 
+	registerAllStacks(r, d)
 	registerStackDraft(r, d)
 	// A render is a check of the working copy followed by a view of what it loaded, so the two
 	// share one limit of checks running per user.
@@ -368,31 +372,11 @@ func stackItemOf(reads *stackReads, st stackops.Stack, latest stackops.DeployRow
 }
 
 func listStacks(ctx context.Context, d StacksDeps, in *EnvironmentPathInput) (*StackListOutput, error) {
-	repo := d.repo()
-	list, err := repo.Stacks(ctx, in.EnvID)
+	items, err := d.stacksOf(ctx, in.EnvID)
 	if err != nil {
 		return nil, stackInternal(d, "list", in.EnvID, err)
 	}
-	latest, err := repo.LatestDeploys(ctx, in.EnvID)
-	if err != nil {
-		return nil, stackInternal(d, "latest deploys", in.EnvID, err)
-	}
-	done, err := repo.LastDeployed(ctx, in.EnvID)
-	if err != nil {
-		return nil, stackInternal(d, "last deployed", in.EnvID, err)
-	}
-	drafts, err := repo.DraftSaves(ctx, in.EnvID)
-	if err != nil {
-		return nil, stackInternal(d, "drafts", in.EnvID, err)
-	}
-	reads := newStackReads(ctx, d, in.EnvID)
-	body := StackListBody{Items: make([]StackItem, 0, len(list))}
-	for _, st := range list {
-		l, hasL := latest[st.ID]
-		g, hasG := done[st.ID]
-		body.Items = append(body.Items, stackItemOf(reads, st, l, hasL, g, hasG, drafts[st.ID].Pending))
-	}
-	return &StackListOutput{CacheControl: "no-store", Body: body}, nil
+	return &StackListOutput{CacheControl: "no-store", Body: StackListBody{Items: items}}, nil
 }
 
 func getStack(ctx context.Context, d StacksDeps, in *StackPathInput) (*StackDetailOutput, error) {

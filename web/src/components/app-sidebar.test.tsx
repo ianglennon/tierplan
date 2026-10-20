@@ -77,6 +77,7 @@ function mount(width: number, path = "/") {
       createRoute({ getParentRoute: () => root, path: "/" }),
       createRoute({ getParentRoute: () => root, path: "/environments" }),
       createRoute({ getParentRoute: () => root, path: "/registries" }),
+      createRoute({ getParentRoute: () => root, path: "/stacks" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/containers" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/stacks" }),
@@ -131,6 +132,37 @@ describe("the mobile main menu", () => {
     await openMenu();
     await router.navigate({ to: "/environments" });
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Navigation" })).toBeNull());
+  });
+});
+
+describe("the All stacks item", () => {
+  it("sits in the top group beside Environments and Registries, and opens the global list", async () => {
+    const router = mount(1280);
+    const link = await screen.findByRole("link", { name: "All stacks" });
+    expect(link.getAttribute("href")).toBe("/stacks");
+    const names = ["Environments", "All stacks", "Registries"].map((n) =>
+      screen.getByRole("link", { name: n }),
+    );
+    // One group: the three links share the menu they are in, in this order.
+    expect(new Set(names.map((l) => l.closest("ul"))).size).toBe(1);
+    expect(names[0]?.compareDocumentPosition(names[1] as Node)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(names[1]?.compareDocumentPosition(names[2] as Node)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    fireEvent.click(link);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/stacks"));
+  });
+
+  it("is left out for a user who may read stacks on no environment", async () => {
+    me = makeMe({
+      envs: { e1: "viewer" },
+      permissions: splitPermissions(["environments.read", "images.read"]),
+    });
+    mount(1280);
+    await screen.findByRole("link", { name: "Registries" });
+    expect(screen.queryByRole("link", { name: "All stacks" })).toBeNull();
   });
 });
 

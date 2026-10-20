@@ -42,6 +42,9 @@ export type StackJobOutputLine = components["schemas"]["StackJobOutputLine"];
 export type StackServices = components["schemas"]["StackServicesBody"];
 export type StackService = components["schemas"]["StackServiceBody"];
 export type StackContainer = components["schemas"]["StackContainerBody"];
+export type AllStacks = components["schemas"]["AllStacksBody"];
+export type AllStacksGroup = components["schemas"]["AllStacksGroup"];
+export type FailedEnvironment = components["schemas"]["FailedEnvironmentBody"];
 
 // The query key of an environment's stacks list, and of every read that extends it: one stack's
 // page is under it, so a change to the list refreshes the page too.
@@ -114,6 +117,37 @@ export function stacksQuery(envId: string) {
       }
       return res.data;
     },
+    refetchInterval: LIST_REFETCH_MS,
+  });
+}
+
+// The query key of the All stacks list. It is the first element "stacks", not an environment's key,
+// so an environment's own events do not refresh it: it follows its own poll.
+export const allStacksKey = ["stacks", "all"] as const;
+
+// What the All stacks list asks the server for: the environments chosen. An empty choice is all of them.
+export interface AllStacksFilters {
+  env?: string;
+}
+
+// Every stack the signed-in user may read, grouped by environment, narrowed by the filters. The rows
+// of the previous filters stay on screen while the new ones load.
+export function allStacksQuery(filters: AllStacksFilters = {}) {
+  const set: AllStacksFilters = {};
+  if (filters.env) set.env = filters.env;
+  return queryOptions({
+    queryKey: [...allStacksKey, set] as const,
+    queryFn: async () => {
+      const res = await api.GET("/api/stacks", {
+        params: { query: Object.keys(set).length > 0 ? set : undefined },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new StacksLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    placeholderData: (previous) => previous,
     refetchInterval: LIST_REFETCH_MS,
   });
 }

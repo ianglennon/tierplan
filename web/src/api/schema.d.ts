@@ -3127,6 +3127,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/stacks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The stacks Bayplan manages on every environment the caller may read them on
+         * @description One group for each environment that has stacks, by environment name, each with its stacks by name, their state and when they were last deployed. An environment the caller does not hold stacks.read on is left out, and so is its name: the list never reveals what the caller cannot open. An environment whose stacks could not be read is named in failedEnvironments while the others are answered. env chooses environments by ID.
+         */
+        get: operations["listAllStacks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/teams": {
         parameters: {
             query?: never;
@@ -3832,6 +3852,25 @@ export interface components {
             items: components["schemas"]["AgentBody"][] | null;
             /** @description The commands that take the agent off a host by hand, for the hosts Bayplan cannot uninstall when the environment is removed. The swarm secret in them is named for the join token's current generation. They carry no token */
             manualCleanup: components["schemas"]["InstallCleanupBody"];
+        };
+        AllStacksBody: {
+            /** @description Environments the caller may read stacks on whose stacks could not be read just now */
+            failedEnvironments: components["schemas"]["FailedEnvironmentBody"][] | null;
+            /** @description One group for each environment that has stacks the caller may read, by environment name. An environment the caller holds no stacks.read on is absent */
+            groups: components["schemas"]["AllStacksGroup"][] | null;
+        };
+        AllStacksGroup: {
+            /** @description The environment */
+            envId: string;
+            /** @description Its name */
+            envName: string;
+            /** @description The environment's stacks by name */
+            stacks: components["schemas"]["StackItem"][] | null;
+            /**
+             * @description Where the environment's stacks deploy: swarm or standalone
+             * @enum {string}
+             */
+            target: "swarm" | "standalone";
         };
         AuditActorDTO: {
             /** @description True when the user behind the name has since been deleted */
@@ -5267,6 +5306,12 @@ export interface components {
         ExportBackupInputBody: {
             /** @description Locks the backup. At least 16 characters; Bayplan never stores it and cannot recover it */
             passphrase: string;
+        };
+        FailedEnvironmentBody: {
+            /** @description The environment */
+            envId: string;
+            /** @description Its name */
+            envName: string;
         };
         GrantBody: {
             /**
@@ -16114,6 +16159,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackJobListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listAllStacks: {
+        parameters: {
+            query?: {
+                /** @description Only these environments, by ID, comma separated. An ID the caller cannot read stacks on is ignored, as one that does not exist */
+                env?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AllStacksBody"];
                 };
             };
             /** @description Error */

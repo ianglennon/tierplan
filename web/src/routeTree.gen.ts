@@ -19,6 +19,7 @@ import { Route as AppAuditRouteImport } from './routes/_app/audit'
 import { Route as AppEnvironmentsRouteImport } from './routes/_app/environments'
 import { Route as AppRegistriesRouteImport } from './routes/_app/registries'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
+import { Route as AppStacksRouteImport } from './routes/_app/stacks'
 import { Route as AppEnvEnvIdRouteImport } from './routes/_app/env/$envId'
 import { Route as AppRegistriesBrowseRouteImport } from './routes/_app/registries_.browse'
 import { Route as AppSettingsIndexRouteImport } from './routes/_app/settings/index'
@@ -145,6 +146,11 @@ const AppRegistriesRoute = AppRegistriesRouteImport.update({
 const AppSettingsRoute = AppSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppStacksRoute = AppStacksRouteImport.update({
+  id: '/stacks',
+  path: '/stacks',
   getParentRoute: () => AppRoute,
 } as any)
 const AppEnvEnvIdRoute = AppEnvEnvIdRouteImport.update({
@@ -601,6 +607,7 @@ export interface FileRoutesByFullPath {
   '/environments': typeof AppEnvironmentsRoute
   '/registries': typeof AppRegistriesRoute
   '/settings': typeof AppSettingsRouteWithChildren
+  '/stacks': typeof AppStacksRoute
   '/env/$envId': typeof AppEnvEnvIdRouteWithChildren
   '/registries/browse': typeof AppRegistriesBrowseRoute
   '/settings/about': typeof AppSettingsAboutRoute
@@ -688,6 +695,7 @@ export interface FileRoutesByTo {
   '/audit': typeof AppAuditRoute
   '/environments': typeof AppEnvironmentsRoute
   '/registries': typeof AppRegistriesRoute
+  '/stacks': typeof AppStacksRoute
   '/': typeof AppIndexRoute
   '/registries/browse': typeof AppRegistriesBrowseRoute
   '/settings/about': typeof AppSettingsAboutRoute
@@ -767,6 +775,7 @@ export interface FileRoutesById {
   '/_app/environments': typeof AppEnvironmentsRoute
   '/_app/registries': typeof AppRegistriesRoute
   '/_app/settings': typeof AppSettingsRouteWithChildren
+  '/_app/stacks': typeof AppStacksRoute
   '/_app/': typeof AppIndexRoute
   '/_app/env/$envId': typeof AppEnvEnvIdRouteWithChildren
   '/_app/registries_/browse': typeof AppRegistriesBrowseRoute
@@ -859,6 +868,7 @@ export interface FileRouteTypes {
     | '/environments'
     | '/registries'
     | '/settings'
+    | '/stacks'
     | '/env/$envId'
     | '/registries/browse'
     | '/settings/about'
@@ -946,6 +956,7 @@ export interface FileRouteTypes {
     | '/audit'
     | '/environments'
     | '/registries'
+    | '/stacks'
     | '/'
     | '/registries/browse'
     | '/settings/about'
@@ -1024,6 +1035,7 @@ export interface FileRouteTypes {
     | '/_app/environments'
     | '/_app/registries'
     | '/_app/settings'
+    | '/_app/stacks'
     | '/_app/'
     | '/_app/env/$envId'
     | '/_app/registries_/browse'
@@ -1186,6 +1198,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof AppSettingsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/stacks': {
+      id: '/_app/stacks'
+      path: '/stacks'
+      fullPath: '/stacks'
+      preLoaderRoute: typeof AppStacksRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/env/$envId': {
@@ -2066,6 +2085,7 @@ interface AppRouteChildren {
   AppEnvironmentsRoute: typeof AppEnvironmentsRoute
   AppRegistriesRoute: typeof AppRegistriesRoute
   AppSettingsRoute: typeof AppSettingsRouteWithChildren
+  AppStacksRoute: typeof AppStacksRoute
   AppIndexRoute: typeof AppIndexRoute
   AppEnvEnvIdRoute: typeof AppEnvEnvIdRouteWithChildren
   AppRegistriesBrowseRoute: typeof AppRegistriesBrowseRoute
@@ -2076,6 +2096,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppEnvironmentsRoute: AppEnvironmentsRoute,
   AppRegistriesRoute: AppRegistriesRoute,
   AppSettingsRoute: AppSettingsRouteWithChildren,
+  AppStacksRoute: AppStacksRoute,
   AppIndexRoute: AppIndexRoute,
   AppEnvEnvIdRoute: AppEnvEnvIdRouteWithChildren,
   AppRegistriesBrowseRoute: AppRegistriesBrowseRoute,
