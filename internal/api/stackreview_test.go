@@ -1064,3 +1064,37 @@ func TestReviewAnswerNeverQuotesASecretVariable(t *testing.T) {
 		t.Errorf("problems = %+v, want a conversion problem (the premise of the test)", rv.Problems)
 	}
 }
+
+// A review of a draft whose cast position or converter refuses an escaped secret variable answers 200 without
+// any part of it (review CR-01, T-07-168).
+func TestReviewAnswerNeverQuotesAnEscapedSecret(t *testing.T) {
+	t.Parallel()
+	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
+	cases := map[string]string{
+		"a cast position":              head + "    deploy:\n      replicas: ${PW}\n",
+		"a value the converter quotes": head + "    deploy:\n      endpoint_mode: ${PW}\n",
+	}
+	for name, compose := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f, e := stackEnv(t, nil)
+			admin := f.caller(t, e, "envadmin-1", "admin")
+			operator := f.caller(t, e, "operator-1", "operator")
+			st := newStack(t, admin, "escaped")
+			saveCompose(t, operator, st.ID, compose, escapedLeakyVars(t))
+
+			_, code, raw := operator.reviewStack(st.ID, `{}`)
+			if code != http.StatusOK {
+				t.Fatalf("review: %d %s", code, raw)
+			}
+			for _, part := range escapedLeakyParts {
+				if strings.Contains(raw, part) {
+					t.Errorf("review answer = %s, want no part (%q) of the secret", raw, part)
+				}
+			}
+			if !strings.Contains(raw, "<hidden>") {
+				t.Errorf("review answer = %s, want the value shown as <hidden>", raw)
+			}
+		})
+	}
+}

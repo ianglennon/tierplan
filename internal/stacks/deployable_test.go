@@ -95,3 +95,41 @@ func TestDeployableRefusalQuotesNoSecret(t *testing.T) {
 		}
 	}
 }
+
+func TestDeployableRefusalQuotesNoEscapedSecret(t *testing.T) {
+	t.Parallel()
+	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
+	for name, body := range map[string]string{
+		"deploy.replicas": "    deploy:\n      replicas: ${PW}\n",
+		"pull_policy":     "    pull_policy: ${PW}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := stacks.Deployable(context.Background(), stacks.CheckInput{
+				Name: "probe", Target: stacks.TargetSwarm,
+				Copy: copyOf(head+body, stacks.Var{Name: "PW", Value: escapedSecret, Secret: true}),
+			})
+			var nd *stacks.NotDeployableError
+			if !errors.As(err, &nd) {
+				t.Fatalf("err = %v, want a *NotDeployableError", err)
+			}
+			hidden := false
+			for _, part := range escapedSecretParts {
+				if strings.Contains(err.Error(), part) {
+					t.Errorf("error text %q quotes %q", err.Error(), part)
+				}
+				for _, p := range nd.Problems {
+					if strings.Contains(p.Message, part) || strings.Contains(p.Key, part) {
+						t.Errorf("problem %+v quotes %q", p, part)
+					}
+				}
+			}
+			for _, p := range nd.Problems {
+				hidden = hidden || strings.Contains(p.Message, stacks.Hidden)
+			}
+			if !hidden {
+				t.Errorf("problems = %+v, want one message to show %s", nd.Problems, stacks.Hidden)
+			}
+		})
+	}
+}

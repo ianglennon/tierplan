@@ -4,6 +4,8 @@
 package stacks_test
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -148,5 +150,70 @@ func TestACheckAndARenderNeverCarryASecretFilesContent(t *testing.T) {
 	}
 	if !strings.Contains(out, stacks.Hidden) {
 		t.Errorf("no <hidden> in the rendered stack:\n%s", out)
+	}
+}
+
+func TestMaskerHidesTheQuotedFormsOfASecret(t *testing.T) {
+	t.Parallel()
+	m := stacks.NewMasker([]stacks.Var{{Name: "PW", Value: escapedSecret, Secret: true}},
+		[]stacks.File{{Path: "tls.key", Content: []byte("pa\"ss-file-12345\n"), Secret: true}})
+	for name, tc := range map[string]struct{ in, want string }{
+		"Go-quoted":     {strconv.Quote(escapedSecret), `"<hidden>"`},
+		"in a %q error": {fmt.Sprintf("parsing %q: invalid syntax", escapedSecret), `parsing "<hidden>": invalid syntax`},
+		"schema-quoted": {`'hunter2-alpha\\hunter2-bravo"hunter2-charlie\'hunter2-delta\nhunter2-echo\n'`, `'<hidden>'`},
+		"trimmed":       {strings.TrimSpace(escapedSecret), stacks.Hidden},
+		"file, quoted":  {strconv.Quote("pa\"ss-file-12345"), `"<hidden>"`},
+	} {
+		if got := m.Mask(tc.in); got != tc.want {
+			t.Errorf("%s: Mask(%q) = %q, want %q", name, tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestMaskerHidesEachLineOfAMultiLineSecretVariable(t *testing.T) {
+	t.Parallel()
+	mask := func(value string) stacks.Masker {
+		return stacks.NewMasker([]stacks.Var{{Name: "KEY", Value: value, Secret: true}}, nil)
+	}
+	multi := "first-line-1234\nx\n\nab\nlast-line-5678\n"
+	m := mask(multi)
+	if got := m.Mask("saw first-line-1234 and last-line-5678"); got != "saw <hidden> and <hidden>" {
+		t.Errorf("each line alone: got %q", got)
+	}
+	if got := m.Mask("x ab box cab"); got != "x ab box cab" {
+		t.Errorf("short and empty lines must not be replacements: got %q", got)
+	}
+	if got := m.Mask(strconv.Quote(multi)); got != `"<hidden>"` {
+		t.Errorf("the whole form must win over its lines: got %q", got)
+	}
+	if got := mask("first-line-1234\r\nlast-line-5678").Mask("first-line-1234"); got != stacks.Hidden {
+		t.Errorf("a CRLF line: got %q, want the line hidden without its carriage return", got)
+	}
+
+	var b strings.Builder
+	for i := 1; i <= 201; i++ {
+		fmt.Fprintf(&b, "cap-line-%04d\n", i)
+	}
+	over := b.String()
+	m = mask(over)
+	if got := m.Mask("cap-line-0001"); got != stacks.Hidden {
+		t.Errorf("a line within the cap: got %q", got)
+	}
+	if got := m.Mask("cap-line-0201"); got != "cap-line-0201" {
+		t.Errorf("a line past the line cap is only hidden with the whole value: got %q", got)
+	}
+	if got := m.Mask(strconv.Quote(over)); got != `"<hidden>"` {
+		t.Errorf("above the line cap the whole value is still hidden: got %q", got)
+	}
+}
+
+func TestMaskerDoesNotSplitASecretVariableAtEquals(t *testing.T) {
+	t.Parallel()
+	m := stacks.NewMasker([]stacks.Var{{Name: "MODE", Value: "mode=readonly", Secret: true}}, nil)
+	if got := m.Mask("set mode=readonly now"); got != "set <hidden> now" {
+		t.Errorf("the whole value: got %q", got)
+	}
+	if got := m.Mask("the volume is readonly"); got != "the volume is readonly" {
+		t.Errorf("the text after '=' must not be a replacement: got %q", got)
 	}
 }

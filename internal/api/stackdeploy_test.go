@@ -860,6 +860,61 @@ func TestADeployRefusalNeverQuotesASecretVariable(t *testing.T) {
 	}
 }
 
+// escapedLeakyValue is a secret variable's value that Go, compose-go and the schema validator quote with
+// escapes: a backslash, a double quote, a single quote and line breaks (review CR-01, D-02).
+const escapedLeakyValue = "hunter2-alpha\\hunter2-bravo\"hunter2-charlie'hunter2-delta\nhunter2-echo\n"
+
+var escapedLeakyParts = []string{"hunter2-alpha", "hunter2-bravo", "hunter2-charlie", "hunter2-delta", "hunter2-echo"}
+
+// escapedLeakyVars is a variable table with one secret variable, PW, that holds escapedLeakyValue. The value
+// cannot be spliced into a JSON string by hand, so it is encoded.
+func escapedLeakyVars(t *testing.T) string {
+	t.Helper()
+	b, err := json.Marshal([]map[string]any{{"name": "PW", "value": escapedLeakyValue, "secret": true}})
+	if err != nil {
+		t.Fatalf("encode the variables: %v", err)
+	}
+	return string(b)
+}
+
+// A deploy refused at a cast position, a schema pattern or a value the converter quotes never carries a secret
+// variable that those texts write with escapes (review CR-01, T-07-168).
+func TestADeployRefusalNeverQuotesAnEscapedSecret(t *testing.T) {
+	t.Parallel()
+	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
+	cases := map[string]string{
+		"a cast position":              head + "    deploy:\n      replicas: ${PW}\n",
+		"a schema pattern":             head + "    pull_policy: ${PW}\n",
+		"a value the converter quotes": head + "    deploy:\n      endpoint_mode: ${PW}\n",
+	}
+	for name, compose := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f, e := stackEnv(t, nil)
+			admin := f.caller(t, e, "envadmin-1", "admin")
+			operator := f.caller(t, e, "operator-1", "operator")
+			st := newStack(t, admin, "escaped")
+			v := saveCompose(t, operator, st.ID, compose, escapedLeakyVars(t))
+
+			rec := operator.deploy(st.ID, `{"draftVersion":`+itoaT(v)+`}`)
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("deploy: %d %.300s, want 422", rec.Code, rec.Body)
+			}
+			for _, part := range escapedLeakyParts {
+				if strings.Contains(rec.Body.String(), part) {
+					t.Errorf("deploy answer = %s, want no part (%q) of the secret", rec.Body, part)
+				}
+			}
+			if !strings.Contains(rec.Body.String(), "<hidden>") {
+				t.Errorf("deploy answer = %s, want the value shown as <hidden>", rec.Body)
+			}
+			if w := f.fake.Writes(); len(w) != 0 {
+				t.Errorf("writes = %v, want none", w)
+			}
+		})
+	}
+}
+
 // Roll back (plan 07-19, STK-07, D-14): one click redeploys exactly what last ran well, with its own
 // images, and asks no registry.
 
