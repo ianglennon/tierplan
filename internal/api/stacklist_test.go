@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/proto/testsupport"
@@ -473,5 +475,95 @@ func TestAllStacksCapsTheRowsAcrossEnvironmentsAndSaysHowManyThereAre(t *testing
 	}
 	if shown != 500 || got.Total != 501 || got.UnfilteredTotal != 501 || !got.Capped {
 		t.Errorf("shown %d, total %d, unfiltered %d, capped %v, want 500, 501, 501, true", shown, got.Total, got.UnfilteredTotal, got.Capped)
+	}
+}
+
+// The live name check of the Create stack dialog (plan 07-24, STK-01, D-12): it answers one environment's
+// verdict on a name and writes nothing.
+
+type nameCheckAnswer struct {
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
+func nameCheck(t *testing.T, c *roleCaller, name string) (int, nameCheckAnswer, *httptest.ResponseRecorder) {
+	t.Helper()
+	rec := c.do(http.MethodGet, "stacks/name-check?name="+url.QueryEscape(name), "")
+	var got nameCheckAnswer
+	if rec.Code == http.StatusOK {
+		got = answerOf[nameCheckAnswer](t, rec)
+	}
+	return rec.Code, got, rec
+}
+
+func TestNameCheckAnswersAvailableTakenClashAndInvalid(t *testing.T) {
+	t.Parallel()
+	foreign := dockertest.FakeService{ID: "s1", Name: "legacy_app", Mode: "replicated", Image: "x", Labels: map[string]string{"com.docker.stack.namespace": "legacy"}}
+	f, e := stackEnv(t, nil, foreign)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	newStack(t, admin, "web")
+
+	for _, c := range []struct {
+		name, status, message string
+	}{
+		{"fresh", "available", ""},
+		{"web", "taken", "A stack named web already exists on " + e.Name + "."},
+		{"legacy", "clash", "A stack named legacy already exists on this environment, not managed by Bayplan."},
+		{"Bad Name", "invalid", "Use lowercase letters, numbers, dash or underscore, and start with a letter or number."},
+		{"-dash", "invalid", "Use lowercase letters, numbers, dash or underscore, and start with a letter or number."},
+		{strings.Repeat("a", 64), "invalid", "Use lowercase letters, numbers, dash or underscore, and start with a letter or number."},
+		{"", "invalid", "Use lowercase letters, numbers, dash or underscore, and start with a letter or number."},
+	} {
+		code, got, rec := nameCheck(t, admin, c.name)
+		if code != http.StatusOK || got.Status != c.status || got.Message != c.message {
+			t.Errorf("name-check %q = %d %s, want %s %q", c.name, code, rec.Body, c.status, c.message)
+		}
+	}
+}
+
+func TestNameCheckWritesNothingAnywhere(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	count := func(table string) int { return f.count(t, "SELECT COUNT(*) FROM "+table) }
+	stacksBefore, auditBefore, snapshotsBefore := count("stacks"), count("audit_log"), count("stack_snapshots")
+
+	for _, name := range []string{"fresh", "Bad Name", "fresh"} {
+		if code, _, rec := nameCheck(t, admin, name); code != http.StatusOK {
+			t.Fatalf("name-check %q: %d %s", name, code, rec.Body)
+		}
+	}
+
+	if got := count("stacks"); got != stacksBefore {
+		t.Errorf("stacks = %d after a name check, want %d", got, stacksBefore)
+	}
+	if got := count("stack_snapshots"); got != snapshotsBefore {
+		t.Errorf("stack snapshots = %d after a name check, want %d", got, snapshotsBefore)
+	}
+	if got := count("audit_log"); got != auditBefore {
+		t.Errorf("audit rows = %d after a name check, want %d: a check is not an action", got, auditBefore)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("engine writes = %v, a name check must change nothing on an engine", w)
+	}
+}
+
+func TestNameCheckNeedsTheRightToCreateStacksOnThatEnvironment(t *testing.T) {
+	t.Parallel()
+	f, a, b := twoStackEnvironments(t, nil)
+	f.seedStack(t, b.ID, "edge-proxy", stacks.TargetSwarm)
+	operator := f.caller(t, a, "operator-1", "operator")
+	viewer := f.caller(t, a, "viewer-1", "viewer")
+
+	for name, c := range map[string]*roleCaller{"an Operator": operator, "a Viewer": viewer} {
+		if code, _, rec := nameCheck(t, c, "fresh"); code != http.StatusForbidden {
+			t.Errorf("name-check as %s: %d %s, want 403", name, code, rec.Body)
+		}
+	}
+	// An Admin of A learns nothing of B: it is not found, as every route of an environment is.
+	admin := f.caller(t, a, "envadmin-1", "admin")
+	probe := &roleCaller{f: f, t: t, e: b, cookie: admin.cookie, csrf: admin.csrf}
+	if code, got, rec := nameCheck(t, probe, "edge-proxy"); code != http.StatusNotFound {
+		t.Errorf("name-check on an environment the caller has no grant on: %d %s %+v, want 404", code, rec.Body, got)
 	}
 }

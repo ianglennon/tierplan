@@ -1007,3 +1007,94 @@ func TestStackListCapAndCounts(t *testing.T) {
 		t.Errorf("a search for the stack past the cap = %v (capped %v), want s499", stackNames(last.Items), last.Capped)
 	}
 }
+
+// Create from an uploaded file (plan 07-24, STK-01, UI-SPEC "Create stack dialog").
+
+func composeOf(t *testing.T, c *roleCaller, stackID string) string {
+	t.Helper()
+	d := answerOf[draftAnswer](t, c.do(http.MethodGet, "stacks/"+stackID+"/draft", ""))
+	for _, f := range d.Files {
+		if f.Path == "compose.yaml" {
+			return f.Content
+		}
+	}
+	t.Fatalf("stack %s has no compose.yaml in %+v", stackID, d.Files)
+	return ""
+}
+
+func TestCreateStackFromAnUploadStoresTheFileAsComposeYaml(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	body := "services:\n  api:\n    image: ghcr.io/example/api:1\n"
+	b, _ := json.Marshal(map[string]string{"name": "uploaded", "start": "upload", "compose": body})
+
+	rec := admin.createStack(string(b))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create from an upload: %d %s", rec.Code, rec.Body)
+	}
+	st := answerOf[stackAnswer](t, rec)
+	if got := composeOf(t, admin, st.ID); got != body {
+		t.Errorf("compose.yaml = %q, want the uploaded file %q", got, body)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("engine writes = %v, a create must change nothing on an engine", w)
+	}
+}
+
+func TestCreateStackFromAnUploadThatDoesNotParseIsAcceptedAsTheDraft(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	body := "services: [this: is not\n  compose"
+	b, _ := json.Marshal(map[string]string{"name": "broken", "start": "upload", "compose": body})
+
+	rec := admin.createStack(string(b))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create from a file that does not parse: %d %s, want 201: the editor shows its problems", rec.Code, rec.Body)
+	}
+	if got := composeOf(t, admin, answerOf[stackAnswer](t, rec).ID); got != body {
+		t.Errorf("compose.yaml = %q, want the uploaded text kept as it is", got)
+	}
+}
+
+func TestCreateStackRefusesAnUploadOverOneMiBAndStoresNothing(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	big := "# " + strings.Repeat("x", stacks.MaxFileBytes)
+	b, _ := json.Marshal(map[string]string{"name": "huge", "start": "upload", "compose": big})
+
+	rec := admin.createStack(string(b))
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "file_too_large" {
+		t.Fatalf("create from a file over 1 MiB: %d %.200s, want 422 file_too_large", rec.Code, rec.Body)
+	}
+	if got := listWith(t, admin, ""); got.UnfilteredTotal != 0 {
+		t.Errorf("stacks = %v after a refused upload, want none", stackNames(got.Items))
+	}
+}
+
+func TestCreateStackWithTheExactMaximumUploadIsAccepted(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	exact := "#" + strings.Repeat("x", stacks.MaxFileBytes-1)
+	b, _ := json.Marshal(map[string]string{"name": "edge", "start": "upload", "compose": exact})
+	if rec := admin.createStack(string(b)); rec.Code != http.StatusCreated {
+		t.Errorf("create from a file of exactly 1 MiB: %d %.200s, want 201", rec.Code, rec.Body)
+	}
+}
+
+func TestCreateStackFromAnEmptyUploadMakesAnEmptyComposeFile(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+
+	rec := admin.createStack(`{"name":"nothing","start":"upload","compose":""}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create from an empty file: %d %s, want 201", rec.Code, rec.Body)
+	}
+	if got := composeOf(t, admin, answerOf[stackAnswer](t, rec).ID); got != "" {
+		t.Errorf("compose.yaml = %q, want the empty file that was uploaded, not the starter", got)
+	}
+}
