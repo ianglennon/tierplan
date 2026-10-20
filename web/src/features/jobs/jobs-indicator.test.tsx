@@ -621,17 +621,18 @@ describe("JobsIndicator job toasts", () => {
   });
 
   it("says nothing from the indicator for an operation this page follows itself", async () => {
-    stackJobs = [stackJob({ kind: "stop" })];
+    // The id is its own: the set of followed jobs outlives the test, and no other test follows this one.
+    stackJobs = [stackJob({ id: "followed-1", kind: "stop" })];
     mount();
     await screen.findByRole("button", { name: "Jobs, 1 in progress" });
     followStackOperation(client, {
       envId: "e1",
       stackId: "s1",
-      jobId: "d1",
+      jobId: "followed-1",
       onDone: vi.fn(),
       onFailed: vi.fn(),
     });
-    await finish({ kind: "stop", state: "done" });
+    await finish({ id: "followed-1", kind: "stop", state: "done" });
     await screen.findByRole("button", { name: "Jobs" });
     expect(screen.queryByText("Stopped web.")).toBeNull();
     expect(document.querySelector("[data-sonner-toast]")).toBeNull();

@@ -22,11 +22,24 @@ export function reasonOf(job: StackJob): string {
   return failed?.message ?? "";
 }
 
+// followed is the ids of the jobs this page watches or has watched. It is kept for the life of the page: the
+// jobs indicator decides once per job, and forgetting an id when its watch ends would let a later read of the
+// list toast the same job again.
+const followed = new Set<string>();
+
+// isFollowed says whether this page follows the job itself, so the jobs indicator, which tells a person how
+// an operation ended while they were elsewhere, leaves it to the follower and an operation started here is
+// told once.
+export function isFollowed(jobId: string): boolean {
+  return followed.has(jobId);
+}
+
 // followStackOperation watches a stop or a start until its job ends and tells the caller once. It is not
 // tied to any component, so the answer still comes when the person has gone to another page or the row that
 // asked has gone from the list. The job is asked for every second while it runs (stackJobQuery); a job the
 // server no longer lists ends the watch without a word, because there is nothing true left to say.
 export function followStackOperation(queryClient: QueryClient, op: FollowedOperation): void {
+  followed.add(op.jobId);
   const observer = new QueryObserver(queryClient, stackJobQuery(op.envId, op.stackId, op.jobId));
   let ended = false;
   const unsubscribe = observer.subscribe((result) => {

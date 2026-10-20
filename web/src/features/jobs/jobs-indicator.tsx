@@ -18,6 +18,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { PullDialog } from "@/features/pulls/pull-dialog";
 import { useCancelPullAction } from "@/features/pulls/pull-progress";
+import { isFollowed } from "@/features/stacks/follow-operation";
 import { useMe } from "@/hooks/use-me";
 import { keyExists, useT } from "@/i18n/use-t";
 import { toastErrorWithAction, toastSuccessWithAction } from "@/lib/toast";
@@ -109,6 +110,8 @@ function useStackJobToasts(jobs: StackJobSummary[] | undefined, username: string
       told.current.add(job.id);
       if (job.startedBy !== username || job.state === "cancelled") continue;
       if (pathname === consoleOf(job)) continue;
+      // An operation this page follows is told by its follower.
+      if (isFollowed(job.id)) continue;
       const words = keyExists(`jobs.toast.${job.kind}.done`) ? job.kind : "other";
       if (job.state === "done") {
         toastSuccessWithAction(
