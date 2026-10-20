@@ -289,7 +289,7 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	}
 	planned, err := convert.Convert(in.Project, convert.Options{StackName: in.Stack.Name, StackID: in.Stack.ID, Objects: plannedRefs(in.Stack.Name, objs)})
 	if err != nil {
-		d.log().Warn("a stack could not be converted for a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
+		d.log().Warn("a stack could not be converted for a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", convertLogText(err, in.Copy))
 		return fail(ItemCheck, CodeStackInvalid, "")
 	}
 	res.Total = len(planned.Services)
@@ -422,7 +422,7 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	r.Update(ItemServices, func(it *jobs.Item) { it.State = jobs.ItemRunning })
 	plan, err := convert.Convert(in.Project, convert.Options{StackName: in.Stack.Name, StackID: in.Stack.ID, Objects: refs})
 	if err != nil {
-		d.log().Warn("a stack could not be converted for a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
+		d.log().Warn("a stack could not be converted for a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", convertLogText(err, in.Copy))
 		return fail(ItemServices, CodeStackInvalid, "")
 	}
 	r.Update(ItemServices, func(it *jobs.Item) { it.Unit, it.Total = "services", int64(len(plan.Services)) })
