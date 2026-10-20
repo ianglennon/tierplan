@@ -127,7 +127,7 @@ func check(ctx context.Context, in CheckInput) CheckResult {
 		res.Problems = yamlProblems(parseErr.Error()).Sorted()
 		return res
 	}
-	binds := relativeBinds(loaded.Project, idx)
+	binds := relativeBinds(loaded.Project, idx, in.Copy.Vars)
 	if err := assertSandboxed(loaded.Project, NewFileSet(in.Copy.Files)); err != nil && (!errors.Is(err, errRelativeBind) || len(binds) == 0) {
 		// Nothing the prescan lets through should fail here. If something does, the project is
 		// withheld and the person is told it is a Bayplan bug, not their file.
@@ -369,15 +369,29 @@ var relativeBindWording = "“%s” is a relative bind mount. Use a named volume
 // no directory for a relative path to be relative to, so it would resolve against the host the
 // engine runs on. compose-go's short-syntax parse tells a bind from a named volume, so "./data" is
 // found and "data" with a volume of that name is not. Both targets are held to it.
-func relativeBinds(project *types.Project, ix *PositionIndex) Problems {
+//
+// A bind whose source comes from a secret variable keeps its key and position, but its message is
+// SecretValueMessage: the sentence quotes the source (D-02).
+func relativeBinds(project *types.Project, ix *PositionIndex, vars []Var) Problems {
 	var out Problems
+	var s SecretUse
+	built := false
 	for name, svc := range project.Services {
 		for i, v := range svc.Volumes {
 			if v.Type != types.VolumeTypeBind || v.Source == "" || strings.HasPrefix(v.Source, "/") {
 				continue
 			}
-			n := ix.findAny("services."+name+".volumes."+strconv.Itoa(i), "services."+name+".volumes", "services."+name)
-			out = append(out, relativeBindAt(n, "services."+name+".volumes", v.Source))
+			if !built {
+				// Only a stack with a relative bind pays for knowing which values come from a secret.
+				s, built = secretUseOf(ix, vars), true
+			}
+			path := "services." + name + ".volumes." + strconv.Itoa(i)
+			n := ix.findAny(path, "services."+name+".volumes", "services."+name)
+			p := relativeBindAt(n, "services."+name+".volumes", v.Source)
+			if s.Withholds(path, p.Message) {
+				p.Message = SecretValueMessage(path)
+			}
+			out = append(out, p)
 		}
 	}
 	return out
@@ -742,15 +756,19 @@ func loadProblems(err error, ix *PositionIndex, s SecretUse) Problems {
 		return Problems{guardLoaderText(ix, CodeComposeInvalid, m[1], m[1]+": "+m[2], s)}
 	}
 	if m := undefinedRe.FindStringSubmatch(text); m != nil {
+		path := "services." + m[1] + "." + m[2] + "s"
 		if m[2] == "volume" {
 			// "data:/data" with no volume called data: compose-go reads it as a named volume and
 			// refuses it. What a person meant by it is a path, so it is the relative bind mount.
 			if n := ix.shortVolume(m[1], m[3]); n != nil {
-				return Problems{relativeBindAt(n, "services."+m[1]+".volumes", m[3])}
+				p := relativeBindAt(n, "services."+m[1]+".volumes", m[3])
+				if s.Withholds(path, p.Message) {
+					return Problems{keyProblem(ix, CodeComposeInvalid, path, SecretValueMessage(path))}
+				}
+				return Problems{p}
 			}
 		}
-		path := "services." + m[1] + "." + m[2] + "s"
-		return Problems{keyProblem(ix, CodeComposeInvalid, path, fmt.Sprintf("%s: %s %s isn't defined. Declare it at the top level, or remove it.", path, m[2], m[3]))}
+		return Problems{guardLoaderText(ix, CodeComposeInvalid, path, fmt.Sprintf("%s: %s %s isn't defined. Declare it at the top level, or remove it.", path, m[2], m[3]), s)}
 	}
 	switch text {
 	case "empty compose file":
@@ -769,10 +787,12 @@ func loadProblems(err error, ix *PositionIndex, s SecretUse) Problems {
 			return ps
 		}
 	}
-	return Problems{{
-		Severity: SeverityError, Code: CodeComposeInvalid, File: ComposeFile, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
-		Message: text,
-	}}
+	// Text that names no field is judged by the run check alone (fail closed). The interpolation
+	// format error quotes only the file's own text, which holds no value of a variable.
+	if strings.HasPrefix(text, "invalid interpolation format for ") {
+		return Problems{keyProblem(ix, CodeComposeInvalid, "", text)}
+	}
+	return Problems{guardLoaderText(ix, CodeComposeInvalid, "", text, s)}
 }
 
 // decodeHeader starts the text of a decode failure (go-viper/mapstructure): the entries follow, one
