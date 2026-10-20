@@ -755,3 +755,113 @@ func TestLocalOnlyImagePinsToItsID(t *testing.T) {
 		t.Errorf("review after the deploy: services %v pins %v, want nothing to do and the image ID kept", changesOf(rv), rv.Pins)
 	}
 }
+
+// TestStandaloneStopStartKeepsSecrets stops and starts a stack on a real engine through the Compose SDK (plan
+// 07-26, STK-11, D-19): the container is stopped and not removed, the network and the named volume stay, and
+// after the start the container runs again with the stack file's secret written into /run/secrets by the
+// SDK before the container started. The secret is read from inside the container, so only what the engine
+// really holds counts.
+func TestStandaloneStopStartKeepsSecrets(t *testing.T) {
+	if err := dockerx.InitCompose(t.TempDir(), slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatalf("InitCompose: %v", err)
+	}
+	node := dockertest.StartHost(t, "")
+	registry := dockertest.StartRegistry(t, node, dockertest.RegistryOptions{})
+	image := registry + "/bp/keep:1"
+	pushed := dockertest.PushImage(t, node, "busybox:1.36.1", image, nil)
+	cli, err := dockerx.New(dockertest.TCPTransportFor(node.Host()))
+	if err != nil {
+		t.Fatalf("dockerx.New: %v", err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+
+	rig := newRigOver(t, dockertest.UnixProxy(t, node.Host()))
+	rig.deps.ConvergeTimeout = 3 * time.Minute
+	const name = "ikeep"
+	compose := "services:\n  web:\n    image: " + image + "\n    command: [\"sleep\", \"3600\"]\n    stop_grace_period: 1s\n" +
+		"    secrets: [tok]\n    volumes:\n      - data:/data\nvolumes:\n  data: {}\nsecrets:\n  tok:\n    file: tok.txt\n"
+	const secret = "s3cret-token-0123456789"
+	copy := stacks.WorkingCopy{Files: []stacks.File{
+		{Path: stacks.ComposeFile, Content: []byte(compose)}, {Path: "tok.txt", Content: []byte(secret)},
+	}}
+	ctx := testsupport.Context(t)
+
+	in := standaloneInput(name, compose)
+	in.Copy = copy
+	in.Pins, in.RevisionID = &memPins{}, "rev-1"
+	res, job := rig.deployStandalone(t, in)
+	if !res.OK() {
+		t.Fatalf("deploy: %+v items %v", res, itemStates(job))
+	}
+	pins := map[string]string{}
+	for svc, p := range res.Pins {
+		pins[svc] = p.Ref
+	}
+	if want := image + "@" + pushed; pins["web"] != want {
+		t.Fatalf("the deploy pinned %q, want %q", pins["web"], want)
+	}
+	st := standaloneStackOf(name)
+	store := &lifecycleStore{
+		rev:  stackops.Snapshot{ID: "rev-1", StackID: st.ID, Seq: 1, Kind: stackops.KindRevision, Outcome: stackops.OutcomeGood, Copy: copy},
+		have: true, pins: pins,
+	}
+
+	web := func() dockerx.ContainerRow {
+		t.Helper()
+		rows, err := cli.ContainersWithLabel(ctx, stacks.LabelComposeProject, name)
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("the project's containers = %+v, %v, want one", rows, err)
+		}
+		return rows[0]
+	}
+	readSecret := func(id string) string {
+		t.Helper()
+		out, err := node.Exec(ctx, "docker", "exec", id, "cat", "/run/secrets/tok")
+		if err != nil {
+			t.Fatalf("read the secret in %s: %v\n%s", id, err, out)
+		}
+		return strings.TrimSpace(out)
+	}
+	first := web()
+	if first.State != "running" || readSecret(first.ID) != secret {
+		t.Fatalf("before the stop: container %+v, secret %q, want it running with the stack file's secret", first, readSecret(first.ID))
+	}
+
+	stopRes, stopJob := rig.lifecycleRunOn(t, stackops.LifecycleStop, st, rig.envID, store, stackops.Caller{})
+	if !stopRes.OK() {
+		t.Fatalf("stop = %+v items %v", stopRes, itemStates(stopJob))
+	}
+	stopped := web()
+	if stopped.ID != first.ID || stopped.State == "running" {
+		t.Errorf("after the stop: %+v, want the same container, not running", stopped)
+	}
+	nets, err := cli.NetworksWithLabel(ctx, stacks.LabelComposeProject, name)
+	if err != nil || len(nets) != 1 {
+		t.Errorf("networks after a stop = %+v, %v, want the project's one network kept", nets, err)
+	}
+	vols, err := cli.VolumesWithLabel(ctx, stacks.LabelComposeProject, name)
+	if err != nil || len(vols) != 1 {
+		t.Errorf("volumes after a stop = %+v, %v, want the named volume kept", vols, err)
+	}
+	if !store.isStopped(st.ID) {
+		t.Errorf("the stack is not recorded as stopped")
+	}
+
+	startRes, startJob := rig.lifecycleRunOn(t, stackops.LifecycleStart, st, rig.envID, store, stackops.Caller{})
+	if !startRes.OK() {
+		t.Fatalf("start = %+v items %v", startRes, itemStates(startJob))
+	}
+	started := web()
+	if started.ID != first.ID || started.State != "running" {
+		t.Fatalf("after the start: %+v, want the same container running", started)
+	}
+	if got := readSecret(started.ID); got != secret {
+		t.Errorf("after the start /run/secrets/tok holds %q, want the stack file's secret %q written again", got, secret)
+	}
+	if !strings.HasSuffix(started.Image, pushed) {
+		t.Errorf("the container runs %q after a start, want the digest %s it ran", started.Image, pushed)
+	}
+	if store.isStopped(st.ID) {
+		t.Errorf("the stack is still recorded as stopped after the start")
+	}
+}

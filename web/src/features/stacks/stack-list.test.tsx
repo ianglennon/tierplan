@@ -520,6 +520,7 @@ describe("StackList: columns and pending rows", () => {
         stack({ id: "b", name: "b-stack", state: "rolling_back" }),
         stack({ id: "c", name: "c-stack", state: "starting" }),
         stack({ id: "d", name: "d-stack", state: "removing" }),
+        stack({ id: "f", name: "f-stack", state: "stopping" }),
         stack({ id: "e", name: "e-stack", state: "running", servicesRunning: 1, servicesTotal: 1 }),
       ],
     };
@@ -531,6 +532,7 @@ describe("StackList: columns and pending rows", () => {
       "b-stack": "Rolling back…",
       "c-stack": "Starting…",
       "d-stack": "Removing…",
+      "f-stack": "Stopping…",
     };
     for (const [name, label] of Object.entries(pending)) {
       expect(within(row(name)).getByText(label)).toBeTruthy();

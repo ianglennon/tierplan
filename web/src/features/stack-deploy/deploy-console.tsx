@@ -137,7 +137,9 @@ export function outcomesOf(
       t(
         job.mode === "rollback"
           ? "stackDeploy.rollback.announce.complete"
-          : "stackDeploy.announce.complete",
+          : job.mode === "start"
+            ? "stackStop.console.announce"
+            : "stackDeploy.announce.complete",
       ),
     );
   }
@@ -327,9 +329,14 @@ export function DeployConsole({ envId, stackId, jobId }: DeployConsoleProps) {
       <div className="flex flex-col gap-1">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h3 ref={title} tabIndex={-1} className="text-xl font-semibold break-all outline-none">
-            {t(job.mode === "rollback" ? "stackDeploy.rollback.title" : "stackDeploy.title", {
-              name,
-            })}
+            {t(
+              job.mode === "rollback"
+                ? "stackDeploy.rollback.title"
+                : job.mode === "start"
+                  ? "stackStop.console.title"
+                  : "stackDeploy.title",
+              { name },
+            )}
           </h3>
           <div className="flex items-center gap-3">
             {ended ? null : (

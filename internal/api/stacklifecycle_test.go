@@ -4,10 +4,17 @@
 package api_test
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/compose-spec/compose-go/v2/types"
+
+	"github.com/ianglennon/bayplan/internal/dockerx"
+	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/jobs"
 )
 
@@ -314,5 +321,128 @@ func TestStartRecreatesAGlobalServiceAndTheAnswerSaysSo(t *testing.T) {
 	}
 	if row == nil || row.Details["recreated"] != "1" {
 		t.Errorf("stack.started = %+v, want one service recreated", row)
+	}
+}
+
+// hostCalls records the stop and the start the Compose SDK's stand-in was asked for.
+type hostCalls struct {
+	mu    sync.Mutex
+	calls []string
+	err   error
+	last  *types.Project
+}
+
+func (h *hostCalls) record(call string) func(context.Context, *dockerx.Client, *types.Project) error {
+	return func(_ context.Context, _ *dockerx.Client, p *types.Project) error {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		h.calls, h.last = append(h.calls, call+" "+p.Name), p
+		return h.err
+	}
+}
+
+func (h *hostCalls) seen() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.calls...)
+}
+
+// standaloneHost is a standalone host with a stack deployed to it (the SDK's up is a stand-in that makes
+// nothing) and the containers of the project put on the engine, running, as a real up would have left them.
+func standaloneHost(t *testing.T, state string) (*envFix, *roleCaller, stackAnswer, *hostCalls) {
+	t.Helper()
+	f, e, _ := standaloneEnv(t, nil)
+	calls := &hostCalls{}
+	f.stackStop, f.stackStart = calls.record("stop"), calls.record("start")
+	f.h = f.build(t)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "solo")
+	if job := f.deployAndWait(t, operator, st.ID, `{"draftVersion":1}`); job.State != "done" {
+		t.Fatalf("deploy = %+v", job)
+	}
+	cfg := swarmManagerEngine()
+	cfg.SwarmState, cfg.SwarmControl, cfg.NodeRows = "", false, nil
+	cfg.Containers = []dockertest.FakeContainer{{
+		ID: "c1", Names: []string{"/solo-web-1"}, Image: "nginx", State: state,
+		Labels: map[string]string{
+			"com.docker.compose.project": "solo", "com.docker.compose.service": "web",
+			"com.docker.compose.oneoff": "False", "bayplan.stack.id": st.ID,
+		},
+	}}
+	f.fake.Reconfigure(cfg)
+	return f, operator, st, calls
+}
+
+func TestStopAndStartAStandaloneStackRunTheComposeSDKOverItsLastRevision(t *testing.T) {
+	t.Parallel()
+	f, operator, st, calls := standaloneHost(t, "running")
+
+	started, job := f.lifecycle(t, operator, stopPath(st.ID))
+	if started.Recreates || job.State != "done" {
+		t.Fatalf("stop = %+v %+v, want a job that is done", started, job)
+	}
+	if got := readStackAnswer(t, operator, st.ID); got.State != "stopped" || !got.Stopped {
+		t.Errorf("stack after a stop = %+v, want Stopped", got)
+	}
+
+	started, job = f.lifecycle(t, operator, startPath(st.ID))
+	if started.Recreates || job.State != "done" {
+		t.Fatalf("start = %+v %+v, want a job that is done and recreates nothing", started, job)
+	}
+	if got := calls.seen(); len(got) != 2 || got[0] != "stop solo" || got[1] != "start solo" {
+		t.Errorf("SDK calls = %v, want a stop then a start of the project solo", got)
+	}
+	if got := calls.last; got == nil || !strings.Contains(got.Services["web"].Image, "@sha256:") {
+		t.Errorf("project = %+v, want the image the last revision pinned", got)
+	}
+	if got := readStackAnswer(t, operator, st.ID); got.Stopped {
+		t.Errorf("stack after a start = %+v, want it no longer stopped", got)
+	}
+	for _, r := range f.stackAudits(t) {
+		if (r.Action == "stack.stopped" || r.Action == "stack.started") && (r.Result != "success" || r.Details["services"] != "1") {
+			t.Errorf("%s = %+v, want a success naming 1 service", r.Action, r)
+		}
+	}
+}
+
+func TestStopOfAStandaloneStackWithNoContainerIsNothingRunning(t *testing.T) {
+	t.Parallel()
+	f, operator, st, calls := standaloneHost(t, "running")
+	cfg := swarmManagerEngine()
+	cfg.SwarmState, cfg.SwarmControl, cfg.NodeRows = "", false, nil
+	f.fake.Reconfigure(cfg)
+
+	rec := operator.do(http.MethodPost, stopPath(st.ID), "")
+
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "nothing_running" {
+		t.Errorf("stop: %d %s, want 409 nothing_running", rec.Code, rec.Body)
+	}
+	if got := calls.seen(); len(got) != 0 {
+		t.Errorf("SDK calls = %v, want none", got)
+	}
+}
+
+func TestAStandaloneStopTheSDKRefusesIsRecordedFailedAndLeavesTheStackNotStopped(t *testing.T) {
+	t.Parallel()
+	f, operator, st, calls := standaloneHost(t, "running")
+	calls.err = errors.New("Error response from daemon: cannot stop container: permission denied")
+
+	_, job := f.lifecycle(t, operator, stopPath(st.ID))
+
+	if job.State == "done" {
+		t.Fatalf("job = %+v, want it failed", job)
+	}
+	if got := readStackAnswer(t, operator, st.ID); got.Stopped {
+		t.Errorf("stack = %+v, a stop that failed must not record the stack as stopped", got)
+	}
+	var row *auditRowFull
+	for _, r := range f.stackAudits(t) {
+		if r.Action == "stack.stopped" {
+			row = &r
+		}
+	}
+	if row == nil || row.Result != "failure" || row.Details["result"] != "failed" {
+		t.Errorf("stack.stopped = %+v, want a failure", row)
 	}
 }

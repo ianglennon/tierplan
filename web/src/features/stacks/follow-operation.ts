@@ -3,7 +3,7 @@
 
 import { type QueryClient, QueryObserver } from "@tanstack/react-query";
 
-import { isJobGone, type StackJob, stackJobQuery } from "@/api/stacks";
+import { type DeployRequestError, isJobGone, type StackJob, stackJobQuery } from "@/api/stacks";
 
 interface FollowedOperation {
   envId: string;
@@ -43,4 +43,18 @@ export function followStackOperation(queryClient: QueryClient, op: FollowedOpera
     if (job.state === "done") op.onDone();
     else op.onFailed(reasonOf(job));
   });
+}
+
+// refusalKey is the key of the words for a stop or a start the server refused or could not reach.
+export function refusalKey(error: DeployRequestError): string {
+  if (error.status === 0) return "stackStop.refusal.unreachable";
+  switch (error.type) {
+    case "nothing_running":
+    case "not_stopped":
+    case "operation_locked":
+    case "privileged_compose":
+      return `stackStop.refusal.${error.type}`;
+    default:
+      return "stackStop.refusal.other";
+  }
 }

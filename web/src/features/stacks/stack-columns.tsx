@@ -3,6 +3,7 @@
 
 import { Link } from "@tanstack/react-router";
 import { Ellipsis } from "lucide-react";
+import { useState } from "react";
 
 import type { StackItem } from "@/api/stacks";
 import { NeedsTooltip } from "@/components/needs-tooltip";
@@ -17,7 +18,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { type Column, TruncatedText } from "@/features/resources/resource-table";
+import { canStart, canStop, useStackStart } from "@/features/stacks/stack-actions";
 import { StackStateCell } from "@/features/stacks/stack-state-cell";
+import { StopStackDialog } from "@/features/stacks/stop-stack-dialog";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 
@@ -49,49 +52,72 @@ interface RowActionsProps {
 }
 
 // RowActions is the row menu of the stack lists: Open stack for everyone, Deploy… (which opens the
-// review) for a user who may deploy and, for anyone else, disabled with the reason. The server decides
-// either way.
+// review) for a user who may deploy and, for anyone else, disabled with the reason, and Stop stack… (which
+// opens its dialog) or Start stack (which starts at once) by the stack's state, off the same way. The server
+// decides either way. The dialog sits beside the menu and not in it, so it outlives the menu closing.
 function RowActions({ row, onOpenChange, disabled }: RowActionsProps) {
   const t = useT();
   const deploy = useNeeds("stacks.deploy", row.envId);
+  const { start } = useStackStart(row);
+  const [stopping, setStopping] = useState(false);
+  const stoppable = canStop(row.state);
   return (
-    <DropdownMenu onOpenChange={onOpenChange}>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="max-md:size-11"
-          disabled={disabled}
-          aria-label={t("stackReview.rowMenu.label", { name: row.name })}
-        >
-          <Ellipsis aria-hidden="true" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuItem asChild className="max-md:min-h-11">
-          <Link to="/env/$envId/stacks/$stackId" params={{ envId: row.envId, stackId: row.id }}>
-            {t("stackReview.rowMenu.open")}
-          </Link>
-        </DropdownMenuItem>
-        {deploy.allowed ? (
+    <>
+      <DropdownMenu onOpenChange={onOpenChange}>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="max-md:size-11"
+            disabled={disabled}
+            aria-label={t("stackReview.rowMenu.label", { name: row.name })}
+          >
+            <Ellipsis aria-hidden="true" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
           <DropdownMenuItem asChild className="max-md:min-h-11">
-            <Link
-              to="/env/$envId/stacks/$stackId/review"
-              params={{ envId: row.envId, stackId: row.id }}
-            >
-              {t("stackReview.deploy.action")}
+            <Link to="/env/$envId/stacks/$stackId" params={{ envId: row.envId, stackId: row.id }}>
+              {t("stackReview.rowMenu.open")}
             </Link>
           </DropdownMenuItem>
-        ) : (
-          <NeedsTooltip reason={deploy.reason}>
-            <DropdownMenuItem className="max-md:min-h-11">
-              {t("stackReview.deploy.action")}
+          {deploy.allowed ? (
+            <DropdownMenuItem asChild className="max-md:min-h-11">
+              <Link
+                to="/env/$envId/stacks/$stackId/review"
+                params={{ envId: row.envId, stackId: row.id }}
+              >
+                {t("stackReview.deploy.action")}
+              </Link>
             </DropdownMenuItem>
-          </NeedsTooltip>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+          ) : (
+            <NeedsTooltip reason={deploy.reason}>
+              <DropdownMenuItem className="max-md:min-h-11">
+                {t("stackReview.deploy.action")}
+              </DropdownMenuItem>
+            </NeedsTooltip>
+          )}
+          {stoppable || canStart(row.state) ? (
+            <NeedsTooltip reason={deploy.allowed ? undefined : deploy.reason}>
+              <DropdownMenuItem
+                className="max-md:min-h-11"
+                onSelect={() => {
+                  if (!deploy.allowed) return;
+                  if (stoppable) setStopping(true);
+                  else void start();
+                }}
+              >
+                {t(stoppable ? "stackStop.actions.stop" : "stackStop.actions.start")}
+              </DropdownMenuItem>
+            </NeedsTooltip>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {stoppable && deploy.allowed ? (
+        <StopStackDialog stack={row} open={stopping} onOpenChange={setStopping} />
+      ) : null}
+    </>
   );
 }
 

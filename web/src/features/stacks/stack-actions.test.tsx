@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useLocation } from "@tanstack/react-router";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -87,12 +88,18 @@ afterEach(() => {
   client.clear();
 });
 
+// Shows where the router is, so a test can see that a start opened the console.
+function Where() {
+  return <p data-testid="where">{useLocation().pathname}</p>;
+}
+
 function mount(s: StackDetail) {
   render(
     <QueryClientProvider client={client}>
       <TestRouter>
         <TooltipProvider>
           <StackActions stack={s} />
+          <Where />
         </TooltipProvider>
       </TestRouter>
     </QueryClientProvider>,
@@ -131,7 +138,7 @@ describe("StackActions", () => {
     expect(await screen.findByRole("heading", { name: "Stop tracer?" })).toBeTruthy();
     expect(
       await screen.findByText(
-        "Swarm scales its 2 replicated services to 0 and removes 1 global services. Networks, volumes, secrets and configs stay. Start brings everything back with the same images.",
+        "Swarm scales its 2 replicated services to 0 and removes 1 global service. Networks, volumes, secrets and configs stay. Start brings everything back with the same images.",
       ),
     ).toBeTruthy();
     expect(posts).toEqual([]);
@@ -192,5 +199,48 @@ describe("StackActions", () => {
     expect(toasts.info).toHaveBeenCalledWith("Needs Operator");
     expect(posts).toEqual([]);
     expect(screen.queryByRole("heading", { name: "Stop tracer?" })).toBeNull();
+  });
+
+  it("opens the console for a start that creates services again, and says nothing else", async () => {
+    answer = { status: 202, body: { jobId: "j1", recreates: true } };
+    mount(stack({ state: "stopped" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Start stack" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("where").textContent).toBe("/env/e1/stacks/s1/deploys/j1"),
+    );
+    expect(toasts.success).not.toHaveBeenCalled();
+  });
+
+  it("says why when the server refuses a start, in a toast", async () => {
+    answer = {
+      status: 409,
+      body: { type: "operation_locked", title: "Conflict", status: 409, detail: "busy" },
+    };
+    mount(stack({ state: "stopped" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Start stack" }));
+
+    await waitFor(() =>
+      expect(toasts.error).toHaveBeenCalledWith(
+        "Couldn't start tracer. Another stack operation is running on this environment. Try again when it finishes.",
+      ),
+    );
+  });
+
+  it("says what failed when a stop's job ends without finishing", async () => {
+    jobState = "failed";
+    jobItems = [{ id: "services", state: "failed", message: "The swarm rejected the service." }];
+    mount(stack());
+
+    fireEvent.click(await screen.findByRole("button", { name: "Stop stack…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Stop stack" }));
+
+    await waitFor(() =>
+      expect(toasts.error).toHaveBeenCalledWith(
+        "Couldn't stop tracer. The swarm rejected the service. What already stopped stays stopped.",
+      ),
+    );
   });
 });

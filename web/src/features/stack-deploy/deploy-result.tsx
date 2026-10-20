@@ -257,7 +257,13 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
     return (
       <section className="flex flex-col gap-3">
         <h4 className="text-base font-semibold">
-          {t(rolledBack ? "stackDeploy.rollback.complete.title" : "stackDeploy.complete.title")}
+          {t(
+            rolledBack
+              ? "stackDeploy.rollback.complete.title"
+              : job.mode === "start"
+                ? "stackStop.console.complete"
+                : "stackDeploy.complete.title",
+          )}
         </h4>
         <p className="text-sm break-words">
           {t("stackDeploy.complete.body", { name, env: envName, count: runningServices(job) })}

@@ -53,6 +53,8 @@ interface Line {
 }
 
 let job: { state: string; items: Item[] };
+// The mode the job under test is in; a test sets it to read a stop or a start in the console.
+let jobMode: string;
 let output: Line[];
 let status: number;
 let reads: number;
@@ -87,7 +89,7 @@ function jobBody(over: Partial<{ state: string; items: Item[]; id: string; mode:
   return {
     id: over.id ?? "j1",
     stackId: STACK,
-    mode: over.mode ?? "deploy",
+    mode: over.mode ?? jobMode,
     startedBy: "ada",
     state: j.state,
     createdAt: "2026-10-19T12:00:00Z",
@@ -111,6 +113,7 @@ const row = (name: string, state: Item["state"], over: Partial<Item> = {}): Item
 
 beforeEach(() => {
   job = { state: "running", items: [check, lookup, services] };
+  jobMode = "deploy";
   output = [];
   status = 200;
   reads = 0;
@@ -245,6 +248,18 @@ describe("a running deploy", () => {
     // No result until the job ends.
     expect(screen.queryByText("Deploy complete")).toBeNull();
     expect(screen.queryByText("Deploy failed")).toBeNull();
+  });
+
+  it("is titled Starting for a start that creates services again and says Start complete when it ends", async () => {
+    jobMode = "start";
+    job = {
+      state: "done",
+      items: [check, { ...services, state: "done" }, row("agent", "done")],
+    };
+    mount();
+    expect(await screen.findByRole("heading", { name: "Starting web", level: 3 })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Start complete" })).toBeTruthy();
+    expect(screen.queryByText("Deploy complete")).toBeNull();
   });
 
   it("says who started it and when, and how long it has run", async () => {

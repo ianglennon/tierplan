@@ -14,8 +14,9 @@ import {
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { followStackOperation } from "@/features/stacks/follow-operation";
+import { followStackOperation, refusalKey } from "@/features/stacks/follow-operation";
 import { StopStackDialog } from "@/features/stacks/stop-stack-dialog";
+import { StoppedAlert } from "@/features/stacks/stopped-alert";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { toastError, toastSuccess } from "@/lib/toast";
@@ -36,40 +37,24 @@ export const canStart = (state: StackState) => state === "stopped";
 
 type LifecycleStack = Pick<StackDetail, "id" | "envId" | "name" | "target" | "state">;
 
-// refusalOf words a stop or a start the server refused or could not reach.
-export function refusalKey(error: DeployRequestError): string {
-  if (error.status === 0) return "stackStop.refusal.unreachable";
-  switch (error.type) {
-    case "nothing_running":
-    case "not_stopped":
-    case "operation_locked":
-    case "privileged_compose":
-      return `stackStop.refusal.${error.type}`;
-    default:
-      return "stackStop.refusal.other";
-  }
-}
-
 interface StackActionsProps {
   stack: LifecycleStack;
 }
 
-// StackActions are the Stop stack… and Start stack buttons of a stack's header (UI-SPEC "Stack page"): both
-// outline, Stop only while there is something to stop and Start only while the stack is stopped. A user who
-// may not deploy sees the one that applies off, with the role it takes; a user whose permissions are not
-// known yet sees nothing rather than a button that may turn off.
-export function StackActions({ stack }: StackActionsProps) {
+// useStackStart is the Start stack action of a stack: it asks the server to start it and follows what comes
+// of it. A start that creates services again is a deploy to follow, so it opens the console; one that only
+// scales opens nothing, and the answer is a toast when the job ends. A refusal is a toast, since a start has
+// no dialog to keep it in. It is shared by the header, the row menu and the stopped alert.
+export function useStackStart(stack: Pick<StackDetail, "id" | "envId" | "name">) {
   const t = useT();
-  const needs = useNeeds("stacks.deploy", stack.envId);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const start = useStartStack(stack.envId, stack.id);
-  const [stopping, setStopping] = useState(false);
+  const mutation = useStartStack(stack.envId, stack.id);
 
-  async function startIt() {
-    if (start.isPending) return;
+  async function start() {
+    if (mutation.isPending) return;
     try {
-      const started = await start.mutateAsync();
+      const started = await mutation.mutateAsync();
       if (started.recreates) {
         // A start that creates services again is a deploy to follow in the console.
         void navigate({
@@ -95,6 +80,27 @@ export function StackActions({ stack }: StackActionsProps) {
       toastError(t("stackStop.toast.startFailed", { name: stack.name, reason }));
     }
   }
+
+  return { start, pending: mutation.isPending };
+}
+
+// StoppedAlertWithStart is the stopped alert of a stack's page with its Start stack wired for a user who may
+// deploy. Anyone else gets the alert without the button.
+export function StoppedAlertWithStart({ stack }: { stack: StackDetail }) {
+  const needs = useNeeds("stacks.deploy", stack.envId);
+  const { start } = useStackStart(stack);
+  return <StoppedAlert stack={stack} onStart={needs.allowed ? () => void start() : undefined} />;
+}
+
+// StackActions are the Stop stack… and Start stack buttons of a stack's header (UI-SPEC "Stack page"): both
+// outline, Stop only while there is something to stop and Start only while the stack is stopped. A user who
+// may not deploy sees the one that applies off, with the role it takes; a user whose permissions are not
+// known yet sees nothing rather than a button that may turn off.
+export function StackActions({ stack }: StackActionsProps) {
+  const t = useT();
+  const needs = useNeeds("stacks.deploy", stack.envId);
+  const { start, pending } = useStackStart(stack);
+  const [stopping, setStopping] = useState(false);
 
   if (canStop(stack.state)) {
     if (!needs.allowed && !needs.reason) return null;
@@ -134,10 +140,10 @@ export function StackActions({ stack }: StackActionsProps) {
             type="button"
             variant="outline"
             className="max-md:h-11"
-            aria-disabled={start.isPending}
-            onClick={() => void startIt()}
+            aria-disabled={pending}
+            onClick={() => void start()}
           >
-            {start.isPending ? t("stackStop.actions.starting") : t("stackStop.actions.start")}
+            {pending ? t("stackStop.actions.starting") : t("stackStop.actions.start")}
           </Button>
         </TooltipTrigger>
         <TooltipContent className="max-w-sm break-words">

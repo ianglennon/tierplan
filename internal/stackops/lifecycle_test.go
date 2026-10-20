@@ -79,6 +79,12 @@ func (r *swarmRig) deployedStack(t *testing.T, name, composeText string, files [
 // lifecycleRun runs a stop or a start as a job and returns its result and the job as it ended.
 func (r *swarmRig) lifecycleRun(t *testing.T, mode string, st stackops.Stack, store stackops.LifecycleStore, caller stackops.Caller) (stackops.LifecycleResult, jobs.Job) {
 	t.Helper()
+	return r.lifecycleRunOn(t, mode, st, "", store, caller)
+}
+
+// lifecycleRunOn is lifecycleRun for a stack of a standalone host, whose node is named.
+func (r *swarmRig) lifecycleRunOn(t *testing.T, mode string, st stackops.Stack, node string, store stackops.LifecycleStore, caller stackops.Caller) (stackops.LifecycleResult, jobs.Job) {
+	t.Helper()
 	if caller.Principal == nil {
 		caller = stackops.Caller{Principal: r.principal(t, "root", ""), Actor: "root"}
 	}
@@ -89,7 +95,7 @@ func (r *swarmRig) lifecycleRun(t *testing.T, mode string, st stackops.Stack, st
 		Items: stackops.LifecycleItemSpecs(mode, st.Target),
 	}, func(ctx context.Context, rep *jobs.Reporter) {
 		defer close(done)
-		in := stackops.LifecycleInput{EnvID: r.envID, Stack: st, Caller: caller, Store: store}
+		in := stackops.LifecycleInput{EnvID: r.envID, NodeID: node, Stack: st, Caller: caller, Store: store}
 		if mode == stackops.LifecycleStop {
 			res = r.deps.Stop(ctx, in, rep)
 		} else {
@@ -471,27 +477,7 @@ func TestStandaloneStopAndStartRunTheSDKOverTheLastRevisionsProject(t *testing.T
 	}
 	run := func(mode string) (stackops.LifecycleResult, jobs.Job) {
 		t.Helper()
-		var res stackops.LifecycleResult
-		done := make(chan struct{})
-		job, err := rig.hub.Start(jobs.Spec{Kind: "stack_" + mode, EnvID: rig.envID, Owner: "user:test", Items: stackops.LifecycleItemSpecs(mode, st.Target)},
-			func(ctx context.Context, rep *jobs.Reporter) {
-				defer close(done)
-				in := stackops.LifecycleInput{EnvID: rig.envID, NodeID: node, Stack: st, Store: store}
-				if mode == stackops.LifecycleStop {
-					res = rig.deps.Stop(ctx, in, rep)
-				} else {
-					res = rig.deps.Start(ctx, in, rep)
-				}
-			})
-		if err != nil {
-			t.Fatal(err)
-		}
-		ended, err := rig.hub.Wait(testsupport.Context(t), job.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		testsupport.Await(t, "the "+mode+" function to return", done)
-		return res, ended
+		return rig.lifecycleRunOn(t, mode, st, node, store, stackops.Caller{})
 	}
 
 	stopRes, stopJob := run(stackops.LifecycleStop)

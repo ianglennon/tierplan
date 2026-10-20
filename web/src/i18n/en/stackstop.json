@@ -8,10 +8,17 @@
     },
     "dialog": {
       "title": "Stop {{name}}?",
-      "swarm": "Swarm scales its {{replicated}} replicated services to 0 and removes {{global}} global services. Networks, volumes, secrets and configs stay. Start brings everything back with the same images.",
+      "swarm": "Swarm scales its {{replicated}} to 0 and removes {{global}}. Networks, volumes, secrets and configs stay. Start brings everything back with the same images.",
       "cancel": "Cancel",
       "confirm": "Stop stack",
-      "stopping": "Stopping…"
+      "standalone": "This stops its {{containers}}. Networks and volumes stay. Start brings them back.",
+      "replicated_one": "{{count, number}} replicated service",
+      "replicated_other": "{{count, number}} replicated services",
+      "global_one": "{{count, number}} global service",
+      "global_other": "{{count, number}} global services",
+      "containers_one": "{{count, number}} container",
+      "containers_other": "{{count, number}} containers",
+      "failed": "Couldn't stop {{name}}. {{reason}} What already stopped stays stopped."
     },
     "toast": {
       "stopped": "Stopped {{name}}.",
@@ -28,6 +35,11 @@
       "privileged_compose": "This stack uses settings that need Admin.",
       "unreachable": "Bayplan couldn't reach the server.",
       "other": "The server refused."
+    },
+    "console": {
+      "title": "Starting {{name}}",
+      "complete": "Start complete",
+      "announce": "Start complete."
     }
   }
 }

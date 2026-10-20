@@ -28,9 +28,8 @@ import { DeployBanner } from "@/features/stacks/deploy-banner";
 import { DeployFailedAlert } from "@/features/stacks/deploy-failed-alert";
 import { DraftBanner } from "@/features/stacks/draft-banner";
 import { OperationLockAlert } from "@/features/stacks/operation-lock-alert";
-import { StackActions } from "@/features/stacks/stack-actions";
+import { StackActions, StoppedAlertWithStart } from "@/features/stacks/stack-actions";
 import { StackStateCell } from "@/features/stacks/stack-state-cell";
-import { StoppedAlert } from "@/features/stacks/stopped-alert";
 import { useDocumentTitle } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -299,7 +298,7 @@ export function StackDetailLayout({
         <OperationLockAlert lock={data.lock} envId={envId} envName={envName} />
       ) : null}
       {data && flow !== "deploy" && data.lastOperation?.state !== "running" ? (
-        <StoppedAlert stack={data} />
+        <StoppedAlertWithStart stack={data} />
       ) : null}
       {data && !flow && !editing ? <DraftBanner stack={data} envName={envName} /> : null}
       {flow ? (
