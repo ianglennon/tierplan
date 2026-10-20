@@ -35,7 +35,6 @@ const (
 	problemStackNameTaken      = "stack_name_taken"
 	problemStackNotFound       = "stack_not_found"
 	problemStackStartInvalid   = "stack_start_invalid"
-	problemStackFileInvalid    = "stack_file_invalid"
 	problemStackVarInvalid     = "stack_var_invalid"
 	problemVariableNameInvalid = "variable_name_invalid"
 	problemVariableNameTaken   = "variable_name_taken"

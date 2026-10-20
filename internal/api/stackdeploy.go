@@ -483,10 +483,7 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 // policy and the name have all passed.
 func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal, env *httpx.Env, st stackops.Stack, draft stackops.Snapshot, in *StackDeployInput, mode string, update map[string]bool) (*StackDeployOutput, error) {
 	repo := d.repo()
-	if _, err := stacks.Load(ctx, stacks.LoadInput{Name: st.Name, Target: st.Target, Copy: draft.Copy}); err != nil {
-		return nil, composeProblem(err)
-	}
-	checked := stacks.Check(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy})
+	checked := stacks.Check(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy, Deadline: d.CheckDeadline})
 	if checked.Loaded == nil {
 		return nil, stackInvalid(checked.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
 	}
@@ -619,15 +616,12 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 		return nil, stackInternal(d, "roll back pins", env.ID, err)
 	}
 
-	// The revision is loaded and converted before anything is stored: one that cannot be redeployed as it
-	// stands is refused here, with the reason, and leaves no revision behind.
+	// The revision is judged once, by the check pipeline, and converted before anything is stored: one that
+	// cannot be redeployed as it stands is refused here, with the reason, and leaves no revision behind. The
+	// project it returns is the one that is rendered and deployed.
 	prep, err := d.ops().PrepareRollback(ctx, st, target, pins)
 	if err != nil {
 		return nil, rollbackPrepareProblem(err)
-	}
-	checked := stacks.Check(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: target.Copy})
-	if checked.Problems.Errors() > 0 || checked.Loaded == nil {
-		return nil, stackInvalid(checked.Problems, "That version has errors now, so it can't be deployed again.")
 	}
 	// What a deploy of this revision would need is judged for the caller, as a deploy is: an Operator
 	// cannot roll back to a version only an Admin may deploy (T-07-91). The job judges it again.
@@ -667,7 +661,7 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 	if err != nil {
 		return nil, stackInternal(d, "revision", env.ID, err)
 	}
-	rendering := revisionRendering{repo: repo, loaded: checked.Loaded, masker: stacks.NewMasker(target.Copy.Vars, target.Copy.Files)}
+	rendering := revisionRendering{repo: repo, loaded: prep.Loaded, masker: stacks.NewMasker(target.Copy.Vars, target.Copy.Files)}
 	if err := rendering.store(ctx, rev.ID, stackops.LivePins(pins)); err != nil {
 		d.Log.Warn("could not store the rendering of a revision", "stack", st.ID, "revision", rev.Seq, "error", err)
 	}
@@ -947,7 +941,11 @@ func rollbackPrepareProblem(err error) error {
 	}
 	switch pe.Stage {
 	case stackops.PrepareLoad:
-		return composeProblem(pe.Err)
+		var nd *stacks.NotDeployableError
+		if errors.As(pe.Err, &nd) {
+			return stackInvalid(nd.Problems, "That version has errors now, so it can't be deployed again.")
+		}
+		return httpx.Problem(http.StatusUnprocessableEntity, problemComposeInvalid, "That version can't be read, so it can't be deployed again.")
 	case stackops.PrepareObjects:
 		return objectProblem(pe.Err)
 	case stackops.PrepareConvert:
@@ -1036,17 +1034,6 @@ func objectProblem(err error) error {
 	return &huma.ErrorModel{
 		Type: problemComposeInvalid, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
 		Detail: stackops.ObjectErrorDetail(err),
-	}
-}
-
-// composeProblem is the 422 for a compose file that does not load.
-func composeProblem(err error) error {
-	if errors.Is(err, stacks.ErrTooLarge) {
-		return httpx.Problem(http.StatusUnprocessableEntity, problemStackFileInvalid, "compose.yaml is over 1 MiB.")
-	}
-	return &huma.ErrorModel{
-		Type: problemComposeInvalid, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
-		Detail: "compose.yaml does not load: " + strings.TrimPrefix(err.Error(), "stacks: load "+stacks.ComposeFile+": "),
 	}
 }
 
