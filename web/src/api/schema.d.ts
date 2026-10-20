@@ -2145,7 +2145,7 @@ export interface paths {
         };
         /**
          * What a stack owns on its environment
-         * @description The tasks (a swarm) or containers (a standalone host) and the networks of the stack, found by the stack's labels: its swarm namespace or Compose project together with its Bayplan ID, so an object of another stack, or one somebody made under the same name, is never listed as the stack's. Each card is read on its own and carries its own error, so one read that fails never hides the others. A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).
+         * @description The tasks (a swarm) or containers (a standalone host), the networks, the volumes (one row for each node that holds one), the secrets and the configs of the stack, found by the stack's labels: its swarm namespace or Compose project together with its Bayplan ID, so an object of another stack, or one somebody made under the same name, is never listed as the stack's. Objects the deployed compose file refers to that were made outside the stack are listed with ownership external. A standalone stack's secrets and configs are read from its deployed definition, because they are files in the containers. Each card is read on its own and carries its own error (a code, never the engine's text), so one read that fails never hides the others. No secret value and no config content is read. A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).
          */
         get: operations["listStackResources"];
         put?: never;
@@ -8796,6 +8796,35 @@ export interface components {
             /** @description The networks of the stack, by name */
             items: components["schemas"]["StackNetworkResourceBody"][] | null;
         };
+        StackObjectResourceBody: {
+            /** @description The name of the object on the swarm: the stack, the name and the content hash joined. The name itself on a standalone host and for an external object */
+            fullName: string;
+            /** @description The short content hash Bayplan put in the name of an object it made from a file; empty for any other */
+            hash: string;
+            /** @description The swarm object ID; empty on a standalone host, where a secret or a config is a file in the containers */
+            id: string;
+            /** @description The name as the compose file writes it */
+            name: string;
+            /**
+             * @description stack: the object carries the stack's own labels, or is a file of a standalone stack. external: the compose file refers to an object created outside the stack, which Bayplan never changes or removes
+             * @enum {string}
+             */
+            ownership: "stack" | "external";
+            /** @description The services of this stack whose spec refers to the object, by name. Services of other stacks are not counted */
+            usedBy: components["schemas"]["StackObjectUserBody"][] | null;
+        };
+        StackObjectUserBody: {
+            /** @description The swarm service ID, which the service page is at; empty on a standalone host */
+            id: string;
+            /** @description The service's name in the compose file */
+            name: string;
+        };
+        StackObjectsCardBody: {
+            /** @description Empty when the card was read. Otherwise why it was not: no_manager, no_quorum, node_unavailable or read_failed; Items is then empty */
+            error: string;
+            /** @description The secrets or configs of the stack, by name then full name */
+            items: components["schemas"]["StackObjectResourceBody"][] | null;
+        };
         StackOperationBody: {
             /** @description A stable word for how a failed operation failed, such as service_rejected, converge_timeout or interrupted; empty otherwise */
             code: string;
@@ -8879,12 +8908,18 @@ export interface components {
             task: components["schemas"]["TaskItem"];
         };
         StackResourcesBody: {
+            /** @description The Configs card */
+            configs: components["schemas"]["StackObjectsCardBody"];
             /** @description The Containers card; present for a standalone stack */
             containers?: components["schemas"]["StackContainersCardBody"];
             /** @description The Networks card */
             networks: components["schemas"]["StackNetworksCardBody"];
+            /** @description The Secrets card */
+            secrets: components["schemas"]["StackObjectsCardBody"];
             /** @description The Tasks card; present for a swarm stack */
             tasks?: components["schemas"]["StackTasksCardBody"];
+            /** @description The Volumes card */
+            volumes: components["schemas"]["StackVolumesCardBody"];
         };
         StackReviewBody: {
             /** @description Left out unless set: set when the last good revision is newer than the revision the draft started from: someone deployed after the draft began. A deploy of the draft then needs acknowledgeConcurrent */
@@ -9139,6 +9174,29 @@ export interface components {
         StackVariableRevealBody: {
             /** @description The variable's saved value, in clear */
             value: string;
+        };
+        StackVolumeResourceBody: {
+            /** @description The volume driver */
+            driver: string;
+            /** @description The volume name */
+            name: string;
+            /** @description The display name of the node that holds the volume */
+            node: string;
+            /** @description The ID of that node, which the volume's page takes as its node */
+            nodeId: string;
+            /**
+             * @description stack: the volume carries the stack's own labels. external: the compose file refers to a volume created outside the stack, which Bayplan never changes or removes
+             * @enum {string}
+             */
+            ownership: "stack" | "external";
+        };
+        StackVolumesCardBody: {
+            /** @description Empty when the card was read. Otherwise why it was not: read_failed or node_unavailable; Items is then empty */
+            error: string;
+            /** @description The volumes of the stack, by name: one row for each node that holds a volume, because a volume is local to a node */
+            items: components["schemas"]["StackVolumeResourceBody"][] | null;
+            /** @description The nodes that should have answered and did not. Their volumes are left out of Items */
+            notReporting: string[] | null;
         };
         StatusCountsBody: {
             /**

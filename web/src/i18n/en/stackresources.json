@@ -4,12 +4,18 @@
     "kind": {
       "tasks": "tasks",
       "containers": "containers",
-      "networks": "networks"
+      "networks": "networks",
+      "volumes": "volumes",
+      "secrets": "secrets",
+      "configs": "configs"
     },
     "titles": {
       "tasks": "Tasks",
       "containers": "Containers",
-      "networks": "Networks"
+      "networks": "Networks",
+      "volumes": "Volumes",
+      "secrets": "Secrets",
+      "configs": "Configs"
     },
     "count": {
       "tasks_one": "{{count, number}} task",
@@ -17,13 +23,22 @@
       "containers_one": "{{count, number}} container",
       "containers_other": "{{count, number}} containers",
       "networks_one": "{{count, number}} network",
-      "networks_other": "{{count, number}} networks"
+      "networks_other": "{{count, number}} networks",
+      "volumes_one": "{{count, number}} volume",
+      "volumes_other": "{{count, number}} volumes",
+      "secrets_one": "{{count, number}} secret",
+      "secrets_other": "{{count, number}} secrets",
+      "configs_one": "{{count, number}} config",
+      "configs_other": "{{count, number}} configs"
     },
     "empty": {
       "tasks": "No tasks.",
       "containers": "No containers.",
       "networks": "No networks.",
-      "nothingRunning": "Nothing is running."
+      "nothingRunning": "Nothing is running.",
+      "volumes": "No volumes.",
+      "secrets": "No secrets.",
+      "configs": "No configs."
     },
     "loadFailed": "Couldn't load {{kind}}.",
     "retry": "Retry",
@@ -42,7 +57,8 @@
       "ports": "Ports",
       "driver": "Driver",
       "scope": "Scope",
-      "ownership": "Ownership"
+      "ownership": "Ownership",
+      "usedBy": "Used by"
     },
     "node": {
       "removed": "Removed node",
@@ -52,6 +68,16 @@
       "stack": "Stack",
       "external": "External",
       "externalTooltip": "Created outside this stack. Bayplan never changes or removes it."
+    },
+    "volumes": {
+      "notReporting_one": "Not reporting: {{nodes}}. Its volumes are left out.",
+      "notReporting_other": "Not reporting: {{nodes}}. Their volumes are left out."
+    },
+    "objects": {
+      "version": "version {{hash}}",
+      "usedBy_one": "{{count, number}} service",
+      "usedBy_other": "{{count, number}} services",
+      "usersLabel": "Services that use {{name}}"
     }
   }
 }

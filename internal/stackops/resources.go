@@ -137,19 +137,119 @@ type Declared struct {
 	Networks, Volumes, Secrets, Configs []DeclaredObject
 }
 
-// DeclaredOf reads what a loaded project's services use.
+// addUser records that a service uses the object of that key.
+func addUser(used map[string][]string, key, service string) {
+	if key == "" || slices.Contains(used[key], service) {
+		return
+	}
+	used[key] = append(used[key], service)
+}
+
+// declaredObjects turns the services that use each key into DeclaredObjects, by key. external says whether the
+// compose file declares the object external and under what name; a key it does not declare (the implicit
+// default network) is the stack's own.
+func declaredObjects(used map[string][]string, external func(key string) (bool, string)) []DeclaredObject {
+	out := make([]DeclaredObject, 0, len(used))
+	for key, users := range used {
+		ext, name := external(key)
+		slices.Sort(users)
+		out = append(out, DeclaredObject{Key: key, Name: cmp.Or(name, key), External: ext, UsedBy: users})
+	}
+	slices.SortFunc(out, func(a, b DeclaredObject) int { return cmp.Compare(a.Key, b.Key) })
+	return out
+}
+
+// DeclaredOf reads what a loaded project's services use: the networks they join, the named volumes they mount, the
+// secrets and the configs they refer to (a credential_spec's config included). An object the file declares and no
+// service uses is left out: it is not part of what the stack runs, and a deploy does not create it.
 func DeclaredOf(p *types.Project) Declared {
-	return Declared{}
+	nets, vols, secrets, configs := map[string][]string{}, map[string][]string{}, map[string][]string{}, map[string][]string{}
+	for name, svc := range p.Services {
+		for key := range svc.Networks {
+			addUser(nets, key, name)
+		}
+		for _, v := range svc.Volumes {
+			if v.Type == types.VolumeTypeVolume {
+				addUser(vols, v.Source, name)
+			}
+		}
+		for _, ref := range svc.Secrets {
+			addUser(secrets, ref.Source, name)
+		}
+		for _, ref := range svc.Configs {
+			addUser(configs, ref.Source, name)
+		}
+		if cs := svc.CredentialSpec; cs != nil {
+			addUser(configs, cs.Config, name)
+		}
+	}
+	return Declared{
+		Known: true,
+		Networks: declaredObjects(nets, func(key string) (bool, string) {
+			n, ok := p.Networks[key]
+			return ok && bool(n.External), n.Name
+		}),
+		Volumes: declaredObjects(vols, func(key string) (bool, string) {
+			v, ok := p.Volumes[key]
+			return ok && bool(v.External), v.Name
+		}),
+		Secrets: declaredObjects(secrets, func(key string) (bool, string) {
+			o, ok := p.Secrets[key]
+			return ok && bool(o.External), o.Name
+		}),
+		Configs: declaredObjects(configs, func(key string) (bool, string) {
+			o, ok := p.Configs[key]
+			return ok && bool(o.External), o.Name
+		}),
+	}
 }
 
-// Declared reads what the stack's newest good revision uses. A stack with none is the zero Declared.
+// Declared reads what the stack's newest good revision uses. A stack with none is the zero Declared. A revision
+// that is stored and does not load comes back as Declared{Err}: the page then says what it cannot, and keeps
+// the cards the engine can answer.
 func (r Repo) Declared(ctx context.Context, stack Stack) (Declared, error) {
-	return Declared{}, nil
+	snap, ok, err := r.LatestGoodRevision(ctx, stack.ID)
+	if err != nil {
+		return Declared{}, err
+	}
+	if !ok {
+		return Declared{}, nil
+	}
+	loaded, err := stacks.Load(ctx, stacks.LoadInput{Name: stack.Name, Target: stack.Target, Copy: snap.Copy})
+	if err != nil {
+		return Declared{Err: err}, nil
+	}
+	return DeclaredOf(loaded.Project), nil
 }
 
-// VolumesFrom picks the volumes of a stack out of what the nodes of an environment hold.
+// VolumesFrom picks the volumes of a stack out of what the nodes of an environment hold, one row for each node
+// that has one: those that carry the stack's own labels, and those the compose file declares external, found
+// by the name it gives. A volume is the stack's only by its labels. The nodes that did not answer are named, so
+// the page can say their volumes are left out.
 func VolumesFrom(stack Stack, decl Declared, agg envs.Aggregate) ([]VolumeResource, []string) {
-	return nil, nil
+	external := map[string]bool{}
+	for _, v := range decl.Volumes {
+		if v.External {
+			external[v.Name] = true
+		}
+	}
+	out := []VolumeResource{}
+	for _, v := range agg.Volumes {
+		owner := ""
+		switch {
+		case ownsLabels(stack, v.Labels):
+			owner = OwnerStack
+		case external[v.Name]:
+			owner = OwnerExternal
+		default:
+			continue
+		}
+		out = append(out, VolumeResource{Name: v.Name, Driver: v.Driver, Node: v.Node, NodeID: v.NodeID, Ownership: owner})
+	}
+	slices.SortFunc(out, func(a, b VolumeResource) int {
+		return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.Node, b.Node), cmp.Compare(a.NodeID, b.NodeID))
+	})
+	return out, append([]string{}, agg.NotReporting...)
 }
 
 // readCode names the failure of a read for a card.
@@ -190,31 +290,116 @@ func ownsLabels(stack Stack, labels map[string]string) bool {
 	return labels[stacks.LabelComposeProject] == stack.Name
 }
 
-// Resources reads the cards of a stack's Resources tab now. Each card is its own read and keeps its own
-// error, so a secrets list the engine refuses leaves the tasks and the networks in place. It is a read.
+// Resources reads the cards of a stack's Resources tab now. Each card keeps its own error, so a secrets list the
+// engine refuses leaves the tasks and the networks in place. decl is what the deployed revision refers to
+// (Repo.Declared); the zero value is a stack with none. It is a read.
 func (d Deps) Resources(ctx context.Context, envID string, stack Stack, decl Declared) Resources {
+	var out Resources
+	vols, notReporting, verr := d.volumesOf(ctx, envID, stack, decl)
+	out.Volumes = cardOf(d, envID, stack, "volumes", vols, verr)
+	if verr == nil {
+		out.NotReporting = notReporting
+	}
+	if out.NotReporting == nil {
+		out.NotReporting = []string{}
+	}
+	nets, nerr := d.networksOf(ctx, envID, stack, decl)
+	out.Networks = cardOf(d, envID, stack, "networks", nets, nerr)
 	if stack.Target == stacks.TargetSwarm {
-		tasks, err := d.swarmTasks(ctx, envID, stack)
-		nets, nerr := d.networksOf(ctx, envID, stack)
-		return Resources{
-			Tasks:      cardOf(d, envID, stack, "tasks", tasks, err),
-			Containers: ResourceCard[ContainerResource]{Items: []ContainerResource{}},
-			Networks:   cardOf(d, envID, stack, "networks", nets, nerr),
-			Volumes:    ResourceCard[VolumeResource]{Items: []VolumeResource{}},
-			Secrets:    ResourceCard[ObjectResource]{Items: []ObjectResource{}},
-			Configs:    ResourceCard[ObjectResource]{Items: []ObjectResource{}},
+		cc, err := d.clusterCards(ctx, envID, stack, decl)
+		if err != nil {
+			cc.tasksErr, cc.secretsErr, cc.configsErr = err, err, err
 		}
+		out.Tasks = cardOf(d, envID, stack, "tasks", cc.tasks, cc.tasksErr)
+		out.Containers = ResourceCard[ContainerResource]{Items: []ContainerResource{}}
+		out.Secrets = cardOf(d, envID, stack, "secrets", cc.secrets, cc.secretsErr)
+		out.Configs = cardOf(d, envID, stack, "configs", cc.configs, cc.configsErr)
+		return out
 	}
 	containers, err := d.standaloneContainers(ctx, envID, stack)
-	nets, nerr := d.networksOf(ctx, envID, stack)
-	return Resources{
-		Tasks:      ResourceCard[TaskResource]{Items: []TaskResource{}},
-		Containers: cardOf(d, envID, stack, "containers", containers, err),
-		Networks:   cardOf(d, envID, stack, "networks", nets, nerr),
-		Volumes:    ResourceCard[VolumeResource]{Items: []VolumeResource{}},
-		Secrets:    ResourceCard[ObjectResource]{Items: []ObjectResource{}},
-		Configs:    ResourceCard[ObjectResource]{Items: []ObjectResource{}},
+	out.Tasks = ResourceCard[TaskResource]{Items: []TaskResource{}}
+	out.Containers = cardOf(d, envID, stack, "containers", containers, err)
+	out.Secrets = d.standaloneObjectsCard(envID, stack, decl, decl.Secrets)
+	out.Configs = d.standaloneObjectsCard(envID, stack, decl, decl.Configs)
+	return out
+}
+
+// standaloneObjectsCard lists the secrets or configs of a standalone stack from its deployed definition. They are
+// files written into the containers, not objects of the engine, so the definition is the only place that knows
+// them, and each is the stack's own. A stack with no deployed definition has none, and one whose definition
+// could not be read says so.
+func (d Deps) standaloneObjectsCard(envID string, stack Stack, decl Declared, declared []DeclaredObject) ResourceCard[ObjectResource] {
+	if decl.Err != nil {
+		return cardOf[ObjectResource](d, envID, stack, "definition", nil, decl.Err)
 	}
+	out := make([]ObjectResource, 0, len(declared))
+	for _, o := range declared {
+		if o.External {
+			continue // a standalone host cannot use one (stacks.ErrExternalFileObject)
+		}
+		users := make([]ObjectUser, 0, len(o.UsedBy))
+		for _, name := range o.UsedBy {
+			users = append(users, ObjectUser{Name: name})
+		}
+		out = append(out, ObjectResource{Name: o.Key, FullName: o.Key, UsedBy: users, Ownership: OwnerStack})
+	}
+	return ResourceCard[ObjectResource]{Items: out}
+}
+
+// volumesOf reads the stack's volumes from the environment's aggregate, which holds the volumes of every node that
+// answered.
+func (d Deps) volumesOf(ctx context.Context, envID string, stack Stack, decl Declared) ([]VolumeResource, []string, error) {
+	if d.Aggregator == nil {
+		return nil, nil, errors.New("stackops: no aggregator to read the volumes with")
+	}
+	agg, _, err := d.Aggregator.Snapshot(ctx, envID)
+	if err != nil {
+		return nil, nil, err
+	}
+	vols, notReporting := VolumesFrom(stack, decl, agg)
+	return vols, notReporting, nil
+}
+
+// clusterCards are the cards of a swarm stack that one read of the cluster answers.
+type clusterCards struct {
+	tasks                []TaskResource
+	secrets, configs     []ObjectResource
+	tasksErr, secretsErr error
+	configsErr           error
+}
+
+// clusterCards reads the tasks, the secrets and the configs of a swarm stack on one manager, from one read of the
+// cluster. If that read fails, none of the three has an answer; once it has succeeded each card is read and keeps its
+// own error.
+func (d Deps) clusterCards(ctx context.Context, envID string, stack Stack, decl Declared) (clusterCards, error) {
+	if d.Clusters == nil {
+		return clusterCards{}, errors.New("stackops: no cluster reader to read the swarm with")
+	}
+	var cc clusterCards
+	err := d.Clusters.ClusterRead(ctx, envID, func(c *dockerx.Client) error {
+		cc = clusterCards{}
+		read, e := c.Cluster(ctx)
+		if e != nil {
+			return e
+		}
+		svcs := SwarmRows(stack, read.Services)
+		cc.tasks, cc.tasksErr = swarmTasks(ctx, c, svcs, read.Nodes)
+		users := objectUsers(svcs, read.ServiceRefs)
+		secrets, e := c.SecretList(ctx)
+		if e != nil {
+			cc.secretsErr = e
+		} else {
+			cc.secrets = swarmObjects(stack, decl.Secrets, users, secretObjects(secrets), func(r dockerx.ServiceRef) []dockerx.ServiceObjectRef { return r.Secrets })
+		}
+		configs, e := c.ConfigList(ctx)
+		if e != nil {
+			cc.configsErr = e
+		} else {
+			cc.configs = swarmObjects(stack, decl.Configs, users, configObjects(configs), func(r dockerx.ServiceRef) []dockerx.ServiceObjectRef { return r.Configs })
+		}
+		return nil
+	})
+	return cc, err
 }
 
 // currentDesired are the desired states of a task that still belongs on the page: one that is wanted
@@ -263,46 +448,123 @@ func currentTasks(rows []dockerx.TaskRow, services map[string]ServiceRow, nodes 
 	return out
 }
 
-// swarmTasks reads the current tasks of the stack's services, in one cluster read.
-func (d Deps) swarmTasks(ctx context.Context, envID string, stack Stack) ([]TaskResource, error) {
-	if d.Clusters == nil {
-		return nil, errors.New("stackops: no cluster reader to read the swarm with")
+// swarmTasks reads the current tasks of the stack's services.
+func swarmTasks(ctx context.Context, c *dockerx.Client, svcs []ServiceRow, nodeRows []dockerx.NodeRow) ([]TaskResource, error) {
+	if len(svcs) == 0 {
+		return []TaskResource{}, nil
 	}
-	var out []TaskResource
-	err := d.Clusters.ClusterRead(ctx, envID, func(c *dockerx.Client) error {
-		read, e := c.Cluster(ctx)
-		if e != nil {
-			return e
+	byID := make(map[string]ServiceRow, len(svcs))
+	ids := make([]string, 0, len(svcs))
+	for _, s := range svcs {
+		byID[s.ID] = s
+		ids = append(ids, s.ID)
+	}
+	tasks, err := c.Tasks(ctx, dockerx.TaskFilter{ServiceIDs: ids})
+	if err != nil {
+		return nil, err
+	}
+	nodes := make(map[string]dockerx.NodeRow, len(nodeRows))
+	for _, n := range nodeRows {
+		nodes[n.ID] = n
+	}
+	return currentTasks(tasks, byID, nodes), nil
+}
+
+// objectInfo is a secret or a config as the page needs it from the engine: its ID, its name and its labels.
+type objectInfo struct {
+	ID, Name string
+	Labels   map[string]string
+}
+
+func secretObjects(rows []dockerx.SecretRow) []objectInfo {
+	out := make([]objectInfo, len(rows))
+	for i, r := range rows {
+		out[i] = objectInfo{ID: r.ID, Name: r.Name, Labels: r.Labels}
+	}
+	return out
+}
+
+func configObjects(rows []dockerx.ConfigRow) []objectInfo {
+	out := make([]objectInfo, len(rows))
+	for i, r := range rows {
+		out[i] = objectInfo{ID: r.ID, Name: r.Name, Labels: r.Labels}
+	}
+	return out
+}
+
+// serviceUse is a service of the stack with what its spec refers to.
+type serviceUse struct {
+	svc ServiceRow
+	ref dockerx.ServiceRef
+}
+
+// objectUsers pairs each service the stack owns with the secrets, configs, networks and volumes its spec refers to,
+// by the service ID. Only the stack's own services are paired: another stack that uses the same external secret
+// is not this stack's user of it.
+func objectUsers(svcs []ServiceRow, refs []dockerx.ServiceRef) []serviceUse {
+	byID := make(map[string]dockerx.ServiceRef, len(refs))
+	for _, r := range refs {
+		byID[r.ID] = r
+	}
+	out := make([]serviceUse, 0, len(svcs))
+	for _, s := range svcs {
+		out = append(out, serviceUse{svc: s, ref: byID[s.ID]})
+	}
+	return out
+}
+
+// usersOf are the services of the stack whose spec refers to the object, by service name.
+func usersOf(o objectInfo, uses []serviceUse, refs func(dockerx.ServiceRef) []dockerx.ServiceObjectRef) []ObjectUser {
+	out := []ObjectUser{}
+	for _, u := range uses {
+		for _, r := range refs(u.ref) {
+			if r.ID == o.ID || (r.Name != "" && r.Name == o.Name) {
+				out = append(out, ObjectUser{ID: u.svc.ID, Name: u.svc.Short})
+				break
+			}
 		}
-		svcs := SwarmRows(stack, read.Services)
-		out = []TaskResource{}
-		if len(svcs) == 0 {
-			return nil
+	}
+	slices.SortFunc(out, func(a, b ObjectUser) int { return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.ID, b.ID)) })
+	return out
+}
+
+// swarmObjects lists the secrets or configs of a swarm stack: those that carry the stack's own labels, by the name the
+// compose file uses and the content hash Bayplan put in the object's name, and those the compose file declares external,
+// found by the name it gives. An object is the stack's only by its labels; an external one never reads Stack.
+func swarmObjects(stack Stack, declared []DeclaredObject, uses []serviceUse, all []objectInfo, refs func(dockerx.ServiceRef) []dockerx.ServiceObjectRef) []ObjectResource {
+	out := []ObjectResource{}
+	owned := map[string]bool{}
+	for _, o := range all {
+		if !ownsLabels(stack, o.Labels) {
+			continue
 		}
-		byID := make(map[string]ServiceRow, len(svcs))
-		ids := make([]string, 0, len(svcs))
-		for _, s := range svcs {
-			byID[s.ID] = s
-			ids = append(ids, s.ID)
+		owned[o.ID] = true
+		out = append(out, ObjectResource{
+			ID: o.ID, Name: cmp.Or(o.Labels[stacks.LabelObject], o.Name), FullName: o.Name, Hash: o.Labels[stacks.LabelObjectHash],
+			UsedBy: usersOf(o, uses, refs), Ownership: OwnerStack,
+		})
+	}
+	for _, dec := range declared {
+		if !dec.External {
+			continue
 		}
-		tasks, e := c.Tasks(ctx, dockerx.TaskFilter{ServiceIDs: ids})
-		if e != nil {
-			return e
+		i := slices.IndexFunc(all, func(o objectInfo) bool { return o.Name == dec.Name && !owned[o.ID] })
+		if i < 0 {
+			continue
 		}
-		nodes := make(map[string]dockerx.NodeRow, len(read.Nodes))
-		for _, n := range read.Nodes {
-			nodes[n.ID] = n
-		}
-		out = currentTasks(tasks, byID, nodes)
-		return nil
+		o := all[i]
+		out = append(out, ObjectResource{ID: o.ID, Name: o.Name, FullName: o.Name, UsedBy: usersOf(o, uses, refs), Ownership: OwnerExternal})
+	}
+	slices.SortFunc(out, func(a, b ObjectResource) int {
+		return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.FullName, b.FullName), cmp.Compare(a.ID, b.ID))
 	})
-	return out, err
+	return out
 }
 
 // networksOf lists the networks the stack owns, found by its labels, in one read of the engine that
 // holds them: a manager for a swarm (a stack's networks are overlay networks of the cluster), the host's
 // own engine for a standalone stack.
-func (d Deps) networksOf(ctx context.Context, envID string, stack Stack) ([]NetworkResource, error) {
+func (d Deps) networksOf(ctx context.Context, envID string, stack Stack, decl Declared) ([]NetworkResource, error) {
 	var (
 		key  string
 		read func(fn func(*dockerx.Client) error) error
@@ -333,6 +595,29 @@ func (d Deps) networksOf(ctx context.Context, envID string, stack Stack) ([]Netw
 				continue
 			}
 			out = append(out, NetworkResource{ID: r.ID, Name: r.Name, Driver: r.Driver, Scope: r.Scope, Ownership: OwnerStack})
+		}
+		// The networks the compose file refers to that were made outside the stack: found by the name it gives, and
+		// listed as external. A network that is not there is left out; the deploy would have refused it.
+		wantsExternal := slices.ContainsFunc(decl.Networks, func(n DeclaredObject) bool { return n.External })
+		if !wantsExternal {
+			return nil
+		}
+		all, e := c.Networks(ctx)
+		if e != nil {
+			return e
+		}
+		for _, dn := range decl.Networks {
+			if !dn.External {
+				continue
+			}
+			i := slices.IndexFunc(all, func(n dockerx.NetworkRow) bool {
+				return n.Name == dn.Name && (stack.Target != stacks.TargetSwarm || n.Scope == dockerx.ScopeSwarm) && !slices.ContainsFunc(out, func(o NetworkResource) bool { return o.ID == n.ID })
+			})
+			if i < 0 {
+				continue
+			}
+			n := all[i]
+			out = append(out, NetworkResource{ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Ownership: OwnerExternal})
 		}
 		return nil
 	})

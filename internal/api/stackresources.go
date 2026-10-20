@@ -65,12 +65,53 @@ type StackNetworksCardBody struct {
 	Error string                     `json:"error" doc:"Empty when the card was read. Otherwise why it was not: no_manager, no_quorum, node_unavailable or read_failed; Items is then empty"`
 }
 
+// StackVolumeResourceBody is one volume of the stack on one node.
+type StackVolumeResourceBody struct {
+	Name      string `json:"name" doc:"The volume name"`
+	Driver    string `json:"driver" doc:"The volume driver"`
+	Node      string `json:"node" doc:"The display name of the node that holds the volume"`
+	NodeID    string `json:"nodeId" doc:"The ID of that node, which the volume's page takes as its node"`
+	Ownership string `json:"ownership" enum:"stack,external" doc:"stack: the volume carries the stack's own labels. external: the compose file refers to a volume created outside the stack, which Bayplan never changes or removes"`
+}
+
+// StackVolumesCardBody is the Volumes card.
+type StackVolumesCardBody struct {
+	Items        []StackVolumeResourceBody `json:"items" doc:"The volumes of the stack, by name: one row for each node that holds a volume, because a volume is local to a node"`
+	Error        string                    `json:"error" doc:"Empty when the card was read. Otherwise why it was not: read_failed or node_unavailable; Items is then empty"`
+	NotReporting []string                  `json:"notReporting" doc:"The nodes that should have answered and did not. Their volumes are left out of Items"`
+}
+
+// StackObjectUserBody is a service that uses a secret or a config.
+type StackObjectUserBody struct {
+	ID   string `json:"id" doc:"The swarm service ID, which the service page is at; empty on a standalone host"`
+	Name string `json:"name" doc:"The service's name in the compose file"`
+}
+
+// StackObjectResourceBody is one secret or config of the stack.
+type StackObjectResourceBody struct {
+	ID        string                `json:"id" doc:"The swarm object ID; empty on a standalone host, where a secret or a config is a file in the containers"`
+	Name      string                `json:"name" doc:"The name as the compose file writes it"`
+	FullName  string                `json:"fullName" doc:"The name of the object on the swarm: the stack, the name and the content hash joined. The name itself on a standalone host and for an external object"`
+	Hash      string                `json:"hash" doc:"The short content hash Bayplan put in the name of an object it made from a file; empty for any other"`
+	UsedBy    []StackObjectUserBody `json:"usedBy" doc:"The services of this stack whose spec refers to the object, by name. Services of other stacks are not counted"`
+	Ownership string                `json:"ownership" enum:"stack,external" doc:"stack: the object carries the stack's own labels, or is a file of a standalone stack. external: the compose file refers to an object created outside the stack, which Bayplan never changes or removes"`
+}
+
+// StackObjectsCardBody is the Secrets or the Configs card. No secret value and no config content is part of it.
+type StackObjectsCardBody struct {
+	Items []StackObjectResourceBody `json:"items" doc:"The secrets or configs of the stack, by name then full name"`
+	Error string                    `json:"error" doc:"Empty when the card was read. Otherwise why it was not: no_manager, no_quorum, node_unavailable or read_failed; Items is then empty"`
+}
+
 // StackResourcesBody is everything a stack owns on its environment, one card for each kind. Each card is read
 // on its own and fails on its own.
 type StackResourcesBody struct {
 	Tasks      *StackTasksCardBody      `json:"tasks,omitempty" doc:"The Tasks card; present for a swarm stack"`
 	Containers *StackContainersCardBody `json:"containers,omitempty" doc:"The Containers card; present for a standalone stack"`
 	Networks   StackNetworksCardBody    `json:"networks" doc:"The Networks card"`
+	Volumes    StackVolumesCardBody     `json:"volumes" doc:"The Volumes card"`
+	Secrets    StackObjectsCardBody     `json:"secrets" doc:"The Secrets card"`
+	Configs    StackObjectsCardBody     `json:"configs" doc:"The Configs card"`
 }
 
 // StackResourcesOutput wraps StackResourcesBody for huma.
@@ -83,8 +124,9 @@ func registerStackResources(r *httpx.Router, d StacksDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "listStackResources", Method: http.MethodGet, Path: "/api/env/{envId}/stacks/{stackId}/resources",
 		Summary: "What a stack owns on its environment",
-		Description: "The tasks (a swarm) or containers (a standalone host) and the networks of the stack, found by the stack's labels: its swarm namespace or Compose project together with its Bayplan ID, so an object of another stack, or one somebody made under the same name, is never listed as the stack's. " +
-			"Each card is read on its own and carries its own error, so one read that fails never hides the others. " +
+		Description: "The tasks (a swarm) or containers (a standalone host), the networks, the volumes (one row for each node that holds one), the secrets and the configs of the stack, found by the stack's labels: its swarm namespace or Compose project together with its Bayplan ID, so an object of another stack, or one somebody made under the same name, is never listed as the stack's. " +
+			"Objects the deployed compose file refers to that were made outside the stack are listed with ownership external. A standalone stack's secrets and configs are read from its deployed definition, because they are files in the containers. " +
+			"Each card is read on its own and carries its own error (a code, never the engine's text), so one read that fails never hides the others. No secret value and no config content is read. " +
 			"A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).",
 		Tags: []string{"stacks"},
 	}, rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment},
@@ -105,10 +147,21 @@ func listStackResources(ctx context.Context, d StacksDeps, in *StackPathInput) (
 	if err != nil {
 		return nil, stackInternal(d, "read", in.EnvID, err)
 	}
+	if decl.Err != nil {
+		d.Log.Warn("a stack's deployed definition could not be loaded for its resources", "environment", in.EnvID, "stack", st.Name, "error", decl.Err)
+	}
 	res := d.ops().Resources(ctx, in.EnvID, st, decl)
-	body := StackResourcesBody{Networks: StackNetworksCardBody{Items: make([]StackNetworkResourceBody, 0, len(res.Networks.Items)), Error: res.Networks.Error}}
+	body := StackResourcesBody{
+		Networks: StackNetworksCardBody{Items: make([]StackNetworkResourceBody, 0, len(res.Networks.Items)), Error: res.Networks.Error},
+		Volumes:  StackVolumesCardBody{Items: make([]StackVolumeResourceBody, 0, len(res.Volumes.Items)), Error: res.Volumes.Error, NotReporting: res.NotReporting},
+		Secrets:  objectsCard(res.Secrets),
+		Configs:  objectsCard(res.Configs),
+	}
 	for _, n := range res.Networks.Items {
 		body.Networks.Items = append(body.Networks.Items, StackNetworkResourceBody{ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Ownership: n.Ownership})
+	}
+	for _, v := range res.Volumes.Items {
+		body.Volumes.Items = append(body.Volumes.Items, StackVolumeResourceBody{Name: v.Name, Driver: v.Driver, Node: v.Node, NodeID: v.NodeID, Ownership: v.Ownership})
 	}
 	if st.Target == stacks.TargetSwarm {
 		targets := map[string]envs.NodeRef(nil)
@@ -142,4 +195,20 @@ func listStackResources(ctx context.Context, d StacksDeps, in *StackPathInput) (
 		body.Containers = &card
 	}
 	return &StackResourcesOutput{CacheControl: "no-store", Body: body}, nil
+}
+
+// objectsCard is the Secrets or Configs card of the answer.
+func objectsCard(c stackops.ResourceCard[stackops.ObjectResource]) StackObjectsCardBody {
+	card := StackObjectsCardBody{Items: make([]StackObjectResourceBody, 0, len(c.Items)), Error: c.Error}
+	for _, o := range c.Items {
+		row := StackObjectResourceBody{
+			ID: o.ID, Name: o.Name, FullName: o.FullName, Hash: o.Hash, Ownership: o.Ownership,
+			UsedBy: make([]StackObjectUserBody, 0, len(o.UsedBy)),
+		}
+		for _, u := range o.UsedBy {
+			row.UsedBy = append(row.UsedBy, StackObjectUserBody{ID: u.ID, Name: u.Name})
+		}
+		card.Items = append(card.Items, row)
+	}
+	return card
 }

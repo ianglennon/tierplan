@@ -137,6 +137,8 @@ beforeEach(() => {
           );
         }
         return Response.json({
+          tasks: EMPTY,
+          networks: EMPTY,
           volumes: EMPTY_VOLUMES,
           secrets: EMPTY,
           configs: EMPTY,
@@ -417,14 +419,12 @@ describe("StackResources volumes, secrets and configs", () => {
     mount();
 
     const volumes = await screen.findByRole("region", { name: "Volumes" });
-    expect(within(volumes).getByText("No volumes.")).toBeTruthy();
+    expect(await within(volumes).findByText("No volumes.")).toBeTruthy();
     expect(within(volumes).getByText("0 volumes")).toBeTruthy();
-    expect(
-      within(screen.getByRole("region", { name: "Secrets" })).getByText("No secrets."),
-    ).toBeTruthy();
-    expect(
-      within(screen.getByRole("region", { name: "Configs" })).getByText("No configs."),
-    ).toBeTruthy();
+    const secrets = screen.getByRole("region", { name: "Secrets" });
+    expect(await within(secrets).findByText("No secrets.")).toBeTruthy();
+    const configs = screen.getByRole("region", { name: "Configs" });
+    expect(await within(configs).findByText("No configs.")).toBeTruthy();
   });
 
   it("counts in the singular and the plural", async () => {
@@ -449,13 +449,11 @@ describe("StackResources volumes, secrets and configs", () => {
     mount();
 
     const volumes = await screen.findByRole("region", { name: "Volumes" });
-    expect(within(volumes).getByText("3 volumes")).toBeTruthy();
-    expect(
-      within(screen.getByRole("region", { name: "Secrets" })).getByText("1 secret"),
-    ).toBeTruthy();
-    expect(
-      within(screen.getByRole("region", { name: "Configs" })).getByText("2 configs"),
-    ).toBeTruthy();
+    expect(await within(volumes).findByText("3 volumes")).toBeTruthy();
+    const secrets = screen.getByRole("region", { name: "Secrets" });
+    expect(await within(secrets).findByText("1 secret")).toBeTruthy();
+    const configs = screen.getByRole("region", { name: "Configs" });
+    expect(await within(configs).findByText("2 configs")).toBeTruthy();
   });
 
   it("lists a swarm volume once for each node that holds it, the name linking to the volume on that node", async () => {
@@ -633,7 +631,9 @@ describe("StackResources volumes, secrets and configs", () => {
       within(await screen.findByRole("region", { name: "Configs" })).getByRole("table"),
     ).toBeTruthy();
     expect(within(screen.getByRole("region", { name: "Volumes" })).getByRole("table")).toBeTruthy();
-    expect(within(screen.getByRole("region", { name: "Tasks" })).getByRole("table")).toBeTruthy();
+    expect(
+      within(screen.getByRole("region", { name: "Tasks" })).getByText("No tasks."),
+    ).toBeTruthy();
     expect(screen.queryByText("Couldn't load configs.")).toBeNull();
   });
 

@@ -9,13 +9,16 @@ import type { ContainerRow } from "@/api/resources";
 import {
   type StackResourceContainer,
   type StackResourceNetwork,
+  type StackResourceObject,
   type StackResourceTask,
+  type StackResourceVolume,
   stackQuery,
   stackResourcesQuery,
 } from "@/api/stacks";
 import { RelativeTime } from "@/components/relative-time";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -57,6 +60,8 @@ interface CardShellProps {
   empty: string;
   onRetry: () => void;
   retrying: boolean;
+  // A line under the table of a card that has been read, as the volumes' nodes that were not reporting.
+  after?: ReactNode;
   children: ReactNode;
 }
 
@@ -72,6 +77,7 @@ function CardShell({
   empty,
   onRetry,
   retrying,
+  after,
   children,
 }: CardShellProps) {
   const t = useT();
@@ -111,6 +117,7 @@ function CardShell({
             {note ? ` · ${note}` : ""}
           </p>
           {count === 0 ? <p className="text-sm text-muted-foreground">{empty}</p> : children}
+          {after}
         </>
       ) : null}
     </SettingsCard>
@@ -329,6 +336,146 @@ function NetworksTable({ envId, rows }: { envId: string; rows: readonly StackRes
   );
 }
 
+function VolumesTable({
+  envId,
+  rows,
+  swarm,
+}: {
+  envId: string;
+  rows: readonly StackResourceVolume[];
+  swarm: boolean;
+}) {
+  const t = useT();
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead scope="col">{t("stackResources.columns.name")}</TableHead>
+          <TableHead scope="col">{t("stackResources.columns.driver")}</TableHead>
+          {swarm ? <TableHead scope="col">{t("stackResources.columns.node")}</TableHead> : null}
+          <TableHead scope="col">{t("stackResources.columns.ownership")}</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((row) => (
+          <TableRow key={`${row.nodeId}|${row.name}`} className={ROW}>
+            <TableCell className="max-w-72">
+              <Link
+                to="/env/$envId/volumes/$volumeName"
+                params={{ envId, volumeName: row.name }}
+                search={{ node: row.nodeId }}
+                className={linkClass}
+              >
+                <TruncatedText mono>{row.name}</TruncatedText>
+              </Link>
+            </TableCell>
+            <TableCell>{row.driver}</TableCell>
+            {swarm ? (
+              <TableCell className="max-w-48">
+                <TruncatedText>{row.node}</TruncatedText>
+              </TableCell>
+            ) : null}
+            <TableCell>
+              <OwnershipBadge ownership={row.ownership} />
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
+// UsedBy is the "{n} services" cell of a secret or a config: a button that opens the services of this stack
+// that use it, each linking to its page on a swarm. An object nothing uses says so in plain words.
+function UsedBy({ envId, row }: { envId: string; row: StackResourceObject }) {
+  const t = useT();
+  const users = row.usedBy ?? [];
+  const label = t("stackResources.objects.usedBy", { count: users.length });
+  if (users.length === 0) return <span className="text-muted-foreground">{label}</span>;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button type="button" variant="link" size="sm" className="h-auto p-0 max-md:h-11">
+          {label}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64">
+        <ul
+          aria-label={t("stackResources.objects.usersLabel", { name: row.name })}
+          className="flex flex-col gap-1"
+        >
+          {users.map((u) => (
+            <li key={`${u.id}|${u.name}`} className="min-w-0">
+              {u.id ? (
+                <Link
+                  to="/env/$envId/services/$serviceId"
+                  params={{ envId, serviceId: u.id }}
+                  className={linkClass}
+                >
+                  <TruncatedText>{u.name}</TruncatedText>
+                </Link>
+              ) : (
+                <TruncatedText>{u.name}</TruncatedText>
+              )}
+            </li>
+          ))}
+        </ul>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+// ObjectNameCell is the name of a secret or a config as the compose file writes it, in mono, with a muted
+// version label when Bayplan hashed it into the object's name. The Tooltip carries the full object name.
+function ObjectNameCell({ row }: { row: StackResourceObject }) {
+  const t = useT();
+  return (
+    <span className="flex min-w-0 flex-col">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="block max-w-64 truncate font-mono text-xs">{row.name}</span>
+        </TooltipTrigger>
+        <TooltipContent className="break-all">{row.fullName || row.name}</TooltipContent>
+      </Tooltip>
+      {row.hash ? (
+        <span className="text-xs text-muted-foreground">
+          {t("stackResources.objects.version", { hash: row.hash })}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+function ObjectsTable({ envId, rows }: { envId: string; rows: readonly StackResourceObject[] }) {
+  const t = useT();
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead scope="col">{t("stackResources.columns.name")}</TableHead>
+          <TableHead scope="col">{t("stackResources.columns.usedBy")}</TableHead>
+          <TableHead scope="col">{t("stackResources.columns.ownership")}</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((row) => (
+          <TableRow key={`${row.id}|${row.fullName}`} className={ROW}>
+            <TableCell className="max-w-72">
+              <ObjectNameCell row={row} />
+            </TableCell>
+            <TableCell className="whitespace-nowrap">
+              <UsedBy envId={envId} row={row} />
+            </TableCell>
+            <TableCell>
+              <OwnershipBadge ownership={row.ownership} />
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
 // StackResources is the Resources tab (STK-10, UI-SPEC "Resources tab"): everything the stack owns on its
 // environment as full-width cards in a column, the Tasks card of a swarm or the Containers card of a
 // standalone host first, then the Networks card. Each card has its own count, empty line, loading skeleton
@@ -356,6 +503,7 @@ export function StackResources({ envId, stackId }: StackResourcesProps) {
 
   const tasks = data?.tasks;
   const containers = data?.containers;
+  const volumes = data?.volumes;
   return (
     <div className="flex flex-col gap-6">
       {swarm ? (
@@ -396,6 +544,49 @@ export function StackResources({ envId, stackId }: StackResourcesProps) {
         retrying={query.isFetching}
       >
         <NetworksTable envId={envId} rows={data?.networks.items ?? []} />
+      </CardShell>
+      <CardShell
+        kind="volumes"
+        loaded={loadedOf(volumes?.error)}
+        failed={failedOf(volumes?.error)}
+        count={volumes?.items?.length ?? 0}
+        empty={t("stackResources.empty.volumes")}
+        onRetry={retry}
+        retrying={query.isFetching}
+        after={
+          (volumes?.notReporting ?? []).length > 0 ? (
+            <p className="text-sm text-status-warning-text">
+              {t("stackResources.volumes.notReporting", {
+                count: volumes?.notReporting?.length ?? 0,
+                nodes: (volumes?.notReporting ?? []).join(", "),
+              })}
+            </p>
+          ) : null
+        }
+      >
+        <VolumesTable envId={envId} rows={volumes?.items ?? []} swarm={swarm} />
+      </CardShell>
+      <CardShell
+        kind="secrets"
+        loaded={loadedOf(data?.secrets?.error)}
+        failed={failedOf(data?.secrets?.error)}
+        count={data?.secrets?.items?.length ?? 0}
+        empty={t("stackResources.empty.secrets")}
+        onRetry={retry}
+        retrying={query.isFetching}
+      >
+        <ObjectsTable envId={envId} rows={data?.secrets?.items ?? []} />
+      </CardShell>
+      <CardShell
+        kind="configs"
+        loaded={loadedOf(data?.configs?.error)}
+        failed={failedOf(data?.configs?.error)}
+        count={data?.configs?.items?.length ?? 0}
+        empty={t("stackResources.empty.configs")}
+        onRetry={retry}
+        retrying={query.isFetching}
+      >
+        <ObjectsTable envId={envId} rows={data?.configs?.items ?? []} />
       </CardShell>
     </div>
   );
