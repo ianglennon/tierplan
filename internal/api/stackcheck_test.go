@@ -6,6 +6,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -344,5 +345,30 @@ func TestCheckIsGivenTheVariablesOfTheTableAndAnswersThemResolved(t *testing.T) 
 	_, code, raw = viewer.check(st.ID, checkBodyWithVars("services: {}\n", `[]`))
 	if code != http.StatusOK || !strings.Contains(raw, `"variables":[]`) {
 		t.Errorf("a file with no variables: %d %s, want an empty list", code, raw)
+	}
+}
+
+func TestCheckRouteLocatesThePortBudgetProblem(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "port-budget")
+
+	// 40 distinct 1,000-port ranges: compose-go would expand them to 40,000 ports. The check
+	// refuses the file at the entry that takes the count over 20,000 and expands nothing.
+	var b strings.Builder
+	b.WriteString("services:\n  web:\n    image: nginx:1.27-alpine\n    ports:\n")
+	for i := range 40 {
+		fmt.Fprintf(&b, "      - %d-%d:20000-20999\n", 10000+1000*i, 10999+1000*i)
+	}
+	answer, code, raw := admin.check(st.ID, checkBody(b.String()))
+	if code != http.StatusOK {
+		t.Fatalf("check: %d %s", code, raw)
+	}
+	if len(answer.Problems) != 1 {
+		t.Fatalf("problems = %+v, want exactly one", answer.Problems)
+	}
+	if p := answer.Problems[0]; p.Code != "ports_too_many" || p.Severity != "error" || p.Line != 25 || p.File != "compose.yaml" {
+		t.Errorf("problem = %+v, want an error ports_too_many at compose.yaml line 25", p)
 	}
 }

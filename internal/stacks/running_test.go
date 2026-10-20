@@ -430,3 +430,19 @@ func TestDiffComposeServicesListsAddedChangedAndRemovedInOrder(t *testing.T) {
 		t.Errorf("changes = %v, want %v", got, want)
 	}
 }
+
+func TestExpandPortsKeepsARangeOverTheBudgetAsText(t *testing.T) {
+	t.Parallel()
+	// A review never expands a range a load would refuse (plan 07-36, CR-02). The ranges here are
+	// bounded, so a regression fails instead of hanging.
+	for _, expose := range []string{"1-200000", "1-30000", "9000-8000"} {
+		got := stacks.NormalizeComposeService(types.ServiceConfig{Name: "web", Image: webImage, Expose: types.StringOrNumberList{expose}}, stacks.ImageDefaults{}, stacks.RunningContext{})
+		if !slices.Equal(got.Expose, []string{expose}) {
+			t.Errorf("expose %q normalised to %d entries, want the one entry kept as its text", expose, len(got.Expose))
+		}
+	}
+	got := stacks.NormalizeComposeService(types.ServiceConfig{Name: "web", Image: webImage, Expose: types.StringOrNumberList{"10-12/udp"}}, stacks.ImageDefaults{}, stacks.RunningContext{})
+	if want := []string{"10/udp", "11/udp", "12/udp"}; !slices.Equal(got.Expose, want) {
+		t.Errorf("expose 10-12/udp = %v, want %v", got.Expose, want)
+	}
+}
