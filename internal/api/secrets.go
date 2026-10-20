@@ -85,14 +85,15 @@ func (d SecretsDeps) services() ServicesDeps {
 // SecretItem is one swarm secret as the list shows it. There is no value: the swarm never
 // returns one, and Bayplan keeps none.
 type SecretItem struct {
-	ID        string            `json:"id" doc:"The secret ID"`
-	Name      string            `json:"name" doc:"The secret name"`
-	Labels    map[string]string `json:"labels" doc:"Every label of the secret"`
-	CreatedAt string            `json:"createdAt" format:"date-time" doc:"When the secret was created"`
-	UpdatedAt string            `json:"updatedAt" format:"date-time" doc:"When the secret was last updated"`
-	UsedBy    int               `json:"usedBy" doc:"How many services' specs reference the secret, whatever their tasks are doing, a service scaled to 0 included"`
-	Owner     string            `json:"owner" doc:"The stack (com.docker.stack.namespace) label value; empty when the secret has none"`
-	OwnerKind string            `json:"ownerKind" enum:"stack," doc:"stack, or empty when the secret has no owner"`
+	ID             string            `json:"id" doc:"The secret ID"`
+	Name           string            `json:"name" doc:"The secret name"`
+	Labels         map[string]string `json:"labels" doc:"Every label of the secret"`
+	CreatedAt      string            `json:"createdAt" format:"date-time" doc:"When the secret was created"`
+	UpdatedAt      string            `json:"updatedAt" format:"date-time" doc:"When the secret was last updated"`
+	UsedBy         int               `json:"usedBy" doc:"How many services' specs reference the secret, whatever their tasks are doing, a service scaled to 0 included"`
+	Owner          string            `json:"owner" doc:"The stack (com.docker.stack.namespace) label value; empty when the secret has none"`
+	OwnerKind      string            `json:"ownerKind" enum:"stack," doc:"stack, or empty when the secret has no owner"`
+	BayplanStackID string            `json:"bayplanStackId" doc:"The ID of the Bayplan stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (bayplan.stack.id). Empty for a stack Bayplan does not manage"`
 }
 
 // SecretListBody is the answer of the secrets list.
@@ -128,15 +129,16 @@ type SecretUserBody struct {
 
 // SecretDetailBody is one secret with the services that use it.
 type SecretDetailBody struct {
-	ID         string            `json:"id" doc:"The secret ID"`
-	Name       string            `json:"name" doc:"The secret name"`
-	Labels     map[string]string `json:"labels" doc:"Every label of the secret"`
-	CreatedAt  string            `json:"createdAt" format:"date-time" doc:"When the secret was created"`
-	UpdatedAt  string            `json:"updatedAt" format:"date-time" doc:"When the secret was last updated"`
-	UsedBy     int               `json:"usedBy" doc:"How many services' specs reference the secret"`
-	Owner      string            `json:"owner" doc:"The stack (com.docker.stack.namespace) label value; empty when the secret has none"`
-	OwnerKind  string            `json:"ownerKind" enum:"stack," doc:"stack, or empty when the secret has no owner"`
-	UsedByRows []SecretUserBody  `json:"usedByRows" doc:"Every service whose spec references the secret, sorted by service name then ID"`
+	ID             string            `json:"id" doc:"The secret ID"`
+	Name           string            `json:"name" doc:"The secret name"`
+	Labels         map[string]string `json:"labels" doc:"Every label of the secret"`
+	CreatedAt      string            `json:"createdAt" format:"date-time" doc:"When the secret was created"`
+	UpdatedAt      string            `json:"updatedAt" format:"date-time" doc:"When the secret was last updated"`
+	UsedBy         int               `json:"usedBy" doc:"How many services' specs reference the secret"`
+	Owner          string            `json:"owner" doc:"The stack (com.docker.stack.namespace) label value; empty when the secret has none"`
+	OwnerKind      string            `json:"ownerKind" enum:"stack," doc:"stack, or empty when the secret has no owner"`
+	BayplanStackID string            `json:"bayplanStackId" doc:"The ID of the Bayplan stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (bayplan.stack.id). Empty for a stack Bayplan does not manage"`
+	UsedByRows     []SecretUserBody  `json:"usedByRows" doc:"Every service whose spec references the secret, sorted by service name then ID"`
 }
 
 // SecretDetailOutput wraps SecretDetailBody for huma.
@@ -312,11 +314,11 @@ func secretOwner(labels map[string]string) (owner, kind string) {
 	return "", ""
 }
 
-func secretItem(row dockerx.SecretRow, used int) SecretItem {
+func secretItem(row dockerx.SecretRow, used int, known stackIDs) SecretItem {
 	owner, kind := secretOwner(row.Labels)
 	return SecretItem{
 		ID: row.ID, Name: row.Name, Labels: row.Labels, CreatedAt: rfc3339(row.CreatedAt), UpdatedAt: rfc3339(row.UpdatedAt),
-		UsedBy: used, Owner: owner, OwnerKind: kind,
+		UsedBy: used, Owner: owner, OwnerKind: kind, BayplanStackID: known.confirm(owner, row.Labels[stacks.LabelStackID]),
 	}
 }
 
@@ -422,8 +424,9 @@ func listSecrets(ctx context.Context, d SecretsDeps, envID string, in *SecretLis
 	body := SecretListBody{
 		Items: make([]SecretItem, 0, len(shown)), Total: len(matched), UnfilteredTotal: len(rows), Capped: len(matched) > maxListRows,
 	}
+	known := loadStackIDs(ctx, d.Store, envID, d.Log)
 	for _, r := range shown {
-		body.Items = append(body.Items, secretItem(r, used[r.ID]))
+		body.Items = append(body.Items, secretItem(r, used[r.ID], known))
 	}
 	return body, nil
 }
@@ -463,10 +466,10 @@ func getSecret(ctx context.Context, d SecretsDeps, envID, id string) (SecretDeta
 	for i := range users {
 		users[i].Stack = stacks[users[i].ServiceID]
 	}
-	it := secretItem(row, len(users))
+	it := secretItem(row, len(users), loadStackIDs(ctx, d.Store, envID, d.Log))
 	return SecretDetailBody{
 		ID: it.ID, Name: it.Name, Labels: it.Labels, CreatedAt: it.CreatedAt, UpdatedAt: it.UpdatedAt,
-		UsedBy: it.UsedBy, Owner: it.Owner, OwnerKind: it.OwnerKind, UsedByRows: users,
+		UsedBy: it.UsedBy, Owner: it.Owner, OwnerKind: it.OwnerKind, BayplanStackID: it.BayplanStackID, UsedByRows: users,
 	}, nil
 }
 

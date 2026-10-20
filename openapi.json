@@ -975,6 +975,10 @@
       "ConfigDetailBody": {
         "additionalProperties": false,
         "properties": {
+          "bayplanStackId": {
+            "description": "The ID of the Bayplan stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (bayplan.stack.id). Empty for a stack Bayplan does not manage",
+            "type": "string"
+          },
           "createdAt": {
             "description": "When the config was created",
             "format": "date-time",
@@ -1065,6 +1069,7 @@
           "usedBy",
           "owner",
           "ownerKind",
+          "bayplanStackId",
           "usedByRows"
         ],
         "type": "object"
@@ -1086,6 +1091,10 @@
       "ConfigItem": {
         "additionalProperties": false,
         "properties": {
+          "bayplanStackId": {
+            "description": "The ID of the Bayplan stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (bayplan.stack.id). Empty for a stack Bayplan does not manage",
+            "type": "string"
+          },
           "createdAt": {
             "description": "When the config was created",
             "format": "date-time",
@@ -1146,7 +1155,8 @@
           "templating",
           "usedBy",
           "owner",
-          "ownerKind"
+          "ownerKind",
+          "bayplanStackId"
         ],
         "type": "object"
       },
@@ -1446,6 +1456,10 @@
       "ContainerDetailBody": {
         "additionalProperties": false,
         "properties": {
+          "bayplanStackId": {
+            "description": "The ID of the Bayplan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (bayplan.stack.id). Empty for a stack or project Bayplan does not manage",
+            "type": "string"
+          },
           "command": {
             "description": "The command (Cmd). Withheld, as the single entry \u003chidden\u003e, unless the caller holds secrets.reveal on this environment: a command line often carries a password or token",
             "items": {
@@ -1695,6 +1709,7 @@
           "project",
           "stack",
           "service",
+          "bayplanStackId",
           "muted"
         ],
         "type": "object"
@@ -1721,6 +1736,10 @@
       "ContainerItem": {
         "additionalProperties": false,
         "properties": {
+          "bayplanStackId": {
+            "description": "The ID of the Bayplan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (bayplan.stack.id). Empty for a stack or project Bayplan does not manage",
+            "type": "string"
+          },
           "created": {
             "format": "date-time",
             "type": "string"
@@ -1831,7 +1850,8 @@
           "readOnly",
           "project",
           "stack",
-          "service"
+          "service",
+          "bayplanStackId"
         ],
         "type": "object"
       },
@@ -9169,6 +9189,10 @@
       "SecretDetailBody": {
         "additionalProperties": false,
         "properties": {
+          "bayplanStackId": {
+            "description": "The ID of the Bayplan stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (bayplan.stack.id). Empty for a stack Bayplan does not manage",
+            "type": "string"
+          },
           "createdAt": {
             "description": "When the secret was created",
             "format": "date-time",
@@ -9231,6 +9255,7 @@
           "usedBy",
           "owner",
           "ownerKind",
+          "bayplanStackId",
           "usedByRows"
         ],
         "type": "object"
@@ -9252,6 +9277,10 @@
       "SecretItem": {
         "additionalProperties": false,
         "properties": {
+          "bayplanStackId": {
+            "description": "The ID of the Bayplan stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (bayplan.stack.id). Empty for a stack Bayplan does not manage",
+            "type": "string"
+          },
           "createdAt": {
             "description": "When the secret was created",
             "format": "date-time",
@@ -9303,7 +9332,8 @@
           "updatedAt",
           "usedBy",
           "owner",
-          "ownerKind"
+          "ownerKind",
+          "bayplanStackId"
         ],
         "type": "object"
       },

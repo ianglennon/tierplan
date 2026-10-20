@@ -35,6 +35,7 @@ const detail = (extra: Partial<SecretDetail> = {}): SecretDetail => ({
   labels: { team: "data", env: "prod" },
   owner: "",
   ownerKind: "",
+  bayplanStackId: "",
   createdAt: "2026-10-01T10:00:00Z",
   updatedAt: "2026-10-02T10:00:00Z",
   usedBy: 0,

@@ -4199,6 +4199,8 @@ export interface components {
             templating?: string;
         };
         ConfigDetailBody: {
+            /** @description The ID of the Bayplan stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (bayplan.stack.id). Empty for a stack Bayplan does not manage */
+            bayplanStackId: string;
             /**
              * Format: date-time
              * @description When the config was created
@@ -4253,6 +4255,8 @@ export interface components {
             };
         };
         ConfigItem: {
+            /** @description The ID of the Bayplan stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (bayplan.stack.id). Empty for a stack Bayplan does not manage */
+            bayplanStackId: string;
             /**
              * Format: date-time
              * @description When the config was created
@@ -4402,6 +4406,8 @@ export interface components {
             nodeId: string;
         };
         ContainerDetailBody: {
+            /** @description The ID of the Bayplan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (bayplan.stack.id). Empty for a stack or project Bayplan does not manage */
+            bayplanStackId: string;
             /** @description The command (Cmd). Withheld, as the single entry <hidden>, unless the caller holds secrets.reveal on this environment: a command line often carries a password or token */
             command: string[] | null;
             /** @description True when command or entrypoint was withheld because the caller may not reveal secrets on this environment */
@@ -4510,6 +4516,8 @@ export interface components {
             masked: boolean;
         };
         ContainerItem: {
+            /** @description The ID of the Bayplan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (bayplan.stack.id). Empty for a stack or project Bayplan does not manage */
+            bayplanStackId: string;
             /** Format: date-time */
             created?: string;
             /**
@@ -7483,6 +7491,8 @@ export interface components {
             source?: "typed" | "file" | "rotate" | "apply";
         };
         SecretDetailBody: {
+            /** @description The ID of the Bayplan stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (bayplan.stack.id). Empty for a stack Bayplan does not manage */
+            bayplanStackId: string;
             /**
              * Format: date-time
              * @description When the secret was created
@@ -7523,6 +7533,8 @@ export interface components {
             };
         };
         SecretItem: {
+            /** @description The ID of the Bayplan stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (bayplan.stack.id). Empty for a stack Bayplan does not manage */
+            bayplanStackId: string;
             /**
              * Format: date-time
              * @description When the secret was created

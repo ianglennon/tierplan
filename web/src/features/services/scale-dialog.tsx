@@ -31,6 +31,7 @@ import type { BulkReport, BulkReportRow } from "@/features/containers/bulk-resul
 import { TruncatedText } from "@/features/resources/resource-table";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { type ScaleEligibility, scaleEligibility } from "@/features/services/eligibility";
+import { StackSentence } from "@/features/stacks/stack-link";
 import { useT } from "@/i18n/use-t";
 import { toastError, toastErrorWithAction, toastInfo, toastSuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -281,7 +282,13 @@ function ScaleForm({ envId, target, onClose, onScaled }: FormProps) {
         <Alert variant="warning" role="status">
           <TriangleAlert aria-hidden="true" />
           <AlertDescription className="text-foreground">
-            {t("services.scale.stackWarning", { name: target.name, stack: target.stack })}
+            <StackSentence
+              i18nKey="services.scale.stackWarning"
+              values={{ name: target.name }}
+              stack={target.stack}
+              envId={envId}
+              bayplanStackId={target.bayplanStackId}
+            />
           </AlertDescription>
         </Alert>
       ) : null}

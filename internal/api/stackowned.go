@@ -36,6 +36,12 @@ func stackOwner(labels map[string]string) (stack, bayplanID string, owned bool) 
 	return stack, labels[stacks.LabelStackID], true
 }
 
+// containerStack is the stack or project name a container shows: the one stackOwner reads.
+func containerStack(labels map[string]string) string {
+	stack, _, _ := stackOwner(labels)
+	return stack
+}
+
 // namespaceOwner is stackOwner as the service operations in swarmops take it.
 func namespaceOwner(labels map[string]string) (string, bool) {
 	stack, _, owned := stackOwner(labels)

@@ -37,6 +37,7 @@ const detail = (extra: Partial<ConfigDetail> = {}): ConfigDetail => ({
   labels: { team: "web", env: "prod" },
   owner: "",
   ownerKind: "",
+  bayplanStackId: "",
   templating: "none",
   size: YAML_TEXT.length,
   data: btoa(YAML_TEXT),

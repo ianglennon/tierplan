@@ -74,15 +74,16 @@ func (d ConfigsDeps) services() ServicesDeps {
 // every config's content with the list, and Bayplan drops it on the way in. The content is read
 // on the detail route.
 type ConfigItem struct {
-	ID         string            `json:"id" doc:"The config ID"`
-	Name       string            `json:"name" doc:"The config name"`
-	Labels     map[string]string `json:"labels" doc:"Every label of the config"`
-	CreatedAt  string            `json:"createdAt" format:"date-time" doc:"When the config was created"`
-	UpdatedAt  string            `json:"updatedAt" format:"date-time" doc:"When the config was last updated"`
-	Templating string            `json:"templating" enum:"none,golang" doc:"golang when the swarm fills the content in as a Go template when a task starts, else none"`
-	UsedBy     int               `json:"usedBy" doc:"How many services' specs reference the config, whatever their tasks are doing, a service scaled to 0 included"`
-	Owner      string            `json:"owner" doc:"The stack (com.docker.stack.namespace) label value; empty when the config has none"`
-	OwnerKind  string            `json:"ownerKind" enum:"stack," doc:"stack, or empty when the config has no owner"`
+	ID             string            `json:"id" doc:"The config ID"`
+	Name           string            `json:"name" doc:"The config name"`
+	Labels         map[string]string `json:"labels" doc:"Every label of the config"`
+	CreatedAt      string            `json:"createdAt" format:"date-time" doc:"When the config was created"`
+	UpdatedAt      string            `json:"updatedAt" format:"date-time" doc:"When the config was last updated"`
+	Templating     string            `json:"templating" enum:"none,golang" doc:"golang when the swarm fills the content in as a Go template when a task starts, else none"`
+	UsedBy         int               `json:"usedBy" doc:"How many services' specs reference the config, whatever their tasks are doing, a service scaled to 0 included"`
+	Owner          string            `json:"owner" doc:"The stack (com.docker.stack.namespace) label value; empty when the config has none"`
+	OwnerKind      string            `json:"ownerKind" enum:"stack," doc:"stack, or empty when the config has no owner"`
+	BayplanStackID string            `json:"bayplanStackId" doc:"The ID of the Bayplan stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (bayplan.stack.id). Empty for a stack Bayplan does not manage"`
 }
 
 // ConfigListBody is the answer of the configs list.
@@ -118,19 +119,20 @@ type ConfigUserBody struct {
 
 // ConfigDetailBody is one config with its content and the services that use it.
 type ConfigDetailBody struct {
-	ID         string            `json:"id" doc:"The config ID"`
-	Name       string            `json:"name" doc:"The config name"`
-	Labels     map[string]string `json:"labels" doc:"Every label of the config"`
-	CreatedAt  string            `json:"createdAt" format:"date-time" doc:"When the config was created"`
-	UpdatedAt  string            `json:"updatedAt" format:"date-time" doc:"When the config was last updated"`
-	Templating string            `json:"templating" enum:"none,golang" doc:"golang when the swarm fills the content in as a Go template when a task starts, else none"`
-	Size       int               `json:"size" doc:"The content's size in bytes"`
-	Data       string            `json:"data" doc:"The content as standard base64"`
-	Text       *string           `json:"text" nullable:"true" doc:"The content as text; null when it is not valid UTF-8, which the page shows as a file to download"`
-	UsedBy     int               `json:"usedBy" doc:"How many services' specs reference the config"`
-	Owner      string            `json:"owner" doc:"The stack (com.docker.stack.namespace) label value; empty when the config has none"`
-	OwnerKind  string            `json:"ownerKind" enum:"stack," doc:"stack, or empty when the config has no owner"`
-	UsedByRows []ConfigUserBody  `json:"usedByRows" doc:"Every service whose spec references the config, sorted by service name then ID"`
+	ID             string            `json:"id" doc:"The config ID"`
+	Name           string            `json:"name" doc:"The config name"`
+	Labels         map[string]string `json:"labels" doc:"Every label of the config"`
+	CreatedAt      string            `json:"createdAt" format:"date-time" doc:"When the config was created"`
+	UpdatedAt      string            `json:"updatedAt" format:"date-time" doc:"When the config was last updated"`
+	Templating     string            `json:"templating" enum:"none,golang" doc:"golang when the swarm fills the content in as a Go template when a task starts, else none"`
+	Size           int               `json:"size" doc:"The content's size in bytes"`
+	Data           string            `json:"data" doc:"The content as standard base64"`
+	Text           *string           `json:"text" nullable:"true" doc:"The content as text; null when it is not valid UTF-8, which the page shows as a file to download"`
+	UsedBy         int               `json:"usedBy" doc:"How many services' specs reference the config"`
+	Owner          string            `json:"owner" doc:"The stack (com.docker.stack.namespace) label value; empty when the config has none"`
+	OwnerKind      string            `json:"ownerKind" enum:"stack," doc:"stack, or empty when the config has no owner"`
+	BayplanStackID string            `json:"bayplanStackId" doc:"The ID of the Bayplan stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (bayplan.stack.id). Empty for a stack Bayplan does not manage"`
+	UsedByRows     []ConfigUserBody  `json:"usedByRows" doc:"Every service whose spec references the config, sorted by service name then ID"`
 }
 
 // ConfigDetailOutput wraps ConfigDetailBody for huma.
@@ -314,11 +316,12 @@ func configTemplatingLabel(driver string) string {
 	return templatingNone
 }
 
-func configItem(row dockerx.ConfigRow, used int) ConfigItem {
+func configItem(row dockerx.ConfigRow, used int, known stackIDs) ConfigItem {
 	owner, kind := configOwner(row.Labels)
 	return ConfigItem{
 		ID: row.ID, Name: row.Name, Labels: row.Labels, CreatedAt: rfc3339(row.CreatedAt), UpdatedAt: rfc3339(row.UpdatedAt),
 		Templating: configTemplatingLabel(row.Templating), UsedBy: used, Owner: owner, OwnerKind: kind,
+		BayplanStackID: known.confirm(owner, row.Labels[stacks.LabelStackID]),
 	}
 }
 
@@ -428,8 +431,9 @@ func listConfigs(ctx context.Context, d ConfigsDeps, envID string, in *ConfigLis
 	body := ConfigListBody{
 		Items: make([]ConfigItem, 0, len(shown)), Total: len(matched), UnfilteredTotal: len(rows), Capped: len(matched) > maxListRows,
 	}
+	known := loadStackIDs(ctx, d.Store, envID, d.Log)
 	for _, r := range shown {
-		body.Items = append(body.Items, configItem(r, used[r.ID]))
+		body.Items = append(body.Items, configItem(r, used[r.ID], known))
 	}
 	return body, nil
 }
@@ -470,7 +474,7 @@ func getConfig(ctx context.Context, d ConfigsDeps, envID, id string) (ConfigDeta
 	for i := range users {
 		users[i].Stack = stacks[users[i].ServiceID]
 	}
-	it := configItem(detail.ConfigRow, len(users))
+	it := configItem(detail.ConfigRow, len(users), loadStackIDs(ctx, d.Store, envID, d.Log))
 	var text *string
 	if utf8.Valid(detail.Data) {
 		s := string(detail.Data)
@@ -479,7 +483,7 @@ func getConfig(ctx context.Context, d ConfigsDeps, envID, id string) (ConfigDeta
 	return ConfigDetailBody{
 		ID: it.ID, Name: it.Name, Labels: it.Labels, CreatedAt: it.CreatedAt, UpdatedAt: it.UpdatedAt, Templating: it.Templating,
 		Size: len(detail.Data), Data: base64.StdEncoding.EncodeToString(detail.Data), Text: text,
-		UsedBy: it.UsedBy, Owner: it.Owner, OwnerKind: it.OwnerKind, UsedByRows: users,
+		UsedBy: it.UsedBy, Owner: it.Owner, OwnerKind: it.OwnerKind, BayplanStackID: it.BayplanStackID, UsedByRows: users,
 	}, nil
 }
 

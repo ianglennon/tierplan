@@ -541,6 +541,7 @@ export function ServiceEditorPage({
           serviceId={serviceId}
           name={data.name}
           stack={data.stack}
+          bayplanStackId={data.bayplanStackId}
           spec={current}
         />
       </div>

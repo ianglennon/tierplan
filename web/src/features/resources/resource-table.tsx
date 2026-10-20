@@ -70,6 +70,8 @@ export interface TableGroup<T> {
     summary?: ReactNode;
     badge?: ReactNode;
     checkbox?: ReactNode;
+    // The name as a link, for a group that is a stack Bayplan manages.
+    nameLink?: ReactNode;
   };
   // A line across every column, drawn under the header while the group is open: what stands in the
   // place of rows that could not be read.
@@ -543,6 +545,7 @@ export function ResourceTable<T>({
                         <GroupHeaderRow
                           colSpan={shownColumns.length}
                           name={g.header.name}
+                          nameLink={g.header.nameLink}
                           summary={g.header.summary}
                           badge={g.header.badge}
                           checkbox={g.header.checkbox}

@@ -42,6 +42,7 @@ export function rowOf(d: ContainerDetail): ContainerRow {
     readOnly: d.readOnly,
     project: d.project,
     stack: d.stack,
+    bayplanStackId: d.bayplanStackId,
     service: d.service,
   };
 }

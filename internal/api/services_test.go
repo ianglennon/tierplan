@@ -1124,6 +1124,7 @@ func TestContainerSecretAndConfigRowsAndDetailsLinkOnlyTheStacksBayplanManages(t
 	f.insertStackRow(t, e.ID, "stk-shop", "shop")
 	type row struct {
 		ID             string `json:"id"`
+		NodeID         string `json:"nodeId"`
 		Name           string `json:"name"`
 		BayplanStackID string `json:"bayplanStackId"`
 	}
@@ -1145,7 +1146,11 @@ func TestContainerSecretAndConfigRowsAndDetailsLinkOnlyTheStacksBayplanManages(t
 	wantContainers := map[string]string{"c-swarm": "stk-shop", "c-project": "stk-shop", "c-forged": "", "c-foreign": "", "c-plain": ""}
 	check("container", containers, wantContainers)
 	for _, r := range containers {
-		if d := decode[row](t, f.get(t, e, "containers/"+r.ID)); d.BayplanStackID != wantContainers[r.Name] {
+		rec := f.get(t, e, "containers/"+r.ID+"?nodeId="+r.NodeID)
+		if rec.code != http.StatusOK {
+			t.Fatalf("container detail %s = %d %s", r.Name, rec.code, rec.body)
+		}
+		if d := decode[row](t, rec); d.BayplanStackID != wantContainers[r.Name] {
 			t.Errorf("container detail %s bayplanStackId = %q, want %q", r.Name, d.BayplanStackID, wantContainers[r.Name])
 		}
 	}

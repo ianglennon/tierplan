@@ -24,6 +24,7 @@ import {
 import { SettingsCard } from "@/features/environments/settings-card";
 import { canScale, itemOf } from "@/features/service-detail/header-actions";
 import { ScaleDialog } from "@/features/services/scale-dialog";
+import { StackLink } from "@/features/stacks/stack-link";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { formatBytes } from "@/lib/format";
@@ -117,7 +118,7 @@ function ScaledToZero({ envId, detail }: { envId: string; detail: ServiceDetail 
   );
 }
 
-function ServiceCard({ detail }: { detail: ServiceDetail }) {
+function ServiceCard({ envId, detail }: { envId: string; detail: ServiceDetail }) {
   const t = useT();
   const missing = useMissing();
   const isJob = detail.mode === "replicated-job" || detail.mode === "global-job";
@@ -144,7 +145,14 @@ function ServiceCard({ detail }: { detail: ServiceDetail }) {
           },
           { key: t(`${key}.service.created`), value: <RelativeTime value={detail.createdAt} /> },
           { key: t(`${key}.service.updated`), value: <RelativeTime value={detail.updatedAt} /> },
-          { key: t(`${key}.service.stack`), value: detail.stack || missing },
+          {
+            key: t(`${key}.service.stack`),
+            value: detail.stack ? (
+              <StackLink envId={envId} name={detail.stack} bayplanStackId={detail.bayplanStackId} />
+            ) : (
+              missing
+            ),
+          },
           {
             key: t(`${key}.service.restartAlerts`),
             value: t(`${key}.service.${detail.muted ? "alertsMuted" : "alertsOn"}`),
@@ -554,7 +562,7 @@ export function ServiceOverview({ envId, serviceId }: ServiceOverviewProps) {
       {canScale(data) && data.desired === 0 ? <ScaledToZero envId={envId} detail={data} /> : null}
       <div className="grid items-start gap-4 lg:grid-cols-2">
         <div className="flex min-w-0 flex-col gap-4">
-          <ServiceCard detail={data} />
+          <ServiceCard envId={envId} detail={data} />
           <ImageCard detail={data} />
           <PortsCard detail={data} />
           <MountsCard envId={envId} detail={data} />

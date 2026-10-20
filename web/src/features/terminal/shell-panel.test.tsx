@@ -608,6 +608,7 @@ const rowFixture = (over: Partial<ContainerRow> = {}): ContainerRow => ({
   ports: [],
   project: "",
   stack: "",
+  bayplanStackId: "",
   service: "",
   ...over,
 });
