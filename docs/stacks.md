@@ -132,7 +132,9 @@ Import it into Variables, or use it as an env_file.*)
 rendered YAML, the console, the logs and the audit log, and is readable only by someone who holds
 `secrets.reveal`. **Show** reads it for 60 seconds and writes a `stack.value_revealed` row first; if that row
 can't be written, you get no value. A secret value needs at least 4 characters, so that hiding it can't hide
-ordinary words. Secret variables are interpolated like any other: they are **not** turned into Docker secrets.
+ordinary words. Bayplan hides the value as stored and in the escaped forms error messages write it in, and a
+value of several lines, such as a PEM key, is also hidden line by line (each line of 4 characters or more, for the
+first 200 lines of a value up to 64 KB; a longer value is hidden whole). Secret variables are interpolated like any other: they are **not** turned into Docker secrets.
 Put a value a container should read as a file in a [secret file](#secrets-and-configs) instead.
 
 ## Secrets and configs
