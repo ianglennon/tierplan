@@ -921,3 +921,70 @@ func TestCheckKeepsTheLoaderWordsWhereNoSecretIsQuoted(t *testing.T) {
 		})
 	}
 }
+
+// An Operator without secrets.reveal must not learn whether a guess is part of a secret from what an
+// answer quotes (D-02, 07-REVIEW-gaps2 CR-01). PW is Zq9xkwmpr and is used only in an environment
+// value. The guesses are letters only, so every one fails the same parser the same way; all are
+// shorter than the secret, and the secret is a single line with no quote character, so none equals
+// a form the masker hides. After the guess is replaced by GUESS, the error problems of a window of
+// the secret (xkwm, kwmp, wmpr) and of a guess that is not (xkwn, aaaa) must be identical.
+func TestCheckAnswersAPlainFieldTheSameWhetherOrNotItsValueIsPartOfASecret(t *testing.T) {
+	t.Parallel()
+	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n    environment:\n      DB: ${PW}\n"
+	guesses := []string{"xkwm", "kwmp", "wmpr", "xkwn", "aaaa"}
+	pw := stacks.Var{Name: "PW", Value: "Zq9xkwmpr", Secret: true}
+	cases := []struct {
+		name string
+		body string // %s is the guess
+		key  string // the key the problem is reported at, "" when the field is not named
+		want string // a text the message contains, with %s the guess
+	}{
+		{"mem_limit", "    mem_limit: %s\n", "services.web.mem_limit", "invalid size: '%s'"},
+		{"stop_grace_period", "    stop_grace_period: %s\n", "services.web.stop_grace_period", ""},
+		{"deploy.replicas", "    deploy:\n      replicas: %s\n", "services.web.deploy.replicas", "failed to cast to expected type"},
+		{"pull_policy", "    pull_policy: %s\n", "services.web.pull_policy", "does not match pattern"},
+		{"a port spec", "    ports: [\"%s:80\"]\n", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var first stacks.Problems
+			for i, g := range guesses {
+				res := withVars(t, head+strings.ReplaceAll(tc.body, "%s", g), pw)
+				var errs stacks.Problems
+				for _, p := range res.Problems {
+					if p.Severity != stacks.SeverityError {
+						continue
+					}
+					p.Message = strings.ReplaceAll(p.Message, g, "GUESS")
+					p.Key = strings.ReplaceAll(p.Key, g, "GUESS")
+					errs = append(errs, p)
+				}
+				if len(errs) != 1 {
+					t.Fatalf("guess %q: error problems = %+v, want exactly one", g, errs)
+				}
+				p := errs[0]
+				if tc.key == "" {
+					if p.Message != stacks.SecretValueMessage("") {
+						t.Errorf("guess %q: message = %q, want the general sentence", g, p.Message)
+					}
+				} else {
+					if p.Key != tc.key {
+						t.Errorf("guess %q: key = %q, want %q", g, p.Key, tc.key)
+					}
+					if strings.Contains(p.Message, "It comes from a secret variable") {
+						t.Errorf("guess %q: message = %q, want the loader's words for a plain field", g, p.Message)
+					}
+					if want := strings.ReplaceAll(tc.want, "%s", "GUESS"); !strings.Contains(p.Message, want) {
+						t.Errorf("guess %q: message = %q, want it to contain %q", g, p.Message, want)
+					}
+				}
+				if i == 0 {
+					first = errs
+				} else if !slices.Equal(errs, first) {
+					t.Errorf("guess %q: error problems = %+v, want the same as for %q: %+v", g, errs, guesses[0], first)
+				}
+			}
+		})
+	}
+}
