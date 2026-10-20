@@ -71,6 +71,8 @@ export interface LogToolbarProps {
   // follows, said beside the Live chip once connected. A container's log has neither.
   taskNames?: { on: boolean; onChange: (on: boolean) => void };
   following?: number;
+  // What a stack's log follows when it is containers of a standalone host and not tasks.
+  followingUnit?: "tasks" | "containers";
   // The third row of a service's log: the task and node filters and the stopped switch
   // (plan 06-30, D-33).
   filterBar?: ReactNode;
@@ -147,7 +149,9 @@ export function LogToolbar(p: LogToolbarProps) {
   const followingLabel =
     p.live && p.following !== undefined ? (
       <span className="text-xs text-muted-foreground">
-        {t("logs.following", { count: p.following })}
+        {t(p.followingUnit === "containers" ? "stackLogs.followingContainers" : "logs.following", {
+          count: p.following,
+        })}
       </span>
     ) : null;
 

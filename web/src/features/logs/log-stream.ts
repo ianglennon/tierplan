@@ -10,6 +10,7 @@ import type {
   ServiceLogTask,
   ServiceMarkerEvent,
   ServiceNodeEvent,
+  StackCapEvent,
 } from "@/features/logs/log-source";
 import { apiUrl } from "@/lib/base-path";
 
@@ -81,6 +82,8 @@ export interface LogStreamOptions extends StreamTarget {
   // runs a followed task stopped reporting or is back (D-37).
   onMarker?: (marker: ServiceMarkerEvent) => void;
   onNode?: (notice: ServiceNodeEvent) => void;
+  // A stack has more tasks or containers than its stream follows at once (plan 07-29, D-22).
+  onCap?: (info: StackCapEvent) => void;
   onContainerState?: (state: ContainerLogState) => void;
   // The engine cannot read this container's log. The stream is closed.
   onUnreadable?: (info: UnreadableInfo) => void;
@@ -145,7 +148,15 @@ export function logStreamUrl(
     if (o.service?.nodes?.length) q.set("node", o.service.nodes.join(","));
     if (o.service?.stopped) q.set("stopped", "1");
   }
-  const what = src.kind === "service" ? "services" : "containers";
+  if (src.kind === "stack") {
+    // A stack's stream names its narrowing in the plural.
+    if (o.service?.services?.length) q.set("services", o.service.services.join(","));
+    if (o.service?.tasks?.length) q.set("tasks", o.service.tasks.join(","));
+    if (o.service?.nodes?.length) q.set("nodes", o.service.nodes.join(","));
+    if (o.service?.containers?.length) q.set("containers", o.service.containers.join(","));
+    if (o.service?.stopped) q.set("stopped", "1");
+  }
+  const what = { container: "containers", service: "services", stack: "stacks" }[src.kind];
   return apiUrl(
     `/api/env/${encodeURIComponent(o.envId)}/${what}/${encodeURIComponent(src.id)}/logs/stream?${q}`,
   );
@@ -179,8 +190,11 @@ function readMarker(body: unknown): ServiceMarkerEvent | undefined {
   const next = text(b.new);
   const node = text(b.node);
   const at = text(b.at);
+  const service = text(b.service);
   return {
     kind: b.kind,
+    ...(service ? { service } : {}),
+    ...(b.unit === "container" ? { unit: "container" as const } : {}),
     slot,
     old,
     oldState: text(b.oldState) ?? "",
@@ -204,6 +218,16 @@ function readNodeNotice(body: unknown): ServiceNodeEvent | undefined {
   return { kind: b.kind, node, ...(at ? { at } : {}) };
 }
 
+// readCap takes the cap event of a stack's stream for what it should be, or nothing.
+function readCap(body: unknown): StackCapEvent | undefined {
+  if (typeof body !== "object" || body === null) return undefined;
+  const b = body as Record<string, unknown>;
+  const n = count(b.count);
+  const cap = count(b.cap);
+  if (n === undefined || cap === undefined) return undefined;
+  return { count: n, cap, unit: b.unit === "containers" ? "containers" : "tasks" };
+}
+
 function parse<T>(event: Event): T | undefined {
   try {
     return JSON.parse((event as MessageEvent<string>).data) as T;
@@ -222,6 +246,13 @@ async function probeLog(o: LogStreamOptions): Promise<number> {
     if (src.kind === "service") {
       const res = await api.GET("/api/env/{envId}/services/{serviceId}/tasks", {
         params: { path: { envId: o.envId, serviceId: src.id } },
+      });
+      return res.response.status;
+    }
+    if (src.kind === "stack") {
+      // The stack's services route needs the same permission as its log.
+      const res = await api.GET("/api/env/{envId}/stacks/{stackId}/services", {
+        params: { path: { envId: o.envId, stackId: src.id } },
       });
       return res.response.status;
     }
@@ -358,6 +389,12 @@ export function createLogStream(options: LogStreamOptions): LogStream {
       const notice = readNodeNotice(parse<unknown>(event));
       if (notice) options.onNode?.(notice);
     });
+    // A stack has more than its stream follows.
+    mine.addEventListener("cap", (event) => {
+      if (!live()) return;
+      const info = readCap(parse<unknown>(event));
+      if (info) options.onCap?.(info);
+    });
     mine.addEventListener("log", (event) => {
       if (!live()) return;
       const body = parse<{ lines?: LogLineData[] }>(event);
@@ -478,6 +515,8 @@ export interface LogPageOptions extends StreamTarget {
 export async function fetchLogPage(o: LogPageOptions): Promise<LogPage> {
   const src = sourceOf(o);
   const tail = o.tail ?? 500;
+  // A stack's log offers no earlier page; the Show range reaches further back.
+  if (src.kind === "stack") throw new Error("A stack's log has no earlier pages");
   if (src.kind === "service") {
     const f = o.service;
     const res = await api.GET("/api/env/{envId}/services/{serviceId}/logs", {

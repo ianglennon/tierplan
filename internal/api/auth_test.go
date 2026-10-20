@@ -163,6 +163,9 @@ type authFixture struct {
 	// serviceLogsBurstEnded is called when a service log stream has taken its opening burst as
 	// complete (newSvcLogsFix sets it, and tests await it through svcLogsFix.awaitBurstEnd).
 	serviceLogsBurstEnded func()
+	// stackLogs tunes the log stream and the download of a stack (plan 07-29); zero is the default.
+	// Its Now is the fixture's clock unless a test sets one.
+	stackLogs api.StackLogsTuning
 	// serviceLogsMaxPageBytes, serviceLogsMaxDownloadBytes and serviceLogsMaxDownloads tune the
 	// page and the download of a service's log (plan 06-31).
 	serviceLogsMaxPageBytes     int
@@ -353,7 +356,12 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			Resolver:          registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
 			MaxStreamsPerUser: f.pullsMaxStreams, MaxLifetime: f.pullsMaxLifetime, NodeTimeout: f.pullsNodeTimeout, Log: log,
 		})
+		stackLogs := f.stackLogs
+		if stackLogs.Now == nil {
+			stackLogs.Now = f.clk.now
+		}
 		api.RegisterStacks(r, api.StacksDeps{
+			Logs:       stackLogs,
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
 			Audit: f.aud, Checker: checker, Jobs: f.jobHub, Store: f.st, Vault: f.v, Log: log,
 			CheckDeadline: f.stackCheckDeadline, OnCheck: f.stackOnCheck, BeforeJob: f.stackBeforeJob, Up: f.stackUp, StopProject: f.stackStop, StartProject: f.stackStart, DownProject: f.stackDown, ReadEnv: f.stackReadEnv,

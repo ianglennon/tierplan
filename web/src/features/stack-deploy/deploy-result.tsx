@@ -24,7 +24,6 @@ import { CONVERGE_TIMEOUT } from "@/features/stack-deploy/deploy-service-row";
 import { isStandalone } from "@/features/stack-deploy/deploy-step-list";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
-import { withBase } from "@/lib/base-path";
 import { formatRelative } from "@/lib/format";
 import { toastError, toastInfo } from "@/lib/toast";
 
@@ -286,15 +285,10 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
         </p>
         <div className="flex flex-wrap gap-2">
           {stack}
-          {/* The stack's Logs tab is a page of its own; until it exists this is a plain address. */}
           <Button asChild variant="outline" className="max-md:h-11">
-            <a
-              href={withBase(
-                `/env/${encodeURIComponent(envId)}/stacks/${encodeURIComponent(stackId)}/logs`,
-              )}
-            >
+            <Link to="/env/$envId/stacks/$stackId/logs" params={{ envId, stackId }}>
               {t("stackDeploy.openLogs")}
-            </a>
+            </Link>
           </Button>
         </div>
       </section>

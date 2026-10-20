@@ -20,6 +20,8 @@ export interface LogLineData {
   task?: string;
   slot?: number;
   node?: string;
+  // A stack's log merges the lines of several services, so each names its own (plan 07-29, D-22).
+  service?: string;
 }
 
 // A line in the buffer, with the number that names it for as long as it is held.

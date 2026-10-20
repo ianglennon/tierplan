@@ -107,6 +107,9 @@ type StacksDeps struct {
 	// MaxStreamsPerUser caps concurrent deploy streams per user. Zero means 4.
 	MaxStreamsPerUser int
 
+	// Logs tunes the log stream and the download of a stack's merged log; every zero value is the default.
+	Logs StackLogsTuning
+
 	// Locks is the per-environment operation lock: one stack operation at a time runs on an environment.
 	// The janitor of Phase 11 takes the same one. Nil means a lock of this deps' own.
 	Locks stackops.OperationLock
@@ -323,6 +326,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 	registerStackJobs(r, d)
 	registerStackOverview(r, d)
 	registerStackResources(r, d)
+	registerStackLogs(r, d)
 }
 
 // stackNotFound is the 404 for a stack the environment does not have.

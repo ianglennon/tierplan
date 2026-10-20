@@ -46,13 +46,19 @@ export function downloadUrl(
   if (src.kind === "container" && src.nodeId) q.set("nodeId", src.nodeId);
   if (range.since) q.set("since", range.since);
   if (range.until) q.set("until", range.until);
-  // A service's file always starts each line with its task and the UTC time.
+  // A service's or a stack's file always starts each line with its task and the UTC time.
   if (src.kind === "container" && timestamps) q.set("timestamps", "1");
   const query = q.toString();
-  const what = src.kind === "service" ? "services" : "containers";
+  const what = { container: "containers", service: "services", stack: "stacks" }[src.kind];
   return apiUrl(
     `/api/env/${encodeURIComponent(target.envId)}/${what}/${encodeURIComponent(src.id)}/logs/download${query ? `?${query}` : ""}`,
   );
+}
+
+// downloadNoteKey is the note under the form: what the file holds and where it comes from.
+function downloadNoteKey(kind: "container" | "service" | "stack"): string {
+  if (kind === "stack") return "stackLogs.download.note";
+  return kind === "service" ? "logs.download.serviceNote" : "logs.download.note";
 }
 
 // defaultRange is the From and To the form opens with: the range the viewer shows, in
@@ -102,7 +108,9 @@ export interface DownloadFormProps {
 function DownloadForm({ target, show, timestamps, onCancel }: DownloadFormProps) {
   const t = useT();
   const id = useId();
-  const isService = sourceOf(target).kind === "service";
+  const kind = sourceOf(target).kind;
+  // A service's and a stack's file always carry the time, so the box is a container's alone.
+  const isMerged = kind !== "container";
   const initial = useMemo(() => defaultRange(show, new Date()), [show]);
   const [from, setFrom] = useState(initial.from);
   const [to, setTo] = useState(initial.to);
@@ -163,7 +171,7 @@ function DownloadForm({ target, show, timestamps, onCancel }: DownloadFormProps)
         ) : null}
       </div>
       <p className="text-xs text-muted-foreground">{t("logs.download.empty")}</p>
-      {isService ? null : (
+      {isMerged ? null : (
         <div className="flex items-center gap-2">
           <Checkbox
             id={`${id}-ts`}
@@ -175,9 +183,7 @@ function DownloadForm({ target, show, timestamps, onCancel }: DownloadFormProps)
           </Label>
         </div>
       )}
-      <p className="text-xs text-muted-foreground">
-        {t(isService ? "logs.download.serviceNote" : "logs.download.note")}
-      </p>
+      <p className="text-xs text-muted-foreground">{t(downloadNoteKey(kind))}</p>
       <div className="flex justify-end gap-2">
         <Button type="button" variant="outline" size="sm" onClick={onCancel}>
           {t("logs.download.cancel")}
@@ -228,11 +234,7 @@ export function DownloadDialog({
         <DialogHeader>
           <DialogTitle>{t("logs.download.title")}</DialogTitle>
           <DialogDescription className="sr-only">
-            {t(
-              sourceOf(props.target).kind === "service"
-                ? "logs.download.serviceNote"
-                : "logs.download.note",
-            )}
+            {t(downloadNoteKey(sourceOf(props.target).kind))}
           </DialogDescription>
         </DialogHeader>
         <DownloadForm {...props} onCancel={() => onOpenChange(false)} />

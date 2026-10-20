@@ -277,38 +277,45 @@ type dueMarker struct {
 // the cluster reader's last node list.
 func (d ServiceLogsDeps) loadTasks(envID, serviceID string) func(context.Context) ([]taskInfo, error) {
 	return func(ctx context.Context) ([]taskInfo, error) {
-		readCtx, cancel := context.WithTimeout(ctx, inspectTimeout)
-		defer cancel()
-		var rows []dockerx.TaskRow
-		err := d.Clusters.ClusterRead(readCtx, envID, func(c *dockerx.Client) error {
-			var e error
-			rows, e = c.Tasks(readCtx, dockerx.TaskFilter{ServiceIDs: []string{serviceID}})
-			return e
-		})
-		if err != nil {
-			return nil, err
-		}
-		nodes := map[string]dockerx.NodeRow{}
-		if st, err := d.Clusters.State(readCtx, envID); err == nil {
-			for _, n := range st.Read.Nodes {
-				nodes[n.ID] = n
-			}
-		}
-		out := make([]taskInfo, 0, len(rows))
-		for _, r := range rows {
-			n := nodes[r.NodeID]
-			host := cleanTaskText(n.Hostname)
-			if host == "" {
-				host = r.NodeID
-			}
-			out = append(out, taskInfo{
-				ID: r.ID, Slot: r.Slot, NodeID: r.NodeID, Node: host,
-				State: effectiveTaskState(r, n.State), Ended: taskEnded(r.State),
-				NodeState: n.State, Created: r.CreatedAt, Since: cmp.Or(r.StateSince, r.UpdatedAt), ExitCode: r.ExitCode,
-			})
-		}
-		return out, nil
+		return readTaskInfos(ctx, d.Clusters, envID, []string{serviceID}, nil)
 	}
+}
+
+// readTaskInfos reads the tasks of the given services and the nodes they are on in one cluster
+// read and the cluster reader's last node list. names says by service ID what each task carries
+// as the name of its service; a service it does not name leaves the task's empty.
+func readTaskInfos(ctx context.Context, clusters *envs.Clusters, envID string, serviceIDs []string, names map[string]string) ([]taskInfo, error) {
+	readCtx, cancel := context.WithTimeout(ctx, inspectTimeout)
+	defer cancel()
+	var rows []dockerx.TaskRow
+	err := clusters.ClusterRead(readCtx, envID, func(c *dockerx.Client) error {
+		var e error
+		rows, e = c.Tasks(readCtx, dockerx.TaskFilter{ServiceIDs: serviceIDs})
+		return e
+	})
+	if err != nil {
+		return nil, err
+	}
+	nodes := map[string]dockerx.NodeRow{}
+	if st, err := clusters.State(readCtx, envID); err == nil {
+		for _, n := range st.Read.Nodes {
+			nodes[n.ID] = n
+		}
+	}
+	out := make([]taskInfo, 0, len(rows))
+	for _, r := range rows {
+		n := nodes[r.NodeID]
+		host := cleanTaskText(n.Hostname)
+		if host == "" {
+			host = r.NodeID
+		}
+		out = append(out, taskInfo{
+			ID: r.ID, Service: names[r.ServiceID], Slot: r.Slot, NodeID: r.NodeID, Node: host,
+			State: effectiveTaskState(r, n.State), Ended: taskEnded(r.State),
+			NodeState: n.State, Created: r.CreatedAt, Since: cmp.Or(r.StateSince, r.UpdatedAt), ExitCode: r.ExitCode,
+		})
+	}
+	return out, nil
 }
 
 // resolveService finds the service a route was asked about, in the same cluster read that

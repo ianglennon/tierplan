@@ -1,0 +1,19 @@
+{
+  "stackLogs": {
+    "tab": "Logs",
+    "emptyBody": "New lines appear here as the stack's services write them.",
+    "noMatch": "Nothing matches these filters.",
+    "followingContainers_one": "Following {{count}} container",
+    "followingContainers_other": "Following {{count}} containers",
+    "cap": {
+      "tasks": "This stack has {{count}} tasks. Bayplan follows {{cap}} at a time. Filter by service, node or task to see the others.",
+      "containers": "This stack has {{count}} containers. Bayplan follows {{cap}} at a time. Filter by service or container to see the others."
+    },
+    "marker": {
+      "replacedContainer": "— {{service}} replaced: container {{old}} → {{new}} —"
+    },
+    "download": {
+      "note": "Lines from all of the stack's services are merged in time order, each starting with its name. Downloads come straight from Docker, so they aren't limited to what's loaded here. Times are in UTC."
+    }
+  }
+}
