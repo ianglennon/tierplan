@@ -1939,9 +1939,29 @@ export interface paths {
         put?: never;
         /**
          * Create a stack
-         * @description Creates a stack and its first draft. Nothing is sent to any engine: the stack is Not deployed until it is deployed. The target is fixed here from the environment: swarm when the environment is a swarm, standalone otherwise. The name must match ^[a-z0-9][a-z0-9_-]{0,62}$ (422 stack_name_invalid) and be new on the environment (409 stack_name_taken). A name that something Bayplan does not manage already uses on the environment (a swarm namespace or a Compose project with that name, without this stack's bayplan.stack.id) is 409 stack_name_clash. start chooses the first compose.yaml: example (a starter with one service) or empty; compose overrides it. Audited as stack.created. Needs stacks.create (Admin).
+         * @description Creates a stack and its first draft. Nothing is sent to any engine: the stack is Not deployed until it is deployed. The target is fixed here from the environment: swarm when the environment is a swarm, standalone otherwise. The name must match ^[a-z0-9][a-z0-9_-]{0,62}$ (422 stack_name_invalid) and be new on the environment (409 stack_name_taken). A name that something Bayplan does not manage already uses on the environment (a swarm namespace or a Compose project with that name, without this stack's bayplan.stack.id) is 409 stack_name_clash. start chooses the first compose.yaml: example (a starter with one service), empty, or upload (the file in compose, kept as it is even when it does not parse; over 1 MiB is 422 file_too_large); compose overrides example and empty. Audited as stack.created. Needs stacks.create (Admin).
          */
         post: operations["createStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/name-check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether a stack name can be used on an environment
+         * @description Answers available, taken (a stack of Bayplan's has it on this environment), clash (something Bayplan does not manage has it: a swarm namespace or a Compose project of that name) or invalid, with the sentence to show. The Create stack dialog asks when the name field loses focus and again on submit. It only reads: nothing is stored, audited or sent to an engine. It needs stacks.create on the environment, so it cannot be used to probe what an environment holds by anyone who may not create there.
+         */
+        get: operations["checkStackName"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -8309,11 +8329,11 @@ export interface components {
             state: string;
         };
         StackCreateRequest: {
-            /** @description The text of the first compose.yaml. When it is given, start is ignored */
+            /** @description The text of the first compose.yaml. When it is given, start is ignored; with start upload it is the uploaded file as it was read, kept even when it does not parse (the editor shows the problems). Over 1 MiB is 422 file_too_large */
             compose?: string;
             /** @description The stack's name: lowercase letters, numbers, dash and underscore, starting with a letter or number, at most 63 characters. Anything else is 422 stack_name_invalid */
             name: string;
-            /** @description What the first draft holds when compose is left out: example (the default) is a starter file with one web service, empty is an empty compose.yaml. Anything else is 422 stack_start_invalid */
+            /** @description What the first draft holds when compose is left out: example (the default) is a starter file with one web service, empty is an empty compose.yaml, upload is the file the person chose (compose, which may be empty). Anything else is 422 stack_start_invalid */
             start?: string;
         };
         StackDeployBody: {
@@ -8698,6 +8718,15 @@ export interface components {
             startedAt: string;
             /** @description Who started it, as a name */
             startedBy: string;
+        };
+        StackNameCheckBody: {
+            /** @description The sentence to show for a name that cannot be used, naming the environment where it matters; empty when it is available */
+            message: string;
+            /**
+             * @description available: the name can be used. taken: one of Bayplan's stacks on this environment has it. clash: something Bayplan does not manage has it on this environment (D-12). invalid: the name breaks the rule
+             * @enum {string}
+             */
+            status: "available" | "taken" | "clash" | "invalid";
         };
         StackOperationBody: {
             /** @description A stable word for how a failed operation failed, such as service_rejected, converge_timeout or interrupted; empty otherwise */
@@ -13851,6 +13880,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackDetail"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    checkStackName: {
+        parameters: {
+            query?: {
+                /** @description The name to check */
+                name?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackNameCheckBody"];
                 };
             };
             /** @description Error */

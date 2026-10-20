@@ -17,6 +17,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/bayplan/internal/stacks"
 )
 
 // maxStackQuery is the longest search the stack lists take, in characters.
@@ -400,4 +401,81 @@ func compareText(a, b string) int {
 		return c
 	}
 	return strings.Compare(a, b)
+}
+
+// StackNameCheckBody is the verdict on a stack name for one environment.
+type StackNameCheckBody struct {
+	Status  string `json:"status" enum:"available,taken,clash,invalid" doc:"available: the name can be used. taken: one of Bayplan's stacks on this environment has it. clash: something Bayplan does not manage has it on this environment (D-12). invalid: the name breaks the rule"`
+	Message string `json:"message" doc:"The sentence to show for a name that cannot be used, naming the environment where it matters; empty when it is available"`
+}
+
+// StackNameCheckInput is the path and query of the name check.
+type StackNameCheckInput struct {
+	EnvironmentPathInput
+	Name string `query:"name" maxLength:"200" doc:"The name to check"`
+}
+
+// StackNameCheckOutput wraps StackNameCheckBody for huma.
+type StackNameCheckOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         StackNameCheckBody
+}
+
+func stackNameTakenMessage(name, envName string) string {
+	return "A stack named " + name + " already exists on " + envName + "."
+}
+
+func registerStackNameCheck(r *httpx.Router, d StacksDeps) {
+	httpx.Register(r, huma.Operation{
+		OperationID: "checkStackName", Method: http.MethodGet, Path: "/api/env/{envId}/stacks/name-check",
+		Summary: "Whether a stack name can be used on an environment",
+		Description: "Answers available, taken (a stack of Bayplan's has it on this environment), clash (something Bayplan does not manage has it: a swarm namespace or a Compose project of that name) or invalid, with the sentence to show. " +
+			"The Create stack dialog asks when the name field loses focus and again on submit. It only reads: nothing is stored, audited or sent to an engine. " +
+			"It needs stacks.create on the environment, so it cannot be used to probe what an environment holds by anyone who may not create there.",
+		Tags: []string{"stacks"},
+	}, rbac.Requirement{Perm: rbac.PermStacksCreate, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *StackNameCheckInput) (*StackNameCheckOutput, error) {
+			return checkStackName(ctx, d, in)
+		})
+}
+
+func checkStackName(ctx context.Context, d StacksDeps, in *StackNameCheckInput) (*StackNameCheckOutput, error) {
+	env := httpx.EnvFrom(ctx)
+	if env == nil {
+		return nil, huma.Error500InternalServerError("internal error")
+	}
+	answer := func(status, message string) (*StackNameCheckOutput, error) {
+		return &StackNameCheckOutput{CacheControl: "no-store", Body: StackNameCheckBody{Status: status, Message: message}}, nil
+	}
+	name := in.Name
+	if !stacks.NameValid(name) {
+		return answer("invalid", stackNameInvalidMessage)
+	}
+	own, err := d.repo().Stacks(ctx, env.ID)
+	if err != nil {
+		return nil, stackInternal(d, "name check", env.ID, err)
+	}
+	if slices.ContainsFunc(own, func(s stackops.Stack) bool { return s.Name == name }) {
+		return answer("taken", stackNameTakenMessage(name, env.Name))
+	}
+	if d.Clusters == nil {
+		d.Log.Error("the stack routes have no cluster reader")
+		return nil, huma.Error500InternalServerError("internal error")
+	}
+	swarm, err := d.Clusters.IsSwarm(ctx, env.ID)
+	if err != nil {
+		return nil, snapshotProblem(d.Log, env.ID, err)
+	}
+	target := stacks.TargetStandalone
+	if swarm {
+		target = stacks.TargetSwarm
+	}
+	foreign, err := d.ops().ForeignStack(ctx, env.ID, target, name, "")
+	if err != nil {
+		return nil, snapshotProblem(d.Log, env.ID, err)
+	}
+	if foreign {
+		return answer("clash", stackops.NameClashMessage(name))
+	}
+	return answer("available", "")
 }

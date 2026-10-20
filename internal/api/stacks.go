@@ -61,6 +61,10 @@ const (
 
 	stackStartExample = "example"
 	stackStartEmpty   = "empty"
+	stackStartUpload  = "upload"
+
+	// stackNameInvalidMessage is the sentence for a name the rule refuses, on create and on the name check.
+	stackNameInvalidMessage = "Use lowercase letters, numbers, dash or underscore, and start with a letter or number."
 
 	// maxStackBody is the largest request body of a stack route: a compose file and files beside it.
 	maxStackBody = 8 << 20
@@ -227,8 +231,8 @@ type StackPathInput struct {
 // StackCreateRequest is the body of POST /api/env/{envId}/stacks.
 type StackCreateRequest struct {
 	Name    string `json:"name" maxLength:"200" doc:"The stack's name: lowercase letters, numbers, dash and underscore, starting with a letter or number, at most 63 characters. Anything else is 422 stack_name_invalid"`
-	Start   string `json:"start,omitempty" doc:"What the first draft holds when compose is left out: example (the default) is a starter file with one web service, empty is an empty compose.yaml. Anything else is 422 stack_start_invalid"`
-	Compose string `json:"compose,omitempty" maxLength:"1100000" doc:"The text of the first compose.yaml. When it is given, start is ignored"`
+	Start   string `json:"start,omitempty" doc:"What the first draft holds when compose is left out: example (the default) is a starter file with one web service, empty is an empty compose.yaml, upload is the file the person chose (compose, which may be empty). Anything else is 422 stack_start_invalid"`
+	Compose string `json:"compose,omitempty" maxLength:"1100000" doc:"The text of the first compose.yaml. When it is given, start is ignored; with start upload it is the uploaded file as it was read, kept even when it does not parse (the editor shows the problems). Over 1 MiB is 422 file_too_large"`
 }
 
 // StackCreateInput is the path and body of the create route.
@@ -280,7 +284,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 			"The target is fixed here from the environment: swarm when the environment is a swarm, standalone otherwise. " +
 			"The name must match ^[a-z0-9][a-z0-9_-]{0,62}$ (422 stack_name_invalid) and be new on the environment (409 stack_name_taken). " +
 			"A name that something Bayplan does not manage already uses on the environment (a swarm namespace or a Compose project with that name, without this stack's bayplan.stack.id) is 409 stack_name_clash. " +
-			"start chooses the first compose.yaml: example (a starter with one service) or empty; compose overrides it. Audited as stack.created. Needs stacks.create (Admin).",
+			"start chooses the first compose.yaml: example (a starter with one service), empty, or upload (the file in compose, kept as it is even when it does not parse; over 1 MiB is 422 file_too_large); compose overrides example and empty. Audited as stack.created. Needs stacks.create (Admin).",
 		Tags: []string{"stacks"}, DefaultStatus: http.StatusCreated, MaxBodyBytes: maxStackBody,
 	}, rbac.Requirement{Perm: rbac.PermStacksCreate, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackCreateInput) (*StackDetailOutput, error) {
@@ -298,6 +302,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 		})
 
 	registerAllStacks(r, d)
+	registerStackNameCheck(r, d)
 	registerStackDraft(r, d)
 	// A render is a check of the working copy followed by a view of what it loaded, so the two
 	// share one limit of checks running per user.
@@ -483,21 +488,20 @@ func createStack(ctx context.Context, d StacksDeps, in *StackCreateInput) (*Stac
 	}
 	name := in.Body.Name
 	if !stacks.NameValid(name) {
-		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemStackNameInvalid,
-			"Use lowercase letters, numbers, dash or underscore, and start with a letter or number.")
+		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemStackNameInvalid, stackNameInvalidMessage)
 	}
 	compose := in.Body.Compose
 	if compose == "" {
 		switch in.Body.Start {
 		case "", stackStartExample:
 			compose = stacks.StarterCompose
-		case stackStartEmpty:
+		case stackStartEmpty, stackStartUpload:
 		default:
-			return nil, httpx.Problem(http.StatusUnprocessableEntity, problemStackStartInvalid, "Start from the starter example or an empty file.")
+			return nil, httpx.Problem(http.StatusUnprocessableEntity, problemStackStartInvalid, "Start from the starter example, an empty file or an uploaded file.")
 		}
 	}
 	if len(compose) > stacks.MaxFileBytes {
-		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemStackFileInvalid, "compose.yaml is over 1 MiB.")
+		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemFileTooLarge, "A file is at most 1 MiB.")
 	}
 	if d.Clusters == nil {
 		d.Log.Error("the stack routes have no cluster reader")
@@ -539,7 +543,7 @@ func createStack(ctx context.Context, d StacksDeps, in *StackCreateInput) (*Stac
 	if errors.Is(err, stackops.ErrNameTaken) {
 		return nil, &huma.ErrorModel{
 			Type: problemStackNameTaken, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
-			Detail: "A stack named " + name + " already exists on " + env.Name + ".",
+			Detail: stackNameTakenMessage(name, env.Name),
 			Errors: []*huma.ErrorDetail{{Location: "name", Message: name}},
 		}
 	}
