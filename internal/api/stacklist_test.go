@@ -6,25 +6,51 @@ package api_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // The stack lists (plan 07-24, STK-10, STK-02, STK-01, UI-SPEC "Stack lists"): the All stacks list across
 // environments. Environment A is the local swarm manager the stack tests use; environment B is an agent
 // environment with no agent connected, whose stacks are stored rows only.
 
+// statusCountsAnswer is how many stacks each status chip counts.
+type statusCountsAnswer struct {
+	Degraded     int `json:"degraded"`
+	Stopped      int `json:"stopped"`
+	Draft        int `json:"draft"`
+	DeployFailed int `json:"deployFailed"`
+}
+
+// stackListAnswer is the list of one environment's stacks.
+type stackListAnswer struct {
+	Items           []stackAnswer      `json:"items"`
+	Total           int                `json:"total"`
+	UnfilteredTotal int                `json:"unfilteredTotal"`
+	Capped          bool               `json:"capped"`
+	StatusCounts    statusCountsAnswer `json:"statusCounts"`
+}
+
 type allStacksAnswer struct {
-	Groups []struct {
-		EnvID   string        `json:"envId"`
-		EnvName string        `json:"envName"`
-		Target  string        `json:"target"`
-		Stacks  []stackAnswer `json:"stacks"`
+	Total           int                `json:"total"`
+	UnfilteredTotal int                `json:"unfilteredTotal"`
+	Capped          bool               `json:"capped"`
+	StatusCounts    statusCountsAnswer `json:"statusCounts"`
+	Groups          []struct {
+		EnvID   string             `json:"envId"`
+		EnvName string             `json:"envName"`
+		Target  string             `json:"target"`
+		Stacks  []stackAnswer      `json:"stacks"`
+		Counts  statusCountsAnswer `json:"counts"`
 	} `json:"groups"`
 	FailedEnvironments []struct {
 		EnvID   string `json:"envId"`
@@ -171,5 +197,281 @@ func TestAllStacksNeedsASignedInCaller(t *testing.T) {
 	f, _, _ := twoStackEnvironments(t, nil)
 	if rec := f.allStacks(t, "", ""); rec.Code != http.StatusUnauthorized {
 		t.Errorf("all stacks signed out: %d %s, want 401", rec.Code, rec.Body)
+	}
+}
+
+// listWith reads the environment's stack list with a query string such as "?q=web".
+func listWith(t *testing.T, c *roleCaller, query string) stackListAnswer {
+	t.Helper()
+	rec := c.do(http.MethodGet, "stacks"+query, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list stacks%s: %d %s", query, rec.Code, rec.Body)
+	}
+	return answerOf[stackListAnswer](t, rec)
+}
+
+func stackNames(items []stackAnswer) []string {
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		out = append(out, it.Name)
+	}
+	return out
+}
+
+// mixedStacks makes five stacks on the environment, one in each of the states the list filters and
+// sorts by, and returns the env Admin who made them:
+//
+//	alpha    deployed, one of its two services running: degraded, and the only one ever deployed
+//	bravo    stopped, and deployed once after alpha
+//	charlie  its last deploy failed
+//	delta    a draft saved since it was made
+//	echo     made and left alone: not deployed
+func mixedStacks(t *testing.T, f *envFix, e envBody) *roleCaller {
+	t.Helper()
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	repo := stackops.Repo{Store: f.st, Vault: f.v}
+
+	alpha := newStack(t, admin, "alpha")
+	if job := f.deployAndWait(t, operator, alpha.ID, `{"draftVersion":1}`); job.State != "done" {
+		t.Fatalf("deploy alpha: %+v", job)
+	}
+	reconfigureSwarm(t, f, e, ownedService(alpha, "worker", 1, 3))
+
+	bravo := f.seedStack(t, e.ID, "bravo", stacks.TargetSwarm)
+	if _, err := f.st.Write.Exec(`UPDATE stacks SET stopped = 1 WHERE id = ?`, bravo); err != nil {
+		t.Fatal(err)
+	}
+
+	earlier, err := repo.StartDeploy(testsupport.Context(t), bravo, e.ID, stackops.DeployKindDeploy, 1, "job-bravo", "operator-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.FinishDeploy(testsupport.Context(t), earlier.ID, stackops.DeployDone, "", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	charlie := f.seedStack(t, e.ID, "charlie", stacks.TargetSwarm)
+	row, err := repo.StartDeploy(testsupport.Context(t), charlie, e.ID, stackops.DeployKindDeploy, 1, "job-charlie", "operator-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.FinishDeploy(testsupport.Context(t), row.ID, stackops.DeployFailed, "web", "service_rejected"); err != nil {
+		t.Fatal(err)
+	}
+
+	delta := newStack(t, admin, "delta")
+	saveCompose(t, operator, delta.ID, stacks.StarterCompose+"# tuned\n", `[]`)
+
+	newStack(t, admin, "echo")
+	return admin
+}
+
+func TestStackListSearchMatchesAStackNameOrOneOfItsServiceNames(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	tracer := newStack(t, admin, "tracer")
+	if job := f.deployAndWait(t, operator, tracer.ID, `{"draftVersion":1}`); job.State != "done" {
+		t.Fatalf("deploy: %+v", job)
+	}
+	newStack(t, admin, "other")
+
+	for query, want := range map[string][]string{
+		"?q=tracer":       {"tracer"},
+		"?q=TRA":          {"tracer"},
+		"?q=web":          {"tracer"}, // the starter file's one service
+		"?q=oth":          {"other"},
+		"?q=%20%20web%20": {"tracer"},
+		"?q=nomatch":      {},
+		"":                {"other", "tracer"},
+	} {
+		got := listWith(t, operator, query)
+		if names := stackNames(got.Items); !slices.Equal(names, want) {
+			t.Errorf("list%s = %v, want %v", query, names, want)
+		}
+		if got.Total != len(want) || got.UnfilteredTotal != 2 || got.Capped {
+			t.Errorf("list%s: total %d, unfiltered %d, capped %v, want %d, 2, false", query, got.Total, got.UnfilteredTotal, got.Capped, len(want))
+		}
+	}
+}
+
+func TestStackListStatusFiltersCombineAndTheirCountsComeFromTheUnfilteredSet(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	operator := mixedStacks(t, f, e)
+	wantCounts := statusCountsAnswer{Degraded: 1, Stopped: 1, Draft: 1, DeployFailed: 1}
+
+	for query, want := range map[string][]string{
+		"":                           {"alpha", "bravo", "charlie", "delta", "echo"},
+		"?status=degraded":           {"alpha"},
+		"?status=stopped":            {"bravo"},
+		"?status=deploy_failed":      {"charlie"},
+		"?status=draft":              {"delta"},
+		"?status=stopped,draft":      {"bravo", "delta"},
+		"?status=draft,degraded":     {"alpha", "delta"},
+		"?status=draft&q=alp":        {},
+		"?status=degraded,draft&q=a": {"alpha", "delta"},
+	} {
+		got := listWith(t, operator, query)
+		if names := stackNames(got.Items); !slices.Equal(names, want) {
+			t.Errorf("list%s = %v, want %v", query, names, want)
+		}
+		if got.Total != len(want) || got.UnfilteredTotal != 5 {
+			t.Errorf("list%s: total %d, unfiltered %d, want %d, 5", query, got.Total, got.UnfilteredTotal, len(want))
+		}
+		if got.StatusCounts != wantCounts {
+			t.Errorf("list%s: counts %+v, want %+v whatever is typed or chosen", query, got.StatusCounts, wantCounts)
+		}
+	}
+
+	rec := operator.do(http.MethodGet, "stacks?status=nonsense", "")
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "status_invalid" {
+		t.Errorf("an unknown status: %d %s, want 422 status_invalid", rec.Code, rec.Body)
+	}
+}
+
+func TestStackListSortsByNameStateAndLastDeployedBothWays(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	operator := mixedStacks(t, f, e)
+
+	for query, want := range map[string][]string{
+		"":                            {"alpha", "bravo", "charlie", "delta", "echo"},
+		"?sort=name&dir=desc":         {"echo", "delta", "charlie", "bravo", "alpha"},
+		"?sort=state":                 {"bravo", "charlie", "alpha", "delta", "echo"},
+		"?sort=state&dir=desc":        {"delta", "echo", "alpha", "charlie", "bravo"},
+		"?sort=lastDeployed":          {"alpha", "bravo", "charlie", "delta", "echo"},
+		"?sort=lastDeployed&dir=desc": {"bravo", "alpha", "charlie", "delta", "echo"},
+		"?sort=name&dir=asc&status=stopped,draft": {"bravo", "delta"},
+	} {
+		got := listWith(t, operator, query)
+		if names := stackNames(got.Items); !slices.Equal(names, want) {
+			t.Errorf("list%s = %v, want %v", query, names, want)
+		}
+	}
+	// The state order is the UI-SPEC priority (stopped, deploy failed, degraded, running, not deployed) and
+	// breaks a tie by name; a stack never deployed comes after every deployed one whichever way the list runs.
+	for _, bad := range []string{"?sort=sideways", "?dir=up"} {
+		if rec := operator.do(http.MethodGet, "stacks"+bad, ""); rec.Code != http.StatusUnprocessableEntity {
+			t.Errorf("list%s: %d, want 422", bad, rec.Code)
+		}
+	}
+}
+
+func TestStackListRefusesASearchOverTheLimit(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	rec := admin.do(http.MethodGet, "stacks?q="+strings.Repeat("a", 129), "")
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "query_too_long" {
+		t.Errorf("a 129-character search: %d %s, want 422 query_too_long", rec.Code, rec.Body)
+	}
+	if rec := admin.do(http.MethodGet, "stacks?q="+strings.Repeat("a", 128), ""); rec.Code != http.StatusOK {
+		t.Errorf("a 128-character search: %d %s, want 200", rec.Code, rec.Body)
+	}
+}
+
+func TestAllStacksTakesTheSameSearchStatusAndSortAndCountsAcrossEnvironments(t *testing.T) {
+	t.Parallel()
+	f, a, b := twoStackEnvironments(t, nil)
+	admin := f.caller(t, a, "envadmin-1", "admin")
+	web := newStack(t, admin, "web")
+	saveCompose(t, admin, web.ID, stacks.StarterCompose+"# tuned\n", `[]`)
+	f.seedStack(t, a.ID, "api", stacks.TargetSwarm)
+	edge := f.seedStack(t, b.ID, "edge", stacks.TargetSwarm)
+	if _, err := f.st.Write.Exec(`UPDATE stacks SET stopped = 1 WHERE id = ?`, edge); err != nil {
+		t.Fatal(err)
+	}
+	f.seedStack(t, b.ID, "web-edge", stacks.TargetSwarm)
+
+	all := func(query string) allStacksAnswer {
+		rec := f.allStacks(t, f.cookie, query)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("all stacks%s: %d %s", query, rec.Code, rec.Body)
+		}
+		return answerOf[allStacksAnswer](t, rec)
+	}
+	names := func(g allStacksAnswer) map[string][]string {
+		out := map[string][]string{}
+		for _, grp := range g.Groups {
+			out[grp.EnvID] = stackNames(grp.Stacks)
+		}
+		return out
+	}
+
+	got := all("")
+	if got.Total != 4 || got.UnfilteredTotal != 4 || got.Capped {
+		t.Errorf("total %d unfiltered %d capped %v, want 4, 4, false", got.Total, got.UnfilteredTotal, got.Capped)
+	}
+	if want := (statusCountsAnswer{Stopped: 1, Draft: 1}); got.StatusCounts != want {
+		t.Errorf("counts = %+v, want %+v", got.StatusCounts, want)
+	}
+
+	got = all("?q=web")
+	if want := map[string][]string{a.ID: {"web"}, b.ID: {"web-edge"}}; !equalGroups(names(got), want) {
+		t.Errorf("q=web = %v, want %v", names(got), want)
+	}
+	if got.Total != 2 || got.UnfilteredTotal != 4 {
+		t.Errorf("q=web total %d unfiltered %d, want 2, 4", got.Total, got.UnfilteredTotal)
+	}
+	if want := (statusCountsAnswer{Stopped: 1, Draft: 1}); got.StatusCounts != want {
+		t.Errorf("counts under a search = %+v, want the unfiltered %+v", got.StatusCounts, want)
+	}
+
+	got = all("?status=stopped,draft")
+	if want := map[string][]string{a.ID: {"web"}, b.ID: {"edge"}}; !equalGroups(names(got), want) {
+		t.Errorf("status=stopped,draft = %v, want %v", names(got), want)
+	}
+
+	got = all("?sort=name&dir=desc")
+	if want := map[string][]string{a.ID: {"web", "api"}, b.ID: {"web-edge", "edge"}}; !equalGroups(names(got), want) {
+		t.Errorf("sort=name&dir=desc = %v, want %v", names(got), want)
+	}
+
+	// The environment filter narrows what the counts and the totals are of.
+	got = all("?env=" + b.ID)
+	if got.Total != 2 || got.UnfilteredTotal != 2 || got.StatusCounts != (statusCountsAnswer{Stopped: 1}) {
+		t.Errorf("env=B: total %d unfiltered %d counts %+v, want 2, 2 and one stopped", got.Total, got.UnfilteredTotal, got.StatusCounts)
+	}
+
+	if rec := f.allStacks(t, f.cookie, "?status=nonsense"); rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "status_invalid" {
+		t.Errorf("an unknown status: %d %s, want 422 status_invalid", rec.Code, rec.Body)
+	}
+	if rec := f.allStacks(t, f.cookie, "?q="+strings.Repeat("a", 129)); rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "query_too_long" {
+		t.Errorf("a long search: %d %s, want 422 query_too_long", rec.Code, rec.Body)
+	}
+}
+
+func equalGroups(got, want map[string][]string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for k, v := range want {
+		if !slices.Equal(got[k], v) {
+			return false
+		}
+	}
+	return true
+}
+
+func TestAllStacksCapsTheRowsAcrossEnvironmentsAndSaysHowManyThereAre(t *testing.T) {
+	t.Parallel()
+	f, a, b := twoStackEnvironments(t, nil)
+	for i := range 300 {
+		f.seedStack(t, a.ID, fmt.Sprintf("a%03d", i), stacks.TargetSwarm)
+	}
+	for i := range 201 {
+		f.seedStack(t, b.ID, fmt.Sprintf("b%03d", i), stacks.TargetSwarm)
+	}
+
+	got := answerOf[allStacksAnswer](t, f.allStacks(t, f.cookie, ""))
+	shown := 0
+	for _, g := range got.Groups {
+		shown += len(g.Stacks)
+	}
+	if shown != 500 || got.Total != 501 || got.UnfilteredTotal != 501 || !got.Capped {
+		t.Errorf("shown %d, total %d, unfiltered %d, capped %v, want 500, 501, 501, true", shown, got.Total, got.UnfilteredTotal, got.Capped)
 	}
 }

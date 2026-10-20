@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -971,5 +972,38 @@ func TestADraftSavedAfterTheLastDeployIsNamedOnThePage(t *testing.T) {
 	got := readStackAnswer(t, operator, st.ID)
 	if !got.HasDraft || got.DraftSavedBy != "operator-1" || got.DraftSavedAt == "" {
 		t.Errorf("stack = %+v, want a draft saved by operator-1", got)
+	}
+}
+
+// The list of one environment answers at most 500 rows and says how many there are (plan 07-24, STK-10).
+func TestStackListCapAndCounts(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	for i := range 500 {
+		f.seedStack(t, e.ID, fmt.Sprintf("s%03d", i), stacks.TargetSwarm)
+	}
+	drafty := newStack(t, admin, "drafty")
+	saveCompose(t, admin, drafty.ID, stacks.StarterCompose+"# tuned\n", `[]`)
+
+	got := listWith(t, admin, "")
+	if len(got.Items) != 500 || got.Total != 501 || got.UnfilteredTotal != 501 || !got.Capped {
+		t.Fatalf("rows %d, total %d, unfiltered %d, capped %v, want 500, 501, 501, true", len(got.Items), got.Total, got.UnfilteredTotal, got.Capped)
+	}
+	if got.Items[0].Name != "drafty" || got.Items[499].Name != "s498" {
+		t.Errorf("the rows run %s to %s, want the first 500 by name: drafty to s498", got.Items[0].Name, got.Items[499].Name)
+	}
+	if got.StatusCounts.Draft != 1 {
+		t.Errorf("draft count = %d, want 1", got.StatusCounts.Draft)
+	}
+
+	// A filter is applied before the cap, and the counts stay those of the whole set.
+	only := listWith(t, admin, "?status=draft")
+	if len(only.Items) != 1 || only.Total != 1 || only.Capped || only.UnfilteredTotal != 501 || only.StatusCounts.Draft != 1 {
+		t.Errorf("status=draft = %d rows, total %d, capped %v, unfiltered %d, draft count %d", len(only.Items), only.Total, only.Capped, only.UnfilteredTotal, only.StatusCounts.Draft)
+	}
+	last := listWith(t, admin, "?q=s499")
+	if len(last.Items) != 1 || last.Items[0].Name != "s499" || last.Capped {
+		t.Errorf("a search for the stack past the cap = %v (capped %v), want s499", stackNames(last.Items), last.Capped)
 	}
 }
