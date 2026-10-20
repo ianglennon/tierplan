@@ -640,10 +640,10 @@ func TestCheckNeverCarriesAnEscapedSecretValue(t *testing.T) {
 		// one means the loader's words are kept and the masker shows <hidden>.
 		fixed string
 	}{
-		{"deploy.replicas, Go-escaped", "    deploy:\n      replicas: ${PW}\n", escapedSecret, escapedSecretParts, ""},
-		{"cpus, Go-escaped", "    cpus: ${PW}\n", escapedSecret, escapedSecretParts, ""},
-		{"pull_policy, schema-escaped", "    pull_policy: ${PW}\n", escapedSecret, escapedSecretParts, ""},
-		{"pull_policy, trailing backslash", "    pull_policy: ${PW}\n", trailingBackslashSecret, trailingBackslashParts, ""},
+		{"deploy.replicas, Go-escaped", "    deploy:\n      replicas: ${PW}\n", escapedSecret, escapedSecretParts, "services.web.deploy.replicas"},
+		{"cpus, Go-escaped", "    cpus: ${PW}\n", escapedSecret, escapedSecretParts, "services.web.cpus"},
+		{"pull_policy, schema-escaped", "    pull_policy: ${PW}\n", escapedSecret, escapedSecretParts, "services.web.pull_policy"},
+		{"pull_policy, trailing backslash", "    pull_policy: ${PW}\n", trailingBackslashSecret, trailingBackslashParts, "services.web.pull_policy"},
 		{"privileged, raw and trimmed", "    privileged: ${PW}\n", escapedSecret, escapedSecretParts, ""},
 		{"healthcheck.interval, raw in quotes", "    healthcheck:\n      test: [CMD, \"true\"]\n      interval: ${PW}\n", escapedSecret, escapedSecretParts, "services.web.healthcheck.interval"},
 	}
@@ -738,6 +738,55 @@ func TestCheckKeepsTheLoaderWordsForAValueThatIsNotSecret(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			res := withVars(t, tc.compose, tc.vars...)
+			for _, p := range res.Problems {
+				if p.Severity == stacks.SeverityError && strings.Contains(p.Message, tc.want) {
+					return
+				}
+			}
+			t.Errorf("problems = %+v, want an error with %q", res.Problems, tc.want)
+		})
+	}
+}
+
+func TestCheckNeverQuotesTheLoaderWordsForASecretField(t *testing.T) {
+	t.Parallel()
+	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
+	secret := stacks.Var{Name: "PW", Value: "Password2024!", Secret: true}
+	for name, tc := range map[string]struct {
+		body string
+		code string
+		path string
+	}{
+		"a cast error":   {"    deploy:\n      replicas: ${PW}\n", stacks.CodeComposeInvalid, "services.web.deploy.replicas"},
+		"a schema error": {"    pull_policy: ${PW}\n", stacks.CodeSchemaInvalid, "services.web.pull_policy"},
+		"a ulimit":       {"    ulimits:\n      nofile: ${PW}\n", stacks.CodeComposeInvalid, "services.web.ulimits.nofile"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			res := withVars(t, head+tc.body, secret)
+			got := problemsOf(res, tc.code)
+			if len(got) != 1 || got[0].Key != tc.path || got[0].Message != stacks.SecretValueMessage(tc.path) {
+				t.Errorf("%s problems = %+v, want exactly the fixed sentence at %s", tc.code, res.Problems, tc.path)
+			}
+			for _, p := range res.Problems {
+				if strings.Contains(p.Message, "Password2024") || strings.Contains(p.Key, "Password2024") {
+					t.Errorf("problem %+v carries part of the secret", p)
+				}
+			}
+		})
+	}
+	// A value that is not secret keeps the loader's words, even where the file uses a secret.
+	used := stacks.Var{Name: "PW", Value: "Password2024!", Secret: true}
+	for name, tc := range map[string]struct {
+		body string
+		want string
+	}{
+		"a plain cast error":   {"    deploy:\n      replicas: abc\n    environment:\n      DB: ${PW}\n", "failed to cast to expected type"},
+		"a plain schema error": {"    pull_policy: sometimes\n    environment:\n      DB: ${PW}\n", "does not match pattern"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			res := withVars(t, head+tc.body, used)
 			for _, p := range res.Problems {
 				if p.Severity == stacks.SeverityError && strings.Contains(p.Message, tc.want) {
 					return

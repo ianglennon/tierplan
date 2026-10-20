@@ -17,6 +17,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
@@ -882,19 +883,24 @@ func escapedLeakyVars(t *testing.T) string {
 func TestADeployRefusalNeverQuotesAnEscapedSecret(t *testing.T) {
 	t.Parallel()
 	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
-	cases := map[string]string{
-		"a cast position":              head + "    deploy:\n      replicas: ${PW}\n",
-		"a schema pattern":             head + "    pull_policy: ${PW}\n",
-		"a value the converter quotes": head + "    deploy:\n      endpoint_mode: ${PW}\n",
+	cases := map[string]struct {
+		compose string
+		// fixed is the key of the field the loader refuses, reported with the fixed sentence (07-40); empty
+		// for the converter's refusal, which still shows <hidden> until 07-41.
+		fixed string
+	}{
+		"a cast position":              {head + "    deploy:\n      replicas: ${PW}\n", "services.web.deploy.replicas"},
+		"a schema pattern":             {head + "    pull_policy: ${PW}\n", "services.web.pull_policy"},
+		"a value the converter quotes": {head + "    deploy:\n      endpoint_mode: ${PW}\n", ""},
 	}
-	for name, compose := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			f, e := stackEnv(t, nil)
 			admin := f.caller(t, e, "envadmin-1", "admin")
 			operator := f.caller(t, e, "operator-1", "operator")
 			st := newStack(t, admin, "escaped")
-			v := saveCompose(t, operator, st.ID, compose, escapedLeakyVars(t))
+			v := saveCompose(t, operator, st.ID, tc.compose, escapedLeakyVars(t))
 
 			rec := operator.deploy(st.ID, `{"draftVersion":`+itoaT(v)+`}`)
 			if rec.Code != http.StatusUnprocessableEntity {
@@ -905,8 +911,64 @@ func TestADeployRefusalNeverQuotesAnEscapedSecret(t *testing.T) {
 					t.Errorf("deploy answer = %s, want no part (%q) of the secret", rec.Body, part)
 				}
 			}
-			if !strings.Contains(rec.Body.String(), "<hidden>") {
+			if tc.fixed != "" {
+				if !strings.Contains(rec.Body.String(), stacks.SecretValueMessage(tc.fixed)) {
+					t.Errorf("deploy answer = %s, want the fixed sentence at %s", rec.Body, tc.fixed)
+				}
+			} else if !strings.Contains(rec.Body.String(), "<hidden>") {
 				t.Errorf("deploy answer = %s, want the value shown as <hidden>", rec.Body)
+			}
+			if w := f.fake.Writes(); len(w) != 0 {
+				t.Errorf("writes = %v, want none", w)
+			}
+		})
+	}
+}
+
+// partSecretVars is a variable table with one secret variable, PW, that holds value.
+func partSecretVars(t *testing.T, value string) string {
+	t.Helper()
+	b, err := json.Marshal([]map[string]any{{"name": "PW", "value": value, "secret": true}})
+	if err != nil {
+		t.Fatalf("encode the variables: %v", err)
+	}
+	return string(b)
+}
+
+// A deploy refused at a field fed by a secret variable carries the fixed sentence and no part of the
+// value, though go-units quotes a substring of it (07-40, D-02, T-07-172).
+func TestADeployRefusalNeverQuotesPartOfASecret(t *testing.T) {
+	t.Parallel()
+	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
+	cases := map[string]struct {
+		compose, secret, path string
+		parts                 []string
+	}{
+		"mem_limit, a number then a word": {head + "    mem_limit: ${PW}\n", "Password2024!", "services.web.mem_limit", []string{"Password2024"}},
+		"mem_limit, a number then a unit": {head + "    mem_limit: ${PW}\n", "2024secretword", "services.web.mem_limit", []string{"secretword", "2024secret"}},
+		"deploy.replicas":                 {head + "    deploy:\n      replicas: ${PW}\n", "Password2024!", "services.web.deploy.replicas", []string{"Password2024"}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f, e := stackEnv(t, nil)
+			admin := f.caller(t, e, "envadmin-1", "admin")
+			operator := f.caller(t, e, "operator-1", "operator")
+			st := newStack(t, admin, "partial")
+			v := saveCompose(t, operator, st.ID, tc.compose, partSecretVars(t, tc.secret))
+
+			rec := operator.deploy(st.ID, `{"draftVersion":`+itoaT(v)+`}`)
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("deploy: %d %.300s, want 422", rec.Code, rec.Body)
+			}
+			raw := rec.Body.String()
+			if !strings.Contains(raw, "stack_invalid") || !strings.Contains(raw, stacks.SecretValueMessage(tc.path)) {
+				t.Errorf("deploy answer = %s, want stack_invalid with the fixed sentence at %s", raw, tc.path)
+			}
+			for _, part := range tc.parts {
+				if strings.Contains(raw, part) {
+					t.Errorf("deploy answer = %s, want no part (%q) of the secret", raw, part)
+				}
 			}
 			if w := f.fake.Writes(); len(w) != 0 {
 				t.Errorf("writes = %v, want none", w)

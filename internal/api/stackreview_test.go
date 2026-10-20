@@ -1070,18 +1070,23 @@ func TestReviewAnswerNeverQuotesASecretVariable(t *testing.T) {
 func TestReviewAnswerNeverQuotesAnEscapedSecret(t *testing.T) {
 	t.Parallel()
 	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
-	cases := map[string]string{
-		"a cast position":              head + "    deploy:\n      replicas: ${PW}\n",
-		"a value the converter quotes": head + "    deploy:\n      endpoint_mode: ${PW}\n",
+	cases := map[string]struct {
+		compose string
+		// fixed is the key of the field the loader refuses, reported with the fixed sentence (07-40); empty
+		// for the converter's refusal, which still shows <hidden> until 07-42.
+		fixed string
+	}{
+		"a cast position":              {head + "    deploy:\n      replicas: ${PW}\n", "services.web.deploy.replicas"},
+		"a value the converter quotes": {head + "    deploy:\n      endpoint_mode: ${PW}\n", ""},
 	}
-	for name, compose := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			f, e := stackEnv(t, nil)
 			admin := f.caller(t, e, "envadmin-1", "admin")
 			operator := f.caller(t, e, "operator-1", "operator")
 			st := newStack(t, admin, "escaped")
-			saveCompose(t, operator, st.ID, compose, escapedLeakyVars(t))
+			saveCompose(t, operator, st.ID, tc.compose, escapedLeakyVars(t))
 
 			_, code, raw := operator.reviewStack(st.ID, `{}`)
 			if code != http.StatusOK {
@@ -1092,9 +1097,35 @@ func TestReviewAnswerNeverQuotesAnEscapedSecret(t *testing.T) {
 					t.Errorf("review answer = %s, want no part (%q) of the secret", raw, part)
 				}
 			}
-			if !strings.Contains(raw, "<hidden>") {
+			if tc.fixed != "" {
+				if !strings.Contains(raw, stacks.SecretValueMessage(tc.fixed)) {
+					t.Errorf("review answer = %s, want the fixed sentence at %s", raw, tc.fixed)
+				}
+			} else if !strings.Contains(raw, "<hidden>") {
 				t.Errorf("review answer = %s, want the value shown as <hidden>", raw)
 			}
 		})
+	}
+}
+
+// A review of a draft with a size field fed by a secret variable answers 200 with the fixed sentence and no
+// part of the value (07-40, D-02, T-07-172).
+func TestReviewAnswerNeverQuotesPartOfASecret(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "partial")
+	saveCompose(t, operator, st.ID, "services:\n  web:\n    image: nginx:1.27-alpine\n    mem_limit: ${PW}\n", partSecretVars(t, "Password2024!"))
+
+	_, code, raw := operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, raw)
+	}
+	if strings.Contains(raw, "Password2024") {
+		t.Errorf("review answer = %s, want no part of the secret", raw)
+	}
+	if !strings.Contains(raw, stacks.SecretValueMessage("services.web.mem_limit")) {
+		t.Errorf("review answer = %s, want the fixed sentence at services.web.mem_limit", raw)
 	}
 }

@@ -99,21 +99,21 @@ func TestDeployableRefusalQuotesNoSecret(t *testing.T) {
 func TestDeployableRefusalQuotesNoEscapedSecret(t *testing.T) {
 	t.Parallel()
 	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
-	for name, body := range map[string]string{
-		"deploy.replicas": "    deploy:\n      replicas: ${PW}\n",
-		"pull_policy":     "    pull_policy: ${PW}\n",
+	for name, tc := range map[string]struct{ body, path string }{
+		"deploy.replicas": {"    deploy:\n      replicas: ${PW}\n", "services.web.deploy.replicas"},
+		"pull_policy":     {"    pull_policy: ${PW}\n", "services.web.pull_policy"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			_, err := stacks.Deployable(context.Background(), stacks.CheckInput{
 				Name: "probe", Target: stacks.TargetSwarm,
-				Copy: copyOf(head+body, stacks.Var{Name: "PW", Value: escapedSecret, Secret: true}),
+				Copy: copyOf(head+tc.body, stacks.Var{Name: "PW", Value: escapedSecret, Secret: true}),
 			})
 			var nd *stacks.NotDeployableError
 			if !errors.As(err, &nd) {
 				t.Fatalf("err = %v, want a *NotDeployableError", err)
 			}
-			hidden := false
+			fixed := false
 			for _, part := range escapedSecretParts {
 				if strings.Contains(err.Error(), part) {
 					t.Errorf("error text %q quotes %q", err.Error(), part)
@@ -125,10 +125,44 @@ func TestDeployableRefusalQuotesNoEscapedSecret(t *testing.T) {
 				}
 			}
 			for _, p := range nd.Problems {
-				hidden = hidden || strings.Contains(p.Message, stacks.Hidden)
+				fixed = fixed || p.Message == stacks.SecretValueMessage(tc.path)
 			}
-			if !hidden {
-				t.Errorf("problems = %+v, want one message to show %s", nd.Problems, stacks.Hidden)
+			if !fixed {
+				t.Errorf("problems = %+v, want the fixed sentence at %s", nd.Problems, tc.path)
+			}
+		})
+	}
+}
+
+func TestDeployableRefusalNeverQuotesPartOfASecret(t *testing.T) {
+	t.Parallel()
+	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
+	for name, tc := range map[string]struct{ body, path string }{
+		"mem_limit":       {"    mem_limit: ${PW}\n", "services.web.mem_limit"},
+		"deploy.replicas": {"    deploy:\n      replicas: ${PW}\n", "services.web.deploy.replicas"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := stacks.Deployable(context.Background(), stacks.CheckInput{
+				Name: "probe", Target: stacks.TargetSwarm,
+				Copy: copyOf(head+tc.body, stacks.Var{Name: "PW", Value: "Password2024!", Secret: true}),
+			})
+			var nd *stacks.NotDeployableError
+			if !errors.As(err, &nd) {
+				t.Fatalf("err = %v, want a *NotDeployableError", err)
+			}
+			if strings.Contains(err.Error(), "Password2024") {
+				t.Errorf("error text %q quotes part of the secret", err.Error())
+			}
+			fixed := false
+			for _, p := range nd.Problems {
+				if strings.Contains(p.Message, "Password2024") || strings.Contains(p.Key, "Password2024") {
+					t.Errorf("problem %+v quotes part of the secret", p)
+				}
+				fixed = fixed || p.Message == stacks.SecretValueMessage(tc.path)
+			}
+			if !fixed {
+				t.Errorf("problems = %+v, want the fixed sentence at %s", nd.Problems, tc.path)
 			}
 		})
 	}
