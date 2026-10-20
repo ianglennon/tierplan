@@ -13,6 +13,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ForceUpdateDialog } from "@/features/services/force-update-dialog";
 import "@/i18n";
 import { makeMe } from "@/test-me";
+import { TestRouter } from "@/test-router";
 
 const ENV = "e1";
 
@@ -85,16 +86,18 @@ function mount(opts: { target?: ServiceItem; retry?: boolean } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <TooltipProvider>
-        <ForceUpdateDialog
-          envId={ENV}
-          target={opts.target ?? web}
-          open
-          onOpenChange={onOpenChange}
-          retry={opts.retry}
-        />
-        <Toaster />
-      </TooltipProvider>
+      <TestRouter>
+        <TooltipProvider>
+          <ForceUpdateDialog
+            envId={ENV}
+            target={opts.target ?? web}
+            open
+            onOpenChange={onOpenChange}
+            retry={opts.retry}
+          />
+          <Toaster />
+        </TooltipProvider>
+      </TestRouter>
     </QueryClientProvider>,
   );
   return { onOpenChange };
@@ -166,6 +169,20 @@ describe("ForceUpdateDialog", () => {
   it("shows no stack warning for a service that belongs to no stack", () => {
     mount();
     expect(screen.queryByText(/belongs to stack/)).toBeNull();
+  });
+
+  it("links the stack's name in the warning when Bayplan manages the stack, the text unchanged", () => {
+    mount({ target: { ...web, stack: "shop", bayplanStackId: "stk-shop" } });
+    const link = screen.getByRole("link", { name: "shop" });
+    expect(link.getAttribute("href")).toBe("/env/e1/stacks/stk-shop");
+    expect(link.closest('[role="status"]')?.textContent).toBe(
+      "web belongs to stack shop. The next stack deploy applies the compose file again.",
+    );
+  });
+
+  it("keeps the stack's name as text in the warning when Bayplan does not manage the stack", () => {
+    mount({ target: { ...web, stack: "shop" } });
+    expect(screen.queryByRole("link", { name: "shop" })).toBeNull();
   });
 
   it("names the image and the registry when the digest could not be looked up, and stays open", async () => {

@@ -12,6 +12,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { RollbackDialog } from "@/features/services/rollback-dialog";
 import "@/i18n";
 import { makeMe } from "@/test-me";
+import { TestRouter } from "@/test-router";
 
 const ENV = "e1";
 
@@ -43,6 +44,7 @@ interface SpecAnswer {
   name: string;
   mode: string;
   stack: string;
+  bayplanStackId: string;
   agent: boolean;
   masked: boolean;
   spec: Record<string, unknown>;
@@ -54,6 +56,7 @@ const loaded = (extra: Partial<SpecAnswer> = {}): SpecAnswer => ({
   name: "web",
   mode: "replicated",
   stack: "",
+  bayplanStackId: "",
   agent: false,
   masked: false,
   spec: specOf("acme/web:2"),
@@ -102,10 +105,12 @@ function mount(target: ServiceItem = web) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <TooltipProvider>
-        <RollbackDialog envId={ENV} target={target} open onOpenChange={onOpenChange} />
-        <Toaster />
-      </TooltipProvider>
+      <TestRouter>
+        <TooltipProvider>
+          <RollbackDialog envId={ENV} target={target} open onOpenChange={onOpenChange} />
+          <Toaster />
+        </TooltipProvider>
+      </TestRouter>
     </QueryClientProvider>,
   );
   return { onOpenChange };
@@ -209,6 +214,26 @@ describe("RollbackDialog", () => {
     mount();
     await diff();
     expect(screen.queryByText(/stack deploy/)).toBeNull();
+  });
+
+  // The rollback warning names no stack, so the link beside it is Open stack.
+  it("offers Open stack beside the warning when Bayplan manages the stack, the text unchanged", async () => {
+    specAnswer = () => Response.json(loaded({ stack: "shop", bayplanStackId: "stk-shop" }));
+    mount({ ...web, stack: "shop", bayplanStackId: "stk-shop" });
+    const link = screen.getByRole("link", { name: "Open stack" });
+    expect(link.getAttribute("href")).toBe("/env/e1/stacks/stk-shop");
+    expect(link.closest('[role="status"]')?.textContent).toContain(
+      "The next stack deploy applies the compose file again.",
+    );
+    await diff();
+  });
+
+  it("offers no Open stack for a stack Bayplan does not manage", async () => {
+    specAnswer = () => Response.json(loaded({ stack: "shop" }));
+    mount({ ...web, stack: "shop" });
+    expect(screen.getByText("The next stack deploy applies the compose file again.")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Open stack" })).toBeNull();
+    await diff();
   });
 
   it("prints withheld values as bullets and never lists an unchanged one", async () => {

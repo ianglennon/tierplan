@@ -594,6 +594,27 @@ const names = () =>
     .map((r) => r.textContent ?? "")
     .filter((t) => t !== "");
 
+describe("the services list: stack links", () => {
+  it("links a stack Bayplan manages in its group header and leaves a foreign stack as text", async () => {
+    items = [
+      svc({ id: "id-web", name: "shop_web", stack: "shop", bayplanStackId: "stk-shop" }),
+      svc({ id: "id-old", name: "old_app", stack: "legacy" }),
+    ];
+    mount();
+    await screen.findByText("shop_web");
+    const headers = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-slot="group-header-row"]'),
+    );
+    const shop = headers.find((h) => h.textContent?.startsWith("shop")) as HTMLElement;
+    const legacy = headers.find((h) => h.textContent?.startsWith("legacy")) as HTMLElement;
+    expect(within(shop).getByRole("link", { name: "shop" }).getAttribute("href")).toBe(
+      "/env/e1/stacks/stk-shop",
+    );
+    expect(within(legacy).queryByRole("link")).toBeNull();
+    expect(legacy.textContent).toContain("legacy");
+  });
+});
+
 describe("the services list: groups", () => {
   const STACKED = () => [
     svc({ id: "id-web", name: "shop_web", stack: "shop" }),

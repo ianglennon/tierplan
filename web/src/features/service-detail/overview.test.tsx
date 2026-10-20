@@ -110,6 +110,17 @@ describe("the Overview cards", () => {
     expect(c.getByText("shop")).toBeTruthy();
   });
 
+  it("links the Stack row to the Bayplan stack, and leaves a foreign stack as text", async () => {
+    await overview(serviceDetail({ stack: "shop", bayplanStackId: "stk-1" }));
+    const link = within(card("Service")).getByRole("link", { name: "shop" });
+    expect(link.getAttribute("href")).toBe(`/env/${SERVICE_ENV}/stacks/stk-1`);
+    cleanup();
+    await overview(serviceDetail({ stack: "legacy" }));
+    const c = within(card("Service"));
+    expect(c.getByText("legacy")).toBeTruthy();
+    expect(c.queryByRole("link", { name: "legacy" })).toBeNull();
+  });
+
   it("says whether the restart-loop alerts are on or muted", async () => {
     await overview();
     const c = within(card("Service"));

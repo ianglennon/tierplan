@@ -50,6 +50,7 @@ const config = (name: string, extra: Partial<ConfigItem> = {}): ConfigItem => ({
   labels: {},
   owner: "",
   ownerKind: "",
+  bayplanStackId: "",
   templating: "none",
   createdAt: "2026-10-01T10:00:00Z",
   updatedAt: "2026-10-02T10:00:00Z",
@@ -194,6 +195,21 @@ describe("ConfigList columns", () => {
     expect(within(shared).getByText("Stack shop")).toBeTruthy();
     const single = screen.getByText("single").closest("tr") as HTMLElement;
     expect(within(single).getByRole("button", { name: "Used by 1 service" })).toBeTruthy();
+  });
+
+  it("links the owner's name to the Bayplan stack, and leaves a foreign stack as text", async () => {
+    items = [
+      config("own", { owner: "shop", ownerKind: "stack", bayplanStackId: "stk-shop" }),
+      config("old", { owner: "legacy", ownerKind: "stack" }),
+    ];
+    mount();
+    const own = (await screen.findByText("own")).closest("tr") as HTMLElement;
+    const link = within(own).getByRole("link", { name: "shop" });
+    expect(link.getAttribute("href")).toBe(`/env/${ENV}/stacks/stk-shop`);
+    expect(own.textContent).toContain("Stack shop");
+    const old = screen.getByText("old").closest("tr") as HTMLElement;
+    expect(within(old).getByText("Stack legacy")).toBeTruthy();
+    expect(within(old).queryByRole("link", { name: "legacy" })).toBeNull();
   });
 
   it("opens the services that use a config from Used by, each a link to the service", async () => {

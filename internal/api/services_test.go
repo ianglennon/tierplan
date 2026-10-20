@@ -1091,3 +1091,77 @@ func TestAStackOwnedRefusalNamesTheBayplanStackOnlyWhenBayplanManagesIt(t *testi
 		}
 	}
 }
+
+// TestContainerSecretAndConfigRowsAndDetailsLinkOnlyTheStacksBayplanManages is STK-10 for the other Phase 4
+// and 6 pages: a container, secret or config row and detail carries bayplanStackId under the same rule as
+// a service, a container being owned by its swarm stack or its compose project.
+func TestContainerSecretAndConfigRowsAndDetailsLinkOnlyTheStacksBayplanManages(t *testing.T) {
+	t.Parallel()
+	ctr := func(n int, name string, labels map[string]string) dockertest.FakeContainer {
+		return dockertest.FakeContainer{
+			ID: strings.Repeat(fmt.Sprintf("%x", n), 64), Names: []string{"/" + name}, Image: "nginx:1.27", State: "running", Status: "Up 1 hour", Labels: labels,
+		}
+	}
+	f, e := actionsEnv(t, func(c *dockertest.FakeConfig) {
+		c.Containers = []dockertest.FakeContainer{
+			ctr(1, "c-swarm", map[string]string{"com.docker.stack.namespace": "shop", "bayplan.stack.id": "stk-shop"}),
+			ctr(2, "c-project", map[string]string{"com.docker.compose.project": "shop", "bayplan.stack.id": "stk-shop"}),
+			ctr(3, "c-forged", map[string]string{"com.docker.compose.project": "other", "bayplan.stack.id": "stk-shop"}),
+			ctr(4, "c-foreign", map[string]string{"com.docker.compose.project": "legacy"}),
+			ctr(5, "c-plain", nil),
+		}
+		c.Secrets = []dockertest.FakeSecret{
+			{ID: "sec-own", Name: "own", Labels: map[string]string{"com.docker.stack.namespace": "shop", "bayplan.stack.id": "stk-shop"}},
+			{ID: "sec-forged", Name: "forged", Labels: map[string]string{"com.docker.stack.namespace": "other", "bayplan.stack.id": "stk-shop"}},
+			{ID: "sec-foreign", Name: "foreign", Labels: map[string]string{"com.docker.stack.namespace": "legacy"}},
+		}
+		c.Configs = []dockertest.FakeConfigObject{
+			{ID: "cfg-own", Name: "own", Labels: map[string]string{"com.docker.stack.namespace": "shop", "bayplan.stack.id": "stk-shop"}, Data: []byte("x")},
+			{ID: "cfg-forged", Name: "forged", Labels: map[string]string{"com.docker.stack.namespace": "other", "bayplan.stack.id": "stk-shop"}, Data: []byte("x")},
+			{ID: "cfg-foreign", Name: "foreign", Labels: map[string]string{"com.docker.stack.namespace": "legacy"}, Data: []byte("x")},
+		}
+	})
+	f.insertStackRow(t, e.ID, "stk-shop", "shop")
+	type row struct {
+		ID             string `json:"id"`
+		Name           string `json:"name"`
+		BayplanStackID string `json:"bayplanStackId"`
+	}
+	type rows struct {
+		Items []row `json:"items"`
+	}
+	check := func(what string, got []row, want map[string]string) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Fatalf("%s list = %+v, want %d rows", what, got, len(want))
+		}
+		for _, r := range got {
+			if r.BayplanStackID != want[r.Name] {
+				t.Errorf("%s row %s bayplanStackId = %q, want %q", what, r.Name, r.BayplanStackID, want[r.Name])
+			}
+		}
+	}
+	containers := decode[rows](t, f.get(t, e, "containers")).Items
+	wantContainers := map[string]string{"c-swarm": "stk-shop", "c-project": "stk-shop", "c-forged": "", "c-foreign": "", "c-plain": ""}
+	check("container", containers, wantContainers)
+	for _, r := range containers {
+		if d := decode[row](t, f.get(t, e, "containers/"+r.ID)); d.BayplanStackID != wantContainers[r.Name] {
+			t.Errorf("container detail %s bayplanStackId = %q, want %q", r.Name, d.BayplanStackID, wantContainers[r.Name])
+		}
+	}
+	want := map[string]string{"own": "stk-shop", "forged": "", "foreign": ""}
+	secrets := decode[rows](t, f.get(t, e, "secrets")).Items
+	check("secret", secrets, want)
+	for _, r := range secrets {
+		if d := decode[row](t, f.get(t, e, "secrets/"+r.ID)); d.BayplanStackID != want[r.Name] {
+			t.Errorf("secret detail %s bayplanStackId = %q, want %q", r.Name, d.BayplanStackID, want[r.Name])
+		}
+	}
+	configs := decode[rows](t, f.get(t, e, "configs")).Items
+	check("config", configs, want)
+	for _, r := range configs {
+		if d := decode[row](t, f.get(t, e, "configs/"+r.ID)); d.BayplanStackID != want[r.Name] {
+			t.Errorf("config detail %s bayplanStackId = %q, want %q", r.Name, d.BayplanStackID, want[r.Name])
+		}
+	}
+}
