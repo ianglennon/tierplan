@@ -1072,12 +1072,12 @@ func TestReviewAnswerNeverQuotesAnEscapedSecret(t *testing.T) {
 	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
 	cases := map[string]struct {
 		compose string
-		// fixed is the key of the field the loader refuses, reported with the fixed sentence (07-40); empty
-		// for the converter's refusal, which still shows <hidden> until 07-42.
+		// fixed is the key of the field the loader or the converter refuses, reported with the fixed sentence
+		// (07-40, 07-42).
 		fixed string
 	}{
 		"a cast position":              {head + "    deploy:\n      replicas: ${PW}\n", "services.web.deploy.replicas"},
-		"a value the converter quotes": {head + "    deploy:\n      endpoint_mode: ${PW}\n", ""},
+		"a value the converter quotes": {head + "    deploy:\n      endpoint_mode: ${PW}\n", "services.web.deploy.endpoint_mode"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -1097,12 +1097,8 @@ func TestReviewAnswerNeverQuotesAnEscapedSecret(t *testing.T) {
 					t.Errorf("review answer = %s, want no part (%q) of the secret", raw, part)
 				}
 			}
-			if tc.fixed != "" {
-				if !strings.Contains(raw, stacks.SecretValueMessage(tc.fixed)) {
-					t.Errorf("review answer = %s, want the fixed sentence at %s", raw, tc.fixed)
-				}
-			} else if !strings.Contains(raw, "<hidden>") {
-				t.Errorf("review answer = %s, want the value shown as <hidden>", raw)
+			if !strings.Contains(raw, stacks.SecretValueMessage(tc.fixed)) {
+				t.Errorf("review answer = %s, want the fixed sentence at %s", raw, tc.fixed)
 			}
 		})
 	}

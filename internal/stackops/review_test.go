@@ -574,13 +574,60 @@ func TestReviewNeverQuotesASecretInAProblem(t *testing.T) {
 		}
 		if p.Code == stackops.CodeConvertProblem {
 			found = true
-			if !strings.Contains(p.Message, "<hidden>") {
-				t.Errorf("message = %q, want the converter's quoted value shown as <hidden>", p.Message)
+			if want := stacks.SecretValueMessage("services.web.deploy.endpoint_mode"); p.Message != want {
+				t.Errorf("message = %q, want the fixed sentence %q", p.Message, want)
 			}
 		}
 	}
 	if !found {
 		t.Fatalf("problems = %+v, want a conversion problem (the premise of the test)", rv.Problems)
+	}
+}
+
+// A review of a field the converter refuses, where compose-go split a secret before the converter saw
+// it, never quotes part of the secret (07-42, D-02, T-07-180); a plain value keeps the converter's words.
+func TestReviewNeverQuotesPartOfASecretTheConverterSplits(t *testing.T) {
+	t.Parallel()
+	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
+	cases := map[string]struct {
+		compose string
+		secret  string
+		// want is the Message exactly; contains is a phrase it holds when want is empty.
+		want, contains string
+		absent         string
+	}{
+		"restart":                   {compose: head + "    restart: ${PW}\n", secret: "sometimes:3", want: stacks.SecretValueMessage("services.web.restart"), absent: "sometimes"},
+		"ports":                     {compose: head + "    ports:\n      - \"${PW}\"\n", secret: "127.0.0.1:8000-8001:80", want: stacks.SecretValueMessage("services.web.ports"), absent: "8000-8001"},
+		"a plain value keeps words": {compose: head + "    dns:\n      - 8.8.8.x\n    environment:\n      TOKEN: ${PW}\n", secret: "Password2024!", contains: "is not an IP address"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newSwarmRig(t, nil)
+			rv := rig.review(t, "shop", tc.compose, nil, stacks.Var{Name: "PW", Value: tc.secret, Secret: true})
+			var msg string
+			var found bool
+			for _, p := range rv.Problems {
+				if p.Code == stackops.CodeConvertProblem {
+					msg, found = p.Message, true
+				}
+				if strings.Contains(p.Message, tc.secret) {
+					t.Errorf("problem = %+v, want the secret absent", p)
+				}
+			}
+			if !found {
+				t.Fatalf("problems = %+v, want a convert_failed problem", rv.Problems)
+			}
+			if tc.want != "" && msg != tc.want {
+				t.Errorf("message = %q, want %q", msg, tc.want)
+			}
+			if tc.absent != "" && strings.Contains(msg, tc.absent) {
+				t.Errorf("message = %q, want no %q", msg, tc.absent)
+			}
+			if tc.contains != "" && !strings.Contains(msg, tc.contains) {
+				t.Errorf("message = %q, want it to contain %q", msg, tc.contains)
+			}
+		})
 	}
 }
 
