@@ -14,6 +14,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // The port budget (plan 07-36, STK-01, STK-04): compose-go expands every short-form range of
@@ -42,6 +43,19 @@ func portBudgetFile(n int, extra ...string) string {
 		fmt.Fprintf(&b, "      - %q\n", e)
 	}
 	return b.String()
+}
+
+// checkWithTestDeadline is checkOf under testsupport.Deadline instead of the product's 5 s check
+// deadline. compose-go expands a range of 10,000 to 20,000 ports into one entry per port, and under
+// -race in a full-suite run that can take longer than 5 s, so a test about the port budget would
+// fail on the clock and not on the budget. The product's deadline is tested on its own by
+// TestCheckEndsWithCheckTimeoutPastItsDeadline; here the deadline only decides how long a broken
+// test takes to fail (docs/testing.md, "Waiting in tests").
+func checkWithTestDeadline(t *testing.T, compose string) stacks.CheckResult {
+	t.Helper()
+	return stacks.Check(context.Background(), stacks.CheckInput{
+		Name: "probe", Target: stacks.TargetSwarm, Copy: copyOf(compose), Deadline: testsupport.Deadline,
+	})
 }
 
 func TestThePortRangeReproductionIsRefusedAtItsLine(t *testing.T) {
@@ -77,7 +91,7 @@ func TestOrdinaryPortRangesStillLoad(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			res := checkOf(t, "services:\n  web:\n    image: nginx:1.27-alpine\n    ports: "+ports+"\n")
+			res := checkWithTestDeadline(t, "services:\n  web:\n    image: nginx:1.27-alpine\n    ports: "+ports+"\n")
 			if res.Problems.Errors() != 0 || res.Loaded == nil {
 				t.Errorf("problems = %+v loaded = %v, want a clean load", res.Problems, res.Loaded != nil)
 			}
@@ -87,11 +101,21 @@ func TestOrdinaryPortRangesStillLoad(t *testing.T) {
 
 func TestThePortBudgetAcceptsExactlyMaxPorts(t *testing.T) {
 	t.Parallel()
-	res := checkOf(t, portBudgetFile(stacks.MaxPorts))
+	// The boundary itself, with no clock: exactly MaxPorts passes and one more is refused at line 6.
+	if err := stacks.PortBudget([]byte(portBudgetFile(stacks.MaxPorts)), nil); err != nil {
+		t.Fatalf("PortBudget at exactly MaxPorts = %v, want nil", err)
+	}
+	var pe *stacks.PortsError
+	err := stacks.PortBudget([]byte(portBudgetFile(stacks.MaxPorts, "30000:30000")), nil)
+	if !errors.As(err, &pe) || !errors.Is(err, stacks.ErrPortsTooMany) || pe.Line != 6 {
+		t.Fatalf("PortBudget one over MaxPorts = %v, want a *PortsError wrapping ErrPortsTooMany at line 6", err)
+	}
+
+	res := checkWithTestDeadline(t, portBudgetFile(stacks.MaxPorts))
 	if res.Problems.Errors() != 0 || res.Loaded == nil {
 		t.Fatalf("problems = %+v loaded = %v, want exactly MaxPorts ports to check clean", res.Problems, res.Loaded != nil)
 	}
-	res = checkOf(t, portBudgetFile(stacks.MaxPorts, "30000:30000"))
+	res = checkWithTestDeadline(t, portBudgetFile(stacks.MaxPorts, "30000:30000"))
 	if res.Loaded != nil {
 		t.Fatal("one port over the budget came back loaded")
 	}

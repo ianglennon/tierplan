@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // allocatedBy returns the bytes the process allocated while fn ran. It reads the process-wide
@@ -22,8 +23,10 @@ func allocatedBy(fn func()) uint64 {
 	return after.TotalAlloc - before.TotalAlloc
 }
 
+// checkCopy runs under testsupport.Deadline, so a slow machine cannot fail these tests on the
+// product's 5 s check deadline; they are about memory, not the clock.
 func checkCopy(compose string) stacks.CheckInput {
-	return stacks.CheckInput{Name: "probe", Target: stacks.TargetSwarm, Copy: copyOf(compose)}
+	return stacks.CheckInput{Name: "probe", Target: stacks.TargetSwarm, Copy: copyOf(compose), Deadline: testsupport.Deadline}
 }
 
 // TestThePortRangeReproductionIsRefusedWithinAFixedMemoryBound reads the allocation counter around
