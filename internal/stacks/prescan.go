@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -454,7 +455,7 @@ func (e *PortsError) Unwrap() error { return e.Err }
 func PortBudget(compose []byte, vars []Var) error {
 	roots, ok := decodeRoots(compose)
 	if !ok {
-		return nil
+		return rawPortBudget(compose)
 	}
 	w := &walker{budget: maxBudget}
 	for _, root := range roots {
@@ -511,19 +512,19 @@ func (pc *portCounter) field(service string, f entry) error {
 			return ErrComposeTooComplex
 		}
 		it := pc.w.resolve(val{n: item, at: seq.at})
-		n := 0
+		n, valid := 0, true
 		switch it.n.Kind {
 		case yaml.MappingNode:
-			n = 1
+			n, valid = 1, pc.longForm(it)
 		case yaml.ScalarNode:
-			text, err := template.Substitute(it.n.Value, func(name string) (string, bool) {
-				v, ok := pc.table[name]
-				return v, ok
-			})
+			text, err := pc.substitute(it.n.Value)
 			if err != nil {
 				continue // the load reports a bad reference
 			}
-			n = shortFormPorts(text, f.name == "expose")
+			n, valid = shortFormPorts(text, f.name == "expose")
+		}
+		if !valid {
+			return &PortsError{Err: ErrPortRangeInvalid, Key: key, Line: it.line(), Col: it.col()}
 		}
 		pc.total += n
 		if pc.total > MaxPorts {
@@ -533,43 +534,129 @@ func (pc *portCounter) field(service string, f entry) error {
 	return nil
 }
 
-// shortFormPorts is how many ports compose-go expands a short-form entry to: the size of its
-// container range. A text that is not a number or a range counts 0: compose-go judges it.
-func shortFormPorts(text string, expose bool) int {
-	spec, _, _ := strings.Cut(text, "/")
-	container := spec
-	if !expose {
-		if rest, ok := strings.CutPrefix(spec, "["); ok {
-			// A bracketed IPv6 host address; its colons are not separators.
-			if _, after, found := strings.Cut(rest, "]"); found {
-				spec = strings.TrimPrefix(after, ":")
-			}
-		}
-		container = spec[strings.LastIndex(spec, ":")+1:]
-	}
-	lo, hi, ok := parsePortRange(container)
-	if !ok {
-		return 0
-	}
-	return int(hi-lo) + 1
+// substitute interpolates a value from the stack's table, as the load will: a blank value is no
+// value.
+func (pc *portCounter) substitute(text string) (string, error) {
+	return template.Substitute(text, func(name string) (string, bool) {
+		v, ok := pc.table[name]
+		return v, ok
+	})
 }
 
-// parsePortRange reads "80" or "8000-8002". It reports false for text that is not made of numbers.
-func parsePortRange(s string) (lo, hi uint64, ok bool) {
+// longForm reports whether the published and target of a long-form entry are ports (or, for
+// published, a range of ports). A long-form entry is one entry however wide its published range.
+func (pc *portCounter) longForm(m val) bool {
+	for _, f := range pc.w.entries(m, 0) {
+		if f.name != "published" && f.name != "target" {
+			continue
+		}
+		v := pc.w.resolve(f.val)
+		if v.n.Kind != yaml.ScalarNode {
+			continue
+		}
+		text, err := pc.substitute(v.n.Value)
+		if err != nil {
+			continue
+		}
+		if _, _, st := parsePortRange(text); st == rangeInvalid {
+			return false
+		}
+	}
+	return true
+}
+
+// shortFormPorts is how many ports compose-go expands a short-form entry to: the size of its
+// container range. A part that is not a number or a range counts 0: compose-go judges it. It
+// reports false when a host or container range is outside the ports or runs backwards.
+func shortFormPorts(text string, expose bool) (n int, valid bool) {
+	spec, _, _ := strings.Cut(text, "/")
+	if expose {
+		lo, hi, st := parsePortRange(spec)
+		return rangeSize(lo, hi, st)
+	}
+	if rest, ok := strings.CutPrefix(spec, "["); ok {
+		// A bracketed IPv6 host address; its colons are not separators.
+		if _, after, found := strings.Cut(rest, "]"); found {
+			spec = strings.TrimPrefix(after, ":")
+		}
+	}
+	parts := strings.Split(spec, ":")
+	valid = true
+	if len(parts) >= 2 {
+		_, _, st := parsePortRange(parts[len(parts)-2])
+		valid = st != rangeInvalid
+	}
+	lo, hi, st := parsePortRange(parts[len(parts)-1])
+	n, ok := rangeSize(lo, hi, st)
+	return n, valid && ok
+}
+
+func rangeSize(lo, hi uint64, st rangeState) (n int, valid bool) {
+	switch st {
+	case rangeInvalid:
+		return 0, false
+	case rangeOK:
+		return int(hi-lo) + 1, true
+	}
+	return 0, true
+}
+
+type rangeState int
+
+const (
+	rangeOK         rangeState = iota // a port or a range of ports
+	rangeNotNumbers                   // text that is not made of numbers
+	rangeInvalid                      // numbers outside 0 to 65535, or a range that runs backwards
+)
+
+// parsePortRange reads "80" or "8000-8002". The numbers are read as 64-bit, so a huge one is
+// reported as invalid and never wraps.
+func parsePortRange(s string) (lo, hi uint64, st rangeState) {
 	a, b, isRange := strings.Cut(s, "-")
 	lo, err := strconv.ParseUint(a, 10, 64)
 	if err != nil {
-		return 0, 0, false
+		return 0, 0, notNumber(err)
 	}
 	hi = lo
 	if isRange {
 		if hi, err = strconv.ParseUint(b, 10, 64); err != nil {
-			return 0, 0, false
+			return 0, 0, notNumber(err)
 		}
 	}
 	if hi < lo || hi > 65535 {
-		// Not a range the budget can count; the validity rules judge it.
-		return lo, lo, true
+		return lo, hi, rangeInvalid
 	}
-	return lo, hi, true
+	return lo, hi, rangeOK
+}
+
+// notNumber tells text that is not a number from a number too big to be read.
+func notNumber(err error) rangeState {
+	if errors.Is(err, strconv.ErrRange) {
+		return rangeInvalid
+	}
+	return rangeNotNumbers
+}
+
+var portPairRe = regexp.MustCompile(`([0-9]+)-([0-9]+)`)
+
+// rawPortBudget is PortBudget for text the walker's YAML parser cannot decode. compose-go's parser
+// is not the walker's, so a file one refuses the other may still read; this closes the gap. Every
+// <digits>-<digits> pair counts: a valid range counts its size, any other pair counts 1. Under the
+// limit it returns nil, and compose-go reports the syntax error as before.
+func rawPortBudget(compose []byte) error {
+	total := 0
+	for _, m := range portPairRe.FindAllSubmatchIndex(compose, -1) {
+		lo, errLo := strconv.ParseUint(string(compose[m[2]:m[3]]), 10, 64)
+		hi, errHi := strconv.ParseUint(string(compose[m[4]:m[5]]), 10, 64)
+		n := 1
+		if errLo == nil && errHi == nil && lo <= hi && hi <= 65535 {
+			n = int(hi-lo) + 1
+		}
+		total += n
+		if total > MaxPorts {
+			line := 1 + bytes.Count(compose[:m[0]], []byte{'\n'})
+			return &PortsError{Err: ErrPortsTooMany, Key: "services", Line: line, Col: 1}
+		}
+	}
+	return nil
 }

@@ -708,7 +708,9 @@ func normPorts(ports []types.ServicePortConfig, expose types.StringOrNumberList,
 	return outPorts, outExpose
 }
 
-// expandPorts expands "80", "80/udp", "8000-8002" and "8000-8002/tcp" to "N/proto" each.
+// expandPorts expands "80", "80/udp", "8000-8002" and "8000-8002/tcp" to "N/proto" each. A range that
+// starts below 0, ends above 65535, runs backwards or holds more than MaxPorts ports stays as its text:
+// a review never expands a range a load would refuse (plan 07-36).
 func expandPorts(e string) []string {
 	spec, proto, _ := strings.Cut(e, "/")
 	if proto == "" {
@@ -725,6 +727,9 @@ func expandPorts(e string) []string {
 		if b, err2 = strconv.Atoi(hi); err2 != nil || b < a {
 			return []string{e}
 		}
+	}
+	if a < 0 || b > 65535 || b-a >= MaxPorts {
+		return []string{e}
 	}
 	var out []string
 	for p := a; p <= b; p++ {
