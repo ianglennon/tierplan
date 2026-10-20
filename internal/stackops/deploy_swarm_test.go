@@ -118,6 +118,29 @@ func stackInput(t *testing.T, name, compose string, files []stacks.File, vars ..
 	}
 }
 
+// checkedStackInput is stackInput over the check pipeline: the project is the one stacks.Deployable
+// returns, as the project of a stack that was deployed always is. A refusal fails the test; the callers
+// of stackInput that feed the converter files the check would stop earlier keep using stackInput.
+func checkedStackInput(t *testing.T, name, compose string, files []stacks.File, vars ...stacks.Var) (stackops.Stack, stackops.SwarmDeployInput) {
+	t.Helper()
+	all := append([]stacks.File{{Path: stacks.ComposeFile, Content: []byte(compose)}}, files...)
+	loaded, err := stacks.Deployable(context.Background(), stacks.CheckInput{
+		Name: name, Target: stacks.TargetSwarm, Copy: stacks.WorkingCopy{Files: all, Vars: vars},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]string{}
+	for _, v := range vars {
+		values[v.Name] = v.Value
+	}
+	st := stackops.Stack{ID: "stack-" + name, Name: name, Target: stacks.TargetSwarm}
+	return st, stackops.SwarmDeployInput{
+		Stack: st, Project: loaded.Project, Files: stacks.NewFileSet(all), Vars: values,
+		Copy: stacks.WorkingCopy{Files: all, Vars: vars},
+	}
+}
+
 // asCaller gives a deploy a caller when the test did not name one: an instance admin, who may deploy
 // anything, so the policy check the deploy makes before it writes passes.
 func (r *swarmRig) asCaller(t *testing.T, in stackops.SwarmDeployInput) stackops.SwarmDeployInput {

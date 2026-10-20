@@ -61,7 +61,7 @@ func (s *lifecycleStore) RevisionPins(context.Context, string) (map[string]strin
 // deployedStack deploys compose as a stack and returns it with the store its last good revision lives in.
 func (r *swarmRig) deployedStack(t *testing.T, name, composeText string, files []stacks.File, vars ...stacks.Var) (stackops.Stack, *lifecycleStore) {
 	t.Helper()
-	st, in := stackInput(t, name, composeText, files, vars...)
+	st, in := checkedStackInput(t, name, composeText, files, vars...)
 	res, job := r.deploy(t, in)
 	if !res.OK() || job.State != jobs.JobDone {
 		t.Fatalf("deploy = %+v %v, want it done", res, itemStates(job))
@@ -353,6 +353,33 @@ func TestStopRemovesAGlobalServiceAndStartCreatesItAgainFromTheLastRevisionWithI
 	}
 	if check, _ := rig.deps.CheckStart(testsupport.Context(t), rig.envID, st, store, rootCaller(t, rig)); check.Recreates {
 		t.Errorf("CheckStart recreates after the service was made again")
+	}
+}
+
+func TestStartOfAStoppedStackThatUsesAnEnvFileRecreatesItsGlobalServiceWithTheFilesValues(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	compose := "services:\n  web:\n    image: nginx:1.27-alpine\n  agent:\n    image: nginx:1.28-alpine\n    env_file: app.env\n    deploy:\n      mode: global\n"
+	st, store := rig.deployedStack(t, "envglobal", compose, []stacks.File{{Path: "app.env", Content: []byte("FROM_FILE=1\n")}})
+	if stopRes, _ := rig.stop(t, st, store); !stopRes.OK() || !slices.Equal(stopRes.Removed, []string{"envglobal_agent"}) {
+		t.Fatalf("stop = %+v, want the global service removed", stopRes)
+	}
+	creates := len(rig.fake.ServiceCreates())
+
+	res, job := rig.start(t, st, store)
+
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("start = %+v %v, want it done", res, itemStates(job))
+	}
+	if !slices.Equal(res.Recreated, []string{"envglobal_agent"}) {
+		t.Errorf("recreated = %v, want the global service", res.Recreated)
+	}
+	made := rig.fake.ServiceCreates()[creates:]
+	if len(made) != 1 {
+		t.Fatalf("start created %d services, want 1", len(made))
+	}
+	if env := made[0].Spec.TaskTemplate.ContainerSpec.Env; !slices.Contains(env, "FROM_FILE=1") {
+		t.Errorf("recreated env = %v, want FROM_FILE=1 from the env file", env)
 	}
 }
 

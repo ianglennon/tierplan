@@ -106,7 +106,8 @@ func CodeMessage(code string) string {
 type SwarmDeployInput struct {
 	EnvID string
 	Stack Stack
-	// Project is the stack's compose file as stacks.Load read it. The deploy converts it twice:
+	// Project is the stack's compose file as stacks.Deployable (the check pipeline) produced it,
+	// with env_file resolved and build stripped. The deploy converts it twice:
 	// once for the networks and the list of services, and again for the services after the
 	// secrets and configs exist, so that they name the objects it created.
 	Project *composetypes.Project
