@@ -816,6 +816,50 @@ func TestASwarmStackThatUsesAnEnvFileReviewsCleanAndDeploysWithTheFilesValues(t 
 	}
 }
 
+// leakyValue is a secret variable's value in the tests of the masking invariant (review WR-04).
+const leakyValue = "hunter2secretvalue"
+
+// leakyVars is a variable table with one secret variable, PW, that holds leakyValue.
+const leakyVars = `[{"name":"PW","value":"` + leakyValue + `","secret":true}]`
+
+// A deploy that is refused says why without ever quoting a secret variable (review WR-04, T-07-159): the
+// converter quotes the values it refuses, so its text is masked with the stack's own masker.
+func TestADeployRefusalNeverQuotesASecretVariable(t *testing.T) {
+	t.Parallel()
+	cases := map[string]struct {
+		compose string
+		// quoted is true when the refusal comes from the converter, which quotes the value it refuses.
+		quoted bool
+	}{
+		"a value the converter quotes": {"services:\n  web:\n    image: nginx:1.27-alpine\n    deploy:\n      endpoint_mode: ${PW}\n", true},
+		"a value in a cast position":   {"services:\n  web:\n    image: nginx:1.27-alpine\n    deploy:\n      replicas: ${PW}\n", false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f, e := stackEnv(t, nil)
+			admin := f.caller(t, e, "envadmin-1", "admin")
+			operator := f.caller(t, e, "operator-1", "operator")
+			st := newStack(t, admin, "leaky")
+			v := saveCompose(t, operator, st.ID, tc.compose, leakyVars)
+
+			rec := operator.deploy(st.ID, `{"draftVersion":`+itoaT(v)+`}`)
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("deploy: %d %.300s, want 422", rec.Code, rec.Body)
+			}
+			if strings.Contains(rec.Body.String(), leakyValue) {
+				t.Errorf("deploy answer = %s, want no secret value", rec.Body)
+			}
+			if tc.quoted && !strings.Contains(rec.Body.String(), "<hidden>") {
+				t.Errorf("deploy answer = %s, want the converter's quoted value shown as <hidden>", rec.Body)
+			}
+			if w := f.fake.Writes(); len(w) != 0 {
+				t.Errorf("writes = %v, want none", w)
+			}
+		})
+	}
+}
+
 // Roll back (plan 07-19, STK-07, D-14): one click redeploys exactly what last ran well, with its own
 // images, and asks no registry.
 
