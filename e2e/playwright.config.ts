@@ -32,6 +32,10 @@ const chromium = {
 // environment by what it is, not by its position, because the agent spec left a
 // second one. The backup project runs last: its restore replaces the state of the shared
 // server, which signs everyone out and drops everything made after the backup.
+// The stacks project deploys compose stacks to the engine Bayplan manages and to an agent host of
+// its own. It enrols that host afresh, because the agent spec leaves its host revoked, and it
+// leaves the engine as it found it. It sits before the services project because it assumes a
+// standalone host, as the specs before it do.
 const order = [
   "setup-and-login",
   "dashboard",
@@ -43,6 +47,7 @@ const order = [
   "access",
   "registries",
   "responsive",
+  "stacks",
   "services",
   "backup",
 ] as const;

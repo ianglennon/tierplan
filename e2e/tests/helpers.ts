@@ -452,3 +452,214 @@ export async function environmentsOf(context: BrowserContext): Promise<Environme
   expect(res.ok(), "GET /api/environments").toBe(true);
   return ((await res.json()) as { items: EnvironmentRow[] }).items;
 }
+
+// ---------------------------------------------------------------------------
+// Stacks (Phase 7)
+// ---------------------------------------------------------------------------
+
+// The registry the stacks spec pins images against. It runs inside the engine it serves, on that
+// engine's own loopback, the way the Go integration tests do (internal/dockerx/dockertest): a
+// stack's image is pinned to a digest a registry gave, the engines of this topology have no route
+// to a real one, and Docker treats localhost:5000 as insecure without any daemon setting.
+const REGISTRY_IMAGE = "registry:2";
+const REGISTRY_NAME = "e2e-registry";
+export const REGISTRY_HOST = "localhost:5000";
+
+// StackHost names the engine a stack is deployed to: the dind Bayplan reaches through its socket,
+// or the agent host behind a real agent.
+export type StackHost = "dind" | "agenthost";
+
+// seedStackImage starts a registry on the engine of the service, loading registry:2 into it from
+// the machine running the suite when the engine does not hold it, and pushes an image made from
+// the engine's own busybox as `ref` (a localhost:5000/... reference). The image has sh and sleep,
+// which is all a stack of this spec runs. It is idempotent, so a retried attempt can run it again,
+// and nothing is pulled from outside the machine except registry:2 on the suite's own engine when
+// it is missing there.
+export function seedStackImage(host: StackHost, ref: string): void {
+  if (!ref.startsWith(`${REGISTRY_HOST}/`)) throw new Error(`${ref} is not on ${REGISTRY_HOST}`);
+  const held = dockerExec(
+    host,
+    `docker image inspect ${REGISTRY_IMAGE} >/dev/null 2>&1 && echo yes || echo no`,
+  );
+  if (held !== "yes") {
+    try {
+      docker("image", "inspect", REGISTRY_IMAGE);
+    } catch {
+      docker("pull", REGISTRY_IMAGE);
+    }
+    execFileSync(
+      "sh",
+      [
+        "-c",
+        `docker save ${REGISTRY_IMAGE} | docker compose -f '${COMPOSE_FILE}' exec -T ${host} docker load`,
+      ],
+      { encoding: "utf8", timeout: 180_000, maxBuffer: 64 * 1024 * 1024 },
+    );
+  }
+  dockerExec(
+    host,
+    [
+      `docker inspect ${REGISTRY_NAME} >/dev/null 2>&1 || docker run -d --name ${REGISTRY_NAME} -p 127.0.0.1:5000:5000 ${REGISTRY_IMAGE} >/dev/null`,
+      // Wait on the registry answering, not on the clock.
+      "for i in $(seq 1 60); do wget -q -O /dev/null http://127.0.0.1:5000/v2/ 2>/dev/null && break; sleep 1; done",
+      "wget -q -O /dev/null http://127.0.0.1:5000/v2/",
+      "root=$(mktemp -d)",
+      'mkdir -p "$root/bin" "$root/lib" "$root/tmp"',
+      'cp /bin/busybox "$root/bin/busybox"',
+      'cp /lib/ld-musl-*.so.1 "$root/lib/"',
+      'chmod 1777 "$root/tmp"',
+      'for c in sh echo sleep touch ls cat printf; do ln -s busybox "$root/bin/$c"; done',
+      `tar -C "$root" -c . | docker import - ${ref} >/dev/null`,
+      'rm -rf "$root"',
+      `docker push ${ref} >/dev/null`,
+    ].join("; "),
+  );
+}
+
+// dropStackImage takes the registry and the images of seedStackImage off the engine again, so the
+// specs that follow find the engine as they expect it. It is safe when none is there.
+export function dropStackImage(host: StackHost, ...refs: string[]): void {
+  dockerExec(
+    host,
+    [
+      `docker rm -f ${REGISTRY_NAME} >/dev/null 2>&1`,
+      ...refs.map((r) => `docker rmi -f ${r} >/dev/null 2>&1`),
+      `docker rmi -f ${REGISTRY_IMAGE} >/dev/null 2>&1`,
+      "true",
+    ].join("; "),
+  );
+}
+
+// enginePs lists the ids of the containers, networks, volumes or secrets of an engine that carry a
+// label (docker <kind> ls), one per line, as an array: how a spec proves a removal left nothing.
+export function engineIds(
+  host: StackHost,
+  kind: "container" | "network" | "volume",
+  label: string,
+): string[] {
+  const list =
+    kind === "container"
+      ? `docker ps -aq --filter label=${label}`
+      : `docker ${kind} ls -q --filter label=${label}`;
+  const out = dockerExec(host, list);
+  return out === "" ? [] : out.split("\n");
+}
+
+// createStack opens an environment's Stacks list, makes a stack from an empty file with the
+// Create stack dialog and returns once the new stack's page is open. The stack is not deployed.
+export async function createStack(page: Page, envId: string, name: string): Promise<void> {
+  await page.goto(at(`/env/${envId}/stacks`));
+  await expect(page.getByRole("heading", { name: "Stacks", level: 1 })).toBeVisible();
+  await page.getByRole("button", { name: "Create stack" }).first().click();
+  const dialog = page.getByRole("dialog", { name: "Create a stack" });
+  await dialog.getByRole("textbox", { name: /^Name/ }).fill(name);
+  await dialog.getByRole("radio", { name: /Empty file/ }).click();
+  await dialog.getByRole("button", { name: "Create stack" }).click();
+  await expect(page.getByRole("dialog", { name: "Create a stack" })).toHaveCount(0);
+  await expect(page).toHaveURL(new RegExp(`/bayplan/env/${envId}/stacks/[^/]+`));
+}
+
+// typeInEditor replaces the whole content of the open file's editor with `text`. The editor is a
+// CodeMirror surface, so the text goes in as one insertion: typing it key by key would let the
+// editor indent each new line again and shift the YAML. `file` is the name the editor carries
+// ("compose.yaml, YAML").
+export async function typeInEditor(page: Page, file: string, text: string): Promise<void> {
+  const editor = page.getByRole("textbox", { name: file, exact: true });
+  await editor.click();
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.insertText(text);
+}
+
+// openReview presses Review and deploy (which saves the draft first) and waits for the review of
+// the stack to load.
+export async function openReview(page: Page, name: string): Promise<void> {
+  await page.getByRole("button", { name: "Review and deploy" }).click();
+  await expect(page.getByRole("heading", { name: `Review ${name}` })).toBeVisible({
+    timeout: 60_000,
+  });
+}
+
+// waitForDeployComplete waits for the deploy console to reach its result: the heading
+// "Deploy complete". A failed deploy shows "Deploy failed" instead, and the wait names it at once
+// rather than running out its clock.
+export async function waitForDeployComplete(page: Page, timeout = 180_000): Promise<void> {
+  const done = page.getByRole("heading", { name: "Deploy complete" });
+  const failed = page.getByRole("heading", { name: /^(Deploy failed|Deploy cancelled)$/ });
+  await expect(done.or(failed)).toBeVisible({ timeout });
+  await expect(failed, "the deploy did not complete").toHaveCount(0);
+}
+
+// enrollAgentHost adds an environment through the UI, runs the Standalone command it shows on
+// the agent host as a person would, and waits for the agent to come online, as the agent spec
+// does. It starts from a clean host (the agent an earlier spec left revoked is removed) and
+// returns the new environment's id. The proxy's certificate pin goes in front of the image name
+// the documented way (docs/agent.md).
+export async function enrollAgentHost(page: Page, name: string, pin: string): Promise<string> {
+  expect(pin, "make e2e writes .devdata/e2e-tls/pin.txt").toMatch(/^sha256\/.{44}$/);
+  dockerExec(
+    "agenthost",
+    "docker rm -f bayplan-agent >/dev/null 2>&1; docker volume rm -f bayplan-agent >/dev/null 2>&1; true",
+  );
+  await page.goto(at("/environments"));
+  await expect(page.getByRole("heading", { name: "Environments", level: 1 })).toBeVisible();
+  await page.getByRole("button", { name: "Add environment" }).first().click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("textbox", { name: /^Name/ }).fill(name);
+  await dialog.getByRole("button", { name: "Generate install command" }).click();
+  await expect(dialog.getByRole("heading", { name: "Install the agent" })).toBeVisible();
+  await dialog.getByRole("tab", { name: "Standalone" }).click();
+  await dialog.getByRole("button", { name: "Show token" }).click();
+  const code = dialog.getByRole("region", { name: "command" }).locator("code");
+  await expect(code).toContainText("docker run -d --name bayplan-agent");
+  const command = ((await code.textContent()) ?? "").trim();
+  const image = command.split(/\s+/).at(-1) ?? "";
+  expect(image, "the last word of the command is the agent image").toMatch(/bayplan-agent:/);
+  const cut = command.lastIndexOf(image);
+  const pinned = `${command.slice(0, cut)}-e 'BAYPLAN_AGENT_PIN=${pin}' ${command.slice(cut)}`;
+  const out = dockerExec("agenthost", pinned);
+  expect(out, "docker run prints the container id").toMatch(/^[0-9a-f]{64}$/m);
+  await expect(dialog.getByText(`${name} is online`)).toBeVisible({ timeout: 90_000 });
+  await expect(page).toHaveURL(/\/bayplan\/env\/[^/]+$/, { timeout: 15_000 });
+  const id = /\/env\/([^/]+)$/.exec(new URL(page.url()).pathname)?.[1] ?? "";
+  expect(id).not.toBe("");
+  return id;
+}
+
+// removeRemoteEnvironments removes every environment that is not the managed local host, through
+// the API, the way Remove environment does. A host that an environment owns, revoked or not, is
+// refused by every other ("This host is already managed by the environment ..."), and the agent
+// spec leaves its host with its revoked environment, so a spec that enrols the agent host again
+// starts here. It leaves the local host and Docker as they are.
+export async function removeRemoteEnvironments(context: BrowserContext): Promise<void> {
+  for (const env of await environmentsOf(context)) {
+    if (env.isLocalSocket) continue;
+    const res = await apiAs(context, "DELETE", `/api/environments/${env.id}`);
+    expect([204, 404], `DELETE /api/environments/${env.id}: ${await res.text()}`).toContain(
+      res.status(),
+    );
+  }
+}
+
+// removeStackIfPresent removes a stack of this name from an environment through the API, the way
+// the Remove button does, and waits until the list no longer has it. A stack an earlier attempt of
+// the spec left behind would otherwise make the name taken. It is a no-op when there is none.
+export async function removeStackIfPresent(
+  context: BrowserContext,
+  envId: string,
+  name: string,
+): Promise<void> {
+  const list = async () => {
+    const res = await context.request.get(at(`/api/env/${envId}/stacks`));
+    expect(res.ok(), `GET /api/env/${envId}/stacks`).toBe(true);
+    return ((await res.json()) as { items: { id: string; name: string }[] }).items;
+  };
+  const found = (await list()).find((s) => s.name === name);
+  if (!found) return;
+  const res = await apiAs(context, "POST", `/api/env/${envId}/stacks/${found.id}/remove`, {
+    confirmName: name,
+    volumes: [],
+    keepDefinition: false,
+  });
+  expect([202, 404], `remove ${name}: ${await res.text()}`).toContain(res.status());
+  await expect.poll(async () => (await list()).some((s) => s.name === name)).toBe(false);
+}
