@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -912,4 +913,184 @@ func TestConvertRefusesAServiceThatOnlyBuilds(t *testing.T) {
 	if !errors.As(err, &nc) || nc.Service != "a" || !slices.Equal(nc.Fields, []string{"build"}) {
 		t.Fatalf("err = %v, want a refusal of build alone", err)
 	}
+}
+
+// A converter refusal caused by a field's value names the field by its dotted compose path (07-41,
+// D-02), so the guard can ask whether that field uses a secret variable. Each row is built from a
+// literal compose file. The error's own text and sentinels are unchanged: the FieldError wraps.
+func TestEveryConverterRefusalOfAFieldNamesItsPath(t *testing.T) {
+	t.Parallel()
+	const head = "services:\n  web:\n    image: nginx:1\n"
+	cases := []struct {
+		name, compose, path string
+		objs                convert.ObjectResolver
+		// is is a sentinel the error must still answer, nil for none.
+		is error
+		// notConverted is true when errors.As must still reach a *NotConvertedError.
+		notConverted bool
+	}{
+		{name: "restart", compose: head + "    restart: sometimes\n", path: "services.web.restart"},
+		{name: "endpoint_mode", compose: head + "    deploy:\n      endpoint_mode: x\n", path: "services.web.deploy.endpoint_mode"},
+		{name: "a published range", compose: head + "    ports:\n      - \"8000-8001:80\"\n", path: "services.web.ports"},
+		{name: "dns", compose: head + "    dns: [\"8.8.8.x\"]\n", path: "services.web.dns"},
+		{name: "global mode with replicas", compose: head + "    deploy:\n      mode: global\n      replicas: 2\n", path: "services.web.deploy.mode"},
+		{name: "a deploy mode the converter refuses", compose: head + "    deploy:\n      mode: weird\n", path: "services.web.deploy.mode", is: convert.ErrNotConverted, notConverted: true},
+		{
+			name: "a relative bind", compose: head + "    volumes:\n      - type: bind\n        source: ./data\n        target: /data\n",
+			path: "services.web.volumes", is: convert.ErrRelativeBind,
+		},
+		{
+			name: "a named pipe", compose: head + "    volumes:\n      - type: npipe\n        source: '\\\\.\\pipe\\docker_engine'\n        target: '\\\\.\\pipe\\docker_engine'\n",
+			path: "services.web.volumes",
+		},
+		{
+			name: "a host-reaching network driver", compose: head + "    networks: [front]\nnetworks:\n  front:\n    driver: macvlan\n",
+			path: "networks.front.driver", is: convert.ErrNotConverted, notConverted: true,
+		},
+		{
+			name: "an unknown secret", compose: head + "    secrets: [ghost]\nsecrets:\n  ghost:\n    file: ./x\n",
+			path: "services.web.secrets", is: convert.ErrUnknownObject,
+		},
+		{
+			name: "an unknown config", compose: head + "    configs: [ghost]\nconfigs:\n  ghost:\n    file: ./x\n",
+			path: "services.web.configs", is: convert.ErrUnknownObject,
+		},
+		{
+			name: "an unknown credential spec config", compose: head + "    credential_spec:\n      config: ghost\nconfigs:\n  ghost:\n    file: ./x\n",
+			path: "services.web.credential_spec", is: convert.ErrUnknownObject,
+		},
+		{
+			name: "a healthcheck with a test and disable", compose: head + "    healthcheck:\n      test: [\"CMD\", \"true\"]\n      disable: true\n",
+			path: "services.web.healthcheck",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := planWith(t, "s", tc.compose, tc.objs)
+			var fe *convert.FieldError
+			if !errors.As(err, &fe) {
+				t.Fatalf("err = %v, want a *FieldError", err)
+			}
+			if fe.Path != tc.path {
+				t.Errorf("path = %q, want %q", fe.Path, tc.path)
+			}
+			if tc.is != nil && !errors.Is(err, tc.is) {
+				t.Errorf("err = %v, want it to still answer %v", err, tc.is)
+			}
+			var nc *convert.NotConvertedError
+			if tc.notConverted != errors.As(err, &nc) {
+				t.Errorf("errors.As(*NotConvertedError) = %v, want %v for %v", !tc.notConverted, tc.notConverted, err)
+			}
+		})
+	}
+
+	t.Run("a refusal that lists keys only is not a field error", func(t *testing.T) {
+		t.Parallel()
+		_, err := plan(t, "s", "services:\n  other:\n    image: o:1\n  web:\n    image: nginx:1\n    volumes_from: [other]\n")
+		var fe *convert.FieldError
+		var nc *convert.NotConvertedError
+		if errors.As(err, &fe) || !errors.As(err, &nc) {
+			t.Errorf("err = %v, want a *NotConvertedError and no *FieldError", err)
+		}
+	})
+	t.Run("a service with no image is not a field error", func(t *testing.T) {
+		t.Parallel()
+		// The loader refuses a service with no image, so the project is built by hand.
+		p := &composetypes.Project{Services: composetypes.Services{"web": {Name: "web"}}}
+		_, err := convert.Convert(p, convert.Options{StackName: "s", StackID: "id-s"})
+		var fe *convert.FieldError
+		if errors.As(err, &fe) || !errors.Is(err, convert.ErrNoImage) {
+			t.Errorf("err = %v, want ErrNoImage and no *FieldError", err)
+		}
+	})
+}
+
+// secretUseOf is the SecretUse of a compose file with one secret variable, PW.
+func secretUseOf(compose, secret string) stacks.SecretUse {
+	return stacks.NewSecretUse(stacks.WorkingCopy{
+		Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte(compose)}},
+		Vars:  []stacks.Var{{Name: "PW", Value: secret, Secret: true}},
+	})
+}
+
+// The guard withholds a converter error only when its field uses a secret variable or its text holds a
+// run of a secret value, and what it returns hides its cause from errors.As (07-41, T-07-177, T-07-178).
+func TestGuardSecretsHidesOnlyWhatComesFromASecret(t *testing.T) {
+	t.Parallel()
+	const secret = "Password2024!"
+	const compose = "services:\n  web:\n    image: nginx:1\n    restart: ${PW}\n    dns: [\"8.8.8.8\"]\n"
+	s := secretUseOf(compose, secret)
+
+	t.Run("a field that uses a secret variable", func(t *testing.T) {
+		t.Parallel()
+		err := convert.GuardSecrets(&convert.FieldError{Path: "services.web.restart", Err: errors.New(`convert: service web: unknown policy "sometimes"`)}, s)
+		var sf *convert.SecretFieldError
+		if !errors.As(err, &sf) || err.Error() != stacks.SecretValueMessage("services.web.restart") {
+			t.Fatalf("err = %v, want the fixed sentence for services.web.restart", err)
+		}
+		var fe *convert.FieldError
+		if errors.As(err, &fe) {
+			t.Errorf("errors.As reached the field error %+v, want the cause out of reach", fe)
+		}
+	})
+	t.Run("a not-converted cause stays out of reach but keeps its class", func(t *testing.T) {
+		t.Parallel()
+		cause := &convert.NotConvertedError{Service: "web", Fields: []string{"deploy.mode: sometimes"}}
+		err := convert.GuardSecrets(&convert.FieldError{Path: "services.web.restart", Err: cause}, s)
+		var nc *convert.NotConvertedError
+		if !errors.Is(err, convert.ErrNotConverted) || errors.As(err, &nc) {
+			t.Errorf("err = %v, want errors.Is(ErrNotConverted) true and errors.As(*NotConvertedError) false", err)
+		}
+		if strings.Contains(err.Error(), "sometimes") {
+			t.Errorf("err = %q, want no word of the cause", err)
+		}
+	})
+	t.Run("a plain field that quotes nothing of the secret", func(t *testing.T) {
+		t.Parallel()
+		in := &convert.FieldError{Path: "services.web.dns", Err: errors.New(`convert: service web: dns "8.8.8.x" is not an IP address`)}
+		if got := convert.GuardSecrets(in, s); got != error(in) {
+			t.Errorf("err = %v, want it unchanged", got)
+		}
+	})
+	t.Run("a plain field whose text quotes a run of the secret", func(t *testing.T) {
+		t.Parallel()
+		in := &convert.FieldError{Path: "services.web.dns", Err: errors.New(`convert: service web: dns "Password2024" is not an IP address`)}
+		got := convert.GuardSecrets(in, s)
+		if got.Error() != stacks.SecretValueMessage("services.web.dns") {
+			t.Errorf("err = %q, want the fixed sentence for services.web.dns", got)
+		}
+	})
+	t.Run("a refusal that lists keys only, and a service with no image", func(t *testing.T) {
+		t.Parallel()
+		for _, in := range []error{
+			&convert.NotConvertedError{Service: "web", Fields: []string{"volumes_from"}},
+			fmt.Errorf("%w: %s", convert.ErrNoImage, "web"),
+		} {
+			if got := convert.GuardSecrets(in, s); got != in {
+				t.Errorf("err = %v, want %v unchanged", got, in)
+			}
+		}
+	})
+	t.Run("an error with no field fails closed on its text", func(t *testing.T) {
+		t.Parallel()
+		got := convert.GuardSecrets(errors.New("convert: service web: odd Password2024 text"), s)
+		if got.Error() != stacks.SecretValueMessage("") {
+			t.Errorf("err = %q, want the general sentence", got)
+		}
+	})
+	t.Run("a file that uses no secret", func(t *testing.T) {
+		t.Parallel()
+		none := secretUseOf("services:\n  web:\n    image: nginx:1\n", secret)
+		in := errors.New("convert: service web: odd Password2024 text")
+		if got := convert.GuardSecrets(in, none); got != in {
+			t.Errorf("err = %v, want it unchanged", got)
+		}
+	})
+	t.Run("nil", func(t *testing.T) {
+		t.Parallel()
+		if got := convert.GuardSecrets(nil, s); got != nil {
+			t.Errorf("err = %v, want nil", got)
+		}
+	})
 }

@@ -994,6 +994,7 @@ func TestADeployNeverQuotesPartOfASecretTheConverterSplits(t *testing.T) {
 		parts []string
 	}{
 		"a restart policy": {head + "    restart: ${PW}\n", "sometimes:3", "services.web.restart", "", []string{"sometimes"}},
+		"a published port": {head + "    ports:\n      - \"${PW}\"\n", "127.0.0.1:8000-8001:80", "services.web.ports", "", []string{"8000-8001"}},
 		"a plain value keeps the converter's words": {
 			head + "    restart: sometimes\n    environment:\n      DB: ${PW}\n", "Password2024!", "", "unknown policy", []string{"Password2024"},
 		},
