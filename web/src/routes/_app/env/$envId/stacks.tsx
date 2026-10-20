@@ -3,35 +3,45 @@
 
 import { createFileRoute } from "@tanstack/react-router";
 
+import { type StackListSearchPatch, stackListSearchSchema } from "@/features/stacks/list-search";
 import { StackList } from "@/features/stacks/stack-list";
 import { useDocumentTitle } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
-import { z } from "@/lib/zod-config";
 
 function Stacks() {
   const { envId } = Route.useParams();
   const t = useT();
   useDocumentTitle(t("stacks.list.title"));
-  const { new: creating } = Route.useSearch();
+  const search = Route.useSearch();
   const navigate = Route.useNavigate();
+
+  // A change to the search replaces the history entry, so the back button leaves the page and does
+  // not walk through every key.
+  function change(patch: StackListSearchPatch) {
+    void navigate({
+      search: (prev) => {
+        const next: Record<string, unknown> = { ...prev, ...patch };
+        for (const key of Object.keys(next)) if (next[key] === undefined) delete next[key];
+        return next;
+      },
+      replace: true,
+    });
+  }
+
   return (
     <StackList
       envId={envId}
-      creating={creating === 1}
-      onCreatingChange={(open) =>
-        void navigate({ search: (prev) => ({ ...prev, new: open ? 1 : undefined }), replace: true })
-      }
+      creating={search.new === 1}
+      onCreatingChange={(open) => change({ new: open ? 1 : undefined })}
+      search={search}
+      onSearchChange={change}
     />
   );
 }
 
-// The stacks route's search: new=1 opens the Create stack dialog. A value that does not fit is
-// dropped, not sent.
-const stackSearchSchema = z.object({
-  new: z.literal(1).optional().catch(undefined),
-});
-
+// The stacks route's search: new=1 opens the Create stack dialog; the search text, the status chips and
+// the sort live in the URL too. A value that does not fit is dropped, not sent.
 export const Route = createFileRoute("/_app/env/$envId/stacks")({
-  validateSearch: stackSearchSchema,
+  validateSearch: stackListSearchSchema,
   component: Stacks,
 });

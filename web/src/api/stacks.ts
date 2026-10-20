@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
 import { type ProblemField, readProblem } from "@/api/problem";
@@ -105,18 +105,49 @@ export function isStackGone(error: unknown): boolean {
   );
 }
 
-// The stacks of an environment, by name.
-export function stacksQuery(envId: string) {
+// What the stack lists ask the server for: the search text, the status chips as a comma list, and the
+// sort. They are applied before the 500-row cap, so the server decides which rows are shown.
+export interface StackFilters {
+  q?: string;
+  status?: string;
+  sort?: "name" | "state" | "lastDeployed";
+  dir?: "asc" | "desc";
+}
+
+// The filters that are set, so an unfiltered read keeps the bare key and a filtered one extends it.
+function filterSet<T extends StackFilters>(filters: T): T {
+  const set = {} as T;
+  for (const key of Object.keys(filters) as (keyof T)[]) {
+    if (filters[key]) set[key] = filters[key];
+  }
+  return set;
+}
+
+// Changing the search, the chips or the sort keeps the rows on screen until the new ones arrive, so
+// the table does not jump to a skeleton. It never carries rows over from another environment.
+function keepForSameEnv(envId: string) {
+  return <T>(previous: T | undefined, previousQuery?: { queryKey: readonly unknown[] }) =>
+    previousQuery?.queryKey[1] === envId ? previous : undefined;
+}
+
+// The stacks of an environment, narrowed and ordered by the filters. The unfiltered list keeps the bare
+// key and every filtered read extends it, so one invalidation refreshes them all.
+export function stacksQuery(envId: string, filters: StackFilters = {}) {
+  const set = filterSet(filters);
+  const filtered = Object.keys(set).length > 0;
   return queryOptions({
-    queryKey: stacksKey(envId),
+    queryKey: filtered ? ([...stacksKey(envId), set] as const) : stacksKey(envId),
     queryFn: async () => {
-      const res = await api.GET("/api/env/{envId}/stacks", { params: { path: { envId } } });
+      const res = await api.GET("/api/env/{envId}/stacks", {
+        params: { path: { envId }, query: filtered ? set : undefined },
+      });
       if (!res.data) {
         const problem = readProblem(res.error, res.response);
         throw new StacksLoadError(problem.status, problem.type);
       }
       return res.data;
     },
+    placeholderData: keepForSameEnv(envId),
     refetchInterval: LIST_REFETCH_MS,
   });
 }
@@ -125,16 +156,16 @@ export function stacksQuery(envId: string) {
 // so an environment's own events do not refresh it: it follows its own poll.
 export const allStacksKey = ["stacks", "all"] as const;
 
-// What the All stacks list asks the server for: the environments chosen. An empty choice is all of them.
-export interface AllStacksFilters {
+// What the All stacks list asks the server for: the environments chosen (empty is all of them) and the
+// same filters as an environment's list.
+export interface AllStacksFilters extends StackFilters {
   env?: string;
 }
 
 // Every stack the signed-in user may read, grouped by environment, narrowed by the filters. The rows
 // of the previous filters stay on screen while the new ones load.
 export function allStacksQuery(filters: AllStacksFilters = {}) {
-  const set: AllStacksFilters = {};
-  if (filters.env) set.env = filters.env;
+  const set = filterSet(filters);
   return queryOptions({
     queryKey: [...allStacksKey, set] as const,
     queryFn: async () => {
@@ -150,6 +181,13 @@ export function allStacksQuery(filters: AllStacksFilters = {}) {
     placeholderData: (previous) => previous,
     refetchInterval: LIST_REFETCH_MS,
   });
+}
+
+// invalidateStacks reads an environment's stack lists and pages again, and the All stacks list too: a
+// change to a stack is in both.
+export function invalidateStacks(queryClient: QueryClient, envId: string): void {
+  void queryClient.invalidateQueries({ queryKey: stacksKey(envId) });
+  void queryClient.invalidateQueries({ queryKey: allStacksKey });
 }
 
 // How often a stack's page reads itself again while an operation runs on it.
@@ -261,7 +299,7 @@ export function useCreateStack(envId: string) {
   return useMutation<StackDetail, StackRequestError, StackCreateInput>({
     mutationFn: (body) => postStack(envId, body),
     retry: false,
-    onSettled: () => void queryClient.invalidateQueries({ queryKey: stacksKey(envId) }),
+    onSettled: () => invalidateStacks(queryClient, envId),
   });
 }
 
@@ -358,7 +396,7 @@ export function useSaveDraft(envId: string, stackId: string) {
           : old,
       );
       // The page and the list show the Draft badge: stacksKey is the prefix of both.
-      void queryClient.invalidateQueries({ queryKey: stacksKey(envId) });
+      invalidateStacks(queryClient, envId);
     },
   });
 }
@@ -384,7 +422,7 @@ export function useDiscardDraft(envId: string, stackId: string) {
       }
     },
     retry: false,
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: stacksKey(envId) }),
+    onSuccess: () => invalidateStacks(queryClient, envId),
   });
 }
 
@@ -643,7 +681,7 @@ export function useDeployStack(envId: string, stackId: string) {
     },
     retry: false,
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: stacksKey(envId) });
+      invalidateStacks(queryClient, envId);
       // The jobs indicator learns of the new job at once, not on its next poll.
       void queryClient.invalidateQueries({ queryKey: stackJobsKey });
     },
@@ -676,7 +714,7 @@ export function useRollbackStack(envId: string, stackId: string) {
     retry: false,
     onSettled: () => {
       // One stack's page is under the list's key, so this reads both again.
-      void queryClient.invalidateQueries({ queryKey: stacksKey(envId) });
+      invalidateStacks(queryClient, envId);
       void queryClient.invalidateQueries({ queryKey: stackJobsKey });
     },
   });

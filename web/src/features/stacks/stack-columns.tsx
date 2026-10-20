@@ -7,6 +7,7 @@ import { Ellipsis } from "lucide-react";
 import type { StackItem } from "@/api/stacks";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
+import { StatusDot } from "@/components/status-dot";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,16 +30,28 @@ export interface StackRow extends StackItem {
 
 export const stackRowKey = (s: StackRow) => `${s.envId}/${s.id}`;
 
+// The states in which an operation is under way on the stack. The row says so in the pulsing warning
+// dot and its own word with an ellipsis, and its menu is off until the list shows the operation ended
+// (UI-SPEC "Stack lists": Pending row labels).
+const PENDING_STATES = ["deploying", "rolling_back", "starting", "removing"] as const;
+type PendingState = (typeof PENDING_STATES)[number];
+
+export function pendingStateOf(state: StackItem["state"]): PendingState | undefined {
+  return PENDING_STATES.find((p) => p === state);
+}
+
 interface RowActionsProps {
   row: StackRow;
   // Called as the row's menu opens and closes: a list with a menu open does not move.
   onOpenChange?: (open: boolean) => void;
+  // True while an operation is under way on the stack: the menu is off.
+  disabled?: boolean;
 }
 
 // RowActions is the row menu of the stack lists: Open stack for everyone, Deploy… (which opens the
 // review) for a user who may deploy and, for anyone else, disabled with the reason. The server decides
 // either way.
-function RowActions({ row, onOpenChange }: RowActionsProps) {
+function RowActions({ row, onOpenChange, disabled }: RowActionsProps) {
   const t = useT();
   const deploy = useNeeds("stacks.deploy", row.envId);
   return (
@@ -49,6 +62,7 @@ function RowActions({ row, onOpenChange }: RowActionsProps) {
           variant="ghost"
           size="icon-sm"
           className="max-md:size-11"
+          disabled={disabled}
           aria-label={t("stackReview.rowMenu.label", { name: row.name })}
         >
           <Ellipsis aria-hidden="true" />
@@ -100,6 +114,7 @@ export function stackColumns(
       id: "name",
       header: t("stackLists.columns.name"),
       className: "min-w-[224px]",
+      sortKey: "name",
       cell: (s) => (
         <span className="flex min-w-0 items-center gap-2">
           <Link
@@ -138,9 +153,16 @@ export function stackColumns(
       id: "state",
       header: t("stackLists.columns.state"),
       className: "w-40 min-w-40",
-      cell: (s) => (
-        <StackStateCell state={s.state} running={s.servicesRunning} total={s.servicesTotal} />
-      ),
+      sortKey: "state",
+      cell: (s) => {
+        const pending = pendingStateOf(s.state);
+        if (pending) {
+          return <StatusDot state="reconnecting" label={t(`stackLists.pending.${pending}`)} />;
+        }
+        return (
+          <StackStateCell state={s.state} running={s.servicesRunning} total={s.servicesTotal} />
+        );
+      },
     },
     {
       id: "services",
@@ -165,6 +187,7 @@ export function stackColumns(
       id: "lastDeployed",
       header: t("stackLists.columns.lastDeployed"),
       className: "w-40 min-w-40",
+      sortKey: "lastDeployed",
       cell: (s) =>
         s.lastDeployedAt ? (
           <span className="flex flex-col leading-tight">
@@ -183,7 +206,13 @@ export function stackColumns(
       id: "actions",
       header: <span className="sr-only">{t("actions.column")}</span>,
       className: "w-11 px-1 text-end",
-      cell: (s) => <RowActions row={s} onOpenChange={(open) => onMenuOpenChange?.(s, open)} />,
+      cell: (s) => (
+        <RowActions
+          row={s}
+          disabled={pendingStateOf(s.state) !== undefined}
+          onOpenChange={(open) => onMenuOpenChange?.(s, open)}
+        />
+      ),
     },
   );
   return columns;

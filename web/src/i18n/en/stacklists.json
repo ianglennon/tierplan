@@ -12,7 +12,9 @@
       "emptyBody": "Stacks you create on any environment show up here.",
       "error": "Couldn't load stacks.",
       "errorRetry": "Retry loading stacks",
-      "title": "Stacks"
+      "title": "Stacks",
+      "filtered_one": "{{n, number}} of {{count, number}} stack in {{environments}}",
+      "filtered_other": "{{n, number}} of {{count, number}} stacks in {{environments}}"
     },
     "columns": {
       "name": "Name",
@@ -51,6 +53,38 @@
     "target": {
       "swarm": "Swarm",
       "standalone": "Standalone"
+    },
+    "filtered_one": "{{n, number}} of {{count, number}} stack",
+    "filtered_other": "{{n, number}} of {{count, number}} stacks",
+    "cap": "Showing the first 500 of {{total, number}}. Narrow the search to see the rest.",
+    "search": {
+      "label": "Search stacks",
+      "placeholder": "Search by name or service",
+      "clear": "Clear search"
+    },
+    "status": {
+      "label": "Filter by status",
+      "degraded": "Degraded",
+      "stopped": "Stopped",
+      "draft": "Draft",
+      "deploy_failed": "Deploy failed",
+      "chip": "{{label}} {{count, number}}"
+    },
+    "clearFilters": "Clear filters",
+    "emptySearch": {
+      "title": "No stacks match “{{q}}”.",
+      "action": "Clear search"
+    },
+    "emptyFilters": {
+      "title": "No stacks match these filters.",
+      "action": "Clear filters"
+    },
+    "pending": {
+      "deploying": "Deploying…",
+      "rolling_back": "Rolling back…",
+      "stopping": "Stopping…",
+      "starting": "Starting…",
+      "removing": "Removing…"
     }
   }
 }

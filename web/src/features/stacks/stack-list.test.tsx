@@ -349,7 +349,9 @@ describe("StackList: search and status chips", () => {
     expect(
       await screen.findByRole("heading", { name: "No stacks match “zzz”.", level: 2 }),
     ).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+    // The search box has a Clear search of its own, above the empty state's.
+    const clears = screen.getAllByRole("button", { name: "Clear search" });
+    fireEvent.click(clears[clears.length - 1] as HTMLElement);
     expect(onChange).toHaveBeenCalledWith({ q: undefined });
   });
 

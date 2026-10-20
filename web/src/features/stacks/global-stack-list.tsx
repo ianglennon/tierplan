@@ -22,14 +22,18 @@ import {
   ResourceTable,
   type TableGroup,
 } from "@/features/resources/resource-table";
+import { STATUS_CHIP_ROW } from "@/features/resources/status-chips";
 import {
   envList,
   envParam,
   type GlobalStackSearch,
   type GlobalStackSearchPatch,
   type StackGroupBy,
+  type StackSortKey,
 } from "@/features/stacks/list-search";
 import { type StackRow, stackColumns, stackRowKey } from "@/features/stacks/stack-columns";
+import { StackFilterBar, StackNoMatch } from "@/features/stacks/stack-filter-bar";
+import { sortStackRows } from "@/features/stacks/stack-sort";
 import { hasPermission, useAnyEnvironmentPermission, useMe } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
@@ -146,10 +150,21 @@ export function GlobalStackList({ search, onSearchChange }: GlobalStackListProps
   const allowed = useAnyEnvironmentPermission("stacks.read");
   const environments = useQuery(environmentsQuery);
   const chosen = envList(search.env);
-  const query = useQuery({ ...allStacksQuery({ env: search.env }), enabled: allowed });
+  const query = useQuery({
+    ...allStacksQuery({
+      env: search.env,
+      q: search.q,
+      status: search.status,
+      sort: search.sort,
+      dir: search.dir,
+    }),
+    enabled: allowed,
+  });
   const data = query.data;
   const collapse = useGroupCollapse();
   const by: StackGroupBy = search.group ?? "env";
+  const sortKey: StackSortKey = search.sort ?? "name";
+  const sortDir = search.dir ?? "asc";
 
   const options = useMemo(
     () =>
@@ -167,8 +182,8 @@ export function GlobalStackList({ search, onSearchChange }: GlobalStackListProps
       })),
     [data],
   );
-  const total = groupRows.reduce((n, g) => n + g.rows.length, 0);
   const failed = data?.failedEnvironments ?? [];
+  const shownEnvironments = groupRows.length;
 
   const columns = stackColumns(t, { withEnvironment: true });
 
@@ -176,7 +191,17 @@ export function GlobalStackList({ search, onSearchChange }: GlobalStackListProps
   const retry = useCallback(() => void refetch(), [refetch]);
   const groups = useMemo<TableGroup<StackRow>[]>(() => {
     if (by === "none") {
-      return [{ key: "all", rows: groupRows.flatMap((g) => g.rows) }];
+      // The server sorts inside each environment; one list needs every row in a single order.
+      return [
+        {
+          key: "all",
+          rows: sortStackRows(
+            groupRows.flatMap((g) => g.rows),
+            sortKey,
+            sortDir,
+          ),
+        },
+      ];
     }
     const out: TableGroup<StackRow>[] = groupRows.map(({ group, rows }) => ({
       key: group.envId,
@@ -196,24 +221,37 @@ export function GlobalStackList({ search, onSearchChange }: GlobalStackListProps
       });
     }
     return out;
-  }, [by, groupRows, failed, query.isFetching, retry, t]);
+  }, [by, sortKey, sortDir, groupRows, failed, query.isFetching, retry, t]);
 
   const headed = groups.filter((g) => g.header).map((g) => g.key);
   const allCollapsed = headed.length > 0 && headed.every((k) => collapse.collapsed.has(k));
 
   const listQuery = useMemo<ListQuery<StackRow>>(
     () => ({
-      data: data ? { items: groupRows.flatMap((g) => g.rows), total, truncated: false } : undefined,
+      data: data
+        ? { items: groupRows.flatMap((g) => g.rows), total: data.total, truncated: data.capped }
+        : undefined,
       isPending: query.isPending,
       isError: query.isError,
       isFetching: query.isFetching,
       refetch: query.refetch,
     }),
-    [data, groupRows, total, query.isPending, query.isError, query.isFetching, query.refetch],
+    [data, groupRows, query.isPending, query.isError, query.isFetching, query.refetch],
   );
 
-  // No stacks on any environment the user can read: nothing is listed, so the notices of environments
-  // that could not be read are shown here in place of the table.
+  const filtered = Boolean(search.q || search.status || search.env);
+  const clearFilters = () => onSearchChange({ q: undefined, status: undefined, env: undefined });
+
+  function onSort(key: string) {
+    const next = key as StackSortKey;
+    if (next === sortKey) onSearchChange({ sort: next, dir: sortDir === "asc" ? "desc" : "asc" });
+    else onSearchChange({ sort: next, dir: "asc" });
+  }
+
+  // Nothing is listed. When stacks exist that the search or the filters let through none of, that is
+  // said, with the way to clear it; with none anywhere, so is that. The notices of environments that
+  // could not be read are shown here in place of the table, since no group is drawn for them.
+  const noMatch = filtered && (data?.unfilteredTotal ?? 0) > 0;
   const empty = (
     <div className="flex flex-col gap-3">
       {by === "none"
@@ -226,14 +264,23 @@ export function GlobalStackList({ search, onSearchChange }: GlobalStackListProps
               retrying={query.isFetching}
             />
           ))}
-      <Empty className="min-h-[30svh] border">
-        <EmptyHeader>
-          <EmptyTitle role="heading" aria-level={2} className="text-base">
-            {t("stackLists.global.empty")}
-          </EmptyTitle>
-          <EmptyDescription>{t("stackLists.global.emptyBody")}</EmptyDescription>
-        </EmptyHeader>
-      </Empty>
+      {noMatch ? (
+        <StackNoMatch
+          q={search.q}
+          moreThanSearch={Boolean(search.status || search.env)}
+          onClearSearch={() => onSearchChange({ q: undefined })}
+          onClear={clearFilters}
+        />
+      ) : (
+        <Empty className="min-h-[30svh] border">
+          <EmptyHeader>
+            <EmptyTitle role="heading" aria-level={2} className="text-base">
+              {t("stackLists.global.empty")}
+            </EmptyTitle>
+            <EmptyDescription>{t("stackLists.global.emptyBody")}</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )}
     </div>
   );
 
@@ -253,7 +300,16 @@ export function GlobalStackList({ search, onSearchChange }: GlobalStackListProps
 
   const groupById = useId();
   const toolbar = (
-    <div className="flex flex-wrap items-center gap-2 max-md:[&>*]:min-w-0">
+    <StackFilterBar
+      q={search.q}
+      status={search.status}
+      counts={data?.statusCounts}
+      filtered={filtered}
+      onSearch={(q) => onSearchChange({ q })}
+      onStatus={(status) => onSearchChange({ status })}
+      onClear={clearFilters}
+      chipRowClassName={STATUS_CHIP_ROW}
+    >
       <EnvironmentFilter
         value={chosen}
         options={options}
@@ -303,7 +359,7 @@ export function GlobalStackList({ search, onSearchChange }: GlobalStackListProps
           )}
         </Button>
       ) : null}
-    </div>
+    </StackFilterBar>
   );
 
   if (!allowed) return <NoPermission />;
@@ -319,13 +375,25 @@ export function GlobalStackList({ search, onSearchChange }: GlobalStackListProps
       toolbar={toolbar}
       caption={
         data
-          ? `${t("stackLists.global.caption")} ${t("stackLists.global.count", {
-              count: total,
-              environments: t("stackLists.global.environments", { count: groupRows.length }),
-            })}`
+          ? `${t("stackLists.global.caption")} ${
+              search.q || search.status
+                ? t("stackLists.global.filtered", {
+                    n: data.total,
+                    count: data.unfilteredTotal,
+                    environments: t("stackLists.global.environments", { count: shownEnvironments }),
+                  })
+                : t("stackLists.global.count", {
+                    count: data.total,
+                    environments: t("stackLists.global.environments", {
+                      count: shownEnvironments,
+                    }),
+                  })
+            }`
           : undefined
       }
       empty={empty}
+      capNote={data ? t("stackLists.cap", { total: data.total }) : undefined}
+      sort={{ key: sortKey, dir: sortDir, onSort }}
       retryLabel={t("stackLists.global.errorRetry")}
       getRowKey={stackRowKey}
     />
