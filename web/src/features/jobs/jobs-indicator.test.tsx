@@ -2,13 +2,14 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useRouterState } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
 import { PULLS_POLL_RUNNING_MS, type PullSummary } from "@/api/pulls";
-import { stackJobsKey } from "@/api/stacks";
+import { type StackJobSummary, stackJobsKey } from "@/api/stacks";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
@@ -40,7 +41,7 @@ interface StackJobRow {
   envName: string;
   stackId: string;
   stackName: string;
-  kind: "deploy" | "update" | "rollback";
+  kind: StackJobSummary["kind"];
   state: "running" | "done" | "failed" | "cancelled";
   startedAt: string;
   finishedAt: string;
@@ -122,6 +123,12 @@ afterEach(() => {
   client.clear();
 });
 
+// Where is the page the router stands on, so a test can see where an action took the person.
+function Where() {
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  return <output data-testid="where">{pathname}</output>;
+}
+
 function mount(path = "/") {
   return render(
     <QueryClientProvider client={client}>
@@ -129,6 +136,7 @@ function mount(path = "/") {
         <TooltipProvider>
           <JobsIndicator />
           <Toaster />
+          <Where />
         </TooltipProvider>
       </TestRouter>
     </QueryClientProvider>,
@@ -378,6 +386,13 @@ describe("JobsIndicator stack jobs", () => {
     ["rollback", "failed", "Failed"],
     ["update", "running", "Updating images"],
     ["update", "done", "Images updated"],
+    ["stop", "running", "Stopping"],
+    ["stop", "done", "Stopped"],
+    ["start", "running", "Starting"],
+    ["start", "done", "Started"],
+    ["remove", "running", "Removing"],
+    ["remove", "done", "Removed"],
+    ["remove", "failed", "Failed"],
   ] as const)("says %s %s as %s", async (kind, state, words) => {
     stackJobs = [
       stackJob({ kind, state, finishedAt: state === "running" ? "" : "2026-10-11T10:02:00Z" }),
@@ -562,6 +577,45 @@ describe("JobsIndicator job toasts", () => {
     await finish({ id: "d1", state: "done" });
     await screen.findByRole("button", { name: "Jobs" });
     expect(screen.queryByText("Deployed web.")).toBeNull();
+  });
+
+  it("words a finished stop as a stop, never as a deploy", async () => {
+    stackJobs = [stackJob({ kind: "stop" })];
+    mount();
+    await screen.findByRole("button", { name: "Jobs, 1 in progress" });
+    await finish({ kind: "stop", state: "done" });
+    expect(await screen.findByText("Stopped web.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open" })).toBeTruthy();
+    expect(screen.queryByText("Deployed web.")).toBeNull();
+  });
+
+  it("words a failed start as a start with Open console", async () => {
+    stackJobs = [stackJob({ kind: "start" })];
+    mount();
+    await screen.findByRole("button", { name: "Jobs, 1 in progress" });
+    await finish({ kind: "start", state: "failed" });
+    expect(await screen.findByText("Start of web failed.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open console" })).toBeTruthy();
+    expect(screen.queryByText("Deploy of web failed.")).toBeNull();
+  });
+
+  it("words a finished removal as a removal, and Open goes to the stack list", async () => {
+    stackJobs = [stackJob({ kind: "remove" })];
+    mount();
+    await screen.findByRole("button", { name: "Jobs, 1 in progress" });
+    await finish({ kind: "remove", state: "done" });
+    expect(await screen.findByText("Removed web.")).toBeTruthy();
+    expect(screen.queryByText("Deployed web.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/env/e1/stacks"));
+  });
+
+  it("words a failed removal as a removal", async () => {
+    stackJobs = [stackJob({ kind: "remove" })];
+    mount();
+    await screen.findByRole("button", { name: "Jobs, 1 in progress" });
+    await finish({ kind: "remove", state: "failed" });
+    expect(await screen.findByText("Removal of web failed.")).toBeTruthy();
   });
 
   it("says nothing for a deploy that was cancelled", async () => {
