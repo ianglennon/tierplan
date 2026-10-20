@@ -893,7 +893,7 @@ func TestCheckNeverQuotesPartOfASecretTheLoaderSplits(t *testing.T) {
 	})
 }
 
-func TestCheckKeepsTheLoaderWordsWhereNoSecretIsQuoted(t *testing.T) {
+func TestCheckKeepsTheLoaderWordsForAPlainFieldItCanFind(t *testing.T) {
 	t.Parallel()
 	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
 	pw := stacks.Var{Name: "PW", Value: "Password2024!", Secret: true}
@@ -902,8 +902,11 @@ func TestCheckKeepsTheLoaderWordsWhereNoSecretIsQuoted(t *testing.T) {
 		vars []stacks.Var
 		want string
 	}{
-		"a plain port spec":     {"    ports: [\"abcd:efgh9:80\"]\n    environment:\n      DB: ${PW}\n", []stacks.Var{pw}, "invalid IP address: abcd"},
-		"a plain relative bind": {"    volumes: [./data:/data]\n    environment:\n      DB: ${PW}\n", []stacks.Var{pw}, "“./data” is a relative bind mount"},
+		"a plain port spec, in a file with no secret": {"    ports: [\"abcd:efgh9:80\"]\n    environment:\n      DB: ${S}\n", []stacks.Var{{Name: "S", Value: "plain"}}, "invalid IP address: abcd"},
+		// A port spec names no field, so in a file that uses a secret variable it gets the general
+		// sentence, whatever it holds (accepted cost, 07-43).
+		"a plain port spec, in a file that uses a secret": {"    ports: [\"abcd:efgh9:80\"]\n    environment:\n      DB: ${PW}\n", []stacks.Var{pw}, stacks.SecretValueMessage("")},
+		"a plain relative bind":                           {"    volumes: [./data:/data]\n    environment:\n      DB: ${PW}\n", []stacks.Var{pw}, "“./data” is a relative bind mount"},
 		"an unclosed reference": {
 			"    command: ${PW\n    environment:\n      DB: ${S}\n", []stacks.Var{{Name: "S", Value: "Secretvalue99", Secret: true}},
 			"invalid interpolation format for services.web.command",

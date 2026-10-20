@@ -73,8 +73,8 @@ func atField(svc composetypes.ServiceConfig, field string, err error) error {
 }
 
 // SecretFieldError replaces a FieldError, or any other converter error, that could quote a secret
-// variable (D-02). Its text is stacks.SecretValueMessage(Path), with Path empty when no field is
-// named.
+// variable (D-02). Its text is the sentence stacks.SecretUse.WithheldMessage gives for Path, with
+// Path empty when no field is named.
 //
 // It deliberately has no Unwrap. A builder that walks a refusal with errors.As (the NotConvertedError
 // field list of the API's problem) would otherwise read the cause's fields and values. Is answers
@@ -82,23 +82,31 @@ func atField(svc composetypes.ServiceConfig, field string, err error) error {
 // still gets it.
 type SecretFieldError struct {
 	Path  string
+	msg   string
 	cause error
 }
 
-func (e *SecretFieldError) Error() string { return stacks.SecretValueMessage(e.Path) }
+func (e *SecretFieldError) Error() string {
+	if e.msg != "" {
+		return e.msg
+	}
+	return stacks.SecretValueMessage(e.Path)
+}
 
 // Is reports whether the hidden cause is target.
 func (e *SecretFieldError) Is(target error) bool { return errors.Is(e.cause, target) }
 
 // GuardSecrets withholds the words of a converter error that could quote a value from a secret
-// variable. The decision is stacks.SecretUse.Withholds, the one the load stage uses:
+// variable. The decision is stacks.SecretUse.Withholds, the one the load stage uses. It reads the
+// file's structure and never the error's text, because the text echoes the Operator's own input and
+// deciding on it would tell them whether their input is part of a secret:
 //
-//   - a *FieldError is judged with its own Path, and its text, so a field misjudged plain whose
-//     text still quotes a secret is withheld too;
+//   - a *FieldError is judged by its own Path alone: a field that uses no secret variable keeps the
+//     converter's words, whatever those words hold;
 //   - a keys-only *NotConvertedError and ErrNoImage carry compose keys and service names, never a
 //     value, and come back as they are;
-//   - any other error is judged by its text alone (the fail-closed case for a refusal site added
-//     without a FieldError), and becomes the general sentence.
+//   - any other error names no field (the fail-closed case for a refusal site added without a
+//     FieldError), and becomes the general sentence whenever the file uses a secret variable.
 //
 // A plain value keeps the converter's words, even in a file that uses a secret elsewhere.
 func GuardSecrets(err error, s stacks.SecretUse) error {
@@ -107,8 +115,8 @@ func GuardSecrets(err error, s stacks.SecretUse) error {
 	}
 	var fe *FieldError
 	if errors.As(err, &fe) {
-		if s.Withholds(fe.Path, err.Error()) {
-			return &SecretFieldError{Path: fe.Path, cause: err}
+		if s.Withholds(fe.Path) {
+			return &SecretFieldError{Path: fe.Path, msg: s.WithheldMessage(fe.Path), cause: err}
 		}
 		return err
 	}
@@ -116,8 +124,8 @@ func GuardSecrets(err error, s stacks.SecretUse) error {
 	if errors.As(err, &nc) || errors.Is(err, ErrNoImage) {
 		return err
 	}
-	if s.Withholds("", err.Error()) {
-		return &SecretFieldError{cause: err}
+	if s.Withholds("") {
+		return &SecretFieldError{msg: s.WithheldMessage(""), cause: err}
 	}
 	return err
 }

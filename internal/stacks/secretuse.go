@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -16,8 +15,13 @@ import (
 // and the converter describe a value they cannot use in their own words, and those words can hold
 // part of the value (go-units quotes the digits of "Password2024!" as parsing "Password2024"). A
 // replacement masker cannot hide an arbitrary part of a secret, so a problem about a field that
-// uses a secret variable never carries those words: it carries SecretValueMessage instead. The
-// masker stays as the second layer.
+// uses a secret variable never carries those words: it carries a general sentence instead.
+//
+// The decision reads only the structure of the file: which nodes use a secret variable. It never
+// reads the loader's or the converter's text. That text echoes the person's own input, so deciding
+// on it would tell them whether their input is part of a secret (07-REVIEW-gaps2 CR-01). The masker
+// stays as the second layer: it replaces whole values and their quoted and per-line forms in text,
+// and makes no decision.
 //
 // The zero SecretUse knows no secret. A SecretUse is a value, safe to share between goroutines once
 // built.
@@ -26,9 +30,7 @@ type SecretUse struct {
 	ix *PositionIndex
 	// used are the scalar nodes whose text uses a secret variable.
 	used map[*yaml.Node]struct{}
-	// forms are the texts the masker hides for the secret variables, in every form it hides them.
-	forms []string
-	any   bool
+	any  bool
 }
 
 // NewSecretUse indexes the working copy's compose file and finds the values that use one of its
@@ -55,27 +57,9 @@ func NewSecretUse(c WorkingCopy) SecretUse {
 func secretUseOf(ix *PositionIndex, vars []Var) SecretUse {
 	s := SecretUse{ix: ix}
 	var names []string
-	seen := map[string]struct{}{}
-	addForm := func(f string) {
-		if utf8.RuneCountInString(f) < MinSecretLen || f == Hidden {
-			return
-		}
-		if _, dup := seen[f]; dup {
-			return
-		}
-		seen[f] = struct{}{}
-		s.forms = append(s.forms, f)
-	}
 	for _, v := range vars {
-		if !v.Secret || v.Value == "" {
-			continue
-		}
-		names = append(names, v.Name)
-		for _, m := range varMaskValues(v.Value) {
-			addForm(m)
-			for _, q := range quotedForms(m) {
-				addForm(q)
-			}
+		if v.Secret && v.Value != "" {
+			names = append(names, v.Name)
 		}
 	}
 	if len(names) == 0 {
@@ -285,31 +269,19 @@ func looseNode(n *yaml.Node, rest string, depth int) *yaml.Node {
 	return nil
 }
 
-// Quotes reports whether text holds a run of MinSecretLen characters of a secret value, in any form
-// the masker hides for it: as stored, trimmed, line by line, Go-quoted or schema-quoted. It runs
-// only on refusal paths, against short loader texts.
-func (s SecretUse) Quotes(text string) bool {
-	if len(s.forms) == 0 {
-		return false
-	}
-	runes := []rune(text)
-	for i := 0; i+MinSecretLen <= len(runes); i++ {
-		window := string(runes[i : i+MinSecretLen])
-		for _, f := range s.forms {
-			if strings.Contains(f, window) {
-				return true
-			}
-		}
-	}
-	return false
+// Withholds is the one decision every caller uses: whether the words of a loader or converter text
+// about the value at path are withheld. They are when the file uses a secret variable and either no
+// path is named (the text may be about anything) or the named path uses one (Uses, which fails
+// closed on a path it cannot find). It takes a path and no text, so no caller can decide on what a
+// message says.
+func (s SecretUse) Withholds(path string) bool {
+	return s.any && (path == "" || s.Uses(path))
 }
 
-// Withholds is the one decision every caller uses: the words of a loader or converter text are
-// withheld when the field they name uses a secret variable, or, whatever the field, when they hold
-// a run of a secret value (the text may be about a field the check misjudged as plain, or may name
-// no field).
-func (s SecretUse) Withholds(path, text string) bool {
-	return (path != "" && s.Uses(path)) || (s.Any() && s.Quotes(text))
+// WithheldMessage is the sentence a withheld problem carries in place of the words of the loader or
+// the converter. Use it with Withholds.
+func (s SecretUse) WithheldMessage(path string) string {
+	return SecretValueMessage(path)
 }
 
 // SecretValueMessage is the sentence a problem carries in place of the loader's or the converter's

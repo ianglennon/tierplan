@@ -4,7 +4,6 @@
 package stacks_test
 
 import (
-	"strconv"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/stacks"
@@ -82,37 +81,40 @@ func TestSecretUseKnowsNothingWithoutASecretInTheFile(t *testing.T) {
 	}
 }
 
-func TestSecretUseQuotesARunOfASecret(t *testing.T) {
+// The decision reads where a value comes from, never what a message says (07-REVIEW-gaps2 CR-01).
+func TestSecretUseWithholdsByWhereAValueComesFromNeverByText(t *testing.T) {
 	t.Parallel()
-	const compose = "services:\n  web:\n    image: nginx:1.27-alpine\n    mem_limit: ${PW}\n"
-	quotes := func(secret, text string) bool {
-		return stacks.NewSecretUse(copyOf(compose, secretVar("PW", secret))).Quotes(text)
-	}
-	for name, tc := range map[string]struct {
-		secret, text string
-		want         bool
-	}{
-		"a substring the parser quotes": {"Password2024!", `parsing "Password2024"`, true},
-		"the shortest run":              {"Password2024!", "Pass", true},
-		"under the shortest run":        {"Password2024!", "Pas", false},
-		"the parser's own words":        {"Password2024!", "invalid size: 'lots'", false},
-		"the Go form":                   {`pa"ss-12`, strconv.Quote(`pa"ss-12`), true},
-		"the schema form":               {"ab'cd", `'ab\'cd'`, true},
-		"a line of several":             {"first-line-1234\nsecond-5678", "second-5678", true},
+	const compose = "services:\n  web:\n    image: nginx:1.27-alpine\n    mem_limit: ${PW}\n    memswap_limit: 1g\n"
+	s := stacks.NewSecretUse(copyOf(compose, secretVar("PW", "Password2024!")))
+	for path, want := range map[string]bool{
+		"":                           true,
+		"services.web.mem_limit":     true,
+		"services.web.no_such_key":   true, // a path no key matches fails closed
+		"services.web.memswap_limit": false,
+		"services.web.image":         false,
 	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			if got := quotes(tc.secret, tc.text); got != tc.want {
-				t.Errorf("Quotes(%q) = %v, want %v", tc.text, got, tc.want)
-			}
-		})
+		if got := s.Withholds(path); got != want {
+			t.Errorf("Withholds(%q) = %v, want %v", path, got, want)
+		}
+	}
+	if got, want := s.WithheldMessage("services.web.mem_limit"), stacks.SecretValueMessage("services.web.mem_limit"); got != want {
+		t.Errorf("WithheldMessage(mem_limit) = %q, want %q", got, want)
+	}
+	if got, want := s.WithheldMessage(""), stacks.SecretValueMessage(""); got != want {
+		t.Errorf("WithheldMessage(\"\") = %q, want %q", got, want)
+	}
+	none := stacks.NewSecretUse(copyOf("services:\n  web:\n    image: nginx:1.27-alpine\n    mem_limit: 1g\n", secretVar("PW", "Password2024!")))
+	for _, path := range []string{"", "services.web.mem_limit", "services.web.no_such_key"} {
+		if none.Withholds(path) {
+			t.Errorf("Withholds(%q) = true in a file that references no secret, want false", path)
+		}
 	}
 }
 
 func TestSecretUseZeroValueKnowsNothing(t *testing.T) {
 	t.Parallel()
 	var s stacks.SecretUse
-	if s.Any() || s.Uses("services.web.mem_limit") || s.Uses("") || s.Quotes("Password2024!") || s.Withholds("a", "Password2024!") {
+	if s.Any() || s.Uses("services.web.mem_limit") || s.Uses("") || s.Withholds("a") || s.Withholds("") {
 		t.Error("the zero SecretUse answered true, want false everywhere")
 	}
 }

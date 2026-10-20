@@ -371,7 +371,7 @@ var relativeBindWording = "“%s” is a relative bind mount. Use a named volume
 // found and "data" with a volume of that name is not. Both targets are held to it.
 //
 // A bind whose source comes from a secret variable keeps its key and position, but its message is
-// SecretValueMessage: the sentence quotes the source (D-02).
+// the withheld sentence: the loader's sentence quotes the source (D-02).
 func relativeBinds(project *types.Project, ix *PositionIndex, vars []Var) Problems {
 	var out Problems
 	var s SecretUse
@@ -388,8 +388,8 @@ func relativeBinds(project *types.Project, ix *PositionIndex, vars []Var) Proble
 			path := "services." + name + ".volumes." + strconv.Itoa(i)
 			n := ix.findAny(path, "services."+name+".volumes", "services."+name)
 			p := relativeBindAt(n, "services."+name+".volumes", v.Source)
-			if s.Withholds(path, p.Message) {
-				p.Message = SecretValueMessage(path)
+			if s.Withholds(path) {
+				p.Message = s.WithheldMessage(path)
 			}
 			out = append(out, p)
 		}
@@ -717,7 +717,7 @@ var (
 // loadProblems turns the error compose-go refused a file with into positioned problems. The
 // position of a schema error comes from walking the stored YAML to the key path the error names.
 //
-// A field whose value uses a secret variable is reported with SecretValueMessage and never with the
+// A field whose value uses a secret variable is reported with the withheld sentence and never with the
 // loader's words, which can hold part of the value (D-02, guardLoaderText).
 func loadProblems(err error, ix *PositionIndex, s SecretUse) Problems {
 	switch {
@@ -762,8 +762,8 @@ func loadProblems(err error, ix *PositionIndex, s SecretUse) Problems {
 			// refuses it. What a person meant by it is a path, so it is the relative bind mount.
 			if n := ix.shortVolume(m[1], m[3]); n != nil {
 				p := relativeBindAt(n, "services."+m[1]+".volumes", m[3])
-				if s.Withholds(path, p.Message) {
-					return Problems{keyProblem(ix, CodeComposeInvalid, path, SecretValueMessage(path))}
+				if s.Withholds(path) {
+					return Problems{keyProblem(ix, CodeComposeInvalid, path, s.WithheldMessage(path))}
 				}
 				return Problems{p}
 			}
@@ -787,8 +787,9 @@ func loadProblems(err error, ix *PositionIndex, s SecretUse) Problems {
 			return ps
 		}
 	}
-	// Text that names no field is judged by the run check alone (fail closed). The interpolation
-	// format error quotes only the file's own text, which holds no value of a variable.
+	// Text that names no field is withheld whenever the file uses a secret variable (fail closed),
+	// whatever the text says. The interpolation format error quotes only the file's own text, which
+	// holds no value of a variable.
 	if strings.HasPrefix(text, "invalid interpolation format for ") {
 		return Problems{keyProblem(ix, CodeComposeInvalid, "", text)}
 	}
@@ -802,8 +803,10 @@ const decodeHeader = "decoding failed due to the following error(s):"
 var decodeIndexRe = regexp.MustCompile(`\[([^\]]*)\]`)
 
 // decodeProblems reads the entries of a decode failure and reports each one at its field. It
-// returns nil when the text is to be reported as it stands: an entry does not parse, or the words
-// of every entry are kept.
+// returns nil when the text is to be reported as it stands: an entry does not parse, or no entry
+// was withheld and the file uses no secret variable. In a file that uses one, each entry is reported
+// at its own field even when none was withheld, because the text as a whole names no field and
+// would be withheld for every value.
 func decodeProblems(ix *PositionIndex, text, rest string, s SecretUse) Problems {
 	var entries []string
 	for _, line := range strings.Split(rest, "\n") {
@@ -832,18 +835,19 @@ func decodeProblems(ix *PositionIndex, text, rest string, s SecretUse) Problems 
 		withheld = withheld || p.Message != words
 		out = append(out, p)
 	}
-	if !withheld {
+	if !withheld && !s.Any() {
 		return nil
 	}
 	return out
 }
 
 // guardLoaderText is a loader problem at the key path names, with the loader's words, unless
-// s.Withholds them: then it carries SecretValueMessage instead, never the words, which may hold
-// part of a secret value (fail closed). An empty path puts the problem on line 1.
+// s.Withholds the path: then it carries s.WithheldMessage instead, never the words, which may hold
+// part of a secret value (fail closed). The words do not take part in the decision. An empty path
+// puts the problem on line 1.
 func guardLoaderText(ix *PositionIndex, code, path, words string, s SecretUse) Problem {
-	if s.Withholds(path, words) {
-		words = SecretValueMessage(path)
+	if s.Withholds(path) {
+		words = s.WithheldMessage(path)
 	}
 	return keyProblem(ix, code, path, words)
 }
@@ -908,7 +912,7 @@ func schemaProblems(text string, ix *PositionIndex, s SecretUse) Problems {
 		if m := extraPropRe.FindStringSubmatch(msg); m != nil {
 			return Problems{keyProblem(ix, CodeSchemaInvalid, m[1], fmt.Sprintf("unknown key “%s”.", m[1]))}
 		}
-		// A top-level error names no field, so only the run check can tell whether it quotes a secret.
+		// A top-level error names no field, so it is withheld whenever the file uses a secret variable.
 		return Problems{guardLoaderText(ix, CodeSchemaInvalid, "", msg, s)}
 	}
 	if msg == "false schema" {

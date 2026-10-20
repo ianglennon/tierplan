@@ -1014,8 +1014,9 @@ func secretUseOf(compose, secret string) stacks.SecretUse {
 	})
 }
 
-// The guard withholds a converter error only when its field uses a secret variable or its text holds a
-// run of a secret value, and what it returns hides its cause from errors.As (07-41, T-07-177, T-07-178).
+// The guard withholds a converter error only when its field uses a secret variable, or when it names
+// no field and the file uses one. The decision is the field's path, never the error's text, and what
+// the guard returns hides its cause from errors.As (07-41, 07-43, T-07-177, T-07-178, T-07-183).
 func TestGuardSecretsHidesOnlyWhatComesFromASecret(t *testing.T) {
 	t.Parallel()
 	const secret = "Password2024!"
@@ -1053,12 +1054,11 @@ func TestGuardSecretsHidesOnlyWhatComesFromASecret(t *testing.T) {
 			t.Errorf("err = %v, want it unchanged", got)
 		}
 	})
-	t.Run("a plain field whose text quotes a run of the secret", func(t *testing.T) {
+	t.Run("a plain field keeps its words even when its value is part of the secret", func(t *testing.T) {
 		t.Parallel()
 		in := &convert.FieldError{Path: "services.web.dns", Err: errors.New(`convert: service web: dns "Password2024" is not an IP address`)}
-		got := convert.GuardSecrets(in, s)
-		if got.Error() != stacks.SecretValueMessage("services.web.dns") {
-			t.Errorf("err = %q, want the fixed sentence for services.web.dns", got)
+		if got := convert.GuardSecrets(in, s); got != error(in) {
+			t.Errorf("err = %v, want it unchanged: the decision is the field, never the text", got)
 		}
 	})
 	t.Run("a refusal that lists keys only, and a service with no image", func(t *testing.T) {
@@ -1072,11 +1072,14 @@ func TestGuardSecretsHidesOnlyWhatComesFromASecret(t *testing.T) {
 			}
 		}
 	})
-	t.Run("an error with no field fails closed on its text", func(t *testing.T) {
+	t.Run("an error with no field fails closed whatever its text", func(t *testing.T) {
 		t.Parallel()
-		got := convert.GuardSecrets(errors.New("convert: service web: odd Password2024 text"), s)
-		if got.Error() != stacks.SecretValueMessage("") {
-			t.Errorf("err = %q, want the general sentence", got)
+		for _, text := range []string{"convert: service web: odd Password2024 text", "convert: service web: odd text"} {
+			got := convert.GuardSecrets(errors.New(text), s)
+			var sf *convert.SecretFieldError
+			if !errors.As(got, &sf) || got.Error() != stacks.SecretValueMessage("") {
+				t.Errorf("GuardSecrets(%q) = %v, want a SecretFieldError with the general sentence", text, got)
+			}
 		}
 	})
 	t.Run("a file that uses no secret", func(t *testing.T) {
