@@ -61,7 +61,7 @@ func convertService(svc composetypes.ServiceConfig, p *composetypes.Project, o O
 
 	health, err := healthcheck(svc)
 	if err != nil {
-		return ServicePlan{}, nil, err
+		return ServicePlan{}, nil, atField(svc, "healthcheck", err)
 	}
 	endpoint, err := endpointSpec(svc)
 	if err != nil {
@@ -73,11 +73,11 @@ func convertService(svc composetypes.ServiceConfig, p *composetypes.Project, o O
 	}
 	attachments, keys, err := serviceNetworks(svc, p, o)
 	if err != nil {
-		return ServicePlan{}, nil, err
+		return ServicePlan{}, nil, atField(svc, "networks", err)
 	}
 	mounts, err := serviceMounts(svc, p, o)
 	if err != nil {
-		return ServicePlan{}, nil, err
+		return ServicePlan{}, nil, atField(svc, "volumes", err)
 	}
 	res, err := resources(svc)
 	if err != nil {
@@ -89,19 +89,19 @@ func convertService(svc composetypes.ServiceConfig, p *composetypes.Project, o O
 	}
 	dns, err := dnsConfig(svc)
 	if err != nil {
-		return ServicePlan{}, nil, err
+		return ServicePlan{}, nil, atField(svc, "dns", err)
 	}
 	secrets, err := secretRefs(svc, o)
 	if err != nil {
-		return ServicePlan{}, nil, err
+		return ServicePlan{}, nil, atField(svc, "secrets", err)
 	}
 	configs, err := configRefs(svc, o)
 	if err != nil {
-		return ServicePlan{}, nil, err
+		return ServicePlan{}, nil, atField(svc, "configs", err)
 	}
 	cred, configs, err := credentialSpec(svc, o, configs)
 	if err != nil {
-		return ServicePlan{}, nil, err
+		return ServicePlan{}, nil, atField(svc, "credential_spec", err)
 	}
 
 	var logDriver *swarm.Driver
@@ -236,7 +236,7 @@ func endpointSpec(svc composetypes.ServiceConfig) (*swarm.EndpointSpec, error) {
 	switch mode {
 	case "", string(swarm.ResolutionModeVIP), string(swarm.ResolutionModeDNSRR):
 	default:
-		return nil, fmt.Errorf("convert: service %s: endpoint_mode %q is not vip or dnsrr", svc.Name, deployOf(svc).EndpointMode)
+		return nil, &FieldError{Path: fieldPath(svc, "deploy.endpoint_mode"), Err: fmt.Errorf("convert: service %s: endpoint_mode %q is not vip or dnsrr", svc.Name, deployOf(svc).EndpointMode)}
 	}
 	ports, err := ports(svc)
 	if err != nil {
@@ -263,7 +263,7 @@ func ports(svc composetypes.ServiceConfig) ([]swarm.PortConfig, error) {
 		if p.Published != "" {
 			n, err := strconv.ParseUint(p.Published, 10, 32)
 			if err != nil {
-				return nil, fmt.Errorf("convert: service %s: published port %q is not one port number", svc.Name, p.Published)
+				return nil, &FieldError{Path: fieldPath(svc, "ports"), Err: fmt.Errorf("convert: service %s: published port %q is not one port number", svc.Name, p.Published)}
 			}
 			pc.PublishedPort = uint32(n)
 		}

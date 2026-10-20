@@ -57,6 +57,21 @@ type FieldError struct {
 func (e *FieldError) Error() string { return e.Err.Error() }
 func (e *FieldError) Unwrap() error { return e.Err }
 
+// fieldPath is the dotted compose path of one of the service's fields.
+func fieldPath(svc composetypes.ServiceConfig, field string) string {
+	return "services." + svc.Name + "." + field
+}
+
+// atField names the service's field as the cause of err, so a refusal added to a step later is a
+// FieldError too. An error that already names a field keeps its own path, and nil stays nil.
+func atField(svc composetypes.ServiceConfig, field string, err error) error {
+	var fe *FieldError
+	if err == nil || errors.As(err, &fe) {
+		return err
+	}
+	return &FieldError{Path: fieldPath(svc, field), Err: err}
+}
+
 // SecretFieldError replaces a FieldError, or any other converter error, that could quote a secret
 // variable (D-02). Its text is stacks.SecretValueMessage(Path), with Path empty when no field is
 // named.

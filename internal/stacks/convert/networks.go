@@ -38,7 +38,7 @@ func networkPlans(p *composetypes.Project, o Options, used map[string]bool) ([]N
 	for _, key := range keys {
 		np := convertNetwork(key, p, o)
 		if !np.External && np.Driver != "overlay" {
-			return nil, &NotConvertedError{Service: "network " + key, Fields: []string{"driver: " + np.Driver}}
+			return nil, &FieldError{Path: "networks." + key + ".driver", Err: &NotConvertedError{Service: "network " + key, Fields: []string{"driver: " + np.Driver}}}
 		}
 		out = append(out, np)
 	}

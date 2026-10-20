@@ -16,11 +16,6 @@ import (
 // (Apache-2.0) onto the compose-go v2 types: convertDeployMode, convertResources,
 // convertRestartPolicy and convertUpdateConfig, plus the Placement block of Service.
 
-// fieldPath is the dotted compose path of one of the service's fields.
-func fieldPath(svc composetypes.ServiceConfig, field string) string {
-	return "services." + svc.Name + "." + field
-}
-
 // deployOf returns the service's deploy block, or an empty one.
 func deployOf(svc composetypes.ServiceConfig) composetypes.DeployConfig {
 	if svc.Deploy == nil {
@@ -37,7 +32,7 @@ func serviceMode(svc composetypes.ServiceConfig) (swarm.ServiceMode, error) {
 	var replicas *uint64
 	if d.Replicas != nil {
 		if *d.Replicas < 0 {
-			return swarm.ServiceMode{}, fmt.Errorf("convert: service %s has %d replicas", svc.Name, *d.Replicas)
+			return swarm.ServiceMode{}, &FieldError{Path: fieldPath(svc, "deploy.replicas"), Err: fmt.Errorf("convert: service %s has %d replicas", svc.Name, *d.Replicas)}
 		}
 		replicas = new(uint64(*d.Replicas))
 	}
@@ -55,14 +50,14 @@ func serviceMode(svc composetypes.ServiceConfig) (swarm.ServiceMode, error) {
 		return swarm.ServiceMode{ReplicatedJob: &swarm.ReplicatedJob{MaxConcurrent: replicas, TotalCompletions: total}}, nil
 	case "global", "global-job":
 		if replicas != nil {
-			return swarm.ServiceMode{}, fmt.Errorf("convert: service %s: replicas can only be used with replicated or replicated-job mode, not %s", svc.Name, d.Mode)
+			return swarm.ServiceMode{}, &FieldError{Path: fieldPath(svc, "deploy.mode"), Err: fmt.Errorf("convert: service %s: replicas can only be used with replicated or replicated-job mode, not %s", svc.Name, d.Mode)}
 		}
 		if d.Mode == "global" {
 			return swarm.ServiceMode{Global: &swarm.GlobalService{}}, nil
 		}
 		return swarm.ServiceMode{GlobalJob: &swarm.GlobalJob{}}, nil
 	}
-	return swarm.ServiceMode{}, &NotConvertedError{Service: svc.Name, Fields: []string{"deploy.mode: " + d.Mode}}
+	return swarm.ServiceMode{}, &FieldError{Path: fieldPath(svc, "deploy.mode"), Err: &NotConvertedError{Service: svc.Name, Fields: []string{"deploy.mode: " + d.Mode}}}
 }
 
 // resources converts deploy.resources. Like docker stack deploy it always returns a value, empty
@@ -78,7 +73,7 @@ func resources(svc composetypes.ServiceConfig) (*swarm.ResourceRequirements, err
 		}
 		cpus, err := nanoCPUs(l.NanoCPUs)
 		if err != nil {
-			return nil, fmt.Errorf("convert: service %s: deploy.resources.limits: %w", svc.Name, err)
+			return nil, &FieldError{Path: fieldPath(svc, "deploy.resources.limits.cpus"), Err: fmt.Errorf("convert: service %s: deploy.resources.limits: %w", svc.Name, err)}
 		}
 		out.Limits = &swarm.Limit{NanoCPUs: cpus, MemoryBytes: int64(l.MemoryBytes), Pids: l.Pids}
 	}
@@ -88,7 +83,7 @@ func resources(svc composetypes.ServiceConfig) (*swarm.ResourceRequirements, err
 		}
 		cpus, err := nanoCPUs(r.NanoCPUs)
 		if err != nil {
-			return nil, fmt.Errorf("convert: service %s: deploy.resources.reservations: %w", svc.Name, err)
+			return nil, &FieldError{Path: fieldPath(svc, "deploy.resources.reservations.cpus"), Err: fmt.Errorf("convert: service %s: deploy.resources.reservations: %w", svc.Name, err)}
 		}
 		var generic []swarm.GenericResource
 		for _, g := range r.GenericResources {
