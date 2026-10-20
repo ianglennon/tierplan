@@ -34,8 +34,9 @@ func (d Deps) startProject(ctx context.Context, c *dockerx.Client, p *types.Proj
 	return c.ComposeStart(ctx, p)
 }
 
-// standaloneProject is the project of the stack's last good revision made ready the way a deploy makes it
-// (stacks.PrepareStandalone): the services with the images the revision ran, and the content of the stack
+// standaloneProject is the project of the stack's last good revision, taken from the check pipeline
+// (stacks.Deployable: env_file resolved, build stripped, the same project the review and the standalone
+// deploy judge) and made ready the way a deploy makes it (stacks.PrepareStandalone): the services with the images the revision ran, and the content of the stack
 // file's secrets and configs, which the SDK writes into a container again before it starts. The Compose SDK
 // needs it to stop the containers in depends_on order and to inject the secrets and configs at a start; it
 // creates nothing from it, so no image is looked up and none is pulled.
@@ -56,7 +57,7 @@ func (d Deps) standaloneProject(ctx context.Context, st Stack, store LifecycleSt
 	if err != nil {
 		return nil, masker, err
 	}
-	loaded, err := stacks.Load(ctx, stacks.LoadInput{Name: st.Name, Target: stacks.TargetStandalone, Copy: rev.Copy})
+	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: stacks.TargetStandalone, Copy: rev.Copy})
 	if err != nil {
 		return nil, masker, err
 	}

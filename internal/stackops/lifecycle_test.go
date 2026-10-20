@@ -497,6 +497,60 @@ func TestStandaloneStopAndStartRunTheSDKOverTheLastRevisionsProject(t *testing.T
 	}
 }
 
+// standaloneStopStart stops and starts a standalone stack whose last good revision holds files, and
+// returns the project the SDK stand-in received on the start. Both jobs must be done.
+func standaloneStopStart(t *testing.T, files []stacks.File) *types.Project {
+	t.Helper()
+	st := stackops.Stack{ID: "stack-standalone", Name: "plain", Target: stacks.TargetStandalone}
+	store := &lifecycleStore{
+		rev:  stackops.Snapshot{ID: "rev-1", StackID: st.ID, Seq: 1, Kind: stackops.KindRevision, Outcome: stackops.OutcomeGood, Copy: stacks.WorkingCopy{Files: files}},
+		have: true, pins: map[string]string{"web": "nginx:1.27-alpine@sha256:" + strings.Repeat("c", 64)},
+	}
+	var started *types.Project
+	rig := newSwarmRig(t, nil)
+	rig.deps.Writable = func(context.Context, string, string) error { return nil }
+	rig.deps.StopProject = func(context.Context, *dockerx.Client, *types.Project) error { return nil }
+	rig.deps.StartProject = func(_ context.Context, _ *dockerx.Client, p *types.Project) error {
+		started = p
+		return nil
+	}
+	node, err := rig.deps.StandaloneNode(testsupport.Context(t), rig.envID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopRes, stopJob := rig.lifecycleRunOn(t, stackops.LifecycleStop, st, node, store, stackops.Caller{})
+	startRes, startJob := rig.lifecycleRunOn(t, stackops.LifecycleStart, st, node, store, stackops.Caller{})
+	if !stopRes.OK() || stopJob.State != jobs.JobDone || !startRes.OK() || startJob.State != jobs.JobDone {
+		t.Fatalf("stop = %+v %v, start = %+v %v, want both done", stopRes, itemStates(stopJob), startRes, itemStates(startJob))
+	}
+	if started == nil {
+		t.Fatal("the SDK was never asked to start the project")
+	}
+	return started
+}
+
+func TestStandaloneStopAndStartOfAStackThatUsesAnEnvFile(t *testing.T) {
+	t.Parallel()
+	project := standaloneStopStart(t, []stacks.File{
+		{Path: stacks.ComposeFile, Content: []byte("services:\n  web:\n    image: nginx:1.27-alpine\n    env_file: app.env\n")},
+		{Path: "app.env", Content: []byte("FROM_FILE=1\n")},
+	})
+	svc := project.Services["web"]
+	if v := svc.Environment["FROM_FILE"]; v == nil || *v != "1" || len(svc.EnvFiles) != 0 {
+		t.Errorf("service = environment %v, env files %+v, want FROM_FILE=1 and no env files", svc.Environment, svc.EnvFiles)
+	}
+}
+
+func TestStandaloneStopAndStartOfAServiceWithBuildBesideItsImage(t *testing.T) {
+	t.Parallel()
+	project := standaloneStopStart(t, []stacks.File{
+		{Path: stacks.ComposeFile, Content: []byte("services:\n  web:\n    image: nginx:1.27-alpine\n    build: .\n")},
+	})
+	if project.Services["web"].Build != nil {
+		t.Error("the project handed to the SDK keeps a build section")
+	}
+}
+
 func mustJSON(t *testing.T, v any) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(v)
