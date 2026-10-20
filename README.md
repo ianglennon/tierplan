@@ -4,7 +4,7 @@ Bayplan is an open-source, web-based manager for Docker: many Docker Swarm clust
 
 Licence: [AGPL-3.0-or-later](LICENSE). Anyone who runs a modified version as a network service must offer its users the source.
 
-**Status: pre-release.** No version has been published yet; the first release will be v0.1.0, and breaking changes are allowed between 0.x minors. This build lets you install Bayplan, sign in, and look at the Docker host it runs on: a dashboard, containers, images, volumes and networks (read-only), a live event feed, an audit log and settings, users and teams with Viewer, Operator and Admin roles per environment, and encrypted backups you can restore. On a Docker Swarm it also manages services (scale, edit, force update, roll back, create and remove), nodes (drain, promote, label and remove), secrets and configs, shows where tasks run, and merges a service's logs and live stats across its tasks. Managing stacks comes later.
+**Status: pre-release.** No version has been published yet; the first release will be v0.1.0, and breaking changes are allowed between 0.x minors. This build lets you install Bayplan, sign in, and look at the Docker host it runs on: a dashboard, containers, images, volumes and networks (read-only), a live event feed, an audit log and settings, users and teams with Viewer, Operator and Admin roles per environment, and encrypted backups you can restore. On a Docker Swarm it also manages services (scale, edit, force update, roll back, create and remove), nodes (drain, promote, label and remove), secrets and configs, shows where tasks run, and merges a service's logs and live stats across its tasks. It also manages **compose stacks**: write a stack in the editor, review what will change, and deploy it to a swarm or a standalone host, with every image pinned to a digest and nothing left behind when you remove it ([docs/stacks.md](docs/stacks.md)).
 
 ## Before you install
 
@@ -200,6 +200,7 @@ The source code, version and commit are linked from **Settings > About**, as the
 - [CONTRIBUTING.md](CONTRIBUTING.md): building, testing and sending changes.
 - [docs/reverse-proxy.md](docs/reverse-proxy.md): running Bayplan behind Caddy, nginx or Traefik, at the root or a subpath.
 - [docs/containers.md](docs/containers.md): containers and bulk actions, logs, browser shells, networks, volumes and events, and what each one records.
+- [docs/stacks.md](docs/stacks.md): compose stacks: the editor, stack files and variables, the review, image pinning, deploying to a swarm or a standalone host, stopping, starting and removing, the labels Bayplan writes, and what is still open.
 - [docs/services.md](docs/services.md): swarm services, nodes, secrets and configs, service logs and stats, restart loops, and why Bayplan cannot change a service with host access unless the host allows it.
 - [docs/access.md](docs/access.md): instance admins, roles, teams, invite and reset links, sessions.
 - [docs/permissions.md](docs/permissions.md): what each role may do, generated from the code.
