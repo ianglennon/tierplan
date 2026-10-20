@@ -636,13 +636,16 @@ func TestCheckNeverCarriesAnEscapedSecretValue(t *testing.T) {
 		body   string
 		secret string
 		parts  []string
+		// fixed is the key of the field the check reports with the fixed sentence (D-02); an empty
+		// one means the loader's words are kept and the masker shows <hidden>.
+		fixed string
 	}{
-		{"deploy.replicas, Go-escaped", "    deploy:\n      replicas: ${PW}\n", escapedSecret, escapedSecretParts},
-		{"cpus, Go-escaped", "    cpus: ${PW}\n", escapedSecret, escapedSecretParts},
-		{"pull_policy, schema-escaped", "    pull_policy: ${PW}\n", escapedSecret, escapedSecretParts},
-		{"pull_policy, trailing backslash", "    pull_policy: ${PW}\n", trailingBackslashSecret, trailingBackslashParts},
-		{"privileged, raw and trimmed", "    privileged: ${PW}\n", escapedSecret, escapedSecretParts},
-		{"healthcheck.interval, raw in quotes", "    healthcheck:\n      test: [CMD, \"true\"]\n      interval: ${PW}\n", escapedSecret, escapedSecretParts},
+		{"deploy.replicas, Go-escaped", "    deploy:\n      replicas: ${PW}\n", escapedSecret, escapedSecretParts, ""},
+		{"cpus, Go-escaped", "    cpus: ${PW}\n", escapedSecret, escapedSecretParts, ""},
+		{"pull_policy, schema-escaped", "    pull_policy: ${PW}\n", escapedSecret, escapedSecretParts, ""},
+		{"pull_policy, trailing backslash", "    pull_policy: ${PW}\n", trailingBackslashSecret, trailingBackslashParts, ""},
+		{"privileged, raw and trimmed", "    privileged: ${PW}\n", escapedSecret, escapedSecretParts, ""},
+		{"healthcheck.interval, raw in quotes", "    healthcheck:\n      test: [CMD, \"true\"]\n      interval: ${PW}\n", escapedSecret, escapedSecretParts, "services.web.healthcheck.interval"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -653,7 +656,9 @@ func TestCheckNeverCarriesAnEscapedSecretValue(t *testing.T) {
 				if p.Severity == stacks.SeverityError {
 					refused = true
 				}
-				if strings.Contains(p.Message, stacks.Hidden) {
+				if tc.fixed != "" {
+					hidden = hidden || (p.Key == tc.fixed && p.Message == stacks.SecretValueMessage(tc.fixed))
+				} else if strings.Contains(p.Message, stacks.Hidden) {
 					hidden = true
 				}
 				for _, part := range tc.parts {
@@ -666,7 +671,7 @@ func TestCheckNeverCarriesAnEscapedSecretValue(t *testing.T) {
 				t.Fatalf("problems = %+v, want the position refused", res.Problems)
 			}
 			if !hidden {
-				t.Errorf("problems = %+v, want one message to show %s", res.Problems, stacks.Hidden)
+				t.Errorf("problems = %+v, want one message to show %s or, for %q, the fixed sentence", res.Problems, stacks.Hidden, tc.fixed)
 			}
 		})
 	}

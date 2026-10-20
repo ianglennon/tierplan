@@ -117,7 +117,8 @@ func check(ctx context.Context, in CheckInput) CheckResult {
 		// compose-go says where a syntax error is better than the parser used for positions does
 		// (it names the line the parser stopped at, not the line the block started on), so its
 		// text is used whenever it refused the file too.
-		res.Problems = append(res.Problems, loadProblems(err, idx)...).Sorted()
+		// Only a refused file pays for knowing which values come from a secret variable.
+		res.Problems = append(res.Problems, loadProblems(err, idx, secretUseOf(idx, in.Copy.Vars))...).Sorted()
 		return res
 	}
 	if parseErr != nil {
@@ -701,7 +702,10 @@ var (
 
 // loadProblems turns the error compose-go refused a file with into positioned problems. The
 // position of a schema error comes from walking the stored YAML to the key path the error names.
-func loadProblems(err error, ix *PositionIndex) Problems {
+//
+// A field whose value uses a secret variable is reported with SecretValueMessage and never with the
+// loader's words, which can hold part of the value (D-02, guardLoaderText).
+func loadProblems(err error, ix *PositionIndex, s SecretUse) Problems {
 	switch {
 	case errors.Is(err, ErrTooLarge):
 		return Problems{{
@@ -760,10 +764,68 @@ func loadProblems(err error, ix *PositionIndex) Problems {
 			Message: "The top level of compose.yaml must be a mapping, such as services: followed by your services.",
 		}}
 	}
+	if rest, ok := strings.CutPrefix(text, decodeHeader); ok {
+		if ps := decodeProblems(ix, text, rest, s); ps != nil {
+			return ps
+		}
+	}
 	return Problems{{
 		Severity: SeverityError, Code: CodeComposeInvalid, File: ComposeFile, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
 		Message: text,
 	}}
+}
+
+// decodeHeader starts the text of a decode failure (go-viper/mapstructure): the entries follow, one
+// "'<name>' <message>" per line, and several to an error.
+const decodeHeader = "decoding failed due to the following error(s):"
+
+var decodeIndexRe = regexp.MustCompile(`\[([^\]]*)\]`)
+
+// decodeProblems reads the entries of a decode failure and reports each one at its field. It
+// returns nil when the text is to be reported as it stands: an entry does not parse, or the words
+// of every entry are kept.
+func decodeProblems(ix *PositionIndex, text, rest string, s SecretUse) Problems {
+	var entries []string
+	for _, line := range strings.Split(rest, "\n") {
+		switch {
+		case strings.HasPrefix(line, "'"):
+			entries = append(entries, line)
+		case strings.TrimSpace(line) == "":
+		case len(entries) > 0:
+			entries[len(entries)-1] += "\n" + line
+		}
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make(Problems, 0, len(entries))
+	withheld := false
+	for _, e := range entries {
+		name, message, ok := strings.Cut(e[1:], "' ")
+		if !ok {
+			return nil
+		}
+		// "services[web].volumes[0].tmpfs.size" is the path services.web.volumes.0.tmpfs.size.
+		path := decodeIndexRe.ReplaceAllString(name, ".$1")
+		words := path + ": " + message
+		p := guardLoaderText(ix, CodeComposeInvalid, path, words, s)
+		withheld = withheld || p.Message != words
+		out = append(out, p)
+	}
+	if !withheld {
+		return nil
+	}
+	return out
+}
+
+// guardLoaderText is a loader problem at the key path names, with the loader's words, unless
+// s.Withholds them: then it carries SecretValueMessage instead, never the words, which may hold
+// part of a secret value (fail closed). An empty path puts the problem on line 1.
+func guardLoaderText(ix *PositionIndex, code, path, words string, s SecretUse) Problem {
+	if s.Withholds(path, words) {
+		words = SecretValueMessage(path)
+	}
+	return keyProblem(ix, code, path, words)
 }
 
 // portsProblem is the problem a refusal of PortBudget is reported as, at the item that caused it.
