@@ -104,6 +104,10 @@ func (f *Fake) serveSecretList(w http.ResponseWriter, r *http.Request, p string,
 	if clusterRefused(w, cfg) {
 		return true
 	}
+	if cfg.SecretListError != "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": cfg.SecretListError})
+		return true
+	}
 	keep := labelFilter(r.URL.Query().Get("filters"))
 	out := make([]swarm.Secret, 0, len(cfg.Secrets))
 	for _, s := range cfg.Secrets {

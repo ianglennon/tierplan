@@ -101,7 +101,11 @@ func listStackResources(ctx context.Context, d StacksDeps, in *StackPathInput) (
 	if err != nil {
 		return nil, stackInternal(d, "read", in.EnvID, err)
 	}
-	res := d.ops().Resources(ctx, in.EnvID, st)
+	decl, err := d.repo().Declared(ctx, st)
+	if err != nil {
+		return nil, stackInternal(d, "read", in.EnvID, err)
+	}
+	res := d.ops().Resources(ctx, in.EnvID, st, decl)
 	body := StackResourcesBody{Networks: StackNetworksCardBody{Items: make([]StackNetworkResourceBody, 0, len(res.Networks.Items)), Error: res.Networks.Error}}
 	for _, n := range res.Networks.Items {
 		body.Networks.Items = append(body.Networks.Items, StackNetworkResourceBody{ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Ownership: n.Ownership})

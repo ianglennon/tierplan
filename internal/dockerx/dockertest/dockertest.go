@@ -112,6 +112,9 @@ type FakeConfig struct {
 	// Configs are the swarm configs /configs lists, each with its content, as a real manager
 	// lists them (fake_configs.go).
 	Configs []FakeConfigObject
+	// SecretListError makes GET /secrets answer 500 with this message, as a manager does when it cannot
+	// list them, while every other read keeps working.
+	SecretListError string
 	// DiskUsageFail makes GET /system/df answer 500, as an engine does when a volume's files
 	// cannot be walked.
 	DiskUsageFail bool

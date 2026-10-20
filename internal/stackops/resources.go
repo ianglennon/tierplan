@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/compose-spec/compose-go/v2/types"
+
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/stacks"
@@ -74,12 +76,80 @@ type NetworkResource struct {
 	Ownership string
 }
 
+// VolumeResource is one volume the stack owns or uses, on the node that holds it: a volume is local to a
+// node, so a swarm stack's volume has one row for each node that has it.
+type VolumeResource struct {
+	Name, Driver string
+	// Node is the display name of the node and NodeID its ID, which the volume's page takes.
+	Node, NodeID string
+	// Ownership is OwnerStack or OwnerExternal.
+	Ownership string
+}
+
+// ObjectUser is a service that uses a secret or a config: its ID on a swarm (the service page), its name in the
+// compose file.
+type ObjectUser struct{ ID, Name string }
+
+// ObjectResource is a secret or a config of the stack. On a swarm it is an object of the cluster; on a standalone
+// host it is a file in the containers, listed from the deployed definition, with no ID.
+type ObjectResource struct {
+	ID string
+	// Name is the name as the compose file writes it, FullName the name of the object on the swarm (the stack,
+	// the name and the content hash joined) and Hash that content hash, empty for an object Bayplan did not hash.
+	Name, FullName, Hash string
+	// UsedBy are the services of the stack that use it, by name.
+	UsedBy []ObjectUser
+	// Ownership is OwnerStack or OwnerExternal.
+	Ownership string
+}
+
 // Resources is everything a stack owns on its environment, in cards: the swarm's tasks or the
-// standalone host's containers, and the networks. A card is left empty (not nil) when nothing is there.
+// standalone host's containers, the networks, the volumes, the secrets and the configs. A card is left empty
+// (not nil) when nothing is there.
 type Resources struct {
 	Tasks      ResourceCard[TaskResource]
 	Containers ResourceCard[ContainerResource]
 	Networks   ResourceCard[NetworkResource]
+	Volumes    ResourceCard[VolumeResource]
+	// NotReporting are the nodes that should have answered the volumes read and did not: their volumes are left out.
+	NotReporting []string
+	Secrets      ResourceCard[ObjectResource]
+	Configs      ResourceCard[ObjectResource]
+}
+
+// DeclaredObject is a network, volume, secret or config that a service of the deployed revision uses.
+type DeclaredObject struct {
+	// Key is the name in the compose file. Name is the object's own name on the engine for an external one.
+	Key, Name string
+	External  bool
+	// UsedBy are the services that use it, by name in the compose file, sorted.
+	UsedBy []string
+}
+
+// Declared is what the deployed revision of a stack's compose file refers to. The Resources tab needs it for what
+// the engine cannot say: the externals a stack uses but did not make, and the secrets and configs of a standalone
+// host, which are files in containers and not objects of the engine. The zero value is a stack with no deployed revision.
+type Declared struct {
+	// Known is true when a deployed revision was read and loaded.
+	Known bool
+	// Err is set when a deployed revision exists and could not be read or loaded.
+	Err                                 error
+	Networks, Volumes, Secrets, Configs []DeclaredObject
+}
+
+// DeclaredOf reads what a loaded project's services use.
+func DeclaredOf(p *types.Project) Declared {
+	return Declared{}
+}
+
+// Declared reads what the stack's newest good revision uses. A stack with none is the zero Declared.
+func (r Repo) Declared(ctx context.Context, stack Stack) (Declared, error) {
+	return Declared{}, nil
+}
+
+// VolumesFrom picks the volumes of a stack out of what the nodes of an environment hold.
+func VolumesFrom(stack Stack, decl Declared, agg envs.Aggregate) ([]VolumeResource, []string) {
+	return nil, nil
 }
 
 // readCode names the failure of a read for a card.
@@ -122,7 +192,7 @@ func ownsLabels(stack Stack, labels map[string]string) bool {
 
 // Resources reads the cards of a stack's Resources tab now. Each card is its own read and keeps its own
 // error, so a secrets list the engine refuses leaves the tasks and the networks in place. It is a read.
-func (d Deps) Resources(ctx context.Context, envID string, stack Stack) Resources {
+func (d Deps) Resources(ctx context.Context, envID string, stack Stack, decl Declared) Resources {
 	if stack.Target == stacks.TargetSwarm {
 		tasks, err := d.swarmTasks(ctx, envID, stack)
 		nets, nerr := d.networksOf(ctx, envID, stack)
@@ -130,6 +200,9 @@ func (d Deps) Resources(ctx context.Context, envID string, stack Stack) Resource
 			Tasks:      cardOf(d, envID, stack, "tasks", tasks, err),
 			Containers: ResourceCard[ContainerResource]{Items: []ContainerResource{}},
 			Networks:   cardOf(d, envID, stack, "networks", nets, nerr),
+			Volumes:    ResourceCard[VolumeResource]{Items: []VolumeResource{}},
+			Secrets:    ResourceCard[ObjectResource]{Items: []ObjectResource{}},
+			Configs:    ResourceCard[ObjectResource]{Items: []ObjectResource{}},
 		}
 	}
 	containers, err := d.standaloneContainers(ctx, envID, stack)
@@ -138,6 +211,9 @@ func (d Deps) Resources(ctx context.Context, envID string, stack Stack) Resource
 		Tasks:      ResourceCard[TaskResource]{Items: []TaskResource{}},
 		Containers: cardOf(d, envID, stack, "containers", containers, err),
 		Networks:   cardOf(d, envID, stack, "networks", nets, nerr),
+		Volumes:    ResourceCard[VolumeResource]{Items: []VolumeResource{}},
+		Secrets:    ResourceCard[ObjectResource]{Items: []ObjectResource{}},
+		Configs:    ResourceCard[ObjectResource]{Items: []ObjectResource{}},
 	}
 }
 

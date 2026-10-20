@@ -54,6 +54,35 @@ function task(over: Json = {}): Json {
   };
 }
 
+const EMPTY = { items: [], error: "" };
+const EMPTY_VOLUMES = { items: [], error: "", notReporting: [] };
+
+function volume(over: Json = {}): Json {
+  return {
+    name: "tracer_data",
+    driver: "local",
+    node: "mgr-1",
+    nodeId: "node-1",
+    ownership: "stack",
+    ...over,
+  };
+}
+
+function secret(over: Json = {}): Json {
+  return {
+    id: "sec-1",
+    name: "tok",
+    fullName: "tracer_tok_1a2b3c4d",
+    hash: "1a2b3c4d",
+    usedBy: [
+      { id: "svc-1", name: "web" },
+      { id: "svc-2", name: "db" },
+    ],
+    ownership: "stack",
+    ...over,
+  };
+}
+
 function network(over: Json = {}): Json {
   return {
     id: "net-1",
@@ -107,7 +136,12 @@ beforeEach(() => {
             { status: 502 },
           );
         }
-        return Response.json(resources);
+        return Response.json({
+          volumes: EMPTY_VOLUMES,
+          secrets: EMPTY,
+          configs: EMPTY,
+          ...resources,
+        });
       }
       return Response.json({}, { status: 404 });
     }),
@@ -363,6 +397,262 @@ describe("StackResources of a standalone stack", () => {
       containers.compareDocumentPosition(networks) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Tasks" })).toBeNull();
+  });
+});
+
+describe("StackResources volumes, secrets and configs", () => {
+  it("shows five cards in order: tasks, networks, volumes, secrets, configs", async () => {
+    mount();
+
+    const names = ["Tasks", "Networks", "Volumes", "Secrets", "Configs"];
+    const cards = await Promise.all(names.map((name) => screen.findByRole("region", { name })));
+    cards.slice(1).forEach((card, i) => {
+      expect(
+        (cards[i]?.compareDocumentPosition(card) ?? 0) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+  });
+
+  it("gives every empty kind its muted line and its count, never hiding a card", async () => {
+    mount();
+
+    const volumes = await screen.findByRole("region", { name: "Volumes" });
+    expect(within(volumes).getByText("No volumes.")).toBeTruthy();
+    expect(within(volumes).getByText("0 volumes")).toBeTruthy();
+    expect(
+      within(screen.getByRole("region", { name: "Secrets" })).getByText("No secrets."),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByRole("region", { name: "Configs" })).getByText("No configs."),
+    ).toBeTruthy();
+  });
+
+  it("counts in the singular and the plural", async () => {
+    resources = {
+      tasks: { items: [], error: "" },
+      networks: { items: [], error: "" },
+      volumes: {
+        items: [
+          volume(),
+          volume({ nodeId: "node-2", node: "wrk-1" }),
+          volume({ name: "tracer_logs" }),
+        ],
+        error: "",
+        notReporting: [],
+      },
+      secrets: { items: [secret()], error: "" },
+      configs: {
+        items: [secret({ id: "cfg-1", name: "site" }), secret({ id: "cfg-2", name: "nginx" })],
+        error: "",
+      },
+    };
+    mount();
+
+    const volumes = await screen.findByRole("region", { name: "Volumes" });
+    expect(within(volumes).getByText("3 volumes")).toBeTruthy();
+    expect(
+      within(screen.getByRole("region", { name: "Secrets" })).getByText("1 secret"),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByRole("region", { name: "Configs" })).getByText("2 configs"),
+    ).toBeTruthy();
+  });
+
+  it("lists a swarm volume once for each node that holds it, the name linking to the volume on that node", async () => {
+    resources = {
+      volumes: {
+        items: [volume(), volume({ node: "wrk-1", nodeId: "node-2" })],
+        error: "",
+        notReporting: [],
+      },
+    };
+    mount();
+
+    const card = await screen.findByRole("region", { name: "Volumes" });
+    const table = await within(card).findByRole("table");
+    const headers = within(table)
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent);
+    expect(headers).toEqual(["Name", "Driver", "Node", "Ownership"]);
+    const links = within(table).getAllByRole("link", { name: "tracer_data" });
+    expect(links.map((l) => l.getAttribute("href"))).toEqual([
+      "/env/e1/volumes/tracer_data?node=node-1",
+      "/env/e1/volumes/tracer_data?node=node-2",
+    ]);
+    expect(within(table).getByText("mgr-1")).toBeTruthy();
+    expect(within(table).getByText("wrk-1")).toBeTruthy();
+    expect(within(table).getAllByText("Stack")).toHaveLength(2);
+  });
+
+  it("marks a node that is not reporting and says its volumes are left out", async () => {
+    resources = {
+      volumes: { items: [volume()], error: "", notReporting: ["wrk-2", "wrk-3"] },
+    };
+    mount();
+
+    const card = await screen.findByRole("region", { name: "Volumes" });
+    expect(await within(card).findByText(/Not reporting: wrk-2, wrk-3/)).toBeTruthy();
+    expect(within(card).getByText(/Their volumes are left out/)).toBeTruthy();
+  });
+
+  it("leaves out the Node column of a standalone host's volumes", async () => {
+    detail = { ...detail, target: "standalone" };
+    resources = {
+      containers: { items: [], error: "" },
+      volumes: { items: [volume({ node: "host", nodeId: "n" })], error: "", notReporting: [] },
+    };
+    mount();
+
+    const card = await screen.findByRole("region", { name: "Volumes" });
+    const table = await within(card).findByRole("table");
+    const headers = within(table)
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent);
+    expect(headers).toEqual(["Name", "Driver", "Ownership"]);
+  });
+
+  it("shows a hashed secret as its name with a muted version label and the full object name in a Tooltip", async () => {
+    resources = { secrets: { items: [secret()], error: "" } };
+    mount();
+
+    const card = await screen.findByRole("region", { name: "Secrets" });
+    const table = await within(card).findByRole("table");
+    const headers = within(table)
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent);
+    expect(headers).toEqual(["Name", "Used by", "Ownership"]);
+    expect(within(table).getByText("tok")).toBeTruthy();
+    expect(within(table).getByText("version 1a2b3c4d")).toBeTruthy();
+    expect(within(table).queryByText("tracer_tok_1a2b3c4d")).toBeNull();
+    fireEvent.focus(within(table).getByText("tok"));
+    expect((await screen.findAllByText("tracer_tok_1a2b3c4d")).length).toBeGreaterThan(0);
+    expect(within(table).getByText("Stack")).toBeTruthy();
+  });
+
+  it("opens the services that use a secret from its '{n} services' button", async () => {
+    resources = { secrets: { items: [secret()], error: "" } };
+    mount();
+
+    const table = await within(await screen.findByRole("region", { name: "Secrets" })).findByRole(
+      "table",
+    );
+    fireEvent.click(within(table).getByRole("button", { name: "2 services" }));
+
+    const list = await screen.findByRole("list", { name: "Services that use tok" });
+    expect(within(list).getByRole("link", { name: "web" }).getAttribute("href")).toBe(
+      "/env/e1/services/svc-1",
+    );
+    expect(within(list).getByRole("link", { name: "db" }).getAttribute("href")).toBe(
+      "/env/e1/services/svc-2",
+    );
+  });
+
+  it("says '1 service' for one user and '0 services' for none", async () => {
+    resources = {
+      secrets: {
+        items: [
+          secret({ usedBy: [{ id: "svc-1", name: "web" }] }),
+          secret({ id: "s2", hash: "0000aaaa", fullName: "tracer_tok_0000aaaa", usedBy: [] }),
+        ],
+        error: "",
+      },
+    };
+    mount();
+
+    const table = await within(await screen.findByRole("region", { name: "Secrets" })).findByRole(
+      "table",
+    );
+    expect(within(table).getByRole("button", { name: "1 service" })).toBeTruthy();
+    expect(within(table).getByText("0 services")).toBeTruthy();
+  });
+
+  it("marks an external secret External and never Stack", async () => {
+    resources = {
+      secrets: {
+        items: [
+          secret({
+            id: "sec-x",
+            name: "shared_cert",
+            fullName: "shared_cert",
+            hash: "",
+            ownership: "external",
+          }),
+        ],
+        error: "",
+      },
+    };
+    mount();
+
+    const card = await screen.findByRole("region", { name: "Secrets" });
+    expect(await within(card).findByText("External")).toBeTruthy();
+    expect(within(card).queryByText("Stack")).toBeNull();
+    expect(within(card).queryByText(/^version /)).toBeNull();
+  });
+
+  it("lists a standalone stack's secrets and configs, which are files, with no version", async () => {
+    detail = { ...detail, target: "standalone" };
+    resources = {
+      containers: { items: [], error: "" },
+      secrets: { items: [secret({ id: "", hash: "", fullName: "tok" })], error: "" },
+      configs: {
+        items: [
+          secret({
+            id: "",
+            name: "site",
+            hash: "",
+            fullName: "site",
+            usedBy: [{ id: "", name: "web" }],
+          }),
+        ],
+        error: "",
+      },
+    };
+    mount();
+
+    const secrets = await screen.findByRole("region", { name: "Secrets" });
+    expect(await within(secrets).findByText("tok")).toBeTruthy();
+    expect(within(secrets).queryByText(/^version /)).toBeNull();
+    const configs = screen.getByRole("region", { name: "Configs" });
+    expect(within(configs).getByText("site")).toBeTruthy();
+    expect(within(configs).getByRole("button", { name: "1 service" })).toBeTruthy();
+  });
+
+  it("shows a card's own failure with Retry while the other cards render", async () => {
+    resources = {
+      secrets: { items: [], error: "read_failed" },
+      configs: { items: [secret({ id: "cfg-1", name: "site" })], error: "" },
+      volumes: { items: [volume()], error: "", notReporting: [] },
+    };
+    mount();
+
+    const secrets = await screen.findByRole("region", { name: "Secrets" });
+    expect(await within(secrets).findByText("Couldn't load secrets.")).toBeTruthy();
+    expect(within(secrets).getByRole("button", { name: "Retry loading secrets" })).toBeTruthy();
+    expect(within(secrets).queryByRole("table")).toBeNull();
+    expect(
+      within(await screen.findByRole("region", { name: "Configs" })).getByRole("table"),
+    ).toBeTruthy();
+    expect(within(screen.getByRole("region", { name: "Volumes" })).getByRole("table")).toBeTruthy();
+    expect(within(screen.getByRole("region", { name: "Tasks" })).getByRole("table")).toBeTruthy();
+    expect(screen.queryByText("Couldn't load configs.")).toBeNull();
+  });
+
+  it("keeps each card scrolling inside overflow-x-auto with 36px rows", async () => {
+    resources = {
+      volumes: {
+        items: Array.from({ length: 80 }, (_, i) => volume({ name: `vol_${i}` })),
+        error: "",
+        notReporting: [],
+      },
+    };
+    mount();
+
+    const card = await screen.findByRole("region", { name: "Volumes" });
+    const table = await within(card).findByRole("table");
+    expect(table.closest("[data-slot=table-container]")?.className).toContain("overflow-x-auto");
+    const rows = table.querySelectorAll("tbody tr");
+    expect(rows).toHaveLength(80);
+    expect(rows[0]?.className).toContain("h-9");
   });
 });
 
