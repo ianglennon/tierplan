@@ -371,7 +371,11 @@ var relativeBindWording = "“%s” is a relative bind mount. Use a named volume
 // found and "data" with a volume of that name is not. Both targets are held to it.
 //
 // A bind whose source comes from a secret variable keeps its key and position, but its message is
-// the withheld sentence: the loader's sentence quotes the source (D-02).
+// the withheld sentence: the loader's sentence quotes the source (D-02). svc.Volumes[i] is a position
+// in compose-go's merged list, not an item of the file, so a bind is judged by its service's whole
+// volumes list across every document (SecretUse.Withholds, through listPath). A withheld bind says the
+// file uses a secret variable, and its marker line from ix.findAny may sit on a neighbouring item of
+// the same list; the marker carries no text.
 func relativeBinds(project *types.Project, ix *PositionIndex, vars []Var) Problems {
 	var out Problems
 	var s SecretUse
@@ -803,8 +807,8 @@ const decodeHeader = "decoding failed due to the following error(s):"
 var decodeIndexRe = regexp.MustCompile(`\[([^\]]*)\]`)
 
 // decodeProblems reads the entries of a decode failure and reports each one at its field. It
-// returns nil when the text is to be reported as it stands: an entry does not parse, or no entry
-// was withheld and the file uses no secret variable. In a file that uses one, each entry is reported
+// returns nil when the text is to be reported as it stands: an entry does not parse, or the file
+// uses no secret variable. In a file that uses one, each entry is reported
 // at its own field even when none was withheld, because the text as a whole names no field and
 // would be withheld for every value.
 func decodeProblems(ix *PositionIndex, text, rest string, s SecretUse) Problems {
@@ -822,7 +826,6 @@ func decodeProblems(ix *PositionIndex, text, rest string, s SecretUse) Problems 
 		return nil
 	}
 	out := make(Problems, 0, len(entries))
-	withheld := false
 	for _, e := range entries {
 		name, message, ok := strings.Cut(e[1:], "' ")
 		if !ok {
@@ -832,10 +835,9 @@ func decodeProblems(ix *PositionIndex, text, rest string, s SecretUse) Problems 
 		path := decodeIndexRe.ReplaceAllString(name, ".$1")
 		words := path + ": " + message
 		p := guardLoaderText(ix, CodeComposeInvalid, path, words, s)
-		withheld = withheld || p.Message != words
 		out = append(out, p)
 	}
-	if !withheld && !s.Any() {
+	if !s.Any() {
 		return nil
 	}
 	return out
