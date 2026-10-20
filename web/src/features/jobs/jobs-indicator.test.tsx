@@ -14,7 +14,9 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { JobsIndicator } from "@/features/jobs/jobs-indicator";
+import { followStackOperation } from "@/features/stacks/follow-operation";
 import "@/i18n";
+import { keyExists } from "@/i18n/use-t";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
 import { waitUnderFakeClock } from "@/test-settle";
@@ -616,6 +618,48 @@ describe("JobsIndicator job toasts", () => {
     await screen.findByRole("button", { name: "Jobs, 1 in progress" });
     await finish({ kind: "remove", state: "failed" });
     expect(await screen.findByText("Removal of web failed.")).toBeTruthy();
+  });
+
+  it("says nothing from the indicator for an operation this page follows itself", async () => {
+    stackJobs = [stackJob({ kind: "stop" })];
+    mount();
+    await screen.findByRole("button", { name: "Jobs, 1 in progress" });
+    followStackOperation(client, {
+      envId: "e1",
+      stackId: "s1",
+      jobId: "d1",
+      onDone: vi.fn(),
+      onFailed: vi.fn(),
+    });
+    await finish({ kind: "stop", state: "done" });
+    await screen.findByRole("button", { name: "Jobs" });
+    expect(screen.queryByText("Stopped web.")).toBeNull();
+    expect(document.querySelector("[data-sonner-toast]")).toBeNull();
+  });
+
+  it("has words for every kind of stack job", () => {
+    const KINDS = [
+      "deploy",
+      "update",
+      "rollback",
+      "start",
+      "stop",
+      "remove",
+    ] as const satisfies readonly StackJobSummary["kind"][];
+    // A kind added to the API type without words here fails the type check.
+    const missing: Exclude<StackJobSummary["kind"], (typeof KINDS)[number]> extends never
+      ? true
+      : false = true;
+    expect(missing).toBe(true);
+    for (const kind of KINDS) {
+      expect(keyExists(`jobs.toast.${kind}.done`), `toast ${kind} done`).toBe(true);
+      expect(keyExists(`jobs.toast.${kind}.failed`), `toast ${kind} failed`).toBe(true);
+      for (const state of ["running", "done", "failed", "cancelled"]) {
+        expect(keyExists(`jobs.indicator.stack.${kind}.${state}`), `row ${kind} ${state}`).toBe(
+          true,
+        );
+      }
+    }
   });
 
   it("says nothing for a deploy that was cancelled", async () => {
