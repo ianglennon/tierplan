@@ -1120,6 +1120,12 @@ func TestAGuardedConverterRefusalHoldsNoRunOfItsSecret(t *testing.T) {
 		},
 		"a dns server through a nested default": {head + "    dns: [\"${A:-${PW}}\"]\n", "8.8.8.xkwm"},
 		"an endpoint mode":                      {head + "    deploy:\n      endpoint_mode: ${PW}\n", "hunter2secretvalue"},
+		"a restart policy set again in a later document": {
+			head + "    restart: \"no\"\n---\nservices:\n  web:\n    restart: ${PW}\n", "sometimes:3",
+		},
+		"dns servers across two documents": {
+			head + "    dns: [\"1.1.1.1\"]\n---\nservices:\n  web:\n    dns: [\"${PW}\"]\n", "8.8.8.xkwm",
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

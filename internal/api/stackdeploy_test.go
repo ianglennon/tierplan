@@ -995,6 +995,55 @@ func TestADeployRefusalNeverQuotesPartOfASecret(t *testing.T) {
 	}
 }
 
+// compose-go moves list items between the file and its model: it concatenates the lists of several YAML
+// documents and merges repeated items even in one document, so the loader's index is not an item of the
+// file. A deploy refused at a list item that uses a secret variable carries the file's sentence at the merged
+// key and no run of the value (07-45, D-02, 07-REVIEW-gaps3 CR-01, T-07-189).
+func TestADeployRefusalOfAListItemTheLoaderMovesNeverQuotesPartOfASecret(t *testing.T) {
+	t.Parallel()
+	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
+	cases := map[string]struct{ compose, secret, key string }{
+		"two documents, a tmpfs size in the second": {
+			head + "    volumes:\n      - {type: tmpfs, target: /a, tmpfs: {size: 1m}}\n---\nservices:\n  web:\n    volumes:\n      - {type: tmpfs, target: /b, tmpfs: {size: \"${PW}\"}}\n      - {type: tmpfs, target: /c, tmpfs: {size: 1m}}\n",
+			"Password2024!", "services.web.volumes.1.tmpfs.size",
+		},
+		"two documents, a relative bind in the second": {
+			head + "    volumes: [\"./p1:/a1\"]\n---\nservices:\n  web:\n    volumes: [\"./${PW}:/s\", \"./p2:/a2\", \"./p3:/a3\", \"./p4:/a4\"]\n",
+			"Zq9xkwmpr:Vb7nm", "services.web.volumes.1",
+		},
+		"one document, a repeated target before the secret item": {
+			head + "    volumes:\n      - {type: tmpfs, target: /a, tmpfs: {size: 1m}}\n      - {type: tmpfs, target: /a, tmpfs: {size: 2m}}\n      - {type: tmpfs, target: /b, tmpfs: {size: \"${PW}\"}}\n      - {type: tmpfs, target: /c, tmpfs: {size: 1m}}\n",
+			"Password2024!", "services.web.volumes.1.tmpfs.size",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f, e := stackEnv(t, nil)
+			admin := f.caller(t, e, "envadmin-1", "admin")
+			operator := f.caller(t, e, "operator-1", "operator")
+			st := newStack(t, admin, "listmoves")
+			v := saveCompose(t, operator, st.ID, tc.compose, partSecretVars(t, tc.secret))
+
+			rec := operator.deploy(st.ID, `{"draftVersion":`+itoaT(v)+`}`)
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("deploy: %d %.300s, want 422", rec.Code, rec.Body)
+			}
+			if raw := rec.Body.String(); !strings.Contains(raw, "stack_invalid") {
+				t.Errorf("deploy answer = %s, want stack_invalid", raw)
+			}
+			words := loaderWordsOf(t, rec)
+			if !slices.Contains(words, stacks.SecretFileMessage(tc.key)) {
+				t.Errorf("deploy words = %q, want one equal to %q", words, stacks.SecretFileMessage(tc.key))
+			}
+			stackstest.NoSecretRun(t, tc.secret, words...)
+			if w := f.fake.Writes(); len(w) != 0 {
+				t.Errorf("writes = %v, want none", w)
+			}
+		})
+	}
+}
+
 // The converter describes a refused value in its own words, and compose-go splits a short syntax before it
 // does, so a secret variable can reach the deploy answer in part: a restart policy cut at ":" and a published
 // port cut out of a longer spec. The answer for a field that uses a secret variable is the fixed sentence for

@@ -392,6 +392,14 @@ func TestStackCheckAnswerNeverHoldsARunOfASecret(t *testing.T) {
 			"    volumes:\n      - {type: tmpfs, target: /a, tmpfs: {size: 1m}}\n---\nservices:\n  web:\n    volumes:\n      - {type: tmpfs, target: /b, tmpfs: {size: \"${PW}\"}}\n      - {type: tmpfs, target: /c, tmpfs: {size: 1m}}\n",
 			"Password2024!", stacks.SecretFileMessage("services.web.volumes.1.tmpfs.size"),
 		},
+		"two documents, a relative bind in the second": {
+			"    volumes: [\"./p1:/a1\"]\n---\nservices:\n  web:\n    volumes: [\"./${PW}:/s\", \"./p2:/a2\", \"./p3:/a3\", \"./p4:/a4\"]\n",
+			"Zq9xkwmpr:Vb7nm", stacks.SecretFileMessage("services.web.volumes.1"),
+		},
+		"one document, a repeated target before the secret item": {
+			"    volumes:\n      - {type: tmpfs, target: /a, tmpfs: {size: 1m}}\n      - {type: tmpfs, target: /a, tmpfs: {size: 2m}}\n      - {type: tmpfs, target: /b, tmpfs: {size: \"${PW}\"}}\n      - {type: tmpfs, target: /c, tmpfs: {size: 1m}}\n",
+			"Password2024!", stacks.SecretFileMessage("services.web.volumes.1.tmpfs.size"),
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
