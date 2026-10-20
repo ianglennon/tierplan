@@ -134,7 +134,7 @@ rendered YAML, the console, the logs and the audit log, and is readable only by 
 can't be written, you get no value. A secret value needs at least 4 characters, so that hiding it can't hide
 ordinary words. Bayplan hides the value as stored and in the escaped forms error messages write it in, and a
 value of several lines, such as a PEM key, is also hidden line by line (each line of 4 characters or more, for the
-first 200 lines of a value up to 64 KB; a longer value is hidden whole). Secret variables are interpolated like any other: they are **not** turned into Docker secrets.
+first 200 lines of a value up to 64 KB; a longer value is hidden whole). When a value that comes from a secret variable can't be used (for example `mem_limit: ${PW}`), the check, the review and the deploy name the field and say that the value comes from a secret variable. They never show what the compose loader said about it, because that can contain part of the value. A message about a value that is not secret keeps the loader's words. Secret variables are interpolated like any other: they are **not** turned into Docker secrets.
 Put a value a container should read as a file in a [secret file](#secrets-and-configs) instead.
 
 ## Secrets and configs
