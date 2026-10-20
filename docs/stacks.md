@@ -134,7 +134,7 @@ rendered YAML, the console, the logs and the audit log, and is readable only by 
 can't be written, you get no value. A secret value needs at least 4 characters, so that hiding it can't hide
 ordinary words. Bayplan hides the value as stored and in the escaped forms error messages write it in, and a
 value of several lines, such as a PEM key, is also hidden line by line (each line of 4 characters or more, for the
-first 200 lines of a value up to 64 KB; a longer value is hidden whole). When a value that comes from a secret variable can't be used (for example `mem_limit: ${PW}`), the check, the review and the deploy name the field and say that the value comes from a secret variable. They never show what the compose loader said about it, because that can contain part of the value. A message about a value that is not secret keeps the loader's words. Secret variables are interpolated like any other: they are **not** turned into Docker secrets.
+first 200 lines of a value up to 64 KB; a longer value is hidden whole). When a value that comes from a secret variable can't be used (for example `mem_limit: ${PW}`), the check, the review, the deploy, the roll back and the start name the field and say that the value comes from a secret variable. They never show what the compose loader or the swarm converter said about it, because that can contain part of the value. The server log gets the same sentence for a conversion a job could not make. A message about a value that is not secret keeps the loader's words. Secret variables are interpolated like any other: they are **not** turned into Docker secrets.
 Put a value a container should read as a file in a [secret file](#secrets-and-configs) instead.
 
 ## Secrets and configs
@@ -492,6 +492,9 @@ them is hidden.
 - **A secret or config written `environment: VAR` cannot be deployed while `VAR` is in the stack's variables
   table.** It is a known bug (the object resolver counts two sources) with a fix proposed. Use a stack file under
   `file:` instead.
+- **Text the Docker Engine or the Compose SDK writes while a deploy, stop or start runs is masked for whole secret
+  values only.** The job's console and item details can show part of a value the engine refuses: for example, the
+  name of a restart policy taken from a secret. This waits for a decision.
 - **Roll back is not available on a standalone stack** (see [above](#when-a-deploy-fails-is-cancelled-or-is-interrupted)).
 - **A network or a volume a file stops declaring is not removed** on either target, as `docker compose up` does
   not either; Remove deletes the networks the stack owns, and the volumes you tick.
