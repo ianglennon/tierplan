@@ -8,11 +8,14 @@ import (
 	"encoding/json"
 	"math/rand/v2"
 	"net/http"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/jobs"
@@ -1026,6 +1029,74 @@ func TestADeployNeverQuotesPartOfASecretTheConverterSplits(t *testing.T) {
 			}
 			if w := f.fake.Writes(); len(w) != 0 {
 				t.Errorf("writes = %v, want none", w)
+			}
+		})
+	}
+}
+
+// A plain field the deploy refuses gets the same answer whether its value is part of a secret used
+// elsewhere in the file or not, so an Operator without secrets.reveal cannot tell a guess at the secret from
+// any other value (07-43, 07-44, D-02, T-07-187). The guesses are the Operator's own input, so they are
+// replaced before the answers are compared, and the check for a run of the secret is not applied to them.
+func TestADeployRefusalOfAPlainFieldIsTheSameForEveryGuessAtASecret(t *testing.T) {
+	t.Parallel()
+	const secret = "Zq9xkwmpr"
+	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n    environment:\n      DB: ${PW}\n"
+	guesses := []string{"xkwm", "kwmp", "xkwn", "aaaa"}
+	type shape struct {
+		Type, Detail string
+		Errors       [][2]string
+	}
+	cases := map[string]struct {
+		field string
+		// words is what the answer keeps of the converter's or the loader's words.
+		words func(g string) string
+	}{
+		"dns, refused by the converter": {
+			field: "    dns: [\"%s\"]\n",
+			words: func(g string) string { return "is not an IP address" },
+		},
+		"mem_limit, refused by the loader": {
+			field: "    mem_limit: %s\n",
+			words: func(g string) string { return "invalid size: '" + g + "'" },
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f, e := stackEnv(t, nil)
+			admin := f.caller(t, e, "envadmin-1", "admin")
+			operator := f.caller(t, e, "operator-1", "operator")
+			st := newStack(t, admin, "oracle")
+			var first shape
+			for i, g := range guesses {
+				compose := head + strings.Replace(tc.field, "%s", g, 1)
+				v := saveCompose(t, operator, st.ID, compose, partSecretVars(t, secret))
+				rec := operator.deploy(st.ID, `{"draftVersion":`+itoaT(v)+`}`)
+				if rec.Code != http.StatusUnprocessableEntity {
+					t.Fatalf("deploy of %q: %d %.300s, want 422", g, rec.Code, rec.Body)
+				}
+				em := answerOf[huma.ErrorModel](t, rec)
+				all := em.Detail
+				got := shape{Type: em.Type, Detail: strings.ReplaceAll(em.Detail, g, "GUESS")}
+				for _, d := range em.Errors {
+					all += " " + d.Message
+					got.Errors = append(got.Errors, [2]string{strings.ReplaceAll(d.Location, g, "GUESS"), strings.ReplaceAll(d.Message, g, "GUESS")})
+				}
+				if !strings.Contains(all, tc.words(g)) {
+					t.Errorf("deploy of %q: %s, want the words %q", g, all, tc.words(g))
+				}
+				if em.Detail == stacks.SecretValueMessage("services.web.dns") {
+					t.Errorf("deploy of %q: detail is the secret sentence, want the converter's words", g)
+				}
+				if i == 0 {
+					first = got
+				} else if !reflect.DeepEqual(first, got) {
+					t.Errorf("deploy of %q = %+v, want the answer of %q (%+v)", g, got, guesses[0], first)
+				}
+				if w := f.fake.Writes(); len(w) != 0 {
+					t.Errorf("writes = %v, want none", w)
+				}
 			}
 		})
 	}
