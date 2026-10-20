@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -441,7 +442,6 @@ func withVars(t *testing.T, compose string, vars ...stacks.Var) stacks.CheckResu
 	return stacks.Check(context.Background(), stacks.CheckInput{Name: "probe", Target: stacks.TargetSwarm, Copy: copyOf(compose, vars...)})
 }
 
-// problemsOf are the problems of a result with this code, in the order Check lists them.
 // messagesOf is the message of each problem: the words the check builds from the loader's or the converter's
 // text. Keys are the file's own key paths and are left to the tests' own assertions.
 func messagesOf(ps []stacks.Problem) []string {
@@ -452,6 +452,7 @@ func messagesOf(ps []stacks.Problem) []string {
 	return out
 }
 
+// problemsOf are the problems of a result with this code, in the order Check lists them.
 func problemsOf(res stacks.CheckResult, code string) []stacks.Problem {
 	var out []stacks.Problem
 	for _, p := range res.Problems {
@@ -934,17 +935,85 @@ func TestCheckNeverQuotesPartOfASecretInAListItemTheLoaderMoves(t *testing.T) {
 	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
 	type want struct{ code, key, message string }
 	file := func(code, key, path string) want { return want{code, key, stacks.SecretFileMessage(path)} }
+	const (
+		pw   = "Password2024!"
+		bind = "Zq9xkwmpr:Vb7nm"
+	)
+	// binds are the relative_bind problems of a service's volumes, one per merged item i of n.
+	binds := func(n int) []want {
+		var out []want
+		for i := range n {
+			out = append(out, file(stacks.CodeRelativeBind, "services.web.volumes", "services.web.volumes."+strconv.Itoa(i)))
+		}
+		return out
+	}
 	cases := []struct {
 		name    string
 		compose string
 		secret  string
 		want    []want
+		// listIndex is true when the row's keys hold a list index, so no message may say the value comes from
+		// a secret variable.
+		listIndex bool
+		// plain is the loader's own word that a message must keep, when the row has no secret in its list. The
+		// message then equals neither withheld sentence, and only code and key are compared.
+		plain string
 	}{
 		{
-			"two documents, a tmpfs size in the second",
-			head + "    volumes:\n      - {type: tmpfs, target: /a, tmpfs: {size: 1m}}\n---\nservices:\n  web:\n    volumes:\n      - {type: tmpfs, target: /b, tmpfs: {size: \"${PW}\"}}\n      - {type: tmpfs, target: /c, tmpfs: {size: 1m}}\n",
-			"Password2024!",
-			[]want{file(stacks.CodeComposeInvalid, "services.web.volumes.1.tmpfs.size", "services.web.volumes.1.tmpfs.size")},
+			name:      "two documents, a tmpfs size in the second",
+			compose:   head + "    volumes:\n      - {type: tmpfs, target: /a, tmpfs: {size: 1m}}\n---\nservices:\n  web:\n    volumes:\n      - {type: tmpfs, target: /b, tmpfs: {size: \"${PW}\"}}\n      - {type: tmpfs, target: /c, tmpfs: {size: 1m}}\n",
+			secret:    pw,
+			want:      []want{file(stacks.CodeComposeInvalid, "services.web.volumes.1.tmpfs.size", "services.web.volumes.1.tmpfs.size")},
+			listIndex: true,
+		},
+		{
+			name:      "two documents, a relative bind in the second",
+			compose:   head + "    volumes: [\"./p1:/a1\"]\n---\nservices:\n  web:\n    volumes: [\"./${PW}:/s\", \"./p2:/a2\", \"./p3:/a3\", \"./p4:/a4\"]\n",
+			secret:    bind,
+			want:      binds(5),
+			listIndex: true,
+		},
+		{
+			name:      "a list expanded across two documents",
+			compose:   head + "    blkio_config:\n      device_read_bps:\n        - {path: /dev/sda, rate: 1m}\n---\nservices:\n  web:\n    blkio_config:\n      device_read_bps:\n        - {path: /dev/sdb, rate: \"${PW}\"}\n        - {path: /dev/sdc, rate: 1m}\n",
+			secret:    pw,
+			want:      []want{file(stacks.CodeComposeInvalid, "services.web.blkio_config.device_read_bps.1.Rate", "services.web.blkio_config.device_read_bps.1.Rate")},
+			listIndex: true,
+		},
+		{
+			name:      "one document, a repeated target before the secret item",
+			compose:   head + "    volumes:\n      - {type: tmpfs, target: /a, tmpfs: {size: 1m}}\n      - {type: tmpfs, target: /a, tmpfs: {size: 2m}}\n      - {type: tmpfs, target: /b, tmpfs: {size: \"${PW}\"}}\n      - {type: tmpfs, target: /c, tmpfs: {size: 1m}}\n",
+			secret:    pw,
+			want:      []want{file(stacks.CodeComposeInvalid, "services.web.volumes.1.tmpfs.size", "services.web.volumes.1.tmpfs.size")},
+			listIndex: true,
+		},
+		{
+			name:      "one document, the secret item repeats an earlier target",
+			compose:   head + "    volumes:\n      - {type: tmpfs, target: /a, tmpfs: {size: 1m}}\n      - {type: tmpfs, target: /b, tmpfs: {size: 1m}}\n      - {type: tmpfs, target: /a, tmpfs: {size: \"${PW}\"}}\n",
+			secret:    pw,
+			want:      []want{file(stacks.CodeComposeInvalid, "services.web.volumes.0.tmpfs.size", "services.web.volumes.0.tmpfs.size")},
+			listIndex: true,
+		},
+		{
+			name:      "one document, a relative bind after a repeated target",
+			compose:   head + "    volumes: [\"./a:/t\", \"./b:/t\", \"./${PW}:/s\", \"./c:/c\"]\n",
+			secret:    bind,
+			want:      binds(3),
+			listIndex: true,
+		},
+		{
+			name:    "two documents set a field that is not in a list",
+			compose: head + "    mem_limit: 1m\n---\nservices:\n  web:\n    mem_limit: ${PW}\n",
+			secret:  pw,
+			want:    []want{{stacks.CodeComposeInvalid, "services.web.mem_limit", stacks.SecretValueMessage("services.web.mem_limit")}},
+		},
+		{
+			name:      "two documents, a plain list while the secret is elsewhere",
+			compose:   head + "    environment:\n      DB: ${PW}\n    volumes:\n      - {type: tmpfs, target: /a, tmpfs: {size: 1m}}\n---\nservices:\n  web:\n    volumes:\n      - {type: tmpfs, target: /b, tmpfs: {size: lots}}\n",
+			secret:    pw,
+			want:      []want{{stacks.CodeComposeInvalid, "services.web.volumes.1.tmpfs.size", ""}},
+			listIndex: true,
+			plain:     "lots",
 		},
 	}
 	for _, tc := range cases {
@@ -959,16 +1028,23 @@ func TestCheckNeverQuotesPartOfASecretInAListItemTheLoaderMoves(t *testing.T) {
 					if p.Severity == stacks.SeverityError {
 						errs = append(errs, want{p.Code, p.Key, p.Message})
 					}
-					if strings.Contains(p.Key, ".volumes") || strings.Contains(p.Key, "device_read_bps") {
-						if strings.Contains(p.Message, "It comes from a secret variable") {
-							t.Errorf("problem %+v says a list item comes from a secret variable", p)
-						}
+					if tc.listIndex && tc.plain == "" && strings.Contains(p.Message, "It comes from a secret variable") {
+						t.Errorf("problem %+v says a list item comes from a secret variable", p)
 					}
 				}
 				stackstest.NoSecretRun(t, tc.secret, messagesOf(res.Problems)...)
 				order := func(a, b want) int { return strings.Compare(a.key+"\x00"+a.message, b.key+"\x00"+b.message) }
-				slices.SortFunc(errs, order)
 				wantSorted := slices.Clone(tc.want)
+				if tc.plain != "" {
+					for i, e := range errs {
+						if !strings.Contains(e.message, tc.plain) ||
+							e.message == stacks.SecretFileMessage(e.key) || e.message == stacks.SecretValueMessage(e.key) {
+							t.Errorf("problem %+v, want the loader's words with %q", e, tc.plain)
+						}
+						errs[i].message = ""
+					}
+				}
+				slices.SortFunc(errs, order)
 				slices.SortFunc(wantSorted, order)
 				if !slices.Equal(errs, wantSorted) {
 					t.Errorf("error problems = %+v, want %+v", errs, wantSorted)
