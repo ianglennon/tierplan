@@ -628,6 +628,9 @@ const trailingBackslashSecret = "hunter2-foxtrot'hunter2-golf\\"
 
 var trailingBackslashParts = []string{"hunter2-foxtrot", "hunter2-golf"}
 
+// noField stands, in the table below, for a problem that names no field of the file.
+const noField = "-"
+
 func TestCheckNeverCarriesAnEscapedSecretValue(t *testing.T) {
 	t.Parallel()
 	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
@@ -636,15 +639,16 @@ func TestCheckNeverCarriesAnEscapedSecretValue(t *testing.T) {
 		body   string
 		secret string
 		parts  []string
-		// fixed is the key of the field the check reports with the fixed sentence (D-02); an empty
-		// one means the loader's words are kept and the masker shows <hidden>.
+		// fixed is the key of the field the check reports with the fixed sentence (D-02), or noField
+		// for the general sentence of a text that names no field; an empty one means the loader's
+		// words are kept and the masker shows <hidden>.
 		fixed string
 	}{
 		{"deploy.replicas, Go-escaped", "    deploy:\n      replicas: ${PW}\n", escapedSecret, escapedSecretParts, "services.web.deploy.replicas"},
 		{"cpus, Go-escaped", "    cpus: ${PW}\n", escapedSecret, escapedSecretParts, "services.web.cpus"},
 		{"pull_policy, schema-escaped", "    pull_policy: ${PW}\n", escapedSecret, escapedSecretParts, "services.web.pull_policy"},
 		{"pull_policy, trailing backslash", "    pull_policy: ${PW}\n", trailingBackslashSecret, trailingBackslashParts, "services.web.pull_policy"},
-		{"privileged, raw and trimmed", "    privileged: ${PW}\n", escapedSecret, escapedSecretParts, ""},
+		{"privileged, raw and trimmed", "    privileged: ${PW}\n", escapedSecret, escapedSecretParts, noField},
 		{"healthcheck.interval, raw in quotes", "    healthcheck:\n      test: [CMD, \"true\"]\n      interval: ${PW}\n", escapedSecret, escapedSecretParts, "services.web.healthcheck.interval"},
 	}
 	for _, tc := range cases {
@@ -656,7 +660,9 @@ func TestCheckNeverCarriesAnEscapedSecretValue(t *testing.T) {
 				if p.Severity == stacks.SeverityError {
 					refused = true
 				}
-				if tc.fixed != "" {
+				if tc.fixed == noField {
+					hidden = hidden || p.Message == stacks.SecretValueMessage("")
+				} else if tc.fixed != "" {
 					hidden = hidden || (p.Key == tc.fixed && p.Message == stacks.SecretValueMessage(tc.fixed))
 				} else if strings.Contains(p.Message, stacks.Hidden) {
 					hidden = true
@@ -787,6 +793,125 @@ func TestCheckNeverQuotesTheLoaderWordsForASecretField(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			res := withVars(t, head+tc.body, used)
+			for _, p := range res.Problems {
+				if p.Severity == stacks.SeverityError && strings.Contains(p.Message, tc.want) {
+					return
+				}
+			}
+			t.Errorf("problems = %+v, want an error with %q", res.Problems, tc.want)
+		})
+	}
+}
+
+func TestCheckNeverQuotesPartOfASecretTheLoaderSplits(t *testing.T) {
+	t.Parallel()
+	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
+	type want struct{ code, message string }
+	fixed := func(code, path string) want { return want{code, stacks.SecretValueMessage(path)} }
+	const pw = "Password2024!"
+	cases := []struct {
+		name    string
+		body    string
+		secret  string
+		parts   []string
+		want    []want
+		keepKey string // the key a relative bind keeps while its message is withheld
+	}{
+		{"shm_size", "    shm_size: ${PW}\n", pw, []string{"Password2024"}, []want{fixed(stacks.CodeComposeInvalid, "services.web.shm_size")}, ""},
+		{"mem_reservation", "    mem_reservation: ${PW}\n", pw, []string{"Password2024"}, []want{fixed(stacks.CodeComposeInvalid, "services.web.mem_reservation")}, ""},
+		{"memswap_limit", "    memswap_limit: ${PW}\n", pw, []string{"Password2024"}, []want{fixed(stacks.CodeComposeInvalid, "services.web.memswap_limit")}, ""},
+		{
+			"deploy.resources limits and reservations memory",
+			"    deploy:\n      resources:\n        limits:\n          memory: ${PW}\n        reservations:\n          memory: ${PW}\n",
+			pw, []string{"Password2024"},
+			[]want{
+				fixed(stacks.CodeComposeInvalid, "services.web.deploy.resources.limits.memory"),
+				fixed(stacks.CodeComposeInvalid, "services.web.deploy.resources.reservations.memory"),
+			}, "",
+		},
+		{
+			"a tmpfs size", "    volumes:\n      - type: tmpfs\n        target: /scratch\n        tmpfs:\n          size: ${PW}\n",
+			pw, []string{"Password2024"}, []want{fixed(stacks.CodeComposeInvalid, "services.web.volumes.0.tmpfs.size")}, "",
+		},
+		{
+			"a blkio rate, named by the loader's Go field", "    blkio_config:\n      device_read_bps:\n        - path: /dev/sda\n          rate: ${PW}\n",
+			pw, []string{"Password2024"}, []want{fixed(stacks.CodeComposeInvalid, "services.web.blkio_config.device_read_bps.0.Rate")}, "",
+		},
+		{"stop_grace_period", "    stop_grace_period: ${PW}\n", pw, []string{"Password2024"}, []want{fixed(stacks.CodeComposeInvalid, "services.web.stop_grace_period")}, ""},
+		{"an anchor", "    mem_limit: *m\n", pw, []string{"Password2024"}, []want{fixed(stacks.CodeComposeInvalid, "services.web.mem_limit")}, ""},
+		{"an undefined volume", "    volumes: [\"${PW}:/data\"]\n", "abcd:efgh9", []string{"abcd"}, []want{fixed(stacks.CodeComposeInvalid, "services.web.volumes")}, ""},
+		{"a port spec", "    ports: [\"${PW}:80\"]\n", "abcd:efgh9", []string{"abcd"}, []want{fixed(stacks.CodeComposeInvalid, "")}, ""},
+		{"a relative bind", "    volumes: [\"${PW}:ro\"]\n", "./abcd:/efgh", []string{"abcd"}, []want{fixed(stacks.CodeRelativeBind, "services.web.volumes.0")}, "services.web.volumes"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			compose := head + tc.body
+			if tc.name == "an anchor" {
+				compose = "x-m: &m ${PW}\n" + compose
+			}
+			res := withVars(t, compose, stacks.Var{Name: "PW", Value: tc.secret, Secret: true})
+			var errs []want
+			for _, p := range res.Problems {
+				if p.Severity == stacks.SeverityError {
+					errs = append(errs, want{p.Code, p.Message})
+					if tc.keepKey != "" && p.Key != tc.keepKey {
+						t.Errorf("problem %+v has key %q, want %q", p, p.Key, tc.keepKey)
+					}
+				}
+				for _, part := range tc.parts {
+					if strings.Contains(p.Message, part) || strings.Contains(p.Key, part) {
+						t.Errorf("problem %+v carries %q of the secret", p, part)
+					}
+				}
+			}
+			slices.SortFunc(errs, func(a, b want) int { return strings.Compare(a.message, b.message) })
+			slices.SortFunc(tc.want, func(a, b want) int { return strings.Compare(a.message, b.message) })
+			if !slices.Equal(errs, tc.want) {
+				t.Errorf("error problems = %+v, want %+v", errs, tc.want)
+			}
+		})
+	}
+	t.Run("a mixed decode keeps the words of the plain entry", func(t *testing.T) {
+		t.Parallel()
+		res := withVars(t, head+"    mem_limit: lots\n    shm_size: ${PW}\n", stacks.Var{Name: "PW", Value: pw, Secret: true})
+		var plain, secret bool
+		for _, p := range res.Problems {
+			if p.Key == "services.web.mem_limit" && strings.Contains(p.Message, "invalid size: 'lots'") {
+				plain = true
+			}
+			if p.Key == "services.web.shm_size" && p.Message == stacks.SecretValueMessage("services.web.shm_size") {
+				secret = true
+			}
+			if strings.Contains(p.Message, "Password2024") {
+				t.Errorf("problem %+v carries part of the secret", p)
+			}
+		}
+		if !plain || !secret {
+			t.Errorf("problems = %+v, want mem_limit with its own words and shm_size with the fixed sentence", res.Problems)
+		}
+	})
+}
+
+func TestCheckKeepsTheLoaderWordsWhereNoSecretIsQuoted(t *testing.T) {
+	t.Parallel()
+	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
+	pw := stacks.Var{Name: "PW", Value: "Password2024!", Secret: true}
+	for name, tc := range map[string]struct {
+		body string
+		vars []stacks.Var
+		want string
+	}{
+		"a plain port spec":     {"    ports: [\"abcd:efgh9:80\"]\n    environment:\n      DB: ${PW}\n", []stacks.Var{pw}, "invalid IP address: abcd"},
+		"a plain relative bind": {"    volumes: [./data:/data]\n    environment:\n      DB: ${PW}\n", []stacks.Var{pw}, "“./data” is a relative bind mount"},
+		"an unclosed reference": {
+			"    command: ${PW\n    environment:\n      DB: ${S}\n", []stacks.Var{{Name: "S", Value: "Secretvalue99", Secret: true}},
+			"invalid interpolation format for services.web.command",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			res := withVars(t, head+tc.body, tc.vars...)
 			for _, p := range res.Problems {
 				if p.Severity == stacks.SeverityError && strings.Contains(p.Message, tc.want) {
 					return

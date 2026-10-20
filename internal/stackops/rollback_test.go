@@ -140,3 +140,34 @@ func TestPrepareErrorTextIsMaskedWithTheRevisionsMasker(t *testing.T) {
 		t.Errorf("error text %q, want the value shown as %s", text, stacks.Hidden)
 	}
 }
+
+// The load stage of a roll back or a start is refused with the fixed sentence for a size field fed by a
+// secret variable, not with go-units' words, which quote part of the value (07-40, D-02, T-07-172). The
+// roll back and start routes answer the problems of this error as they are.
+func TestPrepareRollbackNeverQuotesPartOfASecretInASizeField(t *testing.T) {
+	t.Parallel()
+	target := rollbackTarget("services:\n  web:\n    image: nginx:1.27-alpine\n    mem_limit: ${PW}\n")
+	target.Copy.Vars = []stacks.Var{{Name: "PW", Value: "Password2024!", Secret: true}}
+	_, err := stackops.Deps{}.PrepareRollback(context.Background(), rollbackStack, target, map[string]string{})
+	var pe *stackops.PrepareError
+	if !errors.As(err, &pe) || pe.Stage != stackops.PrepareLoad {
+		t.Fatalf("err = %v, want the load stage", err)
+	}
+	var nd *stacks.NotDeployableError
+	if !errors.As(pe.Err, &nd) {
+		t.Fatalf("cause = %v, want a *stacks.NotDeployableError", pe.Err)
+	}
+	if strings.Contains(err.Error(), "Password2024") {
+		t.Errorf("error text %q carries part of the secret", err.Error())
+	}
+	fixed := false
+	for _, p := range nd.Problems {
+		if strings.Contains(p.Message, "Password2024") || strings.Contains(p.Key, "Password2024") {
+			t.Errorf("problem %+v carries part of the secret", p)
+		}
+		fixed = fixed || p.Message == stacks.SecretValueMessage("services.web.mem_limit")
+	}
+	if !fixed {
+		t.Errorf("problems = %+v, want the fixed sentence at services.web.mem_limit", nd.Problems)
+	}
+}
