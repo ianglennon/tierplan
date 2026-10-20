@@ -20,6 +20,8 @@ let client: QueryClient;
 let answer: unknown;
 let listStatus: number;
 let requests: string[];
+// Fields of the answer a test sets on top of the groups.
+let extra: Record<string, unknown>;
 
 const stack = (over: Record<string, unknown> = {}) => ({
   id: "s1",
@@ -61,6 +63,7 @@ beforeEach(() => {
   };
   listStatus = 200;
   requests = [];
+  extra = {};
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   vi.stubGlobal(
@@ -73,7 +76,16 @@ beforeEach(() => {
         requests.push(url.search);
         if (listStatus !== 200)
           return Response.json({ title: "x", status: listStatus }, { status: listStatus });
-        return Response.json(answer);
+        const groups = (answer as { groups: { stacks: unknown[] }[] }).groups;
+        const rows = groups.reduce((n, g) => n + g.stacks.length, 0);
+        return Response.json({
+          total: rows,
+          unfilteredTotal: rows,
+          capped: false,
+          statusCounts: { degraded: 0, stopped: 0, draft: 0, deployFailed: 0 },
+          ...(answer as object),
+          ...extra,
+        });
       }
       return Response.json({}, { status: 404 });
     }),
@@ -319,5 +331,185 @@ describe("GlobalStackList", () => {
     fireEvent.click(screen.getByRole("button", { name: /Collapse Prod/ }));
     await waitFor(() => expect(screen.queryByRole("link", { name: "alpha" })).toBeNull());
     expect(screen.getByRole("link", { name: "gamma" })).toBeTruthy();
+  });
+});
+
+const searchOf = (query: string) => new URLSearchParams(query);
+
+describe("GlobalStackList: search, status chips, sort and the cap", () => {
+  it("has a search labelled Search stacks and sends it, after 250 ms, to the server", async () => {
+    const { onChange } = mount();
+    await screen.findByRole("link", { name: "alpha" });
+    const box = screen.getByRole("searchbox", { name: "Search stacks" });
+    expect(box.getAttribute("placeholder")).toBe("Search by name or service");
+    fireEvent.change(box, { target: { value: "gam" } });
+    expect(onChange).not.toHaveBeenCalled();
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ q: "gam" }));
+    await waitFor(() => expect(requests.some((r) => searchOf(r).get("q") === "gam")).toBe(true));
+  });
+
+  it("sends the search, the statuses, the sort and the environments of the URL", async () => {
+    mount({
+      q: "a",
+      status: "stopped,deploy_failed",
+      sort: "lastDeployed",
+      dir: "desc",
+      env: "e1",
+    });
+    await screen.findByRole("link", { name: "alpha" });
+    await waitFor(() => expect(requests.length).toBeGreaterThan(0));
+    const sent = searchOf(requests.at(-1) as string);
+    expect(Object.fromEntries(sent)).toEqual({
+      q: "a",
+      status: "stopped,deploy_failed",
+      sort: "lastDeployed",
+      dir: "desc",
+      env: "e1",
+    });
+  });
+
+  it("shows the status chips with the counts of the whole set, and puts a chosen one in the URL", async () => {
+    extra = { statusCounts: { degraded: 4, stopped: 0, draft: 1, deployFailed: 2 } };
+    const { onChange } = mount({ q: "zzz" });
+    await screen.findByRole("link", { name: "alpha" });
+    const group = screen.getByRole("group", { name: "Filter by status" });
+    expect(group.className).toContain("flex-wrap");
+    for (const label of ["Degraded 4", "Stopped 0", "Draft 1", "Deploy failed 2"]) {
+      expect(within(group).getByRole("button", { name: label })).toBeTruthy();
+    }
+    fireEvent.click(within(group).getByRole("button", { name: "Deploy failed 2" }));
+    expect(onChange).toHaveBeenLastCalledWith({ status: "deploy_failed" });
+  });
+
+  it("offers Clear filters while a search, a chip or an environment is on, and clears them all", async () => {
+    const { onChange } = mount({ q: "a", status: "draft", env: "e1" });
+    await screen.findByRole("link", { name: "alpha" });
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(onChange).toHaveBeenCalledWith({ q: undefined, status: undefined, env: undefined });
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Clear filters" })).toBeNull());
+  });
+
+  it("does not offer Clear filters when only the grouping or the sort is set", async () => {
+    mount({ group: "none", sort: "state" });
+    await screen.findByRole("link", { name: "alpha" });
+    expect(screen.queryByRole("button", { name: "Clear filters" })).toBeNull();
+  });
+
+  it("says nothing matches the search, or the filters, when stacks exist but none are listed", async () => {
+    answer = { groups: [], failedEnvironments: [] };
+    extra = { unfilteredTotal: 7 };
+    const { onChange } = mount({ q: "zzz" });
+    expect(
+      await screen.findByRole("heading", { name: "No stacks match “zzz”.", level: 2 }),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+    expect(onChange).toHaveBeenCalledWith({ q: undefined });
+    cleanup();
+    client.clear();
+    mount({ status: "draft" });
+    expect(
+      await screen.findByRole("heading", { name: "No stacks match these filters.", level: 2 }),
+    ).toBeTruthy();
+  });
+
+  it("counts n of total while a filter is on, and the plain count otherwise", async () => {
+    extra = { total: 3, unfilteredTotal: 9 };
+    mount({ status: "draft" });
+    await screen.findByRole("link", { name: "alpha" });
+    expect(screen.getByText(/3 of 9 stacks in 2 environments$/)).toBeTruthy();
+  });
+
+  it("says Showing the first 500 of n when the server capped the list", async () => {
+    extra = { capped: true, total: 640, unfilteredTotal: 640 };
+    mount();
+    await screen.findByRole("link", { name: "alpha" });
+    expect(
+      screen.getByText("Showing the first 500 of 640. Narrow the search to see the rest."),
+    ).toBeTruthy();
+  });
+
+  it("sorts by Name, State and Last deployed from the headers, with aria-sort", async () => {
+    const { onChange } = mount();
+    await screen.findByRole("link", { name: "alpha" });
+    const header = (n: string) => screen.getByRole("columnheader", { name: n });
+    expect(header("Name").getAttribute("aria-sort")).toBe("ascending");
+    expect(header("State").getAttribute("aria-sort")).toBe("none");
+    expect(header("Environment").getAttribute("aria-sort")).toBeNull();
+    fireEvent.click(within(header("State")).getByRole("button"));
+    expect(onChange).toHaveBeenLastCalledWith({ sort: "state", dir: "asc" });
+    fireEvent.click(within(header("State")).getByRole("button"));
+    expect(onChange).toHaveBeenLastCalledWith({ sort: "state", dir: "desc" });
+    await waitFor(() => expect(header("State").getAttribute("aria-sort")).toBe("descending"));
+    fireEvent.click(within(header("Last deployed")).getByRole("button"));
+    expect(onChange).toHaveBeenLastCalledWith({ sort: "lastDeployed", dir: "asc" });
+  });
+
+  it("keeps the server's order inside each environment", async () => {
+    answer = {
+      groups: [
+        group("e1", "Prod", "swarm", [
+          stack({ id: "z", name: "zulu" }),
+          stack({ id: "a", name: "alpha" }),
+        ]),
+      ],
+      failedEnvironments: [],
+    };
+    mount({ sort: "state", dir: "desc" });
+    await screen.findByRole("link", { name: "zulu" });
+    const rows = screen.getAllByRole("row").slice(2);
+    expect(rows.map((r) => within(r).getAllByRole("link")[0]?.textContent)).toEqual([
+      "zulu",
+      "alpha",
+    ]);
+  });
+
+  it("sorts one list across the environments when Group by is None", async () => {
+    answer = {
+      groups: [
+        group("e1", "Prod", "swarm", [
+          stack({ id: "b", name: "beta" }),
+          stack({ id: "d", name: "delta" }),
+        ]),
+        group("e2", "Staging", "standalone", [
+          stack({ id: "a", name: "alpha", target: "standalone" }),
+          stack({ id: "g", name: "gamma", target: "standalone" }),
+        ]),
+      ],
+      failedEnvironments: [],
+    };
+    mount({ group: "none" });
+    await screen.findByRole("link", { name: "alpha" });
+    const order = () =>
+      screen
+        .getAllByRole("row")
+        .slice(1)
+        .map((r) => within(r).getAllByRole("link")[0]?.textContent);
+    expect(order()).toEqual(["alpha", "beta", "delta", "gamma"]);
+    fireEvent.click(within(screen.getByRole("columnheader", { name: "Name" })).getByRole("button"));
+    await waitFor(() => expect(order()).toEqual(["gamma", "delta", "beta", "alpha"]));
+  });
+
+  it("labels a stack with an operation under way and turns its menu off", async () => {
+    answer = {
+      groups: [
+        group("e1", "Prod", "swarm", [
+          stack({ id: "a", name: "alpha", state: "deploying" }),
+          stack({ id: "b", name: "beta", state: "running", servicesRunning: 2, servicesTotal: 2 }),
+        ]),
+      ],
+      failedEnvironments: [],
+    };
+    mount();
+    await screen.findByRole("link", { name: "beta" });
+    const row = (n: string) => screen.getByRole("link", { name: n }).closest("tr") as HTMLElement;
+    expect(within(row("alpha")).getByText("Deploying…")).toBeTruthy();
+    expect(
+      (within(row("alpha")).getByRole("button", { name: "Actions for alpha" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    expect(
+      (within(row("beta")).getByRole("button", { name: "Actions for beta" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
   });
 });

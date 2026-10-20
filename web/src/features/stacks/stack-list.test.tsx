@@ -2,11 +2,13 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { StackListSearch, StackListSearchPatch } from "@/features/stacks/list-search";
 import { StackList } from "@/features/stacks/stack-list";
 import "@/i18n";
 import { makeMe } from "@/test-me";
@@ -19,6 +21,9 @@ let me: ReturnType<typeof makeMe>;
 let stacks: unknown;
 let client: QueryClient;
 let listStatus: number;
+// The list body the server answers; a test sets the fields it cares about.
+let listExtra: Record<string, unknown>;
+let requests: URL[];
 
 const stack = (over: Record<string, unknown> = {}) => ({
   id: "s1",
@@ -36,6 +41,8 @@ beforeEach(() => {
   me = makeMe({ envs: { [ENV]: "admin" } });
   stacks = { items: [stack()] };
   listStatus = 200;
+  listExtra = {};
+  requests = [];
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   vi.stubGlobal(
@@ -49,7 +56,16 @@ beforeEach(() => {
       if (path === `/api/env/${ENV}/stacks`) {
         if (listStatus !== 200)
           return Response.json({ title: "x", status: listStatus }, { status: listStatus });
-        return Response.json(stacks);
+        requests.push(new URL(req.url));
+        const items = (stacks as { items: unknown[] }).items;
+        return Response.json({
+          total: items.length,
+          unfilteredTotal: items.length,
+          capped: false,
+          statusCounts: { degraded: 0, stopped: 0, draft: 0, deployFailed: 0 },
+          ...(stacks as object),
+          ...listExtra,
+        });
       }
       return Response.json({}, { status: 404 });
     }),
@@ -62,18 +78,55 @@ afterEach(() => {
   client.clear();
 });
 
-function mount(props: Partial<Parameters<typeof StackList>[0]> = {}) {
+// The route owns the search; this holds it the way the route's URL does, and reports each change.
+function Harness({
+  initial,
+  onChange,
+  creating,
+  onCreatingChange,
+}: {
+  initial: StackListSearch;
+  onChange: (patch: StackListSearchPatch) => void;
+  creating: boolean;
+  onCreatingChange: (open: boolean) => void;
+}) {
+  const [search, setSearch] = useState(initial);
+  return (
+    <StackList
+      envId={ENV}
+      creating={creating}
+      onCreatingChange={onCreatingChange}
+      search={search}
+      onSearchChange={(patch) => {
+        onChange(patch);
+        setSearch((prev) => {
+          const next: Record<string, unknown> = { ...prev, ...patch };
+          for (const key of Object.keys(next)) if (next[key] === undefined) delete next[key];
+          return next as StackListSearch;
+        });
+      }}
+    />
+  );
+}
+
+function mount(props: { creating?: boolean; search?: StackListSearch } = {}) {
   const onCreatingChange = vi.fn();
+  const onChange = vi.fn();
   render(
     <QueryClientProvider client={client}>
       <TestRouter>
         <TooltipProvider>
-          <StackList envId={ENV} creating={false} onCreatingChange={onCreatingChange} {...props} />
+          <Harness
+            initial={props.search ?? {}}
+            onChange={onChange}
+            creating={props.creating ?? false}
+            onCreatingChange={onCreatingChange}
+          />
         </TooltipProvider>
       </TestRouter>
     </QueryClientProvider>,
   );
-  return { onCreatingChange };
+  return { onCreatingChange, onChange };
 }
 
 describe("StackList", () => {
@@ -105,7 +158,7 @@ describe("StackList", () => {
     await screen.findByRole("link", { name: "d-stack" });
     const rowOf = (name: string) => screen.getByRole("link", { name }).closest("tr") as HTMLElement;
     expect(within(rowOf("a-stack")).getByText("Not deployed")).toBeTruthy();
-    expect(within(rowOf("b-stack")).getByText("Deploying")).toBeTruthy();
+    expect(within(rowOf("b-stack")).getByText("Deploying…")).toBeTruthy();
     expect(within(rowOf("c-stack")).getByText("Deploy failed")).toBeTruthy();
     expect(within(rowOf("d-stack")).getByText("Running")).toBeTruthy();
     for (const name of ["a-stack", "b-stack", "c-stack", "d-stack"]) {
@@ -215,5 +268,205 @@ describe("StackList", () => {
     expect(deploy.getAttribute("aria-disabled")).toBe("true");
     expect(deploy.getAttribute("href")).toBeNull();
     expect(screen.getByRole("menuitem", { name: "Open stack" })).toBeTruthy();
+  });
+});
+
+// The names in the table, top to bottom: the first link of each body row.
+const names = () =>
+  screen
+    .getAllByRole("row")
+    .slice(1)
+    .map((r) => within(r).getAllByRole("link")[0]?.textContent);
+
+describe("StackList: search and status chips", () => {
+  it("has a search labelled Search stacks, with the words of the spec", async () => {
+    mount();
+    await screen.findByRole("link", { name: "web" });
+    const box = screen.getByRole("searchbox", { name: "Search stacks" });
+    expect(box.getAttribute("placeholder")).toBe("Search by name or service");
+  });
+
+  it("waits 250 ms, then puts the search in the URL and asks the server for it", async () => {
+    const { onChange } = mount();
+    await screen.findByRole("link", { name: "web" });
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search stacks" }), {
+      target: { value: "web" },
+    });
+    expect(onChange).not.toHaveBeenCalled();
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ q: "web" }));
+    await waitFor(() => expect(requests.some((u) => u.searchParams.get("q") === "web")).toBe(true));
+  });
+
+  it("sends the search, statuses and sort of the URL to the server", async () => {
+    mount({ search: { q: "api", status: "degraded,draft", sort: "state", dir: "desc" } });
+    await screen.findByRole("link", { name: "web" });
+    await waitFor(() => expect(requests.length).toBeGreaterThan(0));
+    const last = requests.at(-1) as URL;
+    expect(last.searchParams.get("q")).toBe("api");
+    expect(last.searchParams.get("status")).toBe("degraded,draft");
+    expect(last.searchParams.get("sort")).toBe("state");
+    expect(last.searchParams.get("dir")).toBe("desc");
+  });
+
+  it("shows the four status chips with the counts the server gave, in a labelled group that wraps", async () => {
+    listExtra = {
+      statusCounts: { degraded: 2, stopped: 1, draft: 3, deployFailed: 0 },
+      unfilteredTotal: 9,
+    };
+    mount({ search: { q: "zzz" } });
+    await screen.findByRole("link", { name: "web" });
+    const group = screen.getByRole("group", { name: "Filter by status" });
+    expect(group.className).toContain("flex-wrap");
+    for (const label of ["Degraded 2", "Stopped 1", "Draft 3", "Deploy failed 0"]) {
+      expect(within(group).getByRole("button", { name: label })).toBeTruthy();
+    }
+  });
+
+  it("puts a chosen chip in the URL and takes it out again", async () => {
+    const { onChange } = mount();
+    await screen.findByRole("link", { name: "web" });
+    fireEvent.click(screen.getByRole("button", { name: /^Degraded/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ status: "degraded" });
+    fireEvent.click(screen.getByRole("button", { name: /^Draft/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ status: "degraded,draft" });
+    fireEvent.click(screen.getByRole("button", { name: /^Degraded/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Draft/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ status: undefined });
+  });
+
+  it("offers Clear filters only while a search or a chip is on, and clears both", async () => {
+    const { onChange } = mount({ search: { q: "web", status: "stopped" } });
+    await screen.findByRole("link", { name: "web" });
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(onChange).toHaveBeenCalledWith({ q: undefined, status: undefined });
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Clear filters" })).toBeNull());
+  });
+
+  it("says no stack matches the search, and clears the search", async () => {
+    stacks = { items: [] };
+    listExtra = { unfilteredTotal: 4 };
+    const { onChange } = mount({ search: { q: "zzz" } });
+    expect(
+      await screen.findByRole("heading", { name: "No stacks match “zzz”.", level: 2 }),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+    expect(onChange).toHaveBeenCalledWith({ q: undefined });
+  });
+
+  it("says no stack matches the filters when a chip is on, and clears them", async () => {
+    stacks = { items: [] };
+    listExtra = { unfilteredTotal: 4 };
+    const { onChange } = mount({ search: { q: "zzz", status: "draft" } });
+    expect(
+      await screen.findByRole("heading", { name: "No stacks match these filters.", level: 2 }),
+    ).toBeTruthy();
+    const buttons = screen.getAllByRole("button", { name: "Clear filters" });
+    fireEvent.click(buttons[buttons.length - 1] as HTMLElement);
+    expect(onChange).toHaveBeenCalledWith({ q: undefined, status: undefined });
+  });
+});
+
+describe("StackList: captions, sort and the cap", () => {
+  it("counts the stacks, and says n of total while a filter is on", async () => {
+    stacks = { items: [stack({ id: "a", name: "alpha" }), stack({ id: "b", name: "beta" })] };
+    listExtra = { total: 2, unfilteredTotal: 9 };
+    mount({ search: { status: "draft" } });
+    await screen.findByRole("link", { name: "alpha" });
+    expect(screen.getByText(/2 of 9 stacks$/)).toBeTruthy();
+  });
+
+  it("counts one stack in the singular", async () => {
+    mount();
+    await screen.findByRole("link", { name: "web" });
+    expect(screen.getByText(/1 stack$/)).toBeTruthy();
+  });
+
+  it("says Showing the first 500 of n when the server capped the list", async () => {
+    listExtra = { capped: true, total: 640, unfilteredTotal: 640 };
+    mount();
+    await screen.findByRole("link", { name: "web" });
+    expect(
+      screen.getByText("Showing the first 500 of 640. Narrow the search to see the rest."),
+    ).toBeTruthy();
+    expect(screen.getByText(/640 stacks$/)).toBeTruthy();
+  });
+
+  it("sorts by Name, State and Last deployed from the headers, with aria-sort", async () => {
+    const { onChange } = mount();
+    await screen.findByRole("link", { name: "web" });
+    const header = (n: string) => screen.getByRole("columnheader", { name: n });
+    expect(header("Name").getAttribute("aria-sort")).toBe("ascending");
+    expect(header("State").getAttribute("aria-sort")).toBe("none");
+    expect(header("Last deployed").getAttribute("aria-sort")).toBe("none");
+    expect(header("Services").getAttribute("aria-sort")).toBeNull();
+    expect(header("Source").getAttribute("aria-sort")).toBeNull();
+
+    fireEvent.click(within(header("Name")).getByRole("button"));
+    expect(onChange).toHaveBeenLastCalledWith({ sort: "name", dir: "desc" });
+    await waitFor(() => expect(header("Name").getAttribute("aria-sort")).toBe("descending"));
+    fireEvent.click(within(header("State")).getByRole("button"));
+    expect(onChange).toHaveBeenLastCalledWith({ sort: "state", dir: "asc" });
+    fireEvent.click(within(header("Last deployed")).getByRole("button"));
+    expect(onChange).toHaveBeenLastCalledWith({ sort: "lastDeployed", dir: "asc" });
+    await waitFor(() =>
+      expect(header("Last deployed").getAttribute("aria-sort")).toBe("ascending"),
+    );
+  });
+
+  it("shows the rows in the order the server answered", async () => {
+    stacks = {
+      items: [stack({ id: "z", name: "zeta-stack" }), stack({ id: "a", name: "alpha-stack" })],
+    };
+    mount({ search: { sort: "state", dir: "desc" } });
+    await screen.findByRole("link", { name: "zeta-stack" });
+    expect(names()).toEqual(["zeta-stack", "alpha-stack"]);
+  });
+});
+
+describe("StackList: columns and pending rows", () => {
+  it("shows Services as running over total, and a dash and Never for a stack not deployed", async () => {
+    stacks = {
+      items: [
+        stack({ id: "a", name: "alpha", state: "degraded", servicesRunning: 1, servicesTotal: 3 }),
+        stack({ id: "b", name: "beta" }),
+      ],
+    };
+    mount();
+    await screen.findByRole("link", { name: "alpha" });
+    const row = (n: string) => screen.getByRole("link", { name: n }).closest("tr") as HTMLElement;
+    expect(screen.getByRole("columnheader", { name: "Services" })).toBeTruthy();
+    expect(within(row("alpha")).getByText("1/3")).toBeTruthy();
+    expect(within(row("beta")).getByText("—")).toBeTruthy();
+    expect(within(row("beta")).getByText("Not deployed")).toBeTruthy();
+    expect(within(row("beta")).getByText("Never")).toBeTruthy();
+  });
+
+  it("labels a stack with an operation under way and turns its menu off", async () => {
+    stacks = {
+      items: [
+        stack({ id: "a", name: "a-stack", state: "deploying" }),
+        stack({ id: "b", name: "b-stack", state: "rolling_back" }),
+        stack({ id: "c", name: "c-stack", state: "starting" }),
+        stack({ id: "d", name: "d-stack", state: "removing" }),
+        stack({ id: "e", name: "e-stack", state: "running", servicesRunning: 1, servicesTotal: 1 }),
+      ],
+    };
+    mount();
+    await screen.findByRole("link", { name: "e-stack" });
+    const row = (n: string) => screen.getByRole("link", { name: n }).closest("tr") as HTMLElement;
+    const pending: Record<string, string> = {
+      "a-stack": "Deploying…",
+      "b-stack": "Rolling back…",
+      "c-stack": "Starting…",
+      "d-stack": "Removing…",
+    };
+    for (const [name, label] of Object.entries(pending)) {
+      expect(within(row(name)).getByText(label)).toBeTruthy();
+      const menu = within(row(name)).getByRole("button", { name: `Actions for ${name}` });
+      expect((menu as HTMLButtonElement).disabled).toBe(true);
+    }
+    const idle = within(row("e-stack")).getByRole("button", { name: "Actions for e-stack" });
+    expect((idle as HTMLButtonElement).disabled).toBe(false);
+    expect(within(row("e-stack")).getByText("Running")).toBeTruthy();
   });
 });
