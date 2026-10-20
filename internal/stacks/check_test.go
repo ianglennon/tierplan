@@ -671,3 +671,74 @@ func TestCheckNeverCarriesAnEscapedSecretValue(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckNeverQuotesPartOfASecretInASizeField(t *testing.T) {
+	t.Parallel()
+	const compose = "services:\n  web:\n    image: nginx:1.27-alpine\n    mem_limit: ${PW}\n"
+	for name, tc := range map[string]struct {
+		secret string
+		parts  []string
+	}{
+		"a number then a word": {"Password2024!", []string{"Password2024", "word2024"}},
+		"a number then a unit": {"2024secretword", []string{"secretword", "2024secret"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			res := withVars(t, compose, stacks.Var{Name: "PW", Value: tc.secret, Secret: true})
+			var errs []stacks.Problem
+			for _, p := range res.Problems {
+				if p.Severity == stacks.SeverityError {
+					errs = append(errs, p)
+				}
+				for _, part := range tc.parts {
+					if strings.Contains(p.Message, part) || strings.Contains(p.Key, part) {
+						t.Errorf("problem %+v carries %q of the secret", p, part)
+					}
+				}
+			}
+			if len(errs) != 1 {
+				t.Fatalf("error problems = %+v, want exactly one", errs)
+			}
+			p := errs[0]
+			if p.Code != stacks.CodeComposeInvalid || p.Key != "services.web.mem_limit" || p.Line != 4 {
+				t.Errorf("problem = %+v, want compose_invalid at services.web.mem_limit, line 4", p)
+			}
+			if want := stacks.SecretValueMessage("services.web.mem_limit"); p.Message != want {
+				t.Errorf("message = %q, want %q", p.Message, want)
+			}
+		})
+	}
+}
+
+func TestCheckKeepsTheLoaderWordsForAValueThatIsNotSecret(t *testing.T) {
+	t.Parallel()
+	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
+	secretInEnv := stacks.Var{Name: "PW", Value: "Password2024!", Secret: true}
+	for name, tc := range map[string]struct {
+		compose string
+		vars    []stacks.Var
+		want    string
+	}{
+		"the variable is not secret": {
+			head + "    mem_limit: ${PW}\n", []stacks.Var{{Name: "PW", Value: "Password2024!"}}, `parsing "Password2024"`,
+		},
+		"a plain size in a file that uses a secret elsewhere": {
+			head + "    mem_limit: lots\n    environment:\n      DB: ${PW}\n", []stacks.Var{secretInEnv}, "invalid size: 'lots'",
+		},
+		"a plain blkio rate, named by the loader's Go field": {
+			head + "    blkio_config:\n      device_read_bps:\n        - path: /dev/sda\n          rate: 1xx\n    environment:\n      DB: ${PW}\n",
+			[]stacks.Var{secretInEnv}, "invalid suffix",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			res := withVars(t, tc.compose, tc.vars...)
+			for _, p := range res.Problems {
+				if p.Severity == stacks.SeverityError && strings.Contains(p.Message, tc.want) {
+					return
+				}
+			}
+			t.Errorf("problems = %+v, want an error with %q", res.Problems, tc.want)
+		})
+	}
+}
