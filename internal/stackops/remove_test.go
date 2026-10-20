@@ -13,6 +13,9 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
+	"github.com/ianglennon/bayplan/internal/dockerx"
+	"github.com/ianglennon/bayplan/internal/envs"
+
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/internal/stackops"
@@ -59,10 +62,12 @@ func (s *removeStore) SetStopped(_ context.Context, id string, stopped bool) err
 	return nil
 }
 
-func (s *removeStore) wasDeleted() bool {
+func (s *removeStore) wasDeleted() bool { return s.wasDeletedAs(rmID) }
+
+func (s *removeStore) wasDeletedAs(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return slices.Contains(s.deleted, rmID)
+	return slices.Contains(s.deleted, id)
 }
 
 // removeRig is a swarm that runs the stack "rm" (two services, two networks, a secret, a config, two volumes)
@@ -457,5 +462,347 @@ func TestRemoveThatCannotRemoveANetworkStillRemovesTheSecretsAndConfigsAndKeepsT
 	}
 	if job.State != jobs.JobPartial {
 		t.Errorf("job state = %s, want partial", job.State)
+	}
+}
+
+// previewedVolumes are the rm_ volumes of the stack as the preview names them, each on its node, by name.
+func previewedVolumes(t *testing.T, rig *swarmRig) map[string]stackops.VolumeChoice {
+	t.Helper()
+	preview, err := rig.deps.Preview(testsupport.Context(t), rig.envID, rmStack(), stackops.Declared{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]stackops.VolumeChoice{}
+	for _, v := range preview.Volumes {
+		out[v.Name] = v
+	}
+	return out
+}
+
+func TestPreviewCountsTheContainersOutsideTheStackThatMountAVolume(t *testing.T) {
+	t.Parallel()
+	rig := removeRig(t, func(c *dockertest.FakeConfig) {
+		c.Containers = []dockertest.FakeContainer{
+			{ID: "c-own", Names: []string{"/rm_web.1.abc"}, Image: "nginx", State: "running", Labels: rmOwned(), Mounts: []string{"rm_data"}},
+			{ID: "c-out1", Names: []string{"/backup"}, Image: "busybox", State: "running", Mounts: []string{"rm_data"}},
+			{ID: "c-out2", Names: []string{"/old-backup"}, Image: "busybox", State: "exited", Mounts: []string{"rm_data", "rm_cache"}},
+			{ID: "c-bind", Names: []string{"/binder"}, Image: "busybox", State: "running", Mounts: []string{"/srv/rm_data"}},
+		}
+	})
+
+	got := previewedVolumes(t, rig)
+
+	if got["rm_data"].UsedOutside != 2 || got["rm_cache"].UsedOutside != 1 {
+		t.Errorf("volumes = %+v, want two containers outside the stack on rm_data (the stack's own and a bind mount do not count) and one on rm_cache", got)
+	}
+}
+
+func TestRemoveRemovesOnlyTheTickedVolumesEachOnItsNodeAndKeepsTheRest(t *testing.T) {
+	t.Parallel()
+	rig := removeRig(t, nil)
+	store := &removeStore{}
+	vols := previewedVolumes(t, rig)
+
+	res, job := rig.remove(t, stackops.RemoveInput{Store: store, Volumes: []stackops.VolumeChoice{vols["rm_data"]}})
+
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("remove = %+v %v, want it done", res, itemStates(job))
+	}
+	if got := writesTo(rig, "DELETE /volumes/"); !slices.Equal(got, []string{"DELETE /volumes/rm_data"}) {
+		t.Errorf("volume writes = %v, want only the ticked rm_data (not rm_cache, the external volume or another stack's)", got)
+	}
+	if res.Volumes != 1 || res.KeptVolumes != 1 || !res.DefinitionDeleted {
+		t.Errorf("result = %+v, want 1 volume removed, 1 kept and the definition deleted", res)
+	}
+	id := "remove-volume:" + vols["rm_data"].NodeID + "/rm_data"
+	if it := itemByID(t, job, id); it.State != jobs.ItemDone || it.Label != "Remove volume rm_data on "+vols["rm_data"].NodeName {
+		t.Errorf("volume item = %+v, want a done step labelled with the volume and its node", it)
+	}
+	for _, w := range writesTo(rig, "DELETE") {
+		if strings.Contains(w, "shared_vol") || strings.Contains(w, "other_data") || strings.Contains(w, "rm_cache") {
+			t.Errorf("write %q touched a volume that was not ticked", w)
+		}
+	}
+}
+
+func TestRemoveWithNoVolumeTickedRemovesNoVolumeAndCountsThemAllKept(t *testing.T) {
+	t.Parallel()
+	rig := removeRig(t, nil)
+
+	res, job := rig.remove(t, stackops.RemoveInput{Store: &removeStore{}})
+
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("remove = %+v %v", res, itemStates(job))
+	}
+	if got := writesTo(rig, "DELETE /volumes/"); len(got) != 0 {
+		t.Errorf("volume writes = %v, want none: volumes are removed only when ticked", got)
+	}
+	if res.Volumes != 0 || res.KeptVolumes != 2 {
+		t.Errorf("result = %+v, want no volume removed and the stack's two kept", res)
+	}
+}
+
+func TestRemoveRefusesATickedVolumeThatIsAnotherStacksAndRemovesNothing(t *testing.T) {
+	t.Parallel()
+	rig := removeRig(t, nil)
+	store := &removeStore{}
+	vols := previewedVolumes(t, rig)
+	foreign := stackops.VolumeChoice{Name: "other_data", NodeID: vols["rm_data"].NodeID, NodeName: vols["rm_data"].NodeName}
+
+	res, job := rig.remove(t, stackops.RemoveInput{Store: store, Volumes: []stackops.VolumeChoice{vols["rm_data"], foreign}})
+
+	if res.Code != stackops.CodeVolumeNotOwned || res.FailedName != "other_data" {
+		t.Fatalf("remove = %+v %v, want volume_not_owned at other_data", res, itemStates(job))
+	}
+	if got := rig.fake.Writes(); len(got) != 0 {
+		t.Errorf("writes = %v, want none: a removal that asked for something that is not the stack's removes nothing", got)
+	}
+	if store.wasDeleted() {
+		t.Errorf("the definition was deleted")
+	}
+}
+
+func TestRemoveRefusesAnExternalVolumeEvenWhenTheRequestNamesIt(t *testing.T) {
+	t.Parallel()
+	rig := removeRig(t, nil)
+	vols := previewedVolumes(t, rig)
+	external := stackops.VolumeChoice{Name: "shared_vol", NodeID: vols["rm_data"].NodeID, NodeName: vols["rm_data"].NodeName}
+
+	res, _ := rig.remove(t, stackops.RemoveInput{Store: &removeStore{}, Volumes: []stackops.VolumeChoice{external}})
+
+	if res.Code != stackops.CodeVolumeNotOwned {
+		t.Fatalf("remove = %+v, want volume_not_owned", res)
+	}
+	if got := writesTo(rig, "DELETE"); len(got) != 0 {
+		t.Errorf("writes = %v, want none", got)
+	}
+}
+
+func TestRemoveOfATickedVolumeThatIsAlreadyGoneCompletesTheStep(t *testing.T) {
+	t.Parallel()
+	rig := removeRig(t, nil)
+	vols := previewedVolumes(t, rig)
+	gone := stackops.VolumeChoice{Name: "rm_vanished", NodeID: vols["rm_data"].NodeID, NodeName: vols["rm_data"].NodeName}
+
+	res, job := rig.remove(t, stackops.RemoveInput{Store: &removeStore{}, Volumes: []stackops.VolumeChoice{gone}})
+
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("remove = %+v %v, want it done", res, itemStates(job))
+	}
+	if got := writesTo(rig, "DELETE /volumes/"); len(got) != 0 {
+		t.Errorf("volume writes = %v, want none for a volume that is not there", got)
+	}
+}
+
+func TestRemoveLeavesATickedVolumeAContainerOutsideTheStackMountsAndRemovesTheRestKeepingTheDefinition(t *testing.T) {
+	t.Parallel()
+	rig := removeRig(t, func(c *dockertest.FakeConfig) {
+		c.Containers = []dockertest.FakeContainer{
+			{ID: "c-out", Names: []string{"/backup"}, Image: "busybox", State: "running", Mounts: []string{"rm_data"}},
+		}
+	})
+	store := &removeStore{}
+	vols := previewedVolumes(t, rig)
+
+	res, job := rig.remove(t, stackops.RemoveInput{Store: store, Volumes: []stackops.VolumeChoice{vols["rm_data"], vols["rm_cache"]}})
+
+	if res.Code != stackops.CodeInUse || res.FailedName != "rm_data" {
+		t.Fatalf("remove = %+v %v, want in_use at rm_data", res, itemStates(job))
+	}
+	if got := writesTo(rig, "DELETE /volumes/"); !slices.Equal(got, []string{"DELETE /volumes/rm_cache"}) {
+		t.Errorf("volume writes = %v, want the busy volume left (no call made) and rm_cache removed", got)
+	}
+	if res.Volumes != 1 || res.KeptVolumes != 1 {
+		t.Errorf("result = %+v, want 1 removed and 1 kept", res)
+	}
+	got := itemStates(job)
+	if got["remove-volume:"+vols["rm_data"].NodeID+"/rm_data"] != "failed:in_use" || got["remove-volume:"+vols["rm_cache"].NodeID+"/rm_cache"] != "done" || got[stackops.ItemDefinition] != "skipped:not_run" {
+		t.Errorf("items = %v", got)
+	}
+	if got := writesTo(rig, "DELETE /services/"); len(got) != 2 {
+		t.Errorf("writes = %v, want the services, networks and objects removed all the same", rig.fake.Writes())
+	}
+	if store.wasDeleted() {
+		t.Errorf("the definition was deleted although a volume stayed")
+	}
+	if job.State != jobs.JobPartial {
+		t.Errorf("job state = %s, want partial", job.State)
+	}
+}
+
+func TestRemoveLeavesATickedVolumeTheEngineRefusesAsInUseAndSaysSo(t *testing.T) {
+	t.Parallel()
+	rig := removeRig(t, func(c *dockertest.FakeConfig) { c.BusyVolumes = []string{"rm_data"} })
+	vols := previewedVolumes(t, rig)
+
+	res, job := rig.remove(t, stackops.RemoveInput{Store: &removeStore{}, Volumes: []stackops.VolumeChoice{vols["rm_data"]}})
+
+	if res.Code != stackops.CodeInUse || res.FailedName != "rm_data" {
+		t.Fatalf("remove = %+v %v, want in_use at rm_data", res, itemStates(job))
+	}
+}
+
+// A standalone host's stack is removed by the Compose SDK's down, which takes the containers and the project's
+// networks and never a volume; the volumes the person ticked are removed on the node afterwards.
+
+func hostOwned() map[string]string {
+	return map[string]string{"com.docker.compose.project": "plain", "bayplan.stack.id": "stack-plain"}
+}
+
+func TestStandaloneRemoveRunsDownWithoutVolumesThenRemovesTheTickedVolumesOnTheNode(t *testing.T) {
+	t.Parallel()
+	var base dockertest.FakeConfig
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		c.Containers = []dockertest.FakeContainer{
+			{ID: "c1", Names: []string{"/plain-web-1"}, Image: "nginx", State: "running", Labels: withLabel(hostOwned(), "com.docker.compose.service", "web"), Mounts: []string{"plain_data"}},
+		}
+		c.Networks = []dockertest.FakeNetwork{{ID: "net-plain", Name: "plain_default", Driver: "bridge", Scope: "local", Labels: hostOwned()}}
+		c.Volumes = []dockertest.FakeVolume{
+			{Name: "plain_data", Driver: "local", Labels: hostOwned()},
+			{Name: "plain_keep", Driver: "local", Labels: hostOwned()},
+			{Name: "external_vol", Driver: "local"},
+		}
+		base = *c
+	})
+	var downs []string
+	rig.deps.Writable = func(context.Context, string, string) error { return nil }
+	rig.deps.DownProject = func(_ context.Context, _ *dockerx.Client, project string) error {
+		downs = append(downs, project)
+		// The SDK removes the containers and the project's network, as a down does, and no volume.
+		base.Containers, base.Networks = nil, nil
+		rig.fake.Reconfigure(base)
+		return nil
+	}
+	st := stackops.Stack{ID: "stack-plain", Name: "plain", Target: stacks.TargetStandalone}
+	node, err := rig.deps.StandaloneNode(testsupport.Context(t), rig.envID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := rig.deps.Preview(testsupport.Context(t), rig.envID, st, stackops.Declared{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(preview.Containers, []string{"plain-web-1"}) || len(preview.Volumes) != 2 || preview.Volumes[0].UsedOutside != 0 {
+		t.Fatalf("preview = %+v, want the container and the stack's two volumes, none used outside", preview)
+	}
+	var data stackops.VolumeChoice
+	for _, v := range preview.Volumes {
+		if v.Name == "plain_data" {
+			data = v
+		}
+	}
+	store := &removeStore{}
+
+	rr := rig.startRemove(t, stackops.RemoveInput{Stack: st, NodeID: node, Store: store, Volumes: []stackops.VolumeChoice{data}})
+	res, job := rr.finish(t)
+
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("remove = %+v %v, want it done", res, itemStates(job))
+	}
+	if !slices.Equal(downs, []string{"plain"}) {
+		t.Errorf("down calls = %v, want one for the project plain", downs)
+	}
+	if got := writesTo(rig, "DELETE /volumes/"); !slices.Equal(got, []string{"DELETE /volumes/plain_data"}) {
+		t.Errorf("volume writes = %v, want only the ticked plain_data", got)
+	}
+	if res.Services != 1 || res.Volumes != 1 || res.KeptVolumes != 1 || !res.DefinitionDeleted {
+		t.Errorf("result = %+v, want 1 container, 1 volume removed, 1 kept and the definition deleted", res)
+	}
+	if _, has := itemStates(job)[stackops.ItemRemoveObjects]; has {
+		t.Errorf("items = %v, a standalone host has no secrets or configs to remove", itemStates(job))
+	}
+	if it := itemByID(t, job, stackops.ItemServices); it.Label != "Remove containers" {
+		t.Errorf("services item label = %q, want Remove containers", it.Label)
+	}
+	if !store.wasDeletedAs("stack-plain") {
+		t.Errorf("the definition was not deleted")
+	}
+}
+
+func TestStandaloneRemoveOfAProjectAnotherOwnerMadeFailsTheCheckAndRunsNothing(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		c.Containers = []dockertest.FakeContainer{
+			{ID: "c1", Names: []string{"/plain-web-1"}, Image: "nginx", State: "running", Labels: map[string]string{"com.docker.compose.project": "plain"}},
+		}
+	})
+	var downs int
+	rig.deps.Writable = func(context.Context, string, string) error { return nil }
+	rig.deps.DownProject = func(context.Context, *dockerx.Client, string) error { downs++; return nil }
+	st := stackops.Stack{ID: "stack-plain", Name: "plain", Target: stacks.TargetStandalone}
+	node, err := rig.deps.StandaloneNode(testsupport.Context(t), rig.envID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, job := rig.remove(t, stackops.RemoveInput{Stack: st, NodeID: node, Store: &removeStore{}})
+
+	if res.Code != stackops.CodeNameClash || downs != 0 {
+		t.Fatalf("remove = %+v (down calls %d) %v, want stack_name_clash and no down", res, downs, itemStates(job))
+	}
+}
+
+func TestStandaloneRemoveWhenTheHostIsReadOnlyChangesNothing(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	var downs int
+	rig.deps.Writable = func(context.Context, string, string) error { return envs.ErrHostReadOnly }
+	rig.deps.DownProject = func(context.Context, *dockerx.Client, string) error { downs++; return nil }
+	st := stackops.Stack{ID: "stack-plain", Name: "plain", Target: stacks.TargetStandalone}
+	node, err := rig.deps.StandaloneNode(testsupport.Context(t), rig.envID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &removeStore{}
+
+	res, _ := rig.remove(t, stackops.RemoveInput{Stack: st, NodeID: node, Store: store})
+
+	if res.Code != stackops.CodeHostReadOnly || downs != 0 || store.wasDeletedAs("stack-plain") {
+		t.Errorf("remove = %+v (down calls %d), want host_read_only, nothing run and nothing deleted", res, downs)
+	}
+}
+
+func withLabel(m map[string]string, k, v string) map[string]string {
+	out := map[string]string{}
+	for key, val := range m {
+		out[key] = val
+	}
+	out[k] = v
+	return out
+}
+
+func TestRemoveWaitsForTheNodesToRemoveTheContainersOfTasksThatHaveEndedBeforeItRemovesAVolume(t *testing.T) {
+	t.Parallel()
+	var base dockertest.FakeConfig
+	rig := removeRig(t, func(c *dockertest.FakeConfig) {
+		// Every task has ended, but the node has not yet removed the container of one of them, and a container
+		// of another stack (which is not waited for) mounts the same name of a volume of its own.
+		c.Containers = []dockertest.FakeContainer{
+			{ID: "c-old", Names: []string{"/rm_web.1.abc"}, Image: "nginx", State: "exited", Labels: rmOwned(), Mounts: []string{"rm_data"}},
+			{ID: "c-other", Names: []string{"/other_web.1.abc"}, Image: "nginx", State: "running", Labels: rmOther()},
+		}
+		base = *c
+	})
+	clk := newStepClock()
+	rig.deps.Clock = clk
+	vols := previewedVolumes(t, rig)
+	rr := rig.startRemove(t, stackops.RemoveInput{Store: &removeStore{}, Volumes: []stackops.VolumeChoice{vols["rm_data"]}})
+
+	rr.until(t, "the wait to say a container is left", func(items map[string]jobs.Item) bool {
+		return items[stackops.ItemWait].Result["left"] == "1"
+	})
+	if n := len(writesTo(rig, "DELETE /networks/")) + len(writesTo(rig, "DELETE /volumes/")); n != 0 {
+		t.Fatalf("writes = %v: a network or a volume was removed while a container of the stack was still there", rig.fake.Writes())
+	}
+	base.Containers = base.Containers[1:]
+	rig.fake.Reconfigure(base)
+	clk.Tick(t, stackops.PollInterval)
+	res, job := rr.finish(t)
+
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("remove = %+v %v, want it done", res, itemStates(job))
+	}
+	if got := writesTo(rig, "DELETE /volumes/"); !slices.Equal(got, []string{"DELETE /volumes/rm_data"}) {
+		t.Errorf("volume writes = %v, want rm_data removed once its container was gone", got)
 	}
 }

@@ -627,3 +627,109 @@ func (s saState) startedAfter(before saState) bool {
 	b, err2 := time.Parse(time.RFC3339Nano, before.Started)
 	return err1 == nil && err2 == nil && a.After(b)
 }
+
+// TestStandaloneRemoveKeepsUntickedVolumes removes a stack from a standalone host through a real agent (plan
+// 07-27, STK-11, D-20): the Compose SDK's down removes the container and the stack's own network, the one
+// volume the person ticked is deleted, the one they did not tick stays, and the external network and the
+// external volume the file names are not touched. The agent records no refusal: the requests of a down and of a
+// volume removal are on its allowlist.
+func TestStandaloneRemoveKeepsUntickedVolumes(t *testing.T) {
+	f := startSAFix(t, dockertest.RegistryOptions{})
+	image := f.registry + "/bp/app:1"
+	f.pushBusybox(t, image, nil)
+
+	const name, outer, outerVolume = "srm", "srmouter", "srmextvol"
+	sh(t, f.host, "docker network create "+outer)
+	sh(t, f.host, "docker volume create "+outerVolume)
+	compose := "services:\n  app:\n    image: " + image + "\n    command: [\"sleep\", \"3600\"]\n    stop_grace_period: 1s\n" +
+		"    networks: [back, outer]\n    volumes:\n      - keepme:/keep\n      - dropme:/drop\n      - extvol:/ext\n" +
+		"networks:\n  back: {}\n  outer:\n    external: true\n    name: " + outer + "\n" +
+		"volumes:\n  keepme: {}\n  dropme: {}\n  extvol:\n    external: true\n    name: " + outerVolume + "\n"
+	id := f.create(t, name, compose, nil)
+	f.deployOK(t, id)
+	if got := f.containers(t, name); len(got["app"]) != 1 || !strings.HasSuffix(got["app"][0], " running") {
+		t.Fatalf("containers after the deploy = %v, want one running", got)
+	}
+
+	// The preview lists what the stack owns; the external volume and network are not offered.
+	code, body := f.srv.Do(http.MethodGet, f.api()+"/"+id+"/removal-preview", nil)
+	var preview struct {
+		Containers []string `json:"containers"`
+		Networks   []string `json:"networks"`
+		Volumes    []struct {
+			Name   string `json:"name"`
+			NodeID string `json:"nodeId"`
+		} `json:"volumes"`
+		Externals []string `json:"externals"`
+	}
+	if code != http.StatusOK || json.Unmarshal(body, &preview) != nil {
+		t.Fatalf("GET the removal preview = %d %s", code, body)
+	}
+	if !slices.Equal(preview.Containers, []string{name + "-app-1"}) || !slices.Equal(preview.Networks, []string{name + "_back"}) {
+		t.Errorf("preview = %+v, want the container and the stack's own network", preview)
+	}
+	var drop string
+	var names []string
+	for _, v := range preview.Volumes {
+		names = append(names, v.Name)
+		if v.Name == name+"_dropme" {
+			drop = v.NodeID
+		}
+	}
+	if !slices.Equal(names, []string{name + "_dropme", name + "_keepme"}) || drop == "" {
+		t.Fatalf("preview volumes = %v, want only the stack's own dropme and keepme", names)
+	}
+	if !slices.Contains(preview.Externals, outer) || !slices.Contains(preview.Externals, outerVolume) {
+		t.Errorf("preview externals = %v, want the external network %s and volume %s named", preview.Externals, outer, outerVolume)
+	}
+
+	code, body = f.srv.Do(http.MethodPost, f.api()+"/"+id+"/remove", map[string]any{
+		"confirmName": name, "keepDefinition": false,
+		"volumes": []map[string]string{{"name": name + "_dropme", "nodeId": drop}},
+	})
+	var started struct {
+		JobID string `json:"jobId"`
+	}
+	if code != http.StatusAccepted || json.Unmarshal(body, &started) != nil || started.JobID == "" {
+		t.Fatalf("POST the removal = %d %s", code, body)
+	}
+	var job saJob
+	testsupport.Poll(t, standaloneDeployWait, "the removal job "+started.JobID+" to end", func() (bool, string) {
+		code, body := f.srv.Do(http.MethodGet, f.api()+"/"+id+"/deploys/"+started.JobID, nil)
+		if code != http.StatusOK {
+			return false, fmt.Sprintf("GET the job = %d %s", code, body)
+		}
+		job = saJob{}
+		if err := json.Unmarshal(body, &job); err != nil {
+			return false, string(body)
+		}
+		return job.State != "running", string(body)
+	})
+	if job.State != "done" {
+		raw, _ := json.Marshal(job)
+		t.Fatalf("the removal ended %s, want done: %s", job.State, raw)
+	}
+
+	if got := f.containers(t, name); len(got) != 0 {
+		t.Errorf("containers of the removed stack = %v, want none", got)
+	}
+	if out := strings.TrimSpace(sh(t, f.host, "docker network ls -q --filter label=com.docker.compose.project="+name)); out != "" {
+		t.Errorf("networks of the removed stack = %q, want none", out)
+	}
+	if out := strings.TrimSpace(sh(t, f.host, "docker volume ls -q --filter name=^"+name+"_dropme$")); out != "" {
+		t.Errorf("the ticked volume is still there: %q", out)
+	}
+	if out := strings.TrimSpace(sh(t, f.host, "docker volume ls -q --filter name=^"+name+"_keepme$")); out == "" {
+		t.Errorf("the unticked volume %s_keepme was removed", name)
+	}
+	if out := strings.TrimSpace(sh(t, f.host, "docker volume ls -q --filter name=^"+outerVolume+"$")); out == "" {
+		t.Errorf("the external volume %s was removed", outerVolume)
+	}
+	if out := strings.TrimSpace(sh(t, f.host, "docker network ls -q --filter name=^"+outer+"$")); out == "" {
+		t.Errorf("the external network %s was removed", outer)
+	}
+	if code, body := f.srv.Do(http.MethodGet, f.api()+"/"+id, nil); code != http.StatusNotFound {
+		t.Errorf("GET the removed stack = %d %s, want 404", code, body)
+	}
+	f.noDenials(t)
+}

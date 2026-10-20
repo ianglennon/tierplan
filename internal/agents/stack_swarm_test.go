@@ -464,7 +464,24 @@ func sharedStackLifecycle(t *testing.T, f *swarmFix) {
 	service := func(mode string) string {
 		return "    image: " + ref + "\n    command: [\"sleep\", \"3600\"]\n    stop_grace_period: 1s\n    deploy:\n" + mode
 	}
-	compose := "services:\n  web:\n" + service("      replicas: 2\n") + "  api:\n" + service("      replicas: 1\n") + "  mon:\n" + service("      mode: global\n")
+	// Removal (below) needs things to keep and things to delete: web mounts a volume of the stack, an external
+	// volume and joins an external network, and api mounts a second volume of the stack. The external network
+	// is made first, as Docker requires of any stack that names one.
+	const external, externalVolume = "lifeext", "lifeextvol"
+	sh(t, mgr, "docker network create --driver overlay --attachable "+external)
+	t.Cleanup(func() { removeNetwork(t, f, external) })
+	mounts := func(vols ...string) string {
+		out := "    volumes:\n"
+		for _, v := range vols {
+			out += "      - " + v + "\n"
+		}
+		return out
+	}
+	compose := "services:\n  web:\n" + service("      replicas: 2\n") + mounts("data:/data", "extvol:/ext") + "    networks: [back, ext]\n" +
+		"  api:\n" + service("      replicas: 1\n") + mounts("keep:/keep") +
+		"  mon:\n" + service("      mode: global\n") +
+		"networks:\n  back: {}\n  ext:\n    external: true\n    name: " + external + "\n" +
+		"volumes:\n  data: {}\n  keep: {}\n  extvol:\n    external: true\n    name: " + externalVolume + "\n"
 	id := f.createStackBayplan(t, stack, compose)
 	f.deployStackBayplan(t, id)
 	waitStackConverged(t, f, stack)
@@ -516,5 +533,126 @@ func sharedStackLifecycle(t *testing.T, f *swarmFix) {
 		if label := serviceField(t, f, n, `{{index .Spec.Labels "bayplan.stack.stopped-replicas"}}`); label != "" && label != "<no value>" {
 			t.Errorf("%s still carries the stopped-replicas label %q after a start", n, label)
 		}
+	}
+
+	removeLifecycleStack(t, f, id, stack, external, externalVolume)
+}
+
+// removalPreview is the part of the removal preview these tests read.
+type removalPreview struct {
+	Services []string        `json:"services"`
+	Networks []string        `json:"networks"`
+	Volumes  []removalVolume `json:"volumes"`
+}
+
+type removalVolume struct {
+	Name     string `json:"name"`
+	NodeID   string `json:"nodeId"`
+	NodeName string `json:"nodeName"`
+}
+
+// removeLifecycleStack removes the stack of sharedStackLifecycle through the API and shows what a removal
+// deletes and what it keeps on a real swarm (STK-11, D-20, Pitfall 19): the services go, the wait for their
+// tasks ends, the stack's own network goes, a volume the person ticked is deleted on every node that holds it,
+// the one they did not tick stays, and the external network and the external volume are not touched.
+func removeLifecycleStack(t *testing.T, f *swarmFix, id, stack, external, externalVolume string) {
+	t.Helper()
+	// What the removal would delete is read from the engine: the stack's own volumes carry its labels, the
+	// external one does not, so only the two the stack made are offered.
+	code, body := f.srv.Do(http.MethodGet, f.stackAPI()+"/"+id+"/removal-preview", nil)
+	var preview removalPreview
+	if code != http.StatusOK || json.Unmarshal(body, &preview) != nil {
+		t.Fatalf("GET the removal preview = %d %s", code, body)
+	}
+	if want := []string{"life_api", "life_mon", "life_web"}; !slices.Equal(preview.Services, want) {
+		t.Errorf("preview services = %v, want %v", preview.Services, want)
+	}
+	for _, n := range preview.Networks {
+		if n == external {
+			t.Errorf("preview networks = %v, the external network %s is not the stack's to remove", preview.Networks, external)
+		}
+	}
+	var ticked []map[string]string
+	keptOn := map[string]bool{}
+	for _, v := range preview.Volumes {
+		switch v.Name {
+		case stack + "_data":
+			ticked = append(ticked, map[string]string{"name": v.Name, "nodeId": v.NodeID})
+		case stack + "_keep":
+			keptOn[v.NodeName] = true
+		default:
+			t.Errorf("preview offers the volume %s on %s, want only the stack's own data and keep volumes", v.Name, v.NodeName)
+		}
+	}
+	if len(ticked) == 0 || len(keptOn) == 0 {
+		t.Fatalf("preview volumes = %+v, want the stack's data and keep volumes on the nodes that ran them", preview.Volumes)
+	}
+
+	code, body = f.srv.Do(http.MethodPost, f.stackAPI()+"/"+id+"/remove", map[string]any{"confirmName": stack, "volumes": ticked, "keepDefinition": false})
+	var started struct {
+		JobID string `json:"jobId"`
+	}
+	if code != http.StatusAccepted || json.Unmarshal(body, &started) != nil || started.JobID == "" {
+		t.Fatalf("POST the removal = %d %s", code, body)
+	}
+	var job stackJob
+	testsupport.Poll(t, stackDeployWait, "the removal job "+started.JobID+" to end", func() (bool, string) {
+		code, body := f.srv.Do(http.MethodGet, f.stackAPI()+"/"+id+"/deploys/"+started.JobID, nil)
+		if code != http.StatusOK {
+			return false, fmt.Sprintf("GET the job = %d %s", code, body)
+		}
+		job = stackJob{}
+		if err := json.Unmarshal(body, &job); err != nil {
+			return false, string(body)
+		}
+		return job.State != "running", string(body)
+	})
+	if job.State != "done" {
+		raw, _ := json.Marshal(job)
+		t.Fatalf("the removal ended %s, want done: %s", job.State, raw)
+	}
+
+	mgr := f.sw.Managers[0]
+	if out := strings.TrimSpace(sh(t, mgr, "docker service ls -q --filter label=com.docker.stack.namespace="+stack)); out != "" {
+		t.Errorf("services of the removed stack = %q, want none", out)
+	}
+	if out := strings.TrimSpace(sh(t, mgr, "docker network ls -q --filter label=com.docker.stack.namespace="+stack)); out != "" {
+		t.Errorf("networks of the removed stack = %q, want none: a removal leaves nothing behind", out)
+	}
+	for _, n := range f.sw.Nodes() {
+		if out := strings.TrimSpace(sh(t, n, "docker ps -aq --filter label=com.docker.stack.namespace="+stack)); out != "" {
+			t.Errorf("containers of the removed stack on a node = %q, want none", out)
+		}
+		if out := strings.TrimSpace(sh(t, n, "docker volume ls -q --filter name=^"+stack+"_data$")); out != "" {
+			t.Errorf("the ticked volume %s_data is still on a node: %q", stack, out)
+		}
+	}
+	if out := strings.TrimSpace(sh(t, mgr, "docker network ls -q --filter name=^"+external+"$")); out == "" {
+		t.Errorf("the external network %s was removed with the stack", external)
+	}
+	keptSomewhere, externalSomewhere := false, false
+	for _, n := range f.sw.Nodes() {
+		t.Cleanup(func() {
+			_, _ = n.Sh(execCtx(t, time.Minute), "docker volume rm "+stack+"_keep "+externalVolume+" 2>&1")
+		})
+		if strings.TrimSpace(sh(t, n, "docker volume ls -q --filter name=^"+stack+"_keep$")) != "" {
+			keptSomewhere = true
+		}
+		if strings.TrimSpace(sh(t, n, "docker volume ls -q --filter name=^"+externalVolume+"$")) != "" {
+			externalSomewhere = true
+		}
+	}
+	if !keptSomewhere {
+		t.Errorf("the unticked volume %s_keep was removed with the stack", stack)
+	}
+	if !externalSomewhere {
+		t.Errorf("the external volume %s was removed with the stack", externalVolume)
+	}
+	if code, body := f.srv.Do(http.MethodGet, f.stackAPI()+"/"+id, nil); code != http.StatusNotFound {
+		t.Errorf("GET the removed stack = %d %s, want 404", code, body)
+	}
+	rows := f.srv.AuditRows("stack.removed")
+	if len(rows) != 1 {
+		t.Errorf("stack.removed audit rows = %+v, want one", rows)
 	}
 }

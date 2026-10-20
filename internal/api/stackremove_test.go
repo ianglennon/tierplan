@@ -4,10 +4,15 @@
 package api_test
 
 import (
+	"context"
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/ianglennon/bayplan/internal/dockerx"
+	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 )
 
 // Remove of a stack (plan 07-27, STK-11, D-20): a job on the operation lock, audited, that deletes what the
@@ -247,4 +252,179 @@ func TestRemoveStackTakesTheOperationLockAndIsRefusedWhileADeployRuns(t *testing
 	// Let the stuck deploy settle so the test ends clean.
 	f.fake.SetTaskState("alpha_web", "", "")
 	f.awaitDeploy(t, jobID)
+}
+
+// putVolumes puts volumes on the fake engine beside what the deploys made: the stack's own (they carry its labels),
+// one of another stack and an external one, as a swarm would hold them once tasks had used them.
+func (f *envFix) putVolumes(stack, stackID string) {
+	cfg := swarmManagerEngine()
+	cfg.TasksFollowWrites = true
+	owned := map[string]string{"com.docker.stack.namespace": stack, "bayplan.stack.id": stackID}
+	cfg.Volumes = []dockertest.FakeVolume{
+		{Name: stack + "_data", Driver: "local", Labels: owned},
+		{Name: stack + "_cache", Driver: "local", Labels: owned},
+		{Name: "outside_data", Driver: "local", Labels: map[string]string{"com.docker.stack.namespace": "outside", "bayplan.stack.id": "someone-else"}},
+		{Name: "shared_vol", Driver: "local"},
+	}
+	f.fake.Reconfigure(cfg)
+}
+
+func volumesBody(name string, keep bool, vols ...[2]string) string {
+	var parts []string
+	for _, v := range vols {
+		parts = append(parts, `{"name":"`+v[0]+`","nodeId":"`+v[1]+`"}`)
+	}
+	k := "false"
+	if keep {
+		k = "true"
+	}
+	return `{"confirmName":"` + name + `","volumes":[` + strings.Join(parts, ",") + `],"keepDefinition":` + k + `}`
+}
+
+func TestRemoveStackDeletesTheTickedVolumeAndKeepsTheOthersAndAuditsTheCounts(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "vols")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.putVolumes("vols", st.ID)
+	preview := answerOf[removalPreviewAnswer](t, admin.do(http.MethodGet, removalPreviewPath(st.ID), ""))
+	if len(preview.Volumes) != 2 || preview.Volumes[0].Name != "vols_cache" || preview.Volumes[1].Name != "vols_data" {
+		t.Fatalf("preview volumes = %+v, want the stack's own two and neither another stack's nor the external one", preview.Volumes)
+	}
+	node := preview.Volumes[1].NodeID
+
+	_, job := f.removeStack(t, admin, st.ID, volumesBody("vols", false, [2]string{"vols_data", node}))
+
+	if job.State != "done" {
+		t.Fatalf("removal = %+v, want it done", job)
+	}
+	if got := writesWith(f.fake.Writes(), "DELETE /volumes/"); !slices.Equal(got, []string{"DELETE /volumes/vols_data"}) {
+		t.Errorf("volume writes = %v, want only the ticked vols_data", got)
+	}
+	var row *auditRowFull
+	for _, r := range f.stackAudits(t) {
+		if r.Action == "stack.removed" {
+			row = &r
+		}
+	}
+	if row == nil || row.Details["volumes"] != "1" || row.Details["kept"] != "1" || row.Details["definition"] != "deleted" || row.Details["result"] != "done" {
+		t.Errorf("stack.removed = %+v, want 1 volume removed and 1 kept", row)
+	}
+}
+
+func TestRemoveStackRefusesAVolumeThatIsNotTheStacksAndRemovesNothing(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "guard")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.putVolumes("guard", st.ID)
+	preview := answerOf[removalPreviewAnswer](t, admin.do(http.MethodGet, removalPreviewPath(st.ID), ""))
+	node := preview.Volumes[0].NodeID
+	writes := len(f.fake.Writes())
+
+	for name, vol := range map[string]string{"another stack's volume": "outside_data", "an external volume": "shared_vol", "one that is not there": "nowhere"} {
+		rec := admin.do(http.MethodPost, removePath(st.ID), volumesBody("guard", false, [2]string{"guard_data", node}, [2]string{vol, node}))
+		if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "volume_not_owned" {
+			t.Errorf("%s: %d %s, want 422 volume_not_owned", name, rec.Code, rec.Body)
+		}
+	}
+	rec := admin.do(http.MethodPost, removePath(st.ID), volumesBody("guard", false, [2]string{"guard_data", "node-of-nowhere"}))
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "volume_not_owned" {
+		t.Errorf("a volume on a node that holds none: %d %s, want 422 volume_not_owned", rec.Code, rec.Body)
+	}
+	if got := len(f.fake.Writes()); got != writes {
+		t.Errorf("writes went from %d to %d, a refused removal writes nothing", writes, got)
+	}
+	if got := readStackAnswer(t, operator, st.ID); got.State != "running" {
+		t.Errorf("stack = %+v, want it untouched", got)
+	}
+}
+
+// downCalls records the project names the Compose SDK's down stand-in was asked to bring down.
+type downCalls struct {
+	mu    sync.Mutex
+	calls []string
+	err   error
+	after func()
+}
+
+func (d *downCalls) run(_ context.Context, _ *dockerx.Client, project string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.calls = append(d.calls, project)
+	if d.err == nil && d.after != nil {
+		d.after()
+	}
+	return d.err
+}
+
+func (d *downCalls) seen() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.calls...)
+}
+
+func TestRemoveStackOfAStandaloneStackRunsTheSDKsDownThenRemovesTheTickedVolume(t *testing.T) {
+	t.Parallel()
+	f, e, _ := standaloneEnv(t, nil)
+	calls := &downCalls{}
+	f.stackDown = calls.run
+	f.h = f.build(t)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "solo")
+	if job := f.deployAndWait(t, operator, st.ID, `{"draftVersion":1}`); job.State != "done" {
+		t.Fatalf("deploy = %+v", job)
+	}
+	cfg := swarmManagerEngine()
+	cfg.SwarmState, cfg.SwarmControl, cfg.NodeRows = "", false, nil
+	owned := map[string]string{"com.docker.compose.project": "solo", "bayplan.stack.id": st.ID}
+	cfg.Volumes = []dockertest.FakeVolume{
+		{Name: "solo_data", Driver: "local", Labels: owned}, {Name: "solo_keep", Driver: "local", Labels: owned}, {Name: "external_vol", Driver: "local"},
+	}
+	cfg.Containers = []dockertest.FakeContainer{{
+		ID: "c1", Names: []string{"/solo-web-1"}, Image: "nginx", State: "running",
+		Labels: map[string]string{"com.docker.compose.project": "solo", "com.docker.compose.service": "web", "bayplan.stack.id": st.ID},
+	}}
+	f.fake.Reconfigure(cfg)
+	calls.after = func() {
+		// The SDK removes the containers of the project.
+		down := cfg
+		down.Containers = nil
+		f.fake.Reconfigure(down)
+	}
+	preview := answerOf[removalPreviewAnswer](t, admin.do(http.MethodGet, removalPreviewPath(st.ID), ""))
+	if !slices.Equal(preview.Containers, []string{"solo-web-1"}) || len(preview.Volumes) != 2 {
+		t.Fatalf("preview = %+v, want the container and the stack's two volumes", preview)
+	}
+	node := preview.Volumes[0].NodeID
+
+	_, job := f.removeStack(t, admin, st.ID, volumesBody("solo", false, [2]string{"solo_data", node}))
+
+	if job.State != "done" {
+		t.Fatalf("removal = %+v, want it done", job)
+	}
+	if got := calls.seen(); !slices.Equal(got, []string{"solo"}) {
+		t.Errorf("SDK down calls = %v, want one for the project solo", got)
+	}
+	if got := writesWith(f.fake.Writes(), "DELETE /volumes/"); !slices.Equal(got, []string{"DELETE /volumes/solo_data"}) {
+		t.Errorf("volume writes = %v, want only the ticked solo_data", got)
+	}
+	if rec := admin.do(http.MethodGet, "stacks/"+st.ID, ""); rec.Code != http.StatusNotFound {
+		t.Errorf("GET of the removed stack: %d, want 404", rec.Code)
+	}
+}
+
+func writesWith(writes []string, prefix string) []string {
+	var out []string
+	for _, w := range writes {
+		if strings.HasPrefix(w, prefix) {
+			out = append(out, w)
+		}
+	}
+	return out
 }

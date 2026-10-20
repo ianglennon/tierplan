@@ -397,3 +397,219 @@ describe("RemoveStackDialog: the second phase", () => {
     await waitFor(() => expect(confirmButton().getAttribute("aria-disabled")).toBe("false"));
   });
 });
+
+const volume = (name: string, nodeName = "node-a", usedOutside = 0) => ({
+  name,
+  nodeId: `id-${nodeName}`,
+  nodeName,
+  usedOutside,
+});
+
+describe("RemoveStackDialog: volumes", () => {
+  it("lists each volume of a swarm stack on each node, unticked, with the node in its accessible name", async () => {
+    preview = { ...emptyPreview(), volumes: [volume("data", "node-a"), volume("data", "node-b")] };
+    mount();
+
+    const first = await screen.findByRole("checkbox", { name: "Remove volume data on node-a" });
+    const second = screen.getByRole("checkbox", { name: "Remove volume data on node-b" });
+    expect(first.getAttribute("aria-checked")).toBe("false");
+    expect(second.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getAllByText("on node-a")).toHaveLength(1);
+    expect(
+      screen.getByText(
+        "Volumes hold your data. Tick only the ones you're sure you don't need. Unticked volumes stay on the host.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("lists a standalone stack's volume once with no node", async () => {
+    preview = { ...emptyPreview(), volumes: [volume("data", "host")] };
+    mount("standalone");
+
+    expect(await screen.findByRole("checkbox", { name: "Remove volume data" })).toBeTruthy();
+    expect(screen.queryByText("on host")).toBeNull();
+  });
+
+  it("says a stack has no volumes of its own in place of the section", async () => {
+    preview = emptyPreview();
+    mount();
+
+    expect(await screen.findByText("This stack has no volumes of its own.")).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: /Remove volume/ })).toBeNull();
+    expect(screen.queryByText(/Volumes hold your data/)).toBeNull();
+  });
+
+  it("switches the confirm to Remove stack and {n} volumes, plural-aware, and back", async () => {
+    preview = { ...emptyPreview(), volumes: [volume("a"), volume("b")] };
+    mount();
+    expect((await screen.findByRole("button", { name: "Remove stack" })).textContent).toBe(
+      "Remove stack",
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Remove volume a on node-a" }));
+    expect(screen.getByRole("button", { name: "Remove stack and 1 volume" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Remove volume b on node-a" }));
+    expect(screen.getByRole("button", { name: "Remove stack and 2 volumes" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Remove volume a on node-a" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Remove volume b on node-a" }));
+    expect(screen.getByRole("button", { name: "Remove stack" })).toBeTruthy();
+  });
+
+  it("sends exactly the volumes that were ticked, each with its node", async () => {
+    preview = {
+      ...emptyPreview(),
+      volumes: [volume("data", "node-a"), volume("data", "node-b"), volume("cache", "node-a")],
+    };
+    mount();
+    await screen.findByRole("checkbox", { name: "Remove volume cache on node-a" });
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Remove volume data on node-b" }));
+    await typeName();
+    fireEvent.click(screen.getByRole("button", { name: "Remove stack and 1 volume" }));
+
+    await waitFor(() =>
+      expect(bodies).toEqual([
+        {
+          confirmName: "tracer",
+          volumes: [{ name: "data", nodeId: "id-node-b" }],
+          keepDefinition: false,
+        },
+      ]),
+    );
+  });
+
+  it("warns on the row of a volume that containers outside the stack use, plural-aware", async () => {
+    preview = {
+      ...emptyPreview(),
+      volumes: [
+        volume("data", "node-a", 2),
+        volume("cache", "node-a", 1),
+        volume("logs", "node-a", 0),
+      ],
+    };
+    mount();
+
+    expect(
+      await screen.findByText(
+        "2 containers outside this stack use its volume data. Removing the volume will fail while they run.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "1 container outside this stack uses its volume cache. Removing the volume will fail while it runs.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getAllByText(/outside this stack/)).toHaveLength(2);
+  });
+
+  it("puts the volume checkboxes before the typed field in tab order", async () => {
+    preview = { ...emptyPreview(), volumes: [volume("data")] };
+    mount();
+
+    const box = await screen.findByRole("checkbox", { name: "Remove volume data on node-a" });
+    const typed = screen.getByLabelText("Type tracer to confirm");
+    expect(box.compareDocumentPosition(typed) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("scrolls a long list inside a 240px box and still lists every volume", async () => {
+    preview = {
+      ...emptyPreview(),
+      volumes: Array.from({ length: 60 }, (_, i) =>
+        volume(`vol-${i % 10}`, `node-${Math.floor(i / 10)}`),
+      ),
+    };
+    mount();
+
+    await screen.findAllByRole("checkbox", { name: /Remove volume vol-0 on/ });
+    expect(screen.getAllByRole("checkbox", { name: /^Remove volume / })).toHaveLength(60);
+    const list = screen.getByTestId("volume-list");
+    expect(list.className).toContain("max-h-60");
+    expect(list.className).toContain("overflow-y-auto");
+  });
+
+  it("names the nodes that did not answer, whose volumes are not listed", async () => {
+    preview = { ...emptyPreview(), notReporting: ["node-z"] };
+    mount();
+
+    expect(
+      await screen.findByText("node-z didn't answer, so its volumes aren't listed."),
+    ).toBeTruthy();
+  });
+
+  it("starts every reopening with nothing ticked", async () => {
+    preview = { ...emptyPreview(), volumes: [volume("data")] };
+    const first = mount();
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Remove volume data on node-a" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(first).toHaveBeenCalledWith(false);
+    cleanup();
+    client.clear();
+
+    mount();
+
+    const box = await screen.findByRole("checkbox", { name: "Remove volume data on node-a" });
+    expect(box.getAttribute("aria-checked")).toBe("false");
+  });
+});
+
+describe("RemoveStackDialog: keeping the definition and the draft", () => {
+  it("offers Keep the definition, unticked, with its helper", async () => {
+    mount();
+
+    const keep = await screen.findByRole("checkbox", { name: "Keep the definition" });
+    expect(keep.getAttribute("aria-checked")).toBe("false");
+    expect(
+      screen.getByText(
+        "Keeps the compose file, files and variables so you can deploy it again. The stack shows as Not deployed.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("sends keepDefinition when it is ticked and ends on Open stack", async () => {
+    job = {
+      state: "done",
+      items: [
+        {
+          id: "services",
+          label: "Remove services",
+          state: "done",
+          code: "",
+          message: "",
+          detail: "",
+        },
+      ],
+    };
+    mount();
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Keep the definition" }));
+    await typeName();
+    fireEvent.click(confirmButton());
+
+    await waitFor(() =>
+      expect(bodies).toEqual([{ confirmName: "tracer", volumes: [], keepDefinition: true }]),
+    );
+    expect(await screen.findByRole("link", { name: "Open stack" })).toBeTruthy();
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "Removed tracer. Its definition is kept, so you can deploy it again.",
+    );
+  });
+
+  it("says a saved draft is deleted too, until the definition is kept", async () => {
+    preview = { ...emptyPreview(), hasDraft: true };
+    mount();
+
+    expect(
+      await screen.findByText("This stack has a saved draft. Removing the stack deletes it too."),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Keep the definition" }));
+    expect(
+      screen.queryByText("This stack has a saved draft. Removing the stack deletes it too."),
+    ).toBeNull();
+  });
+
+  it("does not mention a draft when there is none", async () => {
+    mount();
+
+    await screen.findByRole("table");
+    expect(screen.queryByText(/saved draft/)).toBeNull();
+  });
+});
