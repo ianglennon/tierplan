@@ -18,6 +18,26 @@ FROM stacks WHERE env_id = ? ORDER BY name;
 SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped
 FROM stacks WHERE env_id = ? AND name = ?;
 
+-- name: SetStackStopped :execrows
+-- A person stopped the stack (1) or it was started or deployed again (0). The stack is looked up by its ID alone: the
+-- caller read it by environment and ID first.
+UPDATE stacks SET stopped = ? WHERE id = ?;
+
+-- name: LatestDeployLikeStackDeploy :one
+-- The newest deploy, update or roll back of one stack, whatever came after it: a stop or a start does not hide a
+-- failed deploy (UI-SPEC Defaults 11).
+SELECT id, stack_id, env_id, kind, state, revision_seq, job_id, started_by, started_at, ended_at, failed_service, code
+FROM stack_deploys WHERE stack_id = ? AND kind IN ('deploy', 'update', 'rollback') ORDER BY started_at DESC, id DESC LIMIT 1;
+
+-- name: LatestDeployLikeStackDeploysByEnv :many
+-- The newest deploy, update or roll back of each stack of an environment, for the list.
+SELECT d.id, d.stack_id, d.env_id, d.kind, d.state, d.revision_seq, d.job_id, d.started_by, d.started_at, d.ended_at, d.failed_service, d.code
+FROM stack_deploys d
+WHERE d.env_id = ? AND d.kind IN ('deploy', 'update', 'rollback')
+  AND d.id = (SELECT d2.id FROM stack_deploys d2
+              WHERE d2.stack_id = d.stack_id AND d2.kind IN ('deploy', 'update', 'rollback')
+              ORDER BY d2.started_at DESC, d2.id DESC LIMIT 1);
+
 -- name: InsertSnapshot :exec
 INSERT INTO stack_snapshots (id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);

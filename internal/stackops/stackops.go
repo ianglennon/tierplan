@@ -85,6 +85,10 @@ type Deps struct {
 	// real engine and is proved against one; a test sets it to feed a deploy a stream of events and an
 	// outcome.
 	Up func(ctx context.Context, c *dockerx.Client, p *types.Project, o dockerx.ComposeUpOptions, on func(dockerx.ComposeEvent)) error
+	// StopProject and StartProject run the Compose SDK's stop and start for a standalone stack. Nil is
+	// (*dockerx.Client).ComposeStop and ComposeStart, which need a real engine and are proved against one; a
+	// test sets them to play a host.
+	StopProject, StartProject func(ctx context.Context, c *dockerx.Client, p *types.Project) error
 	// Writable asks whether the node of a standalone host can be written to: it is the check step's first
 	// question, so a host whose owner made it read-only (envs.ErrHostReadOnly) fails the deploy before it
 	// asks the host or a registry for anything. Nil asks the aggregator with a write that does nothing

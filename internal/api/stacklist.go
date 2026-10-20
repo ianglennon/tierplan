@@ -45,6 +45,7 @@ var stateRank = map[string]int{
 	string(stackops.StateDeploying):    1,
 	string(stackops.StateRollingBack):  1,
 	string(stackops.StateStarting):     1,
+	string(stackops.StateStopping):     1,
 	string(stackops.StateStopped):      2,
 	string(stackops.StateDeployFailed): 3,
 	string(stackops.StateUnknown):      4,
@@ -368,6 +369,10 @@ func (d StacksDeps) stackRowsOf(ctx context.Context, envID, envName string) ([]s
 	if err != nil {
 		return nil, err
 	}
+	likes, err := repo.LatestDeployLikes(ctx, envID)
+	if err != nil {
+		return nil, err
+	}
 	done, err := repo.LastDeployed(ctx, envID)
 	if err != nil {
 		return nil, err
@@ -380,8 +385,9 @@ func (d StacksDeps) stackRowsOf(ctx context.Context, envID, envName string) ([]s
 	rows := make([]stackRow, 0, len(list))
 	for _, st := range list {
 		l, hasL := latest[st.ID]
+		k, hasK := likes[st.ID]
 		g, hasG := done[st.ID]
-		item, services := stackItemWithServices(reads, st, l, hasL, g, hasG, drafts[st.ID].Pending)
+		item, services := stackItemWithServices(reads, st, l, hasL, k, hasK, g, hasG, drafts[st.ID].Pending)
 		r := stackRow{item: item, envID: envID, envName: envName}
 		if hasG {
 			r.deployedAt = g.EndedAt

@@ -11723,12 +11723,13 @@
             "type": "string"
           },
           "state": {
-            "description": "The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back or starting while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run",
+            "description": "The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back, starting or stopping while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run",
             "enum": [
               "removing",
               "deploying",
               "rolling_back",
               "starting",
+              "stopping",
               "stopped",
               "deploy_failed",
               "not_running",
@@ -12110,12 +12111,13 @@
             "type": "string"
           },
           "state": {
-            "description": "The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back or starting while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run",
+            "description": "The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back, starting or stopping while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run",
             "enum": [
               "removing",
               "deploying",
               "rolling_back",
               "starting",
+              "stopping",
               "stopped",
               "deploy_failed",
               "not_running",
@@ -12173,11 +12175,13 @@
             ]
           },
           "mode": {
-            "description": "What the operation is: a deploy of the draft, an update of images, or a roll back to the last version that ran well",
+            "description": "What the operation is: a deploy of the draft, an update of images, a roll back to the last version that ran well, or a stop or a start of the stack",
             "enum": [
               "deploy",
               "update",
-              "rollback"
+              "rollback",
+              "stop",
+              "start"
             ],
             "type": "string"
           },
@@ -12418,6 +12422,24 @@
           "startedAt",
           "finishedAt",
           "startedBy"
+        ],
+        "type": "object"
+      },
+      "StackLifecycleBody": {
+        "additionalProperties": false,
+        "properties": {
+          "jobId": {
+            "description": "The job: read it at GET .../deploys/{jobId}, the same console route a deploy uses",
+            "type": "string"
+          },
+          "recreates": {
+            "description": "True for a start that has to create services again (a global or job service a stop removed), which the page follows in the console; a start that only scales opens nothing. Always false for a stop",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "jobId",
+          "recreates"
         ],
         "type": "object"
       },
@@ -23603,6 +23625,128 @@
           }
         },
         "summary": "What a stack runs now",
+        "tags": [
+          "stacks"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/start": {
+      "post": {
+        "description": "Brings a stopped stack back as a job, answering 202 with the job ID and whether it recreates services. It brings back the last version that was deployed, never the saved draft and never a newer image: on a swarm each service is scaled back to the count it remembered and the label removed, and a service a stop removed is created again from the last good revision with the image digest it ran; on a standalone host the Compose SDK starts the stopped containers and a stack file's secrets and configs are written into each again before it starts. A start that creates services is judged by the host-access policy for the caller, as a deploy is: below env Admin it is refused 403 privileged_compose when the revision uses host access. A stack that is not stopped is 409 not_stopped. While another stack operation runs on the environment the answer is 409 operation_locked and nothing is stored. Writes one stack.started audit row when the job ends. Needs stacks.deploy (Operator).",
+        "operationId": "startStack",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackLifecycleBody"
+                }
+              }
+            },
+            "description": "Accepted",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Start a stopped stack",
+        "tags": [
+          "stacks"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/stop": {
+      "post": {
+        "description": "Parks the stack as a job, answering 202 with the job ID at once. On a swarm every replicated service is scaled to 0 and its count is remembered in the service-level label bayplan.stack.stopped-replicas (the label is not part of the task template, so no task is replaced), and the global and job services are removed. On a standalone host the Compose SDK stops the stack's containers. Networks, volumes, secrets and configs are never removed. The stack is marked stopped once everything has stopped; a stop that fails stops where it failed and what already stopped stays stopped. A stack that is stopped already, was never deployed or has nothing running is 409 nothing_running. Only one stack operation at a time runs on an environment: while one does, the answer is 409 operation_locked naming it and nothing is stored. Writes one stack.stopped audit row when the job ends. Needs stacks.deploy (Operator).",
+        "operationId": "stopStack",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackLifecycleBody"
+                }
+              }
+            },
+            "description": "Accepted",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Stop a stack",
         "tags": [
           "stacks"
         ]

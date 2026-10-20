@@ -116,6 +116,9 @@ type StacksDeps struct {
 	// Up, when set, replaces the Compose SDK's up in a standalone deploy (stackops.Deps.Up). Tests use it:
 	// the SDK needs a real engine and is proved against one.
 	Up func(ctx context.Context, c *dockerx.Client, p *types.Project, o dockerx.ComposeUpOptions, on func(dockerx.ComposeEvent)) error
+	// StopProject and StartProject, when set, replace the Compose SDK's stop and start of a standalone stack
+	// (stackops.Deps). Tests use them for the same reason as Up.
+	StopProject, StartProject func(ctx context.Context, c *dockerx.Client, p *types.Project) error
 
 	// cancels remembers who cancelled which deploy until the deploy ends and is audited. RegisterStacks
 	// makes it; every copy of the deps shares it.
@@ -127,7 +130,7 @@ func (d StacksDeps) repo() stackops.Repo { return stackops.Repo{Store: d.Store, 
 func (d StacksDeps) ops() stackops.Deps {
 	return stackops.Deps{
 		Aggregator: d.Aggregator, Clusters: d.Clusters, Resolver: d.Resolver, Checker: d.Checker,
-		Clock: d.Clock, ConvergeTimeout: d.ConvergeTimeout, Up: d.Up, Log: d.Log,
+		Clock: d.Clock, ConvergeTimeout: d.ConvergeTimeout, Up: d.Up, StopProject: d.StopProject, StartProject: d.StartProject, Log: d.Log,
 	}
 }
 
@@ -137,7 +140,7 @@ type StackItem struct {
 	Name           string `json:"name" doc:"The stack name, also its swarm namespace or compose project"`
 	Target         string `json:"target" enum:"swarm,standalone" doc:"Where the stack deploys: fixed when it was created, from the kind of the environment"`
 	Source         string `json:"source" enum:"inline,adopted,git" doc:"Where the stack's definition lives. Only inline exists today"`
-	State          string `json:"state" enum:"removing,deploying,rolling_back,starting,stopped,deploy_failed,not_running,degraded,running,not_deployed,unknown" doc:"The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back or starting while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run"`
+	State          string `json:"state" enum:"removing,deploying,rolling_back,starting,stopping,stopped,deploy_failed,not_running,degraded,running,not_deployed,unknown" doc:"The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back, starting or stopping while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run"`
 	LastDeployedAt string `json:"lastDeployedAt" doc:"When the newest successful deploy ended, RFC 3339 UTC; empty when there is none"`
 	LastDeployedBy string `json:"lastDeployedBy" doc:"Who started it; empty when there is none"`
 	HasDraft       bool   `json:"hasDraft" doc:"True when the draft holds changes that have not been deployed"`
@@ -312,6 +315,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 	registerStackVariables(r, d)
 	registerStackReview(r, d)
 	registerStackDeploy(r, d)
+	registerStackLifecycle(r, d)
 	registerStackJobs(r, d)
 	registerStackOverview(r, d)
 	registerStackResources(r, d)
@@ -365,17 +369,22 @@ func (r *stackReads) rows(st stackops.Stack) ([]stackops.ServiceRow, bool) {
 }
 
 // stackItemOf builds a stack's list entry from its stored rows and what the engine runs.
-func stackItemOf(reads *stackReads, st stackops.Stack, latest stackops.DeployRow, hasLatest bool, last stackops.DeployRow, hasLast, hasDraft bool) StackItem {
-	item, _ := stackItemWithServices(reads, st, latest, hasLatest, last, hasLast, hasDraft)
+func stackItemOf(reads *stackReads, st stackops.Stack, latest stackops.DeployRow, hasLatest bool, like stackops.DeployRow, hasLike bool, last stackops.DeployRow, hasLast, hasDraft bool) StackItem {
+	item, _ := stackItemWithServices(reads, st, latest, hasLatest, like, hasLike, last, hasLast, hasDraft)
 	return item
 }
 
 // stackItemWithServices is stackItemOf with the services the stack owns on the engine, which a search
 // reads. They are nil for a stack that has had no operation and for one the engine could not be read for.
-func stackItemWithServices(reads *stackReads, st stackops.Stack, latest stackops.DeployRow, hasLatest bool, last stackops.DeployRow, hasLast, hasDraft bool) (StackItem, []stackops.ServiceRow) {
+// latest is the newest operation of any kind and like the newest deploy, update or roll back: a stop or a start
+// after a deploy that failed must not hide the failure.
+func stackItemWithServices(reads *stackReads, st stackops.Stack, latest stackops.DeployRow, hasLatest bool, like stackops.DeployRow, hasLike bool, last stackops.DeployRow, hasLast, hasDraft bool) (StackItem, []stackops.ServiceRow) {
 	in := stackops.StateInput{Stopped: st.Stopped, Deployed: hasLast}
 	if hasLatest {
 		in.Latest = &latest
+	}
+	if hasLike {
+		in.LatestDeploy = &like
 	}
 	// A stack that has had no operation has nothing on the engine to read.
 	if hasLatest || hasLast {
@@ -438,6 +447,10 @@ func stackDetailOf(ctx context.Context, d StacksDeps, st stackops.Stack) (StackD
 	if err != nil {
 		return StackDetail{}, err
 	}
+	like, hasLike, err := repo.LatestDeployLike(ctx, st.ID)
+	if err != nil {
+		return StackDetail{}, err
+	}
 	done, err := repo.LastDeployed(ctx, st.EnvID)
 	if err != nil {
 		return StackDetail{}, err
@@ -449,7 +462,7 @@ func stackDetailOf(ctx context.Context, d StacksDeps, st stackops.Stack) (StackD
 	g, hasG := done[st.ID]
 	draft := drafts[st.ID]
 	detail := StackDetail{
-		StackItem: stackItemOf(newStackReads(ctx, d, st.EnvID), st, latest, hasLatest, g, hasG, draft.Pending),
+		StackItem: stackItemOf(newStackReads(ctx, d, st.EnvID), st, latest, hasLatest, like, hasLike, g, hasG, draft.Pending),
 		EnvID:     st.EnvID, SourceRef: st.Source.Ref, CreatedBy: st.CreatedBy, CreatedAt: rfc3339(st.CreatedAt), Stopped: st.Stopped,
 	}
 	if draft.Pending {

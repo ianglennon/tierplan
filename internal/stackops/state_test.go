@@ -46,7 +46,8 @@ func TestDeriveStateFollowsTheOnePriorityOrder(t *testing.T) {
 		// Stopped.
 		"a stopped stack":                             {stackops.StateInput{Latest: op("stop", "done"), Stopped: true, Deployed: true, Services: services(stop, stop)}, stackops.StateStopped, 0, 2},
 		"a stopped stack outranks a failed deploy":    {stackops.StateInput{Latest: op("deploy", "failed"), Stopped: true, Deployed: true, Services: services(stop)}, stackops.StateStopped, 0, 1},
-		"a stop under way is not yet a stopped stack": {stackops.StateInput{Latest: op("stop", "running"), Deployed: true, Services: services(run, run)}, stackops.StateRunning, 2, 2},
+		"a stop under way is not yet a stopped stack": {stackops.StateInput{Latest: op("stop", "running"), Deployed: true, Services: services(run, run)}, stackops.StateStopping, 2, 2},
+		"a stop under way on a stopped stack":         {stackops.StateInput{Latest: op("stop", "running"), Stopped: true, Deployed: true, Services: services(stop)}, stackops.StateStopping, 0, 1},
 		// Deploy failed.
 		"a failed deploy":                        {stackops.StateInput{Latest: op("deploy", "failed"), Deployed: true, Services: services(run)}, stackops.StateDeployFailed, 1, 1},
 		"a failed deploy outranks Degraded":      {stackops.StateInput{Latest: op("deploy", "failed"), Deployed: true, Services: services(run, deg)}, stackops.StateDeployFailed, 1, 2},
@@ -56,6 +57,11 @@ func TestDeriveStateFollowsTheOnePriorityOrder(t *testing.T) {
 		"a failed roll back":                     {stackops.StateInput{Latest: op("rollback", "failed"), Deployed: true, Services: services(run)}, stackops.StateDeployFailed, 1, 1},
 		"a first deploy that failed":             {stackops.StateInput{Latest: op("deploy", "failed")}, stackops.StateDeployFailed, 0, 0},
 		"a failed deploy with the engine unread": {stackops.StateInput{Latest: op("deploy", "failed"), Deployed: true, Unknown: true}, stackops.StateDeployFailed, 0, 0},
+		// A stop or a start after a deploy that failed does not hide the failure: it is read from the newest deploy.
+		"a start after a failed deploy keeps Deploy failed":     {stackops.StateInput{Latest: op("start", "done"), LatestDeploy: op("deploy", "failed"), Deployed: true, Services: services(run)}, stackops.StateDeployFailed, 1, 1},
+		"a stop and a start after a failed update keep it":      {stackops.StateInput{Latest: op("stop", "failed"), LatestDeploy: op("update", "cancelled"), Deployed: true, Services: services(run)}, stackops.StateDeployFailed, 1, 1},
+		"a start after a deploy that worked reads the services": {stackops.StateInput{Latest: op("start", "done"), LatestDeploy: op("deploy", "done"), Deployed: true, Services: services(run, deg)}, stackops.StateDegraded, 1, 2},
+		"a stopped stack still outranks the failed deploy":      {stackops.StateInput{Latest: op("stop", "done"), LatestDeploy: op("deploy", "failed"), Stopped: true, Deployed: true, Services: services(stop)}, stackops.StateStopped, 0, 1},
 		// A failed stop, start or removal is no failed deploy.
 		"a failed stop reads from the services":    {stackops.StateInput{Latest: op("stop", "failed"), Deployed: true, Services: services(run)}, stackops.StateRunning, 1, 1},
 		"a failed removal reads from the services": {stackops.StateInput{Latest: op("remove", "failed"), Deployed: true, Services: services(run, deg)}, stackops.StateDegraded, 1, 2},
@@ -94,6 +100,7 @@ func TestDeriveStateReachesEveryState(t *testing.T) {
 		{Latest: op("deploy", "running")},
 		{Latest: op("rollback", "running")},
 		{Latest: op("start", "running")},
+		{Latest: op("stop", "running")},
 		{Stopped: true},
 		{Latest: op("deploy", "failed")},
 		{Deployed: true},
@@ -108,7 +115,7 @@ func TestDeriveStateReachesEveryState(t *testing.T) {
 	for _, want := range []stackops.StackState{
 		stackops.StateRemoving, stackops.StateDeploying, stackops.StateRollingBack, stackops.StateStarting,
 		stackops.StateStopped, stackops.StateDeployFailed, stackops.StateNotRunning, stackops.StateDegraded,
-		stackops.StateRunning, stackops.StateNotDeployed, stackops.StateUnknown,
+		stackops.StateRunning, stackops.StateNotDeployed, stackops.StateUnknown, stackops.StateStopping,
 	} {
 		if !seen[want] {
 			t.Errorf("no input reaches %s", want)

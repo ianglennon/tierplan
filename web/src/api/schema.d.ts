@@ -2216,6 +2216,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks/{stackId}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a stopped stack
+         * @description Brings a stopped stack back as a job, answering 202 with the job ID and whether it recreates services. It brings back the last version that was deployed, never the saved draft and never a newer image: on a swarm each service is scaled back to the count it remembered and the label removed, and a service a stop removed is created again from the last good revision with the image digest it ran; on a standalone host the Compose SDK starts the stopped containers and a stack file's secrets and configs are written into each again before it starts. A start that creates services is judged by the host-access policy for the caller, as a deploy is: below env Admin it is refused 403 privileged_compose when the revision uses host access. A stack that is not stopped is 409 not_stopped. While another stack operation runs on the environment the answer is 409 operation_locked and nothing is stored. Writes one stack.started audit row when the job ends. Needs stacks.deploy (Operator).
+         */
+        post: operations["startStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop a stack
+         * @description Parks the stack as a job, answering 202 with the job ID at once. On a swarm every replicated service is scaled to 0 and its count is remembered in the service-level label bayplan.stack.stopped-replicas (the label is not part of the task template, so no task is replaced), and the global and job services are removed. On a standalone host the Compose SDK stops the stack's containers. Networks, volumes, secrets and configs are never removed. The stack is marked stopped once everything has stopped; a stop that fails stops where it failed and what already stopped stays stopped. A stack that is stopped already, was never deployed or has nothing running is 409 nothing_running. Only one stack operation at a time runs on an environment: while one does, the answer is 409 operation_locked naming it and nothing is stored. Writes one stack.stopped audit row when the job ends. Needs stacks.deploy (Operator).
+         */
+        post: operations["stopStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/stacks/{stackId}/variables/{name}/reveal": {
         parameters: {
             query?: never;
@@ -8457,10 +8497,10 @@ export interface components {
             /** @description A reference to the stack's source: empty for an inline stack */
             sourceRef: string;
             /**
-             * @description The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back or starting while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run
+             * @description The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back, starting or stopping while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run
              * @enum {string}
              */
-            state: "removing" | "deploying" | "rolling_back" | "starting" | "stopped" | "deploy_failed" | "not_running" | "degraded" | "running" | "not_deployed" | "unknown";
+            state: "removing" | "deploying" | "rolling_back" | "starting" | "stopping" | "stopped" | "deploy_failed" | "not_running" | "degraded" | "running" | "not_deployed" | "unknown";
             /** @description True while the stack is stopped */
             stopped: boolean;
             /**
@@ -8615,10 +8655,10 @@ export interface components {
              */
             source: "inline" | "adopted" | "git";
             /**
-             * @description The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back or starting while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run
+             * @description The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back, starting or stopping while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run
              * @enum {string}
              */
-            state: "removing" | "deploying" | "rolling_back" | "starting" | "stopped" | "deploy_failed" | "not_running" | "degraded" | "running" | "not_deployed" | "unknown";
+            state: "removing" | "deploying" | "rolling_back" | "starting" | "stopping" | "stopped" | "deploy_failed" | "not_running" | "degraded" | "running" | "not_deployed" | "unknown";
             /**
              * @description Where the stack deploys: fixed when it was created, from the kind of the environment
              * @enum {string}
@@ -8635,10 +8675,10 @@ export interface components {
             /** @description The steps and services, in the order they were added. Read the steps in run order by following parent: a top-level step, then its children */
             items: components["schemas"]["StackJobItemBody"][] | null;
             /**
-             * @description What the operation is: a deploy of the draft, an update of images, or a roll back to the last version that ran well
+             * @description What the operation is: a deploy of the draft, an update of images, a roll back to the last version that ran well, or a stop or a start of the stack
              * @enum {string}
              */
-            mode: "deploy" | "update" | "rollback";
+            mode: "deploy" | "update" | "rollback" | "stop" | "start";
             /** @description The output log, oldest first: the newest 2,000 lines */
             output: components["schemas"]["StackJobOutputLine"][] | null;
             /** @description The stack being deployed */
@@ -8730,6 +8770,12 @@ export interface components {
              * @enum {string}
              */
             state: "running" | "done" | "failed" | "cancelled";
+        };
+        StackLifecycleBody: {
+            /** @description The job: read it at GET .../deploys/{jobId}, the same console route a deploy uses */
+            jobId: string;
+            /** @description True for a start that has to create services again (a global or job service a stop removed), which the page follows in the console; a start that only scales opens nothing. Always false for a stop */
+            recreates: boolean;
         };
         StackListBody: {
             /** @description True when total is more than the rows returned */
@@ -14581,6 +14627,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackServicesBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    startStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackLifecycleBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    stopStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackLifecycleBody"];
                 };
             };
             /** @description Error */

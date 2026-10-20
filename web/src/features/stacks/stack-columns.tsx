@@ -33,7 +33,7 @@ export const stackRowKey = (s: StackRow) => `${s.envId}/${s.id}`;
 // The states in which an operation is under way on the stack. The row says so in the pulsing warning
 // dot and its own word with an ellipsis, and its menu is off until the list shows the operation ended
 // (UI-SPEC "Stack lists": Pending row labels).
-const PENDING_STATES = ["deploying", "rolling_back", "starting", "removing"] as const;
+const PENDING_STATES = ["deploying", "rolling_back", "starting", "stopping", "removing"] as const;
 type PendingState = (typeof PENDING_STATES)[number];
 
 export function pendingStateOf(state: StackItem["state"]): PendingState | undefined {

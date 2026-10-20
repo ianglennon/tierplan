@@ -61,6 +61,7 @@
       "deploying": "Deploying",
       "rolling_back": "Rolling back",
       "starting": "Starting",
+      "stopping": "Stopping",
       "stopped": "Stopped",
       "deploy_failed": "Deploy failed",
       "not_running": "Not running",

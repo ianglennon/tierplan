@@ -35,6 +35,8 @@ const (
 const (
 	DeployKindDeploy   = "deploy"
 	DeployKindRollback = "rollback"
+	DeployKindStop     = "stop"
+	DeployKindStart    = "start"
 
 	DeployRunning     = "running"
 	DeployDone        = "done"
@@ -696,6 +698,49 @@ func (r Repo) LatestGoodRevision(ctx context.Context, stackID string) (Snapshot,
 		return Snapshot{}, false, err
 	}
 	return snap, true, nil
+}
+
+// SetStopped records that a person stopped the stack (true) or that it was started or deployed again
+// (false). It is the stack's own record, read beside what the engine runs (STK-11).
+func (r Repo) SetStopped(ctx context.Context, stackID string, stopped bool) error {
+	var v int64
+	if stopped {
+		v = 1
+	}
+	n, err := r.Store.Q.SetStackStopped(ctx, sqlc.SetStackStoppedParams{Stopped: v, ID: stackID})
+	if err != nil {
+		return fmt.Errorf("set stopped: %w", err)
+	}
+	if n != 1 {
+		return fmt.Errorf("set stopped: no stack %s", stackID)
+	}
+	return nil
+}
+
+// LatestDeployLikes is the newest deploy, update or roll back of each stack of an environment, by stack ID,
+// whatever came after it. A stop or a start does not hide a deploy that failed.
+func (r Repo) LatestDeployLikes(ctx context.Context, envID string) (map[string]DeployRow, error) {
+	rows, err := r.Store.RQ.LatestDeployLikeStackDeploysByEnv(ctx, envID)
+	if err != nil {
+		return nil, fmt.Errorf("list deploys: %w", err)
+	}
+	out := make(map[string]DeployRow, len(rows))
+	for _, row := range rows {
+		out[row.StackID] = deployOf(row)
+	}
+	return out, nil
+}
+
+// LatestDeployLike is the newest deploy, update or roll back of one stack, or false when it has had none.
+func (r Repo) LatestDeployLike(ctx context.Context, stackID string) (DeployRow, bool, error) {
+	row, err := r.Store.RQ.LatestDeployLikeStackDeploy(ctx, stackID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return DeployRow{}, false, nil
+	}
+	if err != nil {
+		return DeployRow{}, false, fmt.Errorf("read deploy: %w", err)
+	}
+	return deployOf(row), true, nil
 }
 
 // StartDeploy records an operation as running.

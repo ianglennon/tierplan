@@ -385,6 +385,79 @@ func (q *Queries) LatestAttemptSeq(ctx context.Context, stackID string) (int64, 
 	return seq, err
 }
 
+const latestDeployLikeStackDeploy = `-- name: LatestDeployLikeStackDeploy :one
+SELECT id, stack_id, env_id, kind, state, revision_seq, job_id, started_by, started_at, ended_at, failed_service, code
+FROM stack_deploys WHERE stack_id = ? AND kind IN ('deploy', 'update', 'rollback') ORDER BY started_at DESC, id DESC LIMIT 1
+`
+
+// The newest deploy, update or roll back of one stack, whatever came after it: a stop or a start does not hide a
+// failed deploy (UI-SPEC Defaults 11).
+func (q *Queries) LatestDeployLikeStackDeploy(ctx context.Context, stackID string) (StackDeploy, error) {
+	row := q.db.QueryRowContext(ctx, latestDeployLikeStackDeploy, stackID)
+	var i StackDeploy
+	err := row.Scan(
+		&i.ID,
+		&i.StackID,
+		&i.EnvID,
+		&i.Kind,
+		&i.State,
+		&i.RevisionSeq,
+		&i.JobID,
+		&i.StartedBy,
+		&i.StartedAt,
+		&i.EndedAt,
+		&i.FailedService,
+		&i.Code,
+	)
+	return i, err
+}
+
+const latestDeployLikeStackDeploysByEnv = `-- name: LatestDeployLikeStackDeploysByEnv :many
+SELECT d.id, d.stack_id, d.env_id, d.kind, d.state, d.revision_seq, d.job_id, d.started_by, d.started_at, d.ended_at, d.failed_service, d.code
+FROM stack_deploys d
+WHERE d.env_id = ? AND d.kind IN ('deploy', 'update', 'rollback')
+  AND d.id = (SELECT d2.id FROM stack_deploys d2
+              WHERE d2.stack_id = d.stack_id AND d2.kind IN ('deploy', 'update', 'rollback')
+              ORDER BY d2.started_at DESC, d2.id DESC LIMIT 1)
+`
+
+// The newest deploy, update or roll back of each stack of an environment, for the list.
+func (q *Queries) LatestDeployLikeStackDeploysByEnv(ctx context.Context, envID string) ([]StackDeploy, error) {
+	rows, err := q.db.QueryContext(ctx, latestDeployLikeStackDeploysByEnv, envID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []StackDeploy
+	for rows.Next() {
+		var i StackDeploy
+		if err := rows.Scan(
+			&i.ID,
+			&i.StackID,
+			&i.EnvID,
+			&i.Kind,
+			&i.State,
+			&i.RevisionSeq,
+			&i.JobID,
+			&i.StartedBy,
+			&i.StartedAt,
+			&i.EndedAt,
+			&i.FailedService,
+			&i.Code,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const latestDoneStackDeploysByEnv = `-- name: LatestDoneStackDeploysByEnv :many
 SELECT d.id, d.stack_id, d.env_id, d.kind, d.state, d.revision_seq, d.job_id, d.started_by, d.started_at, d.ended_at, d.failed_service, d.code
 FROM stack_deploys d
@@ -829,6 +902,25 @@ type SetSnapshotRenderedParams struct {
 // The masked rendering of a revision: what the next review compares the draft's rendering with.
 func (q *Queries) SetSnapshotRendered(ctx context.Context, arg SetSnapshotRenderedParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setSnapshotRendered, arg.Rendered, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setStackStopped = `-- name: SetStackStopped :execrows
+UPDATE stacks SET stopped = ? WHERE id = ?
+`
+
+type SetStackStoppedParams struct {
+	Stopped int64
+	ID      string
+}
+
+// A person stopped the stack (1) or it was started or deployed again (0). The stack is looked up by its ID alone: the
+// caller read it by environment and ID first.
+func (q *Queries) SetStackStopped(ctx context.Context, arg SetStackStoppedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setStackStopped, arg.Stopped, arg.ID)
 	if err != nil {
 		return 0, err
 	}

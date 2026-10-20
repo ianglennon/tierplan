@@ -12,6 +12,7 @@ const (
 	StateDeploying    StackState = "deploying"
 	StateRollingBack  StackState = "rolling_back"
 	StateStarting     StackState = "starting"
+	StateStopping     StackState = "stopping"
 	StateStopped      StackState = "stopped"
 	StateDeployFailed StackState = "deploy_failed"
 	StateNotRunning   StackState = "not_running"
@@ -26,6 +27,10 @@ const (
 type StateInput struct {
 	// Latest is the newest operation on the stack, nil when it has had none.
 	Latest *DeployRow
+	// LatestDeploy is the newest deploy, update or roll back, whatever came after it, nil when the stack has had
+	// none. A stop or a start after a failed deploy must not hide the failure (UI-SPEC Defaults 11), so the
+	// failed-deploy state is read from it. Nil reads the failure from Latest, as before stops and starts existed.
+	LatestDeploy *DeployRow
 	// Stopped is the stack's own record that a person stopped it.
 	Stopped bool
 	// Deployed is true when a deploy, update or roll back of the stack has succeeded.
@@ -41,18 +46,20 @@ func deploying(kind string) bool {
 	return kind == DeployKindDeploy || kind == DeployKindRollback || kind == kindUpdate
 }
 
-// The kinds of operation the later plans add (07-24 update, 07-26 stop and start, 07-27 remove).
+// The kinds of operation the later plans add (07-24 update, 07-27 remove); a stop and a start are
+// DeployKindStop and DeployKindStart.
 const (
 	kindUpdate = "update"
-	kindStart  = "start"
+	kindStart  = DeployKindStart
+	kindStop   = DeployKindStop
 	kindRemove = "remove"
 )
 
 // DeriveState is the stack's state, the services of it that run and the services it has: the one
 // priority order of UI-SPEC Defaults 11, so no state hides a running operation or a failed last deploy.
 //
-//	Removing, then Deploying, Rolling back or Starting (an operation under way), then Stopped, then Deploy
-//	failed (the newest operation put a definition on the target and did not finish), then Not deployed, then
+//	Removing, then Deploying, Rolling back, Starting or Stopping (an operation under way), then Stopped, then
+//	Deploy failed (the newest deploy, update or roll back did not finish), then Not deployed, then
 //	Unknown (deployed, and the engine could not be read), then Not running, Degraded and Running by how many
 //	services run.
 //
@@ -72,6 +79,8 @@ func DeriveState(in StateInput) (StackState, int, int) {
 			return StateRollingBack, running, total
 		case op.Kind == kindStart:
 			return StateStarting, running, total
+		case op.Kind == kindStop:
+			return StateStopping, running, total
 		case deploying(op.Kind):
 			return StateDeploying, running, total
 		}
@@ -79,7 +88,11 @@ func DeriveState(in StateInput) (StackState, int, int) {
 	if in.Stopped {
 		return StateStopped, running, total
 	}
-	if op := in.Latest; op != nil && deploying(op.Kind) && op.State != DeployRunning && op.State != DeployDone {
+	failing := in.LatestDeploy
+	if failing == nil {
+		failing = in.Latest
+	}
+	if op := failing; op != nil && deploying(op.Kind) && op.State != DeployRunning && op.State != DeployDone {
 		return StateDeployFailed, running, total
 	}
 	switch {

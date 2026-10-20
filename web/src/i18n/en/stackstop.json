@@ -1,0 +1,33 @@
+{
+  "stackStop": {
+    "actions": {
+      "stop": "Stop stack…",
+      "start": "Start stack",
+      "starting": "Starting…",
+      "startTooltip": "Start brings back the last deployed version, not your saved draft."
+    },
+    "dialog": {
+      "title": "Stop {{name}}?",
+      "swarm": "Swarm scales its {{replicated}} replicated services to 0 and removes {{global}} global services. Networks, volumes, secrets and configs stay. Start brings everything back with the same images.",
+      "cancel": "Cancel",
+      "confirm": "Stop stack",
+      "stopping": "Stopping…"
+    },
+    "toast": {
+      "stopped": "Stopped {{name}}.",
+      "started": "Started {{name}}.",
+      "stopFailed": "Couldn't stop {{name}}. {{reason}} What already stopped stays stopped.",
+      "stopFailedNoReason": "Couldn't stop {{name}}. What already stopped stays stopped.",
+      "startFailed": "Couldn't start {{name}}. {{reason}}",
+      "startFailedNoReason": "Couldn't start {{name}}."
+    },
+    "refusal": {
+      "nothing_running": "Nothing is running.",
+      "not_stopped": "This stack isn't stopped.",
+      "operation_locked": "Another stack operation is running on this environment. Try again when it finishes.",
+      "privileged_compose": "This stack uses settings that need Admin.",
+      "unreachable": "Bayplan couldn't reach the server.",
+      "other": "The server refused."
+    }
+  }
+}

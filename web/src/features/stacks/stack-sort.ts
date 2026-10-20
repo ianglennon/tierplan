@@ -12,6 +12,7 @@ const STATE_RANK: Record<StackRow["state"], number> = {
   deploying: 1,
   rolling_back: 1,
   starting: 1,
+  stopping: 1,
   stopped: 2,
   deploy_failed: 3,
   unknown: 4,

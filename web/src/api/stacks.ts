@@ -37,6 +37,7 @@ export type StackJob = components["schemas"]["StackJobBody"];
 export type StackJobItem = components["schemas"]["StackJobItemBody"];
 export type StackLock = components["schemas"]["StackLockBody"];
 export type StackRollback = components["schemas"]["StackRollbackBody"];
+export type StackLifecycleStarted = components["schemas"]["StackLifecycleBody"];
 export type StackJobSummary = components["schemas"]["StackJobSummary"];
 export type StackJobOutputLine = components["schemas"]["StackJobOutputLine"];
 export type StackServices = components["schemas"]["StackServicesBody"];
@@ -794,6 +795,49 @@ export function useRollbackStack(envId: string, stackId: string) {
       void queryClient.invalidateQueries({ queryKey: stackJobsKey });
     },
   });
+}
+
+// useStopStack and useStartStack park a stack and bring it back (STK-11). Neither sends anything the person
+// chose: the server decides what to stop and what to bring back, and the answer is the job. They are never
+// retried: a request whose answer was lost may have started, and the stack's page, read again, shows
+// whether it did. The stack's page and the list are read again whatever the answer.
+function useStackLifecycle(
+  envId: string,
+  call: () => Promise<{ data?: StackLifecycleStarted; error?: unknown; response: Response }>,
+) {
+  const queryClient = useQueryClient();
+  return useMutation<StackLifecycleStarted, DeployRequestError, void>({
+    mutationFn: async () => {
+      try {
+        const res = await call();
+        if (!res.data) {
+          const problem = readProblem(res.error, res.response);
+          throw new DeployRequestError(problem.status, problem.type, problem.fields);
+        }
+        return res.data;
+      } catch (e) {
+        // A network failure has no status.
+        throw e instanceof DeployRequestError ? e : new DeployRequestError(0);
+      }
+    },
+    retry: false,
+    onSettled: () => {
+      invalidateStacks(queryClient, envId);
+      void queryClient.invalidateQueries({ queryKey: stackJobsKey });
+    },
+  });
+}
+
+export function useStopStack(envId: string, stackId: string) {
+  return useStackLifecycle(envId, () =>
+    api.POST("/api/env/{envId}/stacks/{stackId}/stop", { params: { path: { envId, stackId } } }),
+  );
+}
+
+export function useStartStack(envId: string, stackId: string) {
+  return useStackLifecycle(envId, () =>
+    api.POST("/api/env/{envId}/stacks/{stackId}/start", { params: { path: { envId, stackId } } }),
+  );
 }
 
 // CancelRequestError is a cancel the server refused or that got no answer. The status is 0 when the

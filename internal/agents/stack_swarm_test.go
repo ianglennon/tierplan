@@ -414,3 +414,107 @@ func sharedStackReviewEmptyAfterDeploy(t *testing.T, f *swarmFix) {
 		})
 	}
 }
+
+// runStackOperation posts a stop or a start of the stack, waits until its job ends and fails the test
+// unless every step is done. It returns whether the start created services again.
+func (f *swarmFix) runStackOperation(t *testing.T, stackID, op string) (recreates bool) {
+	t.Helper()
+	code, body := f.srv.Do(http.MethodPost, f.stackAPI()+"/"+stackID+"/"+op, nil)
+	var started struct {
+		JobID     string `json:"jobId"`
+		Recreates bool   `json:"recreates"`
+	}
+	if code != http.StatusAccepted || json.Unmarshal(body, &started) != nil || started.JobID == "" {
+		t.Fatalf("POST the %s of stack %s = %d %s", op, stackID, code, body)
+	}
+	var job stackJob
+	testsupport.Poll(t, stackDeployWait, "the "+op+" job "+started.JobID+" to end", func() (bool, string) {
+		code, body := f.srv.Do(http.MethodGet, f.stackAPI()+"/"+stackID+"/deploys/"+started.JobID, nil)
+		if code != http.StatusOK {
+			return false, fmt.Sprintf("GET the job = %d %s", code, body)
+		}
+		job = stackJob{}
+		if err := json.Unmarshal(body, &job); err != nil {
+			return false, string(body)
+		}
+		return job.State != "running", string(body)
+	})
+	if job.State != "done" {
+		raw, _ := json.Marshal(job)
+		t.Fatalf("the %s of stack %s ended %s, want done: %s", op, stackID, job.State, raw)
+	}
+	return started.Recreates
+}
+
+// sharedStackLifecycle shows Stop and Start on a real swarm keep what a stack runs (STK-11, D-19, the
+// prohibition: Start never changes an image digest): a stack of two replicated services (2 and 1 replicas) and
+// a global one is deployed, stopped through the API (every task gone, the global service removed, the counts
+// remembered on the services) and started again (the services back at the same counts, the global one made
+// again from the last revision), and the digest and the replica count of every service are the same as before.
+// The image is named by tag, so the deploy pins it and a start that looked a tag up again would show.
+func sharedStackLifecycle(t *testing.T, f *swarmFix) {
+	f.stackEnvReady(t)
+	mgr := f.sw.Managers[0]
+	addr := dockertest.StartSwarmRegistry(t, f.sw, dockertest.RegistryOptions{})
+	ref := addr + "/life/app:1"
+	dockertest.PushImage(t, mgr, dockertest.ServiceTestImage, ref, nil)
+	const stack = "life"
+	t.Cleanup(func() { removeStackCLI(t, f, stack) })
+
+	service := func(mode string) string {
+		return "    image: " + ref + "\n    command: [\"sleep\", \"3600\"]\n    stop_grace_period: 1s\n    deploy:\n" + mode
+	}
+	compose := "services:\n  web:\n" + service("      replicas: 2\n") + "  api:\n" + service("      replicas: 1\n") + "  mon:\n" + service("      mode: global\n")
+	id := f.createStackBayplan(t, stack, compose)
+	f.deployStackBayplan(t, id)
+	waitStackConverged(t, f, stack)
+
+	type shape struct{ image, replicas string }
+	read := func(name string) shape {
+		return shape{
+			image:    serviceField(t, f, name, "{{.Spec.TaskTemplate.ContainerSpec.Image}}"),
+			replicas: serviceField(t, f, name, "{{if .Spec.Mode.Replicated}}{{.Spec.Mode.Replicated.Replicas}}{{end}}"),
+		}
+	}
+	before := map[string]shape{}
+	for _, n := range []string{"life_web", "life_api", "life_mon"} {
+		before[n] = read(n)
+		if !strings.Contains(before[n].image, "@sha256:") {
+			t.Fatalf("%s runs %q, want the image pinned to a digest by the deploy", n, before[n].image)
+		}
+	}
+	if before["life_web"].replicas != "2" || before["life_api"].replicas != "1" {
+		t.Fatalf("replicas before = %+v, want 2 and 1", before)
+	}
+
+	if f.runStackOperation(t, id, "stop") {
+		t.Errorf("a stop answered that it recreates services")
+	}
+	testsupport.Poll(t, taskWait, "every task of the stopped stack to be gone", func() (bool, string) {
+		out, err := mgr.Sh(execCtx(t, time.Minute), "docker service ls --filter label=com.docker.stack.namespace="+stack+" --format '{{.Name}} {{.Replicas}}'")
+		if err != nil {
+			return false, err.Error()
+		}
+		rows := strings.Fields(strings.ReplaceAll(strings.TrimSpace(out), "\n", " "))
+		return slices.Equal(rows, []string{"life_api", "0/0", "life_web", "0/0"}) || slices.Equal(rows, []string{"life_web", "0/0", "life_api", "0/0"}), strings.TrimSpace(out)
+	})
+	for n, want := range map[string]string{"life_web": "2", "life_api": "1"} {
+		if got := serviceField(t, f, n, `{{index .Spec.Labels "bayplan.stack.stopped-replicas"}}`); got != want {
+			t.Errorf("%s remembers %q after a stop, want %s", n, got, want)
+		}
+	}
+
+	if !f.runStackOperation(t, id, "start") {
+		t.Errorf("a start after a stop that removed the global service answered that it creates nothing")
+	}
+	waitStackConverged(t, f, stack)
+	for n, was := range before {
+		got := read(n)
+		if got != was {
+			t.Errorf("%s after a stop and a start: %+v, want exactly what it was, %+v", n, got, was)
+		}
+		if label := serviceField(t, f, n, `{{index .Spec.Labels "bayplan.stack.stopped-replicas"}}`); label != "" && label != "<no value>" {
+			t.Errorf("%s still carries the stopped-replicas label %q after a start", n, label)
+		}
+	}
+}

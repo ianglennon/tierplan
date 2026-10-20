@@ -183,6 +183,8 @@ const (
 	ActionStackDraftSaved            = "stack.draft_saved"
 	ActionStackDraftDiscarded        = "stack.draft_discarded"
 	ActionStackDeployed              = "stack.deployed"
+	ActionStackStopped               = "stack.stopped"
+	ActionStackStarted               = "stack.started"
 	ActionStackValueRevealed         = "stack.value_revealed"
 )
 

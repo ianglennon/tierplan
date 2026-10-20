@@ -24,7 +24,8 @@ import (
 )
 
 const (
-	// stackDeployJobKind is the Kind of a stack deploy in the jobs hub.
+	// stackDeployJobKind is the Kind of a stack deploy in the jobs hub; a stop and a start are stack_stop and
+	// stack_start (stacklifecycle.go).
 	stackDeployJobKind = "stack_deploy"
 
 	metaStackID   = "stackId"
@@ -114,7 +115,7 @@ type StackJobOutputLine struct {
 type StackJobBody struct {
 	ID         string               `json:"id" doc:"The job ID"`
 	StackID    string               `json:"stackId" doc:"The stack being deployed"`
-	Mode       string               `json:"mode" enum:"deploy,update,rollback" doc:"What the operation is: a deploy of the draft, an update of images, or a roll back to the last version that ran well"`
+	Mode       string               `json:"mode" enum:"deploy,update,rollback,stop,start" doc:"What the operation is: a deploy of the draft, an update of images, a roll back to the last version that ran well, or a stop or a start of the stack"`
 	StartedBy  string               `json:"startedBy" doc:"Who started the deploy, as a name"`
 	State      string               `json:"state" enum:"running,done,partial,failed,cancelled" doc:"running until every step has ended, then done when every step is"`
 	CreatedAt  string               `json:"createdAt" doc:"When the job started, RFC 3339 UTC"`
@@ -324,9 +325,10 @@ func cancelStackJob(ctx context.Context, d StacksDeps, in *StackJobPathInput) (*
 	return &StackCancelOutput{CacheControl: "no-store", Body: StackCancelBody{JobID: in.JobID}}, nil
 }
 
-// stackJobOf reports whether a job in the hub is a deploy of that stack on that environment.
+// stackJobOf reports whether a job in the hub is a stack operation (a deploy, a roll back, a stop or a start) on
+// that stack of that environment: they share one console and one stream.
 func stackJobOf(j jobs.Job, envID, stackID string) bool {
-	return j.Kind == stackDeployJobKind && j.EnvID == envID && j.Meta[metaStackID] == stackID
+	return strings.HasPrefix(j.Kind, stackJobKindPrefix) && j.EnvID == envID && j.Meta[metaStackID] == stackID
 }
 
 // stackJobOwner is who a stack job is attributed to in the hub, as an audit actor.
@@ -686,10 +688,15 @@ type launch struct {
 	mode      string
 	kind      string // the kind of the row in stack_deploys
 	userAgent string
+	// jobKind is the Kind of the job in the hub; empty is a deploy's.
+	jobKind string
 	// items are the items the job starts with and run is the engine: it does the operation on the job's
 	// context, reporting on r, and calls onDone once with the result before the job's last item ends.
-	items     []jobs.ItemSpec
-	run       func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult))
+	items []jobs.ItemSpec
+	run   func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult))
+	// record, when set, stores how the operation ended in place of recordDeployEnd, which is a deploy's: a stop
+	// and a start take no revision.
+	record    func(ctx context.Context, deploy stackops.DeployRow, res stackops.DeployResult)
 	rendering revisionRendering
 	// release frees the environment's operation lock; owned is set once the job holds it.
 	release func()
@@ -706,13 +713,27 @@ func launchStackDeploy(ctx context.Context, d StacksDeps, l launch) (*StackDeplo
 	reqCtx := context.WithoutCancel(ctx)
 	actor, userAgent := l.p.AuditActor(), l.userAgent
 	onDone := func(res stackops.DeployResult) {
-		recordDeployEnd(reqCtx, d, actor, userAgent, l.st, l.rev, deploy, l.mode, res, l.rendering)
+		if l.record != nil {
+			l.record(reqCtx, deploy, res)
+		} else {
+			recordDeployEnd(reqCtx, d, actor, userAgent, l.st, l.rev, deploy, l.mode, res, l.rendering)
+		}
 		// The lock is free before the job reads as finished, so whoever sees it end can start the next
 		// operation at once. Freeing it again when the run returns changes nothing.
 		l.release()
 	}
+	kind := l.jobKind
+	if kind == "" {
+		kind = stackDeployJobKind
+	}
+	// A stop and a start take no revision; there is none to mark failed.
+	failRevision := func() {
+		if l.rev.ID != "" {
+			_ = repo.SetOutcome(reqCtx, l.rev.ID, stackops.OutcomeFailed, "", "")
+		}
+	}
 	spec := jobs.Spec{
-		Kind: stackDeployJobKind, EnvID: l.env.ID, Owner: stackJobOwner(l.p),
+		Kind: kind, EnvID: l.env.ID, Owner: stackJobOwner(l.p),
 		Meta: map[string]string{
 			metaStackID: l.st.ID, metaStackName: l.st.Name, metaMode: l.mode, metaStartedBy: l.p.Name, metaEnvName: l.env.Name,
 		},
@@ -734,11 +755,11 @@ func launchStackDeploy(ctx context.Context, d StacksDeps, l launch) (*StackDeplo
 		l.run(jctx, r, onDone)
 	})
 	if errors.Is(err, jobs.ErrTooMany) {
-		_ = repo.SetOutcome(reqCtx, l.rev.ID, stackops.OutcomeFailed, "", "")
+		failRevision()
 		return nil, httpx.Problem(http.StatusTooManyRequests, problemTooManyDeploys, "You already have 5 jobs running. Wait for one to finish.")
 	}
 	if err != nil {
-		_ = repo.SetOutcome(reqCtx, l.rev.ID, stackops.OutcomeFailed, "", "")
+		failRevision()
 		return nil, stackInternal(d, "start the deploy job", l.env.ID, err)
 	}
 	// The job owns the lock now, and the holder can name it.
@@ -748,7 +769,7 @@ func launchStackDeploy(ctx context.Context, d StacksDeps, l launch) (*StackDeplo
 	if err != nil {
 		_ = d.Jobs.Cancel(job.ID)
 		close(ready)
-		_ = repo.SetOutcome(reqCtx, l.rev.ID, stackops.OutcomeFailed, "", "")
+		failRevision()
 		return nil, stackInternal(d, "record the deploy", l.env.ID, err)
 	}
 	deploy = row
@@ -810,6 +831,10 @@ func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userA
 	if err := repo.SetOutcome(wctx, rev.ID, outcome, "", ""); err != nil {
 		d.Log.Error("could not mark a revision", "stack", st.ID, "revision", rev.Seq, "error", err)
 	} else if outcome == stackops.OutcomeGood {
+		// A deploy brings every service up as the file says, so a stack a person stopped is running again.
+		if err := repo.SetStopped(wctx, st.ID, false); err != nil {
+			d.Log.Warn("could not record that a deployed stack is running", "stack", st.ID, "error", err)
+		}
 		// The revision is the newest good one now, so its pins are the images it ran with.
 		pins, perr := repo.GoodPins(wctx, st.ID)
 		if perr == nil {

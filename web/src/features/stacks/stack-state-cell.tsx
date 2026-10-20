@@ -16,6 +16,7 @@ const TONE: Record<StackState, HealthState> = {
   deploying: "reconnecting",
   rolling_back: "reconnecting",
   starting: "reconnecting",
+  stopping: "reconnecting",
   stopped: "unknown",
   deploy_failed: "offline",
   not_running: "offline",

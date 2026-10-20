@@ -238,6 +238,8 @@
         "draft_saved": "Stack draft saved",
         "draft_discarded": "Stack draft discarded",
         "deployed": "Stack deployed",
+        "stopped": "Stack stopped",
+        "started": "Stack started",
         "value_revealed": "Stack secret value revealed"
       }
     },

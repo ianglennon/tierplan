@@ -28,6 +28,7 @@ import { DeployBanner } from "@/features/stacks/deploy-banner";
 import { DeployFailedAlert } from "@/features/stacks/deploy-failed-alert";
 import { DraftBanner } from "@/features/stacks/draft-banner";
 import { OperationLockAlert } from "@/features/stacks/operation-lock-alert";
+import { StackActions } from "@/features/stacks/stack-actions";
 import { StackStateCell } from "@/features/stacks/stack-state-cell";
 import { StoppedAlert } from "@/features/stacks/stopped-alert";
 import { useDocumentTitle } from "@/hooks/use-me";
@@ -277,7 +278,12 @@ export function StackDetailLayout({
                 )}
               </p>
             </div>
-            {flow ? null : <DeployAction envId={envId} stackId={stackId} />}
+            {flow ? null : (
+              <div className="flex flex-wrap items-start gap-2 max-md:w-full">
+                <DeployAction envId={envId} stackId={stackId} />
+                <StackActions stack={data} />
+              </div>
+            )}
           </div>
         ) : (
           <Skeleton className="h-8 w-64" />
