@@ -263,10 +263,8 @@ func serveStackJobStream(w http.ResponseWriter, req *http.Request, d StacksDeps,
 		return
 	}
 	stackID, jobID := chi.URLParam(req, "stackId"), chi.URLParam(req, "jobId")
-	if _, err := d.repo().Stack(ctx, env.ID, stackID); err != nil {
-		writeJSONProblem(w, http.StatusNotFound, problemStackJobNotFound, stackJobGone)
-		return
-	}
+	// The stack's record may be gone (a removal deletes it): the job names the stack and the environment it ran on,
+	// so a job of this stack can be followed to its end all the same.
 	if job, ok := d.Jobs.Get(jobID); !ok || !stackJobOf(job, env.ID, stackID) {
 		writeJSONProblem(w, http.StatusNotFound, problemStackJobNotFound, stackJobGone)
 		return
@@ -300,12 +298,13 @@ func cancelStackJob(ctx context.Context, d StacksDeps, in *StackJobPathInput) (*
 	if d.Jobs == nil {
 		return nil, httpx.Problem(http.StatusServiceUnavailable, problemJobsUnavail, "Deploys are not available right now.")
 	}
-	if _, err := d.repo().Stack(ctx, in.EnvID, in.StackID); err != nil {
-		return nil, stackLookupProblem(d, in.EnvID, err)
-	}
 	gone := httpx.Problem(http.StatusNotFound, problemStackJobNotFound, stackJobGone)
 	job, ok := d.Jobs.Get(in.JobID)
 	if !ok || !stackJobOf(job, in.EnvID, in.StackID) {
+		// Which 404 it is depends on the stack; a job of this stack needs no stack record (a removal deletes it).
+		if _, err := d.repo().Stack(ctx, in.EnvID, in.StackID); err != nil {
+			return nil, stackLookupProblem(d, in.EnvID, err)
+		}
 		return nil, gone
 	}
 	// Who cancelled is noted first: the deploy can end, and be audited, the moment it is cancelled.
@@ -1041,11 +1040,12 @@ func getStackJob(ctx context.Context, d StacksDeps, in *StackJobPathInput) (*Sta
 	if d.Jobs == nil {
 		return nil, httpx.Problem(http.StatusServiceUnavailable, problemJobsUnavail, "Deploys are not available right now.")
 	}
-	if _, err := d.repo().Stack(ctx, in.EnvID, in.StackID); err != nil {
-		return nil, stackLookupProblem(d, in.EnvID, err)
-	}
 	job, ok := d.Jobs.Get(in.JobID)
 	if !ok || !stackJobOf(job, in.EnvID, in.StackID) {
+		// Which 404 it is depends on the stack; a job of this stack needs no stack record (a removal deletes it).
+		if _, err := d.repo().Stack(ctx, in.EnvID, in.StackID); err != nil {
+			return nil, stackLookupProblem(d, in.EnvID, err)
+		}
 		return nil, httpx.Problem(http.StatusNotFound, problemStackJobNotFound, "This deploy is no longer here. Deploys are kept for 10 minutes after they end.")
 	}
 	return &StackJobOutput{CacheControl: "no-store", Body: stackJobBody(job, outputOf(d.Jobs, job.ID))}, nil

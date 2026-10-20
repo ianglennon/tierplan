@@ -15,9 +15,11 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { type Column, TruncatedText } from "@/features/resources/resource-table";
+import { RemoveStackDialog } from "@/features/stacks/remove-stack-dialog";
 import { canStart, canStop, useStackStart } from "@/features/stacks/stack-actions";
 import { StackStateCell } from "@/features/stacks/stack-state-cell";
 import { StopStackDialog } from "@/features/stacks/stop-stack-dialog";
@@ -59,7 +61,9 @@ function RowActions({ row, onOpenChange, disabled }: RowActionsProps) {
   const t = useT();
   const deploy = useNeeds("stacks.deploy", row.envId);
   const { start } = useStackStart(row);
+  const remove = useNeeds("stacks.delete", row.envId);
   const [stopping, setStopping] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const stoppable = canStop(row.state);
   return (
     <>
@@ -112,10 +116,29 @@ function RowActions({ row, onOpenChange, disabled }: RowActionsProps) {
               </DropdownMenuItem>
             </NeedsTooltip>
           ) : null}
+          {remove.allowed || remove.reason ? <DropdownMenuSeparator /> : null}
+          {remove.allowed ? (
+            <DropdownMenuItem
+              variant="destructive"
+              className="max-md:min-h-11"
+              onSelect={() => setRemoving(true)}
+            >
+              {t("stackRemove.actions.remove")}
+            </DropdownMenuItem>
+          ) : remove.reason ? (
+            <NeedsTooltip reason={remove.reason}>
+              <DropdownMenuItem variant="destructive" className="max-md:min-h-11">
+                {t("stackRemove.actions.remove")}
+              </DropdownMenuItem>
+            </NeedsTooltip>
+          ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
       {stoppable && deploy.allowed ? (
         <StopStackDialog stack={row} open={stopping} onOpenChange={setStopping} />
+      ) : null}
+      {remove.allowed ? (
+        <RemoveStackDialog stack={row} open={removing} onOpenChange={setRemoving} />
       ) : null}
     </>
   );

@@ -38,6 +38,10 @@ export type StackJobItem = components["schemas"]["StackJobItemBody"];
 export type StackLock = components["schemas"]["StackLockBody"];
 export type StackRollback = components["schemas"]["StackRollbackBody"];
 export type StackLifecycleStarted = components["schemas"]["StackLifecycleBody"];
+export type RemovalPreview = components["schemas"]["RemovalPreviewBody"];
+export type RemovalVolume = components["schemas"]["RemovalVolumeBody"];
+export type StackRemoveInput = components["schemas"]["RemoveStackRequest"];
+export type StackRemoveStarted = components["schemas"]["RemoveStackBody"];
 export type StackJobSummary = components["schemas"]["StackJobSummary"];
 export type StackJobOutputLine = components["schemas"]["StackJobOutputLine"];
 export type StackServices = components["schemas"]["StackServicesBody"];
@@ -838,6 +842,66 @@ export function useStartStack(envId: string, stackId: string) {
   return useStackLifecycle(envId, () =>
     api.POST("/api/env/{envId}/stacks/{stackId}/start", { params: { path: { envId, stackId } } }),
   );
+}
+
+// The query key of what removing one stack would delete. It extends the stack's key, so the events feed and
+// every action that refreshes the page read it again.
+export function removalPreviewKey(envId: string, stackId: string) {
+  return [...stackKey(envId, stackId), "removal-preview"] as const;
+}
+
+// What a removal of the stack would delete, read from the engine when the Remove dialog opens. It is never
+// kept: a list of volumes that is minutes old is not one to tick from (the server checks every name again, but
+// the person should see what is there now), so it is read afresh each time and not again while the dialog stays.
+export function removalPreviewQuery(envId: string, stackId: string) {
+  return queryOptions({
+    queryKey: removalPreviewKey(envId, stackId),
+    queryFn: async (): Promise<RemovalPreview> => {
+      const res = await api.GET("/api/env/{envId}/stacks/{stackId}/removal-preview", {
+        params: { path: { envId, stackId } },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new StacksLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    retry: false,
+    gcTime: 0,
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+}
+
+// useRemoveStack removes a stack: the name typed, the volumes ticked and whether the definition stays. It is
+// never retried: a removal whose answer was lost may have started, and the stack's page, read again, shows
+// whether it did. The stack's page and the list are read again whatever the answer.
+export function useRemoveStack(envId: string, stackId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<StackRemoveStarted, DeployRequestError, StackRemoveInput>({
+    mutationFn: async (body) => {
+      try {
+        const res = await api.POST("/api/env/{envId}/stacks/{stackId}/remove", {
+          params: { path: { envId, stackId } },
+          body,
+        });
+        if (!res.data) {
+          const problem = readProblem(res.error, res.response);
+          throw new DeployRequestError(problem.status, problem.type, problem.fields);
+        }
+        return res.data;
+      } catch (e) {
+        // A network failure has no status.
+        throw e instanceof DeployRequestError ? e : new DeployRequestError(0);
+      }
+    },
+    retry: false,
+    onSettled: () => {
+      invalidateStacks(queryClient, envId);
+      void queryClient.invalidateQueries({ queryKey: stackJobsKey });
+    },
+  });
 }
 
 // CancelRequestError is a cancel the server refused or that got no answer. The status is 0 when the

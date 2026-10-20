@@ -138,6 +138,8 @@ type authFixture struct {
 	stackUp func(context.Context, *dockerx.Client, *types.Project, dockerx.ComposeUpOptions, func(dockerx.ComposeEvent)) error
 	// stackStop and stackStart replace the Compose SDK's stop and start of a standalone stack (plan 07-26).
 	stackStop, stackStart func(context.Context, *dockerx.Client, *types.Project) error
+	// stackDown replaces the Compose SDK's down in the removal of a standalone stack (plan 07-27).
+	stackDown func(context.Context, *dockerx.Client, string) error
 	// pullsHeartbeat, pullsMaxStreams and pullsMaxLifetime tune the pull stream, and
 	// pullsNodeTimeout the longest one node may pull; zero is the default.
 	jobHub           *jobs.Hub
@@ -354,7 +356,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		api.RegisterStacks(r, api.StacksDeps{
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
 			Audit: f.aud, Checker: checker, Jobs: f.jobHub, Store: f.st, Vault: f.v, Log: log,
-			CheckDeadline: f.stackCheckDeadline, OnCheck: f.stackOnCheck, BeforeJob: f.stackBeforeJob, Up: f.stackUp, StopProject: f.stackStop, StartProject: f.stackStart, ReadEnv: f.stackReadEnv,
+			CheckDeadline: f.stackCheckDeadline, OnCheck: f.stackOnCheck, BeforeJob: f.stackBeforeJob, Up: f.stackUp, StopProject: f.stackStop, StartProject: f.stackStart, DownProject: f.stackDown, ReadEnv: f.stackReadEnv,
 		})
 		var logsSrc api.LogsSource = f.agg
 		if f.logsWrap != nil {

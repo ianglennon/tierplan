@@ -185,6 +185,7 @@ const (
 	ActionStackDeployed              = "stack.deployed"
 	ActionStackStopped               = "stack.stopped"
 	ActionStackStarted               = "stack.started"
+	ActionStackRemoved               = "stack.removed"
 	ActionStackValueRevealed         = "stack.value_revealed"
 )
 

@@ -3,6 +3,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
+import { ChevronDown } from "lucide-react";
 import { useState } from "react";
 
 import {
@@ -11,10 +12,19 @@ import {
   type StackState,
   useStartStack,
 } from "@/api/stacks";
+import { copyText } from "@/components/copyable-code";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { followStackOperation, refusalKey } from "@/features/stacks/follow-operation";
+import { RemoveStackDialog } from "@/features/stacks/remove-stack-dialog";
 import { StopStackDialog } from "@/features/stacks/stop-stack-dialog";
 import { StoppedAlert } from "@/features/stacks/stopped-alert";
 import { useNeeds } from "@/hooks/use-needs";
@@ -32,7 +42,17 @@ const STOPPABLE: readonly StackState[] = [
   "unknown",
 ];
 
+// The states in which an operation is under way on the stack: Remove… waits until it has ended.
+const OPERATING: readonly StackState[] = [
+  "deploying",
+  "rolling_back",
+  "starting",
+  "stopping",
+  "removing",
+];
+
 export const canStop = (state: StackState) => STOPPABLE.includes(state);
+export const isOperating = (state: StackState) => OPERATING.includes(state);
 export const canStart = (state: StackState) => state === "stopped";
 
 type LifecycleStack = Pick<StackDetail, "id" | "envId" | "name" | "target" | "state">;
@@ -97,6 +117,73 @@ export function StoppedAlertWithStart({ stack }: { stack: StackDetail }) {
 // may not deploy sees the one that applies off, with the role it takes; a user whose permissions are not
 // known yet sees nothing rather than a button that may turn off.
 export function StackActions({ stack }: StackActionsProps) {
+  return (
+    <>
+      <StopStartAction stack={stack} />
+      <StackMoreMenu stack={stack} />
+    </>
+  );
+}
+
+// StackMoreMenu is the header's More menu (UI-SPEC "Stack page"): Copy stack name, a separator and Remove… in
+// the destructive text colour. Remove… is for an Env Admin: below that it is off with the role it takes, and
+// for a user whose permissions are not known yet it is not there. It is off, too, while an operation is under
+// way on the stack. The dialog sits beside the menu and not in it, so it outlives the menu closing.
+export function StackMoreMenu({ stack }: StackActionsProps) {
+  const t = useT();
+  const needs = useNeeds("stacks.delete", stack.envId);
+  const [removing, setRemoving] = useState(false);
+  const operating = isOperating(stack.state);
+  async function copy() {
+    if (await copyText(stack.name))
+      toastSuccess(t("stackRemove.actions.copied", { name: stack.name }));
+  }
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            className="max-md:h-11"
+            aria-label={t("stackRemove.actions.more", { name: stack.name })}
+          >
+            {t("stackRemove.actions.moreLabel")}
+            <ChevronDown aria-hidden="true" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem className="max-md:min-h-11" onSelect={() => void copy()}>
+            {t("stackRemove.actions.copyName")}
+          </DropdownMenuItem>
+          {needs.allowed || needs.reason ? <DropdownMenuSeparator /> : null}
+          {needs.allowed ? (
+            <DropdownMenuItem
+              variant="destructive"
+              className="max-md:min-h-11"
+              disabled={operating}
+              onSelect={() => setRemoving(true)}
+            >
+              {t("stackRemove.actions.remove")}
+            </DropdownMenuItem>
+          ) : needs.reason ? (
+            <NeedsTooltip reason={needs.reason}>
+              <DropdownMenuItem variant="destructive" className="max-md:min-h-11">
+                {t("stackRemove.actions.remove")}
+              </DropdownMenuItem>
+            </NeedsTooltip>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {needs.allowed ? (
+        <RemoveStackDialog stack={stack} open={removing} onOpenChange={setRemoving} />
+      ) : null}
+    </>
+  );
+}
+
+// StopStartAction is the Stop stack… or Start stack button the stack's state calls for, or nothing.
+function StopStartAction({ stack }: StackActionsProps) {
   const t = useT();
   const needs = useNeeds("stacks.deploy", stack.envId);
   const { start, pending } = useStackStart(stack);

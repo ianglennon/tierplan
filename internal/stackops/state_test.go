@@ -43,6 +43,10 @@ func TestDeriveStateFollowsTheOnePriorityOrder(t *testing.T) {
 		"a start under way":                                     {stackops.StateInput{Latest: op("start", "running"), Stopped: true, Deployed: true, Services: services(stop)}, stackops.StateStarting, 0, 1},
 		"a stopped stack with a running deploy reads Deploying": {stackops.StateInput{Latest: op("deploy", "running"), Stopped: true, Deployed: true, Services: services(stop)}, stackops.StateDeploying, 0, 1},
 		"a deploy under way outranks a failed one before it":    {stackops.StateInput{Latest: op("deploy", "running"), Deployed: true, Services: services(down)}, stackops.StateDeploying, 0, 1},
+		// A removal that finished and kept the definition leaves nothing deployed.
+		"a removal that kept the definition":                  {stackops.StateInput{Latest: op("remove", "done"), Deployed: true}, stackops.StateNotDeployed, 0, 0},
+		"a kept definition outranks the failed deploy before": {stackops.StateInput{Latest: op("remove", "done"), LatestDeploy: op("deploy", "failed"), Deployed: true}, stackops.StateNotDeployed, 0, 0},
+		"a removal that failed part-way reads what is left":   {stackops.StateInput{Latest: op("remove", "failed"), Deployed: true, Services: services(down)}, stackops.StateNotRunning, 0, 1},
 		// Stopped.
 		"a stopped stack":                             {stackops.StateInput{Latest: op("stop", "done"), Stopped: true, Deployed: true, Services: services(stop, stop)}, stackops.StateStopped, 0, 2},
 		"a stopped stack outranks a failed deploy":    {stackops.StateInput{Latest: op("deploy", "failed"), Stopped: true, Deployed: true, Services: services(stop)}, stackops.StateStopped, 0, 1},

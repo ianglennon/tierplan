@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/moby/moby/api/types/swarm"
 )
@@ -165,6 +166,15 @@ func (c FakeConfig) taskList(rawFilters string) []swarm.Task {
 		}
 		if want := f["id"]; len(want) > 0 && !want[t.ID] {
 			return false
+		}
+		// A label filter matches the labels of the task's service, which the fake keeps as the task's own
+		// annotations; "key" alone matches a task that has the key.
+		for label := range f["label"] {
+			key, value, hasValue := strings.Cut(label, "=")
+			got, ok := t.Labels[key]
+			if !ok || (hasValue && got != value) {
+				return false
+			}
 		}
 		return true
 	}

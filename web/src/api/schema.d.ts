@@ -2116,6 +2116,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks/{stackId}/removal-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What removing a stack would delete
+         * @description Lists the services (or containers), networks, secrets and configs that carry the stack's own labels, the stack's volumes one for each node that holds one, and the external objects the compose file names, which a removal never touches. An object is the stack's only when it carries both its namespace and its Bayplan stack ID. Each volume says how many containers outside the stack mount it. It is a read. Needs stacks.delete (Env Admin).
+         */
+        get: operations["removalPreview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove a stack
+         * @description Removes everything the stack owns as a job, answering 202 with the job ID at once: its services or containers, then a bounded wait until its tasks or containers are gone, then its networks, then its own secrets and configs, then the volumes the request names, then the definition. External networks, secrets, configs and volumes are never touched, and a volume is deleted only when the request names it and it carries this stack's labels on that node. The name must be typed exactly (422 confirm_mismatch). With keepDefinition the files, variables and revisions stay and the stack reads Not deployed. A failure part-way leaves what was removed removed and keeps the definition. Only one stack operation at a time runs on an environment: while one does, the answer is 409 operation_locked and nothing is stored. A stack that is gone is 404. Writes one stack.removed audit row when the job ends. Needs stacks.delete (Env Admin).
+         */
+        post: operations["removeStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/stacks/{stackId}/render": {
         parameters: {
             query?: never;
@@ -6982,6 +7022,57 @@ export interface components {
         RecentEnvironmentsBody: {
             /** @description Up to 3 environment IDs, most recently used first */
             environmentIds: string[] | null;
+        };
+        RemovalPreviewBody: {
+            /** @description The configs that carry this stack's own labels, by name on the swarm */
+            configs: string[] | null;
+            /** @description The stack's containers on a standalone host, by name */
+            containers: string[] | null;
+            /** @description The networks, secrets, configs and volumes the compose file names as external. A removal never touches them */
+            externals: string[] | null;
+            /** @description True when the stack has a saved draft with changes; a removal deletes it with the definition unless the definition is kept */
+            hasDraft: boolean;
+            /** @description The networks that carry this stack's own labels */
+            networks: string[] | null;
+            /** @description The nodes that did not answer, whose volumes are left out of the list */
+            notReporting: string[] | null;
+            /** @description The secrets that carry this stack's own labels (the hashed ones a deploy made), by name on the swarm */
+            secrets: string[] | null;
+            /** @description The stack's swarm services, by name */
+            services: string[] | null;
+            /** @description The stack's own volumes, one for each node that holds one. A removal deletes only the ones the request names */
+            volumes: components["schemas"]["RemovalVolumeBody"][] | null;
+        };
+        RemovalVolumeBody: {
+            /** @description The volume's name */
+            name: string;
+            /** @description The node that holds it: a volume is local to a node, so a swarm stack's volume has a row for each node that has it */
+            nodeId: string;
+            /** @description The node's display name */
+            nodeName: string;
+            /**
+             * Format: int64
+             * @description How many containers outside this stack mount the volume on that node; removing the volume fails while they exist
+             */
+            usedOutside: number;
+        };
+        RemoveStackBody: {
+            /** @description The job: read it at GET .../deploys/{jobId}, the same console route a deploy uses. It stays readable after the stack is gone */
+            jobId: string;
+        };
+        RemoveStackRequest: {
+            /** @description The stack's name, typed exactly. Anything else is 422 confirm_mismatch and nothing is removed */
+            confirmName: string;
+            /** @description True keeps the stack's files, variables and revisions, and the stack reads Not deployed */
+            keepDefinition: boolean;
+            /** @description The volumes to delete, each on its node. A volume that is not listed stays. One that is not this stack's own on that node is 422 volume_not_owned and nothing is removed */
+            volumes: components["schemas"]["RemoveVolumeRequest"][] | null;
+        };
+        RemoveVolumeRequest: {
+            /** @description The volume's name */
+            name: string;
+            /** @description The node it is on */
+            nodeId: string;
         };
         RenameTeamInputBody: {
             /** @description 1 to 64 characters; not case-sensitive for uniqueness */
@@ -14444,6 +14535,80 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackFileRevealBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    removalPreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemovalPreviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    removeStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoveStackRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoveStackBody"];
                 };
             };
             /** @description Error */

@@ -37,6 +37,7 @@ const (
 	DeployKindRollback = "rollback"
 	DeployKindStop     = "stop"
 	DeployKindStart    = "start"
+	DeployKindRemove   = "remove"
 
 	DeployRunning     = "running"
 	DeployDone        = "done"
@@ -713,6 +714,19 @@ func (r Repo) SetStopped(ctx context.Context, stackID string, stopped bool) erro
 	}
 	if n != 1 {
 		return fmt.Errorf("set stopped: no stack %s", stackID)
+	}
+	return nil
+}
+
+// DeleteStack deletes the stack with its drafts, revisions, files, variables and operations (STK-11). A stack that
+// is not there is ErrStackNotFound, so a second removal changes nothing.
+func (r Repo) DeleteStack(ctx context.Context, stackID string) error {
+	n, err := r.Store.Q.DeleteStack(ctx, stackID)
+	if err != nil {
+		return fmt.Errorf("delete stack: %w", err)
+	}
+	if n != 1 {
+		return ErrStackNotFound
 	}
 	return nil
 }

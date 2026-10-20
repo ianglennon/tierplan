@@ -89,6 +89,9 @@ type Deps struct {
 	// (*dockerx.Client).ComposeStop and ComposeStart, which need a real engine and are proved against one; a
 	// test sets them to play a host.
 	StopProject, StartProject func(ctx context.Context, c *dockerx.Client, p *types.Project) error
+	// DownProject runs the Compose SDK's down for a standalone stack's removal, by project name. Nil is
+	// (*dockerx.Client).ComposeDown; a test sets it to play a host.
+	DownProject func(ctx context.Context, c *dockerx.Client, project string) error
 	// Writable asks whether the node of a standalone host can be written to: it is the check step's first
 	// question, so a host whose owner made it read-only (envs.ErrHostReadOnly) fails the deploy before it
 	// asks the host or a registry for anything. Nil asks the aggregator with a write that does nothing
@@ -105,6 +108,14 @@ func (d Deps) up(ctx context.Context, c *dockerx.Client, p *types.Project, o doc
 		return d.Up(ctx, c, p, o, on)
 	}
 	return c.ComposeUp(ctx, p, o, on)
+}
+
+// downProject runs the Compose SDK's down on c, or the test's stand-in for it.
+func (d Deps) downProject(ctx context.Context, c *dockerx.Client, project string) error {
+	if d.DownProject != nil {
+		return d.DownProject(ctx, c, project)
+	}
+	return c.ComposeDown(ctx, project)
 }
 
 // writable asks whether the node can be written to (Deps.Writable).

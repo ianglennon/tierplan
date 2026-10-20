@@ -57,6 +57,7 @@ import stacklists from "./en/stacklists.json";
 import stackoverview from "./en/stackoverview.json";
 import stackproblems from "./en/stackproblems.json";
 import stackpull from "./en/stackpull.json";
+import stackremove from "./en/stackremove.json";
 import stackrendered from "./en/stackrendered.json";
 import stackresources from "./en/stackresources.json";
 import stackreview from "./en/stackreview.json";
@@ -139,6 +140,7 @@ export const resources = {
     stackOverview: stackoverview,
     stackProblems: stackproblems,
     stackPull: stackpull,
+    stackRemove: stackremove,
     stackRendered: stackrendered,
     stackResources: stackresources,
     stackStop: stackstop,

@@ -275,7 +275,9 @@ func TestEveryPhase6ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 // are written as objects, never as a word the audit writer refuses. A reveal of a secret value
 // records the stack, the kind of value (variable) and its name, never the value (plan 07-10, STK-04). A stop
 // and a start record the stack, how many services they scaled, removed or brought back, how many of those they
-// recreated and the result (plan 07-26, STK-11).
+// recreated and the result (plan 07-26, STK-11). A removal records the stack, how many volumes it removed, how many
+// of the stack's volumes it left on their hosts, whether the definition was deleted or kept, and the result (plan
+// 07-27, STK-11).
 var phase7DetailKeys = map[string][]string{
 	audit.ActionStackCreated:        {"stack", "target"},
 	audit.ActionStackDraftSaved:     {"stack", "version", "files", "vars"},
@@ -283,6 +285,7 @@ var phase7DetailKeys = map[string][]string{
 	audit.ActionStackDeployed:       {"stack", "mode", "result", "revision", "job", "services", "code"},
 	audit.ActionStackStopped:        {"stack", "services", "recreated", "result"},
 	audit.ActionStackStarted:        {"stack", "services", "recreated", "result"},
+	audit.ActionStackRemoved:        {"stack", "volumes", "kept", "definition", "result"},
 	audit.ActionStackValueRevealed:  {"stack", "kind", "name"},
 }
 
@@ -313,6 +316,7 @@ func TestEveryPhase7ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		"stack.deployed":        audit.ActionStackDeployed,
 		"stack.stopped":         audit.ActionStackStopped,
 		"stack.started":         audit.ActionStackStarted,
+		"stack.removed":         audit.ActionStackRemoved,
 		"stack.value_revealed":  audit.ActionStackValueRevealed,
 	} {
 		if key != constant {

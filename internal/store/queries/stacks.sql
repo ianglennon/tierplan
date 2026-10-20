@@ -23,6 +23,11 @@ FROM stacks WHERE env_id = ? AND name = ?;
 -- caller read it by environment and ID first.
 UPDATE stacks SET stopped = ? WHERE id = ?;
 
+-- name: DeleteStack :execrows
+-- Removing a stack deletes its definition: the snapshots, their files and variables, and its operations go with it
+-- (ON DELETE CASCADE). The caller read the stack by environment and ID first.
+DELETE FROM stacks WHERE id = ?;
+
 -- name: LatestDeployLikeStackDeploy :one
 -- The newest deploy, update or roll back of one stack, whatever came after it: a stop or a start does not hide a
 -- failed deploy (UI-SPEC Defaults 11).

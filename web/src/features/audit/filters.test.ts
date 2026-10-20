@@ -363,6 +363,7 @@ describe("the stack actions (07-01)", () => {
       "stack.deployed",
       "stack.stopped",
       "stack.started",
+      "stack.removed",
       "stack.value_revealed",
     ]) {
       expect(KNOWN_ACTIONS, key).toContain(key);
@@ -375,6 +376,7 @@ describe("the stack actions (07-01)", () => {
     expect(labels.stack?.deployed).toBe("Stack deployed");
     expect(labels.stack?.stopped).toBe("Stack stopped");
     expect(labels.stack?.started).toBe("Stack started");
+    expect(labels.stack?.removed).toBe("Stack removed");
     expect(labels.stack?.value_revealed).toBe("Stack secret value revealed");
   });
 });

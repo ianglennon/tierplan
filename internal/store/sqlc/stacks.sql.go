@@ -40,6 +40,20 @@ func (q *Queries) DeleteSnapshotVars(ctx context.Context, snapshotID string) err
 	return err
 }
 
+const deleteStack = `-- name: DeleteStack :execrows
+DELETE FROM stacks WHERE id = ?
+`
+
+// Removing a stack deletes its definition: the snapshots, their files and variables, and its operations go with it
+// (ON DELETE CASCADE). The caller read the stack by environment and ID first.
+func (q *Queries) DeleteStack(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteStack, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const finishStackDeploy = `-- name: FinishStackDeploy :execrows
 UPDATE stack_deploys SET state = ?, ended_at = ?, failed_service = ?, code = ?
 WHERE id = ? AND state = 'running'

@@ -119,6 +119,9 @@ type StacksDeps struct {
 	// StopProject and StartProject, when set, replace the Compose SDK's stop and start of a standalone stack
 	// (stackops.Deps). Tests use them for the same reason as Up.
 	StopProject, StartProject func(ctx context.Context, c *dockerx.Client, p *types.Project) error
+	// DownProject, when set, replaces the Compose SDK's down in the removal of a standalone stack
+	// (stackops.Deps.DownProject), for the same reason.
+	DownProject func(ctx context.Context, c *dockerx.Client, project string) error
 
 	// cancels remembers who cancelled which deploy until the deploy ends and is audited. RegisterStacks
 	// makes it; every copy of the deps shares it.
@@ -130,7 +133,7 @@ func (d StacksDeps) repo() stackops.Repo { return stackops.Repo{Store: d.Store, 
 func (d StacksDeps) ops() stackops.Deps {
 	return stackops.Deps{
 		Aggregator: d.Aggregator, Clusters: d.Clusters, Resolver: d.Resolver, Checker: d.Checker,
-		Clock: d.Clock, ConvergeTimeout: d.ConvergeTimeout, Up: d.Up, StopProject: d.StopProject, StartProject: d.StartProject, Log: d.Log,
+		Clock: d.Clock, ConvergeTimeout: d.ConvergeTimeout, Up: d.Up, StopProject: d.StopProject, StartProject: d.StartProject, DownProject: d.DownProject, Log: d.Log,
 	}
 }
 
@@ -316,6 +319,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 	registerStackReview(r, d)
 	registerStackDeploy(r, d)
 	registerStackLifecycle(r, d)
+	registerStackRemove(r, d)
 	registerStackJobs(r, d)
 	registerStackOverview(r, d)
 	registerStackResources(r, d)

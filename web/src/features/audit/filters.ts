@@ -137,6 +137,7 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "stack.deployed",
   "stack.stopped",
   "stack.started",
+  "stack.removed",
   "stack.value_revealed",
 ];
 

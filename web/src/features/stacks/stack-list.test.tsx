@@ -82,6 +82,19 @@ beforeEach(() => {
       if (path === `/api/env/${ENV}/stacks/s1/deploys/j1`) {
         return Response.json({ id: "j1", state: "done", items: [] });
       }
+      if (path === `/api/env/${ENV}/stacks/s1/removal-preview`) {
+        return Response.json({
+          services: [],
+          containers: [],
+          networks: [],
+          secrets: [],
+          configs: [],
+          volumes: [],
+          externals: [],
+          notReporting: [],
+          hasDraft: false,
+        });
+      }
       return Response.json({}, { status: 404 });
     }),
   );
@@ -337,6 +350,51 @@ describe("StackList row menu: Stop and Start", () => {
     expect(stop.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(stop);
     expect(screen.queryByRole("heading", { name: "Stop web?" })).toBeNull();
+    expect(posts).toEqual([]);
+  });
+});
+
+describe("StackList row menu: Remove", () => {
+  async function openMenu() {
+    const trigger = await screen.findByRole("button", { name: "Actions for web" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+  }
+
+  it("offers Remove… to an Env Admin, which opens its dialog without leaving the list", async () => {
+    me = makeMe({ envs: { [ENV]: "admin" } });
+    stacks = { items: [stack({ state: "running" })] };
+    mount();
+    await openMenu();
+
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Remove…" }));
+
+    expect(await screen.findByRole("heading", { name: "Remove web?" })).toBeTruthy();
+    // The list is still there behind the modal dialog.
+    expect(screen.getByRole("link", { name: "web", hidden: true })).toBeTruthy();
+  });
+
+  it("shows an Operator Remove… off with Needs Admin", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    stacks = { items: [stack({ state: "running" })] };
+    mount();
+    await openMenu();
+
+    const remove = await screen.findByRole("menuitem", { name: "Remove…" });
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(remove);
+    expect(screen.queryByRole("heading", { name: "Remove web?" })).toBeNull();
+  });
+
+  it("shows a Viewer Remove… off with Needs Admin and sends nothing", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    stacks = { items: [stack({ state: "running" })] };
+    mount();
+    await openMenu();
+
+    const remove = await screen.findByRole("menuitem", { name: "Remove…" });
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(remove);
+    expect(screen.queryByRole("heading", { name: "Remove web?" })).toBeNull();
     expect(posts).toEqual([]);
   });
 });

@@ -27,7 +27,7 @@ vi.mock("@/lib/toast", () => ({
 
 const ENV = "e1";
 
-let role: "viewer" | "operator" = "operator";
+let role: "viewer" | "operator" | "admin" = "operator";
 let posts: string[];
 let jobState: string;
 let jobItems: Array<{ id: string; state: string; message: string }>;
@@ -69,6 +69,19 @@ beforeEach(() => {
       if (path === "/api/me") return Response.json(makeMe({ envs: { [ENV]: role } }));
       if (path === `/api/env/${ENV}/stacks/s1/services`) {
         return Response.json({ items: services.map((s) => ({ ...s, running: 1, desired: 1 })) });
+      }
+      if (path === `/api/env/${ENV}/stacks/s1/removal-preview`) {
+        return Response.json({
+          services: ["tracer_web"],
+          containers: [],
+          networks: [],
+          secrets: [],
+          configs: [],
+          volumes: [],
+          externals: [],
+          notReporting: [],
+          hasDraft: false,
+        });
       }
       if (req.method === "POST" && /\/stacks\/s1\/(stop|start)$/.test(path)) {
         posts.push(path);
@@ -242,5 +255,46 @@ describe("StackActions", () => {
         "Couldn't stop tracer. The swarm rejected the service. What already stopped stays stopped.",
       ),
     );
+  });
+});
+
+describe("StackActions: the More menu", () => {
+  async function openMore() {
+    const trigger = await screen.findByRole("button", { name: "More actions for tracer" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+  }
+
+  it("offers Copy stack name and, to an Env Admin, Remove… which opens the dialog", async () => {
+    role = "admin";
+    mount(stack());
+    await openMore();
+
+    expect(await screen.findByRole("menuitem", { name: "Copy stack name" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Remove…" }));
+
+    expect(await screen.findByRole("heading", { name: "Remove tracer?" })).toBeTruthy();
+    expect(posts).toEqual([]);
+  });
+
+  it("shows an Operator Remove… off with Needs Admin and opens nothing", async () => {
+    role = "operator";
+    mount(stack());
+    await openMore();
+
+    const remove = await screen.findByRole("menuitem", { name: "Remove…" });
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(remove);
+
+    expect(toasts.info).toHaveBeenCalledWith("Needs Admin");
+    expect(screen.queryByRole("heading", { name: "Remove tracer?" })).toBeNull();
+  });
+
+  it("keeps Remove… off while an operation is under way on the stack", async () => {
+    role = "admin";
+    mount(stack({ state: "deploying" }));
+    await openMore();
+
+    const remove = await screen.findByRole("menuitem", { name: "Remove…" });
+    expect(remove.getAttribute("data-disabled")).not.toBeNull();
   });
 });

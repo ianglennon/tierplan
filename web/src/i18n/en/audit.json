@@ -240,6 +240,7 @@
         "deployed": "Stack deployed",
         "stopped": "Stack stopped",
         "started": "Stack started",
+        "removed": "Stack removed",
         "value_revealed": "Stack secret value revealed"
       }
     },

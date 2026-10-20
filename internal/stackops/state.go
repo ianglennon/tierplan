@@ -46,19 +46,20 @@ func deploying(kind string) bool {
 	return kind == DeployKindDeploy || kind == DeployKindRollback || kind == kindUpdate
 }
 
-// The kinds of operation the later plans add (07-24 update, 07-27 remove); a stop and a start are
-// DeployKindStop and DeployKindStart.
+// The kinds of operation the later plans add (07-24 update); a stop, a start and a remove are
+// DeployKindStop, DeployKindStart and DeployKindRemove.
 const (
 	kindUpdate = "update"
 	kindStart  = DeployKindStart
 	kindStop   = DeployKindStop
-	kindRemove = "remove"
+	kindRemove = DeployKindRemove
 )
 
 // DeriveState is the stack's state, the services of it that run and the services it has: the one
 // priority order of UI-SPEC Defaults 11, so no state hides a running operation or a failed last deploy.
 //
-//	Removing, then Deploying, Rolling back, Starting or Stopping (an operation under way), then Stopped, then
+//	Removing, then Deploying, Rolling back, Starting or Stopping (an operation under way), then Not deployed (the newest
+//	operation is a removal that finished), then Stopped, then
 //	Deploy failed (the newest deploy, update or roll back did not finish), then Not deployed, then
 //	Unknown (deployed, and the engine could not be read), then Not running, Degraded and Running by how many
 //	services run.
@@ -84,6 +85,11 @@ func DeriveState(in StateInput) (StackState, int, int) {
 		case deploying(op.Kind):
 			return StateDeploying, running, total
 		}
+	}
+	// A removal that kept the definition leaves a stack with nothing on the target: it reads Not deployed, whatever
+	// it was before, until a deploy puts something there again.
+	if op := in.Latest; op != nil && op.Kind == kindRemove && op.State == DeployDone {
+		return StateNotDeployed, 0, 0
 	}
 	if in.Stopped {
 		return StateStopped, running, total
