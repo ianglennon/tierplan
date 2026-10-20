@@ -72,7 +72,7 @@ function pullStateKey(p: PullSummary): { key: string; values: Record<string, num
 }
 
 // stackStateKey is the words for where a stack operation stands: by what it is (a deploy, an update of
-// images, a roll back), and for an operation this version has no words for yet, the general ones.
+// images, a roll back, a stop, a start, a removal), and for an operation this version has no words for yet, the general ones.
 function stackStateKey(job: StackJobSummary): string {
   const specific = `jobs.indicator.stack.${job.kind}.${job.state}`;
   return keyExists(specific) ? specific : `jobs.indicator.stack.other.${job.state}`;
@@ -84,7 +84,9 @@ const consoleOf = (j: StackJobSummary): string =>
 
 // useStackJobToasts tells a person, once, how a stack operation they started ended while they were not
 // looking at its console (D-13): Deployed {name}. with Open, or Deploy of {name} failed. with Open
-// console. It speaks only of what ends after the page opened: a job that had already ended when the
+// console. It words each kind as itself (a stop as a stop, a removal as a removal) and an operation this
+// version has no words for in general ones, never as a deploy. A removal's Open goes to the
+// environment's stack list, since the stack it names is gone. It speaks only of what ends after the page opened: a job that had already ended when the
 // list first came is not news. A cancel is the person's own doing and raises nothing. The header is
 // mounted for the life of the page, so one set of ids is "once per job per session".
 function useStackJobToasts(jobs: StackJobSummary[] | undefined, username: string | undefined) {
@@ -107,16 +109,18 @@ function useStackJobToasts(jobs: StackJobSummary[] | undefined, username: string
       told.current.add(job.id);
       if (job.startedBy !== username || job.state === "cancelled") continue;
       if (pathname === consoleOf(job)) continue;
-      const words = keyExists(`jobs.toast.${job.kind}.done`) ? job.kind : "deploy";
+      const words = keyExists(`jobs.toast.${job.kind}.done`) ? job.kind : "other";
       if (job.state === "done") {
         toastSuccessWithAction(
           t(`jobs.toast.${words}.done`, { name: job.stackName }),
           t("jobs.toast.open"),
           () =>
-            void navigate({
-              to: "/env/$envId/stacks/$stackId",
-              params: { envId: job.envId, stackId: job.stackId },
-            }),
+            void (job.kind === "remove"
+              ? navigate({ to: "/env/$envId/stacks", params: { envId: job.envId } })
+              : navigate({
+                  to: "/env/$envId/stacks/$stackId",
+                  params: { envId: job.envId, stackId: job.stackId },
+                })),
         );
       } else {
         toastErrorWithAction(

@@ -48,6 +48,24 @@
           "failed": "Failed",
           "cancelled": "Cancelled"
         },
+        "stop": {
+          "running": "Stopping",
+          "done": "Stopped",
+          "failed": "Failed",
+          "cancelled": "Cancelled"
+        },
+        "start": {
+          "running": "Starting",
+          "done": "Started",
+          "failed": "Failed",
+          "cancelled": "Cancelled"
+        },
+        "remove": {
+          "running": "Removing",
+          "done": "Removed",
+          "failed": "Failed",
+          "cancelled": "Cancelled"
+        },
         "other": {
           "running": "Running",
           "done": "Done",
@@ -70,6 +88,22 @@
       "rollback": {
         "done": "Rolled back {{name}}.",
         "failed": "Roll back of {{name}} failed."
+      },
+      "stop": {
+        "done": "Stopped {{name}}.",
+        "failed": "Stop of {{name}} failed."
+      },
+      "start": {
+        "done": "Started {{name}}.",
+        "failed": "Start of {{name}} failed."
+      },
+      "remove": {
+        "done": "Removed {{name}}.",
+        "failed": "Removal of {{name}} failed."
+      },
+      "other": {
+        "done": "Finished the operation on {{name}}.",
+        "failed": "The operation on {{name}} failed."
       }
     }
   }
