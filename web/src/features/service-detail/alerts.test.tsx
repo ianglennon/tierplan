@@ -259,3 +259,23 @@ describe("the order of the alerts", () => {
     expect(screen.queryByText(/agent service/)).toBeNull();
   });
 });
+
+describe("the stack-owned notice", () => {
+  it("offers Open stack and Edit in stack for a stack Bayplan manages", async () => {
+    await mount(bareServiceDetail({ stack: "shop", bayplanStackId: "stk-1" }));
+    expect(screen.getByText("Managed by stack shop")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open stack" }).getAttribute("href")).toBe(
+      `/env/${SERVICE_ENV}/stacks/stk-1`,
+    );
+    expect(screen.getByRole("link", { name: "Edit in stack" }).getAttribute("href")).toBe(
+      `/env/${SERVICE_ENV}/stacks/stk-1/editor`,
+    );
+  });
+
+  it("keeps a stack Bayplan does not manage as text, with no link", async () => {
+    await mount(bareServiceDetail({ stack: "legacy", bayplanStackId: "" }));
+    expect(screen.getByText("Managed by stack legacy")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Open stack" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Edit in stack" })).toBeNull();
+  });
+});

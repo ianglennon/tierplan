@@ -406,9 +406,9 @@ func removeService(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID
 		wo.id, wo.name, wo.image = detail.ID, detail.Name, detail.Image
 		agent = detail.Agent
 		confirmed = detail.Agent && in.Confirm == detail.Name
-		if s, owned := stackOwner(detail.Labels); owned {
+		if s, _, owned := stackOwner(detail.Labels); owned {
 			stack = s
-			return &serviceRemoveRefusedError{code: problemStackOwned, problem: stackOwnedProblem(s)}
+			return &serviceRemoveRefusedError{code: problemStackOwned, problem: stackOwnedProblem(s, "")}
 		}
 		if agent && !confirmed {
 			return &serviceRemoveRefusedError{code: codeConfirmationRequired, problem: httpx.Problem(http.StatusUnprocessableEntity, codeConfirmationRequired,

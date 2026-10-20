@@ -273,7 +273,7 @@ func registerServiceEdit(r *httpx.Router, d ServicesDeps) {
 
 // swarmopsDeps is what the orchestrator needs from the routes' dependencies.
 func swarmopsDeps(d ServicesDeps) swarmops.Deps {
-	sd := swarmops.Deps{Checker: d.Checker, StackOwner: stackOwner}
+	sd := swarmops.Deps{Checker: d.Checker, StackOwner: namespaceOwner}
 	if d.Resolver != nil {
 		sd.Resolver = d.Resolver
 	}
@@ -568,7 +568,7 @@ func serviceWriteProblem(d ServicesDeps, envID, failed string, err error) (strin
 		return problem(http.StatusUnprocessableEntity, problemSpecInvalid, "The service spec can't be read: "+invalid.Message+".",
 			&huma.ErrorDetail{Location: "spec", Message: invalid.Message})
 	case errors.As(err, &owned):
-		return problemStackOwned, stackOwnedProblem(owned.Stack)
+		return problemStackOwned, stackOwnedProblem(owned.Stack, "")
 	case errors.As(err, &ph) && errors.Is(err, redact.ErrPlaceholderReserved):
 		return problem(http.StatusUnprocessableEntity, problemPlaceholderReserved,
 			redact.Placeholder+" is what Bayplan shows for a value it withholds, so it can't be a value. Type the real value or remove it.",

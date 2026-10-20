@@ -18,6 +18,8 @@ import (
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/internal/store/sqlc"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // Services list and scale (plan 06-01, RES-02, D-08, D-10). Docker is a fake daemon behind
@@ -1001,5 +1003,91 @@ func TestDetectingARestartLoopChangesNothingInDocker(t *testing.T) {
 	rec := f.get(t, e, "services/svc-web")
 	if d := decode[sdDetail](t, rec); d.Running != 0 || d.Desired != 1 {
 		t.Errorf("web = %d of %d after being flagged, want it left at 0 of 1", d.Running, d.Desired)
+	}
+}
+
+// insertStackRow puts a stack of Bayplan's own in an environment under an ID the test chose, so that a
+// label on a fake object can name it.
+func (f *envFix) insertStackRow(t *testing.T, envID, id, name string) {
+	t.Helper()
+	err := f.st.Q.InsertStack(testsupport.Context(t), sqlc.InsertStackParams{
+		ID: id, EnvID: envID, Name: name, Target: "swarm", SourceKind: "inline", CreatedBy: "seed", CreatedAt: 1,
+	})
+	if err != nil {
+		t.Fatalf("insert stack %s: %v", name, err)
+	}
+}
+
+// stackLinkServices are four services that each name a stack in a different way: one Bayplan manages,
+// one that carries Bayplan's ID for a stack that does not exist, one that carries a real ID under another
+// stack's name, and one a plain docker stack deploy made.
+func stackLinkServices() []dockertest.FakeService {
+	svc := func(id, name string, labels map[string]string) dockertest.FakeService {
+		return dockertest.FakeService{ID: id, Name: name, Mode: "replicated", Running: 1, Desired: 1, Image: scaleImage, Version: 3, Labels: labels}
+	}
+	return []dockertest.FakeService{
+		svc("svc-own", "own", map[string]string{"com.docker.stack.namespace": "shop", "bayplan.stack.id": "stk-shop"}),
+		svc("svc-ghost", "ghost", map[string]string{"com.docker.stack.namespace": "gone", "bayplan.stack.id": "stk-gone"}),
+		svc("svc-forged", "forged", map[string]string{"com.docker.stack.namespace": "other", "bayplan.stack.id": "stk-shop"}),
+		svc("svc-foreign", "foreign", map[string]string{"com.docker.stack.namespace": "legacy"}),
+	}
+}
+
+// TestServiceRowsAndDetailsLinkOnlyTheStacksBayplanManages is STK-10 and T-07-146: a service's
+// bayplanStackId is set when the label names a stack this environment holds under that name, and empty
+// for a stack Bayplan does not manage, whatever the label claims.
+func TestServiceRowsAndDetailsLinkOnlyTheStacksBayplanManages(t *testing.T) {
+	t.Parallel()
+	f, e := serviceEnv(t, stackLinkServices()...)
+	f.insertStackRow(t, e.ID, "stk-shop", "shop")
+	type linked struct {
+		Stack          string `json:"stack"`
+		BayplanStackID string `json:"bayplanStackId"`
+	}
+	list := decode[struct {
+		Items []struct {
+			Name string `json:"name"`
+			linked
+		} `json:"items"`
+	}](t, f.get(t, e, "services"))
+	want := map[string]linked{
+		"own": {"shop", "stk-shop"}, "ghost": {"gone", ""}, "forged": {"other", ""}, "foreign": {"legacy", ""},
+	}
+	if len(list.Items) != len(want) {
+		t.Fatalf("list = %+v, want %d rows", list.Items, len(want))
+	}
+	for _, it := range list.Items {
+		if it.linked != want[it.Name] {
+			t.Errorf("list row %s = %+v, want %+v", it.Name, it.linked, want[it.Name])
+		}
+	}
+	for id, name := range map[string]string{"svc-own": "own", "svc-ghost": "ghost", "svc-forged": "forged", "svc-foreign": "foreign"} {
+		if got := decode[linked](t, f.get(t, e, "services/"+id)); got != want[name] {
+			t.Errorf("detail %s = %+v, want %+v", name, got, want[name])
+		}
+		if got := decode[linked](t, f.get(t, e, "services/"+id+"/spec")); got != want[name] {
+			t.Errorf("spec %s = %+v, want %+v", name, got, want[name])
+		}
+	}
+}
+
+// TestAStackOwnedRefusalNamesTheBayplanStackOnlyWhenBayplanManagesIt is the stack_owned 409 a service
+// page gets: the stack in errors as stack, and as bayplanStackId when the SPA may link to it.
+func TestAStackOwnedRefusalNamesTheBayplanStackOnlyWhenBayplanManagesIt(t *testing.T) {
+	t.Parallel()
+	f, e := serviceEnv(t, stackLinkServices()...)
+	f.insertStackRow(t, e.ID, "stk-shop", "shop")
+	for service, want := range map[string]string{"svc-own": "stk-shop", "svc-ghost": "", "svc-forged": "", "svc-foreign": ""} {
+		rec := f.removeService(t, e, service, "")
+		if rec.code != http.StatusConflict || rec.ptyp != "stack_owned" {
+			t.Fatalf("remove %s = %d %s (%s), want 409 stack_owned", service, rec.code, rec.body, rec.ptyp)
+		}
+		var p actionProblem
+		if err := json.Unmarshal(rec.body, &p); err != nil {
+			t.Fatal(err)
+		}
+		if p.at("stack") == "" || p.at("bayplanStackId") != want {
+			t.Errorf("remove %s: stack %q, bayplanStackId %q, want the stack named and bayplanStackId %q", service, p.at("stack"), p.at("bayplanStackId"), want)
+		}
 	}
 }
