@@ -31,7 +31,7 @@ func (r *recorder) Fatalf(format string, args ...any) {
 
 func TestNoSecretRunReportsEveryRunOfTheSecretAndNothingElse(t *testing.T) {
 	t.Parallel()
-	const secret = "Zq9xkwmpr"
+	const needle = "Zq9xkwmpr"
 	const wordy = "2024secretword"
 	cases := map[string]struct {
 		secret string
@@ -43,7 +43,7 @@ func TestNoSecretRunReportsEveryRunOfTheSecretAndNothingElse(t *testing.T) {
 		fatal bool
 	}{
 		"a window of the secret in a loader's words": {
-			secret: secret, texts: []string{"invalid size: 'xkwm'"}, reports: 1, names: []string{"xkwm"},
+			secret: needle, texts: []string{"invalid size: 'xkwm'"}, reports: 1, names: []string{"xkwm"},
 		},
 		"the fixed sentence for a path holds no run, though it says secret": {
 			secret: wordy, texts: []string{stacks.SecretValueMessage("services.web.mem_limit")},
@@ -55,19 +55,19 @@ func TestNoSecretRunReportsEveryRunOfTheSecretAndNothingElse(t *testing.T) {
 			secret: wordy, texts: []string{stacks.SecretValueMessage("")},
 		},
 		"a secret in the key path before the value sentence is reported": {
-			secret: secret, texts: []string{stacks.SecretValueMessage(secret)}, reports: 6, names: []string{"Zq9x"},
+			secret: needle, texts: []string{stacks.SecretValueMessage(needle)}, reports: 6, names: []string{"Zq9x"},
 		},
 		"a secret in the key path before the file sentence is reported": {
-			secret: secret, texts: []string{stacks.SecretFileMessage(secret)}, reports: 6, names: []string{"Zq9x"},
+			secret: needle, texts: []string{stacks.SecretFileMessage(needle)}, reports: 6, names: []string{"Zq9x"},
 		},
 		"a removal never joins its neighbours into a run": {
-			secret: secret, texts: []string{"xk" + stacks.SecretValueMessage("") + "wm"},
+			secret: needle, texts: []string{"xk" + stacks.SecretValueMessage("") + "wm"},
 		},
 		"a run shorter than the minimum is not a run": {
-			secret: secret, texts: []string{"Zq9"},
+			secret: needle, texts: []string{"Zq9"},
 		},
 		"two different runs give two reports": {
-			secret: secret, texts: []string{"kwmp ... Zq9x"}, reports: 2, names: []string{"kwmp", "Zq9x"},
+			secret: needle, texts: []string{"kwmp ... Zq9x"}, reports: 2, names: []string{"kwmp", "Zq9x"},
 		},
 		"a secret shorter than the minimum is a fatal": {
 			secret: "abc", texts: []string{"abc"}, fatal: true,

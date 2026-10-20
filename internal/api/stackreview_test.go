@@ -16,6 +16,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stackops/stackopstest"
 	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/bayplan/internal/stacks/stackstest"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
@@ -1114,7 +1115,7 @@ func TestReviewAnswerNeverQuotesPartOfASecret(t *testing.T) {
 	st := newStack(t, admin, "partial")
 	saveCompose(t, operator, st.ID, "services:\n  web:\n    image: nginx:1.27-alpine\n    mem_limit: ${PW}\n", partSecretVars(t, "Password2024!"))
 
-	_, code, raw := operator.reviewStack(st.ID, `{}`)
+	answer, code, raw := operator.reviewStack(st.ID, `{}`)
 	if code != http.StatusOK {
 		t.Fatalf("review: %d %s", code, raw)
 	}
@@ -1124,4 +1125,9 @@ func TestReviewAnswerNeverQuotesPartOfASecret(t *testing.T) {
 	if !strings.Contains(raw, stacks.SecretValueMessage("services.web.mem_limit")) {
 		t.Errorf("review answer = %s, want the fixed sentence at services.web.mem_limit", raw)
 	}
+	var messages []string
+	for _, p := range answer.Problems {
+		messages = append(messages, p.Message)
+	}
+	stackstest.NoSecretRun(t, "Password2024!", messages...)
 }

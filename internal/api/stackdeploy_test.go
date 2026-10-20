@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"math/rand/v2"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"strconv"
@@ -21,6 +22,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/bayplan/internal/stacks/stackstest"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
@@ -938,6 +940,18 @@ func partSecretVars(t *testing.T, value string) string {
 	return string(b)
 }
 
+// loaderWordsOf is the text of a 422 that is built from the loader's or the converter's words: its detail and
+// every message of its errors. Locations and the raw body hold API fields and key paths, which are not scanned.
+func loaderWordsOf(t *testing.T, rec *httptest.ResponseRecorder) []string {
+	t.Helper()
+	em := answerOf[huma.ErrorModel](t, rec)
+	out := []string{em.Detail}
+	for _, d := range em.Errors {
+		out = append(out, d.Message)
+	}
+	return out
+}
+
 // A deploy refused at a field fed by a secret variable carries the fixed sentence and no part of the
 // value, though go-units quotes a substring of it (07-40, D-02, T-07-172).
 func TestADeployRefusalNeverQuotesPartOfASecret(t *testing.T) {
@@ -973,6 +987,7 @@ func TestADeployRefusalNeverQuotesPartOfASecret(t *testing.T) {
 					t.Errorf("deploy answer = %s, want no part (%q) of the secret", raw, part)
 				}
 			}
+			stackstest.NoSecretRun(t, tc.secret, loaderWordsOf(t, rec)...)
 			if w := f.fake.Writes(); len(w) != 0 {
 				t.Errorf("writes = %v, want none", w)
 			}
@@ -1027,6 +1042,7 @@ func TestADeployNeverQuotesPartOfASecretTheConverterSplits(t *testing.T) {
 					t.Errorf("deploy answer = %s, want no part (%q) of the secret", raw, part)
 				}
 			}
+			stackstest.NoSecretRun(t, tc.secret, loaderWordsOf(t, rec)...)
 			if w := f.fake.Writes(); len(w) != 0 {
 				t.Errorf("writes = %v, want none", w)
 			}
@@ -1040,7 +1056,7 @@ func TestADeployNeverQuotesPartOfASecretTheConverterSplits(t *testing.T) {
 // replaced before the answers are compared, and the check for a run of the secret is not applied to them.
 func TestADeployRefusalOfAPlainFieldIsTheSameForEveryGuessAtASecret(t *testing.T) {
 	t.Parallel()
-	const secret = "Zq9xkwmpr"
+	const needle = "Zq9xkwmpr"
 	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n    environment:\n      DB: ${PW}\n"
 	guesses := []string{"xkwm", "kwmp", "xkwn", "aaaa"}
 	type shape struct {
@@ -1071,7 +1087,7 @@ func TestADeployRefusalOfAPlainFieldIsTheSameForEveryGuessAtASecret(t *testing.T
 			var first shape
 			for i, g := range guesses {
 				compose := head + strings.Replace(tc.field, "%s", g, 1)
-				v := saveCompose(t, operator, st.ID, compose, partSecretVars(t, secret))
+				v := saveCompose(t, operator, st.ID, compose, partSecretVars(t, needle))
 				rec := operator.deploy(st.ID, `{"draftVersion":`+itoaT(v)+`}`)
 				if rec.Code != http.StatusUnprocessableEntity {
 					t.Fatalf("deploy of %q: %d %.300s, want 422", g, rec.Code, rec.Body)
