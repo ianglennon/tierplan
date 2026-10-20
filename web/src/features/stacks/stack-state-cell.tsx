@@ -26,6 +26,11 @@ const TONE: Record<StackState, HealthState> = {
 
 interface StackStateCellProps {
   state: StackState;
+  // The services that run and the services there are: what Degraded explains in a Tooltip.
+  running?: number;
+  total?: number;
+  // The service the last deploy stopped at: what Deploy failed explains in a Tooltip.
+  failedService?: string;
 }
 
 // StackStateCell is a stack's state as a dot and a word, never colour alone. The words are text

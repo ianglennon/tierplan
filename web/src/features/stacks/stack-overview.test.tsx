@@ -2,17 +2,24 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
 import {
   STACK_SERVICES_POLL_BUSY_MS,
   STACK_SERVICES_POLL_MS,
+  type StackDetail,
+  stackQuery,
   stackServicesQuery,
 } from "@/api/stacks";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { DeployBanner } from "@/features/stacks/deploy-banner";
+import { DraftBanner } from "@/features/stacks/draft-banner";
+import { StackDetailLayout } from "@/features/stacks/stack-detail-layout";
 import { StackOverview } from "@/features/stacks/stack-overview";
+import { StackStateCell } from "@/features/stacks/stack-state-cell";
+import { StoppedAlert } from "@/features/stacks/stopped-alert";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
@@ -23,7 +30,9 @@ const IMAGE_ID = `sha256:${"c".repeat(64)}`;
 
 type Json = Record<string, unknown>;
 
+let role: "viewer" | "operator";
 let detail: Json;
+let job: Json;
 let services: Json | "fail";
 let client: QueryClient;
 let servicesCalls: number;
@@ -53,7 +62,7 @@ beforeEach(() => {
     name: "tracer",
     target: "swarm",
     source: "inline",
-    state: "deployed",
+    state: "running",
     lastDeployedAt: "2026-10-19T11:00:00Z",
     lastDeployedBy: "bob",
     hasDraft: false,
@@ -65,6 +74,21 @@ beforeEach(() => {
     rollback: { available: false, deployedAt: "", deployedBy: "" },
   };
   services = { items: [swarmService()] };
+  role = "operator";
+  job = {
+    id: "j1",
+    stackId: "s1",
+    mode: "deploy",
+    state: "running",
+    createdAt: "2026-10-19T12:00:00Z",
+    finishedAt: "",
+    startedBy: "ada",
+    items: [
+      { id: "service:a", kind: "service", state: "done", label: "a", current: 1, total: 1 },
+      { id: "service:b", kind: "service", state: "working", label: "b", current: 0, total: 1 },
+    ],
+    output: [],
+  };
   servicesCalls = 0;
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
@@ -72,11 +96,12 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (req: Request) => {
       const path = new URL(req.url).pathname;
-      if (path === "/api/me") return Response.json(makeMe({ envs: { [ENV]: "operator" } }));
+      if (path === "/api/me") return Response.json(makeMe({ envs: { [ENV]: role } }));
       if (path === "/api/environments") {
         return Response.json({ items: [{ id: ENV, name: "Prod", envType: "swarm" }] });
       }
       if (path === `/api/env/${ENV}/stacks/s1`) return Response.json(detail);
+      if (path === `/api/env/${ENV}/stacks/s1/deploys/j1`) return Response.json(job);
       if (path === `/api/env/${ENV}/stacks/s1/services`) {
         servicesCalls++;
         if (services === "fail") {
@@ -298,5 +323,525 @@ describe("stackServicesQuery", () => {
     mount();
     await screen.findByRole("table");
     expect(servicesCalls).toBe(1);
+  });
+});
+
+function stackOf(over: Partial<StackDetail> = {}): StackDetail {
+  return {
+    ...(detail as unknown as StackDetail),
+    rollback: { available: false, deployedAt: "", deployedBy: "" },
+    draftSavedAt: "",
+    draftSavedBy: "",
+    ...over,
+  };
+}
+
+function operation(over: Partial<NonNullable<StackDetail["lastOperation"]>> = {}) {
+  return {
+    kind: "deploy",
+    state: "running",
+    code: "",
+    failedService: "",
+    jobId: "j1",
+    startedBy: "ada",
+    startedAt: "2026-10-19T12:00:00Z",
+    endedAt: "",
+    ...over,
+  } as NonNullable<StackDetail["lastOperation"]>;
+}
+
+function mountLayout() {
+  render(
+    <QueryClientProvider client={client}>
+      <TestRouter>
+        <TooltipProvider>
+          <StackDetailLayout envId={ENV} stackId="s1">
+            <StackOverview envId={ENV} stackId="s1" />
+          </StackDetailLayout>
+        </TooltipProvider>
+      </TestRouter>
+    </QueryClientProvider>,
+  );
+}
+
+describe("StackStateCell", () => {
+  function cell(props: Parameters<typeof StackStateCell>[0]) {
+    render(
+      <TestRouter>
+        <TooltipProvider>
+          <StackStateCell {...props} />
+        </TooltipProvider>
+      </TestRouter>,
+    );
+  }
+
+  it("words every state", () => {
+    const words: Record<string, string> = {
+      removing: "Removing",
+      deploying: "Deploying",
+      rolling_back: "Rolling back",
+      starting: "Starting",
+      stopped: "Stopped",
+      deploy_failed: "Deploy failed",
+      not_running: "Not running",
+      degraded: "Degraded",
+      running: "Running",
+      not_deployed: "Not deployed",
+      unknown: "Unknown",
+    };
+    for (const [state, word] of Object.entries(words)) {
+      cell({ state: state as StackDetail["state"] });
+      expect(screen.getByText(word)).toBeTruthy();
+      cleanup();
+    }
+  });
+
+  it("says in a Tooltip how many services run when the stack is Degraded", async () => {
+    cell({ state: "degraded", running: 2, total: 3 });
+    fireEvent.focus(screen.getByText("Degraded"));
+    fireEvent.pointerMove(screen.getByText("Degraded"));
+    expect((await screen.findAllByText("2 of 3 services running")).length).toBeGreaterThan(0);
+  });
+
+  it("says in a Tooltip where the last deploy stopped when it failed", async () => {
+    cell({ state: "deploy_failed", failedService: "web_api" });
+    fireEvent.focus(screen.getByText("Deploy failed"));
+    fireEvent.pointerMove(screen.getByText("Deploy failed"));
+    expect(
+      (
+        await screen.findAllByText(
+          "The last deploy stopped at web_api. What is running is shown below.",
+        )
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("pulses the dot of an operation under way and not the dot of Degraded", () => {
+    cell({ state: "deploying" });
+    expect(document.querySelector(".animate-pulse")).not.toBeNull();
+    cleanup();
+    cell({ state: "degraded" });
+    expect(document.querySelector(".animate-pulse")).toBeNull();
+  });
+});
+
+describe("StackOverview details", () => {
+  it("lists the details of a deployed stack with its last deploy and its draft", async () => {
+    detail = {
+      ...detail,
+      hasDraft: true,
+      draftSavedAt: "2026-10-19T13:00:00Z",
+      draftSavedBy: "carol",
+    };
+    mount();
+
+    const card = await screen.findByRole("region", { name: "Details" });
+    const row = (label: string) => within(card).getByText(label).nextElementSibling as HTMLElement;
+    expect(within(row("Environment")).getByRole("link", { name: "Prod" })).toBeTruthy();
+    expect(row("Target").textContent).toBe("Swarm");
+    expect(row("Source").textContent).toBe("Inline");
+    expect(row("Created").textContent).toContain("by ada");
+    expect(row("Last deployed").textContent).toContain("by bob");
+    expect(row("Draft").textContent).toMatch(/^Saved .* by carol$/);
+    expect(row("Stack ID").textContent).toContain("s1");
+  });
+
+  it("reads Standalone host, Never and No draft where they apply", async () => {
+    detail = { ...detail, target: "standalone", lastDeployedAt: "", lastDeployedBy: "" };
+    mount();
+
+    const card = await screen.findByRole("region", { name: "Details" });
+    const row = (label: string) => within(card).getByText(label).nextElementSibling as HTMLElement;
+    expect(row("Target").textContent).toBe("Standalone host");
+    expect(row("Last deployed").textContent).toBe("Never");
+    expect(row("Draft").textContent).toBe("No draft");
+  });
+
+  it("copies the stack ID and says so", async () => {
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    mount();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Copy the stack ID" }));
+
+    expect(writeText).toHaveBeenCalledWith("s1");
+    expect(await screen.findByText("Copied the stack ID")).toBeTruthy();
+  });
+
+  it("draws a name and a user with markup in them as text", async () => {
+    detail = { ...detail, createdBy: "<b>ada</b>" };
+    mount();
+
+    const card = await screen.findByRole("region", { name: "Details" });
+    expect(within(card).getByText(/<b>ada<\/b>/)).toBeTruthy();
+    expect(card.querySelector("b")).toBeNull();
+  });
+});
+
+describe("StackOverview of a stack that was never deployed", () => {
+  beforeEach(() => {
+    detail = {
+      ...detail,
+      state: "not_deployed",
+      lastDeployedAt: "",
+      lastDeployedBy: "",
+      lastOperation: undefined,
+    };
+  });
+
+  it("shows Not deployed yet in place of the services, with Open editor and Deploy…, and the Details beside it", async () => {
+    mount();
+
+    expect(await screen.findByRole("heading", { name: "Not deployed yet" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open editor" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Deploy…" }).getAttribute("href")).toBe(
+      "/env/e1/stacks/s1/review",
+    );
+    expect(screen.getByRole("region", { name: "Details" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Services" })).toBeNull();
+    expect(servicesCalls).toBe(0);
+  });
+
+  it("offers a Viewer the editor to read and no Deploy…", async () => {
+    role = "viewer";
+    mount();
+
+    expect(await screen.findByRole("link", { name: "Open editor" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Deploy…" })).toBeNull();
+  });
+});
+
+describe("StackOverview of a stack with a draft and no deployment", () => {
+  it("keeps the services of a stopped stack listed", async () => {
+    detail = { ...detail, state: "stopped", stopped: true };
+    services = { items: [swarmService({ running: 0, desired: 0, state: "stopped" })] };
+    mount();
+
+    expect(await screen.findByRole("table")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Not deployed yet" })).toBeNull();
+  });
+});
+
+describe("DeployBanner", () => {
+  it("names the operation, counts the services done and opens the console", async () => {
+    render(
+      <QueryClientProvider client={client}>
+        <TestRouter>
+          <DeployBanner stack={stackOf({ lastOperation: operation() })} />
+        </TestRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("Deploying tracer")).toBeTruthy();
+    expect(await screen.findByText("1 of 2 services done.")).toBeTruthy();
+    expect(screen.getByRole("progressbar", { name: "Deploy progress" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open console" }).getAttribute("href")).toBe(
+      "/env/e1/stacks/s1/deploys/j1",
+    );
+  });
+
+  it("counts one service in the singular", async () => {
+    job = {
+      ...job,
+      items: [
+        { id: "service:a", kind: "service", state: "done", label: "a", current: 1, total: 1 },
+      ],
+    };
+    render(
+      <QueryClientProvider client={client}>
+        <TestRouter>
+          <DeployBanner stack={stackOf({ lastOperation: operation() })} />
+        </TestRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("1 of 1 service done.")).toBeTruthy();
+  });
+
+  it("words a roll back, a removal and a start", async () => {
+    for (const [kind, title] of [
+      ["rollback", "Rolling back tracer"],
+      ["remove", "Removing tracer"],
+      ["start", "Starting tracer"],
+    ] as const) {
+      render(
+        <QueryClientProvider client={client}>
+          <TestRouter>
+            <DeployBanner stack={stackOf({ lastOperation: operation({ kind }) })} />
+          </TestRouter>
+        </QueryClientProvider>,
+      );
+      expect(await screen.findByText(title)).toBeTruthy();
+      cleanup();
+    }
+  });
+
+  it("shows nothing for a stack no operation is running on", () => {
+    render(
+      <QueryClientProvider client={client}>
+        <TestRouter>
+          <DeployBanner
+            stack={stackOf({
+              lastOperation: operation({ state: "done", endedAt: "2026-10-19T12:01:00Z" }),
+            })}
+          />
+        </TestRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(screen.queryByText("Deploying tracer")).toBeNull();
+    expect(screen.queryByText("Deploy complete")).toBeNull();
+  });
+
+  it("says Deploy complete when the operation ends well and collapses 4 s later", async () => {
+    const view = (stack: StackDetail) => (
+      <QueryClientProvider client={client}>
+        <TestRouter>
+          <DeployBanner stack={stack} />
+        </TestRouter>
+      </QueryClientProvider>
+    );
+    const { rerender } = render(view(stackOf({ lastOperation: operation() })));
+    expect(await screen.findByText("Deploying tracer")).toBeTruthy();
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      rerender(
+        view(
+          stackOf({ lastOperation: operation({ state: "done", endedAt: "2026-10-19T12:01:00Z" }) }),
+        ),
+      );
+      expect(screen.getByText("Deploy complete")).toBeTruthy();
+      expect(screen.queryByText("Deploying tracer")).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(3_900);
+      });
+      expect(screen.getByText("Deploy complete")).toBeTruthy();
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+      expect(screen.queryByText("Deploy complete")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("collapses at once, with no Deploy complete, when the operation fails", async () => {
+    const view = (stack: StackDetail) => (
+      <QueryClientProvider client={client}>
+        <TestRouter>
+          <DeployBanner stack={stack} />
+        </TestRouter>
+      </QueryClientProvider>
+    );
+    const { rerender } = render(view(stackOf({ lastOperation: operation() })));
+    expect(await screen.findByText("Deploying tracer")).toBeTruthy();
+
+    rerender(
+      view(
+        stackOf({ lastOperation: operation({ state: "failed", endedAt: "2026-10-19T12:01:00Z" }) }),
+      ),
+    );
+
+    expect(screen.queryByText("Deploy complete")).toBeNull();
+    expect(screen.queryByText("Deploying tracer")).toBeNull();
+  });
+});
+
+describe("DraftBanner", () => {
+  function draft(stack: StackDetail) {
+    render(
+      <QueryClientProvider client={client}>
+        <TestRouter>
+          <DraftBanner stack={stack} envName="Prod" />
+        </TestRouter>
+      </QueryClientProvider>,
+    );
+  }
+  const pending = () =>
+    stackOf({ hasDraft: true, draftSavedAt: "2026-10-19T13:00:00Z", draftSavedBy: "carol" });
+
+  it("says who saved the draft and that nothing has changed on the environment", async () => {
+    draft(pending());
+
+    expect(await screen.findByText("Draft saved, not deployed")).toBeTruthy();
+    expect(screen.getByText(/carol saved changes/)).toBeTruthy();
+    expect(screen.getByText(/Nothing has changed on Prod yet\./)).toBeTruthy();
+  });
+
+  it("offers an Operator the editor and the review", async () => {
+    draft(pending());
+
+    expect(await screen.findByRole("link", { name: "Open editor" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Review and deploy" }).getAttribute("href")).toBe(
+      "/env/e1/stacks/s1/review",
+    );
+  });
+
+  it("shows a Viewer the text and no buttons", async () => {
+    role = "viewer";
+    draft(pending());
+
+    expect(await screen.findByText("Draft saved, not deployed")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Review and deploy" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Open editor" })).toBeNull();
+  });
+
+  it("shows nothing when no draft is waiting", () => {
+    draft(stackOf({ hasDraft: false }));
+
+    expect(screen.queryByText("Draft saved, not deployed")).toBeNull();
+  });
+});
+
+describe("StoppedAlert", () => {
+  it("says the stack is stopped and offers Start stack once something can start it", async () => {
+    const onStart = vi.fn();
+    render(
+      <QueryClientProvider client={client}>
+        <TestRouter>
+          <StoppedAlert stack={stackOf({ stopped: true })} onStart={onStart} />
+        </TestRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("tracer is stopped")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Networks, volumes, secrets and configs are still there. Start brings back the last deployed version.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Start stack" }));
+    expect(onStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows nothing for a stack that is not stopped", () => {
+    render(
+      <TestRouter>
+        <StoppedAlert stack={stackOf({ stopped: false })} onStart={() => {}} />
+      </TestRouter>,
+    );
+
+    expect(screen.queryByText("tracer is stopped")).toBeNull();
+  });
+
+  it("draws no button that does nothing", async () => {
+    render(
+      <QueryClientProvider client={client}>
+        <TestRouter>
+          <StoppedAlert stack={stackOf({ stopped: true })} />
+        </TestRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("tracer is stopped")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Start stack" })).toBeNull();
+  });
+});
+
+describe("StackDetailLayout alerts", () => {
+  it("shows the alerts in the order deploy failed, operation lock, stopped, draft pending", async () => {
+    detail = {
+      ...detail,
+      state: "deploy_failed",
+      stopped: true,
+      hasDraft: true,
+      draftSavedAt: "2026-10-19T13:00:00Z",
+      draftSavedBy: "carol",
+      lastOperation: operation({
+        state: "failed",
+        code: "service_rejected",
+        failedService: "tracer_web",
+      }),
+      lock: {
+        stackId: "s2",
+        stackName: "other",
+        jobId: "j9",
+        kind: "deploy",
+        startedAt: "2026-10-19T12:30:00Z",
+        startedBy: "bob",
+      },
+    };
+    mountLayout();
+
+    const failed = await screen.findByText("The last deploy failed");
+    const lock = await waitFor(() => {
+      const found = document.querySelector("[data-slot=operation-lock]");
+      if (!found) throw new Error("no operation lock alert yet");
+      return found;
+    });
+    const stopped = await screen.findByText("tracer is stopped");
+    const drafted = await screen.findByText("Draft saved, not deployed");
+    const follows = (a: Node, b: Node) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(failed, lock)).toBe(true);
+    expect(follows(lock, stopped)).toBe(true);
+    expect(follows(stopped, drafted)).toBe(true);
+  });
+
+  it("shows the deploy banner and the draft banner together and suppresses the stopped alert while a deploy runs", async () => {
+    detail = {
+      ...detail,
+      state: "deploying",
+      stopped: true,
+      hasDraft: true,
+      draftSavedAt: "2026-10-19T13:00:00Z",
+      draftSavedBy: "carol",
+      lastOperation: operation(),
+    };
+    mountLayout();
+
+    const banner = await screen.findByText("Deploying tracer");
+    const drafted = await screen.findByText("Draft saved, not deployed");
+    expect(banner.compareDocumentPosition(drafted) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText("tracer is stopped")).toBeNull();
+  });
+
+  it("says in the header how many services run when the stack is Degraded", async () => {
+    detail = { ...detail, state: "degraded", servicesRunning: 2, servicesTotal: 3 };
+    mountLayout();
+
+    const dot = (await screen.findAllByText("Degraded"))[0] as HTMLElement;
+    fireEvent.focus(dot);
+    fireEvent.pointerMove(dot);
+    expect((await screen.findAllByText("2 of 3 services running")).length).toBeGreaterThan(0);
+  });
+
+  it("names where the last deploy stopped in the Tooltip of Deploy failed", async () => {
+    detail = {
+      ...detail,
+      state: "deploy_failed",
+      lastOperation: operation({
+        state: "failed",
+        code: "service_rejected",
+        failedService: "tracer_web",
+      }),
+    };
+    mountLayout();
+
+    const word = (await screen.findAllByText("Deploy failed"))[0] as HTMLElement;
+    fireEvent.focus(word);
+    fireEvent.pointerMove(word);
+    expect(
+      (
+        await screen.findAllByText(
+          "The last deploy stopped at tracer_web. What is running is shown below.",
+        )
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+});
+
+describe("stackQuery", () => {
+  const interval = (data: unknown) =>
+    (stackQuery(ENV, "s1").refetchInterval as (q: { state: { data: unknown } }) => number | false)({
+      state: { data },
+    });
+
+  it("reads the stack every 2 s while an operation runs on it and at the lists' pace otherwise", () => {
+    expect(interval({ lastOperation: { state: "running" } })).toBe(2_000);
+    expect(interval({ lastOperation: { state: "done" } })).toBe(30_000);
+    expect(interval(undefined)).toBe(30_000);
   });
 });

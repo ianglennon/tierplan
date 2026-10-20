@@ -173,7 +173,7 @@ export function stackServicesQuery(envId: string, stackId: string, o: StackServi
       }
       return res.data;
     },
-    retry: (count, error) => !isStackGone(error) && count < 2,
+    retry: (count, error) => !isStackGone(error) && count < 1,
     refetchInterval: () => {
       if (document.visibilityState !== "visible") return false;
       if (o.target !== "swarm") return LIST_REFETCH_MS;
