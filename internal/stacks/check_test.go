@@ -615,3 +615,59 @@ func TestCheckNeverCarriesASecretValueInAnAnswer(t *testing.T) {
 		}
 	}
 }
+
+// escapedSecret holds a backslash, a double quote, a single quote, an inner and a trailing line
+// break: every character the quoting of a Go error, the schema validator or the loader changes.
+const escapedSecret = "hunter2-alpha\\hunter2-bravo\"hunter2-charlie'hunter2-delta\nhunter2-echo\n"
+
+var escapedSecretParts = []string{"hunter2-alpha", "hunter2-bravo", "hunter2-charlie", "hunter2-delta", "hunter2-echo"}
+
+// trailingBackslashSecret ends in a backslash and holds a single quote, where the order of the
+// schema validator's two replacements decides how it is written.
+const trailingBackslashSecret = "hunter2-foxtrot'hunter2-golf\\"
+
+var trailingBackslashParts = []string{"hunter2-foxtrot", "hunter2-golf"}
+
+func TestCheckNeverCarriesAnEscapedSecretValue(t *testing.T) {
+	t.Parallel()
+	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
+	cases := []struct {
+		name   string
+		body   string
+		secret string
+		parts  []string
+	}{
+		{"deploy.replicas, Go-escaped", "    deploy:\n      replicas: ${PW}\n", escapedSecret, escapedSecretParts},
+		{"cpus, Go-escaped", "    cpus: ${PW}\n", escapedSecret, escapedSecretParts},
+		{"pull_policy, schema-escaped", "    pull_policy: ${PW}\n", escapedSecret, escapedSecretParts},
+		{"pull_policy, trailing backslash", "    pull_policy: ${PW}\n", trailingBackslashSecret, trailingBackslashParts},
+		{"privileged, raw and trimmed", "    privileged: ${PW}\n", escapedSecret, escapedSecretParts},
+		{"healthcheck.interval, raw in quotes", "    healthcheck:\n      test: [CMD, \"true\"]\n      interval: ${PW}\n", escapedSecret, escapedSecretParts},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			res := withVars(t, head+tc.body, stacks.Var{Name: "PW", Value: tc.secret, Secret: true})
+			refused, hidden := false, false
+			for _, p := range res.Problems {
+				if p.Severity == stacks.SeverityError {
+					refused = true
+				}
+				if strings.Contains(p.Message, stacks.Hidden) {
+					hidden = true
+				}
+				for _, part := range tc.parts {
+					if strings.Contains(p.Message, part) || strings.Contains(p.Key, part) {
+						t.Errorf("problem %+v carries %q of the secret", p, part)
+					}
+				}
+			}
+			if !refused {
+				t.Fatalf("problems = %+v, want the position refused", res.Problems)
+			}
+			if !hidden {
+				t.Errorf("problems = %+v, want one message to show %s", res.Problems, stacks.Hidden)
+			}
+		})
+	}
+}
