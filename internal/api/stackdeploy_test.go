@@ -741,6 +741,81 @@ func TestAnOversizeSecretFileIsRefusedByTheReviewAndTheDeploy(t *testing.T) {
 	}
 }
 
+// composeEnvFile is a stack whose one service reads its environment from app.env, a file of the stack.
+const composeEnvFile = "services:\n  web:\n    image: nginx:1.27-alpine\n    env_file: app.env\n"
+
+// envFileFiles are the files of a stack that uses env_file: its compose file and app.env, which sets FROM_FILE.
+func envFileFiles(compose string) []draftFile {
+	return []draftFile{{Path: "compose.yaml", Content: compose}, {Path: "app.env", Content: "FROM_FILE=1\n"}}
+}
+
+// saveFiles saves files over the draft as c and returns the new version.
+func saveFiles(t *testing.T, c *roleCaller, stackID string, files ...draftFile) int64 {
+	t.Helper()
+	v := draftVersion(t, c, stackID)
+	if rec := c.saveDraft(stackID, filesBody(t, v, files...)); rec.Code != http.StatusOK {
+		t.Fatalf("save: %d %s", rec.Code, rec.Body)
+	}
+	return draftVersion(t, c, stackID)
+}
+
+// deployFilesGood saves files as the draft, deploys it and waits for it to end good.
+func (f *envFix) deployFilesGood(t *testing.T, c *roleCaller, stackID string, files ...draftFile) {
+	t.Helper()
+	v := saveFiles(t, c, stackID, files...)
+	if job := f.deployAndWait(t, c, stackID, `{"draftVersion":`+itoaT(v)+`}`); job.State != "done" {
+		t.Fatalf("deploy = %+v, want it done", job)
+	}
+}
+
+// hasEnv reports whether env holds the entry want.
+func hasEnv(env []string, want string) bool {
+	for _, e := range env {
+		if e == want {
+			return true
+		}
+	}
+	return false
+}
+
+// A stack that uses env_file reviews clean, so it must deploy: the deploy takes its project from the check the
+// review ran, with the file's variables already in the service (review CR-05).
+func TestASwarmStackThatUsesAnEnvFileReviewsCleanAndDeploysWithTheFilesValues(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "envf")
+	v := saveFiles(t, operator, st.ID, envFileFiles(composeEnvFile)...)
+
+	rv, code, raw := operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, raw)
+	}
+	for _, p := range rv.Problems {
+		if p.Severity == "error" {
+			t.Fatalf("problems = %+v, want no error: the review accepts an env_file stack", rv.Problems)
+		}
+	}
+	rec := operator.deploy(st.ID, `{"draftVersion":`+itoaT(v)+`}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("deploy: %d %.300s, want 202: what the review accepts deploys", rec.Code, rec.Body)
+	}
+	jobID := answerOf[struct {
+		JobID string `json:"jobId"`
+	}](t, rec).JobID
+	if job := f.awaitDeploy(t, jobID); job.State != "done" {
+		t.Fatalf("deploy job = %+v, want it done", job)
+	}
+	made := f.fake.ServiceCreates()
+	if len(made) == 0 {
+		t.Fatal("no service was created")
+	}
+	if env := made[len(made)-1].Spec.TaskTemplate.ContainerSpec.Env; !hasEnv(env, "FROM_FILE=1") {
+		t.Errorf("env = %v, want the env file's FROM_FILE=1", env)
+	}
+}
+
 // Roll back (plan 07-19, STK-07, D-14): one click redeploys exactly what last ran well, with its own
 // images, and asks no registry.
 
