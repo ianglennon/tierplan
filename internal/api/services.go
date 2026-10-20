@@ -23,6 +23,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/registry"
+	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 )
 
@@ -81,22 +82,25 @@ type ServicesDeps struct {
 	Resolver *registry.Resolver
 	Audit    *audit.Writer
 	Checker  *rbac.Checker
+	// Store holds the stacks a stack label is confirmed against (T-07-146). Nil links no stack.
+	Store *store.Store
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
 
 // ServiceItem is one swarm service as the list shows it.
 type ServiceItem struct {
-	ID          string `json:"id" doc:"The service ID"`
-	Name        string `json:"name" doc:"The service name"`
-	Mode        string `json:"mode" enum:"replicated,global,replicated-job,global-job" doc:"How the swarm runs it"`
-	Running     uint64 `json:"running" doc:"Tasks that are running now"`
-	Desired     uint64 `json:"desired" doc:"Tasks the swarm wants running. For a global service this is the count of nodes it runs on; for a job, 0"`
-	UpdateState string `json:"updateState" doc:"The state of the service's last update or rollback (updating, paused, completed, rollback_started, rollback_paused, rollback_completed); empty when it has none"`
-	Image       string `json:"image" doc:"The image the service's spec names, as written; empty when it has none"`
-	Stack       string `json:"stack" doc:"The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own"`
-	Agent       bool   `json:"agent" doc:"True for a Bayplan agent service"`
-	UpdatedAt   string `json:"updatedAt" format:"date-time" doc:"When the service's spec last changed"`
+	ID             string `json:"id" doc:"The service ID"`
+	Name           string `json:"name" doc:"The service name"`
+	Mode           string `json:"mode" enum:"replicated,global,replicated-job,global-job" doc:"How the swarm runs it"`
+	Running        uint64 `json:"running" doc:"Tasks that are running now"`
+	Desired        uint64 `json:"desired" doc:"Tasks the swarm wants running. For a global service this is the count of nodes it runs on; for a job, 0"`
+	UpdateState    string `json:"updateState" doc:"The state of the service's last update or rollback (updating, paused, completed, rollback_started, rollback_paused, rollback_completed); empty when it has none"`
+	Image          string `json:"image" doc:"The image the service's spec names, as written; empty when it has none"`
+	Stack          string `json:"stack" doc:"The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own"`
+	BayplanStackID string `json:"bayplanStackId" doc:"The ID of the Bayplan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (bayplan.stack.id). Empty for a stack Bayplan does not manage"`
+	Agent          bool   `json:"agent" doc:"True for a Bayplan agent service"`
+	UpdatedAt      string `json:"updatedAt" format:"date-time" doc:"When the service's spec last changed"`
 
 	Ports           []string `json:"ports" doc:"The ports the service publishes, as published->target/protocol (8080->80/tcp), with (host) after a port published in host mode; sorted by published port. Empty when it publishes none"`
 	UpdateMessage   string   `json:"updateMessage" doc:"The swarm's message about the last update; empty when it has none"`
@@ -439,10 +443,12 @@ func listServices(ctx context.Context, d ServicesDeps, envID string, in *Service
 		Items: make([]ServiceItem, 0, len(shown)), Total: len(rows), UnfilteredTotal: len(all), Capped: len(rows) > maxListRows,
 		StatusCounts: serviceStatusCounts(all, loops), NoManager: noManager, FetchedAt: rfc3339(st.FetchedAt),
 	}
+	known := loadStackIDs(ctx, d.Store, envID, d.Log)
 	for _, row := range shown {
 		item := ServiceItem{
 			ID: row.ID, Name: row.Name, Mode: row.Mode, Running: row.Running, Desired: row.Desired,
-			UpdateState: row.UpdateState, Image: row.Image, Stack: row.Stack, Agent: row.Agent, UpdatedAt: rfc3339(row.UpdatedAt),
+			UpdateState: row.UpdateState, Image: row.Image, Stack: row.Stack, BayplanStackID: known.confirmedFor(row.Stack, row.Labels),
+			Agent: row.Agent, UpdatedAt: rfc3339(row.UpdatedAt),
 			Ports: servicePortStrings(row.Ports), UpdateMessage: row.UpdateMessage, HasPreviousSpec: row.HasPreviousSpec,
 			CreatedAt: rfc3339(row.CreatedAt),
 		}

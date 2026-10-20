@@ -224,6 +224,7 @@ export function ServiceEditorPage({
     name: "",
     mode: "replicated",
     stack: "",
+    bayplanStackId: "",
     agent: false,
     masked: false,
     spec: defaultServiceSpec(),

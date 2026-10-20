@@ -24,6 +24,7 @@ const web: ServiceItem = {
   updateState: "",
   image: "acme/web:2",
   stack: "",
+  bayplanStackId: "",
   agent: false,
   updatedAt: "2026-10-01T10:00:00Z",
   ports: [],

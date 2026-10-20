@@ -302,7 +302,7 @@ func reviewServiceUpdate(ctx context.Context, d ServicesDeps, p *rbac.Principal,
 		return e
 	})
 	if err != nil {
-		_, problem := serviceEditProblem(d, envID, err)
+		_, problem := serviceEditProblem(ctx, d, envID, err)
 		return ServiceReviewBody{}, problem
 	}
 	return reviewBody(d, envID, res)
@@ -466,7 +466,7 @@ func applyServiceUpdate(ctx context.Context, d ServicesDeps, p *rbac.Principal, 
 		}
 	}
 	if err != nil {
-		code, problem := serviceEditProblem(d, envID, err)
+		code, problem := serviceEditProblem(ctx, d, envID, err)
 		if code != codeServiceNotFound {
 			auditServiceAction(ctx, d, p, envID, in.UserAgent, audit.ActionServiceUpdated, res.ServiceID, in.ServiceID, details(code), code)
 		}
@@ -540,13 +540,13 @@ func kindsSentence(kinds []string) string {
 
 // serviceEditProblem turns the error of a review or an apply into the code its audit row records and
 // the problem the SPA words. None of the sentences holds a value of the spec.
-func serviceEditProblem(d ServicesDeps, envID string, err error) (string, error) {
-	return serviceWriteProblem(d, envID, problemUpdateFailed, err)
+func serviceEditProblem(ctx context.Context, d ServicesDeps, envID string, err error) (string, error) {
+	return serviceWriteProblem(ctx, d, envID, problemUpdateFailed, err)
 }
 
 // serviceWriteProblem is serviceEditProblem with the type of the problem for a refusal that is none of
 // the known ones: update_failed for an edit, create_failed for a create.
-func serviceWriteProblem(d ServicesDeps, envID, failed string, err error) (string, error) {
+func serviceWriteProblem(ctx context.Context, d ServicesDeps, envID, failed string, err error) (string, error) {
 	problem := func(status int, typ, detail string, errs ...*huma.ErrorDetail) (string, error) {
 		return typ, &huma.ErrorModel{Type: typ, Title: http.StatusText(status), Status: status, Detail: detail, Errors: errs}
 	}
@@ -568,7 +568,7 @@ func serviceWriteProblem(d ServicesDeps, envID, failed string, err error) (strin
 		return problem(http.StatusUnprocessableEntity, problemSpecInvalid, "The service spec can't be read: "+invalid.Message+".",
 			&huma.ErrorDetail{Location: "spec", Message: invalid.Message})
 	case errors.As(err, &owned):
-		return problemStackOwned, stackOwnedProblem(owned.Stack, "")
+		return problemStackOwned, stackOwnedProblem(owned.Stack, loadStackIDs(ctx, d.Store, envID, d.Log).confirm(owned.Stack, owned.StackID))
 	case errors.As(err, &ph) && errors.Is(err, redact.ErrPlaceholderReserved):
 		return problem(http.StatusUnprocessableEntity, problemPlaceholderReserved,
 			redact.Placeholder+" is what Bayplan shows for a value it withholds, so it can't be a value. Type the real value or remove it.",

@@ -12,7 +12,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 )
 
-func TestStackOwner(t *testing.T) {
+func TestStackOwnedLabelsNameTheStackAndTheBayplanID(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		labels map[string]string
@@ -45,9 +45,9 @@ func TestStackOwner(t *testing.T) {
 	}
 }
 
-// TestConfirmedStackID is T-07-146: a label is only a claim. An ID is linked when the environment's
+// TestStackOwnedIDIsConfirmedOnlyForAStackOfTheEnvironment is T-07-146: a label is only a claim. An ID is linked when the environment's
 // stacks hold that ID under the name the object says it belongs to.
-func TestConfirmedStackID(t *testing.T) {
+func TestStackOwnedIDIsConfirmedOnlyForAStackOfTheEnvironment(t *testing.T) {
 	t.Parallel()
 	known := stackIDs{"stk-1": "web"}
 	for name, tc := range map[string]struct {

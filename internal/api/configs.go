@@ -24,6 +24,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/registry"
 	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 )
 
@@ -58,6 +59,8 @@ type ConfigsDeps struct {
 	Audit    *audit.Writer
 	// Checker decides the second permission a rotate needs (services.control) and who may have host access.
 	Checker *rbac.Checker
+	// Store holds the stacks a stack label is confirmed against (T-07-146). Nil links no stack.
+	Store *store.Store
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }

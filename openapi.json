@@ -9663,6 +9663,10 @@
             "description": "True for a Bayplan agent service",
             "type": "boolean"
           },
+          "bayplanStackId": {
+            "description": "The ID of the Bayplan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (bayplan.stack.id). Empty for a stack Bayplan does not manage",
+            "type": "string"
+          },
           "configs": {
             "description": "The swarm configs the service uses, by reference",
             "items": {
@@ -9826,6 +9830,7 @@
           "running",
           "desired",
           "stack",
+          "bayplanStackId",
           "agent",
           "createdAt",
           "updatedAt",
@@ -10069,6 +10074,10 @@
             "description": "True for a Bayplan agent service",
             "type": "boolean"
           },
+          "bayplanStackId": {
+            "description": "The ID of the Bayplan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (bayplan.stack.id). Empty for a stack Bayplan does not manage",
+            "type": "string"
+          },
           "createdAt": {
             "description": "When the service was created",
             "format": "date-time",
@@ -10153,6 +10162,7 @@
           "updateState",
           "image",
           "stack",
+          "bayplanStackId",
           "agent",
           "updatedAt",
           "ports",
@@ -10834,6 +10844,10 @@
             "description": "True for a Bayplan agent service",
             "type": "boolean"
           },
+          "bayplanStackId": {
+            "description": "The ID of the Bayplan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (bayplan.stack.id). Empty for a stack Bayplan does not manage",
+            "type": "string"
+          },
           "masked": {
             "description": "True when a value was replaced by the placeholder \u003chidden\u003e because the caller may not reveal secrets on this environment",
             "type": "boolean"
@@ -10878,6 +10892,7 @@
           "name",
           "mode",
           "stack",
+          "bayplanStackId",
           "agent",
           "masked",
           "spec"

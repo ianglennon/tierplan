@@ -28,6 +28,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/redact"
+	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 )
 
@@ -99,6 +100,8 @@ type ContainersDeps struct {
 	// Clusters is the cluster reader whose last read says which containers are in a restart
 	// loop and which are muted (RES-13). Nil says none are.
 	Clusters *envs.Clusters
+	// Store holds the stacks a stack label is confirmed against (T-07-146). Nil links no stack.
+	Store *store.Store
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }

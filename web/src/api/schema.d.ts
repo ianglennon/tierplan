@@ -7680,6 +7680,8 @@ export interface components {
         ServiceDetailBody: {
             /** @description True for a Bayplan agent service */
             agent: boolean;
+            /** @description The ID of the Bayplan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (bayplan.stack.id). Empty for a stack Bayplan does not manage */
+            bayplanStackId: string;
             /** @description The swarm configs the service uses, by reference */
             configs: components["schemas"]["ServiceFileRefBody"][] | null;
             /**
@@ -7839,6 +7841,8 @@ export interface components {
         ServiceItem: {
             /** @description True for a Bayplan agent service */
             agent: boolean;
+            /** @description The ID of the Bayplan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (bayplan.stack.id). Empty for a stack Bayplan does not manage */
+            bayplanStackId: string;
             /**
              * Format: date-time
              * @description When the service was created
@@ -8141,6 +8145,8 @@ export interface components {
         ServiceSpecBody: {
             /** @description True for a Bayplan agent service */
             agent: boolean;
+            /** @description The ID of the Bayplan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (bayplan.stack.id). Empty for a stack Bayplan does not manage */
+            bayplanStackId: string;
             /** @description True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment */
             masked: boolean;
             /**

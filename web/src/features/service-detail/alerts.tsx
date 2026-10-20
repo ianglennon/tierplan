@@ -121,7 +121,13 @@ export function ServiceAlerts({ envId, detail }: ServiceAlertsProps) {
           </AlertDescription>
         </Alert>
       ) : null}
-      {detail.stack ? <ManagedByStackNotice stack={detail.stack} /> : null}
+      {detail.stack ? (
+        <ManagedByStackNotice
+          envId={envId}
+          stack={detail.stack}
+          bayplanStackId={detail.bayplanStackId}
+        />
+      ) : null}
       {detail.agent ? (
         <Alert variant="warning">
           <TriangleAlert aria-hidden="true" />

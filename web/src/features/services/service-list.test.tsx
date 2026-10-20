@@ -31,6 +31,7 @@ const svc = (extra: Partial<ServiceItem> = {}): ServiceItem => ({
   updateState: "",
   image: `registry.example.com/acme/web:1.4@sha256:${"a".repeat(64)}`,
   stack: "",
+  bayplanStackId: "",
   agent: false,
   updatedAt: "2026-10-01T10:00:00Z",
   ports: [],
