@@ -167,12 +167,13 @@ func TestStackResourcesOfAStandaloneStackListItsContainersAndNetworks(t *testing
 	}
 }
 
-const secretCompose = "services:\n  web:\n    image: nginx:1.27-alpine\n    secrets: [tok]\nsecrets:\n  tok:\n    file: tok.txt\n"
+//nolint:gosec // a compose file that names a secret, not a credential
+const composeWithAFileSecret = "services:\n  web:\n    image: nginx:1.27-alpine\n    secrets: [tok]\nsecrets:\n  tok:\n    file: tok.txt\n"
 
-// saveWithSecretFile saves secretCompose with the secret file tok.txt holding value.
+// saveWithSecretFile saves composeWithAFileSecret with the secret file tok.txt holding value.
 func saveWithSecretFile(t *testing.T, c *roleCaller, stackID, value string) int64 {
 	t.Helper()
-	cb, _ := json.Marshal(secretCompose)
+	cb, _ := json.Marshal(composeWithAFileSecret)
 	body := `{"version":` + itoaT(draftVersion(t, c, stackID)) + `,"files":[{"path":"compose.yaml","content":` + string(cb) + `,"secret":false},` +
 		`{"path":"tok.txt","content":"` + value + `","secret":true}],"vars":[]}`
 	if rec := c.saveDraft(stackID, body); rec.Code != http.StatusOK {
