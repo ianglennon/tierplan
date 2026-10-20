@@ -84,7 +84,9 @@ type Loaded struct {
 //   - paths are not resolved, and the working directory does not exist;
 //   - the ports: and expose: ranges are measured before compose-go expands them (PortBudget).
 //
-// A compose file over MaxFileBytes is refused with ErrTooLarge before it is parsed.
+// A compose file over MaxFileBytes is refused with ErrTooLarge before it is parsed. compose-go runs
+// on its own goroutine: Load returns at the deadline without waiting for it, and a panic inside it
+// is ErrLoadPanicked.
 func Load(ctx context.Context, in LoadInput) (*Loaded, error) {
 	content := in.Copy.Compose()
 	if len(content) > MaxFileBytes {
@@ -113,27 +115,52 @@ func Load(ctx context.Context, in LoadInput) (*Loaded, error) {
 		ConfigFiles: []types.ConfigFile{{Filename: ComposeFile, Content: content}},
 		Environment: env,
 	}
-	project, err := loaderFrom(ctx)(ctx, details, func(o *loader.Options) {
-		o.SetProjectName(in.Name, true)
-		o.SkipInclude = true
-		o.SkipExtends = true
-		o.SkipResolveEnvironment = true
-		o.SkipResolveLabels = true
-		o.ResolvePaths = false
-		if o.Interpolate != nil {
-			// The lookup and the casts stay compose-go's; only the substitution is wrapped, to see
-			// which plain references found nothing.
-			o.Interpolate.Substitute = unset.substitute
-		}
-	})
-	// compose-go looks at the context only at some points, so a load that ran out of time is
-	// ended here whether or not it noticed: the result is then the same on every machine.
+	// compose-go does not stop when its context ends, so it runs on its own goroutine and the
+	// request does not wait for it past the deadline. An abandoned load runs to its end into the
+	// buffered channel and is then collected; what it can cost is bounded by the port budget above
+	// and the prescan's work budget. A panic inside it is an error, never a crash of the server.
+	type result struct {
+		project *types.Project
+		err     error
+	}
+	done := make(chan result, 1)
+	load := loaderFrom(ctx)
+	go func() {
+		defer func() {
+			// The panic value can quote the file or a variable, so it is dropped.
+			if recover() != nil {
+				done <- result{err: ErrLoadPanicked}
+			}
+		}()
+		project, err := load(ctx, details, func(o *loader.Options) {
+			o.SetProjectName(in.Name, true)
+			o.SkipInclude = true
+			o.SkipExtends = true
+			o.SkipResolveEnvironment = true
+			o.SkipResolveLabels = true
+			o.ResolvePaths = false
+			if o.Interpolate != nil {
+				// The lookup and the casts stay compose-go's; only the substitution is wrapped, to see
+				// which plain references found nothing.
+				o.Interpolate.Substitute = unset.substitute
+			}
+		})
+		done <- result{project: project, err: err}
+	}()
+	var res result
+	select {
+	case <-ctx.Done():
+		return nil, &LoadError{Err: ctx.Err()}
+	case res = <-done:
+	}
+	// A load that finished and a deadline that passed together end the same way on every machine.
 	if cerr := ctx.Err(); cerr != nil {
 		return nil, &LoadError{Err: cerr}
 	}
-	if err != nil {
-		return nil, &LoadError{Err: err}
+	if res.err != nil {
+		return nil, &LoadError{Err: res.err}
 	}
+	project := res.project
 	fillBareEnvironment(project, env, unset)
 	return &Loaded{Project: project, Unset: unset.sorted()}, nil
 }

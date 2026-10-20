@@ -130,10 +130,7 @@ func check(ctx context.Context, in CheckInput) CheckResult {
 	if err := assertSandboxed(loaded.Project, NewFileSet(in.Copy.Files)); err != nil && (!errors.Is(err, errRelativeBind) || len(binds) == 0) {
 		// Nothing the prescan lets through should fail here. If something does, the project is
 		// withheld and the person is told it is a Bayplan bug, not their file.
-		res.Problems = Problems{{
-			Severity: SeverityError, Code: CodeInternalCheckFailed, File: ComposeFile, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
-			Message: "The check found something it should have refused. This is a bug in Bayplan: please report it.",
-		}}
+		res.Problems = Problems{internalCheckFailed()}
 		return res
 	}
 	res.Problems = append(res.Problems, unsetProblems(loaded.Unset, res.Variables, res.Problems)...)
@@ -716,6 +713,8 @@ func loadProblems(err error, ix *PositionIndex) Problems {
 	}
 	var pe *PortsError
 	switch {
+	case errors.Is(err, ErrLoadPanicked):
+		return Problems{internalCheckFailed()}
 	case errors.As(err, &pe):
 		return Problems{portsProblem(pe)}
 	case errors.Is(err, ErrComposeTooComplex):
@@ -792,6 +791,13 @@ func thousands(n int) string {
 }
 
 // timeoutProblem is the one problem of a check that ran out of time.
+func internalCheckFailed() Problem {
+	return Problem{
+		Severity: SeverityError, Code: CodeInternalCheckFailed, File: ComposeFile, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
+		Message: "The check found something it should have refused. This is a bug in Bayplan: please report it.",
+	}
+}
+
 func timeoutProblem() Problem {
 	return Problem{
 		Severity: SeverityError, Code: CodeCheckTimeout, File: ComposeFile, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
