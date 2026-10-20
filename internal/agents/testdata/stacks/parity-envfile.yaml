@@ -1,0 +1,16 @@
+# The env_file parity corpus file (plan 07-34, gap CR-05): env_file is resolved once, from the
+# stack's own app.env beside this file, and must give the service the environment docker stack
+# deploy gives it. GREETING is set by both app.env and environment: the entry of environment wins,
+# so the precedence is compared too. {{IMAGE}} is the fixture registry's image by digest, so both
+# deploys name the same image text.
+services:
+  web:
+    image: {{IMAGE}}
+    command: ["sleep", "3600"]
+    stop_grace_period: 1s
+    env_file: app.env
+    environment:
+      FROM_YAML: "1"
+      GREETING: hello
+    deploy:
+      replicas: 1

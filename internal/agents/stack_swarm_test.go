@@ -51,6 +51,10 @@ var parityCorpus = []parityCase{
 		{Path: "app.conf", Content: "listen = 8080\nmode = parity\n"},
 		{Path: "short.conf", Content: "short = yes\n"},
 	}},
+	// env_file is read from the stack's own file, and an entry of environment overrides the file's (CR-05).
+	{file: "parity-envfile.yaml", files: []stackFile{
+		{Path: "app.env", Content: "FROM_FILE=1\nMODE=parity\nGREETING=from-file\n"},
+	}},
 }
 
 // sharedStackDeployParity is the differential oracle for the converter (STK-02, RESEARCH "Parity
