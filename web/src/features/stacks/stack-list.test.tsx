@@ -354,6 +354,46 @@ describe("StackList row menu: Stop and Start", () => {
   });
 });
 
+describe("StackList row menu: Update images", () => {
+  async function openMenu() {
+    const trigger = await screen.findByRole("button", { name: "Actions for web" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+  }
+
+  it("offers Update images… to an Operator of a running stack, which opens its dialog", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    stacks = { items: [stack({ state: "running" })] };
+    mount();
+    await openMenu();
+
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Update images…" }));
+
+    expect(await screen.findByRole("heading", { name: "Update images in web" })).toBeTruthy();
+  });
+
+  it("shows it off with the reason for a stack with nothing running, and for a Viewer", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    stacks = { items: [stack({ state: "not_deployed" })] };
+    mount();
+    await openMenu();
+    const item = await screen.findByRole("menuitem", { name: "Update images…" });
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(item);
+    expect(screen.queryByRole("heading", { name: "Update images in web" })).toBeNull();
+    cleanup();
+
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    stacks = { items: [stack({ state: "running" })] };
+    mount();
+    await openMenu();
+    const viewer = await screen.findByRole("menuitem", { name: "Update images…" });
+    expect(viewer.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(viewer);
+    expect(screen.queryByRole("heading", { name: "Update images in web" })).toBeNull();
+    expect(posts).toEqual([]);
+  });
+});
+
 describe("StackList row menu: Remove", () => {
   async function openMenu() {
     const trigger = await screen.findByRole("button", { name: "Actions for web" });

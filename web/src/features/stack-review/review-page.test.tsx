@@ -718,6 +718,45 @@ describe("nothing to deploy", () => {
     expect(screen.getByText("Every selected image is already up to date.")).toBeTruthy();
   });
 
+  it("shows an image whose tag did not move as Already up to date, with the running chip, and keeps Deploy stack off", async () => {
+    review = () =>
+      Response.json(
+        reviewBody({
+          services: [],
+          images: [
+            {
+              service: "web",
+              image: "nginx:1.27",
+              digest: D1,
+              current: D1,
+              state: "pinned",
+              note: "Already up to date",
+            },
+          ],
+        }),
+      );
+    mount({ mode: "update", services: ["web"] });
+    expect(await screen.findByText("Already up to date")).toBeTruthy();
+    expect(screen.getByText("Pinned (running)")).toBeTruthy();
+    expect(screen.queryByText(/^from /)).toBeNull();
+    expect(screen.getByText("Every selected image is already up to date.")).toBeTruthy();
+    expect(deployButton().getAttribute("aria-disabled")).toBe("true");
+    expect(reasonText()).toBe("There's nothing to deploy.");
+    fireEvent.click(deployButton());
+    expect(posts("/deploys")).toHaveLength(0);
+  });
+
+  it("words a review refused because a chosen service is not in the stack", async () => {
+    review = () => problem(422, "services_invalid");
+    mount({ mode: "update", services: ["ghost"] });
+    expect(await screen.findByText("Couldn't load the review.")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "A service you chose is not in the stack any more. Go back and choose again.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("does not call a stack with only a changed network unchanged", async () => {
     review = () =>
       Response.json(

@@ -59,6 +59,8 @@ function deployRefusal(t: Translate, err: DeployRequestError, envName: string): 
       return t("stackReview.deployErrors.draftChanged");
     case "pins_invalid":
       return t("stackReview.deployErrors.pinsInvalid");
+    case "services_invalid":
+      return t("stackUpdate.refusal.services_invalid");
     case "concurrent_unacknowledged":
       return t("stackYamlDiff.concurrent.refused");
     case "privileged_compose":
@@ -129,6 +131,7 @@ function loadRefusal(t: Translate, err: Error | null): string {
   if (type === "target_changed" || type === "target_engine_missing") {
     return t("stackReview.error.targetChanged");
   }
+  if (type === "services_invalid") return t("stackUpdate.refusal.services_invalid");
   return t("stackReview.error.body");
 }
 

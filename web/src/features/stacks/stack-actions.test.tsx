@@ -31,7 +31,7 @@ let role: "viewer" | "operator" | "admin" = "operator";
 let posts: string[];
 let jobState: string;
 let jobItems: Array<{ id: string; state: string; message: string }>;
-let services: Array<{ name: string; mode: string }>;
+let services: Array<Record<string, unknown>>;
 let answer: { status: number; body: unknown };
 let client: QueryClient;
 
@@ -199,6 +199,55 @@ describe("StackActions", () => {
         "Couldn't start tracer. The swarm rejected the service.",
       ),
     );
+  });
+
+  it("opens Update images in {name} from the header for a stack that runs", async () => {
+    services = [
+      {
+        name: "tracer_web",
+        short: "web",
+        mode: "replicated",
+        image: "nginx:1.27",
+        pinned: `nginx:1.27@sha256:${"a".repeat(64)}`,
+        pinState: "pinned",
+      },
+    ];
+    mount(stack());
+
+    fireEvent.click(await screen.findByRole("button", { name: "Update images…" }));
+
+    expect(await screen.findByRole("heading", { name: "Update images in tracer" })).toBeTruthy();
+    expect(await screen.findByRole("checkbox", { name: "Update the image of web" })).toBeTruthy();
+    expect(posts).toEqual([]);
+  });
+
+  it.each(["not_deployed", "stopped"] as const)(
+    "shows Update images… off with the reason while the stack reads %s",
+    async (state) => {
+      mount(stack({ state }));
+
+      const update = await screen.findByRole("button", { name: "Update images…" });
+      expect(update.getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(update);
+
+      expect(toasts.info).toHaveBeenCalledWith("Nothing is running to update.");
+      expect(screen.queryByRole("heading", { name: "Update images in tracer" })).toBeNull();
+    },
+  );
+
+  it("does not offer Update images… while an operation is under way, and shows a viewer it off", async () => {
+    mount(stack({ state: "deploying" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "Update images…" })).toBeNull();
+    cleanup();
+    client.clear();
+
+    role = "viewer";
+    mount(stack());
+    const update = await screen.findByRole("button", { name: "Update images…" });
+    expect(update.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(update);
+    expect(toasts.info).toHaveBeenCalledWith("Needs Operator");
   });
 
   it("shows a viewer the action it applies to off, with the role it takes, and sends nothing", async () => {

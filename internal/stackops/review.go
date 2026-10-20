@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/distribution/reference"
 	"github.com/moby/moby/api/types/swarm"
 
@@ -43,6 +44,50 @@ const (
 	// ImageUnresolved is an image a registry did not give, for a reference that needs a lookup.
 	ImageUnresolved = "unresolved"
 )
+
+// CodeServicesInvalid is the code of an update that names no service, or one the stack does not have.
+const CodeServicesInvalid = "services_invalid"
+
+// ServicesInvalidError is an update of images whose services do not fit the stack: Unknown are the
+// names the stack does not have, and Empty says the request named none at all.
+type ServicesInvalidError struct {
+	Unknown []string
+	Empty   bool
+}
+
+func (e *ServicesInvalidError) Error() string {
+	if e.Empty {
+		return "stackops: an update names no service"
+	}
+	return "stackops: an update names services the stack does not have: " + strings.Join(e.Unknown, ", ")
+}
+
+// ValidateUpdateServices checks the services an update of images names against the stack's compose
+// project: each must be a service of the file, by its name there or, on a swarm, by the service name
+// the swarm gives it, and at least one must be named. Nothing else decides which digests move, so
+// a name that is not checked here could never be a way to move one (T-07-137).
+func ValidateUpdateServices(project *types.Project, target stacks.Target, stackName string, services []string) error {
+	if len(services) == 0 {
+		return &ServicesInvalidError{Empty: true}
+	}
+	known := make(map[string]bool, 2*len(project.Services))
+	for name := range project.Services {
+		known[name] = true
+		if target != stacks.TargetStandalone {
+			known[stackName+"_"+name] = true
+		}
+	}
+	var unknown []string
+	for _, s := range services {
+		if !known[s] && !slices.Contains(unknown, s) {
+			unknown = append(unknown, s)
+		}
+	}
+	if len(unknown) > 0 {
+		return &ServicesInvalidError{Unknown: unknown}
+	}
+	return nil
+}
 
 // ChangeExternal is the change of an object the stack only names: Bayplan never touches it.
 const ChangeExternal = "external"
@@ -215,6 +260,11 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 	}()
 	if res.Loaded == nil {
 		return rv, nil
+	}
+	if in.Mode == ReviewModeUpdate {
+		if err = ValidateUpdateServices(res.Loaded.Project, in.Stack.Target, in.Stack.Name, in.Services); err != nil {
+			return rv, err
+		}
 	}
 	if in.Stack.Target == stacks.TargetStandalone {
 		err = d.reviewStandalone(ctx, in, res, &rv)

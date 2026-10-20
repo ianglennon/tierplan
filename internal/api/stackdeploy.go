@@ -39,6 +39,7 @@ const (
 
 	problemDraftChanged             = "draft_changed"
 	problemPinsInvalid              = "pins_invalid"
+	problemServicesInvalid          = "services_invalid"
 	problemConcurrentUnacknowledged = "concurrent_unacknowledged"
 	problemNoPreviousVersion        = "no_previous_version"
 )
@@ -186,7 +187,8 @@ func registerStackDeploy(r *httpx.Router, d StacksDeps) {
 			"A name that something Bayplan does not manage holds (a swarm namespace or a Compose project) is 409 stack_name_clash. An environment that is no longer the kind of target the stack was created for is 409 target_changed. At most 5 jobs of one user run at once (429 too_many_deploys). " +
 			"Only one stack operation at a time runs on an environment: while one does, on any stack, a deploy is refused 409 operation_locked with errors naming the stack, the job and when it started, and nothing is stored. " +
 			"Just before it writes anything the job judges the host access of the stack again for the caller, so a grant removed since the request still stops it (the check step fails needs_admin). " +
-			"Writes one stack.deployed audit row, with the result, when the job ends. Needs stacks.deploy (Operator).",
+			"With mode update, only the services named in services take a newly looked-up digest (the ones the review chose, sent as pins) and every other service keeps the digest it runs; a request that names no service, or one the stack does not have, is 422 services_invalid and nothing is stored. " +
+			"Writes one stack.deployed audit row, with the mode and the result, when the job ends. Needs stacks.deploy (Operator).",
 		Tags: []string{"stacks"}, DefaultStatus: http.StatusAccepted,
 	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackDeployInput) (*StackDeployOutput, error) {
@@ -370,6 +372,11 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 	if err != nil {
 		return nil, composeProblem(err)
 	}
+	if mode == deployModeUpdate {
+		if err := stackops.ValidateUpdateServices(loaded.Project, st.Target, st.Name, in.Body.Services); err != nil {
+			return nil, targetProblem(d, env.ID, err)
+		}
+	}
 	files, vars := stacks.NewFileSet(draft.Copy.Files), make(map[string]string, len(draft.Copy.Vars))
 	for _, v := range draft.Copy.Vars {
 		vars[v.Name] = v.Value
@@ -485,6 +492,11 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 	checked := stacks.Check(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy})
 	if checked.Loaded == nil {
 		return nil, stackInvalid(checked.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
+	}
+	if mode == deployModeUpdate {
+		if err := stackops.ValidateUpdateServices(checked.Loaded.Project, st.Target, st.Name, in.Body.Services); err != nil {
+			return nil, targetProblem(d, env.ID, err)
+		}
 	}
 	if _, err := stacks.ResolveObjectsFor(stacks.TargetStandalone, checked.Loaded.Project, stacks.NewFileSet(draft.Copy.Files), varMap(draft.Copy.Vars)); err != nil {
 		return nil, objectProblem(err)
@@ -882,7 +894,27 @@ func targetProblem(d StacksDeps, envID string, err error) error {
 	case errors.Is(err, stackops.ErrNoPolicy):
 		return stackInternal(d, "policy", envID, err)
 	}
+	var invalid *stackops.ServicesInvalidError
+	if errors.As(err, &invalid) {
+		return servicesProblem(invalid)
+	}
 	return snapshotProblem(d.Log, envID, err)
+}
+
+// servicesProblem is the 422 for an update of images that names no service or one the stack does not have.
+func servicesProblem(e *stackops.ServicesInvalidError) error {
+	detail := "Choose at least one service to update."
+	var details []*huma.ErrorDetail
+	if !e.Empty {
+		detail = "These services are not in the stack: " + strings.Join(e.Unknown, ", ") + "."
+		for _, name := range e.Unknown {
+			details = append(details, &huma.ErrorDetail{Location: "services", Message: name})
+		}
+	}
+	return &huma.ErrorModel{
+		Type: problemServicesInvalid, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
+		Detail: detail, Errors: details,
+	}
 }
 
 // operationLocked is the 409 for an operation asked for while another holds the environment: it names

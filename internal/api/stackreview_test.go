@@ -928,3 +928,117 @@ func TestStandaloneReviewShowsAHandChangedContainer(t *testing.T) {
 		t.Errorf("summary = %+v", rv.Summary.Services)
 	}
 }
+
+// Update images (plan 07-28, D-16, STK-09): the explicit way a pinned digest moves, through the same
+// review and deploy as any other change.
+
+const updateCompose = `services:
+  web:
+    image: nginx:1.27-alpine
+  api:
+    image: busybox:1.36
+    command: sleep 1000
+`
+
+func TestUpdateModeChangesOnlyTheChosenServices(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "upd")
+	f.deployGood(t, operator, st.ID, updateCompose)
+	version := draftVersion(t, operator, st.ID)
+
+	const webRef, apiRef = "docker.io/library/nginx:1.27-alpine", "docker.io/library/busybox:1.36"
+	webOld, apiOld := dockertest.FakeDigestOf(webRef), dockertest.FakeDigestOf(apiRef)
+	webNew, apiNew := "sha256:"+strings.Repeat("b", 64), "sha256:"+strings.Repeat("c", 64)
+	f.fake.SetDistributionDigest(webRef, webNew)
+	f.fake.SetDistributionDigest(apiRef, apiNew)
+
+	// Chosen: web. Its tag is looked up again; api keeps what it runs and the registry is not asked about it.
+	lookups := len(f.fake.DistributionRefs())
+	rv, code, raw := operator.reviewStack(st.ID, `{"mode":"update","services":["web"]}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, raw)
+	}
+	rows := map[string]struct{ State, Digest, Current string }{}
+	for _, r := range rv.Images {
+		rows[r.Service] = struct{ State, Digest, Current string }{r.State, r.Digest, r.Current}
+	}
+	if got := rows["web"]; got.State != "new" || got.Digest != webNew || got.Current != webOld {
+		t.Errorf("web image = %+v, want new, from %s to %s", got, webOld, webNew)
+	}
+	if got := rows["api"]; got.State != "pinned" || got.Digest != apiOld || got.Current != apiOld {
+		t.Errorf("api image = %+v, want pinned at %s", got, apiOld)
+	}
+	for _, ref := range f.fake.DistributionRefs()[lookups:] {
+		if strings.Contains(ref, "busybox") {
+			t.Errorf("the review asked the registry about %s, which was not chosen", ref)
+		}
+	}
+	if len(rv.Services) != 1 || rv.Services[0].Short != "web" || rv.Services[0].Change != "changed" {
+		t.Fatalf("services = %+v, want only web changed", rv.Services)
+	}
+
+	// A name the stack does not have, or no name at all, is 422 services_invalid and nothing is looked up or started.
+	lookups = len(f.fake.DistributionRefs())
+	for name, body := range map[string]string{
+		"an unknown service": `"mode":"update","services":["web","ghost"]`,
+		"no service":         `"mode":"update","services":[]`,
+	} {
+		if rec := operator.do(http.MethodPost, "stacks/"+st.ID+"/review", `{`+body+`}`); rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "services_invalid" {
+			t.Errorf("review with %s: %d %s, want 422 services_invalid", name, rec.Code, rec.Body)
+		}
+		if rec := operator.deploy(st.ID, `{"draftVersion":`+itoaT(version)+`,`+body+`,"pins":`+pinsJSON(t, rv.Pins)+`}`); rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "services_invalid" {
+			t.Errorf("deploy with %s: %d %s, want 422 services_invalid", name, rec.Code, rec.Body)
+		}
+	}
+	if n := len(f.fake.DistributionRefs()); n != lookups {
+		t.Errorf("a refused request made %d registry checks", n-lookups)
+	}
+	if got := len(f.revisions(t, st.ID)); got != 1 {
+		t.Errorf("revisions = %d, a refused update must leave none", got)
+	}
+
+	// The deploy that follows ships web at the new digest, api as it was, and is audited as an update.
+	updates := len(f.fake.ServiceUpdates())
+	lookups = len(f.fake.DistributionRefs())
+	job := f.deployAndWait(t, operator, st.ID, `{"draftVersion":`+itoaT(version)+`,"mode":"update","services":["web"],"pins":`+pinsJSON(t, rv.Pins)+`}`)
+	if job.State != "done" {
+		t.Fatalf("job = %+v, want done", job)
+	}
+	if n := len(f.fake.DistributionRefs()); n != lookups {
+		t.Errorf("the deploy made %d registry checks, it carries the reviewed digests", n-lookups)
+	}
+	// A swarm deploy writes every service of the stack (as docker stack deploy does); what the update
+	// must not do is move the digest of one that was not chosen.
+	sent := map[string]string{}
+	for _, u := range f.fake.ServiceUpdates()[updates:] {
+		sent[u.Spec.Name] = u.Spec.TaskTemplate.ContainerSpec.Image
+	}
+	if sent["upd_web"] != "nginx:1.27-alpine@"+webNew || sent["upd_api"] != "busybox:1.36@"+apiOld || len(sent) != 2 {
+		t.Fatalf("service writes = %v, want upd_web at %s and upd_api still at %s", sent, webNew, apiOld)
+	}
+	var row *auditRowFull
+	for _, r := range f.stackAudits(t) {
+		if r.Action == "stack.deployed" {
+			row = &r
+		}
+	}
+	if row == nil || row.Details["mode"] != "update" || row.Result != "success" {
+		t.Errorf("stack.deployed = %+v, want a successful update", row)
+	}
+
+	// Afterwards web runs the new digest, api still the old, and the stored pins say so.
+	rv, code, raw = operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review after: %d %s", code, raw)
+	}
+	after := map[string]string{}
+	for _, r := range rv.Images {
+		after[r.Service] = r.Current
+	}
+	if after["web"] != webNew || after["api"] != apiOld || len(rv.Services) != 0 {
+		t.Errorf("after the update web runs %s and api %s, services %+v; want %s and %s and no change", after["web"], after["api"], rv.Services, webNew, apiOld)
+	}
+}

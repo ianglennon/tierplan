@@ -20,9 +20,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { type Column, TruncatedText } from "@/features/resources/resource-table";
 import { RemoveStackDialog } from "@/features/stacks/remove-stack-dialog";
-import { canStart, canStop, useStackStart } from "@/features/stacks/stack-actions";
+import { canStart, canStop, canUpdateImages, useStackStart } from "@/features/stacks/stack-actions";
 import { StackStateCell } from "@/features/stacks/stack-state-cell";
 import { StopStackDialog } from "@/features/stacks/stop-stack-dialog";
+import { UpdateImagesDialog } from "@/features/stacks/update-images-dialog";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 
@@ -64,7 +65,9 @@ function RowActions({ row, onOpenChange, disabled }: RowActionsProps) {
   const remove = useNeeds("stacks.delete", row.envId);
   const [stopping, setStopping] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [updating, setUpdating] = useState(false);
   const stoppable = canStop(row.state);
+  const updatable = canUpdateImages(row.state);
   return (
     <>
       <DropdownMenu onOpenChange={onOpenChange}>
@@ -102,6 +105,24 @@ function RowActions({ row, onOpenChange, disabled }: RowActionsProps) {
               </DropdownMenuItem>
             </NeedsTooltip>
           )}
+          <NeedsTooltip
+            reason={
+              deploy.allowed
+                ? updatable
+                  ? undefined
+                  : t("stackUpdate.actions.nothing")
+                : deploy.reason
+            }
+          >
+            <DropdownMenuItem
+              className="max-md:min-h-11"
+              onSelect={() => {
+                if (deploy.allowed && updatable) setUpdating(true);
+              }}
+            >
+              {t("stackUpdate.actions.update")}
+            </DropdownMenuItem>
+          </NeedsTooltip>
           {stoppable || canStart(row.state) ? (
             <NeedsTooltip reason={deploy.allowed ? undefined : deploy.reason}>
               <DropdownMenuItem
@@ -134,6 +155,9 @@ function RowActions({ row, onOpenChange, disabled }: RowActionsProps) {
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
+      {updatable && deploy.allowed ? (
+        <UpdateImagesDialog stack={row} open={updating} onOpenChange={setUpdating} />
+      ) : null}
       {stoppable && deploy.allowed ? (
         <StopStackDialog stack={row} open={stopping} onOpenChange={setStopping} />
       ) : null}

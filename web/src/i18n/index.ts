@@ -64,6 +64,7 @@ import stackreview from "./en/stackreview.json";
 import stacks from "./en/stacks.json";
 import stackstandalone from "./en/stackstandalone.json";
 import stackstop from "./en/stackstop.json";
+import stackupdate from "./en/stackupdate.json";
 import stackvars from "./en/stackvars.json";
 import stackyamldiff from "./en/stackyamldiff.json";
 import stats from "./en/stats.json";
@@ -144,6 +145,7 @@ export const resources = {
     stackRendered: stackrendered,
     stackResources: stackresources,
     stackStop: stackstop,
+    stackUpdate: stackupdate,
     stackReview: stackreview,
     stackStandalone: stackstandalone,
     stackVars: stackvars,

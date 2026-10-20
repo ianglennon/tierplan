@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/compose-spec/compose-go/v2/types"
+
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/internal/rbac"
@@ -719,5 +721,57 @@ func TestReviewListsTheComposeFileFirstAndAFileTheOtherSideAddedOrRemoved(t *tes
 	}
 	if !slices.Equal(mine, []string{stacks.ComposeFile}) {
 		t.Errorf("base to draft files = %v, want compose.yaml only", mine)
+	}
+}
+
+func TestReviewInUpdateModeRefusesServicesTheStackDoesNotHaveAndLooksNothingUp(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	_, in := stackInput(t, "site", twoServiceCompose, nil)
+	if res, _ := rig.deploy(t, in); !res.OK() {
+		t.Fatalf("deploy = %+v", res)
+	}
+	lookups := len(rig.fake.DistributionRefs())
+
+	for name, services := range map[string][]string{
+		"an unknown service":          {"web", "ghost"},
+		"no service":                  nil,
+		"a name the swarm would give": {"site_web", "nope"},
+	} {
+		ri := rig.reviewInput(t, "site", twoServiceCompose, nil)
+		ri.Mode, ri.Services = stackops.ReviewModeUpdate, services
+		_, err := rig.deps.Review(testsupport.Context(t), ri)
+		var invalid *stackops.ServicesInvalidError
+		if !errors.As(err, &invalid) {
+			t.Fatalf("%s: err = %v, want ServicesInvalidError", name, err)
+		}
+		if invalid.Empty != (len(services) == 0) || (len(services) > 0 && !slices.Contains(invalid.Unknown, services[len(services)-1])) {
+			t.Errorf("%s: %+v names the wrong thing", name, invalid)
+		}
+	}
+	if n := len(rig.fake.DistributionRefs()); n != lookups {
+		t.Errorf("a refused update made %d registry checks", n-lookups)
+	}
+
+	// The swarm's own name for a service is accepted on a swarm.
+	ri := rig.reviewInput(t, "site", twoServiceCompose, nil)
+	ri.Mode, ri.Services = stackops.ReviewModeUpdate, []string{"site_web"}
+	if _, err := rig.deps.Review(testsupport.Context(t), ri); err != nil {
+		t.Errorf("review by swarm name: %v", err)
+	}
+}
+
+func TestUpdateServicesOfAStandaloneStackAreNamedAsInTheFileOnly(t *testing.T) {
+	t.Parallel()
+	project := &types.Project{Services: types.Services{"web": {Name: "web"}, "db": {Name: "db"}}}
+	if err := stackops.ValidateUpdateServices(project, stacks.TargetStandalone, "demo", []string{"web", "db"}); err != nil {
+		t.Errorf("services of the file: %v", err)
+	}
+	var invalid *stackops.ServicesInvalidError
+	if err := stackops.ValidateUpdateServices(project, stacks.TargetStandalone, "demo", []string{"demo_web"}); !errors.As(err, &invalid) || !slices.Equal(invalid.Unknown, []string{"demo_web"}) {
+		t.Errorf("a swarm name on a standalone host: %v, want it refused", err)
+	}
+	if err := stackops.ValidateUpdateServices(project, stacks.TargetSwarm, "demo", []string{"demo_web"}); err != nil {
+		t.Errorf("a swarm name on a swarm: %v", err)
 	}
 }

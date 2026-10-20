@@ -27,6 +27,7 @@ import { followStackOperation, refusalKey } from "@/features/stacks/follow-opera
 import { RemoveStackDialog } from "@/features/stacks/remove-stack-dialog";
 import { StopStackDialog } from "@/features/stacks/stop-stack-dialog";
 import { StoppedAlert } from "@/features/stacks/stopped-alert";
+import { UpdateImagesDialog } from "@/features/stacks/update-images-dialog";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { toastError, toastSuccess } from "@/lib/toast";
@@ -54,6 +55,8 @@ const OPERATING: readonly StackState[] = [
 export const canStop = (state: StackState) => STOPPABLE.includes(state);
 export const isOperating = (state: StackState) => OPERATING.includes(state);
 export const canStart = (state: StackState) => state === "stopped";
+// Images can be updated where something runs to update: the states a stop acts on.
+export const canUpdateImages = canStop;
 
 type LifecycleStack = Pick<StackDetail, "id" | "envId" | "name" | "target" | "state">;
 
@@ -112,13 +115,14 @@ export function StoppedAlertWithStart({ stack }: { stack: StackDetail }) {
   return <StoppedAlert stack={stack} onStart={needs.allowed ? () => void start() : undefined} />;
 }
 
-// StackActions are the Stop stack… and Start stack buttons of a stack's header (UI-SPEC "Stack page"): both
-// outline, Stop only while there is something to stop and Start only while the stack is stopped. A user who
-// may not deploy sees the one that applies off, with the role it takes; a user whose permissions are not
-// known yet sees nothing rather than a button that may turn off.
+// StackActions are the Update images…, Stop stack… and Start stack buttons of a stack's header (UI-SPEC "Stack
+// page"): all outline, Stop only while there is something to stop and Start only while the stack is stopped. A
+// user who may not deploy sees the one that applies off, with the role it takes; a user whose permissions are
+// not known yet sees nothing rather than a button that may turn off.
 export function StackActions({ stack }: StackActionsProps) {
   return (
     <>
+      <UpdateImagesAction stack={stack} />
       <StopStartAction stack={stack} />
       <StackMoreMenu stack={stack} />
     </>
@@ -177,6 +181,40 @@ export function StackMoreMenu({ stack }: StackActionsProps) {
       </DropdownMenu>
       {needs.allowed ? (
         <RemoveStackDialog stack={stack} open={removing} onOpenChange={setRemoving} />
+      ) : null}
+    </>
+  );
+}
+
+// UpdateImagesAction is the header's Update images… (D-16): it opens the dialog that leads into the review of
+// the chosen services. It is off, with the reason, for a user who may not deploy and for a stack with nothing
+// running to update, and it is not there while an operation is under way on the stack.
+function UpdateImagesAction({ stack }: StackActionsProps) {
+  const t = useT();
+  const needs = useNeeds("stacks.deploy", stack.envId);
+  const [open, setOpen] = useState(false);
+  if (isOperating(stack.state)) return null;
+  if (!needs.allowed && !needs.reason) return null;
+  const nothing = !canUpdateImages(stack.state);
+  const reason = needs.allowed
+    ? nothing
+      ? t("stackUpdate.actions.nothing")
+      : undefined
+    : needs.reason;
+  return (
+    <>
+      <NeedsTooltip reason={reason}>
+        <Button
+          type="button"
+          variant="outline"
+          className="max-md:h-11"
+          onClick={() => setOpen(true)}
+        >
+          {t("stackUpdate.actions.update")}
+        </Button>
+      </NeedsTooltip>
+      {needs.allowed && !nothing ? (
+        <UpdateImagesDialog stack={stack} open={open} onOpenChange={setOpen} />
       ) : null}
     </>
   );

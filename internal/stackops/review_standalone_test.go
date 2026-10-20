@@ -5,6 +5,7 @@ package stackops_test
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -345,5 +346,44 @@ func TestStandaloneReviewCarriesNothingForARemovedService(t *testing.T) {
 
 	if got := changesOf(rv); !slices.Equal(got, []string{"removed other"}) {
 		t.Errorf("services = %v, want other removed and nothing carried", got)
+	}
+}
+
+func TestStandaloneReviewInUpdateModeMovesOnlyTheChosenService(t *testing.T) {
+	t.Parallel()
+	h := hostStack(t, "demo", hostedCompose, nil)
+	rig := hostRig(t, h)
+	moved := "sha256:" + strings.Repeat("b", 64)
+	rig.fake.SetDistributionDigest("docker.io/library/nginx:1.27-alpine", moved)
+	rig.fake.SetDistributionDigest("docker.io/library/postgres:16", "sha256:"+strings.Repeat("c", 64))
+	lookups := len(rig.fake.DistributionRefs())
+
+	in := rig.standaloneReviewInput(t, "demo", hostedCompose, nil)
+	in.Mode, in.Services = stackops.ReviewModeUpdate, []string{"web"}
+	rv, err := rig.deps.Review(testsupport.Context(t), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := map[string]stackops.ImageRow{}
+	for _, r := range rv.Images {
+		rows[r.Service] = r
+	}
+	if web := rows["web"]; web.State != stackops.ImageNew || web.Digest != moved || web.Current == "" || web.Current == moved {
+		t.Errorf("web image = %+v, want new at %s, from the digest it runs", web, moved)
+	}
+	if db := rows["db"]; db.State != stackops.ImagePinned || db.Digest != db.Current || db.Digest == "" {
+		t.Errorf("db image = %+v, want the running digest kept", db)
+	}
+	for _, ref := range rig.fake.DistributionRefs()[lookups:] {
+		if strings.Contains(ref, "postgres") {
+			t.Errorf("the review asked the registry about %s, which was not chosen", ref)
+		}
+	}
+
+	// A service the file does not have is refused here too, with the names the file uses.
+	in.Services = []string{"demo_web"}
+	var invalid *stackops.ServicesInvalidError
+	if _, err := rig.deps.Review(testsupport.Context(t), in); !errors.As(err, &invalid) {
+		t.Errorf("review of a swarm name on a standalone host: %v, want ServicesInvalidError", err)
 	}
 }
