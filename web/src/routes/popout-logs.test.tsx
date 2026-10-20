@@ -19,6 +19,9 @@ const PATH = "/popout/e1/containers/c1/logs";
 
 type Who = "viewer" | "signed-out" | "no-access";
 
+// The state the stack of the stack pop-out tests is in.
+let stackState = "running";
+
 function stub(who: Who) {
   vi.stubGlobal(
     "fetch",
@@ -52,6 +55,36 @@ function stub(who: Who) {
           labels: [],
         });
       }
+      if (path === "/api/env/e1/stacks/s1") {
+        return Response.json({
+          id: "s1",
+          name: "tracer",
+          target: "swarm",
+          source: "inline",
+          state: stackState,
+          lastDeployedAt: "2026-10-19T11:00:00Z",
+          lastDeployedBy: "bob",
+          hasDraft: false,
+          envId: "e1",
+          sourceRef: "",
+          createdBy: "ada",
+          createdAt: "2026-10-19T10:00:00Z",
+          stopped: stackState === "stopped",
+          servicesRunning: 2,
+          servicesTotal: 2,
+          rollback: { available: false, deployedAt: "", deployedBy: "" },
+        });
+      }
+      if (path === "/api/env/e1/stacks/s1/services") return Response.json({ items: [] });
+      if (path === "/api/env/e1/stacks/s1/resources") {
+        return Response.json({
+          tasks: { items: [], error: "" },
+          networks: { items: [], error: "" },
+          volumes: { items: [], error: "", notReporting: [] },
+          secrets: { items: [], error: "" },
+          configs: { items: [], error: "" },
+        });
+      }
       if (path === "/api/version") {
         return Response.json({
           version: "",
@@ -80,6 +113,7 @@ function visit(path: string) {
 }
 
 beforeEach(() => {
+  stackState = "running";
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
 });
@@ -201,6 +235,77 @@ describe("the service logs pop-out", () => {
   it("says so, and opens no stream, for a person who may not read services there", async () => {
     stub("no-access");
     visit(SERVICE_PATH);
+    expect(await screen.findByText(/don't have permission|not allowed|permission/i)).toBeTruthy();
+    expect(FakeEventSource.instances).toHaveLength(0);
+  });
+});
+
+// The logs pop-out of a stack (plan 07-29, STK-10, D-22): the same viewer, chrome-less.
+describe("the stack logs pop-out", () => {
+  const STACK_PATH = "/popout/e1/stacks/s1/logs";
+
+  it("sends a signed-out visitor to sign-in with the pop-out remembered in next", async () => {
+    stub("signed-out");
+    const router = visit(`${STACK_PATH}?service=web&stopped=true`);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
+    const next = (router.state.location.search as { next?: string }).next;
+    expect(next?.startsWith(STACK_PATH)).toBe(true);
+    expect(next).toContain("service=web");
+  });
+
+  it("opens outside the app chrome with the stack, its state, the environment and the version footer", async () => {
+    stub("viewer");
+    visit(STACK_PATH);
+    expect(await screen.findByRole("heading", { level: 1, name: "tracer" })).toBeTruthy();
+    expect(await screen.findByText("Homelab")).toBeTruthy();
+    expect(await screen.findByText("Running")).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: /main/i })).toBeNull();
+    expect(document.querySelector('[data-slot="sidebar"]')).toBeNull();
+    expect(await screen.findByRole("link", { name: /dev \(abc1234\)/ })).toBeTruthy();
+    expect(await screen.findByRole("log", { name: "Logs for tracer" })).toBeTruthy();
+  });
+
+  it("titles the window with the stack and the instance", async () => {
+    stub("viewer");
+    visit(STACK_PATH);
+    await waitFor(() => expect(document.title).toBe("tracer logs · Bayplan Home"));
+  });
+
+  it("opens the stream of the stack narrowed as the address says, and reads the settings from it", async () => {
+    stub("viewer");
+    visit(
+      `${STACK_PATH}?service=web,api&task=t1&node=alpha&stopped=true&prefix=false&q=boom&ts=true&wrap=true&since=1h`,
+    );
+    await screen.findByRole("log", { name: "Logs for tracer" });
+    const url = new URL((FakeEventSource.instances[0] as FakeEventSource).url, "http://x");
+    expect(url.pathname).toBe("/api/env/e1/stacks/s1/logs/stream");
+    expect(url.searchParams.get("services")).toBe("web,api");
+    expect(url.searchParams.get("tasks")).toBe("t1");
+    expect(url.searchParams.get("nodes")).toBe("alpha");
+    expect(url.searchParams.get("stopped")).toBe("1");
+    expect(url.searchParams.has("since")).toBe(true);
+    expect((screen.getByRole("searchbox", { name: "Search logs" }) as HTMLInputElement).value).toBe(
+      "boom",
+    );
+    expect(screen.getByRole("button", { name: "Timestamps", pressed: true })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Wrap", pressed: true })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Task names", pressed: false })).toBeTruthy();
+    // The pop-out does not offer a pop-out.
+    expect(screen.queryByRole("button", { name: "Open in new window" })).toBeNull();
+  });
+
+  it("opens no stream, and says the stack isn't running, for a stack that was stopped", async () => {
+    stackState = "stopped";
+    stub("viewer");
+    visit(STACK_PATH);
+    expect(await screen.findByText("tracer isn't running")).toBeTruthy();
+    expect(screen.getByText("Start it to see its logs.")).toBeTruthy();
+    expect(FakeEventSource.instances).toHaveLength(0);
+  });
+
+  it("says so, and opens no stream, for a person who may not read stacks there", async () => {
+    stub("no-access");
+    visit(STACK_PATH);
     expect(await screen.findByText(/don't have permission|not allowed|permission/i)).toBeTruthy();
     expect(FakeEventSource.instances).toHaveLength(0);
   });

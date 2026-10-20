@@ -538,3 +538,38 @@ describe("the follow cap", () => {
     ).toBeTruthy();
   });
 });
+
+describe("a stack with nothing to read", () => {
+  it("says a stopped stack isn't running and how to start it, and opens no stream", async () => {
+    detail = { ...detail, state: "stopped", stopped: true };
+    mount();
+
+    expect(await screen.findByText("tracer isn't running")).toBeTruthy();
+    expect(screen.getByText("Start it to see its logs.")).toBeTruthy();
+    expect(screen.queryByRole("log")).toBeNull();
+    expect(FakeEventSource.instances).toHaveLength(0);
+  });
+
+  it("says a stack that was never deployed isn't running and how to deploy it, and opens no stream", async () => {
+    detail = { ...detail, state: "not_deployed", lastDeployedAt: "" };
+    mount();
+
+    expect(await screen.findByText("tracer isn't running")).toBeTruthy();
+    expect(screen.getByText("Deploy it to see its logs.")).toBeTruthy();
+    expect(FakeEventSource.instances).toHaveLength(0);
+  });
+
+  it("opens the stream again as soon as the stack runs", async () => {
+    detail = { ...detail, state: "stopped", stopped: true };
+    mount();
+    await screen.findByText("tracer isn't running");
+
+    detail = { ...detail, state: "running", stopped: false };
+    await act(async () => {
+      await client.invalidateQueries();
+    });
+
+    expect(await screen.findByRole("log", { name: "Logs for tracer" })).toBeTruthy();
+    expect(FakeEventSource.instances).toHaveLength(1);
+  });
+});

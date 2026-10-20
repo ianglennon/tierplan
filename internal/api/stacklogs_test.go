@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/audit"
+	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/proto/testsupport"
@@ -831,5 +833,182 @@ func TestStackLogsOfAStandaloneStackFollowAContainerThatRestartedFromItsLastLine
 	got, _ := readStackLines(t, c, 1)
 	if got[0].M != "second run" {
 		t.Errorf("line = %+v, want only the new run's line: the first is not repeated", got[0])
+	}
+}
+
+// ---- the download ----
+
+// stackDownload runs a download of a stack's log as the given signed-in user, to its end.
+func stackDownload(t *testing.T, f *envFix, envID, stackID, query, cookie string) *dlWriter {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/env/"+envID+"/stacks/"+stackID+"/logs/download?"+query, nil)
+	req.Header.Set("User-Agent", authUA)
+	req.RemoteAddr = authIP + ":40000"
+	req.AddCookie(&http.Cookie{Name: auth.CookieName(f.inst.CookieScope()), Value: cookie}) //nolint:gosec // a request cookie as a browser sends it
+	w := newDLWriter(true)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f.h.ServeHTTP(w, req)
+	}()
+	testsupport.Await(t, "the download to finish", done)
+	return w
+}
+
+func (f *stackLogsFix) download(t *testing.T, query string) *dlWriter {
+	t.Helper()
+	return stackDownload(t, f.envFix, f.env.ID, f.stack.ID, query, f.user.cookie)
+}
+
+func TestStackLogDownloadMergesEveryServiceInTimeOrderEachStartingWithItsNameAndUTCTime(t *testing.T) {
+	t.Parallel()
+	f := newStackLogsFix(t, stackLogsTasks(), stackLogsBurst(), nil)
+	w := f.download(t, "")
+	if w.code() != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.code(), w.body.String())
+	}
+	want := strings.Join([]string{
+		dlLine("web.1@mgr-1", 5, "web0 old"),
+		dlLine("web.1@mgr-1", 10, "web1 a"),
+		dlLine("api.1@mgr-1", 20, "api a"),
+		dlLine("web.2@wrk-ready", 30, "web2 a"),
+		dlLine("api.1@mgr-1", 40, "api b"),
+		dlLine("web.1@mgr-1", 60, "web1 b"),
+	}, "\n") + "\n"
+	if got := w.body.String(); got != want {
+		t.Errorf("body =\n%s\nwant\n%s", got, want)
+	}
+	h := w.Header()
+	wantName := "shop-" + f.clk.now().UTC().Format("20060102-1504") + ".log"
+	if cd := h.Get("Content-Disposition"); cd != `attachment; filename="`+wantName+`"` {
+		t.Errorf("Content-Disposition = %q, want the stack's name and the UTC minute %s", cd, wantName)
+	}
+	if h.Get("Content-Type") != "text/plain; charset=utf-8" || h.Get("Cache-Control") != "no-store" || h.Get("X-Content-Type-Options") != "nosniff" {
+		t.Errorf("headers = %v", h)
+	}
+	if len(w.deadlns) == 0 || !w.deadlns[0].IsZero() {
+		t.Errorf("write deadlines = %v, want the first cleared", w.deadlns)
+	}
+}
+
+func TestStackLogDownloadHidesTheKnownSecretValuesAndIsAuditedOnceAsLogsDownloadedForTheStack(t *testing.T) {
+	t.Parallel()
+	lines := map[string][]dockertest.FakeServiceLogLine{
+		"svc-web": {svcLine("tk-w1", "node-1", 10, "key is s3cr3t-value")},
+		"svc-api": {svcLine("tk-a1", "node-1", 20, "fine")},
+	}
+	f := newStackLogsFix(t, stackLogsTasks(), lines, nil)
+	operator := f.caller(t, f.env, "operator-1", "operator")
+	compose := "services:\n  web:\n    image: busybox:1\n    environment:\n      PW: ${DB_PASSWORD}\n"
+	if rec := operator.saveDraft(f.stack.ID, saveBody(1, compose, `[{"name":"DB_PASSWORD","value":"s3cr3t-value","secret":true}]`)); rec.Code != http.StatusOK {
+		t.Fatalf("save: %d %s", rec.Code, rec.Body)
+	}
+
+	w := f.download(t, "")
+
+	if w.code() != http.StatusOK || strings.Contains(w.body.String(), "s3cr3t-value") || !strings.Contains(w.body.String(), "key is <hidden>") {
+		t.Fatalf("download = %d %q, want the value hidden", w.code(), w.body.String())
+	}
+	rows := f.auditRowsOf(t, audit.ActionLogsDownloaded)
+	if len(rows) != 1 || rows[0].TargetType != "stack" || rows[0].TargetID != f.stack.ID || rows[0].Details["stack"] != "shop" || rows[0].Result != "success" {
+		t.Errorf("logs.downloaded rows = %+v, want one for the stack", rows)
+	}
+	for _, r := range rows {
+		for k, v := range r.Details {
+			if strings.Contains(k, "s3cr3t") || strings.Contains(v, "s3cr3t") || strings.Contains(v, "fine") {
+				t.Errorf("audit details %v hold something of the log", r.Details)
+			}
+		}
+	}
+}
+
+func TestStackLogDownloadReadsTheRangeAndCutsAtUntil(t *testing.T) {
+	t.Parallel()
+	f := newStackLogsFix(t, stackLogsTasks(), stackLogsBurst(), nil)
+	since, until := svcT0.Add(20*time.Millisecond), svcT0.Add(60*time.Millisecond)
+	w := f.download(t, "since="+since.Format(time.RFC3339Nano)+"&until="+until.Format(time.RFC3339Nano))
+	want := strings.Join([]string{
+		dlLine("api.1@mgr-1", 20, "api a"),
+		dlLine("web.2@wrk-ready", 30, "web2 a"),
+		dlLine("api.1@mgr-1", 40, "api b"),
+	}, "\n") + "\n"
+	if got := w.body.String(); got != want {
+		t.Errorf("body =\n%s\nwant\n%s", got, want)
+	}
+	if rows := f.auditRowsOf(t, audit.ActionLogsDownloaded); len(rows) != 1 || rows[0].Details["since"] == "" {
+		t.Errorf("audit rows = %+v, want the range asked for", rows)
+	}
+}
+
+func TestStackLogDownloadPastItsSizeLeavesOutTheOldestLinesAndSaysSoFirst(t *testing.T) {
+	t.Parallel()
+	// A line is held as its 30-character stamp and its text; three of them fit.
+	f := newStackLogsFix(t, stackLogsTasks(), stackLogsBurst(), func(f *envFix) { f.stackLogs.MaxDownloadBytes = 3 * 36 })
+	w := f.download(t, "")
+	lines := strings.Split(strings.TrimSuffix(w.body.String(), "\n"), "\n")
+	if len(lines) != 4 || !strings.HasPrefix(lines[0], "Bayplan: the oldest lines of this range were left out") {
+		t.Fatalf("body =\n%s\nwant a notice and the newest three lines", w.body.String())
+	}
+	if !strings.HasSuffix(lines[3], "web1 b") {
+		t.Errorf("last line = %q, want the newest", lines[3])
+	}
+}
+
+func TestStackLogDownloadOfAStandaloneStackIncludesTheContainersThatEnded(t *testing.T) {
+	t.Parallel()
+	f := newSoloFix(t, func(id string) []dockertest.FakeContainer {
+		return append(soloTwoServices(id), soloContainer(id, "cweb3", "web", 3, "exited", 80))
+	}, nil)
+	f.seed()
+	f.fake.AppendLogs("cweb3", soloLine(5, "web3 old"))
+
+	w := stackDownload(t, f.envFix, f.env.ID, f.stack.ID, "", f.user.cookie)
+
+	if w.code() != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.code(), w.body.String())
+	}
+	stamp := func(ms int) string {
+		return soloT0.Add(time.Duration(ms) * time.Millisecond).Format("2006-01-02T15:04:05.000000000Z")
+	}
+	want := strings.Join([]string{
+		"web-3 " + stamp(5) + " web3 old",
+		"web-1 " + stamp(10) + " web1 a",
+		"db-1 " + stamp(20) + " db a",
+		"web-2 " + stamp(30) + " web2 a",
+		"db-1 " + stamp(40) + " db b",
+		"web-1 " + stamp(60) + " web1 b",
+	}, "\n") + "\n"
+	if got := w.body.String(); got != want {
+		t.Errorf("body =\n%s\nwant\n%s", got, want)
+	}
+	if cd := w.Header().Get("Content-Disposition"); !strings.HasPrefix(cd, `attachment; filename="solo-`) {
+		t.Errorf("Content-Disposition = %q", cd)
+	}
+}
+
+func TestStackLogDownloadNeedsStacksReadAndAStackOfThisEnvironment(t *testing.T) {
+	t.Parallel()
+	f := newStackLogsFix(t, stackLogsTasks(), stackLogsBurst(), nil)
+	f.addUser(t, "nobody", false)
+	cookie, _ := f.signIn(t, "nobody", false)
+	if w := stackDownload(t, f.envFix, f.env.ID, f.stack.ID, "", cookie); w.code() != http.StatusForbidden && w.code() != http.StatusNotFound {
+		t.Errorf("a user with no role: status = %d, want a refusal", w.code())
+	}
+	if w := stackDownload(t, f.envFix, f.env.ID, "00000000-0000-0000-0000-000000000000", "", f.user.cookie); w.code() != http.StatusNotFound {
+		t.Errorf("a stack of another environment: status = %d, want 404", w.code())
+	}
+	if w := stackDownload(t, f.envFix, f.env.ID, f.stack.ID, "since=nonsense", f.user.cookie); w.code() != http.StatusUnprocessableEntity {
+		t.Errorf("a bad range: status = %d, want 422", w.code())
+	}
+}
+
+func TestStackLogsRefuseAUsersOverTheirStreamLimit(t *testing.T) {
+	t.Parallel()
+	f := newStackLogsFix(t, stackLogsTasks(), stackLogsBurst(), func(f *envFix) { f.stackLogs.MaxStreamsPerUser = 1 })
+	first := f.open(t, "sid="+sidA, "")
+	stackReadyOf(t, first)
+	second := f.open(t, "sid="+sidB, "")
+	if second.status0() != http.StatusTooManyRequests {
+		t.Fatalf("second stream: status = %d: %s, want 429", second.status0(), second.bodyString())
 	}
 }
