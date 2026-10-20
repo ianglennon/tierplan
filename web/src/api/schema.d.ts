@@ -2136,6 +2136,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks/{stackId}/resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What a stack owns on its environment
+         * @description The tasks (a swarm) or containers (a standalone host) and the networks of the stack, found by the stack's labels: its swarm namespace or Compose project together with its Bayplan ID, so an object of another stack, or one somebody made under the same name, is never listed as the stack's. Each card is read on its own and carries its own error, so one read that fails never hides the others. A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).
+         */
+        get: operations["listStackResources"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/stacks/{stackId}/review": {
         parameters: {
             query?: never;
@@ -8328,6 +8348,33 @@ export interface components {
             /** @description The engine's word for the container: running, exited, restarting, paused, created, removing or dead */
             state: string;
         };
+        StackContainerResourceBody: {
+            /**
+             * Format: date-time
+             * @description When the container was created
+             */
+            created: string;
+            /** @description none, starting, healthy or unhealthy */
+            health: string;
+            /** @description The container ID, which the container page is at */
+            id: string;
+            /** @description The image the container runs, as the engine reports it */
+            image: string;
+            /** @description The container name */
+            name: string;
+            /** @description The published ports as published->target/protocol, without the host address */
+            ports: string[] | null;
+            /** @description The service's name in the compose file */
+            service: string;
+            /** @description The engine's word for the container: running, exited, restarting, paused, created, removing or dead */
+            state: string;
+        };
+        StackContainersCardBody: {
+            /** @description Empty when the card was read. Otherwise why it was not: node_unavailable or read_failed; Items is then empty */
+            error: string;
+            /** @description The containers of the stack's Compose project, stopped ones too, one-off containers (compose run) left out, by name */
+            items: components["schemas"]["StackContainerResourceBody"][] | null;
+        };
         StackCreateRequest: {
             /** @description The text of the first compose.yaml. When it is given, start is ignored; with start upload it is the uploaded file as it was read, kept even when it does not parse (the editor shows the problems). Over 1 MiB is 422 file_too_large */
             compose?: string;
@@ -8728,6 +8775,27 @@ export interface components {
              */
             status: "available" | "taken" | "clash" | "invalid";
         };
+        StackNetworkResourceBody: {
+            /** @description The network driver */
+            driver: string;
+            /** @description The network ID, which the network page is at */
+            id: string;
+            /** @description The network name */
+            name: string;
+            /**
+             * @description stack: the network carries the stack's own labels. external: the compose file refers to a network created outside the stack, which Bayplan never changes or removes
+             * @enum {string}
+             */
+            ownership: "stack" | "external";
+            /** @description swarm for a network of the whole cluster, local for one of a host */
+            scope: string;
+        };
+        StackNetworksCardBody: {
+            /** @description Empty when the card was read. Otherwise why it was not: no_manager, no_quorum, node_unavailable or read_failed; Items is then empty */
+            error: string;
+            /** @description The networks of the stack, by name */
+            items: components["schemas"]["StackNetworkResourceBody"][] | null;
+        };
         StackOperationBody: {
             /** @description A stable word for how a failed operation failed, such as service_rejected, converge_timeout or interrupted; empty otherwise */
             code: string;
@@ -8799,6 +8867,24 @@ export interface components {
             name: string;
             /** @description The compose file after variables and env_file are filled in, each service's image shown as the pin it will run (tag@sha256:..., or the plain reference with a trailing comment when it will be looked up at the next deploy). Every secret value is <hidden> */
             yaml: string;
+        };
+        StackResourceTaskBody: {
+            /** @description True for a global service, whose rows are nodes rather than slots */
+            global: boolean;
+            /** @description The service's name in the compose file, without the stack prefix */
+            service: string;
+            /** @description The swarm service ID, which the service page is at */
+            serviceId: string;
+            /** @description The task, as the service's Tasks tab shows it */
+            task: components["schemas"]["TaskItem"];
+        };
+        StackResourcesBody: {
+            /** @description The Containers card; present for a standalone stack */
+            containers?: components["schemas"]["StackContainersCardBody"];
+            /** @description The Networks card */
+            networks: components["schemas"]["StackNetworksCardBody"];
+            /** @description The Tasks card; present for a swarm stack */
+            tasks?: components["schemas"]["StackTasksCardBody"];
         };
         StackReviewBody: {
             /** @description Left out unless set: set when the last good revision is newer than the revision the draft started from: someone deployed after the draft began. A deploy of the draft then needs acknowledgeConcurrent */
@@ -9009,6 +9095,12 @@ export interface components {
              * @description Stacks a person stopped
              */
             stopped: number;
+        };
+        StackTasksCardBody: {
+            /** @description Empty when the card was read. Otherwise why it was not: no_manager, no_quorum, node_unavailable or read_failed; Items is then empty */
+            error: string;
+            /** @description The current task of each slot of each service of the stack (of each node for a global service), by service then slot. The tasks Docker keeps in history are not listed */
+            items: components["schemas"]["StackResourceTaskBody"][] | null;
         };
         StackTextDiffBody: {
             /**
@@ -14287,6 +14379,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackRenderBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listStackResources: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackResourcesBody"];
                 };
             };
             /** @description Error */

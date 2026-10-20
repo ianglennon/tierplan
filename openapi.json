@@ -11478,6 +11478,85 @@
         ],
         "type": "object"
       },
+      "StackContainerResourceBody": {
+        "additionalProperties": false,
+        "properties": {
+          "created": {
+            "description": "When the container was created",
+            "format": "date-time",
+            "type": "string"
+          },
+          "health": {
+            "description": "none, starting, healthy or unhealthy",
+            "type": "string"
+          },
+          "id": {
+            "description": "The container ID, which the container page is at",
+            "type": "string"
+          },
+          "image": {
+            "description": "The image the container runs, as the engine reports it",
+            "type": "string"
+          },
+          "name": {
+            "description": "The container name",
+            "type": "string"
+          },
+          "ports": {
+            "description": "The published ports as published-\u003etarget/protocol, without the host address",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "service": {
+            "description": "The service's name in the compose file",
+            "type": "string"
+          },
+          "state": {
+            "description": "The engine's word for the container: running, exited, restarting, paused, created, removing or dead",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "service",
+          "state",
+          "health",
+          "image",
+          "ports",
+          "created"
+        ],
+        "type": "object"
+      },
+      "StackContainersCardBody": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "description": "Empty when the card was read. Otherwise why it was not: node_unavailable or read_failed; Items is then empty",
+            "type": "string"
+          },
+          "items": {
+            "description": "The containers of the stack's Compose project, stopped ones too, one-off containers (compose run) left out, by name",
+            "items": {
+              "$ref": "#/components/schemas/StackContainerResourceBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "error"
+        ],
+        "type": "object"
+      },
       "StackCreateRequest": {
         "additionalProperties": false,
         "properties": {
@@ -12453,6 +12532,67 @@
         ],
         "type": "object"
       },
+      "StackNetworkResourceBody": {
+        "additionalProperties": false,
+        "properties": {
+          "driver": {
+            "description": "The network driver",
+            "type": "string"
+          },
+          "id": {
+            "description": "The network ID, which the network page is at",
+            "type": "string"
+          },
+          "name": {
+            "description": "The network name",
+            "type": "string"
+          },
+          "ownership": {
+            "description": "stack: the network carries the stack's own labels. external: the compose file refers to a network created outside the stack, which Bayplan never changes or removes",
+            "enum": [
+              "stack",
+              "external"
+            ],
+            "type": "string"
+          },
+          "scope": {
+            "description": "swarm for a network of the whole cluster, local for one of a host",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "driver",
+          "scope",
+          "ownership"
+        ],
+        "type": "object"
+      },
+      "StackNetworksCardBody": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "description": "Empty when the card was read. Otherwise why it was not: no_manager, no_quorum, node_unavailable or read_failed; Items is then empty",
+            "type": "string"
+          },
+          "items": {
+            "description": "The networks of the stack, by name",
+            "items": {
+              "$ref": "#/components/schemas/StackNetworkResourceBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "error"
+        ],
+        "type": "object"
+      },
       "StackOperationBody": {
         "additionalProperties": false,
         "properties": {
@@ -12606,6 +12746,55 @@
         "required": [
           "name",
           "yaml"
+        ],
+        "type": "object"
+      },
+      "StackResourceTaskBody": {
+        "additionalProperties": false,
+        "properties": {
+          "global": {
+            "description": "True for a global service, whose rows are nodes rather than slots",
+            "type": "boolean"
+          },
+          "service": {
+            "description": "The service's name in the compose file, without the stack prefix",
+            "type": "string"
+          },
+          "serviceId": {
+            "description": "The swarm service ID, which the service page is at",
+            "type": "string"
+          },
+          "task": {
+            "$ref": "#/components/schemas/TaskItem",
+            "description": "The task, as the service's Tasks tab shows it"
+          }
+        },
+        "required": [
+          "task",
+          "serviceId",
+          "service",
+          "global"
+        ],
+        "type": "object"
+      },
+      "StackResourcesBody": {
+        "additionalProperties": false,
+        "properties": {
+          "containers": {
+            "$ref": "#/components/schemas/StackContainersCardBody",
+            "description": "The Containers card; present for a standalone stack"
+          },
+          "networks": {
+            "$ref": "#/components/schemas/StackNetworksCardBody",
+            "description": "The Networks card"
+          },
+          "tasks": {
+            "$ref": "#/components/schemas/StackTasksCardBody",
+            "description": "The Tasks card; present for a swarm stack"
+          }
+        },
+        "required": [
+          "networks"
         ],
         "type": "object"
       },
@@ -13122,6 +13311,30 @@
           "stopped",
           "draft",
           "deployFailed"
+        ],
+        "type": "object"
+      },
+      "StackTasksCardBody": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "description": "Empty when the card was read. Otherwise why it was not: no_manager, no_quorum, node_unavailable or read_failed; Items is then empty",
+            "type": "string"
+          },
+          "items": {
+            "description": "The current task of each slot of each service of the stack (of each node for a global service), by service then slot. The tasks Docker keeps in history are not listed",
+            "items": {
+              "$ref": "#/components/schemas/StackResourceTaskBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "error"
         ],
         "type": "object"
       },
@@ -22959,6 +23172,67 @@
           }
         },
         "summary": "Render a stack's working copy",
+        "tags": [
+          "stacks"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/resources": {
+      "get": {
+        "description": "The tasks (a swarm) or containers (a standalone host) and the networks of the stack, found by the stack's labels: its swarm namespace or Compose project together with its Bayplan ID, so an object of another stack, or one somebody made under the same name, is never listed as the stack's. Each card is read on its own and carries its own error, so one read that fails never hides the others. A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).",
+        "operationId": "listStackResources",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackResourcesBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "What a stack owns on its environment",
         "tags": [
           "stacks"
         ]

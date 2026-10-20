@@ -42,6 +42,10 @@ export type StackJobOutputLine = components["schemas"]["StackJobOutputLine"];
 export type StackServices = components["schemas"]["StackServicesBody"];
 export type StackService = components["schemas"]["StackServiceBody"];
 export type StackContainer = components["schemas"]["StackContainerBody"];
+export type StackResources = components["schemas"]["StackResourcesBody"];
+export type StackResourceTask = components["schemas"]["StackResourceTaskBody"];
+export type StackResourceContainer = components["schemas"]["StackContainerResourceBody"];
+export type StackResourceNetwork = components["schemas"]["StackNetworkResourceBody"];
 export type AllStacks = components["schemas"]["AllStacksBody"];
 export type AllStacksGroup = components["schemas"]["AllStacksGroup"];
 export type FailedEnvironment = components["schemas"]["FailedEnvironmentBody"];
@@ -258,6 +262,43 @@ export function stackServicesQuery(envId: string, stackId: string, o: StackServi
       if (document.visibilityState !== "visible") return false;
       if (o.target !== "swarm") return LIST_REFETCH_MS;
       return o.busy ? STACK_SERVICES_POLL_BUSY_MS : STACK_SERVICES_POLL_MS;
+    },
+  });
+}
+
+// How often the Resources tab of a swarm stack reads again while the page is visible: Docker sends no
+// task events, so it polls like the Overview does (UI-SPEC "Shared state and overflow rules"), faster
+// while a stack operation runs.
+export const STACK_RESOURCES_POLL_MS = 5_000;
+export const STACK_RESOURCES_POLL_BUSY_MS = 2_000;
+
+// The query key of what one stack owns. It extends the stack's key, so the events feed that refreshes the
+// stacks list, and every action that refreshes the page, refresh it too.
+export function stackResourcesKey(envId: string, stackId: string) {
+  return [...stackKey(envId, stackId), "resources"] as const;
+}
+
+// What a stack owns on its environment, one card for each kind, each with its own error. It polls on a
+// swarm while the page is visible and not at all while it is hidden; a read that fails keeps the last
+// cards, so the page can say it failed and still show what it had.
+export function stackResourcesQuery(envId: string, stackId: string, o: StackServicesOptions) {
+  return queryOptions({
+    queryKey: stackResourcesKey(envId, stackId),
+    queryFn: async (): Promise<StackResources> => {
+      const res = await api.GET("/api/env/{envId}/stacks/{stackId}/resources", {
+        params: { path: { envId, stackId } },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new StacksLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    retry: (count, error) => !isStackGone(error) && count < 1,
+    refetchInterval: () => {
+      if (document.visibilityState !== "visible") return false;
+      if (o.target !== "swarm") return LIST_REFETCH_MS;
+      return o.busy ? STACK_RESOURCES_POLL_BUSY_MS : STACK_RESOURCES_POLL_MS;
     },
   });
 }
