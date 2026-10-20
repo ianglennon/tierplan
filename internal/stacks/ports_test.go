@@ -8,8 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/compose-spec/compose-go/v2/loader"
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/ianglennon/bayplan/internal/stacks"
 )
 
@@ -215,5 +218,33 @@ func TestANonYAMLFileWithHugeRangesIsRefusedBeforeTheLoad(t *testing.T) {
 	res = checkOf(t, "services:\n\tweb:\n\t\timage: nginx\n")
 	if res.Loaded != nil || onlyProblem(t, res).Code != stacks.CodeYAMLInvalid {
 		t.Errorf("problems = %+v, want the one yaml_invalid problem", res.Problems)
+	}
+}
+
+// TestThePortRangeReproductionNeverReachesComposeGo counts the calls to compose-go: the
+// reproduction is refused before the load, so its cost is the walker's, which the work budget
+// bounds. An ordinary file is counted too, so a zero for the reproduction means the stand-in is wired.
+func TestThePortRangeReproductionNeverReachesComposeGo(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int64
+	ctx := stacks.WithLoader(context.Background(), func(ctx context.Context, d types.ConfigDetails, o ...func(*loader.Options)) (*types.Project, error) {
+		calls.Add(1)
+		return loader.LoadWithContext(ctx, d, o...)
+	})
+	in := func(compose string) stacks.CheckInput {
+		return stacks.CheckInput{Name: "probe", Target: stacks.TargetSwarm, Copy: copyOf(compose)}
+	}
+	res := stacks.Check(ctx, in(portRangeReproduction()))
+	if p := onlyProblem(t, res); p.Code != stacks.CodePortsTooMany {
+		t.Errorf("problem = %+v, want ports_too_many", p)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("compose-go was called %d times for the reproduction, want 0", got)
+	}
+	if res := stacks.Check(ctx, in("services:\n  web:\n    image: nginx:1.27-alpine\n")); res.Problems.Errors() != 0 || res.Loaded == nil {
+		t.Fatalf("an ordinary file: problems = %+v", res.Problems)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("compose-go was called %d times for an ordinary file, want 1: the stand-in is not wired", got)
 	}
 }
