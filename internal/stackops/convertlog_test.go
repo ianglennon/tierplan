@@ -11,6 +11,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/stacks/convert"
+	"github.com/ianglennon/bayplan/internal/stacks/stackstest"
 )
 
 // The text a job logs for a conversion it could not make is the converter's words for a plain value and the
@@ -54,6 +55,7 @@ func TestTheConvertLogTextNeverQuotesPartOfASecret(t *testing.T) {
 			if strings.Contains(text, tc.secret) {
 				t.Errorf("text = %q, want no secret", text)
 			}
+			stackstest.NoSecretRun(t, tc.secret, text)
 		})
 	}
 	t.Run("a nil error is empty", func(t *testing.T) {

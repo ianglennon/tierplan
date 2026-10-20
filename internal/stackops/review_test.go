@@ -19,6 +19,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/stacks/convert"
+	"github.com/ianglennon/bayplan/internal/stacks/stackstest"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
@@ -559,6 +560,16 @@ func TestReviewMasksASecretInTheRenderedYAML(t *testing.T) {
 	}
 }
 
+// problemMessages is the message of each problem: the words the review builds from the loader's or the
+// converter's text. Keys are the file's own key paths and keep the tests' own assertions.
+func problemMessages(ps []stacks.Problem) []string {
+	out := make([]string, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, p.Message)
+	}
+	return out
+}
+
 // A problem the review adds after the check (a conversion refusal quotes the value it refuses) is masked
 // too, whatever step found it (review WR-04, T-07-160).
 func TestReviewNeverQuotesASecretInAProblem(t *testing.T) {
@@ -582,6 +593,7 @@ func TestReviewNeverQuotesASecretInAProblem(t *testing.T) {
 	if !found {
 		t.Fatalf("problems = %+v, want a conversion problem (the premise of the test)", rv.Problems)
 	}
+	stackstest.NoSecretRun(t, secret, problemMessages(rv.Problems)...)
 }
 
 // A review of a field the converter refuses, where compose-go split a secret before the converter saw
@@ -618,6 +630,7 @@ func TestReviewNeverQuotesPartOfASecretTheConverterSplits(t *testing.T) {
 			if !found {
 				t.Fatalf("problems = %+v, want a convert_failed problem", rv.Problems)
 			}
+			stackstest.NoSecretRun(t, tc.secret, problemMessages(rv.Problems)...)
 			if tc.want != "" && msg != tc.want {
 				t.Errorf("message = %q, want %q", msg, tc.want)
 			}

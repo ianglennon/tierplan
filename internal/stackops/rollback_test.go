@@ -12,6 +12,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/bayplan/internal/stacks/stackstest"
 )
 
 func rollbackTarget(composeText string, extra ...stacks.File) stackops.Snapshot {
@@ -161,6 +162,7 @@ func TestPrepareRollbackNeverQuotesPartOfASecretTheConverterSplits(t *testing.T)
 			t.Errorf("%s %q carries part of the secret", name, text)
 		}
 	}
+	stackstest.NoSecretRun(t, "sometimes:3", err.Error(), detail)
 }
 
 // The load stage of a roll back or a start is refused with the fixed sentence for a size field fed by a
@@ -189,6 +191,7 @@ func TestPrepareRollbackNeverQuotesPartOfASecretInASizeField(t *testing.T) {
 		}
 		fixed = fixed || p.Message == stacks.SecretValueMessage("services.web.mem_limit")
 	}
+	stackstest.NoSecretRun(t, "Password2024!", append(problemMessages(nd.Problems), err.Error())...)
 	if !fixed {
 		t.Errorf("problems = %+v, want the fixed sentence at services.web.mem_limit", nd.Problems)
 	}

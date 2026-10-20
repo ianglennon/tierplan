@@ -16,6 +16,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/bayplan/internal/stacks/stackstest"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
@@ -370,5 +371,45 @@ func TestCheckRouteLocatesThePortBudgetProblem(t *testing.T) {
 	}
 	if p := answer.Problems[0]; p.Code != "ports_too_many" || p.Severity != "error" || p.Line != 25 || p.File != "compose.yaml" {
 		t.Errorf("problem = %+v, want an error ports_too_many at compose.yaml line 25", p)
+	}
+}
+
+// The check route builds its problems from the loader's and the converter's words, and a variable value in the
+// request is used as given. For a field fed by a secret variable the answer holds the fixed sentence and no
+// run of the value (07-44, D-02, T-07-187).
+func TestStackCheckAnswerNeverHoldsARunOfASecret(t *testing.T) {
+	t.Parallel()
+	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
+	cases := map[string]struct {
+		body, secret string
+		// want is the Message a problem of the answer must equal.
+		want string
+	}{
+		"mem_limit":       {"    mem_limit: ${PW}\n", "Password2024!", stacks.SecretValueMessage("services.web.mem_limit")},
+		"deploy.replicas": {"    deploy:\n      replicas: ${PW}\n", "Password2024!", stacks.SecretValueMessage("services.web.deploy.replicas")},
+		"a port spec":     {"    ports: [\"${PW}:80\"]\n", "abcd:efgh9", stacks.SecretValueMessage("")},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f, e := stackEnv(t, nil)
+			admin := f.caller(t, e, "envadmin-1", "admin")
+			operator := f.caller(t, e, "operator-1", "operator")
+			st := newStack(t, admin, "checkleak")
+			answer, code, raw := operator.check(st.ID, checkBodyWithVars(head+tc.body, partSecretVars(t, tc.secret)))
+			if code != http.StatusOK {
+				t.Fatalf("check: %d %.300s, want 200", code, raw)
+			}
+			var messages []string
+			found := false
+			for _, p := range answer.Problems {
+				messages = append(messages, p.Message)
+				found = found || p.Message == tc.want
+			}
+			if !found {
+				t.Errorf("problems = %+v, want one with %q", answer.Problems, tc.want)
+			}
+			stackstest.NoSecretRun(t, tc.secret, messages...)
+		})
 	}
 }
