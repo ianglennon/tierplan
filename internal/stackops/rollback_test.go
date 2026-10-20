@@ -92,3 +92,23 @@ func TestPrepareRollbackNamesTheStageThatRefusedARevision(t *testing.T) {
 		})
 	}
 }
+
+// A revision that is refused carries the masker of its own secrets, so a route can answer the refusal
+// without the converter's quoted value (review WR-04): the roll back and the start both use it.
+func TestPrepareRollbackRefusalCarriesTheRevisionsMasker(t *testing.T) {
+	t.Parallel()
+	const secret = "hunter2secretvalue"
+	target := rollbackTarget("services:\n  web:\n    image: nginx:1.27-alpine\n    deploy:\n      endpoint_mode: ${PW}\n")
+	target.Copy.Vars = []stacks.Var{{Name: "PW", Value: secret, Secret: true}}
+	_, err := stackops.Deps{}.PrepareRollback(context.Background(), rollbackStack, target, map[string]string{})
+	var pe *stackops.PrepareError
+	if !errors.As(err, &pe) || pe.Stage != stackops.PrepareConvert {
+		t.Fatalf("err = %v, want the convert stage", err)
+	}
+	if !strings.Contains(stackops.ConvertDetail(pe.Err), secret) {
+		t.Fatalf("detail = %q, want the converter to quote the value (the premise of the test)", stackops.ConvertDetail(pe.Err))
+	}
+	if got := pe.Masker.Mask(stackops.ConvertDetail(pe.Err)); strings.Contains(got, secret) || !strings.Contains(got, stacks.Hidden) {
+		t.Errorf("masked = %q, want the value shown as %s", got, stacks.Hidden)
+	}
+}

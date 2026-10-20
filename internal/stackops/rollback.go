@@ -24,6 +24,10 @@ const (
 type PrepareError struct {
 	Stage string
 	Err   error
+	// Masker is the masker of the revision that was refused. A route that answers the refusal masks
+	// what it says with it, for the converter quotes the values it refuses and a value may be a secret
+	// variable's. A caller that has the revision's copy at hand may use its own.
+	Masker stacks.Masker
 }
 
 func (e *PrepareError) Error() string {
@@ -50,9 +54,13 @@ type RollbackPlan struct {
 // The project comes from stacks.Deployable, the pipeline the review runs, so a revision that used
 // env_file or kept build beside image converts as it did when it was deployed.
 func (d Deps) PrepareRollback(ctx context.Context, st Stack, target Snapshot, pins map[string]string) (RollbackPlan, error) {
+	// The masker is built only for a refusal: the revision is judged on every roll back and start.
+	refuse := func(stage string, err error) error {
+		return &PrepareError{Stage: stage, Err: err, Masker: stacks.NewMasker(target.Copy.Vars, target.Copy.Files)}
+	}
 	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: target.Copy})
 	if err != nil {
-		return RollbackPlan{}, &PrepareError{Stage: PrepareLoad, Err: err}
+		return RollbackPlan{}, refuse(PrepareLoad, err)
 	}
 	files, vars := stacks.NewFileSet(target.Copy.Files), make(map[string]string, len(target.Copy.Vars))
 	for _, v := range target.Copy.Vars {
@@ -60,14 +68,14 @@ func (d Deps) PrepareRollback(ctx context.Context, st Stack, target Snapshot, pi
 	}
 	objs, err := stacks.ResolveObjects(loaded.Project, files, vars)
 	if err != nil {
-		return RollbackPlan{}, &PrepareError{Stage: PrepareObjects, Err: err}
+		return RollbackPlan{}, refuse(PrepareObjects, err)
 	}
 	plan, err := convert.Convert(loaded.Project, convert.Options{StackName: st.Name, StackID: st.ID, Objects: PlannedObjects(st.Name, objs)})
 	if err != nil {
-		return RollbackPlan{}, &PrepareError{Stage: PrepareConvert, Err: err}
+		return RollbackPlan{}, refuse(PrepareConvert, err)
 	}
 	if _, err := RestoredPins(plan.Services, pins); err != nil {
-		return RollbackPlan{}, &PrepareError{Stage: PreparePins, Err: err}
+		return RollbackPlan{}, refuse(PreparePins, err)
 	}
 	return RollbackPlan{Loaded: loaded, Files: files, Vars: vars, Plan: plan, Pins: pins}, nil
 }

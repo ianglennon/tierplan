@@ -134,7 +134,7 @@ func lifecycleStack(ctx context.Context, d StacksDeps, in *StackLifecycleInput, 
 		var pe *stackops.PrepareError
 		switch {
 		case errors.As(err, &pe):
-			return nil, rollbackPrepareProblem(err)
+			return nil, rollbackPrepareProblem(err, pe.Masker)
 		case errors.Is(err, stackops.ErrNoPolicy):
 			return nil, stackInternal(d, "policy", env.ID, err)
 		case err != nil:

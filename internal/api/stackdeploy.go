@@ -362,8 +362,10 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 		return nil, err
 	}
 	mode, update := deployModeOf(in.Body)
+	// The stack's masker is built once for the request: the refusals below and the stored rendering use it.
+	masker := stacks.NewMasker(draft.Copy.Vars, draft.Copy.Files)
 	if st.Target == stacks.TargetStandalone {
-		return deployStandaloneStack(ctx, d, p, env, st, draft, in, mode, update)
+		return deployStandaloneStack(ctx, d, p, env, st, draft, in, mode, update, masker)
 	}
 
 	// The draft is judged once, by the check pipeline the review ran, before anything is stored or
@@ -385,11 +387,11 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 	}
 	objs, err := stacks.ResolveObjects(loaded.Project, files, vars)
 	if err != nil {
-		return nil, objectProblem(err)
+		return nil, objectProblem(err, masker)
 	}
 	plan, err := convert.Convert(loaded.Project, convert.Options{StackName: st.Name, StackID: st.ID, Objects: stackops.PlannedObjects(st.Name, objs)})
 	if err != nil {
-		return nil, convertProblem(err)
+		return nil, convertProblem(err, masker)
 	}
 	// The images the review chose are checked now, before anything is stored, against what the
 	// server decides itself: a pin it would not have chosen is refused and nothing starts.
@@ -446,7 +448,7 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 	// The masked rendering is what the next review compares its own with. It is stored before the
 	// job starts, with the images this deploy was told to use, and again when the deploy ends good,
 	// with the images it ran with.
-	rendering := revisionRendering{repo: repo, loaded: loaded, masker: stacks.NewMasker(draft.Copy.Vars, draft.Copy.Files)}
+	rendering := revisionRendering{repo: repo, loaded: loaded, masker: masker}
 	var startPins map[string]stacks.LivePin
 	if in.Body.Pins != nil {
 		startPins = stackops.LivePins(in.Body.Pins)
@@ -481,7 +483,7 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 // same way, and the job runs the Compose SDK instead of the swarm engine. Every step before the lock is a
 // read or a check; nothing is stored or started until the draft, the objects, the pins, the host-access
 // policy and the name have all passed.
-func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal, env *httpx.Env, st stackops.Stack, draft stackops.Snapshot, in *StackDeployInput, mode string, update map[string]bool) (*StackDeployOutput, error) {
+func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal, env *httpx.Env, st stackops.Stack, draft stackops.Snapshot, in *StackDeployInput, mode string, update map[string]bool, masker stacks.Masker) (*StackDeployOutput, error) {
 	repo := d.repo()
 	checked := stacks.Check(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy, Deadline: d.CheckDeadline})
 	if checked.Loaded == nil {
@@ -493,7 +495,7 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 		}
 	}
 	if _, err := stacks.ResolveObjectsFor(stacks.TargetStandalone, checked.Loaded.Project, stacks.NewFileSet(draft.Copy.Files), varMap(draft.Copy.Vars)); err != nil {
-		return nil, objectProblem(err)
+		return nil, objectProblem(err, masker)
 	}
 	if checked.Problems.Errors() > 0 {
 		return nil, stackInvalid(checked.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
@@ -546,7 +548,7 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 		_ = repo.SetOutcome(context.WithoutCancel(ctx), rev.ID, stackops.OutcomeFailed, "", "")
 		return nil, stackInternal(d, "rebase the draft", env.ID, err)
 	}
-	rendering := revisionRendering{repo: repo, loaded: checked.Loaded, masker: stacks.NewMasker(draft.Copy.Vars, draft.Copy.Files)}
+	rendering := revisionRendering{repo: repo, loaded: checked.Loaded, masker: masker}
 	var startPins map[string]stacks.LivePin
 	if in.Body.Pins != nil {
 		startPins = stackops.LivePins(in.Body.Pins)
@@ -619,9 +621,10 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 	// The revision is judged once, by the check pipeline, and converted before anything is stored: one that
 	// cannot be redeployed as it stands is refused here, with the reason, and leaves no revision behind. The
 	// project it returns is the one that is rendered and deployed.
+	masker := stacks.NewMasker(target.Copy.Vars, target.Copy.Files)
 	prep, err := d.ops().PrepareRollback(ctx, st, target, pins)
 	if err != nil {
-		return nil, rollbackPrepareProblem(err)
+		return nil, rollbackPrepareProblem(err, masker)
 	}
 	// What a deploy of this revision would need is judged for the caller, as a deploy is: an Operator
 	// cannot roll back to a version only an Admin may deploy (T-07-91). The job judges it again.
@@ -661,7 +664,7 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 	if err != nil {
 		return nil, stackInternal(d, "revision", env.ID, err)
 	}
-	rendering := revisionRendering{repo: repo, loaded: prep.Loaded, masker: stacks.NewMasker(target.Copy.Vars, target.Copy.Files)}
+	rendering := revisionRendering{repo: repo, loaded: prep.Loaded, masker: masker}
 	if err := rendering.store(ctx, rev.ID, stackops.LivePins(pins)); err != nil {
 		d.Log.Warn("could not store the rendering of a revision", "stack", st.ID, "revision", rev.Seq, "error", err)
 	}
@@ -933,8 +936,9 @@ func deployableProblem(d StacksDeps, envID string, err error) error {
 	return stackInternal(d, "check", envID, err)
 }
 
-// rollbackPrepareProblem is the answer to a revision that cannot be redeployed as it stands.
-func rollbackPrepareProblem(err error) error {
+// rollbackPrepareProblem is the answer to a revision that cannot be redeployed as it stands. m is the
+// masker of the revision being restored: what the objects and conversion stages say is masked with it.
+func rollbackPrepareProblem(err error, m stacks.Masker) error {
 	var pe *stackops.PrepareError
 	if !errors.As(err, &pe) {
 		return huma.Error500InternalServerError("internal error")
@@ -947,9 +951,9 @@ func rollbackPrepareProblem(err error) error {
 		}
 		return httpx.Problem(http.StatusUnprocessableEntity, problemComposeInvalid, "That version can't be read, so it can't be deployed again.")
 	case stackops.PrepareObjects:
-		return objectProblem(pe.Err)
+		return objectProblem(pe.Err, m)
 	case stackops.PrepareConvert:
-		return convertProblem(pe.Err)
+		return convertProblem(pe.Err, m)
 	}
 	var invalid *stackops.PinsInvalidError
 	service := ""
@@ -1029,36 +1033,36 @@ func pinsProblem(d StacksDeps, envID string, err error) error {
 	return snapshotProblem(d.Log, envID, err)
 }
 
-// objectProblem is the 422 for a secret or config that has no usable content.
-func objectProblem(err error) error {
+// objectProblem is the 422 for a secret or config that has no usable content. The sentence names the
+// object, which the stack's author chose and which may be built from a variable, so it is masked with m.
+// Nothing here is built from an error's raw text.
+func objectProblem(err error, m stacks.Masker) error {
 	return &huma.ErrorModel{
 		Type: problemComposeInvalid, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
-		Detail: stackops.ObjectErrorDetail(err),
+		Detail: m.Mask(stackops.ObjectErrorDetail(err)),
 	}
 }
 
-// convertProblem is the 422 for a compose file the converter cannot turn into swarm objects.
-func convertProblem(err error) error {
+// convertProblem is the 422 for a compose file the converter cannot turn into swarm objects. The
+// converter quotes the values it refuses (a dns entry, an endpoint mode, a published port), and those may
+// have been interpolated from a secret variable, so every Detail, Message and Location is masked with m.
+// The wording is stackops.ConvertDetail's; nothing here is built from an error's raw text.
+func convertProblem(err error, m stacks.Masker) error {
+	detail := m.Mask(stackops.ConvertDetail(err))
 	var nc *convert.NotConvertedError
 	if errors.As(err, &nc) {
 		details := make([]*huma.ErrorDetail, 0, len(nc.Fields))
 		for _, f := range nc.Fields {
-			details = append(details, &huma.ErrorDetail{Location: nc.Service, Message: f})
+			details = append(details, &huma.ErrorDetail{Location: m.Mask(nc.Service), Message: m.Mask(f)})
 		}
 		return &huma.ErrorModel{
 			Type: problemComposeUnsupported, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
-			Detail: "Service " + nc.Service + " uses " + strings.Join(nc.Fields, ", ") + ", which a swarm stack can't deploy.", Errors: details,
-		}
-	}
-	if errors.Is(err, convert.ErrNoImage) {
-		return &huma.ErrorModel{
-			Type: problemComposeInvalid, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
-			Detail: "A service has no image. Bayplan deploys images, it does not build them.",
+			Detail: detail, Errors: details,
 		}
 	}
 	return &huma.ErrorModel{
 		Type: problemComposeInvalid, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
-		Detail: strings.TrimPrefix(err.Error(), "convert: "),
+		Detail: detail,
 	}
 }
 
