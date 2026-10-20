@@ -735,11 +735,11 @@ func loadProblems(err error, ix *PositionIndex, s SecretUse) Problems {
 			if prefix[0] == 'f' {
 				return yamlProblems(rest)
 			}
-			return schemaProblems(rest, ix)
+			return schemaProblems(rest, ix, s)
 		}
 	}
 	if m := interpolateRe.FindStringSubmatch(text); m != nil {
-		return Problems{keyProblem(ix, CodeComposeInvalid, m[1], m[1]+": "+m[2])}
+		return Problems{guardLoaderText(ix, CodeComposeInvalid, m[1], m[1]+": "+m[2], s)}
 	}
 	if m := undefinedRe.FindStringSubmatch(text); m != nil {
 		if m[2] == "volume" {
@@ -878,7 +878,7 @@ func keyProblem(ix *PositionIndex, code, path, message string) Problem {
 
 // schemaProblems reads a compose-go schema error: "{path} {message}", with an empty path for the
 // top level. An unknown key reads "{parent}: unknown key “{key}”." at the key.
-func schemaProblems(text string, ix *PositionIndex) Problems {
+func schemaProblems(text string, ix *PositionIndex, s SecretUse) Problems {
 	path, msg, _ := strings.Cut(text, " ")
 	msg = strings.TrimSpace(msg)
 	for _, sw := range [][2]string{{"a array", "an array"}, {"a object", "an object"}, {"a integer", "an integer"}} {
@@ -888,7 +888,8 @@ func schemaProblems(text string, ix *PositionIndex) Problems {
 		if m := extraPropRe.FindStringSubmatch(msg); m != nil {
 			return Problems{keyProblem(ix, CodeSchemaInvalid, m[1], fmt.Sprintf("unknown key “%s”.", m[1]))}
 		}
-		return Problems{keyProblem(ix, CodeSchemaInvalid, "", msg)}
+		// A top-level error names no field, so only the run check can tell whether it quotes a secret.
+		return Problems{guardLoaderText(ix, CodeSchemaInvalid, "", msg, s)}
 	}
 	if msg == "false schema" {
 		parent, key := path, path
@@ -897,5 +898,6 @@ func schemaProblems(text string, ix *PositionIndex) Problems {
 		}
 		return Problems{keyProblem(ix, CodeSchemaInvalid, path, fmt.Sprintf("%s: unknown key “%s”.", parent, key))}
 	}
-	return Problems{keyProblem(ix, CodeSchemaInvalid, path, path+": "+msg)}
+	// A value that fails the schema is quoted by the validator, so the words are guarded.
+	return Problems{guardLoaderText(ix, CodeSchemaInvalid, path, path+": "+msg, s)}
 }
