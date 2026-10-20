@@ -53,6 +53,10 @@ type RollbackPlan struct {
 // revision ran, so the digests it stored are the ones that go out (STK-07, T-07-93). Nothing is stored,
 // so a revision that cannot be redeployed is refused before the stack gains a revision of its own.
 //
+// The convert stage's refusal is guarded (convert.GuardSecrets): a field fed by a secret variable is the fixed
+// sentence, so the roll back route (rollbackPrepareProblem), the start route (CheckStart, planStart) and the
+// PrepareError text the start job logs carry no part of the value (07-42, D-02).
+//
 // The project comes from stacks.Deployable, the pipeline the review runs, so a revision that used
 // env_file or kept build beside image converts as it did when it was deployed.
 func (d Deps) PrepareRollback(ctx context.Context, st Stack, target Snapshot, pins map[string]string) (RollbackPlan, error) {
@@ -74,7 +78,7 @@ func (d Deps) PrepareRollback(ctx context.Context, st Stack, target Snapshot, pi
 	}
 	plan, err := convert.Convert(loaded.Project, convert.Options{StackName: st.Name, StackID: st.ID, Objects: PlannedObjects(st.Name, objs)})
 	if err != nil {
-		return RollbackPlan{}, refuse(PrepareConvert, err)
+		return RollbackPlan{}, refuse(PrepareConvert, convert.GuardSecrets(err, stacks.NewSecretUse(target.Copy)))
 	}
 	if _, err := RestoredPins(plan.Services, pins); err != nil {
 		return RollbackPlan{}, refuse(PreparePins, err)
