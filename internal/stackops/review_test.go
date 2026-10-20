@@ -775,3 +775,55 @@ func TestUpdateServicesOfAStandaloneStackAreNamedAsInTheFileOnly(t *testing.T) {
 		t.Errorf("a swarm name on a swarm: %v", err)
 	}
 }
+
+func TestReviewInUpdateModeMarksOnlyTheRowWhoseRegistryIsDownAndBlocksOnlyForIt(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	compose := "services:\n  web:\n    image: nginx:1.27\n  app:\n    image: " + hostApp + "\n  cache:\n    image: redis:7\n"
+	_, in := stackInput(t, "site", compose, nil)
+	if res, _ := rig.deploy(t, in); !res.OK() {
+		t.Fatalf("deploy = %+v", res)
+	}
+	moved := digestOf("e")
+	rig.fake.SetDistributionDigest("docker.io/library/nginx:1.27", moved)
+	rig.fake.SetDistributionFailure(hostApp, 500, registryDown)
+	lookups := len(rig.fake.DistributionRefs())
+
+	ri := rig.reviewInput(t, "site", compose, nil)
+	ri.Mode, ri.Services = stackops.ReviewModeUpdate, []string{"web", "app"}
+	rv, err := rig.deps.Review(testsupport.Context(t), ri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := map[string]stackops.ImageRow{}
+	for _, r := range rv.Images {
+		rows[r.Service] = r
+	}
+	if r := rows["web"]; r.State != stackops.ImageNew || r.Digest != moved || r.Current == "" || r.Current == moved {
+		t.Errorf("web = %+v, want its new digest looked up", r)
+	}
+	if r := rows["app"]; r.State != stackops.ImageUnreachable || r.Digest != "" || r.Note != "Can't reach the registry" || r.Current == "" {
+		t.Errorf("app = %+v, want the registry marked unreachable on that row, with what it runs now", r)
+	}
+	if r := rows["cache"]; r.State != stackops.ImagePinned || r.Digest != r.Current {
+		t.Errorf("cache = %+v, want it kept as it runs", r)
+	}
+	var blocking []string
+	for _, p := range rv.Problems {
+		if p.Severity == stacks.SeverityError {
+			blocking = append(blocking, p.Code+" "+p.Key)
+		}
+	}
+	if !slices.Equal(blocking, []string{stackops.CodeRegistryUnreachable + " services.app.image"}) {
+		t.Errorf("blocking problems = %v, want app alone", blocking)
+	}
+	if _, ok := rv.Pins["site_app"]; ok || rv.Pins["site_web"] == "" || rv.Pins["site_cache"] == "" {
+		t.Errorf("pins = %v, want web and cache and no pin for app", rv.Pins)
+	}
+	// Only the chosen services were looked up.
+	for _, ref := range rig.fake.DistributionRefs()[lookups:] {
+		if strings.Contains(ref, "redis") {
+			t.Errorf("the review asked the registry about %s, which was not chosen", ref)
+		}
+	}
+}

@@ -280,6 +280,123 @@ func sharedStackPin(t *testing.T, f *swarmFix) {
 	})
 }
 
+// sharedStackUpdateImages shows the explicit image update on a real swarm with a real registry (D-16,
+// STK-09, the prohibition: Update images must not change the digest of a service the user did not
+// choose). It deploys two services from the registry, moves both tags, then reviews and deploys an
+// update of web alone through the API: web runs the new digest of its tag, app still runs the one it
+// ran, none of app's tasks is replaced and the registry is asked about web alone. An update of a
+// service the stack does not have is refused before anything is looked up or started.
+func sharedStackUpdateImages(t *testing.T, f *swarmFix) {
+	f.stackEnvReady(t)
+	mgr := f.sw.Managers[0]
+	addr := dockertest.StartSwarmRegistry(t, f.sw, dockertest.RegistryOptions{})
+	refWeb, refApp := addr+"/upd/web:1", addr+"/upd/app:1"
+	webA := dockertest.PushVariant(t, mgr, dockertest.ServiceTestImage, refWeb, "A", nil)
+	appA := dockertest.PushVariant(t, mgr, dockertest.ServiceTestImage, refApp, "A", nil)
+	compose := "services:\n  web:\n    image: " + refWeb + "\n    command: [\"sleep\", \"3600\"]\n    stop_grace_period: 1s\n    deploy:\n      replicas: 1\n" +
+		"  app:\n    image: " + refApp + "\n    command: [\"sleep\", \"3600\"]\n    stop_grace_period: 1s\n    deploy:\n      replicas: 1\n"
+	id := f.createStackBayplan(t, "upd1", compose)
+	f.deployStackBayplan(t, id)
+	const web, app = "upd1_web", "upd1_app"
+	image := func(svc string) string {
+		return serviceField(t, f, svc, "{{.Spec.TaskTemplate.ContainerSpec.Image}}")
+	}
+	if got := image(web); got != refWeb+"@"+webA {
+		t.Fatalf("web runs %q, want %s@%s", got, refWeb, webA)
+	}
+	if got := image(app); got != refApp+"@"+appA {
+		t.Fatalf("app runs %q, want %s@%s", got, refApp, appA)
+	}
+	f.waitTasksOn(t, web, webA, 1, taskWait)
+	f.waitTasksOn(t, app, appA, 1, taskWait)
+	appTasks := serviceTaskIDs(t, f, app)
+
+	// Both tags move; only web is chosen.
+	webB := dockertest.PushVariant(t, mgr, dockertest.ServiceTestImage, refWeb, "B", nil)
+	appB := dockertest.PushVariant(t, mgr, dockertest.ServiceTestImage, refApp, "B", nil)
+	if webB == webA || appB == appA {
+		t.Fatalf("a tag did not move: web %s -> %s, app %s -> %s", webA, webB, appA, appB)
+	}
+
+	// A name the stack does not have is refused, and so is no name at all.
+	for _, services := range [][]string{{"web", "ghost"}, {}} {
+		if code, body := f.srv.Do(http.MethodPost, f.stackAPI()+"/"+id+"/review", map[string]any{"mode": "update", "services": services}); code != http.StatusUnprocessableEntity || !strings.Contains(string(body), "services_invalid") {
+			t.Errorf("POST the review of an update of %v = %d %s, want 422 services_invalid", services, code, body)
+		}
+	}
+
+	code, body := f.srv.Do(http.MethodPost, f.stackAPI()+"/"+id+"/review", map[string]any{"mode": "update", "services": []string{"web"}})
+	var rv struct {
+		DraftVersion int64 `json:"draftVersion"`
+		Images       []struct {
+			Service, Digest, Current, State string
+		} `json:"images"`
+		Pins map[string]string `json:"pins"`
+	}
+	if code != http.StatusOK || json.Unmarshal(body, &rv) != nil {
+		t.Fatalf("POST the review of the update = %d %s", code, body)
+	}
+	for _, r := range rv.Images {
+		switch r.Service {
+		case "web":
+			if r.State != "new" || r.Current != webA || r.Digest != webB {
+				t.Errorf("the review's row for web = %+v, want new, from %s to %s", r, webA, webB)
+			}
+		case "app":
+			if r.State != "pinned" || r.Current != appA || r.Digest != appA {
+				t.Errorf("the review's row for app = %+v, want it kept at %s although its tag moved to %s", r, appA, appB)
+			}
+		}
+	}
+
+	code, body = f.srv.Do(http.MethodPost, f.stackAPI()+"/"+id+"/deploys", map[string]any{
+		"draftVersion": rv.DraftVersion, "mode": "update", "services": []string{"web"}, "pins": rv.Pins,
+	})
+	var started struct {
+		JobID string `json:"jobId"`
+	}
+	if code != http.StatusAccepted || json.Unmarshal(body, &started) != nil || started.JobID == "" {
+		t.Fatalf("POST the update of stack %s = %d %s", id, code, body)
+	}
+	var job stackJob
+	testsupport.Poll(t, stackDeployWait, "the update job "+started.JobID+" to end", func() (bool, string) {
+		code, body := f.srv.Do(http.MethodGet, f.stackAPI()+"/"+id+"/deploys/"+started.JobID, nil)
+		if code != http.StatusOK {
+			return false, fmt.Sprintf("GET the job = %d %s", code, body)
+		}
+		job = stackJob{}
+		if err := json.Unmarshal(body, &job); err != nil {
+			return false, string(body)
+		}
+		return job.State != "running", string(body)
+	})
+	if job.State != "done" {
+		raw, _ := json.Marshal(job)
+		t.Fatalf("the update of stack %s ended %s, want done: %s", id, job.State, raw)
+	}
+
+	// web moved to the digest its tag has now; app is exactly as it was and none of its tasks was replaced.
+	if got := image(web); got != refWeb+"@"+webB {
+		t.Errorf("web runs %q after the update, want %s@%s", got, refWeb, webB)
+	}
+	if got := image(app); got != refApp+"@"+appA {
+		t.Errorf("app runs %q after the update, want %s@%s: it was not chosen", got, refApp, appA)
+	}
+	f.waitTasksOn(t, web, webB, 1, taskWait)
+	if got := serviceTaskIDs(t, f, app); !slices.Equal(got, appTasks) {
+		t.Errorf("the update replaced a task of app, which was not chosen:\n before: %v\n after:  %v", appTasks, got)
+	}
+	waitStackConverged(t, f, "upd1")
+}
+
+// serviceTaskIDs are the IDs of every task a service has had, current and past, sorted.
+func serviceTaskIDs(t *testing.T, f *swarmFix, service string) []string {
+	t.Helper()
+	ids := strings.Fields(sh(t, f.sw.Managers[0], "docker service ps -q --no-trunc "+service))
+	sort.Strings(ids)
+	return ids
+}
+
 // reviewBody is the part of the answer of POST .../review these tests read.
 type reviewBody struct {
 	Problems []struct {

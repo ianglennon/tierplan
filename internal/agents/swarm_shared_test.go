@@ -50,6 +50,7 @@ var sharedSwarmCases = []struct {
 	{"StackPin", sharedStackPin},
 	{"StackRedeployIdempotent", sharedStackRedeployIdempotent},
 	{"StackReviewEmptyAfterDeploy", sharedStackReviewEmptyAfterDeploy},
+	{"StackUpdateImages", sharedStackUpdateImages},
 	{"StatsFromWorker", sharedStatsFromWorker},
 	{"UninstallOnRemove", sharedUninstallOnRemove},
 	{"Volumes", sharedVolumes},
