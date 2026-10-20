@@ -714,6 +714,13 @@ func loadProblems(err error, ix *PositionIndex) Problems {
 	case errors.Is(err, context.DeadlineExceeded):
 		return Problems{timeoutProblem()}
 	}
+	var pe *PortsError
+	switch {
+	case errors.As(err, &pe):
+		return Problems{portsProblem(pe)}
+	case errors.Is(err, ErrComposeTooComplex):
+		return Problems{tooComplexProblem()}
+	}
 	var le *LoadError
 	inner := err
 	if errors.As(err, &le) {
@@ -758,6 +765,30 @@ func loadProblems(err error, ix *PositionIndex) Problems {
 		Severity: SeverityError, Code: CodeComposeInvalid, File: ComposeFile, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
 		Message: text,
 	}}
+}
+
+// portsProblem is the problem a refusal of PortBudget is reported as, at the item that caused it.
+// Neither its message nor its key holds a port's text: a value may come from a secret variable.
+func portsProblem(pe *PortsError) Problem {
+	line, col := max(pe.Line, 1), max(pe.Col, 1)
+	p := Problem{Severity: SeverityError, File: ComposeFile, Key: pe.Key, Line: line, Col: col, EndLine: line, EndCol: col + 1}
+	if errors.Is(pe.Err, ErrPortRangeInvalid) {
+		p.Code = CodePortRangeInvalid
+		p.Message = "This port range isn't valid: a port is a number from 0 to 65535, and a range runs from the lower port to the higher."
+		return p
+	}
+	p.Code = CodePortsTooMany
+	p.Message = fmt.Sprintf("The ports and expose ranges of this file add up to more than %s ports. Use smaller ranges.", thousands(MaxPorts))
+	return p
+}
+
+// thousands writes n with a comma between thousands.
+func thousands(n int) string {
+	s := strconv.Itoa(n)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
 }
 
 // timeoutProblem is the one problem of a check that ran out of time.

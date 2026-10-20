@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/compose-spec/compose-go/v2/template"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -415,7 +417,10 @@ func (w *walker) fileRef(key string, v val, optional bool) {
 	w.found = append(w.found, problem)
 }
 
-// MaxPorts is the most ports a compose file's ports: and expose: ranges may add up to.
+// MaxPorts is the most ports a compose file's ports: and expose: ranges may add up to, counted the
+// way compose-go expands them: every entry counts, also an identical one compose-go would fold. At
+// exactly this many ports one check allocates about 206 MB with about 43 MB of peak heap (measured
+// while planning, and held under 256 MiB by a test), and it lets a full TURN relay range through.
 const MaxPorts = 20000
 
 // ErrPortsTooMany, ErrPortRangeInvalid and ErrComposeTooComplex are the refusals of PortBudget.
@@ -425,7 +430,8 @@ var (
 	ErrComposeTooComplex = errors.New("stacks: the compose file is too complex")
 )
 
-// PortsError is a refusal of PortBudget, located at the item that caused it.
+// PortsError is a refusal of PortBudget, located at the item that caused it. It never holds a
+// port's text: a value may come from a secret variable.
 type PortsError struct {
 	Err       error
 	Key       string
@@ -439,5 +445,131 @@ func (e *PortsError) Error() string {
 // Unwrap returns the refusal.
 func (e *PortsError) Unwrap() error { return e.Err }
 
-// PortBudget is a stub until the budget is implemented.
-func PortBudget(compose []byte, vars []Var) error { return nil }
+// PortBudget measures the ports: and expose: ranges of a compose file before compose-go reads it.
+// compose-go expands every short-form range into one entry per port (about 10 KB each) and ignores
+// its context while doing so, so a few hundred bytes of ranges can cost gigabytes. The ranges are
+// read through the alias-aware walker (aliases and merge keys count where the file used them) and
+// after interpolation with the stack's variable table, and the file is refused at the first item
+// that takes the total over MaxPorts.
+func PortBudget(compose []byte, vars []Var) error {
+	roots, ok := decodeRoots(compose)
+	if !ok {
+		return nil
+	}
+	w := &walker{budget: maxBudget}
+	for _, root := range roots {
+		w.measure(root, 0)
+		if w.err != nil {
+			return ErrComposeTooComplex
+		}
+	}
+	table := make(map[string]string, len(vars))
+	for _, v := range vars {
+		if v.Value != "" {
+			table[v.Name] = v.Value
+		}
+	}
+	pc := &portCounter{w: w, table: table}
+	for _, root := range roots {
+		for _, top := range w.entries(val{n: root}, 0) {
+			if top.name != "services" {
+				continue
+			}
+			for _, svc := range w.entries(top.val, 0) {
+				for _, f := range w.entries(svc.val, 0) {
+					if f.name == "ports" || f.name == "expose" {
+						if err := pc.field(svc.name, f); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+		if w.err != nil {
+			return ErrComposeTooComplex
+		}
+	}
+	return nil
+}
+
+// portCounter adds up the ports of one file.
+type portCounter struct {
+	w     *walker
+	table map[string]string
+	total int
+}
+
+// field counts the items of one ports or expose key of a service.
+func (pc *portCounter) field(service string, f entry) error {
+	seq := pc.w.resolve(f.val)
+	if seq.n.Kind != yaml.SequenceNode {
+		return nil
+	}
+	key := "services." + service + "." + f.name
+	for _, item := range seq.n.Content {
+		if !pc.w.spend() {
+			return ErrComposeTooComplex
+		}
+		it := pc.w.resolve(val{n: item, at: seq.at})
+		n := 0
+		switch it.n.Kind {
+		case yaml.MappingNode:
+			n = 1
+		case yaml.ScalarNode:
+			text, err := template.Substitute(it.n.Value, func(name string) (string, bool) {
+				v, ok := pc.table[name]
+				return v, ok
+			})
+			if err != nil {
+				continue // the load reports a bad reference
+			}
+			n = shortFormPorts(text, f.name == "expose")
+		}
+		pc.total += n
+		if pc.total > MaxPorts {
+			return &PortsError{Err: ErrPortsTooMany, Key: key, Line: it.line(), Col: it.col()}
+		}
+	}
+	return nil
+}
+
+// shortFormPorts is how many ports compose-go expands a short-form entry to: the size of its
+// container range. A text that is not a number or a range counts 0: compose-go judges it.
+func shortFormPorts(text string, expose bool) int {
+	spec, _, _ := strings.Cut(text, "/")
+	container := spec
+	if !expose {
+		if rest, ok := strings.CutPrefix(spec, "["); ok {
+			// A bracketed IPv6 host address; its colons are not separators.
+			if _, after, found := strings.Cut(rest, "]"); found {
+				spec = strings.TrimPrefix(after, ":")
+			}
+		}
+		container = spec[strings.LastIndex(spec, ":")+1:]
+	}
+	lo, hi, ok := parsePortRange(container)
+	if !ok {
+		return 0
+	}
+	return int(hi-lo) + 1
+}
+
+// parsePortRange reads "80" or "8000-8002". It reports false for text that is not made of numbers.
+func parsePortRange(s string) (lo, hi uint64, ok bool) {
+	a, b, isRange := strings.Cut(s, "-")
+	lo, err := strconv.ParseUint(a, 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	hi = lo
+	if isRange {
+		if hi, err = strconv.ParseUint(b, 10, 64); err != nil {
+			return 0, 0, false
+		}
+	}
+	if hi < lo || hi > 65535 {
+		// Not a range the budget can count; the validity rules judge it.
+		return lo, lo, true
+	}
+	return lo, hi, true
+}

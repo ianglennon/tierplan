@@ -62,13 +62,19 @@ type Loaded struct {
 //     table entry with no value is no value: the default written in the file is used;
 //   - include and extends are not followed, and env_file and label_file are not resolved, so the
 //     load opens no file;
-//   - paths are not resolved, and the working directory does not exist.
+//   - paths are not resolved, and the working directory does not exist;
+//   - the ports: and expose: ranges are measured before compose-go expands them (PortBudget).
 //
 // A compose file over MaxFileBytes is refused with ErrTooLarge before it is parsed.
 func Load(ctx context.Context, in LoadInput) (*Loaded, error) {
 	content := in.Copy.Compose()
 	if len(content) > MaxFileBytes {
 		return nil, ErrTooLarge
+	}
+	// compose-go expands a port range into one entry per port and does not stop when its context
+	// ends, so the ranges are measured first.
+	if err := PortBudget(content, in.Copy.Vars); err != nil {
+		return nil, err
 	}
 	env := make(types.Mapping, len(in.Copy.Vars))
 	for _, v := range in.Copy.Vars {
