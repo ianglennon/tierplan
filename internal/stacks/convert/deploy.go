@@ -16,6 +16,11 @@ import (
 // (Apache-2.0) onto the compose-go v2 types: convertDeployMode, convertResources,
 // convertRestartPolicy and convertUpdateConfig, plus the Placement block of Service.
 
+// fieldPath is the dotted compose path of one of the service's fields.
+func fieldPath(svc composetypes.ServiceConfig, field string) string {
+	return "services." + svc.Name + "." + field
+}
+
 // deployOf returns the service's deploy block, or an empty one.
 func deployOf(svc composetypes.ServiceConfig) composetypes.DeployConfig {
 	if svc.Deploy == nil {
@@ -112,7 +117,7 @@ func restartPolicy(svc composetypes.ServiceConfig) (*swarm.RestartPolicy, error)
 	}
 	out, err := restartPolicyFromRestart(svc.Restart)
 	if err != nil {
-		return nil, fmt.Errorf("convert: service %s: %w", svc.Name, err)
+		return nil, &FieldError{Path: fieldPath(svc, "restart"), Err: fmt.Errorf("convert: service %s: %w", svc.Name, err)}
 	}
 	return out, nil
 }

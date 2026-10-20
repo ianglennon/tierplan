@@ -24,6 +24,8 @@ import (
 
 	composetypes "github.com/compose-spec/compose-go/v2/types"
 	"github.com/moby/moby/api/types/swarm"
+
+	"github.com/ianglennon/bayplan/internal/stacks"
 )
 
 // ErrNotConverted means a service uses a compose setting a swarm stack cannot deploy.
@@ -42,6 +44,68 @@ func (e *NotConvertedError) Error() string {
 
 // Is makes errors.Is(err, ErrNotConverted) true.
 func (e *NotConvertedError) Is(target error) bool { return target == ErrNotConverted }
+
+// FieldError is a conversion refused because of one field's value. Path is the dotted compose path
+// from the top of the file (services.web.restart), the same path stacks.SecretUse judges. Error and
+// Unwrap give the wrapped error's own text and chain, so errors.Is and errors.As see what they saw
+// before. A refusal that carries no value (a keys-only NotConvertedError, ErrNoImage) is not wrapped.
+type FieldError struct {
+	Path string
+	Err  error
+}
+
+func (e *FieldError) Error() string { return e.Err.Error() }
+func (e *FieldError) Unwrap() error { return e.Err }
+
+// SecretFieldError replaces a FieldError, or any other converter error, that could quote a secret
+// variable (D-02). Its text is stacks.SecretValueMessage(Path), with Path empty when no field is
+// named.
+//
+// It deliberately has no Unwrap. A builder that walks a refusal with errors.As (the NotConvertedError
+// field list of the API's problem) would otherwise read the cause's fields and values. Is answers
+// for the cause's sentinels, so a caller that only needs the class (errors.Is(err, ErrNotConverted))
+// still gets it.
+type SecretFieldError struct {
+	Path  string
+	cause error
+}
+
+func (e *SecretFieldError) Error() string { return stacks.SecretValueMessage(e.Path) }
+
+// Is reports whether the hidden cause is target.
+func (e *SecretFieldError) Is(target error) bool { return errors.Is(e.cause, target) }
+
+// GuardSecrets withholds the words of a converter error that could quote a value from a secret
+// variable. The decision is stacks.SecretUse.Withholds, the one the load stage uses:
+//
+//   - a *FieldError is judged with its own Path, and its text, so a field misjudged plain whose
+//     text still quotes a secret is withheld too;
+//   - a keys-only *NotConvertedError and ErrNoImage carry compose keys and service names, never a
+//     value, and come back as they are;
+//   - any other error is judged by its text alone (the fail-closed case for a refusal site added
+//     without a FieldError), and becomes the general sentence.
+//
+// A plain value keeps the converter's words, even in a file that uses a secret elsewhere.
+func GuardSecrets(err error, s stacks.SecretUse) error {
+	if err == nil {
+		return nil
+	}
+	var fe *FieldError
+	if errors.As(err, &fe) {
+		if s.Withholds(fe.Path, err.Error()) {
+			return &SecretFieldError{Path: fe.Path, cause: err}
+		}
+		return err
+	}
+	var nc *NotConvertedError
+	if errors.As(err, &nc) || errors.Is(err, ErrNoImage) {
+		return err
+	}
+	if s.Withholds("", err.Error()) {
+		return &SecretFieldError{cause: err}
+	}
+	return err
+}
 
 // ErrRelativeBind means a bind mount's source is not an absolute path. Bayplan never resolves a
 // path against its own directory, so a relative source could only mean a path on the server.

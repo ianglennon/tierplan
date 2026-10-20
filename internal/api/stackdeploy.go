@@ -391,7 +391,9 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 	}
 	plan, err := convert.Convert(loaded.Project, convert.Options{StackName: st.Name, StackID: st.ID, Objects: stackops.PlannedObjects(st.Name, objs)})
 	if err != nil {
-		return nil, convertProblem(err, masker)
+		// A refusal about a field that uses a secret variable arrives as the fixed sentence; the SecretUse is
+		// built only on this path.
+		return nil, convertProblem(convert.GuardSecrets(err, stacks.NewSecretUse(draft.Copy)), masker)
 	}
 	// The images the review chose are checked now, before anything is stored, against what the
 	// server decides itself: a pin it would not have chosen is refused and nothing starts.
@@ -1045,25 +1047,28 @@ func objectProblem(err error, m stacks.Masker) error {
 
 // convertProblem is the 422 for a compose file the converter cannot turn into swarm objects. The
 // converter quotes the values it refuses (a dns entry, an endpoint mode, a published port), and those may
-// have been interpolated from a secret variable, so every Detail, Message and Location is masked with m.
-// The wording is stackops.ConvertDetail's; nothing here is built from an error's raw text.
+// have been interpolated from a secret variable, so a refusal from one arrives guarded (convert.GuardSecrets: the
+// fixed sentence, with its cause out of reach of errors.As), and every Detail, Message and Location is masked
+// with m as the second layer. The wording is stackops.ConvertDetail's; nothing here is built from an error's raw
+// text. The type follows errors.Is, which a guarded error still answers; the per-field list is built only from
+// an unguarded NotConvertedError.
 func convertProblem(err error, m stacks.Masker) error {
-	detail := m.Mask(stackops.ConvertDetail(err))
+	typ := problemComposeInvalid
+	if errors.Is(err, convert.ErrNotConverted) {
+		typ = problemComposeUnsupported
+	}
+	out := &huma.ErrorModel{
+		Type: typ, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
+		Detail: m.Mask(stackops.ConvertDetail(err)),
+	}
 	var nc *convert.NotConvertedError
 	if errors.As(err, &nc) {
-		details := make([]*huma.ErrorDetail, 0, len(nc.Fields))
+		out.Errors = make([]*huma.ErrorDetail, 0, len(nc.Fields))
 		for _, f := range nc.Fields {
-			details = append(details, &huma.ErrorDetail{Location: m.Mask(nc.Service), Message: m.Mask(f)})
-		}
-		return &huma.ErrorModel{
-			Type: problemComposeUnsupported, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
-			Detail: detail, Errors: details,
+			out.Errors = append(out.Errors, &huma.ErrorDetail{Location: m.Mask(nc.Service), Message: m.Mask(f)})
 		}
 	}
-	return &huma.ErrorModel{
-		Type: problemComposeInvalid, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
-		Detail: detail,
-	}
+	return out
 }
 
 func getStackJob(ctx context.Context, d StacksDeps, in *StackJobPathInput) (*StackJobOutput, error) {
