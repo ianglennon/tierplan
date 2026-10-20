@@ -11,7 +11,8 @@ import (
 	"github.com/ianglennon/bayplan/internal/stacks/convert"
 )
 
-// The stages of PrepareRollback, so the caller words the failure of each in its own way.
+// The stages of PrepareRollback, so the caller words the failure of each in its own way. The load
+// stage is the check: a revision the check refuses carries a *stacks.NotDeployableError.
 const (
 	PrepareLoad    = "load"
 	PrepareObjects = "objects"
@@ -41,12 +42,15 @@ type RollbackPlan struct {
 	Pins map[string]string
 }
 
-// PrepareRollback loads and converts the revision to restore, and checks that it knows an image for every
+// PrepareRollback checks, loads and converts the revision to restore, and checks that it knows an image for every
 // service. It sends nothing to any engine and asks no registry: a roll back redeploys exactly what the
 // revision ran, so the digests it stored are the ones that go out (STK-07, T-07-93). Nothing is stored,
 // so a revision that cannot be redeployed is refused before the stack gains a revision of its own.
+//
+// The project comes from stacks.Deployable, the pipeline the review runs, so a revision that used
+// env_file or kept build beside image converts as it did when it was deployed.
 func (d Deps) PrepareRollback(ctx context.Context, st Stack, target Snapshot, pins map[string]string) (RollbackPlan, error) {
-	loaded, err := stacks.Load(ctx, stacks.LoadInput{Name: st.Name, Target: st.Target, Copy: target.Copy})
+	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: target.Copy})
 	if err != nil {
 		return RollbackPlan{}, &PrepareError{Stage: PrepareLoad, Err: err}
 	}

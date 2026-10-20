@@ -59,10 +59,7 @@ func Check(ctx context.Context, in CheckInput) CheckResult {
 	// passed through the stack's masker whatever produced them (RESEARCH Pitfall 10). The loaded
 	// project is not an answer; it is what a deploy reads, and it keeps the real values.
 	m := NewMasker(in.Copy.Vars, in.Copy.Files)
-	for i := range res.Problems {
-		res.Problems[i].Message = m.Mask(res.Problems[i].Message)
-		res.Problems[i].Key = m.Mask(res.Problems[i].Key)
-	}
+	MaskProblems(res.Problems, m)
 	for i := range res.Variables {
 		res.Variables[i].Default = m.Mask(res.Variables[i].Default)
 		if !res.Variables[i].Secret {
@@ -70,6 +67,16 @@ func Check(ctx context.Context, in CheckInput) CheckResult {
 		}
 	}
 	return res
+}
+
+// MaskProblems passes the Message and the Key of every problem through m, in place. It is the one
+// way a problem list is masked before it leaves a pipeline: Check and Deployable both use it, so no
+// answer carries a value of the stack.
+func MaskProblems(ps Problems, m Masker) {
+	for i := range ps {
+		ps[i].Message = m.Mask(ps[i].Message)
+		ps[i].Key = m.Mask(ps[i].Key)
+	}
 }
 
 func check(ctx context.Context, in CheckInput) CheckResult {
