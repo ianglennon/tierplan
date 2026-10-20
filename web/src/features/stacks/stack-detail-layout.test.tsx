@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -19,6 +19,7 @@ let role: "viewer" | "operator" = "viewer";
 let detail: Record<string, unknown>;
 let status: number;
 let client: QueryClient;
+let posts: string[];
 
 beforeEach(() => {
   role = "viewer";
@@ -38,6 +39,7 @@ beforeEach(() => {
     stopped: false,
   };
   status = 200;
+  posts = [];
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   vi.stubGlobal(
@@ -56,6 +58,13 @@ beforeEach(() => {
           );
         }
         return Response.json(detail);
+      }
+      if (req.method === "POST" && path === `/api/env/${ENV}/stacks/s1/start`) {
+        posts.push(path);
+        return Response.json({ jobId: "j1", recreates: false }, { status: 202 });
+      }
+      if (path === `/api/env/${ENV}/stacks/s1/deploys/j1`) {
+        return Response.json({ id: "j1", state: "done", items: [] });
       }
       return Response.json({}, { status: 404 });
     }),
@@ -334,5 +343,39 @@ describe("the operation lock", () => {
     mount();
     await screen.findByRole("heading", { name: "tracer", level: 2 });
     expect(screen.queryByText(/Another stack operation/)).toBeNull();
+  });
+
+  it("wires the stopped alert's Start stack to a start for a user who may deploy", async () => {
+    role = "operator";
+    detail = {
+      ...detail,
+      state: "stopped",
+      stopped: true,
+      lastDeployedAt: "2026-10-19T11:00:00Z",
+      lastDeployedBy: "bob",
+    };
+    mount();
+    const alert = await screen.findByText("tracer is stopped");
+    const box = alert.closest('[data-slot="stopped-alert"]') as HTMLElement;
+
+    fireEvent.click(within(box).getByRole("button", { name: "Start stack" }));
+
+    await waitFor(() => expect(posts).toEqual(["/api/env/e1/stacks/s1/start"]));
+  });
+
+  it("draws no Start stack in the stopped alert for a user who may not deploy", async () => {
+    role = "viewer";
+    detail = {
+      ...detail,
+      state: "stopped",
+      stopped: true,
+      lastDeployedAt: "2026-10-19T11:00:00Z",
+      lastDeployedBy: "bob",
+    };
+    mount();
+    const alert = await screen.findByText("tracer is stopped");
+    const box = alert.closest('[data-slot="stopped-alert"]') as HTMLElement;
+
+    expect(within(box).queryByRole("button", { name: "Start stack" })).toBeNull();
   });
 });

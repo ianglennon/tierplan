@@ -24,6 +24,8 @@ let listStatus: number;
 // The list body the server answers; a test sets the fields it cares about.
 let listExtra: Record<string, unknown>;
 let requests: URL[];
+// The POSTs the list sent for a stop or a start, as "METHOD path".
+let posts: string[];
 
 const stack = (over: Record<string, unknown> = {}) => ({
   id: "s1",
@@ -43,6 +45,7 @@ beforeEach(() => {
   listStatus = 200;
   listExtra = {};
   requests = [];
+  posts = [];
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   vi.stubGlobal(
@@ -66,6 +69,18 @@ beforeEach(() => {
           ...(stacks as object),
           ...listExtra,
         });
+      }
+      if (path === `/api/env/${ENV}/stacks/s1/services`) {
+        return Response.json({
+          items: [{ name: "web_web", mode: "replicated", running: 1, desired: 1 }],
+        });
+      }
+      if (req.method === "POST" && /\/stacks\/s1\/(stop|start)$/.test(path)) {
+        posts.push(`POST ${path}`);
+        return Response.json({ jobId: "j1", recreates: false }, { status: 202 });
+      }
+      if (path === `/api/env/${ENV}/stacks/s1/deploys/j1`) {
+        return Response.json({ id: "j1", state: "done", items: [] });
       }
       return Response.json({}, { status: 404 });
     }),
@@ -268,6 +283,61 @@ describe("StackList", () => {
     expect(deploy.getAttribute("aria-disabled")).toBe("true");
     expect(deploy.getAttribute("href")).toBeNull();
     expect(screen.getByRole("menuitem", { name: "Open stack" })).toBeTruthy();
+  });
+});
+
+describe("StackList row menu: Stop and Start", () => {
+  async function openMenu() {
+    const trigger = await screen.findByRole("button", { name: "Actions for web" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+  }
+
+  it("offers Stop stack… for a stack that runs and opens the dialog without leaving the list", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    stacks = { items: [stack({ state: "running" })] };
+    mount();
+    await openMenu();
+    expect(screen.queryByRole("menuitem", { name: "Start stack" })).toBeNull();
+
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Stop stack…" }));
+
+    expect(await screen.findByRole("heading", { name: "Stop web?" })).toBeTruthy();
+    expect(posts).toEqual([]);
+  });
+
+  it("offers Start stack for a stopped stack and starts it at once", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    stacks = { items: [stack({ state: "stopped" })] };
+    mount();
+    await openMenu();
+    expect(screen.queryByRole("menuitem", { name: "Stop stack…" })).toBeNull();
+
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Start stack" }));
+
+    await waitFor(() => expect(posts).toEqual(["POST /api/env/e1/stacks/s1/start"]));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("offers neither for a stack that was never deployed", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    mount();
+    await openMenu();
+    await screen.findByRole("menuitem", { name: "Open stack" });
+    expect(screen.queryByRole("menuitem", { name: "Stop stack…" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Start stack" })).toBeNull();
+  });
+
+  it("shows a Viewer Stop stack… off with Needs Operator and sends nothing", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    stacks = { items: [stack({ state: "running" })] };
+    mount();
+    await openMenu();
+
+    const stop = await screen.findByRole("menuitem", { name: "Stop stack…" });
+    expect(stop.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(stop);
+    expect(screen.queryByRole("heading", { name: "Stop web?" })).toBeNull();
+    expect(posts).toEqual([]);
   });
 });
 
