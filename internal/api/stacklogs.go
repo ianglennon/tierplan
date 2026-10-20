@@ -321,8 +321,7 @@ func serveStackLogs(w http.ResponseWriter, req *http.Request, d StacksDeps, lim 
 	case stacks.TargetSwarm:
 		fol, err = d.swarmFollower(streamCtx, env.ID, st, params)
 	case stacks.TargetStandalone:
-		// The containers of a standalone host follow with the next task.
-		err = httpx.Problem(http.StatusNotImplemented, "stack_logs_unsupported", "The log of a standalone stack is not available yet.")
+		fol, err = d.standaloneFollower(streamCtx, env.ID, st, params)
 	default:
 		err = errors.New("unknown stack target " + string(st.Target))
 	}

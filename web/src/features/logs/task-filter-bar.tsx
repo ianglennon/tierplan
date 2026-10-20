@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { Check, X } from "lucide-react";
-import { useId } from "react";
+import { type ReactNode, useId } from "react";
 
 import type { NodeList } from "@/api/nodes";
 import type { ServiceTasks } from "@/api/services";
@@ -36,6 +36,12 @@ export interface FilterTask {
   // The state to show; ended says Docker's own state is one the task cannot leave.
   state: string;
   ended: boolean;
+  // In a stack's log, which merges several services, the service the task belongs to.
+  service?: string;
+  // A container of a standalone stack is named by the engine, and its state is the engine's own
+  // word, shown as it is.
+  name?: string;
+  stateText?: string;
 }
 
 // One node the service has tasks on: its role, and how many of those tasks have not ended.
@@ -93,9 +99,15 @@ const idMatches = (chosen: string, id: string): boolean =>
 const shortId = (id: string): string => id.slice(0, MIN_ID_PREFIX);
 
 // A task is named by its service and slot, and a task of a global service, which has none, by
-// the service and its node.
-const taskLabel = (service: string, task: Pick<FilterTask, "slot" | "node">): string =>
-  task.slot > 0 ? `${service}.${task.slot}` : `${service}@${task.node}`;
+// the service and its node. A container is named by the engine.
+const taskLabel = (
+  service: string,
+  task: Pick<FilterTask, "slot" | "node" | "service" | "name">,
+): string => {
+  if (task.name) return task.name;
+  const of = task.service ?? service;
+  return task.slot > 0 ? `${of}.${task.slot}` : `${of}@${task.node}`;
+};
 
 export interface TaskFilterBarProps {
   // The service's name, which the task names carry.
@@ -108,6 +120,13 @@ export interface TaskFilterBarProps {
   onTasksChange: (ids: string[]) => void;
   onNodesChange: (names: string[]) => void;
   onStoppedChange: (on: boolean) => void;
+  // A stack's log (plan 07-29, D-22) names what is chosen as containers on a standalone host, which
+  // has no nodes to choose, and words the switch Include stopped. Controls to put before the Tasks
+  // button (its Services filter) and chips after the others.
+  unit?: "task" | "container";
+  stack?: boolean;
+  leading?: ReactNode;
+  trailing?: ReactNode;
 }
 
 // TaskFilterBar shows the Tasks and Nodes buttons, each opening a searchable list with check
@@ -117,12 +136,34 @@ export function TaskFilterBar(p: TaskFilterBarProps) {
   const t = useT();
   const switchId = useId();
   const { options } = p;
+  const container = p.unit === "container";
+  // The words of the Tasks button and what hangs from it: a stack on a host chooses containers.
+  const words = container
+    ? {
+        label: "stackLogs.filter.containers",
+        count: "stackLogs.filter.containersCount",
+        list: "stackLogs.filter.containerList",
+        find: "stackLogs.filter.findContainer",
+        none: "stackLogs.filter.noContainers",
+        chip: "stackLogs.filter.containerChip",
+        remove: "stackLogs.filter.removeContainer",
+      }
+    : {
+        label: "logs.filter.tasks",
+        count: "logs.filter.tasksCount",
+        list: "logs.filter.taskList",
+        find: "logs.filter.findTask",
+        none: "logs.filter.noTasks",
+        chip: "logs.filter.taskChip",
+        remove: "logs.filter.removeTask",
+      };
 
   const picked = (task: FilterTask): boolean => p.tasks.some((c) => idMatches(c, task.id));
   const offeredTasks = options.tasks
     .filter((task) => p.stopped || !task.ended || picked(task))
     .sort(
       (a, b) =>
+        (a.service ?? "").localeCompare(b.service ?? "") ||
         a.slot - b.slot ||
         Number(a.ended) - Number(b.ended) ||
         a.node.localeCompare(b.node) ||
@@ -145,15 +186,12 @@ export function TaskFilterBar(p: TaskFilterBarProps) {
 
   return (
     <>
+      {p.leading}
       <FilterPopover
-        label={
-          p.tasks.length > 0
-            ? t("logs.filter.tasksCount", { count: p.tasks.length })
-            : t("logs.filter.tasks")
-        }
-        listLabel={t("logs.filter.taskList")}
-        search={t("logs.filter.findTask")}
-        none={t("logs.filter.noTasks")}
+        label={p.tasks.length > 0 ? t(words.count, { count: p.tasks.length }) : t(words.label)}
+        listLabel={t(words.list)}
+        search={t(words.find)}
+        none={t(words.none)}
         empty={offeredTasks.length === 0}
         canClear={p.tasks.length > 0}
         onClear={() => p.onTasksChange([])}
@@ -163,14 +201,18 @@ export function TaskFilterBar(p: TaskFilterBarProps) {
           return (
             <FilterItem
               key={task.id}
-              value={`${taskLabel(p.service, task)} ${task.node} ${t(state.labelKey)} ${task.id}`}
+              value={`${taskLabel(p.service, task)} ${task.node} ${task.stateText ?? t(state.labelKey)} ${task.id}`}
               checked={picked(task)}
               onSelect={() => toggleTask(task)}
             >
               <span className="font-medium">{taskLabel(p.service, task)}</span>
               <span className="min-w-0 truncate text-muted-foreground">{task.node}</span>
               <span className="ms-auto flex shrink-0 items-center gap-2">
-                <StatusDot state={state.tone} label={t(state.labelKey)} />
+                {task.stateText !== undefined ? (
+                  <span className="text-xs text-muted-foreground">{task.stateText}</span>
+                ) : (
+                  <StatusDot state={state.tone} label={t(state.labelKey)} />
+                )}
                 <span className="font-mono text-xs text-muted-foreground">{shortId(task.id)}</span>
               </span>
             </FilterItem>
@@ -178,49 +220,53 @@ export function TaskFilterBar(p: TaskFilterBarProps) {
         })}
       </FilterPopover>
 
-      <FilterPopover
-        label={
-          p.nodes.length > 0
-            ? t("logs.filter.nodesCount", { count: p.nodes.length })
-            : t("logs.filter.nodes")
-        }
-        listLabel={t("logs.filter.nodeList")}
-        search={t("logs.filter.findNode")}
-        none={t("logs.filter.noNodes")}
-        empty={offeredNodes.length === 0}
-        canClear={p.nodes.length > 0}
-        onClear={() => p.onNodesChange([])}
-      >
-        {offeredNodes.map((n) => (
-          <FilterItem
-            key={n.name}
-            value={`${n.name} ${n.role ?? ""}`}
-            checked={p.nodes.includes(n.name)}
-            onSelect={() => toggleNode(n.name)}
-          >
-            <span className="min-w-0 truncate font-medium">{n.name}</span>
-            {n.role ? (
-              <span className="shrink-0 rounded-sm border px-1 text-xs text-muted-foreground">
-                {t(`logs.filter.role.${n.role}`)}
+      {container ? null : (
+        <FilterPopover
+          label={
+            p.nodes.length > 0
+              ? t("logs.filter.nodesCount", { count: p.nodes.length })
+              : t("logs.filter.nodes")
+          }
+          listLabel={t("logs.filter.nodeList")}
+          search={t("logs.filter.findNode")}
+          none={t("logs.filter.noNodes")}
+          empty={offeredNodes.length === 0}
+          canClear={p.nodes.length > 0}
+          onClear={() => p.onNodesChange([])}
+        >
+          {offeredNodes.map((n) => (
+            <FilterItem
+              key={n.name}
+              value={`${n.name} ${n.role ?? ""}`}
+              checked={p.nodes.includes(n.name)}
+              onSelect={() => toggleNode(n.name)}
+            >
+              <span className="min-w-0 truncate font-medium">{n.name}</span>
+              {n.role ? (
+                <span className="shrink-0 rounded-sm border px-1 text-xs text-muted-foreground">
+                  {t(`logs.filter.role.${n.role}`)}
+                </span>
+              ) : null}
+              <span className="ms-auto shrink-0 text-xs text-muted-foreground">
+                {t("logs.filter.taskCount", { count: n.tasks })}
               </span>
-            ) : null}
-            <span className="ms-auto shrink-0 text-xs text-muted-foreground">
-              {t("logs.filter.taskCount", { count: n.tasks })}
-            </span>
-          </FilterItem>
-        ))}
-      </FilterPopover>
+            </FilterItem>
+          ))}
+        </FilterPopover>
+      )}
 
       <Tooltip>
         <TooltipTrigger asChild>
           <span className="inline-flex items-center gap-2 max-md:min-h-11">
             <Switch id={switchId} checked={p.stopped} onCheckedChange={p.onStoppedChange} />
             <Label htmlFor={switchId} className="text-sm font-normal">
-              {t("logs.filter.stopped")}
+              {t(p.stack ? "stackLogs.filter.stopped" : "logs.filter.stopped")}
             </Label>
           </span>
         </TooltipTrigger>
-        <TooltipContent>{t("logs.filter.stoppedTooltip")}</TooltipContent>
+        <TooltipContent>
+          {t(p.stack ? "stackLogs.filter.stoppedTooltip" : "logs.filter.stoppedTooltip")}
+        </TooltipContent>
       </Tooltip>
 
       {p.tasks.map((chosen) => {
@@ -229,13 +275,9 @@ export function TaskFilterBar(p: TaskFilterBarProps) {
         return (
           <Chip
             key={`task-${chosen}`}
-            text={
-              task || !options.loaded
-                ? t("logs.filter.taskChip", { name })
-                : t("logs.filter.taskNotFound")
-            }
+            text={task || !options.loaded ? t(words.chip, { name }) : t("logs.filter.taskNotFound")}
             muted={!task && options.loaded}
-            removeLabel={t("logs.filter.removeTask", { name })}
+            removeLabel={t(words.remove, { name })}
             onRemove={() => p.onTasksChange(p.tasks.filter((c) => c !== chosen))}
           />
         );
@@ -248,12 +290,14 @@ export function TaskFilterBar(p: TaskFilterBarProps) {
           onRemove={() => p.onNodesChange(p.nodes.filter((n) => n !== name))}
         />
       ))}
+      {p.trailing}
     </>
   );
 }
 
-// One popover button with a searchable list below it and a Clear button at the foot.
-function FilterPopover(props: {
+// One popover button with a searchable list below it and a Clear button at the foot. A stack's
+// Services filter words the button for itself.
+export function FilterPopover(props: {
   label: string;
   listLabel: string;
   search: string;
@@ -261,6 +305,7 @@ function FilterPopover(props: {
   empty: boolean;
   canClear: boolean;
   onClear: () => void;
+  clearLabel?: string;
   children: React.ReactNode;
 }) {
   const t = useT();
@@ -294,7 +339,7 @@ function FilterPopover(props: {
             onClick={props.onClear}
             className="max-md:h-11"
           >
-            {t("logs.filter.clear")}
+            {props.clearLabel ?? t("logs.filter.clear")}
           </Button>
         </div>
       </PopoverContent>
@@ -304,7 +349,7 @@ function FilterPopover(props: {
 
 // One row of a popover list: a check box that is ticked for what is chosen. The row says
 // "Selected" to a screen reader as well, since the tick is a picture.
-function FilterItem(props: {
+export function FilterItem(props: {
   value: string;
   checked: boolean;
   onSelect: () => void;
@@ -335,7 +380,12 @@ function FilterItem(props: {
 }
 
 // A removable chip for one thing the log is narrowed to.
-function Chip(props: { text: string; removeLabel: string; muted?: boolean; onRemove: () => void }) {
+export function Chip(props: {
+  text: string;
+  removeLabel: string;
+  muted?: boolean;
+  onRemove: () => void;
+}) {
   return (
     <span
       data-slot="filter-chip"

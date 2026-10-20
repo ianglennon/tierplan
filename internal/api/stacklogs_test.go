@@ -57,6 +57,7 @@ type stackReady struct {
 }
 
 type stackLogMarker struct {
+	At      string `json:"at"`
 	Kind    string `json:"kind"`
 	Service string `json:"service"`
 	Unit    string `json:"unit"`
@@ -768,13 +769,17 @@ func TestStackLogsOfAStandaloneStackReplaceARecreatedContainerWithAMarkerAndFoll
 		soloContainer(f.stack.ID, "cdb1", "db", 1, "running", 90),
 	})
 	f.fake.AppendLogs("cweb1n", soloLine(500, "web1 again"))
-	f.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: "cweb1n",
+	started := soloT0.Add(400 * time.Millisecond)
+	f.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: "cweb1n", TimeNano: started.UnixNano(),
 		Attributes: map[string]string{"name": "solo-web-1", "com.docker.compose.project": "solo"}})
 
+	// The marker and the new container's first line may arrive in either order: the viewer places
+	// the marker by its time. Both are read, whichever comes first.
 	var m stackLogMarker
 	var tasks stackReady
-	for m.Kind == "" {
-		fr := c.nextData(t, "the replacement marker")
+	var lines []stackLogLine
+	for m.Kind == "" || len(lines) == 0 {
+		fr := c.nextData(t, "the replacement marker and the new container's line")
 		switch fr.event {
 		case "tasks":
 			if err := json.Unmarshal([]byte(fr.data), &tasks); err != nil {
@@ -784,18 +789,26 @@ func TestStackLogsOfAStandaloneStackReplaceARecreatedContainerWithAMarkerAndFoll
 			if err := json.Unmarshal([]byte(fr.data), &m); err != nil {
 				t.Fatal(err)
 			}
+		case "log":
+			var ev stackLogEvent
+			if err := json.Unmarshal([]byte(fr.data), &ev); err != nil {
+				t.Fatal(err)
+			}
+			lines = append(lines, ev.Lines...)
 		}
 	}
 	if m.Kind != "replaced" || m.Service != "web" || m.Unit != "container" || m.Slot != 1 || m.Old != "cweb1" || m.New != "cweb1n" {
 		t.Errorf("marker = %+v, want web's container cweb1 replaced by cweb1n", m)
 	}
+	if m.At != started.Format("2006-01-02T15:04:05.000000000Z") {
+		t.Errorf("marker time = %q, want the engine's time of the start %q", m.At, started.Format("2006-01-02T15:04:05.000000000Z"))
+	}
 	if !slices.ContainsFunc(tasks.Tasks, func(x stackReadyTask) bool { return x.ID == "cweb1n" && x.Service == "web" && x.Slot == 1 }) ||
 		slices.ContainsFunc(tasks.Tasks, func(x stackReadyTask) bool { return x.ID == "cweb1" }) {
 		t.Errorf("tasks event = %+v, want the new container in the old one's place", tasks.Tasks)
 	}
-	got, _ := readStackLines(t, c, 1)
-	if got[0].M != "web1 again" || got[0].Task != "cweb1n" || got[0].Slot != 1 {
-		t.Errorf("line = %+v, want the new container's first line", got[0])
+	if lines[0].M != "web1 again" || lines[0].Task != "cweb1n" || lines[0].Slot != 1 {
+		t.Errorf("line = %+v, want the new container's first line", lines[0])
 	}
 }
 
@@ -810,7 +823,8 @@ func TestStackLogsOfAStandaloneStackFollowAContainerThatRestartedFromItsLastLine
 
 	f.fake.EndLogs("cweb1")
 	f.fake.StartLogs("cweb1")
-	f.fake.AppendLogs("cweb1", soloLine(10, "first run"), soloLine(900, "second run"))
+	// The log keeps the first run's line; the new run writes after it.
+	f.fake.AppendLogs("cweb1", soloLine(900, "second run"))
 	f.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: "cweb1",
 		Attributes: map[string]string{"name": "solo-web-1", "com.docker.compose.project": "solo"}})
 
