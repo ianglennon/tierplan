@@ -24,6 +24,25 @@ var ErrTooLarge = errors.New("stacks: the compose file is too large")
 // runs on: a relative path in a compose file resolves under it and so reads nothing.
 const sandboxDir = "/bayplan-stack-sandbox"
 
+// ErrLoadPanicked means compose-go stopped with a panic. The panic value is never kept: it can
+// quote the file or a variable of the stack.
+var ErrLoadPanicked = errors.New("stacks: compose-go stopped with a panic")
+
+// loaderKey is the context key under which a test puts a stand-in for compose-go (export_test.go).
+// Production code never sets it.
+type loaderKey struct{}
+
+// loadFunc is the shape of loader.LoadWithContext.
+type loadFunc = func(context.Context, types.ConfigDetails, ...func(*loader.Options)) (*types.Project, error)
+
+// loaderFrom returns the stand-in a test put in the context, or compose-go's own loader.
+func loaderFrom(ctx context.Context) loadFunc {
+	if fn, ok := ctx.Value(loaderKey{}).(loadFunc); ok {
+		return fn
+	}
+	return loader.LoadWithContext
+}
+
 // loadTimeout bounds one load; compose-go walks a YAML tree that a user wrote.
 const loadTimeout = 5 * time.Second
 
@@ -94,7 +113,7 @@ func Load(ctx context.Context, in LoadInput) (*Loaded, error) {
 		ConfigFiles: []types.ConfigFile{{Filename: ComposeFile, Content: content}},
 		Environment: env,
 	}
-	project, err := loader.LoadWithContext(ctx, details, func(o *loader.Options) {
+	project, err := loaderFrom(ctx)(ctx, details, func(o *loader.Options) {
 		o.SetProjectName(in.Name, true)
 		o.SkipInclude = true
 		o.SkipExtends = true

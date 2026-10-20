@@ -10,7 +10,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
+
+	"github.com/compose-spec/compose-go/v2/loader"
+	"github.com/compose-spec/compose-go/v2/types"
 
 	"github.com/ianglennon/bayplan/internal/stacks"
 )
@@ -214,5 +218,81 @@ func TestLoadAnswersTheSameWhateverTheServerEnvironmentHolds(t *testing.T) {
 	}
 	if !reflect.DeepEqual(loaded.Unset, []string{"BAYPLAN_LEAK_PROBE"}) {
 		t.Errorf("Unset = %v, want the probe named as unset: the table is the only source", loaded.Unset)
+	}
+}
+
+// stuckLoader is a stand-in for compose-go that does not look at its context: it is running until
+// release is closed, as compose-go is while it transforms a file. started is closed when it is
+// called.
+func stuckLoader(started, release chan struct{}) func(context.Context, types.ConfigDetails, ...func(*loader.Options)) (*types.Project, error) {
+	return func(context.Context, types.ConfigDetails, ...func(*loader.Options)) (*types.Project, error) {
+		close(started)
+		<-release
+		return nil, errors.New("released")
+	}
+}
+
+func TestLoadReturnsAtItsDeadlineWhileComposeGoIsStillRunning(t *testing.T) {
+	t.Parallel()
+	// The bubble's clock is fake, so the deadline is exact and no wall-clock time passes.
+	synctest.Test(t, func(t *testing.T) {
+		started, release := make(chan struct{}), make(chan struct{})
+		ctx := stacks.WithLoader(context.Background(), stuckLoader(started, release))
+		begin := time.Now()
+		_, err := stacks.Load(ctx, stacks.LoadInput{
+			Name: "stuck", Target: stacks.TargetSwarm, Copy: copyOf(stacks.StarterCompose), Deadline: 2 * time.Second,
+		})
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v, want context.DeadlineExceeded while the loader is still running", err)
+		}
+		if got := time.Since(begin); got != 2*time.Second {
+			t.Errorf("Load returned after %v, want exactly its 2s deadline", got)
+		}
+		select {
+		case <-started:
+		default:
+			t.Error("the stand-in was never called: the test proves nothing")
+		}
+		// The abandoned load finishes into its buffered channel and the bubble ends clean.
+		close(release)
+	})
+}
+
+func TestCheckOfAStuckLoadEndsWithCheckTimeout(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		started, release := make(chan struct{}), make(chan struct{})
+		ctx := stacks.WithLoader(context.Background(), stuckLoader(started, release))
+		res := stacks.Check(ctx, stacks.CheckInput{
+			Name: "stuck", Target: stacks.TargetSwarm, Copy: copyOf(stacks.StarterCompose), Deadline: 2 * time.Second,
+		})
+		p := onlyProblem(t, res)
+		if p.Severity != stacks.SeverityError || p.Code != stacks.CodeCheckTimeout || res.Loaded != nil {
+			t.Errorf("problem = %+v loaded = %v, want one error check_timeout and no project", p, res.Loaded)
+		}
+		close(release)
+	})
+}
+
+func TestALoadThatPanicsIsAnErrorNotACrash(t *testing.T) {
+	t.Parallel()
+	const secret = "hunter2secretvalue"
+	ctx := stacks.WithLoader(context.Background(), func(context.Context, types.ConfigDetails, ...func(*loader.Options)) (*types.Project, error) {
+		panic("compose-go tripped over " + secret)
+	})
+	_, err := stacks.Load(ctx, stacks.LoadInput{Name: "boom", Target: stacks.TargetSwarm, Copy: copyOf(stacks.StarterCompose)})
+	if !errors.Is(err, stacks.ErrLoadPanicked) {
+		t.Fatalf("err = %v, want ErrLoadPanicked", err)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("the error text quotes the panic: %q", err)
+	}
+	res := stacks.Check(ctx, stacks.CheckInput{Name: "boom", Target: stacks.TargetSwarm, Copy: copyOf(stacks.StarterCompose)})
+	p := onlyProblem(t, res)
+	if p.Severity != stacks.SeverityError || p.Code != stacks.CodeInternalCheckFailed || res.Loaded != nil {
+		t.Errorf("problem = %+v loaded = %v, want one error internal_check_failed and no project", p, res.Loaded)
+	}
+	if strings.Contains(p.Message, secret) {
+		t.Errorf("the problem quotes the panic: %q", p.Message)
 	}
 }
