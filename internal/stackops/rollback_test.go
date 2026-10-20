@@ -105,11 +105,12 @@ func TestPrepareRollbackRefusalCarriesTheRevisionsMasker(t *testing.T) {
 	if !errors.As(err, &pe) || pe.Stage != stackops.PrepareConvert {
 		t.Fatalf("err = %v, want the convert stage", err)
 	}
-	if !strings.Contains(stackops.ConvertDetail(pe.Err), secret) {
-		t.Fatalf("detail = %q, want the converter to quote the value (the premise of the test)", stackops.ConvertDetail(pe.Err))
+	want := stacks.SecretValueMessage("services.web.deploy.endpoint_mode")
+	if got := stackops.ConvertDetail(pe.Err); got != want {
+		t.Fatalf("detail = %q, want the fixed sentence %q (the converter's refusal is guarded)", got, want)
 	}
-	if got := pe.Masker.Mask(stackops.ConvertDetail(pe.Err)); strings.Contains(got, secret) || !strings.Contains(got, stacks.Hidden) {
-		t.Errorf("masked = %q, want the value shown as %s", got, stacks.Hidden)
+	if got := pe.Masker.Mask("x " + secret); strings.Contains(got, secret) || !strings.Contains(got, stacks.Hidden) {
+		t.Errorf("masked = %q, want the revision's masker to show the value as %s", got, stacks.Hidden)
 	}
 }
 
@@ -127,17 +128,38 @@ func TestPrepareErrorTextIsMaskedWithTheRevisionsMasker(t *testing.T) {
 	if !errors.As(err, &pe) || pe.Stage != stackops.PrepareConvert {
 		t.Fatalf("err = %v, want the convert stage", err)
 	}
-	if !strings.Contains(stackops.ConvertDetail(pe.Err), "hunter2-alpha") {
-		t.Fatalf("detail = %q, want the converter to quote the value (the premise of the test)", stackops.ConvertDetail(pe.Err))
-	}
 	text := err.Error()
 	for _, part := range []string{"hunter2-alpha", "hunter2-bravo", "hunter2-charlie", "hunter2-delta", "hunter2-echo"} {
 		if strings.Contains(text, part) {
 			t.Errorf("error text %q carries %q of the secret", text, part)
 		}
 	}
-	if !strings.Contains(text, stacks.Hidden) {
-		t.Errorf("error text %q, want the value shown as %s", text, stacks.Hidden)
+	if want := stacks.SecretValueMessage("services.web.deploy.endpoint_mode"); !strings.Contains(text, want) {
+		t.Errorf("error text %q, want the fixed sentence %q", text, want)
+	}
+}
+
+// The convert stage of a roll back or a start is refused with the fixed sentence for a field the converter
+// refuses and compose-go split out of a secret variable, not with the converter's words, which quote part
+// of the value (07-42, D-02, T-07-180). The roll back and start routes answer ConvertDetail of this error
+// as it is, and the start job logs the error's text.
+func TestPrepareRollbackNeverQuotesPartOfASecretTheConverterSplits(t *testing.T) {
+	t.Parallel()
+	target := rollbackTarget("services:\n  web:\n    image: nginx:1.27-alpine\n    restart: ${PW}\n")
+	target.Copy.Vars = []stacks.Var{{Name: "PW", Value: "sometimes:3", Secret: true}}
+	_, err := stackops.Deps{}.PrepareRollback(context.Background(), rollbackStack, target, map[string]string{})
+	var pe *stackops.PrepareError
+	if !errors.As(err, &pe) || pe.Stage != stackops.PrepareConvert {
+		t.Fatalf("err = %v, want the convert stage", err)
+	}
+	detail := stackops.ConvertDetail(pe.Err)
+	if want := stacks.SecretValueMessage("services.web.restart"); detail != want {
+		t.Errorf("detail = %q, want %q", detail, want)
+	}
+	for name, text := range map[string]string{"error text": err.Error(), "detail": detail} {
+		if strings.Contains(text, "sometimes") {
+			t.Errorf("%s %q carries part of the secret", name, text)
+		}
 	}
 }
 
