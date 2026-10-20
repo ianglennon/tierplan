@@ -292,15 +292,48 @@ export async function postStack(envId: string, body: StackCreateInput): Promise<
   }
 }
 
+// The environment a stack is created on, and what it starts from. The All stacks list's dialog chooses
+// the environment, so it is a variable of the mutation and not of the hook.
+export interface StackCreateVariables {
+  envId: string;
+  body: StackCreateInput;
+}
+
 // useCreateStack is the mutation behind the Create stack dialog. It does not retry, and reads
-// the list again whatever the answer.
-export function useCreateStack(envId: string) {
+// the lists again whatever the answer.
+export function useCreateStack() {
   const queryClient = useQueryClient();
-  return useMutation<StackDetail, StackRequestError, StackCreateInput>({
-    mutationFn: (body) => postStack(envId, body),
+  return useMutation<StackDetail, StackRequestError, StackCreateVariables>({
+    mutationFn: ({ envId, body }) => postStack(envId, body),
     retry: false,
-    onSettled: () => invalidateStacks(queryClient, envId),
+    onSettled: (_made, _error, { envId }) => invalidateStacks(queryClient, envId),
   });
+}
+
+export type StackNameCheck = components["schemas"]["StackNameCheckBody"];
+
+// checkStackName asks whether a name can be used on an environment: available, taken, clash or invalid,
+// with the sentence to show. It only reads. A check that cannot be answered throws, and the caller goes
+// on: the create decides again.
+export async function checkStackName(
+  envId: string,
+  name: string,
+  signal?: AbortSignal,
+): Promise<StackNameCheck> {
+  try {
+    const res = await api.GET("/api/env/{envId}/stacks/name-check", {
+      params: { path: { envId }, query: { name } },
+      signal,
+    });
+    if (!res.data) {
+      const problem = readProblem(res.error, res.response);
+      throw new StackRequestError(problem.status, problem.type);
+    }
+    return res.data;
+  } catch (e) {
+    // A network failure has no status.
+    throw e instanceof StackRequestError ? e : new StackRequestError(0);
+  }
 }
 
 // The query key of one stack's draft. It is deliberately not under stackKey: a refresh of the list

@@ -102,13 +102,19 @@ afterEach(() => {
 function Harness({
   initial,
   onChange,
+  creating,
+  onCreatingChange,
 }: {
   initial: GlobalStackSearch;
   onChange: (patch: GlobalStackSearchPatch) => void;
+  creating: boolean;
+  onCreatingChange: (open: boolean) => void;
 }) {
   const [search, setSearch] = useState(initial);
   return (
     <GlobalStackList
+      creating={creating}
+      onCreatingChange={onCreatingChange}
       search={search}
       onSearchChange={(patch) => {
         onChange(patch);
@@ -122,18 +128,24 @@ function Harness({
   );
 }
 
-function mount(initial: GlobalStackSearch = {}) {
+function mount(initial: GlobalStackSearch = {}, creating = false) {
   const onChange = vi.fn();
+  const onCreatingChange = vi.fn();
   render(
     <QueryClientProvider client={client}>
       <TestRouter>
         <TooltipProvider>
-          <Harness initial={initial} onChange={onChange} />
+          <Harness
+            initial={initial}
+            onChange={onChange}
+            creating={creating}
+            onCreatingChange={onCreatingChange}
+          />
         </TooltipProvider>
       </TestRouter>
     </QueryClientProvider>,
   );
-  return { onChange };
+  return { onChange, onCreatingChange };
 }
 
 describe("GlobalStackList", () => {
@@ -513,5 +525,37 @@ describe("GlobalStackList: search, status chips, sort and the cap", () => {
       (within(row("beta")).getByRole("button", { name: "Actions for beta" }) as HTMLButtonElement)
         .disabled,
     ).toBe(false);
+  });
+});
+
+describe("GlobalStackList: Create stack", () => {
+  it("offers Create stack to a user who may create stacks on at least one environment", async () => {
+    const { onCreatingChange } = mount();
+    await screen.findByRole("link", { name: "alpha" });
+    fireEvent.click(screen.getByRole("button", { name: "Create stack" }));
+    expect(onCreatingChange).toHaveBeenCalledWith(true);
+  });
+
+  it("hides Create stack from a user who may create stacks nowhere", async () => {
+    me = makeMe({ envs: { e1: "operator", e2: "viewer" } });
+    mount();
+    await screen.findByRole("link", { name: "alpha" });
+    expect(screen.queryByRole("button", { name: "Create stack" })).toBeNull();
+  });
+
+  it("offers Create stack in the empty state when there is no stack anywhere", async () => {
+    answer = { groups: [], failedEnvironments: [] };
+    const { onCreatingChange } = mount();
+    await screen.findByRole("heading", { name: "No stacks yet", level: 2 });
+    const buttons = screen.getAllByRole("button", { name: "Create stack" });
+    expect(buttons).toHaveLength(2);
+    fireEvent.click(buttons[buttons.length - 1] as HTMLElement);
+    expect(onCreatingChange).toHaveBeenCalledWith(true);
+  });
+
+  it("shows the dialog, which asks for the environment, while the address says new=1", async () => {
+    mount({}, true);
+    const dialog = await screen.findByRole("dialog", { name: "Create a stack" });
+    expect(await within(dialog).findByRole("combobox", { name: "Environment" })).toBeTruthy();
   });
 });

@@ -85,6 +85,28 @@
       "stopping": "Stopping…",
       "starting": "Starting…",
       "removing": "Removing…"
+    },
+    "create": {
+      "environment": {
+        "label": "Environment",
+        "placeholder": "Choose an environment"
+      },
+      "start": {
+        "upload": "Upload a compose file",
+        "chooseFile": "Choose file",
+        "fileInput": "Compose file",
+        "file": "{{name}} ({{size}})",
+        "removeFile": "Remove file"
+      },
+      "chooseFileReason": "Choose a file.",
+      "checking": "Checking the name",
+      "errors": {
+        "envRequired": "Choose an environment.",
+        "fileTooLarge": "That file is over 1 MiB. Choose a smaller one.",
+        "fileUnreadable": "Couldn't read that file. Choose another.",
+        "nameClash": "A stack named {{name}} already exists on this environment, not managed by Bayplan.",
+        "clashHint": "Pick another name. Bayplan will be able to take over existing stacks in a later version."
+      }
     }
   }
 }

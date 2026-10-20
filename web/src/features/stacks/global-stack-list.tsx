@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
+import { ChevronDown, ChevronsDownUp, ChevronsUpDown, Plus } from "lucide-react";
 import { useCallback, useId, useMemo } from "react";
 
 import { environmentsQuery } from "@/api/environments";
@@ -12,7 +12,13 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -23,6 +29,7 @@ import {
   type TableGroup,
 } from "@/features/resources/resource-table";
 import { STATUS_CHIP_ROW } from "@/features/resources/status-chips";
+import { CreateStackDialog } from "@/features/stacks/create-stack-dialog";
 import {
   envList,
   envParam,
@@ -42,6 +49,9 @@ interface GlobalStackListProps {
   // Changes replace the history entry.
   search: GlobalStackSearch;
   onSearchChange: (patch: GlobalStackSearchPatch) => void;
+  // Whether the Create stack dialog is open: the address says so (new=1), so a link can open it.
+  creating: boolean;
+  onCreatingChange: (open: boolean) => void;
 }
 
 interface EnvironmentFilterProps {
@@ -144,10 +154,17 @@ function FailedEnvironmentNotice({
 // cannot be read is named in place of its group while the others render. The server leaves out an
 // environment the user holds no stacks.read on, so nothing here decides what may be seen. Every name
 // renders as text.
-export function GlobalStackList({ search, onSearchChange }: GlobalStackListProps) {
+export function GlobalStackList({
+  search,
+  onSearchChange,
+  creating,
+  onCreatingChange,
+}: GlobalStackListProps) {
   const t = useT();
   const { data: me } = useMe();
   const allowed = useAnyEnvironmentPermission("stacks.read");
+  // Create stack is for a user who may create stacks on at least one environment; its dialog asks which.
+  const canCreate = useAnyEnvironmentPermission("stacks.create");
   const environments = useQuery(environmentsQuery);
   const chosen = envList(search.env);
   const query = useQuery({
@@ -279,6 +296,13 @@ export function GlobalStackList({ search, onSearchChange }: GlobalStackListProps
             </EmptyTitle>
             <EmptyDescription>{t("stackLists.global.emptyBody")}</EmptyDescription>
           </EmptyHeader>
+          {canCreate ? (
+            <EmptyContent>
+              <Button className="max-md:h-11" onClick={() => onCreatingChange(true)}>
+                {t("stacks.create.button")}
+              </Button>
+            </EmptyContent>
+          ) : null}
         </Empty>
       )}
     </div>
@@ -364,38 +388,53 @@ export function GlobalStackList({ search, onSearchChange }: GlobalStackListProps
 
   if (!allowed) return <NoPermission />;
   return (
-    <ResourceTable
-      resource="stacks"
-      i18nKey="stackLists.global"
-      columns={columns}
-      query={listQuery}
-      envName=""
-      banner={banner}
-      groups={{ items: groups, collapse }}
-      toolbar={toolbar}
-      caption={
-        data
-          ? `${t("stackLists.global.caption")} ${
-              search.q || search.status
-                ? t("stackLists.global.filtered", {
-                    n: data.total,
-                    count: data.unfilteredTotal,
-                    environments: t("stackLists.global.environments", { count: shownEnvironments }),
-                  })
-                : t("stackLists.global.count", {
-                    count: data.total,
-                    environments: t("stackLists.global.environments", {
-                      count: shownEnvironments,
-                    }),
-                  })
-            }`
-          : undefined
-      }
-      empty={empty}
-      capNote={data ? t("stackLists.cap", { total: data.total }) : undefined}
-      sort={{ key: sortKey, dir: sortDir, onSort }}
-      retryLabel={t("stackLists.global.errorRetry")}
-      getRowKey={stackRowKey}
-    />
+    <>
+      <ResourceTable
+        resource="stacks"
+        i18nKey="stackLists.global"
+        columns={columns}
+        query={listQuery}
+        envName=""
+        banner={banner}
+        groups={{ items: groups, collapse }}
+        toolbar={toolbar}
+        caption={
+          data
+            ? `${t("stackLists.global.caption")} ${
+                search.q || search.status
+                  ? t("stackLists.global.filtered", {
+                      n: data.total,
+                      count: data.unfilteredTotal,
+                      environments: t("stackLists.global.environments", {
+                        count: shownEnvironments,
+                      }),
+                    })
+                  : t("stackLists.global.count", {
+                      count: data.total,
+                      environments: t("stackLists.global.environments", {
+                        count: shownEnvironments,
+                      }),
+                    })
+              }`
+            : undefined
+        }
+        empty={empty}
+        capNote={data ? t("stackLists.cap", { total: data.total }) : undefined}
+        sort={{ key: sortKey, dir: sortDir, onSort }}
+        retryLabel={t("stackLists.global.errorRetry")}
+        getRowKey={stackRowKey}
+        captionExtra={
+          canCreate ? (
+            <div className="ml-auto">
+              <Button className="max-md:h-11" onClick={() => onCreatingChange(true)}>
+                <Plus aria-hidden="true" />
+                {t("stacks.create.button")}
+              </Button>
+            </div>
+          ) : null
+        }
+      />
+      {canCreate ? <CreateStackDialog open={creating} onOpenChange={onCreatingChange} /> : null}
+    </>
   );
 }

@@ -30,7 +30,14 @@ function AllStacks() {
     });
   }
 
-  return <GlobalStackList search={search} onSearchChange={change} />;
+  return (
+    <GlobalStackList
+      search={search}
+      onSearchChange={change}
+      creating={search.new === 1}
+      onCreatingChange={(open) => change({ new: open ? 1 : undefined })}
+    />
+  );
 }
 
 // The search is the schema in the list: the environments chosen, the grouping, the search text, the
