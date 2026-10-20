@@ -986,6 +986,66 @@ func TestRollbackRedeploysTheLastGoodRevisionWithoutTheRegistry(t *testing.T) {
 	}
 }
 
+// Rolling back a stack that uses env_file restores the file's variables: the revision is judged once, by the
+// check pipeline, and the service comes back with what the file gave it (review CR-05).
+func TestRollbackOfAStackThatUsesAnEnvFileRestoresTheFilesValues(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rbenv")
+
+	// Revision 1 uses env_file and ran well; revision 2 is stopped, so what last ran well is 1.
+	f.deployFilesGood(t, operator, st.ID, envFileFiles(composeEnvFile)...)
+	f.deployThenCancel(t, operator, st, composeWeb128)
+	updates := len(f.fake.ServiceUpdates())
+
+	rec := operator.do(http.MethodPost, rollbackPath(st.ID), "")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("roll back: %d %s", rec.Code, rec.Body)
+	}
+	started := answerOf[struct {
+		JobID string `json:"jobId"`
+	}](t, rec)
+	if job := f.awaitDeploy(t, started.JobID); job.State != "done" {
+		t.Fatalf("roll back job = %+v, want it done", job)
+	}
+	ups := f.fake.ServiceUpdates()
+	if len(ups) != updates+1 {
+		t.Fatalf("service updates = %d, want one more than %d", len(ups), updates)
+	}
+	if env := ups[len(ups)-1].Spec.TaskTemplate.ContainerSpec.Env; !hasEnv(env, "FROM_FILE=1") {
+		t.Errorf("env = %v, want the env file's FROM_FILE=1 back", env)
+	}
+}
+
+// A revision the check refuses now is refused by the roll back with the check's own masked problems, once.
+func TestRollbackOfARevisionTheCheckRefusesAnswersStackInvalid(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rbbad")
+	f.deployFilesGood(t, operator, st.ID, envFileFiles(composeEnvFile)...)
+	f.deployThenCancel(t, operator, st, composeWeb128)
+	// The stored revision loses its env file after the fact: the check refuses it now.
+	if _, err := f.st.Write.Exec(`DELETE FROM stack_snapshot_files WHERE path = 'app.env' AND snapshot_id IN
+		(SELECT id FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND seq = 1)`, st.ID); err != nil {
+		t.Fatal(err)
+	}
+	revisions := len(f.revisions(t, st.ID))
+	rec := operator.do(http.MethodPost, rollbackPath(st.ID), "")
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "stack_invalid" {
+		t.Fatalf("roll back: %d %.300s, want 422 stack_invalid", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), `"location":"compose.yaml`) {
+		t.Errorf("answer = %.400s, want the check's problems at their file and line", rec.Body)
+	}
+	if n := len(f.revisions(t, st.ID)); n != revisions {
+		t.Errorf("revisions went from %d to %d, a refused roll back stores none", revisions, n)
+	}
+}
+
 func readStack(t *testing.T, c *roleCaller, stackID string) rollbackStackAnswer {
 	t.Helper()
 	rec := c.do(http.MethodGet, "stacks/"+stackID, "")

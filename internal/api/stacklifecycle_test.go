@@ -324,6 +324,33 @@ func TestStartRecreatesAGlobalServiceAndTheAnswerSaysSo(t *testing.T) {
 	}
 }
 
+// Start of a stopped stack that uses env_file recreates its global service with the file's variables: the
+// start takes its project from the same check pipeline the review ran (review CR-05).
+func TestStartRecreatesAGlobalServiceOfAStackThatUsesAnEnvFile(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "globenv")
+	compose := "services:\n  web:\n    image: nginx:1.27-alpine\n  agent:\n    image: nginx:1.28-alpine\n    env_file: app.env\n    deploy:\n      mode: global\n"
+	f.deployFilesGood(t, operator, st.ID, envFileFiles(compose)...)
+	creates := len(f.fake.ServiceCreates())
+
+	f.lifecycle(t, operator, stopPath(st.ID))
+	started, job := f.lifecycle(t, operator, startPath(st.ID))
+
+	if !started.Recreates || job.State != "done" {
+		t.Fatalf("start = %+v %+v, want a job that recreates and is done", started, job)
+	}
+	made := f.fake.ServiceCreates()[creates:]
+	if len(made) != 1 || made[0].Spec.Name != "globenv_agent" {
+		t.Fatalf("created again = %+v, want globenv_agent", made)
+	}
+	if env := made[0].Spec.TaskTemplate.ContainerSpec.Env; !hasEnv(env, "FROM_FILE=1") {
+		t.Errorf("env = %v, want the env file's FROM_FILE=1", env)
+	}
+}
+
 // hostCalls records the stop and the start the Compose SDK's stand-in was asked for.
 type hostCalls struct {
 	mu    sync.Mutex
