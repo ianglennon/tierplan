@@ -112,3 +112,31 @@ func TestPrepareRollbackRefusalCarriesTheRevisionsMasker(t *testing.T) {
 		t.Errorf("masked = %q, want the value shown as %s", got, stacks.Hidden)
 	}
 }
+
+// escapedPrepareSecret holds a backslash, quotes and line breaks, which the converter writes with escapes.
+const escapedPrepareSecret = "hunter2-alpha\\hunter2-bravo\"hunter2-charlie'hunter2-delta\nhunter2-echo\n"
+
+// The text of a refusal is what a log line carries, so it is masked with the revision's own masker (review
+// WR-04, T-07-169).
+func TestPrepareErrorTextIsMaskedWithTheRevisionsMasker(t *testing.T) {
+	t.Parallel()
+	target := rollbackTarget("services:\n  web:\n    image: nginx:1.27-alpine\n    deploy:\n      endpoint_mode: ${PW}\n")
+	target.Copy.Vars = []stacks.Var{{Name: "PW", Value: escapedPrepareSecret, Secret: true}}
+	_, err := stackops.Deps{}.PrepareRollback(context.Background(), rollbackStack, target, map[string]string{})
+	var pe *stackops.PrepareError
+	if !errors.As(err, &pe) || pe.Stage != stackops.PrepareConvert {
+		t.Fatalf("err = %v, want the convert stage", err)
+	}
+	if !strings.Contains(stackops.ConvertDetail(pe.Err), "hunter2-alpha") {
+		t.Fatalf("detail = %q, want the converter to quote the value (the premise of the test)", stackops.ConvertDetail(pe.Err))
+	}
+	text := err.Error()
+	for _, part := range []string{"hunter2-alpha", "hunter2-bravo", "hunter2-charlie", "hunter2-delta", "hunter2-echo"} {
+		if strings.Contains(text, part) {
+			t.Errorf("error text %q carries %q of the secret", text, part)
+		}
+	}
+	if !strings.Contains(text, stacks.Hidden) {
+		t.Errorf("error text %q, want the value shown as %s", text, stacks.Hidden)
+	}
+}
