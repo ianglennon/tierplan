@@ -262,6 +262,20 @@ describe("a running deploy", () => {
     expect(screen.queryByText("Deploy complete")).toBeNull();
   });
 
+  it("is titled Removing for a removal and says Removal complete, with no count of services it ran", async () => {
+    jobMode = "remove";
+    job = {
+      state: "done",
+      items: [check, { ...services, state: "done" }],
+    };
+    mount();
+    expect(await screen.findByRole("heading", { name: "Removing web", level: 3 })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Removal complete" })).toBeTruthy();
+    expect(screen.getByText("Removed web.")).toBeTruthy();
+    expect(screen.queryByText("Deploy complete")).toBeNull();
+    expect(screen.queryByRole("link", { name: "Open logs" })).toBeNull();
+  });
+
   it("says who started it and when, and how long it has run", async () => {
     mount();
     await screen.findByRole("heading", { name: "Deploying web" });

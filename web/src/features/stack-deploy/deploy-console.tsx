@@ -139,7 +139,9 @@ export function outcomesOf(
           ? "stackDeploy.rollback.announce.complete"
           : job.mode === "start"
             ? "stackStop.console.announce"
-            : "stackDeploy.announce.complete",
+            : job.mode === "remove"
+              ? "stackRemove.console.announce"
+              : "stackDeploy.announce.complete",
       ),
     );
   }
@@ -334,7 +336,9 @@ export function DeployConsole({ envId, stackId, jobId }: DeployConsoleProps) {
                 ? "stackDeploy.rollback.title"
                 : job.mode === "start"
                   ? "stackStop.console.title"
-                  : "stackDeploy.title",
+                  : job.mode === "remove"
+                    ? "stackRemove.console.title"
+                    : "stackDeploy.title",
               { name },
             )}
           </h3>

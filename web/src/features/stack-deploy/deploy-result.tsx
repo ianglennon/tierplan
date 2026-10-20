@@ -253,6 +253,22 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
     </Button>
   );
   const rolledBack = job.mode === "rollback";
+  if (job.state === "done" && job.mode === "remove") {
+    // A removal has no services left to count and no logs to open: it says it is done and where to go.
+    return (
+      <section className="flex flex-col gap-3">
+        <h4 className="text-base font-semibold">{t("stackRemove.console.complete")}</h4>
+        <p className="text-sm break-words">{t("stackRemove.progress.done", { name })}</p>
+        <div className="flex flex-wrap gap-2">
+          <Button asChild variant="outline" className="max-md:h-11">
+            <Link to="/env/$envId/stacks" params={{ envId }}>
+              {t("stacks.detail.gone.back")}
+            </Link>
+          </Button>
+        </div>
+      </section>
+    );
+  }
   if (job.state === "done") {
     return (
       <section className="flex flex-col gap-3">

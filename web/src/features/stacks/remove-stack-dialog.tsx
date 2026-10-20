@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import {
   type DeployRequestError,
@@ -15,6 +15,7 @@ import {
 import { matchesName, TypeToConfirm } from "@/components/type-to-confirm";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -23,9 +24,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { followStackOperation } from "@/features/stacks/follow-operation";
 import { RemovalProgress } from "@/features/stacks/removal-progress";
+import { VolumePicker, volumeKey } from "@/features/stacks/volume-picker";
 import { useT } from "@/i18n/use-t";
 import { toastError, toastSuccess } from "@/lib/toast";
 
@@ -84,6 +87,13 @@ export function RemoveStackDialog({ stack, open, onOpenChange }: RemoveStackDial
   const [view, setView] = useState<"form" | "progress">("form");
   const [jobId, setJobId] = useState<string | null>(null);
   const [typed, setTyped] = useState("");
+  // The volumes that are ticked (by volumeKey) and whether the definition stays: both start unticked, and the
+  // person's own hands tick them.
+  const [ticked, setTicked] = useState<string[]>([]);
+  const [keep, setKeep] = useState(false);
+  // What the removal that started was asked to do, for the panel that follows it.
+  const [keptDefinition, setKeptDefinition] = useState(false);
+  const keepId = useId();
   const [refusal, setRefusal] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -100,11 +110,14 @@ export function RemoveStackDialog({ stack, open, onOpenChange }: RemoveStackDial
   function change(next: boolean) {
     if (!next && view === "form") {
       setTyped("");
+      setTicked([]);
+      setKeep(false);
       setRefusal(null);
     }
     onOpenChange(next);
   }
 
+  const volumes = preview.data?.volumes ?? [];
   const armed = Boolean(preview.data) && matchesName(typed, stack.name);
   const pending = submitting || remove.isPending;
 
@@ -113,11 +126,13 @@ export function RemoveStackDialog({ stack, open, onOpenChange }: RemoveStackDial
     setSubmitting(true);
     setRefusal(null);
     try {
+      const chosen = volumes.filter((v) => ticked.includes(volumeKey(v)));
       const started = await remove.mutateAsync({
         confirmName: stack.name,
-        volumes: [],
-        keepDefinition: false,
+        volumes: chosen.map((v) => ({ name: v.name, nodeId: v.nodeId })),
+        keepDefinition: keep,
       });
+      setKeptDefinition(keep);
       setJobId(started.jobId);
       setView("progress");
       followStackOperation(queryClient, {
@@ -171,7 +186,7 @@ export function RemoveStackDialog({ stack, open, onOpenChange }: RemoveStackDial
             stackId={stack.id}
             stackName={stack.name}
             jobId={jobId}
-            keepDefinition={false}
+            keepDefinition={keptDefinition}
             headingRef={headingRef}
             onClose={() => onOpenChange(false)}
           />
@@ -252,6 +267,45 @@ export function RemoveStackDialog({ stack, open, onOpenChange }: RemoveStackDial
                 </div>
               </section>
             ) : null}
+            {preview.data ? (
+              <>
+                {volumes.length > 0 ? (
+                  <VolumePicker
+                    volumes={volumes}
+                    value={ticked}
+                    onChange={setTicked}
+                    swarm={stack.target !== "standalone"}
+                    disabled={pending}
+                  />
+                ) : (
+                  <p className="text-sm text-muted-foreground">{t("stackRemove.volumes.empty")}</p>
+                )}
+                {(preview.data.notReporting ?? []).length > 0 ? (
+                  <p className="text-sm text-muted-foreground break-words">
+                    {t("stackRemove.volumes.notReporting", {
+                      count: (preview.data.notReporting ?? []).length,
+                      nodes: (preview.data.notReporting ?? []).join(", "),
+                    })}
+                  </p>
+                ) : null}
+                <div className="flex items-start gap-2">
+                  <Checkbox
+                    id={keepId}
+                    checked={keep}
+                    disabled={pending}
+                    onCheckedChange={(next) => setKeep(next === true)}
+                    className="mt-0.5 max-md:size-6"
+                  />
+                  <div className="flex flex-col gap-0.5">
+                    <Label htmlFor={keepId}>{t("stackRemove.keep.label")}</Label>
+                    <p className="text-sm text-muted-foreground">{t("stackRemove.keep.helper")}</p>
+                  </div>
+                </div>
+                {preview.data.hasDraft && !keep ? (
+                  <p className="text-sm">{t("stackRemove.draft")}</p>
+                ) : null}
+              </>
+            ) : null}
             <TypeToConfirm
               name={stack.name}
               value={typed}
@@ -282,7 +336,9 @@ export function RemoveStackDialog({ stack, open, onOpenChange }: RemoveStackDial
                 onClick={() => void confirm()}
               >
                 {pending ? <Spinner aria-hidden="true" /> : null}
-                {t("stackRemove.dialog.confirm")}
+                {ticked.length > 0
+                  ? t("stackRemove.dialog.confirmVolumes", { count: ticked.length })
+                  : t("stackRemove.dialog.confirm")}
               </Button>
             </DialogFooter>
           </>

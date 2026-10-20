@@ -12371,13 +12371,14 @@
             ]
           },
           "mode": {
-            "description": "What the operation is: a deploy of the draft, an update of images, a roll back to the last version that ran well, or a stop or a start of the stack",
+            "description": "What the operation is: a deploy of the draft, an update of images, a roll back to the last version that ran well, a stop or a start of the stack, or its removal",
             "enum": [
               "deploy",
               "update",
               "rollback",
               "stop",
-              "start"
+              "start",
+              "remove"
             ],
             "type": "string"
           },

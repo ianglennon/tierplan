@@ -594,9 +594,11 @@ func terminalTask(state string) bool {
 	return false
 }
 
-// remaining counts the tasks of a swarm stack that have not ended, or the containers of a standalone stack. A
-// swarm keeps a task after its service is removed until the node has stopped the container, and the task still
-// carries the labels its service had.
+// remaining counts what the stack still holds on its target after its services are gone. On a swarm that is
+// its tasks that have not ended (the swarm keeps a task after its service is removed until the node has stopped
+// the container, and the task still carries the labels its service had) and the containers of those tasks that
+// the nodes have not removed yet: a network or a volume is in use until they are. On a standalone host it is the
+// containers of the Compose project.
 func (x *removal) remaining(ctx context.Context) (int, error) {
 	d, in := x.d, x.in
 	rctx, cancel := context.WithTimeout(ctx, pollReadTimeout)
@@ -604,6 +606,7 @@ func (x *removal) remaining(ctx context.Context) (int, error) {
 	if in.Stack.Target == stacks.TargetStandalone {
 		var n int
 		err := d.Aggregator.OnNode(rctx, in.EnvID, in.NodeID, func(c *dockerx.Client) error {
+			// The project's containers, as the SDK counts them: a one-off container (compose run) is not one of its services.
 			cs, e := c.ComposeContainers(rctx, in.Stack.Name)
 			if e != nil {
 				return e
@@ -618,15 +621,51 @@ func (x *removal) remaining(ctx context.Context) (int, error) {
 		})
 		return n, err
 	}
-	var n int
+	var tasks int
 	err := d.Clusters.ClusterRead(rctx, in.EnvID, func(c *dockerx.Client) error {
 		rows, e := c.Tasks(rctx, dockerx.TaskFilter{Labels: []string{stacks.LabelStackID + "=" + in.Stack.ID}})
 		if e != nil {
 			return e
 		}
-		n = 0
+		tasks = 0
 		for _, t := range rows {
 			if !terminalTask(t.State) {
+				tasks++
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	// The nodes that answer are the ones whose containers can be looked at; a node nobody reaches is not waited for.
+	agg, _, err := d.Aggregator.Snapshot(rctx, in.EnvID)
+	if err != nil {
+		return 0, err
+	}
+	containers := 0
+	for _, n := range agg.Nodes {
+		c, e := x.containersOn(rctx, n.ID)
+		if e != nil {
+			return 0, e
+		}
+		containers += c
+	}
+	return tasks + containers, nil
+}
+
+// containersOn counts the containers of the swarm stack on one node, in any state: they are found by the stack's
+// namespace and kept only when they also carry its Bayplan ID.
+func (x *removal) containersOn(ctx context.Context, nodeID string) (int, error) {
+	var n int
+	err := x.d.Aggregator.OnNode(ctx, x.in.EnvID, nodeID, func(c *dockerx.Client) error {
+		rows, e := c.ContainersWithLabel(ctx, stacks.LabelSwarmNamespace, x.in.Stack.Name)
+		if e != nil {
+			return e
+		}
+		n = 0
+		for _, row := range rows {
+			if ownsLabels(x.in.Stack, row.Labels) {
 				n++
 			}
 		}

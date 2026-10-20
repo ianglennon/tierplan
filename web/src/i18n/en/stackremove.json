@@ -16,7 +16,9 @@
       "retry": "Retry",
       "cancel": "Cancel",
       "confirm": "Remove stack",
-      "failed": "Couldn't remove {{name}}: {{reason}} What was already removed stays removed. Remove the rest from this page."
+      "failed": "Couldn't remove {{name}}: {{reason}} What was already removed stays removed. Remove the rest from this page.",
+      "confirmVolumes_one": "Remove stack and {{count, number}} volume",
+      "confirmVolumes_other": "Remove stack and {{count, number}} volumes"
     },
     "list": {
       "heading": "What gets removed",
@@ -77,6 +79,28 @@
       "removed": "Removed {{name}}.",
       "failed": "Couldn't remove {{name}}: {{reason}} What was already removed stays removed. Remove the rest from this page.",
       "failedNoReason": "Couldn't remove {{name}}. What was already removed stays removed. Remove the rest from this page."
+    },
+    "volumes": {
+      "heading": "Volumes",
+      "helper": "Volumes hold your data. Tick only the ones you're sure you don't need. Unticked volumes stay on the host.",
+      "empty": "This stack has no volumes of its own.",
+      "label": "Remove volume {{volume}}",
+      "labelOn": "Remove volume {{volume}} on {{node}}",
+      "on": "on {{node}}",
+      "usedOutside_one": "{{count, number}} container outside this stack uses its volume {{volume}}. Removing the volume will fail while it runs.",
+      "usedOutside_other": "{{count, number}} containers outside this stack use its volume {{volume}}. Removing the volume will fail while they run.",
+      "notReporting_one": "{{nodes}} didn't answer, so its volumes aren't listed.",
+      "notReporting_other": "{{nodes}} didn't answer, so their volumes aren't listed."
+    },
+    "keep": {
+      "label": "Keep the definition",
+      "helper": "Keeps the compose file, files and variables so you can deploy it again. The stack shows as Not deployed."
+    },
+    "draft": "This stack has a saved draft. Removing the stack deletes it too.",
+    "console": {
+      "title": "Removing {{name}}",
+      "complete": "Removal complete",
+      "announce": "Removal complete."
     }
   }
 }

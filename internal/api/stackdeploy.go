@@ -115,7 +115,7 @@ type StackJobOutputLine struct {
 type StackJobBody struct {
 	ID         string               `json:"id" doc:"The job ID"`
 	StackID    string               `json:"stackId" doc:"The stack being deployed"`
-	Mode       string               `json:"mode" enum:"deploy,update,rollback,stop,start" doc:"What the operation is: a deploy of the draft, an update of images, a roll back to the last version that ran well, or a stop or a start of the stack"`
+	Mode       string               `json:"mode" enum:"deploy,update,rollback,stop,start,remove" doc:"What the operation is: a deploy of the draft, an update of images, a roll back to the last version that ran well, a stop or a start of the stack, or its removal"`
 	StartedBy  string               `json:"startedBy" doc:"Who started the deploy, as a name"`
 	State      string               `json:"state" enum:"running,done,partial,failed,cancelled" doc:"running until every step has ended, then done when every step is"`
 	CreatedAt  string               `json:"createdAt" doc:"When the job started, RFC 3339 UTC"`

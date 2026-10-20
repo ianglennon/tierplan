@@ -442,9 +442,8 @@ describe("RemoveStackDialog: volumes", () => {
   it("switches the confirm to Remove stack and {n} volumes, plural-aware, and back", async () => {
     preview = { ...emptyPreview(), volumes: [volume("a"), volume("b")] };
     mount();
-    expect((await screen.findByRole("button", { name: "Remove stack" })).textContent).toBe(
-      "Remove stack",
-    );
+    await screen.findByRole("checkbox", { name: "Remove volume a on node-a" });
+    expect(screen.getByRole("button", { name: "Remove stack" }).textContent).toBe("Remove stack");
 
     fireEvent.click(screen.getByRole("checkbox", { name: "Remove volume a on node-a" }));
     expect(screen.getByRole("button", { name: "Remove stack and 1 volume" })).toBeTruthy();
@@ -522,7 +521,7 @@ describe("RemoveStackDialog: volumes", () => {
 
     await screen.findAllByRole("checkbox", { name: /Remove volume vol-0 on/ });
     expect(screen.getAllByRole("checkbox", { name: /^Remove volume / })).toHaveLength(60);
-    const list = screen.getByTestId("volume-list");
+    const list = document.querySelector('[data-slot="volume-list"]') as HTMLElement;
     expect(list.className).toContain("max-h-60");
     expect(list.className).toContain("overflow-y-auto");
   });

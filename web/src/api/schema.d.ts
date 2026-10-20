@@ -8766,10 +8766,10 @@ export interface components {
             /** @description The steps and services, in the order they were added. Read the steps in run order by following parent: a top-level step, then its children */
             items: components["schemas"]["StackJobItemBody"][] | null;
             /**
-             * @description What the operation is: a deploy of the draft, an update of images, a roll back to the last version that ran well, or a stop or a start of the stack
+             * @description What the operation is: a deploy of the draft, an update of images, a roll back to the last version that ran well, a stop or a start of the stack, or its removal
              * @enum {string}
              */
-            mode: "deploy" | "update" | "rollback" | "stop" | "start";
+            mode: "deploy" | "update" | "rollback" | "stop" | "start" | "remove";
             /** @description The output log, oldest first: the newest 2,000 lines */
             output: components["schemas"]["StackJobOutputLine"][] | null;
             /** @description The stack being deployed */
