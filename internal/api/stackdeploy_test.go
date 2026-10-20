@@ -851,8 +851,8 @@ func TestADeployRefusalNeverQuotesASecretVariable(t *testing.T) {
 			if strings.Contains(rec.Body.String(), leakyValue) {
 				t.Errorf("deploy answer = %s, want no secret value", rec.Body)
 			}
-			if tc.quoted && !strings.Contains(rec.Body.String(), "<hidden>") {
-				t.Errorf("deploy answer = %s, want the converter's quoted value shown as <hidden>", rec.Body)
+			if tc.quoted && !strings.Contains(rec.Body.String(), "because they could quote it.") {
+				t.Errorf("deploy answer = %s, want the converter's refusal replaced by the fixed sentence", rec.Body)
 			}
 			if w := f.fake.Writes(); len(w) != 0 {
 				t.Errorf("writes = %v, want none", w)
@@ -886,7 +886,7 @@ func TestADeployRefusalNeverQuotesAnEscapedSecret(t *testing.T) {
 	cases := map[string]struct {
 		compose string
 		// fixed is the key of the field the loader refuses, reported with the fixed sentence (07-40); empty
-		// for the converter's refusal, which still shows <hidden> until 07-41.
+		// for the converter's refusal (07-41), which ends in the same words whichever field it names.
 		fixed string
 	}{
 		"a cast position":              {head + "    deploy:\n      replicas: ${PW}\n", "services.web.deploy.replicas"},
@@ -915,8 +915,8 @@ func TestADeployRefusalNeverQuotesAnEscapedSecret(t *testing.T) {
 				if !strings.Contains(rec.Body.String(), stacks.SecretValueMessage(tc.fixed)) {
 					t.Errorf("deploy answer = %s, want the fixed sentence at %s", rec.Body, tc.fixed)
 				}
-			} else if !strings.Contains(rec.Body.String(), "<hidden>") {
-				t.Errorf("deploy answer = %s, want the value shown as <hidden>", rec.Body)
+			} else if !strings.Contains(rec.Body.String(), "because they could quote it.") {
+				t.Errorf("deploy answer = %s, want the converter's refusal replaced by the fixed sentence", rec.Body)
 			}
 			if w := f.fake.Writes(); len(w) != 0 {
 				t.Errorf("writes = %v, want none", w)
@@ -964,6 +964,59 @@ func TestADeployRefusalNeverQuotesPartOfASecret(t *testing.T) {
 			raw := rec.Body.String()
 			if !strings.Contains(raw, "stack_invalid") || !strings.Contains(raw, stacks.SecretValueMessage(tc.path)) {
 				t.Errorf("deploy answer = %s, want stack_invalid with the fixed sentence at %s", raw, tc.path)
+			}
+			for _, part := range tc.parts {
+				if strings.Contains(raw, part) {
+					t.Errorf("deploy answer = %s, want no part (%q) of the secret", raw, part)
+				}
+			}
+			if w := f.fake.Writes(); len(w) != 0 {
+				t.Errorf("writes = %v, want none", w)
+			}
+		})
+	}
+}
+
+// The converter describes a refused value in its own words, and compose-go splits a short syntax before it
+// does, so a secret variable can reach the deploy answer in part: a restart policy cut at ":" and a published
+// port cut out of a longer spec. The answer for a field that uses a secret variable is the fixed sentence for
+// that field, and a plain value keeps the converter's words (07-41, D-02).
+func TestADeployNeverQuotesPartOfASecretTheConverterSplits(t *testing.T) {
+	t.Parallel()
+	const head = "services:\n  web:\n    image: nginx:1.27-alpine\n"
+	cases := map[string]struct {
+		compose, secret string
+		// path is the field whose fixed sentence is wanted, empty for a plain value.
+		path string
+		// want is a piece of the converter's own words a plain value keeps.
+		want string
+		// parts are the pieces of the secret the answer must not hold.
+		parts []string
+	}{
+		"a restart policy": {head + "    restart: ${PW}\n", "sometimes:3", "services.web.restart", "", []string{"sometimes"}},
+		"a plain value keeps the converter's words": {
+			head + "    restart: sometimes\n    environment:\n      DB: ${PW}\n", "Password2024!", "", "unknown policy", []string{"Password2024"},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f, e := stackEnv(t, nil)
+			admin := f.caller(t, e, "envadmin-1", "admin")
+			operator := f.caller(t, e, "operator-1", "operator")
+			st := newStack(t, admin, "splits")
+			v := saveCompose(t, operator, st.ID, tc.compose, partSecretVars(t, tc.secret))
+
+			rec := operator.deploy(st.ID, `{"draftVersion":`+itoaT(v)+`}`)
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("deploy: %d %.300s, want 422", rec.Code, rec.Body)
+			}
+			raw := rec.Body.String()
+			if tc.path != "" && !strings.Contains(raw, stacks.SecretValueMessage(tc.path)) {
+				t.Errorf("deploy answer = %s, want the fixed sentence at %s", raw, tc.path)
+			}
+			if tc.want != "" && !strings.Contains(raw, tc.want) {
+				t.Errorf("deploy answer = %s, want the converter's words (%q)", raw, tc.want)
 			}
 			for _, part := range tc.parts {
 				if strings.Contains(raw, part) {
