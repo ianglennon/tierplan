@@ -5,3 +5,6 @@ package stackops
 
 // ReplicasSpec is replicasSpec for the tests of package stackops_test.
 var ReplicasSpec = replicasSpec
+
+// ConvertLogText is convertLogText for the tests of package stackops_test.
+var ConvertLogText = convertLogText
