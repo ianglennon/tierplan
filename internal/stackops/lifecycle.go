@@ -637,7 +637,7 @@ func (l *lifecycle) recreate(ctx context.Context, plan startPlan, writes *[]serv
 	}
 	converted, err := convert.Convert(project, convert.Options{StackName: in.Stack.Name, StackID: in.Stack.ID, Objects: refs})
 	if err != nil {
-		d.log().Warn("a stack could not be converted for a start", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
+		d.log().Warn("a stack could not be converted for a start", "environment", in.EnvID, "stack", in.Stack.Name, "error", l.prog.mask(err.Error()))
 		l.fail(ItemServices, CodeStackInvalid, "")
 		return false
 	}

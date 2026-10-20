@@ -30,8 +30,10 @@ type PrepareError struct {
 	Masker stacks.Masker
 }
 
+// Error is the refusal's text with the cause masked by the refused revision's masker, so a log line that carries
+// the error never quotes a secret variable (review WR-04). A zero Masker masks nothing.
 func (e *PrepareError) Error() string {
-	return fmt.Sprintf("stackops: prepare a roll back (%s): %v", e.Stage, e.Err)
+	return fmt.Sprintf("stackops: prepare a roll back (%s): %s", e.Stage, e.Masker.Mask(fmt.Sprint(e.Err)))
 }
 func (e *PrepareError) Unwrap() error { return e.Err }
 
