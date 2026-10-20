@@ -451,7 +451,8 @@ stack**.
 | Secret variable | at least 4 characters |
 | Convergence | each service `BAYPLAN_STACK_CONVERGE_TIMEOUT`, 10 minutes by default, 1 minute to 2 hours |
 | Jobs | 5 running per person; one stack operation per environment |
-| Checks | the editor's check has a 5-second deadline, and 2 run at once per person |
+| Checks | the editor's check has a 5-second deadline, and a load still running at the deadline is abandoned; 2 run at once per person |
+| Ports | the `ports:` and `expose:` ranges of one compose file add up to at most 20,000 ports, counted after variables are filled in; a port is 0 to 65535 and a range runs upwards |
 | Rendered YAML diff | bounded (20,000 lines, 4,000 edits) |
 | Console output | the newest 2,000 lines |
 | Logs | a stack's log follows up to 32 streams (a swarm's services, a host's containers), 8 log streams per person |
