@@ -366,11 +366,13 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 		return deployStandaloneStack(ctx, d, p, env, st, draft, in, mode, update)
 	}
 
-	// Load and convert before anything is stored or started: a compose file that cannot be
-	// deployed is refused here, with the reason, and leaves no revision behind.
-	loaded, err := stacks.Load(ctx, stacks.LoadInput{Name: st.Name, Target: st.Target, Copy: draft.Copy})
+	// The draft is judged once, by the check pipeline the review ran, before anything is stored or
+	// started: a compose file that cannot be deployed is refused here, with the problems the review
+	// lists, and leaves no revision behind. The project it returns is the one that is converted,
+	// rendered and deployed.
+	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy, Deadline: d.CheckDeadline})
 	if err != nil {
-		return nil, composeProblem(err)
+		return nil, deployableProblem(d, env.ID, err)
 	}
 	if mode == deployModeUpdate {
 		if err := stackops.ValidateUpdateServices(loaded.Project, st.Target, st.Name, in.Body.Services); err != nil {
@@ -397,13 +399,8 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 		}
 	}
 
-	// The review's checks are made again on what is about to be deployed (07-18 makes them once
-	// more under the lock): the errors of the check, what the caller may not deploy, and a name
-	// that something Bayplan does not manage holds. Nothing is stored or sent until they pass.
-	checked := stacks.Check(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy})
-	if checked.Problems.Errors() > 0 || checked.Loaded == nil {
-		return nil, stackInvalid(checked.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
-	}
+	// What the caller may not deploy and a name that something Bayplan does not manage holds are
+	// judged next (07-18 judges them once more under the lock). Nothing is stored or sent until they pass.
 	caller := stackops.Caller{Principal: p, Actor: p.Name}
 	pol, err := d.ops().Policy(ctx, caller, env.ID, draft.Copy, plan)
 	if err != nil {
@@ -449,7 +446,7 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 	// The masked rendering is what the next review compares its own with. It is stored before the
 	// job starts, with the images this deploy was told to use, and again when the deploy ends good,
 	// with the images it ran with.
-	rendering := revisionRendering{repo: repo, loaded: checked.Loaded, masker: stacks.NewMasker(draft.Copy.Vars, draft.Copy.Files)}
+	rendering := revisionRendering{repo: repo, loaded: loaded, masker: stacks.NewMasker(draft.Copy.Vars, draft.Copy.Files)}
 	var startPins map[string]stacks.LivePin
 	if in.Body.Pins != nil {
 		startPins = stackops.LivePins(in.Body.Pins)
@@ -930,6 +927,16 @@ func operationLocked(envName string, h stackops.Holder) error {
 			{Location: "started", Message: started},
 		},
 	}
+}
+
+// deployableProblem is the answer to a draft the check pipeline refused: a 422 stack_invalid that lists
+// the check's masked problems, the very ones the review shows. Any other failure is the server's.
+func deployableProblem(d StacksDeps, envID string, err error) error {
+	var nd *stacks.NotDeployableError
+	if errors.As(err, &nd) {
+		return stackInvalid(nd.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
+	}
+	return stackInternal(d, "check", envID, err)
 }
 
 // rollbackPrepareProblem is the answer to a revision that cannot be redeployed as it stands.

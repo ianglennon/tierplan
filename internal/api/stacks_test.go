@@ -495,6 +495,8 @@ func TestSavingADraftRefusesAPathOrNameThatCouldEscapeTheStack(t *testing.T) {
 	}
 }
 
+// The deploy judges the draft with the check the review runs, so what it refuses it refuses as the review
+// does: 422 stack_invalid, listing every problem at its file and line.
 func TestDeployRefusesAComposeFileItCannotLoadOrConvertAndStoresNothing(t *testing.T) {
 	t.Parallel()
 	f, e := stackEnv(t, nil)
@@ -503,10 +505,10 @@ func TestDeployRefusesAComposeFileItCannotLoadOrConvertAndStoresNothing(t *testi
 	st := newStack(t, admin, "broken")
 
 	for name, tc := range map[string]struct{ compose, problem string }{
-		"invalid yaml":           {"services: [", "compose_invalid"},
-		"a schema error":         {"services:\n  a:\n    image: busybox\n    ports: 5\n", "compose_invalid"},
-		"a service with a build": {"services:\n  a:\n    build: .\n", "compose_unsupported"},
-		"a legacy memory limit":  {"services:\n  a:\n    image: busybox:1\n    mem_limit: 64m\n", "compose_unsupported"},
+		"invalid yaml":           {"services: [", "stack_invalid"},
+		"a schema error":         {"services:\n  a:\n    image: busybox\n    ports: 5\n", "stack_invalid"},
+		"a service with a build": {"services:\n  a:\n    build: .\n", "stack_invalid"},
+		"a legacy memory limit":  {"services:\n  a:\n    image: busybox:1\n    mem_limit: 64m\n", "stack_invalid"},
 	} {
 		rec := operator.saveDraft(st.ID, saveBody(draftVersion(t, operator, st.ID), tc.compose, `[]`))
 		if rec.Code != http.StatusOK {
