@@ -255,8 +255,42 @@ func (f *Fake) serveNetworkInspect(w http.ResponseWriter, r *http.Request, p str
 			out.Services[s.Name] = info
 		}
 	}
+	f.mu.Lock()
+	usage := f.netUsage[fn.Name]
+	f.mu.Unlock()
+	if len(usage) > 0 {
+		subnets := network.SubnetStatuses{}
+		for _, u := range usage {
+			subnets[netip.MustParsePrefix(u.Subnet)] = network.SubnetStatus{IPsInUse: u.InUse, DynamicIPsAvailable: u.Available}
+		}
+		out.Status = &network.Status{IPAM: network.IPAMStatus{Subnets: subnets}}
+	}
 	writeJSON(w, http.StatusOK, out)
 	return true
+}
+
+// FakeSubnetUsage is one subnet of a network inspect's Status.IPAM: the addresses in use
+// and the dynamic addresses still available. Available 0 is a subnet that is full.
+type FakeSubnetUsage struct {
+	Subnet           string
+	InUse, Available uint64
+}
+
+// SetNetworkUsage is what an Engine 29 manager reports for the network called name from
+// now on, in its inspect Status.IPAM, for a network seeded in FakeConfig and one the
+// client created alike. A network never given usage (or given none here) answers with no
+// Status, as Engine 24 to 28 do.
+func (f *Fake) SetNetworkUsage(name string, usage ...FakeSubnetUsage) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(usage) == 0 {
+		delete(f.netUsage, name)
+		return
+	}
+	if f.netUsage == nil {
+		f.netUsage = map[string][]FakeSubnetUsage{}
+	}
+	f.netUsage[name] = slices.Clone(usage)
 }
 
 func firstOf(names []string, fallback string) string {

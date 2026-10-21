@@ -314,6 +314,14 @@ type NetworkService struct {
 	Tasks int
 }
 
+// SubnetUsage is one subnet's address use as the engine reports it. Available is the
+// dynamic addresses left in the subnet's range, and 0 means the swarm cannot give another
+// task an address there.
+type SubnetUsage struct {
+	Subnet           string
+	InUse, Available uint64
+}
+
 // NetworkDetail is one network as its detail page shows it. Which containers are
 // attached is not here: the lists of every node say that, with the addresses.
 type NetworkDetail struct {
@@ -329,6 +337,12 @@ type NetworkDetail struct {
 	// asked for and the engine answered with them (a swarm-scoped network, read on a
 	// manager). Never nil.
 	Services []NetworkService
+	// Usage is the address use of each subnet, sorted by Subnet. It comes from the
+	// inspect Status.IPAM (API 1.52, Engine 29 and later) and is nil when the engine
+	// reports none, which an engine older than 29 never does. On a swarm manager it is
+	// the cluster's use, on a worker only that node's, so a caller that judges whether a
+	// swarm network is full reads it through a manager (Clusters.ClusterRead).
+	Usage []SubnetUsage
 }
 
 // NetworkDetail inspects one network and returns the typed detail and the raw

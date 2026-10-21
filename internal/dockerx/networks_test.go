@@ -573,3 +573,63 @@ func TestNetworkCreateKeepsTheSingleAddressFieldsWorkingWithoutPools(t *testing.
 		t.Errorf("IPAM = %+v, want one pool and no driver", req.IPAM)
 	}
 }
+
+// Address use (plan 07-48, G-07-5): an Engine 29 manager reports each subnet's addresses
+// in use and still available in the network inspect, and that is the one reliable sign
+// that a network is full.
+
+func TestNetworkDetailReadsTheAddressUsageAManagerReports(t *testing.T) {
+	fake := dockertest.NewFake(t, detailManager())
+	fake.SetNetworkUsage("ovl",
+		dockertest.FakeSubnetUsage{Subnet: "fd00:1::/64", InUse: 3, Available: 1 << 40},
+		dockertest.FakeSubnetUsage{Subnet: "10.0.1.0/24", InUse: 256, Available: 0})
+	d, raw, err := newClient(t, fake).NetworkDetail(context.Background(), "ovl-id-1", false)
+	if err != nil {
+		t.Fatalf("NetworkDetail: %v", err)
+	}
+	want := []dockerx.SubnetUsage{
+		{Subnet: "10.0.1.0/24", InUse: 256, Available: 0},
+		{Subnet: "fd00:1::/64", InUse: 3, Available: 1 << 40},
+	}
+	if !reflect.DeepEqual(d.Usage, want) {
+		t.Errorf("Usage = %+v, want %+v (sorted by subnet, a full subnet with Available 0)", d.Usage, want)
+	}
+	wantIPAM := []dockerx.IPAMRow{{Subnet: "10.0.1.0/24", Gateway: "10.0.1.1"}, {Subnet: "fd00:1::/64"}}
+	if !reflect.DeepEqual(d.IPAM, wantIPAM) || d.ID != "ovl-id-1" || d.Name != "ovl" || !d.Attachable {
+		t.Errorf("existing fields moved: %+v", d)
+	}
+	if !strings.Contains(string(raw), `"DynamicIPsAvailable"`) {
+		t.Errorf("raw = %s, want the Status document", raw)
+	}
+}
+
+func TestNetworkDetailOfAnEngineThatReportsNoUsageHasNone(t *testing.T) {
+	d, raw, err := newClient(t, dockertest.NewFake(t, detailManager())).NetworkDetail(context.Background(), "ovl-id-1", false)
+	if err != nil {
+		t.Fatalf("NetworkDetail: %v", err)
+	}
+	if d.Usage != nil {
+		t.Errorf("Usage = %+v, want nil: an engine with no Status must not read as a full network", d.Usage)
+	}
+	if strings.Contains(string(raw), `"Status"`) {
+		t.Errorf("raw has a Status key: %s", raw)
+	}
+}
+
+func TestTheFakeReportsUsageForANetworkTheClientCreated(t *testing.T) {
+	fake := dockertest.NewFake(t, detailManager())
+	c := newClient(t, fake)
+	id, _, err := c.NetworkCreate(context.Background(), dockerx.NetworkCreateSpec{Name: "made", Driver: "overlay", Subnet: "10.9.0.0/28"})
+	if err != nil {
+		t.Fatalf("NetworkCreate: %v", err)
+	}
+	fake.SetNetworkUsage("made", dockertest.FakeSubnetUsage{Subnet: "10.9.0.0/28", InUse: 16, Available: 0})
+	d, _, err := c.NetworkDetail(context.Background(), id, false)
+	if err != nil {
+		t.Fatalf("NetworkDetail: %v", err)
+	}
+	want := []dockerx.SubnetUsage{{Subnet: "10.9.0.0/28", InUse: 16, Available: 0}}
+	if !reflect.DeepEqual(d.Usage, want) {
+		t.Errorf("Usage = %+v, want %+v", d.Usage, want)
+	}
+}
