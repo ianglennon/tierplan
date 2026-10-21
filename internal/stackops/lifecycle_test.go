@@ -85,32 +85,40 @@ func (r *swarmRig) lifecycleRun(t *testing.T, mode string, st stackops.Stack, st
 // lifecycleRunOn is lifecycleRun for a stack of a standalone host, whose node is named.
 func (r *swarmRig) lifecycleRunOn(t *testing.T, mode string, st stackops.Stack, node string, store stackops.LifecycleStore, caller stackops.Caller) (stackops.LifecycleResult, jobs.Job) {
 	t.Helper()
+	id, res, done := startLifecycleJob(t, r, mode, st, node, store, caller)
+	ended, err := r.hub.Wait(testsupport.Context(t), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testsupport.Await(t, "the "+mode+" function to return", done)
+	return *res, ended
+}
+
+// startLifecycleJob starts a stop or a start as a job without waiting for it. The result is filled in when
+// done is closed. A caller with no principal is root. node names the host of a standalone stack, "" for a swarm.
+func startLifecycleJob(t *testing.T, r *swarmRig, mode string, st stackops.Stack, node string, store stackops.LifecycleStore, caller stackops.Caller) (jobID string, res *stackops.LifecycleResult, done <-chan struct{}) {
+	t.Helper()
 	if caller.Principal == nil {
 		caller = stackops.Caller{Principal: r.principal(t, "root", ""), Actor: "root"}
 	}
-	var res stackops.LifecycleResult
-	done := make(chan struct{})
+	res = new(stackops.LifecycleResult)
+	fin := make(chan struct{})
 	job, err := r.hub.Start(jobs.Spec{
 		Kind: "stack_" + mode, EnvID: r.envID, Owner: "user:test",
 		Items: stackops.LifecycleItemSpecs(mode, st.Target),
 	}, func(ctx context.Context, rep *jobs.Reporter) {
-		defer close(done)
+		defer close(fin)
 		in := stackops.LifecycleInput{EnvID: r.envID, NodeID: node, Stack: st, Caller: caller, Store: store}
 		if mode == stackops.LifecycleStop {
-			res = r.deps.Stop(ctx, in, rep)
+			*res = r.deps.Stop(ctx, in, rep)
 		} else {
-			res = r.deps.Start(ctx, in, rep)
+			*res = r.deps.Start(ctx, in, rep)
 		}
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ended, err := r.hub.Wait(testsupport.Context(t), job.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	testsupport.Await(t, "the "+mode+" function to return", done)
-	return res, ended
+	return job.ID, res, fin
 }
 
 func rootCaller(t *testing.T, r *swarmRig) stackops.Caller {
@@ -211,6 +219,36 @@ func TestStartScalesEachServiceBackToTheCountItRememberedWithTheSameImageAndRemo
 	}
 	if store.isStopped(st.ID) {
 		t.Errorf("the stack is still recorded as stopped")
+	}
+}
+
+func TestStartEndsAServiceTheSwarmWillNotStartAgainAsTasksFailed(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	st, store := rig.deployedStack(t, "lifecycle", lifecycleTwo, nil)
+	if res, _ := rig.stop(t, st, store); !res.OK() {
+		t.Fatalf("stop = %+v", res)
+	}
+	clk := newStepClock()
+	rig.deps.Clock = clk
+	dead := dockertest.FakeServiceTask{Slot: 1, State: "failed", Desired: "shutdown", Err: "task: non-zero exit (1)"}
+	rig.fake.SetServiceTasks("lifecycle_api", dead, dead)
+
+	id, res, done := startLifecycleJob(t, rig, stackops.LifecycleStart, st, "", store, stackops.Caller{})
+	// One poll interval is the second read; a start that waited out the converge timeout would not end.
+	clk.Tick(t, stackops.PollInterval)
+	job, err := rig.hub.Wait(testsupport.Context(t), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testsupport.Await(t, "the start function to return", done)
+
+	if res.Code != stackops.CodeTasksFailed || res.FailedService != "lifecycle_api" {
+		t.Fatalf("start = %+v, want tasks failed at lifecycle_api", *res)
+	}
+	row := itemByID(t, job, "service:lifecycle_api")
+	if row.State != jobs.ItemFailed || row.Code != stackops.CodeTasksFailed || !strings.Contains(row.Detail, "non-zero exit (1)") {
+		t.Errorf("api row = %+v, want failed as tasks_failed with the swarm's words", row)
 	}
 }
 
