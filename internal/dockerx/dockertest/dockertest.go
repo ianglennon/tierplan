@@ -296,6 +296,10 @@ type FakeService struct {
 	// name as the spec wrote it, and Mounts the mounts of its container spec.
 	Networks []string
 	Mounts   []FakeServiceMount
+	// VirtualIPs are the networks, by ID, the service's endpoint has a virtual IP on, as
+	// a manager reports for a service on an overlay or with a port published in ingress
+	// mode.
+	VirtualIPs []string
 	// Image is the image the spec names; empty leaves the container spec without one.
 	Image string
 	// Secrets and Configs are the secrets and configs the spec's container spec references.
@@ -1538,6 +1542,9 @@ func (fs FakeService) decorate(s *swarm.Service) {
 	}
 	if len(fs.Ports) > 0 {
 		s.Endpoint.Ports = slices.Clone(fs.Ports)
+	}
+	for _, id := range fs.VirtualIPs {
+		s.Endpoint.VirtualIPs = append(s.Endpoint.VirtualIPs, swarm.EndpointVirtualIP{NetworkID: id})
 	}
 	s.PreviousSpec = fs.PreviousSpec
 	s.CreatedAt = fs.CreatedAt

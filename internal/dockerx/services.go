@@ -75,6 +75,12 @@ type ServiceDetail struct {
 	// TemplateHash identifies the spec's TaskTemplate, Runtime aside: the SpecHash of a task
 	// that runs the service's current version.
 	TemplateHash string
+	// NetworkIDs is every network the service's tasks need an address on: its task
+	// template's attachment targets (an ID, or a name as a write gave it, which a network
+	// inspect accepts alike) and the networks its endpoint has a virtual IP on (ingress
+	// for a port published in ingress mode). Each is listed once, sorted, and the field is
+	// nil when there are none.
+	NetworkIDs []string
 }
 
 // ServiceInspect reads one service by ID or name, and returns the typed detail and the
