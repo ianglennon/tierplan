@@ -386,6 +386,19 @@ func TestProgressFindsTheSlotsTheSwarmWillNotStartAgain(t *testing.T) {
 		{name: "a dead slot above the replica count while the swarm makes the missing one", detail: convService("replicated", 3, "h", nil),
 			rows: []dockerx.TaskRow{slotTask("t4", 4, "failed", "shutdown", "h", boom), slotTask("t2", 2, "running", "running", "h", ""), slotTask("t1", 1, "running", "running", "h", "")},
 			live: 2, dead: 0},
+		// Scale-down keeps slots by node balance, so Live counts a live slot above Want, and the dead slot 1
+		// is one the swarm is about to delete (a 3 to 2 scale-down before the swarm reconciles).
+		{name: "a slot the swarm kept above the replica count beside a dead one it will delete", detail: convService("replicated", 2, "h", nil),
+			rows: []dockerx.TaskRow{slotTask("t3", 3, "running", "running", "h", ""), slotTask("t2", 2, "running", "running", "h", ""), slotTask("t1", 1, "failed", "shutdown", "h", boom)},
+			live: 2, dead: 1, deadErr: boom, settled: true},
+		// The swarm kept slots 1 and 3 after a scale-down and slot 1 then died for good: detection still fires.
+		{name: "a dead slot within the replica count beside a live one above it", detail: convService("replicated", 2, "h", nil),
+			rows: []dockerx.TaskRow{slotTask("t3", 3, "running", "running", "h", ""), slotTask("t1", 1, "failed", "shutdown", "h", boom)},
+			live: 1, dead: 1, deadErr: boom, exhausted: true},
+		// A slot being scaled away is desired remove, so it is never live and Live does not over-count.
+		{name: "a task a scale-down is taking away", detail: convService("replicated", 1, "h", nil),
+			rows: []dockerx.TaskRow{slotTask("t2", 2, "running", "remove", "h", ""), slotTask("t1", 1, "running", "running", "h", "")},
+			live: 1, dead: 0, settled: true},
 		{name: "shut down by the swarm, not failed", detail: convService("replicated", 1, "h", nil),
 			rows: []dockerx.TaskRow{slotTask("t1", 1, "shutdown", "shutdown", "h", "")}},
 	} {
