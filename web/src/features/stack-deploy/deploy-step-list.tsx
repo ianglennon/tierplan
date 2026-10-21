@@ -36,11 +36,15 @@ export const UPDATE_STOPPED = "update_stopped";
 // The server's code for a service whose tasks the swarm will not start again.
 export const TASKS_FAILED = "tasks_failed";
 
+// The server's code for a service whose network has no free addresses left in its subnet.
+export const NETWORK_FULL = "network_full";
+
 // The codes whose row reason the result alert repeats: a service that never settled, or that the
 // swarm gave up on, has a sentence of its own that says why and what to do.
 export const CONVERGE_SENTENCE_CODES: ReadonlySet<string> = new Set([
   CONVERGE_TIMEOUT,
   TASKS_FAILED,
+  NETWORK_FULL,
 ]);
 
 // FailureContext is where an item failed: the environment's name, and whether it is a standalone host,
@@ -51,8 +55,11 @@ export interface FailureContext {
 }
 
 // failureOf is why an item failed, as the console words it: the sentence for the code, and Docker's
-// own words under it. Docker's rejection of a service reads as one sentence naming the service. Both
-// are text from outside Bayplan and are drawn as text.
+// own words under it. A service has four convergence outcomes with a sentence of their own: it did
+// not settle in time (and how many tasks still waited for an address), the swarm stopped its update,
+// the swarm will not start its tasks again, and its network has no free addresses.
+// Docker's rejection of a service reads as one sentence naming the service. Both are text from
+// outside Bayplan and are drawn as text.
 export function failureOf(
   t: Translate,
   item: StackJobItem,
@@ -101,17 +108,32 @@ export function failureOf(
   }
   // A service that did not settle: how long it was given, and the swarm's last words about it.
   if (item.code === CONVERGE_TIMEOUT) {
+    const body = t("stackConverge.timeout.body", {
+      service: item.label,
+      count: Number(item.result?.minutes) || 0,
+    });
+    // Tasks that never got an address are the usual reason a service does not settle: say how many.
+    const waiting = Number(item.result?.waiting) || 0;
     return {
-      sentence: t("stackConverge.timeout.body", {
-        service: item.label,
-        count: Number(item.result?.minutes) || 0,
-      }),
+      sentence:
+        waiting > 0 ? `${body} ${t("stackConverge.timeout.waiting", { count: waiting })}` : body,
       words: item.detail,
     };
   }
   if (item.code === UPDATE_STOPPED) {
     return {
       sentence: t("stackConverge.stopped.body", { service: item.label }),
+      words: item.detail,
+    };
+  }
+  if (item.code === NETWORK_FULL) {
+    const network = item.result?.network;
+    const subnet = item.result?.subnet;
+    return {
+      sentence:
+        network && subnet
+          ? t("stackConverge.networkFull.body", { service: item.label, network, subnet })
+          : t("stackConverge.networkFull.bodyUnnamed", { service: item.label }),
       words: item.detail,
     };
   }
