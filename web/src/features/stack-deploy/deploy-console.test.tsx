@@ -562,6 +562,36 @@ describe("a service coming up (plan 07-18, D-13)", () => {
     ).toBeGreaterThan(0);
   });
 
+  it("reads Failed with the sentence and Docker's words when the swarm won't start a service's tasks again", async () => {
+    job = {
+      state: "failed",
+      items: [
+        check,
+        { ...services, state: "failed" },
+        row("web", "failed", {
+          code: "tasks_failed",
+          message: "The service's tasks stopped and the swarm will not start them again.",
+          detail: "task: non-zero exit (1)",
+          current: 0,
+          total: 1,
+          unit: "tasks",
+          result: { action: "created" },
+        }),
+      ],
+    };
+    mount();
+    const list = within(await screen.findByRole("list", { name: "Services" }));
+    expect(list.getByText("Failed")).toBeTruthy();
+    // A failed row starts open.
+    expect(
+      list.getByText(
+        "web's tasks stopped and the swarm won't start them again. Check the service's restart policy and its logs, or roll back.",
+      ),
+    ).toBeTruthy();
+    expect(list.getByText("task: non-zero exit (1)")).toBeTruthy();
+    expect(list.queryByText("Timed out")).toBeNull();
+  });
+
   it("reads Updated, not Running, for a service the deploy took but did not wait for", async () => {
     job = {
       state: "failed",
@@ -1811,6 +1841,20 @@ describe("the announcements", () => {
     });
     expect(spoken()).toEqual([
       "web failed: web didn't settle within 10 minutes. Docker may still finish it. Check the service, or roll back.",
+    ]);
+  });
+
+  it("announces a service the swarm will not start again with its sentence and Docker's words", async () => {
+    await mountLive(jobBody({ items: [check, services, row("web", "running")] }));
+    act(() => {
+      source().sendFrame(
+        "item",
+        item(row("web", "failed", { code: "tasks_failed", detail: "task: non-zero exit (1)" })),
+        "4",
+      );
+    });
+    expect(spoken()).toEqual([
+      "web failed: web's tasks stopped and the swarm won't start them again. Check the service's restart policy and its logs, or roll back. task: non-zero exit (1)",
     ]);
   });
 
