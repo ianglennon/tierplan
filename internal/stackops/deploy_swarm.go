@@ -59,6 +59,7 @@ const (
 	CodeCancelled          = "cancelled"
 	CodeNotRun             = "not_run"
 	CodeConvergeTimeout    = "converge_timeout"
+	CodeTasksFailed        = "tasks_failed"
 	CodeUpdateStopped      = "update_stopped"
 	CodePolicyUnavailable  = "policy_unavailable"
 )
@@ -87,6 +88,7 @@ var codeMessages = map[string]string{
 	CodeNotRun:              "Not run because an earlier step failed.",
 	CodeConvergeTimeout:     "The service didn't settle in time. Docker may still finish it.",
 	CodeUpdateStopped:       "The swarm stopped the update of the service.",
+	CodeTasksFailed:         "The service's tasks stopped and the swarm will not start them again.",
 	CodeNeedsAdmin:          "The stack uses host access that needs Admin.",
 	CodePolicyUnavailable:   "The host-access policy could not be applied, so nothing was deployed.",
 	CodePinsInvalid:         "The images in the request don't match what the deploy would use. Review the stack again.",

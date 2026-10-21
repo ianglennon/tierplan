@@ -9,12 +9,37 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/moby/moby/api/types/swarm"
 )
 
-// fakeTaskState is the state SetTaskState gave a service's tasks and the error text they carry.
-type fakeTaskState struct{ state, errText string }
+// fakeTaskState is the state SetTaskState gave a service's tasks and the error text they carry, or, in
+// the case of SetServiceTasks, the tasks themselves.
+type fakeTaskState struct {
+	state, errText string
+	tasks          []FakeServiceTask
+}
+
+// FakeServiceTask is one task of a service whose tasks SetServiceTasks scripts.
+type FakeServiceTask struct {
+	// ID is the task's ID. "" means "<service ID>-scripted-<n>", where n is the 1-based position in the
+	// script.
+	ID string
+	// Slot is the replica slot of a replicated service's task, 0 for a global service's.
+	Slot int
+	// Node is the ID of the node the task is on. "" means "node-1".
+	Node string
+	// State is the state the swarm last saw the task in.
+	State string
+	// Desired is the state the swarm wants the task in. "" means "running".
+	Desired string
+	// Err and Message are the swarm's free text about the task.
+	Err, Message string
+	// Old puts the task on a spec other than the service's current task template, so its spec hash
+	// differs from the service's.
+	Old bool
+}
 
 // withTaskStates returns c with the states SetTaskState gave the tasks that follow writes.
 func (c FakeConfig) withTaskStates(states map[string]fakeTaskState) FakeConfig {
@@ -27,7 +52,7 @@ func (c FakeConfig) withTaskStates(states map[string]fakeTaskState) FakeConfig {
 // SetTaskState sets the state, and the error text the swarm records with it, of the tasks that follow
 // the writes to the service of that name, as a swarm moves them on: preparing while it pulls the
 // image, rejected when it cannot, running once it can. A test moves a service on with it between
-// two polls of a deploy. The state "" is running again.
+// two polls of a deploy. The state "" is running again, and takes a SetServiceTasks script away.
 func (f *Fake) SetTaskState(service, state, errText string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -39,6 +64,22 @@ func (f *Fake) SetTaskState(service, state, errText string) {
 		return
 	}
 	f.taskStates[service] = fakeTaskState{state: state, errText: errText}
+}
+
+// SetServiceTasks scripts the tasks of the service of that name. They replace the tasks that follow the
+// writes to the service, and they are listed newest first, the first being the newest. A later
+// SetServiceTasks or SetTaskState for the service replaces the script; no tasks takes the script away.
+func (f *Fake) SetServiceTasks(service string, tasks ...FakeServiceTask) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.taskStates == nil {
+		f.taskStates = map[string]fakeTaskState{}
+	}
+	if len(tasks) == 0 {
+		delete(f.taskStates, service)
+		return
+	}
+	f.taskStates[service] = fakeTaskState{tasks: slices.Clone(tasks)}
 }
 
 // LoseQuorum makes the swarm lose its quorum from now on, as QuorumLost does from the start: the
@@ -128,6 +169,38 @@ func (c FakeConfig) followingTasks() []swarm.Task {
 			t.Status = swarm.TaskStatus{State: state, Err: errText}
 			out = append(out, t)
 		}
+	}
+	return out
+}
+
+// scriptedBase is the creation time of the newest scripted task; each next one is a second older, so
+// the client's newest-first sort keeps the script's order.
+var scriptedBase = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// scriptedTasks are the tasks SetServiceTasks gave the service fs.
+func scriptedTasks(fs FakeService, script []FakeServiceTask) []swarm.Task {
+	out := make([]swarm.Task, 0, len(script))
+	for i, st := range script {
+		id := st.ID
+		if id == "" {
+			id = fmt.Sprintf("%s-scripted-%d", fs.ID, i+1)
+		}
+		node := st.Node
+		if node == "" {
+			node = "node-1"
+		}
+		desired := swarm.TaskState(st.Desired)
+		if desired == "" {
+			desired = swarm.TaskStateRunning
+		}
+		spec := fs.Spec.TaskTemplate
+		if st.Old {
+			spec.ForceUpdate++
+		}
+		t := swarm.Task{ID: id, ServiceID: fs.ID, NodeID: node, Slot: st.Slot, DesiredState: desired, Spec: spec}
+		t.CreatedAt = scriptedBase.Add(-time.Duration(i) * time.Second)
+		t.Status = swarm.TaskStatus{State: swarm.TaskState(st.State), Err: st.Err, Message: st.Message}
+		out = append(out, t)
 	}
 	return out
 }

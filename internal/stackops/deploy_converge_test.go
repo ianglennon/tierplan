@@ -232,6 +232,55 @@ func TestDeploySwarmTimesOutAServiceThatDoesNotSettleAndStopsThere(t *testing.T)
 	}
 }
 
+func TestDeploySwarmFailsAServiceWhoseTasksTheSwarmWillNotStartAgainAtTheSecondRead(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	clk := newStepClock()
+	rig.deps.Clock = clk
+	const words = "task: non-zero exit (1)"
+	rig.fake.SetServiceTasks("web_api",
+		dockertest.FakeServiceTask{Slot: 1, State: "failed", Desired: "shutdown", Err: words},
+		dockertest.FakeServiceTask{Slot: 1, State: "failed", Desired: "shutdown", Err: words},
+	)
+	_, in := stackInput(t, "web", twoServices, nil)
+	d := rig.startDeploy(t, in)
+	// One poll interval is the second read. A wait that ran to the converge timeout would arm timer after
+	// timer, and the deploy would not end.
+	clk.Tick(t, stackops.PollInterval)
+	res, job := d.finish(t)
+
+	if res.Code != stackops.CodeTasksFailed || res.FailedService != "web_api" {
+		t.Fatalf("result = %+v, want tasks failed at web_api", res)
+	}
+	api := itemByID(t, job, "service:web_api")
+	if api.State != jobs.ItemFailed || api.Code != stackops.CodeTasksFailed || api.Message == "" ||
+		api.Message != stackops.CodeMessage(stackops.CodeTasksFailed) || !strings.Contains(api.Detail, "non-zero exit (1)") || api.Result["action"] != "created" {
+		t.Errorf("api row = %+v, want failed as tasks_failed with the server's sentence and the swarm's words", api)
+	}
+	if web := itemByID(t, job, "service:web_web"); web.State != jobs.ItemDone || web.Result["settled"] != "true" {
+		t.Errorf("web row = %+v, want done: it settled on its own", web)
+	}
+	got := itemStates(job)
+	if got[stackops.ItemServices] != "failed:tasks_failed" || got[stackops.ItemCleanup] != "skipped:not_run" {
+		t.Errorf("steps = %v, want Deploy services failed and the cleanup not run", got)
+	}
+	var tasks int
+	for _, it := range job.Items {
+		if it.Kind == stackops.KindTask && it.Parent == "service:web_api" {
+			tasks++
+			if it.State != jobs.ItemDone {
+				t.Errorf("task %s = %s, want done", it.ID, it.State)
+			}
+		}
+	}
+	if tasks == 0 {
+		t.Error("no task item under the web_api row: the console cannot show why")
+	}
+	if ups := rig.fake.ServiceUpdates(); len(ups) != 0 {
+		t.Errorf("service updates = %d, want none: nothing is rolled back", len(ups))
+	}
+}
+
 func TestDeploySwarmStopsWhenTheSwarmRollsTheUpdateBack(t *testing.T) {
 	t.Parallel()
 	owned := map[string]string{"com.docker.stack.namespace": "tracer", "bayplan.stack.id": "stack-tracer"}
