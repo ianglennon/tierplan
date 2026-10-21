@@ -31,6 +31,7 @@ const (
 	TaskRejected  = "rejected"
 	taskPreparing = "preparing"
 	taskComplete  = "complete"
+	taskNew       = "new"
 
 	modeReplicated = "replicated"
 )
@@ -43,6 +44,11 @@ const PollInterval = 2 * time.Second
 // it. The swarm adds a task to a dead slot when the service is written again (a redeploy of an
 // unchanged spec, a Start), and the first read after the write can come before it does.
 const exhaustedReads = 2
+
+// NewTaskHold is how long a task the swarm means to run may stay new before the wait asks whether the
+// networks of its service have room. The allocator retries an address every few seconds, so a task new
+// this long is held, not slow.
+const NewTaskHold = 15 * time.Second
 
 // maxPollErrors is how many reads in a row may fail before the wait gives up: a manager that fails
 // over is back within a poll or two, and one that is not should not make a deploy wait out its whole
@@ -58,7 +64,23 @@ var (
 	// ErrTasksExhausted means every task of the service on its current template ended and the swarm will
 	// not start another by itself: the restart policy is used up, or it says never to restart.
 	ErrTasksExhausted = errors.New("stackops: the swarm will not start the service's tasks again")
+	// ErrNetworkFull means a task the swarm means to run has been held new and a network of the service
+	// has a subnet with no free address.
+	ErrNetworkFull = errors.New("stackops: a network of the service has no free addresses")
 )
+
+// NetworkFull is a network of a service whose subnet has no free address, by the network's name and the
+// subnet's prefix.
+type NetworkFull struct{ Network, Subnet string }
+
+// NetworkFullError is how the wait ends when a network of the service is full.
+type NetworkFullError struct{ NetworkFull }
+
+func (e *NetworkFullError) Error() string {
+	return ErrNetworkFull.Error() + ": " + e.Network + " " + e.Subnet
+}
+
+func (e *NetworkFullError) Unwrap() error { return ErrNetworkFull }
 
 // Convergence is how far a service has got toward running the spec it has. It is the counting of the
 // service rollout endpoint (Phase 6), moved here so a deploy waits on exactly what the page shows.
@@ -87,6 +109,15 @@ type Convergence struct {
 	// DeadErr is the swarm's words about the newest of those dead tasks, its Err, else its Message. It is
 	// Docker's text: a caller that shows it cleans it.
 	DeadErr string
+	// Waiting lists the IDs of the tasks on the current template that the swarm means to run and that are
+	// still new, in row order: the allocator has not given them their addresses.
+	Waiting []string
+	// Stopping is true when some task of the service that the swarm does not mean to run is in a state
+	// from pending to running. It holds an address that may come free. A task still new holds none.
+	Stopping bool
+	// Held counts the Waiting tasks that have been new for NewTaskHold or longer, by the clock of the wait
+	// that read them. WaitConverged sets it; Progress leaves it 0.
+	Held int
 	// Template is the hash of the service's current task template: the SpecHash of a task that runs
 	// it.
 	Template string
@@ -125,7 +156,32 @@ func Progress(detail dockerx.ServiceDetail, rows []dockerx.TaskRow) Convergence 
 		c.Want = int(min(detail.Replicas, math.MaxInt32))
 	}
 	c.countSlots(detail, rows)
+	c.findWaiting(detail, rows)
 	return c
+}
+
+// findWaiting sets Waiting and Stopping from the rows.
+func (c *Convergence) findWaiting(detail dockerx.ServiceDetail, rows []dockerx.TaskRow) {
+	for _, r := range rows {
+		switch {
+		case wantsToRun(r.DesiredState):
+			if r.State == taskNew && detail.TemplateHash != "" && r.SpecHash == detail.TemplateHash {
+				c.Waiting = append(c.Waiting, r.ID)
+			}
+		case holdsAddress(r.State):
+			c.Stopping = true
+		}
+	}
+}
+
+// holdsAddress reports whether a task in this state has been given its addresses and has not let them go:
+// any state from pending to running. A task still new has none.
+func holdsAddress(state string) bool {
+	switch state {
+	case "pending", "assigned", "accepted", taskPreparing, "ready", "starting", TaskRunning:
+		return true
+	}
+	return false
 }
 
 // slotFacts is what the rows of one slot (replicated) or one node (any other mode) say.
@@ -246,15 +302,24 @@ func (c Convergence) Settled() bool {
 
 // WaitConverged polls a service until it has settled and returns nil, until the swarm stops its
 // update (ErrUpdateStopped), until the service is exhausted on exhaustedReads reads in a row
-// (ErrTasksExhausted), until timeout has passed on clock (ErrConvergeTimeout), until ctx ends
-// (its error), or until reads have failed maxPollErrors times in a row (the last error). poll reads
-// the service and its tasks; on, when not nil, is called with every read that succeeded, so the
-// caller can show it. The first read is made at once and the next every PollInterval of clock. It
-// writes nothing.
+// (ErrTasksExhausted), until full names a full network (a NetworkFullError), until timeout has passed
+// on clock (ErrConvergeTimeout), until ctx ends (its error), or until reads have failed maxPollErrors
+// times in a row (the last error). poll reads the service and its tasks; on, when not nil, is called
+// with every read that succeeded, so the caller can show it. The first read is made at once and the next
+// every PollInterval of clock. It writes nothing.
+//
+// full, when not nil, is asked on a read where some task the swarm means to run has been new for
+// NewTaskHold by clock and no task that holds an address is stopping, because that address may come
+// free. It answers the network of the service that has no free address, nil when there is none. An
+// update rolling out does not stop the question: a start-first update into a full network stays
+// updating for ever. A failed answer is ignored and the next read asks again.
 func WaitConverged(ctx context.Context, clock Clock, timeout time.Duration,
-	poll func(context.Context) (Convergence, []dockerx.TaskRow, error), on func(Convergence, []dockerx.TaskRow)) error {
+	poll func(context.Context) (Convergence, []dockerx.TaskRow, error),
+	full func(context.Context) (*NetworkFull, error), on func(Convergence, []dockerx.TaskRow)) error {
 	deadline := clock.Now().Add(timeout)
 	failures, exhausted := 0, 0
+	// firstNew is when this wait first read each task that is still waiting for an address.
+	firstNew := map[string]time.Time{}
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -270,6 +335,7 @@ func WaitConverged(ctx context.Context, clock Clock, timeout time.Duration,
 			}
 		default:
 			failures = 0
+			c.Held = holdTasks(firstNew, c.Waiting, clock.Now())
 			if on != nil {
 				on(c, rows)
 			}
@@ -287,6 +353,15 @@ func WaitConverged(ctx context.Context, clock Clock, timeout time.Duration,
 			if c.Settled() {
 				return nil
 			}
+			if c.Held > 0 && !c.Stopping && full != nil {
+				nf, ferr := full(ctx)
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if ferr == nil && nf != nil {
+					return &NetworkFullError{NetworkFull: *nf}
+				}
+			}
 		}
 		if !clock.Now().Before(deadline) {
 			return ErrConvergeTimeout
@@ -297,4 +372,28 @@ func WaitConverged(ctx context.Context, clock Clock, timeout time.Duration,
 		case <-clock.After(PollInterval):
 		}
 	}
+}
+
+// holdTasks records when each waiting task was first read, forgets the tasks that are no longer waiting
+// (a task that left new starts its hold again if it returns), and counts those new for NewTaskHold by now.
+func holdTasks(firstNew map[string]time.Time, waiting []string, now time.Time) int {
+	seen := make(map[string]struct{}, len(waiting))
+	held := 0
+	for _, id := range waiting {
+		seen[id] = struct{}{}
+		at, ok := firstNew[id]
+		if !ok {
+			at = now
+			firstNew[id] = at
+		}
+		if now.Sub(at) >= NewTaskHold {
+			held++
+		}
+	}
+	for id := range firstNew {
+		if _, ok := seen[id]; !ok {
+			delete(firstNew, id)
+		}
+	}
+	return held
 }

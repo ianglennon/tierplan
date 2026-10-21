@@ -4,8 +4,10 @@
 package stackops
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
+	"github.com/ianglennon/bayplan/internal/jobs"
 )
 
 const (
@@ -93,6 +96,9 @@ func (d Deps) awaitServices(ctx context.Context, envID string, writes []serviceW
 // awaitService waits for one service and ends its row.
 func (d Deps) awaitService(ctx context.Context, envID string, w serviceWrite, prog *progress, nodes *nodeNames) error {
 	var last Convergence
+	// networks are the networks the service's tasks need, as the latest read found them. The wait calls
+	// poll and then full on one goroutine, so full reads what poll set with no race.
+	var networks []string
 	err := WaitConverged(ctx, d.clock(), d.convergeTimeout(), func(ctx context.Context) (Convergence, []dockerx.TaskRow, error) {
 		rctx, cancel := context.WithTimeout(ctx, pollReadTimeout)
 		defer cancel()
@@ -110,21 +116,31 @@ func (d Deps) awaitService(ctx context.Context, envID string, w serviceWrite, pr
 		}); err != nil {
 			return Convergence{}, nil, err
 		}
+		networks = detail.NetworkIDs
 		return Progress(detail, rows).IgnoringUpdate(w.prior), rows, nil
-	}, func(c Convergence, rows []dockerx.TaskRow) {
+	}, d.networkFull(envID, &networks), func(c Convergence, rows []dockerx.TaskRow) {
 		last = c
 		prog.converging(w.name, c, d.taskLines(ctx, envID, w.name, c, rows, nodes))
 	})
+	var nf *NetworkFullError
 	switch {
 	case err == nil:
 		prog.settled(w.name, last)
 	case errors.Is(err, ErrConvergeTimeout):
-		prog.unsettled(w.name, CodeConvergeTimeout, firstWords(last.Err, last.Message),
-			map[string]string{"minutes": strconv.Itoa(int(d.convergeTimeout() / time.Minute))})
+		// A timeout with tasks still new says how many were waiting for the swarm to give them an
+		// address: the engine reports no address use, or no network is full.
+		result := map[string]string{"minutes": strconv.Itoa(int(d.convergeTimeout() / time.Minute))}
+		if last.Held > 0 {
+			result["waiting"] = strconv.Itoa(last.Held)
+		}
+		prog.unsettled(w.name, CodeConvergeTimeout, firstWords(last.Err, last.Message), result)
 	case errors.Is(err, ErrUpdateStopped):
 		prog.unsettled(w.name, CodeUpdateStopped, firstWords(last.Message, last.Err), nil)
 	case errors.Is(err, ErrTasksExhausted):
 		prog.unsettled(w.name, CodeTasksFailed, firstWords(last.DeadErr, last.Err), nil)
+	case errors.As(err, &nf):
+		prog.unsettled(w.name, CodeNetworkFull, last.Err,
+			map[string]string{"network": prog.clean(nf.Network), "subnet": prog.clean(nf.Subnet)})
 	case ctx.Err() != nil:
 		// The deploy was cancelled: the caller ends the row.
 	default:
@@ -132,6 +148,58 @@ func (d Deps) awaitService(ctx context.Context, envID string, w serviceWrite, pr
 		prog.unsettled(w.name, CodeEngineError, engineWords(err), nil)
 	}
 	return err
+}
+
+// networkFull is the question WaitConverged asks of a service with a task held new: does a network the
+// service needs have a subnet with no dynamic address left? It reads through a manager only
+// (Clusters.ClusterRead), because a worker's address use is node-local (07-48). It answers the first full
+// subnet by network name, then subnet. A network that is gone is skipped; any other failed read is the
+// caller's to ignore.
+func (d Deps) networkFull(envID string, networks *[]string) func(context.Context) (*NetworkFull, error) {
+	return func(ctx context.Context) (*NetworkFull, error) {
+		rctx, cancel := context.WithTimeout(ctx, pollReadTimeout)
+		defer cancel()
+		var found []NetworkFull
+		if err := d.Clusters.ClusterRead(rctx, envID, func(c *dockerx.Client) error {
+			// ClusterRead may run this twice: start again.
+			found = found[:0]
+			for _, id := range *networks {
+				nd, _, e := c.NetworkDetail(rctx, id, false)
+				if e != nil {
+					if dockerx.IsNotFound(e) {
+						continue
+					}
+					return e
+				}
+				for _, u := range nd.Usage {
+					if u.Available == 0 {
+						found = append(found, NetworkFull{Network: nd.Name, Subnet: u.Subnet})
+					}
+				}
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		if len(found) == 0 {
+			return nil, nil
+		}
+		slices.SortFunc(found, func(a, b NetworkFull) int {
+			if a.Network != b.Network {
+				return cmp.Compare(a.Network, b.Network)
+			}
+			return cmp.Compare(a.Subnet, b.Subnet)
+		})
+		return &found[0], nil
+	}
+}
+
+// clean masks Docker's text for the job, like every other remote text in it.
+func (p *progress) clean(text string) string {
+	if p == nil {
+		return text
+	}
+	return jobs.Clean(text, p.mask)
 }
 
 // firstWords is the first of the swarm's texts that says anything.

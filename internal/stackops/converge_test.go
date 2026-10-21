@@ -223,7 +223,7 @@ func converging(running, want int) stackops.Convergence {
 // wait runs WaitConverged in a goroutine and returns what it ends with.
 func wait(ctx context.Context, clk stackops.Clock, timeout time.Duration, r *reads, on func(stackops.Convergence, []dockerx.TaskRow)) <-chan error {
 	done := make(chan error, 1)
-	go func() { done <- stackops.WaitConverged(ctx, clk, timeout, r.poll, on) }()
+	go func() { done <- stackops.WaitConverged(ctx, clk, timeout, r.poll, nil, on) }()
 	return done
 }
 
@@ -257,7 +257,7 @@ func TestWaitConvergedReadsOnceAtOnceWithoutWaiting(t *testing.T) {
 	t.Parallel()
 	clk := newStepClock()
 	r := &reads{steps: []readStep{{c: converging(1, 1)}}}
-	if err := stackops.WaitConverged(testsupport.Context(t), clk, time.Minute, r.poll, nil); err != nil {
+	if err := stackops.WaitConverged(testsupport.Context(t), clk, time.Minute, r.poll, nil, nil); err != nil {
 		t.Fatalf("WaitConverged = %v, want nil", err)
 	}
 	if r.count() != 1 {

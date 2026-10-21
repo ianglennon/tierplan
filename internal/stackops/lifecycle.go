@@ -589,6 +589,9 @@ func (l *lifecycle) startSwarm(ctx context.Context) {
 		case errors.Is(v.err, ErrTasksExhausted):
 			l.fail(ItemServices, CodeTasksFailed, v.name)
 			return
+		case errors.Is(v.err, ErrNetworkFull):
+			l.fail(ItemServices, CodeNetworkFull, v.name)
+			return
 		case ctx.Err() != nil:
 			l.fail(ItemServices, CodeCancelled, "")
 			return
