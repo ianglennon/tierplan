@@ -114,6 +114,18 @@ func serviceDetail(s swarm.Service) (ServiceDetail, error) {
 	if r := s.Spec.Mode.Replicated; r != nil && r.Replicas != nil {
 		d.Replicas = *r.Replicas
 	}
+	for _, n := range s.Spec.TaskTemplate.Networks {
+		if n.Target != "" {
+			d.NetworkIDs = append(d.NetworkIDs, n.Target)
+		}
+	}
+	for _, v := range s.Endpoint.VirtualIPs {
+		if v.NetworkID != "" {
+			d.NetworkIDs = append(d.NetworkIDs, v.NetworkID)
+		}
+	}
+	slices.Sort(d.NetworkIDs)
+	d.NetworkIDs = slices.Compact(d.NetworkIDs)
 	var err error
 	if d.Spec, err = json.Marshal(s.Spec); err != nil {
 		return ServiceDetail{}, err
