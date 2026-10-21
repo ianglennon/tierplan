@@ -417,6 +417,45 @@ func TestDeploySwarmDoesNotFailASlotTheSwarmRefillsAfterTheWrite(t *testing.T) {
 	}
 }
 
+func TestDeploySwarmDoesNotFailAServiceWhoseOnlyDeadSlotIsAboveItsReplicaCount(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	clk := newStepClock()
+	rig.deps.Clock = clk
+	// A stale failed slot 4 beside slots 1 and 2: the swarm has not made slot 3 yet.
+	rig.fake.SetServiceTasks("web_wide",
+		dockertest.FakeServiceTask{Slot: 4, State: "failed", Desired: "shutdown", Err: "task: non-zero exit (1)"},
+		dockertest.FakeServiceTask{Slot: 2, State: "running"},
+		dockertest.FakeServiceTask{Slot: 1, State: "running"},
+	)
+	_, in := stackInput(t, "web", wideAndAPI, nil)
+	d := rig.startDeploy(t, in)
+	// The second read of the wait. Counting slot 4 as dead, it would be the second exhausted read.
+	clk.Tick(t, stackops.PollInterval)
+	select {
+	case <-clk.armed:
+	case <-d.done:
+		t.Fatalf("the deploy ended before the swarm made slot 3: a dead slot above the replica count must not end it; result = %+v", *d.res)
+	case <-testsupport.Context(t).Done():
+		t.Fatal("timed out waiting for the wait to arm its third poll")
+	}
+	// The swarm answers the write: it makes slot 3 and deletes the stale slot 4.
+	rig.fake.SetServiceTasks("web_wide",
+		dockertest.FakeServiceTask{Slot: 3, State: "running"},
+		dockertest.FakeServiceTask{Slot: 2, State: "running"},
+		dockertest.FakeServiceTask{Slot: 1, State: "running"},
+	)
+	clk.Advance(stackops.PollInterval)
+	res, job := d.finish(t)
+
+	if !res.OK() {
+		t.Fatalf("result = %+v, want the deploy to settle: a dead slot above the replica count must not end it", res)
+	}
+	if wide := itemByID(t, job, "service:web_wide"); wide.State != jobs.ItemDone || wide.Result["settled"] != "true" {
+		t.Errorf("wide row = %+v, want done and settled: a dead slot above the replica count must not end the deploy", wide)
+	}
+}
+
 func TestDeploySwarmStopsWhenTheSwarmRollsTheUpdateBack(t *testing.T) {
 	t.Parallel()
 	owned := map[string]string{"com.docker.stack.namespace": "tracer", "bayplan.stack.id": "stack-tracer"}

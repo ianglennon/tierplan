@@ -380,7 +380,12 @@ func TestProgressFindsTheSlotsTheSwarmWillNotStartAgain(t *testing.T) {
 			live: 1, dead: 0},
 		{name: "a slot a scale-down left behind", detail: convService("replicated", 1, "h", nil),
 			rows: []dockerx.TaskRow{slotTask("t2", 1, "running", "running", "h", ""), slotTask("t1", 2, "failed", "shutdown", "h", boom)},
-			live: 1, dead: 1, deadErr: boom, settled: true},
+			live: 1, dead: 0, settled: true},
+		// The swarm fills the lowest free slot number and deletes a dead slot it does not refill when it
+		// answers the write, so slot 4 decides nothing (WR-01).
+		{name: "a dead slot above the replica count while the swarm makes the missing one", detail: convService("replicated", 3, "h", nil),
+			rows: []dockerx.TaskRow{slotTask("t4", 4, "failed", "shutdown", "h", boom), slotTask("t2", 2, "running", "running", "h", ""), slotTask("t1", 1, "running", "running", "h", "")},
+			live: 2, dead: 0},
 		{name: "shut down by the swarm, not failed", detail: convService("replicated", 1, "h", nil),
 			rows: []dockerx.TaskRow{slotTask("t1", 1, "shutdown", "shutdown", "h", "")}},
 	} {
