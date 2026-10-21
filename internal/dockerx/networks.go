@@ -383,5 +383,12 @@ func (c *Client) NetworkDetail(ctx context.Context, id string, verbose bool) (Ne
 		d.Services = append(d.Services, NetworkService{Name: name, Tasks: len(svc.Tasks)})
 	}
 	slices.SortFunc(d.Services, func(a, b NetworkService) int { return strings.Compare(a.Name, b.Name) })
+	if in.Status != nil {
+		d.Usage = []SubnetUsage{}
+		for prefix, u := range in.Status.IPAM.Subnets {
+			d.Usage = append(d.Usage, SubnetUsage{Subnet: prefix.String(), InUse: u.IPsInUse, Available: u.DynamicIPsAvailable})
+		}
+		slices.SortFunc(d.Usage, func(a, b SubnetUsage) int { return strings.Compare(a.Subnet, b.Subnet) })
+	}
 	return d, res.Raw, nil
 }
