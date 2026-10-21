@@ -6,7 +6,9 @@ package stackops_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -450,5 +452,190 @@ func TestWaitConvergedKeepsCountingExhaustedReadsAcrossAFailedRead(t *testing.T)
 	}
 	if got := r.count(); got != 3 {
 		t.Errorf("reads = %d, want 3", got)
+	}
+}
+
+func TestProgressListsTheTasksStillWaitingForAnAddressAndTheOnesStillStopping(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		rows     []dockerx.TaskRow
+		waiting  []string
+		stopping bool
+	}{
+		{"new and desired running", []dockerx.TaskRow{slotTask("t3", 3, "new", "running", "h", "")}, []string{"t3"}, false},
+		{"a new replacement in its restart delay", []dockerx.TaskRow{slotTask("t3", 3, "new", "ready", "h", "")}, []string{"t3"}, false},
+		{"new on an earlier template", []dockerx.TaskRow{slotTask("t3", 3, "new", "running", "old", "")}, nil, false},
+		{"allocated and pending", []dockerx.TaskRow{slotTask("t3", 3, "pending", "running", "h", "")}, nil, false},
+		{"stopping and still running", []dockerx.TaskRow{slotTask("t1", 1, "running", "shutdown", "h", "")}, nil, true},
+		{"stopping but still new", []dockerx.TaskRow{slotTask("t1", 1, "new", "shutdown", "h", "")}, nil, false},
+		{"rejected and shut down", []dockerx.TaskRow{slotTask("t1", 1, "rejected", "shutdown", "h", "")}, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := stackops.Progress(convService("replicated", 3, "h", nil), tc.rows)
+			if !slices.Equal(c.Waiting, tc.waiting) || c.Stopping != tc.stopping {
+				t.Errorf("waiting, stopping = %v, %v; want %v, %v", c.Waiting, c.Stopping, tc.waiting, tc.stopping)
+			}
+			if c.Held != 0 {
+				t.Errorf("Held = %d, want 0: only the wait times a hold", c.Held)
+			}
+		})
+	}
+}
+
+// hookAnswer is what the full-network hook answers on one call.
+type hookAnswer struct {
+	nf  *stackops.NetworkFull
+	err error
+}
+
+// fullAfter is a full-network hook that answers each call with the next of answers, the last one forever,
+// and counts its calls.
+func fullAfter(calls *atomic.Int32, answers ...hookAnswer) func(context.Context) (*stackops.NetworkFull, error) {
+	return func(context.Context) (*stackops.NetworkFull, error) {
+		i := min(int(calls.Add(1))-1, len(answers)-1)
+		return answers[i].nf, answers[i].err
+	}
+}
+
+// held is a replicated service short of one task, which is new: the swarm has not given it an address.
+var held = stackops.Convergence{Mode: "replicated", Running: 2, Desired: 3, Want: 3, State: stackops.UpdateNone, Waiting: []string{"t3"}}
+
+var fullNetwork = &stackops.NetworkFull{Network: "web_default", Subnet: "10.0.1.0/24"}
+
+// waitFull runs WaitConverged with a full-network hook in a goroutine and returns what it ends with.
+func waitFull(ctx context.Context, clk stackops.Clock, timeout time.Duration, r *reads,
+	full func(context.Context) (*stackops.NetworkFull, error), on func(stackops.Convergence, []dockerx.TaskRow)) <-chan error {
+	done := make(chan error, 1)
+	go func() { done <- stackops.WaitConverged(ctx, clk, timeout, r.poll, full, on) }()
+	return done
+}
+
+// repeat is n reads of c.
+func repeat(n int, c stackops.Convergence) []readStep {
+	out := make([]readStep, n)
+	for i := range out {
+		out[i] = readStep{c: c}
+	}
+	return out
+}
+
+func wantNetworkFull(t *testing.T, err error) {
+	t.Helper()
+	var nfe *stackops.NetworkFullError
+	if !errors.As(err, &nfe) || nfe.Network != "web_default" || nfe.Subnet != "10.0.1.0/24" || !errors.Is(err, stackops.ErrNetworkFull) {
+		t.Fatalf("WaitConverged = %v, want a NetworkFullError for web_default 10.0.1.0/24", err)
+	}
+}
+
+func TestWaitConvergedAsksAboutTheNetworksOnlyOnceATaskHasBeenNewForTheHold(t *testing.T) {
+	t.Parallel()
+	clk := newStepClock()
+	r := &reads{steps: []readStep{{c: held}}}
+	var calls atomic.Int32
+	done := waitFull(testsupport.Context(t), clk, 10*time.Minute, r, fullAfter(&calls, hookAnswer{nf: fullNetwork}), nil)
+	// Each tick waits for the wait to arm again, so the wait did not end at the read at 14 s, before the hold of
+	// 15 s passed. The ninth read, at 16 s, asks.
+	for range 8 {
+		clk.Tick(t, stackops.PollInterval)
+	}
+	wantNetworkFull(t, testsupport.Await(t, "the wait to name the full network", done))
+	if calls.Load() != 1 || r.count() != 9 {
+		t.Errorf("hook calls, reads = %d, %d; want 1, 9: not asked before the hold", calls.Load(), r.count())
+	}
+}
+
+func TestWaitConvergedDoesNotEndWhileATaskThatHoldsAnAddressIsStopping(t *testing.T) {
+	t.Parallel()
+	clk := newStepClock()
+	stopping := held
+	stopping.Stopping = true
+	r := &reads{steps: append(repeat(10, stopping), readStep{c: held})}
+	var calls atomic.Int32
+	done := waitFull(testsupport.Context(t), clk, 10*time.Minute, r, fullAfter(&calls, hookAnswer{nf: fullNetwork}), nil)
+	for range 10 {
+		clk.Tick(t, stackops.PollInterval)
+	}
+	wantNetworkFull(t, testsupport.Await(t, "the wait to name the full network", done))
+	if calls.Load() != 1 || r.count() != 11 {
+		t.Errorf("hook calls, reads = %d, %d; want 1, 11: the address of the stopping task may come free", calls.Load(), r.count())
+	}
+}
+
+func TestWaitConvergedChecksTheNetworksWhileAnUpdateRollsOut(t *testing.T) {
+	t.Parallel()
+	clk := newStepClock()
+	updating := held
+	updating.State = "updating"
+	r := &reads{steps: []readStep{{c: updating}}}
+	var calls atomic.Int32
+	done := waitFull(testsupport.Context(t), clk, 10*time.Minute, r, fullAfter(&calls, hookAnswer{nf: fullNetwork}), nil)
+	for range 8 {
+		clk.Tick(t, stackops.PollInterval)
+	}
+	wantNetworkFull(t, testsupport.Await(t, "the wait to name the full network", done))
+}
+
+func TestWaitConvergedRestartsTheHoldOfATaskThatLeftNew(t *testing.T) {
+	t.Parallel()
+	clk := newStepClock()
+	left := held
+	left.Waiting = nil
+	steps := []readStep{{c: held}}
+	steps = append(steps, repeat(3, left)...)
+	steps = append(steps, readStep{c: held})
+	r := &reads{steps: steps}
+	var calls atomic.Int32
+	done := waitFull(testsupport.Context(t), clk, 10*time.Minute, r, fullAfter(&calls, hookAnswer{nf: fullNetwork}), nil)
+	// The task is new again from the read at 8 s, so its fifteen seconds pass at the read at 24 s.
+	for range 12 {
+		clk.Tick(t, stackops.PollInterval)
+	}
+	wantNetworkFull(t, testsupport.Await(t, "the wait to name the full network", done))
+	if calls.Load() != 1 || r.count() != 13 {
+		t.Errorf("hook calls, reads = %d, %d; want 1, 13: the hold started again when the task returned to new", calls.Load(), r.count())
+	}
+}
+
+func TestWaitConvergedIgnoresAFailedNetworkRead(t *testing.T) {
+	t.Parallel()
+	clk := newStepClock()
+	r := &reads{steps: []readStep{{c: held}}}
+	var calls atomic.Int32
+	full := fullAfter(&calls, hookAnswer{err: errors.New("no manager answered")}, hookAnswer{nf: fullNetwork})
+	done := waitFull(testsupport.Context(t), clk, 10*time.Minute, r, full, nil)
+	for range 9 {
+		clk.Tick(t, stackops.PollInterval)
+	}
+	wantNetworkFull(t, testsupport.Await(t, "the wait to name the full network", done))
+	if calls.Load() != 2 || r.count() != 10 {
+		t.Errorf("hook calls, reads = %d, %d; want 2, 10: a failed read is asked again at the next", calls.Load(), r.count())
+	}
+}
+
+func TestWaitConvergedKeepsWaitingWhenNoNetworkIsFull(t *testing.T) {
+	t.Parallel()
+	clk := newStepClock()
+	r := &reads{steps: []readStep{{c: held}}}
+	var calls atomic.Int32
+	var mu sync.Mutex
+	var lastHeld int
+	on := func(c stackops.Convergence, _ []dockerx.TaskRow) {
+		mu.Lock()
+		defer mu.Unlock()
+		lastHeld = c.Held
+	}
+	done := waitFull(testsupport.Context(t), clk, time.Minute, r, fullAfter(&calls, hookAnswer{}), on)
+	for range 30 {
+		clk.Tick(t, stackops.PollInterval)
+	}
+	if err := testsupport.Await(t, "the wait to time out", done); !errors.Is(err, stackops.ErrConvergeTimeout) {
+		t.Fatalf("WaitConverged = %v, want ErrConvergeTimeout", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls.Load() != 23 || lastHeld != 1 {
+		t.Errorf("hook calls, last Held = %d, %d; want 23 (reads at 16 s to 60 s), 1", calls.Load(), lastHeld)
 	}
 }
