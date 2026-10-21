@@ -101,10 +101,15 @@ type Convergence struct {
 	Err string
 	// Live counts the slots (replicated, keyed by TaskRow.Slot) or nodes (any other mode, keyed by NodeID)
 	// that hold a task the swarm still means to run: one desired in a state up to running, a restart in its
-	// delay (desired ready) included.
+	// delay (desired ready) included. For a replicated service this includes a slot numbered above Want,
+	// because the swarm scales down by node balance and not by slot number, so a settled service may run
+	// slot 3 of 2. A slot being scaled away is desired remove and is not live.
 	Live int
 	// Dead counts the slots or nodes that hold no such task and whose newest task on the current template
-	// ended failed, rejected or complete: the swarm will not start another task there by itself.
+	// ended failed, rejected or complete: the swarm will not start another task there by itself. For a
+	// replicated service it counts only slots numbered up to Want. When it answers a write, the swarm fills
+	// the lowest free slot numbers and deletes the tasks of the dead slots it does not refill, so a dead slot
+	// above Want is left from before the write and decides nothing.
 	Dead int
 	// DeadErr is the swarm's words about the newest of those dead tasks, its Err, else its Message. It is
 	// Docker's text: a caller that shows it cleans it.
@@ -187,12 +192,20 @@ func holdsAddress(state string) bool {
 // slotFacts is what the rows of one slot (replicated) or one node (any other mode) say.
 type slotFacts struct {
 	live bool
+	// beyond is true for a replicated slot numbered above Want, one the spec no longer asks for.
+	beyond bool
 	// newest is the index in rows of the slot's newest task on the current template, -1 when it has none.
 	newest int
 }
 
 // countSlots sets Live, Dead and DeadErr from the rows, newest first. Only a task on the current template
 // can make a slot dead, so an earlier version's failures and a service with no task yet are never counted.
+// For a replicated service a dead slot numbered above Want is not counted either (WR-01): the swarm fills the
+// lowest free slot numbers and deletes the dead slots it does not refill, so such a slot is left from before
+// the write. Live is deliberately not filtered the same way, because the swarm scales down by node balance
+// and a live slot above Want is a real slot toward Want. The accepted trade-off: a slot above Want that a
+// scale-down kept and that then dies alone is not counted, so that shape ends at the converge timeout and
+// not as exhausted. One snapshot of the slots cannot tell it from the stale slot.
 func (c *Convergence) countSlots(detail dockerx.ServiceDetail, rows []dockerx.TaskRow) {
 	slots := map[string]*slotFacts{}
 	for i, r := range rows {
@@ -202,7 +215,7 @@ func (c *Convergence) countSlots(detail dockerx.ServiceDetail, rows []dockerx.Ta
 		}
 		f := slots[key]
 		if f == nil {
-			f = &slotFacts{newest: -1}
+			f = &slotFacts{newest: -1, beyond: detail.Mode == modeReplicated && r.Slot > c.Want}
 			slots[key] = f
 		}
 		if wantsToRun(r.DesiredState) {
@@ -218,7 +231,7 @@ func (c *Convergence) countSlots(detail dockerx.ServiceDetail, rows []dockerx.Ta
 			c.Live++
 			continue
 		}
-		if f.newest < 0 {
+		if f.beyond || f.newest < 0 {
 			continue
 		}
 		switch rows[f.newest].State {
@@ -269,7 +282,7 @@ func (c Convergence) Stopped() bool {
 }
 
 // Exhausted reports whether the service can never settle because the swarm will not start its tasks
-// again: some slot is dead, an update is not still rolling out, and the live slots are fewer than a
+// again: some slot within the replica count is dead, an update is not still rolling out, and the live slots are fewer than a
 // replicated service's replica count, or, for a global service, no node is live. A global service with
 // one dead node and the rest running is not stuck: its Want is Desired, so it settles, and it is not
 // exhausted. A service with no task yet has no dead slot and is never exhausted.
