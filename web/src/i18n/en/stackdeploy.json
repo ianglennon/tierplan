@@ -150,6 +150,8 @@
       "reason": {
         "service_rejected": "Docker rejected the service.",
         "converge_timeout": "It didn't settle in time. Docker may still finish it.",
+        "tasks_failed": "Its tasks stopped and the swarm won't start them again.",
+        "network_full": "A network of the stack has no free addresses.",
         "update_stopped": "The swarm stopped the update of the service.",
         "service_changed": "Someone else changed the service while the deploy ran.",
         "service_name_taken": "The swarm already has a service of that name.",

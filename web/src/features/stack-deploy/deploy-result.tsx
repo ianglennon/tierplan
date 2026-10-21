@@ -20,8 +20,11 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { useEnvName } from "@/features/resources/use-env-name";
-import { CONVERGE_TIMEOUT } from "@/features/stack-deploy/deploy-service-row";
-import { isStandalone } from "@/features/stack-deploy/deploy-step-list";
+import {
+  CONVERGE_SENTENCE_CODES,
+  failureOf as failureWords,
+  isStandalone,
+} from "@/features/stack-deploy/deploy-step-list";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { formatRelative } from "@/lib/format";
@@ -313,8 +316,10 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
         : failed?.message
           ? failed.message
           : t("stackDeploy.failed.fallback", { step: failed?.label ?? name });
-    // A service that never settled has its own sentence: how long it was given, and what to do.
-    const timedOut = rows.find((r) => r.code === CONVERGE_TIMEOUT);
+    // A service that never settled, or that the swarm gave up on, has its own sentence: why, and what
+    // to do.
+    const unsettled = rows.find((r) => CONVERGE_SENTENCE_CODES.has(r.code ?? ""));
+    const unsettledSentence = unsettled ? failureWords(t, unsettled)?.sentence : undefined;
     const cleanup = cleanupOf(job);
     return (
       <Alert variant="destructive">
@@ -323,14 +328,7 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
           {t(rolledBack ? "stackDeploy.rollback.failed.title" : "stackDeploy.failed.title")}
         </AlertTitle>
         <AlertDescription className="flex flex-col gap-3">
-          {timedOut ? (
-            <p className="break-words">
-              {t("stackConverge.timeout.body", {
-                service: timedOut.label,
-                count: Number(timedOut.result?.minutes) || 0,
-              })}
-            </p>
-          ) : null}
+          {unsettledSentence ? <p className="break-words">{unsettledSentence}</p> : null}
           <p className="break-words">{sentence}</p>
           <CleanupReport cleanup={cleanup} />
           {standalone && failed?.code === "agent_policy_denied" ? (
