@@ -189,6 +189,13 @@ type FakeConfig struct {
 	// has its replica count, a global one a task on each node, all running on the service's current
 	// task template. A service that is not running is set with SetTaskState (fake_tasks.go).
 	TasksFollowWrites bool
+	// NetworkTargetsByID makes a service create or update store each task-template network target
+	// as the ID of the network it names, as a swarm manager does (moby daemon/cluster
+	// populateNetworkID), so a service read back names its networks by full ID. A target the daemon
+	// has no network for is kept as written. ServiceCreates and ServiceUpdates still record the
+	// request as it was sent. It is off by default, so a test that reads back the names it wrote
+	// keeps them (fake_networks.go).
+	NetworkTargetsByID bool
 	// taskStates are the states SetTaskState gave those tasks, by service name.
 	taskStates map[string]fakeTaskState
 	// OnWrite, when set, is called with each write as Writes lists it ("METHOD path?query") the
@@ -567,6 +574,11 @@ type Fake struct {
 	epChanges      map[[2]string]*FakeEndpoint
 	// The address use SetNetworkUsage gave each network, by network name (fake_networks.go).
 	netUsage map[string][]FakeSubnetUsage
+	// The address use this node counts for its own instance of each network, by network name
+	// (SetNetworkLocalUsage), and the networks the swarm answers with no Status
+	// (SetNetworkNoSwarmStatus), both in fake_networks.go.
+	netLocalUsage    map[string][]FakeSubnetUsage
+	netNoSwarmStatus map[string]bool
 	// vols are the volumes created through the fake, and volCreates the bodies of those
 	// requests (fake_volumes.go).
 	vols       []FakeVolume

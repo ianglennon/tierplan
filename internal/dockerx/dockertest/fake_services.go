@@ -212,7 +212,11 @@ func (f *Fake) serveServiceUpdate(w http.ResponseWriter, r *http.Request, p stri
 			now = s.Spec
 		}
 	}
-	next := fakeServiceState{version: current + 1, spec: spec, previous: &now}
+	stored := spec
+	if cfg.NetworkTargetsByID {
+		stored.TaskTemplate.Networks = cfg.networkTargetsByID(spec.TaskTemplate.Networks)
+	}
+	next := fakeServiceState{version: current + 1, spec: stored, previous: &now}
 	if q.Get("rollback") == "previous" {
 		// A rollback ignores the spec in the body: the previous spec becomes the service's and
 		// the one it replaces becomes the previous one, so a second rollback toggles back.
@@ -386,7 +390,11 @@ func (f *Fake) serveServiceCreate(w http.ResponseWriter, r *http.Request, p stri
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": cfg.ServiceCreateError})
 		return true
 	}
-	row := FakeService{Name: spec.Name, Version: 1, Spec: &spec}
+	stored := spec
+	if cfg.NetworkTargetsByID {
+		stored.TaskTemplate.Networks = cfg.networkTargetsByID(spec.TaskTemplate.Networks)
+	}
+	row := FakeService{Name: spec.Name, Version: 1, Spec: &stored}
 	switch {
 	case spec.Mode.Global != nil:
 		row.Mode = "global"

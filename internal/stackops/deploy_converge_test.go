@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/internal/stackops"
@@ -323,6 +324,72 @@ func TestDeploySwarmFailsAServiceWhoseNetworkHasNoFreeAddressesNamingTheNetworkA
 	if ups := rig.fake.ServiceUpdates(); len(ups) != 0 {
 		t.Errorf("service updates = %d, want none: nothing is rolled back", len(ups))
 	}
+}
+
+// requireNetworkTargetsByID fails the test unless the service names the network by its full ID, as a
+// real manager stores it, so a case cannot pass through the name path by accident.
+func requireNetworkTargetsByID(t *testing.T, r *swarmRig, service, network string) {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	if err := r.deps.Clusters.ClusterRead(ctx, r.envID, func(c *dockerx.Client) error {
+		nd, _, err := c.NetworkDetail(ctx, network, false)
+		if err != nil {
+			return err
+		}
+		sd, _, err := c.ServiceInspect(ctx, service)
+		if err != nil {
+			return err
+		}
+		if len(sd.NetworkIDs) != 1 || sd.NetworkIDs[0] != nd.ID || nd.ID == network || len(nd.ID) != 64 {
+			t.Errorf("service %s names networks %v, want its full ID %q of %s", service, sd.NetworkIDs, nd.ID, network)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// UAT G-07-8: the manager that is read holds a local instance of the network, so Engine 29 answers an
+// inspect by full ID with that node's own count, and the service names its network by ID as a real
+// manager stores it. Only the swarm's count says the subnet is full.
+func TestDeploySwarmFailsAServiceWhoseNetworkIsFullWhenTheManagerItReadsHoldsTheNetworkLocally(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) { c.NetworkTargetsByID = true })
+	clk := newStepClock()
+	rig.deps.Clock = clk
+	rig.fake.SetNetworkUsage("web_default", dockertest.FakeSubnetUsage{Subnet: "10.0.1.0/24", InUse: 256, Available: 0})
+	rig.fake.SetNetworkLocalUsage("web_default", dockertest.FakeSubnetUsage{Subnet: "10.0.1.0/24", InUse: 46, Available: 210})
+	rig.fake.SetServiceTasks("web_wide",
+		dockertest.FakeServiceTask{Slot: 3, State: "new", Desired: "running", Message: "created"},
+		dockertest.FakeServiceTask{Slot: 2, State: "running"},
+		dockertest.FakeServiceTask{Slot: 1, State: "running"},
+	)
+	_, in := stackInput(t, "web", wideAndAPI, nil)
+	d := rig.startDeploy(t, in)
+	for range 8 {
+		clk.Tick(t, stackops.PollInterval)
+	}
+	res, job := d.finish(t)
+
+	if res.Code != stackops.CodeNetworkFull || res.FailedService != "web_wide" {
+		t.Fatalf("result = %+v, want network_full at web_wide", res)
+	}
+	wide := itemByID(t, job, "service:web_wide")
+	if wide.State != jobs.ItemFailed || wide.Code != stackops.CodeNetworkFull || wide.Message != stackops.CodeMessage(stackops.CodeNetworkFull) ||
+		wide.Message == "" || wide.Result["network"] != "web_default" || wide.Result["subnet"] != "10.0.1.0/24" {
+		t.Errorf("wide row = %+v, want failed as network_full naming web_default and 10.0.1.0/24", wide)
+	}
+	if api := itemByID(t, job, "service:web_api"); api.State != jobs.ItemDone || api.Result["settled"] != "true" {
+		t.Errorf("api row = %+v, want done: it settled on its own", api)
+	}
+	got := itemStates(job)
+	if got[stackops.ItemServices] != "failed:network_full" || got[stackops.ItemCleanup] != "skipped:not_run" {
+		t.Errorf("steps = %v, want Deploy services failed and the cleanup not run", got)
+	}
+	if ups := rig.fake.ServiceUpdates(); len(ups) != 0 {
+		t.Errorf("service updates = %d, want none: nothing is rolled back", len(ups))
+	}
+	requireNetworkTargetsByID(t, rig, "web_wide", "web_default")
 }
 
 func TestDeploySwarmTimesOutWithHowManyTasksWereStillWaitingForAnAddress(t *testing.T) {
