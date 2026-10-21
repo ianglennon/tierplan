@@ -565,8 +565,7 @@ type Fake struct {
 	netConnects    []network.ConnectRequest
 	netDisconnects []network.DisconnectRequest
 	epChanges      map[[2]string]*FakeEndpoint
-	// netUsage is the address use SetNetworkUsage gave each network, by network name
-	// (fake_networks.go).
+	// The address use SetNetworkUsage gave each network, by network name (fake_networks.go).
 	netUsage map[string][]FakeSubnetUsage
 	// vols are the volumes created through the fake, and volCreates the bodies of those
 	// requests (fake_volumes.go).
