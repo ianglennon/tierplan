@@ -46,6 +46,7 @@ var sharedSwarmCases = []struct {
 	{"ServiceLifecycle", sharedServiceLifecycle},
 	{"ServiceLogsMerged", sharedServiceLogsMerged},
 	{"StackDeployParity", sharedStackDeployParity},
+	{"StackDeployTasksFailed", sharedStackDeployTasksFailed},
 	{"StackLifecycle", sharedStackLifecycle},
 	{"StackPin", sharedStackPin},
 	{"StackRedeployIdempotent", sharedStackRedeployIdempotent},
