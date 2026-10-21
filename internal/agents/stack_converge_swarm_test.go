@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -154,6 +155,63 @@ func sharedStackDeployTasksFailed(t *testing.T, f *swarmFix) {
 	}
 	if services := job.item(t, "services"); services.Code != "tasks_failed" {
 		t.Errorf("the services step = code %q, want tasks_failed: %s", services.Code, raw)
+	}
+	f.awaitStackUnlocked(t, id)
+}
+
+// networkFullComposeFmt is a service of 16 tasks on a stack network of 13 dynamic addresses. The
+// one argument is the image.
+const networkFullComposeFmt = `services:
+  wide:
+    image: %s
+    command: ["sleep", "3600"]
+    deploy:
+      replicas: 16
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 10.231.20.0/28
+`
+
+// sharedStackDeployNetworkFull holds UAT G-07-5 on a real Engine 29 swarm. A /28 has 13 dynamic
+// addresses. The service's virtual IP takes one and each node that runs a task takes a
+// load-balancer endpoint, 4 at most here, so at least 7 of the 16 tasks stay new. The swarm
+// reports no error for them; only a manager's network inspect says the subnet is full, and the
+// deploy must end on that, naming the network and the subnet, and not on the converge timeout.
+// The case asserts the outcome and never a count of tasks.
+func sharedStackDeployNetworkFull(t *testing.T, f *swarmFix) {
+	if major, err := strconv.Atoi(f.sw.Engine); err == nil && major < 29 {
+		t.Skipf("Engine %s reports no address usage on a network inspect (API 1.52 is Engine 29); internal/stackops covers the fallback", f.sw.Engine)
+	}
+	f.stackEnvReady(t)
+	mgr := f.sw.Managers[0]
+	addr := dockertest.StartSwarmRegistry(t, f.sw, dockertest.RegistryOptions{})
+	digest := dockertest.PushImage(t, mgr, dockertest.ServiceTestImage, addr+"/netfull/app:1", nil)
+	image := addr + "/netfull/app@" + digest
+
+	const stack = "netfull"
+	t.Cleanup(func() { removeStackCLI(t, f, stack) })
+	id := f.createStackBayplan(t, stack, fmt.Sprintf(networkFullComposeFmt, image))
+	job := f.deployStackUntilEnded(t, id)
+
+	raw, _ := json.Marshal(job)
+	// partial, not failed: the check, lookup and network steps are done.
+	if job.State != "partial" {
+		t.Fatalf("the deploy ended %s, want partial (some steps done, the wide service failed): %s", job.State, raw)
+	}
+	wide := job.item(t, "service:"+stack+"_wide")
+	if wide.State != "failed" || wide.Code != "network_full" {
+		t.Errorf("the wide service = state %q code %q, want failed and network_full: %s", wide.State, wide.Code, raw)
+	}
+	if got := wide.Result["network"]; got != stack+"_default" {
+		t.Errorf("the wide service names network %q, want %s_default: %s", got, stack, raw)
+	}
+	if got := wide.Result["subnet"]; got != "10.231.20.0/28" {
+		t.Errorf("the wide service names subnet %q, want 10.231.20.0/28: %s", got, raw)
+	}
+	if services := job.item(t, "services"); services.Code != "network_full" {
+		t.Errorf("the services step = code %q, want network_full: %s", services.Code, raw)
 	}
 	f.awaitStackUnlocked(t, id)
 }
