@@ -65,7 +65,8 @@ func (d Deps) convergeTimeout() time.Duration {
 
 // awaitServices waits for every service the swarm accepted to settle, at most maxParallelWaits at a
 // time, and returns one verdict per service in the order given. Each row of the job ends as its wait
-// does: done with the counts it settled at, or failed as Timed out or Stopped. A wait that ends
+// does: done with the counts it settled at, or failed as Timed out, Stopped, or because the swarm will
+// not start its tasks again. A wait that ends
 // because ctx did leaves its row to the caller, which ends it as updated, not running. Nothing is
 // written.
 func (d Deps) awaitServices(ctx context.Context, envID string, writes []serviceWrite, prog *progress) []verdict {
@@ -122,6 +123,8 @@ func (d Deps) awaitService(ctx context.Context, envID string, w serviceWrite, pr
 			map[string]string{"minutes": strconv.Itoa(int(d.convergeTimeout() / time.Minute))})
 	case errors.Is(err, ErrUpdateStopped):
 		prog.unsettled(w.name, CodeUpdateStopped, firstWords(last.Message, last.Err), nil)
+	case errors.Is(err, ErrTasksExhausted):
+		prog.unsettled(w.name, CodeTasksFailed, firstWords(last.DeadErr, last.Err), nil)
 	case ctx.Err() != nil:
 		// The deploy was cancelled: the caller ends the row.
 	default:

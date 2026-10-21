@@ -137,6 +137,10 @@ func (c FakeConfig) followingTasks() []swarm.Task {
 		if fs.Spec == nil {
 			continue
 		}
+		if o, ok := c.taskStates[fs.Name]; ok && o.tasks != nil {
+			out = append(out, scriptedTasks(fs, o.tasks)...)
+			continue
+		}
 		state, errText := swarm.TaskStateRunning, ""
 		if o, ok := c.taskStates[fs.Name]; ok {
 			state, errText = swarm.TaskState(o.state), o.errText

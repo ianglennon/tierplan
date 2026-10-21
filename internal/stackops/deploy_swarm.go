@@ -492,6 +492,8 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 			return fail(ItemServices, CodeConvergeTimeout, v.name)
 		case errors.Is(v.err, ErrUpdateStopped):
 			return fail(ItemServices, CodeUpdateStopped, v.name)
+		case errors.Is(v.err, ErrTasksExhausted):
+			return fail(ItemServices, CodeTasksFailed, v.name)
 		case ctx.Err() != nil:
 			return fail(ItemServices, CodeCancelled, "")
 		default:
