@@ -592,6 +592,99 @@ describe("a service coming up (plan 07-18, D-13)", () => {
     expect(list.queryByText("Timed out")).toBeNull();
   });
 
+  describe("the sentences of a full network and of tasks waiting for addresses", () => {
+    const failedJob = (...rows: Item[]) => {
+      job = { state: "failed", items: [check, { ...services, state: "failed" }, ...rows] };
+    };
+    const text = async (sentence: string) => {
+      const list = within(await screen.findByRole("list", { name: "Services" }));
+      return list.getByText(sentence);
+    };
+
+    it("names the network and the subnet that has no free addresses", async () => {
+      failedJob(
+        row("wide", "failed", {
+          code: "network_full",
+          detail: "",
+          result: { action: "created", network: "uat-big_default", subnet: "10.0.1.0/24" },
+        }),
+      );
+      mount();
+      expect(
+        await text(
+          "wide can't start all its tasks: the network uat-big_default has no free addresses in 10.0.1.0/24. Give the network a larger subnet, or run fewer tasks on it, then deploy again.",
+        ),
+      ).toBeTruthy();
+      const list = within(screen.getByRole("list", { name: "Services" }));
+      expect(list.getByText("Failed")).toBeTruthy();
+    });
+
+    it("words a full network it cannot name", async () => {
+      failedJob(row("wide", "failed", { code: "network_full", result: { action: "created" } }));
+      mount();
+      expect(
+        await text(
+          "wide can't start all its tasks: one of its networks has no free addresses. Give the network a larger subnet, or run fewer tasks on it, then deploy again.",
+        ),
+      ).toBeTruthy();
+    });
+
+    it("draws a network name that holds markup as text", async () => {
+      failedJob(
+        row("wide", "failed", {
+          code: "network_full",
+          result: { action: "created", network: "<b>x</b>", subnet: "10.0.1.0/24" },
+        }),
+      );
+      mount();
+      const found = await text(
+        "wide can't start all its tasks: the network <b>x</b> has no free addresses in 10.0.1.0/24. Give the network a larger subnet, or run fewer tasks on it, then deploy again.",
+      );
+      expect(found.querySelector("b")).toBeNull();
+      expect(
+        within(screen.getByRole("list", { name: "Services" })).queryByText("x", {
+          selector: "b",
+        }),
+      ).toBeNull();
+    });
+
+    it("says how many tasks were still waiting for addresses when a service timed out", async () => {
+      failedJob(
+        row("wide", "failed", {
+          code: "converge_timeout",
+          result: { action: "created", minutes: "10", waiting: "31" },
+        }),
+      );
+      mount();
+      expect(
+        await text(
+          "wide didn't settle within 10 minutes. Docker may still finish it. Check the service, or roll back. 31 tasks were still waiting for the swarm to give them addresses.",
+        ),
+      ).toBeTruthy();
+      expect(
+        within(screen.getByRole("list", { name: "Services" })).getByText("Timed out"),
+      ).toBeTruthy();
+    });
+
+    it("says one task, not one tasks", async () => {
+      failedJob(
+        row("wide", "failed", {
+          code: "converge_timeout",
+          result: { action: "created", minutes: "10", waiting: "1" },
+        }),
+      );
+      mount();
+      const found = await text(
+        "wide didn't settle within 10 minutes. Docker may still finish it. Check the service, or roll back. 1 task was still waiting for the swarm to give it an address.",
+      );
+      expect(
+        found.textContent?.endsWith(
+          "1 task was still waiting for the swarm to give it an address.",
+        ),
+      ).toBe(true);
+    });
+  });
+
   it("reads Updated, not Running, for a service the deploy took but did not wait for", async () => {
     job = {
       state: "failed",
