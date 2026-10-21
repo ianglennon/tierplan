@@ -1770,6 +1770,54 @@ describe("the result of a deploy that stopped", () => {
     ).toBeTruthy();
   });
 
+  it("carries the reason of a service the swarm won't start again", async () => {
+    job = {
+      state: "partial",
+      items: [
+        check,
+        { ...services, state: "failed", code: "tasks_failed" },
+        row("web", "failed", {
+          code: "tasks_failed",
+          detail: "task: non-zero exit (1)",
+          result: { action: "created" },
+        }),
+      ],
+    };
+    mount();
+    const alert = await screen.findByRole("alert");
+    expect(
+      within(alert).getByText(
+        "web's tasks stopped and the swarm won't start them again. Check the service's restart policy and its logs, or roll back.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(alert).getByText(
+        "Bayplan stopped at web. 1 of 1 service was updated before it stopped, and nothing was rolled back.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("carries the full network in the failure alert", async () => {
+    job = {
+      state: "partial",
+      items: [
+        check,
+        { ...services, state: "failed", code: "network_full" },
+        row("wide", "failed", {
+          code: "network_full",
+          result: { action: "created", network: "uat-big_default", subnet: "10.0.1.0/24" },
+        }),
+      ],
+    };
+    mount();
+    const alert = await screen.findByRole("alert");
+    expect(
+      within(alert).getByText(
+        "wide can't start all its tasks: the network uat-big_default has no free addresses in 10.0.1.0/24. Give the network a larger subnet, or run fewer tasks on it, then deploy again.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("reads cancelled with how far it got and what was cleaned up", async () => {
     job = {
       state: "cancelled",

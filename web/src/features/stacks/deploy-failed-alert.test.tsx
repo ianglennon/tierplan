@@ -196,6 +196,24 @@ describe("DeployFailedAlert", () => {
     ).toBeTruthy();
   });
 
+  it("words a service the swarm won't start again", async () => {
+    mount(withOperation({ code: "tasks_failed" }));
+    expect(
+      await screen.findByText(
+        "Bayplan stopped at web_api: Its tasks stopped and the swarm won't start them again.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("words a full network", async () => {
+    mount(withOperation({ code: "network_full" }));
+    expect(
+      await screen.findByText(
+        "Bayplan stopped at web_api: A network of the stack has no free addresses.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("names no service when the deploy stopped before any", async () => {
     mount(withOperation({ code: "needs_admin", failedService: "" }));
     expect(
