@@ -31,7 +31,12 @@ import { useEnvName } from "@/features/resources/use-env-name";
 import { CancelDeployDialog } from "@/features/stack-deploy/cancel-deploy-dialog";
 import { DeployOutput } from "@/features/stack-deploy/deploy-output";
 import { DeployResult, servicesOf } from "@/features/stack-deploy/deploy-result";
-import { DeployStepList, failureOf } from "@/features/stack-deploy/deploy-step-list";
+import {
+  CONVERGE_SENTENCE_CODES,
+  DeployStepList,
+  failureOf,
+  UPDATE_STOPPED,
+} from "@/features/stack-deploy/deploy-step-list";
 import { useStackJob } from "@/features/stack-deploy/stack-job-stream";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -121,9 +126,10 @@ export function outcomesOf(
         out.push(t("stackDeploy.announce.running", { service: row.label }));
       }
     } else if (row.state === "failed") {
-      // A timeout or a stopped update has a sentence of its own; Docker's words follow it.
+      // A timeout, a stopped update and a service the swarm gave up on each have a sentence of their
+      // own; Docker's words follow it.
       const why =
-        row.code === "converge_timeout" || row.code === "update_stopped"
+        CONVERGE_SENTENCE_CODES.has(row.code ?? "") || row.code === UPDATE_STOPPED
           ? failureOf(t, row)
           : undefined;
       const reason = why

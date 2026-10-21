@@ -16,6 +16,9 @@
     "stopped": {
       "body": "The swarm stopped updating {{service}}. Check the service, or roll back."
     },
+    "exhausted": {
+      "body": "{{service}}'s tasks stopped and the swarm won't start them again. Check the service's restart policy and its logs, or roll back."
+    },
     "tasks": {
       "caption": "Tasks of {{service}}",
       "task": "Task",

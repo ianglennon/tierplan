@@ -31,7 +31,17 @@ function refusedRequest(detail: string): string {
 }
 
 // The server's code for a service whose update the swarm paused or rolled back.
-const UPDATE_STOPPED = "update_stopped";
+export const UPDATE_STOPPED = "update_stopped";
+
+// The server's code for a service whose tasks the swarm will not start again.
+export const TASKS_FAILED = "tasks_failed";
+
+// The codes whose row reason the result alert repeats: a service that never settled, or that the
+// swarm gave up on, has a sentence of its own that says why and what to do.
+export const CONVERGE_SENTENCE_CODES: ReadonlySet<string> = new Set([
+  CONVERGE_TIMEOUT,
+  TASKS_FAILED,
+]);
 
 // FailureContext is where an item failed: the environment's name, and whether it is a standalone host,
 // whose agent refusals are worded with the host's and the service's names.
@@ -102,6 +112,12 @@ export function failureOf(
   if (item.code === UPDATE_STOPPED) {
     return {
       sentence: t("stackConverge.stopped.body", { service: item.label }),
+      words: item.detail,
+    };
+  }
+  if (item.code === TASKS_FAILED) {
+    return {
+      sentence: t("stackConverge.exhausted.body", { service: item.label }),
       words: item.detail,
     };
   }
