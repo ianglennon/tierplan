@@ -281,6 +281,57 @@ func TestDeploySwarmFailsAServiceWhoseTasksTheSwarmWillNotStartAgainAtTheSecondR
 	}
 }
 
+func TestDeploySwarmWaitsThroughARestartDelay(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	clk := newStepClock()
+	rig.deps.Clock = clk
+	rig.fake.SetServiceTasks("web_api",
+		dockertest.FakeServiceTask{Slot: 1, State: "ready", Desired: "ready"},
+		dockertest.FakeServiceTask{Slot: 1, State: "failed", Desired: "shutdown", Err: "task: non-zero exit (1)"},
+	)
+	_, in := stackInput(t, "web", twoServices, nil)
+	d := rig.startDeploy(t, in)
+	// Each tick is a read that found the service not settled, and not at its end: the wait armed again.
+	for range 4 {
+		clk.Tick(t, stackops.PollInterval)
+	}
+	// The wait is blocked on its fifth timer, so the swarm can move on without racing a read.
+	testsupport.Await(t, "the wait to arm its fifth poll", clk.armed)
+	rig.fake.SetServiceTasks("web_api", dockertest.FakeServiceTask{Slot: 1, State: "running"})
+	clk.Advance(stackops.PollInterval)
+	res, job := d.finish(t)
+
+	if !res.OK() {
+		t.Fatalf("result = %+v, want the deploy to wait for the replacement and settle", res)
+	}
+	if api := itemByID(t, job, "service:web_api"); api.State != jobs.ItemDone || api.Result["settled"] != "true" {
+		t.Errorf("api row = %+v, want done and settled", api)
+	}
+}
+
+func TestDeploySwarmDoesNotFailASlotTheSwarmRefillsAfterTheWrite(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	clk := newStepClock()
+	rig.deps.Clock = clk
+	dead := dockertest.FakeServiceTask{Slot: 1, State: "failed", Desired: "shutdown", Err: "task: non-zero exit (1)"}
+	rig.fake.SetServiceTasks("web_api", dead, dead)
+	_, in := stackInput(t, "web", twoServices, nil)
+	d := rig.startDeploy(t, in)
+	d.until(t, "the first read of web_api to be shown", func(items map[string]jobs.Item) bool {
+		return items["service:web_api"].Unit == "tasks"
+	})
+	// The swarm adds a task to the dead slot just after the write; the wait has not read again.
+	rig.fake.SetServiceTasks("web_api", dockertest.FakeServiceTask{Slot: 1, State: "running"}, dead, dead)
+	clk.Tick(t, stackops.PollInterval)
+	res, _ := d.finish(t)
+
+	if !res.OK() {
+		t.Fatalf("result = %+v, want the deploy to settle: one exhausted read is not the end", res)
+	}
+}
+
 func TestDeploySwarmStopsWhenTheSwarmRollsTheUpdateBack(t *testing.T) {
 	t.Parallel()
 	owned := map[string]string{"com.docker.stack.namespace": "tracer", "bayplan.stack.id": "stack-tracer"}

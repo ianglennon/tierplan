@@ -192,6 +192,47 @@ func TestTaskSpecHashIgnoresRuntimeAndMatchesTheTemplateOfTheSameSpec(t *testing
 	}
 }
 
+func TestScriptedServiceTasksComeBackNewestFirstOnTheTemplateTheyName(t *testing.T) {
+	t.Parallel()
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{
+		SwarmState: "active", SwarmControl: true, SwarmClusterID: "cluster-1", TasksFollowWrites: true,
+		NodeRows: []dockertest.FakeNode{{ID: "node-a", Hostname: "alpha", Role: "manager"}},
+		ServiceRows: []dockertest.FakeService{{
+			ID: "web-id", Name: "web", Mode: "replicated",
+			Spec: &swarm.ServiceSpec{
+				Annotations:  swarm.Annotations{Name: "web"},
+				TaskTemplate: swarm.TaskSpec{ContainerSpec: &swarm.ContainerSpec{Image: "img:2"}},
+			},
+		}},
+	})
+	fake.SetServiceTasks("web",
+		dockertest.FakeServiceTask{Slot: 1, State: "ready", Desired: "ready"},
+		dockertest.FakeServiceTask{Slot: 1, State: "failed", Desired: "shutdown", Err: "e", Old: true},
+	)
+	c := newClient(t, fake)
+
+	detail, _, err := c.ServiceInspect(context.Background(), "web-id")
+	if err != nil {
+		t.Fatalf("ServiceInspect: %v", err)
+	}
+	rows, err := c.Tasks(context.Background(), dockerx.TaskFilter{ServiceIDs: []string{"web-id"}})
+	if err != nil {
+		t.Fatalf("Tasks: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("tasks = %d, want the 2 scripted", len(rows))
+	}
+	if rows[0].State != "ready" || rows[0].DesiredState != "ready" || rows[1].State != "failed" || rows[1].DesiredState != "shutdown" || rows[1].Err != "e" {
+		t.Errorf("tasks = %+v, want the ready replacement first and the failed task after it", rows)
+	}
+	if rows[0].SpecHash != detail.TemplateHash {
+		t.Errorf("the first task hashes to %q, the template to %q", rows[0].SpecHash, detail.TemplateHash)
+	}
+	if rows[1].SpecHash == detail.TemplateHash {
+		t.Errorf("the old task hashes like the template: %q", rows[1].SpecHash)
+	}
+}
+
 func TestTasksCarryTheMemoryLimitOfTheirSpec(t *testing.T) {
 	limited := fakeTask("t-lim", "web-id", "node-a", 1, "running", "running", time.Minute)
 	limited.Spec.Resources = &swarm.ResourceRequirements{Limits: &swarm.Limit{MemoryBytes: 256 << 20}}

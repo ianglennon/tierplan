@@ -80,6 +80,20 @@ func task(id, state, desired, hash, err string) dockerx.TaskRow {
 	return dockerx.TaskRow{ID: id, ServiceID: "svc", State: state, DesiredState: desired, SpecHash: hash, Err: err}
 }
 
+// slotTask is a task of a replicated service's slot.
+func slotTask(id string, slot int, state, desired, hash, err string) dockerx.TaskRow {
+	r := task(id, state, desired, hash, err)
+	r.Slot = slot
+	return r
+}
+
+// nodeTask is a task of a global service on a node.
+func nodeTask(id, node, state, desired, hash, err string) dockerx.TaskRow {
+	r := task(id, state, desired, hash, err)
+	r.NodeID = node
+	return r
+}
+
 func TestProgressCountsRunningTasksOnTheCurrentTemplateAgainstWhatTheSwarmWants(t *testing.T) {
 	t.Parallel()
 	rows := []dockerx.TaskRow{
@@ -320,5 +334,121 @@ func TestWaitConvergedEndsWithTheContextsError(t *testing.T) {
 	cancel()
 	if err := testsupport.Await(t, "the wait to end", done); !errors.Is(err, context.Canceled) {
 		t.Fatalf("WaitConverged = %v, want context.Canceled", err)
+	}
+}
+
+func TestProgressFindsTheSlotsTheSwarmWillNotStartAgain(t *testing.T) {
+	t.Parallel()
+	const boom = "task: non-zero exit (1)"
+	updating := &dockerx.ServiceUpdateStatus{State: "updating", Message: "update in progress"}
+	deadRows := []dockerx.TaskRow{slotTask("t2", 1, "failed", "shutdown", "h", boom), slotTask("t1", 1, "failed", "shutdown", "h", boom)}
+	for _, tc := range []struct {
+		name       string
+		detail     dockerx.ServiceDetail
+		rows       []dockerx.TaskRow
+		live, dead int
+		deadErr    string
+		exhausted  bool
+		settled    bool
+	}{
+		{name: "restart policy used up", detail: convService("replicated", 1, "h", nil), rows: deadRows,
+			live: 0, dead: 1, deadErr: boom, exhausted: true},
+		{name: "a restart in its delay", detail: convService("replicated", 1, "h", nil),
+			rows: []dockerx.TaskRow{slotTask("t2", 1, "ready", "ready", "h", ""), slotTask("t1", 1, "failed", "shutdown", "h", boom)},
+			live: 1, dead: 0},
+		{name: "condition none, one of two slots failed", detail: convService("replicated", 2, "h", nil),
+			rows: []dockerx.TaskRow{slotTask("t2", 2, "running", "running", "h", ""), slotTask("t1", 1, "failed", "shutdown", "h", "task: non-zero exit (2)")},
+			live: 1, dead: 1, deadErr: "task: non-zero exit (2)", exhausted: true},
+		{name: "exit 0 under on-failure", detail: convService("replicated", 1, "h", nil),
+			rows: []dockerx.TaskRow{{ID: "t1", ServiceID: "svc", Slot: 1, State: "complete", DesiredState: "shutdown", SpecHash: "h", Message: "finished"}},
+			live: 0, dead: 1, deadErr: "finished", exhausted: true},
+		{name: "every node of a global service", detail: convService("global", 0, "h", nil),
+			rows: []dockerx.TaskRow{nodeTask("b", "node-2", "failed", "shutdown", "h", "second"), nodeTask("a", "node-1", "failed", "shutdown", "h", "first")},
+			live: 0, dead: 2, deadErr: "second", exhausted: true},
+		{name: "one node of a global service", detail: convService("global", 0, "h", nil),
+			rows: []dockerx.TaskRow{nodeTask("b", "node-2", "running", "running", "h", ""), nodeTask("a", "node-1", "failed", "shutdown", "h", boom)},
+			live: 1, dead: 1, deadErr: boom, settled: true},
+		{name: "no task yet", detail: convService("replicated", 1, "h", nil)},
+		{name: "only an earlier template ended", detail: convService("replicated", 1, "new", nil),
+			rows: []dockerx.TaskRow{slotTask("t1", 1, "failed", "shutdown", "old", boom)}},
+		{name: "an update still rolling out", detail: convService("replicated", 1, "h", updating), rows: deadRows,
+			live: 0, dead: 1, deadErr: boom},
+		{name: "a crash loop the swarm keeps retrying", detail: convService("replicated", 1, "h", nil),
+			rows: []dockerx.TaskRow{slotTask("t2", 1, "rejected", "running", "h", "No such image"), slotTask("t1", 1, "rejected", "shutdown", "h", "No such image")},
+			live: 1, dead: 0},
+		{name: "a slot a scale-down left behind", detail: convService("replicated", 1, "h", nil),
+			rows: []dockerx.TaskRow{slotTask("t2", 1, "running", "running", "h", ""), slotTask("t1", 2, "failed", "shutdown", "h", boom)},
+			live: 1, dead: 1, deadErr: boom, settled: true},
+		{name: "shut down by the swarm, not failed", detail: convService("replicated", 1, "h", nil),
+			rows: []dockerx.TaskRow{slotTask("t1", 1, "shutdown", "shutdown", "h", "")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := stackops.Progress(tc.detail, tc.rows)
+			if c.Live != tc.live || c.Dead != tc.dead || c.DeadErr != tc.deadErr {
+				t.Errorf("live, dead, dead error = %d, %d, %q; want %d, %d, %q", c.Live, c.Dead, c.DeadErr, tc.live, tc.dead, tc.deadErr)
+			}
+			if c.Exhausted() != tc.exhausted {
+				t.Errorf("Exhausted = %v, want %v (%+v)", c.Exhausted(), tc.exhausted, c)
+			}
+			if c.Settled() != tc.settled {
+				t.Errorf("Settled = %v, want %v (%+v)", c.Settled(), tc.settled, c)
+			}
+		})
+	}
+}
+
+func TestProgressOfARestartInItsDelayStillCarriesTheFailedTasksWords(t *testing.T) {
+	t.Parallel()
+	rows := []dockerx.TaskRow{slotTask("t2", 1, "ready", "ready", "h", ""), slotTask("t1", 1, "failed", "shutdown", "h", "task: non-zero exit (1)")}
+	if c := stackops.Progress(convService("replicated", 1, "h", nil), rows); c.Err != "task: non-zero exit (1)" {
+		t.Errorf("Err = %q, want the failed task's words, as before", c.Err)
+	}
+}
+
+var exhaustedRead = stackops.Convergence{Mode: "replicated", Want: 1, Dead: 1, State: stackops.UpdateNone}
+
+func TestWaitConvergedGivesUpOnAServiceTheSwarmWillNotStartAgainAtTheSecondRead(t *testing.T) {
+	t.Parallel()
+	clk := newStepClock()
+	r := &reads{steps: []readStep{{c: exhaustedRead}}}
+	done := wait(testsupport.Context(t), clk, 10*time.Minute, r, nil)
+	clk.Tick(t, stackops.PollInterval)
+	if err := testsupport.Await(t, "the wait to give up", done); !errors.Is(err, stackops.ErrTasksExhausted) {
+		t.Fatalf("WaitConverged = %v, want ErrTasksExhausted", err)
+	}
+	if got := r.count(); got != 2 {
+		t.Errorf("reads = %d, want 2", got)
+	}
+}
+
+func TestWaitConvergedDoesNotTakeOneExhaustedReadForTheEnd(t *testing.T) {
+	t.Parallel()
+	clk := newStepClock()
+	r := &reads{steps: []readStep{{c: exhaustedRead}, {c: converging(0, 1)}, {c: converging(1, 1)}}}
+	done := wait(testsupport.Context(t), clk, 10*time.Minute, r, nil)
+	clk.Tick(t, stackops.PollInterval)
+	clk.Tick(t, stackops.PollInterval)
+	if err := testsupport.Await(t, "the wait to return", done); err != nil {
+		t.Fatalf("WaitConverged = %v, want nil", err)
+	}
+	if got := r.count(); got != 3 {
+		t.Errorf("reads = %d, want 3", got)
+	}
+}
+
+func TestWaitConvergedKeepsCountingExhaustedReadsAcrossAFailedRead(t *testing.T) {
+	t.Parallel()
+	boom := errors.New("no manager answered")
+	clk := newStepClock()
+	r := &reads{steps: []readStep{{c: exhaustedRead}, {err: boom}, {c: exhaustedRead}}}
+	done := wait(testsupport.Context(t), clk, 10*time.Minute, r, nil)
+	clk.Tick(t, stackops.PollInterval)
+	clk.Tick(t, stackops.PollInterval)
+	if err := testsupport.Await(t, "the wait to give up", done); !errors.Is(err, stackops.ErrTasksExhausted) {
+		t.Fatalf("WaitConverged = %v, want ErrTasksExhausted", err)
+	}
+	if got := r.count(); got != 3 {
+		t.Errorf("reads = %d, want 3", got)
 	}
 }
