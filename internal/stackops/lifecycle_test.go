@@ -252,6 +252,43 @@ func TestStartEndsAServiceTheSwarmWillNotStartAgainAsTasksFailed(t *testing.T) {
 	}
 }
 
+func TestStartEndsAServiceWhoseNetworkHasNoFreeAddressesAsNetworkFull(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	st, store := rig.deployedStack(t, "lifecycle", lifecycleTwo, nil)
+	if res, _ := rig.stop(t, st, store); !res.OK() {
+		t.Fatalf("stop = %+v", res)
+	}
+	clk := newStepClock()
+	rig.deps.Clock = clk
+	rig.fake.SetNetworkUsage("lifecycle_default", dockertest.FakeSubnetUsage{Subnet: "10.0.2.0/24", InUse: 256, Available: 0})
+	rig.fake.SetServiceTasks("lifecycle_web",
+		dockertest.FakeServiceTask{Slot: 3, State: "new", Desired: "running", Message: "created"},
+		dockertest.FakeServiceTask{Slot: 2, State: "running"},
+		dockertest.FakeServiceTask{Slot: 1, State: "running"},
+	)
+
+	id, res, done := startLifecycleJob(t, rig, stackops.LifecycleStart, st, "", store, stackops.Caller{})
+	// Eight polls are sixteen seconds: past the hold of fifteen, which each tick proves the wait outlasted.
+	for range 8 {
+		clk.Tick(t, stackops.PollInterval)
+	}
+	job, err := rig.hub.Wait(testsupport.Context(t), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testsupport.Await(t, "the start function to return", done)
+
+	if res.Code != stackops.CodeNetworkFull || res.FailedService != "lifecycle_web" {
+		t.Fatalf("start = %+v, want network full at lifecycle_web", *res)
+	}
+	row := itemByID(t, job, "service:lifecycle_web")
+	if row.State != jobs.ItemFailed || row.Code != stackops.CodeNetworkFull ||
+		row.Result["network"] != "lifecycle_default" || row.Result["subnet"] != "10.0.2.0/24" {
+		t.Errorf("web row = %+v, want failed as network_full naming lifecycle_default and 10.0.2.0/24", row)
+	}
+}
+
 func TestStopAndStartNeverRemoveANetworkVolumeSecretOrConfig(t *testing.T) {
 	t.Parallel()
 	rig := newSwarmRig(t, nil)

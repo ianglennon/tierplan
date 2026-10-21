@@ -325,6 +325,47 @@ func TestDeploySwarmFailsAServiceWhoseNetworkHasNoFreeAddressesNamingTheNetworkA
 	}
 }
 
+func TestDeploySwarmTimesOutWithHowManyTasksWereStillWaitingForAnAddress(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		usage []dockertest.FakeSubnetUsage
+	}{
+		{"an engine that reports no address usage", nil},
+		{"a network with room", []dockertest.FakeSubnetUsage{{Subnet: "10.0.1.0/24", InUse: 200, Available: 53}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newSwarmRig(t, nil)
+			clk := newStepClock()
+			rig.deps.Clock, rig.deps.ConvergeTimeout = clk, time.Minute
+			if tc.usage != nil {
+				rig.fake.SetNetworkUsage("web_default", tc.usage...)
+			}
+			rig.fake.SetServiceTasks("web_wide",
+				dockertest.FakeServiceTask{Slot: 3, State: "new", Desired: "running", Message: "created"},
+				dockertest.FakeServiceTask{Slot: 3, State: "rejected", Desired: "shutdown", Err: "node is missing network attachments, ip addresses may be exhausted"},
+				dockertest.FakeServiceTask{Slot: 2, State: "running"},
+				dockertest.FakeServiceTask{Slot: 1, State: "running"},
+			)
+			_, in := stackInput(t, "web", wideAndAPI, nil)
+			d := rig.startDeploy(t, in)
+			for range 30 {
+				clk.Tick(t, stackops.PollInterval)
+			}
+			res, job := d.finish(t)
+
+			if res.Code != stackops.CodeConvergeTimeout || res.FailedService != "web_wide" {
+				t.Fatalf("result = %+v, want a timeout at web_wide", res)
+			}
+			wide := itemByID(t, job, "service:web_wide")
+			if wide.Result["minutes"] != "1" || wide.Result["waiting"] != "1" || !strings.Contains(wide.Detail, "ip addresses may be exhausted") {
+				t.Errorf("wide row = %+v, want 1 minute, 1 task waiting and the swarm's words", wide)
+			}
+		})
+	}
+}
+
 func TestDeploySwarmWaitsThroughARestartDelay(t *testing.T) {
 	t.Parallel()
 	rig := newSwarmRig(t, nil)
