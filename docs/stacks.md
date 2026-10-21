@@ -298,7 +298,20 @@ and an output log, all with the stack's secret values removed before anything is
 - **On a swarm**, a service is done when it **converges**, not when the swarm accepted the write: the job polls
   each service every 2 seconds until its tasks run on its current spec and its update completed, and the row reads
   *Pulling image*, then *Converging 2/3*, then *Running*. A service that has not settled within the **convergence
-  timeout** reads *Timed out* and the deploy stops there: Docker may still finish it. Set the timeout with
+  timeout** reads *Timed out* and the deploy stops there: Docker may still finish it. Two causes do not wait for
+  the timeout:
+  - A service the swarm will not start again reads *Failed* within a few seconds, with the task's own error
+    (*task: non-zero exit (1)*), and the deploy stops there. Its tasks stopped and its restart policy is used up:
+    `max_attempts` was reached, `condition` is `none`, or the task exited 0 under `on-failure`. Check the
+    service's restart policy and its logs, or roll back.
+  - A service whose tasks are waiting because a network of the stack
+    has no free addresses reads *Failed*, and the console names the network and its subnet. Give the network
+    a larger subnet under `networks.<name>.ipam` (a network with no `ipam` gets a /24, 253 addresses, shared by
+    every task, service virtual IP and node of the stack), or run fewer tasks, then deploy again. Bayplan reads
+    this from a manager, which needs Docker Engine 29 or later. On an older engine such a service reads *Timed
+    out*, and the console says how many tasks were still waiting for an address.
+
+  Set the timeout with
   `BAYPLAN_STACK_CONVERGE_TIMEOUT` (default `10m`, from `1m` to `2h`; see the table in the README). Job services
   (`replicated-job`, `global-job`) are not waited for.
 - **On a standalone host**, Bayplan prepares the project and runs the Docker Compose engine itself against the
