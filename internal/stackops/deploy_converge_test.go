@@ -281,6 +281,50 @@ func TestDeploySwarmFailsAServiceWhoseTasksTheSwarmWillNotStartAgainAtTheSecondR
 	}
 }
 
+const wideAndAPI = "services:\n  wide:\n    image: busybox:1.36\n    deploy:\n      replicas: 3\n  api:\n    image: nginx:1.27-alpine\n"
+
+func TestDeploySwarmFailsAServiceWhoseNetworkHasNoFreeAddressesNamingTheNetworkAndSubnet(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	clk := newStepClock()
+	rig.deps.Clock = clk
+	// The shape of UAT G-07-5: a task stays new with nothing in its error while the subnet has no
+	// address left, and no update is rolling out.
+	rig.fake.SetNetworkUsage("web_default", dockertest.FakeSubnetUsage{Subnet: "10.0.1.0/24", InUse: 256, Available: 0})
+	rig.fake.SetServiceTasks("web_wide",
+		dockertest.FakeServiceTask{Slot: 3, State: "new", Desired: "running", Message: "created"},
+		dockertest.FakeServiceTask{Slot: 2, State: "running"},
+		dockertest.FakeServiceTask{Slot: 1, State: "running"},
+	)
+	_, in := stackInput(t, "web", wideAndAPI, nil)
+	d := rig.startDeploy(t, in)
+	// Eight polls of two seconds are sixteen: each tick proves the wait armed again, so it did not
+	// end before the fifteen-second hold.
+	for range 8 {
+		clk.Tick(t, stackops.PollInterval)
+	}
+	res, job := d.finish(t)
+
+	if res.Code != stackops.CodeNetworkFull || res.FailedService != "web_wide" {
+		t.Fatalf("result = %+v, want network_full at web_wide", res)
+	}
+	wide := itemByID(t, job, "service:web_wide")
+	if wide.State != jobs.ItemFailed || wide.Code != stackops.CodeNetworkFull || wide.Message != stackops.CodeMessage(stackops.CodeNetworkFull) ||
+		wide.Message == "" || wide.Result["network"] != "web_default" || wide.Result["subnet"] != "10.0.1.0/24" || wide.Result["action"] != "created" {
+		t.Errorf("wide row = %+v, want failed as network_full naming web_default and 10.0.1.0/24", wide)
+	}
+	if api := itemByID(t, job, "service:web_api"); api.State != jobs.ItemDone || api.Result["settled"] != "true" {
+		t.Errorf("api row = %+v, want done: it settled on its own", api)
+	}
+	got := itemStates(job)
+	if got[stackops.ItemServices] != "failed:network_full" || got[stackops.ItemCleanup] != "skipped:not_run" {
+		t.Errorf("steps = %v, want Deploy services failed and the cleanup not run", got)
+	}
+	if ups := rig.fake.ServiceUpdates(); len(ups) != 0 {
+		t.Errorf("service updates = %d, want none: nothing is rolled back", len(ups))
+	}
+}
+
 func TestDeploySwarmWaitsThroughARestartDelay(t *testing.T) {
 	t.Parallel()
 	rig := newSwarmRig(t, nil)

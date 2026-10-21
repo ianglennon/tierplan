@@ -60,6 +60,7 @@ const (
 	CodeNotRun             = "not_run"
 	CodeConvergeTimeout    = "converge_timeout"
 	CodeTasksFailed        = "tasks_failed"
+	CodeNetworkFull        = "network_full"
 	CodeUpdateStopped      = "update_stopped"
 	CodePolicyUnavailable  = "policy_unavailable"
 )
@@ -89,6 +90,7 @@ var codeMessages = map[string]string{
 	CodeConvergeTimeout:     "The service didn't settle in time. Docker may still finish it.",
 	CodeUpdateStopped:       "The swarm stopped the update of the service.",
 	CodeTasksFailed:         "The service's tasks stopped and the swarm will not start them again.",
+	CodeNetworkFull:         "A network of the service has no free addresses, so the swarm cannot start all of its tasks.",
 	CodeNeedsAdmin:          "The stack uses host access that needs Admin.",
 	CodePolicyUnavailable:   "The host-access policy could not be applied, so nothing was deployed.",
 	CodePinsInvalid:         "The images in the request don't match what the deploy would use. Review the stack again.",
