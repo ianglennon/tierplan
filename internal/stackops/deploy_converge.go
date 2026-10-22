@@ -152,9 +152,13 @@ func (d Deps) awaitService(ctx context.Context, envID string, w serviceWrite, pr
 
 // networkFull is the question WaitConverged asks of a service with a task held new: does a network the
 // service needs have a subnet with no dynamic address left? It reads through a manager only
-// (Clusters.ClusterRead), because a worker's address use is node-local (07-48). It answers the first full
-// subnet by network name, then subnet. A network that is gone is skipped; any other failed read is the
-// caller's to ignore.
+// (Clusters.ClusterRead), because a worker would answer only its own node's count. It asks NetworkDetail
+// by the full IDs of ServiceDetail.NetworkIDs, which is how a manager stores a service's networks.
+// NetworkDetail answers with the swarm's count even when the manager holds the network locally, where the
+// engine's own answer to a full ID is the node's count (UAT G-07-8, dockerx), or with no Usage when the
+// swarm gave no count, which networkFull reads as no full subnet. It answers the first full subnet by
+// network name, then subnet. A network that is gone is skipped; any other failed read is the caller's to
+// ignore.
 func (d Deps) networkFull(envID string, networks *[]string) func(context.Context) (*NetworkFull, error) {
 	return func(ctx context.Context) (*NetworkFull, error) {
 		rctx, cancel := context.WithTimeout(ctx, pollReadTimeout)
