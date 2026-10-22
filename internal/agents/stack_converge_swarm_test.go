@@ -180,6 +180,12 @@ networks:
 // reports no error for them; only a manager's network inspect says the subnet is full, and the
 // deploy must end on that, naming the network and the subnet, and not on the converge timeout.
 // The case asserts the outcome and never a count of tasks.
+//
+// It holds the window before any node has a local instance of the network: the tasks sit in
+// preparing for about 30 s and Bayplan's first read comes sooner, so a full-ID inspect still falls
+// through to the swarm. sharedStackDeployNetworkFullOnEveryNode holds the steady state of UAT
+// G-07-8, where every manager holds the network locally. Both stay, because between them they
+// cover both answers of the engine's lookup.
 func sharedStackDeployNetworkFull(t *testing.T, f *swarmFix) {
 	if major, err := strconv.Atoi(f.sw.Engine); err == nil && major < 29 {
 		t.Skipf("Engine %s reports no address usage on a network inspect (API 1.52 is Engine 29); internal/stackops covers the fallback", f.sw.Engine)
