@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
 	"slices"
 	"strings"
@@ -339,19 +340,67 @@ type NetworkDetail struct {
 	Services []NetworkService
 	// Usage is the address use of each subnet, sorted by Subnet. It comes from the
 	// inspect Status.IPAM (API 1.52, Engine 29 and later) and is nil when the engine
-	// reports none, which an engine older than 29 never does. On a swarm manager it is
-	// the cluster's use, on a worker only that node's, so a caller that judges whether a
-	// swarm network is full reads it through a manager (Clusters.ClusterRead).
+	// reports none, which an engine older than 29 never does.
+	//
+	// A manager reports the swarm's count (the leader's allocator) for a lookup by name or
+	// partial ID, and for a full ID only when it holds no local instance of the network. On a
+	// node that holds one, which is any node running a task or a load-balancer endpoint of the
+	// network, Engine 29 answers a full ID with that node's own count, even with scope=swarm
+	// (moby getNetwork's local-first rule, UAT G-07-8). NetworkDetail therefore reads a swarm
+	// network it was asked for by full ID again by a partial ID, the ID less its last
+	// character. On a manager that can reach the swarm's leader, Usage is then the swarm's count
+	// whatever the reference.
+	//
+	// When that second answer carries no swarm count, Usage is nil with no error, not the
+	// node's own count. That is an answer with no Status, or one that repeats the node's own
+	// count from a record that lists this node's endpoints, as a node that cannot ask the swarm
+	// (a worker, or a manager cut off from the leader) answers. A swarm count that happens to
+	// equal this node's own also reads nil, and a caller then waits for its timeout. That needs
+	// this node to hold every address the swarm gave out on the network, with no virtual IP and
+	// no other node on it.
+	//
+	// One race is left. The check compares the second answer with the first only. When the
+	// engine cannot ask the swarm and this node's own endpoints change between the two reads,
+	// the second answer is the node's newer count, it differs from the first, and Usage is that
+	// count, not the swarm's. It can delay a verdict but not invent one, since a node's own
+	// count shows a subnet full only when the node holds every address the swarm gave out on it.
+	//
+	// A node that cannot ask the swarm answers a name or partial ID with its own count, in one
+	// read that NetworkDetail cannot tell from the swarm's. So a caller that judges whether a
+	// swarm network is full reads through a manager (Clusters.ClusterRead) by full ID, as
+	// stackops does.
 	Usage []SubnetUsage
 }
 
 // NetworkDetail inspects one network and returns the typed detail and the raw
 // document, for the Inspect tab. verbose asks a manager for the services on a
-// swarm-scoped network too; a local network ignores it.
+// swarm-scoped network too; a local network ignores it. A swarm network asked for by its
+// full ID is read twice (see Usage): the answer and the raw document are the second read's,
+// the same record with the swarm's Status, or with no Usage when the swarm gave no count.
 func (c *Client) NetworkDetail(ctx context.Context, id string, verbose bool) (NetworkDetail, []byte, error) {
-	res, err := c.cur().NetworkInspect(ctx, id, client.NetworkInspectOptions{Verbose: verbose})
+	opts := client.NetworkInspectOptions{Verbose: verbose}
+	res, err := c.cur().NetworkInspect(ctx, id, opts)
 	if err != nil {
 		return NetworkDetail{}, nil, fmt.Errorf("inspect network on %s: %w", c.t.Describe(), err)
+	}
+	// Engine 29 answers a full ID from the node's own instance of the network, and only a name
+	// or partial ID brings the swarm leader's count. The ID less its last character is a partial
+	// ID that names this one network, and an ambiguous one is the engine's error. A partial-ID
+	// answer with no Status, or with the node's own count again, is no swarm count, so Usage is
+	// nil.
+	noSwarmCount := false
+	if res.Network.Scope == ScopeSwarm && res.Network.Status != nil && res.Network.ID == id && len(id) > 1 {
+		first := res
+		prefix := id[:len(id)-1]
+		res, err = c.cur().NetworkInspect(ctx, prefix, opts)
+		if err != nil {
+			return NetworkDetail{}, nil, fmt.Errorf("inspect network on %s: %w", c.t.Describe(), err)
+		}
+		if res.Network.ID != id {
+			return NetworkDetail{}, nil, fmt.Errorf("inspect network on %s: a lookup of %s answered network %s, not %s", c.t.Describe(), prefix, res.Network.ID, id)
+		}
+		noSwarmCount = res.Network.Status == nil ||
+			(len(first.Network.Containers) > 0 && maps.Equal(first.Network.Status.IPAM.Subnets, res.Network.Status.IPAM.Subnets))
 	}
 	in := res.Network
 	d := NetworkDetail{
@@ -383,7 +432,7 @@ func (c *Client) NetworkDetail(ctx context.Context, id string, verbose bool) (Ne
 		d.Services = append(d.Services, NetworkService{Name: name, Tasks: len(svc.Tasks)})
 	}
 	slices.SortFunc(d.Services, func(a, b NetworkService) int { return strings.Compare(a.Name, b.Name) })
-	if in.Status != nil {
+	if in.Status != nil && !noSwarmCount {
 		d.Usage = []SubnetUsage{}
 		for prefix, u := range in.Status.IPAM.Subnets {
 			d.Usage = append(d.Usage, SubnetUsage{Subnet: prefix.String(), InUse: u.IPsInUse, Available: u.DynamicIPsAvailable})
