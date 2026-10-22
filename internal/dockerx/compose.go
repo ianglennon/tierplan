@@ -322,13 +322,52 @@ func composeUpOptions(p *types.Project, o ComposeUpOptions) api.UpOptions {
 
 // ComposeStop stops the containers of the project the way `docker compose stop` does, with their own stop
 // timeouts: nothing is removed, so the networks, volumes and containers stay for ComposeStart. p names the
-// project and its services (the stop order follows depends_on); it need not be sandboxed.
+// project and its services (the stop order follows depends_on); it need not be sandboxed. It returns once no
+// container of the project runs: an engine older than 28 answers a stop that ran out its timeout as soon as it
+// has sent SIGKILL, before the container has exited, so a start right after it would find a dependency still dying
+// and refuse it ("exited (137)").
 func (c *Client) ComposeStop(ctx context.Context, p *types.Project) error {
 	svc, err := c.composeService(p, nil)
 	if err != nil {
 		return err
 	}
-	return svc.Stop(ctx, p.Name, api.StopOptions{Project: p})
+	if err := svc.Stop(ctx, p.Name, api.StopOptions{Project: p}); err != nil {
+		return err
+	}
+	return c.waitComposeStopped(ctx, p.Name)
+}
+
+// composeStopSettle bounds how long ComposeStop waits for a container the engine has said it stopped to exit.
+// A SIGKILL takes effect at once, so this is only reached by a container the kernel cannot end.
+const composeStopSettle = 30 * time.Second
+
+// waitComposeStopped polls the containers of the project until none of those the SDK stops (every one but a
+// one-off run) is running. It reads through the container list, which the agent already allows.
+func (c *Client) waitComposeStopped(ctx context.Context, project string) error {
+	ctx, cancel := context.WithTimeout(ctx, composeStopSettle)
+	defer cancel()
+	t := time.NewTicker(waitPoll)
+	defer t.Stop()
+	for {
+		rows, err := c.ContainersWithLabel(ctx, api.ProjectLabel, project)
+		if err != nil {
+			return err
+		}
+		var running []string
+		for _, r := range rows {
+			if r.Labels[api.OneoffLabel] != "True" && (r.State == "running" || r.State == "restarting") {
+				running = append(running, r.Name)
+			}
+		}
+		if len(running) == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("stop project %s on %s: %s still running: %w", project, c.t.Describe(), strings.Join(running, ", "), ctx.Err())
+		case <-t.C:
+		}
+	}
 }
 
 // ComposeStart starts the stopped containers of the project the way `docker compose start` does, in
