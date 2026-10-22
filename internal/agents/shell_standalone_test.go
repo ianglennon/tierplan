@@ -91,6 +91,7 @@ func (o *output) awaitOutput(t *testing.T, want string) {
 func TestStandaloneAgentExec(t *testing.T) {
 	host := dockertest.StartHost(t, "")
 	dockertest.LoadAgentImage(t, host)
+	dockertest.LoadImage(t, "alpine", host)
 	dumpOnFailure(t, host)
 	srv := servertest.Start(t, servertest.Options{Host: host.Gateway})
 

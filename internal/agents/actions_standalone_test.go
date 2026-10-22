@@ -53,6 +53,7 @@ func act(t *testing.T, srv *servertest.Server, envID, action, nodeID, id string)
 func TestStandaloneAgentContainerActions(t *testing.T) {
 	host := dockertest.StartHost(t, "")
 	dockertest.LoadAgentImage(t, host)
+	dockertest.LoadImage(t, "alpine", host)
 	dumpOnFailure(t, host)
 	srv := servertest.Start(t, servertest.Options{Host: host.Gateway})
 
@@ -100,6 +101,7 @@ func TestStandaloneAgentContainerActions(t *testing.T) {
 	// A host whose owner set the read-only flag: the refusal is named before any call.
 	ro := dockertest.StartHost(t, "")
 	dockertest.LoadAgentImage(t, ro)
+	dockertest.LoadImage(t, "alpine", ro)
 	dumpOnFailure(t, ro)
 	roEnv := srv.CreateAgentEnvironment("")
 	cmd := strings.Replace(roEnv.Install.Standalone.Command, " "+roEnv.Install.Image, " -e BAYPLAN_AGENT_READ_ONLY=true "+roEnv.Install.Image, 1)
