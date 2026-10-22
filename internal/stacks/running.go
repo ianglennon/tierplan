@@ -516,7 +516,7 @@ func NormalizeComposeService(svc types.ServiceConfig, img ImageDefaults, rc Runn
 	out.Ipc, out.Pid = normMode(svc.Ipc, rc), normMode(svc.Pid, rc)
 	out.Uts, out.UserNSMode = svc.Uts, svc.UserNSMode
 	if out.NetworkMode == "" {
-		out.Networks = normNetworks(svc.Networks, rc.Project, svc.Name)
+		out.Networks = normNetworks(svc.Networks, rc.Project, svc.Name, svc.Hostname)
 	}
 
 	out.Restart = desiredRestart(svc)
@@ -776,8 +776,10 @@ func normVolumesFrom(in []string, rc RunningContext) []string {
 }
 
 // normNetworks writes the networks of a service without the aliases the SDK adds and without the settings
-// the engine does not keep (the order of connection, the MAC address the engine generated).
-func normNetworks(in map[string]*types.ServiceNetworkConfig, project, service string) map[string]*types.ServiceNetworkConfig {
+// the engine does not keep (the order of connection, the MAC address the engine generated). An engine older
+// than 26 (API below 1.45) also lists the container's hostname as an alias of every network, so an alias
+// equal to the hostname is left out on both sides.
+func normNetworks(in map[string]*types.ServiceNetworkConfig, project, service, hostname string) map[string]*types.ServiceNetworkConfig {
 	if len(in) == 0 {
 		return nil
 	}
@@ -795,7 +797,7 @@ func normNetworks(in map[string]*types.ServiceNetworkConfig, project, service st
 			n.DriverOpts = types.Options(maps.Clone(cfg.DriverOpts))
 		}
 		for _, a := range cfg.Aliases {
-			if a == service || defaultContainerName(a, project, service) {
+			if a == service || (hostname != "" && a == hostname) || defaultContainerName(a, project, service) {
 				continue
 			}
 			n.Aliases = append(n.Aliases, a)

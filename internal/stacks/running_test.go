@@ -187,6 +187,23 @@ func TestAContainerMadeFromTheServiceReadsBackAsTheSameService(t *testing.T) {
 	}
 }
 
+// An engine older than 26 (API below 1.45) also lists the container's hostname among the aliases of each
+// network it is on, though the compose file named no such alias. It is no difference.
+func TestTheHostnameAnOlderEngineAddsAsAnAliasIsNoDifference(t *testing.T) {
+	t.Parallel()
+	p := preparedProject(t, richCompose)
+	c := replica(t, p, "web", strings.Repeat("c", 64))
+	for _, ep := range c.NetworkSettings.Networks {
+		ep.Aliases = append(ep.Aliases, "web-host")
+	}
+	desired, running := compareService(t, p, "web", c, nil)
+	if !stacks.SameComposeService(desired, running) {
+		want, _ := stacks.ServiceJSON(desired)
+		got, _ := stacks.ServiceJSON(running)
+		t.Errorf("the hostname alias is listed\nfile:    %s\nrunning: %s", want, got)
+	}
+}
+
 func TestTheImagesOwnValuesAreNoDifference(t *testing.T) {
 	t.Parallel()
 	// Neither command nor entrypoint nor environment is written: the container gets the image's.
