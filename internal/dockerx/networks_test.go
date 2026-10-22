@@ -635,7 +635,9 @@ func TestTheFakeReportsUsageForANetworkTheClientCreated(t *testing.T) {
 }
 
 // Engine 29 answers an inspect by a network's full ID from the node's own instance of it,
-// and only a name or partial ID brings the swarm leader's count (UAT G-07-8).
+// and only a name or partial ID brings the swarm leader's count (UAT G-07-8). NetworkDetail
+// makes one read and shows that answer. NetworkSwarmUsage reads a full ID again by the ID less
+// its last character, for the swarm's count.
 
 const bigNetID = "skvqz4pk12gec9lje3akizuef"
 
@@ -649,6 +651,24 @@ func bigNetFake(t *testing.T) *dockertest.Fake {
 	})
 }
 
+// dupNetFake has two swarm networks whose IDs differ only in the last character, so the ID of
+// one less its last character is also a prefix of the other. dup1 is listed first, so the
+// engine's first match for the shared 24 character prefix is dup1 on every run. A real engine
+// answers that prefix as ambiguous, also an error.
+func dupNetFake(t *testing.T) *dockertest.Fake {
+	t.Helper()
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{
+		SwarmState: "active", SwarmControl: true,
+		Networks: []dockertest.FakeNetwork{
+			{ID: "dupnetaaaaaaaaaaaaaaaaaa1", Name: "dup1", Driver: "overlay", Scope: "swarm"},
+			{ID: "dupnetaaaaaaaaaaaaaaaaaa2", Name: "dup2", Driver: "overlay", Scope: "swarm"},
+		},
+	})
+	fake.SetNetworkUsage("dup1", dockertest.FakeSubnetUsage{Subnet: "10.0.3.0/24", InUse: 256, Available: 0})
+	fake.SetNetworkUsage("dup2", dockertest.FakeSubnetUsage{Subnet: "10.0.4.0/24", InUse: 10, Available: 246})
+	return fake
+}
+
 // networkInspects counts the GETs of one network the fake has served.
 func networkInspects(f *dockertest.Fake) int {
 	n := 0
@@ -658,6 +678,61 @@ func networkInspects(f *dockertest.Fake) int {
 		}
 	}
 	return n
+}
+
+// The detail page and Inspect ask once and show what the engine answers for that ID, which is
+// what docker network inspect shows on the same node. On a node holding a local instance of a
+// swarm network that is the node's own count, not the swarm's.
+func TestNetworkDetailReadsAFullIDOnceAndAnswersWithTheNodesOwnCount(t *testing.T) {
+	fake := bigNetFake(t)
+	fake.SetNetworkUsage("big_default", dockertest.FakeSubnetUsage{Subnet: "10.0.2.0/24", InUse: 256, Available: 0})
+	fake.SetNetworkLocalUsage("big_default", dockertest.FakeSubnetUsage{Subnet: "10.0.2.0/24", InUse: 46, Available: 210})
+	c := newClient(t, fake)
+	for _, verbose := range []bool{false, true} {
+		before := networkInspects(fake)
+		d, raw, err := c.NetworkDetail(context.Background(), bigNetID, verbose)
+		if err != nil {
+			t.Fatalf("verbose=%v: NetworkDetail: %v", verbose, err)
+		}
+		if got := networkInspects(fake) - before; got != 1 {
+			t.Errorf("verbose=%v: %d network reads, want 1: the page would cost the engine a second scan", verbose, got)
+		}
+		reqs := fake.Requests()
+		if last := reqs[len(reqs)-1]; !strings.HasSuffix(last, "/networks/"+bigNetID) {
+			t.Errorf("verbose=%v: the read was %q, want one by the full ID", verbose, last)
+		}
+		if d.ID != bigNetID || d.Name != "big_default" {
+			t.Errorf("verbose=%v: ID, Name = %q, %q", verbose, d.ID, d.Name)
+		}
+		want := []dockerx.SubnetUsage{{Subnet: "10.0.2.0/24", InUse: 46, Available: 210}}
+		if !reflect.DeepEqual(d.Usage, want) {
+			t.Errorf("verbose=%v: Usage = %+v, want %+v: the detail page would show the swarm's count, not this node's own", verbose, d.Usage, want)
+		}
+		if !strings.Contains(string(raw), `"IPsInUse":46`) || strings.Contains(string(raw), `"IPsInUse":256`) {
+			t.Errorf("verbose=%v: raw = %s, want the node's own Status: the Inspect tab would disagree with docker network inspect", verbose, raw)
+		}
+	}
+}
+
+// Two networks whose IDs share all but the last character must not make the detail page fail:
+// NetworkDetail never reads by a prefix, so it answers the network asked for as itself.
+func TestNetworkDetailAnswersTheNetworkAskedForWhenAnotherSharesItsPrefix(t *testing.T) {
+	fake := dupNetFake(t)
+	before := networkInspects(fake)
+	d, _, err := newClient(t, fake).NetworkDetail(context.Background(), "dupnetaaaaaaaaaaaaaaaaaa2", false)
+	if err != nil {
+		t.Fatalf("NetworkDetail: %v: the detail page would be an error for a network that exists", err)
+	}
+	if d.ID != "dupnetaaaaaaaaaaaaaaaaaa2" {
+		t.Errorf("ID = %q, want dup2's", d.ID)
+	}
+	want := []dockerx.SubnetUsage{{Subnet: "10.0.4.0/24", InUse: 10, Available: 246}}
+	if !reflect.DeepEqual(d.Usage, want) {
+		t.Errorf("Usage = %+v, want %+v", d.Usage, want)
+	}
+	if got := networkInspects(fake) - before; got != 1 {
+		t.Errorf("%d network reads, want 1", got)
+	}
 }
 
 func TestNetworkDetailReadsTheSwarmsCountWhenTheNodeHoldsTheNetworkLocally(t *testing.T) {
@@ -730,17 +805,7 @@ func TestNetworkDetailReadsALocalNetworkOrAnOldEngineOnce(t *testing.T) {
 }
 
 func TestNetworkDetailRefusesAnAnswerForAnotherNetwork(t *testing.T) {
-	// dup1 is listed first, so the engine's first match for the shared 24 character prefix is
-	// dup1 on every run. A real engine answers that prefix as ambiguous, also an error.
-	fake := dockertest.NewFake(t, dockertest.FakeConfig{
-		SwarmState: "active", SwarmControl: true,
-		Networks: []dockertest.FakeNetwork{
-			{ID: "dupnetaaaaaaaaaaaaaaaaaa1", Name: "dup1", Driver: "overlay", Scope: "swarm"},
-			{ID: "dupnetaaaaaaaaaaaaaaaaaa2", Name: "dup2", Driver: "overlay", Scope: "swarm"},
-		},
-	})
-	fake.SetNetworkUsage("dup1", dockertest.FakeSubnetUsage{Subnet: "10.0.3.0/24", InUse: 256, Available: 0})
-	fake.SetNetworkUsage("dup2", dockertest.FakeSubnetUsage{Subnet: "10.0.4.0/24", InUse: 10, Available: 246})
+	fake := dupNetFake(t)
 	c := newClient(t, fake)
 	d, _, err := c.NetworkDetail(context.Background(), "dupnetaaaaaaaaaaaaaaaaaa", false)
 	if err != nil || d.ID != "dupnetaaaaaaaaaaaaaaaaaa1" {
