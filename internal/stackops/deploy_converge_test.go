@@ -433,6 +433,54 @@ func TestDeploySwarmTimesOutWithHowManyTasksWereStillWaitingForAnAddress(t *test
 	}
 }
 
+// The 07-49 fallback holds under the real-manager shape: the manager holds the network locally and the
+// service names it by ID, yet a swarm with room, or an engine that reports no usage, is not a full network.
+func TestDeploySwarmKeepsWaitingWhenTheSwarmHasRoomThoughTheManagerHoldsTheNetwork(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		swarm []dockertest.FakeSubnetUsage
+		local []dockertest.FakeSubnetUsage
+	}{
+		{"the swarm has room",
+			[]dockertest.FakeSubnetUsage{{Subnet: "10.0.1.0/24", InUse: 200, Available: 53}},
+			[]dockertest.FakeSubnetUsage{{Subnet: "10.0.1.0/24", InUse: 46, Available: 210}}},
+		{"an engine that reports no address usage", nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newSwarmRig(t, func(c *dockertest.FakeConfig) { c.NetworkTargetsByID = true })
+			clk := newStepClock()
+			rig.deps.Clock, rig.deps.ConvergeTimeout = clk, time.Minute
+			if tc.swarm != nil {
+				rig.fake.SetNetworkUsage("web_default", tc.swarm...)
+				rig.fake.SetNetworkLocalUsage("web_default", tc.local...)
+			}
+			rig.fake.SetServiceTasks("web_wide",
+				dockertest.FakeServiceTask{Slot: 3, State: "new", Desired: "running", Message: "created"},
+				dockertest.FakeServiceTask{Slot: 3, State: "rejected", Desired: "shutdown", Err: "node is missing network attachments, ip addresses may be exhausted"},
+				dockertest.FakeServiceTask{Slot: 2, State: "running"},
+				dockertest.FakeServiceTask{Slot: 1, State: "running"},
+			)
+			_, in := stackInput(t, "web", wideAndAPI, nil)
+			d := rig.startDeploy(t, in)
+			for range 30 {
+				clk.Tick(t, stackops.PollInterval)
+			}
+			res, job := d.finish(t)
+
+			if res.Code != stackops.CodeConvergeTimeout || res.FailedService != "web_wide" {
+				t.Fatalf("result = %+v, want a timeout at web_wide", res)
+			}
+			wide := itemByID(t, job, "service:web_wide")
+			if wide.Result["minutes"] != "1" || wide.Result["waiting"] != "1" || !strings.Contains(wide.Detail, "ip addresses may be exhausted") {
+				t.Errorf("wide row = %+v, want 1 minute, 1 task waiting and the swarm's words", wide)
+			}
+			requireNetworkTargetsByID(t, rig, "web_wide", "web_default")
+		})
+	}
+}
+
 func TestDeploySwarmWaitsThroughARestartDelay(t *testing.T) {
 	t.Parallel()
 	rig := newSwarmRig(t, nil)
