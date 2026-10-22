@@ -322,7 +322,8 @@ func sharedStackDeployNetworkFullOnEveryNode(t *testing.T, f *swarmFix) {
 		t.Errorf("the services step = code %q, want network_full: %s", services.Code, raw)
 	}
 
-	// The condition: a full-ID read on a manager that holds the network does not show the subnet full.
+	// The condition: a full-ID read on every manager, each of which holds the network, shows the subnet with
+	// room. The subnet must be in that Status, or the check would pass on an answer that says nothing about it.
 	for _, m := range f.sw.Managers {
 		var st struct {
 			IPAM struct {
@@ -341,7 +342,11 @@ func sharedStackDeployNetworkFullOnEveryNode(t *testing.T, f *swarmFix) {
 		if err := json.Unmarshal([]byte(byID), &st); err != nil {
 			t.Fatalf("%s: decode the Status by full ID %q: %v", m.Hostname, byID, err)
 		}
-		if sub, ok := st.IPAM.Subnets["10.231.21.0/27"]; ok && sub.DynamicIPsAvailable == 0 {
+		sub, ok := st.IPAM.Subnets["10.231.21.0/27"]
+		if !ok {
+			t.Fatalf("%s: the Status by full ID has no 10.231.21.0/27 entry (%s), so the case cannot show that the full-ID read sees room", m.Hostname, byID)
+		}
+		if sub.DynamicIPsAvailable == 0 {
 			t.Errorf("%s: its full-ID read shows 10.231.21.0/27 full (%s), so the case did not reproduce G-07-8: the read 07-49 made would have seen it", m.Hostname, byID)
 		}
 	}
