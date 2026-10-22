@@ -215,3 +215,129 @@ func sharedStackDeployNetworkFull(t *testing.T, f *swarmFix) {
 	}
 	f.awaitStackUnlocked(t, id)
 }
+
+// netEveryNodeAnchorFmt is the anchor alone: one task on every node, on a stack network of a /27.
+// The one argument is the image.
+const netEveryNodeAnchorFmt = `services:
+  anchor:
+    image: %s
+    command: ["sleep", "3600"]
+    deploy:
+      mode: global
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 10.231.21.0/27
+`
+
+// netEveryNodeWideFmt is the anchor and the network of netEveryNodeAnchorFmt unchanged, with wide
+// added: 32 tasks on a /27. The one argument is the image.
+const netEveryNodeWideFmt = `services:
+  anchor:
+    image: %[1]s
+    command: ["sleep", "3600"]
+    deploy:
+      mode: global
+  wide:
+    image: %[1]s
+    command: ["sleep", "3600"]
+    deploy:
+      replicas: 32
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 10.231.21.0/27
+`
+
+// sharedStackDeployNetworkFullOnEveryNode holds UAT G-07-8 on a real Engine 29 swarm in its steady
+// state (decisions D-13 and D-14): every manager already holds the stack network locally when a
+// redeploy adds a service too wide for it. sharedStackDeployNetworkFull cannot hold that. Its
+// tasks sit in preparing for about 30 s, Bayplan's first read comes before any node has a local
+// instance of the network, and a full-ID inspect still falls through to the swarm. Here a global
+// anchor service runs a task, and so holds an endpoint of the network, on all 4 nodes, and the
+// case waits until each manager's full-ID inspect lists a local endpoint before it redeploys.
+//
+// A /27 has 29 dynamic addresses. The anchor takes 4 task addresses, 1 virtual IP and 4
+// load-balancer endpoints, which is 9. wide takes 1 virtual IP, which leaves 19 for its tasks, so
+// 13 of its 32 tasks stay new. The case asserts the outcome and never a count of tasks: the deploy
+// ends network_full, naming the network and the subnet, and not on the converge timeout.
+//
+// After the deploy the case reads every manager by full ID again. A manager holds only its own
+// endpoints and the other three hold at least 2 each, so none can show the subnet at 0 available.
+// That proves the read 07-49 made would have missed the full subnet, so the verdict came from the
+// swarm's count (07-51) and the case does not pass vacuously.
+func sharedStackDeployNetworkFullOnEveryNode(t *testing.T, f *swarmFix) {
+	if major, err := strconv.Atoi(f.sw.Engine); err == nil && major < 29 {
+		t.Skipf("Engine %s reports no address usage on a network inspect (API 1.52 is Engine 29); internal/stackops covers the fallback", f.sw.Engine)
+	}
+	f.stackEnvReady(t)
+	mgr := f.sw.Managers[0]
+	addr := dockertest.StartSwarmRegistry(t, f.sw, dockertest.RegistryOptions{})
+	digest := dockertest.PushImage(t, mgr, dockertest.ServiceTestImage, addr+"/netlocal/app:1", nil)
+	image := addr + "/netlocal/app@" + digest
+
+	const stack = "netlocal"
+	t.Cleanup(func() { removeStackCLI(t, f, stack) })
+	id := f.createStackBayplan(t, stack, fmt.Sprintf(netEveryNodeAnchorFmt, image))
+	f.deployStackBayplan(t, id)
+
+	netID := strings.TrimSpace(sh(t, mgr, "docker network inspect --format '{{.ID}}' "+stack+"_default"))
+	for _, m := range f.sw.Managers {
+		testsupport.Poll(t, time.Minute, "manager "+m.Hostname+" to hold the network "+stack+"_default locally, the steady state of UAT G-07-8 where every manager does", func() (bool, string) {
+			out, err := m.Sh(execCtx(t, time.Minute), "docker network inspect --format '{{len .Containers}}' "+netID)
+			if err != nil {
+				return false, err.Error()
+			}
+			n, err := strconv.Atoi(strings.TrimSpace(out))
+			return err == nil && n >= 1, "local endpoints: " + strings.TrimSpace(out)
+		})
+	}
+
+	f.saveStackBayplan(t, id, paritySource{Compose: fmt.Sprintf(netEveryNodeWideFmt, image)})
+	job := f.deployStackUntilEnded(t, id)
+
+	raw, _ := json.Marshal(job)
+	if job.State != "partial" {
+		t.Fatalf("the deploy ended %s, want partial (some steps done, the wide service failed): %s", job.State, raw)
+	}
+	wide := job.item(t, "service:"+stack+"_wide")
+	if wide.State != "failed" || wide.Code != "network_full" {
+		t.Errorf("the wide service = state %q code %q, want failed and network_full: %s", wide.State, wide.Code, raw)
+	}
+	if got := wide.Result["network"]; got != stack+"_default" {
+		t.Errorf("the wide service names network %q, want %s_default: %s", got, stack, raw)
+	}
+	if got := wide.Result["subnet"]; got != "10.231.21.0/27" {
+		t.Errorf("the wide service names subnet %q, want 10.231.21.0/27: %s", got, raw)
+	}
+	if services := job.item(t, "services"); services.Code != "network_full" {
+		t.Errorf("the services step = code %q, want network_full: %s", services.Code, raw)
+	}
+
+	// The condition: a full-ID read on a manager that holds the network does not show the subnet full.
+	for _, m := range f.sw.Managers {
+		var st struct {
+			IPAM struct {
+				Subnets map[string]struct {
+					IPsInUse            uint64
+					DynamicIPsAvailable uint64
+				}
+			}
+		}
+		statusOf := func(ref string) string {
+			return strings.TrimSpace(sh(t, m, "docker network inspect --format '{{json .Status}}' "+ref))
+		}
+		byID := statusOf(netID)
+		t.Logf("%s: Status by full ID: %s", m.Hostname, byID)
+		t.Logf("%s: Status by name: %s", m.Hostname, statusOf(stack+"_default"))
+		if err := json.Unmarshal([]byte(byID), &st); err != nil {
+			t.Fatalf("%s: decode the Status by full ID %q: %v", m.Hostname, byID, err)
+		}
+		if sub, ok := st.IPAM.Subnets["10.231.21.0/27"]; ok && sub.DynamicIPsAvailable == 0 {
+			t.Errorf("%s: its full-ID read shows 10.231.21.0/27 full (%s), so the case did not reproduce G-07-8: the read 07-49 made would have seen it", m.Hostname, byID)
+		}
+	}
+	f.awaitStackUnlocked(t, id)
+}
