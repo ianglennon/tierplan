@@ -638,6 +638,34 @@
     "hasBody": false
   },
   {
+    "method": "POST",
+    "path": "/networks/replay_front/connect",
+    "hasBody": true,
+    "json": {
+      "Container": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "EndpointConfig": {
+        "Aliases": [
+          "replay-web-1",
+          "web"
+        ],
+        "DNSNames": null,
+        "DriverOpts": null,
+        "EndpointID": "",
+        "Gateway": "",
+        "GlobalIPv6Address": "",
+        "GlobalIPv6PrefixLen": 0,
+        "GwPriority": 0,
+        "IPAMConfig": null,
+        "IPAddress": "",
+        "IPPrefixLen": 0,
+        "IPv6Gateway": "",
+        "Links": null,
+        "MacAddress": "",
+        "NetworkID": ""
+      }
+    }
+  },
+  {
     "method": "GET",
     "path": "/volumes",
     "query": "filters=%7B%22label%22%3A%7B%22com.docker.compose.project%3Dreplay%22%3Atrue%7D%7D",
