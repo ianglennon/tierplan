@@ -725,8 +725,8 @@ func TestStandaloneRemoveKeepsUntickedVolumes(t *testing.T) {
 	if out := strings.TrimSpace(sh(t, f.host, "docker volume ls -q --filter name=^"+outerVolume+"$")); out == "" {
 		t.Errorf("the external volume %s was removed", outerVolume)
 	}
-	if out := strings.TrimSpace(sh(t, f.host, "docker network ls -q --filter name=^"+outer+"$")); out == "" {
-		t.Errorf("the external network %s was removed", outer)
+	if ok, err := networkNamed(execCtx(t, time.Minute), f.host, outer); err != nil || !ok {
+		t.Errorf("the external network %s was removed (%v)", outer, err)
 	}
 	if code, body := f.srv.Do(http.MethodGet, f.api()+"/"+id, nil); code != http.StatusNotFound {
 		t.Errorf("GET the removed stack = %d %s, want 404", code, body)

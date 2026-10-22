@@ -615,11 +615,11 @@ func removeNetwork(t *testing.T, f *swarmFix, name string) {
 	mgr := f.sw.Managers[0]
 	testsupport.Poll(t, stackGoneWait, "the network "+name+" to be removed", func() (bool, string) {
 		ctx := execCtx(t, time.Minute)
-		out, err := mgr.Sh(ctx, "docker network ls -q --filter name=^"+name+"$")
+		listed, err := networkNamed(ctx, mgr, name)
 		if err != nil {
 			return false, err.Error()
 		}
-		if strings.TrimSpace(out) == "" {
+		if !listed {
 			return true, ""
 		}
 		rm, err := mgr.Sh(ctx, "docker network rm "+name+" 2>&1")

@@ -748,8 +748,8 @@ func removeLifecycleStack(t *testing.T, f *swarmFix, id, stack, external, extern
 			t.Errorf("the ticked volume %s_data is still on a node: %q", stack, out)
 		}
 	}
-	if out := strings.TrimSpace(sh(t, mgr, "docker network ls -q --filter name=^"+external+"$")); out == "" {
-		t.Errorf("the external network %s was removed with the stack", external)
+	if ok, err := networkNamed(execCtx(t, time.Minute), mgr, external); err != nil || !ok {
+		t.Errorf("the external network %s was removed with the stack (%v)", external, err)
 	}
 	keptSomewhere, externalSomewhere := false, false
 	for _, n := range f.sw.Nodes() {
