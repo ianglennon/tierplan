@@ -18,6 +18,8 @@ import (
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/internal/store/sqlc"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // Services list and scale (plan 06-01, RES-02, D-08, D-10). Docker is a fake daemon behind
@@ -1001,5 +1003,170 @@ func TestDetectingARestartLoopChangesNothingInDocker(t *testing.T) {
 	rec := f.get(t, e, "services/svc-web")
 	if d := decode[sdDetail](t, rec); d.Running != 0 || d.Desired != 1 {
 		t.Errorf("web = %d of %d after being flagged, want it left at 0 of 1", d.Running, d.Desired)
+	}
+}
+
+// insertStackRow puts a stack of Bayplan's own in an environment under an ID the test chose, so that a
+// label on a fake object can name it.
+func (f *envFix) insertStackRow(t *testing.T, envID, id, name string) {
+	t.Helper()
+	err := f.st.Q.InsertStack(testsupport.Context(t), sqlc.InsertStackParams{
+		ID: id, EnvID: envID, Name: name, Target: "swarm", SourceKind: "inline", CreatedBy: "seed", CreatedAt: 1,
+	})
+	if err != nil {
+		t.Fatalf("insert stack %s: %v", name, err)
+	}
+}
+
+// stackLinkServices are four services that each name a stack in a different way: one Bayplan manages,
+// one that carries Bayplan's ID for a stack that does not exist, one that carries a real ID under another
+// stack's name, and one a plain docker stack deploy made.
+func stackLinkServices() []dockertest.FakeService {
+	svc := func(id, name string, labels map[string]string) dockertest.FakeService {
+		return dockertest.FakeService{ID: id, Name: name, Mode: "replicated", Running: 1, Desired: 1, Image: scaleImage, Version: 3, Labels: labels}
+	}
+	return []dockertest.FakeService{
+		svc("svc-own", "own", map[string]string{"com.docker.stack.namespace": "shop", "bayplan.stack.id": "stk-shop"}),
+		svc("svc-ghost", "ghost", map[string]string{"com.docker.stack.namespace": "gone", "bayplan.stack.id": "stk-gone"}),
+		svc("svc-forged", "forged", map[string]string{"com.docker.stack.namespace": "other", "bayplan.stack.id": "stk-shop"}),
+		svc("svc-foreign", "foreign", map[string]string{"com.docker.stack.namespace": "legacy"}),
+	}
+}
+
+// TestServiceRowsAndDetailsLinkOnlyTheStacksBayplanManages is STK-10 and T-07-146: a service's
+// bayplanStackId is set when the label names a stack this environment holds under that name, and empty
+// for a stack Bayplan does not manage, whatever the label claims.
+func TestServiceRowsAndDetailsLinkOnlyTheStacksBayplanManages(t *testing.T) {
+	t.Parallel()
+	f, e := serviceEnv(t, stackLinkServices()...)
+	f.insertStackRow(t, e.ID, "stk-shop", "shop")
+	type linked struct {
+		Stack          string `json:"stack"`
+		BayplanStackID string `json:"bayplanStackId"`
+	}
+	list := decode[struct {
+		Items []struct {
+			Name string `json:"name"`
+			linked
+		} `json:"items"`
+	}](t, f.get(t, e, "services"))
+	want := map[string]linked{
+		"own": {"shop", "stk-shop"}, "ghost": {"gone", ""}, "forged": {"other", ""}, "foreign": {"legacy", ""},
+	}
+	if len(list.Items) != len(want) {
+		t.Fatalf("list = %+v, want %d rows", list.Items, len(want))
+	}
+	for _, it := range list.Items {
+		if it.linked != want[it.Name] {
+			t.Errorf("list row %s = %+v, want %+v", it.Name, it.linked, want[it.Name])
+		}
+	}
+	for id, name := range map[string]string{"svc-own": "own", "svc-ghost": "ghost", "svc-forged": "forged", "svc-foreign": "foreign"} {
+		if got := decode[linked](t, f.get(t, e, "services/"+id)); got != want[name] {
+			t.Errorf("detail %s = %+v, want %+v", name, got, want[name])
+		}
+		if got := decode[linked](t, f.get(t, e, "services/"+id+"/spec")); got != want[name] {
+			t.Errorf("spec %s = %+v, want %+v", name, got, want[name])
+		}
+	}
+}
+
+// TestAStackOwnedRefusalNamesTheBayplanStackOnlyWhenBayplanManagesIt is the stack_owned 409 a service
+// page gets: the stack in errors as stack, and as bayplanStackId when the SPA may link to it.
+func TestAStackOwnedRefusalNamesTheBayplanStackOnlyWhenBayplanManagesIt(t *testing.T) {
+	t.Parallel()
+	f, e := serviceEnv(t, stackLinkServices()...)
+	f.insertStackRow(t, e.ID, "stk-shop", "shop")
+	for service, want := range map[string]string{"svc-own": "stk-shop", "svc-ghost": "", "svc-forged": "", "svc-foreign": ""} {
+		rec := f.removeService(t, e, service, "")
+		if rec.code != http.StatusConflict || rec.ptyp != "stack_owned" {
+			t.Fatalf("remove %s = %d %s (%s), want 409 stack_owned", service, rec.code, rec.body, rec.ptyp)
+		}
+		var p actionProblem
+		if err := json.Unmarshal(rec.body, &p); err != nil {
+			t.Fatal(err)
+		}
+		if p.at("stack") == "" || p.at("bayplanStackId") != want {
+			t.Errorf("remove %s: stack %q, bayplanStackId %q, want the stack named and bayplanStackId %q", service, p.at("stack"), p.at("bayplanStackId"), want)
+		}
+	}
+}
+
+// TestContainerSecretAndConfigRowsAndDetailsLinkOnlyTheStacksBayplanManages is STK-10 for the other Phase 4
+// and 6 pages: a container, secret or config row and detail carries bayplanStackId under the same rule as
+// a service, a container being owned by its swarm stack or its compose project.
+func TestContainerSecretAndConfigRowsAndDetailsLinkOnlyTheStacksBayplanManages(t *testing.T) {
+	t.Parallel()
+	ctr := func(n int, name string, labels map[string]string) dockertest.FakeContainer {
+		return dockertest.FakeContainer{
+			ID: strings.Repeat(fmt.Sprintf("%x", n), 64), Names: []string{"/" + name}, Image: "nginx:1.27", State: "running", Status: "Up 1 hour", Labels: labels,
+		}
+	}
+	f, e := actionsEnv(t, func(c *dockertest.FakeConfig) {
+		c.Containers = []dockertest.FakeContainer{
+			ctr(1, "c-swarm", map[string]string{"com.docker.stack.namespace": "shop", "bayplan.stack.id": "stk-shop"}),
+			ctr(2, "c-project", map[string]string{"com.docker.compose.project": "shop", "bayplan.stack.id": "stk-shop"}),
+			ctr(3, "c-forged", map[string]string{"com.docker.compose.project": "other", "bayplan.stack.id": "stk-shop"}),
+			ctr(4, "c-foreign", map[string]string{"com.docker.compose.project": "legacy"}),
+			ctr(5, "c-plain", nil),
+		}
+		c.Secrets = []dockertest.FakeSecret{
+			{ID: "sec-own", Name: "own", Labels: map[string]string{"com.docker.stack.namespace": "shop", "bayplan.stack.id": "stk-shop"}},
+			{ID: "sec-forged", Name: "forged", Labels: map[string]string{"com.docker.stack.namespace": "other", "bayplan.stack.id": "stk-shop"}},
+			{ID: "sec-foreign", Name: "foreign", Labels: map[string]string{"com.docker.stack.namespace": "legacy"}},
+		}
+		c.Configs = []dockertest.FakeConfigObject{
+			{ID: "cfg-own", Name: "own", Labels: map[string]string{"com.docker.stack.namespace": "shop", "bayplan.stack.id": "stk-shop"}, Data: []byte("x")},
+			{ID: "cfg-forged", Name: "forged", Labels: map[string]string{"com.docker.stack.namespace": "other", "bayplan.stack.id": "stk-shop"}, Data: []byte("x")},
+			{ID: "cfg-foreign", Name: "foreign", Labels: map[string]string{"com.docker.stack.namespace": "legacy"}, Data: []byte("x")},
+		}
+	})
+	f.insertStackRow(t, e.ID, "stk-shop", "shop")
+	type row struct {
+		ID             string `json:"id"`
+		NodeID         string `json:"nodeId"`
+		Name           string `json:"name"`
+		BayplanStackID string `json:"bayplanStackId"`
+	}
+	type rows struct {
+		Items []row `json:"items"`
+	}
+	check := func(what string, got []row, want map[string]string) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Fatalf("%s list = %+v, want %d rows", what, got, len(want))
+		}
+		for _, r := range got {
+			if r.BayplanStackID != want[r.Name] {
+				t.Errorf("%s row %s bayplanStackId = %q, want %q", what, r.Name, r.BayplanStackID, want[r.Name])
+			}
+		}
+	}
+	containers := decode[rows](t, f.get(t, e, "containers")).Items
+	wantContainers := map[string]string{"c-swarm": "stk-shop", "c-project": "stk-shop", "c-forged": "", "c-foreign": "", "c-plain": ""}
+	check("container", containers, wantContainers)
+	for _, r := range containers {
+		rec := f.get(t, e, "containers/"+r.ID+"?nodeId="+r.NodeID)
+		if rec.code != http.StatusOK {
+			t.Fatalf("container detail %s = %d %s", r.Name, rec.code, rec.body)
+		}
+		if d := decode[row](t, rec); d.BayplanStackID != wantContainers[r.Name] {
+			t.Errorf("container detail %s bayplanStackId = %q, want %q", r.Name, d.BayplanStackID, wantContainers[r.Name])
+		}
+	}
+	want := map[string]string{"own": "stk-shop", "forged": "", "foreign": ""}
+	secrets := decode[rows](t, f.get(t, e, "secrets")).Items
+	check("secret", secrets, want)
+	for _, r := range secrets {
+		if d := decode[row](t, f.get(t, e, "secrets/"+r.ID)); d.BayplanStackID != want[r.Name] {
+			t.Errorf("secret detail %s bayplanStackId = %q, want %q", r.Name, d.BayplanStackID, want[r.Name])
+		}
+	}
+	configs := decode[rows](t, f.get(t, e, "configs")).Items
+	check("config", configs, want)
+	for _, r := range configs {
+		if d := decode[row](t, f.get(t, e, "configs/"+r.ID)); d.BayplanStackID != want[r.Name] {
+			t.Errorf("config detail %s bayplanStackId = %q, want %q", r.Name, d.BayplanStackID, want[r.Name])
+		}
 	}
 }

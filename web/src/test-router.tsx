@@ -14,7 +14,7 @@ import { type ReactNode, useState } from "react";
 // gives it that, with no route to render: the Link builds its address and the
 // page under test stays where it is. It is synchronous, so a test can look at the
 // page as soon as it has rendered.
-export function TestRouter({ children }: { children: ReactNode }) {
+export function TestRouter({ children, path = "/" }: { children: ReactNode; path?: string }) {
   const [router] = useState(() => {
     const root = createRootRoute();
     const tree = root.addChildren([
@@ -30,6 +30,14 @@ export function TestRouter({ children }: { children: ReactNode }) {
       createRoute({ getParentRoute: () => root, path: "/env/$envId/configs/$configId" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/nodes" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/nodes/$nodeId" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/stacks" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/stacks/$stackId" }),
+      createRoute({
+        getParentRoute: () => root,
+        path: "/env/$envId/stacks/$stackId/deploys/$jobId",
+      }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/stacks/$stackId/review" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/stacks/$stackId/editor" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/events" }),
       createRoute({ getParentRoute: () => root, path: "/registries" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId" }),
@@ -38,7 +46,7 @@ export function TestRouter({ children }: { children: ReactNode }) {
     ]);
     return createRouter({
       routeTree: tree,
-      history: createMemoryHistory({ initialEntries: ["/"] }),
+      history: createMemoryHistory({ initialEntries: [path] }),
     });
   });
   return <RouterContextProvider router={router}>{children}</RouterContextProvider>;

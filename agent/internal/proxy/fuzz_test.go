@@ -4,8 +4,12 @@
 package proxy
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/netip"
 	"net/url"
 	"path"
@@ -110,7 +114,14 @@ var oracle = []oracleEntry{
 		"tag":       rx(`^([A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|sha256:[a-f0-9]{64}|sha512:[a-f0-9]{128})$`),
 		"platform":  rx(`^[a-z0-9]{1,16}(/[A-Za-z0-9_.-]{1,32}){1,2}$`),
 	}),
-	oEntry("GET", `images/`+oImg+`/json`, nil),
+	// The inspect takes manifests and a platform, as os/arch[/variant] or the JSON of an OCI platform.
+	oEntry("GET", `images/`+oImg+`/json`, map[string]*regexp.Regexp{
+		"manifests": oBool,
+		"platform": rx(`^([a-z0-9]{1,16}(/[A-Za-z0-9_.-]{1,32}){1,2}|` +
+			`\{"architecture":"[a-z0-9_]{1,16}","os":"[a-z0-9]{1,16}"(,"os\.version":"[A-Za-z0-9_.+-]{1,64}")?(,"variant":"[A-Za-z0-9_.-]{1,32}")?\})$`),
+	}),
+	// A rename: the new name, in the shape a create takes, and no body.
+	oEntry("POST", `containers/`+oID+`/rename`, map[string]*regexp.Regexp{"name": rx(`^/?[a-zA-Z0-9][a-zA-Z0-9_.-]{0,254}$`)}),
 	oEntry("GET", `images/`+oImg+`/history`, nil),
 	oEntry("DELETE", `images/`+oImg, map[string]*regexp.Regexp{"noprune": oBool}),
 	oEntry("GET", `distribution/`+oImg+`/json`, nil),
@@ -128,6 +139,19 @@ var oracle = []oracleEntry{
 	{method: "POST", path: rx(oVer + `nodes/` + oID + `/update$`), body: true, keys: map[string]*regexp.Regexp{"version": rx(`^[0-9]{1,20}$`)}},
 	{method: "POST", path: rx(oVer + `services/create$`), body: true},
 	oEntry("DELETE", `services/`+oID, nil),
+	// A container create: a name and a platform, and the container spec as the body.
+	{
+		method: "POST", path: rx(oVer + `containers/create$`), body: true,
+		keys: map[string]*regexp.Regexp{
+			"name":     rx(`^/?[a-zA-Z0-9][a-zA-Z0-9_.-]{0,254}$`),
+			"platform": rx(`^[a-z0-9]{1,16}(/[A-Za-z0-9_.-]{1,32}){1,2}$`),
+		},
+	},
+	// An archive write: a tar body, at the root of the container, with no owner copied.
+	{
+		method: "PUT", path: rx(oVer + `containers/` + oID + `/archive$`), body: true,
+		keys: map[string]*regexp.Regexp{"path": rx(`^/$`), "noOverwriteDirNonDir": oBool, "copyUIDGID": rx(`^(0|false)$`)},
+	},
 	// Secrets: the list and the inspect take no key at all, the create takes a SecretSpec body, and the
 	// remove takes no key either.
 	oEntry("GET", `secrets`, nil),
@@ -288,6 +312,17 @@ func FuzzAllowed(f *testing.F) {
 		{"GET", "/images/json", "", false, false, false},
 		{"HEAD", "/images/json", "all=1", false, false, true},
 		{"GET", "/images/a/json", "manifests=1", false, false, false},
+		{"GET", "/v1.52/images/nginx:1.27/json", "manifests=1&platform=%7B%22architecture%22%3A%22amd64%22%2C%22os%22%3A%22linux%22%7D", false, false, false},
+		{"GET", "/images/a/json", "platform=linux%2Famd64", false, false, false},
+		{"GET", "/images/a/json", "platform=%7B%22architecture%22%3A%22amd64%22%2C%22os%22%3A%22linux%22%2C%22x%22%3A%22y%22%7D", false, false, false},
+		{"GET", "/images/a/json", "manifests=yes", false, false, false},
+		{"GET", "/images/a/history", "manifests=1", false, false, false},
+		{"POST", "/containers/abc/rename", "name=web-1", false, false, false},
+		{"POST", "/v1.52/containers/abc/rename", "name=%2Fweb-1", false, false, false},
+		{"POST", "/containers/abc/rename", "", false, false, false},
+		{"POST", "/containers/abc/rename", "name=a%2Fb", false, false, false},
+		{"POST", "/containers/abc/rename", "name=web-1", true, false, false},
+		{"POST", "/containers/abc/rename", "name=web-1", false, false, true},
 		{"GET", "/distribution/a:1/json", "", false, false, false},
 		{"GET", "/images/sha256:0000000000000000000000000000000000000000000000000000000000000000/json", "", false, false, false},
 		{"GET", "/images/../x/json", "", false, false, false},
@@ -296,8 +331,25 @@ func FuzzAllowed(f *testing.F) {
 		{"POST", "/images/load", "", true, false, false},
 		{"GET", "/images/get", "names=x", false, false, false},
 		{"POST", "/containers/create", "", true, false, false},
+		{"POST", "/containers/create", "name=web&platform=linux/amd64", true, false, false},
+		{"POST", "/v1.56/containers/create", "name=%2Fshop-web-1", true, false, false},
+		{"POST", "/containers/create", "name=web&pull=always", true, false, false},
+		{"POST", "/containers/create", "name=a%2Fb", true, false, false},
+		{"POST", "/containers/create", "platform=linux", true, false, false},
+		{"POST", "/containers/create", "", false, false, false},
+		{"POST", "/containers/create", "", true, true, false},
+		{"POST", "/containers/create", "name=web", true, false, true},
+		{"POST", "/containers/create/", "", true, false, false},
 		{"POST", "/containers/abc/attach", "", false, true, false},
 		{"GET", "/containers/abc/archive", "", false, false, false},
+		{"PUT", "/containers/abc/archive", "noOverwriteDirNonDir=true&path=%2F", true, false, false},
+		{"PUT", "/v1.52/containers/abc/archive", "path=/&copyUIDGID=false", true, false, false},
+		{"PUT", "/containers/abc/archive", "path=%2F&copyUIDGID=true", true, false, false},
+		{"PUT", "/containers/abc/archive", "path=%2Fetc", true, false, false},
+		{"PUT", "/containers/abc/archive", "path=%2F", false, false, false},
+		{"PUT", "/containers/abc/archive", "path=%2F", true, true, false},
+		{"PUT", "/containers/abc/archive", "path=%2F", true, false, true},
+		{"HEAD", "/containers/abc/archive", "path=%2F", false, false, false},
 		{"GET", "//info", "", false, false, false},
 		{"GET", "/./info", "", false, false, false},
 		{"GET", "/%2e%2e/info", "", false, false, false},
@@ -460,6 +512,41 @@ var bodyShapes = map[BodyKind]bodyShape{
 	BodyConfigCreate: {
 		keys: map[string]*bodyShape{"Name": nil, "Labels": nil, "Data": nil, "Templating": {keys: map[string]*bodyShape{"Name": nil}}},
 	},
+	// A container create is the container config fields the Compose SDK sets, the host config and the
+	// networking config. The fields the SDK does not set are always encoded or omitted as zero values and
+	// are listed in zero; the host-access ones are listed there too, because no body is forwarded with
+	// one set when the host did not allow it (containerOracle judges those in FuzzBody).
+	BodyContainerCreate: {
+		keys: map[string]*bodyShape{
+			"Hostname": nil, "Domainname": nil, "User": nil, "AttachStdin": nil, "AttachStdout": nil, "AttachStderr": nil,
+			"ExposedPorts": nil, "Tty": nil, "OpenStdin": nil, "StdinOnce": nil, "Env": nil, "Cmd": nil, "Healthcheck": nil,
+			"Image": nil, "Volumes": nil, "WorkingDir": nil, "Entrypoint": nil, "Labels": nil, "StopSignal": nil,
+			"StopTimeout": nil, "Shell": nil, "ArgsEscaped": nil, "NetworkDisabled": nil, "OnBuild": nil,
+			"NetworkingConfig": {keys: map[string]*bodyShape{"EndpointsConfig": nil}},
+			"HostConfig": {keys: map[string]*bodyShape{
+				"Binds": nil, "ContainerIDFile": nil, "LogConfig": nil, "NetworkMode": nil, "PortBindings": nil,
+				"RestartPolicy": nil, "AutoRemove": nil, "VolumeDriver": nil, "VolumesFrom": nil, "ConsoleSize": nil,
+				"Annotations": nil, "CapAdd": nil, "CapDrop": nil, "CgroupnsMode": nil, "Dns": nil, "DnsOptions": nil,
+				"DnsSearch": nil, "ExtraHosts": nil, "GroupAdd": nil, "IpcMode": nil, "Cgroup": nil, "Links": nil,
+				"OomScoreAdj": nil, "PidMode": nil, "Privileged": nil, "PublishAllPorts": nil, "ReadonlyRootfs": nil,
+				"SecurityOpt": nil, "StorageOpt": nil, "Tmpfs": nil, "UTSMode": nil, "UsernsMode": nil, "ShmSize": nil,
+				"Sysctls": nil, "Runtime": nil, "Umask": nil, "Isolation": nil, "Mounts": nil, "MaskedPaths": nil,
+				"ReadonlyPaths": nil, "Init": nil,
+				// Resources, which the host config embeds.
+				"CpuShares": nil, "Memory": nil, "NanoCpus": nil, "CgroupParent": nil, "BlkioWeight": nil,
+				"BlkioWeightDevice": nil, "BlkioDeviceReadBps": nil, "BlkioDeviceWriteBps": nil,
+				"BlkioDeviceReadIOps": nil, "BlkioDeviceWriteIOps": nil, "CpuPeriod": nil, "CpuQuota": nil,
+				"CpuRealtimePeriod": nil, "CpuRealtimeRuntime": nil, "CpusetCpus": nil, "CpusetMems": nil,
+				"Devices": nil, "DeviceCgroupRules": nil, "DeviceRequests": nil, "MemoryReservation": nil,
+				"MemorySwap": nil, "MemorySwappiness": nil, "OomKillDisable": nil, "PidsLimit": nil, "Ulimits": nil,
+				"CpuCount": nil, "CpuPercent": nil, "IOMaximumIOps": nil, "IOMaximumBandwidth": nil,
+			}},
+		},
+		zero: []string{
+			"ArgsEscaped", "NetworkDisabled", "OnBuild",
+			"HostConfig.ContainerIDFile", "HostConfig.VolumeDriver", "HostConfig.Cgroup", "HostConfig.PublishAllPorts", "HostConfig.Umask",
+		},
+	},
 	// A service spec is the user's whole service, so the shape is its top-level keys.
 	// What it must not hold is a plugin or a network attachment task, and a runtime
 	// other than container (checked in FuzzBody).
@@ -595,13 +682,21 @@ func FuzzBody(f *testing.F) {
 		{uint8(BodyConfigCreate), enc(swarm.ConfigSpec{Annotations: swarm.Annotations{Name: "nginx.conf"}, Data: []byte("v"), Templating: &swarm.Driver{Name: "vault"}})},
 		{uint8(BodyConfigCreate), enc(swarm.ConfigSpec{Annotations: swarm.Annotations{Name: "nginx.conf"}, Data: []byte("v"), Templating: &swarm.Driver{Name: "golang", Options: map[string]string{"a": "b"}}})},
 		{uint8(BodyConfigCreate), `{"Name":"nginx.conf","Data":"","Driver":{"Name":"vault"}}`},
+		{uint8(BodyContainerCreate), enc(sdkContainerCreate())},
+		{uint8(BodyContainerCreate), enc(container.CreateRequest{Config: &container.Config{Image: "x"}, HostConfig: &container.HostConfig{Privileged: true}})},
+		{uint8(BodyContainerCreate), enc(container.CreateRequest{Config: &container.Config{Image: "x"}, HostConfig: &container.HostConfig{Binds: []string{"/var/run/docker.sock:/s"}}})},
+		{uint8(BodyContainerCreate), enc(container.CreateRequest{Config: &container.Config{Image: "x"}, HostConfig: &container.HostConfig{PidMode: "host", NetworkMode: "host"}})},
+		{uint8(BodyContainerCreate), enc(container.CreateRequest{Config: &container.Config{Image: "x"}, HostConfig: &container.HostConfig{MaskedPaths: []string{}, SecurityOpt: []string{"seccomp=unconfined"}}})},
+		{uint8(BodyContainerCreate), enc(container.CreateRequest{Config: &container.Config{Image: "x"}, HostConfig: &container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: "v", Target: "/v", VolumeOptions: &mount.VolumeOptions{DriverConfig: &mount.Driver{Name: "local", Options: map[string]string{"type": "none", "o": "bind", "device": "/"}}}}}}})},
+		{uint8(BodyContainerCreate), `{"Image":"x","HostConfig":{"ContainerIDFile":"/tmp/cid"}}`},
 		{uint8(BodyNone), `{}`},
 	}
 	for _, s := range seeds {
 		f.Add(s.kind, s.body)
 	}
 	f.Fuzz(func(t *testing.T, kind uint8, body string) {
-		k := BodyKind(kind % 11) // BodyNone and the ten kinds
+		// BodyNone and the eleven JSON kinds. BodyArchive is a tar and not JSON; FuzzArchive drives it.
+		k := BodyKind(kind % 12)
 		out, err := validateBody(k, strings.NewReader(body), bodyEnv{})
 		if err != nil {
 			return
@@ -637,6 +732,26 @@ func FuzzBody(f *testing.F) {
 			}
 			if reason := volumeOracle(req.Driver, req.DriverOpts); reason != "" {
 				t.Fatalf("a volume create with host access (%s) was forwarded: %.200s", reason, out)
+			}
+		}
+		if k == BodyContainerCreate {
+			// A container create with host access must never be forwarded when the host did not
+			// allow it. The judge is containerOracle, which shares no code with the rule, so a gap in
+			// the rule is not also a gap here; and what is forwarded is what a second encoding of the
+			// decoded value gives.
+			var req container.CreateRequest
+			if err := json.Unmarshal(out, &req); err != nil {
+				t.Fatalf("the forwarded container create does not decode: %v: %.200s", err, out)
+			}
+			if req.Config == nil || req.Image == "" {
+				t.Fatalf("a container create with no image was forwarded: %.200s", out)
+			}
+			if reasons := containerOracle(req); len(reasons) > 0 {
+				t.Fatalf("a container create with host access (%v) was forwarded: %.200s", reasons, out)
+			}
+			again, err := json.Marshal(req)
+			if err != nil || string(again) != string(out) {
+				t.Fatalf("the forwarded container create does not re-encode to itself (%v):\n %.300s\n %.300s", err, out, again)
 			}
 		}
 		if k == BodyNodeSpec {
@@ -752,6 +867,69 @@ func FuzzBody(f *testing.F) {
 						t.Fatalf("a service spec with host access in the inline volume of mount %d (%s) was forwarded for an absent volume: %.200s", i, reason, again)
 					}
 				}
+			}
+		}
+	})
+}
+
+// FuzzArchive drives the archive validator with arbitrary bytes. Whatever it is given, a tar it
+// accepts is, read again here by the raw header bytes and by archive/tar, exactly one entry: a
+// regular file with a clean name (relative, or with one leading slash) that has no .. segment
+// and no NUL, a mode with no bit above rwxrwxrwx, no link target, device or extended record, at
+// most 1,000 KB of content, and nothing after the end of the archive but zero padding. A crasher
+// is fixed in validateArchive, never here.
+func FuzzArchive(f *testing.F) {
+	f.Add(sdkArchive(f, "/run/secrets/tok", "s3cret-value", 0o444))
+	f.Add(sdkArchive(f, "run/secrets/tok", "", 0o444))
+	f.Add(sdkArchive(f, "../etc/passwd", "x", 0o444))
+	f.Add(sdkArchive(f, "/bin/x", "x", 0o4755))
+	f.Add(tarOf(f, tarEntry{hdr: tar.Header{Typeflag: tar.TypeSymlink, Name: "/run/secrets/tok", Linkname: "/etc/shadow", Mode: 0o777, ModTime: archiveModTime}}))
+	f.Add(append(sdkArchive(f, "/a", "x", 0o444), sdkArchive(f, "/b", "y", 0o444)...))
+	f.Add(append(sdkArchive(f, "/a", "x", 0o444), 0, 0, 0, 1))
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		if validateArchive(raw) != nil {
+			return
+		}
+		if len(raw) < 512 {
+			t.Fatalf("an archive of %d bytes was accepted, shorter than one header block", len(raw))
+		}
+		if tf := raw[156]; tf != '0' && tf != 0 {
+			t.Fatalf("an archive whose first entry has the type byte %q was accepted", tf)
+		}
+		rd := bytes.NewReader(raw)
+		tr := tar.NewReader(rd)
+		hdr, err := tr.Next()
+		if err != nil {
+			t.Fatalf("an accepted archive has no first entry: %v", err)
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			t.Fatalf("an accepted archive holds an entry of type %q", hdr.Typeflag)
+		}
+		name := strings.TrimPrefix(hdr.Name, "/")
+		if name == "" || name == "." || strings.HasPrefix(name, "/") || path.Clean(hdr.Name) != hdr.Name || strings.ContainsRune(hdr.Name, 0) {
+			t.Fatalf("an accepted archive names %q, not a clean path", hdr.Name)
+		}
+		for _, seg := range strings.Split(name, "/") {
+			if seg == ".." || seg == "" {
+				t.Fatalf("an accepted archive names %q, which has the segment %q", hdr.Name, seg)
+			}
+		}
+		if hdr.Mode&^0o777 != 0 || hdr.Mode < 0 {
+			t.Fatalf("an accepted archive has the mode %o", hdr.Mode)
+		}
+		if hdr.Linkname != "" || hdr.Devmajor != 0 || hdr.Devminor != 0 || len(hdr.PAXRecords) != 0 {
+			t.Fatalf("an accepted archive has a link, a device or an extended record: %+v", hdr)
+		}
+		n, err := io.Copy(io.Discard, io.LimitReader(tr, maxArchiveContent+1))
+		if err != nil || n != hdr.Size || n > maxArchiveContent {
+			t.Fatalf("an accepted archive has %d bytes of content (header %d, cap %d): %v", n, hdr.Size, maxArchiveContent, err)
+		}
+		if _, err := tr.Next(); !errors.Is(err, io.EOF) {
+			t.Fatalf("an accepted archive has more than one entry (%v)", err)
+		}
+		for _, c := range raw[len(raw)-rd.Len():] {
+			if c != 0 {
+				t.Fatalf("an accepted archive has data after its end")
 			}
 		}
 	})

@@ -353,3 +353,30 @@ describe("the secret.rotated and config.rotated actions (06-28)", () => {
     expect(labels.config?.rotated).toBe("Config rotated");
   });
 });
+
+describe("the stack actions (07-01)", () => {
+  it("are in the Action filter, scoped to an environment, with their own labels", () => {
+    for (const key of [
+      "stack.created",
+      "stack.draft_saved",
+      "stack.draft_discarded",
+      "stack.deployed",
+      "stack.stopped",
+      "stack.started",
+      "stack.removed",
+      "stack.value_revealed",
+    ]) {
+      expect(KNOWN_ACTIONS, key).toContain(key);
+      expect(ENV_SCOPED_ACTIONS, key).toContain(key);
+    }
+    const labels = audit.audit.actions as Record<string, Record<string, string>>;
+    expect(labels.stack?.created).toBe("Stack created");
+    expect(labels.stack?.draft_saved).toBe("Stack draft saved");
+    expect(labels.stack?.draft_discarded).toBe("Stack draft discarded");
+    expect(labels.stack?.deployed).toBe("Stack deployed");
+    expect(labels.stack?.stopped).toBe("Stack stopped");
+    expect(labels.stack?.started).toBe("Stack started");
+    expect(labels.stack?.removed).toBe("Stack removed");
+    expect(labels.stack?.value_revealed).toBe("Stack secret value revealed");
+  });
+});

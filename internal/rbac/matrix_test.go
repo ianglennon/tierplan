@@ -54,6 +54,11 @@ func TestRequirementOfEveryRegisteredPermission(t *testing.T) {
 		rbac.PermSecretsManage:         {Kind: rbac.NeedRole, Role: rbac.RoleAdmin},
 		rbac.PermConfigsRead:           {Kind: rbac.NeedRole, Role: rbac.RoleViewer},
 		rbac.PermConfigsManage:         {Kind: rbac.NeedRole, Role: rbac.RoleAdmin},
+		rbac.PermStacksRead:            {Kind: rbac.NeedRole, Role: rbac.RoleViewer},
+		rbac.PermStacksUpdate:          {Kind: rbac.NeedRole, Role: rbac.RoleOperator},
+		rbac.PermStacksDeploy:          {Kind: rbac.NeedRole, Role: rbac.RoleOperator},
+		rbac.PermStacksCreate:          {Kind: rbac.NeedRole, Role: rbac.RoleAdmin},
+		rbac.PermStacksDelete:          {Kind: rbac.NeedRole, Role: rbac.RoleAdmin},
 	}
 	all := rbac.All()
 	if len(all) != len(want) {

@@ -73,7 +73,12 @@ func (e *SpecInvalidError) Error() string        { return "swarmops: the spec is
 func (e *SpecInvalidError) Is(target error) bool { return target == ErrSpecInvalid }
 
 // StackOwnedError names the stack that owns the service.
-type StackOwnedError struct{ Stack string }
+type StackOwnedError struct {
+	Stack string
+	// StackID is the bayplan.stack.id label of the service, as the label says it: a claim the caller
+	// confirms before it links to anything. Empty for a stack docker stack deploy made.
+	StackID string
+}
 
 func (e *StackOwnedError) Error() string        { return "swarmops: the service belongs to stack " + e.Stack }
 func (e *StackOwnedError) Is(target error) bool { return target == ErrStackOwned }
@@ -180,6 +185,9 @@ const stackLabelPrefix = "com.docker.stack."
 // stackNamespaceLabel is the label that makes a service a stack's.
 const stackNamespaceLabel = "com.docker.stack.namespace"
 
+// stackIDLabel is the label that names the Bayplan stack record behind a stack's service (stacks.LabelStackID).
+const stackIDLabel = "bayplan.stack.id"
+
 // common is what Review and Apply read the same way.
 type common struct {
 	envID, serviceID string
@@ -224,7 +232,7 @@ func prepare(ctx context.Context, deps Deps, c common) (*prepared, error) {
 		}
 	}
 	if stack, owned := owner(detail.Labels); owned {
-		return p, &StackOwnedError{Stack: stack}
+		return p, &StackOwnedError{Stack: stack, StackID: detail.Labels[stackIDLabel]}
 	}
 	if c.version != detail.Version {
 		return p, dockerx.ErrServiceChanged

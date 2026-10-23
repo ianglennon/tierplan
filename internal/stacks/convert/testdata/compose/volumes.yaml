@@ -1,0 +1,45 @@
+# Mounts: named volumes with and without a driver, an external volume under its own name, a
+# volume with a subpath, absolute binds with and without propagation, a sized tmpfs and an
+# anonymous volume.
+services:
+  db:
+    image: postgres:16
+    volumes:
+      - data:/var/lib/postgresql/data
+      - cache:/cache:nocopy
+      - type: volume
+        source: nfs
+        target: /nfs
+        volume:
+          nocopy: true
+          subpath: sub
+      - archive:/archive:ro
+      - /etc/ssl/certs:/certs:ro
+      - type: bind
+        source: /srv/shared
+        target: /shared
+        bind:
+          propagation: rshared
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 67108864
+      - /scratch
+volumes:
+  data: {}
+  cache:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+    labels:
+      purpose: cache
+  nfs:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: addr=10.0.0.5,rw
+      device: ":/export"
+  archive:
+    external: true
+    name: shared-archive

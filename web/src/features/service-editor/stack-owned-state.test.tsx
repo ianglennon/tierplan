@@ -19,7 +19,7 @@ afterEach(() => {
   localStorage.clear();
 });
 
-function renderState() {
+function renderState(bayplanStackId?: string) {
   return render(
     <TestRouter>
       <StackOwnedState
@@ -27,6 +27,7 @@ function renderState() {
         serviceId={SERVICE_ID}
         name="api"
         stack="shop"
+        bayplanStackId={bayplanStackId}
         spec={editSpec()}
       />
     </TestRouter>,
@@ -48,6 +49,24 @@ describe("StackOwnedState", () => {
     renderState();
     const back = screen.getByRole("link", { name: "Back to api" });
     expect(back.getAttribute("href")).toBe(`/env/${SERVICE_ENV}/services/${SERVICE_ID}`);
+  });
+
+  it("offers Open stack beside Back to {name} when Bayplan manages the stack", () => {
+    renderState("stk-1");
+    const open = screen.getByRole("link", { name: "Open stack" });
+    expect(open.getAttribute("href")).toBe(`/env/${SERVICE_ENV}/stacks/stk-1`);
+    // The accent button is the stack; going back stays the outline one.
+    expect(open.getAttribute("data-variant")).toBe("default");
+    expect(screen.getByRole("link", { name: "Back to api" }).getAttribute("data-variant")).toBe(
+      "outline",
+    );
+    expect(screen.getByRole("heading", { name: "api is managed by stack shop" })).toBeTruthy();
+  });
+
+  it("offers no Open stack for a stack Bayplan does not manage", () => {
+    renderState();
+    expect(screen.queryByRole("link", { name: "Open stack" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Back to api" })).toBeTruthy();
   });
 
   it("shows the spec read-only, hidden values as the server sent them", async () => {

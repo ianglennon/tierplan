@@ -34,3 +34,16 @@ npm minimatch BlueOak-1.0.0  # via shadcn > ts-morph; permissive, attribution on
 # 0BSD (BSD Zero Clause) is a public-domain-equivalent permissive licence with no attribution
 # requirement, OSI approved and compatible with the AGPL. The allowlist has no 0BSD entry yet.
 go github.com/realclientip/realclientip-go BSD-0-Clause  # permissive, no obligations, AGPL-compatible
+
+# --- Reviewed 2026-10-19 (plan 07-20), the Compose SDK's dependency tree ---
+
+# The Docker Compose SDK (github.com/docker/compose/v5 v5.6.0, Apache-2.0) pulls these three modules in
+# through buildkit. go-licenses prints "no license found" for them because each LICENSE file holds only the
+# Apache License 2.0 notice ("Licensed under the Apache License, Version 2.0 ..."), 13 lines, and not the full
+# text it matches against. The notice is read from the module cache at the pinned version and matches the
+# upstream repository, so each is Apache-2.0, which may be included in an AGPL-3.0 work. The licence column
+# is what the scanner reports (Unknown), as the rule above requires; a new version that changes its LICENSE
+# file is re-reviewed.
+go github.com/in-toto/attestation Unknown  # Apache-2.0 notice in LICENSE (v1.2.0); go-licenses cannot classify the short file
+go github.com/in-toto/in-toto-golang Unknown  # Apache-2.0 notice in LICENSE (v0.11.0); go-licenses cannot classify the short file
+go gotest.tools/v3 Unknown  # Apache-2.0 notice in LICENSE (v3.5.2); go-licenses cannot classify the short file

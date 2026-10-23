@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/moby/moby/api/types/swarm"
 )
@@ -211,7 +212,11 @@ func (f *Fake) serveServiceUpdate(w http.ResponseWriter, r *http.Request, p stri
 			now = s.Spec
 		}
 	}
-	next := fakeServiceState{version: current + 1, spec: spec, previous: &now}
+	stored := spec
+	if cfg.NetworkTargetsByID {
+		stored.TaskTemplate.Networks = cfg.networkTargetsByID(spec.TaskTemplate.Networks)
+	}
+	next := fakeServiceState{version: current + 1, spec: stored, previous: &now}
 	if q.Get("rollback") == "previous" {
 		// A rollback ignores the spec in the body: the previous spec becomes the service's and
 		// the one it replaces becomes the previous one, so a second rollback toggles back.
@@ -385,7 +390,11 @@ func (f *Fake) serveServiceCreate(w http.ResponseWriter, r *http.Request, p stri
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": cfg.ServiceCreateError})
 		return true
 	}
-	row := FakeService{Name: spec.Name, Version: 1, Spec: &spec}
+	stored := spec
+	if cfg.NetworkTargetsByID {
+		stored.TaskTemplate.Networks = cfg.networkTargetsByID(spec.TaskTemplate.Networks)
+	}
+	row := FakeService{Name: spec.Name, Version: 1, Spec: &stored}
 	switch {
 	case spec.Mode.Global != nil:
 		row.Mode = "global"
@@ -414,4 +423,41 @@ func (f *Fake) ServiceCreates() []FakeServiceCreate {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.svcCreates)
+}
+
+// labelFilter reads the "label" terms of a list request's filters query (a JSON map of term to
+// values, as the engine client encodes it) and returns a test of a label set: every term must
+// match, a "key=value" term on both, a bare "key" on the key alone. Without a label term it
+// accepts everything, as a daemon does.
+func labelFilter(rawFilters string) func(map[string]string) bool {
+	var f map[string]map[string]bool
+	if rawFilters == "" || json.Unmarshal([]byte(rawFilters), &f) != nil || len(f["label"]) == 0 {
+		return func(map[string]string) bool { return true }
+	}
+	terms := f["label"]
+	return func(labels map[string]string) bool {
+		for term, on := range terms {
+			if !on {
+				continue
+			}
+			key, value, hasValue := strings.Cut(term, "=")
+			got, ok := labels[key]
+			if !ok || (hasValue && got != value) {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+// filterServicesByLabel keeps the services whose own labels pass the request's label filter.
+func filterServicesByLabel(in []swarm.Service, rawFilters string) []swarm.Service {
+	keep := labelFilter(rawFilters)
+	out := make([]swarm.Service, 0, len(in))
+	for _, s := range in {
+		if keep(s.Spec.Labels) {
+			out = append(out, s)
+		}
+	}
+	return out
 }

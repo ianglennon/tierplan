@@ -55,6 +55,11 @@ const (
 	ContextAgentCA        = "agent-ca/v1/"
 	ContextBackupSchedule = "backup-schedule/v1"
 	ContextRegistryCred   = "registry-cred/v1/" //nolint:gosec // G101: a sealing context label, not a credential
+	// A stack's secret variable is sealed under the snapshot ID and the variable's name, a secret
+	// stack file under the snapshot ID and its path (Phase 7), so a value copied to another row,
+	// another snapshot or another name does not open.
+	ContextStackVar  = "stack-var/v1/"  //nolint:gosec // G101: a sealing context label, not a credential
+	ContextStackFile = "stack-file/v1/" //nolint:gosec // G101: a sealing context label, not a credential
 
 	keyLen         = 32
 	keyIDDomain    = "bayplan/key-id/v1"

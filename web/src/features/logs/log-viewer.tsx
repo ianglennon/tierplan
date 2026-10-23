@@ -43,6 +43,7 @@ import {
   isSlotMark,
   type LogSource,
   type ServiceLogTask,
+  type StackCapEvent,
 } from "@/features/logs/log-source";
 import {
   createLogStream,
@@ -64,6 +65,7 @@ import {
   TaskFilterBar,
 } from "@/features/logs/task-filter-bar";
 import {
+  formatStackPrefix,
   formatTaskPrefix,
   prefixColour,
   prefixWidthCh,
@@ -101,20 +103,26 @@ const listOf = (v: string | undefined): string[] =>
 const idMatches = (chosen: string, id: string): boolean =>
   chosen === id || (chosen.length >= 8 && id.startsWith(chosen));
 
-// shownUnderFilters says whether a row of the buffer belongs to the tasks and nodes a log is
+// shownUnderFilters says whether a row of the buffer belongs to the tasks, nodes and services a log is
 // narrowed to. It narrows the lines already loaded while the stream for the new set opens; the
 // server narrows what follows. A row that names no task (a container's marker, the interrupted
 // notice) stays. A replacement marker belongs to the old task and the new one, a node notice to
-// its node, and says nothing about a task that is chosen.
+// its node, and says nothing about a task that is chosen. A stack's containers are chosen by ID
+// as tasks are, so they ride in tasks.
 function shownUnderFilters(
   line: BufferedLine,
   tasks: readonly string[],
   nodes: readonly string[],
+  services: readonly string[] = [],
 ): boolean {
-  if (tasks.length === 0 && nodes.length === 0) return true;
+  if (tasks.length === 0 && nodes.length === 0 && services.length === 0) return true;
   const mark = line.swarm;
   if (mark) {
-    if (!isSlotMark(mark)) return tasks.length === 0 && nodes.includes(mark.node);
+    if (!isSlotMark(mark))
+      return tasks.length === 0 && services.length === 0 && nodes.includes(mark.node);
+    if (services.length > 0 && mark.service !== undefined && !services.includes(mark.service)) {
+      return false;
+    }
     const newId = mark.new;
     const taskOk =
       tasks.length === 0 ||
@@ -129,7 +137,8 @@ function shownUnderFilters(
   const id = line.task;
   return (
     (tasks.length === 0 || tasks.some((c) => idMatches(c, id))) &&
-    (nodes.length === 0 || nodes.includes(line.node ?? ""))
+    (nodes.length === 0 || nodes.includes(line.node ?? "")) &&
+    (services.length === 0 || (line.service !== undefined && services.includes(line.service)))
   );
 }
 
@@ -147,6 +156,12 @@ export interface LogViewerProps extends StreamTarget {
   onParamsChange?: (params: LogViewParams) => void;
   // What the Tasks and Nodes filters of a service's log offer (plan 06-30, D-33).
   filterOptions?: FilterOptions;
+  // The third row of a stack's toolbar: its Services, Tasks, Nodes and Containers filters, which
+  // the page that owns the address builds (plan 07-29, D-22).
+  filterBar?: ReactNode;
+  // The names of the stack's services, which colour its prefixes: by the service's place in the
+  // list sorted by name.
+  serviceNames?: readonly string[];
   // Controls after Download… at the right of the toolbar's second row, and the items of
   // the More menu that stand in for them on a narrow screen.
   actions?: ReactNode;
@@ -181,14 +196,18 @@ export function popoutLogsUrl(envId: string, source: LogSource, view: LogViewPar
   if (view.ts !== undefined) q.set("ts", String(view.ts));
   if (view.utc !== undefined) q.set("utc", String(view.utc));
   if (view.wrap !== undefined) q.set("wrap", String(view.wrap));
-  if (source.kind === "service") {
+  if (source.kind === "service" || source.kind === "stack") {
     if (view.prefix !== undefined) q.set("prefix", String(view.prefix));
     if (view.task) q.set("task", text(view.task));
     if (view.node) q.set("node", text(view.node));
     if (view.stopped !== undefined) q.set("stopped", String(view.stopped));
   }
+  if (source.kind === "stack") {
+    if (view.service) q.set("service", text(view.service));
+    if (view.container) q.set("container", text(view.container));
+  }
   const query = q.toString();
-  const what = source.kind === "service" ? "services" : "containers";
+  const what = { container: "containers", service: "services", stack: "stacks" }[source.kind];
   return withBase(
     `/popout/${encodeURIComponent(envId)}/${what}/${encodeURIComponent(source.id)}/logs${query ? `?${query}` : ""}`,
   );
@@ -232,15 +251,21 @@ export function LogViewer(props: LogViewerProps) {
     params,
     onParamsChange,
     filterOptions = NO_FILTER_OPTIONS,
+    filterBar,
+    serviceNames,
     actions,
     moreItems,
     popout = false,
   } = props;
   const src = sourceOf(props);
   // A service's log shares everything with a container's but what it adds: the task of every
-  // line, the filters on tasks and nodes and the markers (plans 06-29 to 06-31, D-35).
+  // line, the filters on tasks and nodes and the markers (plans 06-29 to 06-31, D-35). A stack's
+  // log adds the service of every line and the filters on services and containers (plan 07-29).
   const kind = src.kind;
   const isService = kind === "service";
+  const isStack = kind === "stack";
+  const hasTasks = isService || isStack;
+  const stackTarget = src.kind === "stack" ? src.target : undefined;
   const sourceId = src.id;
   const containerNode = src.kind === "container" ? src.nodeId : undefined;
   const t = useT();
@@ -260,10 +285,15 @@ export function LogViewer(props: LogViewerProps) {
   // A service's tasks as the stream last listed them, null before it has, and the longest
   // task prefix loaded, which sets the width of the prefix gutter.
   const [tasks, setTasks] = useState<ServiceLogTask[] | null>(null);
-  // The slot and node pairs seen so far: few however many lines, and what the width of the
-  // prefix gutter is worked out from. prefixSeen counts them, to draw again when one is new.
-  const prefixPairs = useRef(new Map<string, { slot: number; node: string }>());
+  // The stack has more than the stream follows at once; the notice above the log says so.
+  const [capNotice, setCapNotice] = useState<StackCapEvent | null>(null);
+  // The service, slot and node triples seen so far: few however many lines, and what the width
+  // of the prefix gutter is worked out from. prefixSeen counts them, to draw again when one is new.
+  const prefixPairs = useRef(new Map<string, { service: string; slot: number; node: string }>());
   const [prefixSeen, setPrefixSeen] = useState(0);
+  // The services seen in a stack's lines, for the colour of a prefix when the page has not given
+  // the stack's list of them.
+  const seenServices = useRef(new Set<string>());
   // The order nodes were first seen in, which colours the prefixes of a global service.
   const nodeOrder = useRef(new Map<string, number>());
   const theme = useTheme();
@@ -290,7 +320,7 @@ export function LogViewer(props: LogViewerProps) {
     else setOwn(next);
   };
   const savedTaskNames = useMemo(loadTaskNames, []);
-  const taskNamesOn = isService && (view.prefix ?? savedTaskNames);
+  const taskNamesOn = hasTasks && (view.prefix ?? savedTaskNames);
   const setTaskNames = (on: boolean) => {
     saveTaskNames(on);
     change({ prefix: on });
@@ -307,14 +337,18 @@ export function LogViewer(props: LogViewerProps) {
   const taskFilter = view.task ?? "";
   const nodeFilter = view.node ?? "";
   const stoppedOn = view.stopped === true;
-  const filtersKey = `${taskFilter}|${nodeFilter}|${stoppedOn}`;
+  const serviceFilter = isStack ? (view.service ?? "") : "";
+  const containerFilter = isStack ? (view.container ?? "") : "";
+  const filtersKey = `${taskFilter}|${nodeFilter}|${stoppedOn}|${serviceFilter}|${containerFilter}`;
   // The filters of the stream whose lines the buffer holds. When the address changes them, the
   // lines already loaded are narrowed at once while the stream for the new set opens, and the
   // buffer is replaced by that stream's last 500 lines when it answers (D-33).
   const [loadedFilters, setLoadedFilters] = useState(filtersKey);
-  const reloading = isService && loadedFilters !== filtersKey;
+  const reloading = hasTasks && loadedFilters !== filtersKey;
   const taskIds = useMemo(() => listOf(taskFilter), [taskFilter]);
   const nodeNames = useMemo(() => listOf(nodeFilter), [nodeFilter]);
+  const serviceNamesChosen = useMemo(() => listOf(serviceFilter), [serviceFilter]);
+  const containerIds = useMemo(() => listOf(containerFilter), [containerFilter]);
   // The effect below tells a change of filters from every other change by what else is the same.
   const streamBase = useRef("");
   const show = useMemo(() => parseShow(sinceKey || undefined), [sinceKey]);
@@ -325,7 +359,7 @@ export function LogViewer(props: LogViewerProps) {
   useEffect(() => {
     // Only the filters changed: keep the lines (narrowed) until the new stream answers.
     const base = `${envId}|${kind}|${sourceId}|${containerNode ?? ""}|${sinceKey}|${openCount}`;
-    const reload = kind === "service" && streamBase.current === base && buffer.length > 0;
+    const reload = hasTasks && streamBase.current === base && buffer.length > 0;
     streamBase.current = base;
     following.current = true;
     setPaused(false);
@@ -335,7 +369,9 @@ export function LogViewer(props: LogViewerProps) {
       setEarlier("idle");
       setUnreadable(null);
       setTasks(null);
+      setCapNotice(null);
       prefixPairs.current = new Map();
+      seenServices.current = new Set();
       setPrefixSeen(0);
       nodeOrder.current = new Map();
       setLoadedFilters(filtersKey);
@@ -350,30 +386,42 @@ export function LogViewer(props: LogViewerProps) {
         if (l.task === undefined) continue;
         const slot = l.slot ?? 0;
         const node = l.node ?? "";
-        const key = `${slot}@${node}`;
+        const service = l.service ?? "";
+        const key = `${service}|${slot}@${node}`;
         if (!prefixPairs.current.has(key)) {
-          prefixPairs.current.set(key, { slot, node });
+          prefixPairs.current.set(key, { service, slot, node });
           added = true;
         }
+        if (service) seenServices.current.add(service);
         if (slot === 0 && !nodeOrder.current.has(node)) {
           nodeOrder.current.set(node, nodeOrder.current.size);
         }
       }
       if (added) setPrefixSeen(prefixPairs.current.size);
     };
-    const target: StreamTarget =
-      kind === "service"
-        ? { source: { kind: "service", id: sourceId } }
-        : { containerId: sourceId, nodeId: containerNode };
+    const target: StreamTarget = hasTasks
+      ? {
+          source:
+            kind === "stack"
+              ? { kind: "stack", id: sourceId, target: stackTarget ?? "swarm" }
+              : { kind: "service", id: sourceId },
+        }
+      : { containerId: sourceId, nodeId: containerNode };
     const stream = createLogStream({
       envId,
       ...target,
       sid,
       ...range,
-      service:
-        kind === "service"
-          ? { tasks: listOf(taskFilter), nodes: listOf(nodeFilter), stopped: stoppedOn }
-          : undefined,
+      service: hasTasks
+        ? {
+            tasks: listOf(taskFilter),
+            nodes: listOf(nodeFilter),
+            stopped: stoppedOn,
+            ...(isStack
+              ? { services: listOf(serviceFilter), containers: listOf(containerFilter) }
+              : {}),
+          }
+        : undefined,
       onReady: (info) => {
         if (firstReady) {
           firstReady = false;
@@ -388,11 +436,12 @@ export function LogViewer(props: LogViewerProps) {
         setTasks(info.tasks ?? null);
       },
       onTasks: setTasks,
+      onCap: setCapNotice,
       onMarker: ({ at, ...mark }) => buffer.insertSwarmMarker(mark, at ?? new Date().toISOString()),
       onNode: ({ at, ...notice }) =>
         buffer.insertSwarmMarker(notice, at ?? new Date().toISOString()),
       onLines: (lines) => {
-        if (kind === "service") noteTasks(lines);
+        if (hasTasks) noteTasks(lines);
         buffer.push(lines);
       },
       onState: (next) => {
@@ -406,15 +455,14 @@ export function LogViewer(props: LogViewerProps) {
           buffer.pushMarker("interrupted", new Date().toISOString());
       },
       // The end of a service's stream is not a container that stopped; there is no row for it.
-      onContainerState:
-        kind === "service"
-          ? undefined
-          : ({ state: what, at }) => {
-              // A reconnect to a stopped container is told again; the row is shown once.
-              if (what === "stopped" && buffer.last?.marker !== "stopped")
-                buffer.pushMarker("stopped", at);
-              else if (what === "restarted") buffer.pushMarker("restarted", at);
-            },
+      onContainerState: hasTasks
+        ? undefined
+        : ({ state: what, at }) => {
+            // A reconnect to a stopped container is told again; the row is shown once.
+            if (what === "stopped" && buffer.last?.marker !== "stopped")
+              buffer.pushMarker("stopped", at);
+            else if (what === "restarted") buffer.pushMarker("restarted", at);
+          },
     });
     streamRef.current = stream;
     return () => {
@@ -432,8 +480,13 @@ export function LogViewer(props: LogViewerProps) {
     taskFilter,
     nodeFilter,
     stoppedOn,
+    serviceFilter,
+    containerFilter,
     filtersKey,
     openCount,
+    hasTasks,
+    isStack,
+    stackTarget,
   ]);
 
   // A pop-out nobody can see lets its stream go after a minute and takes it up again
@@ -500,7 +553,11 @@ export function LogViewer(props: LogViewerProps) {
     let day = "";
     const add = (i: number) => {
       const line = buffer.at(i);
-      if (reloading && !shownUnderFilters(line, taskIds, nodeNames)) return;
+      if (
+        reloading &&
+        !shownUnderFilters(line, taskIds.concat(containerIds), nodeNames, serviceNamesChosen)
+      )
+        return;
       if (timestamps && !line.marker) {
         const d = stampDay(line.t, utc);
         if (d !== day) {
@@ -513,19 +570,34 @@ export function LogViewer(props: LogViewerProps) {
     if (filtering) for (const m of matches) add(m.index);
     else for (let i = 0; i < buffer.length; i++) add(i);
     return out;
-  }, [buffer, version, filtering, matches, timestamps, utc, reloading, taskIds, nodeNames]);
+  }, [
+    buffer,
+    version,
+    filtering,
+    matches,
+    timestamps,
+    utc,
+    reloading,
+    taskIds,
+    containerIds,
+    nodeNames,
+    serviceNamesChosen,
+  ]);
 
   const capped = buffer.droppedCount > 0;
   const allLoaded = show.kind === "all" && buffer.length < 50_000;
   const hasOldest = buffer.length > 0;
+  // A stack's log has no earlier pages to load: the Show range reaches further back.
   const topRow = hasOldest
     ? capped
       ? "cap"
-      : startReached || allLoaded
-        ? "start"
-        : earlier === "error"
-          ? "error"
-          : "load"
+      : isStack
+        ? null
+        : startReached || allLoaded
+          ? "start"
+          : earlier === "error"
+            ? "error"
+            : "load"
     : null;
   const topCount = topRow ? 1 : 0;
   const count = topCount + codes.length;
@@ -667,7 +739,17 @@ export function LogViewer(props: LogViewerProps) {
   const announcement = useDebounced(counter, ANNOUNCE_DEBOUNCE_MS);
   const markerLabel = (line: BufferedLine) =>
     line.marker === "swarm" && line.swarm
-      ? swarmMarkerText(t, line.swarm, name)
+      ? isSlotMark(line.swarm) && line.swarm.unit === "container"
+        ? t("stackLogs.marker.replacedContainer", {
+            service: line.swarm.service ?? name,
+            old: line.swarm.old.slice(0, 8),
+            new: (line.swarm.new ?? "").slice(0, 8),
+          })
+        : swarmMarkerText(
+            t,
+            line.swarm,
+            isSlotMark(line.swarm) && line.swarm.service ? line.swarm.service : name,
+          )
       : line.marker === "interrupted"
         ? t("logs.interrupted")
         : t(line.marker === "stopped" ? "logs.stopped" : "logs.restarted", {
@@ -683,7 +765,10 @@ export function LogViewer(props: LogViewerProps) {
   const connected = state.status === "live" || state.status === "reconnecting";
   // Filters that leave no task to follow: said in place of "No log output yet".
   const noTaskMatches =
-    isService && (taskFilter !== "" || nodeFilter !== "") && tasks !== null && tasks.length === 0;
+    hasTasks &&
+    (taskFilter !== "" || nodeFilter !== "" || serviceFilter !== "" || containerFilter !== "") &&
+    tasks !== null &&
+    tasks.length === 0;
   const loadFailed = state.status === "closed" && state.reason === "failed" && !everLive.current;
   const [downloadOpen, setDownloadOpen] = useState(false);
   const downloadTarget = { envId, source: src };
@@ -697,7 +782,7 @@ export function LogViewer(props: LogViewerProps) {
       ts: timestamps,
       utc: view.utc ?? prefs.utc,
       wrap,
-      ...(isService
+      ...(hasTasks
         ? {
             prefix: taskNamesOn,
             task: taskFilter || undefined,
@@ -705,33 +790,49 @@ export function LogViewer(props: LogViewerProps) {
             stopped: stoppedOn || undefined,
           }
         : {}),
+      ...(isStack
+        ? { service: serviceFilter || undefined, container: containerFilter || undefined }
+        : {}),
     });
     window.open(url, "_blank", "popup,noopener,width=1100,height=760");
   };
 
-  // ---- the task prefix of a service's lines ----
+  // ---- the task prefix of a service's or a stack's lines ----
   const taskStates = useMemo(() => new Map((tasks ?? []).map((x) => [x.id, x.state])), [tasks]);
+  // The text of a prefix: a service's names the task by its slot beside the service's own header,
+  // and a stack's names the service of every line (plan 07-29, D-22).
+  const prefixText = (service: string, slot: number, node: string): string =>
+    stackTarget
+      ? formatStackPrefix({ target: stackTarget, service, slot, node })
+      : formatTaskPrefix({ service: name, slot, node, showService: showServiceName });
   // biome-ignore lint/correctness/useExhaustiveDependencies: prefixSeen is the trigger, not an input
   const prefixCh = useMemo(() => {
     let longest = 0;
-    for (const { slot, node } of prefixPairs.current.values()) {
-      longest = Math.max(
-        longest,
-        formatTaskPrefix({ service: name, slot, node, showService: showServiceName }).length,
-      );
+    for (const { service, slot, node } of prefixPairs.current.values()) {
+      longest = Math.max(longest, prefixText(service, slot, node).length);
     }
     return prefixWidthCh(longest);
-  }, [prefixSeen, name, showServiceName]);
+  }, [prefixSeen, name, showServiceName, stackTarget]);
+  // A stack's prefixes are coloured by service: its place among the stack's services sorted by
+  // name, modulo eight, so every replica of a service shares a colour.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: prefixSeen is the trigger, not an input
+  const serviceOrder = useMemo(
+    () => [...new Set([...(serviceNames ?? []), ...seenServices.current])].sort(),
+    [serviceNames, prefixSeen],
+  );
   const prefixOf = (line: BufferedLine) => {
     if (!taskNamesOn || line.task === undefined) return undefined;
     const slot = line.slot ?? 0;
     const node = line.node ?? "";
+    const service = line.service ?? "";
     // A replicated service's tasks are coloured by slot, a global service's by node, so a
     // replacement task keeps its slot's colour.
-    const colour = prefixColour(slot === 0 ? (nodeOrder.current.get(node) ?? 0) : slot - 1);
+    const colour = isStack
+      ? prefixColour(Math.max(0, serviceOrder.indexOf(service)))
+      : prefixColour(slot === 0 ? (nodeOrder.current.get(node) ?? 0) : slot - 1);
     return (
       <TaskPrefix
-        text={formatTaskPrefix({ service: name, slot, node, showService: showServiceName })}
+        text={prefixText(service, slot, node)}
         colour={colour}
         widthCh={prefixCh}
         taskId={line.task}
@@ -823,12 +924,15 @@ export function LogViewer(props: LogViewerProps) {
         onTimestampsChange={(on) => setView({ timestamps: on })}
         utc={utc}
         onUtcChange={(on) => setView({ utc: on })}
-        taskNames={isService ? { on: taskNamesOn, onChange: setTaskNames } : undefined}
+        taskNames={hasTasks ? { on: taskNamesOn, onChange: setTaskNames } : undefined}
         following={
-          isService && tasks ? tasks.filter((x) => !isEndedTaskState(x.state)).length : undefined
+          hasTasks && tasks ? tasks.filter((x) => !isEndedTaskState(x.state)).length : undefined
         }
+        followingUnit={stackTarget === "standalone" ? "containers" : "tasks"}
         filterBar={
-          isService ? (
+          isStack ? (
+            filterBar
+          ) : isService ? (
             <TaskFilterBar
               service={name}
               options={filterOptions}
@@ -865,6 +969,14 @@ export function LogViewer(props: LogViewerProps) {
         show={show}
         timestamps={timestamps}
       />
+      {capNotice ? (
+        <p role="status" className="rounded-lg border bg-muted px-3 py-2 text-sm">
+          {t(capNotice.unit === "containers" ? "stackLogs.cap.containers" : "stackLogs.cap.tasks", {
+            count: capNotice.count,
+            cap: capNotice.cap,
+          })}
+        </p>
+      ) : null}
       <div className="relative">
         <div
           ref={scrollRef}
@@ -925,14 +1037,16 @@ export function LogViewer(props: LogViewerProps) {
           )}
         </div>
         {connected && buffer.length === 0 ? (
-          isService ? (
+          hasTasks ? (
             <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-1 p-6 text-center text-sm text-muted-foreground">
               {noTaskMatches ? (
-                <p>{t("logs.service.noTasksMatch")}</p>
+                <p>{t(isStack ? "stackLogs.noMatch" : "logs.service.noTasksMatch")}</p>
               ) : (
                 <>
                   <p>{t("logs.empty")}</p>
-                  <p className="text-xs">{t("logs.service.emptyBody")}</p>
+                  <p className="text-xs">
+                    {t(isStack ? "stackLogs.emptyBody" : "logs.service.emptyBody")}
+                  </p>
                 </>
               )}
             </div>

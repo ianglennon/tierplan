@@ -687,3 +687,32 @@ func TestServiceCreateTheDaemonsRefusalOfASpecKeepsItsWords(t *testing.T) {
 		t.Errorf("writes = %d, want exactly one", got)
 	}
 }
+
+func TestServiceInspectNamesEveryNetworkItsTasksNeedAnAddressOn(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{
+		SwarmState: "active", SwarmControl: true,
+		ServiceRows: []dockertest.FakeService{
+			{ID: "wide-id", Name: "wide", Mode: "replicated", Desired: 3, Running: 1,
+				Networks: []string{"net-b", "net-a"}, VirtualIPs: []string{"ingress-id", "net-a"}},
+		},
+	})
+	d, _, err := newClient(t, fake).ServiceInspect(context.Background(), "wide")
+	if err != nil {
+		t.Fatalf("ServiceInspect: %v", err)
+	}
+	want := []string{"ingress-id", "net-a", "net-b"}
+	if !slices.Equal(d.NetworkIDs, want) {
+		t.Errorf("NetworkIDs = %v, want %v (once each, sorted, the virtual IP networks included)", d.NetworkIDs, want)
+	}
+}
+
+func TestServiceInspectOfAServiceOnNoNetworkHasNoNetworkIDs(t *testing.T) {
+	c, _ := serviceFake(t)
+	d, _, err := c.ServiceInspect(context.Background(), "web")
+	if err != nil {
+		t.Fatalf("ServiceInspect: %v", err)
+	}
+	if d.NetworkIDs != nil {
+		t.Errorf("NetworkIDs = %v, want nil", d.NetworkIDs)
+	}
+}

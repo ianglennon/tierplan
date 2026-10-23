@@ -4,12 +4,17 @@
 package jobs_test
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/proto/testsupport"
@@ -29,6 +34,17 @@ func hold(release <-chan struct{}) func(context.Context, *jobs.Reporter) {
 		case <-release:
 		case <-ctx.Done():
 		}
+	}
+}
+
+// gate waits for a channel the test closes, or for the end of the job's context; it is false when the
+// job was cancelled first, so a run never outlives a test that failed.
+func gate(ctx context.Context, ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 
@@ -54,7 +70,9 @@ func TestStartReturnsARunningJobAndFinishEndsItsItems(t *testing.T) {
 	t.Cleanup(h.Close)
 	release := make(chan struct{})
 	job, err := h.Start(twoItems("user:a"), func(ctx context.Context, r *jobs.Reporter) {
-		<-release
+		if !gate(ctx, release) {
+			return
+		}
 		r.Finish("n1", jobs.ItemDone, "", "", map[string]string{"digest": "sha256:1"})
 		r.Finish("n2", jobs.ItemFailed, "pull_denied", "Denied.", nil)
 	})
@@ -98,7 +116,9 @@ func coalescesUpdates(t *testing.T) {
 		for i := int64(1); i <= 200; i++ {
 			r.Update("n1", func(it *jobs.Item) { it.State, it.Current, it.Total = jobs.ItemRunning, i, 200 })
 		}
-		<-release
+		if !gate(ctx, release) {
+			return
+		}
 		r.Finish("n1", jobs.ItemDone, "", "", nil)
 		r.Finish("n2", jobs.ItemDone, "", "", nil)
 	})
@@ -471,5 +491,341 @@ func TestWaitReturnsTheJobOnceItHasEnded(t *testing.T) {
 	got, err = h.Wait(short, hold2.ID)
 	if !errors.Is(err, context.DeadlineExceeded) || got.ID != hold2.ID || got.Finished() {
 		t.Fatalf("Wait of a running job = %+v, %v", got, err)
+	}
+}
+
+func TestAddPutsAnItemInAJobWhileItRunsAndSubscribersSeeIt(t *testing.T) {
+	h := jobs.New(jobs.Options{})
+	t.Cleanup(h.Close)
+	begin := make(chan struct{})
+	release := make(chan struct{})
+	job, err := h.Start(jobs.Spec{
+		Kind: "stack_deploy", Owner: "u",
+		Items: []jobs.ItemSpec{{ID: "services", Label: "Deploy services", Kind: "step"}},
+	}, func(ctx context.Context, r *jobs.Reporter) {
+		if !gate(ctx, begin) {
+			return
+		}
+		r.Add(jobs.ItemSpec{ID: "service:web", Label: "web", Parent: "services", Kind: "service"})
+		// Adding an ID the job has changes nothing, and nothing new is published for it.
+		r.Add(jobs.ItemSpec{ID: "service:web", Label: "changed", Parent: "other", Kind: "other"})
+		if !gate(ctx, release) {
+			return
+		}
+		r.Finish("service:web", jobs.ItemDone, "", "", nil)
+		r.Finish("services", jobs.ItemDone, "", "", nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, ch, cancel, err := h.Subscribe(context.Background(), job.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	if len(snap.Items) != 1 {
+		t.Fatalf("snapshot items = %+v, want the one the job started with", snap.Items)
+	}
+	close(begin)
+	close(release)
+	evs := drain(t, ch)
+
+	var addedEvents int
+	for _, ev := range evs {
+		if ev.Type == jobs.EventItem && ev.Item.ID == "service:web" && ev.Item.State == jobs.ItemWaiting {
+			addedEvents++
+			if ev.Item.Parent != "services" || ev.Item.Kind != "service" || ev.Item.Label != "web" {
+				t.Errorf("added item = %+v, want its parent, kind and label as given", ev.Item)
+			}
+		}
+	}
+	if addedEvents != 1 {
+		t.Errorf("the added item was published %d times, want once", addedEvents)
+	}
+	got, ok := h.Get(job.ID)
+	if !ok || got.State != jobs.JobDone || len(got.Items) != 2 || got.Items[1].ID != "service:web" || got.Items[1].Parent != "services" || got.Items[1].Kind != "service" {
+		t.Fatalf("job = %+v, want done with the added item after the first", got)
+	}
+	if got.Items[0].Kind != "step" || got.Items[0].Parent != "" {
+		t.Errorf("first item = %+v, want the kind it started with", got.Items[0])
+	}
+}
+
+func TestAddToAFinishedJobChangesNothing(t *testing.T) {
+	h := jobs.New(jobs.Options{})
+	t.Cleanup(h.Close)
+	var rep *jobs.Reporter
+	job, err := h.Start(twoItems("u"), func(ctx context.Context, r *jobs.Reporter) {
+		rep = r
+		r.Finish("n1", jobs.ItemDone, "", "", nil)
+		r.Finish("n2", jobs.ItemDone, "", "", nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Wait(testsupport.Context(t), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	rep.Add(jobs.ItemSpec{ID: "late", Label: "late"})
+	got, _ := h.Get(job.ID)
+	if len(got.Items) != 2 || got.State != jobs.JobDone {
+		t.Errorf("job = %+v, want the two items it ended with", got)
+	}
+}
+
+func TestAnAddedItemIsInTheReplayAfterAnEventAndNothingIsRepeated(t *testing.T) {
+	h := jobs.New(jobs.Options{})
+	t.Cleanup(h.Close)
+	step := make(chan struct{})
+	release := make(chan struct{})
+	job, err := h.Start(jobs.Spec{Kind: "k", Owner: "u", Items: []jobs.ItemSpec{{ID: "a", Label: "a"}}}, func(ctx context.Context, r *jobs.Reporter) {
+		r.Add(jobs.ItemSpec{ID: "b", Label: "b", Parent: "a"})
+		close(step)
+		if !gate(ctx, release) {
+			return
+		}
+		r.Finish("b", jobs.ItemDone, "", "", nil)
+		r.Finish("a", jobs.ItemDone, "", "", nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-step
+	// A first reader saw the add (event 1); a reader that resumes after 1 sees 2 onwards, and the
+	// snapshot it is sent holds the added item.
+	snap, ch, cancel, err := h.Subscribe(context.Background(), job.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	if len(snap.Items) != 2 {
+		t.Fatalf("snapshot = %+v, want both items", snap.Items)
+	}
+	close(release)
+	evs := drain(t, ch)
+	var last uint64 = 1
+	for _, ev := range evs {
+		if ev.ID <= last {
+			t.Fatalf("event %d after %d: a resumed reader must see only newer events, once each (%+v)", ev.ID, last, evs)
+		}
+		last = ev.ID
+	}
+	if evs[0].Item == nil || evs[0].Item.ID != "b" || evs[0].Item.State != jobs.ItemDone {
+		t.Errorf("first replayed event = %+v, want the finish of the added item, the first event after 1", evs[0])
+	}
+}
+
+func TestOutputLinesAreEventsAndAreCleaned(t *testing.T) {
+	h := jobs.New(jobs.Options{})
+	t.Cleanup(h.Close)
+	begin, release := make(chan struct{}), make(chan struct{})
+	job, err := h.Start(twoItems("u"), func(ctx context.Context, r *jobs.Reporter) {
+		if !gate(ctx, begin) {
+			return
+		}
+		r.Output("Created network web_default")
+		r.Output("engine said \x1b[31mno\x1b[0m\nsecond line")
+		if !gate(ctx, release) {
+			return
+		}
+		r.Finish("n1", jobs.ItemDone, "", "", nil)
+		r.Finish("n2", jobs.ItemDone, "", "", nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ch, cancel, err := h.Subscribe(context.Background(), job.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	close(begin)
+	close(release)
+	evs := drain(t, ch)
+
+	var lines []jobs.Output
+	var last uint64
+	for _, ev := range evs {
+		if ev.ID <= last {
+			t.Fatalf("event %d after %d: ids must strictly increase", ev.ID, last)
+		}
+		last = ev.ID
+		if ev.Type == jobs.EventOutput {
+			if ev.Output == nil || ev.Output.Seq != ev.ID {
+				t.Fatalf("output event %+v, want an Output whose Seq is the event's ID", ev)
+			}
+			lines = append(lines, *ev.Output)
+		}
+	}
+	if len(lines) != 2 || lines[0].Text != "Created network web_default" || lines[1].Text != "engine said [31mno[0msecond line" {
+		t.Fatalf("output events = %+v, want the two lines, cleaned", lines)
+	}
+	if lines[0].At.IsZero() {
+		t.Error("an output line has no time")
+	}
+	got, ok := h.Output(job.ID)
+	if !ok || len(got) != 2 || got[0] != lines[0] || got[1] != lines[1] {
+		t.Errorf("Output = %+v (%v), want the two lines as the events carried them", got, ok)
+	}
+}
+
+func TestOutputKeepsTheNewestLinesInItsOwnRingAndNeverEvictsItemEvents(t *testing.T) {
+	h := jobs.New(jobs.Options{Ring: 8, OutputRing: 50})
+	t.Cleanup(h.Close)
+	job, err := h.Start(jobs.Spec{Kind: "k", Owner: "u", Items: []jobs.ItemSpec{{ID: "a", Label: "a"}}}, func(ctx context.Context, r *jobs.Reporter) {
+		r.Add(jobs.ItemSpec{ID: "b", Label: "b"}) // event 1
+		for i := range 500 {
+			r.Output("line " + strconv.Itoa(i))
+		}
+		r.Finish("b", jobs.ItemDone, "", "", nil)
+		r.Finish("a", jobs.ItemDone, "", "", nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Wait(testsupport.Context(t), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := h.Output(job.ID)
+	if len(out) != 50 || out[0].Text != "line 450" || out[49].Text != "line 499" {
+		t.Fatalf("output = %d lines from %q to %q, want the newest 50", len(out), head(out[0].Text, 20), head(out[len(out)-1].Text, 20))
+	}
+	if !slices.IsSortedFunc(out, func(a, b jobs.Output) int { return cmp.Compare(a.Seq, b.Seq) }) {
+		t.Error("output is not in order")
+	}
+	// A reader that last saw event 1 is replayed the item events it missed, however many lines the
+	// job wrote, and the retained lines, in order and once each.
+	_, ch, cancel, err := h.Subscribe(context.Background(), job.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	evs := drain(t, ch)
+	var ids []uint64
+	var items, lines int
+	for _, ev := range evs {
+		ids = append(ids, ev.ID)
+		switch ev.Type {
+		case jobs.EventItem:
+			items++
+		case jobs.EventOutput:
+			lines++
+		}
+	}
+	if items != 2 || lines != 50 {
+		t.Errorf("replay holds %d item events and %d output events, want both item finishes and the retained 50 lines", items, lines)
+	}
+	if !slices.IsSorted(ids) || len(slices.Compact(slices.Clone(ids))) != len(ids) || ids[0] <= 1 {
+		t.Errorf("replay ids = %v, want only events after 1, in order, once each", ids)
+	}
+}
+
+func TestOutputOfAFinishedJobIsKeptAndALateLineIsDropped(t *testing.T) {
+	h := jobs.New(jobs.Options{})
+	t.Cleanup(h.Close)
+	var rep *jobs.Reporter
+	job, err := h.Start(jobs.Spec{Kind: "k", Owner: "u", Items: []jobs.ItemSpec{{ID: "a", Label: "a"}}}, func(ctx context.Context, r *jobs.Reporter) {
+		rep = r
+		r.Output("before")
+		r.Finish("a", jobs.ItemDone, "", "", nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Wait(testsupport.Context(t), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	rep.Output("after")
+	out, ok := h.Output(job.ID)
+	if !ok || len(out) != 1 || out[0].Text != "before" {
+		t.Errorf("Output = %+v (%v), want only the line written while the job ran", out, ok)
+	}
+	if _, ok := h.Output("no-such-job"); ok {
+		t.Error("Output of a job the hub does not have reported one")
+	}
+}
+
+func TestDetailIsTheRemoteWordsCleanedAndPublishedWithTheItem(t *testing.T) {
+	h := jobs.New(jobs.Options{})
+	t.Cleanup(h.Close)
+	job, err := h.Start(jobs.Spec{Kind: "k", Owner: "u", Items: []jobs.ItemSpec{{ID: "a", Label: "a"}}}, func(ctx context.Context, r *jobs.Reporter) {
+		r.Detail("a", "rpc error:\x1b[1m code = InvalidArgument\n"+strings.Repeat("z", 3000))
+		r.Finish("a", jobs.ItemFailed, "service_rejected", "The swarm rejected the service.", nil)
+		r.Detail("a", "too late") // an item that has ended is not changed
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ch, cancel, err := h.Subscribe(context.Background(), job.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	evs := drain(t, ch)
+	got, _ := h.Get(job.ID)
+	detail := got.Items[0].Detail
+	if !strings.HasPrefix(detail, "rpc error:[1m code = InvalidArgumentzzz") || utf8.RuneCountInString(detail) != jobs.MaxDetailRunes || !strings.HasSuffix(detail, "…") {
+		t.Errorf("detail = %q (%d characters), want it cleaned and clipped", head(detail, 50), utf8.RuneCountInString(detail))
+	}
+	var published string
+	for _, ev := range evs {
+		if ev.Type == jobs.EventItem {
+			published = ev.Item.Detail
+		}
+	}
+	if published != detail {
+		t.Error("the finish event did not carry the detail")
+	}
+}
+
+func TestASkippedItemCountsAsNeitherDoneNorFailed(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		ends  map[string]string
+		state string
+	}{
+		{"a failure and the item it skipped", map[string]string{"n1": jobs.ItemFailed, "n2": jobs.ItemSkipped}, jobs.JobFailed},
+		{"a finished item and the item that was skipped", map[string]string{"n1": jobs.ItemDone, "n2": jobs.ItemSkipped}, jobs.JobPartial},
+		{"only skipped items", map[string]string{"n1": jobs.ItemSkipped, "n2": jobs.ItemSkipped}, jobs.JobCancelled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := jobs.New(jobs.Options{})
+			t.Cleanup(h.Close)
+			job, err := h.Start(twoItems("u"), func(ctx context.Context, r *jobs.Reporter) {
+				for _, id := range []string{"n1", "n2"} {
+					r.Finish(id, tc.ends[id], "not_run", "", nil)
+				}
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := h.Wait(testsupport.Context(t), job.ID)
+			if err != nil || got.State != tc.state {
+				t.Errorf("job = %s (%v), want %s", got.State, err, tc.state)
+			}
+		})
+	}
+}
+
+func TestASkippedItemIsFinalAndTheRunsEndLeavesItAlone(t *testing.T) {
+	h := jobs.New(jobs.Options{})
+	t.Cleanup(h.Close)
+	job, err := h.Start(twoItems("u"), func(ctx context.Context, r *jobs.Reporter) {
+		r.Finish("n1", jobs.ItemSkipped, "not_run", "Not run.", nil)
+		r.Finish("n1", jobs.ItemDone, "", "", nil) // already ended
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := h.Wait(testsupport.Context(t), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Items[0].State != jobs.ItemSkipped || got.Items[0].Code != "not_run" {
+		t.Errorf("first item = %+v, want it skipped for good", got.Items[0])
+	}
+	// The item the run never touched is ended by the hub, as before.
+	if got.Items[1].State != jobs.ItemFailed || got.Items[1].Code != jobs.CodeInterrupted {
+		t.Errorf("second item = %+v, want interrupted", got.Items[1])
 	}
 }

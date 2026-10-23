@@ -1,0 +1,151 @@
+{
+  "Networks": [
+    {
+      "Key": "default",
+      "Name": "volumes_default",
+      "Driver": "overlay",
+      "Attachable": false,
+      "Internal": false,
+      "External": false,
+      "Labels": {
+        "bayplan.stack.id": "id-volumes",
+        "com.docker.stack.namespace": "volumes"
+      },
+      "DriverOpts": null,
+      "IPAMDriver": "",
+      "Pools": null
+    }
+  ],
+  "Services": [
+    {
+      "Name": "volumes_db",
+      "Short": "db",
+      "ImageAsWritten": "postgres:16",
+      "Spec": {
+        "Name": "volumes_db",
+        "Labels": {
+          "bayplan.stack.id": "id-volumes",
+          "com.docker.stack.image": "postgres:16",
+          "com.docker.stack.namespace": "volumes"
+        },
+        "TaskTemplate": {
+          "ContainerSpec": {
+            "Image": "postgres:16",
+            "Labels": {
+              "bayplan.stack.id": "id-volumes",
+              "com.docker.stack.namespace": "volumes"
+            },
+            "Privileges": {
+              "CredentialSpec": null,
+              "SELinuxContext": null,
+              "NoNewPrivileges": false
+            },
+            "Mounts": [
+              {
+                "Type": "volume",
+                "Source": "volumes_data",
+                "Target": "/var/lib/postgresql/data",
+                "VolumeOptions": {
+                  "Labels": {
+                    "bayplan.stack.id": "id-volumes",
+                    "com.docker.stack.namespace": "volumes"
+                  }
+                }
+              },
+              {
+                "Type": "volume",
+                "Source": "volumes_cache",
+                "Target": "/cache",
+                "VolumeOptions": {
+                  "NoCopy": true,
+                  "Labels": {
+                    "bayplan.stack.id": "id-volumes",
+                    "com.docker.stack.namespace": "volumes",
+                    "purpose": "cache"
+                  },
+                  "DriverConfig": {
+                    "Name": "local",
+                    "Options": {
+                      "device": "tmpfs",
+                      "type": "tmpfs"
+                    }
+                  }
+                }
+              },
+              {
+                "Type": "volume",
+                "Source": "volumes_nfs",
+                "Target": "/nfs",
+                "VolumeOptions": {
+                  "NoCopy": true,
+                  "Labels": {
+                    "bayplan.stack.id": "id-volumes",
+                    "com.docker.stack.namespace": "volumes"
+                  },
+                  "Subpath": "sub",
+                  "DriverConfig": {
+                    "Name": "local",
+                    "Options": {
+                      "device": ":/export",
+                      "o": "addr=10.0.0.5,rw",
+                      "type": "nfs"
+                    }
+                  }
+                }
+              },
+              {
+                "Type": "volume",
+                "Source": "shared-archive",
+                "Target": "/archive",
+                "ReadOnly": true,
+                "VolumeOptions": {}
+              },
+              {
+                "Type": "bind",
+                "Source": "/etc/ssl/certs",
+                "Target": "/certs",
+                "ReadOnly": true
+              },
+              {
+                "Type": "bind",
+                "Source": "/srv/shared",
+                "Target": "/shared",
+                "BindOptions": {
+                  "Propagation": "rshared"
+                }
+              },
+              {
+                "Type": "tmpfs",
+                "Target": "/tmp",
+                "TmpfsOptions": {
+                  "SizeBytes": 67108864
+                }
+              },
+              {
+                "Type": "volume",
+                "Target": "/scratch"
+              }
+            ]
+          },
+          "Resources": {},
+          "Placement": {},
+          "Networks": [
+            {
+              "Target": "volumes_default",
+              "Aliases": [
+                "db"
+              ]
+            }
+          ],
+          "ForceUpdate": 0
+        },
+        "Mode": {
+          "Replicated": {
+            "Replicas": 1
+          }
+        },
+        "EndpointSpec": {}
+      }
+    }
+  ]
+}

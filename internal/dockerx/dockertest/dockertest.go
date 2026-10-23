@@ -112,6 +112,9 @@ type FakeConfig struct {
 	// Configs are the swarm configs /configs lists, each with its content, as a real manager
 	// lists them (fake_configs.go).
 	Configs []FakeConfigObject
+	// SecretListError makes GET /secrets answer 500 with this message, as a manager does when it cannot
+	// list them, while every other read keeps working.
+	SecretListError string
 	// DiskUsageFail makes GET /system/df answer 500, as an engine does when a volume's files
 	// cannot be walked.
 	DiskUsageFail bool
@@ -181,6 +184,25 @@ type FakeConfig struct {
 	// Tasks are whole swarm tasks /tasks lists, with the filters of a real daemon (service,
 	// node, desired-state and id), beside AgentTasks (fake_tasks.go).
 	Tasks []swarm.Task
+	// TasksFollowWrites makes /tasks list, for every service whose spec the daemon holds (one a
+	// client created or updated through it), the tasks a settled swarm shows: a replicated service
+	// has its replica count, a global one a task on each node, all running on the service's current
+	// task template. A service that is not running is set with SetTaskState (fake_tasks.go).
+	TasksFollowWrites bool
+	// NetworkTargetsByID makes a service create or update store each task-template network target
+	// as the ID of the network it names, as a swarm manager does (moby daemon/cluster
+	// populateNetworkID), so a service read back names its networks by full ID. A target the daemon
+	// has no network for is kept as written. ServiceCreates and ServiceUpdates still record the
+	// request as it was sent. It is off by default, so a test that reads back the names it wrote
+	// keeps them (fake_networks.go).
+	NetworkTargetsByID bool
+	// taskStates are the states SetTaskState gave those tasks, by service name.
+	taskStates map[string]fakeTaskState
+	// OnWrite, when set, is called with each write as Writes lists it ("METHOD path?query") the
+	// moment the daemon receives it, before it answers, from the goroutine that serves the request. A
+	// test uses it to do something at an exact point of a deploy, like cancelling it while its first
+	// service is being written. It must not call the daemon's own client.
+	OnWrite func(write string)
 	// ServiceLogs are the lines the tasks of each service wrote, by service ID, which
 	// /services/{id}/logs and /tasks/{id}/logs answer (fake_servicelogs.go).
 	ServiceLogs map[string][]FakeServiceLogLine
@@ -281,6 +303,10 @@ type FakeService struct {
 	// name as the spec wrote it, and Mounts the mounts of its container spec.
 	Networks []string
 	Mounts   []FakeServiceMount
+	// VirtualIPs are the networks, by ID, the service's endpoint has a virtual IP on, as
+	// a manager reports for a service on an overlay or with a port published in ingress
+	// mode.
+	VirtualIPs []string
 	// Image is the image the spec names; empty leaves the container spec without one.
 	Image string
 	// Secrets and Configs are the secrets and configs the spec's container spec references.
@@ -435,6 +461,10 @@ type FakeImage struct {
 	Env []string
 	// Cmd and Entrypoint are the image config's command, carried in Config when set.
 	Cmd, Entrypoint []string
+	// User, WorkingDir and StopSignal are the image config's, carried in Config when set, and
+	// ExposedPorts are its EXPOSE lines ("80/tcp" each).
+	User, WorkingDir, StopSignal string
+	ExposedPorts                 []string
 	// History is the layers /images/{name}/history answers, newest first. Empty gives one
 	// layer.
 	History []FakeLayer
@@ -542,6 +572,13 @@ type Fake struct {
 	netConnects    []network.ConnectRequest
 	netDisconnects []network.DisconnectRequest
 	epChanges      map[[2]string]*FakeEndpoint
+	// The address use SetNetworkUsage gave each network, by network name (fake_networks.go).
+	netUsage map[string][]FakeSubnetUsage
+	// The address use this node counts for its own instance of each network, by network name
+	// (SetNetworkLocalUsage), and the networks the swarm answers with no Status
+	// (SetNetworkNoSwarmStatus), both in fake_networks.go.
+	netLocalUsage    map[string][]FakeSubnetUsage
+	netNoSwarmStatus map[string]bool
 	// vols are the volumes created through the fake, and volCreates the bodies of those
 	// requests (fake_volumes.go).
 	vols       []FakeVolume
@@ -574,6 +611,12 @@ type Fake struct {
 	nodeGone map[string]bool
 	// svcGone are the IDs of the services removed through the fake.
 	svcGone map[string]bool
+	// taskStates are the states SetTaskState gave the tasks that follow writes, by service name.
+	taskStates map[string]fakeTaskState
+	// quorumLost is set by LoseQuorum.
+	quorumLost bool
+	// updateStates are the update statuses SetUpdateState gave services, by service name.
+	updateStates map[string]fakeTaskState
 	// secrets are the secrets created through the fake, secretCreates the requests that made
 	// them (as byte counts) and secretGone the IDs of those removed (fake_secrets.go).
 	secrets       []FakeSecret
@@ -587,6 +630,9 @@ type Fake struct {
 	// distDigest is the digest the distribution route answers a full reference with, where a
 	// test has moved a tag (SetDistributionDigest); a reference not in it gets fakeDigest.
 	distDigest map[string]string
+	// distFail is the status and message the distribution route answers one full reference
+	// with (SetDistributionFailure), where a test makes a single registry fail.
+	distFail map[string]FakePullStatus
 	// distAuth and distRefs are the header and reference of each distribution check.
 	distAuth, distRefs []string
 
@@ -790,7 +836,7 @@ func withEnvProbeDelay(cfg FakeConfig) (FakeConfig, error) {
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withCreatedServices(f.svcCreated).withServices(f.svcState).withoutServices(f.svcGone).withNodes(f.nodeState).withoutNodes(f.nodeGone).withSecrets(f.secrets).withoutSecrets(f.secretGone).withConfigs(f.configs).withoutConfigs(f.configGone)
+	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withCreatedServices(f.svcCreated).withServices(f.svcState).withoutServices(f.svcGone).withNodes(f.nodeState).withoutNodes(f.nodeGone).withSecrets(f.secrets).withoutSecrets(f.secretGone).withConfigs(f.configs).withoutConfigs(f.configGone).withTaskStates(f.taskStates).withUpdateStates(f.updateStates).withQuorum(f.quorumLost)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
@@ -931,7 +977,7 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 	case "/volumes":
 		writeJSON(w, http.StatusOK, cfg.volumeList())
 	case "/networks":
-		writeJSON(w, http.StatusOK, cfg.networkList())
+		writeJSON(w, http.StatusOK, filterNetworksByLabel(cfg.networkList(), r.URL.Query().Get("filters")))
 	case "/nodes", "/services", "/tasks", "/swarm":
 		f.serveCluster(w, r, p, cfg)
 	default:
@@ -961,7 +1007,7 @@ func (f *Fake) serveCluster(w http.ResponseWriter, r *http.Request, p string, cf
 	case "/nodes":
 		writeJSON(w, http.StatusOK, cfg.nodeList())
 	case "/services":
-		writeJSON(w, http.StatusOK, cfg.serviceList(r.URL.Query().Get("status") == "true"))
+		writeJSON(w, http.StatusOK, filterServicesByLabel(cfg.serviceList(r.URL.Query().Get("status") == "true"), r.URL.Query().Get("filters")))
 	case "/tasks":
 		writeJSON(w, http.StatusOK, cfg.taskList(r.URL.Query().Get("filters")))
 	default:
@@ -1507,6 +1553,9 @@ func (fs FakeService) decorate(s *swarm.Service) {
 	}
 	if len(fs.Ports) > 0 {
 		s.Endpoint.Ports = slices.Clone(fs.Ports)
+	}
+	for _, id := range fs.VirtualIPs {
+		s.Endpoint.VirtualIPs = append(s.Endpoint.VirtualIPs, swarm.EndpointVirtualIP{NetworkID: id})
 	}
 	s.PreviousSpec = fs.PreviousSpec
 	s.CreatedAt = fs.CreatedAt

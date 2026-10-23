@@ -36,7 +36,8 @@ export type ResourceKind =
   | "services"
   | "nodes"
   | "secrets"
-  | "configs";
+  | "configs"
+  | "stacks";
 
 // One column of a list. The cell renders from the row; the header is the
 // translated label.
@@ -69,7 +70,12 @@ export interface TableGroup<T> {
     summary?: ReactNode;
     badge?: ReactNode;
     checkbox?: ReactNode;
+    // The name as a link, for a group that is a stack Bayplan manages.
+    nameLink?: ReactNode;
   };
+  // A line across every column, drawn under the header while the group is open: what stands in the
+  // place of rows that could not be read.
+  notice?: ReactNode;
 }
 
 // How a row is drawn while the list changes under it (D-05, D-50).
@@ -539,6 +545,7 @@ export function ResourceTable<T>({
                         <GroupHeaderRow
                           colSpan={shownColumns.length}
                           name={g.header.name}
+                          nameLink={g.header.nameLink}
                           summary={g.header.summary}
                           badge={g.header.badge}
                           checkbox={g.header.checkbox}
@@ -549,6 +556,13 @@ export function ResourceTable<T>({
                       </TableBody>
                     ) : null}
                     <TableBody id={rowsId} hidden={!expanded}>
+                      {expanded && g.notice ? (
+                        <TableRow className="hover:bg-transparent">
+                          <TableCell colSpan={shownColumns.length} className="py-2">
+                            {g.notice}
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
                       {expanded ? g.rows.map(renderRow) : null}
                     </TableBody>
                   </Fragment>

@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/compose-spec/compose-go/v2/types"
+
 	"github.com/ianglennon/bayplan/internal/access"
 	"github.com/ianglennon/bayplan/internal/agents"
 	"github.com/ianglennon/bayplan/internal/api"
@@ -25,6 +27,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/datadir"
+	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
@@ -123,6 +126,20 @@ type authFixture struct {
 	// eventsMaxLifetime caps how long one stream may live; zero is the default.
 	eventsMaxLifetime time.Duration
 	// jobHub holds the pulls (plan 05-01); it is made when a test builds the routes.
+	// stackCheckDeadline bounds one check of a stack and stackOnCheck is called as a check starts
+	// (plan 07-06); zero and nil are the defaults.
+	stackCheckDeadline time.Duration
+	stackOnCheck       func(context.Context)
+	// stackBeforeJob is called in a deploy just before its job starts (plan 07-18).
+	stackBeforeJob func(context.Context)
+	// stackReadEnv is called before the stacks of an environment are read for the All stacks list (plan 07-24).
+	stackReadEnv func(context.Context, string) error
+	// stackUp replaces the Compose SDK's up in a standalone deploy (plan 07-20).
+	stackUp func(context.Context, *dockerx.Client, *types.Project, dockerx.ComposeUpOptions, func(dockerx.ComposeEvent)) error
+	// stackStop and stackStart replace the Compose SDK's stop and start of a standalone stack (plan 07-26).
+	stackStop, stackStart func(context.Context, *dockerx.Client, *types.Project) error
+	// stackDown replaces the Compose SDK's down in the removal of a standalone stack (plan 07-27).
+	stackDown func(context.Context, *dockerx.Client, string) error
 	// pullsHeartbeat, pullsMaxStreams and pullsMaxLifetime tune the pull stream, and
 	// pullsNodeTimeout the longest one node may pull; zero is the default.
 	jobHub           *jobs.Hub
@@ -146,6 +163,9 @@ type authFixture struct {
 	// serviceLogsBurstEnded is called when a service log stream has taken its opening burst as
 	// complete (newSvcLogsFix sets it, and tests await it through svcLogsFix.awaitBurstEnd).
 	serviceLogsBurstEnded func()
+	// stackLogs tunes the log stream and the download of a stack (plan 07-29); zero is the default.
+	// Its Now is the fixture's clock unless a test sets one.
+	stackLogs api.StackLogsTuning
 	// serviceLogsMaxPageBytes, serviceLogsMaxDownloadBytes and serviceLogsMaxDownloads tune the
 	// page and the download of a service's log (plan 06-31).
 	serviceLogsMaxPageBytes     int
@@ -310,17 +330,17 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		})
 	}
 	if f.envSvc != nil && f.agg != nil {
-		api.RegisterDashboard(r, api.DashboardDeps{Aggregator: f.agg, Clusters: f.clusters, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
-		api.RegisterContainers(r, api.ContainersDeps{Aggregator: f.agg, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Clusters: f.clusters, Log: log})
+		api.RegisterDashboard(r, api.DashboardDeps{Aggregator: f.agg, Clusters: f.clusters, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Store: f.st, Log: log})
+		api.RegisterContainers(r, api.ContainersDeps{Aggregator: f.agg, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Clusters: f.clusters, Store: f.st, Log: log})
 		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
 		api.RegisterServices(r, api.ServicesDeps{
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
-			Audit: f.aud, Checker: checker, Log: log,
+			Audit: f.aud, Checker: checker, Store: f.st, Log: log,
 		})
 		api.RegisterRestartLoop(r, api.RestartLoopDeps{Store: f.st, Clusters: f.clusters, Aggregator: f.agg, Audit: f.aud, Log: log})
 		rotateResolver := registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now))
-		api.RegisterSecrets(r, api.SecretsDeps{Aggregator: f.agg, Clusters: f.clusters, Resolver: rotateResolver, Audit: f.aud, Checker: checker, Log: log})
-		api.RegisterConfigs(r, api.ConfigsDeps{Aggregator: f.agg, Clusters: f.clusters, Resolver: rotateResolver, Audit: f.aud, Checker: checker, Log: log})
+		api.RegisterSecrets(r, api.SecretsDeps{Aggregator: f.agg, Clusters: f.clusters, Resolver: rotateResolver, Audit: f.aud, Checker: checker, Store: f.st, Log: log})
+		api.RegisterConfigs(r, api.ConfigsDeps{Aggregator: f.agg, Clusters: f.clusters, Resolver: rotateResolver, Audit: f.aud, Checker: checker, Store: f.st, Log: log})
 		api.RegisterNodes(r, api.NodesDeps{
 			Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, Agents: agentSvc, Live: f.liveAgents,
 			SelfContainerID: f.envSvc.SelfContainerID(), Log: log,
@@ -335,6 +355,16 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			Aggregator: f.agg, Jobs: f.jobHub, Audit: f.aud, Checker: checker, Heartbeat: f.pullsHeartbeat,
 			Resolver:          registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
 			MaxStreamsPerUser: f.pullsMaxStreams, MaxLifetime: f.pullsMaxLifetime, NodeTimeout: f.pullsNodeTimeout, Log: log,
+		})
+		stackLogs := f.stackLogs
+		if stackLogs.Now == nil {
+			stackLogs.Now = f.clk.now
+		}
+		api.RegisterStacks(r, api.StacksDeps{
+			Logs:       stackLogs,
+			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
+			Audit: f.aud, Checker: checker, Jobs: f.jobHub, Store: f.st, Vault: f.v, Log: log,
+			CheckDeadline: f.stackCheckDeadline, OnCheck: f.stackOnCheck, BeforeJob: f.stackBeforeJob, Up: f.stackUp, StopProject: f.stackStop, StartProject: f.stackStart, DownProject: f.stackDown, ReadEnv: f.stackReadEnv,
 		})
 		var logsSrc api.LogsSource = f.agg
 		if f.logsWrap != nil {

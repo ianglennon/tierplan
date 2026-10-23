@@ -265,6 +265,66 @@ func TestEveryPhase6ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 	}
 }
 
+// phase7DetailKeys maps every Phase 7 action to the detail keys the plans that record it must use,
+// for the same reason as phase3DetailKeys. A create records the stack's name and its target (swarm or
+// standalone). A save of the draft records the name, the version it left and how many files and
+// variables it holds, never a value (plan 07-01, STK-01, STK-05). A discard of the draft records the
+// name and the version it deleted (plan 07-03, STK-05). A deploy records the name, the mode
+// (deploy, update or rollback), the result (done, failed, cancelled or interrupted), the revision it
+// ran, the job, how many services it touched and the code of a failure; counts of secrets and configs
+// are written as objects, never as a word the audit writer refuses. A reveal of a secret value
+// records the stack, the kind of value (variable) and its name, never the value (plan 07-10, STK-04). A stop
+// and a start record the stack, how many services they scaled, removed or brought back, how many of those they
+// recreated and the result (plan 07-26, STK-11). A removal records the stack, how many volumes it removed, how many
+// of the stack's volumes it left on their hosts, whether the definition was deleted or kept, and the result (plan
+// 07-27, STK-11).
+var phase7DetailKeys = map[string][]string{
+	audit.ActionStackCreated:        {"stack", "target"},
+	audit.ActionStackDraftSaved:     {"stack", "version", "files", "vars"},
+	audit.ActionStackDraftDiscarded: {"stack", "version"},
+	audit.ActionStackDeployed:       {"stack", "mode", "result", "revision", "job", "services", "code"},
+	audit.ActionStackStopped:        {"stack", "services", "recreated", "result"},
+	audit.ActionStackStarted:        {"stack", "services", "recreated", "result"},
+	audit.ActionStackRemoved:        {"stack", "volumes", "kept", "definition", "result"},
+	audit.ActionStackValueRevealed:  {"stack", "kind", "name"},
+}
+
+func TestEveryPhase7ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
+	f := newFixture(t)
+	for action, keys := range phase7DetailKeys {
+		details := make(map[string]string, len(keys))
+		for _, k := range keys {
+			details[k] = "x"
+		}
+		e := ent(action)
+		e.Details = details
+		if err := f.w.Record(context.Background(), e); err != nil {
+			if errors.Is(err, audit.ErrSecretField) {
+				t.Errorf("%s: a documented detail key trips the secret-word filter: %v", action, err)
+			} else {
+				t.Errorf("%s: Record: %v", action, err)
+			}
+		}
+	}
+	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase7DetailKeys) {
+		t.Fatalf("verify = %+v", got)
+	}
+	for key, constant := range map[string]string{
+		"stack.created":         audit.ActionStackCreated,
+		"stack.draft_saved":     audit.ActionStackDraftSaved,
+		"stack.draft_discarded": audit.ActionStackDraftDiscarded,
+		"stack.deployed":        audit.ActionStackDeployed,
+		"stack.stopped":         audit.ActionStackStopped,
+		"stack.started":         audit.ActionStackStarted,
+		"stack.removed":         audit.ActionStackRemoved,
+		"stack.value_revealed":  audit.ActionStackValueRevealed,
+	} {
+		if key != constant {
+			t.Errorf("constant = %q, want %q", constant, key)
+		}
+	}
+}
+
 func TestEveryPhase5ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 	f := newFixture(t)
 	for action, keys := range phase5DetailKeys {

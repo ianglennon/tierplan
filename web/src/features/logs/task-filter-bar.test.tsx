@@ -324,3 +324,71 @@ describe("filterOptionsFrom", () => {
     expect(got).toEqual({ loaded: true, tasks: [], nodes: [] });
   });
 });
+
+describe("a stack's row (plan 07-29)", () => {
+  const stackOptions: FilterOptions = {
+    loaded: true,
+    tasks: [
+      { id: T1, service: "api", slot: 1, node: "alpha", state: "running", ended: false },
+      { id: T2, service: "web", slot: 2, node: "beta", state: "running", ended: false },
+    ],
+    nodes: [{ name: "alpha", tasks: 1 }],
+  };
+
+  it("puts what leads before the Tasks button and what trails after the chips, and words the switch for a stack", () => {
+    bar({
+      options: stackOptions,
+      stack: true,
+      tasks: [T1],
+      leading: <span>LEAD</span>,
+      trailing: <span>TRAIL</span>,
+    });
+    const lead = screen.getByText("LEAD");
+    const tasksButton = screen.getByRole("button", { name: "Tasks (1)" });
+    const chip = screen.getByText("Task: api.1");
+    const trail = screen.getByText("TRAIL");
+    expect(
+      lead.compareDocumentPosition(tasksButton) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(chip.compareDocumentPosition(trail) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "Include stopped" })).toBeTruthy();
+  });
+
+  it("names each task by its own service and orders them by service, then slot", () => {
+    bar({ options: stackOptions, stack: true });
+    fireEvent.click(screen.getByRole("button", { name: "Tasks" }));
+    const items = within(screen.getByRole("listbox")).getAllByRole("option");
+    expect(items.map((i) => i.textContent)).toEqual([
+      expect.stringContaining("api.1"),
+      expect.stringContaining("web.2"),
+    ]);
+  });
+
+  it("chooses containers on a host: a Containers button, the engine's names and states, and no Nodes", () => {
+    bar({
+      unit: "container",
+      stack: true,
+      options: {
+        loaded: true,
+        tasks: [
+          {
+            id: T1,
+            service: "web",
+            name: "solo-web-1",
+            slot: 1,
+            node: "",
+            state: "running",
+            stateText: "running",
+            ended: false,
+          },
+        ],
+        nodes: [],
+      },
+    });
+    expect(screen.queryByRole("button", { name: "Nodes" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Containers" }));
+    const item = within(screen.getByRole("listbox")).getByRole("option");
+    expect(item.textContent).toContain("solo-web-1");
+    expect(item.textContent).toContain("running");
+  });
+});

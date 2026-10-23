@@ -10,6 +10,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // The merge of a service's log (plan 06-29, OBS-02, D-37, RESEARCH E1): the engine answers
@@ -343,5 +345,124 @@ func TestLineHolderNeverHoldsMoreThanItsSize(t *testing.T) {
 		if size > limit {
 			t.Fatalf("after %d records the holder holds %d bytes, over %d", i+1, size, limit)
 		}
+	}
+}
+
+// ---- the merge of several sources (plan 07-29, STK-10, D-22) ----
+
+// srcOf is a source with the records given, already closed: the engine gave all it had.
+func srcOf(name string, recs ...svcRec) logSource {
+	ch := make(chan svcRec, len(recs))
+	for _, r := range recs {
+		ch <- r
+	}
+	close(ch)
+	return logSource{Name: name, Records: ch}
+}
+
+// mergeSourcesTexts runs mergeSources over sources and returns the texts it handed out, in order.
+func mergeSourcesTexts(t *testing.T, sources []logSource, opts ...mergeOption) []string {
+	t.Helper()
+	var got []svcRec
+	err := mergeSources(testsupport.Context(t), sources, reorderHold, func(r svcRec) bool {
+		got = append(got, r)
+		return true
+	}, opts...)
+	if err != nil {
+		t.Fatalf("mergeSources: %v", err)
+	}
+	return texts(got)
+}
+
+func TestMergeSourcesPutsThreeSourcesWithInterleavedTimesInTimeOrder(t *testing.T) {
+	t.Parallel()
+	// Each service gave its lines task by task; the times of the three interleave.
+	got := mergeSourcesTexts(t, []logSource{
+		srcOf("web", rec("w1", 10, "web a"), rec("w1", 40, "web b"), rec("w2", 25, "web c")),
+		srcOf("api", rec("a1", 20, "api a"), rec("a1", 50, "api b")),
+		srcOf("db", rec("d1", 5, "db a"), rec("d1", 30, "db b"), rec("d1", 60, "db c")),
+	})
+	want := []string{"db a", "web a", "api a", "web c", "db b", "web b", "api b", "db c"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("merged = %v, want %v", got, want)
+	}
+}
+
+func TestMergeSourcesBreaksATieByServiceNameThenByTheLowerSlot(t *testing.T) {
+	t.Parallel()
+	tasks := map[string]taskInfo{
+		"w1": {ID: "w1", Slot: 1}, "w2": {ID: "w2", Slot: 2},
+		"a1": {ID: "a1", Slot: 3},
+	}
+	// Four lines at one instant: api sorts before web whatever the slot, and web's slot 1 before 2.
+	got := mergeSourcesTexts(t, []logSource{
+		srcOf("web", rec("w2", 10, "web.2"), rec("w1", 10, "web.1")),
+		srcOf("api", rec("a1", 10, "api.3")),
+	}, withTasks(func() map[string]taskInfo { return tasks }))
+	if want := []string{"api.3", "web.1", "web.2"}; !slices.Equal(got, want) {
+		t.Fatalf("merged = %v, want %v", got, want)
+	}
+}
+
+func TestMergeSourcesKeepsTheNewestLinesOfTheBurstAcrossAllSources(t *testing.T) {
+	t.Parallel()
+	got := mergeSourcesTexts(t, []logSource{
+		srcOf("web", rec("w1", 10, "web old"), rec("w1", 50, "web new")),
+		srcOf("api", rec("a1", 20, "api old"), rec("a1", 60, "api new")),
+	}, withBurstKeep(2))
+	if want := []string{"web new", "api new"}; !slices.Equal(got, want) {
+		t.Fatalf("kept = %v, want the newest two of all %v", got, want)
+	}
+}
+
+func TestMergeSourcesLeavesOutWhatTheFilterRefuses(t *testing.T) {
+	t.Parallel()
+	got := mergeSourcesTexts(t, []logSource{
+		srcOf("web", rec("w1", 10, "keep"), rec("hidden", 20, "drop")),
+	}, withAccept(func(r svcRec) bool { return r.TaskID != "hidden" }))
+	if want := []string{"keep"}; !slices.Equal(got, want) {
+		t.Fatalf("merged = %v, want %v", got, want)
+	}
+}
+
+func TestMergeSourcesOfNoSourcesEndsAtOnce(t *testing.T) {
+	t.Parallel()
+	if got := mergeSourcesTexts(t, nil); len(got) != 0 {
+		t.Fatalf("merged = %v", got)
+	}
+}
+
+func TestMergeSourcesHoldsLiveLinesToPutThemInOrderAndEndsWhenTheSourcesDo(t *testing.T) {
+	t.Parallel()
+	clk := &fakeClock{t: mergeT0}
+	live := make(chan svcRec)
+	ended := make(chan struct{}, 1)
+	out := make(chan string, 16)
+	done := make(chan error, 1)
+	ctx := testsupport.Context(t)
+	go func() {
+		done <- mergeSources(ctx, []logSource{{Name: "web", Records: live}}, 500*time.Millisecond, func(r svcRec) bool {
+			out <- r.M
+			return true
+		}, withClock(func() time.Time { return clk.t }), withBurstEnded(func() { ended <- struct{}{} }))
+	}()
+	// Nothing came before the burst ended on its quiet period; from then on lines are live.
+	testsupport.Await(t, "the burst to end", ended)
+
+	// The later line arrives first, the earlier one just after: the window puts them in order.
+	live <- rec("w1", 200, "later")
+	live <- rec("w1", 100, "earlier")
+	close(live)
+	// Closing the source drains the window, whatever the clock says.
+	if err := testsupport.Await(t, "the merge to end", done); err != nil {
+		t.Fatalf("mergeSources: %v", err)
+	}
+	close(out)
+	var got []string
+	for s := range out {
+		got = append(got, s)
+	}
+	if want := []string{"earlier", "later"}; !slices.Equal(got, want) {
+		t.Fatalf("live lines = %v, want %v", got, want)
 	}
 }

@@ -1,0 +1,6 @@
+# Hostile: a remote include makes the loader fetch a URL.
+include:
+  - path: https://example.com/compose.yaml
+services:
+  web:
+    image: nginx:1.27-alpine

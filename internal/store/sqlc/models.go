@@ -209,6 +209,63 @@ type Setting struct {
 	UpdatedAt int64
 }
 
+type Stack struct {
+	ID         string
+	EnvID      string
+	Name       string
+	Target     string
+	SourceKind string
+	SourceRef  string
+	CreatedBy  string
+	CreatedAt  int64
+	Stopped    int64
+}
+
+type StackDeploy struct {
+	ID            string
+	StackID       string
+	EnvID         string
+	Kind          string
+	State         string
+	RevisionSeq   int64
+	JobID         string
+	StartedBy     string
+	StartedAt     int64
+	EndedAt       int64
+	FailedService string
+	Code          string
+}
+
+type StackSnapshot struct {
+	ID        string
+	StackID   string
+	Kind      string
+	Seq       int64
+	BaseSeq   int64
+	Version   int64
+	Outcome   string
+	Rendered  string
+	Pins      string
+	CreatedBy string
+	CreatedAt int64
+}
+
+type StackSnapshotFile struct {
+	SnapshotID    string
+	Path          string
+	Content       string
+	ContentSealed string
+	Secret        int64
+}
+
+type StackSnapshotVar struct {
+	SnapshotID  string
+	Name        string
+	Value       string
+	ValueSealed string
+	Secret      int64
+}
+
 type Team struct {
 	ID        string
 	Name      string

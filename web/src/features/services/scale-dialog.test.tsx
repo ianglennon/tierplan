@@ -14,6 +14,7 @@ import type { BulkReport } from "@/features/containers/bulk-result-dialog";
 import { ScaleDialog, type ScaledService } from "@/features/services/scale-dialog";
 import "@/i18n";
 import { makeMe } from "@/test-me";
+import { TestRouter } from "@/test-router";
 
 const ENV = "e1";
 
@@ -28,6 +29,7 @@ const web: ServiceItem = {
   updateState: "",
   image: "acme/web:1",
   stack: "",
+  bayplanStackId: "",
   agent: false,
   updatedAt: "2026-10-01T10:00:00Z",
   ports: [],
@@ -84,10 +86,12 @@ function mount(target: ServiceItem = web, onOpenChange = vi.fn()) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <TooltipProvider>
-        <ScaleDialog envId={ENV} targets={[target]} open onOpenChange={onOpenChange} />
-        <Toaster />
-      </TooltipProvider>
+      <TestRouter>
+        <TooltipProvider>
+          <ScaleDialog envId={ENV} targets={[target]} open onOpenChange={onOpenChange} />
+          <Toaster />
+        </TooltipProvider>
+      </TestRouter>
     </QueryClientProvider>,
   );
   return { onOpenChange };
@@ -198,6 +202,20 @@ describe("ScaleDialog", () => {
   it("shows no stack warning for a service that belongs to no stack", () => {
     mount();
     expect(screen.queryByText(/belongs to stack/)).toBeNull();
+  });
+
+  it("links the stack's name in the warning when Bayplan manages the stack, the text unchanged", () => {
+    mount({ ...web, stack: "shop", bayplanStackId: "stk-shop" });
+    const link = screen.getByRole("link", { name: "shop" });
+    expect(link.getAttribute("href")).toBe("/env/e1/stacks/stk-shop");
+    expect(link.closest('[role="status"]')?.textContent).toBe(
+      "web belongs to stack shop. The next stack deploy sets its replica count again.",
+    );
+  });
+
+  it("keeps the stack's name as text in the warning when Bayplan does not manage the stack", () => {
+    mount({ ...web, stack: "shop" });
+    expect(screen.queryByRole("link", { name: "shop" })).toBeNull();
   });
 });
 

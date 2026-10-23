@@ -3,7 +3,7 @@
 
 import { useTranslation } from "react-i18next";
 
-import { resources } from "@/i18n";
+import i18n, { resources } from "@/i18n";
 
 type Options = Record<string, unknown>;
 
@@ -15,4 +15,10 @@ type Options = Record<string, unknown>;
 export function useT(): (key: string, options?: Options) => string {
   const { t } = useTranslation(Object.keys(resources.en));
   return (key, options) => String(t(key, { ...options, ns: key.split(".")[0] }));
+}
+
+// keyExists says whether the text has words for a key, read from the namespace its first segment names
+// as useT does. It lets a screen choose between a specific sentence and the general one.
+export function keyExists(key: string): boolean {
+  return i18n.exists(key, { ns: key.split(".")[0] });
 }

@@ -1295,3 +1295,60 @@ func TestAPullThatWorksAfterAFailureClearsIt(t *testing.T) {
 		t.Errorf("failure = %q set=%v, want cleared", code, set)
 	}
 }
+
+// The pull stream shares its handler with the stack deploy stream (plan 07-17); a pull still
+// answers with the same frames and the same fields, and none of the fields a deploy item adds.
+func TestPullStreamUnchanged(t *testing.T) {
+	t.Parallel()
+	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
+	rec := f.startPull(t, e, `{"ref":"busybox:1.36.1"}`)
+	started := decode[pullStarted](t, rec)
+	f.pullDone(t, started.JobID)
+
+	keys := func(raw string) []string {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(raw), &m); err != nil {
+			t.Fatalf("frame data %q: %v", raw, err)
+		}
+		out := make([]string, 0, len(m))
+		for k := range m {
+			out = append(out, k)
+		}
+		slices.Sort(out)
+		return out
+	}
+	jobKeys := []string{"createdAt", "credential", "envId", "finishedAt", "id", "items", "ref", "state"}
+	itemKeys := []string{"code", "count", "current", "digest", "done", "layers", "message", "name", "nodeId", "state", "total", "unit", "upToDate"}
+
+	c := openSSE(t, f.authFixture, "/api/pulls/"+started.JobID+"/stream", f.cookie, "")
+	snap := nextFrame(t, c)
+	if snap.event != "snapshot" || snap.id != "" || !slices.Equal(keys(snap.data), jobKeys) {
+		t.Fatalf("snapshot = %+v, keys %v, want the pull job's fields %v", snap, keys(snap.data), jobKeys)
+	}
+	var job struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(snap.data), &job); err != nil || len(job.Items) != 1 || !slices.Equal(keys(string(job.Items[0])), itemKeys) {
+		t.Fatalf("snapshot items = %s (%v), want the pull item's fields %v", snap.data, err, itemKeys)
+	}
+	var events []string
+	for {
+		fr := nextFrame(t, c)
+		events = append(events, fr.event)
+		if fr.event == "item" && !slices.Equal(keys(fr.data), itemKeys) {
+			t.Errorf("item frame keys = %v, want %v", keys(fr.data), itemKeys)
+		}
+		if fr.event == "done" {
+			if !slices.Equal(keys(fr.data), jobKeys) {
+				t.Errorf("done frame keys = %v, want %v", keys(fr.data), jobKeys)
+			}
+			break
+		}
+	}
+	for _, ev := range events[:len(events)-1] {
+		if ev != "item" {
+			t.Errorf("frames = %v, want only item frames before done", events)
+		}
+	}
+	c.awaitEnd(t, "the done frame")
+}

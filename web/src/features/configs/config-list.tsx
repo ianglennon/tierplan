@@ -33,6 +33,7 @@ import { useEnvName } from "@/features/resources/use-env-name";
 import { ObjectSheet } from "@/features/secrets/object-sheet";
 import { RotateDialog } from "@/features/secrets/rotate-dialog";
 import { NotASwarm } from "@/features/services/not-a-swarm";
+import { StackSentence } from "@/features/stacks/stack-link";
 import { usePermission } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -172,7 +173,19 @@ export function ConfigList({
       header: t("configs.list.columns.owner"),
       cell: (s) =>
         s.owner ? (
-          <TruncatedText>{t("configs.list.owner", { name: s.owner })}</TruncatedText>
+          s.bayplanStackId ? (
+            <span className="block max-w-64 truncate">
+              <StackSentence
+                i18nKey="configs.list.owner"
+                variable="name"
+                stack={s.owner}
+                envId={envId}
+                bayplanStackId={s.bayplanStackId}
+              />
+            </span>
+          ) : (
+            <TruncatedText>{t("configs.list.owner", { name: s.owner })}</TruncatedText>
+          )
         ) : (
           missing
         ),

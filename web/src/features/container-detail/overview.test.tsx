@@ -52,6 +52,7 @@ function detail(extra: Partial<ContainerDetail> = {}): ContainerDetail {
     selfKind: "",
     project: "",
     stack: "",
+    bayplanStackId: "",
     service: "",
     muted: false,
     ...extra,

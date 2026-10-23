@@ -1,0 +1,54 @@
+# One field of every group the tracer converts: command and entrypoint, environment as a map and
+# as a list, container labels and deploy.labels, a healthcheck and a disabled one, ports in
+# ingress and host mode, endpoint_mode, a user network, an external network and the default one.
+services:
+  web:
+    image: nginx:1.27-alpine
+    command: ["nginx", "-g", "daemon off;"]
+    entrypoint: ["/docker-entrypoint.sh"]
+    environment:
+      ZED: last
+      ALPHA: first
+    labels:
+      tier: front
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    ports:
+      - "8080:80"
+      - target: 443
+        published: 8443
+        mode: host
+    networks:
+      front:
+        aliases: [site]
+      shared: {}
+    deploy:
+      replicas: 2
+      labels:
+        team: web
+  worker:
+    image: registry.example.com/worker:3
+    environment:
+      - MODE=batch
+      - KEEP=1
+    healthcheck:
+      disable: true
+    ports:
+      - target: 9000
+        published: 9000
+        protocol: udp
+        mode: host
+    networks: [front]
+    deploy:
+      endpoint_mode: dnsrr
+  plain:
+    image: busybox:1
+networks:
+  front: {}
+  shared:
+    external: true
+    name: shared-net

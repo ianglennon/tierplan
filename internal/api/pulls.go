@@ -6,9 +6,7 @@ package api
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -28,7 +26,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/registry"
-	"github.com/ianglennon/bayplan/internal/tunnel"
+	"github.com/ianglennon/bayplan/internal/stackops"
 )
 
 const (
@@ -66,32 +64,7 @@ const (
 	metaCredID    = "credentialId"    //nolint:gosec // G101: a job field name, not a credential
 	metaCredLayer = "credentialLayer" //nolint:gosec // G101: a job field name, not a credential
 
-	// maxPullLayers bounds the layers one item lists; an image has a few dozen.
-	maxPullLayers = 256
-	// maxPullText bounds a layer ID or status taken from the engine's progress.
-	maxPullText = 80
 )
-
-// pullMessages are the sentences an item carries for a failure code. They are built here
-// from the code, never from the engine's or the registry's answer, so nothing a remote
-// system said reaches a browser through a job (T-05-02, T-05-06). The SPA words a code
-// itself and uses these only as a fallback.
-var pullMessages = map[string]string{
-	dockerx.PullCodeDenied:               "The registry refused the pull.",
-	dockerx.PullCodeUnauthorized:         "The registry asked for a sign-in the pull did not have.",
-	dockerx.PullCodeNotFound:             "The registry has no such image.",
-	dockerx.PullCodeInvalidReference:     "The engine did not accept this image reference.",
-	dockerx.PullCodeRateLimited:          "The registry is limiting pulls. Try again later.",
-	dockerx.PullCodeRegistryUnreachable:  "The registry could not be reached from this node.",
-	dockerx.PullCodeRegistryTLS:          "The registry's certificate was not accepted by this node.",
-	dockerx.PullCodeRegistryHTTP:         "The registry does not speak HTTPS and this node requires it.",
-	dockerx.PullCodeRegistryHTTPFallback: "The registry's real answer was hidden by a retry over plain HTTP. Check the name, the tag and the sign-in.",
-	dockerx.PullCodeCancelled:            "The pull was cancelled.",
-	dockerx.PullCodeFailed:               "The pull failed.",
-	codeNodeUnreachable:                  "The node is not connected to Bayplan.",
-	codeHostReadOnly:                     "This host is read-only, so Bayplan cannot pull on it.",
-	codeAgentPolicyDeny:                  "The node's agent refused the request.",
-}
 
 // PullsDeps are the dependencies of the pull routes.
 type PullsDeps struct {
@@ -694,12 +667,12 @@ func (pr *pullRun) pullOnNode(ctx context.Context, r *jobs.Reporter, n envs.Node
 	err := pr.d.Aggregator.WriteOnNode(nctx, pr.envID, n.ID, func(c *dockerx.Client) error {
 		var e error
 		res, e = c.ImagePull(nctx, pr.ref.String(), dockerx.PullOptions{EncodedAuth: pr.header}, func(ev dockerx.PullEvent) {
-			r.Update(n.ID, func(it *jobs.Item) { applyPullEvent(it, index, ev) })
+			r.Update(n.ID, func(it *jobs.Item) { stackops.ApplyPullEvent(it, index, ev) })
 		})
 		return e
 	})
 	if err != nil {
-		code := pullErrorCode(err)
+		code := stackops.PullErrorCode(err)
 		if code == dockerx.PullCodeFailed || code == codeNodeUnreachable {
 			// The text stays in the server log; the job carries the code only.
 			pr.d.Log.Warn("a pull failed", "environment", pr.envID, "node", n.ID, "ref", pr.ref.String(), "code", code, "error", err)
@@ -757,7 +730,7 @@ func (pr *pullRun) finish(r *jobs.Reporter, n envs.NodeRef, res dockerx.PullResu
 	if code == dockerx.PullCodeCancelled {
 		state = jobs.ItemCancelled
 	}
-	r.Finish(n.ID, state, code, pullMessages[code], nil)
+	r.Finish(n.ID, state, code, stackops.PullMessages[code], nil)
 }
 
 // noteCredential keeps the credential's bookkeeping (D-07): a node the registry refused to sign
@@ -794,80 +767,6 @@ func (pr *pullRun) noteCredential(code string) {
 	}
 }
 
-// pullErrorCode maps the error of one node's pull to an item code.
-func pullErrorCode(err error) string {
-	var denied *envs.AgentPolicyDeniedError
-	switch {
-	case errors.Is(err, envs.ErrHostReadOnly):
-		return codeHostReadOnly
-	case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound), errors.Is(err, envs.ErrOffline),
-		errors.Is(err, envs.ErrUnsupported), errors.Is(err, tunnel.ErrAgentGone):
-		return codeNodeUnreachable
-	case errors.As(envs.ClassifyDockerError(err), &denied):
-		return codeAgentPolicyDeny
-	}
-	return dockerx.PullFailure(err)
-}
-
-// applyPullEvent folds one line of the engine's progress into the item: the layer it is
-// about, and the totals across the layers. The item is the hub's own, held under its lock.
-func applyPullEvent(it *jobs.Item, index map[string]int, ev dockerx.PullEvent) {
-	it.State = jobs.ItemRunning
-	if ev.Layer == "" {
-		return
-	}
-	id := clipPullText(ev.Layer)
-	i, ok := index[id]
-	if !ok {
-		if len(it.Subs) >= maxPullLayers {
-			return
-		}
-		it.Subs = append(it.Subs, jobs.Sub{ID: id})
-		i = len(it.Subs) - 1
-		index[id] = i
-	}
-	s := &it.Subs[i]
-	s.Status = clipPullText(ev.Status)
-	if ev.Bytes {
-		s.Current, s.Total = ev.Current, ev.Total
-	}
-	if layerFinished(s.Status) && s.Total > 0 {
-		s.Current = s.Total
-	}
-	it.Count = len(it.Subs)
-	it.Done, it.Current, it.Total = 0, 0, 0
-	for _, l := range it.Subs {
-		if layerFinished(l.Status) {
-			it.Done++
-		}
-		it.Current += l.Current
-		it.Total += l.Total
-	}
-	it.Unit = ""
-	if it.Total > 0 {
-		it.Unit = "bytes"
-	}
-}
-
-func layerFinished(status string) bool {
-	return status == "Pull complete" || status == "Already exists"
-}
-
-// clipPullText cuts a layer ID or status to maxPullText bytes on a rune boundary and drops
-// control characters: it is shown to a browser as text.
-func clipPullText(s string) string {
-	s = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
-			return -1
-		}
-		return r
-	}, s)
-	if len(s) > maxPullText {
-		s = strings.ToValidUTF8(s[:maxPullText], "")
-	}
-	return s
-}
-
 // pullItemBody maps a job item to the body the routes send.
 func pullItemBody(it jobs.Item) PullItemBody {
 	b := PullItemBody{
@@ -896,15 +795,9 @@ func pullJobBody(j jobs.Job) PullJobBody {
 	return b
 }
 
-// servePullStream follows one pull: the job as it stands as a snapshot frame, then an item
-// frame for each change and a done frame at the end, each with the hub's event ID. A
-// browser that reconnects sends the last ID it saw in Last-Event-ID (or lastEventId in the
-// query) and is sent a new
-// snapshot and what it missed after that ID. An idle stream gets a comment line every
-// Heartbeat, and each one re-checks that the caller is still allowed in.
-//
-// The pull does not depend on this stream: it runs on the server, and closing the stream
-// does not stop it.
+// servePullStream follows one pull through the shared job stream (jobstream.go): the job as it
+// stands as a snapshot frame, then an item frame for each change and a done frame at the end. The
+// pull does not depend on the stream: it runs on the server, and closing the stream does not stop it.
 func servePullStream(w http.ResponseWriter, req *http.Request, d PullsDeps, lim *streamLimiter) {
 	ctx := req.Context()
 	p := httpx.PrincipalFrom(ctx)
@@ -917,106 +810,24 @@ func servePullStream(w http.ResponseWriter, req *http.Request, d PullsDeps, lim 
 		return
 	}
 	id := chi.URLParam(req, "jobId")
+	const gone = "This pull is no longer here. Pulls are kept for 10 minutes after they end."
 	if job, ok := d.Jobs.Get(id); !ok || !d.pullVisible(ctx, p, job) {
-		writeJSONProblem(w, http.StatusNotFound, problemPullNotFound, "This pull is no longer here. Pulls are kept for 10 minutes after they end.")
+		writeJSONProblem(w, http.StatusNotFound, problemPullNotFound, gone)
 		return
 	}
-	release, ok := lim.acquire(string(p.Type) + ":" + p.ID)
-	if !ok {
-		writeJSONProblem(w, http.StatusTooManyRequests, problemTooManyStreams,
-			fmt.Sprintf("You already have %d pull streams open. Close one and try again.", lim.max))
-		return
-	}
-	defer release()
-
-	// A browser's EventSource sends Last-Event-ID itself when it reconnects on its own. The
-	// SPA reopens the stream by hand, which cannot set a header, so it says the same in
-	// the query.
-	var after uint64
-	last := req.Header.Get("Last-Event-ID")
-	if last == "" {
-		last = req.URL.Query().Get("lastEventId")
-	}
-	if last != "" {
-		if n, err := strconv.ParseUint(last, 10, 64); err == nil {
-			after = n
-		}
-	}
-	snap, ch, cancel, err := d.Jobs.Subscribe(ctx, id, after)
-	if err != nil {
-		writeJSONProblem(w, http.StatusNotFound, problemPullNotFound, "This pull is no longer here. Pulls are kept for 10 minutes after they end.")
-		return
-	}
-	defer cancel()
-
-	rc := http.NewResponseController(w)
-	_ = rc.SetWriteDeadline(time.Time{})
-	h := w.Header()
-	h.Set("Content-Type", "text/event-stream")
-	h.Set("Cache-Control", "no-cache")
-	h.Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	if rc.Flush() != nil {
-		return
-	}
-	write := func(format string, args ...any) bool {
-		if _, err := fmt.Fprintf(w, format, args...); err != nil {
-			return false
-		}
-		return rc.Flush() == nil
-	}
-	frame := func(id, event string, v any) bool {
-		data, err := json.Marshal(v)
-		if err != nil {
-			d.Log.Error("encode a pull frame", "error", err)
-			return false
-		}
-		if id == "" {
-			return write("event: %s\ndata: %s\n\n", event, data)
-		}
-		return write("id: %s\nevent: %s\ndata: %s\n\n", id, event, data)
-	}
-	// The snapshot has no id: it is not an event.
-	if !frame("", "snapshot", pullJobBody(snap)) {
-		return
-	}
-
-	beat := time.NewTicker(d.Heartbeat)
-	defer beat.Stop()
-	life := time.NewTimer(d.MaxLifetime)
-	defer life.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-life.C:
-			return
-		case ev, open := <-ch:
-			if !open {
-				// The channel closed without a done event: the job had already finished when
-				// the stream opened and nothing newer than Last-Event-ID was left to replay.
-				if job, ok := d.Jobs.Get(id); ok && job.Finished() {
-					_ = frame("", "done", pullJobBody(job))
-				}
-				return
-			}
-			evID := strconv.FormatUint(ev.ID, 10)
+	serveJobStream(w, req, jobStream{
+		Hub: d.Jobs, JobID: id, Key: string(p.Type) + ":" + p.ID, Limiter: lim, What: "pull",
+		GoneType: problemPullNotFound, GoneDetail: gone, TooManyType: problemTooManyStreams,
+		Heartbeat: d.Heartbeat, MaxLifetime: d.MaxLifetime, Log: d.Log,
+		Snapshot: func(j jobs.Job) any { return pullJobBody(j) },
+		Encode: func(ev jobs.Event) (any, bool) {
 			switch {
 			case ev.Type == jobs.EventItem && ev.Item != nil:
-				if !frame(evID, "item", pullItemBody(*ev.Item)) {
-					return
-				}
+				return pullItemBody(*ev.Item), true
 			case ev.Type == jobs.EventDone && ev.Job != nil:
-				_ = frame(evID, "done", pullJobBody(*ev.Job))
-				return
+				return pullJobBody(*ev.Job), true
 			}
-		case <-beat.C:
-			if !httpx.StillAuthorized(ctx) {
-				return
-			}
-			if !write(": ping\n\n") {
-				return
-			}
-		}
-	}
+			return nil, false
+		},
+	})
 }

@@ -14,8 +14,10 @@
     "nav": {
       "environments": "Environments",
       "registries": "Registries",
+      "allStacks": "All stacks",
       "dashboard": "Dashboard",
       "resources": "Resources",
+      "stacks": "Stacks",
       "containers": "Containers",
       "images": "Images",
       "volumes": "Volumes",

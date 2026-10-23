@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
 	"slices"
 	"strings"
@@ -64,7 +65,16 @@ type NetworkCreateSpec struct {
 	// Subnet and IPRange are in CIDR form and Gateway is an address. Empty leaves
 	// the choice to the engine.
 	Subnet, Gateway, IPRange string
+	// Pools are several address pools, for a stack network that declares more than one. It
+	// replaces Subnet, Gateway and IPRange: setting both is ErrAddressing.
+	Pools []NetworkPool
+	// IPAMDriver is the IPAM driver, empty for the engine's default.
+	IPAMDriver string
 }
+
+// NetworkPool is one address pool of a network, in the same forms as the single fields of
+// NetworkCreateSpec.
+type NetworkPool struct{ Subnet, Gateway, IPRange string }
 
 // NetworkCreate creates the network once and never retries: a create whose answer
 // was lost may have happened (P2 D-42). It returns the ID and the engine's warning,
@@ -95,35 +105,60 @@ func (c *Client) NetworkCreate(ctx context.Context, spec NetworkCreateSpec) (id,
 	return res.ID, strings.Join(res.Warning, "; "), nil
 }
 
-// ipamOf builds the address management of a create from its CIDR fields, or nil
-// when none is set.
+// ipamOf builds the address management of a create from its pools and IPAM driver, or nil when
+// none is set. The single Subnet, Gateway and IPRange fields are one pool; they cannot be
+// combined with Pools. A pool with nothing in it is left out.
 func ipamOf(spec NetworkCreateSpec) (*network.IPAM, error) {
-	if spec.Subnet == "" && spec.Gateway == "" && spec.IPRange == "" {
+	single := spec.Subnet != "" || spec.Gateway != "" || spec.IPRange != ""
+	pools := spec.Pools
+	switch {
+	case single && len(pools) > 0:
+		return nil, fmt.Errorf("%w: pools together with a single subnet, gateway or IP range", ErrAddressing)
+	case single:
+		pools = []NetworkPool{{Subnet: spec.Subnet, Gateway: spec.Gateway, IPRange: spec.IPRange}}
+	}
+	ipam := &network.IPAM{Driver: spec.IPAMDriver}
+	for _, p := range pools {
+		if p == (NetworkPool{}) {
+			continue
+		}
+		cfg, err := ipamConfig(p)
+		if err != nil {
+			return nil, err
+		}
+		ipam.Config = append(ipam.Config, cfg)
+	}
+	if ipam.Driver == "" && len(ipam.Config) == 0 {
 		return nil, nil
 	}
+	return ipam, nil
+}
+
+// ipamConfig parses one pool. Empty fields leave the choice to the engine.
+func ipamConfig(p NetworkPool) (network.IPAMConfig, error) {
 	var cfg network.IPAMConfig
-	if spec.Subnet != "" {
-		p, err := netip.ParsePrefix(spec.Subnet)
+	if p.Subnet != "" {
+		prefix, err := netip.ParsePrefix(p.Subnet)
 		if err != nil {
-			return nil, fmt.Errorf("%w: subnet %q", ErrAddressing, spec.Subnet)
+			return cfg, fmt.Errorf("%w: subnet %q", ErrAddressing, p.Subnet)
 		}
-		cfg.Subnet = p.Masked()
+		cfg.Subnet = prefix.Masked()
 	}
-	if spec.Gateway != "" {
-		a, err := netip.ParseAddr(spec.Gateway)
+	if p.Gateway != "" {
+		a, err := netip.ParseAddr(p.Gateway)
 		if err != nil {
-			return nil, fmt.Errorf("%w: gateway %q", ErrAddressing, spec.Gateway)
+			return cfg, fmt.Errorf("%w: gateway %q", ErrAddressing, p.Gateway)
 		}
 		cfg.Gateway = a
 	}
-	if spec.IPRange != "" {
-		p, err := netip.ParsePrefix(spec.IPRange)
+	if p.IPRange != "" {
+		prefix, err := netip.ParsePrefix(p.IPRange)
 		if err != nil {
-			return nil, fmt.Errorf("%w: IP range %q", ErrAddressing, spec.IPRange)
+			return cfg, fmt.Errorf("%w: IP range %q", ErrAddressing, p.IPRange)
 		}
-		cfg.IPRange = p.Masked()
+		cfg.IPRange = prefix.Masked()
 	}
-	return &network.IPAM{Config: []network.IPAMConfig{cfg}}, nil
+	return cfg, nil
 }
 
 // builtinNetworks are the networks the engine and the swarm make themselves. Their
@@ -280,6 +315,14 @@ type NetworkService struct {
 	Tasks int
 }
 
+// SubnetUsage is one subnet's address use as the engine reports it. Available is the
+// dynamic addresses left in the subnet's range, and 0 means the swarm cannot give another
+// task an address there.
+type SubnetUsage struct {
+	Subnet           string
+	InUse, Available uint64
+}
+
 // NetworkDetail is one network as its detail page shows it. Which containers are
 // attached is not here: the lists of every node say that, with the addresses.
 type NetworkDetail struct {
@@ -295,17 +338,91 @@ type NetworkDetail struct {
 	// asked for and the engine answered with them (a swarm-scoped network, read on a
 	// manager). Never nil.
 	Services []NetworkService
+	// Usage is the address use of each subnet, sorted by Subnet. It comes from the
+	// inspect Status.IPAM (API 1.52, Engine 29 and later) and is nil when the engine
+	// reports none, which an engine older than 29 never does.
+	//
+	// One read answers as the engine answers that reference. A manager reports the swarm's
+	// count (the leader's allocator) for a name, a partial ID, or the full ID of a network it
+	// holds no local instance of. A node that holds one, which is any node running a task or a
+	// load-balancer endpoint of the network, answers a full ID with its own count, even with
+	// scope=swarm (moby getNetwork's local-first rule, UAT G-07-8). A worker answers with its
+	// own count. So the Usage of NetworkDetail is what docker network inspect shows on the node
+	// read. A caller that judges whether a swarm network is full asks NetworkSwarmUsage instead.
+	Usage []SubnetUsage
 }
 
 // NetworkDetail inspects one network and returns the typed detail and the raw
 // document, for the Inspect tab. verbose asks a manager for the services on a
-// swarm-scoped network too; a local network ignores it.
+// swarm-scoped network too; a local network ignores it. It makes one read, so the document and
+// Usage are the engine's own answer for the reference asked.
 func (c *Client) NetworkDetail(ctx context.Context, id string, verbose bool) (NetworkDetail, []byte, error) {
 	res, err := c.cur().NetworkInspect(ctx, id, client.NetworkInspectOptions{Verbose: verbose})
 	if err != nil {
 		return NetworkDetail{}, nil, fmt.Errorf("inspect network on %s: %w", c.t.Describe(), err)
 	}
-	in := res.Network
+	return networkDetailOf(res.Network), res.Raw, nil
+}
+
+// NetworkSwarmUsage inspects one swarm network by its full ID and returns the detail with the
+// swarm's address count in Usage, for a caller that judges whether the network is full. A
+// manager that holds a local instance of the network answers a full ID with its own count (see
+// NetworkDetail.Usage), so for a swarm network with a Status asked for by its full ID this reads
+// again by the ID less its last character, a partial ID that names the one network. On a manager
+// that can reach the swarm's leader, Usage is then the swarm's count whatever the reference.
+// A network that is not swarm-scoped, or has no Status (an engine older than 29), or was asked
+// for by a name or partial ID, is answered in one read.
+//
+// When the second answer carries no swarm count, Usage is nil with no error, not the node's own
+// count. That is an answer with no Status, or one that repeats the node's own count from a record
+// that lists this node's endpoints, as a node that cannot ask the swarm (a worker, or a manager
+// cut off from the leader) answers. A swarm count that happens to equal this node's own also
+// reads nil, and a caller then waits for its timeout. That needs this node to hold every address
+// the swarm gave out on the network, with no virtual IP and no other node on it.
+//
+// One race is left. The check compares the second answer with the first only. When the engine
+// cannot ask the swarm and this node's own endpoints change between the two reads, the second
+// answer is the node's newer count, it differs from the first, and Usage is that count, not the
+// swarm's. It can delay a verdict but not invent one, since a node's own count shows a subnet
+// full only when the node holds every address the swarm gave out on it.
+//
+// A node that cannot ask the swarm answers a name or partial ID with its own count, in one read
+// that this method cannot tell from the swarm's. So read through a manager (Clusters.ClusterRead)
+// by full ID, as stackops networkFull does. An answer for another network is an error, never its
+// count. No raw document is returned: the Inspect tab shows NetworkDetail's single read.
+func (c *Client) NetworkSwarmUsage(ctx context.Context, id string) (NetworkDetail, error) {
+	res, err := c.cur().NetworkInspect(ctx, id, client.NetworkInspectOptions{})
+	if err != nil {
+		return NetworkDetail{}, fmt.Errorf("inspect network on %s: %w", c.t.Describe(), err)
+	}
+	if res.Network.Scope != ScopeSwarm || res.Network.Status == nil || res.Network.ID != id || len(id) <= 1 {
+		return networkDetailOf(res.Network), nil
+	}
+	// Engine 29 answers a full ID from the node's own instance of the network, and only a name
+	// or partial ID brings the swarm leader's count. The ID less its last character is a partial
+	// ID that names this one network, and an ambiguous one is the engine's error. A partial-ID
+	// answer with no Status, or with the node's own count again, is no swarm count, so Usage is
+	// nil.
+	first := res
+	prefix := id[:len(id)-1]
+	res, err = c.cur().NetworkInspect(ctx, prefix, client.NetworkInspectOptions{})
+	if err != nil {
+		return NetworkDetail{}, fmt.Errorf("inspect network on %s: %w", c.t.Describe(), err)
+	}
+	if res.Network.ID != id {
+		return NetworkDetail{}, fmt.Errorf("inspect network on %s: a lookup of %s answered network %s, not %s", c.t.Describe(), prefix, res.Network.ID, id)
+	}
+	d := networkDetailOf(res.Network)
+	if res.Network.Status == nil ||
+		(len(first.Network.Containers) > 0 && maps.Equal(first.Network.Status.IPAM.Subnets, res.Network.Status.IPAM.Subnets)) {
+		d.Usage = nil
+	}
+	return d, nil
+}
+
+// networkDetailOf maps one engine inspect to a NetworkDetail. Every slice and map is non-nil,
+// and Usage is whatever Status the answer carries.
+func networkDetailOf(in network.Inspect) NetworkDetail {
 	d := NetworkDetail{
 		ID: in.ID, Name: in.Name, Driver: in.Driver, Scope: in.Scope,
 		Internal: in.Internal, Attachable: in.Attachable, IPv6: in.EnableIPv6, Ingress: in.Ingress,
@@ -335,5 +452,12 @@ func (c *Client) NetworkDetail(ctx context.Context, id string, verbose bool) (Ne
 		d.Services = append(d.Services, NetworkService{Name: name, Tasks: len(svc.Tasks)})
 	}
 	slices.SortFunc(d.Services, func(a, b NetworkService) int { return strings.Compare(a.Name, b.Name) })
-	return d, res.Raw, nil
+	if in.Status != nil {
+		d.Usage = []SubnetUsage{}
+		for prefix, u := range in.Status.IPAM.Subnets {
+			d.Usage = append(d.Usage, SubnetUsage{Subnet: prefix.String(), InUse: u.IPsInUse, Available: u.DynamicIPsAvailable})
+		}
+		slices.SortFunc(d.Usage, func(a, b SubnetUsage) int { return strings.Compare(a.Subnet, b.Subnet) })
+	}
+	return d
 }

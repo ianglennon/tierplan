@@ -1,0 +1,147 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+package dockerx
+
+import (
+	"cmp"
+	"context"
+	"fmt"
+	"maps"
+	"slices"
+
+	"github.com/moby/moby/client"
+)
+
+// ServicesWithLabel lists the swarm services that carry the label key=value, as details.
+// The filter is built with the engine client's Filters type, so key and value are encoded for
+// the query and never joined into it by hand. It is read-only and needs a manager.
+func (c *Client) ServicesWithLabel(ctx context.Context, key, value string) ([]ServiceDetail, error) {
+	ss, err := c.cur().ServiceList(ctx, client.ServiceListOptions{
+		Filters: make(client.Filters).Add("label", key+"="+value),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list swarm services on %s: %w", c.t.Describe(), err)
+	}
+	out := make([]ServiceDetail, 0, len(ss.Items))
+	for _, s := range ss.Items {
+		// A label filter matches on the key and value, but a daemon that ignores it would list
+		// every service, so the label is checked again here.
+		if s.Spec.Labels[key] != value {
+			continue
+		}
+		d, err := serviceDetail(s)
+		if err != nil {
+			return nil, fmt.Errorf("read service on %s: %w", c.t.Describe(), err)
+		}
+		out = append(out, d)
+	}
+	return out, nil
+}
+
+// NetworksWithLabel lists the networks that carry the label key=value, sorted by name then ID,
+// built the same way as ServicesWithLabel. It is read-only.
+func (c *Client) NetworksWithLabel(ctx context.Context, key, value string) ([]NetworkRow, error) {
+	ns, err := c.cur().NetworkList(ctx, client.NetworkListOptions{
+		Filters: make(client.Filters).Add("label", key+"="+value),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list networks on %s: %w", c.t.Describe(), err)
+	}
+	rows := networkRows(ns.Items)
+	out := rows[:0]
+	for _, r := range rows {
+		if r.Labels[key] == value {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// SecretsWithLabel lists the swarm secrets that carry the label key=value, sorted by name then ID.
+// The list is asked for whole and the label is matched on each row here, because an agent's secrets
+// list takes no filter (its route takes no query key, so a filtered list is refused on a real swarm
+// and a fake engine cannot tell). It is read-only and needs a manager. A value is not a field of a
+// row, so none is read.
+func (c *Client) SecretsWithLabel(ctx context.Context, key, value string) ([]SecretRow, error) {
+	res, err := c.cur().SecretList(ctx, client.SecretListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list swarm secrets on %s: %w", c.t.Describe(), err)
+	}
+	rows := make([]SecretRow, 0, len(res.Items))
+	for _, s := range res.Items {
+		if row := secretRow(s); row.Labels[key] == value {
+			rows = append(rows, row)
+		}
+	}
+	slices.SortFunc(rows, func(a, b SecretRow) int {
+		return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.ID, b.ID))
+	})
+	return rows, nil
+}
+
+// ConfigsWithLabel lists the swarm configs that carry the label key=value, without their content,
+// sorted by name then ID, built the same way as SecretsWithLabel: asked for whole, matched here. It
+// is read-only and needs a manager.
+func (c *Client) ConfigsWithLabel(ctx context.Context, key, value string) ([]ConfigRow, error) {
+	res, err := c.cur().ConfigList(ctx, client.ConfigListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list swarm configs on %s: %w", c.t.Describe(), err)
+	}
+	rows := make([]ConfigRow, 0, len(res.Items))
+	for i := range res.Items {
+		if row := configRow(res.Items[i]); row.Labels[key] == value {
+			rows = append(rows, row)
+		}
+		res.Items[i].Spec.Data = nil
+	}
+	slices.SortFunc(rows, func(a, b ConfigRow) int {
+		return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.ID, b.ID))
+	})
+	return rows, nil
+}
+
+// ContainersWithLabel lists the containers, stopped ones too, that carry the label key=value,
+// sorted by name then ID. The filter is built with the engine client's Filters type, so key and
+// value are encoded for the query and never joined into it by hand; the label is checked again
+// on each row. It is read-only and works on any engine, a swarm node's or a standalone host's.
+func (c *Client) ContainersWithLabel(ctx context.Context, key, value string) ([]ContainerRow, error) {
+	cs, err := c.cur().ContainerList(ctx, client.ContainerListOptions{
+		All:     true,
+		Filters: make(client.Filters).Add("label", key+"="+value),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list containers on %s: %w", c.t.Describe(), err)
+	}
+	rows := containerRows(cs.Items)
+	out := rows[:0]
+	for _, r := range rows {
+		if r.Labels[key] == value {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// VolumesWithLabel lists the volumes that carry the label key=value, sorted by name, built the
+// same way as ContainersWithLabel. It is read-only.
+func (c *Client) VolumesWithLabel(ctx context.Context, key, value string) ([]VolumeRow, error) {
+	vs, err := c.cur().VolumeList(ctx, client.VolumeListOptions{
+		Filters: make(client.Filters).Add("label", key+"="+value),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list volumes on %s: %w", c.t.Describe(), err)
+	}
+	out := make([]VolumeRow, 0, len(vs.Items))
+	for _, v := range vs.Items {
+		if v.Labels[key] != value {
+			continue
+		}
+		out = append(out, VolumeRow{
+			Name: v.Name, Driver: v.Driver, Created: parseTime(v.CreatedAt),
+			Labels: maps.Clone(v.Labels), Anonymous: IsAnonymousVolume(v.Name, v.Labels),
+		})
+	}
+	slices.SortFunc(out, func(a, b VolumeRow) int { return cmp.Compare(a.Name, b.Name) })
+	return out, nil
+}

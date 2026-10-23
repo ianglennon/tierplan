@@ -75,6 +75,12 @@ type ServiceDetail struct {
 	// TemplateHash identifies the spec's TaskTemplate, Runtime aside: the SpecHash of a task
 	// that runs the service's current version.
 	TemplateHash string
+	// NetworkIDs is every network the service's tasks need an address on: its task
+	// template's attachment targets (an ID, or a name as a write gave it, which a network
+	// inspect accepts alike) and the networks its endpoint has a virtual IP on (ingress
+	// for a port published in ingress mode). Each is listed once, sorted, and the field is
+	// nil when there are none.
+	NetworkIDs []string
 }
 
 // ServiceInspect reads one service by ID or name, and returns the typed detail and the
@@ -108,6 +114,18 @@ func serviceDetail(s swarm.Service) (ServiceDetail, error) {
 	if r := s.Spec.Mode.Replicated; r != nil && r.Replicas != nil {
 		d.Replicas = *r.Replicas
 	}
+	for _, n := range s.Spec.TaskTemplate.Networks {
+		if n.Target != "" {
+			d.NetworkIDs = append(d.NetworkIDs, n.Target)
+		}
+	}
+	for _, v := range s.Endpoint.VirtualIPs {
+		if v.NetworkID != "" {
+			d.NetworkIDs = append(d.NetworkIDs, v.NetworkID)
+		}
+	}
+	slices.Sort(d.NetworkIDs)
+	d.NetworkIDs = slices.Compact(d.NetworkIDs)
 	var err error
 	if d.Spec, err = json.Marshal(s.Spec); err != nil {
 		return ServiceDetail{}, err

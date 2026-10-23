@@ -1,0 +1,46 @@
+# The networks of the parity corpus (plan 07-11): a user network with an address pool, a second
+# attachable one with labels and a driver option, an alias, and an external network the case makes
+# first. The extra keys of compose-go's ipam (gateway, ip_range) are left out, because docker stack
+# deploy has no such keys to compare with.
+services:
+  api:
+    image: {{IMAGE}}
+    command: ["sleep", "3600"]
+    stop_grace_period: 1s
+    networks:
+      front:
+        aliases:
+          - api-alias
+          - api.internal
+      back:
+      shared:
+    deploy:
+      replicas: 1
+
+  worker:
+    image: {{IMAGE}}
+    command: ["sleep", "3600"]
+    stop_grace_period: 1s
+    networks:
+      - back
+    deploy:
+      replicas: 1
+
+networks:
+  front:
+    driver: overlay
+    ipam:
+      config:
+        - subnet: 10.231.10.0/24
+  back:
+    attachable: true
+    labels:
+      parity.network: "back"
+    driver_opts:
+      com.docker.network.driver.mtu: "1400"
+    ipam:
+      config:
+        - subnet: 10.231.11.0/24
+  shared:
+    external: true
+    name: {{EXTERNAL_NETWORK}}

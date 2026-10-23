@@ -4,10 +4,13 @@
 package compose_test
 
 import (
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/rbac/compose"
+	"github.com/ianglennon/bayplan/proto/hostpath"
 )
 
 // CR-A01: a bind source is allowed only under the data roots, so a system or
@@ -60,9 +63,17 @@ func TestLocalVolumeDevicesAreFlaggedForEveryMountType(t *testing.T) {
 		vol  string
 		want []string
 	}{
-		{"ext4 block device", "{driver_opts: {type: ext4, device: /dev/sda1}}", []string{"volume_driver_opts:/dev/sda1"}},
-		{"xfs block device with options", `{driver: local, driver_opts: {type: xfs, o: "ro", device: /dev/mapper/vg-root}}`, []string{"volume_driver_opts:/dev/mapper/vg-root"}},
-		{"btrfs in data root is fine", "{driver_opts: {type: btrfs, device: /srv/img}}", nil},
+		// A filesystem type other than a network one or tmpfs mounts a host device whatever the
+		// device says, so the type is the finding (LocalVolumeHostAccess, as the service and agent
+		// paths judge it).
+		{"ext4 block device", "{driver_opts: {type: ext4, device: /dev/sda1}}", []string{"volume_driver_opts:ext4"}},
+		{"xfs block device with options", `{driver: local, driver_opts: {type: xfs, o: "ro", device: /dev/mapper/vg-root}}`, []string{"volume_driver_opts:xfs"}},
+		{"btrfs mounts a host filesystem even from a data root", "{driver_opts: {type: btrfs, device: /srv/img}}", []string{"volume_driver_opts:btrfs"}},
+		{"overlay names host directories in its options", `{driver_opts: {type: overlay, o: "lowerdir=/etc", device: overlay}}`, []string{"volume_driver_opts:overlay"}},
+		{"a host pseudo filesystem", "{driver_opts: {type: proc, device: proc}}", []string{"volume_driver_opts:proc"}},
+		{"a bind given with a network type is a bind", `{driver_opts: {type: nfs, o: "bind", device: /etc}}`, []string{"volume_driver_opts:/etc"}},
+		{"a bind of a relative device reads against the daemon", "{driver_opts: {type: none, o: bind, device: data}}", []string{"volume_driver_opts:data"}},
+		{"a bind with no device mounts nothing", "{driver_opts: {type: none, o: bind}}", nil},
 		{"bind of containerd state", "{driver_opts: {type: none, o: bind, device: /var/lib/containerd}}", []string{"volume_driver_opts:/var/lib/containerd"}},
 		{"bind of usr", `{driver_opts: {type: none, o: "bind,ro", device: /usr}}`, []string{"volume_driver_opts:/usr"}},
 		{"bind of home", "{driver_opts: {type: none, o: bind, device: /home}}", []string{"volume_driver_opts:/home"}},
@@ -158,5 +169,47 @@ secrets:
 `
 	if got := ruleValues(t, src); !slices.Equal(got, []string{"secret_file:/data/bayplan.key"}) {
 		t.Fatalf("got %v", got)
+	}
+}
+
+// The rule is the one proto/hostpath.LocalVolumeHostAccess states, so a volume an Operator may not
+// create as a service or through the agent is a volume an Operator may not deploy in a stack.
+func TestDriverOptsAreJudgedLikeTheServiceAndAgentPaths(t *testing.T) {
+	cases := []struct {
+		name string
+		opts map[string]string
+		key  string // the finding's key under the volume, "" for none
+	}{
+		{"bind of a system path", map[string]string{"type": "none", "o": "bind", "device": "/etc"}, "driver_opts.device"},
+		{"bind of a data root", map[string]string{"type": "none", "o": "bind", "device": "/srv/data"}, ""},
+		{"a device with leading white space", map[string]string{"type": "none", "o": "bind", "device": " /srv/data"}, "driver_opts.device"},
+		{"block device type", map[string]string{"type": "ext4", "device": "/dev/sda1"}, "driver_opts.type"},
+		{"network share", map[string]string{"type": "nfs", "o": "addr=10.0.0.1", "device": ":/export"}, ""},
+		{"tmpfs", map[string]string{"type": "tmpfs", "device": "tmpfs"}, ""},
+		{"no type and no bind", map[string]string{"device": "/etc"}, ""},
+		{"a type with upper case letters", map[string]string{"type": "EXT4", "device": "/dev/sda1"}, "driver_opts.type"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var b strings.Builder
+			b.WriteString("volumes:\n  v:\n    driver_opts:\n")
+			for k, v := range tc.opts {
+				fmt.Fprintf(&b, "      %s: %q\n", k, v)
+			}
+			fs, err := compose.Check([]byte(b.String()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := tc.key
+			if got := hostpath.LocalVolumeHostAccess(tc.opts); (got == "") != (want == "") || (got != "" && "driver_opts."+got != want) {
+				t.Fatalf("test vector %q disagrees with hostpath.LocalVolumeHostAccess (%q)", tc.name, got)
+			}
+			switch {
+			case want == "" && len(fs) != 0:
+				t.Fatalf("findings = %+v, want none", fs)
+			case want != "" && (len(fs) != 1 || fs[0].Key != "volumes.v."+want || fs[0].Rule != "volume_driver_opts"):
+				t.Fatalf("findings = %+v, want one at volumes.v.%s", fs, want)
+			}
+		})
 	}
 }

@@ -56,6 +56,10 @@ type TaskRow struct {
 type TaskFilter struct {
 	ServiceIDs, NodeIDs, IDs []string
 	DesiredState             string
+	// Labels are "key=value" pairs the swarm matches against the labels of the task's service as they were when the
+	// task was made. A task outlives its service for a while, so this is the one filter that still finds the tasks of
+	// a service that was removed (a service filter is answered "not found" once the service is gone).
+	Labels []string
 }
 
 // Tasks reads swarm tasks from a manager, newest first (by creation, then ID). A filter
@@ -64,7 +68,7 @@ type TaskFilter struct {
 func (c *Client) Tasks(ctx context.Context, f TaskFilter) ([]TaskRow, error) {
 	filters := make(client.Filters)
 	named := false
-	for key, values := range map[string][]string{"service": f.ServiceIDs, "node": f.NodeIDs, "id": f.IDs, "desired-state": {f.DesiredState}} {
+	for key, values := range map[string][]string{"service": f.ServiceIDs, "node": f.NodeIDs, "id": f.IDs, "desired-state": {f.DesiredState}, "label": f.Labels} {
 		var clean []string
 		for _, v := range values {
 			if strings.TrimSpace(v) != "" {

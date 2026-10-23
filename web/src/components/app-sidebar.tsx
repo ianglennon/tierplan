@@ -17,6 +17,7 @@ import {
   ScrollText,
   Server,
   Settings,
+  SquareStack,
   X,
 } from "lucide-react";
 import { useEffect } from "react";
@@ -59,6 +60,8 @@ import { useT } from "@/i18n/use-t";
 // lists of the selected environment and its event feed, each shown only to a user
 // who may read it.
 const RESOURCE_ITEMS = [
+  // Stacks (Phase 7, UI-SPEC "Sidebar"): the first item, on swarm and standalone environments alike.
+  { key: "stacks", perm: "stacks.read", to: "/env/$envId/stacks", icon: SquareStack },
   { key: "containers", perm: "containers.read", to: "/env/$envId/containers", icon: Container },
   { key: "images", perm: "images.read", to: "/env/$envId/images", icon: Layers },
   { key: "volumes", perm: "volumes.read", to: "/env/$envId/volumes", icon: HardDrive },
@@ -164,6 +167,9 @@ export function AppSidebar() {
   // Registries is global too (D-09): the stored credentials, shown to anyone who may
   // read images on at least one environment. The server limits the rows it lists.
   const canRegistries = useAnyEnvironmentPermission("images.read");
+  // All stacks is global too (D-21): the stacks of every environment the user may read them on. The
+  // server limits the rows it lists.
+  const canAllStacks = useAnyEnvironmentPermission("stacks.read");
 
   return (
     <Sidebar
@@ -189,7 +195,7 @@ export function AppSidebar() {
         ) : null}
       </SidebarHeader>
       <SidebarContent>
-        {canOverview || canRegistries ? (
+        {canOverview || canRegistries || canAllStacks ? (
           <SidebarGroup>
             <SidebarGroupContent>
               <SidebarMenu>
@@ -208,6 +214,24 @@ export function AppSidebar() {
                       >
                         <LayoutGrid aria-hidden="true" />
                         <span>{t("shell.nav.environments")}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ) : null}
+                {canAllStacks ? (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      asChild
+                      tooltip={t("shell.nav.allStacks")}
+                      className="max-md:h-11"
+                    >
+                      <Link
+                        to="/stacks"
+                        onClick={closeMenu}
+                        activeProps={{ "aria-current": "page", "data-active": true }}
+                      >
+                        <SquareStack aria-hidden="true" />
+                        <span>{t("shell.nav.allStacks")}</span>
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>

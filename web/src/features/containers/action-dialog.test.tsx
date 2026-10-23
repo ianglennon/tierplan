@@ -33,6 +33,7 @@ function row(name: string, extra: Partial<ContainerRow> = {}): ContainerRow {
     isSelf: false,
     project: "",
     stack: "",
+    bayplanStackId: "",
     service: "",
     health: "none",
     selfKind: "",

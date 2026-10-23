@@ -432,6 +432,9 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // its addressing; it cannot express an ingress, config-only or config-from network.
 // ServiceRefs (Phase 4, RES-06) is a read: the networks and volumes each swarm service spec mentions.
 // NetworkDetail (Phase 4, RES-06) is a read: one network inspect by ID, typed, with the raw document.
+// NetworkSwarmUsage (Phase 7, G-07-8) is a read. It makes one network inspect by ID and, for a swarm network
+// asked for by its full ID, a second by the ID less its last character for the swarm leader's address count.
+// It takes no options and returns no raw document. stackops networkFull is its one caller.
 // NetworkRemove (Phase 4, RES-06) removes one network by ID, once; it takes no path and
 // no options, and the API refuses a built-in or an in-use network before it is called.
 // NetworkConnect (Phase 4, RES-06) takes a network ID, a container ID and an EndpointSpec of an
@@ -494,6 +497,19 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // is a read that returns one config's content, its templating driver and the raw document. ConfigCreate sends one
 // config's name, labels, content and, optionally, the golang templating driver, once and never retries; ConfigRemove
 // removes one config by ID, once, and the manager itself refuses a config a service's spec still references.
+// ServicesWithLabel and NetworksWithLabel (Phase 7, STK-02) are reads: the swarm services or the networks that
+// carry one label key and value, the filter built with the engine client's Filters type so key and value are
+// encoded, never joined into the query; a stack deploy reads what it owns with them before it writes.
+// SecretsWithLabel and ConfigsWithLabel (Phase 7, STK-02) are reads of the same kind for the swarm secrets and configs
+// that carry one label key and value, a config without its content; a stack deploy finds the objects it made with them.
+// ContainersWithLabel and VolumesWithLabel (Phase 7, STK-02) are reads of the same kind for the containers (stopped ones
+// too) and the volumes that carry one label key and value; the name-clash check of a standalone stack finds a Compose
+// project that Bayplan does not manage with them.
+// ComposeUp (Phase 7, STK-02) runs the Compose SDK's up for one project over this client wrapped in a guard that refuses
+// build, save, load, push, import, export, commit, copy out, exec, attach, every swarm call and a plugin install; it
+// takes a sandboxed project (no build, no file-backed secret or config) and two options, cannot name a path, and is never
+// retried. ComposeContainers (Phase 7, STK-06) is a read: the containers of one Compose project by its project label,
+// the filter built with the engine client's Filters type.
 // ContainerLogs (Phase 4, OBS-01) is a read: one inspect, then the engine's log of the container
 // with stdout, stderr and timestamps always on; it takes only the time range, the tail and follow.
 // ServiceLogs and TaskLogs (Phase 6, OBS-02) are reads of the same kind on a manager: one inspect for the TTY flag,
@@ -501,11 +517,11 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // follow, since and tail.
 // ContainerStatsOnce (Phase 6, RES-11) is a read: one one-shot stats sample of a container by ID, with stream off and
 // one-shot on; it takes no options and nothing that picks a path.
-var allowedMethods = []string{"Close", "Cluster", "ConfigCreate", "ConfigInspect", "ConfigList", "ConfigRemove", "ContainerAction", "ContainerDetail", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "ContainerStatsOnce", "DistributionInspect", "Events", "ImageDetail", "ImageHistory", "ImagePull", "ImageRemove", "ImageUntag", "ImageUsers", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "Networks", "NodeInspect", "NodeRemove", "NodeUpdate", "Probe", "RestartPolicies", "ResolveImage", "SecretCreate", "SecretInspect", "SecretList", "SecretRemove", "ServiceCreate", "ServiceForceUpdate", "ServiceInspect", "ServiceLogs", "ServiceRefs", "ServiceRemove", "ServiceRollback", "ServiceScale", "ServiceUpdate", "Snapshot", "StartExec", "SwarmNetworkNames", "TaskHistoryLimit", "TaskLogs", "Tasks", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers"}
+var allowedMethods = []string{"Close", "Cluster", "ConfigCreate", "ConfigInspect", "ConfigList", "ConfigRemove", "ComposeContainers", "ComposeDown", "ComposeStart", "ComposeStop", "ComposeUp", "ConfigsWithLabel", "ContainerAction", "ContainerDetail", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "ContainerStatsOnce", "ContainersWithLabel", "DistributionInspect", "Events", "ImageDetail", "ImageHistory", "ImagePull", "ImageRemove", "ImageUntag", "ImageUsers", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "NetworkSwarmUsage", "Networks", "NetworksWithLabel", "NodeInspect", "NodeRemove", "NodeUpdate", "Probe", "RestartPolicies", "ResolveImage", "SecretCreate", "SecretInspect", "SecretList", "SecretRemove", "SecretsWithLabel", "ServiceCreate", "ServiceForceUpdate", "ServiceInspect", "ServiceLogs", "ServiceRefs", "ServiceRemove", "ServiceRollback", "ServiceScale", "ServiceUpdate", "ServicesWithLabel", "Snapshot", "StartExec", "SwarmNetworkNames", "TaskHistoryLimit", "TaskLogs", "Tasks", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers", "VolumesWithLabel"}
 
 // typedMethodsWithForbiddenWords are allowed methods whose names contain a word the
 // pattern below refuses, each reviewed one by one.
-var typedMethodsWithForbiddenWords = []string{"ServiceCreate", "ServiceForceUpdate", "ServiceUpdate", "ServiceRemove", "StartExec", "ContainerRemove", "NetworkCreate", "NetworkRemove", "VolumeCreate", "VolumeRemove", "ImageRemove", "NodeRemove", "NodeUpdate", "SecretCreate", "SecretRemove", "ConfigCreate", "ConfigRemove"}
+var typedMethodsWithForbiddenWords = []string{"ComposeStart", "ComposeStop", "ServiceCreate", "ServiceForceUpdate", "ServiceUpdate", "ServiceRemove", "StartExec", "ContainerRemove", "NetworkCreate", "NetworkRemove", "VolumeCreate", "VolumeRemove", "ImageRemove", "NodeRemove", "NodeUpdate", "SecretCreate", "SecretRemove", "ConfigCreate", "ConfigRemove"}
 
 var forbiddenName = regexp.MustCompile(`Plugin|Swarm(Init|Join|Leave|Unlock)|Create|Remove|Start|Stop|Kill|Exec|Update|Prune|Raw|Do$|Passthrough`)
 

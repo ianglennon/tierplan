@@ -39,14 +39,20 @@ const (
 // manager named in the record's details.
 type svcRec struct {
 	T, S, M, TaskID, NodeID string
+	// Svc is the name of the service the record came from, set when several services are merged
+	// (a stack's log); it breaks a tie in time before the slot does. Empty for a single service.
+	Svc string
 	// seq is the order the record arrived in; it breaks ties that time and slot leave.
 	seq uint64
 }
 
 // taskInfo is what the stream knows of one task of the service.
 type taskInfo struct {
-	ID   string
-	Slot int
+	ID string
+	// Service is the name of the service the task belongs to, set when the tasks of several
+	// services are read together (a stack's log); empty for a single service's.
+	Service string
+	Slot    int
 	// NodeID is the swarm node, Node its host name (the ID while the swarm does not list it).
 	NodeID, Node string
 	// State is the state to show (taskStateUnknown for a task on a node that cannot vouch for
@@ -71,8 +77,9 @@ func slotOrLast(tasks map[string]taskInfo, id string) int {
 	return math.MaxInt
 }
 
-// mergeBurst sorts a burst by time, then by the lower slot, then by arrival, and keeps the
-// newest n. The slot of a task comes from tasks.
+// mergeBurst sorts a burst by time, then by service name (when several services are merged),
+// then by the lower slot, then by arrival, and keeps the newest n. The slot of a task comes from
+// tasks.
 func mergeBurst(recs []svcRec, tasks map[string]taskInfo, n int) []svcRec {
 	if n <= 0 || len(recs) == 0 {
 		return nil
@@ -81,6 +88,7 @@ func mergeBurst(recs []svcRec, tasks map[string]taskInfo, n int) []svcRec {
 	slices.SortStableFunc(out, func(a, b svcRec) int {
 		return cmp.Or(
 			cmp.Compare(a.T, b.T),
+			cmp.Compare(a.Svc, b.Svc),
 			cmp.Compare(slotOrLast(tasks, a.TaskID), slotOrLast(tasks, b.TaskID)),
 			cmp.Compare(a.seq, b.seq),
 		)
@@ -102,7 +110,7 @@ type heldHeap []held
 
 func (h heldHeap) Len() int { return len(h) }
 func (h heldHeap) Less(i, j int) bool {
-	return cmp.Or(cmp.Compare(h[i].rec.T, h[j].rec.T), cmp.Compare(h[i].slot, h[j].slot), cmp.Compare(h[i].rec.seq, h[j].rec.seq)) < 0
+	return cmp.Or(cmp.Compare(h[i].rec.T, h[j].rec.T), cmp.Compare(h[i].rec.Svc, h[j].rec.Svc), cmp.Compare(h[i].slot, h[j].slot), cmp.Compare(h[i].rec.seq, h[j].rec.seq)) < 0
 }
 func (h heldHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
 func (h *heldHeap) Push(x any) {
@@ -120,8 +128,8 @@ func (h *heldHeap) Pop() any {
 }
 
 // reorderWindow puts live lines in time order. A line is held until it has waited the hold
-// since it arrived, and lines go out smallest time first (the lower slot, then the arrival,
-// when times are equal). A line older than the newest one already released cannot be put
+// since it arrived, and lines go out smallest time first (the service name, then the lower slot,
+// then the arrival, when times are equal). A line older than the newest one already released cannot be put
 // back in order, so it goes out at the next release, with its own time.
 type reorderWindow struct {
 	hold   time.Duration
@@ -298,6 +306,8 @@ const maxDownloadBytes = 32 << 20
 // taskLines are the lines of one task of a service in the order the engine gave them (time
 // order), and the task's slot.
 type taskLines struct {
+	// Svc is the service the task belongs to when several services are merged; empty otherwise.
+	Svc   string
 	Slot  int
 	Lines []svcRec
 }
@@ -306,6 +316,7 @@ type taskLines struct {
 type mergeCursor struct {
 	list, pos int
 	slot      int
+	svc       string
 	t         string
 }
 
@@ -313,7 +324,7 @@ type mergeHeap []mergeCursor
 
 func (h mergeHeap) Len() int { return len(h) }
 func (h mergeHeap) Less(i, j int) bool {
-	return cmp.Or(cmp.Compare(h[i].t, h[j].t), cmp.Compare(h[i].slot, h[j].slot), cmp.Compare(h[i].list, h[j].list)) < 0
+	return cmp.Or(cmp.Compare(h[i].t, h[j].t), cmp.Compare(h[i].svc, h[j].svc), cmp.Compare(h[i].slot, h[j].slot), cmp.Compare(h[i].list, h[j].list)) < 0
 }
 func (h mergeHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
 func (h *mergeHeap) Push(x any) {
@@ -330,14 +341,14 @@ func (h *mergeHeap) Pop() any {
 }
 
 // kWayMerge yields the lines of lists, each already in time order, as one list in time order;
-// lines with the same stamp go lower slot first, then in the order of lists. It holds one place
+// lines with the same stamp go by service name, then lower slot, then in the order of lists. It holds one place
 // in each list and nothing else, so a list of any length costs it no memory.
 func kWayMerge(lists []taskLines) iter.Seq[svcRec] {
 	return func(yield func(svcRec) bool) {
 		h := make(mergeHeap, 0, len(lists))
 		for i, l := range lists {
 			if len(l.Lines) > 0 {
-				h = append(h, mergeCursor{list: i, slot: l.Slot, t: l.Lines[0].T})
+				h = append(h, mergeCursor{list: i, slot: l.Slot, svc: l.Svc, t: l.Lines[0].T})
 			}
 		}
 		heap.Init(&h)
@@ -363,6 +374,7 @@ func recSize(r svcRec) int { return len(r.T) + len(r.M) }
 // heldTask is the lines held of one task; off is how many of the oldest were dropped.
 type heldTask struct {
 	slot  int
+	svc   string
 	lines []svcRec
 	off   int
 }
@@ -386,7 +398,7 @@ func newLineHolder(limit int) *lineHolder {
 func (h *lineHolder) add(r svcRec, slot int) {
 	ht, ok := h.byTask[r.TaskID]
 	if !ok {
-		ht = &heldTask{slot: slot}
+		ht = &heldTask{slot: slot, svc: r.Svc}
 		h.byTask[r.TaskID] = ht
 		h.order = append(h.order, r.TaskID)
 	}
@@ -409,7 +421,7 @@ func (h *lineHolder) dropOldest() bool {
 			continue
 		}
 		a, b := ht.lines[ht.off], best.lines[best.off]
-		if cmp.Or(cmp.Compare(a.T, b.T), cmp.Compare(ht.slot, best.slot)) < 0 {
+		if cmp.Or(cmp.Compare(a.T, b.T), cmp.Compare(ht.svc, best.svc), cmp.Compare(ht.slot, best.slot)) < 0 {
 			best = ht
 		}
 	}
@@ -441,10 +453,195 @@ func (h *lineHolder) lists() []taskLines {
 		if !slices.IsSortedFunc(lines, func(a, b svcRec) int { return cmp.Compare(a.T, b.T) }) {
 			slices.SortStableFunc(lines, func(a, b svcRec) int { return cmp.Compare(a.T, b.T) })
 		}
-		out = append(out, taskLines{Slot: ht.slot, Lines: lines})
+		out = append(out, taskLines{Svc: ht.svc, Slot: ht.slot, Lines: lines})
 	}
 	return out
 }
 
 // cut says lines were dropped for size.
 func (h *lineHolder) cut() bool { return h.dropped }
+
+// logSource is one upstream log of a merged view (a stack's log): a service, or the containers of
+// one. Its records come oldest first as the engine gave them (task by task for a swarm service).
+type logSource struct {
+	// Name is the service's name. Lines with the same time go by it first, then by slot.
+	Name string
+	// Records carries the records and is closed when the read ends.
+	Records <-chan svcRec
+}
+
+// mergeOptions are what mergeSources is tuned with.
+type mergeOptions struct {
+	// keep is how many of the newest lines of the opening burst are kept.
+	keep int
+	// tasks says where each task runs, for ordering the burst; slotOf its slot, for ordering the
+	// live lines. Nil means every slot is unknown, which orders by arrival.
+	tasks  func() map[string]taskInfo
+	slotOf func(taskID string) int
+	// accept says whether a record is one to show; nil keeps every record.
+	accept func(svcRec) bool
+	// burstEnded is called, from the merging goroutine, each time the opening burst is taken as
+	// complete and the live window has taken over.
+	burstEnded func()
+	// now is the clock of the reorder window; nil is the wall clock.
+	now func() time.Time
+}
+
+type mergeOption func(*mergeOptions)
+
+// withBurstKeep sets how many of the newest lines of the opening burst are kept.
+func withBurstKeep(n int) mergeOption { return func(o *mergeOptions) { o.keep = n } }
+
+// withTasks says where tasks run and in which slot, which orders lines whose times are equal.
+func withTasks(tasks func() map[string]taskInfo) mergeOption {
+	return func(o *mergeOptions) {
+		o.tasks = tasks
+		o.slotOf = func(id string) int { return slotOrLast(tasks(), id) }
+	}
+}
+
+// withAccept narrows what is merged to the records fn accepts.
+func withAccept(fn func(svcRec) bool) mergeOption { return func(o *mergeOptions) { o.accept = fn } }
+
+// withBurstEnded sets the call made when the opening burst is complete.
+func withBurstEnded(fn func()) mergeOption { return func(o *mergeOptions) { o.burstEnded = fn } }
+
+// withClock sets the clock of the reorder window.
+func withClock(now func() time.Time) mergeOption { return func(o *mergeOptions) { o.now = now } }
+
+// mergeSources merges the records of several sources into one list in time order and hands each
+// to out, until every source has ended and the window is empty, ctx ends, or out says false.
+//
+// It does for N sources what the service log stream does for one: the burst the engine opens
+// with (each source gives its tasks one after the other) is collected until it has been quiet for
+// burstQuiet, or burstMax has passed, or every source has ended, sorted as a whole by time, then
+// the name of the service, then the slot, and the newest lines are kept; the lines that follow
+// are held for hold in a window and released in time order. out is called from this goroutine
+// only, so it needs no lock. A source that is never closed ends with ctx, which the caller must
+// cancel when it is done with the merge.
+func mergeSources(ctx context.Context, sources []logSource, hold time.Duration, out func(svcRec) bool, opts ...mergeOption) error {
+	o := mergeOptions{keep: maxLogTail, now: time.Now}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	if o.tasks == nil {
+		o.tasks = func() map[string]taskInfo { return nil }
+		o.slotOf = func(string) int { return math.MaxInt }
+	}
+
+	in := make(chan svcRec, 256)
+	var feeders sync.WaitGroup
+	for _, src := range sources {
+		feeders.Add(1)
+		go func() {
+			defer feeders.Done()
+			for {
+				select {
+				case r, open := <-src.Records:
+					if !open {
+						return
+					}
+					r.Svc = src.Name
+					select {
+					case in <- r:
+					case <-ctx.Done():
+						return
+					}
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+	go func() {
+		feeders.Wait()
+		close(in)
+	}()
+
+	window := newReorderWindow(hold, o.now, o.slotOf)
+	var (
+		burst    []svcRec
+		bytes    int
+		bursting = true
+		stopped  bool
+	)
+	emit := func(rs []svcRec) bool {
+		for _, r := range rs {
+			if !out(r) {
+				stopped = true
+				return false
+			}
+		}
+		return true
+	}
+	endBurst := func() bool {
+		bursting = false
+		sorted := mergeBurst(burst, o.tasks(), o.keep)
+		burst = nil
+		if !emit(sorted) {
+			return false
+		}
+		if n := len(sorted); n > 0 {
+			window.seed(sorted[n-1].T)
+		}
+		if o.burstEnded != nil {
+			o.burstEnded()
+		}
+		return true
+	}
+
+	quiet := time.NewTimer(burstQuiet)
+	defer quiet.Stop()
+	maxWait := time.NewTimer(burstMax)
+	defer maxWait.Stop()
+	tick := time.NewTicker(windowTick)
+	defer tick.Stop()
+	for {
+		var burstQuietC, burstMaxC <-chan time.Time
+		if bursting {
+			burstQuietC, burstMaxC = quiet.C, maxWait.C
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case r, open := <-in:
+			if !open {
+				if bursting && !endBurst() {
+					return nil
+				}
+				emit(window.drain())
+				return nil
+			}
+			if bursting {
+				quiet.Reset(burstQuiet)
+			}
+			if o.accept != nil && !o.accept(r) {
+				continue
+			}
+			if !bursting {
+				window.add(r)
+				continue
+			}
+			burst = append(burst, r)
+			bytes += len(r.M) + len(r.T)
+			if (len(burst) >= maxBurstRecords || bytes >= maxBurstBytes) && !endBurst() {
+				return nil
+			}
+		case <-burstQuietC:
+			if !endBurst() {
+				return nil
+			}
+		case <-burstMaxC:
+			if !endBurst() {
+				return nil
+			}
+		case <-tick.C:
+			if !emit(window.release()) {
+				return nil
+			}
+		}
+		if stopped {
+			return nil
+		}
+	}
+}

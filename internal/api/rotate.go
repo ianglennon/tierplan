@@ -417,7 +417,7 @@ func rotateObject(ctx context.Context, d ServicesDeps, k rotateKind, p *rbac.Pri
 
 	code, problem := actionDone, error(nil)
 	if err != nil {
-		code, problem = rotateProblem(d, k, envID, rp.id, res, err)
+		code, problem = rotateProblem(ctx, d, k, envID, rp.id, res, err)
 	}
 	if res.Created {
 		auditRotatedServices(ctx, d, p, envID, userAgent, res)
@@ -439,14 +439,14 @@ func (k rotateKind) notFoundCode() string { return k.noun + "_not_found" }
 // rotateProblem turns the error of a rotate into the code its audit row records and the problem the
 // caller is answered with. A run that stopped part-way says what moved and that the old object stays; a
 // create that failed says nothing else changed.
-func rotateProblem(d ServicesDeps, k rotateKind, envID, id string, res swarmops.RotateResult, err error) (string, error) {
+func rotateProblem(ctx context.Context, d ServicesDeps, k rotateKind, envID, id string, res swarmops.RotateResult, err error) (string, error) {
 	var (
 		stop *swarmops.RotateStopError
 		made *swarmops.ObjectCreateError
 	)
 	switch {
 	case errors.As(err, &stop):
-		code, problem := serviceEditProblem(d, envID, stop.Err)
+		code, problem := serviceEditProblem(ctx, d, envID, stop.Err)
 		return code, rotateStopped(problem, k, res)
 	case errors.As(err, &made):
 		code, problem := k.problem(envID, problemCreateFailed, made.Name, made.Err)

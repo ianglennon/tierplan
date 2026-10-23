@@ -1,0 +1,52 @@
+{
+  "stackUpdate": {
+    "actions": {
+      "update": "Update images…",
+      "nothing": "Nothing is running to update."
+    },
+    "dialog": {
+      "title": "Update images in {{name}}",
+      "body": "Bayplan looks up each tag again and shows what would change before anything is deployed.",
+      "cancel": "Cancel",
+      "submit": "Review image updates",
+      "submitting": "Looking up…",
+      "selectAll": "Select all",
+      "clearSelection": "Clear selection",
+      "selected_one": "{{count, number}} service selected",
+      "selected_other": "{{count, number}} services selected",
+      "tickOne": "Tick at least one service.",
+      "none": "No services can be updated.",
+      "noneBody": "Services that pin their image in the compose file, run an image from no registry or are not deployed can't be updated here.",
+      "listLabel": "Services of {{name}}",
+      "loading": "Loading the services…",
+      "loadFailed": "Couldn't load the services of {{name}}.",
+      "lookupFailed": "Couldn't look up the images of {{name}}. {{reason}}",
+      "retry": "Retry"
+    },
+    "columns": {
+      "select": "Update",
+      "service": "Service",
+      "image": "Image",
+      "running": "Running now",
+      "note": "Note"
+    },
+    "row": {
+      "select": "Update the image of {{service}}",
+      "none": "None"
+    },
+    "notes": {
+      "pinnedInFile": "Pinned in the compose file",
+      "notFromRegistry": "Not from a registry",
+      "notDeployed": "Not deployed",
+      "unreachable": "Can't reach the registry",
+      "unresolved": "Couldn't look up the image."
+    },
+    "refusal": {
+      "services_invalid": "A service you chose is not in the stack any more. Go back and choose again.",
+      "target_changed": "This environment is no longer the kind of target this stack was created for.",
+      "permission": "You don't have permission to review this stack.",
+      "unreachable": "Bayplan couldn't reach the server.",
+      "other": "The server refused."
+    }
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "stackStop": {
+    "actions": {
+      "stop": "Stop stack…",
+      "start": "Start stack",
+      "starting": "Starting…",
+      "startTooltip": "Start brings back the last deployed version, not your saved draft."
+    },
+    "dialog": {
+      "title": "Stop {{name}}?",
+      "swarm": "Swarm scales its {{replicated}} to 0 and removes {{global}}. Networks, volumes, secrets and configs stay. Start brings everything back with the same images.",
+      "cancel": "Cancel",
+      "confirm": "Stop stack",
+      "standalone": "This stops its {{containers}}. Networks and volumes stay. Start brings them back.",
+      "replicated_one": "{{count, number}} replicated service",
+      "replicated_other": "{{count, number}} replicated services",
+      "global_one": "{{count, number}} global service",
+      "global_other": "{{count, number}} global services",
+      "containers_one": "{{count, number}} container",
+      "containers_other": "{{count, number}} containers",
+      "failed": "Couldn't stop {{name}}. {{reason}} What already stopped stays stopped."
+    },
+    "toast": {
+      "stopped": "Stopped {{name}}.",
+      "started": "Started {{name}}.",
+      "stopFailed": "Couldn't stop {{name}}. {{reason}} What already stopped stays stopped.",
+      "stopFailedNoReason": "Couldn't stop {{name}}. What already stopped stays stopped.",
+      "startFailed": "Couldn't start {{name}}. {{reason}}",
+      "startFailedNoReason": "Couldn't start {{name}}."
+    },
+    "refusal": {
+      "nothing_running": "Nothing is running.",
+      "not_stopped": "This stack isn't stopped.",
+      "operation_locked": "Another stack operation is running on this environment. Try again when it finishes.",
+      "privileged_compose": "This stack uses settings that need Admin.",
+      "unreachable": "Bayplan couldn't reach the server.",
+      "other": "The server refused."
+    },
+    "console": {
+      "title": "Starting {{name}}",
+      "complete": "Start complete",
+      "announce": "Start complete."
+    }
+  }
+}

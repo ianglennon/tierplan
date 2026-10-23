@@ -1,0 +1,106 @@
+{
+  "stackOverview": {
+    "services": {
+      "title": "Services",
+      "columns": {
+        "service": "Service",
+        "state": "State",
+        "replicas": "Replicas",
+        "containers": "Containers",
+        "image": "Image",
+        "ports": "Ports"
+      },
+      "showContainers": "Show containers for {{service}}",
+      "hideContainers": "Hide containers for {{service}}",
+      "containersOf": "Containers of {{service}}",
+      "empty": "Nothing is running.",
+      "loadFailed": "Couldn't read what {{name}} is running.",
+      "retry": "Retry reading services",
+      "refreshing": "Reading…"
+    },
+    "rollup": {
+      "running": "Running",
+      "degraded": "Degraded",
+      "not_running": "Not running",
+      "stopped": "Stopped"
+    },
+    "image": {
+      "new": "New",
+      "newTooltip": "This image has no digest yet. The next deploy looks it up and pins it.",
+      "local": "Not from a registry",
+      "localTooltip": "The engine runs this image by its ID, and no registry has it."
+    },
+    "notDeployed": {
+      "title": "Not deployed yet",
+      "body": "{{name}} has a definition, but nothing is running. Review and deploy it when you're ready.",
+      "openEditor": "Open editor",
+      "deploy": "Deploy…"
+    },
+    "details": {
+      "title": "Details",
+      "environment": "Environment",
+      "target": "Target",
+      "source": "Source",
+      "created": "Created",
+      "lastDeployed": "Last deployed",
+      "draft": "Draft",
+      "id": "Stack ID",
+      "by": "by {{user}}",
+      "never": "Never",
+      "noDraft": "No draft",
+      "draftSaved": "Saved",
+      "copy": "Copy the stack ID",
+      "copied": "Copied the stack ID",
+      "targets": {
+        "swarm": "Swarm",
+        "standalone": "Standalone host"
+      }
+    },
+    "state": {
+      "removing": "Removing",
+      "deploying": "Deploying",
+      "rolling_back": "Rolling back",
+      "starting": "Starting",
+      "stopping": "Stopping",
+      "stopped": "Stopped",
+      "deploy_failed": "Deploy failed",
+      "not_running": "Not running",
+      "degraded": "Degraded",
+      "running": "Running",
+      "not_deployed": "Not deployed",
+      "unknown": "Unknown",
+      "degradedTooltip_one": "{{running}} of {{count}} service running",
+      "degradedTooltip_other": "{{running}} of {{count}} services running",
+      "deployFailedTooltip": "The last deploy stopped at {{service}}. What is running is shown below.",
+      "deployFailedTooltipNoService": "The last deploy stopped. What is running is shown below.",
+      "unknownTooltip": "Bayplan couldn't read what is running on this environment."
+    },
+    "deployBanner": {
+      "title": {
+        "deploy": "Deploying {{name}}",
+        "update": "Deploying {{name}}",
+        "rollback": "Rolling back {{name}}",
+        "remove": "Removing {{name}}",
+        "start": "Starting {{name}}"
+      },
+      "starting": "Getting started…",
+      "openConsole": "Open console",
+      "complete": "Deploy complete",
+      "progress_one": "{{done}} of {{count}} service done.",
+      "progress_other": "{{done}} of {{count}} services done."
+    },
+    "draftBanner": {
+      "title": "Draft saved, not deployed",
+      "openEditor": "Open editor",
+      "review": "Review and deploy",
+      "bodyUnknown": "The draft has changes that aren't deployed. Nothing has changed on {{env}} yet.",
+      "before": "{{user}} saved changes",
+      "after": ". Nothing has changed on {{env}} yet."
+    },
+    "stopped": {
+      "title": "{{name}} is stopped",
+      "body": "Networks, volumes, secrets and configs are still there. Start brings back the last deployed version.",
+      "start": "Start stack"
+    }
+  }
+}

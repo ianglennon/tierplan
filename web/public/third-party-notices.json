@@ -1435,14 +1435,59 @@
     "licence": "MIT"
   },
   {
+    "name": "github.com/acarl005/stripansi",
+    "version": "v0.0.0-20180116102854-5a71ef0e047d",
+    "licence": "MIT"
+  },
+  {
+    "name": "github.com/buger/goterm",
+    "version": "v1.0.4",
+    "licence": "MIT"
+  },
+  {
+    "name": "github.com/cenkalti/backoff/v5",
+    "version": "v5.0.3",
+    "licence": "MIT"
+  },
+  {
     "name": "github.com/cespare/xxhash/v2",
     "version": "v2.3.0",
+    "licence": "MIT"
+  },
+  {
+    "name": "github.com/clipperhouse/uax29/v2",
+    "version": "v2.7.0",
     "licence": "MIT"
   },
   {
     "name": "github.com/coder/websocket",
     "version": "v1.8.15",
     "licence": "ISC"
+  },
+  {
+    "name": "github.com/compose-spec/compose-go/v2",
+    "version": "v2.16.1",
+    "licence": "Apache-2.0 AND MIT"
+  },
+  {
+    "name": "github.com/containerd/console",
+    "version": "v1.0.5",
+    "licence": "Apache-2.0"
+  },
+  {
+    "name": "github.com/containerd/containerd/api",
+    "version": "v1.12.0",
+    "licence": "Apache-2.0"
+  },
+  {
+    "name": "github.com/containerd/containerd/v2",
+    "version": "v2.4.1",
+    "licence": "Apache-2.0"
+  },
+  {
+    "name": "github.com/containerd/continuity",
+    "version": "v0.5.0",
+    "licence": "Apache-2.0"
   },
   {
     "name": "github.com/containerd/errdefs",
@@ -1455,14 +1500,59 @@
     "licence": "Apache-2.0"
   },
   {
+    "name": "github.com/containerd/log",
+    "version": "v0.2.0",
+    "licence": "Apache-2.0"
+  },
+  {
+    "name": "github.com/containerd/log/otel",
+    "version": "v0.1.0",
+    "licence": "Apache-2.0"
+  },
+  {
+    "name": "github.com/containerd/platforms",
+    "version": "v1.0.0-rc.5",
+    "licence": "Apache-2.0"
+  },
+  {
+    "name": "github.com/containerd/ttrpc",
+    "version": "v1.2.9",
+    "licence": "Apache-2.0"
+  },
+  {
+    "name": "github.com/containerd/typeurl/v2",
+    "version": "v2.3.0",
+    "licence": "Apache-2.0"
+  },
+  {
     "name": "github.com/danielgtaylor/huma/v2",
     "version": "v2.39.1",
     "licence": "MIT"
   },
   {
+    "name": "github.com/DefangLabs/secret-detector",
+    "version": "v0.0.0-20260916192156-3e28d7ed64df",
+    "licence": "Apache-2.0"
+  },
+  {
     "name": "github.com/distribution/reference",
     "version": "v0.6.0",
     "licence": "Apache-2.0"
+  },
+  {
+    "name": "github.com/docker/cli",
+    "version": "v29.8.2+incompatible",
+    "licence": "Apache-2.0 AND BSD-3-Clause"
+  },
+  {
+    "name": "github.com/docker/compose/v5",
+    "version": "v5.6.0",
+    "licence": "Apache-2.0"
+  },
+  {
+    "name": "github.com/docker/docker-credential-helpers",
+    "version": "v0.9.9",
+    "licence": "MIT"
   },
   {
     "name": "github.com/docker/go-connections",
@@ -1485,8 +1575,18 @@
     "licence": "MIT"
   },
   {
+    "name": "github.com/eiannone/keyboard",
+    "version": "v0.0.0-20220611211555-0d226195f203",
+    "licence": "MIT"
+  },
+  {
     "name": "github.com/felixge/httpsnoop",
     "version": "v1.1.0",
+    "licence": "MIT"
+  },
+  {
+    "name": "github.com/fvbommel/sortorder",
+    "version": "v1.2.0",
     "licence": "MIT"
   },
   {
@@ -1505,9 +1605,44 @@
     "licence": "Apache-2.0"
   },
   {
+    "name": "github.com/go-viper/mapstructure/v2",
+    "version": "v2.5.0",
+    "licence": "MIT"
+  },
+  {
+    "name": "github.com/gofrs/flock",
+    "version": "v0.13.1",
+    "licence": "BSD-3-Clause"
+  },
+  {
+    "name": "github.com/golang-jwt/jwt/v5",
+    "version": "v5.3.1",
+    "licence": "MIT"
+  },
+  {
+    "name": "github.com/google/go-cmp",
+    "version": "v0.7.0",
+    "licence": "BSD-3-Clause"
+  },
+  {
+    "name": "github.com/google/shlex",
+    "version": "v0.0.0-20191202100458-e7afc7fbc510",
+    "licence": "Apache-2.0"
+  },
+  {
     "name": "github.com/google/uuid",
     "version": "v1.6.0",
     "licence": "BSD-3-Clause"
+  },
+  {
+    "name": "github.com/grpc-ecosystem/grpc-gateway/v2",
+    "version": "v2.30.0",
+    "licence": "BSD-3-Clause"
+  },
+  {
+    "name": "github.com/hashicorp/go-version",
+    "version": "v1.9.0",
+    "licence": "MPL-2.0"
   },
   {
     "name": "github.com/hashicorp/yamux",
@@ -1515,9 +1650,34 @@
     "licence": "MPL-2.0"
   },
   {
+    "name": "github.com/in-toto/attestation",
+    "version": "v1.2.0",
+    "licence": "Unknown"
+  },
+  {
+    "name": "github.com/in-toto/in-toto-golang",
+    "version": "v0.11.0",
+    "licence": "Unknown"
+  },
+  {
+    "name": "github.com/inhies/go-bytesize",
+    "version": "v0.0.0-20220417184213-4913239db9cf",
+    "licence": "BSD-3-Clause"
+  },
+  {
     "name": "github.com/klauspost/compress",
-    "version": "v1.19.2",
+    "version": "v1.20.0",
     "licence": "Apache-2.0 AND BSD-3-Clause AND MIT"
+  },
+  {
+    "name": "github.com/mattn/go-runewidth",
+    "version": "v0.0.30",
+    "licence": "MIT"
+  },
+  {
+    "name": "github.com/mattn/go-shellwords",
+    "version": "v1.0.15",
+    "licence": "MIT"
   },
   {
     "name": "github.com/mfridman/interpolate",
@@ -1525,24 +1685,89 @@
     "licence": "MIT"
   },
   {
+    "name": "github.com/moby/buildkit",
+    "version": "v0.33.1",
+    "licence": "Apache-2.0"
+  },
+  {
     "name": "github.com/moby/docker-image-spec",
     "version": "v1.3.1",
     "licence": "Apache-2.0"
   },
   {
+    "name": "github.com/moby/go-archive",
+    "version": "v0.3.3",
+    "licence": "Apache-2.0"
+  },
+  {
+    "name": "github.com/moby/locker",
+    "version": "v1.0.1",
+    "licence": "Apache-2.0"
+  },
+  {
     "name": "github.com/moby/moby/api",
-    "version": "v1.56.0",
+    "version": "v1.56.1",
     "licence": "Apache-2.0"
   },
   {
     "name": "github.com/moby/moby/client",
-    "version": "v0.6.0",
+    "version": "v0.6.1",
     "licence": "Apache-2.0"
+  },
+  {
+    "name": "github.com/moby/patternmatcher",
+    "version": "v0.6.1",
+    "licence": "Apache-2.0"
+  },
+  {
+    "name": "github.com/moby/sys/atomicwriter",
+    "version": "v0.1.0",
+    "licence": "Apache-2.0"
+  },
+  {
+    "name": "github.com/moby/sys/capability",
+    "version": "v0.4.0",
+    "licence": "BSD-2-Clause"
   },
   {
     "name": "github.com/moby/sys/mountinfo",
     "version": "v0.7.2",
     "licence": "Apache-2.0"
+  },
+  {
+    "name": "github.com/moby/sys/sequential",
+    "version": "v0.7.0",
+    "licence": "Apache-2.0"
+  },
+  {
+    "name": "github.com/moby/sys/signal",
+    "version": "v0.7.1",
+    "licence": "Apache-2.0"
+  },
+  {
+    "name": "github.com/moby/sys/symlink",
+    "version": "v0.3.0",
+    "licence": "Apache-2.0"
+  },
+  {
+    "name": "github.com/moby/sys/user",
+    "version": "v0.4.1",
+    "licence": "Apache-2.0"
+  },
+  {
+    "name": "github.com/moby/sys/userns",
+    "version": "v0.2.1",
+    "licence": "Apache-2.0"
+  },
+  {
+    "name": "github.com/moby/term",
+    "version": "v0.5.2",
+    "licence": "Apache-2.0"
+  },
+  {
+    "name": "github.com/morikuni/aec",
+    "version": "v1.1.0",
+    "licence": "MIT"
   },
   {
     "name": "github.com/opencontainers/go-digest",
@@ -1553,6 +1778,16 @@
     "name": "github.com/opencontainers/image-spec",
     "version": "v1.1.1",
     "licence": "Apache-2.0"
+  },
+  {
+    "name": "github.com/pkg/errors",
+    "version": "v0.9.1",
+    "licence": "BSD-2-Clause"
+  },
+  {
+    "name": "github.com/planetscale/vtprotobuf",
+    "version": "v0.6.1-0.20240319094008-0393e58bdf10",
+    "licence": "BSD-3-Clause"
   },
   {
     "name": "github.com/pressly/goose/v3",
@@ -1575,13 +1810,33 @@
     "licence": "BSD-3-Clause"
   },
   {
+    "name": "github.com/santhosh-tekuri/jsonschema/v6",
+    "version": "v6.0.3",
+    "licence": "Apache-2.0"
+  },
+  {
+    "name": "github.com/secure-systems-lab/go-securesystemslib",
+    "version": "v0.11.0",
+    "licence": "MIT"
+  },
+  {
     "name": "github.com/sethvargo/go-retry",
     "version": "v0.4.0",
     "licence": "Apache-2.0"
   },
   {
+    "name": "github.com/shibumi/go-pathspec",
+    "version": "v1.3.0",
+    "licence": "Apache-2.0"
+  },
+  {
     "name": "github.com/sirupsen/logrus",
     "version": "v1.10.2",
+    "licence": "MIT"
+  },
+  {
+    "name": "github.com/skratchdot/open-golang",
+    "version": "v0.0.0-20200116055534-eef842397966",
     "licence": "MIT"
   },
   {
@@ -1595,8 +1850,38 @@
     "licence": "BSD-3-Clause"
   },
   {
+    "name": "github.com/tilt-dev/fsnotify",
+    "version": "v1.4.8-0.20220602155310-fff9c274a375",
+    "licence": "BSD-3-Clause"
+  },
+  {
+    "name": "github.com/tonistiigi/fsutil",
+    "version": "v0.0.0-20260819142231-83cac42c1c52",
+    "licence": "MIT"
+  },
+  {
+    "name": "github.com/tonistiigi/go-csvvalue",
+    "version": "v0.0.0-20240814133006-030d3b2625d0",
+    "licence": "MIT"
+  },
+  {
+    "name": "github.com/tonistiigi/units",
+    "version": "v0.0.0-20180711220420-6950e57a87ea",
+    "licence": "MIT"
+  },
+  {
+    "name": "github.com/tonistiigi/vt100",
+    "version": "v0.0.0-20240514184818-90bafcd6abab",
+    "licence": "MIT"
+  },
+  {
     "name": "github.com/ulikunitz/xz",
     "version": "v0.5.16",
+    "licence": "BSD-3-Clause"
+  },
+  {
+    "name": "github.com/xhit/go-str2duration/v2",
+    "version": "v2.1.0",
     "licence": "BSD-3-Clause"
   },
   {
@@ -1610,6 +1895,16 @@
     "licence": "Apache-2.0"
   },
   {
+    "name": "go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc",
+    "version": "v0.71.0",
+    "licence": "Apache-2.0 AND BSD-3-Clause"
+  },
+  {
+    "name": "go.opentelemetry.io/contrib/instrumentation/net/http/httptrace/otelhttptrace",
+    "version": "v0.71.0",
+    "licence": "Apache-2.0 AND BSD-3-Clause"
+  },
+  {
     "name": "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp",
     "version": "v0.71.0",
     "licence": "Apache-2.0 AND BSD-3-Clause"
@@ -1620,7 +1915,42 @@
     "licence": "Apache-2.0 AND BSD-3-Clause"
   },
   {
+    "name": "go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc",
+    "version": "v1.46.0",
+    "licence": "Apache-2.0 AND BSD-3-Clause"
+  },
+  {
+    "name": "go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp",
+    "version": "v1.46.0",
+    "licence": "Apache-2.0 AND BSD-3-Clause"
+  },
+  {
+    "name": "go.opentelemetry.io/otel/exporters/otlp/otlptrace",
+    "version": "v1.46.0",
+    "licence": "Apache-2.0 AND BSD-3-Clause"
+  },
+  {
+    "name": "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc",
+    "version": "v1.46.0",
+    "licence": "Apache-2.0 AND BSD-3-Clause"
+  },
+  {
+    "name": "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp",
+    "version": "v1.46.0",
+    "licence": "Apache-2.0 AND BSD-3-Clause"
+  },
+  {
     "name": "go.opentelemetry.io/otel/metric",
+    "version": "v1.46.0",
+    "licence": "Apache-2.0 AND BSD-3-Clause"
+  },
+  {
+    "name": "go.opentelemetry.io/otel/sdk",
+    "version": "v1.46.0",
+    "licence": "Apache-2.0 AND BSD-3-Clause"
+  },
+  {
+    "name": "go.opentelemetry.io/otel/sdk/metric",
     "version": "v1.46.0",
     "licence": "Apache-2.0 AND BSD-3-Clause"
   },
@@ -1628,6 +1958,11 @@
     "name": "go.opentelemetry.io/otel/trace",
     "version": "v1.46.0",
     "licence": "Apache-2.0 AND BSD-3-Clause"
+  },
+  {
+    "name": "go.opentelemetry.io/proto/otlp",
+    "version": "v1.11.0",
+    "licence": "Apache-2.0"
   },
   {
     "name": "go.uber.org/multierr",
@@ -1640,8 +1975,18 @@
     "licence": "MIT"
   },
   {
+    "name": "go.yaml.in/yaml/v4",
+    "version": "v4.0.0-rc.6",
+    "licence": "Apache-2.0"
+  },
+  {
     "name": "golang.org/x/crypto",
     "version": "v0.57.0",
+    "licence": "BSD-3-Clause"
+  },
+  {
+    "name": "golang.org/x/net",
+    "version": "v0.58.0",
     "licence": "BSD-3-Clause"
   },
   {
@@ -1655,14 +2000,49 @@
     "licence": "BSD-3-Clause"
   },
   {
+    "name": "golang.org/x/text",
+    "version": "v0.42.0",
+    "licence": "BSD-3-Clause"
+  },
+  {
     "name": "golang.org/x/time",
     "version": "v0.16.0",
+    "licence": "BSD-3-Clause"
+  },
+  {
+    "name": "google.golang.org/genproto/googleapis/api",
+    "version": "v0.0.0-20260825221802-da73d73af1c5",
+    "licence": "Apache-2.0"
+  },
+  {
+    "name": "google.golang.org/genproto/googleapis/rpc",
+    "version": "v0.0.0-20260831171406-18b4a7587f8a",
+    "licence": "Apache-2.0"
+  },
+  {
+    "name": "google.golang.org/grpc",
+    "version": "v1.84.0",
+    "licence": "Apache-2.0"
+  },
+  {
+    "name": "google.golang.org/protobuf",
+    "version": "v1.36.12",
     "licence": "BSD-3-Clause"
   },
   {
     "name": "gopd",
     "version": "1.2.0",
     "licence": "MIT"
+  },
+  {
+    "name": "gopkg.in/ini.v1",
+    "version": "v1.67.3",
+    "licence": "Apache-2.0"
+  },
+  {
+    "name": "gotest.tools/v3",
+    "version": "v3.5.2",
+    "licence": "BSD-3-Clause AND Unknown"
   },
   {
     "name": "graceful-fs",
@@ -2588,6 +2968,11 @@
     "name": "systeminformation",
     "version": "5.33.15",
     "licence": "MIT"
+  },
+  {
+    "name": "tags.cncf.io/container-device-interface",
+    "version": "v1.1.1",
+    "licence": "Apache-2.0"
   },
   {
     "name": "tailwind-merge",

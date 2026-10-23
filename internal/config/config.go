@@ -94,6 +94,10 @@ type Config struct {
 	// FailingServiceGrace is how long after a swarm service was updated it is not
 	// counted as failing (D-34).
 	FailingServiceGrace time.Duration
+	// StackConvergeTimeout is how long a swarm stack deploy waits for each service to settle
+	// after the swarm accepted it (D-13). A service that has not settled by then reads
+	// "Timed out"; Docker may still finish it.
+	StackConvergeTimeout time.Duration
 	// AgentAllowInsecure lets agents connect over plain ws:// to an agent address
 	// that is not this machine; for development only. Join tokens and Docker
 	// answers then travel unencrypted, and install commands for a plain address
@@ -128,6 +132,14 @@ const (
 const (
 	minUploadBytes = 1 << 20
 	maxUploadBytes = 64 << 30
+)
+
+// The range the stack converge timeout accepts: under a minute a service that pulls an image
+// would be called stuck while it works, and over two hours a stuck service holds the environment's
+// one stack operation for a working day.
+const (
+	minConvergeTimeout = time.Minute
+	maxConvergeTimeout = 2 * time.Hour
 )
 
 // The range BAYPLAN_INVITE_TTL accepts: an hour is the shortest a person can
@@ -233,6 +245,14 @@ var settings = []setting{
 		apply: func(c *Config, raw string) (err error) { c.AgentReconnectGrace, err = parseDuration(raw); return err }},
 	{env: "BAYPLAN_FAILING_SERVICE_GRACE", flag: "failing-service-grace", def: "2m", desc: "how long after a swarm service was updated it is not counted as failing",
 		apply: func(c *Config, raw string) (err error) { c.FailingServiceGrace, err = parseDuration(raw); return err }},
+	{env: "BAYPLAN_STACK_CONVERGE_TIMEOUT", flag: "stack-converge-timeout", def: "10m", desc: "how long a swarm stack deploy waits for each service to settle, from 1m to 2h; a service that has not settled by then reads Timed out and the deploy stops",
+		apply: func(c *Config, raw string) (err error) {
+			c.StackConvergeTimeout, err = parseDuration(raw)
+			if err == nil && (c.StackConvergeTimeout < minConvergeTimeout || c.StackConvergeTimeout > maxConvergeTimeout) {
+				err = fmt.Errorf("%q must be between %s and %s", raw, minConvergeTimeout, maxConvergeTimeout)
+			}
+			return err
+		}},
 	{env: "BAYPLAN_AGENT_ALLOW_INSECURE", flag: "agent-allow-insecure", def: "false", desc: "development only: let agents connect over plain ws:// to an agent address that is not this machine, which sends join tokens and Docker answers unencrypted; install commands for a plain address then set it on the agent too",
 		apply: func(c *Config, raw string) (err error) {
 			c.AgentAllowInsecure, err = strconv.ParseBool(raw)

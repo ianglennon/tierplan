@@ -23,6 +23,9 @@ interface GroupHeaderRowProps {
   badge?: ReactNode;
   // The group's selection checkbox (plan 04-08). It sits before the chevron.
   checkbox?: ReactNode;
+  // The name drawn as something other than text: a link to the stack the group is. The name stays what
+  // the chevron's label says.
+  nameLink?: ReactNode;
 }
 
 // GroupHeaderRow is the muted band that opens a group of rows (UI-SPEC "Group
@@ -38,6 +41,7 @@ export function GroupHeaderRow({
   summary,
   badge,
   checkbox,
+  nameLink,
 }: GroupHeaderRowProps) {
   const t = useT();
   const Chevron = expanded ? ChevronDown : ChevronRight;
@@ -63,7 +67,7 @@ export function GroupHeaderRow({
           >
             <Chevron aria-hidden="true" />
           </Button>
-          <span className="min-w-0 truncate text-sm font-semibold">{name}</span>
+          <span className="min-w-0 truncate text-sm font-semibold">{nameLink ?? name}</span>
           {badge}
           {summary ? (
             <span className={cn("shrink-0 text-xs text-muted-foreground tabular-nums")}>

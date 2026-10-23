@@ -1,0 +1,43 @@
+{
+  "stackConverge": {
+    "converging": "Converging {{running}}/{{total}}",
+    "pulling": "Pulling image",
+    "timedOut": "Timed out",
+    "created": "Created",
+    "updated": "Updated",
+    "progress": {
+      "label": "Convergence of {{service}}",
+      "tasks": "{{running}}/{{desired}} tasks"
+    },
+    "timeout": {
+      "body_one": "{{service}} didn't settle within {{count}} minute. Docker may still finish it. Check the service, or roll back.",
+      "body_other": "{{service}} didn't settle within {{count}} minutes. Docker may still finish it. Check the service, or roll back.",
+      "waiting_one": "{{count}} task was still waiting for the swarm to give it an address.",
+      "waiting_other": "{{count}} tasks were still waiting for the swarm to give them addresses."
+    },
+    "networkFull": {
+      "body": "{{service}} can't start all its tasks: the network {{network}} has no free addresses in {{subnet}}. Give the network a larger subnet, or run fewer tasks on it, then deploy again.",
+      "bodyUnnamed": "{{service}} can't start all its tasks: one of its networks has no free addresses. Give the network a larger subnet, or run fewer tasks on it, then deploy again."
+    },
+    "stopped": {
+      "body": "The swarm stopped updating {{service}}. Check the service, or roll back."
+    },
+    "exhausted": {
+      "body": "{{service}}'s tasks stopped and the swarm won't start them again. Check the service's restart policy and its logs, or roll back."
+    },
+    "tasks": {
+      "caption": "Tasks of {{service}}",
+      "task": "Task",
+      "state": "State",
+      "node": "Node",
+      "error": "Error"
+    },
+    "lock": {
+      "before": "Another stack operation is running on {{env}}: {{stack}}, started",
+      "after": ".",
+      "openIt": "Open it",
+      "reason": "Another stack operation is running on {{env}}. Try again when it finishes.",
+      "refused": "Another stack operation started on {{env}} just now. Try again when it finishes."
+    }
+  }
+}

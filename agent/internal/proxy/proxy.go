@@ -24,6 +24,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -57,8 +58,9 @@ type Policy struct {
 	// allowlist says.
 	ReadOnly bool
 	// AllowPrivilegedServices lets a service spec that gives tasks host access
-	// through, and a volume create that mounts a host path or a device or names a
-	// volume plugin, on every agent-managed host: a swarm node or a standalone host
+	// through, a container create that gives the container host access, and a volume
+	// create that mounts a host path or a device or names a volume plugin, on every
+	// agent-managed host: a swarm node or a standalone host
 	// (BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES). On a manager it also lets a service
 	// mount a named volume whose backing gives host access.
 	AllowPrivilegedServices bool
@@ -97,7 +99,7 @@ func Allowed(method, rawPath, rawQuery string, hasBody, hasUpgrade bool, p Polic
 }
 
 // queryAllowed reports whether every key of the query is one the route takes and
-// every value of it matches the key's pattern. It parses the query the way the
+// every value of it matches the key's pattern, and every key the route requires is there. It parses the query the way the
 // engine does, so a key or value spelled with escapes is judged as the engine will
 // read it.
 func queryAllowed(rt route, rawQuery string) bool {
@@ -119,6 +121,11 @@ func queryAllowed(rt route, rawQuery string) bool {
 			}
 		}
 	}
+	for _, key := range rt.required {
+		if len(q[key]) == 0 {
+			return false
+		}
+	}
 	return true
 }
 
@@ -136,6 +143,7 @@ func Handler(socketPath string, policy Policy, onDenied func(method, path, reaso
 	}
 	lookup := networkLookupOver(transport)
 	volumes := volumeLookupOver(transport)
+	containers := containerLookupOver(transport)
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			// Rewrite, unlike Director, drops any X-Forwarded-* the server
@@ -210,13 +218,29 @@ func Handler(socketPath string, policy Policy, onDenied func(method, path, reaso
 				}
 				return
 			}
+			if kind == BodyArchive {
+				// The tar is fine; the container it is for must be a stopped compose container.
+				// A lookup the engine does not answer is an engine fault (502), never an allow.
+				if err := archiveTargetOK(r.Context(), archiveContainerID(rawPath), containers); err != nil {
+					if errors.Is(err, errContainerLookup) {
+						writeJSON(w, http.StatusBadGateway, "agent_engine_unreachable: the Docker engine did not answer a container lookup", false)
+						return
+					}
+					deny(wire.DeniedAllowlist)
+					return
+				}
+			}
 			r.Body = io.NopCloser(bytes.NewReader(rebuilt))
 			r.ContentLength = int64(len(rebuilt))
 			r.TransferEncoding = nil
 			r.Header.Set("Content-Length", strconv.Itoa(len(rebuilt)))
 			// The engine reads a form body as query keys when the type says form, so
 			// the type is always the one the rebuilt body has.
-			r.Header.Set("Content-Type", "application/json")
+			if kind == BodyArchive {
+				r.Header.Set("Content-Type", "application/x-tar")
+			} else {
+				r.Header.Set("Content-Type", "application/json")
+			}
 			r.Header.Del("Content-Encoding")
 		}
 		rp.ServeHTTP(w, r)
@@ -302,6 +326,65 @@ func volumeLookupOver(transport http.RoundTripper) volumeLookup {
 			return "", nil, false, err
 		}
 		return v.Driver, v.Options, true, nil
+	}
+}
+
+// maxContainerAnswer caps what is read of a container inspect. Only the labels and the running
+// flag are used, but the answer carries the whole config and the mounts.
+const maxContainerAnswer = 8 << 20
+
+// archiveRe reads the container out of the path of an archive write, which Allowed has already
+// matched against the route.
+var archiveRe = regexp.MustCompile(`^/(?:v[0-9]+\.[0-9]+/)?containers/(` + idShape + `)/archive$`)
+
+// archiveContainerID is the container an archive path names, or "" for any other path.
+func archiveContainerID(rawPath string) string {
+	m := archiveRe.FindStringSubmatch(rawPath)
+	if m == nil {
+		return ""
+	}
+	return m[1]
+}
+
+// containerLookupOver asks the engine behind transport about a container: one GET
+// /containers/{id}/json, read for Config.Labels and State.Running. A 404 is a container the engine
+// does not have, found false with no error. A name not shaped like a container name or ID, any
+// other status, a timeout or an answer that cannot be read is an error, which archiveTargetOK
+// reads as an engine fault and never as permission.
+func containerLookupOver(transport http.RoundTripper) containerLookup {
+	client := &http.Client{Transport: transport}
+	return func(ctx context.Context, id string) (map[string]string, bool, bool, error) {
+		if !idRe.MatchString(id) {
+			return nil, false, false, errors.New("not a container name or ID")
+		}
+		ctx, cancel := context.WithTimeout(ctx, lookupTimeout)
+		defer cancel()
+		// G704: id is shaped by idRe above and the host is the fixed placeholder; the transport
+		// dials the engine's unix socket whatever the URL says.
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker/containers/"+id+"/json", nil) //nolint:gosec // G704, see above
+		if err != nil {
+			return nil, false, false, err
+		}
+		resp, err := client.Do(req) //nolint:gosec // G704, see above
+		if err != nil {
+			return nil, false, false, err
+		}
+		defer func() { _ = resp.Body.Close() }()
+		switch resp.StatusCode {
+		case http.StatusNotFound:
+			return nil, false, false, nil
+		case http.StatusOK:
+		default:
+			return nil, false, false, fmt.Errorf("container lookup answered %d", resp.StatusCode)
+		}
+		var c struct {
+			State  struct{ Running bool }
+			Config struct{ Labels map[string]string }
+		}
+		if err := json.NewDecoder(io.LimitReader(resp.Body, maxContainerAnswer)).Decode(&c); err != nil {
+			return nil, false, false, err
+		}
+		return c.Config.Labels, c.State.Running, true, nil
 	}
 }
 

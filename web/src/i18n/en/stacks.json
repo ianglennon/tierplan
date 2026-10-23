@@ -1,0 +1,84 @@
+{
+  "stacks": {
+    "target": {
+      "swarm": "Swarm",
+      "standalone": "Standalone"
+    },
+    "source": {
+      "inline": "Inline",
+      "adopted": "Adopted",
+      "git": "Git"
+    },
+    "draft": "Draft",
+    "list": {
+      "title": "Stacks",
+      "caption": "Stacks Bayplan manages on {{name}}.",
+      "count_one": "{{count, number}} stack",
+      "count_other": "{{count, number}} stacks",
+      "empty": "No stacks",
+      "emptyBody": "A stack is a compose file that Bayplan deploys and keeps tidy. Its services, networks, secrets and configs go together, and nothing is left behind when you remove it.",
+      "error": "Couldn't load stacks.",
+      "errorRetry": "Retry loading stacks",
+      "columns": {
+        "name": "Name",
+        "state": "State",
+        "source": "Source",
+        "lastDeployed": "Last deployed"
+      },
+      "lastDeployedBy": "by {{user}}",
+      "never": "Never"
+    },
+    "create": {
+      "button": "Create stack",
+      "title": "Create a stack",
+      "body": "Nothing is deployed until you review and deploy it.",
+      "target": "On {{name}} ({{target}})",
+      "name": {
+        "label": "Name",
+        "helper": "Lowercase letters, numbers, dash or underscore. It can't change later."
+      },
+      "start": {
+        "label": "Start from",
+        "example": "Starter example",
+        "empty": "Empty file"
+      },
+      "cancel": "Cancel",
+      "submit": "Create stack",
+      "pending": "Creating…",
+      "success": "Created stack {{name}}. Nothing is deployed yet.",
+      "errors": {
+        "nameRequired": "Enter a name for the stack.",
+        "nameInvalid": "Use lowercase letters, numbers, dash or underscore, and start with a letter or number.",
+        "nameTaken": "A stack named {{name}} already exists on {{env}}.",
+        "permission": "You can't create stacks on this environment.",
+        "generic": "Couldn't create the stack. Check the connection and try again.",
+        "lost": "The server didn't answer. The stack may have been created: check the list before you try again."
+      }
+    },
+    "detail": {
+      "breadcrumb": {
+        "label": "Breadcrumb",
+        "root": "Stacks"
+      },
+      "meta": {
+        "neverDeployed": "{{env}} · Never deployed",
+        "deployedPrefix": "{{env}} · Last deployed"
+      },
+      "tabs": {
+        "label": "Stack",
+        "overview": "Overview",
+        "editor": "Editor"
+      },
+      "error": {
+        "loadFailed": "Couldn't load {{name}}.",
+        "body": "Check the connection and try again.",
+        "retry": "Retry loading {{name}}"
+      },
+      "gone": {
+        "heading": "This stack is gone",
+        "body": "It was removed. Go back to the list to find it.",
+        "back": "Back to stacks"
+      }
+    }
+  }
+}

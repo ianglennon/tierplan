@@ -1,0 +1,6 @@
+# Hostile: env_file reads the environment of the Bayplan server process.
+services:
+  web:
+    image: nginx:1.27-alpine
+    env_file:
+      - /proc/self/environ

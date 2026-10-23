@@ -230,6 +230,51 @@ func TestBuildMigratesAndRecordsTheVersion(t *testing.T) {
 	}
 }
 
+// A deploy that was running when the process stopped is not running when the next one starts, so the
+// next one ends it as interrupted and fails the revision it had taken (plan 07-18, Open Q5).
+func TestBuildMarksStackDeploysThatWereRunningAsInterrupted(t *testing.T) {
+	dir := t.TempDir() + "/data"
+	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir})
+	var logs bytes.Buffer
+	first, err := Build(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, q := range []string{
+		`INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at) VALUES ('env-1', 'agent', 'e', '', 1, 1, 1)`,
+		`INSERT INTO stacks (id, env_id, name, target, source_kind, source_ref, created_by, created_at) VALUES ('s1', 'env-1', 'web', 'swarm', 'inline', '', 'ada', 1)`,
+		`INSERT INTO stack_snapshots (id, stack_id, kind, seq, outcome, created_by, created_at) VALUES ('r1', 's1', 'revision', 1, 'pending', 'ada', 1)`,
+		`INSERT INTO stack_deploys (id, stack_id, env_id, kind, state, revision_seq, job_id, started_by, started_at) VALUES ('d1', 's1', 'env-1', 'deploy', 'running', 1, 'j1', 'ada', 1)`,
+	} {
+		if _, err := first.Store().Write.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := Build(ctx, cfg, slog.New(slog.NewJSONHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+	var state, code, outcome string
+	if err := second.Store().Read.QueryRowContext(ctx, `SELECT state, code FROM stack_deploys WHERE id = 'd1'`).Scan(&state, &code); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Store().Read.QueryRowContext(ctx, `SELECT outcome FROM stack_snapshots WHERE id = 'r1'`).Scan(&outcome); err != nil {
+		t.Fatal(err)
+	}
+	if state != "interrupted" || code != "interrupted" || outcome != "failed" {
+		t.Errorf("deploy %q (%q), revision %q, want interrupted and failed", state, code, outcome)
+	}
+	if !strings.Contains(logs.String(), "marked interrupted") {
+		t.Errorf("no line about the interrupted operations: %s", logs.String())
+	}
+}
+
 func TestBuildRefusesADatabaseNewerThanTheBinary(t *testing.T) {
 	dir := t.TempDir() + "/data"
 	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir})

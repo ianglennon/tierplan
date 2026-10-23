@@ -19,6 +19,7 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { refusalOf } from "@/features/services/action-refusal";
+import { StackSentence } from "@/features/stacks/stack-link";
 import { useT } from "@/i18n/use-t";
 import { toastInfo, toastSuccess } from "@/lib/toast";
 
@@ -123,7 +124,13 @@ function ForceUpdateForm({ envId, target, retry, onClose }: FormProps) {
         <Alert variant="warning" role="status">
           <TriangleAlert aria-hidden="true" />
           <AlertDescription className="text-foreground">
-            {t("services.forceUpdate.stackWarning", { name: target.name, stack: target.stack })}
+            <StackSentence
+              i18nKey="services.forceUpdate.stackWarning"
+              values={{ name: target.name }}
+              stack={target.stack}
+              envId={envId}
+              bayplanStackId={target.bayplanStackId}
+            />
           </AlertDescription>
         </Alert>
       ) : null}

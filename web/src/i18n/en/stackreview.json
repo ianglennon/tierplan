@@ -1,0 +1,163 @@
+{
+  "stackReview": {
+    "digest": {
+      "pinned": "Pinned to {{digest}}",
+      "new": "Will be pinned to {{digest}}",
+      "local": "Local image {{digest}}",
+      "copied": "Copied"
+    },
+    "editor": {
+      "button": "Review and deploy",
+      "saving": "Saving…",
+      "checking": "Checking…"
+    },
+    "flow": {
+      "label": "Deploy steps",
+      "edit": "1 Edit",
+      "review": "2 Review",
+      "deploy": "3 Deploy",
+      "reviewCurrent": "Step 2 of 3: Review",
+      "deployCurrent": "Step 3 of 3: Deploy"
+    },
+    "title": "Review {{name}}",
+    "titleUpdate": "Review image updates for {{name}}",
+    "body": "Check what will change on {{env}}, then deploy.",
+    "bodyUpdate": "These services get a newly looked-up digest. Everything else keeps its running image.",
+    "loading": "Checking the stack…",
+    "lookingUp": "Looking up the digest…",
+    "summary": {
+      "title": "Summary",
+      "caption": "Summary of changes",
+      "resource": "Resource",
+      "added": "Added",
+      "changed": "Changed",
+      "removed": "Removed",
+      "services": "Services",
+      "networks": "Networks",
+      "volumes": "Volumes",
+      "secrets": "Secrets",
+      "configs": "Configs",
+      "images": "Images",
+      "imagesCount": "{{pinned}} pinned, {{new}} new",
+      "newVersions_one": "{{count}} new version",
+      "newVersions_other": "{{count}} new versions"
+    },
+    "images": {
+      "title": "Images",
+      "columns": {
+        "service": "Service",
+        "image": "Image",
+        "digest": "Digest",
+        "note": "Note"
+      },
+      "pinned": "Pinned (running)",
+      "new": "New",
+      "willPin": "will be pinned to {{digest}}",
+      "fromTo": "from {{from}} to {{to}}",
+      "asWritten": "Pinned in the compose file",
+      "local": "Not from a registry. Pinned to the local image ID.",
+      "unreachable": "Can't reach the registry",
+      "unresolved": "Can't look up this image"
+    },
+    "footer": {
+      "back": "Back to editing",
+      "deploy": "Deploy stack",
+      "starting": "Starting…"
+    },
+    "deployErrors": {
+      "draftChanged": "That changed while you were looking at it. Reload the page and try again.",
+      "pinsInvalid": "The images changed since this review. Reload the page and try again.",
+      "needsAdmin": "This stack needs Admin to deploy. Ask an Admin, or take out what needs it.",
+      "nameClash": "A stack with this name that Bayplan doesn't manage already exists on this environment.",
+      "targetChanged": "This environment is no longer the kind of target the stack was made for.",
+      "tooMany": "You already have 5 deploys running. Wait for one to finish.",
+      "permission": "You can't deploy on this environment.",
+      "lost": "The server didn't answer. The deploy may have started: check the stack before you try again.",
+      "generic": "Couldn't start the deploy. Check the connection and try again."
+    },
+    "changes": {
+      "tab": "Changes",
+      "label": "What the review shows",
+      "recreated": "Recreated",
+      "restarted": "Restarted",
+      "recreatedBecause": "Recreated with {{because}}, whose network, processes or volumes it shares. Settings and pinned image stay the same.",
+      "restartedBecause": "Restarted because {{because}} is recreated (depends_on with restart: true). Same container, settings and image."
+    },
+    "serviceDiff": {
+      "added": "Added",
+      "changed": "Changed",
+      "removed": "Removed",
+      "settings_one": "{{count}} setting changed",
+      "settings_other": "{{count}} settings changed",
+      "newDigest": "New digest",
+      "imageTo": "to",
+      "hiddenCaption": "Hidden changes to {{name}}",
+      "hiddenChange": "Changed (hidden)",
+      "changeColumn": "Change",
+      "settingColumn": "Setting"
+    },
+    "other": {
+      "title": "Other resources",
+      "columns": {
+        "change": "Change",
+        "kind": "Kind",
+        "name": "Name",
+        "detail": "Detail"
+      },
+      "change": {
+        "added": "Added",
+        "changed": "Changed",
+        "removed": "Removed",
+        "external": "External"
+      },
+      "kind": {
+        "network": "Network",
+        "volume": "Volume",
+        "secret": "Secret",
+        "config": "Config"
+      },
+      "detail": {
+        "external": "External. Bayplan doesn't touch it.",
+        "removed": "Removed from the stack. Deleted with the deploy."
+      }
+    },
+    "blocking": {
+      "title_one": "{{count}} error stops this deploy",
+      "title_other": "{{count}} errors stop this deploy",
+      "back": "Back to editing"
+    },
+    "warnings": {
+      "title_one": "{{count}} warning",
+      "title_other": "{{count}} warnings"
+    },
+    "firstDeploy": {
+      "title": "First deploy",
+      "body": "Nothing from this stack is running yet, so everything below is new."
+    },
+    "noChanges": {
+      "title": "No changes",
+      "body": "The stack is the same as what's running. There's nothing to deploy.",
+      "bodyUpdate": "Every selected image is already up to date."
+    },
+    "reasons": {
+      "errors_one": "Fix {{count}} error first.",
+      "errors_other": "Fix {{count}} errors first.",
+      "nothing": "There's nothing to deploy.",
+      "needsAdmin": "Needs Admin to use {{kinds}}",
+      "lookup": "Bayplan can't look up {{ref}} right now."
+    },
+    "error": {
+      "title": "Couldn't load the review.",
+      "body": "Check the connection and try again.",
+      "targetChanged": "This environment is no longer the kind of target the stack was made for.",
+      "retry": "Retry loading the review"
+    },
+    "deploy": {
+      "action": "Deploy…"
+    },
+    "rowMenu": {
+      "open": "Open stack",
+      "label": "Actions for {{name}}"
+    }
+  }
+}

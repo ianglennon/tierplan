@@ -1,0 +1,178 @@
+{
+  "stackDeploy": {
+    "title": "Deploying {{name}}",
+    "started": "Started {{time}} by {{user}}.",
+    "startedAnon": "Started {{time}}.",
+    "elapsedRunning": "Running for {{elapsed}}.",
+    "elapsedDone": "Took {{elapsed}}.",
+    "elapsed": {
+      "seconds": "{{count}} s",
+      "minutes": "{{minutes}} min {{seconds}} s",
+      "hours": "{{hours}} h {{minutes}} min"
+    },
+    "loading": "Loading the deploy…",
+    "progress": {
+      "label": "Deploy progress",
+      "text_one": "{{done}} of {{count}} service done",
+      "text_other": "{{done}} of {{count}} services done"
+    },
+    "steps": {
+      "label": "Steps of the deploy",
+      "services": "Services"
+    },
+    "state": {
+      "waiting": "Waiting",
+      "running": "Working",
+      "done": "Done",
+      "failed": "Failed",
+      "skipped": "Skipped",
+      "cancelled": "Cancelled"
+    },
+    "service": {
+      "state": {
+        "waiting": "Waiting",
+        "running": "Working",
+        "done": "Running",
+        "failed": "Failed",
+        "skipped": "Skipped",
+        "cancelled": "Cancelled"
+      },
+      "details": "Show what happened to {{name}}"
+    },
+    "gone": {
+      "title": "This deploy is no longer listed",
+      "body": "Finished deploys stay here for a short while. Open the stack to see what is running now."
+    },
+    "error": {
+      "title": "Couldn't load the deploy.",
+      "body": "Check the connection and try again.",
+      "retry": "Retry loading the deploy"
+    },
+    "complete": {
+      "title": "Deploy complete",
+      "body_one": "{{name}} is running {{count}} service on {{env}}.",
+      "body_other": "{{name}} is running {{count}} services on {{env}}."
+    },
+    "failed": {
+      "title": "Deploy failed",
+      "fallback": "Bayplan stopped at {{step}}.",
+      "stopped_one": "Bayplan stopped at {{step}}. {{done}} of {{count}} service was updated before it stopped, and nothing was rolled back.",
+      "stopped_other": "Bayplan stopped at {{step}}. {{done}} of {{count}} services were updated before it stopped, and nothing was rolled back."
+    },
+    "cancelled": {
+      "title": "Deploy cancelled",
+      "body": "Bayplan stopped at the step it had reached.",
+      "stopped_one": "Bayplan stopped at {{step}}. {{done}} of {{count}} service was already updated.",
+      "stopped_other": "Bayplan stopped at {{step}}. {{done}} of {{count}} services were already updated."
+    },
+    "openStack": "Open stack",
+    "backToEditing": "Back to editing",
+    "output": {
+      "title": "Output",
+      "wrap": "Wrap",
+      "copy": "Copy output",
+      "copied": "Output copied.",
+      "copyFailed": "Couldn't copy the output.",
+      "empty": "No output yet.",
+      "lines_one": "{{count}} line",
+      "lines_other": "{{count}} lines"
+    },
+    "failure": {
+      "rejected": "Docker rejected {{service}}: {{message}}"
+    },
+    "openLogs": "Open logs",
+    "announce": {
+      "running": "{{service}} is running",
+      "failed": "{{service}} failed: {{reason}}",
+      "complete": "Deploy complete",
+      "cancelled": "Deploy cancelled"
+    },
+    "cancel": {
+      "action": "Cancel deploy",
+      "pending": "Cancelling…",
+      "title": "Cancel this deploy?",
+      "body": "Bayplan stops at the step it has reached. Services already updated stay updated, and objects created for this deploy that nothing uses are removed.",
+      "keep": "Keep deploying",
+      "confirm": "Cancel deploy",
+      "finished": "This deploy has already ended.",
+      "failed": "Couldn't cancel the deploy. Try again."
+    },
+    "cleanup": {
+      "removed_one": "The {{count}} object created for this deploy that nothing uses was removed.",
+      "removed_other": "The {{count}} objects created for this deploy that nothing uses were removed.",
+      "removedCancelled": "Objects created for this deploy that nothing uses were removed.",
+      "left": "Bayplan couldn't remove {{list}}. Remove them under Networks, Secrets or Configs.",
+      "object": "{{kind}} {{name}}",
+      "label": "Cleaned up"
+    },
+    "rollback": {
+      "title": "Rolling back {{name}}",
+      "action": "Roll back to previous version",
+      "retry": "Retry roll back",
+      "lastDeployed": "Last deployed {{time}} by {{user}}",
+      "lastDeployedAnon": "Last deployed {{time}}",
+      "noPrevious": "There's no earlier deployed version to roll back to.",
+      "complete": {
+        "title": "Roll back complete"
+      },
+      "failed": {
+        "title": "Roll back failed"
+      },
+      "cancelled": {
+        "title": "Roll back cancelled"
+      },
+      "announce": {
+        "complete": "Roll back complete"
+      },
+      "errors": {
+        "needsAdmin": "The version to roll back to uses host access, which needs Admin. Ask an administrator to roll it back.",
+        "noPrevious": "There's no earlier deployed version to roll back to.",
+        "invalid": "That version can't be deployed again as it is. Open the editor to fix it, then deploy.",
+        "tooMany": "You already have 5 jobs running. Wait for one to finish.",
+        "target": "This environment is no longer the kind of target this stack was created for.",
+        "clash": "Something Bayplan does not manage already uses this stack's name on this environment.",
+        "lost": "Bayplan couldn't tell whether the roll back started. Open the stack to see where it stands.",
+        "generic": "Couldn't start the roll back. Try again."
+      }
+    },
+    "lastFailed": {
+      "title": "The last deploy failed",
+      "titleCancelled": "The last deploy was cancelled",
+      "titleRollback": "The last roll back failed",
+      "titleRollbackCancelled": "The last roll back was cancelled",
+      "stoppedAt": "Bayplan stopped at {{service}}: {{reason}}",
+      "stoppedAtCancelled": "Bayplan stopped at {{service}}. Nothing was rolled back.",
+      "stoppedCancelled": "Bayplan stopped at the step it had reached. Nothing was rolled back.",
+      "stopped": "Bayplan stopped: {{reason}}",
+      "interrupted": "The deploy was interrupted when Bayplan stopped. The swarm may be partly updated.",
+      "interruptedRollback": "The roll back was interrupted when Bayplan stopped. The swarm may be partly updated.",
+      "openConsole": "Open console",
+      "reason": {
+        "service_rejected": "Docker rejected the service.",
+        "converge_timeout": "It didn't settle in time. Docker may still finish it.",
+        "tasks_failed": "Its tasks stopped and the swarm won't start them again.",
+        "network_full": "A network of the stack has no free addresses.",
+        "update_stopped": "The swarm stopped the update of the service.",
+        "service_changed": "Someone else changed the service while the deploy ran.",
+        "service_name_taken": "The swarm already has a service of that name.",
+        "needs_admin": "The stack uses host access that needs Admin.",
+        "policy_unavailable": "The host-access policy could not be applied.",
+        "image_unresolved": "An image could not be looked up.",
+        "registry_unreachable": "A registry could not be reached.",
+        "registry_unresolved": "The registry credential for an image could not be read.",
+        "no_manager_connected": "No manager of the swarm is connected to Bayplan.",
+        "agent_policy_denied": "The agent refused the request.",
+        "host_read_only": "The host is read-only, so Bayplan can't change it.",
+        "network_conflict": "The swarm already has a network of that name that this stack does not own.",
+        "network_failed": "The swarm could not create a network.",
+        "object_failed": "The swarm could not create a secret or config.",
+        "object_invalid": "A secret or config of the stack has no usable content.",
+        "object_name_taken": "The swarm already has a secret or config of that name that this stack does not own.",
+        "external_missing": "A network, secret or config the stack names as external does not exist.",
+        "stack_name_clash": "A stack of that name already exists here that Bayplan does not manage.",
+        "engine_error": "The engine could not complete the request.",
+        "default": "The deploy didn't finish."
+      }
+    }
+  }
+}

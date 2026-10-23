@@ -80,6 +80,7 @@ import { STATUS_CHIP_ROW } from "@/features/resources/status-chips";
 import { nodeRowKey, useEnvIsSwarm, useNodeColumn } from "@/features/resources/swarm-lists";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { RestartLoopBadge } from "@/features/restart-loop/restart-loop-badge";
+import { bayplanStackIdOf, StackLink } from "@/features/stacks/stack-link";
 import { MAX_LIST_STATS, useListStats } from "@/features/stats/list-stats";
 import { CpuCell, MemoryCell, NetworkCell } from "@/features/stats/stats-cells";
 import { StatsToggle } from "@/features/stats/stats-toggle";
@@ -319,6 +320,14 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
             ? undefined
             : {
                 name: g.kind === "ungrouped" ? t("containers.list.group.ungrouped") : g.name,
+                nameLink:
+                  g.kind === "stack" || g.kind === "project" ? (
+                    <StackLink
+                      envId={envId}
+                      name={g.name}
+                      bayplanStackId={bayplanStackIdOf(g.rows)}
+                    />
+                  ) : undefined,
                 summary: t("containers.list.group.running", {
                   running: g.running,
                   count: g.total,
@@ -329,7 +338,7 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
                   ) : undefined,
               },
       })),
-    [shownRows, by, t],
+    [shownRows, by, t, envId],
   );
 
   // Which rows can be chosen: not Bayplan's own, not gone, not waiting on an

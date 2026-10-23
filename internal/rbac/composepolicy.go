@@ -53,6 +53,23 @@ type ComposeDecision struct {
 // A6). A database error comes back as err with a refusing decision.
 func (c *Checker) CheckComposeDeploy(ctx context.Context, p *Principal, envID string, src []byte) (ComposeDecision, error) {
 	findings, err := compose.Check(src)
+	return c.decideCompose(ctx, p, envID, findings, err)
+}
+
+// CheckComposeDeployResolved is CheckComposeDeploy for a caller that knows the variables of the
+// file: each interpolated value is judged by what lookup gives for its names (the stack's table,
+// with the defaults the file writes), at the line it was written, so a bind source written as
+// ${DATA} is judged by DATA's value and the findings keep the numbers of the file the person
+// edits. A name with no value and no default is still a finding. The decision, the Admin rule and
+// the on-behalf-of rule are CheckComposeDeploy's. The stack phases call it at review and again
+// just before a deploy, beside CheckServiceSpec on each converted service.
+func (c *Checker) CheckComposeDeployResolved(ctx context.Context, p *Principal, envID string, src []byte, lookup func(name string) (string, bool)) (ComposeDecision, error) {
+	findings, err := compose.CheckResolved(src, lookup)
+	return c.decideCompose(ctx, p, envID, findings, err)
+}
+
+// decideCompose turns the findings of a check into the decision for one caller.
+func (c *Checker) decideCompose(ctx context.Context, p *Principal, envID string, findings []compose.Finding, err error) (ComposeDecision, error) {
 	if err != nil {
 		msg := "The compose file can't be read: it isn't valid YAML."
 		if errors.Is(err, compose.ErrTooLarge) {

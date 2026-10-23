@@ -4,10 +4,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet } from "@tanstack/react-router";
 import { Boxes } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
 import { isServiceGone, type ServiceDetail, serviceQuery } from "@/api/services";
-import { copyText } from "@/components/copyable-code";
 import { RelativeTime } from "@/components/relative-time";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -32,21 +31,15 @@ import { ForceUpdateDialog } from "@/features/services/force-update-dialog";
 import { RollbackDialog } from "@/features/services/rollback-dialog";
 import { RolloutProgress } from "@/features/services/rollout-progress";
 import { ServiceStateCell } from "@/features/services/service-state-cell";
+import { DigestChip } from "@/features/stacks/digest-chip";
 import { useDocumentTitle } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
-import { toastError } from "@/lib/toast";
 
 interface ServiceDetailLayoutProps {
   envId: string;
   serviceId: string;
 }
-
-// How long the digest chip says "Copied" before it shows the digest again.
-const COPIED_MS = 2000;
-
-// The digest as the chip shows it: the algorithm and the first twelve characters.
-const shortDigest = (digest: string) => digest.slice(0, "sha256:".length + 12);
 
 function Breadcrumb({ envId, name }: { envId: string; name: string | undefined }) {
   const t = useT();
@@ -73,46 +66,6 @@ function Breadcrumb({ envId, name }: { envId: string; name: string | undefined }
         </li>
       </ol>
     </nav>
-  );
-}
-
-// DigestChip is the image's digest as an outline badge with its short form. The full digest is
-// in the tooltip, and a click copies it. A text node only: the digest is Docker's.
-function DigestChip({ digest }: { digest: string }) {
-  const t = useT();
-  const [copied, setCopied] = useState(false);
-  const host = useRef<HTMLSpanElement>(null);
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => clearTimeout(timer.current), []);
-
-  async function onCopy() {
-    clearTimeout(timer.current);
-    if (await copyText(digest, host.current)) {
-      setCopied(true);
-      timer.current = setTimeout(() => setCopied(false), COPIED_MS);
-      return;
-    }
-    toastError(t("env.copy.failed"));
-  }
-
-  return (
-    <span ref={host}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            aria-label={t("servicedetail.header.copyDigest")}
-            onClick={() => void onCopy()}
-            className="rounded-full focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-          >
-            <Badge variant="outline" className="font-mono">
-              {copied ? t("servicedetail.header.digestCopied") : shortDigest(digest)}
-            </Badge>
-          </button>
-        </TooltipTrigger>
-        <TooltipContent className="max-w-sm break-all font-mono">{digest}</TooltipContent>
-      </Tooltip>
-    </span>
   );
 }
 

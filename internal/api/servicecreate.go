@@ -138,7 +138,7 @@ func reviewServiceCreate(ctx context.Context, d ServicesDeps, p *rbac.Principal,
 		return e
 	})
 	if err != nil {
-		_, problem := serviceWriteProblem(d, envID, problemCreateFailed, err)
+		_, problem := serviceWriteProblem(ctx, d, envID, problemCreateFailed, err)
 		return ServiceReviewBody{}, problem
 	}
 	return reviewBody(d, envID, res)
@@ -188,7 +188,7 @@ func createService(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID
 		asked = "(unnamed)"
 	}
 	if err != nil {
-		code, problem := serviceWriteProblem(d, envID, problemCreateFailed, err)
+		code, problem := serviceWriteProblem(ctx, d, envID, problemCreateFailed, err)
 		auditServiceAction(ctx, d, p, envID, in.UserAgent, audit.ActionServiceCreated, res.ServiceID, asked, details(code), code)
 		return ServiceCreateBody{}, withCleanup(problem, "create", res.Name, res.Cleanup)
 	}

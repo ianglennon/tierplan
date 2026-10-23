@@ -42,6 +42,7 @@ export function itemOf(d: ServiceDetail): ServiceItem {
     updateState: d.updateStatus,
     image: d.image.ref,
     stack: d.stack,
+    bayplanStackId: d.bayplanStackId,
     agent: d.agent,
     updatedAt: d.updatedAt,
     ports: [],

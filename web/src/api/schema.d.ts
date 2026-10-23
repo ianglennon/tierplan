@@ -1924,6 +1924,398 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The stacks Bayplan manages on an environment
+         * @description Every stack of the environment by name, with where it deploys, its state and when it was last deployed. The state comes from Bayplan's own records of the stack's deploys and the engine's cached rows, never from a read of the engine of its own. At most 500 stacks come back after the search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed) and the sort, with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Needs stacks.read (Viewer).
+         */
+        get: operations["listStacks"];
+        put?: never;
+        /**
+         * Create a stack
+         * @description Creates a stack and its first draft. Nothing is sent to any engine: the stack is Not deployed until it is deployed. The target is fixed here from the environment: swarm when the environment is a swarm, standalone otherwise. The name must match ^[a-z0-9][a-z0-9_-]{0,62}$ (422 stack_name_invalid) and be new on the environment (409 stack_name_taken). A name that something Bayplan does not manage already uses on the environment (a swarm namespace or a Compose project with that name, without this stack's bayplan.stack.id) is 409 stack_name_clash. start chooses the first compose.yaml: example (a starter with one service), empty, or upload (the file in compose, kept as it is even when it does not parse; over 1 MiB is 422 file_too_large); compose overrides example and empty. Audited as stack.created. Needs stacks.create (Admin).
+         */
+        post: operations["createStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/name-check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether a stack name can be used on an environment
+         * @description Answers available, taken (a stack of Bayplan's has it on this environment), clash (something Bayplan does not manage has it: a swarm namespace or a Compose project of that name) or invalid, with the sentence to show. The Create stack dialog asks when the name field loses focus and again on submit. It only reads: nothing is stored, audited or sent to an engine. It needs stacks.create on the environment, so it cannot be used to probe what an environment holds by anyone who may not create there.
+         */
+        get: operations["checkStackName"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One stack
+         * @description The stack with its state, derived as on the list, and who saved its pending draft. A stack ID of another environment is 404 stack_not_found, as one that does not exist. Needs stacks.read (Viewer).
+         */
+        get: operations["getStack"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check a stack's working copy
+         * @description Checks the files and variables in the body, as the editor holds them, and answers every problem with its file, line and column. The check works only on the bytes it is sent: it reads no file from the Bayplan server, fetches nothing, writes nothing and sends nothing to an engine. include, extends and label_file are refused, and every env_file and file: reference must name one of the stack's own files. The editor calls it while a person types and on Save, and the review and the deploy run the same check. One user may have two checks running; a third is 429 check_busy. A check stops after 5 seconds and answers 200 with one error problem, check_timeout. Needs stacks.read (Viewer).
+         */
+        post: operations["checkStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/deploys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Deploy a stack's draft
+         * @description Takes a revision from the draft and deploys it as a job, answering 202 with the job ID at once; the deploy goes on if the browser closes. draftVersion must be the version of the draft you reviewed, or the answer is 409 draft_changed. A draft that started from an older revision than the newest good one (someone deployed since) is 409 concurrent_unacknowledged unless acknowledgeConcurrent is true; a deploy never overwrites a newer one unseen. pins, when sent, are the review's: the deploy uses exactly those digests and makes no registry lookup (422 pins_invalid for one the server would not have chosen). On a standalone host the job checks the stack, pins each image the same way (a service that runs the text it is deployed with keeps its digest; a new or changed one is looked up on the host with the stored credential), pulls each image of a container it will create or recreate that the host does not have, with the stored credential and never the SDK's anonymous pull (a Pull step under the lookup with the bytes done of the total; a refused pull ends it with its pull_denied, pull_unauthorized, image_not_found, rate_limited or registry_tls code and nothing is created), and runs the Compose SDK's up over a guarded client: containers created, those whose configuration changed recreated, the others left alone, those of services the file no longer declares removed, and a wait until they run; they carry com.docker.compose.project and bayplan.stack.id, and bayplan.stack.image holds the image as written. A stack secret or config is written into the container, not mounted from a file. On a swarm the job checks the stack, looks up each image and pins it to a digest (the one the service runs, or a fresh lookup through a manager), creates the stack's networks, then its secrets and configs under names that end in a short hash of their content, then its services, through one manager, each once and never retried; each carries com.docker.stack.namespace and bayplan.stack.id, and each service com.docker.stack.image with the image as written. A service is done when it converges, not when the swarm took it: the job polls each service every 2 seconds, up to BAYPLAN_STACK_CONVERGE_TIMEOUT (10 minutes by default), until its tasks run on its current spec and its update completed. A secret or config that content changes replaces is removed at the end, once every service uses the new one. A compose file that does not load is 422 compose_invalid; one that uses a setting a swarm can't deploy at all is 422 compose_unsupported; one whose check finds an error is 422 stack_invalid. A caller below env Admin is refused 403 privileged_compose, with each setting and its line in errors, when the stack asks for host access (a bind of the Docker socket or a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables. A name that something Bayplan does not manage holds (a swarm namespace or a Compose project) is 409 stack_name_clash. An environment that is no longer the kind of target the stack was created for is 409 target_changed. At most 5 jobs of one user run at once (429 too_many_deploys). Only one stack operation at a time runs on an environment: while one does, on any stack, a deploy is refused 409 operation_locked with errors naming the stack, the job and when it started, and nothing is stored. Just before it writes anything the job judges the host access of the stack again for the caller, so a grant removed since the request still stops it (the check step fails needs_admin). With mode update, only the services named in services take a newly looked-up digest (the ones the review chose, sent as pins) and every other service keeps the digest it runs; a request that names no service, or one the stack does not have, is 422 services_invalid and nothing is stored. Writes one stack.deployed audit row, with the mode and the result, when the job ends. Needs stacks.deploy (Operator).
+         */
+        post: operations["deployStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/deploys/{jobId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One deploy job and its steps
+         * @description The deploy as it stands now. A job is kept for 10 minutes after it ends. A job of another stack, or one that is gone, is 404 stack_job_not_found. Needs stacks.read (Viewer).
+         */
+        get: operations["getStackDeploy"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/deploys/{jobId}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel a deploy that is running
+         * @description Asks the deploy to stop at the step it has reached and answers 202 at once; follow the job until it reads cancelled. A service being written when the cancel arrives is finished and no other is started; services already updated stay updated and nothing is rolled back. The networks, secrets and configs this deploy created that no service uses are removed again. The deploy is recorded in the audit log as stack.deployed with the result cancelled, and who cancelled it. A job that has ended answers 409 job_finished and nothing changes, so cancelling twice is safe; a job of another stack, or one that is gone, is 404 stack_job_not_found. A cancel is a change and is never retried. Needs stacks.deploy (Operator), not necessarily the person who started the deploy.
+         */
+        post: operations["cancelStackDeploy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A stack's draft
+         * @description The files and variables of the stack's draft, with its version and who saved it last. The value of a secret variable and the content of a secret file are <hidden>. Needs stacks.read (Viewer).
+         */
+        get: operations["getStackDraft"];
+        /**
+         * Save a stack's draft
+         * @description Replaces the draft's files and variables when the draft is still at the version you read; if someone saved in between the answer is 409 draft_conflict, naming who saved and when, and nothing is written. Saving content equal to the saved draft changes nothing: changed is false, the version does not move and no audit row is written. A save never sends anything to an engine: only a deploy does. The files are held to the stack's file rules, each refused with 422 and the path in errors[].location: a path that is absolute, has .., a backslash or a colon (file_path_invalid), a path used twice (file_name_taken), a file over 1 MiB (file_too_large), more than 50 files or 8 MiB in all (stack_too_large), no compose.yaml (compose_missing). A variable name must be letters, digits and underscore, not start with a digit and be at most 128 characters (422 variable_name_invalid), and be used once (422 variable_name_taken); a secret variable's value must be at least 4 characters (422 secret_too_short), because shorter values cannot be hidden reliably; more than 500 variables, or a value over 64 KiB, is 422 stack_var_invalid. A secret file or variable sent as <hidden> keeps its saved value; with none saved it is 422 stack_placeholder_without_value. A file the compose file uses under secrets: is a secret file whatever the body says: it is stored sealed, and it stays secret until the file is deleted from the draft. The answer lists the secret files. Audited as stack.draft_saved when it changed. Needs stacks.update (Operator).
+         */
+        put: operations["saveStackDraft"];
+        post?: never;
+        /**
+         * Discard a stack's draft
+         * @description Deletes the saved draft with its files and variables; the editor then shows the last deployed definition, or the starter example for a stack never deployed. Discarding when there is no draft is the same as discarding once: 204, nothing written, no audit row. A discard never sends anything to an engine. Audited as stack.draft_discarded, with the version it deleted, when there was a draft. Needs stacks.update (Operator).
+         */
+        delete: operations["discardStackDraft"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/files/reveal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reveal a secret stack file's saved content
+         * @description Answers the saved content of a secret file of the stack, in clear: the one way back to a content every other answer shows as <hidden>. A file is secret when the compose file uses it under secrets: or it was saved as secret. The content is read from the saved draft, or from the last deployed definition when there is no draft. A path that is not in the stack, is not secret or is empty is 404 file_not_found. The answer is never cached. Every reveal is audited as stack.value_revealed with the stack, the kind (file) and the path, never the content; if the audit row cannot be written the content is not sent. A refusal is audited as permission.denied. Needs secrets.reveal (Admin, or an Operator granted the extra).
+         */
+        post: operations["revealStackFile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/removal-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What removing a stack would delete
+         * @description Lists the services (or containers), networks, secrets and configs that carry the stack's own labels, the stack's volumes one for each node that holds one, and the external objects the compose file names, which a removal never touches. An object is the stack's only when it carries both its namespace and its Bayplan stack ID. Each volume says how many containers outside the stack mount it. It is a read. Needs stacks.delete (Env Admin).
+         */
+        get: operations["removalPreview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove a stack
+         * @description Removes everything the stack owns as a job, answering 202 with the job ID at once: its services or containers, then a bounded wait until its tasks or containers are gone, then its networks, then its own secrets and configs, then the volumes the request names, then the definition. External networks, secrets, configs and volumes are never touched, and a volume is deleted only when the request names it and it carries this stack's labels on that node. The name must be typed exactly (422 confirm_mismatch). With keepDefinition the files, variables and revisions stay and the stack reads Not deployed. A failure part-way leaves what was removed removed and keeps the definition. Only one stack operation at a time runs on an environment: while one does, the answer is 409 operation_locked and nothing is stored. A stack that is gone is 404. Writes one stack.removed audit row when the job ends. Needs stacks.delete (Env Admin).
+         */
+        post: operations["removeStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/render": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Render a stack's working copy
+         * @description Answers the stack as it will be deployed: the files and variables in the body, as the editor holds them, with every variable and env_file filled in and each service's image shown as the digest it will run. A service whose image text is unchanged since the last successful deploy shows its pinned tag@sha256 reference; any other image is shown as written with a trailing comment, since the deploy looks it up. Every secret variable value and secret file content is <hidden>. The render is a view: it never changes the stack's files, and writes nothing and sends nothing to an engine. It runs the same check as POST .../check, shares its limit of two running per user (429 check_busy), and answers 422 stack_invalid, with each error in errors[], when the check found an error. The answer is never cached. Needs stacks.read (Viewer).
+         */
+        post: operations["renderStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What a stack owns on its environment
+         * @description The tasks (a swarm) or containers (a standalone host), the networks, the volumes (one row for each node that holds one), the secrets and the configs of the stack, found by the stack's labels: its swarm namespace or Compose project together with its Bayplan ID, so an object of another stack, or one somebody made under the same name, is never listed as the stack's. Objects the deployed compose file refers to that were made outside the stack are listed with ownership external. A standalone stack's secrets and configs are read from its deployed definition, because they are files in the containers. Each card is read on its own and carries its own error (a code, never the engine's text), so one read that fails never hides the others. No secret value and no config content is read. A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).
+         */
+        get: operations["listStackResources"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Review what a deploy of a stack would do
+         * @description Reviews the stack's saved draft (the latest good revision when there is no draft) against what is running and saves nothing. It runs the same check as the editor, looks up the digests of the images that need one, converts the stack the way a deploy does, reads what the swarm holds under the stack's namespace and answers the problems, a summary, an image table, each service's change with its masked current and next spec, and the other resources. A value derived from a secret of the stack is <hidden> on both sides; whether it changed is decided before it is hidden and listed in hiddenChanges as a path. Right after a deploy, a review shows no change. yaml is the one comparison with the last deploy and not with what is running: the rendered stack against the masked rendering stored with the last good revision, as hunks computed here with 3 lines of context. concurrent is set when someone deployed after the draft was started, with what that deployment changed and what the draft changed, file by file; the deploy then needs acknowledgeConcurrent. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. For a caller below env Admin, host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables, is a blocking needs_admin problem at its line, and needsAdmin names the kinds. A name that something Bayplan does not manage holds is a blocking stack_name_clash problem, and another stack operation running on the environment is a blocking operation_locked problem. On a standalone host the review pins the images the same way and compares each service with the containers that run it: the service a deploy would send, and the service rebuilt from each running container's inspect document, both with what the image or the engine fills in taken out, so that right after a deploy nothing differs. A service with no container is added; one whose containers carry another config hash than the service has now, or whose running configuration is not what the file says (a container changed by hand on the host, which keeps its labels and its hash), is changed, with the masked current and next settings as compose settings (restart, ports, environment, volumes ...); a changed secret or config is a changed service; and a service of the host's Compose project that the file no longer declares is removed. Settings the engine does not record (depends_on, secrets, configs, profiles, pull_policy) are read from the stored revision that made the container, and are the file's own when none did. A deploy that recreates a service carries others with it, as docker compose does: a service that shares its network, IPC or PID namespace or its volumes is recreated and keeps its pinned image, and one that depends on it with restart: true is stopped and started again; they follow as recreated and restarted rows with because naming the service, carry no spec, and are not counted in the summary. A container changed by hand is put right by a deploy of an unedited file. An environment that is no longer the kind of target the stack was created for is 409 target_changed. In mode update, only the services named in services look their tag up again and every other service keeps the digest it runs; each row of images then carries the digest it runs now in current and the one it would run in digest, and a tag that did not move reads pinned with the note Already up to date. A request that names no service, or one the stack does not have, is 422 services_invalid and nothing is looked up. Needs stacks.deploy (Operator).
+         */
+        post: operations["reviewStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Roll a stack back to the version that ran before
+         * @description Redeploys the last version of the stack that ran well, as a job, answering 202 with the job ID at once. That is the newest revision whose deploy succeeded, or, when the newest revision is itself the one that runs, the good one before it. It takes a revision of its own from it (the files, the variables and the images it ran) and runs the same swarm deploy on it, so it is audited as stack.deployed with the mode rollback. It uses exactly the images that revision ran and looks nothing up: a tag that has moved since is not followed. The draft is not touched. A stack with no earlier version that ran well is 409 no_previous_version. Everything a deploy is judged on is judged again: a revision that uses host access is refused 403 privileged_compose below env Admin, a stack that no longer loads is 422, and while another stack operation runs on the environment the answer is 409 operation_locked and nothing is stored. Rolling back a stack of a standalone host is 409 target_engine_missing: its engine is not in this version. A roll back is only ever sent by a person; nothing rolls a stack back by itself. Needs stacks.deploy (Operator).
+         */
+        post: operations["rollbackStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/services": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What a stack runs now
+         * @description The services the stack owns on the engine, read now: on a swarm each service with its task counts, its image as written and as pinned and its published ports; on a standalone host each service with its containers. A service the engine holds under the stack's name that Bayplan did not make is not listed. A stack that was never deployed answers an empty list. A stack ID of another environment is 404 stack_not_found. An environment that cannot be read is the environment's own problem answer. Needs stacks.read (Viewer).
+         */
+        get: operations["listStackServices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a stopped stack
+         * @description Brings a stopped stack back as a job, answering 202 with the job ID and whether it recreates services. It brings back the last version that was deployed, never the saved draft and never a newer image: on a swarm each service is scaled back to the count it remembered and the label removed, and a service a stop removed is created again from the last good revision with the image digest it ran; on a standalone host the Compose SDK starts the stopped containers and a stack file's secrets and configs are written into each again before it starts. A start that creates services is judged by the host-access policy for the caller, as a deploy is: below env Admin it is refused 403 privileged_compose when the revision uses host access. A stack that is not stopped is 409 not_stopped. While another stack operation runs on the environment the answer is 409 operation_locked and nothing is stored. Writes one stack.started audit row when the job ends. Needs stacks.deploy (Operator).
+         */
+        post: operations["startStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop a stack
+         * @description Parks the stack as a job, answering 202 with the job ID at once. On a swarm every replicated service is scaled to 0 and its count is remembered in the service-level label bayplan.stack.stopped-replicas (the label is not part of the task template, so no task is replaced), and the global and job services are removed. On a standalone host the Compose SDK stops the stack's containers. Networks, volumes, secrets and configs are never removed. The stack is marked stopped once everything has stopped; a stop that fails stops where it failed and what already stopped stays stopped. A stack that is stopped already, was never deployed or has nothing running is 409 nothing_running. Only one stack operation at a time runs on an environment: while one does, the answer is 409 operation_locked naming it and nothing is stored. Writes one stack.stopped audit row when the job ends. Needs stacks.deploy (Operator).
+         */
+        post: operations["stopStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/variables/{name}/reveal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reveal a secret variable's saved value
+         * @description Answers the saved value of a secret variable of the stack, in clear: the one way back to a value every other answer shows as <hidden>. The value is read from the saved draft, or from the last deployed definition when there is no draft. A variable that is not in it, is not secret or has no value is 404 variable_not_found. The answer is never cached. Every reveal is audited as stack.value_revealed with the stack, the kind (variable) and the name, never the value; if the audit row cannot be written the value is not sent. A refusal is audited as permission.denied. Needs secrets.reveal (Admin, or an Operator granted the extra).
+         */
+        post: operations["revealStackVariable"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/summary": {
         parameters: {
             query?: never;
@@ -2835,6 +3227,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/stack-jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The stack operations you can follow
+         * @description The deploys, updates and roll backs of stacks that are running or ended in the last 10 minutes, newest first, for the header's jobs list. Every job on an environment where you may read stacks (stacks.read) is listed, whoever started it; a job on any other environment is left out, as if it did not exist. A job that has left the server's history is not listed, and its console answers 404 stack_job_not_found.
+         */
+        get: operations["listStackJobs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/stacks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The stacks Bayplan manages on every environment the caller may read them on
+         * @description One group for each environment that has stacks, by environment name, each with its stacks, their state and when they were last deployed. An environment the caller does not hold stacks.read on is left out, and so is its name: the list never reveals what the caller cannot open. An environment whose stacks could not be read is named in failedEnvironments while the others are answered. env chooses environments by ID. The search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed) and the sort run over every environment together, before the 500-row cap, so at most 500 stacks come back across all the groups, with total the number that matched, unfilteredTotal the number before the search and the status filter and statusCounts the chip numbers, counted before them too.
+         */
+        get: operations["listAllStacks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/teams": {
         parameters: {
             query?: never;
@@ -3541,6 +3973,41 @@ export interface components {
             /** @description The commands that take the agent off a host by hand, for the hosts Bayplan cannot uninstall when the environment is removed. The swarm secret in them is named for the join token's current generation. They carry no token */
             manualCleanup: components["schemas"]["InstallCleanupBody"];
         };
+        AllStacksBody: {
+            /** @description True when total is more than the rows returned, counted over every group together */
+            capped: boolean;
+            /** @description Environments the caller may read stacks on whose stacks could not be read just now */
+            failedEnvironments: components["schemas"]["FailedEnvironmentBody"][] | null;
+            /** @description One group for each environment that has stacks among the rows returned, by environment name. An environment the caller holds no stacks.read on is absent */
+            groups: components["schemas"]["AllStacksGroup"][] | null;
+            /** @description How many stacks each status chip counts, over the environments read and before the search and the status filter */
+            statusCounts: components["schemas"]["StackStatusCountsBody"];
+            /**
+             * Format: int64
+             * @description How many stacks of the environments read match the search and the status filter, whatever the cap
+             */
+            total: number;
+            /**
+             * Format: int64
+             * @description How many stacks the environments read have before the search and the status filter
+             */
+            unfilteredTotal: number;
+        };
+        AllStacksGroup: {
+            /** @description How many of the environment's stacks each status chip counts, before the search and the status filter */
+            counts: components["schemas"]["StackStatusCountsBody"];
+            /** @description The environment */
+            envId: string;
+            /** @description Its name */
+            envName: string;
+            /** @description The environment's stacks among the rows returned, in the order asked for */
+            stacks: components["schemas"]["StackItem"][] | null;
+            /**
+             * @description Where the environment's stacks deploy: swarm or standalone
+             * @enum {string}
+             */
+            target: "swarm" | "standalone";
+        };
         AuditActorDTO: {
             /** @description True when the user behind the name has since been deleted */
             deleted: boolean;
@@ -3732,6 +4199,8 @@ export interface components {
             templating?: string;
         };
         ConfigDetailBody: {
+            /** @description The ID of the Bayplan stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (bayplan.stack.id). Empty for a stack Bayplan does not manage */
+            bayplanStackId: string;
             /**
              * Format: date-time
              * @description When the config was created
@@ -3786,6 +4255,8 @@ export interface components {
             };
         };
         ConfigItem: {
+            /** @description The ID of the Bayplan stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (bayplan.stack.id). Empty for a stack Bayplan does not manage */
+            bayplanStackId: string;
             /**
              * Format: date-time
              * @description When the config was created
@@ -3935,6 +4406,8 @@ export interface components {
             nodeId: string;
         };
         ContainerDetailBody: {
+            /** @description The ID of the Bayplan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (bayplan.stack.id). Empty for a stack or project Bayplan does not manage */
+            bayplanStackId: string;
             /** @description The command (Cmd). Withheld, as the single entry <hidden>, unless the caller holds secrets.reveal on this environment: a command line often carries a password or token */
             command: string[] | null;
             /** @description True when command or entrypoint was withheld because the caller may not reveal secrets on this environment */
@@ -4043,6 +4516,8 @@ export interface components {
             masked: boolean;
         };
         ContainerItem: {
+            /** @description The ID of the Bayplan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (bayplan.stack.id). Empty for a stack or project Bayplan does not manage */
+            bayplanStackId: string;
             /** Format: date-time */
             created?: string;
             /**
@@ -4478,6 +4953,22 @@ export interface components {
             at: string;
             /** @description The Docker API path the agent refused */
             endpoint: string;
+        };
+        DraftFileBody: {
+            /** @description The file's text. A secret file's content is <hidden> on a read; sending <hidden> back for a secret file that is already saved keeps the saved content */
+            content: string;
+            /** @description The file's path inside the stack: relative, at most 255 characters, no .. or . name, no leading or doubled slash, no backslash or colon, no control character. compose.yaml is the stack's compose file. A path that breaks the rule is 422 file_path_invalid */
+            path: string;
+            /** @description True when the file is stored sealed and never shown */
+            secret: boolean;
+        };
+        DraftVarBody: {
+            /** @description The variable's name: letters, digits and underscore, not starting with a digit */
+            name: string;
+            /** @description True when the value is stored sealed and shown as <hidden> */
+            secret: boolean;
+            /** @description The variable's value. A secret variable's value is <hidden> on a read; sending <hidden> back for a secret variable that is already saved keeps the saved value */
+            value: string;
         };
         EffectiveEnvBody: {
             /** @description The environment's ID */
@@ -4959,6 +5450,12 @@ export interface components {
         ExportBackupInputBody: {
             /** @description Locks the backup. At least 16 characters; Bayplan never stores it and cannot recover it */
             passphrase: string;
+        };
+        FailedEnvironmentBody: {
+            /** @description The environment */
+            envId: string;
+            /** @description Its name */
+            envName: string;
         };
         GrantBody: {
             /**
@@ -6534,6 +7031,57 @@ export interface components {
             /** @description Up to 3 environment IDs, most recently used first */
             environmentIds: string[] | null;
         };
+        RemovalPreviewBody: {
+            /** @description The configs that carry this stack's own labels, by name on the swarm */
+            configs: string[] | null;
+            /** @description The stack's containers on a standalone host, by name */
+            containers: string[] | null;
+            /** @description The networks, secrets, configs and volumes the compose file names as external. A removal never touches them */
+            externals: string[] | null;
+            /** @description True when the stack has a saved draft with changes; a removal deletes it with the definition unless the definition is kept */
+            hasDraft: boolean;
+            /** @description The networks that carry this stack's own labels */
+            networks: string[] | null;
+            /** @description The nodes that did not answer, whose volumes are left out of the list */
+            notReporting: string[] | null;
+            /** @description The secrets that carry this stack's own labels (the hashed ones a deploy made), by name on the swarm */
+            secrets: string[] | null;
+            /** @description The stack's swarm services, by name */
+            services: string[] | null;
+            /** @description The stack's own volumes, one for each node that holds one. A removal deletes only the ones the request names */
+            volumes: components["schemas"]["RemovalVolumeBody"][] | null;
+        };
+        RemovalVolumeBody: {
+            /** @description The volume's name */
+            name: string;
+            /** @description The node that holds it: a volume is local to a node, so a swarm stack's volume has a row for each node that has it */
+            nodeId: string;
+            /** @description The node's display name */
+            nodeName: string;
+            /**
+             * Format: int64
+             * @description How many containers outside this stack mount the volume on that node; removing the volume fails while they exist
+             */
+            usedOutside: number;
+        };
+        RemoveStackBody: {
+            /** @description The job: read it at GET .../deploys/{jobId}, the same console route a deploy uses. It stays readable after the stack is gone */
+            jobId: string;
+        };
+        RemoveStackRequest: {
+            /** @description The stack's name, typed exactly. Anything else is 422 confirm_mismatch and nothing is removed */
+            confirmName: string;
+            /** @description True keeps the stack's files, variables and revisions, and the stack reads Not deployed */
+            keepDefinition: boolean;
+            /** @description The volumes to delete, each on its node. A volume that is not listed stays. One that is not this stack's own on that node is 422 volume_not_owned and nothing is removed */
+            volumes: components["schemas"]["RemoveVolumeRequest"][] | null;
+        };
+        RemoveVolumeRequest: {
+            /** @description The volume's name */
+            name: string;
+            /** @description The node it is on */
+            nodeId: string;
+        };
         RenameTeamInputBody: {
             /** @description 1 to 64 characters; not case-sensitive for uniqueness */
             name: string;
@@ -6943,6 +7491,8 @@ export interface components {
             source?: "typed" | "file" | "rotate" | "apply";
         };
         SecretDetailBody: {
+            /** @description The ID of the Bayplan stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (bayplan.stack.id). Empty for a stack Bayplan does not manage */
+            bayplanStackId: string;
             /**
              * Format: date-time
              * @description When the secret was created
@@ -6983,6 +7533,8 @@ export interface components {
             };
         };
         SecretItem: {
+            /** @description The ID of the Bayplan stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (bayplan.stack.id). Empty for a stack Bayplan does not manage */
+            bayplanStackId: string;
             /**
              * Format: date-time
              * @description When the secret was created
@@ -7140,6 +7692,8 @@ export interface components {
         ServiceDetailBody: {
             /** @description True for a Bayplan agent service */
             agent: boolean;
+            /** @description The ID of the Bayplan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (bayplan.stack.id). Empty for a stack Bayplan does not manage */
+            bayplanStackId: string;
             /** @description The swarm configs the service uses, by reference */
             configs: components["schemas"]["ServiceFileRefBody"][] | null;
             /**
@@ -7299,6 +7853,8 @@ export interface components {
         ServiceItem: {
             /** @description True for a Bayplan agent service */
             agent: boolean;
+            /** @description The ID of the Bayplan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (bayplan.stack.id). Empty for a stack Bayplan does not manage */
+            bayplanStackId: string;
             /**
              * Format: date-time
              * @description When the service was created
@@ -7601,6 +8157,8 @@ export interface components {
         ServiceSpecBody: {
             /** @description True for a Bayplan agent service */
             agent: boolean;
+            /** @description The ID of the Bayplan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (bayplan.stack.id). Empty for a stack Bayplan does not manage */
+            bayplanStackId: string;
             /** @description True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment */
             masked: boolean;
             /**
@@ -7893,6 +8451,907 @@ export interface components {
             teamId?: string;
             /** @description The team's name; set when kind is team */
             teamName?: string;
+        };
+        StackCancelBody: {
+            /** @description The deploy that is being stopped: follow it at GET .../deploys/{jobId} or its stream until it reads cancelled */
+            jobId: string;
+        };
+        StackCheckBody: {
+            /** @description The problems, ordered by file and line */
+            problems: components["schemas"]["StackProblemBody"][] | null;
+            /** @description The stack files that are secret: the ones the compose file uses under secrets: (even before a save has sealed them) and the ones already saved as secret. Ordered by path */
+            secretFiles: string[] | null;
+            /** @description Stack files the compose file never refers to */
+            unusedFiles: string[] | null;
+            /** @description The rows of the Variables pane, ordered by name. Empty when the compose file is not valid YAML */
+            variables: components["schemas"]["StackVariableBody"][] | null;
+        };
+        StackCheckRequest: {
+            /** @description Every file of the working copy, as a save sends them. A secret file sent as <hidden> is filled from the saved draft */
+            files: components["schemas"]["DraftFileBody"][] | null;
+            /** @description Every variable of the working copy. A secret variable sent as <hidden> is filled from the saved draft */
+            vars: components["schemas"]["DraftVarBody"][] | null;
+        };
+        StackConcurrentBody: {
+            /** @description What that deployment changed since the version the draft started from, file by file, masked */
+            baseToDeployed: components["schemas"]["StackFileDiffBody"][] | null;
+            /** @description What the draft changed since the version it started from, file by file, masked */
+            baseToDraft: components["schemas"]["StackFileDiffBody"][] | null;
+            /** @description When it was started, RFC 3339 UTC */
+            deployedAt: string;
+            /** @description Who started that deploy */
+            deployedBy: string;
+            /**
+             * Format: int64
+             * @description The number of the revision that was deployed
+             */
+            revision: number;
+        };
+        StackContainerBody: {
+            /** @description none, starting, healthy or unhealthy */
+            health: string;
+            /** @description The container ID */
+            id: string;
+            /** @description The container name */
+            name: string;
+            /** @description The engine's word for the container: running, exited, restarting, paused, created, removing or dead */
+            state: string;
+        };
+        StackContainerResourceBody: {
+            /**
+             * Format: date-time
+             * @description When the container was created
+             */
+            created: string;
+            /** @description none, starting, healthy or unhealthy */
+            health: string;
+            /** @description The container ID, which the container page is at */
+            id: string;
+            /** @description The image the container runs, as the engine reports it */
+            image: string;
+            /** @description The container name */
+            name: string;
+            /** @description The published ports as published->target/protocol, without the host address */
+            ports: string[] | null;
+            /** @description The service's name in the compose file */
+            service: string;
+            /** @description The engine's word for the container: running, exited, restarting, paused, created, removing or dead */
+            state: string;
+        };
+        StackContainersCardBody: {
+            /** @description Empty when the card was read. Otherwise why it was not: node_unavailable or read_failed; Items is then empty */
+            error: string;
+            /** @description The containers of the stack's Compose project, stopped ones too, one-off containers (compose run) left out, by name */
+            items: components["schemas"]["StackContainerResourceBody"][] | null;
+        };
+        StackCreateRequest: {
+            /** @description The text of the first compose.yaml. When it is given, start is ignored; with start upload it is the uploaded file as it was read, kept even when it does not parse (the editor shows the problems). Over 1 MiB is 422 file_too_large */
+            compose?: string;
+            /** @description The stack's name: lowercase letters, numbers, dash and underscore, starting with a letter or number, at most 63 characters. Anything else is 422 stack_name_invalid */
+            name: string;
+            /** @description What the first draft holds when compose is left out: example (the default) is a starter file with one web service, empty is an empty compose.yaml, upload is the file the person chose (compose, which may be empty). Anything else is 422 stack_start_invalid */
+            start?: string;
+        };
+        StackDeployBody: {
+            /** @description The deploy job: read it at GET .../deploys/{jobId} */
+            jobId: string;
+            /**
+             * Format: int64
+             * @description The number of the revision the deploy took from the draft
+             */
+            revision: number;
+        };
+        StackDeployRequest: {
+            /** @description Set when the review answered concurrent and the person has seen what changed and wants to deploy the draft over it. Without it, a draft that started from an older revision than the newest good one is 409 concurrent_unacknowledged and nothing is deployed */
+            acknowledgeConcurrent?: boolean;
+            /**
+             * Format: int64
+             * @description The version of the draft you reviewed and mean to deploy. If the draft moved since, the answer is 409 draft_changed and nothing is deployed
+             */
+            draftVersion: number;
+            /**
+             * @description deploy (the default), or update to move the services named in services to a newly looked-up digest
+             * @enum {string}
+             */
+            mode?: "deploy" | "update";
+            /** @description The images the review chose, by swarm service name (the review's pins). The deploy uses exactly these digests and asks no registry. Each is checked against what the server decides itself: a service that keeps its running digest must be sent that digest, and a looked-up one a sha256 digest of the repository its reference names; anything else is 422 pins_invalid. Left out, the deploy looks the images up itself */
+            pins?: {
+                [key: string]: string;
+            };
+            /** @description For mode update: the services to move, by the name in the compose file or by the swarm name */
+            services?: string[] | null;
+        };
+        StackDetail: {
+            /** @description When it was created, RFC 3339 UTC */
+            createdAt: string;
+            /** @description Who created the stack */
+            createdBy: string;
+            /** @description When the draft that holds changes that have not been deployed was last saved, RFC 3339 UTC; empty when there is no such draft */
+            draftSavedAt: string;
+            /** @description Who saved it, as a name; empty when there is no such draft */
+            draftSavedBy: string;
+            /** @description The environment the stack belongs to */
+            envId: string;
+            /** @description True when the draft holds changes that have not been deployed */
+            hasDraft: boolean;
+            /** @description The stack ID */
+            id: string;
+            /** @description When the newest successful deploy ended, RFC 3339 UTC; empty when there is none */
+            lastDeployedAt: string;
+            /** @description Who started it; empty when there is none */
+            lastDeployedBy: string;
+            /** @description Left out for a stack that has had no operation: the newest one, which the state is read from */
+            lastOperation?: components["schemas"]["StackOperationBody"];
+            /** @description Left out unless set: set while a stack operation runs on this environment, on any of its stacks, and names it. Only one runs at a time: a second is refused 409 operation_locked */
+            lock?: components["schemas"]["StackLockBody"];
+            /** @description The stack name, also its swarm namespace or compose project */
+            name: string;
+            /** @description Whether a roll back has a version to restore: the newest version that ran well, or, when the newest version is the one that runs, the one before it */
+            rollback: components["schemas"]["StackRollbackBody"];
+            /**
+             * Format: int64
+             * @description Services of the stack that run now; left out for a stack not deployed and when the engine could not be read
+             */
+            servicesRunning?: number;
+            /**
+             * Format: int64
+             * @description Services the stack has on the engine; left out for a stack not deployed and when the engine could not be read
+             */
+            servicesTotal?: number;
+            /**
+             * @description Where the stack's definition lives. Only inline exists today
+             * @enum {string}
+             */
+            source: "inline" | "adopted" | "git";
+            /** @description A reference to the stack's source: empty for an inline stack */
+            sourceRef: string;
+            /**
+             * @description The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back, starting or stopping while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run
+             * @enum {string}
+             */
+            state: "removing" | "deploying" | "rolling_back" | "starting" | "stopping" | "stopped" | "deploy_failed" | "not_running" | "degraded" | "running" | "not_deployed" | "unknown";
+            /** @description True while the stack is stopped */
+            stopped: boolean;
+            /**
+             * @description Where the stack deploys: fixed when it was created, from the kind of the environment
+             * @enum {string}
+             */
+            target: "swarm" | "standalone";
+        };
+        StackDiffHunkBody: {
+            /** @description The hunk's lines in order */
+            lines: components["schemas"]["StackDiffLineBody"][] | null;
+            /**
+             * Format: int64
+             * @description How many lines of the newer text the hunk covers
+             */
+            newLines: number;
+            /**
+             * Format: int64
+             * @description The number of the hunk's first line in the newer text, as oldStart is for the older
+             */
+            newStart: number;
+            /**
+             * Format: int64
+             * @description How many lines of the older text the hunk covers
+             */
+            oldLines: number;
+            /**
+             * Format: int64
+             * @description The number of the hunk's first line in the older text; for a hunk with no older line, the number of the line that would come next
+             */
+            oldStart: number;
+        };
+        StackDiffLineBody: {
+            /**
+             * @description context (in both texts), added (only in the newer) or removed (only in the older)
+             * @enum {string}
+             */
+            kind: "context" | "added" | "removed";
+            /**
+             * Format: int64
+             * @description The line's number in the newer text, 0 for a removed line
+             */
+            new: number;
+            /**
+             * Format: int64
+             * @description The line's number in the older text, 0 for an added line
+             */
+            old: number;
+            /** @description The line, without its line break. A secret value is <hidden> */
+            text: string;
+        };
+        StackDraftBody: {
+            /**
+             * Format: int64
+             * @description The number of the deployed revision the draft started from, 0 for none
+             */
+            baseSeq: number;
+            /** @description The draft's files by path */
+            files: components["schemas"]["DraftFileBody"][] | null;
+            /** @description True when this is a saved draft. False when the stack has none (it was discarded): the files and variables are then the last deployed definition, or the starter example for a stack never deployed, and version is 0 */
+            isDraft: boolean;
+            /** @description When, RFC 3339 UTC */
+            savedAt: string;
+            /** @description Who saved the draft last, or created the stack */
+            savedBy: string;
+            /** @description The draft's variables by name */
+            vars: components["schemas"]["DraftVarBody"][] | null;
+            /**
+             * Format: int64
+             * @description The draft's version: send it back with a save, and the save is refused with 409 draft_conflict if the draft moved. 0 when there is no saved draft: a save at version 0 then makes one
+             */
+            version: number;
+        };
+        StackDraftSaveBody: {
+            /** @description False when the draft already held exactly this content: nothing was written, the version did not move and no audit row was made */
+            changed: boolean;
+            /** @description When, RFC 3339 UTC */
+            savedAt: string;
+            /** @description Who saved the draft last */
+            savedBy: string;
+            /** @description Every file of the saved draft that is secret, ordered by path: the ones sent as secret, the ones the compose file uses under secrets:, and the ones that were already secret. Their content is stored sealed and is <hidden> in every read */
+            secretFiles: string[] | null;
+            /**
+             * Format: int64
+             * @description The draft's version now
+             */
+            version: number;
+        };
+        StackDraftSaveRequest: {
+            /** @description Every file of the draft. compose.yaml must be one of them. At most 50 files, 1 MiB each and 8 MiB in all */
+            files: components["schemas"]["DraftFileBody"][] | null;
+            /** @description Every variable of the draft */
+            vars: components["schemas"]["DraftVarBody"][] | null;
+            /**
+             * Format: int64
+             * @description The version of the draft you read, or 0 when you read a stack with no saved draft (isDraft false)
+             */
+            version: number;
+        };
+        StackFileDiffBody: {
+            /**
+             * Format: int64
+             * @description How many lines the hunks add and remove
+             */
+            changedLines: number;
+            /** @description True when the file or a variable is secret and differs: its content is never sent, so the hunks do not show it */
+            hidden: boolean;
+            /** @description The changes, as in the rendered YAML */
+            hunks: components["schemas"]["StackDiffHunkBody"][] | null;
+            /**
+             * @description file, or variables for the stack's variables shown as NAME=value lines
+             * @enum {string}
+             */
+            kind: "file" | "variables";
+            /** @description The lines of the newer text, masked; empty when there are no hunks */
+            lines: string[] | null;
+            /** @description The file's path in the stack; for the variables, variables */
+            path: string;
+        };
+        StackFileRevealBody: {
+            /** @description The file's saved content, in clear */
+            content: string;
+        };
+        StackFileRevealRequest: {
+            /** @description The file's path inside the stack. A path that is not a saved secret file is 404 file_not_found */
+            path: string;
+        };
+        StackItem: {
+            /** @description True when the draft holds changes that have not been deployed */
+            hasDraft: boolean;
+            /** @description The stack ID */
+            id: string;
+            /** @description When the newest successful deploy ended, RFC 3339 UTC; empty when there is none */
+            lastDeployedAt: string;
+            /** @description Who started it; empty when there is none */
+            lastDeployedBy: string;
+            /** @description The stack name, also its swarm namespace or compose project */
+            name: string;
+            /**
+             * Format: int64
+             * @description Services of the stack that run now; left out for a stack not deployed and when the engine could not be read
+             */
+            servicesRunning?: number;
+            /**
+             * Format: int64
+             * @description Services the stack has on the engine; left out for a stack not deployed and when the engine could not be read
+             */
+            servicesTotal?: number;
+            /**
+             * @description Where the stack's definition lives. Only inline exists today
+             * @enum {string}
+             */
+            source: "inline" | "adopted" | "git";
+            /**
+             * @description The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back, starting or stopping while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run
+             * @enum {string}
+             */
+            state: "removing" | "deploying" | "rolling_back" | "starting" | "stopping" | "stopped" | "deploy_failed" | "not_running" | "degraded" | "running" | "not_deployed" | "unknown";
+            /**
+             * @description Where the stack deploys: fixed when it was created, from the kind of the environment
+             * @enum {string}
+             */
+            target: "swarm" | "standalone";
+        };
+        StackJobBody: {
+            /** @description When the job started, RFC 3339 UTC */
+            createdAt: string;
+            /** @description When the job ended, RFC 3339 UTC, empty while it runs */
+            finishedAt: string;
+            /** @description The job ID */
+            id: string;
+            /** @description The steps and services, in the order they were added. Read the steps in run order by following parent: a top-level step, then its children */
+            items: components["schemas"]["StackJobItemBody"][] | null;
+            /**
+             * @description What the operation is: a deploy of the draft, an update of images, a roll back to the last version that ran well, a stop or a start of the stack, or its removal
+             * @enum {string}
+             */
+            mode: "deploy" | "update" | "rollback" | "stop" | "start" | "remove";
+            /** @description The output log, oldest first: the newest 2,000 lines */
+            output: components["schemas"]["StackJobOutputLine"][] | null;
+            /** @description The stack being deployed */
+            stackId: string;
+            /** @description Who started the deploy, as a name */
+            startedBy: string;
+            /**
+             * @description running until every step has ended, then done when every step is
+             * @enum {string}
+             */
+            state: "running" | "done" | "partial" | "failed" | "cancelled";
+        };
+        StackJobItemBody: {
+            /** @description A stable word for how an item failed or was not run, empty otherwise */
+            code: string;
+            /**
+             * Format: int64
+             * @description How many of total were done. On a service row, how many tasks run on its current spec
+             */
+            current: number;
+            /** @description The engine's own words about a failed item, cleaned of control characters, clipped to 2,048 characters and with the stack's secret values hidden. Empty when there are none */
+            detail: string;
+            /** @description The item: check, lookup, networks, objects (volumes on a standalone host), services or cleanup, or one made for an object, service, task or container of the deploy, like service:web, task:<task id> or container:<name>, or on a standalone host pull:<image> under lookup for an image it pulls, and clean-container:<name> or clean-network:<name> under cleanup for what a deploy that stopped removed again */
+            id: string;
+            /** @description step for a line of the step list, service for a service row, task for a swarm task listed under its service while the deploy waits for the service to settle, group for an item that only holds steps and is not shown itself */
+            kind: string;
+            /** @description The item's name: a step's words, or a service's name */
+            label: string;
+            /** @description A sentence for the code. The SPA words the code itself */
+            message: string;
+            /** @description The ID of the item this one belongs to, empty for a top-level step. A service is under services; a network is under networks, a volume under volumes, a secret or config under objects, an old secret or config or a container the file no longer declares under cleanup, a task or a container under its service */
+            parent: string;
+            /** @description What a step, service or task produced or shows. A service row: action (created or updated), settled (true once its tasks run, false when the deploy did not wait for it), running and desired at the end, phase pulling while a task prepares its image, minutes on a timeout. A task: state (the swarm's) and node (the host name). On a standalone host, a service row: action (created, updated or unchanged), phase (pulling, creating, starting, running or healthy, or failed) and, once done, running and desired; a container row: state, the last word the Compose SDK gave it (creating, starting, running, healthy ...). A pull step: image, ref (the registry written out, without the digest), the credential it used (credential, credentialId, credentialLayer) and, once pulled, digest and upToDate. A cleanup step of a deploy that stopped: cleaned (true when removed), kind (container or network), name and left (in_use or failed) when it stays. The steps: the counts of services created and updated */
+            result: {
+                [key: string]: string;
+            };
+            /**
+             * @description Where the item is. skipped is an item that was not run because an earlier one failed
+             * @enum {string}
+             */
+            state: "waiting" | "running" | "done" | "failed" | "skipped" | "cancelled";
+            /**
+             * Format: int64
+             * @description How many there are to do, 0 until known. On a service row, how many tasks must run for it to settle
+             */
+            total: number;
+            /** @description What current and total count, or empty: services for the services step, tasks for a service row of a swarm, containers for one of a standalone host */
+            unit: string;
+        };
+        StackJobListBody: {
+            /** @description The stack operations running or ended in the last 10 minutes on the environments the caller may read stacks on, newest first */
+            jobs: components["schemas"]["StackJobSummary"][] | null;
+        };
+        StackJobOutputLine: {
+            /** @description When the line was written, RFC 3339 UTC */
+            at: string;
+            /**
+             * Format: int64
+             * @description The event ID that carried the line; it strictly increases
+             */
+            seq: number;
+            /** @description What the deploy did, or what the engine said, cleaned of control characters and clipped, with the stack's secret values hidden */
+            text: string;
+        };
+        StackJobSummary: {
+            /** @description The environment the operation runs on */
+            envId: string;
+            /** @description The environment's name when the operation started */
+            envName: string;
+            /** @description When the job ended, RFC 3339 UTC, empty while it runs */
+            finishedAt: string;
+            /** @description The job ID: open its console at /env/{envId}/stacks/{stackId}/deploys/{id} */
+            id: string;
+            /**
+             * @description What the operation is
+             * @enum {string}
+             */
+            kind: "deploy" | "update" | "rollback" | "start" | "stop" | "remove";
+            /** @description The stack the operation is on */
+            stackId: string;
+            /** @description The stack's name when the operation started */
+            stackName: string;
+            /** @description When the job started, RFC 3339 UTC */
+            startedAt: string;
+            /** @description Who started it, as a name */
+            startedBy: string;
+            /**
+             * @description Where it is. A job that ended with some of its work done and some not reads failed
+             * @enum {string}
+             */
+            state: "running" | "done" | "failed" | "cancelled";
+        };
+        StackLifecycleBody: {
+            /** @description The job: read it at GET .../deploys/{jobId}, the same console route a deploy uses */
+            jobId: string;
+            /** @description True for a start that has to create services again (a global or job service a stop removed), which the page follows in the console; a start that only scales opens nothing. Always false for a stop */
+            recreates: boolean;
+        };
+        StackListBody: {
+            /** @description True when total is more than the rows returned */
+            capped: boolean;
+            /** @description At most 500 stacks that match the search and the status filter, in the order asked for (by name unless sort says otherwise) */
+            items: components["schemas"]["StackItem"][] | null;
+            /** @description How many stacks each status chip counts, before the search and the status filter, so the numbers never shrink with what was typed */
+            statusCounts: components["schemas"]["StackStatusCountsBody"];
+            /**
+             * Format: int64
+             * @description How many stacks match the search and the status filter, whatever the cap
+             */
+            total: number;
+            /**
+             * Format: int64
+             * @description How many stacks the environment has before the search and the status filter, so a page can say 3 of 600
+             */
+            unfilteredTotal: number;
+        };
+        StackLockBody: {
+            /** @description The job that runs the operation: open its console at .../stacks/{stackId}/deploys/{jobId}. Empty for the instant between the lock being taken and the job starting */
+            jobId: string;
+            /**
+             * @description What the operation is
+             * @enum {string}
+             */
+            kind: "deploy" | "update" | "rollback" | "start" | "stop" | "remove";
+            /** @description The stack the running operation is on */
+            stackId: string;
+            /** @description Its name */
+            stackName: string;
+            /** @description When it started, RFC 3339 UTC */
+            startedAt: string;
+            /** @description Who started it, as a name */
+            startedBy: string;
+        };
+        StackNameCheckBody: {
+            /** @description The sentence to show for a name that cannot be used, naming the environment where it matters; empty when it is available */
+            message: string;
+            /**
+             * @description available: the name can be used. taken: one of Bayplan's stacks on this environment has it. clash: something Bayplan does not manage has it on this environment (D-12). invalid: the name breaks the rule
+             * @enum {string}
+             */
+            status: "available" | "taken" | "clash" | "invalid";
+        };
+        StackNetworkResourceBody: {
+            /** @description The network driver */
+            driver: string;
+            /** @description The network ID, which the network page is at */
+            id: string;
+            /** @description The network name */
+            name: string;
+            /**
+             * @description stack: the network carries the stack's own labels. external: the compose file refers to a network created outside the stack, which Bayplan never changes or removes
+             * @enum {string}
+             */
+            ownership: "stack" | "external";
+            /** @description swarm for a network of the whole cluster, local for one of a host */
+            scope: string;
+        };
+        StackNetworksCardBody: {
+            /** @description Empty when the card was read. Otherwise why it was not: no_manager, no_quorum, node_unavailable or read_failed; Items is then empty */
+            error: string;
+            /** @description The networks of the stack, by name */
+            items: components["schemas"]["StackNetworkResourceBody"][] | null;
+        };
+        StackObjectResourceBody: {
+            /** @description The name of the object on the swarm: the stack, the name and the content hash joined. The name itself on a standalone host and for an external object */
+            fullName: string;
+            /** @description The short content hash Bayplan put in the name of an object it made from a file; empty for any other */
+            hash: string;
+            /** @description The swarm object ID; empty on a standalone host, where a secret or a config is a file in the containers */
+            id: string;
+            /** @description The name as the compose file writes it */
+            name: string;
+            /**
+             * @description stack: the object carries the stack's own labels, or is a file of a standalone stack. external: the compose file refers to an object created outside the stack, which Bayplan never changes or removes
+             * @enum {string}
+             */
+            ownership: "stack" | "external";
+            /** @description The services of this stack whose spec refers to the object, by name. Services of other stacks are not counted */
+            usedBy: components["schemas"]["StackObjectUserBody"][] | null;
+        };
+        StackObjectUserBody: {
+            /** @description The swarm service ID, which the service page is at; empty on a standalone host */
+            id: string;
+            /** @description The service's name in the compose file */
+            name: string;
+        };
+        StackObjectsCardBody: {
+            /** @description Empty when the card was read. Otherwise why it was not: no_manager, no_quorum, node_unavailable or read_failed; Items is then empty */
+            error: string;
+            /** @description The secrets or configs of the stack, by name then full name */
+            items: components["schemas"]["StackObjectResourceBody"][] | null;
+        };
+        StackOperationBody: {
+            /** @description A stable word for how a failed operation failed, such as service_rejected, converge_timeout or interrupted; empty otherwise */
+            code: string;
+            /** @description When it ended, RFC 3339 UTC; empty while it runs */
+            endedAt: string;
+            /** @description The service, network, secret or config a failed operation stopped at; empty otherwise */
+            failedService: string;
+            /** @description The job that ran it, open at .../deploys/{jobId} while the hub still has it */
+            jobId: string;
+            /**
+             * @description What the operation was
+             * @enum {string}
+             */
+            kind: "deploy" | "update" | "rollback" | "start" | "stop" | "remove";
+            /** @description When it started, RFC 3339 UTC */
+            startedAt: string;
+            /** @description Who started it, as a name */
+            startedBy: string;
+            /**
+             * @description Where it is. interrupted is a deploy that was running when the server stopped: the swarm may be partly updated
+             * @enum {string}
+             */
+            state: "running" | "done" | "failed" | "cancelled" | "interrupted";
+        };
+        StackPlaceBody: {
+            /** @description The stack file */
+            file: string;
+            /**
+             * Format: int64
+             * @description The 1-based line
+             */
+            line: number;
+        };
+        StackProblemBody: {
+            /** @description A stable name for the kind of problem, such as yaml_invalid or relative_bind */
+            code: string;
+            /**
+             * Format: int64
+             * @description The 1-based column
+             */
+            col: number;
+            /**
+             * Format: int64
+             * @description The column the marked range ends before
+             */
+            endCol: number;
+            /**
+             * Format: int64
+             * @description The line the marked range ends on
+             */
+            endLine: number;
+            /** @description The stack file the problem is in */
+            file: string;
+            /**
+             * Format: int64
+             * @description The 1-based line
+             */
+            line: number;
+            /** @description What is wrong, then what to do */
+            message: string;
+            /**
+             * @description An error stops a deploy; a warning only informs
+             * @enum {string}
+             */
+            severity: "error" | "warning";
+        };
+        StackRenderBody: {
+            /** @description The stack's name, which names the downloaded file */
+            name: string;
+            /** @description The compose file after variables and env_file are filled in, each service's image shown as the pin it will run (tag@sha256:..., or the plain reference with a trailing comment when it will be looked up at the next deploy). Every secret value is <hidden> */
+            yaml: string;
+        };
+        StackResourceTaskBody: {
+            /** @description True for a global service, whose rows are nodes rather than slots */
+            global: boolean;
+            /** @description The service's name in the compose file, without the stack prefix */
+            service: string;
+            /** @description The swarm service ID, which the service page is at */
+            serviceId: string;
+            /** @description The task, as the service's Tasks tab shows it */
+            task: components["schemas"]["TaskItem"];
+        };
+        StackResourcesBody: {
+            /** @description The Configs card */
+            configs: components["schemas"]["StackObjectsCardBody"];
+            /** @description The Containers card; present for a standalone stack */
+            containers?: components["schemas"]["StackContainersCardBody"];
+            /** @description The Networks card */
+            networks: components["schemas"]["StackNetworksCardBody"];
+            /** @description The Secrets card */
+            secrets: components["schemas"]["StackObjectsCardBody"];
+            /** @description The Tasks card; present for a swarm stack */
+            tasks?: components["schemas"]["StackTasksCardBody"];
+            /** @description The Volumes card */
+            volumes: components["schemas"]["StackVolumesCardBody"];
+        };
+        StackReviewBody: {
+            /** @description Left out unless set: set when the last good revision is newer than the revision the draft started from: someone deployed after the draft began. A deploy of the draft then needs acknowledgeConcurrent */
+            concurrent?: components["schemas"]["StackConcurrentBody"];
+            /**
+             * Format: int64
+             * @description The version of the draft the review was made of: send it with the deploy
+             */
+            draftVersion: number;
+            /** @description One row for each service with an image, by name */
+            images: components["schemas"]["StackReviewImageBody"][] | null;
+            /** @description The kinds of host access the stack uses that the caller may not deploy (bind mounts, extra privileges, host networking, device mounts). Empty when the caller may deploy it */
+            needsAdmin: string[] | null;
+            /** @description The other resources: networks, secrets and configs */
+            objects: components["schemas"]["StackReviewObjectBody"][] | null;
+            /** @description The image each service will be deployed with, by swarm service name: send it with the deploy and the deploy uses exactly these digests */
+            pins: {
+                [key: string]: string;
+            };
+            /** @description What the check found and the review added: host access that needs Admin, a name clash, an image that cannot be looked up, an external object that does not exist. An error stops a deploy */
+            problems: components["schemas"]["StackProblemBody"][] | null;
+            /** @description The services a deploy would add or change, by name, then the ones it would remove */
+            services: components["schemas"]["StackReviewServiceBody"][] | null;
+            /** @description The counts of what would change */
+            summary: components["schemas"]["StackReviewSummaryBody"];
+            /** @description The rendered stack of the draft, with the images the review chose, against the rendering stored with the last good deploy, masked, as hunks with 3 lines of context. A stack never deployed is compared with an empty document. This is the one comparison that is with the last deploy and not with what is running */
+            yaml: components["schemas"]["StackTextDiffBody"];
+        };
+        StackReviewCountsBody: {
+            /**
+             * Format: int64
+             * @description How many a deploy would create
+             */
+            added: number;
+            /**
+             * Format: int64
+             * @description How many it would change
+             */
+            changed: number;
+            /**
+             * Format: int64
+             * @description How many it would remove
+             */
+            removed: number;
+        };
+        StackReviewImageBody: {
+            /** @description The digest the service runs with now; empty for a new service */
+            current: string;
+            /** @description The digest the service will run with (an image ID for a local image); empty when the image could not be looked up */
+            digest: string;
+            /** @description The image reference as written */
+            image: string;
+            /** @description A short sentence for the row, or empty */
+            note: string;
+            /** @description The service's name in the compose file */
+            service: string;
+            /**
+             * @description pinned (keeps the running digest), new (just looked up), as_written (the reference carries its digest), local (no registry has it; pinned to the image ID), unreachable (the registry could not be reached; blocks) or unresolved (the registry did not give it; blocks)
+             * @enum {string}
+             */
+            state: "pinned" | "new" | "as_written" | "local" | "unreachable" | "unresolved";
+        };
+        StackReviewObjectBody: {
+            /**
+             * @description What a deploy would do; external is an object the stack only names and Bayplan never touches
+             * @enum {string}
+             */
+            change: "added" | "changed" | "removed" | "external";
+            /** @description A sentence for the row, or empty */
+            detail: string;
+            /**
+             * @description What it is. A volume is listed for a standalone host only: a swarm creates its volumes on the node that first uses one
+             * @enum {string}
+             */
+            kind: "network" | "volume" | "secret" | "config";
+            /** @description Its name in the compose file (the swarm name for an external one) */
+            name: string;
+        };
+        StackReviewRequest: {
+            /**
+             * @description deploy (the default) reviews the draft; update reviews a newly looked-up digest for the services named in services, with every other service keeping the image it runs
+             * @enum {string}
+             */
+            mode?: "deploy" | "update";
+            /** @description For mode update: the services to look up again, by the name in the compose file or by the swarm name */
+            services?: string[] | null;
+        };
+        StackReviewServiceBody: {
+            /** @description Left out unless set: for a recreated or restarted service, the name of the recreated service that carries it */
+            because?: string;
+            /**
+             * @description What a deploy would do. recreated and restarted are listed for a standalone host only: the service is not changed, and the deploy recreates it because it shares the network, IPC, PID namespace or volumes of the service in because, which is recreated, or stops it and starts it again (keeping its container) because it depends on that service with restart: true. They carry no spec and no settings
+             * @enum {string}
+             */
+            change: "added" | "changed" | "removed" | "recreated" | "restarted";
+            /** @description The running service's spec, masked: a value derived from a secret of the stack is <hidden>. Null for an added or removed service */
+            current: {
+                [key: string]: unknown;
+            } | null;
+            /** @description Paths of settings whose value changed to or from one that is hidden, such as TaskTemplate.ContainerSpec.Env[API_KEY]. The values are never sent */
+            hiddenChanges: string[] | null;
+            /** @description The swarm service name */
+            name: string;
+            /** @description The spec a deploy would send, masked the same way. Null for a removed service */
+            next: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Format: int64
+             * @description How many settings differ between current and next, hidden ones included
+             */
+            settings: number;
+            /** @description The service's name in the compose file */
+            short: string;
+        };
+        StackReviewSummaryBody: {
+            /** @description Configs Bayplan makes from the stack's files; a changed file counts as changed */
+            configs: components["schemas"]["StackReviewCountsBody"];
+            /**
+             * Format: int64
+             * @description Services whose digest the review just looked up
+             */
+            imagesNew: number;
+            /**
+             * Format: int64
+             * @description Services that keep or carry a digest
+             */
+            imagesPinned: number;
+            /** @description Networks the stack owns */
+            networks: components["schemas"]["StackReviewCountsBody"];
+            /** @description Secrets Bayplan makes from the stack's files; a changed file counts as changed */
+            secrets: components["schemas"]["StackReviewCountsBody"];
+            /** @description Services */
+            services: components["schemas"]["StackReviewCountsBody"];
+            /** @description Volumes the stack's deploy would create on a standalone host. Always zero on a swarm: the engine of each node makes a named volume when a task first uses it */
+            volumes: components["schemas"]["StackReviewCountsBody"];
+        };
+        StackRollbackBody: {
+            /** @description True when there is an earlier version that ran well to roll back to */
+            available: boolean;
+            /** @description When that version's deploy was started, RFC 3339 UTC; empty when there is none */
+            deployedAt: string;
+            /** @description Who started it, as a name; empty when there is none */
+            deployedBy: string;
+        };
+        StackServiceBody: {
+            /** @description The containers of a standalone service, by name; empty on a swarm */
+            containers: components["schemas"]["StackContainerBody"][] | null;
+            /**
+             * Format: int64
+             * @description Tasks the swarm wants running, or the containers a standalone service has
+             */
+            desired: number;
+            /** @description The swarm service ID, which the service page is at; empty on a standalone host */
+            id: string;
+            /** @description The image as the compose file wrote it */
+            image: string;
+            /** @description replicated, global, replicated-job or global-job on a swarm; empty on a standalone host */
+            mode: string;
+            /** @description The full name: stack_web on a swarm, web on a standalone host */
+            name: string;
+            /**
+             * @description pinned: the reference carries a digest. new: it has none and the next deploy resolves it. local: the engine runs an image ID, an image from no registry
+             * @enum {string}
+             */
+            pinState: "pinned" | "new" | "local";
+            /** @description The reference the engine runs: the image with its digest, or the image ID of one no registry has */
+            pinned: string;
+            /** @description The published ports as published->target/protocol, with (host) after one published in host mode */
+            ports: string[] | null;
+            /**
+             * Format: int64
+             * @description Tasks that run (a swarm) or containers that run (a standalone host)
+             */
+            running: number;
+            /** @description The name in the compose file, without the stack prefix */
+            short: string;
+            /**
+             * @description The roll-up of its tasks or containers: running, degraded (some running, or an update that stopped, or a failing health check), not_running, or stopped (scaled to 0, or every container exited). A job counts as running
+             * @enum {string}
+             */
+            state: "running" | "degraded" | "not_running" | "stopped";
+            /** @description The state of a swarm service's last update or rollback; empty when it has none and on a standalone host */
+            updateState: string;
+        };
+        StackServicesBody: {
+            /** @description The stack's services by name; empty for a stack that has nothing running */
+            items: components["schemas"]["StackServiceBody"][] | null;
+        };
+        StackStatusCountsBody: {
+            /**
+             * Format: int64
+             * @description Stacks with some but not all of their services running
+             */
+            degraded: number;
+            /**
+             * Format: int64
+             * @description Stacks whose newest deploy, update or roll back failed, was cancelled or was interrupted
+             */
+            deployFailed: number;
+            /**
+             * Format: int64
+             * @description Stacks whose draft holds changes that have not been deployed
+             */
+            draft: number;
+            /**
+             * Format: int64
+             * @description Stacks a person stopped
+             */
+            stopped: number;
+        };
+        StackTasksCardBody: {
+            /** @description Empty when the card was read. Otherwise why it was not: no_manager, no_quorum, node_unavailable or read_failed; Items is then empty */
+            error: string;
+            /** @description The current task of each slot of each service of the stack (of each node for a global service), by service then slot. The tasks Docker keeps in history are not listed */
+            items: components["schemas"]["StackResourceTaskBody"][] | null;
+        };
+        StackTextDiffBody: {
+            /**
+             * Format: int64
+             * @description How many lines the hunks add and remove
+             */
+            changedLines: number;
+            /** @description The changes, in order, each with 3 lines of context. Empty when the texts are the same. Over 20,000 lines, or when it takes more than 4,000 added and removed lines to turn one into the other, there is one hunk that removes the whole older text and adds the whole newer */
+            hunks: components["schemas"]["StackDiffHunkBody"][] | null;
+            /** @description The lines of the newer text, masked, so that the unchanged lines between hunks can be shown; empty when there are no hunks */
+            lines: string[] | null;
+        };
+        StackVariableBody: {
+            /** @description The default written in the compose file, when hasDefault is true */
+            default: string;
+            /** @description True when a reference in the compose file writes a default, even an empty one */
+            hasDefault: boolean;
+            /** @description The variable's name */
+            name: string;
+            /** @description Where the compose file uses the variable, ordered by line. Empty for an unused variable */
+            places: components["schemas"]["StackPlaceBody"][] | null;
+            /** @description True when the variable has no value in the table and no default, so a deploy is refused */
+            required: boolean;
+            /** @description True when the variable is marked secret in the table */
+            secret: boolean;
+            /**
+             * @description Where the value comes from: table (the stack's variables), default (the ${NAME:-default} written in the compose file) or unset (neither)
+             * @enum {string}
+             */
+            source: "table" | "default" | "unset";
+            /** @description True when the variable is in the table and no file refers to it */
+            unused: boolean;
+            /** @description The value a deploy will use: the table's value, else the default written in the compose file, else empty. A secret variable's value is <hidden> */
+            value: string;
+        };
+        StackVariableRevealBody: {
+            /** @description The variable's saved value, in clear */
+            value: string;
+        };
+        StackVolumeResourceBody: {
+            /** @description The volume driver */
+            driver: string;
+            /** @description The volume name */
+            name: string;
+            /** @description The display name of the node that holds the volume */
+            node: string;
+            /** @description The ID of that node, which the volume's page takes as its node */
+            nodeId: string;
+            /**
+             * @description stack: the volume carries the stack's own labels. external: the compose file refers to a volume created outside the stack, which Bayplan never changes or removes
+             * @enum {string}
+             */
+            ownership: "stack" | "external";
+        };
+        StackVolumesCardBody: {
+            /** @description Empty when the card was read. Otherwise why it was not: read_failed or node_unavailable; Items is then empty */
+            error: string;
+            /** @description The volumes of the stack, by name: one row for each node that holds a volume, because a volume is local to a node */
+            items: components["schemas"]["StackVolumeResourceBody"][] | null;
+            /** @description The nodes that should have answered and did not. Their volumes are left out of Items */
+            notReporting: string[] | null;
         };
         StatusCountsBody: {
             /**
@@ -12660,6 +14119,817 @@ export interface operations {
             };
         };
     };
+    listStacks: {
+        parameters: {
+            query?: {
+                /** @description Search: a case-insensitive substring of the stack name or of one of its service names, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap */
+                q?: string;
+                /** @description Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed) or deploy_failed. Applied before the 500-row cap; any other value is refused 422 status_invalid */
+                status?: string;
+                /** @description What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name */
+                sort?: "name" | "state" | "lastDeployed";
+                /** @description asc (the default) or desc */
+                dir?: "asc" | "desc";
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackDetail"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    checkStackName: {
+        parameters: {
+            query?: {
+                /** @description The name to check */
+                name?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackNameCheckBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackDetail"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    checkStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackCheckBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deployStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackDeployRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackDeployBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getStackDeploy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+                /** @description The job ID the deploy answered with */
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackJobBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    cancelStackDeploy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+                /** @description The job ID the deploy answered with */
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackCancelBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getStackDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackDraftBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    saveStackDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackDraftSaveRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackDraftSaveBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    discardStackDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    revealStackFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackFileRevealRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackFileRevealBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    removalPreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemovalPreviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    removeStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoveStackRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoveStackBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    renderStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackRenderBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listStackResources: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackResourcesBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    reviewStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackReviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    rollbackStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackDeployBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listStackServices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackServicesBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    startStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackLifecycleBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    stopStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackLifecycleBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    revealStackVariable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+                /** @description The variable name. A name that is not a valid variable name is 404 variable_not_found */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackVariableRevealBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     getEnvironmentSummary: {
         parameters: {
             query?: never;
@@ -14469,6 +16739,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SetupDefaultsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listStackJobs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackJobListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listAllStacks: {
+        parameters: {
+            query?: {
+                /** @description Only these environments, by ID, comma separated. An ID the caller cannot read stacks on is ignored, as one that does not exist */
+                env?: string;
+                /** @description Search: a case-insensitive substring of the stack name or of one of its service names, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap */
+                q?: string;
+                /** @description Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed) or deploy_failed. Applied before the 500-row cap; any other value is refused 422 status_invalid */
+                status?: string;
+                /** @description What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name */
+                sort?: "name" | "state" | "lastDeployed";
+                /** @description asc (the default) or desc */
+                dir?: "asc" | "desc";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AllStacksBody"];
                 };
             };
             /** @description Error */

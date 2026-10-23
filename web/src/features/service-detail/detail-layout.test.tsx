@@ -117,7 +117,7 @@ describe("the page frame", () => {
     expect(screen.getAllByText("Replicated").length).toBeGreaterThanOrEqual(1);
     // The tag in mono and the short digest as a chip; the full digest is not on the line.
     expect(within(headerOf()).getByText("1.4")).toBeTruthy();
-    const chip = screen.getByRole("button", { name: "Copy digest" });
+    const chip = screen.getByRole("button", { name: `Pinned to ${DIGEST}` });
     expect(chip.textContent).toBe(DIGEST.slice(0, 19));
     expect(within(headerOf()).getByText(/Updated/)).toBeTruthy();
     expect(document.title).toBe("api · Lab");
@@ -224,7 +224,7 @@ describe("the page frame", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
     renderAt();
-    fireEvent.click(await screen.findByRole("button", { name: "Copy digest" }));
+    fireEvent.click(await screen.findByRole("button", { name: `Pinned to ${DIGEST}` }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(DIGEST));
   });
 
@@ -232,7 +232,7 @@ describe("the page frame", () => {
     answerWith(bareServiceDetail());
     renderAt();
     await screen.findByRole("heading", { name: "api" });
-    expect(screen.queryByRole("button", { name: "Copy digest" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Pinned to / })).toBeNull();
     expect(within(headerOf()).getByText("1")).toBeTruthy();
   });
 });

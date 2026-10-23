@@ -6,6 +6,7 @@ package proxy
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strings"
 	"sync"
@@ -247,7 +248,7 @@ func TestRouteImageInspectHistoryRemoveAndDistribution(t *testing.T) {
 		{"a remove with force=0", "DELETE", "/images/x", "force=0", ""},
 		{"a remove with platforms", "DELETE", "/images/x", "platforms=x", ""},
 		{"a remove with a bad noprune", "DELETE", "/images/x", "noprune=yes", ""},
-		{"an inspect with manifests", "GET", "/images/a/json", "manifests=1", ""},
+		{"an inspect with manifests", "GET", "/images/a/json", "manifests=1", "image inspect"},
 		{"an inspect with a platform", "GET", "/images/a/json", "platform=linux", ""},
 		{"a history with a query", "GET", "/images/a/history", "platform=x", ""},
 		{"a distribution check with a query", "GET", "/distribution/a/json", "x=1", ""},
@@ -824,5 +825,228 @@ func TestServiceUpdateRefusalsNeverReachTheEngine(t *testing.T) {
 	}
 	if len(reasons) != 5 {
 		t.Errorf("onDenied ran %d times, want 5", len(reasons))
+	}
+}
+
+func TestRouteContainerCreateTakesOnlyANameAndAPlatformAndABody(t *testing.T) {
+	long254 := "a" + strings.Repeat("b", 254)
+	long255 := "a" + strings.Repeat("b", 255)
+	for _, tc := range []struct {
+		name, method, path, query string
+		body                      bool
+		wantRoute                 string // "" means refused
+	}{
+		{"no key", "POST", "/containers/create", "", true, "container create"},
+		{"the version prefix", "POST", "/v1.52/containers/create", "", true, "container create"},
+		{"a name", "POST", "/containers/create", "name=shop-web-1", true, "container create"},
+		{"a name with a leading slash", "POST", "/containers/create", "name=%2Fweb", true, "container create"},
+		{"a name with dots and underscores", "POST", "/containers/create", "name=a.b_c-d", true, "container create"},
+		{"a name of 255 characters", "POST", "/containers/create", "name=" + long254, true, "container create"},
+		{"a platform", "POST", "/containers/create", "platform=linux%2Famd64", true, "container create"},
+		{"a platform with a variant", "POST", "/containers/create", "name=web&platform=linux%2Farm%2Fv7", true, "container create"},
+		{"a name of 256 characters", "POST", "/containers/create", "name=" + long255, true, ""},
+		{"an empty name", "POST", "/containers/create", "name=", true, ""},
+		{"a name with a slash after the first character", "POST", "/containers/create", "name=a%2Fb", true, ""},
+		{"a name starting with a dash", "POST", "/containers/create", "name=-web", true, ""},
+		{"a name starting with a dot", "POST", "/containers/create", "name=.web", true, ""},
+		{"a name with a space", "POST", "/containers/create", "name=a%20b", true, ""},
+		{"a second name that is not allowed", "POST", "/containers/create", "name=a&name=-b", true, ""},
+		{"a platform without an architecture", "POST", "/containers/create", "platform=linux", true, ""},
+		{"an upper-case operating system", "POST", "/containers/create", "platform=Linux%2Famd64", true, ""},
+		{"an unknown key", "POST", "/containers/create", "name=web&pull=always", true, ""},
+		{"fromImage", "POST", "/containers/create", "fromImage=x", true, ""},
+		{"no body", "POST", "/containers/create", "", false, ""},
+		{"a GET", "GET", "/containers/create", "", false, ""},
+		{"a PUT", "PUT", "/containers/create", "", true, ""},
+		{"a DELETE", "DELETE", "/containers/create", "", false, "container remove"},
+		{"a trailing slash", "POST", "/containers/create/", "", true, ""},
+		{"an exec of a container called create", "POST", "/containers/create/exec", "", true, "exec create"},
+		{"a start of a container called create", "POST", "/containers/create/start", "", false, "container start"},
+		{"attach stays absent", "POST", "/containers/create/attach", "", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, _, kind := Allowed(tc.method, tc.path, tc.query, tc.body, false, Policy{})
+			if ok != (tc.wantRoute != "") {
+				t.Fatalf("Allowed(%s %s?%s) = %v, want %v", tc.method, tc.path, tc.query, ok, tc.wantRoute != "")
+			}
+			if !ok {
+				return
+			}
+			rt, found := Match(tc.method, tc.path)
+			if !found || rt.name != tc.wantRoute {
+				t.Fatalf("Match(%s %s) = %q, want %q", tc.method, tc.path, rt.name, tc.wantRoute)
+			}
+			if (tc.wantRoute == "container create") != (kind == BodyContainerCreate) {
+				t.Errorf("the body kind of %q is %d", tc.wantRoute, kind)
+			}
+			if rt.registryAuth || rt.upgrade {
+				t.Errorf("route %q may carry a registry credential or an upgrade", rt.name)
+			}
+		})
+	}
+}
+
+func TestRouteContainerArchiveTakesOnlyThreeKeysAndOnlyAPut(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, path, query string
+		body                      bool
+		wantRoute                 string // "" means refused
+	}{
+		{"the query the SDK sends", "PUT", "/containers/web-1/archive", "noOverwriteDirNonDir=true&path=%2F", true, "container archive"},
+		{"the version prefix", "PUT", "/v1.52/containers/web-1/archive", "noOverwriteDirNonDir=true&path=%2F", true, "container archive"},
+		{"path alone", "PUT", "/containers/web-1/archive", "path=%2F", true, "container archive"},
+		{"copyUIDGID false", "PUT", "/containers/web-1/archive", "path=%2F&copyUIDGID=false", true, "container archive"},
+		{"copyUIDGID 0", "PUT", "/containers/web-1/archive", "path=%2F&copyUIDGID=0", true, "container archive"},
+		{"noOverwriteDirNonDir false", "PUT", "/containers/web-1/archive", "path=/&noOverwriteDirNonDir=false", true, "container archive"},
+		{"a container ID", "PUT", "/containers/" + strings.Repeat("a", 64) + "/archive", "path=%2F", true, "container archive"},
+
+		{"copyUIDGID true", "PUT", "/containers/web-1/archive", "path=%2F&copyUIDGID=true", true, ""},
+		{"copyUIDGID 1", "PUT", "/containers/web-1/archive", "path=%2F&copyUIDGID=1", true, ""},
+		{"a path other than the root", "PUT", "/containers/web-1/archive", "path=%2Fetc", true, ""},
+		{"a path of two slashes", "PUT", "/containers/web-1/archive", "path=%2F%2F", true, ""},
+		{"a relative path", "PUT", "/containers/web-1/archive", "path=run", true, ""},
+		{"a path with a dot-dot", "PUT", "/containers/web-1/archive", "path=%2F..", true, ""},
+		{"an empty path", "PUT", "/containers/web-1/archive", "path=", true, ""},
+		{"no path", "PUT", "/containers/web-1/archive", "noOverwriteDirNonDir=true", true, ""},
+		{"no query", "PUT", "/containers/web-1/archive", "", true, ""},
+		{"a second path that is not the root", "PUT", "/containers/web-1/archive", "path=%2F&path=%2Fetc", true, ""},
+		{"an unknown key", "PUT", "/containers/web-1/archive", "path=%2F&overwrite=1", true, ""},
+		{"a bad boolean", "PUT", "/containers/web-1/archive", "path=%2F&noOverwriteDirNonDir=yes", true, ""},
+		{"no body", "PUT", "/containers/web-1/archive", "path=%2F", false, ""},
+		{"a GET reads the container's files", "GET", "/containers/web-1/archive", "path=%2F", false, ""},
+		{"a HEAD stats a path", "HEAD", "/containers/web-1/archive", "path=%2F", false, ""},
+		{"a POST", "POST", "/containers/web-1/archive", "path=%2F", true, ""},
+		{"a DELETE", "DELETE", "/containers/web-1/archive", "path=%2F", false, ""},
+		{"a dot-dot container", "PUT", "/containers/../archive", "path=%2F", true, ""},
+		{"a container starting with a dash", "PUT", "/containers/-x/archive", "path=%2F", true, ""},
+		{"a trailing slash", "PUT", "/containers/web-1/archive/", "path=%2F", true, ""},
+		{"an encoded slash in the ID", "PUT", "/containers/a%2Fb/archive", "path=%2F", true, ""},
+		{"the container list", "PUT", "/containers/archive", "path=%2F", true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, _, kind := Allowed(tc.method, tc.path, tc.query, tc.body, false, Policy{})
+			if ok != (tc.wantRoute != "") {
+				t.Fatalf("Allowed(%s %s?%s) = %v, want %v", tc.method, tc.path, tc.query, ok, tc.wantRoute != "")
+			}
+			if !ok {
+				return
+			}
+			rt, found := Match(tc.method, tc.path)
+			if !found || rt.name != tc.wantRoute {
+				t.Fatalf("Match(%s %s) = %q, want %q", tc.method, tc.path, rt.name, tc.wantRoute)
+			}
+			if kind != BodyArchive {
+				t.Errorf("the body kind of %q is %d, want BodyArchive", rt.name, kind)
+			}
+			if rt.registryAuth || rt.upgrade {
+				t.Errorf("route %q may carry a registry credential or an upgrade", rt.name)
+			}
+		})
+	}
+}
+
+func TestRouteContainerArchiveIsRefusedOnAReadOnlyHost(t *testing.T) {
+	ok, reason, _ := Allowed("PUT", "/containers/web-1/archive", "path=%2F", true, false, Policy{ReadOnly: true})
+	if ok || reason != "read_only_flag" {
+		t.Errorf("an archive write on a read-only host = %v %q, want refused read_only_flag", ok, reason)
+	}
+}
+
+func TestRouteContainerRenameTakesOnlyANameAndNoBody(t *testing.T) {
+	long255 := "a" + strings.Repeat("b", 254)
+	long256 := "a" + strings.Repeat("b", 255)
+	for _, tc := range []struct {
+		name, method, path, query string
+		body                      bool
+		wantRoute                 string // "" means refused
+	}{
+		{"the name the SDK sends", "POST", "/containers/0123456789ab/rename", "name=web-1", false, "container rename"},
+		{"the version prefix", "POST", "/v1.52/containers/web-1/rename", "name=shop-web-1", false, "container rename"},
+		{"a name with a leading slash", "POST", "/containers/web-1/rename", "name=%2Fweb-1", false, "container rename"},
+		{"a name with dots and underscores", "POST", "/containers/web-1/rename", "name=a.b_c-d", false, "container rename"},
+		{"a name of 255 characters", "POST", "/containers/web-1/rename", "name=" + long255, false, "container rename"},
+
+		{"a name of 256 characters", "POST", "/containers/web-1/rename", "name=" + long256, false, ""},
+		{"no name", "POST", "/containers/web-1/rename", "", false, ""},
+		{"an empty name", "POST", "/containers/web-1/rename", "name=", false, ""},
+		{"a slash after the first character", "POST", "/containers/web-1/rename", "name=a%2Fb", false, ""},
+		{"a name starting with a dash", "POST", "/containers/web-1/rename", "name=-web", false, ""},
+		{"a name starting with a dot", "POST", "/containers/web-1/rename", "name=.web", false, ""},
+		{"a name with a space", "POST", "/containers/web-1/rename", "name=a%20b", false, ""},
+		{"a name with a dot-dot path", "POST", "/containers/web-1/rename", "name=..%2Fx", false, ""},
+		{"a second name that is not allowed", "POST", "/containers/web-1/rename", "name=a&name=-b", false, ""},
+		{"an unknown key", "POST", "/containers/web-1/rename", "name=a&force=1", false, ""},
+		{"a body", "POST", "/containers/web-1/rename", "name=a", true, ""},
+		{"a GET", "GET", "/containers/web-1/rename", "name=a", false, ""},
+		{"a PUT", "PUT", "/containers/web-1/rename", "name=a", false, ""},
+		{"a DELETE", "DELETE", "/containers/web-1/rename", "name=a", false, ""},
+		{"a dot-dot container", "POST", "/containers/../rename", "name=a", false, ""},
+		{"a trailing slash", "POST", "/containers/web-1/rename/", "name=a", false, ""},
+		{"an encoded slash in the ID", "POST", "/containers/a%2Fb/rename", "name=a", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, _, kind := Allowed(tc.method, tc.path, tc.query, tc.body, false, Policy{})
+			if ok != (tc.wantRoute != "") {
+				t.Fatalf("Allowed(%s %s?%s) = %v, want %v", tc.method, tc.path, tc.query, ok, tc.wantRoute != "")
+			}
+			if !ok {
+				return
+			}
+			rt, found := Match(tc.method, tc.path)
+			if !found || rt.name != tc.wantRoute {
+				t.Fatalf("Match(%s %s) = %q, want %q", tc.method, tc.path, rt.name, tc.wantRoute)
+			}
+			if kind != BodyNone || rt.registryAuth || rt.upgrade {
+				t.Errorf("route %q takes a body (%d), a registry credential or an upgrade", rt.name, kind)
+			}
+		})
+	}
+	if ok, reason, _ := Allowed("POST", "/containers/web-1/rename", "name=web-1", false, false, Policy{ReadOnly: true}); ok || reason != "read_only_flag" {
+		t.Errorf("a rename on a read-only host = %v %q, want refused read_only_flag", ok, reason)
+	}
+}
+
+// The Compose SDK asks for the manifests of an image, and for one platform of it, with the
+// moby client's own spelling: manifests=1, and platform as the JSON of an OCI platform.
+func TestRouteImageInspectTakesTheTwoKeysTheSDKSends(t *testing.T) {
+	jsonPlatform := func(p string) string { return url.QueryEscape(p) }
+	for _, tc := range []struct {
+		name, query string
+		want        bool
+	}{
+		{"no key", "", true},
+		{"manifests=1, as the client sends it", "manifests=1", true},
+		{"manifests=true", "manifests=true", true},
+		{"manifests=0", "manifests=0", true},
+		{"a platform as os/arch", "platform=linux%2Famd64", true},
+		{"a platform as os/arch/variant", "platform=linux%2Farm%2Fv7", true},
+		{"a platform as the JSON of an OCI platform", "platform=" + jsonPlatform(`{"architecture":"amd64","os":"linux"}`), true},
+		{"a JSON platform with a variant", "platform=" + jsonPlatform(`{"architecture":"arm","os":"linux","variant":"v7"}`), true},
+		{"a JSON platform with an OS version", "platform=" + jsonPlatform(`{"architecture":"amd64","os":"windows","os.version":"10.0.17763.1"}`), true},
+		{"both keys", "manifests=1&platform=" + jsonPlatform(`{"architecture":"arm64","os":"linux","variant":"v8"}`), true},
+
+		{"a bad boolean", "manifests=yes", false},
+		{"a platform that is only an OS", "platform=linux", false},
+		{"an upper-case OS", "platform=Linux%2Famd64", false},
+		{"a JSON platform with an unknown field", "platform=" + jsonPlatform(`{"architecture":"amd64","os":"linux","x":"y"}`), false},
+		{"a JSON platform with a quote inside a value", "platform=" + jsonPlatform(`{"architecture":"am\"d64","os":"linux"}`), false},
+		{"a JSON platform followed by more", "platform=" + jsonPlatform(`{"architecture":"amd64","os":"linux"}{}`), false},
+		{"a JSON platform with a slash in the OS", "platform=" + jsonPlatform(`{"architecture":"amd64","os":"li/nux"}`), false},
+		{"an empty platform", "platform=", false},
+		{"an unknown key", "manifests=1&size=1", false},
+		{"verbose", "verbose=1", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, _, _ := Allowed("GET", "/v1.52/images/nginx:1.27/json", tc.query, false, false, Policy{})
+			if ok != tc.want {
+				t.Fatalf("Allowed(GET images/nginx:1.27/json?%s) = %v, want %v", tc.query, ok, tc.want)
+			}
+		})
+	}
+	// The other image routes still take no query.
+	for _, p := range []string{"/images/a/history", "/distribution/a/json"} {
+		if ok, _, _ := Allowed("GET", p, "manifests=1", false, false, Policy{}); ok {
+			t.Errorf("GET %s took the manifests key", p)
+		}
 	}
 }

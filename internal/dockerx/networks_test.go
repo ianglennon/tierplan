@@ -508,3 +508,360 @@ func TestAnOlderEnginesAddressRefusalSentAsAServerErrorIsARefusal(t *testing.T) 
 		t.Error("IsRefusal(nil) = true")
 	}
 }
+
+func TestNetworkCreateSendsEveryPoolAndTheIPAMDriver(t *testing.T) {
+	c, fake := networkFake(t)
+	_, _, err := c.NetworkCreate(context.Background(), dockerx.NetworkCreateSpec{
+		Name: "stack_backend", Driver: "overlay", Scope: dockerx.ScopeSwarm, IPAMDriver: "default",
+		Pools: []dockerx.NetworkPool{
+			{Subnet: "10.50.0.0/24", Gateway: "10.50.0.1", IPRange: "10.50.0.128/25"},
+			{Subnet: "10.51.0.0/24"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NetworkCreate: %v", err)
+	}
+	req := fake.NetworkCreates()[0]
+	if req.IPAM == nil || req.IPAM.Driver != "default" || len(req.IPAM.Config) != 2 {
+		t.Fatalf("IPAM = %+v, want the default driver and two pools", req.IPAM)
+	}
+	first, second := req.IPAM.Config[0], req.IPAM.Config[1]
+	if first.Subnet.String() != "10.50.0.0/24" || first.Gateway.String() != "10.50.0.1" || first.IPRange.String() != "10.50.0.128/25" {
+		t.Errorf("first pool = %+v", first)
+	}
+	if second.Subnet.String() != "10.51.0.0/24" || second.Gateway.IsValid() || second.IPRange.IsValid() {
+		t.Errorf("second pool = %+v, want only its subnet", second)
+	}
+}
+
+func TestNetworkCreateRefusesPoolsTogetherWithTheSingleAddressFieldsBeforeAnyCall(t *testing.T) {
+	c, fake := networkFake(t)
+	for _, spec := range []dockerx.NetworkCreateSpec{
+		{Name: "x", Driver: "bridge", Subnet: "10.1.0.0/24", Pools: []dockerx.NetworkPool{{Subnet: "10.2.0.0/24"}}},
+		{Name: "x", Driver: "bridge", Gateway: "10.1.0.1", Pools: []dockerx.NetworkPool{{Subnet: "10.2.0.0/24"}}},
+		{Name: "x", Driver: "bridge", IPRange: "10.1.0.0/25", Pools: []dockerx.NetworkPool{{Subnet: "10.2.0.0/24"}}},
+	} {
+		if _, _, err := c.NetworkCreate(context.Background(), spec); !errors.Is(err, dockerx.ErrAddressing) {
+			t.Errorf("NetworkCreate(%+v) err = %v, want ErrAddressing", spec, err)
+		}
+	}
+	if w := fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, a refused spec must send nothing", w)
+	}
+}
+
+func TestNetworkCreateRefusesAnUnparsablePoolBeforeAnyCall(t *testing.T) {
+	c, fake := networkFake(t)
+	for _, pool := range []dockerx.NetworkPool{{Subnet: "not-a-cidr"}, {Subnet: "10.2.0.0/24", Gateway: "x"}, {Subnet: "10.2.0.0/24", IPRange: "y"}} {
+		spec := dockerx.NetworkCreateSpec{Name: "x", Driver: "bridge", Pools: []dockerx.NetworkPool{{Subnet: "10.9.0.0/24"}, pool}}
+		if _, _, err := c.NetworkCreate(context.Background(), spec); !errors.Is(err, dockerx.ErrAddressing) {
+			t.Errorf("NetworkCreate(pool %+v) err = %v, want ErrAddressing", pool, err)
+		}
+	}
+	if w := fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, want none", w)
+	}
+}
+
+func TestNetworkCreateKeepsTheSingleAddressFieldsWorkingWithoutPools(t *testing.T) {
+	c, fake := networkFake(t)
+	if _, _, err := c.NetworkCreate(context.Background(), dockerx.NetworkCreateSpec{Name: "one", Driver: "bridge", Subnet: "10.3.0.0/24"}); err != nil {
+		t.Fatal(err)
+	}
+	req := fake.NetworkCreates()[0]
+	if req.IPAM == nil || len(req.IPAM.Config) != 1 || req.IPAM.Config[0].Subnet.String() != "10.3.0.0/24" || req.IPAM.Driver != "" {
+		t.Errorf("IPAM = %+v, want one pool and no driver", req.IPAM)
+	}
+}
+
+// Address use (plan 07-48, G-07-5): an Engine 29 manager reports each subnet's addresses
+// in use and still available in the network inspect, and that is the one reliable sign
+// that a network is full.
+
+func TestNetworkDetailReadsTheAddressUsageAManagerReports(t *testing.T) {
+	fake := dockertest.NewFake(t, detailManager())
+	fake.SetNetworkUsage("ovl",
+		dockertest.FakeSubnetUsage{Subnet: "fd00:1::/64", InUse: 3, Available: 1 << 40},
+		dockertest.FakeSubnetUsage{Subnet: "10.0.1.0/24", InUse: 256, Available: 0})
+	d, raw, err := newClient(t, fake).NetworkDetail(context.Background(), "ovl-id-1", false)
+	if err != nil {
+		t.Fatalf("NetworkDetail: %v", err)
+	}
+	want := []dockerx.SubnetUsage{
+		{Subnet: "10.0.1.0/24", InUse: 256, Available: 0},
+		{Subnet: "fd00:1::/64", InUse: 3, Available: 1 << 40},
+	}
+	if !reflect.DeepEqual(d.Usage, want) {
+		t.Errorf("Usage = %+v, want %+v (sorted by subnet, a full subnet with Available 0)", d.Usage, want)
+	}
+	wantIPAM := []dockerx.IPAMRow{{Subnet: "10.0.1.0/24", Gateway: "10.0.1.1"}, {Subnet: "fd00:1::/64"}}
+	if !reflect.DeepEqual(d.IPAM, wantIPAM) || d.ID != "ovl-id-1" || d.Name != "ovl" || !d.Attachable {
+		t.Errorf("existing fields moved: %+v", d)
+	}
+	if !strings.Contains(string(raw), `"DynamicIPsAvailable"`) {
+		t.Errorf("raw = %s, want the Status document", raw)
+	}
+}
+
+func TestNetworkDetailOfAnEngineThatReportsNoUsageHasNone(t *testing.T) {
+	d, raw, err := newClient(t, dockertest.NewFake(t, detailManager())).NetworkDetail(context.Background(), "ovl-id-1", false)
+	if err != nil {
+		t.Fatalf("NetworkDetail: %v", err)
+	}
+	if d.Usage != nil {
+		t.Errorf("Usage = %+v, want nil: an engine with no Status must not read as a full network", d.Usage)
+	}
+	if strings.Contains(string(raw), `"Status"`) {
+		t.Errorf("raw has a Status key: %s", raw)
+	}
+}
+
+func TestTheFakeReportsUsageForANetworkTheClientCreated(t *testing.T) {
+	fake := dockertest.NewFake(t, detailManager())
+	c := newClient(t, fake)
+	id, _, err := c.NetworkCreate(context.Background(), dockerx.NetworkCreateSpec{Name: "made", Driver: "overlay", Subnet: "10.9.0.0/28"})
+	if err != nil {
+		t.Fatalf("NetworkCreate: %v", err)
+	}
+	fake.SetNetworkUsage("made", dockertest.FakeSubnetUsage{Subnet: "10.9.0.0/28", InUse: 16, Available: 0})
+	d, _, err := c.NetworkDetail(context.Background(), id, false)
+	if err != nil {
+		t.Fatalf("NetworkDetail: %v", err)
+	}
+	want := []dockerx.SubnetUsage{{Subnet: "10.9.0.0/28", InUse: 16, Available: 0}}
+	if !reflect.DeepEqual(d.Usage, want) {
+		t.Errorf("Usage = %+v, want %+v", d.Usage, want)
+	}
+}
+
+// Engine 29 answers an inspect by a network's full ID from the node's own instance of it,
+// and only a name or partial ID brings the swarm leader's count (UAT G-07-8). NetworkDetail
+// makes one read and shows that answer. NetworkSwarmUsage reads a full ID again by the ID less
+// its last character, for the swarm's count.
+
+const bigNetID = "skvqz4pk12gec9lje3akizuef"
+
+func bigNetFake(t *testing.T) *dockertest.Fake {
+	t.Helper()
+	return dockertest.NewFake(t, dockertest.FakeConfig{
+		SwarmState: "active", SwarmControl: true,
+		Networks: []dockertest.FakeNetwork{
+			{ID: bigNetID, Name: "big_default", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.2.0/24"}},
+		},
+	})
+}
+
+// dupNetFake has two swarm networks whose IDs differ only in the last character, so the ID of
+// one less its last character is also a prefix of the other. dup1 is listed first, so the
+// engine's first match for the shared 24 character prefix is dup1 on every run. A real engine
+// answers that prefix as ambiguous, also an error.
+func dupNetFake(t *testing.T) *dockertest.Fake {
+	t.Helper()
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{
+		SwarmState: "active", SwarmControl: true,
+		Networks: []dockertest.FakeNetwork{
+			{ID: "dupnetaaaaaaaaaaaaaaaaaa1", Name: "dup1", Driver: "overlay", Scope: "swarm"},
+			{ID: "dupnetaaaaaaaaaaaaaaaaaa2", Name: "dup2", Driver: "overlay", Scope: "swarm"},
+		},
+	})
+	fake.SetNetworkUsage("dup1", dockertest.FakeSubnetUsage{Subnet: "10.0.3.0/24", InUse: 256, Available: 0})
+	fake.SetNetworkUsage("dup2", dockertest.FakeSubnetUsage{Subnet: "10.0.4.0/24", InUse: 10, Available: 246})
+	return fake
+}
+
+// networkInspects counts the GETs of one network the fake has served.
+func networkInspects(f *dockertest.Fake) int {
+	n := 0
+	for _, p := range f.Requests() {
+		if strings.Contains(p, "/networks/") {
+			n++
+		}
+	}
+	return n
+}
+
+// The detail page and Inspect ask once and show what the engine answers for that ID, which is
+// what docker network inspect shows on the same node. On a node holding a local instance of a
+// swarm network that is the node's own count, not the swarm's.
+func TestNetworkDetailReadsAFullIDOnceAndAnswersWithTheNodesOwnCount(t *testing.T) {
+	fake := bigNetFake(t)
+	fake.SetNetworkUsage("big_default", dockertest.FakeSubnetUsage{Subnet: "10.0.2.0/24", InUse: 256, Available: 0})
+	fake.SetNetworkLocalUsage("big_default", dockertest.FakeSubnetUsage{Subnet: "10.0.2.0/24", InUse: 46, Available: 210})
+	c := newClient(t, fake)
+	for _, verbose := range []bool{false, true} {
+		before := networkInspects(fake)
+		d, raw, err := c.NetworkDetail(context.Background(), bigNetID, verbose)
+		if err != nil {
+			t.Fatalf("verbose=%v: NetworkDetail: %v", verbose, err)
+		}
+		if got := networkInspects(fake) - before; got != 1 {
+			t.Errorf("verbose=%v: %d network reads, want 1: the page would cost the engine a second scan", verbose, got)
+		}
+		reqs := fake.Requests()
+		if last := reqs[len(reqs)-1]; !strings.HasSuffix(last, "/networks/"+bigNetID) {
+			t.Errorf("verbose=%v: the read was %q, want one by the full ID", verbose, last)
+		}
+		if d.ID != bigNetID || d.Name != "big_default" {
+			t.Errorf("verbose=%v: ID, Name = %q, %q", verbose, d.ID, d.Name)
+		}
+		want := []dockerx.SubnetUsage{{Subnet: "10.0.2.0/24", InUse: 46, Available: 210}}
+		if !reflect.DeepEqual(d.Usage, want) {
+			t.Errorf("verbose=%v: Usage = %+v, want %+v: the detail page would show the swarm's count, not this node's own", verbose, d.Usage, want)
+		}
+		if !strings.Contains(string(raw), `"IPsInUse":46`) || strings.Contains(string(raw), `"IPsInUse":256`) {
+			t.Errorf("verbose=%v: raw = %s, want the node's own Status: the Inspect tab would disagree with docker network inspect", verbose, raw)
+		}
+	}
+}
+
+// Two networks whose IDs share all but the last character must not make the detail page fail:
+// NetworkDetail never reads by a prefix, so it answers the network asked for as itself.
+func TestNetworkDetailAnswersTheNetworkAskedForWhenAnotherSharesItsPrefix(t *testing.T) {
+	fake := dupNetFake(t)
+	before := networkInspects(fake)
+	d, _, err := newClient(t, fake).NetworkDetail(context.Background(), "dupnetaaaaaaaaaaaaaaaaaa2", false)
+	if err != nil {
+		t.Fatalf("NetworkDetail: %v: the detail page would be an error for a network that exists", err)
+	}
+	if d.ID != "dupnetaaaaaaaaaaaaaaaaaa2" {
+		t.Errorf("ID = %q, want dup2's", d.ID)
+	}
+	want := []dockerx.SubnetUsage{{Subnet: "10.0.4.0/24", InUse: 10, Available: 246}}
+	if !reflect.DeepEqual(d.Usage, want) {
+		t.Errorf("Usage = %+v, want %+v", d.Usage, want)
+	}
+	if got := networkInspects(fake) - before; got != 1 {
+		t.Errorf("%d network reads, want 1", got)
+	}
+}
+
+func TestNetworkSwarmUsageReadsTheSwarmsCountWhenTheNodeHoldsTheNetworkLocally(t *testing.T) {
+	fake := bigNetFake(t)
+	fake.SetNetworkUsage("big_default", dockertest.FakeSubnetUsage{Subnet: "10.0.2.0/24", InUse: 256, Available: 0})
+	fake.SetNetworkLocalUsage("big_default", dockertest.FakeSubnetUsage{Subnet: "10.0.2.0/24", InUse: 46, Available: 210})
+	c := newClient(t, fake)
+	for _, tc := range []struct {
+		name, ref string
+		reads     int
+	}{
+		{"the full ID", bigNetID, 2},
+		{"the name", "big_default", 1},
+		{"a 12 character prefix", bigNetID[:12], 1},
+	} {
+		before := networkInspects(fake)
+		d, err := c.NetworkSwarmUsage(context.Background(), tc.ref)
+		if err != nil {
+			t.Fatalf("%s: NetworkSwarmUsage: %v", tc.name, err)
+		}
+		want := []dockerx.SubnetUsage{{Subnet: "10.0.2.0/24", InUse: 256, Available: 0}}
+		if !reflect.DeepEqual(d.Usage, want) {
+			t.Errorf("%s: Usage = %+v, want the swarm's %+v", tc.name, d.Usage, want)
+		}
+		if d.ID != bigNetID || d.Name != "big_default" {
+			t.Errorf("%s: ID, Name = %q, %q", tc.name, d.ID, d.Name)
+		}
+		if got := networkInspects(fake) - before; got != tc.reads {
+			t.Errorf("%s: %d network reads, want %d", tc.name, got, tc.reads)
+		}
+	}
+}
+
+func TestNetworkSwarmUsageReadsALocalNetworkOrAnOldEngineOnce(t *testing.T) {
+	t.Run("a local network", func(t *testing.T) {
+		fake := dockertest.NewFake(t, dockertest.FakeConfig{Networks: []dockertest.FakeNetwork{
+			{ID: "br-local-id", Name: "br", Driver: "bridge", Scope: "local", Subnets: []string{"172.30.0.0/24"}},
+		}})
+		fake.SetNetworkLocalUsage("br", dockertest.FakeSubnetUsage{Subnet: "172.30.0.0/24", InUse: 5, Available: 250})
+		before := networkInspects(fake)
+		d, err := newClient(t, fake).NetworkSwarmUsage(context.Background(), "br-local-id")
+		if err != nil {
+			t.Fatalf("NetworkSwarmUsage: %v", err)
+		}
+		want := []dockerx.SubnetUsage{{Subnet: "172.30.0.0/24", InUse: 5, Available: 250}}
+		if !reflect.DeepEqual(d.Usage, want) {
+			t.Errorf("Usage = %+v, want %+v", d.Usage, want)
+		}
+		if got := networkInspects(fake) - before; got != 1 {
+			t.Errorf("%d network reads, want 1", got)
+		}
+	})
+	t.Run("an engine older than 29", func(t *testing.T) {
+		fake := dockertest.NewFake(t, detailManager())
+		before := networkInspects(fake)
+		d, err := newClient(t, fake).NetworkSwarmUsage(context.Background(), "ovl-id-1")
+		if err != nil {
+			t.Fatalf("NetworkSwarmUsage: %v", err)
+		}
+		if d.Usage != nil {
+			t.Errorf("Usage = %+v, want nil", d.Usage)
+		}
+		if got := networkInspects(fake) - before; got != 1 {
+			t.Errorf("%d network reads, want 1", got)
+		}
+	})
+}
+
+func TestNetworkSwarmUsageRefusesAnAnswerForAnotherNetwork(t *testing.T) {
+	fake := dupNetFake(t)
+	c := newClient(t, fake)
+	d, err := c.NetworkSwarmUsage(context.Background(), "dupnetaaaaaaaaaaaaaaaaaa")
+	if err != nil || d.ID != "dupnetaaaaaaaaaaaaaaaaaa1" {
+		t.Fatalf("a partial ID = %+v, %v, want dup1", d, err)
+	}
+	d, err = c.NetworkSwarmUsage(context.Background(), "dupnetaaaaaaaaaaaaaaaaaa2")
+	if err == nil || dockerx.IsNotFound(err) {
+		t.Fatalf("err = %v, want an error that is not a not-found", err)
+	}
+	if d.Usage != nil || d.ID != "" {
+		t.Errorf("detail = %+v, want none: dup1's numbers must not come back for dup2", d)
+	}
+}
+
+func TestNetworkSwarmUsageHasNoUsageWhenThePartialIDReadBringsNoSwarmCount(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tune func(*dockertest.Fake)
+	}{
+		{"the swarm answers with no Status", func(f *dockertest.Fake) {
+			f.SetNetworkUsage("big_default", dockertest.FakeSubnetUsage{Subnet: "10.0.2.0/24", InUse: 256, Available: 0})
+			f.SetNetworkNoSwarmStatus("big_default", true)
+		}},
+		{"the node cannot ask the swarm", func(*dockertest.Fake) {}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := bigNetFake(t)
+			fake.SetNetworkLocalUsage("big_default", dockertest.FakeSubnetUsage{Subnet: "10.0.2.0/24", InUse: 46, Available: 210})
+			tc.tune(fake)
+			before := networkInspects(fake)
+			d, err := newClient(t, fake).NetworkSwarmUsage(context.Background(), bigNetID)
+			if err != nil {
+				t.Fatalf("NetworkSwarmUsage: %v", err)
+			}
+			if d.Usage != nil {
+				t.Errorf("Usage = %+v, want nil: the node's own count is not the swarm's", d.Usage)
+			}
+			if d.ID != bigNetID || d.Name != "big_default" {
+				t.Errorf("ID, Name = %q, %q", d.ID, d.Name)
+			}
+			if got := networkInspects(fake) - before; got != 2 {
+				t.Errorf("%d network reads, want 2", got)
+			}
+		})
+	}
+	t.Run("a one-read lookup by name cannot tell", func(t *testing.T) {
+		fake := bigNetFake(t)
+		fake.SetNetworkLocalUsage("big_default", dockertest.FakeSubnetUsage{Subnet: "10.0.2.0/24", InUse: 46, Available: 210})
+		before := networkInspects(fake)
+		d, err := newClient(t, fake).NetworkSwarmUsage(context.Background(), "big_default")
+		if err != nil {
+			t.Fatalf("NetworkSwarmUsage: %v", err)
+		}
+		want := []dockerx.SubnetUsage{{Subnet: "10.0.2.0/24", InUse: 46, Available: 210}}
+		if !reflect.DeepEqual(d.Usage, want) {
+			t.Errorf("Usage = %+v, want %+v", d.Usage, want)
+		}
+		if got := networkInspects(fake) - before; got != 1 {
+			t.Errorf("%d network reads, want 1", got)
+		}
+	})
+}

@@ -25,6 +25,7 @@ import grants from "./en/grants.json";
 import images from "./en/images.json";
 import install from "./en/install.json";
 import invite from "./en/invite.json";
+import jobs from "./en/jobs.json";
 import logs from "./en/logs.json";
 import needs from "./en/needs.json";
 import networks from "./en/networks.json";
@@ -48,6 +49,26 @@ import settings from "./en/settings.json";
 import setup from "./en/setup.json";
 import shell from "./en/shell.json";
 import specedit from "./en/specedit.json";
+import stackconverge from "./en/stackconverge.json";
+import stackdeploy from "./en/stackdeploy.json";
+import stackeditor from "./en/stackeditor.json";
+import stackimport from "./en/stackimport.json";
+import stacklinks from "./en/stacklinks.json";
+import stacklists from "./en/stacklists.json";
+import stacklogs from "./en/stacklogs.json";
+import stackoverview from "./en/stackoverview.json";
+import stackproblems from "./en/stackproblems.json";
+import stackpull from "./en/stackpull.json";
+import stackremove from "./en/stackremove.json";
+import stackrendered from "./en/stackrendered.json";
+import stackresources from "./en/stackresources.json";
+import stackreview from "./en/stackreview.json";
+import stacks from "./en/stacks.json";
+import stackstandalone from "./en/stackstandalone.json";
+import stackstop from "./en/stackstop.json";
+import stackupdate from "./en/stackupdate.json";
+import stackvars from "./en/stackvars.json";
+import stackyamldiff from "./en/stackyamldiff.json";
 import stats from "./en/stats.json";
 import switcher from "./en/switcher.json";
 import tags from "./en/tags.json";
@@ -62,7 +83,7 @@ import volumes from "./en/volumes.json";
 // English only for now (D-65). Resources are bundled statically, so there is
 // no language detector and no backend plugin: nothing is fetched at runtime.
 // Each later plan adds its own namespace file (setup, auth, shell, env,
-// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule, actions, activeshells, containers, containerdetail, networks, volumes, logs, terminal, events, pulls, registries, images, usedBy, tags, services, servicedetail, serviceForm, tasks, specedit, placement, nodes, secrets, configs, stats, restartLoop) and registers it
+// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule, actions, activeshells, containers, containerdetail, networks, volumes, logs, terminal, events, pulls, jobs, registries, images, usedBy, tags, services, servicedetail, serviceForm, tasks, specedit, placement, nodes, secrets, configs, stats, restartLoop, stacks, stackConverge, stackDeploy, stackEditor, stackImport, stackLinks, stackLists, stackLogs, stackOverview, stackProblems, stackPull, stackRendered, stackResources, stackReview, stackStandalone, stackVars, stackYamlDiff) and registers it
 // here, so parallel work never edits the same JSON. The "containers" namespace
 // holds the containers list copy, and the "terminal" namespace the browser shell's
 // (never "shell", which is the app chrome's). Keys are shaped
@@ -90,6 +111,7 @@ export const resources = {
     images,
     install,
     invite,
+    jobs,
     logs,
     needs,
     networks,
@@ -113,6 +135,26 @@ export const resources = {
     setup,
     shell,
     specEditor: specedit,
+    stackConverge: stackconverge,
+    stackDeploy: stackdeploy,
+    stackEditor: stackeditor,
+    stackImport: stackimport,
+    stackLogs: stacklogs,
+    stackLinks: stacklinks,
+    stackLists: stacklists,
+    stackOverview: stackoverview,
+    stackProblems: stackproblems,
+    stackPull: stackpull,
+    stackRemove: stackremove,
+    stackRendered: stackrendered,
+    stackResources: stackresources,
+    stackStop: stackstop,
+    stackUpdate: stackupdate,
+    stackReview: stackreview,
+    stackStandalone: stackstandalone,
+    stackVars: stackvars,
+    stackYamlDiff: stackyamldiff,
+    stacks,
     stats,
     switcher,
     tags,

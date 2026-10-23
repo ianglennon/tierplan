@@ -128,23 +128,6 @@
       "reason": "This host is read-only (set on the host)",
       "alert": "This host is read-only. Changes are turned off on the host itself, so you can look at images but not pull or remove them."
     },
-    "indicator": {
-      "button": "Pulls",
-      "buttonCount": "Pulls, {{count}} in progress",
-      "title": "Pulls",
-      "by": "by {{name}}",
-      "state": {
-        "running_one": "Pulling on {{running}} of {{count}} node",
-        "running_other": "Pulling on {{running}} of {{count}} nodes",
-        "done": "Done",
-        "partialFailed": "Done, {{failed}} failed",
-        "partial": "Partly done",
-        "failed": "Failed",
-        "cancelled": "Cancelled"
-      },
-      "cancel": "Cancel",
-      "cancelLabel": "Cancel pull of {{ref}}"
-    },
     "cancel": {
       "done_one": "Cancelled the pull on {{count}} node.",
       "done_other": "Cancelled the pull on {{count}} nodes.",

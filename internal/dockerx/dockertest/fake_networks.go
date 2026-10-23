@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/swarm"
 )
 
 var _ = registerFakeHandler((*Fake).serveNetworkCreate)
@@ -77,8 +78,12 @@ func (f *Fake) serveNetworkCreate(w http.ResponseWriter, r *http.Request, p stri
 	return true
 }
 
-// newFakeNetworkID is a 64 character hex ID like a daemon's, made from n.
-func newFakeNetworkID(n int) string { return fmt.Sprintf("%064x", 0xbeef0000+n) }
+// newFakeNetworkID is a 64 character hex ID like a daemon's, made from n. What tells one
+// network from another comes first, so that, like a daemon's random IDs, a prefix of any
+// length a client uses, including the ID less its last character, names one network.
+func newFakeNetworkID(n int) string {
+	return fmt.Sprintf("%08x%s", 0xbeef0000+n, strings.Repeat("0", 56))
+}
 
 // NetworkCreates returns the body of every network create the daemon accepted, in
 // order, as the daemon decoded it.
@@ -192,6 +197,13 @@ func (c FakeConfig) resolveNetwork(ref string) (FakeNetwork, bool) {
 // options and labels, the containers attached to it and, for a swarm-scoped network on
 // a manager asked with verbose, the services whose specs mention it with a task for each
 // one that runs. An unknown network is the 404 a real daemon gives.
+//
+// The Status follows Engine 29's getNetwork. A node lists its own networks first, so a
+// reference equal to a network's full ID gets the node's own count (SetNetworkLocalUsage)
+// when it has one. A name or ID prefix gets the swarm's count (SetNetworkUsage), or no
+// Status when SetNetworkNoSwarmStatus is on; with no swarm count it falls back to the
+// local one, as a node that cannot ask the swarm does. A network with local usage lists
+// this node's load-balancer endpoint lb-<name> in Containers for every reference.
 func (f *Fake) serveNetworkInspect(w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) bool {
 	if r.Method != http.MethodGet {
 		return false
@@ -255,8 +267,108 @@ func (f *Fake) serveNetworkInspect(w http.ResponseWriter, r *http.Request, p str
 			out.Services[s.Name] = info
 		}
 	}
+	f.mu.Lock()
+	swarmUsage, localUsage, noSwarm := f.netUsage[fn.Name], f.netLocalUsage[fn.Name], f.netNoSwarmStatus[fn.Name]
+	f.mu.Unlock()
+	var usage []FakeSubnetUsage
+	switch {
+	case len(localUsage) > 0 && m[1] == fn.ID:
+		usage = localUsage
+	case noSwarm:
+	case len(swarmUsage) > 0:
+		usage = swarmUsage
+	default:
+		usage = localUsage
+	}
+	if len(localUsage) > 0 {
+		out.Containers["lb-"+fn.Name] = network.EndpointResource{Name: fn.Name + "-endpoint"}
+	}
+	if len(usage) > 0 {
+		subnets := network.SubnetStatuses{}
+		for _, u := range usage {
+			subnets[netip.MustParsePrefix(u.Subnet)] = network.SubnetStatus{IPsInUse: u.InUse, DynamicIPsAvailable: u.Available}
+		}
+		out.Status = &network.Status{IPAM: network.IPAMStatus{Subnets: subnets}}
+	}
 	writeJSON(w, http.StatusOK, out)
 	return true
+}
+
+// FakeSubnetUsage is one subnet of a network inspect's Status.IPAM: the addresses in use
+// and the dynamic addresses still available. Available 0 is a subnet that is full.
+type FakeSubnetUsage struct {
+	Subnet           string
+	InUse, Available uint64
+}
+
+// SetNetworkUsage is what an Engine 29 manager reports for the network called name from
+// now on, in its inspect Status.IPAM, for a network seeded in FakeConfig and one the
+// client created alike. A network never given usage (or given none here) answers with no
+// Status, as Engine 24 to 28 do.
+func (f *Fake) SetNetworkUsage(name string, usage ...FakeSubnetUsage) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(usage) == 0 {
+		delete(f.netUsage, name)
+		return
+	}
+	if f.netUsage == nil {
+		f.netUsage = map[string][]FakeSubnetUsage{}
+	}
+	f.netUsage[name] = slices.Clone(usage)
+}
+
+// SetNetworkLocalUsage is what this node counts for its own instance of the network called
+// name from now on, which a node holds while a task or a load-balancer endpoint of the
+// network runs on it. Engine 29 answers that count for an inspect by the network's full ID,
+// even with scope=swarm (moby getNetwork: "If a network appears both in swarm and local,
+// assume it is in local first"). A name or ID prefix gets the swarm's count (SetNetworkUsage).
+// A network with local usage and no swarm count answers the local one for every reference,
+// as a node that cannot ask the swarm does. The network also lists this node's load-balancer
+// endpoint lb-<name> in Containers. No usage removes it.
+func (f *Fake) SetNetworkLocalUsage(name string, usage ...FakeSubnetUsage) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(usage) == 0 {
+		delete(f.netLocalUsage, name)
+		return
+	}
+	if f.netLocalUsage == nil {
+		f.netLocalUsage = map[string][]FakeSubnetUsage{}
+	}
+	f.netLocalUsage[name] = slices.Clone(usage)
+}
+
+// SetNetworkNoSwarmStatus makes the swarm answer the network called name with no Status: a
+// name or ID prefix gets none, while a full ID still gets the SetNetworkLocalUsage count. It is
+// how a test reaches a reader's no-swarm-Status branch. Off removes it.
+func (f *Fake) SetNetworkNoSwarmStatus(name string, on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !on {
+		delete(f.netNoSwarmStatus, name)
+		return
+	}
+	if f.netNoSwarmStatus == nil {
+		f.netNoSwarmStatus = map[string]bool{}
+	}
+	f.netNoSwarmStatus[name] = true
+}
+
+// networkTargetsByID returns the network targets of a service write with each one that names
+// a network the daemon has as that network's ID, as a swarm manager stores them. The rest stay
+// as given. in is not written to.
+func (c FakeConfig) networkTargetsByID(in []swarm.NetworkAttachmentConfig) []swarm.NetworkAttachmentConfig {
+	if in == nil {
+		return nil
+	}
+	out := slices.Clone(in)
+	for i := range out {
+		if n, ok := c.resolveNetwork(out[i].Target); ok {
+			out[i].Target = n.ID
+		}
+	}
+	return out
 }
 
 func firstOf(names []string, fallback string) string {
@@ -444,4 +556,16 @@ func (c FakeConfig) withEndpoints(changes map[[2]string]*FakeEndpoint) FakeConfi
 	}
 	c.Containers = cs
 	return c
+}
+
+// filterNetworksByLabel keeps the networks whose labels pass the request's label filter.
+func filterNetworksByLabel(in []network.Summary, rawFilters string) []network.Summary {
+	keep := labelFilter(rawFilters)
+	out := make([]network.Summary, 0, len(in))
+	for _, n := range in {
+		if keep(n.Labels) {
+			out = append(out, n)
+		}
+	}
+	return out
 }

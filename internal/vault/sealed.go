@@ -38,6 +38,14 @@ var SealedColumns = []SealedColumn{
 		Table: "registry_credentials", Column: "secret_sealed", KeyColumns: []string{"id"},
 		Context: func(keys []string) string { return ContextRegistryCred + keys[0] },
 	},
+	{
+		Table: "stack_snapshot_vars", Column: "value_sealed", KeyColumns: []string{"snapshot_id", "name"},
+		Context: func(keys []string) string { return ContextStackVar + keys[0] + "/" + keys[1] },
+	},
+	{
+		Table: "stack_snapshot_files", Column: "content_sealed", KeyColumns: []string{"snapshot_id", "path"},
+		Context: func(keys []string) string { return ContextStackFile + keys[0] + "/" + keys[1] },
+	},
 }
 
 // RewrapAll moves every sealed value in tx from the vault from to the vault to:

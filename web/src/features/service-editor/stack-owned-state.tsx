@@ -24,6 +24,9 @@ interface StackOwnedStateProps {
   // The service's name and the stack that owns it. Text from Docker, drawn as text.
   name: string;
   stack: string;
+  // The Bayplan stack it is, when the server says Bayplan manages it. Empty for a stack made some other
+  // way, which has no page here.
+  bayplanStackId?: string;
   // The spec as the server stated it, with hidden values withheld.
   spec: SpecValue;
 }
@@ -31,8 +34,17 @@ interface StackOwnedStateProps {
 // StackOwnedState is what the edit page becomes for a service a stack owns (D-05): a stack's next
 // deploy would overwrite any change made here, so the page says to change it through the stack and
 // shows the spec read-only, in the format the person last chose. Scale, force update and roll
-// back stay on the service's own page.
-export function StackOwnedState({ envId, serviceId, name, stack, spec }: StackOwnedStateProps) {
+// back stay on the service's own page. For a stack Bayplan manages the state offers Open stack (the
+// accent button) beside the outline Back to {name}; a stack made some other way has no page, so no
+// button.
+export function StackOwnedState({
+  envId,
+  serviceId,
+  name,
+  stack,
+  bayplanStackId,
+  spec,
+}: StackOwnedStateProps) {
   const t = useT();
   const format = useMemo(() => loadSpecFormat(), []);
   const text = useMemo(() => renderSpec(spec, format), [spec, format]);
@@ -49,6 +61,13 @@ export function StackOwnedState({ envId, serviceId, name, stack, spec }: StackOw
           <EmptyDescription>{t("specEditor.stackOwned.body")}</EmptyDescription>
         </EmptyHeader>
         <EmptyContent>
+          {bayplanStackId ? (
+            <Button asChild className="max-md:h-11">
+              <Link to="/env/$envId/stacks/$stackId" params={{ envId, stackId: bayplanStackId }}>
+                {t("stackLinks.open")}
+              </Link>
+            </Button>
+          ) : null}
           <Button asChild variant="outline" className="max-md:h-11">
             <Link to="/env/$envId/services/$serviceId" params={{ envId, serviceId }}>
               {t("specEditor.stackOwned.back", { name })}

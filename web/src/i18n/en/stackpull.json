@@ -1,0 +1,16 @@
+{
+  "stackPull": {
+    "steps": {
+      "pull": "Pull {{image}}"
+    },
+    "phase": {
+      "pulling": "Pulling image"
+    },
+    "progress": "{{done}} of {{total}}",
+    "host": "This host",
+    "refusal": {
+      "sentence": "{{host}}'s agent refuses {{service}}: {{reason}}",
+      "generic": "the request isn't allowed"
+    }
+  }
+}

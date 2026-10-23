@@ -73,6 +73,7 @@ import { RollbackDialog } from "@/features/services/rollback-dialog";
 import { RollbackMenuItem } from "@/features/services/rollback-menu-item";
 import { ScaleDialog, type ScaledService } from "@/features/services/scale-dialog";
 import { ServiceStateCell } from "@/features/services/service-state-cell";
+import { bayplanStackIdOf, StackLink } from "@/features/stacks/stack-link";
 import { MAX_LIST_STATS, useListStats } from "@/features/stats/list-stats";
 import { CpuCell, MemoryCell, NetworkCell } from "@/features/stats/stats-cells";
 import { StatsToggle } from "@/features/stats/stats-toggle";
@@ -425,6 +426,14 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
             ? undefined
             : {
                 name: g.kind === "ungrouped" ? t("services.list.group.ungrouped") : g.name,
+                nameLink:
+                  g.kind === "stack" ? (
+                    <StackLink
+                      envId={envId}
+                      name={g.name}
+                      bayplanStackId={bayplanStackIdOf(g.rows)}
+                    />
+                  ) : undefined,
                 summary: t("services.list.group.healthy", { healthy: g.healthy, count: g.total }),
                 badge:
                   g.kind === "stack" ? (
@@ -432,7 +441,7 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
                   ) : undefined,
               },
       })),
-    [shownRows, by, t],
+    [shownRows, by, t, envId],
   );
 
   // Which rows can be chosen: not gone and not waiting on a scale. A global service or a job

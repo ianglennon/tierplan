@@ -1,0 +1,112 @@
+{
+  "stackLists": {
+    "title": "Stacks",
+    "documentTitle": "All stacks",
+    "global": {
+      "caption": "Stacks Bayplan manages across your environments.",
+      "count_one": "{{count, number}} stack in {{environments}}",
+      "count_other": "{{count, number}} stacks in {{environments}}",
+      "environments_one": "{{count, number}} environment",
+      "environments_other": "{{count, number}} environments",
+      "empty": "No stacks yet",
+      "emptyBody": "Stacks you create on any environment show up here.",
+      "error": "Couldn't load stacks.",
+      "errorRetry": "Retry loading stacks",
+      "title": "Stacks",
+      "filtered_one": "{{n, number}} of {{count, number}} stack in {{environments}}",
+      "filtered_other": "{{n, number}} of {{count, number}} stacks in {{environments}}"
+    },
+    "columns": {
+      "name": "Name",
+      "environment": "Environment",
+      "state": "State",
+      "services": "Services",
+      "source": "Source",
+      "lastDeployed": "Last deployed"
+    },
+    "services": "{{running, number}}/{{total, number}}",
+    "missing": "—",
+    "lastDeployedBy": "by {{user}}",
+    "never": "Never",
+    "group": {
+      "count_one": "{{count, number}} stack",
+      "count_other": "{{count, number}} stacks"
+    },
+    "groupBy": {
+      "label": "Group by",
+      "env": "Environment",
+      "none": "None"
+    },
+    "envFilter": {
+      "label": "Environment",
+      "all": "All environments",
+      "count_one": "{{count, number}} environment",
+      "count_other": "{{count, number}} environments",
+      "list": "Environments"
+    },
+    "envFailed": {
+      "text": "Couldn't load stacks on {{name}}.",
+      "retry": "Retry"
+    },
+    "collapseAll": "Collapse all groups",
+    "expandAll": "Expand all groups",
+    "target": {
+      "swarm": "Swarm",
+      "standalone": "Standalone"
+    },
+    "filtered_one": "{{n, number}} of {{count, number}} stack",
+    "filtered_other": "{{n, number}} of {{count, number}} stacks",
+    "cap": "Showing the first 500 of {{total, number}}. Narrow the search to see the rest.",
+    "search": {
+      "label": "Search stacks",
+      "placeholder": "Search by name or service",
+      "clear": "Clear search"
+    },
+    "status": {
+      "label": "Filter by status",
+      "degraded": "Degraded",
+      "stopped": "Stopped",
+      "draft": "Draft",
+      "deploy_failed": "Deploy failed",
+      "chip": "{{label}} {{count, number}}"
+    },
+    "clearFilters": "Clear filters",
+    "emptySearch": {
+      "title": "No stacks match “{{q}}”.",
+      "action": "Clear search"
+    },
+    "emptyFilters": {
+      "title": "No stacks match these filters.",
+      "action": "Clear filters"
+    },
+    "pending": {
+      "deploying": "Deploying…",
+      "rolling_back": "Rolling back…",
+      "stopping": "Stopping…",
+      "starting": "Starting…",
+      "removing": "Removing…"
+    },
+    "create": {
+      "environment": {
+        "label": "Environment",
+        "placeholder": "Choose an environment"
+      },
+      "start": {
+        "upload": "Upload a compose file",
+        "chooseFile": "Choose file",
+        "fileInput": "Compose file",
+        "file": "{{name}} ({{size}})",
+        "removeFile": "Remove file"
+      },
+      "chooseFileReason": "Choose a file.",
+      "checking": "Checking the name",
+      "errors": {
+        "envRequired": "Choose an environment.",
+        "fileTooLarge": "That file is over 1 MiB. Choose a smaller one.",
+        "fileUnreadable": "Couldn't read that file. Choose another.",
+        "nameClash": "A stack named {{name}} already exists on this environment, not managed by Bayplan.",
+        "clashHint": "Pick another name. Bayplan will be able to take over existing stacks in a later version."
+      }
+    }
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "stackLogs": {
+    "tab": "Logs",
+    "emptyBody": "New lines appear here as the stack's services write them.",
+    "noMatch": "Nothing matches these filters.",
+    "followingContainers_one": "Following {{count}} container",
+    "followingContainers_other": "Following {{count}} containers",
+    "cap": {
+      "tasks": "This stack has {{count}} tasks. Bayplan follows {{cap}} at a time. Filter by service, node or task to see the others.",
+      "containers": "This stack has {{count}} containers. Bayplan follows {{cap}} at a time. Filter by service or container to see the others."
+    },
+    "marker": {
+      "replacedContainer": "— {{service}} replaced: container {{old}} → {{new}} —"
+    },
+    "download": {
+      "note": "Lines from all of the stack's services are merged in time order, each starting with its name. Downloads come straight from Docker, so they aren't limited to what's loaded here. Times are in UTC."
+    },
+    "filter": {
+      "services": "Services",
+      "servicesCount": "Services ({{count}})",
+      "findService": "Find a service",
+      "serviceList": "Services of this stack",
+      "noServices": "No services",
+      "clearService": "Clear service filter",
+      "serviceChip": "Service: {{service}}",
+      "removeService": "Remove service filter {{service}}",
+      "replicas": "{{running}}/{{desired}}",
+      "containers": "Containers",
+      "containersCount": "Containers ({{count}})",
+      "findContainer": "Find a container",
+      "containerList": "Containers of this stack",
+      "noContainers": "No containers",
+      "containerChip": "Container: {{name}}",
+      "removeContainer": "Remove container filter {{name}}",
+      "stopped": "Include stopped",
+      "stoppedTooltip": "Off shows only what is running now, and new ones as they start."
+    },
+    "notRunning": {
+      "title": "{{name}} isn't running",
+      "stopped": "Start it to see its logs.",
+      "notDeployed": "Deploy it to see its logs."
+    }
+  }
+}

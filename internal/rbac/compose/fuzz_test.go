@@ -69,3 +69,38 @@ func FuzzCheck(f *testing.F) {
 		}
 	})
 }
+
+// FuzzCheckResolved feeds arbitrary bytes and a table that answers every name to CheckResolved. It
+// must never panic and must keep Check's promises: only ErrTooLarge or ErrInvalid, and complete,
+// positioned findings, and it must refuse the same files Check refuses.
+func FuzzCheckResolved(f *testing.F) {
+	for _, seed := range []string{
+		"", "services:\n  a:\n    volumes: [\"${D}:/x\", \"$D:/y\", \"${D:-/etc}:/z\", \"${D:?no}:/w\"]\n",
+		"services:\n  a:\n    privileged: ${P}\n    network_mode: \"${N:-host}\"\n    cap_add: [\"$$C\", \"${C}\"]\n",
+		"volumes:\n  v: {driver: \"${DR}\", driver_opts: {type: \"${T}\", o: \"${O}\", device: \"${DEV}\"}}\n",
+		"services:\n  a:\n    volumes:\n      - type: \"${T}\"\n        source: \"${S}\"\n",
+		"secrets:\n  k:\n    file: \"${F}\"\n",
+	} {
+		f.Add([]byte(seed))
+	}
+	f.Fuzz(func(t *testing.T, src []byte) {
+		fs, err := compose.CheckResolved(src, func(string) (string, bool) { return "/var/run/docker.sock", true })
+		if err != nil {
+			if !errors.Is(err, compose.ErrTooLarge) && !errors.Is(err, compose.ErrInvalid) {
+				t.Fatalf("unexpected error type: %v", err)
+			}
+			if _, plainErr := compose.Check(src); plainErr == nil {
+				t.Fatalf("CheckResolved refused a file Check accepts: %v", err)
+			}
+			return
+		}
+		for _, f := range fs {
+			if f.Rule == "" || f.Key == "" || f.Why == "" || f.Line < 1 {
+				t.Fatalf("incomplete finding %+v", f)
+			}
+		}
+		if _, plainErr := compose.Check(src); plainErr != nil {
+			t.Fatalf("CheckResolved accepted a file Check refuses: %v", plainErr)
+		}
+	})
+}

@@ -232,6 +232,16 @@
         "created": "Config created",
         "removed": "Config deleted",
         "rotated": "Config rotated"
+      },
+      "stack": {
+        "created": "Stack created",
+        "draft_saved": "Stack draft saved",
+        "draft_discarded": "Stack draft discarded",
+        "deployed": "Stack deployed",
+        "stopped": "Stack stopped",
+        "started": "Stack started",
+        "removed": "Stack removed",
+        "value_revealed": "Stack secret value revealed"
       }
     },
     "coalesced": {

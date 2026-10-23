@@ -28,6 +28,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/redact"
+	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 )
 
@@ -99,6 +100,8 @@ type ContainersDeps struct {
 	// Clusters is the cluster reader whose last read says which containers are in a restart
 	// loop and which are muted (RES-13). Nil says none are.
 	Clusters *envs.Clusters
+	// Store holds the stacks a stack label is confirmed against (T-07-146). Nil links no stack.
+	Store *store.Store
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
@@ -252,11 +255,12 @@ type ContainerDetailBody struct {
 	LogConfig ContainerLogConfigBody `json:"logConfig"`
 	Masked    bool                   `json:"masked" doc:"True when any value was withheld from env, logConfig.options, command or entrypoint"`
 
-	IsSelf   bool   `json:"isSelf" doc:"True for the container Bayplan itself runs in"`
-	SelfKind string `json:"selfKind" enum:",server,agent" doc:"server for the container Bayplan itself runs in, agent for a Bayplan agent's container, empty otherwise"`
-	Project  string `json:"project" doc:"The compose project (com.docker.compose.project); empty when the container has none"`
-	Stack    string `json:"stack" doc:"The swarm stack namespace (com.docker.stack.namespace); empty when the container has none"`
-	Service  string `json:"service" doc:"The swarm service name (com.docker.swarm.service.name); empty when the container has none"`
+	IsSelf         bool   `json:"isSelf" doc:"True for the container Bayplan itself runs in"`
+	SelfKind       string `json:"selfKind" enum:",server,agent" doc:"server for the container Bayplan itself runs in, agent for a Bayplan agent's container, empty otherwise"`
+	Project        string `json:"project" doc:"The compose project (com.docker.compose.project); empty when the container has none"`
+	Stack          string `json:"stack" doc:"The swarm stack namespace (com.docker.stack.namespace); empty when the container has none"`
+	Service        string `json:"service" doc:"The swarm service name (com.docker.swarm.service.name); empty when the container has none"`
+	BayplanStackID string `json:"bayplanStackId" doc:"The ID of the Bayplan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (bayplan.stack.id). Empty for a stack or project Bayplan does not manage"`
 
 	RestartLoop *ContainerRestartLoopBody `json:"restartLoop,omitempty" doc:"Present while the container is in a restart loop: it died with a non-zero exit code the environment's threshold of times inside its window. Absent otherwise"`
 	Muted       bool                      `json:"muted" doc:"True when a user muted the container's restart-loop alerts, whether or not it is in a loop now. The mute is keyed by node and name"`
@@ -324,6 +328,7 @@ func RegisterContainers(r *httpx.Router, d ContainersDeps) {
 			}
 			reveal := redact.CanReveal(ctx, d.Checker, p, env.ID)
 			body := containerDetailBody(detail, nodeID, node, isSelf(detail.ID), reveal)
+			body.BayplanStackID = loadStackIDs(ctx, d.Store, env.ID, d.Log).confirmedFor(containerStack(detail.Labels), detail.Labels)
 			loops, muted := containerLoopsOf(d.Clusters, env.ID)
 			key := envs.ContainerLoopKey(nodeID, detail.Name)
 			if l, flagged := loops[key]; flagged {

@@ -39,6 +39,10 @@ const maxBody = 64 << 10
 // (environment, mounts, labels, healthcheck, secret and config references).
 const maxServiceSpecBody = 256 << 10
 
+// maxContainerCreateBody caps a container create, which carries the whole container spec the
+// Compose SDK builds (environment, labels, mounts, port bindings, healthcheck, networks).
+const maxContainerCreateBody = 256 << 10
+
 // maxSecretBody caps a secret create: a value of 511,999 bytes is about 683 KB as base64 in
 // JSON, so the cap is 1 MiB (D-40).
 const maxSecretBody = 1 << 20
@@ -53,10 +57,14 @@ func bodyCap(kind BodyKind) int64 {
 	switch kind {
 	case BodyServiceSpec:
 		return maxServiceSpecBody
+	case BodyContainerCreate:
+		return maxContainerCreateBody
 	case BodySecretCreate:
 		return maxSecretBody
 	case BodyConfigCreate:
 		return maxConfigBody
+	case BodyArchive:
+		return maxArchiveBody
 	}
 	return maxBody
 }
@@ -102,7 +110,8 @@ func refuse(format string, args ...any) error {
 // value is built that carries only the allowlisted fields, and the decoded value
 // must equal that fresh value, so any other field that was set is a refusal. What
 // is forwarded is the fresh value encoded again, so a field the decoder accepted
-// but the allowlist does not name cannot cross.
+// but the allowlist does not name cannot cross. The one exception is an archive, which is a tar
+// and not JSON: it is checked by validateArchive and forwarded as received.
 func validateBody(kind BodyKind, r io.Reader, env bodyEnv) ([]byte, error) {
 	limit := bodyCap(kind)
 	raw, err := io.ReadAll(io.LimitReader(r, limit+1))
@@ -111,6 +120,12 @@ func validateBody(kind BodyKind, r io.Reader, env bodyEnv) ([]byte, error) {
 	}
 	if int64(len(raw)) > limit {
 		return nil, refuse("the body is over %d bytes", limit)
+	}
+	if kind == BodyArchive {
+		if err := validateArchive(raw); err != nil {
+			return nil, err
+		}
+		return raw, nil
 	}
 	var clean any
 	switch kind {
@@ -134,6 +149,8 @@ func validateBody(kind BodyKind, r io.Reader, env bodyEnv) ([]byte, error) {
 		clean, err = validateSecretCreate(raw)
 	case BodyConfigCreate:
 		clean, err = validateConfigCreate(raw)
+	case BodyContainerCreate:
+		clean, err = validateContainerCreate(raw, env)
 	default:
 		return nil, refuse("a route with no body kind has no validator")
 	}
@@ -554,4 +571,155 @@ func validateNodeSpec(raw []byte) (swarm.NodeSpec, error) {
 		return in, err
 	}
 	return clean, nil
+}
+
+// validateContainerCreate decodes the body of a container create into the engine's own
+// container.CreateRequest with unknown fields refused and rebuilds it from the fields the Compose
+// SDK fills (getCreateConfigs). A field the SDK does not set is not copied, so any of
+// ContainerIDFile, VolumeDriver, ConsoleSize, Cgroup, PublishAllPorts, Umask, ArgsEscaped,
+// NetworkDisabled, OnBuild and the state fields of an endpoint set is a refusal (STK-02). The
+// image must be named. Unless the host owner opted in, a container create that gives the container
+// host access is refused with errHostPolicy (checkContainerHostPolicy). What is forwarded is the
+// rebuilt value encoded again.
+func validateContainerCreate(raw []byte, env bodyEnv) (container.CreateRequest, error) {
+	var in container.CreateRequest
+	if err := decodeStrict(raw, &in); err != nil {
+		return in, err
+	}
+	// The fields the rebuild does not copy are zero in a request the SDK sends. An empty list says
+	// the same as null for the ones that are encoded when empty.
+	if in.Config != nil && len(in.OnBuild) == 0 {
+		in.OnBuild = nil
+	}
+	if nc := in.NetworkingConfig; nc != nil {
+		for _, ep := range nc.EndpointsConfig {
+			if ep != nil && len(ep.DNSNames) == 0 {
+				ep.DNSNames = nil
+			}
+		}
+	}
+	clean := container.CreateRequest{
+		Config:           cleanContainerConfig(in.Config),
+		HostConfig:       cleanHostConfig(in.HostConfig),
+		NetworkingConfig: cleanNetworkingConfig(in.NetworkingConfig),
+	}
+	if err := sameAsAllowlisted(in, clean); err != nil {
+		return in, err
+	}
+	if clean.Config == nil || clean.Image == "" {
+		return in, refuse("a container create names no image")
+	}
+	// Host access: a container create that gives the container the host's privileges, namespaces,
+	// devices or paths is refused unless the host owner allowed it with
+	// BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES (STK-02, D-36).
+	if err := checkContainerHostPolicy(clean, env); err != nil {
+		return in, err
+	}
+	return clean, nil
+}
+
+// cleanContainerConfig copies the container config fields the Compose SDK sets.
+func cleanContainerConfig(in *container.Config) *container.Config {
+	if in == nil {
+		return nil
+	}
+	return &container.Config{
+		Hostname:     in.Hostname,
+		Domainname:   in.Domainname,
+		User:         in.User,
+		AttachStdin:  in.AttachStdin,
+		AttachStdout: in.AttachStdout,
+		AttachStderr: in.AttachStderr,
+		ExposedPorts: in.ExposedPorts,
+		Tty:          in.Tty,
+		OpenStdin:    in.OpenStdin,
+		StdinOnce:    in.StdinOnce,
+		Env:          in.Env,
+		Cmd:          in.Cmd,
+		Healthcheck:  in.Healthcheck,
+		Image:        in.Image,
+		Volumes:      in.Volumes,
+		WorkingDir:   in.WorkingDir,
+		Entrypoint:   in.Entrypoint,
+		Labels:       in.Labels,
+		StopSignal:   in.StopSignal,
+		StopTimeout:  in.StopTimeout,
+		Shell:        in.Shell,
+	}
+}
+
+// cleanHostConfig copies the host config fields the Compose SDK sets, the host-access ones
+// included (containerpolicy.go judges those). ContainerIDFile, VolumeDriver, ConsoleSize, Cgroup,
+// PublishAllPorts and Umask are not copied.
+func cleanHostConfig(in *container.HostConfig) *container.HostConfig {
+	if in == nil {
+		return nil
+	}
+	return &container.HostConfig{
+		Binds:          in.Binds,
+		LogConfig:      in.LogConfig,
+		NetworkMode:    in.NetworkMode,
+		PortBindings:   in.PortBindings,
+		RestartPolicy:  in.RestartPolicy,
+		AutoRemove:     in.AutoRemove,
+		VolumesFrom:    in.VolumesFrom,
+		Annotations:    in.Annotations,
+		CapAdd:         in.CapAdd,
+		CapDrop:        in.CapDrop,
+		CgroupnsMode:   in.CgroupnsMode,
+		DNS:            in.DNS,
+		DNSOptions:     in.DNSOptions,
+		DNSSearch:      in.DNSSearch,
+		ExtraHosts:     in.ExtraHosts,
+		GroupAdd:       in.GroupAdd,
+		IpcMode:        in.IpcMode,
+		Links:          in.Links,
+		OomScoreAdj:    in.OomScoreAdj,
+		PidMode:        in.PidMode,
+		Privileged:     in.Privileged,
+		ReadonlyRootfs: in.ReadonlyRootfs,
+		SecurityOpt:    in.SecurityOpt,
+		StorageOpt:     in.StorageOpt,
+		Tmpfs:          in.Tmpfs,
+		UTSMode:        in.UTSMode,
+		UsernsMode:     in.UsernsMode,
+		ShmSize:        in.ShmSize,
+		Sysctls:        in.Sysctls,
+		Runtime:        in.Runtime,
+		Isolation:      in.Isolation,
+		Resources:      in.Resources,
+		Mounts:         in.Mounts,
+		MaskedPaths:    in.MaskedPaths,
+		ReadonlyPaths:  in.ReadonlyPaths,
+		Init:           in.Init,
+	}
+}
+
+// cleanNetworkingConfig copies the endpoint fields the Compose SDK sets for each network the
+// container joins. A nil map and an empty one stay as they were.
+func cleanNetworkingConfig(in *network.NetworkingConfig) *network.NetworkingConfig {
+	if in == nil {
+		return nil
+	}
+	out := &network.NetworkingConfig{}
+	if in.EndpointsConfig != nil {
+		out.EndpointsConfig = make(map[string]*network.EndpointSettings, len(in.EndpointsConfig))
+		for name, ep := range in.EndpointsConfig {
+			if ep == nil {
+				out.EndpointsConfig[name] = nil
+				continue
+			}
+			out.EndpointsConfig[name] = &network.EndpointSettings{
+				IPAMConfig:  ep.IPAMConfig,
+				Links:       ep.Links,
+				Aliases:     ep.Aliases,
+				DriverOpts:  ep.DriverOpts,
+				GwPriority:  ep.GwPriority,
+				IPAddress:   ep.IPAddress,
+				MacAddress:  ep.MacAddress,
+				IPv6Gateway: ep.IPv6Gateway,
+			}
+		}
+	}
+	return out
 }

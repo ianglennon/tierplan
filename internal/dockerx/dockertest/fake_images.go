@@ -33,12 +33,26 @@ func (c FakeConfig) resolveImage(name string) (FakeImage, bool) {
 			return fi, true
 		}
 		for _, rt := range append(slices.Clone(fi.RepoTags), fi.RepoDigests...) {
-			if normaliseImage(rt) == normaliseImage(name) {
+			if normaliseImage(rt) == normaliseImage(name) || byDigest(rt) == byDigest(name) {
 				return fi, true
 			}
 		}
 	}
 	return FakeImage{}, false
+}
+
+// byDigest is a reference written name:tag@digest read the way the engine reads it: the digest says
+// which image, and the tag is only how the person wrote it, so it is dropped. A reference without a digest
+// is returned as it is (never equal to another: it has no "@").
+func byDigest(ref string) string {
+	repo, digest, ok := strings.Cut(normaliseImage(ref), "@")
+	if !ok {
+		return ref
+	}
+	if i := strings.LastIndex(repo, ":"); i > strings.LastIndex(repo, "/") {
+		repo = repo[:i]
+	}
+	return repo + "@" + digest
 }
 
 // serveImageInspect answers GET /images/{name}/json: the image as the daemon documents it,
@@ -69,6 +83,18 @@ func (f *Fake) serveImageInspect(w http.ResponseWriter, r *http.Request, p strin
 	}
 	if len(fi.Entrypoint) > 0 {
 		config["Entrypoint"] = fi.Entrypoint
+	}
+	for k, v := range map[string]string{"User": fi.User, "WorkingDir": fi.WorkingDir, "StopSignal": fi.StopSignal} {
+		if v != "" {
+			config[k] = v
+		}
+	}
+	if len(fi.ExposedPorts) > 0 {
+		exposed := map[string]struct{}{}
+		for _, p := range fi.ExposedPorts {
+			exposed[p] = struct{}{}
+		}
+		config["ExposedPorts"] = exposed
 	}
 	doc := map[string]any{
 		"Id": fi.ID, "RepoTags": orEmpty(fi.RepoTags), "RepoDigests": orEmpty(fi.RepoDigests),
@@ -158,8 +184,13 @@ func (f *Fake) serveDistribution(w http.ResponseWriter, r *http.Request, p strin
 		return true
 	}
 	f.mu.Lock()
+	failure, failing := f.distFail[name]
 	dgst, moved := f.distDigest[name]
 	f.mu.Unlock()
+	if failing {
+		writeJSON(w, failure.Code, map[string]string{"message": failure.Message})
+		return true
+	}
 	if !moved {
 		dgst = fakeDigest(name)
 	}
@@ -189,6 +220,19 @@ func (f *Fake) SetDistributionDigest(fullRef, digest string) {
 		f.distDigest = map[string]string{}
 	}
 	f.distDigest[fullRef] = digest
+}
+
+// SetDistributionFailure makes the distribution route answer the full reference (for example
+// "registry.example:5000/app:1") with the status and message from now on, as one registry that
+// is down, refuses a credential or does not know the image does, while every other reference is
+// answered as before. The check is still recorded in DistributionRefs.
+func (f *Fake) SetDistributionFailure(fullRef string, status int, message string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.distFail == nil {
+		f.distFail = map[string]FakePullStatus{}
+	}
+	f.distFail[fullRef] = FakePullStatus{Code: status, Message: message}
 }
 
 // DistributionAuth returns the X-Registry-Auth header of every distribution check the

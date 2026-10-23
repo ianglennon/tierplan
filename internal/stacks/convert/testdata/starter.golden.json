@@ -1,0 +1,74 @@
+{
+  "Networks": [
+    {
+      "Key": "default",
+      "Name": "tracer_default",
+      "Driver": "overlay",
+      "Attachable": false,
+      "Internal": false,
+      "External": false,
+      "Labels": {
+        "bayplan.stack.id": "id-tracer",
+        "com.docker.stack.namespace": "tracer"
+      },
+      "DriverOpts": null,
+      "IPAMDriver": "",
+      "Pools": null
+    }
+  ],
+  "Services": [
+    {
+      "Name": "tracer_web",
+      "Short": "web",
+      "ImageAsWritten": "nginx:1.27-alpine",
+      "Spec": {
+        "Name": "tracer_web",
+        "Labels": {
+          "bayplan.stack.id": "id-tracer",
+          "com.docker.stack.image": "nginx:1.27-alpine",
+          "com.docker.stack.namespace": "tracer"
+        },
+        "TaskTemplate": {
+          "ContainerSpec": {
+            "Image": "nginx:1.27-alpine",
+            "Labels": {
+              "bayplan.stack.id": "id-tracer",
+              "com.docker.stack.namespace": "tracer"
+            },
+            "Privileges": {
+              "CredentialSpec": null,
+              "SELinuxContext": null,
+              "NoNewPrivileges": false
+            }
+          },
+          "Resources": {},
+          "Placement": {},
+          "Networks": [
+            {
+              "Target": "tracer_default",
+              "Aliases": [
+                "web"
+              ]
+            }
+          ],
+          "ForceUpdate": 0
+        },
+        "Mode": {
+          "Replicated": {
+            "Replicas": 1
+          }
+        },
+        "EndpointSpec": {
+          "Ports": [
+            {
+              "Protocol": "tcp",
+              "TargetPort": 80,
+              "PublishedPort": 8080,
+              "PublishMode": "ingress"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

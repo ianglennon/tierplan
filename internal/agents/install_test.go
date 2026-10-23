@@ -15,10 +15,14 @@ import (
 	"github.com/ianglennon/bayplan/internal/agents"
 )
 
-// update rewrites the golden files: go test ./internal/agents/ -run InstallCommand -update.
+// update rewrites the golden files: go test ./internal/agents/ -run InstallCommand -update-golden.
 // Do it only when the change to the command text is intended; the golden files
 // are what an admin pastes into a shell as root.
-var update = flag.Bool("update", false, "rewrite the install golden files")
+//
+// The flag is not called -update: the Compose SDK links gotest.tools into the server (through
+// docker/compose/v5/pkg/utils), and that package registers a -update flag of its own in every binary that
+// holds it, so a second one here makes the test binary panic when it starts (plan 07-20).
+var update = flag.Bool("update-golden", false, "rewrite the install golden files")
 
 const (
 	goldenToken    = "bpjt_E_S" //nolint:gosec // a made-up token for the golden files

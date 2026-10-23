@@ -1,0 +1,27 @@
+{
+  "stackProblems": {
+    "title": "Problems",
+    "counts": {
+      "errors_one": "{{count}} error",
+      "errors_other": "{{count}} errors",
+      "warnings_one": "{{count}} warning",
+      "warnings_other": "{{count}} warnings",
+      "both": "{{errors}}, {{warnings}}",
+      "none": "No problems"
+    },
+    "checking": "Checking…",
+    "failed": "Couldn't check the stack. It will retry.",
+    "severity": {
+      "error": "Error",
+      "warning": "Warning"
+    },
+    "marker": "{{severity}}: {{message}}",
+    "row": {
+      "name": "{{severity}}: {{message}}, {{file}} line {{line}}",
+      "where": "{{file}}:{{line}}"
+    },
+    "yaml": {
+      "line": "Line {{line}}: {{message}}"
+    }
+  }
+}

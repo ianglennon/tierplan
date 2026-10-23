@@ -339,10 +339,11 @@ func TestListsCarryTheDocumentedColumns(t *testing.T) {
 }
 
 // containerKeys are the only keys a container row may have (T-04-29). Every other
-// label, every mount and every variable stays on the server.
+// label, every mount and every variable stays on the server. bayplanStackId is no label: it is the ID
+// of a stack the server confirmed (plan 07-30, T-07-146), empty for a stack Bayplan does not manage.
 var containerKeys = []string{
 	"node", "nodeId", "id", "name", "state", "status", "image", "created", "ports", "isSelf",
-	"project", "stack", "service", "health", "selfKind", "readOnly",
+	"project", "stack", "service", "health", "selfKind", "readOnly", "bayplanStackId",
 }
 
 func TestListsNeverCarryLabelsMountsOrVariables(t *testing.T) {

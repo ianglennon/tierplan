@@ -41,6 +41,9 @@ const (
 	ItemDone      = "done"
 	ItemFailed    = "failed"
 	ItemCancelled = "cancelled"
+	// ItemSkipped is an item that was never run because an earlier one failed. It counts as
+	// neither done nor failed when the job's own state is settled.
+	ItemSkipped = "skipped"
 )
 
 // The states of a job. It is running until every item has ended, then done when every
@@ -62,6 +65,8 @@ const (
 	EventItem = "item"
 	// EventDone carries the finished job, and is the last event of a job.
 	EventDone = "done"
+	// EventOutput carries one line of the job's output log.
+	EventOutput = "output"
 )
 
 // The codes the hub gives an item the run left unfinished.
@@ -89,6 +94,12 @@ var (
 // ItemSpec names one item of a job.
 type ItemSpec struct {
 	ID, Label string
+	// Parent is the ID of the item this one belongs to, empty for a top-level item. The hub
+	// keeps it as it was given and checks nothing: a reader groups by it.
+	Parent string
+	// Kind says what sort of item this is, free-form and empty for none ("step" and "service"
+	// for a stack deploy). The hub never reads it.
+	Kind string
 }
 
 // Spec is a job to start.
@@ -122,6 +133,13 @@ type Item struct {
 	Code string `json:"code"`
 	// Message is a sentence built from Code, never the raw answer of a remote system.
 	Message string `json:"message"`
+	// Parent and Kind are the item's ItemSpec.Parent and ItemSpec.Kind.
+	Parent string `json:"parent"`
+	Kind   string `json:"kind"`
+	// Detail is a remote system's own words about the item, like Docker's error text for a
+	// service it rejected. It is the one place a remote text may enter an item, and only after
+	// the caller cleaned it (Clean) and masked it, which Reporter.Detail does.
+	Detail string `json:"detail"`
 	// Current and Total count Unit ("bytes") across the item; Total is 0 until known.
 	Current int64  `json:"current"`
 	Total   int64  `json:"total"`
@@ -151,14 +169,24 @@ type Job struct {
 // Finished reports whether the job has ended.
 func (j Job) Finished() bool { return j.State != JobRunning }
 
+// Output is one line of a job's output log: what the job did, in words, as it did it. Seq is the
+// ID of the event that carried it, so a reader that has the lines up to a Seq asks for the events
+// after it and never sees a line twice. Text is cleaned (Clean) when it is stored.
+type Output struct {
+	Seq  uint64    `json:"seq"`
+	At   time.Time `json:"at"`
+	Text string    `json:"text"`
+}
+
 // Event is one change to a job. ID strictly increases within a job. An item event
-// carries Item; a done event carries Job.
+// carries Item; a done event carries Job; an output event carries Output.
 type Event struct {
-	ID    uint64
-	JobID string
-	Type  string
-	Item  *Item
-	Job   *Job
+	ID     uint64
+	JobID  string
+	Type   string
+	Item   *Item
+	Job    *Job
+	Output *Output
 }
 
 // Options tune the hub. A zero field takes its default.
@@ -174,8 +202,13 @@ type Options struct {
 	// publishes; the latest state is always published once the gap has passed.
 	// Default 250 ms.
 	Coalesce time.Duration
-	// Ring is how many events a job keeps for a subscriber that resumes. Default 1024.
+	// Ring is how many item and done events a job keeps for a subscriber that resumes.
+	// Default 1024.
 	Ring int
+	// OutputRing is how many output lines a job keeps, and how many output events it replays to a
+	// subscriber that resumes. It is its own ring so a chatty job never pushes the item events a
+	// reader needs out of the first. Default 2,000.
+	OutputRing int
 	// Now is the clock for creation and retention. Default time.Now.
 	Now func() time.Time
 }
@@ -195,6 +228,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.Ring <= 0 {
 		o.Ring = 1024
+	}
+	if o.OutputRing <= 0 {
+		o.OutputRing = 2000
 	}
 	if o.Now == nil {
 		o.Now = time.Now
@@ -229,7 +265,10 @@ type entry struct {
 	cancelRequested bool
 	nextID          uint64
 	ring            []Event
-	subs            map[*sub]struct{}
+	// outRing holds the output events, apart from ring, so a job that writes many lines never
+	// pushes the item events a resuming reader needs out of the ring.
+	outRing []Event
+	subs    map[*sub]struct{}
 	// last is when each item last published an event; pending are the items whose latest
 	// state is not published yet, and timers the flush scheduled for them.
 	last    map[string]time.Time
@@ -291,7 +330,7 @@ func (h *Hub) Start(spec Spec, run func(ctx context.Context, r *Reporter)) (Job,
 		e.job.Meta = map[string]string{}
 	}
 	for _, it := range spec.Items {
-		e.job.Items = append(e.job.Items, Item{ID: it.ID, Label: it.Label, State: ItemWaiting, Subs: []Sub{}, Result: map[string]string{}})
+		e.job.Items = append(e.job.Items, newItem(it))
 	}
 	if len(e.job.Items) == 0 {
 		e.job.Items = []Item{}
@@ -330,6 +369,29 @@ type Reporter struct {
 // JobID is the ID of the job the reporter reports on, known to the run as soon as it
 // starts.
 func (r *Reporter) JobID() string { return r.e.job.ID }
+
+func newItem(spec ItemSpec) Item {
+	return Item{
+		ID: spec.ID, Label: spec.Label, Parent: spec.Parent, Kind: spec.Kind,
+		State: ItemWaiting, Subs: []Sub{}, Result: map[string]string{},
+	}
+}
+
+// Add adds an item to the job while it runs, waiting, and publishes it, so a reader that is
+// watching sees it appear and one that comes later finds it in the snapshot. It changes nothing
+// for an ID the job already has, or for a job that has ended. An item added when every other
+// item has ended does not stop the job from having ended: add the items of a stage before the
+// last item that is already running finishes.
+func (r *Reporter) Add(spec ItemSpec) {
+	h, e := r.h, r.e
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if e.job.Finished() || e.item(spec.ID) != nil {
+		return
+	}
+	e.job.Items = append(e.job.Items, newItem(spec))
+	h.publishItemLocked(e, spec.ID)
+}
 
 // Update changes one item under the hub's lock and publishes it, at most once per
 // Options.Coalesce: updates in between are folded into the one published when the gap
@@ -389,7 +451,46 @@ func (r *Reporter) Finish(itemID, state, code, message string, result map[string
 }
 
 func terminal(state string) bool {
-	return state == ItemDone || state == ItemFailed || state == ItemCancelled
+	return state == ItemDone || state == ItemFailed || state == ItemCancelled || state == ItemSkipped
+}
+
+// Output adds one line to the job's output log and publishes it. The text is cleaned (Clean, with no
+// mask: a caller that can hold a secret masks it before it calls) and stamped with the time. A line
+// for a job that has ended is dropped.
+func (r *Reporter) Output(text string) {
+	h, e := r.h, r.e
+	clean := Clean(text, nil)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if e.job.Finished() {
+		return
+	}
+	h.emitLocked(e, Event{Type: EventOutput, Output: &Output{At: h.opt.Now(), Text: clean}})
+}
+
+// Detail sets the remote system's own words on an item that has not ended, cleaned (Clean), and
+// publishes it as an update, so it is sent with the item. The caller masks secrets before it calls.
+// An item that has ended is not changed.
+func (r *Reporter) Detail(itemID, text string) {
+	clean := Clean(text, nil)
+	r.Update(itemID, func(it *Item) { it.Detail = clean })
+}
+
+// Output returns a copy of the job's output log, oldest first, and false when the hub has no such
+// job. It holds at most Options.OutputRing lines.
+func (h *Hub) Output(id string) ([]Output, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.sweepLocked(h.opt.Now())
+	e, ok := h.jobs[id]
+	if !ok {
+		return nil, false
+	}
+	out := make([]Output, 0, len(e.outRing))
+	for _, ev := range e.outRing {
+		out = append(out, *ev.Output)
+	}
+	return out, true
 }
 
 func (e *entry) item(id string) *Item {
@@ -422,9 +523,20 @@ func (h *Hub) publishItemLocked(e *entry, itemID string) {
 func (h *Hub) emitLocked(e *entry, ev Event) {
 	e.nextID++
 	ev.ID, ev.JobID = e.nextID, e.job.ID
-	e.ring = append(e.ring, ev)
-	if over := len(e.ring) - h.opt.Ring; over > 0 {
-		e.ring = slices.Delete(e.ring, 0, over)
+	if ev.Type == EventOutput && ev.Output != nil {
+		// A line's sequence is the ID of the event that carries it.
+		line := *ev.Output
+		line.Seq = ev.ID
+		ev.Output = &line
+		e.outRing = append(e.outRing, ev)
+		if over := len(e.outRing) - h.opt.OutputRing; over > 0 {
+			e.outRing = slices.Delete(e.outRing, 0, over)
+		}
+	} else {
+		e.ring = append(e.ring, ev)
+		if over := len(e.ring) - h.opt.Ring; over > 0 {
+			e.ring = slices.Delete(e.ring, 0, over)
+		}
 	}
 	for s := range e.subs {
 		select {
@@ -455,7 +567,7 @@ func (h *Hub) finishIfAllLocked(e *entry) {
 			done++
 		case ItemFailed:
 			failed++
-		case ItemCancelled:
+		case ItemCancelled, ItemSkipped:
 		default:
 			return
 		}
@@ -571,6 +683,16 @@ func (h *Hub) List(keep func(Job) bool) []Job {
 	return out
 }
 
+func cmpUint(a, b uint64) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	}
+	return 0
+}
+
 func cmpString(a, b string) int {
 	switch {
 	case a < b:
@@ -604,6 +726,13 @@ func (h *Hub) Subscribe(ctx context.Context, id string, after uint64) (Job, <-ch
 				replay = append(replay, ev)
 			}
 		}
+		for _, ev := range e.outRing {
+			if ev.ID > after {
+				replay = append(replay, ev)
+			}
+		}
+		// The two rings are each in order; the reader needs one order.
+		slices.SortFunc(replay, func(a, b Event) int { return cmpUint(a.ID, b.ID) })
 	}
 	s := &sub{ch: make(chan Event, len(replay)+h.opt.Ring)}
 	for _, ev := range replay {

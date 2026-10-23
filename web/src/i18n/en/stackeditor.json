@@ -1,0 +1,116 @@
+{
+  "stackEditor": {
+    "panes": {
+      "label": "Editor panes",
+      "files": "Files",
+      "variables": "Variables",
+      "rendered": "Rendered"
+    },
+    "loading": "Loading the draft",
+    "error": {
+      "loadFailed": "Couldn't load the draft of {{name}}.",
+      "body": "Check the connection and try again.",
+      "retry": "Retry loading the draft of {{name}}"
+    },
+    "editor": {
+      "name": "{{file}}, {{kind}}",
+      "kind": {
+        "yaml": "YAML",
+        "text": "text"
+      },
+      "helper": "Tab leaves the editor. Use <kbd>{{indent}}</kbd> to indent and <kbd>{{outdent}}</kbd> to outdent. <kbd>{{save}}</kbd> saves the draft."
+    },
+    "status": {
+      "unsaved": "Unsaved changes",
+      "saved": "Saved",
+      "savedBy": "by {{user}}",
+      "none": "No draft yet"
+    },
+    "save": {
+      "button": "Save draft",
+      "pending": "Saving…",
+      "toast": "Saved the draft of {{name}}.",
+      "errors": {
+        "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening.",
+        "lost": "The server didn't answer. The draft may have been saved: reload it before you save again.",
+        "permission": "You can't save this stack's draft.",
+        "tooLarge": "A stack can hold at most 50 files and 8 MB in all.",
+        "composeMissing": "A stack needs a compose.yaml.",
+        "variableName": "A variable name is letters, numbers and underscores, and doesn't start with a number.",
+        "variableTaken": "Two variables are named {{name}}. Remove one.",
+        "secretTooShort": "A secret value needs at least 4 characters, so that hiding it can't hide ordinary words. Use a longer value, or turn Secret off for {{name}}."
+      }
+    },
+    "secretFile": {
+      "title": "The content of {{file}} is hidden.",
+      "body": "Secret files are stored encrypted and never shown again. Replace the content to change it.",
+      "replace": "Replace content",
+      "upload": "Upload a file",
+      "show": "Show content",
+      "hide": "Hide content",
+      "contentLabel": "Content of {{file}}",
+      "hiddenAgain": "{{file}} hidden again",
+      "revealDenied": "Needs the reveal secrets permission to show this content.",
+      "revealFailed": "Couldn't load the content. Try again.",
+      "tooBig": "Secret files can be at most 500 KB.",
+      "readFailed": "Couldn't read that file. Try another."
+    },
+    "readOnly": "You can read this stack's files but not change them.",
+    "rail": {
+      "label": "Stack files",
+      "heading": "Files",
+      "empty": "No other files. Add one for an env_file, a config or a secret the compose file refers to.",
+      "secret": "Secret",
+      "notUsed": "Not used",
+      "actions": "Actions for {{file}}",
+      "rename": "Rename…",
+      "delete": "Delete file",
+      "select": "File",
+      "add": {
+        "button": "Add file",
+        "title": "Add a file",
+        "label": "File name",
+        "placeholder": ".env or config/nginx.conf",
+        "helper": "A path inside this stack.",
+        "cancel": "Cancel",
+        "submit": "Add file",
+        "upload": "Upload files"
+      },
+      "renameDialog": {
+        "title": "Rename {{file}}",
+        "submit": "Rename"
+      },
+      "errors": {
+        "path": "Use a path inside this stack, without “..” or a leading /.",
+        "taken": "A file named {{name}} already exists.",
+        "large": "Files can be at most 1 MB."
+      }
+    },
+    "discard": {
+      "button": "Discard draft",
+      "title": "Discard the draft?",
+      "body": "This deletes the saved draft, including files and variables, and the editor goes back to what is deployed. It can't be undone.",
+      "cancel": "Cancel",
+      "confirm": "Discard draft",
+      "pending": "Discarding…",
+      "toast": "Discarded the draft of {{name}}.",
+      "errors": {
+        "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening.",
+        "lost": "The server didn't answer. The draft may have been discarded: reload the page to check.",
+        "permission": "You can't discard this stack's draft."
+      }
+    },
+    "guard": {
+      "title": "Discard changes?",
+      "body": "Your edits to {{name}} haven't been saved.",
+      "keep": "Keep editing",
+      "discard": "Discard changes"
+    },
+    "conflict": {
+      "saved": "{{user}} saved this draft while you were editing. Reloading shows their version and drops your unsaved changes.",
+      "discarded": "The draft was discarded while you were editing. Reloading shows what is deployed now and drops your unsaved changes.",
+      "reload": "Reload draft",
+      "over": "Save over it"
+    }
+  }
+}

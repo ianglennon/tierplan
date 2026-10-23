@@ -86,6 +86,10 @@ export interface LogViewParams {
   task?: string;
   node?: string;
   stopped?: boolean;
+  // A stack's log adds the services it is narrowed to, and on a standalone host the containers
+  // (comma lists; plan 07-29, D-22).
+  service?: string;
+  container?: string;
 }
 
 // The router turns a value like 404 into a number before the schema sees it.
@@ -118,6 +122,13 @@ export const serviceLogSearchSchema = logSearchSchema.extend({
   task: text(2000),
   node: text(2000),
   stopped: flag,
+});
+
+// The address of a stack's Logs tab: a service's, and the services and containers the log is
+// narrowed to.
+export const stackLogSearchSchema = serviceLogSearchSchema.extend({
+  service: text(2000),
+  container: text(2000),
 });
 
 // ---- the Show range ----

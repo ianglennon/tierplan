@@ -1,0 +1,6 @@
+# Hostile: include pulls a file of the Bayplan server's own disk into the project.
+include:
+  - /etc/hostname
+services:
+  web:
+    image: nginx:1.27-alpine

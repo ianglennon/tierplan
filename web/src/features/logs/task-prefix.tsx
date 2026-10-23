@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import type { StackTarget } from "@/features/logs/log-source";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
@@ -45,6 +46,23 @@ export interface PrefixParts {
 export function formatTaskPrefix({ service, slot, node, showService }: PrefixParts): string {
   const name = slot === 0 ? service : showService ? `${service}.${slot}` : String(slot);
   return node ? `${name}@${node}` : name;
+}
+
+export interface StackPrefixParts {
+  target: StackTarget;
+  // The service's name in the compose file, without the stack's prefix.
+  service: string;
+  // A swarm task's slot (0 for a task of a global service), or a container's number.
+  slot: number;
+  node: string;
+}
+
+// formatStackPrefix is the prefix of a line of a stack's log (plan 07-29, D-22): web.2@node3 for a
+// task of a swarm, web@node3 for a task of a global service, and web-2 for the second container
+// of a service on a standalone host, which has one node and needs no name for it.
+export function formatStackPrefix({ target, service, slot, node }: StackPrefixParts): string {
+  if (target === "standalone") return `${service}-${slot}`;
+  return formatTaskPrefix({ service, slot, node, showService: true });
 }
 
 export interface TaskPrefixProps {

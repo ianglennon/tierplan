@@ -38,6 +38,7 @@ function row(name: string, extra: Partial<ContainerRow> = {}): ContainerRow {
     isSelf: false,
     project: "",
     stack: "",
+    bayplanStackId: "",
     service: "",
     health: "none",
     selfKind: "",
@@ -184,6 +185,29 @@ describe("container list: the name opens the container", () => {
     expect(screen.getByRole("link", { name: "loose" }).getAttribute("href")).toBe(
       "/env/e1/containers/id-loose?node=n1",
     );
+  });
+});
+
+describe("container list: stack links", () => {
+  it("links a stack or project Bayplan manages in its group header, and leaves a foreign one as text", async () => {
+    answer = () =>
+      Response.json(
+        body([
+          row("shop-web", { project: "shop", bayplanStackId: "stk-shop" }),
+          row("blog", { stack: "Blog" }),
+        ]),
+      );
+    mount();
+    await screen.findByText("shop-web");
+    const headers = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-slot="group-header-row"]'),
+    );
+    const shop = headers.find((h) => h.textContent?.startsWith("shop")) as HTMLElement;
+    const blog = headers.find((h) => h.textContent?.startsWith("Blog")) as HTMLElement;
+    expect(within(shop).getByRole("link", { name: "shop" }).getAttribute("href")).toBe(
+      "/env/e1/stacks/stk-shop",
+    );
+    expect(within(blog).queryByRole("link")).toBeNull();
   });
 });
 

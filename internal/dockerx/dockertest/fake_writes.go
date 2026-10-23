@@ -194,9 +194,13 @@ func (f *Fake) recordWrite(r *http.Request) {
 	if q := r.URL.RawQuery; q != "" {
 		p += "?" + q
 	}
+	write := r.Method + " " + p
 	f.mu.Lock()
-	f.writes = append(f.writes, r.Method+" "+p)
+	f.writes = append(f.writes, write)
 	f.mu.Unlock()
+	if f.cfg.OnWrite != nil {
+		f.cfg.OnWrite(write)
+	}
 }
 
 // Writes returns every write the daemon served so far, in order, as

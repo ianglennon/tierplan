@@ -7,6 +7,7 @@ package agents_test
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,17 @@ func execCtx(t testing.TB, d time.Duration) context.Context {
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	t.Cleanup(cancel)
 	return ctx
+}
+
+// networkNamed reports whether a node lists a network of exactly this name. The names are compared here:
+// Engine 24 ignores ^ and $ in the name filter of `docker network ls` for a swarm-scoped network, so an
+// anchored filter lists no overlay network there (a local one is matched as asked).
+func networkNamed(ctx context.Context, n *dockertest.Node, name string) (bool, error) {
+	out, err := n.Sh(ctx, "docker network ls --filter name="+name+" --format '{{.Name}}'")
+	if err != nil {
+		return false, err
+	}
+	return slices.Contains(strings.Fields(out), name), nil
 }
 
 // sh runs a shell line in a node and fails the test when it exits non-zero. The

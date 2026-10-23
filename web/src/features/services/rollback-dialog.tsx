@@ -28,6 +28,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { refusalOf } from "@/features/services/action-refusal";
 import { SpecDiff } from "@/features/spec-editor/spec-diff";
+import { StackLink } from "@/features/stacks/stack-link";
 import { useT } from "@/i18n/use-t";
 import { toastInfo, toastSuccess } from "@/lib/toast";
 
@@ -98,6 +99,7 @@ function RollbackBody({ envId, target, onClose }: BodyProps) {
   const inFlight = useRef(false);
   const data = spec.data;
   const stack = target.stack || data?.stack;
+  const bayplanStackId = target.bayplanStackId || data?.bayplanStackId;
   const ready = data !== undefined && data.previousSpec !== undefined;
 
   async function submit(event: { preventDefault: () => void }) {
@@ -167,6 +169,16 @@ function RollbackBody({ envId, target, onClose }: BodyProps) {
           <TriangleAlert aria-hidden="true" />
           <AlertDescription className="text-foreground">
             {t("services.rollback.stackWarning")}
+            {bayplanStackId ? (
+              <>
+                {" "}
+                <StackLink
+                  envId={envId}
+                  name={t("stackLinks.open")}
+                  bayplanStackId={bayplanStackId}
+                />
+              </>
+            ) : null}
           </AlertDescription>
         </Alert>
       ) : null}

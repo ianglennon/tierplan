@@ -28,6 +28,11 @@ const (
 // the task that took over and the node it starts on; a stopped one has no successor yet.
 type slotMarker struct {
 	Kind string `json:"kind"`
+	// Service names the service the slot belongs to in a stack's log, which merges several; it is
+	// left out of a service's own log. Unit is "container" for a container of a standalone stack
+	// that a deploy replaced, and left out for a swarm task.
+	Service string `json:"service,omitempty"`
+	Unit    string `json:"unit,omitempty"`
 	// Slot is the replica number, 0 for a task of a global service.
 	Slot int `json:"slot"`
 	// Old is the task that ended, OldState how (failed, shutdown or rejected), OldNode where it
@@ -69,12 +74,13 @@ func markerState(state string) bool {
 }
 
 // markerGroup is the key tasks are paired by: the slot of a replicated service's task, the
-// node of a global service's.
+// node of a global service's. In a stack's log, which holds several services, the service comes
+// first, so two services' slot 1 are never paired.
 func markerGroup(ti taskInfo) string {
 	if ti.Slot > 0 {
-		return "slot:" + strconv.Itoa(ti.Slot)
+		return ti.Service + "/slot:" + strconv.Itoa(ti.Slot)
 	}
-	return "node:" + ti.NodeID
+	return ti.Service + "/node:" + ti.NodeID
 }
 
 // markerKey names a marker, so one that was told is not told again; a stopped marker that
@@ -97,7 +103,7 @@ func markersOf(tasks []taskInfo) []slotMarker {
 			if !old.Ended || !markerState(old.State) {
 				continue
 			}
-			m := slotMarker{Kind: markerStopped, Slot: old.Slot, Old: old.ID, OldState: old.State, OldNode: old.Node, ExitCode: old.ExitCode}
+			m := slotMarker{Kind: markerStopped, Service: old.Service, Slot: old.Slot, Old: old.ID, OldState: old.State, OldNode: old.Node, ExitCode: old.ExitCode}
 			if i+1 < len(g) {
 				next := g[i+1]
 				m.Kind, m.New, m.Node = markerReplaced, next.ID, next.Node

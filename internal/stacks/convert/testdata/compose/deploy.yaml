@@ -1,0 +1,100 @@
+# The deploy block and the container settings docker stack deploy honours, plus secrets and
+# configs (resolved by the test's fake resolver) and the legacy restart key.
+services:
+  api:
+    image: registry.example.com/api:2.1
+    user: "1000:1000"
+    working_dir: /srv
+    hostname: api-host
+    init: true
+    read_only: true
+    tty: true
+    stdin_open: true
+    stop_signal: SIGINT
+    stop_grace_period: 45s
+    group_add: ["audio", "1001"]
+    extra_hosts:
+      - cache.local=10.0.0.8
+      - db.local=10.0.0.9
+    dns: [1.1.1.1, 9.9.9.9]
+    dns_search: [example.com]
+    dns_opt: ["ndots:2"]
+    cap_add: [ALL]
+    cap_drop: [NET_RAW, net_admin]
+    sysctls:
+      net.core.somaxconn: "1024"
+    ulimits:
+      nofile:
+        soft: 20000
+        hard: 40000
+      nproc: 65535
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+    oom_score_adj: -100
+    restart: unless-stopped
+    secrets:
+      - db_password
+      - source: tls_key
+        target: /etc/ssl/key.pem
+        uid: "100"
+        gid: "100"
+        mode: 0400
+    configs:
+      - app_config
+      - source: nginx_conf
+        target: /etc/nginx/nginx.conf
+        mode: 0440
+    deploy:
+      mode: replicated
+      replicas: 4
+      endpoint_mode: vip
+      labels:
+        team: platform
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+          pids: 200
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 2m
+      update_config:
+        parallelism: 2
+        delay: 10s
+        failure_action: rollback
+        monitor: 30s
+        max_failure_ratio: 0.25
+        order: start-first
+      rollback_config:
+        failure_action: pause
+        order: stop-first
+      placement:
+        constraints:
+          - node.role == worker
+          - node.labels.zone == a
+        preferences:
+          - spread: node.labels.zone
+        max_replicas_per_node: 2
+  bare:
+    image: busybox:1
+    restart: "no"
+  legacy:
+    image: img:1
+    restart: on-failure:5
+secrets:
+  db_password:
+    file: ./db_password.txt
+  tls_key:
+    file: ./tls.key
+configs:
+  app_config:
+    file: ./app.conf
+  nginx_conf:
+    file: ./nginx.conf

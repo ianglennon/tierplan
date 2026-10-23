@@ -4,7 +4,9 @@
 package proxy
 
 import (
+	"archive/tar"
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"io"
 	"net"
@@ -13,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -227,7 +230,7 @@ func TestEverythingElseIsRefusedWithATypedAnswerAndNeverReachesTheEngine(t *test
 	for _, tc := range []struct {
 		name, raw, wantMessage string
 	}{
-		{"create a container", request("POST", "/containers/create", "Content-Length: 2\r\n") + "{}", "agent_policy_denied: POST /containers/create"},
+		{"create a container with no image", request("POST", "/containers/create", "Content-Length: 2\r\n") + "{}", "agent_policy_denied: POST /containers/create"},
 		{"the archive of a container", get("/containers/abc/archive"), "agent_policy_denied: GET /containers/abc/archive"},
 		{"the stats of a container with a key the one-shot read does not send", get("/containers/abc/stats?decode=1"), "agent_policy_denied: GET /containers/abc/stats"},
 		{"inspect a container with a POST", request("POST", "/containers/abc/json"), "agent_policy_denied: POST /containers/abc/json"},
@@ -357,7 +360,8 @@ func TestReadOnlyRefusesEveryChangeWhateverTheAllowlistSays(t *testing.T) {
 		{name: "a POST on an allowlisted path with the flag set", method: "POST", path: "/info", policy: Policy{ReadOnly: true}, wantReason: "read_only_flag"},
 		{name: "a POST on any other path with the flag set", method: "POST", path: "/containers/create", policy: Policy{ReadOnly: true}, hasBody: true, wantReason: "read_only_flag"},
 		{name: "a DELETE with the flag set", method: "DELETE", path: "/containers/abc", policy: Policy{ReadOnly: true}, wantReason: "read_only_flag"},
-		{name: "a POST on a non-allowlisted path without the flag", method: "POST", path: "/containers/create", hasBody: true, wantReason: "allowlist"},
+		{name: "a POST on a non-allowlisted path without the flag", method: "POST", path: "/containers/abc/attach", hasBody: true, wantReason: "allowlist"},
+		{name: "a container create without the flag", method: "POST", path: "/containers/create", hasBody: true, wantOK: true},
 		{name: "a POST on an allowlisted path without the flag", method: "POST", path: "/info", wantReason: "allowlist"},
 		{name: "a GET off the allowlist without the flag", method: "GET", path: "/swarm", wantReason: "allowlist"},
 		{name: "a GET off the allowlist with the flag", method: "GET", path: "/swarm", policy: Policy{ReadOnly: true}, wantReason: "allowlist"},
@@ -1154,6 +1158,294 @@ func TestAReadOnlyHostRefusesServiceCreateAndRemoveBeforeAnyValidator(t *testing
 	}
 	if !slices.Equal(reasons, []string{"read_only_flag", "read_only_flag", "read_only_flag", "read_only_flag"}) {
 		t.Errorf("reasons = %v", reasons)
+	}
+	if got := sock.requests(); len(got) != 0 {
+		t.Fatalf("the engine saw %v", got)
+	}
+}
+
+// writesSeen is the requests the engine got that change something, in order; the lookups a
+// policy check makes before a write are reads and are left out.
+func (f *fakeSocket) writesSeen() []string {
+	var out []string
+	for _, r := range f.requests() {
+		if !strings.HasPrefix(r, "GET ") {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func TestAContainerCreateReachesTheEngine(t *testing.T) {
+	sock := newFakeSocket(t)
+	h := Handler(sock.path, Policy{}, nil)
+	body := enc(t, sdkContainerCreate())
+	resp := do(t, h, postJSON("POST", "/v1.52/containers/create?name=shop-web-1&platform=linux%2Famd64", body,
+		"X-Registry-Auth: eyJ1c2VybmFtZSI6InUifQ==\r\n"))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", resp.StatusCode)
+	}
+	if got := sock.writesSeen(); !slices.Equal(got, []string{"POST /v1.52/containers/create?name=shop-web-1&platform=linux%2Famd64"}) {
+		t.Fatalf("the engine saw %v", got)
+	}
+	bodies := sock.bodiesSeen()
+	if len(bodies) == 0 || string(bodies[len(bodies)-1]) != body {
+		t.Fatalf("the engine received %s, want the rebuilt body %s", bodies, body)
+	}
+	sock.mu.Lock()
+	defer sock.mu.Unlock()
+	last := sock.headers[len(sock.headers)-1]
+	if ct := last.Get("Content-Type"); ct != "application/json" {
+		t.Errorf("the engine saw the content type %q", ct)
+	}
+	if got := last.Get("X-Registry-Auth"); got != "" {
+		t.Errorf("a container create carried a registry credential to the engine: %q", got)
+	}
+}
+
+func TestAReadOnlyHostRefusesContainerCreate(t *testing.T) {
+	sock := newFakeSocket(t)
+	var reasons []string
+	h := Handler(sock.path, Policy{ReadOnly: true, AllowPrivilegedServices: true}, func(_, _, reason string) { reasons = append(reasons, reason) })
+	for _, raw := range []string{
+		postJSON("POST", "/containers/create?name=web", enc(t, sdkContainerCreate())),
+		postJSON("POST", "/containers/create", `{not json`),
+	} {
+		resp := do(t, h, raw)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("status %d, want 403 for %.40q", resp.StatusCode, raw)
+		}
+	}
+	if !slices.Equal(reasons, []string{"read_only_flag", "read_only_flag"}) {
+		t.Errorf("reasons = %v", reasons)
+	}
+	if got := sock.requests(); len(got) != 0 {
+		t.Fatalf("the engine saw %v", got)
+	}
+}
+
+// archivePath is the request the Compose SDK's CopyToContainer sends for a stack file secret,
+// without a copyUIDGID key (the secret names no owner).
+const archivePath = "/v1.52/containers/web-1/archive?noOverwriteDirNonDir=true&path=%2F"
+
+// putTar is a PUT with a tar body of the right length.
+func putTar(target string, raw []byte, headers ...string) string {
+	headers = append([]string{"Content-Type: application/x-tar\r\n", "Content-Length: " + strconv.Itoa(len(raw)) + "\r\n"}, headers...)
+	return request(http.MethodPut, target, headers...) + string(raw)
+}
+
+// containerAnswer is what an engine answers to the inspect of a container: the labels and the
+// running flag are the two things the agent reads.
+func containerAnswer(running bool, labels map[string]string) string {
+	b, _ := json.Marshal(map[string]any{
+		"Id": "0123456789ab", "State": map[string]any{"Running": running},
+		"Config": map[string]any{"Image": "nginx:1.27", "Labels": labels},
+	})
+	return string(b)
+}
+
+var composeLabels = map[string]string{"com.docker.compose.project": "shop", "com.docker.compose.service": "web"}
+
+func TestASecretFileIsInjectedIntoACreatedComposeContainer(t *testing.T) {
+	sock := newFakeSocket(t)
+	sock.answers = map[string]string{"/containers/web-1/json": containerAnswer(false, composeLabels)}
+	var reasons []string
+	h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+	raw := sdkArchive(t, "/run/secrets/tok", "s3cret-value", 0o444)
+	resp := do(t, h, putTar(archivePath, raw))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || len(reasons) != 0 {
+		t.Fatalf("status %d, reasons %v, want 200 and no refusal", resp.StatusCode, reasons)
+	}
+	if got := sock.requests(); !slices.Equal(got, []string{"GET /containers/web-1/json", "PUT " + archivePath}) {
+		t.Fatalf("the engine saw %v, want the container lookup and then the write", got)
+	}
+	bodies := sock.bodiesSeen()
+	if len(bodies) != 2 || !bytes.Equal(bodies[1], raw) {
+		t.Fatalf("the engine did not receive the tar byte for byte")
+	}
+	sock.mu.Lock()
+	defer sock.mu.Unlock()
+	if ct := sock.headers[1].Get("Content-Type"); ct != "application/x-tar" {
+		t.Errorf("the engine saw the content type %q, want application/x-tar", ct)
+	}
+}
+
+func TestArchiveIntoARunningContainerIsRefused(t *testing.T) {
+	sock := newFakeSocket(t)
+	sock.answers = map[string]string{"/containers/web-1/json": containerAnswer(true, composeLabels)}
+	var reasons []string
+	h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+	resp := do(t, h, putTar(archivePath, sdkArchive(t, "/run/secrets/tok", "x", 0o444)))
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "agent_policy_denied: PUT /v1.52/containers/web-1/archive") {
+		t.Fatalf("status %d body %s, want a typed 403", resp.StatusCode, body)
+	}
+	if !slices.Equal(reasons, []string{"allowlist"}) {
+		t.Errorf("reasons = %v", reasons)
+	}
+	if got := sock.writesSeen(); len(got) != 0 {
+		t.Fatalf("a write reached the engine: %v", got)
+	}
+}
+
+func TestArchiveIntoAContainerComposeDidNotCreateIsRefused(t *testing.T) {
+	for name, tc := range map[string]struct {
+		answer string
+		status int
+	}{
+		"no compose label":         {answer: containerAnswer(false, map[string]string{"app": "x"})},
+		"no label at all":          {answer: containerAnswer(false, nil)},
+		"a container that is gone": {answer: `{"message":"No such container: web-1"}`, status: http.StatusNotFound},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sock := newFakeSocket(t)
+			sock.answers = map[string]string{"/containers/web-1/json": tc.answer}
+			if tc.status != 0 {
+				sock.status = map[string]int{"/containers/web-1/json": tc.status}
+			}
+			var reasons []string
+			h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+			resp := do(t, h, putTar(archivePath, sdkArchive(t, "/run/secrets/tok", "x", 0o444)))
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden || !slices.Equal(reasons, []string{"allowlist"}) {
+				t.Fatalf("status %d reasons %v, want 403 allowlist", resp.StatusCode, reasons)
+			}
+			if got := sock.writesSeen(); len(got) != 0 {
+				t.Fatalf("a write reached the engine: %v", got)
+			}
+		})
+	}
+}
+
+// An engine that cannot say what a container is gives no permission: the answer is the 502 of an
+// engine fault (the 06-50 rule), nothing is reported as a policy denial and nothing is forwarded.
+func TestArchiveLookupThatFailsIsAnEngineFaultNotAPermission(t *testing.T) {
+	for name, tc := range map[string]struct {
+		answer string
+		status int
+	}{
+		"a server error":      {answer: `{"message":"boom"}`, status: http.StatusInternalServerError},
+		"an unreadable reply": {answer: `not json`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sock := newFakeSocket(t)
+			sock.answers = map[string]string{"/containers/web-1/json": tc.answer}
+			if tc.status != 0 {
+				sock.status = map[string]int{"/containers/web-1/json": tc.status}
+			}
+			var reasons []string
+			h := Handler(sock.path, Policy{}, func(_, _, reason string) { reasons = append(reasons, reason) })
+			resp := do(t, h, putTar(archivePath, sdkArchive(t, "/run/secrets/tok", "x", 0o444)))
+			body, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusBadGateway || len(reasons) != 0 {
+				t.Fatalf("status %d reasons %v, want 502 and no denial reported", resp.StatusCode, reasons)
+			}
+			if !strings.Contains(string(body), "agent_engine_unreachable: the Docker engine did not answer a container lookup") {
+				t.Fatalf("body %s does not name the engine fault", body)
+			}
+			if got := sock.writesSeen(); len(got) != 0 {
+				t.Fatalf("a write reached the engine: %v", got)
+			}
+		})
+	}
+}
+
+// A bad tar is refused before the engine is asked anything.
+func TestAnInvalidArchiveNeverReachesTheEngineNorItsLookup(t *testing.T) {
+	sock := newFakeSocket(t)
+	sock.answers = map[string]string{"/containers/web-1/json": containerAnswer(false, composeLabels)}
+	h := Handler(sock.path, Policy{}, nil)
+	for name, raw := range map[string][]byte{
+		"a symlink":      tarOf(t, tarEntry{hdr: tar.Header{Typeflag: tar.TypeSymlink, Name: "/run/secrets/tok", Linkname: "/etc/shadow", Mode: 0o777, ModTime: archiveModTime}}),
+		"a dot-dot name": sdkArchive(t, "../etc/passwd", "x", 0o444),
+		"a setuid file":  sdkArchive(t, "/bin/x", "x", 0o4755),
+		"garbage":        []byte("not a tar"),
+	} {
+		resp := do(t, h, putTar(archivePath, raw))
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%s: status %d, want 403", name, resp.StatusCode)
+		}
+	}
+	if got := sock.requests(); len(got) != 0 {
+		t.Fatalf("the engine saw %v", got)
+	}
+}
+
+func TestAReadOnlyHostRefusesArchiveBeforeAnyBodyIsRead(t *testing.T) {
+	sock := newFakeSocket(t)
+	sock.answers = map[string]string{"/containers/web-1/json": containerAnswer(false, composeLabels)}
+	var reasons []string
+	h := Handler(sock.path, Policy{ReadOnly: true, AllowPrivilegedServices: true}, func(_, _, reason string) { reasons = append(reasons, reason) })
+	for _, raw := range [][]byte{sdkArchive(t, "/run/secrets/tok", "x", 0o444), []byte("not a tar")} {
+		resp := do(t, h, putTar(archivePath, raw))
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("status %d, want 403", resp.StatusCode)
+		}
+	}
+	if !slices.Equal(reasons, []string{"read_only_flag", "read_only_flag"}) {
+		t.Errorf("reasons = %v", reasons)
+	}
+	if got := sock.requests(); len(got) != 0 {
+		t.Fatalf("the engine saw %v", got)
+	}
+}
+
+func TestAContainerRenameReachesTheEngineWithNoBody(t *testing.T) {
+	sock := newFakeSocket(t)
+	h := Handler(sock.path, Policy{}, nil)
+	resp := do(t, h, request("POST", "/v1.52/containers/0123456789ab/rename?name=shop-web-1"))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", resp.StatusCode)
+	}
+	if got := sock.writesSeen(); !slices.Equal(got, []string{"POST /v1.52/containers/0123456789ab/rename?name=shop-web-1"}) {
+		t.Fatalf("the engine saw %v", got)
+	}
+	for _, raw := range []string{
+		request("POST", "/containers/0123456789ab/rename"),
+		request("POST", "/containers/0123456789ab/rename?name=a%2Fb"),
+		postJSON("POST", "/containers/0123456789ab/rename?name=web", `{"name":"x"}`),
+	} {
+		resp := do(t, h, raw)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("status %d, want 403 for %.60q", resp.StatusCode, raw)
+		}
+	}
+	if got := sock.writesSeen(); len(got) != 1 {
+		t.Fatalf("a refused rename reached the engine: %v", got)
+	}
+}
+
+func TestAnImageInspectWithTheSDKsKeysReachesTheEngine(t *testing.T) {
+	sock := newFakeSocket(t)
+	h := Handler(sock.path, Policy{}, nil)
+	target := "/v1.52/images/nginx:1.27/json?manifests=1&platform=%7B%22architecture%22%3A%22amd64%22%2C%22os%22%3A%22linux%22%7D"
+	resp := do(t, h, get(target))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", resp.StatusCode)
+	}
+	if got := sock.requests(); !slices.Equal(got, []string{"GET " + target}) {
+		t.Fatalf("the engine saw %v", got)
+	}
+}
+
+func TestAReadOnlyHostRefusesContainerRename(t *testing.T) {
+	sock := newFakeSocket(t)
+	var reasons []string
+	h := Handler(sock.path, Policy{ReadOnly: true}, func(_, _, reason string) { reasons = append(reasons, reason) })
+	resp := do(t, h, request("POST", "/containers/web-1/rename?name=web-2"))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden || !slices.Equal(reasons, []string{"read_only_flag"}) {
+		t.Fatalf("status %d reasons %v, want 403 read_only_flag", resp.StatusCode, reasons)
 	}
 	if got := sock.requests(); len(got) != 0 {
 		t.Fatalf("the engine saw %v", got)

@@ -69,6 +69,11 @@ const (
 	PermSecretsManage         Perm = "secrets.manage"
 	PermConfigsRead           Perm = "configs.read"
 	PermConfigsManage         Perm = "configs.manage"
+	PermStacksRead            Perm = "stacks.read"
+	PermStacksUpdate          Perm = "stacks.update"
+	PermStacksDeploy          Perm = "stacks.deploy"
+	PermStacksCreate          Perm = "stacks.create"
+	PermStacksDelete          Perm = "stacks.delete"
 )
 
 // Registry is a list of permissions. The Checker consults one, so a test can
@@ -124,6 +129,11 @@ var defaultRegistry = Registry{
 	{Name: PermSecretsManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Create, rotate and delete swarm secrets"},
 	{Name: PermConfigsRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View swarm configs and their content"},
 	{Name: PermConfigsManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Create, rotate and delete swarm configs"},
+	{Name: PermStacksRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View stacks, their files, reviews, deploys and logs"},
+	{Name: PermStacksUpdate, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Save and discard a stack's draft"},
+	{Name: PermStacksDeploy, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Deploy, update, roll back, stop, start and cancel stack operations"},
+	{Name: PermStacksCreate, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Create stacks"},
+	{Name: PermStacksDelete, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Remove stacks"},
 }
 
 // DefaultRegistry returns a copy of the registry production runs with.

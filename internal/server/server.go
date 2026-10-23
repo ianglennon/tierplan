@@ -27,6 +27,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/buildinfo"
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/datadir"
+	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/engine"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
@@ -35,6 +36,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/registry"
 	"github.com/ianglennon/bayplan/internal/shells"
+	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/vault"
@@ -174,6 +176,7 @@ type RouterDeps struct {
 	Volumes       api.VolumesDeps
 	Images        api.ImagesDeps
 	Pulls         api.PullsDeps
+	Stacks        api.StacksDeps
 	Registries    api.RegistriesDeps
 	Tags          api.TagsDeps
 	Events        api.EventsDeps
@@ -225,6 +228,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterVolumes(r, d.Volumes)
 	api.RegisterImages(r, d.Images)
 	api.RegisterPulls(r, d.Pulls)
+	api.RegisterStacks(r, d.Stacks)
 	api.RegisterRegistries(r, d.Registries)
 	api.RegisterTags(r, d.Tags)
 	api.RegisterEvents(r, d.Events)
@@ -470,6 +474,26 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		attrs = append(attrs, "snapshot", res.SnapshotPath)
 	}
 	log.Info("database ready", attrs...)
+
+	// The jobs and the operation lock are in memory, so a deploy that was running when the last process
+	// stopped is not running now. It ends interrupted, its revision failed, and its stack reads Deploy
+	// failed and offers a roll back (Open Q5).
+	interrupted, err := stackops.Repo{Store: st, Vault: vlt}.MarkInterrupted(ctx)
+	if err != nil {
+		_ = st.Close()
+		return nil, restoredStateError{fmt.Errorf("mark interrupted stack deploys: %w", err)}
+	}
+	if interrupted > 0 {
+		log.Warn("stack operations that were running when the server stopped were marked interrupted", "count", interrupted)
+	}
+
+	// The Compose SDK that deploys a standalone stack keeps process-wide state (its Docker CLI
+	// configuration directory and its logging), set once here and never per deploy. The directory is
+	// private to the SDK and always empty, under the data directory.
+	if err = dockerx.InitCompose(info.Path, log); err != nil {
+		_ = st.Close()
+		return nil, fmt.Errorf("prepare the Compose SDK: %w", err)
+	}
 
 	// /readyz needs a usable data directory and a database at this binary's
 	// schema version (D-86).
@@ -759,19 +783,20 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Environments:  api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Checker: checker, Updater: updater, Log: log},
 		UnknownAgents: api.UnknownAgentsDeps{Unknown: agentSvc.Unknown(), Store: st, Log: log},
 		Agents:        api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Updater: updater, Log: log},
-		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, Checker: checker, SelfContainerID: selfID, Log: log},
+		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, Checker: checker, SelfContainerID: selfID, Store: st, Log: log},
 		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, SelfContainerID: selfID, Log: log},
-		Services:      api.ServicesDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Log: log},
+		Services:      api.ServicesDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Store: st, Log: log},
 		RestartLoop:   api.RestartLoopDeps{Store: st, Clusters: clusters, Aggregator: aggregator, Audit: aud, Log: log},
-		Secrets:       api.SecretsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Log: log},
-		Configs:       api.ConfigsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Log: log},
+		Secrets:       api.SecretsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Store: st, Log: log},
+		Configs:       api.ConfigsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Store: st, Log: log},
 		Nodes:         api.NodesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, Agents: agentSvc, Live: tunnelHub, SelfContainerID: selfID, Log: log},
 		Volumes:       api.VolumesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, Log: log},
 		Images:        api.ImagesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
 		Pulls:         api.PullsDeps{Aggregator: aggregator, Jobs: jobHub, Audit: aud, Checker: checker, Resolver: resolver, Log: log},
+		Stacks:        api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackops.NewLocks(), Log: log},
 		Registries:    api.RegistriesDeps{Store: registryStore, Envs: envSvc, Aggregator: aggregator, Audit: aud, Checker: checker, Egress: registryEgress, Clients: registryClients, Version: buildinfo.Get().Version, Log: log},
 		Tags:          api.TagsDeps{Resolver: resolver, Tags: registry.NewTagService(registryClients, registryEgress, buildinfo.Get().Version, log), Checker: checker, Aggregator: aggregator, Envs: envSvc, Audit: aud, Log: log},
-		Containers:    api.ContainersDeps{Aggregator: aggregator, Audit: aud, Checker: checker, SelfContainerID: selfID, Clusters: clusters, Log: log},
+		Containers:    api.ContainersDeps{Aggregator: aggregator, Audit: aud, Checker: checker, SelfContainerID: selfID, Clusters: clusters, Store: st, Log: log},
 		Events:        api.EventsDeps{Aggregator: aggregator, Log: log},
 		Logs:          api.LogsDeps{Aggregator: aggregator, Audit: aud, Checker: checker, Log: log},
 		ServiceLogs:   api.ServiceLogsDeps{Clusters: clusters, Audit: aud, Checker: checker, Log: log},
