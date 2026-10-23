@@ -568,9 +568,19 @@ func compareSnapshots(t *testing.T, cli, bp stackSnapshot) {
 func removeStackCLI(t *testing.T, f *swarmFix, stack string) {
 	t.Helper()
 	mgr := f.sw.Managers[0]
-	if out, err := mgr.Sh(execCtx(t, 3*time.Minute), "docker stack rm "+stack+" 2>&1"); err != nil {
-		t.Fatalf("docker stack rm %s: %v\n%s", stack, err, out)
-	}
+	// docker stack rm removes the networks straight after the services, without waiting for their
+	// tasks to stop, so a network a task still holds is refused as in use. Running it again once the
+	// task is gone removes what is left.
+	testsupport.Poll(t, stackGoneWait, "docker stack rm "+stack+" to remove every network", func() (bool, string) {
+		out, err := mgr.Sh(execCtx(t, 3*time.Minute), "docker stack rm "+stack+" 2>&1")
+		if err == nil {
+			return true, ""
+		}
+		if !strings.Contains(out, "is in use by task") {
+			t.Fatalf("docker stack rm %s: %v\n%s", stack, err, out)
+		}
+		return false, out
+	})
 	testsupport.Poll(t, stackGoneWait, "the stack "+stack+" to leave no service, container or network", func() (bool, string) {
 		ctx := execCtx(t, time.Minute)
 		var left []string
