@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -950,5 +951,167 @@ func TestVolumeConfigEditKeepsTheVolume(t *testing.T) {
 	rows, err := cli.ContainersWithLabel(ctx, stacks.LabelComposeProject, name)
 	if err != nil || len(rows) != 1 || rows[0].State != "running" {
 		t.Errorf("containers after the redeploy = %+v, %v, want the stack's one running", rows, err)
+	}
+}
+
+// startRequestLog serves a unix socket in front of the engine at host (a DockerHost value such as
+// tcp://localhost:32771) that forwards every request and remembers its method and path without the API version.
+// It returns the socket's path and a function that reads what was remembered, so a test shows which requests a
+// step sent to the engine, in particular the distribution checks that look a tag up in a registry.
+func startRequestLog(t *testing.T, host string) (string, func() []string) {
+	t.Helper()
+	target, err := url.Parse("http://" + strings.TrimPrefix(host, "tcp://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rp := &httputil.ReverseProxy{Rewrite: func(pr *httputil.ProxyRequest) { pr.SetURL(target) }, FlushInterval: -1}
+	var mu sync.Mutex
+	var seen []string
+	// A short path: a unix socket path may not be longer than about 100 bytes.
+	dir, err := os.MkdirTemp("", "bpx")
+	if err != nil {
+		t.Fatalf("make the log's directory: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "d.sock")
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("listen on %s: %v", path, err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Method+" "+apiVersion.ReplaceAllString(r.URL.Path, "/"))
+		mu.Unlock()
+		rp.ServeHTTP(w, r)
+	}), ReadHeaderTimeout: time.Minute}
+	var wg sync.WaitGroup
+	wg.Go(func() { _ = srv.Serve(l) })
+	t.Cleanup(func() {
+		_ = srv.Close()
+		wg.Wait()
+	})
+	return path, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(seen)
+	}
+}
+
+// TestStandaloneRollbackOnARealEngine rolls a stack back to its first revision on a real engine (plan 08-05, STK-08,
+// D-02, D-06, T-08-18). The stack is deployed at a tag, the tag is moved in the registry and the stack is deployed
+// again (an update, which looks the tag up), so the host runs the second image. The roll back is reviewed against
+// the host, then run through the Compose SDK with the pins revision 1 stored: the container runs the first image
+// again although the tag now names the second, the review of that revision then lists no change, and the engine was
+// asked for no registry lookup from the review to the end of the roll back.
+func TestStandaloneRollbackOnARealEngine(t *testing.T) {
+	// The SDK's process-wide state: its private configuration directory and its logging.
+	if err := dockerx.InitCompose(t.TempDir(), slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatalf("InitCompose: %v", err)
+	}
+	node := dockertest.StartHost(t, "")
+	registry := dockertest.StartRegistry(t, node, dockertest.RegistryOptions{})
+	image := registry + "/bp/web:1"
+	first := dockertest.PushImage(t, node, "busybox:1.36.1", image, nil)
+	// Bayplan's own client to the node, for what the test reads back: the project's containers.
+	cli, err := dockerx.New(dockertest.TCPTransportFor(node.Host()))
+	if err != nil {
+		t.Fatalf("dockerx.New: %v", err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+
+	socket, requests := startRequestLog(t, node.Host())
+	rig := newRigOver(t, socket)
+	rig.deps.ConvergeTimeout = 3 * time.Minute
+	pins := &memPins{}
+	const name = "itest"
+	compose := "services:\n  web:\n    image: " + image + "\n    command: [\"sleep\", \"3600\"]\n"
+	ctx := testsupport.Context(t)
+	web := func() dockerx.ContainerRow {
+		t.Helper()
+		rows, err := cli.ContainersWithLabel(ctx, stacks.LabelComposeProject, name)
+		if err != nil || len(rows) != 1 || rows[0].State != "running" {
+			t.Fatalf("the project's containers = %+v (%v), want one running", rows, err)
+		}
+		return rows[0]
+	}
+	deploy := func(rev string, in stackops.StandaloneDeployInput) stackops.DeployResult {
+		t.Helper()
+		in.Pins, in.RevisionID = pins, rev
+		res, job := rig.deployStandalone(t, in)
+		if !res.OK() {
+			var words []string
+			for _, it := range job.Items {
+				if it.Detail != "" {
+					words = append(words, it.ID+": "+it.Detail)
+				}
+			}
+			t.Fatalf("deploy %s: %+v items %v details %q", rev, res, itemStates(job), words)
+		}
+		return res
+	}
+
+	// Revision 1 at the first image, then the tag moves and revision 2 updates to the second.
+	deploy("rev-1", standaloneInput(name, compose))
+	pin1 := image + "@" + first
+	if got := pins.pinsOf("rev-1")["web"]; got != pin1 {
+		t.Fatalf("revision 1 stored %q, want %q", got, pin1)
+	}
+	second := dockertest.PushImage(t, node, "alpine:3", image, nil)
+	if second == first {
+		t.Fatalf("the tag did not move: %s", second)
+	}
+	update := standaloneInput(name, compose)
+	update.Update = map[string]bool{"web": true}
+	if res := deploy("rev-2", update); res.Updated != 1 {
+		t.Fatalf("update = %+v, want the container recreated on the second image", res)
+	}
+	pin2 := image + "@" + second
+	before := web()
+	if before.Image != pin2 {
+		t.Fatalf("the container runs %q after the update, want %q", before.Image, pin2)
+	}
+
+	// The roll back review: revision 1 against the host, with its stored pin, asking no registry.
+	mark := len(requests())
+	review := rig.standaloneRollbackInput(t, name, compose, pins.pinsOf("rev-1"))
+	rv, err := rig.deps.Review(ctx, review)
+	if err != nil {
+		t.Fatalf("roll back review: %v", err)
+	}
+	if got := changesOf(rv); !slices.Equal(got, []string{"changed web"}) || rv.Problems.Errors() != 0 {
+		t.Fatalf("roll back review: services %v problems %v, want web changed and nothing blocking", got, rv.Problems)
+	}
+	if len(rv.Images) != 1 || rv.Images[0].State != stackops.ImagePinned || rv.Images[0].Digest != first || rv.Images[0].Current != second {
+		t.Fatalf("roll back review images = %+v, want the first digest %s against the running %s", rv.Images, first, second)
+	}
+
+	// The roll back: the pins revision 1 stored, run as revision 3.
+	rollback := standaloneInput(name, compose)
+	rollback.Reviewed, rollback.Rollback = rv.Pins, true
+	if res := deploy("rev-3", rollback); res.Updated != 1 || res.Services != 0 {
+		t.Fatalf("roll back = %+v, want the one container recreated", res)
+	}
+	after := web()
+	if after.ID == before.ID || after.Image != pin1 {
+		t.Fatalf("the container is %s on %q after the roll back, want a new one on %q although the tag names %s", after.ID, after.Image, pin1, second)
+	}
+	if got := pins.pinsOf("rev-3")["web"]; got != pin1 {
+		t.Errorf("the roll back's revision stored %q, want revision 1's %q", got, pin1)
+	}
+
+	// Revision 1 reviewed again against the host that runs it has nothing left to change.
+	rv, err = rig.deps.Review(ctx, rig.standaloneRollbackInput(t, name, compose, pins.pinsOf("rev-1")))
+	if err != nil {
+		t.Fatalf("review after the roll back: %v", err)
+	}
+	if len(rv.Services) != 0 || rv.Problems.Errors() != 0 {
+		t.Errorf("review after the roll back: services %v problems %v, want nothing to roll back", changesOf(rv), rv.Problems)
+	}
+
+	// From the review to the end of the roll back the engine was asked for no registry lookup.
+	for _, req := range requests()[mark:] {
+		if strings.Contains(req, "/distribution/") {
+			t.Errorf("the engine was asked %q during the roll back, a roll back looks no tag up", req)
+		}
 	}
 }

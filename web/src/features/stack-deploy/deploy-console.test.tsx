@@ -932,6 +932,77 @@ describe("a standalone deploy (plan 07-20, D-13)", () => {
     }
   });
 
+  describe("rolled back to a chosen revision (plan 08-05)", () => {
+    // The steps of a standalone roll back are those of a standalone deploy, finished.
+    const finished = (over: Partial<Record<string, Partial<Item>>> = {}): Item[] =>
+      standalone({
+        volumes: { state: "done" },
+        services: { state: "done" },
+        cleanup: { state: "done" },
+        "volume:demo_data": { state: "done" },
+        "service:web": { state: "done", current: 2, result: { phase: "healthy" } },
+        "container:demo-web-1": { state: "done" },
+        "container:demo-web-2": { state: "done" },
+        "remove-container:demo-old-1": { state: "done" },
+        ...over,
+      });
+
+    it("is titled with the revision, lists the standalone steps in their words and says Roll back complete", async () => {
+      jobMode = "rollback";
+      jobRevision = 5;
+      jobRecorded = 9;
+      job = { state: "done", items: finished() };
+      mount();
+      expect(await screen.findByRole("heading", { name: "Rolling back web to #5" })).toBeTruthy();
+      expect(stepLines()).toEqual([
+        "Check the stackDone",
+        "Look up imagesDone",
+        "Create network demo_defaultDone",
+        "Create volume demo_dataDone",
+        "Deploy servicesDone",
+        "Remove containers no longer in the stackDone",
+        "Remove container demo-old-1Done",
+      ]);
+      expect(await screen.findByRole("heading", { name: "Roll back complete" })).toBeTruthy();
+      expect(
+        screen.getByText(
+          "web is running the content of revision #5. Bayplan recorded it as revision #9.",
+        ),
+      ).toBeTruthy();
+      expect(screen.getByRole("link", { name: "Open history" }).getAttribute("href")).toBe(
+        "/env/e1/stacks/s1/history?rev=9",
+      );
+    });
+
+    it("says Roll back failed when a container does not come up, and retries the same revision", async () => {
+      role = "operator";
+      jobMode = "rollback";
+      jobRevision = 5;
+      jobRecorded = 9;
+      job = {
+        state: "failed",
+        items: finished({
+          services: { state: "failed", code: "engine_error" },
+          "service:web": { state: "failed", code: "engine_error" },
+          "container:demo-web-2": {
+            state: "failed",
+            detail: "port is already allocated",
+            result: { state: "failed" },
+          },
+        }),
+      };
+      mount();
+      const alert = await screen.findByRole("alert");
+      expect(within(alert).getByText("Roll back failed")).toBeTruthy();
+      expect(
+        within(alert).getByText("Bayplan recorded the failed attempt as revision #9."),
+      ).toBeTruthy();
+      fireEvent.click(within(alert).getByRole("button", { name: "Retry roll back" }));
+      await waitFor(() => expect(rollbacks).toHaveLength(1));
+      expect(JSON.parse((await rollbacks[0]?.text()) ?? "")).toEqual({ revision: 5 });
+    });
+  });
+
   it("leaves a swarm job alone: its steps keep the server's words", async () => {
     job = {
       state: "running",

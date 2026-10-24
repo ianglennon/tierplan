@@ -34,6 +34,8 @@ let deploy: () => Response | Promise<Response>;
 let rollback: () => Response | Promise<Response>;
 // Whether the stack holds a saved draft with changes that were not deployed.
 let draftSaved: boolean;
+// The kind of host the stack deploys to.
+let target: "swarm" | "standalone";
 let client: QueryClient;
 // The operation lock the stack's page reports, when one is held.
 let lock: Record<string, string> | undefined;
@@ -92,6 +94,7 @@ beforeEach(() => {
   deploy = () => Response.json({ jobId: "j1", revision: 3 }, { status: 202 });
   rollback = () => Response.json({ jobId: "j9", revision: 4 }, { status: 202 });
   draftSaved = false;
+  target = "swarm";
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   vi.stubGlobal(
@@ -111,13 +114,13 @@ beforeEach(() => {
       });
       if (path === "/api/me") return Response.json(me);
       if (path === "/api/environments") {
-        return Response.json({ items: [{ id: ENV, name: "Prod", envType: "swarm" }] });
+        return Response.json({ items: [{ id: ENV, name: "Prod", envType: target }] });
       }
       if (path === `/api/env/${ENV}/stacks/${STACK}`) {
         return Response.json({
           id: STACK,
           name: "web",
-          target: "swarm",
+          target,
           source: "inline",
           state: "running",
           lastDeployedAt: "2026-10-19T11:00:00Z",
@@ -1150,6 +1153,39 @@ describe("in roll back mode", () => {
     fireEvent.click(screen.getByRole("button", { name: "Review again" }));
     await waitFor(() => expect(posts("/review")).toHaveLength(2));
     expect(screen.queryByRole("button", { name: "Review again" })).toBeNull();
+  });
+
+  it("reviews a roll back of a standalone stack the same way: the host's network and volume are created, and it rolls back with the same request", async () => {
+    target = "standalone";
+    review = () =>
+      Response.json(
+        rollbackReview({
+          pins: { web: `nginx:1.27@${D2}` },
+          services: [changedWeb({ name: "web" })],
+          objects: [
+            { change: "added", kind: "network", name: "web_front", detail: "" },
+            { change: "added", kind: "volume", name: "web_data", detail: "" },
+          ],
+          summary: { ...reviewBody().summary, networks: counts(1), volumes: counts(1) },
+        }),
+      );
+    const { onDeployed } = mount({ mode: "rollback", revision: 1 });
+    expect(
+      await screen.findByRole("heading", { name: "Roll back web to revision #1" }),
+    ).toBeTruthy();
+    const summary = within(await screen.findByRole("table", { name: "Summary of changes" }));
+    expect(
+      within(summary.getByRole("row", { name: /^Volumes/ }))
+        .getAllByRole("cell")
+        .map((c) => c.textContent),
+    ).toEqual(["1", "0", "0"]);
+    const others = within(screen.getByRole("table", { name: "Other resources" }));
+    expect(others.getByText("web_front")).toBeTruthy();
+    expect(others.getByText("web_data")).toBeTruthy();
+    expect(screen.queryByText(/target_engine_missing|can't be deployed to/)).toBeNull();
+    fireEvent.click(rollbackButton());
+    await waitFor(() => expect(onDeployed).toHaveBeenCalledWith("j9"));
+    expect(posts("/rollback")[0]?.body).toEqual({ revision: 1, expectedDeployed: 3 });
   });
 
   it("says there is nothing to roll back when running already matches the revision", async () => {
