@@ -2,10 +2,18 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { Link } from "@tanstack/react-router";
+import { Ellipsis } from "lucide-react";
 
 import type { StackRevision } from "@/api/stack-history";
 import { RelativeTime } from "@/components/relative-time";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   TableBody,
   TableCaption,
@@ -15,6 +23,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { TruncatedText } from "@/features/resources/resource-table";
+import { ImageChangeSummary } from "@/features/stack-history/image-change-summary";
+import { RevisionKindCell, RevisionLink } from "@/features/stack-history/revision-kind-cell";
+import { RevisionResultCell } from "@/features/stack-history/revision-result-cell";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
@@ -25,16 +36,56 @@ interface RevisionTableProps {
   items: readonly StackRevision[];
   // The revision the detail below the table shows.
   selected: number | undefined;
+  // Revisions that appeared while the tab was open: their rows are highlighted for a moment (P4 D-05).
+  fresh: ReadonlySet<number>;
 }
 
 // The body shows 8 rows of 36px and scrolls inside, with the header row above them (UI-SPEC "Spacing
 // Scale": History tab).
 const BODY_MAX = "max-h-[324px]";
 
+function RowActions({ envId, stackId, seq }: { envId: string; stackId: string; seq: number }) {
+  const t = useT();
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="max-md:size-11"
+          aria-label={t("stackHistory.table.rowMenu", { seq })}
+        >
+          <Ellipsis aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem asChild className="max-md:min-h-11">
+          <Link
+            to="/env/$envId/stacks/$stackId/history"
+            params={{ envId, stackId }}
+            search={{ rev: seq }}
+            replace
+          >
+            {t("stackHistory.table.open", { seq })}
+          </Link>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 // RevisionTable lists the revisions of a stack, newest first. It is a native table with a caption, and the
 // revision number is the link that selects a revision: it sets rev with replace, so selecting does not add
-// a history entry per click.
-export function RevisionTable({ envId, stackId, name, items, selected }: RevisionTableProps) {
+// a history entry per click. The selected row is marked with aria-current.
+export function RevisionTable({
+  envId,
+  stackId,
+  name,
+  items,
+  selected,
+  fresh,
+}: RevisionTableProps) {
   const t = useT();
   return (
     <div className={cn("overflow-auto rounded-md border", BODY_MAX)}>
@@ -48,6 +99,9 @@ export function RevisionTable({ envId, stackId, name, items, selected }: Revisio
             <TableHead scope="col">{t("stackHistory.table.columns.who")}</TableHead>
             <TableHead scope="col">{t("stackHistory.table.columns.when")}</TableHead>
             <TableHead scope="col">{t("stackHistory.table.columns.images")}</TableHead>
+            <TableHead scope="col" className="w-10">
+              <span className="sr-only">{t("stackHistory.table.columns.actions")}</span>
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -56,26 +110,25 @@ export function RevisionTable({ envId, stackId, name, items, selected }: Revisio
               key={item.seq}
               aria-current={item.seq === selected ? "true" : undefined}
               data-state={item.seq === selected ? "selected" : undefined}
-              className="h-9 max-md:h-11"
+              className={cn(
+                "h-9 max-md:h-11",
+                fresh.has(item.seq) && "bg-muted motion-reduce:bg-transparent",
+              )}
             >
               <TableCell>
                 <span className="flex items-center gap-2">
-                  <Link
-                    to="/env/$envId/stacks/$stackId/history"
-                    params={{ envId, stackId }}
-                    search={{ rev: item.seq }}
-                    replace
-                    className="rounded-sm font-mono text-accent-ink hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-                  >
-                    #{item.seq}
-                  </Link>
+                  <RevisionLink envId={envId} stackId={stackId} seq={item.seq} />
                   {item.deployed ? (
                     <Badge variant="outline">{t("stackHistory.table.deployed")}</Badge>
                   ) : null}
                 </span>
               </TableCell>
-              <TableCell>{t(`stackHistory.kind.${item.origin}`)}</TableCell>
-              <TableCell>{t(`stackHistory.result.${item.outcome}`)}</TableCell>
+              <TableCell>
+                <RevisionKindCell item={item} envId={envId} stackId={stackId} />
+              </TableCell>
+              <TableCell>
+                <RevisionResultCell item={item} />
+              </TableCell>
               <TableCell>
                 {item.createdBy ? (
                   <TruncatedText>{item.createdBy}</TruncatedText>
@@ -87,11 +140,10 @@ export function RevisionTable({ envId, stackId, name, items, selected }: Revisio
                 <RelativeTime value={item.createdAt} />
               </TableCell>
               <TableCell>
-                {(item.images ?? []).length > 0
-                  ? t("stackHistory.images.changed", { count: (item.images ?? []).length })
-                  : item.pinned > 0
-                    ? t("stackHistory.images.pinned", { count: item.pinned })
-                    : t("stackHistory.images.none")}
+                <ImageChangeSummary item={item} />
+              </TableCell>
+              <TableCell className="text-end">
+                <RowActions envId={envId} stackId={stackId} seq={item.seq} />
               </TableCell>
             </TableRow>
           ))}

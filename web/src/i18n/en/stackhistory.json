@@ -26,14 +26,15 @@
       "update": "Update images",
       "rollback": "Roll back",
       "adopted": "Adopted",
-      "of": "of #{{seq}}",
-      "from": "from {{name}}"
+      "from": "from {{name}}",
+      "ofPrefix": "of"
     },
     "result": {
       "good": "Good",
       "failed": "Failed",
       "pending": "In progress",
-      "unfinished": "The deploy did not finish."
+      "unfinished": "The deploy didn't finish.",
+      "interrupted": "The server restarted while it ran."
     },
     "images": {
       "changed_one": "{{count, number}} image changed",
@@ -46,8 +47,7 @@
       "added": "{{service}}: new, {{to}}"
     },
     "detail": {
-      "heading": "Revision #{{seq}}",
-      "meta": "{{kind}} by {{user}},",
+      "heading": "Revision",
       "rollbackOf": "Roll back of",
       "deployed": "This is the deployed revision.",
       "failed": {
@@ -59,7 +59,8 @@
       "pending": {
         "title": "Revision #{{seq}} is still deploying",
         "console": "Open console"
-      }
+      },
+      "by": "by {{user}},"
     },
     "gone": {
       "title": "That revision is gone",
