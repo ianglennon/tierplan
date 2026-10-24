@@ -1239,7 +1239,8 @@ func (f *envFix) revisions(t *testing.T, stackID string) []revisionRow {
 }
 
 type rollbackStackAnswer struct {
-	State    string `json:"state"`
+	State        string `json:"state"`
+	DraftSavedAt string `json:"draftSavedAt"`
 	Rollback struct {
 		Available  bool   `json:"available"`
 		DeployedAt string `json:"deployedAt"`
@@ -1804,5 +1805,53 @@ func TestRollbackWithoutABodyKeepsThePreviousVersion(t *testing.T) {
 	// Revision 4 is deployed now, so the one a roll back with no body would restore is the good one before it, 3.
 	if a := readStack(t, operator, st.ID); !a.Rollback.Available || a.Rollback.Revision != 3 {
 		t.Errorf("rollback = %+v, want revision 3 as the one a roll back would restore", a.Rollback)
+	}
+}
+
+// After a roll back the draft is told the deployed version moved (plan 08-03, D-03, P7 D-09): its next review
+// carries the concurrent notice and a deploy of it needs the acknowledgement. Its Draft badge stays.
+func TestDeployAfterRollbackNeedsAcknowledgement(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rb")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.deployGood(t, operator, st.ID, composeWeb128)
+	f.deployGood(t, operator, st.ID, composeWeb129)
+	// An edit saved after the last deploy and before the roll back.
+	v := saveCompose(t, operator, st.ID, composeWeb129+"# edited\n", `[]`)
+	if readStack(t, operator, st.ID).DraftSavedAt == "" {
+		t.Fatal("the saved edit does not read as a draft before the roll back")
+	}
+
+	rec := operator.do(http.MethodPost, rollbackPath(st.ID), `{"revision":1,"expectedDeployed":3}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("roll back: %d %s", rec.Code, rec.Body)
+	}
+	if job := f.awaitDeploy(t, answerOf[rollbackStarted](t, rec).JobID); job.State != "done" {
+		t.Fatalf("roll back job = %+v, want it done", job)
+	}
+
+	if readStack(t, operator, st.ID).DraftSavedAt == "" {
+		t.Error("a roll back hid the Draft badge of a draft that holds undeployed changes")
+	}
+	rv, code, body := operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, body)
+	}
+	if rv.Concurrent == nil || rv.Concurrent.Revision != 4 || rv.Concurrent.DeployedBy != "operator-1" {
+		t.Fatalf("concurrent = %+v, want the roll back (revision 4) as a deployment since the draft started", rv.Concurrent)
+	}
+	rec = operator.deploy(st.ID, `{"draftVersion":`+itoaT(v)+`}`)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "concurrent_unacknowledged" {
+		t.Fatalf("deploy of the draft: %d %s, want 409 concurrent_unacknowledged", rec.Code, rec.Body)
+	}
+	if n := len(f.revisions(t, st.ID)); n != 4 {
+		t.Errorf("revisions = %d, a refused deploy stores none", n)
+	}
+	rec = operator.deploy(st.ID, `{"draftVersion":`+itoaT(v)+`,"acknowledgeConcurrent":true}`)
+	if rec.Code != http.StatusAccepted {
+		t.Errorf("deploy with the acknowledgement: %d %s, want 202", rec.Code, rec.Body)
 	}
 }

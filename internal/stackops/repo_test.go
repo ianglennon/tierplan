@@ -1135,3 +1135,89 @@ func TestRevisionsRecordTheirOrigin(t *testing.T) {
 		t.Errorf("the revision a roll back copied = %+v, %v, want it unchanged", orig, err)
 	}
 }
+
+// A roll back leaves the draft as it is (plan 08-03, D-03, RESEARCH Pitfall 8): the draft still reads as holding
+// changes that were not deployed when it did before, and as clean when it was.
+
+// rolledBackTo copies revision seq of the stack into a new revision of origin rollback, as a roll back does, and
+// marks it good.
+func rolledBackTo(t *testing.T, f repoFixture, stackID string, seq int64) stackops.Snapshot {
+	t.Helper()
+	ctx := context.Background()
+	from, err := f.repo.Revision(ctx, stackID, seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rev, err := f.repo.CopyRevision(ctx, from, "ada", stackops.OriginRollback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetOutcome(ctx, rev.ID, stackops.OutcomeGood, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	return rev
+}
+
+func TestRollbackKeepsTheDraftPending(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("a")}})
+	goodRevision(t, f, st.ID, "ada")
+	goodRevision(t, f, st.ID, "ada")
+	goodRevision(t, f, st.ID, "ada")
+	// An edit saved after revision 3 and before the roll back to revision 1.
+	if _, _, err := f.repo.SaveDraft(ctx, st.ID, 1, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("edited")}}); err != nil {
+		t.Fatal(err)
+	}
+	pending := func() bool {
+		saves, err := f.repo.DraftSaves(ctx, f.envID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return saves[st.ID].Pending
+	}
+	if !pending() {
+		t.Fatal("the saved draft does not read as holding changes before the roll back")
+	}
+
+	rev := rolledBackTo(t, f, st.ID, 1)
+	if rev.Seq != 4 {
+		t.Fatalf("roll back revision = %d, want 4", rev.Seq)
+	}
+	if !pending() {
+		t.Error("a roll back hid the Draft badge: the draft still holds changes that were not deployed")
+	}
+	draft, err := f.repo.Draft(ctx, st.ID)
+	if err != nil || !draft.IsDraft || draft.Version != 2 || string(draft.Copy.Compose()) != "edited" {
+		t.Errorf("draft after the roll back = %+v, %v, want version 2 with the edit untouched", draft, err)
+	}
+}
+
+func TestRollbackKeepsAnUnchangedDraftClean(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("a")}})
+	goodRevision(t, f, st.ID, "ada")
+	// The edit was saved and then deployed: nothing is pending.
+	if _, _, err := f.repo.SaveDraft(ctx, st.ID, 1, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("b")}}); err != nil {
+		t.Fatal(err)
+	}
+	goodRevision(t, f, st.ID, "ada")
+	pending := func() bool {
+		saves, err := f.repo.DraftSaves(ctx, f.envID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return saves[st.ID].Pending
+	}
+	if pending() {
+		t.Fatal("a deployed draft reads as holding changes before the roll back")
+	}
+
+	rolledBackTo(t, f, st.ID, 1)
+	if pending() {
+		t.Error("a roll back made a draft with no changes read as holding some")
+	}
+}
