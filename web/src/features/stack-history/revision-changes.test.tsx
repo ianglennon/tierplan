@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCsrfToken } from "@/api/client";
 import { RevisionChanges } from "@/features/stack-history/revision-changes";
@@ -54,7 +54,7 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (req: Request) => {
       const path = new URL(req.url).pathname;
-      if (path === `/api/env/${ENV}/stacks/s1/revisions/1/changes`) {
+      if (/^\/api\/env\/e1\/stacks\/s1\/revisions\/\d+\/changes$/.test(path)) {
         calls++;
         if (status !== 200) {
           return Response.json(
@@ -75,10 +75,16 @@ afterEach(() => {
   client.clear();
 });
 
-function mount(seq = 1, deployedSeq = 2) {
+function mount(seq = 1, deployedSeq = 2, pending = false) {
   return render(
     <QueryClientProvider client={client}>
-      <RevisionChanges envId={ENV} stackId="s1" seq={seq} deployedSeq={deployedSeq} />
+      <RevisionChanges
+        envId={ENV}
+        stackId="s1"
+        seq={seq}
+        deployedSeq={deployedSeq}
+        pending={pending}
+      />
     </QueryClientProvider>,
   );
 }
@@ -105,5 +111,159 @@ describe("the Changes tab", () => {
     const table = await screen.findByRole("table", { name: "Hidden changes to web" });
     expect(within(table).getByText("TaskTemplate.ContainerSpec.Env[API_KEY]")).toBeTruthy();
     expect(screen.queryByText("<hidden>")).toBeNull();
+  });
+});
+
+describe("when nothing would change", () => {
+  beforeEach(() => {
+    body = {
+      deployedSeq: 2,
+      services: [],
+      summary: { added: 0, changed: 0, removed: 0 },
+      identical: true,
+    };
+  });
+
+  it("says the deployed revision has no changes", async () => {
+    mount(2, 2);
+
+    expect(await screen.findByText("No changes")).toBeTruthy();
+    expect(screen.getByText("This is the deployed revision.")).toBeTruthy();
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  it("says a revision with the same content as the deployed one has no changes", async () => {
+    mount(1, 2);
+
+    expect(await screen.findByText("No changes")).toBeTruthy();
+    expect(
+      screen.getByText("Revision #1 has the same content as the deployed revision."),
+    ).toBeTruthy();
+  });
+
+  it("lists a difference of the deployed revision, which is drift, instead of saying there is none", async () => {
+    body = {
+      deployedSeq: 2,
+      services: [webChanged()],
+      summary: { added: 0, changed: 1, removed: 0 },
+      identical: false,
+    };
+    mount(2, 2);
+
+    expect(await screen.findByText("web")).toBeTruthy();
+    expect(screen.queryByText("No changes")).toBeNull();
+  });
+});
+
+describe("a revision that cannot be rolled back to", () => {
+  it("says a failed revision failed, with nothing to retry", async () => {
+    status = 409;
+    problemType = "revision_not_good";
+    mount();
+
+    expect(
+      await screen.findByText("Revision #1 failed, so there is nothing to roll back to."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(calls).toBe(1);
+  });
+
+  it("says a revision still deploying has no changes to show yet", async () => {
+    status = 409;
+    problemType = "revision_not_good";
+    mount(1, 2, true);
+
+    expect(
+      await screen.findByText(
+        "Revision #1 is still deploying. Its changes show once it has finished.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/failed/)).toBeNull();
+  });
+
+  it("says a revision that can no longer be redeployed has nothing to compare", async () => {
+    status = 409;
+    problemType = "revision_not_deployable";
+    mount();
+
+    expect(
+      await screen.findByText(
+        "Revision #1 can't be redeployed as it stands, so there is nothing to compare.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+});
+
+describe("loading and failing", () => {
+  it("shows a skeleton while the changes load", async () => {
+    mount();
+
+    const loading = screen.getByTestId("revision-changes-loading");
+    expect(loading.getAttribute("aria-busy")).toBe("true");
+    await screen.findByText(/What rolling back to #1 would change/);
+    expect(screen.queryByTestId("revision-changes-loading")).toBeNull();
+  });
+
+  it("says the server is busy when a third comparison is refused, and reads again on Retry", async () => {
+    status = 429;
+    problemType = "check_busy";
+    mount();
+
+    const alert = await screen.findByRole("alert");
+    expect(
+      within(alert).getByText("Too many comparisons are running. Try again in a moment."),
+    ).toBeTruthy();
+    const before = calls;
+    status = 200;
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+
+    await screen.findByText(/What rolling back to #1 would change/);
+    expect(calls).toBeGreaterThan(before);
+  });
+
+  it("says it could not load the changes for any other failure, and reads again on Retry", async () => {
+    status = 500;
+    problemType = "internal";
+    mount();
+
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("Couldn't load this revision's changes.")).toBeTruthy();
+    expect(within(alert).queryByText(/too many comparisons/i)).toBeNull();
+    const before = calls;
+    status = 200;
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => expect(calls).toBeGreaterThan(before));
+    await screen.findByText(/What rolling back to #1 would change/);
+  });
+});
+
+describe("values the server withheld", () => {
+  it("draws a hidden value as four dots and never as the sentinel", async () => {
+    const spec = (env: string[]) => ({
+      TaskTemplate: { ContainerSpec: { Image: "nginx:1.27-alpine", Env: env } },
+    });
+    body = {
+      deployedSeq: 2,
+      services: [
+        {
+          name: "tracer_web",
+          short: "web",
+          change: "changed",
+          current: spec([]),
+          next: spec(["TOKEN=<hidden>"]),
+          hiddenChanges: [],
+          settings: 1,
+        },
+      ],
+      summary: { added: 0, changed: 1, removed: 0 },
+      identical: false,
+    };
+    mount();
+
+    const table = await screen.findByRole("table", { name: "Changes to web" });
+    expect(within(table).getByText(/••••/)).toBeTruthy();
+    expect(screen.queryByText(/<hidden>/)).toBeNull();
   });
 });
