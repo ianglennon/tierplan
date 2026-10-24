@@ -533,8 +533,13 @@ func TestNameClashIsRefusedAtCreateAndReview(t *testing.T) {
 	list := answerOf[struct {
 		Items []stackAnswer `json:"items"`
 	}](t, admin.do(http.MethodGet, "stacks", ""))
-	if len(list.Items) != 0 {
-		t.Errorf("stacks = %+v, a refused create stores nothing", list.Items)
+	// The foreign stack is listed as unmanaged (STK-12); only a managed row would be one the
+	// refused create stored.
+	for _, it := range list.Items {
+		if it.Managed || it.Name != "taken" {
+			t.Errorf("stacks = %+v, want only the foreign stack as unmanaged: a refused create stores nothing", list.Items)
+			break
+		}
 	}
 	if rec := admin.createStack(`{"name":"free"}`); rec.Code != http.StatusCreated {
 		t.Errorf("create of a free name: %d %s", rec.Code, rec.Body)
