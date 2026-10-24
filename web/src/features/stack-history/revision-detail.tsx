@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { RevisionLink } from "@/features/stack-history/revision-kind-cell";
 import { failureReason } from "@/features/stack-history/revision-result-cell";
+import { RevisionTabs } from "@/features/stack-history/revision-tabs";
 import { useT } from "@/i18n/use-t";
 
 interface RevisionDetailProps {
@@ -28,7 +29,7 @@ interface RevisionDetailProps {
 
 // RevisionDetail is the card below the table for the selected revision (UI-SPEC "History tab"): its heading
 // and who made it and when, then what stands out about it: it failed, it is still deploying, or it is the
-// deployed one. Plans that follow add the tabs and the Roll back action to this card.
+// deployed one. The tabs below show what the revision was; the Roll back action is added by the plan that follows.
 export function RevisionDetail({ envId, stackId, item, stack, headingRef }: RevisionDetailProps) {
   const t = useT();
   const op = stack?.lastOperation;
@@ -94,6 +95,12 @@ export function RevisionDetail({ envId, stackId, item, stack, headingRef }: Revi
             <AlertDescription>{t("stackHistory.detail.deployed")}</AlertDescription>
           </Alert>
         ) : null}
+        <RevisionTabs
+          envId={envId}
+          stackId={stackId}
+          seq={item.seq}
+          name={stack?.name ?? stackId}
+        />
       </CardContent>
     </Card>
   );

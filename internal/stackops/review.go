@@ -791,6 +791,14 @@ func textDiffOf(old, next string) TextDiff {
 	return TextDiff{Hunks: hunks, ChangedLines: stacks.ChangedLines(hunks), Lines: stacks.SplitLines(next)}
 }
 
+// RevisionYAMLDiff compares the stored rendering of a revision (next) with another rendering (old), line by
+// line. It is textDiffOf with the same bounds (stacks.LineDiff): there is nothing to show when they are the
+// same. Both texts are the masked renderings that were stored with their revisions, so no secret is in
+// either.
+func RevisionYAMLDiff(old, next []byte) TextDiff {
+	return textDiffOf(string(old), string(next))
+}
+
 // renderedChange is the rendered stack of the draft, with the images the review chose, against the
 // rendering stored with the last good revision. Both are masked: the stored one when it was taken,
 // this one by the draft's own secrets. A rendering that cannot be made is no change shown (the

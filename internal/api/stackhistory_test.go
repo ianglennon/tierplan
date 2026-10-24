@@ -4,6 +4,7 @@
 package api_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -148,5 +149,174 @@ func TestStackRevisionsListAFailedRevisionWithItsReason(t *testing.T) {
 	it := got.Items[0]
 	if it.Outcome != "failed" || it.FailedService != "web" || it.Code != stackops.CodeServiceRejected || it.Reason != stackops.CodeMessage(stackops.CodeServiceRejected) || it.Reason == "" || it.Deployed {
 		t.Errorf("item = %+v, want failed on web with the sentence of service_rejected, not deployed", it)
+	}
+}
+
+// A revision's card (plan 08-02, STK-08, D-05): its stored rendering, files, variables, pinned images and the
+// difference from the deployed revision, with no secret in any of it.
+
+type stackRevisionAnswer struct {
+	Item struct {
+		Seq      int64 `json:"seq"`
+		Deployed bool  `json:"deployed"`
+	} `json:"item"`
+	DeployedSeq int64  `json:"deployedSeq"`
+	Rendered    string `json:"rendered"`
+	Files       []struct {
+		Path   string `json:"path"`
+		Secret bool   `json:"secret"`
+	} `json:"files"`
+	Vars []struct {
+		Name   string `json:"name"`
+		Value  string `json:"value"`
+		Secret bool   `json:"secret"`
+	} `json:"vars"`
+	Pins []struct {
+		Service string `json:"service"`
+		Image   string `json:"image"`
+		Digest  string `json:"digest"`
+	} `json:"pins"`
+	YAML struct {
+		ChangedLines int `json:"changedLines"`
+		Hunks        []struct {
+			Lines []struct {
+				Kind string `json:"kind"`
+				Text string `json:"text"`
+			} `json:"lines"`
+		} `json:"hunks"`
+	} `json:"yaml"`
+}
+
+func TestStackRevisionDetail(t *testing.T) {
+	t.Parallel()
+	const (
+		secretValue = "tok-9f8e7d6c5b4a"    //nolint:gosec // a made-up value the test must never find in an answer
+		secretFile  = "file-1a2b3c4d5e6f7a" //nolint:gosec // a made-up value the test must never find in an answer
+	)
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	st := newStack(t, admin, "card")
+
+	// Two deploys of a stack with a secret variable, a plain one and a secret file.
+	compose := func(image string) string {
+		return "services:\n  web:\n    image: " + image + "\n    environment:\n      TOKEN: ${TOKEN}\n      PLAIN: ${PLAIN}\n    secrets: [tok]\nsecrets:\n  tok:\n    file: tok.txt\n"
+	}
+	deploy := func(image string) {
+		t.Helper()
+		cb, _ := json.Marshal(compose(image))
+		body := `{"version":` + itoaT(draftVersion(t, operator, st.ID)) + `,"files":[{"path":"compose.yaml","content":` + string(cb) + `,"secret":false},` +
+			`{"path":"tok.txt","content":"` + secretFile + `","secret":true}],` +
+			`"vars":[{"name":"TOKEN","value":"` + secretValue + `","secret":true},{"name":"PLAIN","value":"visible","secret":false}]}`
+		if rec := operator.saveDraft(st.ID, body); rec.Code != http.StatusOK {
+			t.Fatalf("save: %d %s", rec.Code, rec.Body)
+		}
+		if job := f.deployAndWait(t, operator, st.ID, `{"draftVersion":`+itoaT(draftVersion(t, operator, st.ID))+`}`); job.State != "done" {
+			t.Fatalf("deploy = %+v, want it done", job)
+		}
+	}
+	deploy("nginx:1.27-alpine")
+	deploy("nginx:1.28-alpine")
+
+	// A Viewer reads the older revision.
+	rec := viewer.do(http.MethodGet, "stacks/"+st.ID+"/revisions/1", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("revision 1: %d %s", rec.Code, rec.Body)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q", cc)
+	}
+	// No secret reaches the answer, whoever asks.
+	for _, c := range []*roleCaller{viewer, operator, admin} {
+		body := c.do(http.MethodGet, "stacks/"+st.ID+"/revisions/1", "").Body.String()
+		for _, secret := range []string{secretValue, secretFile} {
+			if strings.Contains(body, secret) {
+				t.Fatalf("a secret reached the answer: %s", body)
+			}
+		}
+	}
+	got := answerOf[stackRevisionAnswer](t, rec)
+	if got.Item.Seq != 1 || got.Item.Deployed || got.DeployedSeq != 2 {
+		t.Errorf("revision = seq %d deployed %v, deployedSeq %d, want 1, not deployed, 2 deployed", got.Item.Seq, got.Item.Deployed, got.DeployedSeq)
+	}
+	// The files: paths and whether secret, nothing else (the answer has no field for a file's content).
+	files := map[string]bool{}
+	for _, fl := range got.Files {
+		files[fl.Path] = fl.Secret
+	}
+	if len(files) != 2 || files["compose.yaml"] || !files["tok.txt"] {
+		t.Errorf("files = %+v, want compose.yaml plain and tok.txt secret", got.Files)
+	}
+	if strings.Contains(rec.Body.String(), `"content"`) {
+		t.Errorf("the answer has a content field: %s", rec.Body)
+	}
+	// The variables: a secret value reads <hidden>, a plain one is as stored.
+	vars := map[string]string{}
+	for _, v := range got.Vars {
+		vars[v.Name] = v.Value
+		if v.Secret != (v.Name == "TOKEN") {
+			t.Errorf("variable %+v: secret = %v", v, v.Secret)
+		}
+	}
+	if vars["TOKEN"] != stacks.Hidden || vars["PLAIN"] != "visible" {
+		t.Errorf("variables = %v, want TOKEN <hidden> and PLAIN visible", vars)
+	}
+	// The pins are named as the compose file names the service, with their digest.
+	if len(got.Pins) != 1 || got.Pins[0].Service != "web" || !strings.HasPrefix(got.Pins[0].Image, "nginx:1.27") || !strings.HasPrefix(got.Pins[0].Digest, "sha256:") {
+		t.Errorf("pins = %+v, want web pinned to nginx:1.27 with a sha256 digest", got.Pins)
+	}
+	// The rendering is the stored one: the older image, the secret as <hidden>.
+	if !strings.Contains(got.Rendered, "nginx:1.27") || strings.Contains(got.Rendered, "nginx:1.28") || !strings.Contains(got.Rendered, stacks.Hidden) {
+		t.Errorf("rendered = %q, want the 1.27 rendering with the secret hidden", got.Rendered)
+	}
+	// The diff runs from the deployed rendering (1.28) to this one (1.27).
+	var added, removed int
+	for _, h := range got.YAML.Hunks {
+		for _, l := range h.Lines {
+			switch {
+			case l.Kind == "added" && strings.Contains(l.Text, "nginx:1.27"):
+				added++
+			case l.Kind == "removed" && strings.Contains(l.Text, "nginx:1.28"):
+				removed++
+			}
+		}
+	}
+	if added != 1 || removed != 1 || got.YAML.ChangedLines < 2 {
+		t.Errorf("yaml diff = %+v, want 1.28 removed and 1.27 added", got.YAML)
+	}
+
+	// The deployed revision has no difference from itself.
+	deployed := answerOf[stackRevisionAnswer](t, viewer.do(http.MethodGet, "stacks/"+st.ID+"/revisions/2", ""))
+	if !deployed.Item.Deployed || len(deployed.YAML.Hunks) != 0 || deployed.YAML.ChangedLines != 0 {
+		t.Errorf("deployed revision = %+v, want deployed with no diff", deployed)
+	}
+
+	// A number the stack does not hold is gone; so is one that is not a number at all.
+	rec = viewer.do(http.MethodGet, "stacks/"+st.ID+"/revisions/99", "")
+	if rec.Code != http.StatusNotFound || problemType(t, rec) != "revision_not_found" || !strings.Contains(rec.Body.String(), "That revision is gone.") {
+		t.Errorf("revision 99: %d %s, want 404 revision_not_found", rec.Code, rec.Body)
+	}
+	for _, seq := range []string{"0", "-1", "x"} {
+		if rec = viewer.do(http.MethodGet, "stacks/"+st.ID+"/revisions/"+seq, ""); rec.Code != http.StatusUnprocessableEntity {
+			t.Errorf("revision %s: %d %s, want 422", seq, rec.Code, rec.Body)
+		}
+	}
+
+	// A stack of another environment is not found, whoever asks, and so is a revision read through it.
+	ctx := testsupport.Context(t)
+	if _, err := f.st.Write.ExecContext(ctx, `INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at) VALUES ('env-elsewhere', 'agent', 'elsewhere', '', 1, 1, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	repo := stackops.Repo{Store: f.st, Vault: f.v}
+	foreign, _, err := repo.CreateStack(ctx, "env-elsewhere", "foreign", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte("services: {}\n")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{foreign.ID, st.ID + "x", "not-a-stack"} {
+		rec = viewer.do(http.MethodGet, "stacks/"+id+"/revisions/1", "")
+		if rec.Code != http.StatusNotFound || problemType(t, rec) != "stack_not_found" {
+			t.Errorf("revision 1 of %s: %d %s, want 404 stack_not_found", id, rec.Code, rec.Body)
+		}
 	}
 }

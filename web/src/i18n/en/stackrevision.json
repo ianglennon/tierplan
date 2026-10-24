@@ -1,0 +1,90 @@
+{
+  "stackRevision": {
+    "tabs": {
+      "label": "Revision #{{seq}}",
+      "yaml": "YAML diff",
+      "rendered": "Rendered",
+      "contents": "Contents"
+    },
+    "loading": "Loading revision #{{seq}}…",
+    "yaml": {
+      "caption": "Rendered YAML, revision #{{seq}} against #{{deployed}}",
+      "same": {
+        "title": "No changes",
+        "body": "Revision #{{seq}} has the same content as the deployed revision."
+      },
+      "deployed": {
+        "title": "No changes",
+        "body": "This is the deployed revision."
+      },
+      "noDeployed": {
+        "title": "Nothing to compare with",
+        "body": "No revision is deployed yet."
+      },
+      "noRendering": {
+        "title": "No rendering stored",
+        "body": "Revision #{{seq}} was never rendered, so there is nothing to compare."
+      }
+    },
+    "rendered": {
+      "title": "Revision #{{seq}}, rendered",
+      "helper": "The compose file as it was deployed, with variables filled in and images pinned. Hidden values show as <hidden>.",
+      "label": "Rendered stack, revision {{seq}}, read only",
+      "loading": "Loading the compose file…",
+      "copy": "Copy",
+      "copied": "Copied",
+      "download": "Download",
+      "empty": {
+        "title": "No rendering stored",
+        "body": "Revision #{{seq}} was never rendered, so there is no compose file to show."
+      }
+    },
+    "contents": {
+      "helper": "A roll back restores all of this exactly, including the pinned images. It never looks anything up in a registry.",
+      "files": {
+        "title": "Files",
+        "count_one": "{{count, number}} file",
+        "count_other": "{{count, number}} files",
+        "caption": "Files of revision #{{seq}}",
+        "file": "File",
+        "type": "Type",
+        "plain": "Plain",
+        "secret": "Secret",
+        "hidden": "Hidden"
+      },
+      "vars": {
+        "title": "Variables",
+        "count_one": "{{count, number}} variable",
+        "count_other": "{{count, number}} variables",
+        "caption": "Variables of revision #{{seq}}",
+        "name": "Name",
+        "value": "Value",
+        "secret": "Secret",
+        "yes": "Yes",
+        "no": "No",
+        "none": "This revision has no variables."
+      },
+      "pins": {
+        "title": "Pinned images",
+        "count_one": "{{count, number}} image",
+        "count_other": "{{count, number}} images",
+        "caption": "Images pinned by revision #{{seq}}",
+        "service": "Service",
+        "image": "Image",
+        "digest": "Digest",
+        "none": "This revision pinned no images."
+      }
+    },
+    "error": {
+      "yaml": "Couldn't load this revision's YAML.",
+      "contents": "Couldn't load this revision's contents.",
+      "body": "Check the connection and try again.",
+      "retry": "Retry"
+    },
+    "gone": {
+      "title": "That revision is gone",
+      "body": "Bayplan keeps the last {{count, number}} revisions of each stack, and this one was deleted.",
+      "back": "Back to history"
+    }
+  }
+}

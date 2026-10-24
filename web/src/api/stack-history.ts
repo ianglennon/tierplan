@@ -11,6 +11,7 @@ import { isStackGone, StacksLoadError, stackKey } from "@/api/stacks";
 
 export type StackRevision = components["schemas"]["StackRevisionItem"];
 export type StackRevisionList = components["schemas"]["StackRevisionListBody"];
+export type StackRevisionDetail = components["schemas"]["StackRevisionDetailBody"];
 export type StackRevisionImageChange = components["schemas"]["StackRevisionImageChange"];
 
 // The query key of a stack's revisions. It extends the stack's key, so the events feed that refreshes the
@@ -36,6 +37,41 @@ export function revisionsQuery(envId: string, stackId: string) {
       return res.data;
     },
     retry: (count, error) => !isStackGone(error) && count < 3,
+    refetchInterval: () => (document.visibilityState === "visible" ? LIST_REFETCH_MS : false),
+  });
+}
+
+// The query key of one revision of a stack. It extends the key of the list, so whatever refreshes the
+// history refreshes an open revision too.
+export function revisionKey(envId: string, stackId: string, seq: number) {
+  return [...revisionsKey(envId, stackId), seq] as const;
+}
+
+// isRevisionGone says whether the error is the server answering that the stack holds no such revision: it
+// was never taken, or retention deleted it.
+export function isRevisionGone(error: unknown): boolean {
+  return (
+    error instanceof StacksLoadError && error.status === 404 && error.type === "revision_not_found"
+  );
+}
+
+// One revision with its stored rendering, files, variables, pinned images and the YAML difference from the
+// deployed revision. A secret variable reads <hidden> and a secret file has no content in it: History has no
+// way to reveal either. A revision that is gone, or a stack that is, is not retried.
+export function revisionQuery(envId: string, stackId: string, seq: number) {
+  return queryOptions({
+    queryKey: revisionKey(envId, stackId, seq),
+    queryFn: async (): Promise<StackRevisionDetail> => {
+      const res = await api.GET("/api/env/{envId}/stacks/{stackId}/revisions/{seq}", {
+        params: { path: { envId, stackId, seq } },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new StacksLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    retry: (count, error) => !isStackGone(error) && !isRevisionGone(error) && count < 3,
     refetchInterval: () => (document.visibilityState === "visible" ? LIST_REFETCH_MS : false),
   });
 }

@@ -13509,6 +13509,86 @@
         ],
         "type": "object"
       },
+      "StackRevisionDetailBody": {
+        "additionalProperties": false,
+        "properties": {
+          "deployedSeq": {
+            "description": "The number of the deployed revision (the newest good one); 0 when the stack has none",
+            "format": "int64",
+            "type": "integer"
+          },
+          "files": {
+            "description": "The stack's files in the revision, by path",
+            "items": {
+              "$ref": "#/components/schemas/StackRevisionFileBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "item": {
+            "$ref": "#/components/schemas/StackRevisionItem",
+            "description": "The revision as the list shows it"
+          },
+          "pins": {
+            "description": "The images the revision was deployed with, by service",
+            "items": {
+              "$ref": "#/components/schemas/StackRevisionPinBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "rendered": {
+            "description": "The rendering stored with the revision, masked when it was stored: a secret value is \u003chidden\u003e. Empty for a revision with none",
+            "type": "string"
+          },
+          "vars": {
+            "description": "The stack's variables in the revision, by name",
+            "items": {
+              "$ref": "#/components/schemas/StackRevisionVarBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "yaml": {
+            "$ref": "#/components/schemas/StackTextDiffBody",
+            "description": "The deployed revision's rendering against this revision's. No hunks for the deployed revision itself, for a revision with the same rendering, and when either has no stored rendering"
+          }
+        },
+        "required": [
+          "item",
+          "deployedSeq",
+          "rendered",
+          "files",
+          "vars",
+          "pins",
+          "yaml"
+        ],
+        "type": "object"
+      },
+      "StackRevisionFileBody": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "description": "The file's path in the stack",
+            "type": "string"
+          },
+          "secret": {
+            "description": "True for a secret file. Its content is not in any answer about a revision",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "secret"
+        ],
+        "type": "object"
+      },
       "StackRevisionImageChange": {
         "additionalProperties": false,
         "properties": {
@@ -13647,6 +13727,52 @@
         "required": [
           "items",
           "capped"
+        ],
+        "type": "object"
+      },
+      "StackRevisionPinBody": {
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "description": "The sha256 digest of the reference; empty when it has none",
+            "type": "string"
+          },
+          "image": {
+            "description": "The reference the revision pinned, tag@sha256",
+            "type": "string"
+          },
+          "service": {
+            "description": "The service's name in the compose file",
+            "type": "string"
+          }
+        },
+        "required": [
+          "service",
+          "image",
+          "digest"
+        ],
+        "type": "object"
+      },
+      "StackRevisionVarBody": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "The variable's name",
+            "type": "string"
+          },
+          "secret": {
+            "description": "True for a secret variable",
+            "type": "boolean"
+          },
+          "value": {
+            "description": "The value; \u003chidden\u003e for a secret variable, whoever asks",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value",
+          "secret"
         ],
         "type": "object"
       },
@@ -24079,6 +24205,79 @@
           }
         },
         "summary": "The revisions of a stack",
+        "tags": [
+          "stacks"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/revisions/{seq}": {
+      "get": {
+        "description": "What a revision deployed: the rendering stored with it, its files (path and whether secret; a file's content is never sent), its variables (a secret variable's value is \u003chidden\u003e, for every caller: there is no reveal for a revision), the images it pinned by service with their digests, and the difference of its rendering from the deployed revision's. A revision number the stack does not hold (never taken, or deleted by retention) is 404 revision_not_found; a stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).",
+        "operationId": "getStackRevision",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The revision number",
+            "in": "path",
+            "name": "seq",
+            "required": true,
+            "schema": {
+              "description": "The revision number",
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackRevisionDetailBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "One revision of a stack",
         "tags": [
           "stacks"
         ]

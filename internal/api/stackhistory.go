@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -67,6 +68,7 @@ func registerStackHistory(r *httpx.Router, d StacksDeps) {
 		func(ctx context.Context, in *StackPathInput) (*StackRevisionListOutput, error) {
 			return listStackRevisions(ctx, d, in)
 		})
+	registerStackRevision(r, d)
 }
 
 func listStackRevisions(ctx context.Context, d StacksDeps, in *StackPathInput) (*StackRevisionListOutput, error) {
@@ -82,25 +84,133 @@ func listStackRevisions(ctx context.Context, d StacksDeps, in *StackPathInput) (
 	}
 	body := StackRevisionListBody{Items: make([]StackRevisionItem, 0, len(rows)), Capped: capped}
 	for _, row := range rows {
-		item := StackRevisionItem{
-			Seq: row.Seq, Origin: row.Origin, RestoredFrom: row.RestoredFrom, Outcome: row.Outcome, CreatedBy: row.CreatedBy,
-			CreatedAt: row.CreatedAt.UTC().Format(time.RFC3339), FailedService: row.FailedService, Code: row.Code,
-			Reason: stackops.CodeMessage(row.Code), Deployed: row.Deployed, Pinned: row.Pinned,
-			Images: make([]StackRevisionImageChange, 0, len(row.Images)),
-		}
-		for _, c := range row.Images {
-			// A swarm revision pins by swarm service name, {stack}_{service}; the list names the service as the
-			// compose file does.
-			service := c.Service
-			if st.Target == stacks.TargetSwarm {
-				service = strings.TrimPrefix(service, st.Name+"_")
-			}
-			item.Images = append(item.Images, StackRevisionImageChange{Service: service, From: c.From, To: c.To})
-		}
-		if row.Origin == stackops.OriginAdopted {
-			item.AdoptedFrom = st.Source.Ref
-		}
-		body.Items = append(body.Items, item)
+		body.Items = append(body.Items, revisionItem(st, row))
 	}
 	return &StackRevisionListOutput{CacheControl: "no-store", Body: body}, nil
+}
+
+// revisionItem is a revision of the stack as the list and the detail name it.
+func revisionItem(st stackops.Stack, row stackops.RevisionRow) StackRevisionItem {
+	item := StackRevisionItem{
+		Seq: row.Seq, Origin: row.Origin, RestoredFrom: row.RestoredFrom, Outcome: row.Outcome, CreatedBy: row.CreatedBy,
+		CreatedAt: row.CreatedAt.UTC().Format(time.RFC3339), FailedService: row.FailedService, Code: row.Code,
+		Reason: stackops.CodeMessage(row.Code), Deployed: row.Deployed, Pinned: row.Pinned,
+		Images: make([]StackRevisionImageChange, 0, len(row.Images)),
+	}
+	for _, c := range row.Images {
+		item.Images = append(item.Images, StackRevisionImageChange{Service: pinService(st, c.Service), From: c.From, To: c.To})
+	}
+	if row.Origin == stackops.OriginAdopted {
+		item.AdoptedFrom = st.Source.Ref
+	}
+	return item
+}
+
+// pinService names a pinned service as the compose file does. A swarm revision pins by swarm service name,
+// {stack}_{service}; a standalone one already pins by the compose name.
+func pinService(st stackops.Stack, service string) string {
+	if st.Target == stacks.TargetSwarm {
+		return strings.TrimPrefix(service, st.Name+"_")
+	}
+	return service
+}
+
+// StackRevisionInput is the path of one revision of a stack.
+type StackRevisionInput struct {
+	EnvID   string `path:"envId" doc:"The environment ID"`
+	StackID string `path:"stackId" doc:"The stack ID"`
+	Seq     int64  `path:"seq" minimum:"1" doc:"The revision number"`
+}
+
+// StackRevisionFileBody is a file of a revision. Its content is never sent: a plain file's is the stored
+// rendering's business, and a secret file's is nobody's.
+type StackRevisionFileBody struct {
+	Path   string `json:"path" doc:"The file's path in the stack"`
+	Secret bool   `json:"secret" doc:"True for a secret file. Its content is not in any answer about a revision"`
+}
+
+// StackRevisionVarBody is a variable of a revision.
+type StackRevisionVarBody struct {
+	Name   string `json:"name" doc:"The variable's name"`
+	Value  string `json:"value" doc:"The value; <hidden> for a secret variable, whoever asks"`
+	Secret bool   `json:"secret" doc:"True for a secret variable"`
+}
+
+// StackRevisionPinBody is an image a revision was deployed with.
+type StackRevisionPinBody struct {
+	Service string `json:"service" doc:"The service's name in the compose file"`
+	Image   string `json:"image" doc:"The reference the revision pinned, tag@sha256"`
+	Digest  string `json:"digest" doc:"The sha256 digest of the reference; empty when it has none"`
+}
+
+// StackRevisionDetailBody is one revision of a stack.
+type StackRevisionDetailBody struct {
+	Item        StackRevisionItem       `json:"item" doc:"The revision as the list shows it"`
+	DeployedSeq int64                   `json:"deployedSeq" doc:"The number of the deployed revision (the newest good one); 0 when the stack has none"`
+	Rendered    string                  `json:"rendered" doc:"The rendering stored with the revision, masked when it was stored: a secret value is <hidden>. Empty for a revision with none"`
+	Files       []StackRevisionFileBody `json:"files" doc:"The stack's files in the revision, by path"`
+	Vars        []StackRevisionVarBody  `json:"vars" doc:"The stack's variables in the revision, by name"`
+	Pins        []StackRevisionPinBody  `json:"pins" doc:"The images the revision was deployed with, by service"`
+	YAML        StackTextDiffBody       `json:"yaml" doc:"The deployed revision's rendering against this revision's. No hunks for the deployed revision itself, for a revision with the same rendering, and when either has no stored rendering"`
+}
+
+// StackRevisionDetailOutput wraps StackRevisionDetailBody for huma.
+type StackRevisionDetailOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         StackRevisionDetailBody
+}
+
+const problemRevisionNotFound = "revision_not_found"
+
+func registerStackRevision(r *httpx.Router, d StacksDeps) {
+	httpx.Register(r, huma.Operation{
+		OperationID: "getStackRevision", Method: http.MethodGet, Path: "/api/env/{envId}/stacks/{stackId}/revisions/{seq}",
+		Summary: "One revision of a stack",
+		Description: "What a revision deployed: the rendering stored with it, its files (path and whether secret; a file's content is never sent), " +
+			"its variables (a secret variable's value is <hidden>, for every caller: there is no reveal for a revision), " +
+			"the images it pinned by service with their digests, and the difference of its rendering from the deployed revision's. " +
+			"A revision number the stack does not hold (never taken, or deleted by retention) is 404 revision_not_found; " +
+			"a stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).",
+		Tags: []string{"stacks"},
+	}, rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *StackRevisionInput) (*StackRevisionDetailOutput, error) {
+			return getStackRevision(ctx, d, in)
+		})
+}
+
+func getStackRevision(ctx context.Context, d StacksDeps, in *StackRevisionInput) (*StackRevisionDetailOutput, error) {
+	repo := d.repo()
+	// The stack is read by its environment and ID first, so a revision of another environment's stack is not
+	// found; the revision is then read by that stack's ID and its number.
+	st, err := repo.Stack(ctx, in.EnvID, in.StackID)
+	if err != nil {
+		return nil, stackLookupProblem(d, in.EnvID, err)
+	}
+	rev, err := repo.RevisionDetail(ctx, st, in.Seq)
+	if errors.Is(err, stackops.ErrRevisionNotFound) {
+		return nil, httpx.Problem(http.StatusNotFound, problemRevisionNotFound, "That revision is gone.")
+	}
+	if err != nil {
+		return nil, stackInternal(d, "read revision", in.EnvID, err)
+	}
+	body := StackRevisionDetailBody{
+		Item: revisionItem(st, rev.Row), DeployedSeq: rev.DeployedSeq, Rendered: string(rev.Rendered),
+		Files: make([]StackRevisionFileBody, 0, len(rev.Copy.Files)), Vars: make([]StackRevisionVarBody, 0, len(rev.Copy.Vars)),
+		Pins: make([]StackRevisionPinBody, 0, len(rev.Pins)), YAML: textDiffBody(rev.YAML),
+	}
+	// Only the path of a file is sent, whether plain or secret: the contents of a revision are its rendering.
+	for _, f := range rev.Copy.Files {
+		body.Files = append(body.Files, StackRevisionFileBody{Path: f.Path, Secret: f.Secret})
+	}
+	for _, v := range rev.Copy.Vars {
+		value := v.Value
+		if v.Secret {
+			value = stacks.Hidden
+		}
+		body.Vars = append(body.Vars, StackRevisionVarBody{Name: v.Name, Value: value, Secret: v.Secret})
+	}
+	for _, p := range rev.Pins {
+		body.Pins = append(body.Pins, StackRevisionPinBody{Service: pinService(st, p.Service), Image: p.Image, Digest: p.Digest})
+	}
+	return &StackRevisionDetailOutput{CacheControl: "no-store", Body: body}, nil
 }

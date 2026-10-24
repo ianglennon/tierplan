@@ -5,11 +5,14 @@ package stackops
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
 
+	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/store/sqlc"
 )
 
@@ -102,4 +105,83 @@ func imageChanges(before, now map[string]string) []ImageChange {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Service < out[j].Service })
 	return out
+}
+
+// RevisionPin is one image a revision was deployed with.
+type RevisionPin struct {
+	// Service is the name the revision stored the pin under: the swarm service name for a swarm stack, the
+	// compose name for a standalone one.
+	Service string
+	// Image is the reference as stored, tag@sha256; Digest is its sha256 part, empty when it has none.
+	Image, Digest string
+}
+
+// RevisionDetail is one revision as its card shows it: the row of the list, the stored rendering, the files
+// and variables with their secrets opened (the caller hides them before they leave the server), the pinned
+// images, and how the rendering differs from the deployed revision's.
+type RevisionDetail struct {
+	Row RevisionRow
+	// Rendered is the masked rendering stored with the revision, as it was stored. It is empty for a revision
+	// that has none (one still deploying, or taken before renderings were stored).
+	Rendered []byte
+	Copy     stacks.WorkingCopy
+	// Pins are sorted by service.
+	Pins []RevisionPin
+	// DeployedSeq is the number of the stack's newest good revision, 0 when it has none.
+	DeployedSeq int64
+	// YAML is the rendering of the deployed revision against this revision's. It is empty when this is the
+	// deployed revision, when none is deployed, and when either has no stored rendering.
+	YAML TextDiff
+}
+
+// RevisionDetail reads one revision of a stack by its number. A number the stack has no revision for (never
+// taken, or pruned) is ErrRevisionNotFound. It only reads.
+func (r Repo) RevisionDetail(ctx context.Context, stack Stack, seq int64) (RevisionDetail, error) {
+	snap, err := r.Revision(ctx, stack.ID, seq)
+	if err != nil {
+		return RevisionDetail{}, err
+	}
+	ran, err := r.Store.RQ.GetSnapshotPinsAndRendered(ctx, snap.ID)
+	if err != nil {
+		return RevisionDetail{}, fmt.Errorf("read the rendering of revision %d: %w", seq, err)
+	}
+	var pins map[string]string
+	if err := json.Unmarshal([]byte(ran.Pins), &pins); err != nil {
+		return RevisionDetail{}, fmt.Errorf("read the pins of revision %d: %w", seq, err)
+	}
+	out := RevisionDetail{Rendered: []byte(ran.Rendered), Copy: snap.Copy, Pins: make([]RevisionPin, 0, len(pins))}
+	for service, ref := range pins {
+		out.Pins = append(out.Pins, RevisionPin{Service: service, Image: ref, Digest: digestOf(ref)})
+	}
+	sort.Slice(out.Pins, func(i, j int) bool { return out.Pins[i].Service < out.Pins[j].Service })
+
+	// The row is the one the list shows. A revision older than the list's cap is not in it: it gets the part of
+	// the row the revision itself holds.
+	rows, _, err := r.ListRevisions(ctx, stack.ID)
+	if err != nil {
+		return RevisionDetail{}, err
+	}
+	out.Row = RevisionRow{
+		Seq: snap.Seq, Origin: snap.Origin, RestoredFrom: snap.RestoredFrom, Outcome: snap.Outcome, CreatedBy: snap.CreatedBy,
+		CreatedAt: snap.CreatedAt,
+	}
+	for _, row := range rows {
+		if row.Seq == seq {
+			out.Row = row
+			break
+		}
+	}
+
+	deployed, err := r.Store.RQ.LatestGoodRevision(ctx, stack.ID)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return out, nil
+	case err != nil:
+		return RevisionDetail{}, fmt.Errorf("read the deployed revision: %w", err)
+	}
+	out.DeployedSeq = deployed.Seq
+	if deployed.Seq != seq && deployed.Rendered != "" && len(out.Rendered) > 0 {
+		out.YAML = RevisionYAMLDiff([]byte(deployed.Rendered), out.Rendered)
+	}
+	return out, nil
 }

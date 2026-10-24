@@ -2236,6 +2236,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks/{stackId}/revisions/{seq}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One revision of a stack
+         * @description What a revision deployed: the rendering stored with it, its files (path and whether secret; a file's content is never sent), its variables (a secret variable's value is <hidden>, for every caller: there is no reveal for a revision), the images it pinned by service with their digests, and the difference of its rendering from the deployed revision's. A revision number the stack does not hold (never taken, or deleted by retention) is 404 revision_not_found; a stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).
+         */
+        get: operations["getStackRevision"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/stacks/{stackId}/rollback": {
         parameters: {
             query?: never;
@@ -9232,6 +9252,31 @@ export interface components {
             /** @description Volumes the stack's deploy would create on a standalone host. Always zero on a swarm: the engine of each node makes a named volume when a task first uses it */
             volumes: components["schemas"]["StackReviewCountsBody"];
         };
+        StackRevisionDetailBody: {
+            /**
+             * Format: int64
+             * @description The number of the deployed revision (the newest good one); 0 when the stack has none
+             */
+            deployedSeq: number;
+            /** @description The stack's files in the revision, by path */
+            files: components["schemas"]["StackRevisionFileBody"][] | null;
+            /** @description The revision as the list shows it */
+            item: components["schemas"]["StackRevisionItem"];
+            /** @description The images the revision was deployed with, by service */
+            pins: components["schemas"]["StackRevisionPinBody"][] | null;
+            /** @description The rendering stored with the revision, masked when it was stored: a secret value is <hidden>. Empty for a revision with none */
+            rendered: string;
+            /** @description The stack's variables in the revision, by name */
+            vars: components["schemas"]["StackRevisionVarBody"][] | null;
+            /** @description The deployed revision's rendering against this revision's. No hunks for the deployed revision itself, for a revision with the same rendering, and when either has no stored rendering */
+            yaml: components["schemas"]["StackTextDiffBody"];
+        };
+        StackRevisionFileBody: {
+            /** @description The file's path in the stack */
+            path: string;
+            /** @description True for a secret file. Its content is not in any answer about a revision */
+            secret: boolean;
+        };
         StackRevisionImageChange: {
             /** @description The reference the previous good revision ran, tag@sha256; empty for a service that revision did not have */
             from: string;
@@ -9291,6 +9336,22 @@ export interface components {
             capped: boolean;
             /** @description The revisions of the stack, newest first by revision number. A pruned revision is gone from the list */
             items: components["schemas"]["StackRevisionItem"][] | null;
+        };
+        StackRevisionPinBody: {
+            /** @description The sha256 digest of the reference; empty when it has none */
+            digest: string;
+            /** @description The reference the revision pinned, tag@sha256 */
+            image: string;
+            /** @description The service's name in the compose file */
+            service: string;
+        };
+        StackRevisionVarBody: {
+            /** @description The variable's name */
+            name: string;
+            /** @description True for a secret variable */
+            secret: boolean;
+            /** @description The value; <hidden> for a secret variable, whoever asks */
+            value: string;
         };
         StackRollbackBody: {
             /** @description True when there is an earlier version that ran well to roll back to */
@@ -14855,6 +14916,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackRevisionListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getStackRevision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+                /** @description The revision number */
+                seq: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackRevisionDetailBody"];
                 };
             };
             /** @description Error */
