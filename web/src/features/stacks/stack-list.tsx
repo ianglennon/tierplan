@@ -25,7 +25,12 @@ import type {
   StackSortKey,
 } from "@/features/stacks/list-search";
 import { type StackRow, stackColumns, stackRowKey } from "@/features/stacks/stack-columns";
-import { StackFilterBar, StackNoMatch } from "@/features/stacks/stack-filter-bar";
+import {
+  DiscoveryFailedNotice,
+  StackFilterBar,
+  StackKindEmpty,
+  StackNoMatch,
+} from "@/features/stacks/stack-filter-bar";
 import { usePermission } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -63,6 +68,7 @@ export function StackList({
     ...stacksQuery(envId, {
       q: search.q,
       status: search.status,
+      kind: search.kind,
       sort: search.sort,
       dir: search.dir,
     }),
@@ -88,8 +94,9 @@ export function StackList({
   );
 
   const columns = stackColumns(t);
-  const filtered = Boolean(search.q || search.status);
-  const clearFilters = () => onSearchChange({ q: undefined, status: undefined });
+  const unmanagedCount = data?.kindCounts?.unmanaged ?? 0;
+  const filtered = Boolean(search.q || search.status || search.kind);
+  const clearFilters = () => onSearchChange({ q: undefined, status: undefined, kind: undefined });
 
   function onSort(key: string) {
     const next = key as StackSortKey;
@@ -101,13 +108,23 @@ export function StackList({
   // at all, a user who may create one is told what a stack is and given the button, and anyone else
   // gets the table's own "Nothing to show on {environment} right now."
   const noneAtAll = !filtered || (data?.unfilteredTotal ?? 0) === 0;
+  // The Show group alone left nothing: every stack is managed, or every stack was created elsewhere.
+  const kindOnly =
+    search.kind !== undefined &&
+    !search.q &&
+    !search.status &&
+    (search.kind === "unmanaged" || (data?.kindCounts?.unmanaged ?? 0) > 0);
   const empty = !noneAtAll ? (
-    <StackNoMatch
-      q={search.q}
-      moreThanSearch={Boolean(search.status)}
-      onClearSearch={() => onSearchChange({ q: undefined })}
-      onClear={clearFilters}
-    />
+    kindOnly && search.kind ? (
+      <StackKindEmpty kind={search.kind} envName={envName} onClear={clearFilters} />
+    ) : (
+      <StackNoMatch
+        q={search.q}
+        moreThanSearch={Boolean(search.status || search.kind)}
+        onClearSearch={() => onSearchChange({ q: undefined })}
+        onClear={clearFilters}
+      />
+    )
   ) : create.allowed ? (
     <Empty className="min-h-[30svh] border">
       <EmptyHeader>
@@ -129,6 +146,9 @@ export function StackList({
       q={search.q}
       status={search.status}
       counts={data?.statusCounts}
+      kind={search.kind}
+      kindCounts={data?.kindCounts}
+      onKind={(kind) => onSearchChange({ kind })}
       filtered={filtered}
       onSearch={(q) => onSearchChange({ q })}
       onStatus={(status) => onSearchChange({ status })}
@@ -147,12 +167,26 @@ export function StackList({
         query={listQuery}
         envName={envName}
         toolbar={toolbar}
+        banner={
+          data?.discoveryFailed ? (
+            <DiscoveryFailedNotice
+              name={envName}
+              onRetry={() => void query.refetch()}
+              retrying={query.isFetching}
+            />
+          ) : undefined
+        }
         caption={
           data
-            ? `${t("stacks.list.caption", { name: envName })} ${
+            ? `${t("stackUnmanaged.caption.env", { name: envName })} ${
                 filtered
                   ? t("stackLists.filtered", { n: data.total, count: data.unfilteredTotal })
-                  : t("stacks.list.count", { count: data.total })
+                  : unmanagedCount > 0
+                    ? t("stackUnmanaged.caption.count", {
+                        count: data.total,
+                        unmanaged: unmanagedCount,
+                      })
+                    : t("stacks.list.count", { count: data.total })
               }`
             : undefined
         }

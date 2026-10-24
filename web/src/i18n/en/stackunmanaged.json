@@ -8,6 +8,43 @@
       "bayplan": "Bayplan",
       "agent": "Bayplan agent"
     },
-    "missing": "—"
+    "missing": "—",
+    "show": {
+      "label": "Show",
+      "all": "All",
+      "managed": "Managed",
+      "unmanaged": "Unmanaged",
+      "all_one": "All, {{count, number}}",
+      "all_other": "All, {{count, number}}",
+      "managed_one": "Managed, {{count, number}}",
+      "managed_other": "Managed, {{count, number}}",
+      "unmanaged_one": "Unmanaged, {{count, number}}",
+      "unmanaged_other": "Unmanaged, {{count, number}}"
+    },
+    "caption": {
+      "env": "Stacks on {{name}}.",
+      "global": "Stacks across your environments.",
+      "count_one": "{{count, number}} stack, {{unmanaged, number}} unmanaged",
+      "count_other": "{{count, number}} stacks, {{unmanaged, number}} unmanaged",
+      "globalCount_one": "{{count, number}} stack in {{environments}}, {{unmanaged, number}} unmanaged",
+      "globalCount_other": "{{count, number}} stacks in {{environments}}, {{unmanaged, number}} unmanaged"
+    },
+    "empty": {
+      "unmanaged": {
+        "title": "No unmanaged stacks",
+        "body": "Every stack on {{name}} is managed by Bayplan.",
+        "bodyGlobal": "Every stack on the environments shown is managed by Bayplan."
+      },
+      "managed": {
+        "title": "No managed stacks",
+        "body": "The stacks on {{name}} were all created elsewhere. Adopt one to manage it here.",
+        "bodyGlobal": "The stacks on the environments shown were all created elsewhere. Adopt one to manage it here."
+      },
+      "action": "Clear filters"
+    },
+    "discovery": {
+      "failed": "Couldn't look for unmanaged stacks on {{name}}.",
+      "retry": "Retry"
+    }
   }
 }

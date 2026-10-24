@@ -3,7 +3,6 @@
     "title": "Stacks",
     "documentTitle": "All stacks",
     "global": {
-      "caption": "Stacks Bayplan manages across your environments.",
       "count_one": "{{count, number}} stack in {{environments}}",
       "count_other": "{{count, number}} stacks in {{environments}}",
       "environments_one": "{{count, number}} environment",

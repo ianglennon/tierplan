@@ -53,6 +53,8 @@ export type StackResourceContainer = components["schemas"]["StackContainerResour
 export type StackResourceNetwork = components["schemas"]["StackNetworkResourceBody"];
 export type StackResourceVolume = components["schemas"]["StackVolumeResourceBody"];
 export type StackResourceObject = components["schemas"]["StackObjectResourceBody"];
+export type StackUnmanaged = components["schemas"]["StackUnmanagedBody"];
+export type StackKindCounts = components["schemas"]["StackKindCountsBody"];
 export type AllStacks = components["schemas"]["AllStacksBody"];
 export type AllStacksGroup = components["schemas"]["AllStacksGroup"];
 export type FailedEnvironment = components["schemas"]["FailedEnvironmentBody"];
@@ -121,6 +123,8 @@ export function isStackGone(error: unknown): boolean {
 export interface StackFilters {
   q?: string;
   status?: string;
+  // managed or unmanaged; absent lists both.
+  kind?: "managed" | "unmanaged";
   sort?: "name" | "state" | "lastDeployed";
   dir?: "asc" | "desc";
 }

@@ -767,6 +767,7 @@ describe("StackList: the Show group, captions and discovery", () => {
     expect(screen.getByText(/Stacks on Prod\./)).toBeTruthy();
     expect(screen.getByText(/3 stacks, 2 unmanaged$/)).toBeTruthy();
     cleanup();
+    client.clear();
 
     stacks = { items: [unmanaged("legacy")] };
     listExtra = { kindCounts: counts(1, 0, 1) };

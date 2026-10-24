@@ -1932,8 +1932,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * The stacks Bayplan manages on an environment
-         * @description Every stack of the environment by name, with where it deploys, its state and when it was last deployed. The state comes from Bayplan's own records of the stack's deploys and the engine's cached rows, never from a read of the engine of its own. At most 500 stacks come back after the search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed) and the sort, with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Needs stacks.read (Viewer).
+         * The stacks of an environment: those Bayplan manages and those it found
+         * @description Every stack of the environment by name, with where it deploys, its state and when it was last deployed. The state comes from Bayplan's own records of the stack's deploys and the engine's cached rows, never from a read of the engine of its own. Stacks Bayplan did not make (a swarm namespace or a Compose project made by docker stack deploy, docker compose up or Portainer) are listed beside them with managed false and an unmanaged body; they are found by their labels in the same cached rows and nothing about them is stored. kind (managed or unmanaged) lists one kind only; kindCounts counts both. discoveryFailed is true when the look for them failed, and the managed stacks are listed all the same. At most 500 stacks come back after the search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed) and the sort, with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Needs stacks.read (Viewer).
          */
         get: operations["listStacks"];
         put?: never;
@@ -3359,8 +3359,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * The stacks Bayplan manages on every environment the caller may read them on
-         * @description One group for each environment that has stacks, by environment name, each with its stacks, their state and when they were last deployed. An environment the caller does not hold stacks.read on is left out, and so is its name: the list never reveals what the caller cannot open. An environment whose stacks could not be read is named in failedEnvironments while the others are answered. env chooses environments by ID. The search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed) and the sort run over every environment together, before the 500-row cap, so at most 500 stacks come back across all the groups, with total the number that matched, unfilteredTotal the number before the search and the status filter and statusCounts the chip numbers, counted before them too.
+         * The stacks of every environment the caller may read them on, managed or found
+         * @description One group for each environment that has stacks, by environment name, each with its stacks, their state and when they were last deployed. An environment the caller does not hold stacks.read on is left out, and so is its name: the list never reveals what the caller cannot open. An environment whose stacks could not be read is named in failedEnvironments while the others are answered. env chooses environments by ID. Stacks Bayplan did not make are listed beside the managed ones (managed false, unmanaged body); kind (managed or unmanaged) lists one kind only, and a group's discoveryFailed says the look for them on that environment failed. The search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed) and the sort run over every environment together, before the 500-row cap, so at most 500 stacks come back across all the groups, with total the number that matched, unfilteredTotal the number before the search and the status filter and statusCounts the chip numbers, counted before them too.
          */
         get: operations["listAllStacks"];
         put?: never;
@@ -14483,7 +14483,7 @@ export interface operations {
                 /** @description Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed) or deploy_failed. Applied before the 500-row cap; any other value is refused 422 status_invalid */
                 status?: string;
                 /** @description Only stacks Bayplan manages (managed) or only stacks found on the engine that Bayplan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap */
-                kind?: "managed" | "unmanaged";
+                kind?: string;
                 /** @description What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name */
                 sort?: "name" | "state" | "lastDeployed";
                 /** @description asc (the default) or desc */
@@ -17360,7 +17360,7 @@ export interface operations {
                 /** @description Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed) or deploy_failed. Applied before the 500-row cap; any other value is refused 422 status_invalid */
                 status?: string;
                 /** @description Only stacks Bayplan manages (managed) or only stacks found on the engine that Bayplan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap */
-                kind?: "managed" | "unmanaged";
+                kind?: string;
                 /** @description What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name */
                 sort?: "name" | "state" | "lastDeployed";
                 /** @description asc (the default) or desc */

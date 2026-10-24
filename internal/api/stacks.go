@@ -317,9 +317,12 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 	}
 	httpx.Register(r, huma.Operation{
 		OperationID: "listStacks", Method: http.MethodGet, Path: "/api/env/{envId}/stacks",
-		Summary: "The stacks Bayplan manages on an environment",
+		Summary: "The stacks of an environment: those Bayplan manages and those it found",
 		Description: "Every stack of the environment by name, with where it deploys, its state and when it was last deployed. " +
 			"The state comes from Bayplan's own records of the stack's deploys and the engine's cached rows, never from a read of the engine of its own. " +
+			"Stacks Bayplan did not make (a swarm namespace or a Compose project made by docker stack deploy, docker compose up or Portainer) are listed beside them with managed false and an unmanaged body; " +
+			"they are found by their labels in the same cached rows and nothing about them is stored. kind (managed or unmanaged) lists one kind only; kindCounts counts both. " +
+			"discoveryFailed is true when the look for them failed, and the managed stacks are listed all the same. " +
 			"At most 500 stacks come back after the search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed) and the sort, " +
 			"with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Needs stacks.read (Viewer).",
 		Tags: []string{"stacks"},

@@ -12,7 +12,6 @@
     "draft": "Draft",
     "list": {
       "title": "Stacks",
-      "caption": "Stacks Bayplan manages on {{name}}.",
       "count_one": "{{count, number}} stack",
       "count_other": "{{count, number}} stacks",
       "empty": "No stacks",

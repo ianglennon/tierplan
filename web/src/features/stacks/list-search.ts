@@ -9,6 +9,10 @@ import { z } from "@/lib/zod-config";
 export const STACK_STATUS_VALUES = ["degraded", "stopped", "draft", "deploy_failed"] as const;
 export type StackStatusValue = (typeof STACK_STATUS_VALUES)[number];
 
+// The Show toggle-group: only the stacks Bayplan manages or only the ones it found. Absent means both.
+export const STACK_KIND_VALUES = ["managed", "unmanaged"] as const;
+export type StackKindValue = (typeof STACK_KIND_VALUES)[number];
+
 export const STACK_SORT_VALUES = ["name", "state", "lastDeployed"] as const;
 export type StackSortKey = (typeof STACK_SORT_VALUES)[number];
 
@@ -44,7 +48,7 @@ export function envParam(values: readonly string[]): string | undefined {
   return chosen.length > 0 ? chosen.join(",") : undefined;
 }
 
-// The search both stack lists share: the search text, the status chips, the sort, and new=1, which
+// The search both stack lists share: the search text, the status chips, the kind, the sort, and new=1, which
 // opens the Create stack dialog. A value that does not fit is dropped, not sent.
 const shared = {
   q: z.string().min(1).max(MAX_QUERY).optional().catch(undefined),
@@ -54,6 +58,7 @@ const shared = {
     .transform((s) => stackStatusParam(stackStatusList(s)))
     .optional()
     .catch(undefined),
+  kind: z.enum(STACK_KIND_VALUES).optional().catch(undefined),
   sort: z.enum(STACK_SORT_VALUES).optional().catch(undefined),
   dir: z.enum(["asc", "desc"]).optional().catch(undefined),
   new: z.literal(1).optional().catch(undefined),

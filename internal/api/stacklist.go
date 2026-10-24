@@ -80,7 +80,7 @@ type StackStatusCountsBody struct {
 type StackQueryInput struct {
 	Q      string `query:"q" doc:"Search: a case-insensitive substring of the stack name or of one of its service names, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap"`
 	Status string `query:"status" maxLength:"64" doc:"Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed) or deploy_failed. Applied before the 500-row cap; any other value is refused 422 status_invalid"`
-	Kind   string `query:"kind" enum:"managed,unmanaged" doc:"Only stacks Bayplan manages (managed) or only stacks found on the engine that Bayplan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap"`
+	Kind   string `query:"kind" maxLength:"16" doc:"Only stacks Bayplan manages (managed) or only stacks found on the engine that Bayplan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap"`
 	Sort   string `query:"sort" enum:"name,state,lastDeployed" doc:"What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name"`
 	Dir    string `query:"dir" enum:"asc,desc" doc:"asc (the default) or desc"`
 }
@@ -316,11 +316,12 @@ func splitIDs(raw string) []string {
 func registerAllStacks(r *httpx.Router, d StacksDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "listAllStacks", Method: http.MethodGet, Path: "/api/stacks",
-		Summary: "The stacks Bayplan manages on every environment the caller may read them on",
+		Summary: "The stacks of every environment the caller may read them on, managed or found",
 		Description: "One group for each environment that has stacks, by environment name, each with its stacks, " +
 			"their state and when they were last deployed. An environment the caller does not hold stacks.read on is left out, " +
 			"and so is its name: the list never reveals what the caller cannot open. An environment whose stacks could not be read " +
 			"is named in failedEnvironments while the others are answered. env chooses environments by ID. " +
+			"Stacks Bayplan did not make are listed beside the managed ones (managed false, unmanaged body); kind (managed or unmanaged) lists one kind only, and a group's discoveryFailed says the look for them on that environment failed. " +
 			"The search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed) and the sort " +
 			"run over every environment together, before the 500-row cap, so at most 500 stacks come back across all the groups, " +
 			"with total the number that matched, unfilteredTotal the number before the search and the status filter and statusCounts the chip numbers, counted before them too.",

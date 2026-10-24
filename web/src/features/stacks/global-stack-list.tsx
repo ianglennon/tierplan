@@ -39,7 +39,12 @@ import {
   type StackSortKey,
 } from "@/features/stacks/list-search";
 import { type StackRow, stackColumns, stackRowKey } from "@/features/stacks/stack-columns";
-import { StackFilterBar, StackNoMatch } from "@/features/stacks/stack-filter-bar";
+import {
+  DiscoveryFailedNotice,
+  StackFilterBar,
+  StackKindEmpty,
+  StackNoMatch,
+} from "@/features/stacks/stack-filter-bar";
 import { sortStackRows } from "@/features/stacks/stack-sort";
 import { hasPermission, useAnyEnvironmentPermission, useMe } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -172,6 +177,7 @@ export function GlobalStackList({
       env: search.env,
       q: search.q,
       status: search.status,
+      kind: search.kind,
       sort: search.sort,
       dir: search.dir,
     }),
@@ -229,6 +235,14 @@ export function GlobalStackList({
         badge: <Badge variant="outline">{t(`stackLists.target.${group.target}`)}</Badge>,
       },
     }));
+    for (const g of out) {
+      const found = groupRows.find((r) => r.group.envId === g.key)?.group;
+      if (found?.discoveryFailed) {
+        g.notice = (
+          <DiscoveryFailedNotice name={found.envName} onRetry={retry} retrying={query.isFetching} />
+        );
+      }
+    }
     for (const f of failed) {
       out.push({
         key: f.envId,
@@ -256,8 +270,19 @@ export function GlobalStackList({
     [data, groupRows, query.isPending, query.isError, query.isFetching, query.refetch],
   );
 
-  const filtered = Boolean(search.q || search.status || search.env);
-  const clearFilters = () => onSearchChange({ q: undefined, status: undefined, env: undefined });
+  const filtered = Boolean(search.q || search.status || search.env || search.kind);
+  const clearFilters = () =>
+    onSearchChange({ q: undefined, status: undefined, env: undefined, kind: undefined });
+  const unmanagedCount = data?.kindCounts?.unmanaged ?? 0;
+  // The Show group alone left nothing: every stack is managed, or every stack was created elsewhere.
+  const kindOnly =
+    search.kind !== undefined &&
+    !search.q &&
+    !search.status &&
+    !search.env &&
+    (search.kind === "unmanaged" || unmanagedCount > 0);
+  // The environments whose look for unmanaged stacks failed, named where no group can carry the notice.
+  const lookFailed = groupRows.filter((g) => g.group.discoveryFailed).map((g) => g.group);
 
   function onSort(key: string) {
     const next = key as StackSortKey;
@@ -281,10 +306,22 @@ export function GlobalStackList({
               retrying={query.isFetching}
             />
           ))}
-      {noMatch ? (
+      {by === "none"
+        ? null
+        : lookFailed.map((g) => (
+            <DiscoveryFailedNotice
+              key={g.envId}
+              name={g.envName}
+              onRetry={retry}
+              retrying={query.isFetching}
+            />
+          ))}
+      {noMatch && kindOnly && search.kind ? (
+        <StackKindEmpty kind={search.kind} onClear={clearFilters} />
+      ) : noMatch ? (
         <StackNoMatch
           q={search.q}
-          moreThanSearch={Boolean(search.status || search.env)}
+          moreThanSearch={Boolean(search.status || search.env || search.kind)}
           onClearSearch={() => onSearchChange({ q: undefined })}
           onClear={clearFilters}
         />
@@ -309,12 +346,20 @@ export function GlobalStackList({
   );
 
   const banner =
-    by === "none" && failed.length > 0 ? (
+    by === "none" && (failed.length > 0 || lookFailed.length > 0) ? (
       <div className="flex flex-col gap-2">
         {failed.map((f) => (
           <FailedEnvironmentNotice
             key={f.envId}
             failed={f}
+            onRetry={retry}
+            retrying={query.isFetching}
+          />
+        ))}
+        {lookFailed.map((g) => (
+          <DiscoveryFailedNotice
+            key={g.envId}
+            name={g.envName}
             onRetry={retry}
             retrying={query.isFetching}
           />
@@ -328,6 +373,9 @@ export function GlobalStackList({
       q={search.q}
       status={search.status}
       counts={data?.statusCounts}
+      kind={search.kind}
+      kindCounts={data?.kindCounts}
+      onKind={(kind) => onSearchChange({ kind })}
       filtered={filtered}
       onSearch={(q) => onSearchChange({ q })}
       onStatus={(status) => onSearchChange({ status })}
@@ -400,8 +448,8 @@ export function GlobalStackList({
         toolbar={toolbar}
         caption={
           data
-            ? `${t("stackLists.global.caption")} ${
-                search.q || search.status
+            ? `${t("stackUnmanaged.caption.global")} ${
+                search.q || search.status || search.kind
                   ? t("stackLists.global.filtered", {
                       n: data.total,
                       count: data.unfilteredTotal,
@@ -409,12 +457,18 @@ export function GlobalStackList({
                         count: shownEnvironments,
                       }),
                     })
-                  : t("stackLists.global.count", {
-                      count: data.total,
-                      environments: t("stackLists.global.environments", {
-                        count: shownEnvironments,
-                      }),
-                    })
+                  : t(
+                      unmanagedCount > 0
+                        ? "stackUnmanaged.caption.globalCount"
+                        : "stackLists.global.count",
+                      {
+                        count: data.total,
+                        unmanaged: unmanagedCount,
+                        environments: t("stackLists.global.environments", {
+                          count: shownEnvironments,
+                        }),
+                      },
+                    )
               }`
             : undefined
         }
