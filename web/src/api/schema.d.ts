@@ -2216,6 +2216,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks/{stackId}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The revisions of a stack
+         * @description Every deploy of the stack is a revision. They come newest first by revision number, with how each came to be (origin), the revision a roll back copied, the result (outcome, and for a failed one the service and the sentence of its failure code), who started it and when, and the images that changed against the next older good revision. The newest good revision is marked deployed. Only references, codes and names are listed: no file, variable or rendered text. A stack with no revision answers an empty list. A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).
+         */
+        get: operations["listStackRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/stacks/{stackId}/rollback": {
         parameters: {
             query?: never;
@@ -9212,6 +9232,66 @@ export interface components {
             /** @description Volumes the stack's deploy would create on a standalone host. Always zero on a swarm: the engine of each node makes a named volume when a task first uses it */
             volumes: components["schemas"]["StackReviewCountsBody"];
         };
+        StackRevisionImageChange: {
+            /** @description The reference the previous good revision ran, tag@sha256; empty for a service that revision did not have */
+            from: string;
+            /** @description The service's name in the compose file */
+            service: string;
+            /** @description The reference this revision pinned, tag@sha256 */
+            to: string;
+        };
+        StackRevisionItem: {
+            /** @description The swarm namespace or Compose project an adopted stack was taken over from; empty for any other revision */
+            adoptedFrom: string;
+            /** @description The code of the failure; empty when the revision did not fail */
+            code: string;
+            /**
+             * Format: date-time
+             * @description When the revision was taken, RFC 3339 UTC
+             */
+            createdAt: string;
+            /** @description Who started the deploy the revision was taken for */
+            createdBy: string;
+            /** @description True for the newest good revision, the one the stack stands at */
+            deployed: boolean;
+            /** @description The service a failed deploy stopped at; empty when it did not fail or the failure names none */
+            failedService: string;
+            /** @description The services whose image differs from the next older good revision's, by service name. Empty for a revision that changed none, and for one with no older good revision to compare with */
+            images: components["schemas"]["StackRevisionImageChange"][] | null;
+            /**
+             * @description How the revision came to be: a deploy, an Update images deploy, a roll back that copied an earlier revision, or the first revision of an adopted stack
+             * @enum {string}
+             */
+            origin: "deploy" | "update" | "rollback" | "adopted";
+            /**
+             * @description pending while its deploy runs, then good or failed
+             * @enum {string}
+             */
+            outcome: "pending" | "good" | "failed";
+            /**
+             * Format: int64
+             * @description How many images the revision pinned, when it has no older good revision to compare with (the first or an adopted one); 0 otherwise
+             */
+            pinned: number;
+            /** @description The sentence of the failure code; empty when there is no code or Bayplan has no sentence for it */
+            reason: string;
+            /**
+             * Format: int64
+             * @description The number of the revision a roll back copied; 0 for any other revision
+             */
+            restoredFrom: number;
+            /**
+             * Format: int64
+             * @description The revision number, unique per stack and never reused
+             */
+            seq: number;
+        };
+        StackRevisionListBody: {
+            /** @description True when the stack has more revisions than the 500 the list holds; the oldest are left out */
+            capped: boolean;
+            /** @description The revisions of the stack, newest first by revision number. A pruned revision is gone from the list */
+            items: components["schemas"]["StackRevisionItem"][] | null;
+        };
         StackRollbackBody: {
             /** @description True when there is an earlier version that ran well to roll back to */
             available: boolean;
@@ -14740,6 +14820,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackReviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listStackRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackRevisionListBody"];
                 };
             };
             /** @description Error */

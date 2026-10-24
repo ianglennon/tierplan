@@ -219,11 +219,11 @@ func TestNewRevisionCopiesTheDraftAndSealsSecretsUnderTheNewSnapshot(t *testing.
 	ctx := context.Background()
 	wc := stacks.WorkingCopy{Files: []stacks.File{compose("a")}, Vars: []stacks.Var{{Name: "K", Value: "secret", Secret: true}}}
 	st, draft, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", wc)
-	rev1, err := f.repo.NewRevision(ctx, st.ID, "bob")
+	rev1, err := f.repo.NewRevision(ctx, st.ID, "bob", stackops.OriginDeploy)
 	if err != nil {
 		t.Fatalf("NewRevision: %v", err)
 	}
-	rev2, err := f.repo.NewRevision(ctx, st.ID, "bob")
+	rev2, err := f.repo.NewRevision(ctx, st.ID, "bob", stackops.OriginDeploy)
 	if err != nil {
 		t.Fatalf("NewRevision: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestDraftStatesSeeASaveAfterTheLastDeploy(t *testing.T) {
 	if !states() {
 		t.Error("a saved, undeployed draft does not read as a draft")
 	}
-	if _, err := f.repo.NewRevision(ctx, st.ID, "ada"); err != nil {
+	if _, err := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy); err != nil {
 		t.Fatal(err)
 	}
 	if states() {
@@ -388,7 +388,7 @@ func TestDraftOfAStackWithNoneFallsBackToTheLastGoodRevision(t *testing.T) {
 	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{
 		Files: []stacks.File{compose("deployed")}, Vars: []stacks.Var{{Name: "PORT", Value: "80"}},
 	})
-	rev, err := f.repo.NewRevision(ctx, st.ID, "bob")
+	rev, err := f.repo.NewRevision(ctx, st.ID, "bob", stackops.OriginDeploy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +396,7 @@ func TestDraftOfAStackWithNoneFallsBackToTheLastGoodRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A later revision that failed is not what is deployed.
-	failed, _ := f.repo.NewRevision(ctx, st.ID, "bob")
+	failed, _ := f.repo.NewRevision(ctx, st.ID, "bob", stackops.OriginDeploy)
 	if err := f.repo.SetOutcome(ctx, failed.ID, stackops.OutcomeFailed, "", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -445,7 +445,7 @@ func TestSavingAfterADiscardStartsAFreshDraft(t *testing.T) {
 	f := newRepo(t)
 	ctx := context.Background()
 	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("a")}})
-	rev, _ := f.repo.NewRevision(ctx, st.ID, "ada")
+	rev, _ := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
 	if err := f.repo.SetOutcome(ctx, rev.ID, stackops.OutcomeGood, "", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -529,7 +529,7 @@ func TestPinsAreStoredOnARevisionAndTheLastGoodOnesReadBack(t *testing.T) {
 		t.Fatalf("GoodPins of a stack with no good revision = %v, %v; want none", got, err)
 	}
 
-	good, _ := f.repo.NewRevision(ctx, st.ID, "ada")
+	good, _ := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
 	if err := f.repo.SetPins(ctx, good.ID, map[string]string{"web_app": "nginx:1.27@sha256:aaa", "web_db": "registry.example:5000/db:2@sha256:bbb"}); err != nil {
 		t.Fatalf("SetPins: %v", err)
 	}
@@ -538,7 +538,7 @@ func TestPinsAreStoredOnARevisionAndTheLastGoodOnesReadBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A later revision that failed, with its own pins, is not what runs.
-	failed, _ := f.repo.NewRevision(ctx, st.ID, "ada")
+	failed, _ := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
 	if err := f.repo.SetPins(ctx, failed.ID, map[string]string{"web_app": "nginx:1.28@sha256:ccc"}); err != nil {
 		t.Fatal(err)
 	}
@@ -690,7 +690,7 @@ func TestARevisionKeepsASecretFileSealedUnderItsOwnRow(t *testing.T) {
 	if _, _, err := f.repo.SaveDraft(ctx, st.ID, 1, "ada", filesOf(composeWithTokFile, stacks.File{Path: "tok.txt", Content: []byte("TOP-SECRET-TOKEN")})); err != nil {
 		t.Fatal(err)
 	}
-	rev, err := f.repo.NewRevision(ctx, st.ID, "ada")
+	rev, err := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -723,7 +723,7 @@ func TestARevisionKeepsItsRenderingThroughItsOutcomeAndOnlyAGoodOneIsTheBase(t *
 		t.Fatalf("GoodRendering of a stack with no good revision = %q, %v; want none", got, err)
 	}
 
-	good, _ := f.repo.NewRevision(ctx, st.ID, "ada")
+	good, _ := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
 	if err := f.repo.SetRendered(ctx, good.ID, []byte("services:\n  web: {}\n")); err != nil {
 		t.Fatalf("SetRendered: %v", err)
 	}
@@ -731,7 +731,7 @@ func TestARevisionKeepsItsRenderingThroughItsOutcomeAndOnlyAGoodOneIsTheBase(t *
 	if err := f.repo.SetOutcome(ctx, good.ID, stackops.OutcomeGood, "", ""); err != nil {
 		t.Fatal(err)
 	}
-	failed, _ := f.repo.NewRevision(ctx, st.ID, "ada")
+	failed, _ := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
 	if err := f.repo.SetRendered(ctx, failed.ID, []byte("services:\n  other: {}\n")); err != nil {
 		t.Fatal(err)
 	}
@@ -764,7 +764,7 @@ func TestSetRenderedRefusesARevisionThatDoesNotExistAndADraft(t *testing.T) {
 func goodRevision(t *testing.T, f repoFixture, stackID, actor string) stackops.Snapshot {
 	t.Helper()
 	ctx := context.Background()
-	rev, err := f.repo.NewRevision(ctx, stackID, actor)
+	rev, err := f.repo.NewRevision(ctx, stackID, actor, stackops.OriginDeploy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -863,7 +863,7 @@ func TestGoodRevisionInfoNamesWhoDeployedTheNewestGoodRevision(t *testing.T) {
 	}
 	goodRevision(t, f, st.ID, "ada")
 	second := goodRevision(t, f, st.ID, "bob")
-	failed, _ := f.repo.NewRevision(ctx, st.ID, "cy")
+	failed, _ := f.repo.NewRevision(ctx, st.ID, "cy", stackops.OriginDeploy)
 	if err := f.repo.SetOutcome(ctx, failed.ID, stackops.OutcomeFailed, "", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -890,14 +890,14 @@ func TestMarkInterruptedEndsRunningDeploysAndFailsTheirPendingRevisions(t *testi
 	}
 	// run: a deploy that was running with its revision pending. finished: one that ended good.
 	run, finished := mk("run"), mk("finished")
-	revRun, err := f.repo.NewRevision(ctx, run.ID, "ada")
+	revRun, err := f.repo.NewRevision(ctx, run.ID, "ada", stackops.OriginDeploy)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.repo.StartDeploy(ctx, run.ID, f.envID, stackops.DeployKindDeploy, revRun.Seq, "job-1", "ada"); err != nil {
 		t.Fatal(err)
 	}
-	revDone, err := f.repo.NewRevision(ctx, finished.ID, "ada")
+	revDone, err := f.repo.NewRevision(ctx, finished.ID, "ada", stackops.OriginDeploy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -961,7 +961,7 @@ func TestRollbackTargetIsTheLastRevisionThatRanWell(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, outcome := range tc.outcomes {
-				rev, err := f.repo.NewRevision(ctx, st.ID, "ada")
+				rev, err := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -1007,7 +1007,7 @@ func TestCopyRevisionTakesTheContentPinsAndRenderingAsANewRevision(t *testing.T)
 	if err := f.repo.SetRendered(ctx, good.ID, []byte("rendered: yes\n")); err != nil {
 		t.Fatal(err)
 	}
-	bad, err := f.repo.NewRevision(ctx, st.ID, "bob")
+	bad, err := f.repo.NewRevision(ctx, st.ID, "bob", stackops.OriginDeploy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1019,7 +1019,7 @@ func TestCopyRevisionTakesTheContentPinsAndRenderingAsANewRevision(t *testing.T)
 	if err != nil || !ok || target.ID != good.ID {
 		t.Fatalf("target = %+v, %v, %v", target, ok, err)
 	}
-	cp, err := f.repo.CopyRevision(ctx, target, "cyd")
+	cp, err := f.repo.CopyRevision(ctx, target, "cyd", stackops.OriginRollback)
 	if err != nil {
 		t.Fatalf("CopyRevision: %v", err)
 	}
@@ -1070,7 +1070,7 @@ func TestMarkInterruptedFailsTheRevisionOfARollBackToo(t *testing.T) {
 		t.Fatal(err)
 	}
 	good := goodRevision(t, f, st.ID, "ada")
-	cp, err := f.repo.CopyRevision(ctx, good, "ada")
+	cp, err := f.repo.CopyRevision(ctx, good, "ada", stackops.OriginRollback)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1085,5 +1085,53 @@ func TestMarkInterruptedFailsTheRevisionOfARollBackToo(t *testing.T) {
 	}
 	if rev, _ := f.repo.Revision(ctx, st.ID, good.Seq); rev.Outcome != stackops.OutcomeGood {
 		t.Errorf("the restored revision = %+v, must stay good", rev)
+	}
+}
+
+func TestRevisionsRecordTheirOrigin(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, err := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("services: {}\n")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deploy := goodRevision(t, f, st.ID, "ada")
+	update, err := f.repo.NewRevision(ctx, st.ID, "bob", stackops.OriginUpdate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetOutcome(ctx, update.ID, stackops.OutcomeGood, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	rollback, err := f.repo.CopyRevision(ctx, deploy, "cyd", stackops.OriginRollback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name         string
+		got          stackops.Snapshot
+		seq          int64
+		origin       string
+		restoredFrom int64
+	}{
+		{"deploy", deploy, 1, stackops.OriginDeploy, 0},
+		{"update", update, 2, stackops.OriginUpdate, 0},
+		{"rollback", rollback, 3, stackops.OriginRollback, deploy.Seq},
+	} {
+		if c.got.Seq != c.seq || c.got.Origin != c.origin || c.got.RestoredFrom != c.restoredFrom {
+			t.Errorf("%s returned seq %d origin %q restored from %d, want %d %q %d", c.name, c.got.Seq, c.got.Origin, c.got.RestoredFrom, c.seq, c.origin, c.restoredFrom)
+		}
+		read, err := f.repo.Revision(ctx, st.ID, c.seq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if read.Origin != c.origin || read.RestoredFrom != c.restoredFrom {
+			t.Errorf("%s reads back origin %q restored from %d, want %q %d", c.name, read.Origin, read.RestoredFrom, c.origin, c.restoredFrom)
+		}
+	}
+	// A roll back adds a revision; the one it copied is not rewritten.
+	if orig, err := f.repo.Revision(ctx, st.ID, deploy.Seq); err != nil || orig.Origin != stackops.OriginDeploy || orig.RestoredFrom != 0 || orig.Outcome != stackops.OutcomeGood {
+		t.Errorf("the revision a roll back copied = %+v, %v, want it unchanged", orig, err)
 	}
 }

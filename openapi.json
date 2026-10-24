@@ -13509,6 +13509,147 @@
         ],
         "type": "object"
       },
+      "StackRevisionImageChange": {
+        "additionalProperties": false,
+        "properties": {
+          "from": {
+            "description": "The reference the previous good revision ran, tag@sha256; empty for a service that revision did not have",
+            "type": "string"
+          },
+          "service": {
+            "description": "The service's name in the compose file",
+            "type": "string"
+          },
+          "to": {
+            "description": "The reference this revision pinned, tag@sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "service",
+          "from",
+          "to"
+        ],
+        "type": "object"
+      },
+      "StackRevisionItem": {
+        "additionalProperties": false,
+        "properties": {
+          "adoptedFrom": {
+            "description": "The swarm namespace or Compose project an adopted stack was taken over from; empty for any other revision",
+            "type": "string"
+          },
+          "code": {
+            "description": "The code of the failure; empty when the revision did not fail",
+            "type": "string"
+          },
+          "createdAt": {
+            "description": "When the revision was taken, RFC 3339 UTC",
+            "format": "date-time",
+            "type": "string"
+          },
+          "createdBy": {
+            "description": "Who started the deploy the revision was taken for",
+            "type": "string"
+          },
+          "deployed": {
+            "description": "True for the newest good revision, the one the stack stands at",
+            "type": "boolean"
+          },
+          "failedService": {
+            "description": "The service a failed deploy stopped at; empty when it did not fail or the failure names none",
+            "type": "string"
+          },
+          "images": {
+            "description": "The services whose image differs from the next older good revision's, by service name. Empty for a revision that changed none, and for one with no older good revision to compare with",
+            "items": {
+              "$ref": "#/components/schemas/StackRevisionImageChange"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "origin": {
+            "description": "How the revision came to be: a deploy, an Update images deploy, a roll back that copied an earlier revision, or the first revision of an adopted stack",
+            "enum": [
+              "deploy",
+              "update",
+              "rollback",
+              "adopted"
+            ],
+            "type": "string"
+          },
+          "outcome": {
+            "description": "pending while its deploy runs, then good or failed",
+            "enum": [
+              "pending",
+              "good",
+              "failed"
+            ],
+            "type": "string"
+          },
+          "pinned": {
+            "description": "How many images the revision pinned, when it has no older good revision to compare with (the first or an adopted one); 0 otherwise",
+            "format": "int64",
+            "type": "integer"
+          },
+          "reason": {
+            "description": "The sentence of the failure code; empty when there is no code or Bayplan has no sentence for it",
+            "type": "string"
+          },
+          "restoredFrom": {
+            "description": "The number of the revision a roll back copied; 0 for any other revision",
+            "format": "int64",
+            "type": "integer"
+          },
+          "seq": {
+            "description": "The revision number, unique per stack and never reused",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "origin",
+          "restoredFrom",
+          "outcome",
+          "createdBy",
+          "createdAt",
+          "failedService",
+          "code",
+          "reason",
+          "deployed",
+          "images",
+          "pinned",
+          "adoptedFrom"
+        ],
+        "type": "object"
+      },
+      "StackRevisionListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "capped": {
+            "description": "True when the stack has more revisions than the 500 the list holds; the oldest are left out",
+            "type": "boolean"
+          },
+          "items": {
+            "description": "The revisions of the stack, newest first by revision number. A pruned revision is gone from the list",
+            "items": {
+              "$ref": "#/components/schemas/StackRevisionItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "capped"
+        ],
+        "type": "object"
+      },
       "StackRollbackBody": {
         "additionalProperties": false,
         "properties": {
@@ -23877,6 +24018,67 @@
           }
         },
         "summary": "Review what a deploy of a stack would do",
+        "tags": [
+          "stacks"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/revisions": {
+      "get": {
+        "description": "Every deploy of the stack is a revision. They come newest first by revision number, with how each came to be (origin), the revision a roll back copied, the result (outcome, and for a failed one the service and the sentence of its failure code), who started it and when, and the images that changed against the next older good revision. The newest good revision is marked deployed. Only references, codes and names are listed: no file, variable or rendered text. A stack with no revision answers an empty list. A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).",
+        "operationId": "listStackRevisions",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackRevisionListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The revisions of a stack",
         "tags": [
           "stacks"
         ]

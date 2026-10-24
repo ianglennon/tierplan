@@ -325,6 +325,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 	registerStackJobs(r, d)
 	registerStackOverview(r, d)
 	registerStackResources(r, d)
+	registerStackHistory(r, d)
 	registerStackLogs(r, d)
 }
 

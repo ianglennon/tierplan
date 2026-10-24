@@ -82,7 +82,7 @@ func (q *Queries) FinishStackDeploy(ctx context.Context, arg FinishStackDeployPa
 }
 
 const getDraft = `-- name: GetDraft :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'draft'
 `
 
@@ -101,12 +101,14 @@ func (q *Queries) GetDraft(ctx context.Context, stackID string) (StackSnapshot, 
 		&i.Pins,
 		&i.CreatedBy,
 		&i.CreatedAt,
+		&i.Origin,
+		&i.RestoredFrom,
 	)
 	return i, err
 }
 
 const getRevision = `-- name: GetRevision :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND seq = ?
 `
 
@@ -130,6 +132,8 @@ func (q *Queries) GetRevision(ctx context.Context, arg GetRevisionParams) (Stack
 		&i.Pins,
 		&i.CreatedBy,
 		&i.CreatedAt,
+		&i.Origin,
+		&i.RestoredFrom,
 	)
 	return i, err
 }
@@ -152,7 +156,7 @@ func (q *Queries) GetSnapshotPinsAndRendered(ctx context.Context, id string) (Ge
 }
 
 const getStack = `-- name: GetStack :one
-SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped
+SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption
 FROM stacks WHERE env_id = ? AND id = ?
 `
 
@@ -175,12 +179,13 @@ func (q *Queries) GetStack(ctx context.Context, arg GetStackParams) (Stack, erro
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.Stopped,
+		&i.Adoption,
 	)
 	return i, err
 }
 
 const getStackByName = `-- name: GetStackByName :one
-SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped
+SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption
 FROM stacks WHERE env_id = ? AND name = ?
 `
 
@@ -202,12 +207,13 @@ func (q *Queries) GetStackByName(ctx context.Context, arg GetStackByNameParams) 
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.Stopped,
+		&i.Adoption,
 	)
 	return i, err
 }
 
 const goodRevisionBefore = `-- name: GoodRevisionBefore :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good' AND seq < ?
 ORDER BY seq DESC LIMIT 1
 `
@@ -234,27 +240,31 @@ func (q *Queries) GoodRevisionBefore(ctx context.Context, arg GoodRevisionBefore
 		&i.Pins,
 		&i.CreatedBy,
 		&i.CreatedAt,
+		&i.Origin,
+		&i.RestoredFrom,
 	)
 	return i, err
 }
 
 const insertSnapshot = `-- name: InsertSnapshot :exec
-INSERT INTO stack_snapshots (id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO stack_snapshots (id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertSnapshotParams struct {
-	ID        string
-	StackID   string
-	Kind      string
-	Seq       int64
-	BaseSeq   int64
-	Version   int64
-	Outcome   string
-	Rendered  string
-	Pins      string
-	CreatedBy string
-	CreatedAt int64
+	ID           string
+	StackID      string
+	Kind         string
+	Seq          int64
+	BaseSeq      int64
+	Version      int64
+	Outcome      string
+	Rendered     string
+	Pins         string
+	CreatedBy    string
+	CreatedAt    int64
+	Origin       string
+	RestoredFrom int64
 }
 
 func (q *Queries) InsertSnapshot(ctx context.Context, arg InsertSnapshotParams) error {
@@ -270,6 +280,8 @@ func (q *Queries) InsertSnapshot(ctx context.Context, arg InsertSnapshotParams) 
 		arg.Pins,
 		arg.CreatedBy,
 		arg.CreatedAt,
+		arg.Origin,
+		arg.RestoredFrom,
 	)
 	return err
 }
@@ -519,7 +531,7 @@ func (q *Queries) LatestDoneStackDeploysByEnv(ctx context.Context, envID string)
 }
 
 const latestGoodRevision = `-- name: LatestGoodRevision :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good'
 ORDER BY seq DESC LIMIT 1
 `
@@ -539,6 +551,8 @@ func (q *Queries) LatestGoodRevision(ctx context.Context, stackID string) (Stack
 		&i.Pins,
 		&i.CreatedBy,
 		&i.CreatedAt,
+		&i.Origin,
+		&i.RestoredFrom,
 	)
 	return i, err
 }
@@ -690,6 +704,71 @@ func (q *Queries) ListLatestRevisionTimesByEnv(ctx context.Context, envID string
 	return items, nil
 }
 
+const listRevisions = `-- name: ListRevisions :many
+SELECT r.seq, r.origin, r.restored_from, r.outcome, r.pins, r.created_by, r.created_at,
+       COALESCE(d.failed_service, '') AS failed_service, COALESCE(d.code, '') AS code
+FROM stack_snapshots r
+LEFT JOIN stack_deploys d ON d.id = (
+    SELECT d2.id FROM stack_deploys d2
+    WHERE d2.stack_id = r.stack_id AND d2.revision_seq = r.seq AND d2.kind IN ('deploy', 'update', 'rollback')
+    ORDER BY d2.started_at DESC, d2.id DESC LIMIT 1)
+WHERE r.stack_id = ? AND r.kind = 'revision'
+ORDER BY r.seq DESC
+LIMIT ?
+`
+
+type ListRevisionsParams struct {
+	StackID string
+	Limit   int64
+}
+
+type ListRevisionsRow struct {
+	Seq           int64
+	Origin        string
+	RestoredFrom  int64
+	Outcome       string
+	Pins          string
+	CreatedBy     string
+	CreatedAt     int64
+	FailedService string
+	Code          string
+}
+
+// The revisions of one stack, newest first, with the failure each one's deploy ended in. Two operations can name one
+// seq (a retry of the same revision), so the newest deploy row is the one read.
+func (q *Queries) ListRevisions(ctx context.Context, arg ListRevisionsParams) ([]ListRevisionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listRevisions, arg.StackID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRevisionsRow
+	for rows.Next() {
+		var i ListRevisionsRow
+		if err := rows.Scan(
+			&i.Seq,
+			&i.Origin,
+			&i.RestoredFrom,
+			&i.Outcome,
+			&i.Pins,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.FailedService,
+			&i.Code,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSnapshotFiles = `-- name: ListSnapshotFiles :many
 SELECT snapshot_id, path, content, content_sealed, secret FROM stack_snapshot_files
 WHERE snapshot_id = ? ORDER BY path
@@ -759,7 +838,7 @@ func (q *Queries) ListSnapshotVars(ctx context.Context, snapshotID string) ([]St
 }
 
 const listStacksByEnv = `-- name: ListStacksByEnv :many
-SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped
+SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption
 FROM stacks WHERE env_id = ? ORDER BY name
 `
 
@@ -782,6 +861,7 @@ func (q *Queries) ListStacksByEnv(ctx context.Context, envID string) ([]Stack, e
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.Stopped,
+			&i.Adoption,
 		); err != nil {
 			return nil, err
 		}

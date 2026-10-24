@@ -736,7 +736,7 @@ func TestConcurrentDraftNeedsAcknowledgement(t *testing.T) {
 	repo := stackops.Repo{Store: f.st, Vault: f.v}
 	saveCompose(t, operator, st.ID, concurrentFixture("staging"), secret("second-secret-value"))
 	ctx := testsupport.Context(t)
-	rev, err := repo.NewRevision(ctx, st.ID, "bob")
+	rev, err := repo.NewRevision(ctx, st.ID, "bob", stackops.OriginDeploy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1028,6 +1028,10 @@ func TestUpdateModeChangesOnlyTheChosenServices(t *testing.T) {
 	}
 	if row == nil || row.Details["mode"] != "update" || row.Result != "success" {
 		t.Errorf("stack.deployed = %+v, want a successful update", row)
+	}
+	// The revision it took says it was an Update images deploy; the first one was a plain deploy.
+	if revs := answerOf[stackRevisionsAnswer](t, operator.do(http.MethodGet, "stacks/"+st.ID+"/revisions", "")); len(revs.Items) != 2 || revs.Items[0].Origin != "update" || revs.Items[1].Origin != "deploy" {
+		t.Errorf("revisions = %+v, want the update on top of a deploy", revs.Items)
 	}
 
 	// Afterwards web runs the new digest, api still the old, and the stored pins say so.

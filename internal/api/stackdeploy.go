@@ -437,7 +437,7 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 		}
 	}()
 
-	rev, err := repo.NewRevision(ctx, st.ID, p.Name)
+	rev, err := repo.NewRevision(ctx, st.ID, p.Name, originOf(mode))
 	if err != nil {
 		return nil, stackInternal(d, "revision", env.ID, err)
 	}
@@ -542,7 +542,7 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 		}
 	}()
 
-	rev, err := repo.NewRevision(ctx, st.ID, p.Name)
+	rev, err := repo.NewRevision(ctx, st.ID, p.Name, originOf(mode))
 	if err != nil {
 		return nil, stackInternal(d, "revision", env.ID, err)
 	}
@@ -662,7 +662,7 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 	// The roll back is a revision of its own: a copy of the one it restores, with its images and its
 	// rendering. The draft is not rebased: it still starts from the revision it began at, so the next
 	// review shows the roll back as a deploy made since.
-	rev, err := repo.CopyRevision(ctx, target, p.Name)
+	rev, err := repo.CopyRevision(ctx, target, p.Name, stackops.OriginRollback)
 	if err != nil {
 		return nil, stackInternal(d, "revision", env.ID, err)
 	}
@@ -999,6 +999,15 @@ func policyProblem(pol stackops.PolicyResult) error {
 		Detail: "This stack uses settings that need Admin: " + strings.Join(lines, "; ") + ". Ask an administrator to deploy it.",
 		Errors: details,
 	}
+}
+
+// originOf is the origin a revision takes from the mode of the deploy that made it: an Update images deploy is
+// OriginUpdate, any other OriginDeploy.
+func originOf(mode string) string {
+	if mode == deployModeUpdate {
+		return stackops.OriginUpdate
+	}
+	return stackops.OriginDeploy
 }
 
 // deployModeOf reads the mode of a deploy request and the services an update names.

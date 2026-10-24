@@ -65,6 +65,12 @@ const TABS = [
     exact: false,
   },
   {
+    id: "history",
+    to: "/env/$envId/stacks/$stackId/history",
+    labelKey: "stackHistory.tab",
+    exact: false,
+  },
+  {
     id: "resources",
     to: "/env/$envId/stacks/$stackId/resources",
     labelKey: "stackResources.tab",

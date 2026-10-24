@@ -683,7 +683,7 @@ describe("stackResourcesQuery", () => {
 });
 
 describe("the Resources tab of the stack page", () => {
-  it("is the third tab, after Overview and Editor and before Logs", async () => {
+  it("is the fourth tab, after Overview, Editor and History and before Logs", async () => {
     render(
       <QueryClientProvider client={client}>
         <TestRouter>
@@ -696,10 +696,11 @@ describe("the Resources tab of the stack page", () => {
       </QueryClientProvider>,
     );
 
-    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(4));
+    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(5));
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
       "Overview",
       "Editor",
+      "History",
       "Resources",
       "Logs",
     ]);

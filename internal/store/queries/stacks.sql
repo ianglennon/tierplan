@@ -7,15 +7,15 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0);
 
 -- name: GetStack :one
 -- A stack is always looked up by its environment and ID, so an ID of another environment is not found.
-SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped
+SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption
 FROM stacks WHERE env_id = ? AND id = ?;
 
 -- name: ListStacksByEnv :many
-SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped
+SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption
 FROM stacks WHERE env_id = ? ORDER BY name;
 
 -- name: GetStackByName :one
-SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped
+SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption
 FROM stacks WHERE env_id = ? AND name = ?;
 
 -- name: SetStackStopped :execrows
@@ -44,11 +44,11 @@ WHERE d.env_id = ? AND d.kind IN ('deploy', 'update', 'rollback')
               ORDER BY d2.started_at DESC, d2.id DESC LIMIT 1);
 
 -- name: InsertSnapshot :exec
-INSERT INTO stack_snapshots (id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO stack_snapshots (id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetDraft :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'draft';
 
 -- name: UpdateDraftVersion :execrows
@@ -87,7 +87,7 @@ SELECT CAST(COALESCE(MAX(seq), 0) AS INTEGER) + 1 AS seq FROM stack_snapshots
 WHERE stack_id = ? AND kind = 'revision';
 
 -- name: LatestGoodRevision :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good'
 ORDER BY seq DESC LIMIT 1;
 
@@ -100,7 +100,7 @@ WHERE stack_id = ? AND kind = 'revision';
 -- name: GoodRevisionBefore :one
 -- The newest good revision numbered below seq: what a roll back restores when the newest revision is
 -- itself good.
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good' AND seq < ?
 ORDER BY seq DESC LIMIT 1;
 
@@ -121,7 +121,7 @@ WHERE id = sqlc.arg(id) AND kind = 'revision';
 UPDATE stack_snapshots SET rendered = ? WHERE id = ? AND kind = 'revision';
 
 -- name: GetRevision :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND seq = ?;
 
 -- name: SetDraftBaseSeq :execrows
@@ -185,3 +185,17 @@ SELECT r.stack_id, CAST(MAX(r.created_at) AS INTEGER) AS taken_at FROM stack_sna
 JOIN stacks s ON s.id = r.stack_id
 WHERE s.env_id = ? AND r.kind = 'revision'
 GROUP BY r.stack_id;
+
+-- name: ListRevisions :many
+-- The revisions of one stack, newest first, with the failure each one's deploy ended in. Two operations can name one
+-- seq (a retry of the same revision), so the newest deploy row is the one read.
+SELECT r.seq, r.origin, r.restored_from, r.outcome, r.pins, r.created_by, r.created_at,
+       COALESCE(d.failed_service, '') AS failed_service, COALESCE(d.code, '') AS code
+FROM stack_snapshots r
+LEFT JOIN stack_deploys d ON d.id = (
+    SELECT d2.id FROM stack_deploys d2
+    WHERE d2.stack_id = r.stack_id AND d2.revision_seq = r.seq AND d2.kind IN ('deploy', 'update', 'rollback')
+    ORDER BY d2.started_at DESC, d2.id DESC LIMIT 1)
+WHERE r.stack_id = ? AND r.kind = 'revision'
+ORDER BY r.seq DESC
+LIMIT ?;

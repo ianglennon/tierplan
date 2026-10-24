@@ -614,7 +614,7 @@ func TestRunningDeploysAreMarkedInterruptedAtStartup(t *testing.T) {
 	st := newStack(t, admin, "crash")
 	ctx := testsupport.Context(t)
 	repo := stackops.Repo{Store: f.st, Vault: f.v}
-	rev, err := repo.NewRevision(ctx, st.ID, "ada")
+	rev, err := repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
 	if err != nil {
 		t.Fatal(err)
 	}

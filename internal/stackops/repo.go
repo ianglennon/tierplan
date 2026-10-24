@@ -31,6 +31,15 @@ const (
 	OutcomeFailed  = "failed"
 )
 
+// How a revision came to be (stack_snapshots.origin): a deploy, an Update images deploy, a roll back that
+// copied an earlier revision, or the first revision of an adopted stack. A draft reads deploy.
+const (
+	OriginDeploy   = "deploy"
+	OriginUpdate   = "update"
+	OriginRollback = "rollback"
+	OriginAdopted  = "adopted"
+)
+
 // The kinds of a stack operation and the states of its row in stack_deploys.
 const (
 	DeployKindDeploy   = "deploy"
@@ -81,7 +90,11 @@ type Snapshot struct {
 	Seq, BaseSeq, Version int64
 	Outcome, CreatedBy    string
 	CreatedAt             time.Time
-	Copy                  stacks.WorkingCopy
+	// Origin is how a revision came to be (OriginDeploy and the others); RestoredFrom is the number of the
+	// revision a roll back copied, and 0 for any other.
+	Origin       string
+	RestoredFrom int64
+	Copy         stacks.WorkingCopy
 	// IsDraft is true for a draft that is stored. It is false for what Draft answers when the stack
 	// has none: the last good revision, or the starter, so the editor always has content.
 	IsDraft bool
@@ -108,7 +121,7 @@ func snapshotOf(row sqlc.StackSnapshot) Snapshot {
 	return Snapshot{
 		ID: row.ID, StackID: row.StackID, Kind: row.Kind, Seq: row.Seq, BaseSeq: row.BaseSeq, Version: row.Version,
 		Outcome: row.Outcome, CreatedBy: row.CreatedBy, CreatedAt: time.Unix(0, row.CreatedAt).UTC(),
-		IsDraft: row.Kind == KindDraft,
+		Origin: row.Origin, RestoredFrom: row.RestoredFrom, IsDraft: row.Kind == KindDraft,
 	}
 }
 
@@ -163,7 +176,7 @@ func (r Repo) CreateStack(ctx context.Context, envID, name string, target stacks
 	}
 	if err := q.InsertSnapshot(ctx, sqlc.InsertSnapshotParams{
 		ID: snapID.String(), StackID: stackID.String(), Kind: KindDraft, Version: 1, Outcome: OutcomePending,
-		Pins: "{}", CreatedBy: actor, CreatedAt: now.UnixNano(),
+		Pins: "{}", CreatedBy: actor, CreatedAt: now.UnixNano(), Origin: OriginDeploy,
 	}); err != nil {
 		return Stack{}, Snapshot{}, fmt.Errorf("insert draft: %w", err)
 	}
@@ -377,7 +390,7 @@ func (r Repo) saveFirst(ctx context.Context, tx *sql.Tx, q *sqlc.Queries, stackI
 	now := r.now()
 	if err := q.InsertSnapshot(ctx, sqlc.InsertSnapshotParams{
 		ID: id.String(), StackID: stackID, Kind: KindDraft, BaseSeq: base.BaseSeq, Version: firstSavedVersion,
-		Outcome: OutcomePending, Pins: "{}", CreatedBy: actor, CreatedAt: now.UnixNano(),
+		Outcome: OutcomePending, Pins: "{}", CreatedBy: actor, CreatedAt: now.UnixNano(), Origin: OriginDeploy,
 	}); err != nil {
 		return Snapshot{}, false, fmt.Errorf("insert draft: %w", err)
 	}
@@ -395,8 +408,9 @@ func (r Repo) saveFirst(ctx context.Context, tx *sql.Tx, q *sqlc.Queries, stackI
 
 // NewRevision copies the draft into a new revision, numbered after the stack's last one and
 // pending until its deploy ends. Each sealed value is opened and sealed again under the new
-// snapshot's ID.
-func (r Repo) NewRevision(ctx context.Context, stackID, actor string) (Snapshot, error) {
+// snapshot's ID. origin says how the revision came to be: OriginDeploy, or OriginUpdate for an
+// Update images deploy.
+func (r Repo) NewRevision(ctx context.Context, stackID, actor, origin string) (Snapshot, error) {
 	id, err := uuid.NewV7()
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("new snapshot id: %w", err)
@@ -419,7 +433,7 @@ func (r Repo) NewRevision(ctx context.Context, stackID, actor string) (Snapshot,
 	now := r.now()
 	if err := q.InsertSnapshot(ctx, sqlc.InsertSnapshotParams{
 		ID: id.String(), StackID: stackID, Kind: KindRevision, Seq: seq, BaseSeq: draft.BaseSeq, Version: 1,
-		Outcome: OutcomePending, Pins: "{}", CreatedBy: actor, CreatedAt: now.UnixNano(),
+		Outcome: OutcomePending, Pins: "{}", CreatedBy: actor, CreatedAt: now.UnixNano(), Origin: origin,
 	}); err != nil {
 		return Snapshot{}, fmt.Errorf("insert revision: %w", err)
 	}
@@ -431,7 +445,7 @@ func (r Repo) NewRevision(ctx context.Context, stackID, actor string) (Snapshot,
 	}
 	return Snapshot{
 		ID: id.String(), StackID: stackID, Kind: KindRevision, Seq: seq, BaseSeq: draft.BaseSeq, Version: 1,
-		Outcome: OutcomePending, CreatedBy: actor, CreatedAt: now, Copy: draft.Copy,
+		Outcome: OutcomePending, CreatedBy: actor, CreatedAt: now, Origin: origin, Copy: draft.Copy,
 	}, nil
 }
 
@@ -490,8 +504,9 @@ func (r Repo) rollbackRow(ctx context.Context, stackID string) (sqlc.StackSnapsh
 // CopyRevision makes a new revision, numbered after the stack's last one and pending until its
 // operation ends, from the content, pins and rendering of from: a roll back redeploys exactly what
 // from ran, and the history keeps it as a revision of its own. Each sealed value is opened with from
-// and sealed again under the new snapshot's ID. The draft is not touched.
-func (r Repo) CopyRevision(ctx context.Context, from Snapshot, actor string) (Snapshot, error) {
+// and sealed again under the new snapshot's ID. The draft is not touched. The new revision names the
+// one it copied (restored_from) and carries origin, OriginRollback for a roll back.
+func (r Repo) CopyRevision(ctx context.Context, from Snapshot, actor, origin string) (Snapshot, error) {
 	id, err := uuid.NewV7()
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("new snapshot id: %w", err)
@@ -515,6 +530,7 @@ func (r Repo) CopyRevision(ctx context.Context, from Snapshot, actor string) (Sn
 	if err := q.InsertSnapshot(ctx, sqlc.InsertSnapshotParams{
 		ID: id.String(), StackID: from.StackID, Kind: KindRevision, Seq: seq, BaseSeq: from.Seq, Version: 1,
 		Outcome: OutcomePending, Rendered: ran.Rendered, Pins: ran.Pins, CreatedBy: actor, CreatedAt: now.UnixNano(),
+		Origin: origin, RestoredFrom: from.Seq,
 	}); err != nil {
 		return Snapshot{}, fmt.Errorf("insert revision: %w", err)
 	}
@@ -526,7 +542,7 @@ func (r Repo) CopyRevision(ctx context.Context, from Snapshot, actor string) (Sn
 	}
 	return Snapshot{
 		ID: id.String(), StackID: from.StackID, Kind: KindRevision, Seq: seq, BaseSeq: from.Seq, Version: 1,
-		Outcome: OutcomePending, CreatedBy: actor, CreatedAt: now, Copy: from.Copy,
+		Outcome: OutcomePending, CreatedBy: actor, CreatedAt: now, Origin: origin, RestoredFrom: from.Seq, Copy: from.Copy,
 	}, nil
 }
 

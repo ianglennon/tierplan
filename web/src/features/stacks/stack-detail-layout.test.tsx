@@ -194,15 +194,19 @@ describe("the flow caption", () => {
     expect(screen.queryByRole("navigation", { name: "Deploy steps" })).toBeNull();
   });
 
-  it("lists Overview, Editor, Resources and Logs in that order, the last one a link to the stack's log", async () => {
+  it("lists Overview, Editor, History, Resources and Logs in that order, History after Editor and Logs a link to the stack's log", async () => {
     mount();
     await screen.findByRole("tab", { name: "Overview" });
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
       "Overview",
       "Editor",
+      "History",
       "Resources",
       "Logs",
     ]);
+    expect(screen.getByRole("tab", { name: "History" }).getAttribute("href")).toBe(
+      "/env/e1/stacks/s1/history",
+    );
     expect(screen.getByRole("tab", { name: "Logs" }).getAttribute("href")).toBe(
       "/env/e1/stacks/s1/logs",
     );
