@@ -1,0 +1,13 @@
+{
+  "stackUnmanaged": {
+    "badge": "Unmanaged",
+    "tooltip": "Bayplan didn't create this stack and doesn't manage it. Adopt it to manage it here.",
+    "orphan": "Created by Bayplan (another instance or a lost record).",
+    "portainer": "Portainer",
+    "owner": {
+      "bayplan": "Bayplan",
+      "agent": "Bayplan agent"
+    },
+    "missing": "—"
+  }
+}

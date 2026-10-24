@@ -423,6 +423,10 @@
               "null"
             ]
           },
+          "kindCounts": {
+            "$ref": "#/components/schemas/StackKindCountsBody",
+            "description": "How many stacks the Show toggle counts (all, managed, unmanaged), over the environments read and before the search, the status filter and the kind"
+          },
           "statusCounts": {
             "$ref": "#/components/schemas/StackStatusCountsBody",
             "description": "How many stacks each status chip counts, over the environments read and before the search and the status filter"
@@ -444,7 +448,8 @@
           "total",
           "unfilteredTotal",
           "capped",
-          "statusCounts"
+          "statusCounts",
+          "kindCounts"
         ],
         "type": "object"
       },
@@ -455,6 +460,10 @@
             "$ref": "#/components/schemas/StackStatusCountsBody",
             "description": "How many of the environment's stacks each status chip counts, before the search and the status filter"
           },
+          "discoveryFailed": {
+            "description": "True when the look for unmanaged stacks on this environment failed just now: its managed stacks are listed all the same",
+            "type": "boolean"
+          },
           "envId": {
             "description": "The environment",
             "type": "string"
@@ -462,6 +471,10 @@
           "envName": {
             "description": "Its name",
             "type": "string"
+          },
+          "kindCounts": {
+            "$ref": "#/components/schemas/StackKindCountsBody",
+            "description": "How many of the environment's stacks are managed and unmanaged, before the search, the status filter and the kind"
           },
           "stacks": {
             "description": "The environment's stacks among the rows returned, in the order asked for",
@@ -487,7 +500,9 @@
           "envName",
           "target",
           "stacks",
-          "counts"
+          "counts",
+          "kindCounts",
+          "discoveryFailed"
         ],
         "type": "object"
       },
@@ -11932,6 +11947,10 @@
             "$ref": "#/components/schemas/StackLockBody",
             "description": "Left out unless set: set while a stack operation runs on this environment, on any of its stacks, and names it. Only one runs at a time: a second is refused 409 operation_locked"
           },
+          "managed": {
+            "description": "True for a stack Bayplan manages; false for one found on the engine by its labels that Bayplan did not make. An unmanaged item has an empty id, only the state and the service counts, and no draft or last deploy",
+            "type": "boolean"
+          },
           "name": {
             "description": "The stack name, also its swarm namespace or compose project",
             "type": "string"
@@ -11951,11 +11970,12 @@
             "type": "integer"
           },
           "source": {
-            "description": "Where the stack's definition lives. Only inline exists today",
+            "description": "Where the stack's definition lives. Only inline exists today for a stack Bayplan manages; unmanaged is a stack found on the engine that Bayplan did not make (see unmanaged)",
             "enum": [
               "inline",
               "adopted",
-              "git"
+              "git",
+              "unmanaged"
             ],
             "type": "string"
           },
@@ -11992,6 +12012,10 @@
               "standalone"
             ],
             "type": "string"
+          },
+          "unmanaged": {
+            "$ref": "#/components/schemas/StackUnmanagedBody",
+            "description": "Set on an unmanaged stack only: what was found about it"
           }
         },
         "required": [
@@ -12007,6 +12031,7 @@
           "name",
           "target",
           "source",
+          "managed",
           "state",
           "lastDeployedAt",
           "lastDeployedBy",
@@ -12382,6 +12407,10 @@
             "description": "Who started it; empty when there is none",
             "type": "string"
           },
+          "managed": {
+            "description": "True for a stack Bayplan manages; false for one found on the engine by its labels that Bayplan did not make. An unmanaged item has an empty id, only the state and the service counts, and no draft or last deploy",
+            "type": "boolean"
+          },
           "name": {
             "description": "The stack name, also its swarm namespace or compose project",
             "type": "string"
@@ -12397,11 +12426,12 @@
             "type": "integer"
           },
           "source": {
-            "description": "Where the stack's definition lives. Only inline exists today",
+            "description": "Where the stack's definition lives. Only inline exists today for a stack Bayplan manages; unmanaged is a stack found on the engine that Bayplan did not make (see unmanaged)",
             "enum": [
               "inline",
               "adopted",
-              "git"
+              "git",
+              "unmanaged"
             ],
             "type": "string"
           },
@@ -12430,6 +12460,10 @@
               "standalone"
             ],
             "type": "string"
+          },
+          "unmanaged": {
+            "$ref": "#/components/schemas/StackUnmanagedBody",
+            "description": "Set on an unmanaged stack only: what was found about it"
           }
         },
         "required": [
@@ -12437,6 +12471,7 @@
           "name",
           "target",
           "source",
+          "managed",
           "state",
           "lastDeployedAt",
           "lastDeployedBy",
@@ -12731,6 +12766,32 @@
         ],
         "type": "object"
       },
+      "StackKindCountsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "all": {
+            "description": "Managed and unmanaged stacks together",
+            "format": "int64",
+            "type": "integer"
+          },
+          "managed": {
+            "description": "Stacks Bayplan manages",
+            "format": "int64",
+            "type": "integer"
+          },
+          "unmanaged": {
+            "description": "Stacks found on the engine that Bayplan did not make",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "all",
+          "managed",
+          "unmanaged"
+        ],
+        "type": "object"
+      },
       "StackLifecycleBody": {
         "additionalProperties": false,
         "properties": {
@@ -12756,6 +12817,10 @@
             "description": "True when total is more than the rows returned",
             "type": "boolean"
           },
+          "discoveryFailed": {
+            "description": "True when the look for unmanaged stacks failed just now: the managed stacks are listed all the same and the unmanaged ones are missing",
+            "type": "boolean"
+          },
           "items": {
             "description": "At most 500 stacks that match the search and the status filter, in the order asked for (by name unless sort says otherwise)",
             "items": {
@@ -12765,6 +12830,10 @@
               "array",
               "null"
             ]
+          },
+          "kindCounts": {
+            "$ref": "#/components/schemas/StackKindCountsBody",
+            "description": "How many stacks the Show toggle counts (all, managed, unmanaged), before the search, the status filter and the kind"
           },
           "statusCounts": {
             "$ref": "#/components/schemas/StackStatusCountsBody",
@@ -12786,7 +12855,9 @@
           "total",
           "unfilteredTotal",
           "capped",
-          "statusCounts"
+          "statusCounts",
+          "kindCounts",
+          "discoveryFailed"
         ],
         "type": "object"
       },
@@ -14154,6 +14225,44 @@
           "changedLines",
           "hunks",
           "lines"
+        ],
+        "type": "object"
+      },
+      "StackUnmanagedBody": {
+        "additionalProperties": false,
+        "properties": {
+          "adoptable": {
+            "description": "False for Bayplan's own stack and an agent's, which cannot be adopted",
+            "type": "boolean"
+          },
+          "orphan": {
+            "description": "True when an object of the stack carries a bayplan.stack.id: Bayplan made it once, for a record this instance does not hold (another instance or a lost record). The ID is never linked to a stack",
+            "type": "boolean"
+          },
+          "owner": {
+            "description": "bayplan for the stack the Bayplan server itself runs in, agent for a stack that holds a Bayplan agent, empty for any other",
+            "enum": [
+              "",
+              "bayplan",
+              "agent"
+            ],
+            "type": "string"
+          },
+          "portainer": {
+            "description": "True when the stack carries a Portainer marker: a label key starting io.portainer., or a Compose working directory under /data/compose/",
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "Why the stack cannot be adopted; empty when it can",
+            "type": "string"
+          }
+        },
+        "required": [
+          "orphan",
+          "portainer",
+          "owner",
+          "adoptable",
+          "reason"
         ],
         "type": "object"
       },
@@ -23201,6 +23310,20 @@
             }
           },
           {
+            "description": "Only stacks Bayplan manages (managed) or only stacks found on the engine that Bayplan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap",
+            "explode": false,
+            "in": "query",
+            "name": "kind",
+            "schema": {
+              "description": "Only stacks Bayplan manages (managed) or only stacks found on the engine that Bayplan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap",
+              "enum": [
+                "managed",
+                "unmanaged"
+              ],
+              "type": "string"
+            }
+          },
+          {
             "description": "What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name",
             "explode": false,
             "in": "query",
@@ -27775,6 +27898,20 @@
             "schema": {
               "description": "Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed) or deploy_failed. Applied before the 500-row cap; any other value is refused 422 status_invalid",
               "maxLength": 64,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only stacks Bayplan manages (managed) or only stacks found on the engine that Bayplan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap",
+            "explode": false,
+            "in": "query",
+            "name": "kind",
+            "schema": {
+              "description": "Only stacks Bayplan manages (managed) or only stacks found on the engine that Bayplan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap",
+              "enum": [
+                "managed",
+                "unmanaged"
+              ],
               "type": "string"
             }
           },

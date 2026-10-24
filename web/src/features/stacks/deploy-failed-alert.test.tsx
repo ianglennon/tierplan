@@ -28,6 +28,7 @@ const stackOf = (over: Partial<StackDetail> = {}): StackDetail => ({
   name: "web",
   target: "swarm",
   source: "inline",
+  managed: true,
   state: "deploy_failed",
   lastDeployedAt: "2026-10-19T11:00:00Z",
   lastDeployedBy: "bob",

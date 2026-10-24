@@ -40,6 +40,15 @@ type stackListAnswer struct {
 	UnfilteredTotal int                `json:"unfilteredTotal"`
 	Capped          bool               `json:"capped"`
 	StatusCounts    statusCountsAnswer `json:"statusCounts"`
+	KindCounts      kindCountsAnswer   `json:"kindCounts"`
+	DiscoveryFailed bool               `json:"discoveryFailed"`
+}
+
+// kindCountsAnswer is how many stacks the Show toggle counts.
+type kindCountsAnswer struct {
+	All       int `json:"all"`
+	Managed   int `json:"managed"`
+	Unmanaged int `json:"unmanaged"`
 }
 
 type allStacksAnswer struct {
@@ -47,12 +56,15 @@ type allStacksAnswer struct {
 	UnfilteredTotal int                `json:"unfilteredTotal"`
 	Capped          bool               `json:"capped"`
 	StatusCounts    statusCountsAnswer `json:"statusCounts"`
+	KindCounts      kindCountsAnswer   `json:"kindCounts"`
 	Groups          []struct {
-		EnvID   string             `json:"envId"`
-		EnvName string             `json:"envName"`
-		Target  string             `json:"target"`
-		Stacks  []stackAnswer      `json:"stacks"`
-		Counts  statusCountsAnswer `json:"counts"`
+		EnvID           string             `json:"envId"`
+		EnvName         string             `json:"envName"`
+		Target          string             `json:"target"`
+		Stacks          []stackAnswer      `json:"stacks"`
+		Counts          statusCountsAnswer `json:"counts"`
+		KindCounts      kindCountsAnswer   `json:"kindCounts"`
+		DiscoveryFailed bool               `json:"discoveryFailed"`
 	} `json:"groups"`
 	FailedEnvironments []struct {
 		EnvID   string `json:"envId"`
@@ -565,5 +577,86 @@ func TestNameCheckNeedsTheRightToCreateStacksOnThatEnvironment(t *testing.T) {
 	probe := &roleCaller{f: f, t: t, e: b, cookie: admin.cookie, csrf: admin.csrf}
 	if code, got, rec := nameCheck(t, probe, "edge-proxy"); code != http.StatusNotFound {
 		t.Errorf("name-check on an environment the caller has no grant on: %d %s %+v, want 404", code, rec.Body, got)
+	}
+}
+
+// foreignSwarmService is a service of a namespace no stack of Bayplan's has, as `docker stack deploy` leaves it.
+func foreignSwarmService(namespace, short string, running, desired uint64, labels map[string]string) dockertest.FakeService {
+	l := map[string]string{"com.docker.stack.namespace": namespace}
+	for k, v := range labels {
+		l[k] = v
+	}
+	return dockertest.FakeService{
+		ID: "svc-" + namespace + "-" + short, Name: namespace + "_" + short, Mode: "replicated", Running: running, Desired: desired,
+		Image: "nginx:1.27", Labels: l,
+	}
+}
+
+func TestStackListIncludesUnmanaged(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	web := newStack(t, admin, "web")
+	reconfigureSwarm(t, f, e,
+		foreignSwarmService("legacy", "app", 2, 2, nil),
+		foreignSwarmService("legacy", "db", 0, 1, nil),
+		foreignSwarmService("lost", "app", 1, 1, map[string]string{"bayplan.stack.id": "stack-old", "io.portainer.accesscontrol.teams": "x"}),
+		foreignSwarmService("web", "app", 0, 1, nil), // the name of a managed stack: that stack's, not a second one
+	)
+	writesBefore := len(f.fake.Writes())
+
+	got := listWith(t, admin, "")
+
+	byName := map[string]stackAnswer{}
+	for _, it := range got.Items {
+		byName[it.Name] = it
+	}
+	if len(got.Items) != 3 || got.KindCounts != (kindCountsAnswer{All: 3, Managed: 1, Unmanaged: 2}) || got.DiscoveryFailed {
+		t.Fatalf("list = %+v, want web plus legacy and lost, two unmanaged, discovery fine", got)
+	}
+	if m := byName["web"]; !m.Managed || m.ID != web.ID || m.Unmanaged != nil {
+		t.Errorf("web = %+v, want the managed stack with no unmanaged body", m)
+	}
+	legacy := byName["legacy"]
+	if legacy.Managed || legacy.ID != "" || legacy.Target != "swarm" || legacy.State != "degraded" || legacy.Source != "unmanaged" {
+		t.Errorf("legacy = %+v, want an unmanaged swarm stack with no ID, degraded", legacy)
+	}
+	if legacy.ServicesRunning == nil || *legacy.ServicesRunning != 1 || legacy.ServicesTotal == nil || *legacy.ServicesTotal != 2 {
+		t.Errorf("legacy services = %v of %v, want 1 of 2", legacy.ServicesRunning, legacy.ServicesTotal)
+	}
+	if u := legacy.Unmanaged; u == nil || u.Orphan || u.Portainer || u.Owner != "" || !u.Adoptable || u.Reason != "" {
+		t.Errorf("legacy unmanaged = %+v, want a plain adoptable stack", u)
+	}
+	lost := byName["lost"]
+	if u := lost.Unmanaged; u == nil || !u.Orphan || !u.Portainer || !u.Adoptable {
+		t.Errorf("lost unmanaged = %+v, want orphan and Portainer flags", u)
+	}
+	if strings.Contains(stackListText(t, admin), "stack-old") {
+		t.Error("the list carries the label ID of an orphan: it is a flag, never sent")
+	}
+	if after := len(f.fake.Writes()); after != writesBefore {
+		t.Errorf("the engine received %d writes while discovering, want none", after-writesBefore)
+	}
+}
+
+func stackListText(t *testing.T, c *roleCaller) string {
+	t.Helper()
+	rec := c.do(http.MethodGet, "stacks", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list stacks: %d %s", rec.Code, rec.Body)
+	}
+	return rec.Body.String()
+}
+
+func TestStackListSearchFindsAnUnmanagedStackByItsServiceName(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	reconfigureSwarm(t, f, e, foreignSwarmService("legacy", "cache", 1, 1, nil), foreignSwarmService("other", "app", 1, 1, nil))
+
+	got := listWith(t, admin, "?q=cache")
+
+	if names := stackNames(got.Items); !slices.Equal(names, []string{"legacy"}) {
+		t.Errorf("q=cache listed %v, want legacy", names)
 	}
 }

@@ -28,6 +28,7 @@ const stack = (over: Record<string, unknown> = {}) => ({
   name: "web",
   target: "swarm",
   source: "inline",
+  managed: true,
   state: "not_deployed",
   lastDeployedAt: "",
   lastDeployedBy: "",

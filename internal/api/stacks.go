@@ -100,6 +100,9 @@ type StacksDeps struct {
 	OnChanges func(ctx context.Context)
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
+	// SelfContainerID is the ID of the container Bayplan runs in and SelfNamespace the swarm namespace of
+	// that container; either is empty when Bayplan cannot tell. The lists flag the stack that holds them (D-49).
+	SelfContainerID, SelfNamespace string
 	// RevisionsKept is how many revisions of each stack are kept (D-01); the server passes the instance
 	// setting. Nil means the default of 20.
 	RevisionsKept func() int
@@ -161,7 +164,8 @@ type StackItem struct {
 	ID             string `json:"id" doc:"The stack ID"`
 	Name           string `json:"name" doc:"The stack name, also its swarm namespace or compose project"`
 	Target         string `json:"target" enum:"swarm,standalone" doc:"Where the stack deploys: fixed when it was created, from the kind of the environment"`
-	Source         string `json:"source" enum:"inline,adopted,git" doc:"Where the stack's definition lives. Only inline exists today"`
+	Source         string `json:"source" enum:"inline,adopted,git,unmanaged" doc:"Where the stack's definition lives. Only inline exists today for a stack Bayplan manages; unmanaged is a stack found on the engine that Bayplan did not make (see unmanaged)"`
+	Managed        bool   `json:"managed" doc:"True for a stack Bayplan manages; false for one found on the engine by its labels that Bayplan did not make. An unmanaged item has an empty id, only the state and the service counts, and no draft or last deploy"`
 	State          string `json:"state" enum:"removing,deploying,rolling_back,starting,stopping,stopped,deploy_failed,not_running,degraded,running,not_deployed,unknown" doc:"The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back, starting or stopping while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run"`
 	LastDeployedAt string `json:"lastDeployedAt" doc:"When the newest successful deploy ended, RFC 3339 UTC; empty when there is none"`
 	LastDeployedBy string `json:"lastDeployedBy" doc:"Who started it; empty when there is none"`
@@ -170,6 +174,25 @@ type StackItem struct {
 	// cache the lists use. They are left out for a stack that was never deployed and for one the engine could not be read for.
 	ServicesRunning *int `json:"servicesRunning,omitempty" doc:"Services of the stack that run now; left out for a stack not deployed and when the engine could not be read"`
 	ServicesTotal   *int `json:"servicesTotal,omitempty" doc:"Services the stack has on the engine; left out for a stack not deployed and when the engine could not be read"`
+	// Unmanaged is set on a stack found on the engine that Bayplan did not make (D-07).
+	Unmanaged *StackUnmanagedBody `json:"unmanaged,omitempty" doc:"Set on an unmanaged stack only: what was found about it"`
+}
+
+// StackUnmanagedBody is what the lists say about a stack Bayplan found on the engine and does not manage.
+type StackUnmanagedBody struct {
+	Orphan    bool   `json:"orphan" doc:"True when an object of the stack carries a bayplan.stack.id: Bayplan made it once, for a record this instance does not hold (another instance or a lost record). The ID is never linked to a stack"`
+	Portainer bool   `json:"portainer" doc:"True when the stack carries a Portainer marker: a label key starting io.portainer., or a Compose working directory under /data/compose/"`
+	Owner     string `json:"owner" enum:",bayplan,agent" doc:"bayplan for the stack the Bayplan server itself runs in, agent for a stack that holds a Bayplan agent, empty for any other"`
+	Adoptable bool   `json:"adoptable" doc:"False for Bayplan's own stack and an agent's, which cannot be adopted"`
+	Reason    string `json:"reason" doc:"Why the stack cannot be adopted; empty when it can"`
+}
+
+// StackKindCountsBody is how many stacks the Show toggle counts. They are counted before the search, the
+// status filter and the kind, so the numbers never shrink with what was typed.
+type StackKindCountsBody struct {
+	All       int `json:"all" doc:"Managed and unmanaged stacks together"`
+	Managed   int `json:"managed" doc:"Stacks Bayplan manages"`
+	Unmanaged int `json:"unmanaged" doc:"Stacks found on the engine that Bayplan did not make"`
 }
 
 // StackListBody is the stacks of an environment.
@@ -179,6 +202,8 @@ type StackListBody struct {
 	UnfilteredTotal int                   `json:"unfilteredTotal" doc:"How many stacks the environment has before the search and the status filter, so a page can say 3 of 600"`
 	Capped          bool                  `json:"capped" doc:"True when total is more than the rows returned"`
 	StatusCounts    StackStatusCountsBody `json:"statusCounts" doc:"How many stacks each status chip counts, before the search and the status filter, so the numbers never shrink with what was typed"`
+	KindCounts      StackKindCountsBody   `json:"kindCounts" doc:"How many stacks the Show toggle counts (all, managed, unmanaged), before the search, the status filter and the kind"`
+	DiscoveryFailed bool                  `json:"discoveryFailed" doc:"True when the look for unmanaged stacks failed just now: the managed stacks are listed all the same and the unmanaged ones are missing"`
 }
 
 // StackListInput is the path of the stacks list with its search, status filter and sort.
@@ -377,9 +402,8 @@ func newStackReads(ctx context.Context, d StacksDeps, envID string) *stackReads 
 	return &stackReads{ctx: ctx, d: d, envID: envID, held: map[bool]heldRead{}}
 }
 
-// rows are the services the stack owns, and false when they could not be read.
-func (r *stackReads) rows(st stackops.Stack) ([]stackops.ServiceRow, bool) {
-	swarm := st.Target == stacks.TargetSwarm
+// heldOf is what the environment holds for one kind of target, read once.
+func (r *stackReads) heldOf(swarm bool) heldRead {
 	h, ok := r.held[swarm]
 	if !ok {
 		h.held, h.err = r.d.ops().Cached(r.ctx, r.envID, swarm)
@@ -388,6 +412,12 @@ func (r *stackReads) rows(st stackops.Stack) ([]stackops.ServiceRow, bool) {
 		}
 		r.held[swarm] = h
 	}
+	return h
+}
+
+// rows are the services the stack owns, and false when they could not be read.
+func (r *stackReads) rows(st stackops.Stack) ([]stackops.ServiceRow, bool) {
+	h := r.heldOf(st.Target == stacks.TargetSwarm)
 	if h.err != nil {
 		return nil, false
 	}
@@ -419,7 +449,7 @@ func stackItemWithServices(reads *stackReads, st stackops.Stack, latest stackops
 	}
 	state, running, total := stackops.DeriveState(in)
 	item := StackItem{
-		ID: st.ID, Name: st.Name, Target: string(st.Target), Source: string(st.Source.Kind),
+		ID: st.ID, Name: st.Name, Target: string(st.Target), Source: string(st.Source.Kind), Managed: true,
 		State: string(state), HasDraft: hasDraft,
 	}
 	if state != stackops.StateNotDeployed && state != stackops.StateUnknown && !in.Unknown {
@@ -436,14 +466,20 @@ func listStacks(ctx context.Context, d StacksDeps, in *StackListInput) (*StackLi
 	if err != nil {
 		return nil, err
 	}
-	rows, err := d.stackRowsOf(ctx, in.EnvID, "")
+	row, err := d.Store.RQ.GetEnvironment(ctx, in.EnvID)
+	if err != nil {
+		return nil, stackInternal(d, "list: read the environment", in.EnvID, err)
+	}
+	read, err := d.stackRowsOf(ctx, in.EnvID, "", row.Kind == envs.KindLocal)
 	if err != nil {
 		return nil, stackInternal(d, "list", in.EnvID, err)
 	}
+	rows := read.rows
 	shown, total := q.apply(rows)
 	body := StackListBody{
 		Items: make([]StackItem, 0, len(shown)), Total: total, UnfilteredTotal: len(rows),
 		Capped: total > len(shown), StatusCounts: stackStatusCounts(rows),
+		KindCounts: stackKindCounts(rows), DiscoveryFailed: read.discoveryFailed,
 	}
 	for _, r := range shown {
 		body.Items = append(body.Items, r.item)

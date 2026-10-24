@@ -138,13 +138,22 @@ func swarmPorts(ps []dockerx.ServicePort) []string {
 // its ID, so a service of the same name that Bayplan did not make is never the stack's. They are in name
 // order.
 func SwarmRows(stack Stack, all []dockerx.ServiceRow) []ServiceRow {
+	return swarmRowsWhere(stack.Name, all, func(r dockerx.ServiceRow) bool {
+		return r.Stack == stack.Name && r.Labels[stacks.LabelStackID] == stack.ID
+	})
+}
+
+// swarmRowsWhere draws the rows of the services that keep accepts, named for the stack (the prefix its
+// services' short names drop), in name order. SwarmRows keeps the services a stack owns; Discover keeps those
+// of one namespace whoever made them.
+func swarmRowsWhere(stack string, all []dockerx.ServiceRow, keep func(dockerx.ServiceRow) bool) []ServiceRow {
 	out := make([]ServiceRow, 0)
 	for _, r := range all {
-		if r.Stack != stack.Name || r.Labels[stacks.LabelStackID] != stack.ID {
+		if !keep(r) {
 			continue
 		}
 		out = append(out, ServiceRow{
-			ID: r.ID, Name: r.Name, Short: strings.TrimPrefix(r.Name, stack.Name+"_"), Mode: r.Mode,
+			ID: r.ID, Name: r.Name, Short: strings.TrimPrefix(r.Name, stack+"_"), Mode: r.Mode,
 			State: swarmRollup(r), UpdateState: r.UpdateState, Running: taskCount(r.Running), Desired: taskCount(r.Desired),
 			Image: writtenImage(r.Labels, r.Image), Pinned: r.Image, PinState: imageState(r.Image),
 			Ports: swarmPorts(r.Ports),
@@ -198,9 +207,18 @@ func standaloneRollup(cs []ContainerRow) string {
 // project that carry its ID, one-off containers (`compose run`) left out. A service is the containers that
 // share the service label, so a service with none has no row.
 func StandaloneRows(stack Stack, all []dockerx.ContainerRow) []ServiceRow {
+	return standaloneRowsWhere(all, func(c dockerx.ContainerRow) bool {
+		return c.Labels[stacks.LabelComposeProject] == stack.Name && c.Labels[stacks.LabelStackID] == stack.ID
+	})
+}
+
+// standaloneRowsWhere draws the rows of the services of the containers that keep accepts, one-off containers
+// left out, in name order. StandaloneRows keeps the containers of a project a stack owns; Discover keeps those
+// of one project whoever made them.
+func standaloneRowsWhere(all []dockerx.ContainerRow, keep func(dockerx.ContainerRow) bool) []ServiceRow {
 	byService := map[string][]dockerx.ContainerRow{}
 	for _, c := range all {
-		if c.Labels[stacks.LabelComposeProject] != stack.Name || c.Labels[stacks.LabelStackID] != stack.ID {
+		if !keep(c) {
 			continue
 		}
 		if strings.EqualFold(c.Labels["com.docker.compose.oneoff"], "true") {

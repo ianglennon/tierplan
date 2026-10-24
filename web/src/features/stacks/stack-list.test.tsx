@@ -32,10 +32,32 @@ const stack = (over: Record<string, unknown> = {}) => ({
   name: "web",
   target: "swarm",
   source: "inline",
+  managed: true,
   state: "not_deployed",
   lastDeployedAt: "",
   lastDeployedBy: "",
   hasDraft: false,
+  ...over,
+});
+
+// A stack found on the engine that Bayplan did not make: no ID, a state and the service counts, and the flags.
+const unmanaged = (
+  name: string,
+  over: Record<string, unknown> = {},
+  flags: Record<string, unknown> = {},
+) => ({
+  id: "",
+  name,
+  target: "swarm",
+  source: "unmanaged",
+  managed: false,
+  state: "running",
+  lastDeployedAt: "",
+  lastDeployedBy: "",
+  hasDraft: false,
+  servicesRunning: 2,
+  servicesTotal: 2,
+  unmanaged: { orphan: false, portainer: false, owner: "", adoptable: true, reason: "", ...flags },
   ...over,
 });
 
@@ -640,5 +662,50 @@ describe("StackList: columns and pending rows", () => {
     const idle = within(row("e-stack")).getByRole("button", { name: "Actions for e-stack" });
     expect((idle as HTMLButtonElement).disabled).toBe(false);
     expect(within(row("e-stack")).getByText("Running")).toBeTruthy();
+  });
+});
+
+describe("StackList unmanaged stacks", () => {
+  const rowOfName = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
+
+  it("lists a stack Bayplan did not make with the Unmanaged badge, its state and services, and no actions", async () => {
+    stacks = {
+      items: [
+        stack(),
+        unmanaged("legacy", { state: "degraded", servicesRunning: 1, servicesTotal: 3 }),
+      ],
+    };
+    mount();
+    await screen.findByRole("link", { name: "web" });
+
+    const row = rowOfName("legacy");
+    expect(within(row).getByText("Unmanaged")).toBeTruthy();
+    expect(within(row).getByText("Degraded")).toBeTruthy();
+    expect(within(row).getByText("1/3")).toBeTruthy();
+    // Source is a dash without a Portainer marker and Last deployed is a dash: two cells say so.
+    expect(within(row).getAllByText("\u2014")).toHaveLength(2);
+    // The name is text, and the row has no menu: Deploy, Update images, Stop, Start and Remove are not offered.
+    expect(screen.queryByRole("link", { name: "legacy" })).toBeNull();
+    expect(within(row).queryByRole("button")).toBeNull();
+    // A managed row beside it keeps its link and menu.
+    expect(within(rowOfName("web")).getByRole("button", { name: /web/ })).toBeTruthy();
+  });
+
+  it("renders the name of an unmanaged stack with markup in it as text", async () => {
+    stacks = { items: [unmanaged("<img src=x onerror=alert(1)>")] };
+    mount();
+    const name = await screen.findByText("<img src=x onerror=alert(1)>");
+    expect(name.querySelector("img")).toBeNull();
+  });
+
+  it("explains in a Tooltip that Bayplan did not create the stack", async () => {
+    stacks = { items: [unmanaged("legacy")] };
+    mount();
+    await screen.findByText("legacy");
+    fireEvent.focus(within(rowOfName("legacy")).getByText("Unmanaged"));
+    const tip = await screen.findByRole("tooltip");
+    expect(tip.textContent).toBe(
+      "Bayplan didn't create this stack and doesn't manage it. Adopt it to manage it here.",
+    );
   });
 });

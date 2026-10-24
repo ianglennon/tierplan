@@ -72,6 +72,15 @@ type stackAnswer struct {
 	Stopped         bool   `json:"stopped"`
 	DraftSavedAt    string `json:"draftSavedAt"`
 	DraftSavedBy    string `json:"draftSavedBy"`
+	// Managed is false for a stack found on the engine that Bayplan did not make, which carries Unmanaged.
+	Managed   bool `json:"managed"`
+	Unmanaged *struct {
+		Orphan    bool   `json:"orphan"`
+		Portainer bool   `json:"portainer"`
+		Owner     string `json:"owner"`
+		Adoptable bool   `json:"adoptable"`
+		Reason    string `json:"reason"`
+	} `json:"unmanaged"`
 }
 
 type draftAnswer struct {

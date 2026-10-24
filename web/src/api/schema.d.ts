@@ -4084,6 +4084,8 @@ export interface components {
             failedEnvironments: components["schemas"]["FailedEnvironmentBody"][] | null;
             /** @description One group for each environment that has stacks among the rows returned, by environment name. An environment the caller holds no stacks.read on is absent */
             groups: components["schemas"]["AllStacksGroup"][] | null;
+            /** @description How many stacks the Show toggle counts (all, managed, unmanaged), over the environments read and before the search, the status filter and the kind */
+            kindCounts: components["schemas"]["StackKindCountsBody"];
             /** @description How many stacks each status chip counts, over the environments read and before the search and the status filter */
             statusCounts: components["schemas"]["StackStatusCountsBody"];
             /**
@@ -4100,10 +4102,14 @@ export interface components {
         AllStacksGroup: {
             /** @description How many of the environment's stacks each status chip counts, before the search and the status filter */
             counts: components["schemas"]["StackStatusCountsBody"];
+            /** @description True when the look for unmanaged stacks on this environment failed just now: its managed stacks are listed all the same */
+            discoveryFailed: boolean;
             /** @description The environment */
             envId: string;
             /** @description Its name */
             envName: string;
+            /** @description How many of the environment's stacks are managed and unmanaged, before the search, the status filter and the kind */
+            kindCounts: components["schemas"]["StackKindCountsBody"];
             /** @description The environment's stacks among the rows returned, in the order asked for */
             stacks: components["schemas"]["StackItem"][] | null;
             /**
@@ -8688,6 +8694,8 @@ export interface components {
             lastOperation?: components["schemas"]["StackOperationBody"];
             /** @description Left out unless set: set while a stack operation runs on this environment, on any of its stacks, and names it. Only one runs at a time: a second is refused 409 operation_locked */
             lock?: components["schemas"]["StackLockBody"];
+            /** @description True for a stack Bayplan manages; false for one found on the engine by its labels that Bayplan did not make. An unmanaged item has an empty id, only the state and the service counts, and no draft or last deploy */
+            managed: boolean;
             /** @description The stack name, also its swarm namespace or compose project */
             name: string;
             /** @description Whether a roll back has a version to restore: the newest version that ran well, or, when the newest version is the one that runs, the one before it */
@@ -8703,10 +8711,10 @@ export interface components {
              */
             servicesTotal?: number;
             /**
-             * @description Where the stack's definition lives. Only inline exists today
+             * @description Where the stack's definition lives. Only inline exists today for a stack Bayplan manages; unmanaged is a stack found on the engine that Bayplan did not make (see unmanaged)
              * @enum {string}
              */
-            source: "inline" | "adopted" | "git";
+            source: "inline" | "adopted" | "git" | "unmanaged";
             /** @description A reference to the stack's source: empty for an inline stack */
             sourceRef: string;
             /**
@@ -8721,6 +8729,8 @@ export interface components {
              * @enum {string}
              */
             target: "swarm" | "standalone";
+            /** @description Set on an unmanaged stack only: what was found about it */
+            unmanaged?: components["schemas"]["StackUnmanagedBody"];
         };
         StackDiffHunkBody: {
             /** @description The hunk's lines in order */
@@ -8884,6 +8894,8 @@ export interface components {
             lastDeployedAt: string;
             /** @description Who started it; empty when there is none */
             lastDeployedBy: string;
+            /** @description True for a stack Bayplan manages; false for one found on the engine by its labels that Bayplan did not make. An unmanaged item has an empty id, only the state and the service counts, and no draft or last deploy */
+            managed: boolean;
             /** @description The stack name, also its swarm namespace or compose project */
             name: string;
             /**
@@ -8897,10 +8909,10 @@ export interface components {
              */
             servicesTotal?: number;
             /**
-             * @description Where the stack's definition lives. Only inline exists today
+             * @description Where the stack's definition lives. Only inline exists today for a stack Bayplan manages; unmanaged is a stack found on the engine that Bayplan did not make (see unmanaged)
              * @enum {string}
              */
-            source: "inline" | "adopted" | "git";
+            source: "inline" | "adopted" | "git" | "unmanaged";
             /**
              * @description The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back, starting or stopping while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run
              * @enum {string}
@@ -8911,6 +8923,8 @@ export interface components {
              * @enum {string}
              */
             target: "swarm" | "standalone";
+            /** @description Set on an unmanaged stack only: what was found about it */
+            unmanaged?: components["schemas"]["StackUnmanagedBody"];
         };
         StackJobBody: {
             /** @description When the job started, RFC 3339 UTC */
@@ -9028,6 +9042,23 @@ export interface components {
              */
             state: "running" | "done" | "failed" | "cancelled";
         };
+        StackKindCountsBody: {
+            /**
+             * Format: int64
+             * @description Managed and unmanaged stacks together
+             */
+            all: number;
+            /**
+             * Format: int64
+             * @description Stacks Bayplan manages
+             */
+            managed: number;
+            /**
+             * Format: int64
+             * @description Stacks found on the engine that Bayplan did not make
+             */
+            unmanaged: number;
+        };
         StackLifecycleBody: {
             /** @description The job: read it at GET .../deploys/{jobId}, the same console route a deploy uses */
             jobId: string;
@@ -9037,8 +9068,12 @@ export interface components {
         StackListBody: {
             /** @description True when total is more than the rows returned */
             capped: boolean;
+            /** @description True when the look for unmanaged stacks failed just now: the managed stacks are listed all the same and the unmanaged ones are missing */
+            discoveryFailed: boolean;
             /** @description At most 500 stacks that match the search and the status filter, in the order asked for (by name unless sort says otherwise) */
             items: components["schemas"]["StackItem"][] | null;
+            /** @description How many stacks the Show toggle counts (all, managed, unmanaged), before the search, the status filter and the kind */
+            kindCounts: components["schemas"]["StackKindCountsBody"];
             /** @description How many stacks each status chip counts, before the search and the status filter, so the numbers never shrink with what was typed */
             statusCounts: components["schemas"]["StackStatusCountsBody"];
             /**
@@ -9601,6 +9636,21 @@ export interface components {
             hunks: components["schemas"]["StackDiffHunkBody"][] | null;
             /** @description The lines of the newer text, masked, so that the unchanged lines between hunks can be shown; empty when there are no hunks */
             lines: string[] | null;
+        };
+        StackUnmanagedBody: {
+            /** @description False for Bayplan's own stack and an agent's, which cannot be adopted */
+            adoptable: boolean;
+            /** @description True when an object of the stack carries a bayplan.stack.id: Bayplan made it once, for a record this instance does not hold (another instance or a lost record). The ID is never linked to a stack */
+            orphan: boolean;
+            /**
+             * @description bayplan for the stack the Bayplan server itself runs in, agent for a stack that holds a Bayplan agent, empty for any other
+             * @enum {string}
+             */
+            owner: "" | "bayplan" | "agent";
+            /** @description True when the stack carries a Portainer marker: a label key starting io.portainer., or a Compose working directory under /data/compose/ */
+            portainer: boolean;
+            /** @description Why the stack cannot be adopted; empty when it can */
+            reason: string;
         };
         StackVariableBody: {
             /** @description The default written in the compose file, when hasDefault is true */
@@ -14432,6 +14482,8 @@ export interface operations {
                 q?: string;
                 /** @description Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed) or deploy_failed. Applied before the 500-row cap; any other value is refused 422 status_invalid */
                 status?: string;
+                /** @description Only stacks Bayplan manages (managed) or only stacks found on the engine that Bayplan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap */
+                kind?: "managed" | "unmanaged";
                 /** @description What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name */
                 sort?: "name" | "state" | "lastDeployed";
                 /** @description asc (the default) or desc */
@@ -17307,6 +17359,8 @@ export interface operations {
                 q?: string;
                 /** @description Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed) or deploy_failed. Applied before the 500-row cap; any other value is refused 422 status_invalid */
                 status?: string;
+                /** @description Only stacks Bayplan manages (managed) or only stacks found on the engine that Bayplan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap */
+                kind?: "managed" | "unmanaged";
                 /** @description What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name */
                 sort?: "name" | "state" | "lastDeployed";
                 /** @description asc (the default) or desc */
