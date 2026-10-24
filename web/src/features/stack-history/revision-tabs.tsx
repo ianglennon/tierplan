@@ -9,8 +9,9 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { RevisionContents } from "@/features/stack-history/revision-contents";
 import { RevisionRendered } from "@/features/stack-history/revision-rendered";
-import { YamlDiff } from "@/features/stack-review/yaml-diff";
+import { RevisionYaml } from "@/features/stack-history/revision-yaml";
 import { useT } from "@/i18n/use-t";
 
 interface RevisionTabsProps {
@@ -21,10 +22,10 @@ interface RevisionTabsProps {
   name: string;
 }
 
-type Tab = "yaml" | "rendered";
+type Tab = "yaml" | "rendered" | "contents";
 
 // RevisionTabs is what a selected revision was (UI-SPEC "Revision detail"): the YAML difference from the
-// deployed revision, the compose file it deployed and, in the plan that follows, its contents. The tab is
+// deployed revision, the compose file it deployed and its contents. The tab is
 // local state and the arrow keys move between tabs. One read feeds them all, so a failed read says so in the
 // tab that is open, with Retry.
 export function RevisionTabs({ envId, stackId, seq, name }: RevisionTabsProps) {
@@ -43,6 +44,7 @@ export function RevisionTabs({ envId, stackId, seq, name }: RevisionTabsProps) {
         data-testid="revision-loading"
       >
         <div className="flex gap-2">
+          <Skeleton className="h-8 w-24" />
           <Skeleton className="h-8 w-24" />
           <Skeleton className="h-8 w-24" />
         </div>
@@ -81,31 +83,29 @@ export function RevisionTabs({ envId, stackId, seq, name }: RevisionTabsProps) {
         <TabsTrigger value="rendered" className="max-md:h-11">
           {t("stackRevision.tabs.rendered")}
         </TabsTrigger>
+        <TabsTrigger value="contents" className="max-md:h-11">
+          {t("stackRevision.tabs.contents")}
+        </TabsTrigger>
       </TabsList>
       <TabsContent value="yaml" className="flex min-w-0 flex-col gap-2">
-        {detail ? (
-          <>
-            <p className="text-sm text-muted-foreground">
-              {t("stackRevision.yaml.caption", { seq, deployed: detail.deployedSeq })}
-            </p>
-            <div className="max-h-[70vh] overflow-y-auto rounded-md">
-              <YamlDiff
-                hunks={detail.yaml.hunks}
-                lines={detail.yaml.lines}
-                caption={t("stackRevision.yaml.caption", { seq, deployed: detail.deployedSeq })}
-              />
-            </div>
-          </>
-        ) : (
-          failed("yaml")
-        )}
+        {detail ? <RevisionYaml detail={detail} /> : failed("yaml")}
       </TabsContent>
       <TabsContent value="rendered" className="flex min-w-0 flex-col gap-2">
-        {detail ? (
-          <RevisionRendered seq={seq} name={name} rendered={detail.rendered} />
-        ) : (
+        {!detail ? (
           failed("yaml")
+        ) : detail.rendered === "" ? (
+          <div className="flex flex-col gap-1 rounded-lg border p-4">
+            <p className="font-medium">{t("stackRevision.rendered.empty.title")}</p>
+            <p className="text-sm text-muted-foreground">
+              {t("stackRevision.rendered.empty.body", { seq })}
+            </p>
+          </div>
+        ) : (
+          <RevisionRendered seq={seq} name={name} rendered={detail.rendered} />
         )}
+      </TabsContent>
+      <TabsContent value="contents" className="flex min-w-0 flex-col gap-2">
+        {detail ? <RevisionContents detail={detail} /> : failed("contents")}
       </TabsContent>
     </Tabs>
   );

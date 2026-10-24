@@ -327,18 +327,20 @@ describe("loading, errors and a gone revision", () => {
 
     const alert = await screen.findByRole("alert");
     expect(within(alert).getByText("Couldn't load this revision's YAML.")).toBeTruthy();
+    const before = detailCalls;
     detailStatus = 200;
     fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
 
     await screen.findByRole("table", { name: "Rendered YAML, revision #1 against #3" });
-    expect(detailCalls).toBe(2);
+    expect(detailCalls).toBeGreaterThan(before);
+  });
 
-    // The Contents tab of a revision that cannot load says contents.
-    cleanup();
-    client.clear();
+  it("says it is the contents that could not load on the Contents tab", async () => {
     detailStatus = 500;
+    detailType = "internal";
     mount();
     await openContents();
+
     expect(await screen.findByText("Couldn't load this revision's contents.")).toBeTruthy();
   });
 

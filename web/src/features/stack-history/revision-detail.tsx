@@ -1,16 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { CircleX, Info } from "lucide-react";
+import { CircleX, History, Info } from "lucide-react";
 import type { RefObject } from "react";
 
-import type { StackRevision } from "@/api/stack-history";
+import { isRevisionGone, revisionQuery, type StackRevision } from "@/api/stack-history";
 import type { StackDetail } from "@/api/stacks";
 import { RelativeTime } from "@/components/relative-time";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { RevisionLink } from "@/features/stack-history/revision-kind-cell";
 import { failureReason } from "@/features/stack-history/revision-result-cell";
 import { RevisionTabs } from "@/features/stack-history/revision-tabs";
@@ -25,13 +34,51 @@ interface RevisionDetailProps {
   // The heading takes focus when a revision is selected, so a keyboard or screen reader user lands on what
   // they chose (UI-SPEC "Interaction and Accessibility Contract").
   headingRef: RefObject<HTMLHeadingElement | null>;
+  // How many revisions the instance keeps of each stack, for the sentence about a revision that was deleted.
+  // Until the retention setting is passed in (plan 08-06) it is the default.
+  retention?: number;
 }
+
+// How many revisions an instance keeps of each stack unless its settings say otherwise.
+const DEFAULT_RETENTION = 20;
 
 // RevisionDetail is the card below the table for the selected revision (UI-SPEC "History tab"): its heading
 // and who made it and when, then what stands out about it: it failed, it is still deploying, or it is the
 // deployed one. The tabs below show what the revision was; the Roll back action is added by the plan that follows.
-export function RevisionDetail({ envId, stackId, item, stack, headingRef }: RevisionDetailProps) {
+export function RevisionDetail({
+  envId,
+  stackId,
+  item,
+  stack,
+  headingRef,
+  retention = DEFAULT_RETENTION,
+}: RevisionDetailProps) {
   const t = useT();
+  // The same read the tabs make (one request, shared by the query key): when the server says retention
+  // deleted this revision since the list was read, the whole card says so.
+  const revision = useQuery(revisionQuery(envId, stackId, item.seq));
+  if (isRevisionGone(revision.error)) {
+    return (
+      <Empty>
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <History aria-hidden="true" />
+          </EmptyMedia>
+          <EmptyTitle role="heading" aria-level={3} ref={headingRef} tabIndex={-1}>
+            {t("stackRevision.gone.title")}
+          </EmptyTitle>
+          <EmptyDescription>{t("stackRevision.gone.body", { count: retention })}</EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <Button asChild variant="outline" className="max-md:h-11">
+            <Link to="/env/$envId/stacks/$stackId/history" params={{ envId, stackId }} replace>
+              {t("stackRevision.gone.back")}
+            </Link>
+          </Button>
+        </EmptyContent>
+      </Empty>
+    );
+  }
   const op = stack?.lastOperation;
   const consoleJob = op?.state === "running" ? op.jobId : "";
   return (
