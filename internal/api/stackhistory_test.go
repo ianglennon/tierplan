@@ -4,9 +4,13 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/stackops"
@@ -318,5 +322,222 @@ func TestStackRevisionDetail(t *testing.T) {
 		if rec.Code != http.StatusNotFound || problemType(t, rec) != "stack_not_found" {
 			t.Errorf("revision 1 of %s: %d %s, want 404 stack_not_found", id, rec.Code, rec.Body)
 		}
+	}
+}
+
+// The Changes tab of a revision (plan 08-04, STK-08, D-05, D-47, AUTH-07): what rolling back to a revision would
+// change against what runs, read by anyone who may read stacks, with the live values a reader may not reveal
+// withheld.
+
+type revisionChangesAnswer struct {
+	DeployedSeq int64 `json:"deployedSeq"`
+	Services    []struct {
+		Name, Short, Change string
+		Current, Next       map[string]any
+		HiddenChanges       []string `json:"hiddenChanges"`
+		Settings            int
+	} `json:"services"`
+	Summary   struct{ Added, Changed, Removed int } `json:"summary"`
+	Identical bool                                  `json:"identical"`
+}
+
+func revisionChangesPath(stackID string, seq int) string {
+	return "stacks/" + stackID + "/revisions/" + itoaT(int64(seq)) + "/changes"
+}
+
+// liveValues are the made-up values of the stack the tests run: they must reach an Admin and never a Viewer.
+var liveValues = []string{"key-one-8c1d", "key-two-3f6a", "pw-one-9e2f", "pw-two-5d0b", "u:pw-one-4b7a", "u:pw-two-7c3e"}
+
+func liveValuesCompose(image, n string) string {
+	keys := map[string]string{"one": "key-one-8c1d", "two": "key-two-3f6a"}
+	pws := map[string]string{"one": "pw-one-9e2f", "two": "pw-two-5d0b"}
+	logs := map[string]string{"one": "tcp://u:pw-one-4b7a@h", "two": "tcp://u:pw-two-7c3e@h"}
+	return "services:\n  web:\n    image: " + image + "\n    environment:\n      API_KEY: " + keys[n] + "\n      MODE: prod\n" +
+		"    command: [\"nginx\", \"--pw=" + pws[n] + "\"]\n    logging:\n      driver: syslog\n      options:\n        syslog-address: " + logs[n] + "\n"
+}
+
+func TestRevisionChangesRedactsForAViewer(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	st := newStack(t, admin, "chg")
+	f.deployGood(t, operator, st.ID, liveValuesCompose("nginx:1.27-alpine", "one"))
+	f.deployGood(t, operator, st.ID, liveValuesCompose("nginx:1.28-alpine", "two"))
+
+	// A Viewer reads what rolling back to revision 1 would change, and sees no live value.
+	rec := viewer.do(http.MethodGet, revisionChangesPath(st.ID, 1), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("changes as a viewer: %d %s", rec.Code, rec.Body)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q", cc)
+	}
+	for _, v := range liveValues {
+		if strings.Contains(rec.Body.String(), v) {
+			t.Fatalf("a live value %q reached a viewer: %s", v, rec.Body)
+		}
+	}
+	got := answerOf[revisionChangesAnswer](t, rec)
+	if got.DeployedSeq != 2 || got.Identical || len(got.Services) != 1 || got.Services[0].Change != "changed" || got.Summary.Changed != 1 {
+		t.Fatalf("changes = %+v, want revision 2 deployed and the one service changed", got)
+	}
+	svc := got.Services[0]
+	if !strings.Contains(rec.Body.String(), "API_KEY=\\u003chidden\\u003e") && !strings.Contains(rec.Body.String(), "API_KEY=<hidden>") {
+		t.Errorf("the environment entry is not withheld by name: %s", rec.Body)
+	}
+	for _, want := range []string{"TaskTemplate.ContainerSpec.Env[API_KEY]", "TaskTemplate.ContainerSpec.Command", "TaskTemplate.LogDriver.Options.syslog-address"} {
+		if !slices.Contains(svc.HiddenChanges, want) {
+			t.Errorf("hidden changes = %v, want %s listed", svc.HiddenChanges, want)
+		}
+	}
+	// The image change is still shown: it is not a value to withhold.
+	if !strings.Contains(rec.Body.String(), "nginx:1.28-alpine") || !strings.Contains(rec.Body.String(), "nginx:1.27-alpine") {
+		t.Errorf("the image change is missing: %s", rec.Body)
+	}
+
+	// An Admin may reveal, and sees both sides.
+	for _, c := range []*roleCaller{admin} {
+		rec = c.do(http.MethodGet, revisionChangesPath(st.ID, 1), "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("changes as an admin: %d %s", rec.Code, rec.Body)
+		}
+		for _, v := range []string{"key-one-8c1d", "key-two-3f6a", "pw-one-9e2f", "pw-two-5d0b"} {
+			if !strings.Contains(rec.Body.String(), v) {
+				t.Errorf("an admin's answer lacks %q: %s", v, rec.Body)
+			}
+		}
+	}
+	// An Operator holds no secrets.reveal and is redacted like a Viewer.
+	rec = operator.do(http.MethodGet, revisionChangesPath(st.ID, 1), "")
+	for _, v := range liveValues {
+		if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), v) {
+			t.Fatalf("changes as an operator: %d, a live value %q may have reached them: %s", rec.Code, v, rec.Body)
+		}
+	}
+}
+
+func TestRevisionChangesOfTheDeployedRevisionAndOfOneThatMatchesItAreIdentical(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	st := newStack(t, admin, "same")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.deployGood(t, operator, st.ID, composeWeb128)
+	f.deployGood(t, operator, st.ID, composeWeb128)
+
+	// The newest is the deployed one; revision 2 ran the same content, so rolling back to either changes nothing.
+	for _, seq := range []int{3, 2} {
+		rec := viewer.do(http.MethodGet, revisionChangesPath(st.ID, seq), "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("changes of %d: %d %s", seq, rec.Code, rec.Body)
+		}
+		got := answerOf[revisionChangesAnswer](t, rec)
+		if !got.Identical || len(got.Services) != 0 || got.DeployedSeq != 3 {
+			t.Errorf("changes of %d = %+v, want none against deployed revision 3", seq, got)
+		}
+	}
+	// Revision 1 differs: the tag moved.
+	if got := answerOf[revisionChangesAnswer](t, viewer.do(http.MethodGet, revisionChangesPath(st.ID, 1), "")); got.Identical || len(got.Services) != 1 {
+		t.Errorf("changes of 1 = %+v, want the one service changed", got)
+	}
+}
+
+func TestRevisionChangesRefusesAFailedRevision(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	st := newStack(t, admin, "failed")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.deployThenCancel(t, operator, st, composeWeb128)
+	writes := len(f.fake.Writes())
+
+	rec := viewer.do(http.MethodGet, revisionChangesPath(st.ID, 2), "")
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "revision_not_good" {
+		t.Errorf("changes of a failed revision: %d %s, want 409 revision_not_good", rec.Code, rec.Body)
+	}
+	rec = viewer.do(http.MethodGet, revisionChangesPath(st.ID, 99), "")
+	if rec.Code != http.StatusNotFound || problemType(t, rec) != "revision_not_found" {
+		t.Errorf("changes of a revision the stack lacks: %d %s, want 404 revision_not_found", rec.Code, rec.Body)
+	}
+	// A stack of another environment is not found, whoever asks.
+	ctx := testsupport.Context(t)
+	if _, err := f.st.Write.ExecContext(ctx, `INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at) VALUES ('env-elsewhere', 'agent', 'elsewhere', '', 1, 1, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	repo := stackops.Repo{Store: f.st, Vault: f.v}
+	foreign, _, err := repo.CreateStack(ctx, "env-elsewhere", "foreign", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte("services: {}\n")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec = viewer.do(http.MethodGet, revisionChangesPath(foreign.ID, 1), "")
+	if rec.Code != http.StatusNotFound || problemType(t, rec) != "stack_not_found" {
+		t.Errorf("changes of another environment's stack: %d %s, want 404 stack_not_found", rec.Code, rec.Body)
+	}
+	if n := len(f.fake.Writes()); n != writes {
+		t.Errorf("writes went from %d to %d, reading the changes writes nothing", writes, n)
+	}
+}
+
+func TestRevisionChangesIsLimitedPerUser(t *testing.T) {
+	t.Parallel()
+	entered := make(chan struct{}, 4)
+	release := make(chan struct{})
+	var calls atomic.Int32
+	f, e := stackEnvTuned(t, func(f *envFix) {
+		// The first two reads are held in flight; the others pass through.
+		f.stackOnChanges = func(context.Context) {
+			if calls.Add(1) <= 2 {
+				entered <- struct{}{}
+				<-release
+			}
+		}
+	})
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	holder := f.caller(t, e, "holder-1", "viewer")
+	other := f.caller(t, e, "other-1", "viewer")
+	st := newStack(t, admin, "limited")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.deployGood(t, operator, st.ID, composeWeb128)
+
+	var wg sync.WaitGroup
+	codes := make(chan int, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			codes <- holder.do(http.MethodGet, revisionChangesPath(st.ID, 1), "").Code
+		}()
+	}
+	testsupport.Await(t, "the first read to be in flight", entered)
+	testsupport.Await(t, "the second read to be in flight", entered)
+
+	// Two are in flight for this user: the third is refused, and says why.
+	rec := holder.do(http.MethodGet, revisionChangesPath(st.ID, 1), "")
+	if rec.Code != http.StatusTooManyRequests || problemType(t, rec) != "check_busy" {
+		t.Errorf("a third read: %d %s, want 429 check_busy", rec.Code, rec.Body)
+	}
+	// Another user is unaffected.
+	if rec := other.do(http.MethodGet, revisionChangesPath(st.ID, 1), ""); rec.Code != http.StatusOK {
+		t.Errorf("another user's read: %d %s, want 200", rec.Code, rec.Body)
+	}
+
+	close(release)
+	wg.Wait()
+	close(codes)
+	for code := range codes {
+		if code != http.StatusOK {
+			t.Errorf("a held read ended with %d, want 200", code)
+		}
+	}
+	// The slots are given back.
+	if rec := holder.do(http.MethodGet, revisionChangesPath(st.ID, 1), ""); rec.Code != http.StatusOK {
+		t.Errorf("a read after the others finished: %d %s, want 200", rec.Code, rec.Body)
 	}
 }

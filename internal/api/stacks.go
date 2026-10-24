@@ -94,6 +94,9 @@ type StacksDeps struct {
 	// OnCheck, when set, is called once a check holds its slot and before it runs. Tests use it to
 	// hold a check in flight.
 	OnCheck func(ctx context.Context)
+	// OnChanges, when set, is called once a read of a revision's changes holds its slot and before it runs. Tests
+	// use it to hold one in flight.
+	OnChanges func(ctx context.Context)
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 	// ReadEnv, when set, is called before the stacks of an environment are read for the All stacks list;
