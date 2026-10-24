@@ -1135,3 +1135,117 @@ func TestReviewAnswerNeverQuotesPartOfASecret(t *testing.T) {
 	}
 	stackstest.NoSecretRun(t, "Password2024!", messages...)
 }
+
+// Reviewing a roll back to a chosen revision (plan 08-03, STK-08, D-02, D-05).
+
+func TestReviewRollbackModeRefusals(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rv")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.deployThenCancel(t, operator, st, composeWeb128)
+	writes := len(f.fake.Writes())
+
+	cases := []struct {
+		name, body, problem string
+		status              int
+	}{
+		{"no revision", `{"mode":"rollback"}`, "revision_required", http.StatusUnprocessableEntity},
+		{"unknown revision", `{"mode":"rollback","revision":99}`, "revision_not_found", http.StatusNotFound},
+		{"failed revision", `{"mode":"rollback","revision":2}`, "revision_not_good", http.StatusConflict},
+	}
+	for _, c := range cases {
+		rec := operator.do(http.MethodPost, "stacks/"+st.ID+"/review", c.body)
+		if rec.Code != c.status || problemType(t, rec) != c.problem {
+			t.Errorf("%s: %d %s, want %d %s", c.name, rec.Code, rec.Body, c.status, c.problem)
+		}
+	}
+	if n := len(f.fake.Writes()); n != writes {
+		t.Errorf("writes went from %d to %d, a review writes nothing", writes, n)
+	}
+}
+
+func TestReviewRollbackModeShowsTheStoredDigestsAndAsksNoRegistry(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rv")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.deployGood(t, operator, st.ID, composeWeb128)
+	pin127 := f.revisions(t, st.ID)[0].Pins
+	var pins map[string]string
+	if err := json.Unmarshal([]byte(pin127), &pins); err != nil {
+		t.Fatal(err)
+	}
+	f.fake.SetDistributionDigest("docker.io/library/nginx:1.27-alpine", "sha256:"+strings.Repeat("c", 64))
+	lookups := len(f.fake.DistributionRefs())
+
+	rv, code, body := operator.reviewStack(st.ID, `{"mode":"rollback","revision":1}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, body)
+	}
+	var extra struct {
+		Revision    int64 `json:"revision"`
+		DeployedSeq int64 `json:"deployedSeq"`
+	}
+	if err := json.Unmarshal([]byte(body), &extra); err != nil {
+		t.Fatal(err)
+	}
+	if extra.Revision != 1 || extra.DeployedSeq != 2 {
+		t.Errorf("revision %d, deployedSeq %d, want 1 and 2", extra.Revision, extra.DeployedSeq)
+	}
+	if n := len(f.fake.DistributionRefs()); n != lookups {
+		t.Errorf("distribution checks went from %d to %d, a roll back review asks no registry", lookups, n)
+	}
+	if len(rv.Problems) != 0 {
+		t.Fatalf("problems = %+v", rv.Problems)
+	}
+	if len(rv.Images) != 1 || rv.Images[0].State != "pinned" || rv.Images[0].Note != "revision" || !strings.HasSuffix(pins["rv_web"], rv.Images[0].Digest) {
+		t.Errorf("images = %+v, want the one image pinned to revision 1's digest %s", rv.Images, pins["rv_web"])
+	}
+	if rv.Pins["rv_web"] != pins["rv_web"] {
+		t.Errorf("pins = %v, want revision 1's %v", rv.Pins, pins)
+	}
+	if len(rv.Services) != 1 || rv.Services[0].Change != "changed" {
+		t.Errorf("services = %+v, want the one service changed back", rv.Services)
+	}
+	if rv.Concurrent != nil {
+		t.Errorf("concurrent = %+v, a roll back review has none", rv.Concurrent)
+	}
+	if rv.YAML.ChangedLines == 0 {
+		t.Errorf("yaml = %+v, want the rendering of revision 1 against the deployed one", rv.YAML)
+	}
+}
+
+func TestReviewRollbackModeJudgesHostAccessOnTheChosenRevision(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "esc")
+	// The Admin deployed host access as revision 1; a plainer revision 2 runs now.
+	f.deployGood(t, admin, st.ID, hostAccessCompose)
+	f.deployGood(t, operator, st.ID, composeWeb128)
+
+	rv, code, body := operator.reviewStack(st.ID, `{"mode":"rollback","revision":1}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, body)
+	}
+	blocked := false
+	for _, p := range rv.Problems {
+		blocked = blocked || (p.Code == "needs_admin" && p.Severity == "error")
+	}
+	if !blocked || len(rv.NeedsAdmin) == 0 {
+		t.Errorf("problems %+v needsAdmin %v, want a blocking needs_admin for an operator", rv.Problems, rv.NeedsAdmin)
+	}
+	rec := operator.do(http.MethodPost, "stacks/"+st.ID+"/rollback", `{"revision":1}`)
+	if rec.Code != http.StatusForbidden || problemType(t, rec) != "privileged_compose" {
+		t.Errorf("an operator's roll back to revision 1: %d %s, want 403 privileged_compose", rec.Code, rec.Body)
+	}
+	if rv, code, body := admin.reviewStack(st.ID, `{"mode":"rollback","revision":1}`); code != http.StatusOK || len(rv.NeedsAdmin) != 0 {
+		t.Errorf("an admin's review: %d %s, want no needsAdmin", code, body)
+	}
+}

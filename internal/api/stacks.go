@@ -210,6 +210,7 @@ type StackRollbackBody struct {
 	Available  bool   `json:"available" doc:"True when there is an earlier version that ran well to roll back to"`
 	DeployedAt string `json:"deployedAt" doc:"When that version's deploy was started, RFC 3339 UTC; empty when there is none"`
 	DeployedBy string `json:"deployedBy" doc:"Who started it, as a name; empty when there is none"`
+	Revision   int64  `json:"revision,omitempty" doc:"Left out when there is none: the number of that revision, the one a roll back with no body would restore"`
 }
 
 // StackOperationBody is the newest operation on a stack: the one the state comes from.
@@ -481,7 +482,7 @@ func stackDetailOf(ctx context.Context, d StacksDeps, st stackops.Stack) (StackD
 		return StackDetail{}, err
 	}
 	if hasBack {
-		detail.Rollback = StackRollbackBody{Available: true, DeployedAt: rfc3339(back.At), DeployedBy: back.By}
+		detail.Rollback = StackRollbackBody{Available: true, DeployedAt: rfc3339(back.At), DeployedBy: back.By, Revision: back.Seq}
 	}
 	if hasLatest {
 		detail.LastOperation = &StackOperationBody{

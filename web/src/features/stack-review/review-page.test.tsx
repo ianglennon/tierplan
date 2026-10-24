@@ -31,6 +31,9 @@ let sent: Sent[];
 let me: ReturnType<typeof makeMe>;
 let review: () => Response | Promise<Response>;
 let deploy: () => Response | Promise<Response>;
+let rollback: () => Response | Promise<Response>;
+// Whether the stack holds a saved draft with changes that were not deployed.
+let draftSaved: boolean;
 let client: QueryClient;
 // The operation lock the stack's page reports, when one is held.
 let lock: Record<string, string> | undefined;
@@ -87,6 +90,8 @@ beforeEach(() => {
   me = makeMe({ envs: { [ENV]: "operator" } });
   review = () => Response.json(reviewBody());
   deploy = () => Response.json({ jobId: "j1", revision: 3 }, { status: 202 });
+  rollback = () => Response.json({ jobId: "j9", revision: 4 }, { status: 202 });
+  draftSaved = false;
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   vi.stubGlobal(
@@ -123,11 +128,13 @@ beforeEach(() => {
           createdBy: "ada",
           createdAt: "2026-10-19T10:00:00Z",
           stopped: false,
+          ...(draftSaved ? { draftSavedAt: "2026-10-19T12:00:00Z", draftSavedBy: "ada" } : {}),
           ...(lock ? { lock } : {}),
         });
       }
       if (path === `/api/env/${ENV}/stacks/${STACK}/review`) return review();
       if (path === `/api/env/${ENV}/stacks/${STACK}/deploys`) return deploy();
+      if (path === `/api/env/${ENV}/stacks/${STACK}/rollback`) return rollback();
       return Response.json({}, { status: 404 });
     }),
   );
@@ -1047,5 +1054,110 @@ describe("the operation lock", () => {
         "Another stack operation started on Prod just now. Try again when it finishes.",
       ),
     ).toBeTruthy();
+  });
+});
+
+// A roll back to a chosen revision (plan 08-03, STK-08, D-02): the revision's own stack with its stored
+// digests against what runs, and the roll back of exactly that.
+describe("in roll back mode", () => {
+  const rollbackReview = (over: Record<string, unknown> = {}) =>
+    reviewBody({
+      revision: 1,
+      deployedSeq: 3,
+      images: [
+        {
+          service: "web",
+          image: "nginx:1.27",
+          digest: D2,
+          current: D1,
+          state: "pinned",
+          note: "revision",
+        },
+      ],
+      pins: { s1_web: `nginx:1.27@${D2}` },
+      ...over,
+    });
+  const rollbackButton = () =>
+    screen.getByRole("button", { name: /^(Roll back stack|Starting…)$/ });
+
+  beforeEach(() => {
+    review = () => Response.json(rollbackReview());
+  });
+
+  it("is titled for the revision, says what it restores and asks for that revision's review", async () => {
+    mount({ mode: "rollback", revision: 1 });
+    expect(
+      await screen.findByRole("heading", { name: "Roll back web to revision #1" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This restores revision #1 exactly: its compose file, files, variables and pinned images. Nothing is looked up in a registry.",
+      ),
+    ).toBeTruthy();
+    await screen.findByRole("table", { name: "Summary of changes" });
+    expect(posts("/review")).toHaveLength(1);
+    expect(posts("/review")[0]?.body).toEqual({ mode: "rollback", revision: 1 });
+  });
+
+  it("has Back to history, which returns to the revision, and Roll back stack in place of Deploy stack", async () => {
+    mount({ mode: "rollback", revision: 1 });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    const back = screen.getByRole("link", { name: "Back to history" });
+    expect(back.getAttribute("href")).toBe(`/env/${ENV}/stacks/${STACK}/history?rev=1`);
+    expect(rollbackButton().getAttribute("aria-disabled")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Deploy stack" })).toBeNull();
+  });
+
+  it("tells a person with a saved draft that the draft stays as it is, and no one else", async () => {
+    draftSaved = true;
+    const { unmount } = mount({ mode: "rollback", revision: 1 });
+    expect(
+      await screen.findByText(
+        "Your saved draft stays as it is. After the roll back it shows a notice that the deployed version changed.",
+      ),
+    ).toBeTruthy();
+    unmount();
+    cleanup();
+    client.clear();
+    draftSaved = false;
+    mount({ mode: "rollback", revision: 1 });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    expect(screen.queryByText(/Your saved draft stays as it is/)).toBeNull();
+  });
+
+  it("rolls back with the revision and the deployed revision it reviewed, once, and opens the job", async () => {
+    const { onDeployed } = mount({ mode: "rollback", revision: 1 });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    fireEvent.click(rollbackButton());
+    await waitFor(() => expect(onDeployed).toHaveBeenCalledWith("j9"));
+    fireEvent.click(rollbackButton());
+    expect(posts("/rollback")).toHaveLength(1);
+    expect(posts("/rollback")[0]?.body).toEqual({ revision: 1, expectedDeployed: 3 });
+    expect(posts("/deploys")).toHaveLength(0);
+  });
+
+  it("says the stack was deployed again, stores nothing, and reviews again on request", async () => {
+    rollback = () => problem(409, "deployed_changed");
+    const { onDeployed } = mount({ mode: "rollback", revision: 1 });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    fireEvent.click(rollbackButton());
+    expect(
+      await screen.findByText(
+        "The stack was deployed again since you opened this review. Review it again.",
+      ),
+    ).toBeTruthy();
+    expect(onDeployed).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Review again" }));
+    await waitFor(() => expect(posts("/review")).toHaveLength(2));
+    expect(screen.queryByRole("button", { name: "Review again" })).toBeNull();
+  });
+
+  it("says there is nothing to roll back when running already matches the revision", async () => {
+    review = () => Response.json(rollbackReview({ services: [], summary: reviewBody().summary }));
+    mount({ mode: "rollback", revision: 1 });
+    expect(
+      await screen.findByText("Running already matches revision #1. There's nothing to roll back."),
+    ).toBeTruthy();
+    expect(rollbackButton().getAttribute("aria-disabled")).toBe("true");
   });
 });

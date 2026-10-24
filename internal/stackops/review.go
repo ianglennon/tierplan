@@ -23,7 +23,8 @@ import (
 	"github.com/ianglennon/bayplan/internal/stacks/convert"
 )
 
-// The modes of a review: a deploy of the draft, or an update of the images of some services (D-16).
+// The modes of a review: a deploy of the draft, an update of the images of some services (D-16), or a roll back to a
+// revision (ReviewModeRollback, review_rollback.go).
 const (
 	ReviewModeDeploy = "deploy"
 	ReviewModeUpdate = "update"
@@ -134,6 +135,12 @@ type ReviewInput struct {
 	Base     *stacks.WorkingCopy
 	// Pins is where the pins of the stack's last good revision are read from. Nil means none.
 	Pins PinStore
+	// Target is the revision a roll back restores, with its files and variables opened, and TargetPins the images it
+	// ran (by swarm service name) and TargetRendering the masked rendering it stored, which may be empty. They are read
+	// only for ReviewModeRollback, which reviews Target against what is running instead of the draft.
+	Target          *Snapshot
+	TargetPins      map[string]string
+	TargetRendering []byte
 	// Revisions is where a standalone review reads the stored revisions from, to find what the engine does
 	// not record about a running container. Nil means none.
 	Revisions RevisionStore
@@ -242,6 +249,10 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 		return rv, ErrNoPolicy
 	}
 	if err = d.CheckTarget(ctx, in.EnvID, in.Stack); err != nil {
+		return rv, err
+	}
+	if in.Mode == ReviewModeRollback {
+		err = d.reviewRollback(ctx, in, &rv)
 		return rv, err
 	}
 	res := stacks.Check(ctx, stacks.CheckInput{Name: in.Stack.Name, Target: in.Stack.Target, Copy: in.Copy})

@@ -1,0 +1,34 @@
+{
+  "stackRollback": {
+    "action": "Roll back to revision #{{seq}}",
+    "draftNote": "Your saved draft stays as it is.",
+    "review": {
+      "title": "Roll back {{name}} to revision #{{seq}}",
+      "body": "This restores revision #{{seq}} exactly: its compose file, files, variables and pinned images. Nothing is looked up in a registry.",
+      "draftNotice": "Your saved draft stays as it is. After the roll back it shows a notice that the deployed version changed.",
+      "yamlCaption": "Rendered YAML, revision #{{seq}} against #{{deployed}}",
+      "noChanges": {
+        "body": "Running already matches revision #{{seq}}. There's nothing to roll back."
+      },
+      "footer": {
+        "back": "Back to history",
+        "rollback": "Roll back stack",
+        "starting": "Starting…"
+      },
+      "error": {
+        "notGood": "That revision can't be rolled back to. Pick a revision that finished well.",
+        "gone": "That revision is gone. Open the history and pick another."
+      },
+      "errors": {
+        "deployedChanged": "The stack was deployed again since you opened this review. Review it again.",
+        "reviewAgain": "Review again",
+        "notGood": "That revision can't be rolled back to. Pick a revision that finished well.",
+        "gone": "That revision is gone. Open the history and pick another.",
+        "needsAdmin": "That revision uses host access, which needs Admin. Ask an administrator to roll it back.",
+        "invalid": "That revision can't be deployed again as it is.",
+        "lost": "The server didn't answer. The roll back may have started: check the stack before you try again.",
+        "generic": "Couldn't start the roll back. Check the connection and try again."
+      }
+    }
+  }
+}

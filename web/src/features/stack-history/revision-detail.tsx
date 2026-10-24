@@ -3,11 +3,12 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { CircleX, History, Info } from "lucide-react";
+import { CircleX, History, Info, Undo2 } from "lucide-react";
 import type { RefObject } from "react";
 
 import { isRevisionGone, revisionQuery, type StackRevision } from "@/api/stack-history";
 import type { StackDetail } from "@/api/stacks";
+import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,7 @@ import {
 import { RevisionLink } from "@/features/stack-history/revision-kind-cell";
 import { failureReason } from "@/features/stack-history/revision-result-cell";
 import { RevisionTabs } from "@/features/stack-history/revision-tabs";
+import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 
 interface RevisionDetailProps {
@@ -44,7 +46,9 @@ const DEFAULT_RETENTION = 20;
 
 // RevisionDetail is the card below the table for the selected revision (UI-SPEC "History tab"): its heading
 // and who made it and when, then what stands out about it: it failed, it is still deploying, or it is the
-// deployed one. The tabs below show what the revision was; the Roll back action is added by the plan that follows.
+// deployed one. The header holds the Roll back action of a revision that finished well and is not the one that
+// runs: it opens the review, which is where the roll back is confirmed (D-02). The tabs below show what the
+// revision was.
 export function RevisionDetail({
   envId,
   stackId,
@@ -54,6 +58,7 @@ export function RevisionDetail({
   retention = DEFAULT_RETENTION,
 }: RevisionDetailProps) {
   const t = useT();
+  const needs = useNeeds("stacks.deploy", envId);
   // The same read the tabs make (one request, shared by the query key): when the server says retention
   // deleted this revision since the list was read, the whole card says so.
   const revision = useQuery(revisionQuery(envId, stackId, item.seq));
@@ -81,25 +86,56 @@ export function RevisionDetail({
   }
   const op = stack?.lastOperation;
   const consoleJob = op?.state === "running" ? op.jobId : "";
+  // Only a revision that finished well can be rolled back to (D-06), and the deployed one has nothing to roll
+  // back (D-51: the server allows it, the page does not offer it).
+  const canRollBack = item.outcome === "good" && !item.deployed;
   return (
     <Card className="gap-4 [--card-spacing:--spacing(4)] md:[--card-spacing:--spacing(6)]">
       <CardContent className="flex min-w-0 flex-col gap-4">
-        <header className="flex flex-col gap-1">
-          <h3 ref={headingRef} tabIndex={-1} className="text-base font-semibold outline-none">
-            {t("stackHistory.detail.heading")} <span className="font-mono">#{item.seq}</span>
-          </h3>
-          <p className="text-sm text-muted-foreground">
-            {item.origin === "rollback" && item.restoredFrom > 0 ? (
-              <>
-                {t("stackHistory.detail.rollbackOf")}{" "}
-                <RevisionLink envId={envId} stackId={stackId} seq={item.restoredFrom} />
-              </>
-            ) : (
-              t(`stackHistory.kind.${item.origin}`)
-            )}{" "}
-            {t("stackHistory.detail.by", { user: item.createdBy || t("stackHistory.missing") })}{" "}
-            <RelativeTime value={item.createdAt} />
-          </p>
+        <header className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-1">
+            <h3 ref={headingRef} tabIndex={-1} className="text-base font-semibold outline-none">
+              {t("stackHistory.detail.heading")} <span className="font-mono">#{item.seq}</span>
+            </h3>
+            <p className="text-sm text-muted-foreground">
+              {item.origin === "rollback" && item.restoredFrom > 0 ? (
+                <>
+                  {t("stackHistory.detail.rollbackOf")}{" "}
+                  <RevisionLink envId={envId} stackId={stackId} seq={item.restoredFrom} />
+                </>
+              ) : (
+                t(`stackHistory.kind.${item.origin}`)
+              )}{" "}
+              {t("stackHistory.detail.by", { user: item.createdBy || t("stackHistory.missing") })}{" "}
+              <RelativeTime value={item.createdAt} />
+            </p>
+          </div>
+          {canRollBack ? (
+            <div className="flex flex-col items-start gap-1 md:items-end">
+              {needs.allowed ? (
+                <Button asChild className="max-md:h-11">
+                  <Link
+                    to="/env/$envId/stacks/$stackId/review"
+                    params={{ envId, stackId }}
+                    search={{ mode: "rollback", revision: item.seq }}
+                  >
+                    <Undo2 aria-hidden="true" />
+                    {t("stackRollback.action", { seq: item.seq })}
+                  </Link>
+                </Button>
+              ) : (
+                <NeedsTooltip reason={needs.reason}>
+                  <Button type="button" className="max-md:h-11">
+                    <Undo2 aria-hidden="true" />
+                    {t("stackRollback.action", { seq: item.seq })}
+                  </Button>
+                </NeedsTooltip>
+              )}
+              {needs.allowed && stack?.draftSavedAt ? (
+                <p className="text-xs text-muted-foreground">{t("stackRollback.draftNote")}</p>
+              ) : null}
+            </div>
+          ) : null}
         </header>
         {item.outcome === "failed" ? (
           <Alert variant="destructive" role="alert">

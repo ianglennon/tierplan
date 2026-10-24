@@ -2207,7 +2207,7 @@ export interface paths {
         put?: never;
         /**
          * Review what a deploy of a stack would do
-         * @description Reviews the stack's saved draft (the latest good revision when there is no draft) against what is running and saves nothing. It runs the same check as the editor, looks up the digests of the images that need one, converts the stack the way a deploy does, reads what the swarm holds under the stack's namespace and answers the problems, a summary, an image table, each service's change with its masked current and next spec, and the other resources. A value derived from a secret of the stack is <hidden> on both sides; whether it changed is decided before it is hidden and listed in hiddenChanges as a path. Right after a deploy, a review shows no change. yaml is the one comparison with the last deploy and not with what is running: the rendered stack against the masked rendering stored with the last good revision, as hunks computed here with 3 lines of context. concurrent is set when someone deployed after the draft was started, with what that deployment changed and what the draft changed, file by file; the deploy then needs acknowledgeConcurrent. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. For a caller below env Admin, host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables, is a blocking needs_admin problem at its line, and needsAdmin names the kinds. A name that something Bayplan does not manage holds is a blocking stack_name_clash problem, and another stack operation running on the environment is a blocking operation_locked problem. On a standalone host the review pins the images the same way and compares each service with the containers that run it: the service a deploy would send, and the service rebuilt from each running container's inspect document, both with what the image or the engine fills in taken out, so that right after a deploy nothing differs. A service with no container is added; one whose containers carry another config hash than the service has now, or whose running configuration is not what the file says (a container changed by hand on the host, which keeps its labels and its hash), is changed, with the masked current and next settings as compose settings (restart, ports, environment, volumes ...); a changed secret or config is a changed service; and a service of the host's Compose project that the file no longer declares is removed. Settings the engine does not record (depends_on, secrets, configs, profiles, pull_policy) are read from the stored revision that made the container, and are the file's own when none did. A deploy that recreates a service carries others with it, as docker compose does: a service that shares its network, IPC or PID namespace or its volumes is recreated and keeps its pinned image, and one that depends on it with restart: true is stopped and started again; they follow as recreated and restarted rows with because naming the service, carry no spec, and are not counted in the summary. A container changed by hand is put right by a deploy of an unedited file. An environment that is no longer the kind of target the stack was created for is 409 target_changed. In mode update, only the services named in services look their tag up again and every other service keeps the digest it runs; each row of images then carries the digest it runs now in current and the one it would run in digest, and a tag that did not move reads pinned with the note Already up to date. A request that names no service, or one the stack does not have, is 422 services_invalid and nothing is looked up. Needs stacks.deploy (Operator).
+         * @description Reviews the stack's saved draft (the latest good revision when there is no draft) against what is running and saves nothing. It runs the same check as the editor, looks up the digests of the images that need one, converts the stack the way a deploy does, reads what the swarm holds under the stack's namespace and answers the problems, a summary, an image table, each service's change with its masked current and next spec, and the other resources. A value derived from a secret of the stack is <hidden> on both sides; whether it changed is decided before it is hidden and listed in hiddenChanges as a path. Right after a deploy, a review shows no change. yaml is the one comparison with the last deploy and not with what is running: the rendered stack against the masked rendering stored with the last good revision, as hunks computed here with 3 lines of context. concurrent is set when someone deployed after the draft was started, with what that deployment changed and what the draft changed, file by file; the deploy then needs acknowledgeConcurrent. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. For a caller below env Admin, host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables, is a blocking needs_admin problem at its line, and needsAdmin names the kinds. A name that something Bayplan does not manage holds is a blocking stack_name_clash problem, and another stack operation running on the environment is a blocking operation_locked problem. On a standalone host the review pins the images the same way and compares each service with the containers that run it: the service a deploy would send, and the service rebuilt from each running container's inspect document, both with what the image or the engine fills in taken out, so that right after a deploy nothing differs. A service with no container is added; one whose containers carry another config hash than the service has now, or whose running configuration is not what the file says (a container changed by hand on the host, which keeps its labels and its hash), is changed, with the masked current and next settings as compose settings (restart, ports, environment, volumes ...); a changed secret or config is a changed service; and a service of the host's Compose project that the file no longer declares is removed. Settings the engine does not record (depends_on, secrets, configs, profiles, pull_policy) are read from the stored revision that made the container, and are the file's own when none did. A deploy that recreates a service carries others with it, as docker compose does: a service that shares its network, IPC or PID namespace or its volumes is recreated and keeps its pinned image, and one that depends on it with restart: true is stopped and started again; they follow as recreated and restarted rows with because naming the service, carry no spec, and are not counted in the summary. A container changed by hand is put right by a deploy of an unedited file. An environment that is no longer the kind of target the stack was created for is 409 target_changed. In mode update, only the services named in services look their tag up again and every other service keeps the digest it runs; each row of images then carries the digest it runs now in current and the one it would run in digest, and a tag that did not move reads pinned with the note Already up to date. A request that names no service, or one the stack does not have, is 422 services_invalid and nothing is looked up. In mode rollback, revision names the revision to restore (422 revision_required without it, 404 revision_not_found for one the stack does not hold, 409 revision_not_good for one that did not end good). The review is of that revision, not of the draft: it is converted, judged for host access for the caller and compared with the services, networks, secrets and configs that run now, with each image set to the digest the revision stored (state pinned, note revision), and no registry is asked. yaml is the revision's rendering against the deployed revision's, and concurrent is never set. deployedSeq is the newest good revision's number, to send as expectedDeployed. A revision that cannot be redeployed as it stands is one blocking revision_not_deployable problem. Needs stacks.deploy (Operator).
          */
         post: operations["reviewStack"];
         delete?: never;
@@ -2266,8 +2266,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Roll a stack back to the version that ran before
-         * @description Redeploys the last version of the stack that ran well, as a job, answering 202 with the job ID at once. That is the newest revision whose deploy succeeded, or, when the newest revision is itself the one that runs, the good one before it. It takes a revision of its own from it (the files, the variables and the images it ran) and runs the same swarm deploy on it, so it is audited as stack.deployed with the mode rollback. It uses exactly the images that revision ran and looks nothing up: a tag that has moved since is not followed. The draft is not touched. A stack with no earlier version that ran well is 409 no_previous_version. Everything a deploy is judged on is judged again: a revision that uses host access is refused 403 privileged_compose below env Admin, a stack that no longer loads is 422, and while another stack operation runs on the environment the answer is 409 operation_locked and nothing is stored. Rolling back a stack of a standalone host is 409 target_engine_missing: its engine is not in this version. A roll back is only ever sent by a person; nothing rolls a stack back by itself. Needs stacks.deploy (Operator).
+         * Roll a stack back to a revision that ran well
+         * @description Redeploys a revision of the stack that ran well, as a job, answering 202 with the job ID at once. With no body, that is the newest revision whose deploy succeeded, or, when the newest revision is itself the one that runs, the good one before it. With revision, it is that one: any revision whose deploy ended good, the deployed one included (useful after a newer attempt failed). A revision that failed or is still deploying is 409 revision_not_good; one the stack does not hold is 404 revision_not_found. expectedDeployed is the number of the deployed revision the review was made against; if the stack was deployed again since, the answer is 409 deployed_changed and nothing is stored. It takes a revision of its own from it (the files, the variables and the images it ran, recorded as origin rollback with restored_from naming the revision it restored) and runs the same swarm deploy on it, so it is audited as stack.deployed with the mode rollback, the revision and restoredFrom. It uses exactly the images that revision ran and looks nothing up: a tag that has moved since is not followed. The draft is not touched. A stack with no earlier version that ran well is 409 no_previous_version. Everything a deploy is judged on is judged again: a revision that uses host access is refused 403 privileged_compose below env Admin, a stack that no longer loads is 422, and while another stack operation runs on the environment the answer is 409 operation_locked and nothing is stored. Rolling back a stack of a standalone host is 409 target_engine_missing: its engine is not in this version. A roll back is only ever sent by a person; nothing rolls a stack back by itself. Needs stacks.deploy (Operator).
          */
         post: operations["rollbackStack"];
         delete?: never;
@@ -8824,12 +8824,22 @@ export interface components {
             /** @description The steps and services, in the order they were added. Read the steps in run order by following parent: a top-level step, then its children */
             items: components["schemas"]["StackJobItemBody"][] | null;
             /**
-             * @description What the operation is: a deploy of the draft, an update of images, a roll back to the last version that ran well, a stop or a start of the stack, or its removal
+             * @description What the operation is: a deploy of the draft, an update of images, a roll back to a revision that ran well, a stop or a start of the stack, or its removal
              * @enum {string}
              */
             mode: "deploy" | "update" | "rollback" | "stop" | "start" | "remove";
             /** @description The output log, oldest first: the newest 2,000 lines */
             output: components["schemas"]["StackJobOutputLine"][] | null;
+            /**
+             * Format: int64
+             * @description Left out unless set: the number of the revision the operation was recorded as, the one a deploy took from the draft or a roll back's copy of the revision it restores. A stop, a start and a removal take none
+             */
+            recordedRevision?: number;
+            /**
+             * Format: int64
+             * @description Left out unless set: for a roll back, the number of the revision it restores
+             */
+            revision?: number;
             /** @description The stack being deployed */
             stackId: string;
             /** @description Who started the deploy, as a name */
@@ -9121,6 +9131,11 @@ export interface components {
             concurrent?: components["schemas"]["StackConcurrentBody"];
             /**
              * Format: int64
+             * @description The number of the stack's newest good revision when the review was made, 0 when it has none. A roll back sends it as expectedDeployed, so a deploy made after the review is noticed
+             */
+            deployedSeq: number;
+            /**
+             * Format: int64
              * @description The version of the draft the review was made of: send it with the deploy
              */
             draftVersion: number;
@@ -9136,6 +9151,11 @@ export interface components {
             };
             /** @description What the check found and the review added: host access that needs Admin, a name clash, an image that cannot be looked up, an external object that does not exist. An error stops a deploy */
             problems: components["schemas"]["StackProblemBody"][] | null;
+            /**
+             * Format: int64
+             * @description For mode rollback, the number of the revision the review restores; 0 for any other mode
+             */
+            revision: number;
             /** @description The services a deploy would add or change, by name, then the ones it would remove */
             services: components["schemas"]["StackReviewServiceBody"][] | null;
             /** @description The counts of what would change */
@@ -9195,10 +9215,15 @@ export interface components {
         };
         StackReviewRequest: {
             /**
-             * @description deploy (the default) reviews the draft; update reviews a newly looked-up digest for the services named in services, with every other service keeping the image it runs
+             * @description deploy (the default) reviews the draft; update reviews a newly looked-up digest for the services named in services, with every other service keeping the image it runs; rollback reviews restoring the revision named in revision, with the digests it stored, against what is running
              * @enum {string}
              */
-            mode?: "deploy" | "update";
+            mode?: "deploy" | "update" | "rollback";
+            /**
+             * Format: int64
+             * @description For mode rollback: the number of the revision to restore. Required for it (422 revision_required); a revision the stack does not hold is 404 revision_not_found, one that did not end good 409 revision_not_good
+             */
+            revision?: number;
             /** @description For mode update: the services to look up again, by the name in the compose file or by the swarm name */
             services?: string[] | null;
         };
@@ -9360,6 +9385,23 @@ export interface components {
             deployedAt: string;
             /** @description Who started it, as a name; empty when there is none */
             deployedBy: string;
+            /**
+             * Format: int64
+             * @description Left out when there is none: the number of that revision, the one a roll back with no body would restore
+             */
+            revision?: number;
+        };
+        StackRollbackRequest: {
+            /**
+             * Format: int64
+             * @description The number of the deployed revision (the newest good one) the review was made against. If the stack was deployed again since, the answer is 409 deployed_changed and nothing is stored. Left out, the roll back is not checked against it
+             */
+            expectedDeployed?: number;
+            /**
+             * Format: int64
+             * @description The revision to restore: any revision of the stack whose deploy ended good, the deployed one included. A revision that failed or is still deploying is 409 revision_not_good; one the stack does not hold is 404 revision_not_found. Left out, the roll back restores the version that ran well before the deployed one
+             */
+            revision?: number;
         };
         StackServiceBody: {
             /** @description The containers of a standalone service, by name; empty on a swarm */
@@ -14978,7 +15020,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["StackRollbackRequest"];
+            };
+        };
         responses: {
             /** @description Accepted */
             202: {

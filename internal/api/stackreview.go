@@ -19,8 +19,9 @@ import (
 
 // StackReviewRequest is the body of POST .../review.
 type StackReviewRequest struct {
-	Mode     string   `json:"mode,omitempty" enum:"deploy,update" doc:"deploy (the default) reviews the draft; update reviews a newly looked-up digest for the services named in services, with every other service keeping the image it runs"`
+	Mode     string   `json:"mode,omitempty" enum:"deploy,update,rollback" doc:"deploy (the default) reviews the draft; update reviews a newly looked-up digest for the services named in services, with every other service keeping the image it runs; rollback reviews restoring the revision named in revision, with the digests it stored, against what is running"`
 	Services []string `json:"services,omitempty" maxItems:"200" doc:"For mode update: the services to look up again, by the name in the compose file or by the swarm name"`
+	Revision int64    `json:"revision,omitempty" minimum:"1" doc:"For mode rollback: the number of the revision to restore. Required for it (422 revision_required); a revision the stack does not hold is 404 revision_not_found, one that did not end good 409 revision_not_good"`
 }
 
 // StackReviewInput is the path and body of the review route.
@@ -133,6 +134,8 @@ type StackReviewBody struct {
 	NeedsAdmin   []string                 `json:"needsAdmin" doc:"The kinds of host access the stack uses that the caller may not deploy (bind mounts, extra privileges, host networking, device mounts). Empty when the caller may deploy it"`
 	YAML         StackTextDiffBody        `json:"yaml" doc:"The rendered stack of the draft, with the images the review chose, against the rendering stored with the last good deploy, masked, as hunks with 3 lines of context. A stack never deployed is compared with an empty document. This is the one comparison that is with the last deploy and not with what is running"`
 	Concurrent   *StackConcurrentBody     `json:"concurrent,omitempty" doc:"Left out unless set: set when the last good revision is newer than the revision the draft started from: someone deployed after the draft began. A deploy of the draft then needs acknowledgeConcurrent"`
+	Revision     int64                    `json:"revision" doc:"For mode rollback, the number of the revision the review restores; 0 for any other mode"`
+	DeployedSeq  int64                    `json:"deployedSeq" doc:"The number of the stack's newest good revision when the review was made, 0 when it has none. A roll back sends it as expectedDeployed, so a deploy made after the review is noticed"`
 }
 
 // StackReviewOutput wraps StackReviewBody for huma.
@@ -140,6 +143,9 @@ type StackReviewOutput struct {
 	CacheControl string `header:"Cache-Control"`
 	Body         StackReviewBody
 }
+
+// problemRevisionRequired is the code of a roll back review that names no revision.
+const problemRevisionRequired = "revision_required"
 
 func registerStackReview(r *httpx.Router, d StacksDeps) {
 	httpx.Register(r, huma.Operation{
@@ -153,7 +159,10 @@ func registerStackReview(r *httpx.Router, d StacksDeps) {
 			"For a caller below env Admin, host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables, is a blocking needs_admin problem at its line, and needsAdmin names the kinds. " +
 			"A name that something Bayplan does not manage holds is a blocking stack_name_clash problem, and another stack operation running on the environment is a blocking operation_locked problem. " +
 			"On a standalone host the review pins the images the same way and compares each service with the containers that run it: the service a deploy would send, and the service rebuilt from each running container's inspect document, both with what the image or the engine fills in taken out, so that right after a deploy nothing differs. A service with no container is added; one whose containers carry another config hash than the service has now, or whose running configuration is not what the file says (a container changed by hand on the host, which keeps its labels and its hash), is changed, with the masked current and next settings as compose settings (restart, ports, environment, volumes ...); a changed secret or config is a changed service; and a service of the host's Compose project that the file no longer declares is removed. Settings the engine does not record (depends_on, secrets, configs, profiles, pull_policy) are read from the stored revision that made the container, and are the file's own when none did. A deploy that recreates a service carries others with it, as docker compose does: a service that shares its network, IPC or PID namespace or its volumes is recreated and keeps its pinned image, and one that depends on it with restart: true is stopped and started again; they follow as recreated and restarted rows with because naming the service, carry no spec, and are not counted in the summary. A container changed by hand is put right by a deploy of an unedited file. An environment that is no longer the kind of target the stack was created for is 409 target_changed. " +
-			"In mode update, only the services named in services look their tag up again and every other service keeps the digest it runs; each row of images then carries the digest it runs now in current and the one it would run in digest, and a tag that did not move reads pinned with the note Already up to date. A request that names no service, or one the stack does not have, is 422 services_invalid and nothing is looked up. Needs stacks.deploy (Operator).",
+			"In mode update, only the services named in services look their tag up again and every other service keeps the digest it runs; each row of images then carries the digest it runs now in current and the one it would run in digest, and a tag that did not move reads pinned with the note Already up to date. A request that names no service, or one the stack does not have, is 422 services_invalid and nothing is looked up. " +
+			"In mode rollback, revision names the revision to restore (422 revision_required without it, 404 revision_not_found for one the stack does not hold, 409 revision_not_good for one that did not end good). " +
+			"The review is of that revision, not of the draft: it is converted, judged for host access for the caller and compared with the services, networks, secrets and configs that run now, with each image set to the digest the revision stored (state pinned, note revision), and no registry is asked. yaml is the revision's rendering against the deployed revision's, and concurrent is never set. deployedSeq is the newest good revision's number, to send as expectedDeployed. " +
+			"A revision that cannot be redeployed as it stands is one blocking revision_not_deployable problem. Needs stacks.deploy (Operator).",
 		Tags: []string{"stacks"},
 	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackReviewInput) (*StackReviewOutput, error) {
@@ -180,6 +189,25 @@ func reviewStack(ctx context.Context, d StacksDeps, in *StackReviewInput) (*Stac
 		Mode: in.Body.Mode, Services: in.Body.Services, Pins: repo, Revisions: repo,
 		Caller: stackops.Caller{Principal: p, Actor: p.Name},
 	}
+	rollback := in.Body.Mode == stackops.ReviewModeRollback
+	if rollback {
+		// A roll back reviews the revision the person chose, not the draft: it is read by (stack, seq) after the
+		// stack by (environment, ID), and only a good one qualifies (D-06, T-08-10, T-08-13).
+		if in.Body.Revision == 0 {
+			return nil, httpx.Problem(http.StatusUnprocessableEntity, problemRevisionRequired, "Say which revision to roll back to.")
+		}
+		target, err := restorableRevision(ctx, d, repo, env.ID, st.ID, in.Body.Revision)
+		if err != nil {
+			return nil, err
+		}
+		if ri.TargetPins, err = repo.RevisionPins(ctx, target.ID); err != nil {
+			return nil, stackInternal(d, "read the pins of the revision to restore", env.ID, err)
+		}
+		if ri.TargetRendering, err = repo.RevisionRendering(ctx, target.ID); err != nil {
+			return nil, stackInternal(d, "read the rendering of the revision to restore", env.ID, err)
+		}
+		ri.Target, ri.Copy = &target, target.Copy
+	}
 	if good, ok, err := repo.LatestGoodRevision(ctx, st.ID); err != nil {
 		return nil, stackInternal(d, "read the running revision", env.ID, err)
 	} else if ok {
@@ -189,7 +217,7 @@ func reviewStack(ctx context.Context, d StacksDeps, in *StackReviewInput) (*Stac
 		if ri.Rendering, err = repo.GoodRendering(ctx, st.ID); err != nil {
 			return nil, stackInternal(d, "read the last rendering", env.ID, err)
 		}
-		if good.Seq > draft.BaseSeq && draft.BaseSeq > 0 {
+		if !rollback && good.Seq > draft.BaseSeq && draft.BaseSeq > 0 {
 			base, err := repo.Revision(ctx, st.ID, draft.BaseSeq)
 			switch {
 			case errors.Is(err, stackops.ErrRevisionNotFound):
@@ -213,7 +241,14 @@ func reviewStack(ctx context.Context, d StacksDeps, in *StackReviewInput) (*Stac
 			Message: "Another stack operation is running on " + env.Name + ": " + h.StackName + ", started " + rfc3339(h.Started) + ".",
 		})
 	}
-	return &StackReviewOutput{CacheControl: "no-store", Body: stackReviewBody(rv)}, nil
+	body := stackReviewBody(rv)
+	if ri.Deployed != nil {
+		body.DeployedSeq = ri.Deployed.Seq
+	}
+	if rollback {
+		body.Revision = in.Body.Revision
+	}
+	return &StackReviewOutput{CacheControl: "no-store", Body: body}, nil
 }
 
 // stackReviewBody turns a review into its answer. Every list is present, empty when there is nothing.

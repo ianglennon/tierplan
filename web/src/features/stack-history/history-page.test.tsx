@@ -20,6 +20,8 @@ let role: "viewer" | "operator";
 let revisions: Json[];
 let listStatus: number;
 let lastOperation: Json | undefined;
+// Whether the stack holds a saved draft with changes that were not deployed.
+let draftSaved: boolean;
 let listCalls: number;
 let client: QueryClient;
 
@@ -50,6 +52,7 @@ beforeEach(() => {
   role = "viewer";
   listStatus = 200;
   listCalls = 0;
+  draftSaved = false;
   lastOperation = undefined;
   revisions = [
     revision(3, {
@@ -89,6 +92,7 @@ beforeEach(() => {
           createdBy: "ada",
           createdAt: "2026-10-19T10:00:00Z",
           stopped: false,
+          ...(draftSaved ? { draftSavedAt: "2026-10-20T12:00:00Z", draftSavedBy: "ada" } : {}),
           lastOperation,
         });
       }
@@ -423,6 +427,76 @@ describe("the selected revision", () => {
       "/env/e1/stacks/s1/history",
     );
     expect(rowOf(3).getAttribute("aria-current")).toBeNull();
+  });
+});
+
+// Rolling back to a revision (plan 08-03, STK-08, D-02, D-06, D-51): the detail card offers it, the review
+// confirms it.
+describe("the Roll back action of the selected revision", () => {
+  it("opens the review of a good revision that is not deployed, for an Operator", async () => {
+    role = "operator";
+    mount(1);
+
+    const link = await screen.findByRole("link", { name: "Roll back to revision #1" });
+    expect(link.getAttribute("href")).toBe("/env/e1/stacks/s1/review?mode=rollback&revision=1");
+  });
+
+  it("is not offered on the deployed revision, which says so", async () => {
+    role = "operator";
+    mount(3);
+
+    expect(await screen.findByText("This is the deployed revision.")).toBeTruthy();
+    expect(screen.queryByText(/Roll back to revision/)).toBeNull();
+  });
+
+  it("is not offered on a failed revision, which shows the failed alert", async () => {
+    role = "operator";
+    mount(2);
+
+    expect(await screen.findByText("Revision #2 failed")).toBeTruthy();
+    expect(screen.queryByText(/Roll back to revision/)).toBeNull();
+  });
+
+  it("is not offered on a revision that is still deploying", async () => {
+    role = "operator";
+    revisions = [revision(2, { outcome: "pending" }), revision(1, { deployed: true })];
+    mount(2);
+
+    expect(await screen.findByText("Revision #2 is still deploying")).toBeTruthy();
+    expect(screen.queryByText(/Roll back to revision/)).toBeNull();
+  });
+
+  it("is not offered anywhere on a stack whose only revision is the deployed one", async () => {
+    role = "operator";
+    revisions = [revision(1, { deployed: true })];
+    mount();
+
+    expect(await screen.findByText("This is the deployed revision.")).toBeTruthy();
+    expect(screen.queryByText(/Roll back to revision/)).toBeNull();
+  });
+
+  it("is off for a Viewer, with the reason, and leads nowhere", async () => {
+    mount(1);
+
+    const button = await screen.findByRole("button", { name: "Roll back to revision #1" });
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.queryByRole("link", { name: "Roll back to revision #1" })).toBeNull();
+  });
+
+  it("says the saved draft stays as it is, when there is one", async () => {
+    role = "operator";
+    draftSaved = true;
+    mount(1);
+
+    expect(await screen.findByText("Your saved draft stays as it is.")).toBeTruthy();
+  });
+
+  it("does not mention a draft when there is none", async () => {
+    role = "operator";
+    mount(1);
+
+    await screen.findByRole("link", { name: "Roll back to revision #1" });
+    expect(screen.queryByText("Your saved draft stays as it is.")).toBeNull();
   });
 });
 

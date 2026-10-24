@@ -1,13 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
 import { readProblem } from "@/api/problem";
 import { LIST_REFETCH_MS } from "@/api/resources";
 import type { components } from "@/api/schema";
-import { isStackGone, StacksLoadError, stackKey } from "@/api/stacks";
+import {
+  DeployRequestError,
+  invalidateStacks,
+  isStackGone,
+  type StackDeployed,
+  StacksLoadError,
+  stackJobsKey,
+  stackKey,
+} from "@/api/stacks";
 
 export type StackRevision = components["schemas"]["StackRevisionItem"];
 export type StackRevisionList = components["schemas"]["StackRevisionListBody"];
@@ -73,5 +81,42 @@ export function revisionQuery(envId: string, stackId: string, seq: number) {
     },
     retry: (count, error) => !isStackGone(error) && !isRevisionGone(error) && count < 3,
     refetchInterval: () => (document.visibilityState === "visible" ? LIST_REFETCH_MS : false),
+  });
+}
+
+export type RollbackToRevisionInput = components["schemas"]["StackRollbackRequest"] & {
+  revision: number;
+};
+
+// useRollbackToRevision starts a roll back to the revision the person chose and reviewed: the revision, and the
+// deployed revision the review was made against, so the server refuses (409 deployed_changed) a stack that was
+// deployed again since. It is never retried: a roll back whose answer was lost may have started, and the stack's
+// page, read again, shows whether it did. The stack, its history and the jobs list are read again whatever the
+// answer.
+export function useRollbackToRevision(envId: string, stackId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<StackDeployed, DeployRequestError, RollbackToRevisionInput>({
+    mutationFn: async (body) => {
+      try {
+        const res = await api.POST("/api/env/{envId}/stacks/{stackId}/rollback", {
+          params: { path: { envId, stackId } },
+          body,
+        });
+        if (!res.data) {
+          const problem = readProblem(res.error, res.response);
+          throw new DeployRequestError(problem.status, problem.type, problem.fields);
+        }
+        return res.data;
+      } catch (e) {
+        // A network failure has no status.
+        throw e instanceof DeployRequestError ? e : new DeployRequestError(0);
+      }
+    },
+    retry: false,
+    onSettled: () => {
+      invalidateStacks(queryClient, envId);
+      void queryClient.invalidateQueries({ queryKey: revisionsKey(envId, stackId) });
+      void queryClient.invalidateQueries({ queryKey: stackJobsKey });
+    },
   });
 }

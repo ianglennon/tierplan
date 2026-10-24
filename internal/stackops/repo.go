@@ -562,6 +562,19 @@ func (r Repo) RevisionPins(ctx context.Context, snapshotID string) (map[string]s
 	return pins, nil
 }
 
+// RevisionRendering is the masked rendering stored with a revision, as it was stored. A revision still deploying, or
+// taken before renderings were stored, has none (nil).
+func (r Repo) RevisionRendering(ctx context.Context, snapshotID string) ([]byte, error) {
+	ran, err := r.Store.RQ.GetSnapshotPinsAndRendered(ctx, snapshotID)
+	if err != nil {
+		return nil, fmt.Errorf("read revision: %w", err)
+	}
+	if ran.Rendered == "" {
+		return nil, nil
+	}
+	return []byte(ran.Rendered), nil
+}
+
 // SetOutcome marks a revision good or failed and stores what it rendered and the digests it ran
 // with. Empty pins keep the pins SetPins stored while the deploy ran (a revision starts with
 // "{}").

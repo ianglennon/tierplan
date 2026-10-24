@@ -1244,6 +1244,7 @@ type rollbackStackAnswer struct {
 		Available  bool   `json:"available"`
 		DeployedAt string `json:"deployedAt"`
 		DeployedBy string `json:"deployedBy"`
+		Revision   int64  `json:"revision"`
 	} `json:"rollback"`
 	LastOperation *struct {
 		Kind, State string
@@ -1585,5 +1586,223 @@ func TestAFailedRollbackLeavesTheWayBackOpen(t *testing.T) {
 		JobID string `json:"jobId"`
 	}](t, rec).JobID); job.State != "done" {
 		t.Errorf("retry job = %+v, want done", job)
+	}
+}
+
+// Rolling back to a chosen revision (plan 08-03, STK-08, D-02 to D-06, D-51).
+
+type rollbackStarted struct {
+	JobID    string `json:"jobId"`
+	Revision int64  `json:"revision"`
+}
+
+// revisionOrigin is how revision seq of a stack came to be and the revision a roll back copied.
+func (f *envFix) revisionOrigin(t *testing.T, stackID string, seq int64) (origin string, restoredFrom int64) {
+	t.Helper()
+	err := f.st.Read.QueryRow(`SELECT origin, restored_from FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND seq = ?`, stackID, seq).Scan(&origin, &restoredFrom)
+	if err != nil {
+		t.Fatalf("read revision %d: %v", seq, err)
+	}
+	return origin, restoredFrom
+}
+
+func TestRollbackToAChosenRevision(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rb")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.deployGood(t, operator, st.ID, composeWeb128)
+	f.deployGood(t, operator, st.ID, composeWeb129)
+	revs := f.revisions(t, st.ID)
+	if len(revs) != 3 {
+		t.Fatalf("revisions = %+v, want three", revs)
+	}
+	pin127 := revs[0].Pins
+	if !strings.Contains(pin127, "nginx:1.27-alpine@sha256:") {
+		t.Fatalf("revision 1 pins = %s, want the 1.27 image pinned to a digest", pin127)
+	}
+
+	// An edit saved after the last deploy is the draft's, and a roll back leaves it alone (D-03).
+	edited := composeWeb129 + "# not deployed yet\n"
+	saveCompose(t, operator, st.ID, edited, `[]`)
+	draftBefore := answerOf[draftAnswer](t, operator.do(http.MethodGet, "stacks/"+st.ID+"/draft", ""))
+
+	// The tag has moved on the registry since: a roll back must not follow it.
+	f.fake.SetDistributionDigest("docker.io/library/nginx:1.27-alpine", "sha256:"+strings.Repeat("b", 64))
+	lookups, updates := len(f.fake.DistributionRefs()), len(f.fake.ServiceUpdates())
+
+	rec := operator.do(http.MethodPost, rollbackPath(st.ID), `{"revision":1,"expectedDeployed":3}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("roll back: %d %s", rec.Code, rec.Body)
+	}
+	started := answerOf[rollbackStarted](t, rec)
+	if started.Revision != 4 {
+		t.Errorf("revision = %d, want 4: the roll back is a revision of its own", started.Revision)
+	}
+	if job := f.awaitDeploy(t, started.JobID); job.State != "done" {
+		t.Fatalf("roll back job = %+v, want it done", job)
+	}
+
+	if n := len(f.fake.DistributionRefs()); n != lookups {
+		t.Errorf("distribution checks went from %d to %d, a roll back asks no registry", lookups, n)
+	}
+	ups := f.fake.ServiceUpdates()
+	if len(ups) != updates+1 {
+		t.Fatalf("service updates = %d, want one more than %d", len(ups), updates)
+	}
+	var pins map[string]string
+	if err := json.Unmarshal([]byte(pin127), &pins); err != nil {
+		t.Fatal(err)
+	}
+	if image := ups[len(ups)-1].Spec.TaskTemplate.ContainerSpec.Image; image != pins["rb_web"] {
+		t.Errorf("image = %q, want exactly what revision 1 ran, %q", image, pins["rb_web"])
+	}
+
+	revs = f.revisions(t, st.ID)
+	if len(revs) != 4 || revs[3].Outcome != "good" || revs[3].Pins != pin127 {
+		t.Errorf("revisions = %+v, want a good revision 4 with revision 1's pins", revs)
+	}
+	if origin, from := f.revisionOrigin(t, st.ID, 4); origin != "rollback" || from != 1 {
+		t.Errorf("revision 4 = %q restored from %d, want rollback of 1", origin, from)
+	}
+
+	// The draft is as it was: same content, same version (D-03).
+	draftAfter := answerOf[draftAnswer](t, operator.do(http.MethodGet, "stacks/"+st.ID+"/draft", ""))
+	if draftAfter.Version != draftBefore.Version || len(draftAfter.Files) != 1 || draftAfter.Files[0].Content != edited {
+		t.Errorf("draft after = %+v, want version %d and the edit untouched", draftAfter, draftBefore.Version)
+	}
+
+	job := answerOf[struct {
+		Mode             string `json:"mode"`
+		State            string `json:"state"`
+		Revision         int64  `json:"revision"`
+		RecordedRevision int64  `json:"recordedRevision"`
+	}](t, operator.do(http.MethodGet, "stacks/"+st.ID+"/deploys/"+started.JobID, ""))
+	if job.Mode != "rollback" || job.Revision != 1 || job.RecordedRevision != 4 {
+		t.Errorf("job = %+v, want a roll back that restores 1 and was recorded as 4", job)
+	}
+	var row *auditRowFull
+	for _, r := range f.stackAudits(t) {
+		if r.Action == "stack.deployed" {
+			row = &r
+		}
+	}
+	if row == nil || row.Details["mode"] != "rollback" || row.Details["revision"] != "4" || row.Details["restoredFrom"] != "1" || row.Result != "success" {
+		t.Errorf("stack.deployed = %+v, want a successful rollback of revision 4 restoring 1", row)
+	}
+}
+
+func TestRollbackToTheDeployedRevisionIsAllowed(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rb")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.deployGood(t, operator, st.ID, composeWeb128)
+	// A newer attempt failed: the deployed revision is still 2.
+	f.deployThenCancel(t, operator, st, composeWeb129)
+
+	rec := operator.do(http.MethodPost, rollbackPath(st.ID), `{"revision":2,"expectedDeployed":2}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("roll back to the deployed revision: %d %s", rec.Code, rec.Body)
+	}
+	started := answerOf[rollbackStarted](t, rec)
+	if job := f.awaitDeploy(t, started.JobID); job.State != "done" || started.Revision != 4 {
+		t.Fatalf("job = %+v revision %d, want it done as revision 4", job, started.Revision)
+	}
+	if origin, from := f.revisionOrigin(t, st.ID, 4); origin != "rollback" || from != 2 {
+		t.Errorf("revision 4 = %q restored from %d, want rollback of 2", origin, from)
+	}
+}
+
+func TestRollbackRefusesAFailedRevision(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rb")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.deployThenCancel(t, operator, st, composeWeb128)
+	revs := f.revisions(t, st.ID)
+	if len(revs) != 2 || revs[1].Outcome != "failed" {
+		t.Fatalf("revisions = %+v, want a good one and a failed one", revs)
+	}
+	writes := len(f.fake.Writes())
+
+	rec := operator.do(http.MethodPost, rollbackPath(st.ID), `{"revision":2}`)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "revision_not_good" ||
+		!strings.Contains(rec.Body.String(), "That revision can't be rolled back to. Pick a revision that finished well.") {
+		t.Fatalf("roll back to a failed revision: %d %s, want 409 revision_not_good", rec.Code, rec.Body)
+	}
+	rec = operator.do(http.MethodPost, rollbackPath(st.ID), `{"revision":99}`)
+	if rec.Code != http.StatusNotFound || problemType(t, rec) != "revision_not_found" {
+		t.Fatalf("roll back to revision 99: %d %s, want 404 revision_not_found", rec.Code, rec.Body)
+	}
+	if n := len(f.revisions(t, st.ID)); n != 2 {
+		t.Errorf("revisions = %d, a refused roll back stores none", n)
+	}
+	if n := len(f.fake.Writes()); n != writes {
+		t.Errorf("writes went from %d to %d, a refused roll back writes nothing", writes, n)
+	}
+}
+
+func TestRollbackDeployedChanged(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rb")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.deployGood(t, operator, st.ID, composeWeb128)
+	writes := len(f.fake.Writes())
+
+	// The review was made when revision 1 was the deployed one; revision 2 has been deployed since.
+	rec := operator.do(http.MethodPost, rollbackPath(st.ID), `{"revision":1,"expectedDeployed":1}`)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "deployed_changed" ||
+		!strings.Contains(rec.Body.String(), "rb was deployed again since you opened this review. Review it again.") {
+		t.Fatalf("roll back: %d %s, want 409 deployed_changed", rec.Code, rec.Body)
+	}
+	if n := len(f.revisions(t, st.ID)); n != 2 {
+		t.Errorf("revisions = %d, a refused roll back stores none", n)
+	}
+	if n := len(f.fake.Writes()); n != writes {
+		t.Errorf("writes went from %d to %d, a refused roll back writes nothing", writes, n)
+	}
+}
+
+func TestRollbackWithoutABodyKeepsThePreviousVersion(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rb")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.deployGood(t, operator, st.ID, composeWeb128)
+
+	// The previous version of the deployed revision 2 is revision 1, whether the body is absent or empty.
+	for i, body := range []string{"", `{}`} {
+		rec := operator.do(http.MethodPost, rollbackPath(st.ID), body)
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("roll back %d: %d %s", i, rec.Code, rec.Body)
+		}
+		started := answerOf[rollbackStarted](t, rec)
+		if job := f.awaitDeploy(t, started.JobID); job.State != "done" {
+			t.Fatalf("roll back %d job = %+v", i, job)
+		}
+		if origin, _ := f.revisionOrigin(t, st.ID, started.Revision); origin != "rollback" {
+			t.Errorf("revision %d origin = %q, want rollback", started.Revision, origin)
+		}
+		// The first restores revision 1; the second, with revision 3 (a copy of 1) now deployed, restores 2.
+		wantFrom := []int64{1, 2}[i]
+		if _, from := f.revisionOrigin(t, st.ID, started.Revision); from != wantFrom {
+			t.Errorf("roll back %d restored %d, want %d", i, from, wantFrom)
+		}
+	}
+	// Revision 4 is deployed now, so the one a roll back with no body would restore is the good one before it, 3.
+	if a := readStack(t, operator, st.ID); !a.Rollback.Available || a.Rollback.Revision != 3 {
+		t.Errorf("rollback = %+v, want revision 3 as the one a roll back would restore", a.Rollback)
 	}
 }

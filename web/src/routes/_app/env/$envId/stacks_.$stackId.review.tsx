@@ -8,12 +8,14 @@ import { ReviewPage } from "@/features/stack-review/review-page";
 import { usePermission } from "@/hooks/use-me";
 import { z } from "@/lib/zod-config";
 
-// The review's search: what is reviewed (the saved draft, or a fresh digest for some services)
-// and the services an update names, as a comma list. A value that does not fit is dropped rather
-// than refused, so an old or edited link still opens the plain review (UI-SPEC "Screens").
+// The review's search: what is reviewed (the saved draft, a fresh digest for some services, or an
+// earlier revision), the services an update names, as a comma list, and the revision a roll back
+// restores. A value that does not fit is dropped rather than refused, so an old or edited link still
+// opens the plain review (UI-SPEC "Screens").
 export const reviewSearchSchema = z.object({
-  mode: z.enum(["deploy", "update"]).optional().catch(undefined),
+  mode: z.enum(["deploy", "update", "rollback"]).optional().catch(undefined),
   services: z.string().max(4000).optional().catch(undefined),
+  revision: z.coerce.number().int().min(1).optional().catch(undefined),
 });
 
 // The names an update review looks up again, from the comma list in the address.
@@ -29,17 +31,19 @@ function servicesOf(list: string | undefined): string[] {
 // that is over.
 function StackReviewRoute() {
   const { envId, stackId } = Route.useParams();
-  const { mode, services } = Route.useSearch();
+  const { mode, services, revision } = Route.useSearch();
   const navigate = Route.useNavigate();
   const allowed = usePermission("stacks.deploy", envId);
   if (!allowed) return <NoPermission />;
-  const reviewed = mode ?? "deploy";
+  // A roll back names the revision it restores; without one the link opens the plain review.
+  const reviewed = mode === "rollback" && revision === undefined ? "deploy" : (mode ?? "deploy");
   return (
     <ReviewPage
       envId={envId}
       stackId={stackId}
       mode={reviewed}
       services={reviewed === "update" ? servicesOf(services) : []}
+      revision={reviewed === "rollback" ? revision : undefined}
       onDeployed={(jobId) =>
         void navigate({
           to: "/env/$envId/stacks/$stackId/deploys/$jobId",

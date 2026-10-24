@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +33,10 @@ const (
 	metaStackName = "stackName"
 	metaMode      = "mode"
 	metaStartedBy = "startedBy"
+	// metaRevision is the revision a roll back restores and metaRecorded the revision the operation was recorded
+	// as. A deploy has no metaRevision.
+	metaRevision = "revision"
+	metaRecorded = "recorded"
 
 	deployModeDeploy   = "deploy"
 	deployModeUpdate   = "update"
@@ -42,6 +47,8 @@ const (
 	problemServicesInvalid          = "services_invalid"
 	problemConcurrentUnacknowledged = "concurrent_unacknowledged"
 	problemNoPreviousVersion        = "no_previous_version"
+	problemRevisionNotGood          = "revision_not_good"
+	problemDeployedChanged          = "deployed_changed"
 )
 
 // StackDeployRequest is the body of POST .../deploys.
@@ -61,11 +68,19 @@ type StackDeployInput struct {
 	Body      StackDeployRequest
 }
 
-// StackRollbackInput is the path of the roll back route. It has no body: a roll back is never given
-// anything to restore, it restores the last version that ran well.
+// StackRollbackRequest is the optional body of POST .../rollback. Without it (or with no revision) the roll back
+// restores the version that ran well before, as it always has.
+type StackRollbackRequest struct {
+	Revision         int64 `json:"revision,omitempty" minimum:"1" doc:"The revision to restore: any revision of the stack whose deploy ended good, the deployed one included. A revision that failed or is still deploying is 409 revision_not_good; one the stack does not hold is 404 revision_not_found. Left out, the roll back restores the version that ran well before the deployed one"`
+	ExpectedDeployed int64 `json:"expectedDeployed,omitempty" minimum:"1" doc:"The number of the deployed revision (the newest good one) the review was made against. If the stack was deployed again since, the answer is 409 deployed_changed and nothing is stored. Left out, the roll back is not checked against it"`
+}
+
+// StackRollbackInput is the path and the optional body of the roll back route.
 type StackRollbackInput struct {
 	StackPathInput
 	UserAgent string `header:"User-Agent" hidden:"true"`
+	// Body is a pointer so that it is optional: a roll back with no body restores the previous version.
+	Body *StackRollbackRequest
 }
 
 // noPreviousVersion is the sentence for a stack with no earlier version that ran well.
@@ -116,7 +131,9 @@ type StackJobOutputLine struct {
 type StackJobBody struct {
 	ID         string               `json:"id" doc:"The job ID"`
 	StackID    string               `json:"stackId" doc:"The stack being deployed"`
-	Mode       string               `json:"mode" enum:"deploy,update,rollback,stop,start,remove" doc:"What the operation is: a deploy of the draft, an update of images, a roll back to the last version that ran well, a stop or a start of the stack, or its removal"`
+	Mode       string               `json:"mode" enum:"deploy,update,rollback,stop,start,remove" doc:"What the operation is: a deploy of the draft, an update of images, a roll back to a revision that ran well, a stop or a start of the stack, or its removal"`
+	Revision   int64                `json:"revision,omitempty" doc:"Left out unless set: for a roll back, the number of the revision it restores"`
+	Recorded   int64                `json:"recordedRevision,omitempty" doc:"Left out unless set: the number of the revision the operation was recorded as, the one a deploy took from the draft or a roll back's copy of the revision it restores. A stop, a start and a removal take none"`
 	StartedBy  string               `json:"startedBy" doc:"Who started the deploy, as a name"`
 	State      string               `json:"state" enum:"running,done,partial,failed,cancelled" doc:"running until every step has ended, then done when every step is"`
 	CreatedAt  string               `json:"createdAt" doc:"When the job started, RFC 3339 UTC"`
@@ -197,10 +214,12 @@ func registerStackDeploy(r *httpx.Router, d StacksDeps) {
 
 	httpx.Register(r, huma.Operation{
 		OperationID: "rollbackStack", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/rollback",
-		Summary: "Roll a stack back to the version that ran before",
-		Description: "Redeploys the last version of the stack that ran well, as a job, answering 202 with the job ID at once. " +
-			"That is the newest revision whose deploy succeeded, or, when the newest revision is itself the one that runs, the good one before it. " +
-			"It takes a revision of its own from it (the files, the variables and the images it ran) and runs the same swarm deploy on it, so it is audited as stack.deployed with the mode rollback. " +
+		Summary: "Roll a stack back to a revision that ran well",
+		Description: "Redeploys a revision of the stack that ran well, as a job, answering 202 with the job ID at once. " +
+			"With no body, that is the newest revision whose deploy succeeded, or, when the newest revision is itself the one that runs, the good one before it. " +
+			"With revision, it is that one: any revision whose deploy ended good, the deployed one included (useful after a newer attempt failed). A revision that failed or is still deploying is 409 revision_not_good; one the stack does not hold is 404 revision_not_found. " +
+			"expectedDeployed is the number of the deployed revision the review was made against; if the stack was deployed again since, the answer is 409 deployed_changed and nothing is stored. " +
+			"It takes a revision of its own from it (the files, the variables and the images it ran, recorded as origin rollback with restored_from naming the revision it restored) and runs the same swarm deploy on it, so it is audited as stack.deployed with the mode rollback, the revision and restoredFrom. " +
 			"It uses exactly the images that revision ran and looks nothing up: a tag that has moved since is not followed. The draft is not touched. " +
 			"A stack with no earlier version that ran well is 409 no_previous_version. " +
 			"Everything a deploy is judged on is judged again: a revision that uses host access is refused 403 privileged_compose below env Admin, a stack that no longer loads is 422, and while another stack operation runs on the environment the answer is 409 operation_locked and nothing is stored. " +
@@ -608,12 +627,25 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 		// Rolling a standalone stack back is a later plan's: the engine for it is not here yet.
 		return nil, targetProblem(d, env.ID, stackops.ErrTargetEngineMissing)
 	}
-	target, ok, err := repo.RollbackTarget(ctx, st.ID)
-	if err != nil {
-		return nil, stackInternal(d, "roll back target", env.ID, err)
+	var req StackRollbackRequest
+	if in.Body != nil {
+		req = *in.Body
 	}
-	if !ok {
-		return nil, httpx.Problem(http.StatusConflict, problemNoPreviousVersion, noPreviousVersion)
+	var target stackops.Snapshot
+	if req.Revision > 0 {
+		// The person chose the revision (D-02): any good one, the deployed one included (D-51).
+		if target, err = restorableRevision(ctx, d, repo, env.ID, st.ID, req.Revision); err != nil {
+			return nil, err
+		}
+	} else {
+		var ok bool
+		target, ok, err = repo.RollbackTarget(ctx, st.ID)
+		if err != nil {
+			return nil, stackInternal(d, "roll back target", env.ID, err)
+		}
+		if !ok {
+			return nil, httpx.Problem(http.StatusConflict, problemNoPreviousVersion, noPreviousVersion)
+		}
 	}
 	pins, err := repo.RevisionPins(ctx, target.ID)
 	if err != nil {
@@ -659,6 +691,19 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 		}
 	}()
 
+	// The review was made against a deployed revision. A deploy that ended after it took the lock off before
+	// the job read as finished, so reading the newest good revision now, holding the lock, is the answer no
+	// other operation can change (T-08-11).
+	if req.ExpectedDeployed > 0 {
+		good, found, gerr := repo.GoodRevisionInfo(ctx, st.ID)
+		if gerr != nil {
+			return nil, stackInternal(d, "read the running revision", env.ID, gerr)
+		}
+		if !found || good.Seq != req.ExpectedDeployed {
+			return nil, deployedChanged(st.Name, good.Seq)
+		}
+	}
+
 	// The roll back is a revision of its own: a copy of the one it restores, with its images and its
 	// rendering. The draft is not rebased: it still starts from the revision it began at, so the next
 	// review shows the roll back as a deploy made since.
@@ -677,13 +722,43 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 	}
 	return launchStackDeploy(ctx, d, launch{
 		p: p, env: env, st: st, rev: rev, mode: deployModeRollback, kind: stackops.DeployKindRollback, userAgent: in.UserAgent,
-		items: stackops.DeployItemSpecs(),
+		restores: target.Seq, items: stackops.DeployItemSpecs(),
 		run: func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {
 			swarmIn.OnDone = onDone
 			d.ops().DeploySwarm(jctx, swarmIn, r)
 		},
 		rendering: rendering, release: release, owned: &jobOwnsLock,
 	})
+}
+
+// restorableRevision reads the revision a roll back or its review names. The stack was read by (environment, ID)
+// already, so the revision is read by (stack, seq) and another stack's is not found (T-08-13). Only a revision
+// whose deploy ended good qualifies (D-06, T-08-10); the deployed one does (D-51).
+func restorableRevision(ctx context.Context, d StacksDeps, repo stackops.Repo, envID, stackID string, seq int64) (stackops.Snapshot, error) {
+	rev, err := repo.Revision(ctx, stackID, seq)
+	if errors.Is(err, stackops.ErrRevisionNotFound) {
+		return stackops.Snapshot{}, httpx.Problem(http.StatusNotFound, problemRevisionNotFound, "That revision is gone.")
+	}
+	if err != nil {
+		return stackops.Snapshot{}, stackInternal(d, "read the revision to restore", envID, err)
+	}
+	if rev.Outcome != stackops.OutcomeGood {
+		return stackops.Snapshot{}, httpx.Problem(http.StatusConflict, problemRevisionNotGood, revisionNotGood)
+	}
+	return rev, nil
+}
+
+// revisionNotGood is the sentence for a revision that cannot be rolled back to.
+const revisionNotGood = "That revision can't be rolled back to. Pick a revision that finished well."
+
+// deployedChanged is the 409 for a roll back whose review was made against a revision that is not the deployed
+// one any more.
+func deployedChanged(name string, now int64) error {
+	return &huma.ErrorModel{
+		Type: problemDeployedChanged, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
+		Detail: name + " was deployed again since you opened this review. Review it again.",
+		Errors: []*huma.ErrorDetail{{Location: "expectedDeployed", Message: "revision " + itoa(now)}},
+	}
 }
 
 // launch is a stack operation that has been judged, locked and given its revision, and now becomes a job.
@@ -697,6 +772,8 @@ type launch struct {
 	userAgent string
 	// jobKind is the Kind of the job in the hub; empty is a deploy's.
 	jobKind string
+	// restores is the revision a roll back restores, 0 for any other operation.
+	restores int64
 	// items are the items the job starts with and run is the engine: it does the operation on the job's
 	// context, reporting on r, and calls onDone once with the result before the job's last item ends.
 	items []jobs.ItemSpec
@@ -739,13 +816,16 @@ func launchStackDeploy(ctx context.Context, d StacksDeps, l launch) (*StackDeplo
 			_ = repo.SetOutcome(reqCtx, l.rev.ID, stackops.OutcomeFailed, "", "")
 		}
 	}
-	spec := jobs.Spec{
-		Kind: kind, EnvID: l.env.ID, Owner: stackJobOwner(l.p),
-		Meta: map[string]string{
-			metaStackID: l.st.ID, metaStackName: l.st.Name, metaMode: l.mode, metaStartedBy: l.p.Name, metaEnvName: l.env.Name,
-		},
-		Items: l.items,
+	meta := map[string]string{
+		metaStackID: l.st.ID, metaStackName: l.st.Name, metaMode: l.mode, metaStartedBy: l.p.Name, metaEnvName: l.env.Name,
 	}
+	if l.restores > 0 {
+		meta[metaRevision] = itoa(l.restores)
+	}
+	if l.rev.Seq > 0 {
+		meta[metaRecorded] = itoa(l.rev.Seq)
+	}
+	spec := jobs.Spec{Kind: kind, EnvID: l.env.ID, Owner: stackJobOwner(l.p), Meta: meta, Items: l.items}
 	if d.BeforeJob != nil {
 		d.BeforeJob(ctx)
 	}
@@ -868,6 +948,9 @@ func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userA
 	}
 	if resultWord == "cancelled" && cancelledBy != "" {
 		details["cancelledBy"] = cancelledBy
+	}
+	if rev.RestoredFrom > 0 {
+		details["restoredFrom"] = itoa(rev.RestoredFrom)
 	}
 	if err := d.Audit.Record(wctx, audit.Entry{
 		Actor: actor, Action: audit.ActionStackDeployed, TargetType: stackTargetType, TargetID: st.ID, EnvID: st.EnvID,
@@ -1098,6 +1181,7 @@ func getStackJob(ctx context.Context, d StacksDeps, in *StackJobPathInput) (*Sta
 func stackJobBody(j jobs.Job, output []jobs.Output) StackJobBody {
 	b := StackJobBody{
 		ID: j.ID, StackID: j.Meta[metaStackID], Mode: j.Meta[metaMode], StartedBy: j.Meta[metaStartedBy], State: stackJobState(j),
+		Revision: metaInt(j.Meta, metaRevision), Recorded: metaInt(j.Meta, metaRecorded),
 		CreatedAt: rfc3339(j.CreatedAt), FinishedAt: rfc3339(j.FinishedAt), Items: make([]StackJobItemBody, 0, len(j.Items)),
 		Output: make([]StackJobOutputLine, 0, len(output)),
 	}
@@ -1108,6 +1192,12 @@ func stackJobBody(j jobs.Job, output []jobs.Output) StackJobBody {
 		b.Output = append(b.Output, stackJobOutputLine(o))
 	}
 	return b
+}
+
+// metaInt reads a number out of a job's meta, 0 for one that is not there.
+func metaInt(meta map[string]string, key string) int64 {
+	n, _ := strconv.ParseInt(meta[key], 10, 64)
+	return n
 }
 
 // stackJobState is the state of a deploy job as the console reads it. The hub calls a job partial
